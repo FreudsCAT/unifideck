@@ -213,6 +213,29 @@ run_umu_with_retry() {
 }
 
 # ==============================================================================
+# OFFLINE MODE DETECTION
+# Detects Steam Offline Mode (via loginusers.vdf) or no internet connectivity
+# ==============================================================================
+detect_offline_mode() {
+    # Method 1: Check Steam's loginusers.vdf for WantsOfflineMode
+    local login_vdf="$HOME/.steam/steam/config/loginusers.vdf"
+    if [ -f "$login_vdf" ]; then
+        if grep -q '"WantsOfflineMode".*"1"' "$login_vdf" 2>/dev/null; then
+            log "[Offline] Steam is in Offline Mode (loginusers.vdf)"
+            return 0
+        fi
+    fi
+
+    # Method 2: Quick network connectivity check (3s timeout)
+    if ! ping -c 1 -W 3 8.8.8.8 >/dev/null 2>&1; then
+        log "[Offline] No network connectivity detected"
+        return 0
+    fi
+
+    return 1
+}
+
+# ==============================================================================
 # UNIFIDECK CONFIG READERS
 # Read proton_settings.json and shortcuts_registry.json for Proton selection
 # ==============================================================================
@@ -744,6 +767,13 @@ if [[ "$EXE_PATH" == *.exe ]] || [[ "$EXE_PATH" == *.EXE ]] || \
         fi
         
         log "Launching Epic game via legendary..."
+
+        # Detect offline mode (Steam Offline Mode or no internet)
+        IS_OFFLINE=false
+        if detect_offline_mode; then
+            IS_OFFLINE=true
+            log "[Epic] Offline mode detected - will pass --offline to legendary"
+        fi
         
         # PREFER Bundled Legendary binary (v0.20.38+) which has LEGENDARY_WRAPPER_EXE support
         # We now download this during build, so checks for Heroic's binary are secondary/fallback
@@ -883,24 +913,36 @@ if [[ "$EXE_PATH" == *.exe ]] || [[ "$EXE_PATH" == *.EXE ]] || \
             log "[Language] No Unifideck settings found, defaulting to: $EPIC_LANG"
         fi
 
-        # Construct the legendary launch command
-        CMD="$LEGENDARY_BIN launch $GAME_ID --no-wine --wrapper \"$PYTHON_BIN $UMU_WRAPPER\" --language $EPIC_LANG"
+        # Construct the legendary launch command (add --offline if in offline mode)
+        OFFLINE_FLAG=""
+        if [ "$IS_OFFLINE" = true ]; then
+            OFFLINE_FLAG="--offline"
+        fi
+        CMD="$LEGENDARY_BIN launch $GAME_ID --no-wine $OFFLINE_FLAG --wrapper \"$PYTHON_BIN $UMU_WRAPPER\" --language $EPIC_LANG"
         log "Executing: $CMD"
 
         # === CLOUD SAVE: Download before launch ===
-        sync_cloud_saves "epic" "$GAME_ID" "download" "$PREFIX_PATH"
+        if [ "$IS_OFFLINE" = true ]; then
+            log "[CloudSave] Offline mode - skipping pre-launch sync"
+        else
+            sync_cloud_saves "epic" "$GAME_ID" "download" "$PREFIX_PATH"
+        fi
 
         # Notify user that game is launching
         notify_stage "toasts.launcher.launchingGame" "toasts.launcher.startingEpicGame" "low"
 
         # Execute legendary (wait for exit, don't use exec)
-        "$LEGENDARY_BIN" launch "$GAME_ID" --no-wine --wrapper "$PYTHON_BIN $UMU_WRAPPER" --language $EPIC_LANG 2>>"$LOG_FILE"
+        "$LEGENDARY_BIN" launch "$GAME_ID" --no-wine $OFFLINE_FLAG --wrapper "$PYTHON_BIN $UMU_WRAPPER" --language $EPIC_LANG 2>>"$LOG_FILE"
 
         GAME_EXIT_CODE=$?
 
         # === CLOUD SAVE: Upload after exit ===
         log "Epic game exited with code: $GAME_EXIT_CODE"
-        sync_cloud_saves "epic" "$GAME_ID" "upload" "$PREFIX_PATH"
+        if [ "$IS_OFFLINE" = true ]; then
+            log "[CloudSave] Offline mode - skipping post-launch sync"
+        else
+            sync_cloud_saves "epic" "$GAME_ID" "upload" "$PREFIX_PATH"
+        fi
 
         exit $GAME_EXIT_CODE
     elif [ "$STORE" == "amazon" ]; then
