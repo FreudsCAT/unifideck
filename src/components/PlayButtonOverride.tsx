@@ -183,12 +183,17 @@ export const PlaySectionWrapper: FC<PlaySectionWrapperProps> = ({ appId, playSec
   // Non-Unifideck shortcuts: get_game_info returns null → gameInfo is null → false
   const shouldShowCustom = !loading && gameInfo && !gameInfo.error;
 
-  // Style management: The hide style is injected by the PATCHER via CDP.
-  // For Unifideck games, native PlaySection stays permanently hidden —
-  // our custom section handles all states (install, cancel, play).
+  // Style management: CDP hide is triggered FROM this component, not the patcher.
+  // Only hide native PlaySection once shouldShowCustom is true — this prevents
+  // the blank screen race condition where CDP hides native before custom is ready.
   // We do NOT remove on unmount — React re-renders cause unmount/remount cycles,
   // and the patcher's deduplication prevents re-injection on remount.
   // Cleanup of all hide styles happens in plugin _unload via shutdown_cdp_client.
+  useEffect(() => {
+    if (shouldShowCustom) {
+      injectHidePlaySectionCDP(appId);
+    }
+  }, [shouldShowCustom, appId]);
 
   // Failure handling: if get_game_info fails or returns null/error,
   // remove the hide CSS so the native PlaySection is restored
@@ -753,16 +758,31 @@ export const PlaySectionWrapper: FC<PlaySectionWrapperProps> = ({ appId, playSec
     }
   };
 
-  // While loading, or not a Unifideck game — render hidden anchor only
-  // The anchor div stays in the DOM so our useEffect can find the parent container
+  // While loading: show visible placeholder to prevent blank screen.
+  // Error (gameInfo null): return null so native PlaySection (unhidden via CDP) shows through.
   if (!shouldShowCustom) {
-    return (
-      <div
-        ref={wrapperRef}
-        data-unifideck-play-wrapper="true"
-        style={{ display: "none" }}
-      />
-    );
+    if (loading) {
+      return (
+        <div
+          ref={wrapperRef}
+          data-unifideck-play-wrapper="true"
+          className={playSectionClassName || undefined}
+          style={{
+            display: "flex",
+            alignItems: "center",
+            width: "100%",
+            padding: "16px",
+            boxSizing: "border-box",
+            background: "rgba(14, 20, 27, 0.33)",
+            position: "relative" as const,
+            zIndex: 2,
+            minHeight: "80px",
+          }}
+        />
+      );
+    }
+    // Error state: gameInfo is null/error — return null so native PlaySection shows
+    return null;
   }
 
   // Render a custom PlaySection that visually matches Steam's native layout.

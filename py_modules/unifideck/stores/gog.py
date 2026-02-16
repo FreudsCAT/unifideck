@@ -483,7 +483,7 @@ class GOGAPIClient:
                 url = f'https://api.gog.com/products/{game_id}?locale=en-US'
                 headers = {'Authorization': f'Bearer {self.access_token}'}
 
-                async with session.get(url, headers=headers) as response:
+                async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=10)) as response:
                     if response.status == 200:
                         data = await response.json()
                         slug = data.get('slug')

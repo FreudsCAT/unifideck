@@ -732,16 +732,10 @@ function patchGameDetailsRoute() {
             );
 
             if (!alreadyHasWrapper) {
-              // For Unifideck games, always hide native PlaySection —
-              // our custom section handles all states (install, cancel, play).
-              // Non-Unifideck shortcuts won't be in the cache and are unaffected.
-              const cached = unifideckGameCache.get(appId);
-              if (cached) {
-                // Inject hide style via CDP (async, non-blocking).
-                // CDP crosses the CEF process boundary to inject into Steam's SP tab DOM.
-                // Style persists across patcher re-runs (idempotent backend check).
-                injectHidePlaySectionCDP(appId);
-              }
+              // CDP hide is now handled by PlaySectionWrapper's useEffect —
+              // it only hides native PlaySection once shouldShowCustom is true.
+              // This prevents blank screens when get_game_info hasn't resolved yet
+              // (e.g., offline mode, slow backend).
 
               // Include version in key to force remount when state changes
               const version = gameStateVersion.get(appId) || 0;

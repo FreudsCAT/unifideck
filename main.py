@@ -4367,7 +4367,14 @@ class Plugin:
 
                 # Resolve Steam presence if missing or invalid
                 if (not steam_app_id) or (not steam_metadata) or (not steam_metadata.get('name')):
-                    presence = await self.resolve_steam_presence(title)
+                    try:
+                        presence = await asyncio.wait_for(
+                            self.resolve_steam_presence(title),
+                            timeout=15.0
+                        )
+                    except asyncio.TimeoutError:
+                        logger.warning(f"[MetadataDisplay] Steam presence resolve timed out for '{title}'")
+                        presence = {'steam_appid': 0, 'metadata': {}}
                     resolved_app_id = presence.get('steam_appid', 0)
                     resolved_metadata = presence.get('metadata', {})
                     if resolved_app_id:
@@ -4417,7 +4424,10 @@ class Plugin:
                 store_url = f"https://store.epicgames.com/en-US/browse?q={encoded_title}&sortBy=relevancy"
             elif store == 'gog':
                 # GOG: Try to get slug from API for direct link, fallback to search
-                gog_slug = await self._get_gog_slug(game_id)
+                try:
+                    gog_slug = await asyncio.wait_for(self._get_gog_slug(game_id), timeout=10.0)
+                except asyncio.TimeoutError:
+                    gog_slug = None
                 if gog_slug:
                     store_url = f"https://www.gog.com/en/game/{gog_slug}"
                 else:
