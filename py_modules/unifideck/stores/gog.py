@@ -2181,3 +2181,212 @@ class GOGAPIClient:
         
         return None
 
+    def _get_local_build_id(self, install_path: str, game_id: str) -> Optional[str]:
+        """Get local buildId from goggame-*.info file.
+        
+        Searches install_path root and game/ subdirectory for the goggame info file.
+        
+        Args:
+            install_path: Path to the installed game directory.
+            game_id: GOG product ID.
+        
+        Returns:
+            buildId string, or None if not found.
+        """
+        search_dirs = [install_path, os.path.join(install_path, 'game')]
+        
+        for search_dir in search_dirs:
+            info_file = os.path.join(search_dir, f'goggame-{game_id}.info')
+            if os.path.exists(info_file):
+                try:
+                    with open(info_file, 'r') as f:
+                        data = json.load(f)
+                    build_id = data.get('buildId')
+                    if build_id:
+                        logger.debug(f"[GOG] Local buildId for {game_id}: {build_id}")
+                        return str(build_id)
+                except Exception as e:
+                    logger.warning(f"[GOG] Error reading {info_file}: {e}")
+        
+        # Also check .unifideck-id marker for buildId
+        marker_path = os.path.join(install_path, '.unifideck-id')
+        if os.path.exists(marker_path):
+            try:
+                with open(marker_path, 'r') as f:
+                    data = json.loads(f.read().strip())
+                build_id = data.get('buildId')
+                if build_id:
+                    logger.debug(f"[GOG] Local buildId from marker for {game_id}: {build_id}")
+                    return str(build_id)
+            except Exception:
+                pass
+        
+        return None
+
+    async def check_for_game_update(self, game_id: str) -> Optional[bool]:
+        """Check if a specific GOG game has an update available.
+        
+        Compares local buildId (from goggame-*.info) against the latest
+        remote buildId from GOG's Content System API.
+        
+        Args:
+            game_id: GOG product ID.
+        
+        Returns:
+            True if update available, False if up-to-date, None if check failed.
+        """
+        await self._ensure_fresh_token()
+        
+        if not self.access_token:
+            logger.warning(f"[GOG] No access token for update check")
+            return None
+        
+        # Find install path for this game
+        info = self.get_installed_game_info(game_id)
+        if not info:
+            logger.debug(f"[GOG] Game {game_id} not installed, skipping update check")
+            return None
+        
+        install_path = info.get('install_path', '')
+        
+        # Get local build ID
+        local_build_id = self._get_local_build_id(install_path, game_id)
+        if not local_build_id:
+            logger.warning(f"[GOG] No local buildId found for {game_id}")
+            return None
+        
+        # Query Content System API for latest build
+        try:
+            import aiohttp
+            import ssl
+            
+            ssl_context = ssl.create_default_context()
+            ssl_context.check_hostname = False
+            ssl_context.verify_mode = ssl.CERT_NONE
+            
+            connector = aiohttp.TCPConnector(ssl=ssl_context)
+            timeout = aiohttp.ClientTimeout(total=10.0)
+            
+            async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
+                url = f"https://content-system.gog.com/products/{game_id}/os/windows/builds?generation=2"
+                headers = {'Authorization': f'Bearer {self.access_token}'}
+                
+                async with session.get(url, headers=headers) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        items = data.get('items', [])
+                        
+                        if items:
+                            remote_build_id = str(items[0].get('build_id', ''))
+                            logger.info(f"[GOG] {game_id}: local={local_build_id}, remote={remote_build_id}")
+                            
+                            if remote_build_id and remote_build_id != local_build_id:
+                                logger.info(f"[GOG] Update available for {game_id}!")
+                                return True
+                            else:
+                                return False
+                        else:
+                            logger.warning(f"[GOG] No builds found for {game_id}")
+                            return None
+                    else:
+                        logger.warning(f"[GOG] Content System API returned {resp.status} for {game_id}")
+                        return None
+                        
+        except Exception as e:
+            logger.error(f"[GOG] Error checking update for {game_id}: {e}")
+            return None
+
+    async def check_for_updates(self) -> List[str]:
+        """Check which installed GOG games have updates available.
+        
+        Iterates through all installed games and queries the Content System API
+        for each one. This is slower than Epic/Amazon since there's no batch
+        endpoint.
+        
+        Returns:
+            List of game IDs that have updates available.
+        """
+        if not os.path.exists(self.download_dir):
+            return []
+        
+        updates = []
+        
+        try:
+            for item in os.listdir(self.download_dir):
+                item_path = os.path.join(self.download_dir, item)
+                if not os.path.isdir(item_path):
+                    continue
+                
+                game_id = self._get_game_id_from_dir(item_path)
+                if not game_id:
+                    continue
+                
+                has_update = await self.check_for_game_update(game_id)
+                if has_update:
+                    updates.append(game_id)
+        except Exception as e:
+            logger.error(f"[GOG] Error checking for updates: {e}")
+        
+        logger.info(f"[GOG] Found {len(updates)} games with updates")
+        return updates
+
+    async def update_game(self, game_id: str, install_path: Optional[str] = None) -> Dict[str, Any]:
+        """Update an installed GOG game using gogdl.
+        
+        Args:
+            game_id: GOG product ID.
+            install_path: Path to the installed game (required for gogdl).
+            
+        Returns:
+            Dict with 'success' and optionally 'error'.
+        """
+        if not self.gogdl_bin:
+            return {'success': False, 'error': 'gogdl binary not found'}
+        
+        # Resolve install_path if not provided
+        if not install_path:
+            info = self.get_installed_game_info(game_id)
+            if info:
+                install_path = info.get('install_path', '')
+            if not install_path:
+                return {'success': False, 'error': f'Could not find install path for {game_id}'}
+        
+        # Ensure auth tokens are synced
+        await self._ensure_fresh_token()
+        self._sync_auth_to_gogdl()
+        
+        try:
+            logger.info(f"[GOG] Starting update for {game_id} at {install_path}")
+            
+            env = self._get_gogdl_env()
+            proc = await asyncio.create_subprocess_exec(
+                self.gogdl_bin, 'update', game_id, '--path', install_path,
+                '--auth-config-path', self.gogdl_config_path,
+                '--platform', 'windows',
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+                env=env
+            )
+            
+            while True:
+                line = await proc.stdout.readline()
+                if not line:
+                    break
+                line_str = line.decode().strip()
+                if line_str:
+                    logger.info(f"[GOG Update] {line_str}")
+            
+            await proc.wait()
+            
+            if proc.returncode == 0:
+                logger.info(f"[GOG] Successfully updated {game_id}")
+                return {'success': True, 'message': f'Successfully updated {game_id}'}
+            else:
+                logger.error(f"[GOG] Update failed for {game_id} (exit code {proc.returncode})")
+                return {'success': False, 'error': 'Update failed - check logs'}
+        
+        except Exception as e:
+            logger.error(f"[GOG] Error updating {game_id}: {e}")
+            return {'success': False, 'error': str(e)}
+
+

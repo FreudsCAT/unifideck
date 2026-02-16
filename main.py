@@ -4958,6 +4958,128 @@ class Plugin:
             logger.error(f"[DownloadQueue] Error clearing stale downloads: {e}")
             return {'success': False, 'error': str(e)}
 
+    # ── Update Detection ──────────────────────────────────────────────
+
+    # In-memory cache for update check results (avoids redundant CLI calls)
+    _update_cache: Dict[str, Any] = {}
+    _update_cache_timestamp: float = 0
+    _UPDATE_CACHE_TTL = 300  # 5 minutes
+
+    async def check_game_update(self, app_id: int) -> Dict[str, Any]:
+        """Check if a single game has an update available.
+        
+        Dispatches to the appropriate store connector's update check.
+        Results are cached for 5 minutes to avoid repeated CLI calls.
+        
+        Args:
+            app_id: Steam shortcut app ID.
+            
+        Returns:
+            Dict with 'success', 'has_update' (bool|None), 'store'.
+        """
+        try:
+            game_info = await self.get_game_info(app_id)
+            if not game_info.get('is_installed'):
+                return {'success': True, 'has_update': None, 'store': game_info.get('store', '')}
+
+            store = game_info.get('store', '')
+            game_id = game_info.get('game_id', '')
+
+            if not store or not game_id:
+                return {'success': False, 'error': 'Missing store or game_id'}
+
+            has_update = None
+
+            if store == 'epic':
+                # Epic uses batch check — cache all results
+                import time
+                if (time.time() - self._update_cache_timestamp > self._UPDATE_CACHE_TTL or
+                    f'epic:{game_id}' not in self._update_cache):
+                    updates = await self.epic.check_for_updates()
+                    # Cache all epic results
+                    for uid in updates:
+                        self._update_cache[f'epic:{uid}'] = True
+                    self._update_cache_timestamp = time.time()
+
+                has_update = self._update_cache.get(f'epic:{game_id}', False)
+
+            elif store == 'gog':
+                # GOG checks per-game via Content System API
+                cache_key = f'gog:{game_id}'
+                import time
+                if (cache_key not in self._update_cache or
+                    time.time() - self._update_cache_timestamp > self._UPDATE_CACHE_TTL):
+                    result = await self.gog.check_for_game_update(game_id)
+                    self._update_cache[cache_key] = result
+                    self._update_cache_timestamp = time.time()
+
+                has_update = self._update_cache.get(cache_key)
+
+            elif store == 'amazon' and self.amazon:
+                # Amazon uses batch check — cache all results
+                import time
+                if (time.time() - self._update_cache_timestamp > self._UPDATE_CACHE_TTL or
+                    f'amazon:{game_id}' not in self._update_cache):
+                    updates = await self.amazon.check_for_updates()
+                    for uid in updates:
+                        self._update_cache[f'amazon:{uid}'] = True
+                    self._update_cache_timestamp = time.time()
+
+                has_update = self._update_cache.get(f'amazon:{game_id}', False)
+
+            else:
+                return {'success': True, 'has_update': None, 'store': store}
+
+            logger.info(f"[UpdateCheck] app_id={app_id}, store={store}, game_id={game_id}, has_update={has_update}")
+            return {'success': True, 'has_update': has_update, 'store': store}
+
+        except Exception as e:
+            logger.error(f"[UpdateCheck] Error checking update for app_id={app_id}: {e}")
+            return {'success': False, 'error': str(e)}
+
+    async def update_game(self, app_id: int) -> Dict[str, Any]:
+        """Trigger an update for a game by adding it to the download queue.
+        
+        For Epic/GOG this uses delta patching. For Amazon, it's a full re-download.
+        The frontend should confirm with the user before calling this for Amazon games.
+        
+        Args:
+            app_id: Steam shortcut app ID.
+            
+        Returns:
+            Dict with 'success' and optionally 'error'.
+        """
+        try:
+            game_info = await self.get_game_info(app_id)
+            store = game_info.get('store', '')
+            game_id = game_info.get('game_id', '')
+            title = game_info.get('title', 'Unknown')
+
+            if not store or not game_id:
+                return {'success': False, 'error': 'Missing store or game_id'}
+
+            logger.info(f"[UpdateGame] Starting update: {title} ({store}:{game_id})")
+
+            # Add to download queue — the download worker will invoke
+            # the store connector's update_game method
+            result = await self.add_to_download_queue(
+                game_id=game_id,
+                game_title=title,
+                store=store,
+                was_previously_installed=True  # It's an update, game is installed
+            )
+
+            if result.get('success'):
+                # Clear the update cache entry so it re-checks after update
+                cache_key = f'{store}:{game_id}'
+                self._update_cache.pop(cache_key, None)
+
+            return result
+
+        except Exception as e:
+            logger.error(f"[UpdateGame] Error updating app_id={app_id}: {e}")
+            return {'success': False, 'error': str(e)}
+
     async def is_game_downloading(self, game_id: str, store: str) -> Dict[str, Any]:
         """Check if a specific game is currently downloading or in queue"""
         try:
