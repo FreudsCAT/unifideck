@@ -196,11 +196,11 @@ const PlaySectionWrapperInner: FC<PlaySectionWrapperProps> = ({
     const doHide = () => injectHidePlaySectionCDP(appId);
 
     // Fast burst: catch the native PlaySection as soon as it appears
-    doHide();                                          // Immediate
-    timers.push(setTimeout(doHide, 50));               // Fast retry
-    timers.push(setTimeout(doHide, 150));              // DOM settle
-    timers.push(setTimeout(doHide, 300));              // React reconciliation
-    timers.push(setTimeout(doHide, 600));              // Late re-render
+    doHide(); // Immediate
+    timers.push(setTimeout(doHide, 50)); // Fast retry
+    timers.push(setTimeout(doHide, 150)); // DOM settle
+    timers.push(setTimeout(doHide, 300)); // React reconciliation
+    timers.push(setTimeout(doHide, 600)); // Late re-render
 
     // Persistent poll: catch React re-renders that happen after the burst.
     // CDP hide is idempotent (re-applying styles to already-hidden elements is harmless).
@@ -263,8 +263,17 @@ const PlaySectionWrapperInner: FC<PlaySectionWrapperProps> = ({
 
     call<[number], any>("get_game_info", appId)
       .then((info) => {
-        console.log("[Unifideck DIAG] get_game_info result:", "appId:", appId,
-          "hasError:", !!info?.error, "isInstalled:", info?.is_installed, "store:", info?.store);
+        console.log(
+          "[Unifideck DIAG] get_game_info result:",
+          "appId:",
+          appId,
+          "hasError:",
+          !!info?.error,
+          "isInstalled:",
+          info?.is_installed,
+          "store:",
+          info?.store,
+        );
         const processedInfo = info?.error ? null : info;
         setGameInfo(processedInfo);
         if (gameInfoCacheRef && processedInfo) {
@@ -455,6 +464,7 @@ const PlaySectionWrapperInner: FC<PlaySectionWrapperProps> = ({
             appid_unsigned?: number;
             is_linux_runtime?: boolean;
             launcher_path?: string;
+            current_launch_options?: string;
             error?: string;
           }
         >("get_compat_tool_for_game", storeGameId);
@@ -463,6 +473,25 @@ const PlaySectionWrapperInner: FC<PlaySectionWrapperProps> = ({
 
         const launcherPath = result.launcher_path;
         if (!launcherPath) return;
+
+        // Extract user-appended params from current launch options
+        // Strips: launcher path, quoted strings, bare store:game_id, #%command%
+        const currentOpts = result.current_launch_options ?? storeGameId;
+        const extractUserParams = (opts: string): string => {
+          return opts
+            .replace(/#%command%/g, "")
+            .replace(/"[^"]*"/g, "") // Remove quoted strings (launcher path, store id)
+            .replace(
+              new RegExp(
+                storeGameId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"),
+                "g",
+              ),
+              "",
+            ) // bare id
+            .replace(/\/\S+unifideck-launcher/g, "") // launcher path
+            .trim();
+        };
+        const userParams = extractUserParams(currentOpts);
 
         if (result.tool_name && !result.is_linux_runtime) {
           // Proton compat tool detected - save for the launcher
@@ -474,9 +503,10 @@ const PlaySectionWrapperInner: FC<PlaySectionWrapperProps> = ({
 
           if (cancelled) return;
 
-          // Set launch options with %command% bypass: runs launcher natively,
-          // Proton-wrapped command gets commented out after #
-          const bypassOptions = `${launcherPath} "${storeGameId}" #%command%`;
+          // Set launch options with %command% bypass, preserving user params
+          const bypassOptions = userParams
+            ? `${launcherPath} "${storeGameId}" ${userParams} #%command%`
+            : `${launcherPath} "${storeGameId}" #%command%`;
           window.SteamClient?.Apps?.SetShortcutLaunchOptions(
             appId,
             bypassOptions,
@@ -486,11 +516,18 @@ const PlaySectionWrapperInner: FC<PlaySectionWrapperProps> = ({
             `[PlaySectionWrapper] Set %command% bypass for "${gameInfo.title}" (${result.tool_name})`,
           );
         } else {
-          // No Proton tool (or Linux runtime) - restore original launch options
-          window.SteamClient?.Apps?.SetShortcutLaunchOptions(
-            appId,
-            storeGameId,
-          );
+          // No Proton tool (or Linux runtime) - restore launch options preserving user params
+          const restoredOptions = userParams
+            ? `${storeGameId} ${userParams}`
+            : storeGameId;
+
+          // Only write if actually different (avoids unnecessary overwrites every page load)
+          if (currentOpts !== restoredOptions) {
+            window.SteamClient?.Apps?.SetShortcutLaunchOptions(
+              appId,
+              restoredOptions,
+            );
+          }
 
           // Clear any previously saved proton setting
           await call<[string, string], { success: boolean }>(
@@ -837,9 +874,19 @@ const PlaySectionWrapperInner: FC<PlaySectionWrapperProps> = ({
   };
 
   // DIAG: Track component lifecycle (temporary)
-  console.log("[Unifideck DIAG] PlaySectionWrapper render:",
-    "appId:", appId, "loading:", loading, "gameInfo:", !!gameInfo,
-    "shouldShowCustom:", shouldShowCustom, "isDownloading:", isDownloading);
+  console.log(
+    "[Unifideck DIAG] PlaySectionWrapper render:",
+    "appId:",
+    appId,
+    "loading:",
+    loading,
+    "gameInfo:",
+    !!gameInfo,
+    "shouldShowCustom:",
+    shouldShowCustom,
+    "isDownloading:",
+    isDownloading,
+  );
 
   // While loading: show visible placeholder to prevent blank screen.
   // Error (gameInfo null): return null so native PlaySection (unhidden via CDP) shows through.
@@ -1176,12 +1223,7 @@ const PlaySectionWrapperInner: FC<PlaySectionWrapperProps> = ({
           onClick={handleUpdateClick}
           style={actionBtnStyle}
         >
-          <svg
-            viewBox="0 0 24 24"
-            fill="currentColor"
-            width="1em"
-            height="1em"
-          >
+          <svg viewBox="0 0 24 24" fill="currentColor" width="1em" height="1em">
             {isDownloading ? (
               /* X icon when updating (acts as cancel) */
               <path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z" />
@@ -1519,12 +1561,7 @@ const PlaySectionWrapperInner: FC<PlaySectionWrapperProps> = ({
         style={actionBtnStyle}
       >
         {!isDownloading && (
-          <svg
-            viewBox="0 0 24 24"
-            fill="currentColor"
-            width="1em"
-            height="1em"
-          >
+          <svg viewBox="0 0 24 24" fill="currentColor" width="1em" height="1em">
             <path d="M5 20h14v-2H5v2zM19 9h-4V3H9v6H5l7 7 7-7z" />
           </svg>
         )}

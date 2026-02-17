@@ -132,3 +132,39 @@ def get_full_id(launch_options: str) -> Optional[str]:
     if match:
         return f"{match.group(1)}:{match.group(2)}"
     return None
+
+
+def preserve_user_params(current_launch_options: str, new_store_id: str) -> str:
+    """
+    Replace the store:game_id core in current launch options while preserving
+    any user-appended parameters (LSFG=1, MANGOHUD=1, ~/lsfg, etc.).
+    
+    If current_launch_options is empty or doesn't contain a store:id pattern,
+    returns new_store_id as-is.
+    
+    Args:
+        current_launch_options: The current LaunchOptions string from the shortcut
+        new_store_id: The canonical store:game_id to set (e.g. "epic:Salt")
+        
+    Returns:
+        LaunchOptions string with the store:id replaced but user params preserved
+        
+    Examples:
+        >>> preserve_user_params("epic:Salt ~/lsfg %command%", "epic:Salt")
+        'epic:Salt ~/lsfg %command%'
+        >>> preserve_user_params("epic:OldId MANGOHUD=1", "epic:NewId")
+        'epic:NewId MANGOHUD=1'
+        >>> preserve_user_params("", "epic:Salt")
+        'epic:Salt'
+        >>> preserve_user_params("random text no id", "epic:Salt")
+        'epic:Salt'
+    """
+    if not current_launch_options:
+        return new_store_id
+    
+    match = STORE_ID_PATTERN.search(current_launch_options)
+    if not match:
+        return new_store_id
+    
+    # Replace just the matched store:game_id portion, keeping everything else
+    return current_launch_options[:match.start()] + new_store_id + current_launch_options[match.end():]

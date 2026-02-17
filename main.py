@@ -5320,6 +5320,18 @@ class Plugin:
         from py_modules.unifideck.compat.proton_tools import get_compat_tool_for_game as _get
         result = _get(store_game_id)
         result["launcher_path"] = os.path.join(os.path.dirname(__file__), 'bin', 'unifideck-launcher')
+        
+        # Include current launch options so frontend can preserve user params
+        try:
+            shortcuts = await self.shortcuts_manager.read_shortcuts()
+            for idx, shortcut in shortcuts.get("shortcuts", {}).items():
+                from py_modules.unifideck.shortcuts.launch_options import get_full_id
+                if get_full_id(shortcut.get('LaunchOptions', '')) == store_game_id:
+                    result["current_launch_options"] = shortcut.get('LaunchOptions', '')
+                    break
+        except Exception as e:
+            logger.warning(f"Could not read current launch options: {e}")
+        
         return result
 
     async def temporarily_clear_compat_tool(self, appid_unsigned: int) -> Dict[str, Any]:
