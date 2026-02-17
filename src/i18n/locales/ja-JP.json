@@ -237,7 +237,17 @@
     "backgroundSyncDisabled": "バックグラウンド同期が無効です",
     "steamGridDbUnavailable": "SteamGridDBライブラリが利用できません",
     "deleteSyncInProgress": "同期中は削除できません",
-    "alreadyInQueue": "すでにキューにあります"
+    "alreadyInQueue": "すでにキューにあります",
+    "download": {
+      "diskSpace": "ディスク容量が不足しています",
+      "network": "ネットワークエラー — 接続を確認してください",
+      "authExpired": "ログインの有効期限切れ — 再度サインインしてください",
+      "toolMissing": "必要なダウンロードツールが見つかりません",
+      "processFailed": "ダウンロードに失敗しました — もう一度お試しください",
+      "directoryNotFound": "インストールされたファイルが見つかりません",
+      "lockConflict": "別の操作が進行中です — もう一度お試しください",
+      "generic": "インストールに失敗しました — ログを確認してください"
+    }
   },
   "sync": {
     "downloadingArtwork": "{{game}} のアートをDL中...",

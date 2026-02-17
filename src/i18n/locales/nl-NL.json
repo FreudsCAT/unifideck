@@ -237,7 +237,17 @@
     "backgroundSyncDisabled": "Achtergrondsynchronisatie uitgeschakeld",
     "steamGridDbUnavailable": "SteamGridDB-bibliotheek niet beschikbaar",
     "deleteSyncInProgress": "Kan niet verwijderen terwijl synchronisatie bezig is",
-    "alreadyInQueue": "Reeds in wachtrij"
+    "alreadyInQueue": "Reeds in wachtrij",
+    "download": {
+      "diskSpace": "Onvoldoende schijfruimte beschikbaar",
+      "network": "Netwerkfout — controleer je verbinding",
+      "authExpired": "Inlog verlopen — log opnieuw in",
+      "toolMissing": "Vereist downloadprogramma niet gevonden",
+      "processFailed": "Download mislukt — probeer het opnieuw",
+      "directoryNotFound": "Geïnstalleerde bestanden niet gevonden",
+      "lockConflict": "Een andere bewerking is bezig — probeer het opnieuw",
+      "generic": "Installatie mislukt — controleer de logbestanden"
+    }
   },
   "sync": {
     "downloadingArtwork": "Artwork downloaden voor {{game}}...",

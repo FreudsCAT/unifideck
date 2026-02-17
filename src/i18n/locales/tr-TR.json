@@ -240,7 +240,17 @@
     "backgroundSyncDisabled": "Arka plan senkronizasyonu devre dışı",
     "steamGridDbUnavailable": "SteamGridDB kütüphanesi kullanılamıyor",
     "deleteSyncInProgress": "Senkronizasyon devam ederken silinemiyor",
-    "alreadyInQueue": "Zaten kuyrukta"
+    "alreadyInQueue": "Zaten kuyrukta",
+    "download": {
+      "diskSpace": "Yeterli disk alanı yok",
+      "network": "Ağ hatası — bağlantınızı kontrol edin",
+      "authExpired": "Oturum süresi doldu — tekrar giriş yapın",
+      "toolMissing": "Gerekli indirme aracı bulunamadı",
+      "processFailed": "İndirme başarısız — tekrar deneyin",
+      "directoryNotFound": "Yüklenen dosyalar bulunamadı",
+      "lockConflict": "Başka bir işlem devam ediyor — tekrar deneyin",
+      "generic": "Kurulum başarısız — günlükleri kontrol edin"
+    }
   },
   "sync": {
     "downloadingArtwork": "{{game}} için görsel indiriliyor...",

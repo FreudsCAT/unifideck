@@ -237,7 +237,17 @@
     "backgroundSyncDisabled": "Фоновая синхронизация отключена",
     "steamGridDbUnavailable": "Библиотека SteamGridDB недоступна",
     "deleteSyncInProgress": "Невозможно удалить во время синхронизации",
-    "alreadyInQueue": "Уже в очереди"
+    "alreadyInQueue": "Уже в очереди",
+    "download": {
+      "diskSpace": "Недостаточно места на диске",
+      "network": "Ошибка сети — проверьте подключение",
+      "authExpired": "Сессия истекла — войдите снова",
+      "toolMissing": "Необходимый инструмент загрузки не найден",
+      "processFailed": "Загрузка не удалась — попробуйте ещё раз",
+      "directoryNotFound": "Не удалось найти установленные файлы",
+      "lockConflict": "Другая операция выполняется — попробуйте позже",
+      "generic": "Установка не удалась — проверьте логи"
+    }
   },
   "sync": {
     "downloadingArtwork": "Загрузка арта для {{game}}...",

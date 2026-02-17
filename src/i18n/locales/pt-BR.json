@@ -237,7 +237,17 @@
     "backgroundSyncDisabled": "Sincronização em segundo plano desativada",
     "steamGridDbUnavailable": "Biblioteca SteamGridDB indisponível",
     "deleteSyncInProgress": "Não é possível excluir enquanto a sincronização está em andamento",
-    "alreadyInQueue": "Já na fila"
+    "alreadyInQueue": "Já na fila",
+    "download": {
+      "diskSpace": "Espaço em disco insuficiente",
+      "network": "Erro de rede — verifique sua conexão",
+      "authExpired": "Login expirado — faça login novamente",
+      "toolMissing": "Ferramenta de download necessária não encontrada",
+      "processFailed": "Download falhou — tente novamente",
+      "directoryNotFound": "Não foi possível localizar os arquivos instalados",
+      "lockConflict": "Outra operação em andamento — tente novamente",
+      "generic": "Instalação falhou — verifique os logs"
+    }
   },
   "sync": {
     "downloadingArtwork": "Baixando arte de {{game}}...",

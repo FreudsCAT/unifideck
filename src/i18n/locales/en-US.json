@@ -237,7 +237,17 @@
     "backgroundSyncDisabled": "Background sync disabled",
     "steamGridDbUnavailable": "SteamGridDB library not available",
     "deleteSyncInProgress": "Cannot delete while sync is in progress",
-    "alreadyInQueue": "Already in queue"
+    "alreadyInQueue": "Already in queue",
+    "download": {
+      "diskSpace": "Not enough disk space available",
+      "network": "Network error — check your connection",
+      "authExpired": "Login expired — please sign in again",
+      "toolMissing": "Required download tool not found",
+      "processFailed": "Download failed — please try again",
+      "directoryNotFound": "Could not locate installed files",
+      "lockConflict": "Another operation is in progress — try again",
+      "generic": "Installation failed — check logs for details"
+    }
   },
   "sync": {
     "downloadingArtwork": "Downloading artwork for {{game}}...",

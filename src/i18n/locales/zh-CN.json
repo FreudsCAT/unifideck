@@ -242,7 +242,17 @@
     "backgroundSyncDisabled": "后台同步已禁用",
     "steamGridDbUnavailable": "SteamGridDB 库不可用",
     "deleteSyncInProgress": "同步进行时无法删除",
-    "alreadyInQueue": "已在队列中"
+    "alreadyInQueue": "已在队列中",
+    "download": {
+      "diskSpace": "磁盘空间不足",
+      "network": "网络错误 — 请检查连接",
+      "authExpired": "登录已过期 — 请重新登录",
+      "toolMissing": "未找到所需的下载工具",
+      "processFailed": "下载失败 — 请重试",
+      "directoryNotFound": "无法找到已安装的文件",
+      "lockConflict": "另一个操作正在进行中 — 请重试",
+      "generic": "安装失败 — 请查看日志"
+    }
   },
   "sync": {
     "downloadingArtwork": "正在下载 {{game}} 的封面...",
