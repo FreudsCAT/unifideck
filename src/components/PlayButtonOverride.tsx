@@ -904,7 +904,8 @@ const PlaySectionWrapperInner: FC<PlaySectionWrapperProps> = ({
     .unifideck-install-btn,
     .unifideck-play-btn,
     .unifideck-resume-btn,
-    .unifideck-stop-btn {
+    .unifideck-stop-btn,
+    .unifideck-cancel-btn {
       background: rgba(255, 255, 255, 0.1) !important;
       transition: background 0.15s ease, filter 0.15s ease !important;
     }
@@ -912,13 +913,9 @@ const PlaySectionWrapperInner: FC<PlaySectionWrapperProps> = ({
     .unifideck-install-btn.gpfocus {
       background: linear-gradient(135deg, #1a9fff 0%, #1570b5 100%) !important;
     }
-    .unifideck-cancel-btn {
-      background: linear-gradient(135deg, #dc3545 0%, #c82333 100%) !important;
-      transition: background 0.15s ease, filter 0.15s ease !important;
-    }
     .unifideck-cancel-btn:hover,
     .unifideck-cancel-btn.gpfocus {
-      filter: brightness(1.2) !important;
+      background: linear-gradient(135deg, #dc3545 0%, #c82333 100%) !important;
     }
     .unifideck-play-btn:hover,
     .unifideck-play-btn.gpfocus {
