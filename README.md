@@ -13,6 +13,7 @@ A Decky Loader plugin that brings together games from Steam, Epic Games Store, G
 - [Prerequisites](#prerequisites)
 - [Installation](#installation)
 - [Getting Started](#getting-started)
+- [Launch Options](#launch-options)
 - [Building](#building)
 - [Known Limitations](#known-limitations)
 - [Troubleshooting](#troubleshooting)
@@ -87,10 +88,16 @@ For the expected plugin zip layout (dist, package.json, plugin.json, main.py, LI
 
 Your games will now appear in your Steam library!
 
+## Launch Options
+
+You can add custom parameters to your game launch options (e.g. `MANGOHUD=1`, `LSFG=1`, `PROTON=proton_9`). These are preserved across syncs, installs, and Proton compatibility toggles.
+
+See the full **[Launch Options Guide](docs/launch-options.md)** for details and examples.
+
 ## Known Limitations
 
 - The plugin creates custom tabs that replace the standard Great on Deck, All Games and Installed tabs so standard filtering and sorting will not work (for now).
-- The plugin handles proton/winetricks automatically, but you can use any proton version of your choice. See compatibiity docs.
+- The plugin handles proton/winetricks automatically, but you can use any Proton version of your choice. See the [Proton compatibility docs](docs/proton-compatibility.md) and [launch options guide](docs/launch-options.md).
 - Game download paths (local and sd card) are fixed (for now)
 - Not all games have artwork available - some may show default images. Suggest using SteamGridDB.
 - Cloud saves implemented, but may not work for all games
@@ -108,7 +115,7 @@ Apps and plugins that use the Epic API often get "locked out" when Epic updates 
 
 ### Force Use of Compatibility Tool
 
-DO NOT select this option for Unifideck games. Proton/Wine compatibiltiy is handled automatically and is not configurable right now.
+Force Compatibility (Proton) is supported. The plugin automatically detects your selection and configures the launcher to use it. You can also set a specific Proton version via launch options — see the [Launch Options Guide](docs/launch-options.md) for details.
 
 ### Games Don't Appear After Syncing
 
