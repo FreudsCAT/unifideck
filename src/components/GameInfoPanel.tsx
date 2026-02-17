@@ -508,39 +508,51 @@ const GameInfoPanelInner: React.FC<GameInfoPanelProps> = ({ appId }) => {
 
   // CSS for controller focus state (.gpfocus is automatically applied by Steam)
   const focusStyles = `
+    @keyframes unifideck-focus-breathe {
+      0%, 100% { box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.35); }
+      50% { box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.7); }
+    }
+
     .unifideck-nav-button.gpfocus,
     .unifideck-nav-button:hover {
-      filter: brightness(1.3) !important;
-      background-color: rgba(255, 255, 255, 0.2) !important;
+      animation: unifideck-focus-breathe 1.5s ease-in-out infinite !important;
     }
-    
+
     /* Install button - blue (always) */
     .unifideck-install-button.install-state {
       background-color: #1a9fff !important;
     }
-    
-    /* Install button - brighter blue when focused */
+
+    /* Install button - breathing border when focused */
     .unifideck-install-button.install-state.gpfocus,
     .unifideck-install-button.install-state:hover {
-      background-color: #1a9fff !important;
-      filter: brightness(1.2) !important;
+      animation: unifideck-focus-breathe 1.5s ease-in-out infinite !important;
     }
-    
+
     /* Uninstall button - red (always) */
     .unifideck-install-button.uninstall-state {
       background-color: #d32f2f !important;
     }
-    
-    /* Uninstall button - brighter red when focused */
+
+    /* Uninstall button - breathing border when focused */
     .unifideck-install-button.uninstall-state.gpfocus,
     .unifideck-install-button.uninstall-state:hover {
-      background-color: #d32f2f !important;
-      filter: brightness(1.2) !important;
+      animation: unifideck-focus-breathe 1.5s ease-in-out infinite !important;
     }
-    
+
     /* Cancel button - red (always) */
     .unifideck-install-button.cancel-state {
       background-color: #d32f2f !important;
+    }
+
+    /* Game Info Row - breathing border on gamepad focus */
+    .unifideck-game-info-row.gpfocus {
+      animation: unifideck-focus-breathe 1.5s ease-in-out infinite !important;
+    }
+
+    /* Synopsis Description - breathing border on gamepad focus */
+    .unifideck-synopsis-section.gpfocus {
+      animation: unifideck-focus-breathe 1.5s ease-in-out infinite !important;
     }
   `;
 
@@ -834,7 +846,10 @@ const GameInfoPanelInner: React.FC<GameInfoPanelProps> = ({ appId }) => {
         metadata.publisher ||
         metadata.releaseDate ||
         metadata.metacritic) && (
-        <div
+        <Focusable
+          noFocusRing={true}
+          onActivate={() => {}}
+          className="unifideck-game-info-row"
           style={{
             backgroundColor: "rgba(0, 0, 0, 0.3)",
             borderRadius: "6px",
@@ -927,12 +942,15 @@ const GameInfoPanelInner: React.FC<GameInfoPanelProps> = ({ appId }) => {
               </div>
             )}
           </div>
-        </div>
+        </Focusable>
       )}
 
       {/* Synopsis Expanded Description */}
       {expanded && metadata.description && (
-        <div
+        <Focusable
+          noFocusRing={true}
+          onActivate={() => {}}
+          className="unifideck-synopsis-section"
           style={{
             backgroundColor: "rgba(0, 0, 0, 0.3)",
             borderRadius: "6px",
@@ -944,7 +962,7 @@ const GameInfoPanelInner: React.FC<GameInfoPanelProps> = ({ appId }) => {
           }}
         >
           {metadata.description}
-        </div>
+        </Focusable>
       )}
 
       {/* Navigation Buttons Row */}

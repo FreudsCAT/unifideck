@@ -879,6 +879,8 @@ const PlaySectionWrapperInner: FC<PlaySectionWrapperProps> = ({
     alignItems: "center",
     justifyContent: "flex-start",
     gap: "8px",
+    flex: "0 0 auto",
+    width: "auto",
     minWidth: "200px",
     height: "48px",
     padding: "0 24px",
@@ -1153,10 +1155,11 @@ const PlaySectionWrapperInner: FC<PlaySectionWrapperProps> = ({
     !isRunning
   ) {
     return (
-      <div
+      <Focusable
         ref={wrapperRef}
         data-unifideck-play-wrapper="true"
         className={playSectionClassName || undefined}
+        flow-children="row"
         style={{
           display: "flex",
           alignItems: "center",
@@ -1171,29 +1174,27 @@ const PlaySectionWrapperInner: FC<PlaySectionWrapperProps> = ({
         <style>{buttonStyles}</style>
 
         {/* Update button — acts as cancel when update is in progress */}
-        <Focusable style={{ flex: "0 0 auto" }}>
-          <DialogButton
-            className="unifideck-update-btn"
-            onClick={handleUpdateClick}
-            style={actionBtnStyle}
+        <DialogButton
+          className="unifideck-update-btn"
+          onClick={handleUpdateClick}
+          style={actionBtnStyle}
+        >
+          <svg
+            viewBox="0 0 24 24"
+            fill="currentColor"
+            width="1em"
+            height="1em"
           >
-            <svg
-              viewBox="0 0 24 24"
-              fill="currentColor"
-              width="1em"
-              height="1em"
-            >
-              {isDownloading ? (
-                /* X icon when updating (acts as cancel) */
-                <path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z" />
-              ) : (
-                /* Sync/refresh icon when idle */
-                <path d="M12 4V1L8 5l4 4V6c3.31 0 6 2.69 6 6 0 1.01-.25 1.97-.7 2.8l1.46 1.46C19.54 15.03 20 13.57 20 12c0-4.42-3.58-8-8-8zm0 14c-3.31 0-6-2.69-6-6 0-1.01.25-1.97.7-2.8L5.24 7.74C4.46 8.97 4 10.43 4 12c0 4.42 3.58 8 8 8v3l4-4-4-4v3z" />
-              )}
-            </svg>
-            {isDownloading ? t("installButton.cancel", "Cancel") : "UPDATE"}
-          </DialogButton>
-        </Focusable>
+            {isDownloading ? (
+              /* X icon when updating (acts as cancel) */
+              <path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z" />
+            ) : (
+              /* Sync/refresh icon when idle */
+              <path d="M12 4V1L8 5l4 4V6c3.31 0 6 2.69 6 6 0 1.01-.25 1.97-.7 2.8l1.46 1.46C19.54 15.03 20 13.57 20 12c0-4.42-3.58-8-8-8zm0 14c-3.31 0-6-2.69-6-6 0-1.01.25-1.97.7-2.8L5.24 7.74C4.46 8.97 4 10.43 4 12c0 4.42 3.58 8 8 8v3l4-4-4-4v3z" />
+            )}
+          </svg>
+          {isDownloading ? t("installButton.cancel", "Cancel") : "UPDATE"}
+        </DialogButton>
 
         {/* Progress area — shows during update download or "Update Available" when idle */}
         {isDownloading && downloadInfo ? (
@@ -1226,7 +1227,7 @@ const PlaySectionWrapperInner: FC<PlaySectionWrapperProps> = ({
           </div>
         )}
         {/* Right icon buttons - controller config + app settings */}
-        <Focusable
+        <div
           style={{
             display: "flex",
             gap: "8px",
@@ -1293,18 +1294,19 @@ const PlaySectionWrapperInner: FC<PlaySectionWrapperProps> = ({
               />
             </svg>
           </DialogButton>
-        </Focusable>
-      </div>
+        </div>
+      </Focusable>
     );
   }
 
   // ========== INSTALLED STATE: Play / Resume + X ==========
   if (gameInfo.is_installed && !isDownloading) {
     return (
-      <div
+      <Focusable
         ref={wrapperRef}
         data-unifideck-play-wrapper="true"
         className={playSectionClassName || undefined}
+        flow-children="row"
         style={{
           display: "flex",
           alignItems: "center",
@@ -1319,56 +1321,11 @@ const PlaySectionWrapperInner: FC<PlaySectionWrapperProps> = ({
         <style>{buttonStyles}</style>
 
         {/* Action buttons — Play or Resume+X depending on running state */}
-        <Focusable style={{ flex: "0 0 auto", display: "flex", gap: "4px" }}>
-          {isRunning ? (
-            <>
-              {/* Resume button — brings running game to foreground */}
-              <DialogButton
-                className="unifideck-resume-btn"
-                onClick={handlePlay}
-                style={actionBtnStyle}
-              >
-                <svg
-                  viewBox="0 0 24 24"
-                  fill="currentColor"
-                  width="1em"
-                  height="1em"
-                >
-                  <path d="M8 5v14l11-7z" />
-                </svg>
-                {t("installButton.resume", "Resume")}
-              </DialogButton>
-              {/* X close button — terminates the running game */}
-              <DialogButton
-                className="unifideck-stop-btn"
-                onClick={handleStop}
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  width: "48px",
-                  height: "48px",
-                  minWidth: "48px",
-                  padding: "0",
-                  borderRadius: "4px",
-                  border: "none",
-                  color: "#fff",
-                }}
-              >
-                <svg
-                  viewBox="0 0 24 24"
-                  fill="currentColor"
-                  width="20"
-                  height="20"
-                >
-                  <path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z" />
-                </svg>
-              </DialogButton>
-            </>
-          ) : (
-            /* Play button — launches the game */
+        {isRunning ? (
+          <>
+            {/* Resume button — brings running game to foreground */}
             <DialogButton
-              className="unifideck-play-btn"
+              className="unifideck-resume-btn"
               onClick={handlePlay}
               style={actionBtnStyle}
             >
@@ -1380,10 +1337,53 @@ const PlaySectionWrapperInner: FC<PlaySectionWrapperProps> = ({
               >
                 <path d="M8 5v14l11-7z" />
               </svg>
-              {t("installButton.play", "Play")}
+              {t("installButton.resume", "Resume")}
             </DialogButton>
-          )}
-        </Focusable>
+            {/* X close button — terminates the running game */}
+            <DialogButton
+              className="unifideck-stop-btn"
+              onClick={handleStop}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                width: "48px",
+                height: "48px",
+                minWidth: "48px",
+                padding: "0",
+                borderRadius: "4px",
+                border: "none",
+                color: "#fff",
+              }}
+            >
+              <svg
+                viewBox="0 0 24 24"
+                fill="currentColor"
+                width="20"
+                height="20"
+              >
+                <path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z" />
+              </svg>
+            </DialogButton>
+          </>
+        ) : (
+          /* Play button — launches the game */
+          <DialogButton
+            className="unifideck-play-btn"
+            onClick={handlePlay}
+            style={actionBtnStyle}
+          >
+            <svg
+              viewBox="0 0 24 24"
+              fill="currentColor"
+              width="1em"
+              height="1em"
+            >
+              <path d="M8 5v14l11-7z" />
+            </svg>
+            {t("installButton.play", "Play")}
+          </DialogButton>
+        )}
 
         {/* Last Played stat — hidden when background download is active */}
         {!isDownloading && (
@@ -1417,7 +1417,7 @@ const PlaySectionWrapperInner: FC<PlaySectionWrapperProps> = ({
         {isDownloading && downloadInfo && renderUnifiedProgress(downloadInfo)}
 
         {/* Right icon buttons - controller config + app settings */}
-        <Focusable
+        <div
           style={{
             display: "flex",
             gap: "8px",
@@ -1484,8 +1484,8 @@ const PlaySectionWrapperInner: FC<PlaySectionWrapperProps> = ({
               />
             </svg>
           </DialogButton>
-        </Focusable>
-      </div>
+        </div>
+      </Focusable>
     );
   }
 
@@ -1495,10 +1495,11 @@ const PlaySectionWrapperInner: FC<PlaySectionWrapperProps> = ({
     : t("installButton.installNative", "Install");
 
   return (
-    <div
+    <Focusable
       ref={wrapperRef}
       data-unifideck-play-wrapper="true"
       className={playSectionClassName || undefined}
+      flow-children="row"
       style={{
         display: "flex",
         alignItems: "center",
@@ -1513,27 +1514,25 @@ const PlaySectionWrapperInner: FC<PlaySectionWrapperProps> = ({
       <style>{buttonStyles}</style>
 
       {/* Install/Cancel button — explicit styling matching native Steam button */}
-      <Focusable style={{ flex: "0 0 auto" }}>
-        <DialogButton
-          className={
-            isDownloading ? "unifideck-cancel-btn" : "unifideck-install-btn"
-          }
-          onClick={handleClick}
-          style={actionBtnStyle}
-        >
-          {!isDownloading && (
-            <svg
-              viewBox="0 0 24 24"
-              fill="currentColor"
-              width="1em"
-              height="1em"
-            >
-              <path d="M5 20h14v-2H5v2zM19 9h-4V3H9v6H5l7 7 7-7z" />
-            </svg>
-          )}
-          {displayText}
-        </DialogButton>
-      </Focusable>
+      <DialogButton
+        className={
+          isDownloading ? "unifideck-cancel-btn" : "unifideck-install-btn"
+        }
+        onClick={handleClick}
+        style={actionBtnStyle}
+      >
+        {!isDownloading && (
+          <svg
+            viewBox="0 0 24 24"
+            fill="currentColor"
+            width="1em"
+            height="1em"
+          >
+            <path d="M5 20h14v-2H5v2zM19 9h-4V3H9v6H5l7 7 7-7z" />
+          </svg>
+        )}
+        {displayText}
+      </DialogButton>
 
       {/* Stats or Progress - inline layout matching native spacing */}
       {isDownloading && downloadInfo ? (
@@ -1588,7 +1587,7 @@ const PlaySectionWrapperInner: FC<PlaySectionWrapperProps> = ({
       )}
 
       {/* Right icon buttons - controller config + app settings */}
-      <Focusable
+      <div
         style={{
           display: "flex",
           gap: "8px",
@@ -1647,8 +1646,8 @@ const PlaySectionWrapperInner: FC<PlaySectionWrapperProps> = ({
             />
           </svg>
         </DialogButton>
-      </Focusable>
-    </div>
+      </div>
+    </Focusable>
   );
 };
 
