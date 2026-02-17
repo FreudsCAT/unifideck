@@ -94,7 +94,7 @@ const getStoredViewMode = (): GameDetailsViewMode => {
  * GameInfoPanel - Displays metadata for non-Steam games
  * Matches Steam's GAME INFO tab layout with functional navigation buttons
  */
-const GameInfoPanel: React.FC<GameInfoPanelProps> = ({ appId }) => {
+const GameInfoPanelInner: React.FC<GameInfoPanelProps> = ({ appId }) => {
   const { t } = useTranslation();
   const [metadata, setMetadata] = useState<GameMetadata | null>(null);
   const [loading, setLoading] = useState(true);
@@ -1027,5 +1027,38 @@ const GameInfoPanel: React.FC<GameInfoPanelProps> = ({ appId }) => {
     </div>
   );
 };
+
+// Error boundary: catches render-time crashes (e.g. in Steam offline mode where
+// the React tree changes) and falls back to native Steam game details instead of
+// blanking the entire page.
+class GameInfoPanelErrorBoundary extends React.Component<
+  { children: React.ReactNode; appId: number },
+  { hasError: boolean }
+> {
+  state = { hasError: false };
+
+  static getDerivedStateFromError() {
+    return { hasError: true };
+  }
+
+  componentDidCatch(error: Error, info: React.ErrorInfo) {
+    console.error(
+      `[Unifideck] GameInfoPanel crashed for app ${this.props.appId}:`,
+      error,
+      info,
+    );
+  }
+
+  render() {
+    if (this.state.hasError) return null;
+    return this.props.children;
+  }
+}
+
+const GameInfoPanel: React.FC<GameInfoPanelProps> = (props) => (
+  <GameInfoPanelErrorBoundary appId={props.appId}>
+    <GameInfoPanelInner {...props} />
+  </GameInfoPanelErrorBoundary>
+);
 
 export default GameInfoPanel;

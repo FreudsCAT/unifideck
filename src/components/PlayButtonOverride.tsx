@@ -16,7 +16,7 @@
  * Click handling triggers Steam's game action flow, which the interceptor catches.
  */
 
-import { FC, useState, useEffect, useRef } from "react";
+import React, { FC, useState, useEffect, useRef } from "react";
 import { call, toaster } from "@decky/api";
 import { DialogButton, Focusable, showModal, ConfirmModal } from "@decky/ui";
 import { useTranslation } from "react-i18next";
@@ -56,10 +56,16 @@ function chainCDPOp(appId: number, op: () => Promise<void>): void {
 export async function injectHidePlaySectionCDP(appId: number): Promise<void> {
   chainCDPOp(appId, async () => {
     try {
-      const result = await call<[number], { success: boolean; error?: string }>(
-        "hide_native_play_section",
-        appId,
+      const timeout = new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error("CDP hide timeout (10s)")), 10000),
       );
+      const result = await Promise.race([
+        call<[number], { success: boolean; error?: string }>(
+          "hide_native_play_section",
+          appId,
+        ),
+        timeout,
+      ]);
 
       if (result.success) {
         console.log(
@@ -82,10 +88,16 @@ export async function injectHidePlaySectionCDP(appId: number): Promise<void> {
 export async function removeHidePlaySectionCDP(appId: number): Promise<void> {
   chainCDPOp(appId, async () => {
     try {
-      const result = await call<[number], { success: boolean; error?: string }>(
-        "unhide_native_play_section",
-        appId,
+      const timeout = new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error("CDP unhide timeout (10s)")), 10000),
       );
+      const result = await Promise.race([
+        call<[number], { success: boolean; error?: string }>(
+          "unhide_native_play_section",
+          appId,
+        ),
+        timeout,
+      ]);
 
       if (result.success) {
         console.log(
@@ -126,12 +138,19 @@ interface PlaySectionWrapperProps {
   playSectionClassName?: string;
 }
 
-export const PlaySectionWrapper: FC<PlaySectionWrapperProps> = ({
+const PlaySectionWrapperInner: FC<PlaySectionWrapperProps> = ({
   appId,
   playSectionClassName,
 }) => {
-  const [gameInfo, setGameInfo] = useState<any>(null);
-  const [loading, setLoading] = useState(true);
+  // Lazy init from cache: avoids blank screen on remount (e.g. after Steam Settings → B → back).
+  // If any cached entry exists (even stale), use it immediately so the first render has data.
+  // Stale data is refreshed in the background by the useEffect below.
+  const [gameInfo, setGameInfo] = useState<any>(
+    () => gameInfoCacheRef?.get(appId)?.info ?? null,
+  );
+  const [loading, setLoading] = useState<boolean>(
+    () => !gameInfoCacheRef?.has(appId),
+  );
   const [downloadInfo, setDownloadInfo] = useState<{
     id: string;
     status: string;
@@ -164,16 +183,34 @@ export const PlaySectionWrapper: FC<PlaySectionWrapperProps> = ({
   // Non-Unifideck shortcuts: get_game_info returns null → gameInfo is null → false
   const shouldShowCustom = !loading && gameInfo && !gameInfo.error;
 
-  // Style management: CDP hide is triggered FROM this component, not the patcher.
-  // Only hide native PlaySection once shouldShowCustom is true — this prevents
-  // the blank screen race condition where CDP hides native before custom is ready.
-  // We do NOT remove on unmount — React re-renders cause unmount/remount cycles,
-  // and the patcher's deduplication prevents re-injection on remount.
-  // Cleanup of all hide styles happens in plugin _unload via shutdown_cdp_client.
+  // Style management: CDP hide with burst + persistent polling.
+  // React can recreate native PlaySection DOM elements at unpredictable times,
+  // especially when navigating from Decky settings, console, or Steam menu.
+  // Strategy: fast burst for immediate navigation, then slow poll to catch late re-renders.
+  // Safety: CDP's hide_native_play_section has a container-size check (>50% viewport)
+  // that prevents blanking the entire page in offline mode or unusual DOM structures.
   useEffect(() => {
-    if (shouldShowCustom) {
-      injectHidePlaySectionCDP(appId);
-    }
+    if (!shouldShowCustom) return;
+
+    const timers: NodeJS.Timeout[] = [];
+    const doHide = () => injectHidePlaySectionCDP(appId);
+
+    // Fast burst: catch the native PlaySection as soon as it appears
+    doHide();                                          // Immediate
+    timers.push(setTimeout(doHide, 50));               // Fast retry
+    timers.push(setTimeout(doHide, 150));              // DOM settle
+    timers.push(setTimeout(doHide, 300));              // React reconciliation
+    timers.push(setTimeout(doHide, 600));              // Late re-render
+
+    // Persistent poll: catch React re-renders that happen after the burst.
+    // CDP hide is idempotent (re-applying styles to already-hidden elements is harmless).
+    const interval = setInterval(doHide, 2000);
+
+    return () => {
+      timers.forEach(clearTimeout);
+      clearInterval(interval);
+      removeHidePlaySectionCDP(appId);
+    };
   }, [shouldShowCustom, appId]);
 
   // Failure handling: if get_game_info fails or returns null/error,
@@ -200,19 +237,34 @@ export const PlaySectionWrapper: FC<PlaySectionWrapperProps> = ({
     }
   }, [appId]);
 
-  // Fetch game info on mount
+  // Safety timeout: if loading hangs (e.g. get_game_info never resolves),
+  // force loading=false after 8s so the component falls back to showing
+  // the native Steam game details page instead of a blank placeholder.
   useEffect(() => {
-    if (gameInfoCacheRef) {
-      const cached = gameInfoCacheRef.get(appId);
-      if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
-        setGameInfo(cached.info);
-        setLoading(false);
-        return;
-      }
+    if (!loading) return;
+    const timer = setTimeout(() => {
+      console.warn(
+        `[PlaySectionWrapper] Loading timeout for app ${appId}, falling back to native`,
+      );
+      setLoading(false);
+    }, 8000);
+    return () => clearTimeout(timer);
+  }, [loading, appId]);
+
+  // Fetch game info on mount. With lazy state init above, any cached entry is already rendered.
+  // - Fresh cache (< TTL): skip fetch entirely — data is already shown.
+  // - Stale cache (≥ TTL): data is already shown from init; re-fetch in background and update.
+  // - No cache: loading=true from init; fetch and show when done.
+  useEffect(() => {
+    const cached = gameInfoCacheRef?.get(appId);
+    if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
+      return; // Fresh — already initialized, nothing to do
     }
 
     call<[number], any>("get_game_info", appId)
       .then((info) => {
+        console.log("[Unifideck DIAG] get_game_info result:", "appId:", appId,
+          "hasError:", !!info?.error, "isInstalled:", info?.is_installed, "store:", info?.store);
         const processedInfo = info?.error ? null : info;
         setGameInfo(processedInfo);
         if (gameInfoCacheRef && processedInfo) {
@@ -223,7 +275,7 @@ export const PlaySectionWrapper: FC<PlaySectionWrapperProps> = ({
         }
       })
       .catch((err) => {
-        console.error(`[PlaySectionWrapper] Error fetching game info:`, err);
+        console.error(`[Unifideck DIAG] get_game_info FAILED:`, err);
         setGameInfo(null);
       })
       .finally(() => setLoading(false));
@@ -582,13 +634,17 @@ export const PlaySectionWrapper: FC<PlaySectionWrapperProps> = ({
   // Autofocus: Focus our action button via CDP after hiding the native one.
   // DOM .focus() doesn't work cross-process (plugin CEF ≠ SP tab), so we
   // use CDP to find and focus our button in the SP tab's DOM directly.
+  // Non-critical — short 3s timeout to avoid blocking on CDP degradation.
   useEffect(() => {
     if (!shouldShowCustom) return;
     const timer = setTimeout(() => {
-      call<[number], { success: boolean }>(
-        "focus_unifideck_button",
-        appId,
-      ).catch(() => {});
+      const focusTimeout = new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error("focus timeout")), 3000),
+      );
+      Promise.race([
+        call<[number], { success: boolean }>("focus_unifideck_button", appId),
+        focusTimeout,
+      ]).catch(() => {});
     }, 300);
     return () => clearTimeout(timer);
   }, [shouldShowCustom, appId]);
@@ -779,6 +835,11 @@ export const PlaySectionWrapper: FC<PlaySectionWrapperProps> = ({
       console.error(`[PlaySectionWrapper] TerminateApp failed:`, error);
     }
   };
+
+  // DIAG: Track component lifecycle (temporary)
+  console.log("[Unifideck DIAG] PlaySectionWrapper render:",
+    "appId:", appId, "loading:", loading, "gameInfo:", !!gameInfo,
+    "shouldShowCustom:", shouldShowCustom, "isDownloading:", isDownloading);
 
   // While loading: show visible placeholder to prevent blank screen.
   // Error (gameInfo null): return null so native PlaySection (unhidden via CDP) shows through.
@@ -1590,5 +1651,40 @@ export const PlaySectionWrapper: FC<PlaySectionWrapperProps> = ({
     </div>
   );
 };
+
+// Error boundary: catches render-time crashes (e.g. in Steam offline mode where
+// the React tree changes) and falls back to native Steam game details instead of
+// blanking the entire page.
+class PlaySectionErrorBoundary extends React.Component<
+  { children: React.ReactNode; appId: number },
+  { hasError: boolean }
+> {
+  state = { hasError: false };
+
+  static getDerivedStateFromError() {
+    return { hasError: true };
+  }
+
+  componentDidCatch(error: Error, info: React.ErrorInfo) {
+    console.error(
+      `[Unifideck] PlaySectionWrapper crashed for app ${this.props.appId}:`,
+      error,
+      info,
+    );
+    // Unhide native play section so Steam's default UI shows through
+    removeHidePlaySectionCDP(this.props.appId);
+  }
+
+  render() {
+    if (this.state.hasError) return null;
+    return this.props.children;
+  }
+}
+
+export const PlaySectionWrapper: FC<PlaySectionWrapperProps> = (props) => (
+  <PlaySectionErrorBoundary appId={props.appId}>
+    <PlaySectionWrapperInner {...props} />
+  </PlaySectionErrorBoundary>
+);
 
 export default PlaySectionWrapper;

@@ -52,6 +52,7 @@ class UnifideckCDPClient:
         self.ws_url: Optional[str] = None
         self.msg_id = 0
         self.connected = False
+        self._exec_lock = asyncio.Lock()
 
     async def connect(self):
         """Connect to Steam's SP (library UI) tab via CDP.
@@ -130,46 +131,51 @@ class UnifideckCDPClient:
 
         Returns the CDP response dict. Raises on timeout, disconnect, or
         if the evaluated JS threw an exception.
+
+        Uses asyncio.Lock to serialize WebSocket access — prevents concurrent
+        readers from stealing each other's responses (message-stealing race).
         """
-        if not self.connected or not self.websocket:
-            raise Exception("CDP not connected")
+        async with self._exec_lock:
+            if not self.connected or not self.websocket:
+                raise Exception("CDP not connected")
 
-        self.msg_id += 1
-        msg_id = self.msg_id
+            self.msg_id += 1
+            msg_id = self.msg_id
 
-        await self.websocket.send_json({
-            "id": msg_id,
-            "method": "Runtime.evaluate",
-            "params": {
-                "expression": js,
-                "userGesture": True,
-                "awaitPromise": False,
-                "returnByValue": True,
-            },
-        })
+            await self.websocket.send_json({
+                "id": msg_id,
+                "method": "Runtime.evaluate",
+                "params": {
+                    "expression": js,
+                    "userGesture": True,
+                    "awaitPromise": False,
+                    "returnByValue": True,
+                },
+            })
 
-        # Wait for the matching response with a hard timeout
-        async def _wait_for_response():
-            async for msg in self.websocket:
-                data = msg.json()
-                if data.get("id") == msg_id:
-                    return data
-                # Discard unrelated CDP events/responses (keep reading)
-            raise Exception("CDP connection closed while waiting for response")
+            # Wait for the matching response with a hard timeout
+            async def _wait_for_response():
+                async for msg in self.websocket:
+                    data = msg.json()
+                    if data.get("id") == msg_id:
+                        return data
+                    # Discard unrelated CDP events/responses (keep reading)
+                raise Exception("CDP connection closed while waiting for response")
 
-        try:
-            result = await asyncio.wait_for(_wait_for_response(), timeout=8.0)
-        except asyncio.TimeoutError:
-            raise Exception("CDP timeout waiting for response (8s)")
+            try:
+                result = await asyncio.wait_for(_wait_for_response(), timeout=8.0)
+            except asyncio.TimeoutError:
+                self.connected = False  # Force reconnect on next call
+                raise Exception("CDP timeout waiting for response (8s)")
 
-        # Validate: check for JS exceptions in the result
-        if "exceptionDetails" in result.get("result", {}):
-            exc = result["result"]["exceptionDetails"]
-            text = exc.get("text", "")
-            desc = exc.get("exception", {}).get("description", "")
-            raise Exception(f"CDP JS exception: {text} — {desc}")
+            # Validate: check for JS exceptions in the result
+            if "exceptionDetails" in result.get("result", {}):
+                exc = result["result"]["exceptionDetails"]
+                text = exc.get("text", "")
+                desc = exc.get("exception", {}).get("description", "")
+                raise Exception(f"CDP JS exception: {text} — {desc}")
 
-        return result
+            return result
 
     async def inject_hide_css(self, appId: int, css_rules: str) -> str:
         """Inject CSS to hide native PlaySection in the SP tab's DOM.
@@ -309,11 +315,19 @@ class UnifideckCDPClient:
             '            break;\n'
             '        }\n'
             '    }\n'
+            '    // Safety check: do not hide containers that are too large.\n'
+            '    // If the container covers more than 50% of viewport height,\n'
+            '    // we likely walked up too far and would blank the entire page.\n'
+            '    var cRect = container.getBoundingClientRect();\n'
+            '    if (cRect.height > window.innerHeight * 0.5) {\n'
+            '        console.warn("[Unifideck CDP] SAFETY: container too large (" + Math.round(cRect.height) + "px > 50% viewport), NOT hiding for app " + appId);\n'
+            '        return "too_large";\n'
+            '    }\n'
             '    container.setAttribute("data-unifideck-hidden-native", appId);\n'
             '    container.style.setProperty("display", "none", "important");\n'
             '    container.style.setProperty("visibility", "hidden", "important");\n'
             '    container.style.setProperty("pointer-events", "none", "important");\n'
-            '    console.log("[Unifideck CDP] Hidden native play section for app " + appId);\n'
+            '    console.log("[Unifideck CDP] Hidden native play section for app " + appId + " (container " + Math.round(cRect.height) + "px)");\n'
             '    return "hidden";\n'
             '})()'
         )
@@ -393,18 +407,22 @@ _cdp_client: Optional[UnifideckCDPClient] = None
 
 
 async def get_cdp_client() -> UnifideckCDPClient:
-    """Get or create CDP client singleton"""
+    """Get or create CDP client singleton.
+
+    Wraps connect() with a 5s timeout so callers get either a working
+    client or a clean exception — never hanging indefinitely.
+    """
     global _cdp_client
 
     if _cdp_client is None:
         _cdp_client = UnifideckCDPClient()
-        await _cdp_client.connect()
+        await asyncio.wait_for(_cdp_client.connect(), timeout=5.0)
     elif not _cdp_client.connected:
         # Stale client — reconnect
         print("[Unifideck CDP] Singleton exists but disconnected, reconnecting...")
         await _cdp_client.disconnect()
         _cdp_client = UnifideckCDPClient()
-        await _cdp_client.connect()
+        await asyncio.wait_for(_cdp_client.connect(), timeout=5.0)
 
     return _cdp_client
 
@@ -416,8 +434,8 @@ async def shutdown_cdp_client():
     if _cdp_client:
         try:
             if _cdp_client.connected:
-                await _cdp_client.remove_all_hide_css()
-        except Exception as e:
-            print(f"[Unifideck CDP] Failed to remove styles during shutdown: {e}")
+                await asyncio.wait_for(_cdp_client.remove_all_hide_css(), timeout=3.0)
+        except (asyncio.TimeoutError, Exception) as e:
+            print(f"[Unifideck CDP] Cleanup during shutdown skipped: {e}")
         await _cdp_client.disconnect()
         _cdp_client = None
