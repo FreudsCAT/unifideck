@@ -198,7 +198,13 @@
       "installingRedist": "Redistributables installeren",
       "installingRedistMessage": "Eerste GOG redistributable installatie uitvoeren...",
       "setupFailed": "Installatie mislukt",
-      "setupFailedMessage": "Installatie mislukt, zie logs voor details"
+      "setupFailedMessage": "Installatie mislukt, zie logs voor details",
+      "prerequisitesTitle": "Vereisten installeren",
+      "installingPrerequisites": "Vereiste spelvoorwaarden installeren...",
+      "prerequisitesReady": "Vereisten gereed",
+      "prerequisitesInstalled": "Spelvereisten geïnstalleerd",
+      "prerequisitesFailed": "Vereisten waarschuwing",
+      "prerequisitesFailedMessage": "Vereisten zijn mogelijk niet correct geïnstalleerd"
     }
   },
   "uninstallModal": {

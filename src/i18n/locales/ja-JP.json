@@ -198,7 +198,13 @@
       "installingRedist": "再頒布可能パッケージをインストール中",
       "installingRedistMessage": "GOG再頒布可能パッケージの初回インストールを実行中...",
       "setupFailed": "セットアップに失敗しました",
-      "setupFailedMessage": "インストールに失敗しました。詳細はログを確認してください"
+      "setupFailedMessage": "インストールに失敗しました。詳細はログを確認してください",
+      "prerequisitesTitle": "前提条件のインストール",
+      "installingPrerequisites": "ゲームの前提条件をインストール中...",
+      "prerequisitesReady": "前提条件の準備完了",
+      "prerequisitesInstalled": "ゲームの前提条件がインストールされました",
+      "prerequisitesFailed": "前提条件の警告",
+      "prerequisitesFailedMessage": "前提条件が正しくインストールされなかった可能性があります"
     }
   },
   "uninstallModal": {

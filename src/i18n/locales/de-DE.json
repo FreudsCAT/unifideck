@@ -198,7 +198,13 @@
       "installingRedist": "Redistributables werden installiert",
       "installingRedistMessage": "Führe erstmalige GOG-Redistributable-Installation aus...",
       "setupFailed": "Einrichtung fehlgeschlagen",
-      "setupFailedMessage": "Installation fehlgeschlagen, siehe Protokolle für Details"
+      "setupFailedMessage": "Installation fehlgeschlagen, siehe Protokolle für Details",
+      "prerequisitesTitle": "Voraussetzungen installieren",
+      "installingPrerequisites": "Erforderliche Spielvoraussetzungen werden installiert...",
+      "prerequisitesReady": "Voraussetzungen bereit",
+      "prerequisitesInstalled": "Spielvoraussetzungen installiert",
+      "prerequisitesFailed": "Voraussetzungen Warnung",
+      "prerequisitesFailedMessage": "Voraussetzungen wurden möglicherweise nicht korrekt installiert"
     }
   },
   "uninstallModal": {

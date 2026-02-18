@@ -861,6 +861,26 @@ if [[ "$EXE_PATH" == *.exe ]] || [[ "$EXE_PATH" == *.EXE ]] || \
             log "[Winetricks] Redistributables already installed, skipping"
         fi
 
+        # === PREREQUISITES: Install game-specific prerequisites (e.g., Ubisoft Connect) ===
+        # This mirrors Heroic's legendarySetup which reads prereq_info from legendary metadata
+        # and runs the installer (e.g., UplayInstaller.exe /S) inside the prefix.
+        PREREQ_SCRIPT="$PLUGIN_DIR/bin/epic_prerequisites.py"
+        PREREQ_MARKER="$PREFIX_PATH/.unifideck_prereqs_${GAME_ID}.done"
+
+        if [ ! -f "$PREREQ_MARKER" ] && [ -f "$PREREQ_SCRIPT" ]; then
+            log "[Prerequisites] Checking for game prerequisites..."
+            notify_stage "toasts.launcher.prerequisitesTitle" "toasts.launcher.installingPrerequisites" "normal"
+
+            if python3 "$PREREQ_SCRIPT" "$GAME_ID" "$PREFIX_PATH" >> "$LOG_FILE" 2>&1; then
+                log "[Prerequisites] Installation completed"
+                notify_stage "toasts.launcher.prerequisitesReady" "toasts.launcher.prerequisitesInstalled" "low"
+            else
+                log "[Prerequisites] Installation failed (game may still work)"
+                notify_stage "toasts.launcher.prerequisitesFailed" "toasts.launcher.prerequisitesFailedMessage" "normal"
+            fi
+        else
+            log "[Prerequisites] Already installed or no script found, skipping"
+        fi
 
         # Get the umu-run path
         # PREFER bundled umu-run - Heroic's flatpak uses Python 3.9 which causes

@@ -198,7 +198,13 @@
       "installingRedist": "Installation des redistribuables",
       "installingRedistMessage": "Exécution de la première installation des redistribuables GOG...",
       "setupFailed": "Échec de l'installation",
-      "setupFailedMessage": "L'installation a échoué, voir les journaux pour plus de détails"
+      "setupFailedMessage": "L'installation a échoué, voir les journaux pour plus de détails",
+      "prerequisitesTitle": "Installation des prérequis",
+      "installingPrerequisites": "Installation des prérequis du jeu...",
+      "prerequisitesReady": "Prérequis prêts",
+      "prerequisitesInstalled": "Prérequis du jeu installés",
+      "prerequisitesFailed": "Avertissement prérequis",
+      "prerequisitesFailedMessage": "Les prérequis n'ont peut-être pas été installés correctement"
     }
   },
   "uninstallModal": {

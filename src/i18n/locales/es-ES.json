@@ -198,7 +198,13 @@
       "installingRedist": "Instalando redistribuibles",
       "installingRedistMessage": "Ejecutando instalación inicial de redistribuibles de GOG...",
       "setupFailed": "Configuración fallida",
-      "setupFailedMessage": "La instalación falló, ver registros para más detalles"
+      "setupFailedMessage": "La instalación falló, ver registros para más detalles",
+      "prerequisitesTitle": "Instalando requisitos previos",
+      "installingPrerequisites": "Instalando requisitos previos del juego...",
+      "prerequisitesReady": "Requisitos listos",
+      "prerequisitesInstalled": "Requisitos previos del juego instalados",
+      "prerequisitesFailed": "Advertencia de requisitos",
+      "prerequisitesFailedMessage": "Es posible que los requisitos previos no se hayan instalado correctamente"
     }
   },
   "uninstallModal": {

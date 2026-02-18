@@ -198,7 +198,13 @@
       "installingRedist": "Installing Redistributables",
       "installingRedistMessage": "Running first-time GOG redistributable installation...",
       "setupFailed": "Setup Failed",
-      "setupFailedMessage": "Installation failed, see logs for details"
+      "setupFailedMessage": "Installation failed, see logs for details",
+      "prerequisitesTitle": "Installing Prerequisites",
+      "installingPrerequisites": "Installing required game prerequisites...",
+      "prerequisitesReady": "Prerequisites Ready",
+      "prerequisitesInstalled": "Game prerequisites installed",
+      "prerequisitesFailed": "Prerequisites Warning",
+      "prerequisitesFailedMessage": "Prerequisites may not have installed correctly"
     }
   },
   "uninstallModal": {

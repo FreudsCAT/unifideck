@@ -201,7 +201,13 @@
       "installingRedist": "Yeniden Dağıtılabilir Paketler Yükleniyor",
       "installingRedistMessage": "İlk GOG paket kurulumu çalıştırılıyor...",
       "setupFailed": "Kurulum Başarısız",
-      "setupFailedMessage": "Kurulum başarısız, ayrıntılar için günlüklere bakın"
+      "setupFailedMessage": "Kurulum başarısız, ayrıntılar için günlüklere bakın",
+      "prerequisitesTitle": "Ön Koşullar Yükleniyor",
+      "installingPrerequisites": "Gerekli oyun ön koşulları yükleniyor...",
+      "prerequisitesReady": "Ön Koşullar Hazır",
+      "prerequisitesInstalled": "Oyun ön koşulları yüklendi",
+      "prerequisitesFailed": "Ön Koşullar Uyarısı",
+      "prerequisitesFailedMessage": "Ön koşullar doğru şekilde yüklenmemiş olabilir"
     }
   },
   "uninstallModal": {

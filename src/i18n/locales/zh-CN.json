@@ -203,7 +203,13 @@
       "installingRedist": "正在安装运行库",
       "installingRedistMessage": "正在运行首次 GOG 运行库安装...",
       "setupFailed": "设置失败",
-      "setupFailedMessage": "安装失败，请查看日志详情"
+      "setupFailedMessage": "安装失败，请查看日志详情",
+      "prerequisitesTitle": "正在安装前置条件",
+      "installingPrerequisites": "正在安装游戏所需的前置条件...",
+      "prerequisitesReady": "前置条件就绪",
+      "prerequisitesInstalled": "游戏前置条件已安装",
+      "prerequisitesFailed": "前置条件警告",
+      "prerequisitesFailedMessage": "前置条件可能未正确安装"
     }
   },
   "uninstallModal": {

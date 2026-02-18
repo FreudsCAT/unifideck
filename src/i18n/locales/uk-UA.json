@@ -198,7 +198,13 @@
       "installingRedist": "Встановлення додаткових компонентів",
       "installingRedistMessage": "Запуск первинного встановлення компонентів GOG...",
       "setupFailed": "Помилка налаштування",
-      "setupFailedMessage": "Встановлення не вдалося, див. журнал"
+      "setupFailedMessage": "Встановлення не вдалося, див. журнал",
+      "prerequisitesTitle": "Встановлення передумов",
+      "installingPrerequisites": "Встановлення необхідних передумов гри...",
+      "prerequisitesReady": "Передумови готові",
+      "prerequisitesInstalled": "Передумови гри встановлені",
+      "prerequisitesFailed": "Попередження про передумови",
+      "prerequisitesFailedMessage": "Передумови можуть бути встановлені некоректно"
     }
   },
   "uninstallModal": {

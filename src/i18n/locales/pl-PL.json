@@ -198,7 +198,13 @@
       "installingRedist": "Instalowanie pakietów redystrybucyjnych",
       "installingRedistMessage": "Uruchamianie pierwszej instalacji pakietów GOG...",
       "setupFailed": "Konfiguracja nie powiodła się",
-      "setupFailedMessage": "Instalacja nie powiodła się, zobacz logi po szczegóły"
+      "setupFailedMessage": "Instalacja nie powiodła się, zobacz logi po szczegóły",
+      "prerequisitesTitle": "Instalowanie wymagań wstępnych",
+      "installingPrerequisites": "Instalowanie wymaganych składników gry...",
+      "prerequisitesReady": "Wymagania wstępne gotowe",
+      "prerequisitesInstalled": "Wymagania wstępne gry zainstalowane",
+      "prerequisitesFailed": "Ostrzeżenie o wymaganiach",
+      "prerequisitesFailedMessage": "Wymagania wstępne mogły nie zostać poprawnie zainstalowane"
     }
   },
   "uninstallModal": {

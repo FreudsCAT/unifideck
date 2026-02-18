@@ -198,7 +198,13 @@
       "installingRedist": "Установка зависимостей",
       "installingRedistMessage": "Первичный запуск установки пакетов GOG...",
       "setupFailed": "Ошибка настройки",
-      "setupFailedMessage": "Установка не удалась, см. логи"
+      "setupFailedMessage": "Установка не удалась, см. логи",
+      "prerequisitesTitle": "Установка необходимых компонентов",
+      "installingPrerequisites": "Установка необходимых компонентов игры...",
+      "prerequisitesReady": "Компоненты готовы",
+      "prerequisitesInstalled": "Необходимые компоненты игры установлены",
+      "prerequisitesFailed": "Предупреждение о компонентах",
+      "prerequisitesFailedMessage": "Необходимые компоненты могли быть установлены некорректно"
     }
   },
   "uninstallModal": {
