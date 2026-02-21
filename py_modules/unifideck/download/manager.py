@@ -556,30 +556,47 @@ class DownloadQueue:
                 
                 # Sanitize game title to match the folder name created during download
                 safe_title = "".join(c for c in current.game_title if c.isalnum() or c in (' ', '-', '_')).strip()
-                game_dir = os.path.join(install_path, safe_title)
                 
-                # ADDITIONAL GUARDRAIL: Only delete if path looks like a game install dir
-                # and contains expected partial download indicators
-                is_safe_path = (
-                    os.path.exists(game_dir) and 
-                    os.path.isdir(game_dir) and
-                    '/Games/' in game_dir and
-                    game_dir not in ['/', '/home/deck', '/home/deck/Games']
-                )
-                
-                # Check if this is actually a partial download (no .unifideck-id marker means unfinished)
-                # Completed installs should have a marker file from mark_installed
-                marker_file = os.path.join(game_dir, '.unifideck-id')
-                is_partial_download = not os.path.exists(marker_file)
-                
-                if is_safe_path and is_partial_download:
-                    logger.info(f"[DownloadQueue] Cleaning up cancelled PARTIAL download: {game_dir}")
-                    shutil.rmtree(game_dir, ignore_errors=True)
-                    logger.info(f"[DownloadQueue] Deleted partial download directory: {game_dir}")
-                elif not is_partial_download:
-                    logger.warning(f"[DownloadQueue] NOT deleting - found .unifideck-id marker (completed install): {game_dir}")
+                # GUARDRAIL 1: Abort if safe_title is empty — joining an empty
+                # string would resolve to install_path itself and wipe everything.
+                if not safe_title:
+                    logger.error(f"[DownloadQueue] BLOCKED cleanup — safe_title is empty for '{current.game_title}', refusing to delete")
                 else:
-                    logger.warning(f"[DownloadQueue] NOT deleting - failed safety checks: {game_dir}")
+                    game_dir = os.path.join(install_path, safe_title)
+                    
+                    # GUARDRAIL 2: Normalize both paths to eliminate trailing slashes,
+                    # symlinks, and '..' components so the comparison is reliable.
+                    real_install = os.path.realpath(install_path)
+                    real_game   = os.path.realpath(game_dir)
+                    
+                    # GUARDRAIL 3: game_dir must be a STRICT child of install_path
+                    # (starts with install_path + separator AND is not equal to it).
+                    is_strict_subdir = (
+                        real_game.startswith(real_install + os.sep) and
+                        real_game != real_install
+                    )
+                    
+                    is_safe_path = (
+                        os.path.exists(real_game) and
+                        os.path.isdir(real_game) and
+                        is_strict_subdir
+                    )
+                    
+                    # Check if this is actually a partial download (no .unifideck-id marker means unfinished)
+                    # Completed installs should have a marker file from mark_installed
+                    marker_file = os.path.join(real_game, '.unifideck-id')
+                    is_partial_download = not os.path.exists(marker_file)
+                    
+                    if is_safe_path and is_partial_download:
+                        logger.info(f"[DownloadQueue] Cleaning up cancelled PARTIAL download: {real_game}")
+                        shutil.rmtree(real_game, ignore_errors=True)
+                        logger.info(f"[DownloadQueue] Deleted partial download directory: {real_game}")
+                    elif not is_partial_download:
+                        logger.warning(f"[DownloadQueue] NOT deleting - found .unifideck-id marker (completed install): {real_game}")
+                    elif not is_strict_subdir:
+                        logger.error(f"[DownloadQueue] BLOCKED cleanup — path is not a strict subdirectory of install_path: {real_game}")
+                    else:
+                        logger.warning(f"[DownloadQueue] NOT deleting - failed safety checks: {real_game}")
             except Exception as e:
                 logger.error(f"[DownloadQueue] Error cleaning up cancelled download: {e}")
         
