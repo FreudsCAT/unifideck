@@ -46,6 +46,20 @@ function chainCDPOp(appId: number, op: () => Promise<void>): void {
   });
 }
 
+const pendingUnhides: Map<number, NodeJS.Timeout> = new Map();
+
+export function scheduleRemoveHidePlaySectionCDP(appId: number) {
+  // Clear any existing timer for this app
+  if (pendingUnhides.has(appId)) {
+    clearTimeout(pendingUnhides.get(appId)!);
+  }
+  const timer = setTimeout(() => {
+    pendingUnhides.delete(appId);
+    removeHidePlaySectionCDP(appId);
+  }, 150); // Small 150ms delay catches immediate React remounts
+  pendingUnhides.set(appId, timer);
+}
+
 /**
  * Inject CSS to hide native PlaySection via CDP.
  * Called from the patcher (asynchronously, non-blocking).
@@ -54,6 +68,16 @@ function chainCDPOp(appId: number, op: () => Promise<void>): void {
  * because React destroys and recreates DOM elements.
  */
 export async function injectHidePlaySectionCDP(appId: number): Promise<void> {
+  // Cancel any pending unhide for this app
+  const unhideTimer = pendingUnhides.get(appId);
+  if (unhideTimer) {
+    clearTimeout(unhideTimer);
+    pendingUnhides.delete(appId);
+    console.log(
+      `[PlaySectionWrapper] Cancelled pending unhide for ${appId} (React remounted)`,
+    );
+  }
+
   chainCDPOp(appId, async () => {
     try {
       const timeout = new Promise<never>((_, reject) =>
@@ -71,11 +95,13 @@ export async function injectHidePlaySectionCDP(appId: number): Promise<void> {
         console.log(
           `[PlaySectionWrapper] Hidden native play section via CDP for app ${appId}`,
         );
+      } else if (result.error === "not_found") {
+        // Suppress "not_found" error, as it evaluates to expected state during component mount fast burst
       } else {
-        console.error(`[PlaySectionWrapper] CDP hide failed: ${result.error}`);
+        console.warn(`[PlaySectionWrapper] CDP hide failed: ${result.error}`);
       }
     } catch (error) {
-      console.error(`[PlaySectionWrapper] CDP hide call failed:`, error);
+      console.warn(`[PlaySectionWrapper] CDP hide call failed:`, error);
     }
   });
 }
@@ -209,7 +235,9 @@ const PlaySectionWrapperInner: FC<PlaySectionWrapperProps> = ({
     return () => {
       timers.forEach(clearTimeout);
       clearInterval(interval);
-      removeHidePlaySectionCDP(appId);
+      // Use scheduled removal! Decky UI might recreate this component rapidly
+      // during navigation/focus changes, so we wait 150ms before unhiding natively.
+      scheduleRemoveHidePlaySectionCDP(appId);
     };
   }, [shouldShowCustom, appId]);
 

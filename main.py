@@ -3967,9 +3967,12 @@ class Plugin:
         """
         try:
             client = await get_cdp_client()
-            hidden = await client.hide_native_play_section(appId)
-            logger.info(f"[CDP] hide_native_play_section({appId}) => {hidden}")
-            return {"success": hidden}
+            hidden_msg = await client.hide_native_play_section(appId)
+            logger.info(f"[CDP] hide_native_play_section({appId}) => {hidden_msg}")
+            if hidden_msg == "hidden":
+                return {"success": True}
+            else:
+                return {"success": False, "error": hidden_msg}
         except Exception as e:
             err_lower = str(e).lower()
             if any(kw in err_lower for kw in ["transport", "closing", "closed", "reset", "eof", "timeout", "not connected", "refused"]):
@@ -3977,9 +3980,12 @@ class Plugin:
                     logger.warning(f"[CDP] Connection error, reconnecting...")
                     await shutdown_cdp_client()
                     client = await get_cdp_client()
-                    hidden = await client.hide_native_play_section(appId)
-                    logger.info(f"[CDP] hide_native_play_section({appId}) => {hidden} (after reconnect)")
-                    return {"success": hidden}
+                    hidden_msg = await client.hide_native_play_section(appId)
+                    logger.info(f"[CDP] hide_native_play_section({appId}) => {hidden_msg} (after reconnect)")
+                    if hidden_msg == "hidden":
+                        return {"success": True}
+                    else:
+                        return {"success": False, "error": hidden_msg}
                 except Exception as retry_e:
                     logger.error(f"[CDP] Reconnection failed for app {appId}: {retry_e}")
                     return {"success": False, "error": str(retry_e)}

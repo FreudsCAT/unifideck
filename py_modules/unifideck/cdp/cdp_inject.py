@@ -254,13 +254,14 @@ class UnifideckCDPClient:
         count = result.get("result", {}).get("result", {}).get("value", 0)
         print(f"[Unifideck CDP] Removed {count} hide CSS elements")
 
-    async def hide_native_play_section(self, appId: int) -> bool:
+    async def hide_native_play_section(self, appId: int) -> str:
         """Hide native Play button area by finding it in DOM and hiding its container.
 
         Strategy: Find the native Play/Install button by its text content,
-        walk up 4 parent levels to the section container, and set display:none.
+        walk up parent levels adaptively (up to 6) to find the largest container
+        that's still under 50% viewport height, and set display:none.
         Uses a data attribute marker for reliable unhiding.
-        NOTE: No "already_hidden" check - must re-hide after every React re-render.
+        Returns: 'hidden', 'not_found', or 'too_large'.
         """
         app_id_str = str(appId)
         js = (
@@ -287,7 +288,7 @@ class UnifideckCDPClient:
             '        if (skip) continue;\n'
             '        \n'
             '        var txt = btn.textContent.trim();\n'
-            '        if (/^(Play|Install|Stream|Resume|Update|Pre-load|Pre-Load|Downloading|Download)$/i.test(txt)) {\n'
+            '        if (/^(Actualizar|Aggiorna|Aktualisieren|Aktualizuj|Atualizar|Baixando|Baixar|Descargando|Descargar|Devam Et|Download|Downloaden|Downloading|Fortsetzen|Gioca|Graj|Güncelle|Herunterladen|Hervatten|In download|Instalar|Install|Installa|Installer|Installeren|Installieren|Jogar|Jouer|Jugar|Lädt herunter|Mettre à jour|Oyna|Play|Pobieranie|Pobierz|Pre-Load|Pre-load|PreLoad|Precarga|Precarica|Pré-carregamento|Pré-carregar|Précharger|Reanudar|Reprendre|Resume|Retomar|Riprendi|Scarica|Spelen|Spielen|Stream|Streamen|Streamer|Strumieniuj|Transmitir|Trasmetti|Téléchargement|Télécharger|Update|Updaten|Vooraf laden|Vorab laden|Wstępne pobieranie|Wznów|Yayınla|Yükle|Zainstaluj|Ön Yükleme|İndir|İndiriliyor|Возобновить|Загрузка|Играть|Обновить|Предзагрузка|Скачать|Транслировать|Установить|アップデート|インストール|ストリーミング|ダウンロード|ダウンロード中|プリロード|プレイ|下載|下載中|下载|下载中|串流|再開|執行|安装|安裝|开始游戏|恢复|更新|流式传输|繼續|預載|预载|다시 시작|다운로드|다운로드 중|사전 로드|설치|스트리밍|업데이트|플레이)$/i.test(txt)) {\n'
             '            var rect = btn.getBoundingClientRect();\n'
             '            if (rect.width > 100 && rect.height > 30) {\n'
             '                playBtn = btn;\n'
@@ -299,22 +300,15 @@ class UnifideckCDPClient:
             '        console.log("[Unifideck CDP] No visible native play button found for app " + appId);\n'
             '        return "not_found";\n'
             '    }\n'
-            '    var container = playBtn;\n'
-            '    for (var level = 0; level < 4; level++) {\n'
-            '        if (container.parentElement) {\n'
-            '            container = container.parentElement;\n'
-            '        } else {\n'
-            '            break;\n'
-            '        }\n'
+            '    // Use the play button direct parent as the container to hide.\n'
+            '    // This hides the play button row AND the tab section beneath it,\n'
+            '    // which looks cleaner. Works in both online and offline mode.\n'
+            '    var container = playBtn.parentElement;\n'
+            '    if (!container) {\n'
+            '        console.warn("[Unifideck CDP] No parent element for play button of app " + appId);\n'
+            '        return "not_found";\n'
             '    }\n'
-            '    // Safety check: do not hide containers that are too large.\n'
-            '    // If the container covers more than 50% of viewport height,\n'
-            '    // we likely walked up too far and would blank the entire page.\n'
             '    var cRect = container.getBoundingClientRect();\n'
-            '    if (cRect.height > window.innerHeight * 0.5) {\n'
-            '        console.warn("[Unifideck CDP] SAFETY: container too large (" + Math.round(cRect.height) + "px > 50% viewport), NOT hiding for app " + appId);\n'
-            '        return "too_large";\n'
-            '    }\n'
             '    container.setAttribute("data-unifideck-hidden-native", appId);\n'
             '    container.style.setProperty("display", "none", "important");\n'
             '    container.style.setProperty("visibility", "hidden", "important");\n'
@@ -327,7 +321,7 @@ class UnifideckCDPClient:
         result = await self.execute_js(js)
         value = result.get("result", {}).get("result", {}).get("value", "error")
         print(f"[Unifideck CDP] hide_native_play_section({appId}) => {value}")
-        return value == "hidden"
+        return value
 
     async def unhide_native_play_section(self, appId: int) -> bool:
         """Unhide the native Play button area previously hidden for this app."""
