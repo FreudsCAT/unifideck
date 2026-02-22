@@ -28,10 +28,7 @@ loadTranslations();
 // Import views
 
 // Import tab system
-import {
-  patchLibrary,
-  loadCompatCacheFromBackend,
-} from "./tabs";
+import { patchLibrary, loadCompatCacheFromBackend } from "./tabs";
 
 import { syncUnifideckCollections } from "./spoofing/CollectionManager";
 import {
@@ -56,7 +53,11 @@ import {
   PlaySectionWrapper,
   setPlayButtonCacheRef,
 } from "./components/PlayButtonOverride";
-import { unifideckGameCache, gameStateVersion, setForceRefreshCallback } from "./tabs";
+import {
+  unifideckGameCache,
+  gameStateVersion,
+  setForceRefreshCallback,
+} from "./tabs";
 import {
   registerGameActionInterceptor,
   setGameInfoCacheRef,
@@ -110,7 +111,6 @@ import { SyncProgress } from "./types/syncProgress";
 // Global cache for game info (5-second TTL for faster updates after installation)
 const gameInfoCache = new Map<number, { info: any; timestamp: number }>();
 
-
 // ========== END INSTALL BUTTON FEATURE ==========
 
 // ========== GAME DETAILS VIEW MODE SETTING ==========
@@ -159,9 +159,8 @@ import InstallInfoDisplay, {
 function findPlaySectionInsertIndex(children: any[]): number {
   // Heuristic 1: Find by PlaySection container class
   if (playSectionClasses?.Container) {
-    const idx = children.findIndex(
-      (child: any) =>
-        child?.props?.className?.includes?.(playSectionClasses.Container),
+    const idx = children.findIndex((child: any) =>
+      child?.props?.className?.includes?.(playSectionClasses.Container),
     );
     if (idx >= 0) return idx + 1;
   }
@@ -186,9 +185,14 @@ function patchGameDetailsRoute() {
   return routerHook.addPatch("/library/app/:appid", (routerTree: any) => {
     const routeProps = findInReactTree(routerTree, (x: any) => x?.renderFunc);
     // DIAG: Log at the very top of the callback (temporary)
-    console.log("[Unifideck DIAG] addPatch callback fired. routeProps found:", !!routeProps,
-      "unifideckPatched:", !!(routeProps?.renderFunc as any)?.__unifideckPatched,
-      "path:", window.location?.pathname);
+    console.log(
+      "[Unifideck DIAG] addPatch callback fired. routeProps found:",
+      !!routeProps,
+      "unifideckPatched:",
+      !!(routeProps?.renderFunc as any)?.__unifideckPatched,
+      "path:",
+      window.location?.pathname,
+    );
     if (!routeProps) return routerTree;
 
     // Only re-patch if renderFunc is NOT already wrapped by OUR afterPatch.
@@ -210,7 +214,12 @@ function patchGameDetailsRoute() {
       (_, ret) => {
         try {
           // DIAG: Confirm patcher handler actually executes (temporary)
-          console.log("[Unifideck DIAG] patcher handler executing. ret type:", ret?.type?.name || ret?.type?.toString?.()?.substring(0, 60) || typeof ret);
+          console.log(
+            "[Unifideck DIAG] patcher handler executing. ret type:",
+            ret?.type?.name ||
+              ret?.type?.toString?.()?.substring(0, 60) ||
+              typeof ret,
+          );
           // Patcher function: SAFE to mutate here (before reconciliation)
           // Extract appId from ret (not from finder closure)
           const overview = findInReactTree(
@@ -219,10 +228,18 @@ function patchGameDetailsRoute() {
           )?.props?.children?.props?.overview;
 
           if (!overview) {
-            console.log("[Unifideck DIAG] overview NOT found in ret. ret keys:", ret ? Object.keys(ret).join(",") : "null", "ret.props keys:", ret?.props ? Object.keys(ret.props).join(",") : "null");
+            console.log(
+              "[Unifideck DIAG] overview NOT found in ret. ret keys:",
+              ret ? Object.keys(ret).join(",") : "null",
+              "ret.props keys:",
+              ret?.props ? Object.keys(ret.props).join(",") : "null",
+            );
             return ret;
           }
-          console.log("[Unifideck DIAG] overview found, appId:", overview.appid);
+          console.log(
+            "[Unifideck DIAG] overview found, appId:",
+            overview.appid,
+          );
           const appId = overview.appid;
 
           // DISABLED: Store patching disabled, so no metadata injection
@@ -292,13 +309,21 @@ function patchGameDetailsRoute() {
           const isNonSteamGame = appId > 2000000000;
 
           // DIAG: Log which containers were found (temporary)
-          console.log("[Unifideck DIAG] Container search results:",
-            "innerContainer:", !!innerContainer,
-            "headerContainer:", !!headerContainer,
-            "playSection:", !!playSection,
-            "buttonsContainer:", !!buttonsContainer,
-            "gameInfoRow:", !!gameInfoRow,
-            "isNonSteam:", isNonSteamGame);
+          console.log(
+            "[Unifideck DIAG] Container search results:",
+            "innerContainer:",
+            !!innerContainer,
+            "headerContainer:",
+            !!headerContainer,
+            "playSection:",
+            !!playSection,
+            "buttonsContainer:",
+            !!buttonsContainer,
+            "gameInfoRow:",
+            !!gameInfoRow,
+            "isNonSteam:",
+            isNonSteamGame,
+          );
 
           // CONTAINER SELECTION
           // For non-Steam games: REQUIRE InnerContainer. Fallback containers have different
@@ -360,10 +385,12 @@ function patchGameDetailsRoute() {
           const gameInfoKey = `unifideck-game-info-${appId}`;
 
           const alreadyHasInstallInfo = container.props.children.some(
-            (child: any) => child?.key?.startsWith?.(`unifideck-install-info-${appId}`),
+            (child: any) =>
+              child?.key?.startsWith?.(`unifideck-install-info-${appId}`),
           );
           const alreadyHasGameInfo = container.props.children.some(
-            (child: any) => child?.key?.startsWith?.(`unifideck-game-info-${appId}`),
+            (child: any) =>
+              child?.key?.startsWith?.(`unifideck-game-info-${appId}`),
           );
 
           // For non-Steam games: splice at index 4 (after HeaderCapsule[0],
@@ -434,7 +461,8 @@ function patchGameDetailsRoute() {
                 React.createElement(PlaySectionWrapper, {
                   key: versionedKey,
                   appId,
-                  playSectionClassName: basicAppDetailsSectionStylerClasses?.PlaySection,
+                  playSectionClassName:
+                    basicAppDetailsSectionStylerClasses?.PlaySection,
                 }),
               );
               console.log(
@@ -513,21 +541,16 @@ function patchGameDetailsRoute() {
               gameInfoIdx !== wrapperIdx + 1
             ) {
               console.log(
-                `[Unifideck] GameInfoPanel at index ${gameInfoIdx}, expected ${wrapperIdx + 1}, repositioning`,
+                `[Unifideck] GameInfoPanel at index ${gameInfoIdx}, expected ${
+                  wrapperIdx + 1
+                }, repositioning`,
               );
-              const [element] = container.props.children.splice(
-                gameInfoIdx,
-                1,
-              );
+              const [element] = container.props.children.splice(gameInfoIdx, 1);
               // Re-find wrapper index after splice (indices shifted)
               const newWrapperIdx = container.props.children.findIndex(
                 (child: any) => child?.key?.startsWith?.(playWrapperKey),
               );
-              container.props.children.splice(
-                newWrapperIdx + 1,
-                0,
-                element,
-              );
+              container.props.children.splice(newWrapperIdx + 1, 0, element);
             }
           }
 
@@ -1499,9 +1522,10 @@ export default definePlugin(() => {
     .catch(() => {}); // Silently ignore if backend not ready
 
   // Check for account switch and show modal if needed
-  call<[], { show_modal: boolean; has_registry: boolean; has_auth_tokens: boolean }>(
-    "check_account_switch",
-  )
+  call<
+    [],
+    { show_modal: boolean; has_registry: boolean; has_auth_tokens: boolean }
+  >("check_account_switch")
     .then((result) => {
       if (result?.show_modal) {
         console.log("[Unifideck] Account switch detected, showing modal");
@@ -1510,9 +1534,10 @@ export default definePlugin(() => {
             hasRegistry={result.has_registry}
             hasAuthTokens={result.has_auth_tokens}
             onMigrate={async () => {
-              const r = await call<[], { shortcuts_created: number; artwork_copied: number }>(
-                "migrate_account_data",
-              );
+              const r = await call<
+                [],
+                { shortcuts_created: number; artwork_copied: number }
+              >("migrate_account_data");
               toaster.toast({
                 title: t("accountSwitch.toastMigrateTitle"),
                 body: t("accountSwitch.toastMigrateBody", {
@@ -1577,7 +1602,9 @@ export default definePlugin(() => {
     // Check if user is currently viewing this game's details page
     const currentPath = window.location.pathname;
     if (!currentPath.includes(`/library/app/${appId}`)) {
-      console.log(`[Unifideck] Not on game details page for app ${appId}, skipping refresh`);
+      console.log(
+        `[Unifideck] Not on game details page for app ${appId}, skipping refresh`,
+      );
       return;
     }
 
@@ -1585,7 +1612,11 @@ export default definePlugin(() => {
     const now = Date.now();
     const lastRefresh = refreshDebounceMap.get(appId) || 0;
     if (now - lastRefresh < 500) {
-      console.log(`[Unifideck] Debouncing refresh for app ${appId} (last refresh ${now - lastRefresh}ms ago)`);
+      console.log(
+        `[Unifideck] Debouncing refresh for app ${appId} (last refresh ${
+          now - lastRefresh
+        }ms ago)`,
+      );
       return;
     }
     refreshDebounceMap.set(appId, now);
@@ -1597,25 +1628,34 @@ export default definePlugin(() => {
     // CRITICAL: Clear gameInfoCache for this appId to force components to re-fetch fresh data
     const signedId = appId;
     const unsignedId = signedId < 0 ? signedId + 0x100000000 : signedId;
-    const altSignedId = signedId >= 0 && signedId > 0x7fffffff ? signedId - 0x100000000 : signedId;
+    const altSignedId =
+      signedId >= 0 && signedId > 0x7fffffff
+        ? signedId - 0x100000000
+        : signedId;
     gameInfoCache.delete(signedId);
     gameInfoCache.delete(unsignedId);
     if (altSignedId !== signedId) {
       gameInfoCache.delete(altSignedId);
     }
-    console.log(`[Unifideck] Cleared gameInfoCache for app ${appId} (all variants)`);
+    console.log(
+      `[Unifideck] Cleared gameInfoCache for app ${appId} (all variants)`,
+    );
 
     // CDP hide management is now handled by PlaySectionWrapper's useEffect
     // (gated on hasNativePlaySection prop). Direct CDP calls here are removed
     // because they bypass the safety gate and can hide the wrong container
     // in offline mode where no native PlaySection exists.
-    console.log(`[Unifideck] Game ${appId} state changed (installed=${isInstalled})`);
+    console.log(
+      `[Unifideck] Game ${appId} state changed (installed=${isInstalled})`,
+    );
 
     if (!isInstalled) {
       // Game is now uninstalled → navigate to trigger patcher re-run
       // Navigation as backup to CustomEvent (which handles the immediate update)
-      const normalizedPath = currentPath.replace(/^\/routes/, '');
-      console.log(`[Unifideck] Navigating back then forward to ${normalizedPath} to trigger patcher`);
+      const normalizedPath = currentPath.replace(/^\/routes/, "");
+      console.log(
+        `[Unifideck] Navigating back then forward to ${normalizedPath} to trigger patcher`,
+      );
       Navigation.NavigateBack();
 
       setTimeout(() => {

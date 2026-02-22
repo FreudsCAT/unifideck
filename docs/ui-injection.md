@@ -83,11 +83,11 @@ routerHook.addPatch("/library/app/:appid", (routerTree) => {
 
 For non-Steam (Unifideck) games, components use **anchor-based insertion** (not hardcoded indices):
 
-| Component          | Positioned After       | Strategy                                                         |
-| ------------------ | ---------------------- | ---------------------------------------------------------------- |
-| PlaySectionWrapper | Native PlaySection     | `findPlaySectionInsertIndex()` — finds native PlaySection child  |
-| GameInfoPanel      | PlaySectionWrapper     | `findIndex()` on PlaySectionWrapper key, insert after            |
-| InstallInfoDisplay | GameInfoPanel          | `findIndex()` on GameInfoPanel key, insert after                 |
+| Component          | Positioned After   | Strategy                                                        |
+| ------------------ | ------------------ | --------------------------------------------------------------- |
+| PlaySectionWrapper | Native PlaySection | `findPlaySectionInsertIndex()` — finds native PlaySection child |
+| GameInfoPanel      | PlaySectionWrapper | `findIndex()` on PlaySectionWrapper key, insert after           |
+| InstallInfoDisplay | GameInfoPanel      | `findIndex()` on GameInfoPanel key, insert after                |
 
 **Container requirement**: Non-Steam games MUST use InnerContainer. If not found (partial tree,
 timing), injection is skipped — the patcher retries on the next React render cycle. This prevents
