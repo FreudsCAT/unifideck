@@ -400,9 +400,9 @@ function patchGameDetailsRoute() {
           // NOTE: For non-Steam games, InstallInfoDisplay injection is deferred
           // until after PlaySectionWrapper and GameInfoPanel are spliced.
 
-          // For Steam games, inject InstallInfoDisplay now (non-Steam handled below)
+          // For Steam games, inject InstallInfoDisplay before the native PlaySection (index 1)
           if (!isNonSteamGame && !alreadyHasInstallInfo) {
-            const spliceIndex = Math.min(2, container.props.children.length);
+            const spliceIndex = Math.min(1, container.props.children.length);
             container.props.children.splice(
               spliceIndex,
               0,
@@ -555,18 +555,17 @@ function patchGameDetailsRoute() {
           }
 
           // ========== INSTALL INFO BADGE (Non-Steam) ==========
-          // For non-Steam games, inject InstallInfoDisplay AFTER GameInfoPanel.
-          // Position: absolute, so visual placement is CSS-controlled.
-          // Uses relative positioning (after GameInfoPanel) instead of hardcoded index.
+          // For non-Steam games, inject InstallInfoDisplay BEFORE PlaySectionWrapper.
+          // Position: absolute, so visual placement is CSS-controlled. This ensures
+          // the focal order hits the top-right button before the Play button.
           if (isNonSteamGame && !alreadyHasInstallInfo) {
-            const gameInfoIdx = container.props.children.findIndex(
-              (child: any) =>
-                child?.key?.startsWith?.(`unifideck-game-info-${appId}`),
+            const wrapperIdx = container.props.children.findIndex(
+              (child: any) => child?.key?.startsWith?.(playWrapperKey),
             );
             const installInfoSpliceIndex =
-              gameInfoIdx >= 0
-                ? gameInfoIdx + 1
-                : Math.min(4, container.props.children.length);
+              wrapperIdx >= 0
+                ? Math.max(0, wrapperIdx) // Inject exactly where Play wrapper is, pushing it down
+                : 1; // Fallback
 
             const version = gameStateVersion.get(appId) || 0;
             const versionedInstallInfoKey = `${installInfoKey}-v${version}`;

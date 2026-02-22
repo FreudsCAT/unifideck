@@ -1232,6 +1232,9 @@ const PlaySectionWrapperInner: FC<PlaySectionWrapperProps> = ({
         data-unifideck-play-wrapper="true"
         className={playSectionClassName || undefined}
         flow-children="row"
+        onFocus={(e: any) =>
+          e.target.scrollIntoView({ behavior: "smooth", block: "center" })
+        }
         style={{
           display: "flex",
           alignItems: "center",
@@ -1374,6 +1377,9 @@ const PlaySectionWrapperInner: FC<PlaySectionWrapperProps> = ({
         data-unifideck-play-wrapper="true"
         className={playSectionClassName || undefined}
         flow-children="row"
+        onFocus={(e: any) =>
+          e.target.scrollIntoView({ behavior: "smooth", block: "center" })
+        }
         style={{
           display: "flex",
           alignItems: "center",
@@ -1567,6 +1573,9 @@ const PlaySectionWrapperInner: FC<PlaySectionWrapperProps> = ({
       data-unifideck-play-wrapper="true"
       className={playSectionClassName || undefined}
       flow-children="row"
+      onFocus={(e: any) =>
+        e.target.scrollIntoView({ behavior: "smooth", block: "center" })
+      }
       style={{
         display: "flex",
         alignItems: "center",

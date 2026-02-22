@@ -735,6 +735,9 @@ const GameInfoPanelInner: React.FC<GameInfoPanelProps> = ({ appId }) => {
       <Focusable
         style={{ display: "flex", alignItems: "center", gap: "12px" }}
         flow-children="row"
+        onFocus={(e) =>
+          e.target.scrollIntoView({ behavior: "smooth", block: "center" })
+        }
       >
         {/* Compatibility Badge */}
         <div
@@ -850,6 +853,9 @@ const GameInfoPanelInner: React.FC<GameInfoPanelProps> = ({ appId }) => {
           noFocusRing={true}
           onActivate={() => {}}
           className="unifideck-game-info-row"
+          onFocus={(e) =>
+            e.target.scrollIntoView({ behavior: "smooth", block: "center" })
+          }
           style={{
             backgroundColor: "rgba(0, 0, 0, 0.3)",
             borderRadius: "6px",
@@ -951,6 +957,9 @@ const GameInfoPanelInner: React.FC<GameInfoPanelProps> = ({ appId }) => {
           noFocusRing={true}
           onActivate={() => {}}
           className="unifideck-synopsis-section"
+          onFocus={(e) =>
+            e.target.scrollIntoView({ behavior: "smooth", block: "center" })
+          }
           style={{
             backgroundColor: "rgba(0, 0, 0, 0.3)",
             borderRadius: "6px",
@@ -966,7 +975,13 @@ const GameInfoPanelInner: React.FC<GameInfoPanelProps> = ({ appId }) => {
       )}
 
       {/* Navigation Buttons Row */}
-      <Focusable style={buttonRowStyle} flow-children="row">
+      <Focusable
+        style={buttonRowStyle}
+        flow-children="row"
+        onFocus={(e) =>
+          e.target.scrollIntoView({ behavior: "smooth", block: "center" })
+        }
+      >
         {/* Store Page - uses steam:// when available, falls back to store URL */}
         <DialogButton
           onClick={() =>
