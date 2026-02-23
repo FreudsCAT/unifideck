@@ -212,6 +212,21 @@ run_umu_with_retry() {
     return $exit_code
 }
 
+# Wait for all Wine processes in the prefix to exit.
+# umu-run returns before game processes exit (it only waits for the direct child).
+# wineserver --wait blocks until ALL Wine processes in the prefix exit,
+# keeping this script alive so Steam tracks the game as running.
+wait_for_game_exit() {
+    local wineserver="$PROTONPATH/files/bin/wineserver"
+    if [ -x "$wineserver" ]; then
+        log "Waiting for game processes to exit (wineserver --wait)..."
+        WINEPREFIX="$PREFIX_PATH/pfx" "$wineserver" --wait 2>/dev/null || true
+        log "All game processes have exited"
+    else
+        log "WARNING: wineserver not found at $wineserver, cannot wait for game exit"
+    fi
+}
+
 # ==============================================================================
 # OFFLINE MODE DETECTION
 # Detects Steam Offline Mode (via loginusers.vdf) or no internet connectivity
@@ -436,7 +451,7 @@ select_proton_version() {
         fi
     fi
     
-    # Priority 4: Default to Proton Experimental (ALWAYS)
+    # Priority 4: Default - find any installed Proton (prefer Experimental > 10 > 9 > GE)
     for base in "$HOME/.steam/steam/steamapps/common" \
                 "$HOME/.local/share/Steam/steamapps/common" \
                 "$HOME/.steam/root/steamapps/common"; do
@@ -445,8 +460,33 @@ select_proton_version() {
             log "[Proton] Using default: Proton Experimental"
             return 0
         fi
+        if [ -d "$base/Proton 10.0" ]; then
+            export PROTONPATH="$base/Proton 10.0"
+            log "[Proton] Using default: Proton 10.0"
+            return 0
+        fi
+        if [ -d "$base/Proton 9.0 (Beta)" ]; then
+            export PROTONPATH="$base/Proton 9.0 (Beta)"
+            log "[Proton] Using default: Proton 9.0 (Beta)"
+            return 0
+        fi
     done
-    
+
+    # Also check GE-Proton in compatibilitytools.d
+    for compat_dir in "$HOME/.steam/root/compatibilitytools.d" \
+                      "$HOME/.steam/steam/compatibilitytools.d" \
+                      "$HOME/.local/share/Steam/compatibilitytools.d"; do
+        if [ -d "$compat_dir" ]; then
+            local ge_proton
+            ge_proton=$(ls -d "$compat_dir"/GE-Proton* 2>/dev/null | sort -rV | head -1)
+            if [ -n "$ge_proton" ] && [ -d "$ge_proton" ]; then
+                export PROTONPATH="$ge_proton"
+                log "[Proton] Using default: $(basename "$ge_proton") (GE-Proton)"
+                return 0
+            fi
+        fi
+    done
+
     log "[Proton] No Proton found locally, umu will download one"
     return 0
 }
@@ -675,10 +715,11 @@ if [[ "$EXE_PATH" == *.exe ]] || [[ "$EXE_PATH" == *.EXE ]] || \
                     cp -r "$PREFIX_PFX/drive_c/users" "$SAVE_BACKUP" 2>/dev/null || true
                 fi
                 
-                # Remove the prefix
+                # Remove the prefix and all installation markers
                 rm -rf "$PREFIX_PFX" 2>/dev/null || true
                 rm -f "$PREFIX_PATH/unifideck_winetricks_complete.marker" 2>/dev/null || true
-                
+                rm -f "$PREFIX_PATH/.unifideck_prereqs_"*.done 2>/dev/null || true
+
                 log "[Proton] Prefix cleared, will be recreated on launch"
                 
                 # Note: save backup is kept at $SAVE_BACKUP if needed
@@ -826,6 +867,7 @@ if [[ "$EXE_PATH" == *.exe ]] || [[ "$EXE_PATH" == *.EXE ]] || \
         else
             # Update to latest version (non-blocking, best effort)
             "$LEGENDARY_BIN" eos-overlay update -y 2>>"$LOG_FILE" &
+            EOS_UPDATE_PID=$!
         fi
 
         # Enable EOS overlay for the /pfx subdirectory (like Heroic)
@@ -948,13 +990,21 @@ if [[ "$EXE_PATH" == *.exe ]] || [[ "$EXE_PATH" == *.EXE ]] || \
             sync_cloud_saves "epic" "$GAME_ID" "download" "$PREFIX_PATH"
         fi
 
+        # Clean up background EOS overlay update if still running
+        if [ -n "$EOS_UPDATE_PID" ]; then
+            kill "$EOS_UPDATE_PID" 2>/dev/null || true
+            wait "$EOS_UPDATE_PID" 2>/dev/null || true
+        fi
+
         # Notify user that game is launching
         notify_stage "toasts.launcher.launchingGame" "toasts.launcher.startingEpicGame" "low"
 
-        # Execute legendary (wait for exit, don't use exec)
+        # Execute legendary (launches wrapper and may return before game exits)
         "$LEGENDARY_BIN" launch "$GAME_ID" --no-wine $OFFLINE_FLAG --wrapper "$PYTHON_BIN $UMU_WRAPPER" --language $EPIC_LANG 2>>"$LOG_FILE"
 
         GAME_EXIT_CODE=$?
+
+        wait_for_game_exit
 
         # === CLOUD SAVE: Upload after exit ===
         log "Epic game exited with code: $GAME_EXIT_CODE"
@@ -1046,6 +1096,7 @@ except Exception as e:
         fi
         GAME_EXIT_CODE=$?
 
+        wait_for_game_exit
 
         log "Amazon game exited with code: $GAME_EXIT_CODE"
         exit $GAME_EXIT_CODE
@@ -1212,11 +1263,13 @@ except Exception as e:
         run_umu_with_retry "$PYTHON_BIN" "$UMU_WRAPPER" "$EXE_PATH"
         GAME_EXIT_CODE=$?
 
+        wait_for_game_exit
+
         # === COMET: Stop after game exits ===
         if [ -n "$COMET_PID" ]; then
             log "[Comet] Stopping (PID $COMET_PID)..."
-            kill "$COMET_PID" 2>/dev/null
-            wait "$COMET_PID" 2>/dev/null
+            kill "$COMET_PID" 2>/dev/null || true
+            wait "$COMET_PID" 2>/dev/null || true
             log "[Comet] Stopped"
         fi
 

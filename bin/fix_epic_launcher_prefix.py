@@ -97,12 +97,18 @@ def main():
     env = os.environ.copy()
     env["WINEPREFIX"] = registry_prefix
     
-    # Find wine binary
-    proton_paths = [
+    # Find wine binary — check PROTONPATH first (set by launcher's select_proton_version)
+    proton_paths = []
+    env_proton = os.environ.get("PROTONPATH")
+    if env_proton:
+        proton_paths.append(os.path.join(env_proton, "files", "bin", "wine"))
+
+    proton_paths.extend([
         os.path.expanduser("~/.steam/steam/steamapps/common/Proton - Experimental/files/bin/wine"),
         os.path.expanduser("~/.steam/steam/steamapps/common/Proton 10.0/files/bin/wine"),
-    ]
-    
+        os.path.expanduser("~/.steam/steam/steamapps/common/Proton 9.0 (Beta)/files/bin/wine"),
+    ])
+
     wine_bin = None
     for path in proton_paths:
         if os.path.exists(path):

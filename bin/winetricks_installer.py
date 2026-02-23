@@ -84,18 +84,23 @@ def find_umu_run():
 
 
 def find_proton():
-    """Find Proton installation"""
+    """Find Proton installation. Prefers PROTONPATH from environment (set by launcher)."""
+    # Check PROTONPATH first — the launcher's select_proton_version() already resolved this
+    env_path = os.environ.get("PROTONPATH")
+    if env_path and os.path.exists(env_path):
+        return env_path
+
     proton_paths = [
         os.path.expanduser("~/.steam/steam/steamapps/common/Proton - Experimental"),
         os.path.expanduser("~/.steam/steam/steamapps/common/Proton 10.0"),
         os.path.expanduser("~/.steam/steam/steamapps/common/Proton 9.0 (Beta)"),
         os.path.expanduser("~/.local/share/Steam/steamapps/common/Proton - Experimental"),
     ]
-    
+
     for path in proton_paths:
         if os.path.exists(path):
             return path
-    
+
     return None
 
 
