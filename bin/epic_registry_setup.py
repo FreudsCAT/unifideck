@@ -42,13 +42,13 @@ def setup_registry(game_id, prefix_path, legendary_config):
     if not win_path.endswith("\\\\"):
         win_path += "\\\\"
 
-    # Extract UplayId from launch parameters
+    # Extract UplayId from launch parameters (handles spaces like -UplayId= 3353)
+    import re
     uplay_id = None
     params = app.get("launch_parameters", "")
-    for p in params.split():
-        if p.startswith("-UplayId="):
-            uplay_id = p.split("=")[1]
-            break
+    m = re.search(r'-UplayId=\s*(\d+)', params)
+    if m:
+        uplay_id = m.group(1)
 
     # Locate Proton's wine binary
     proton_path = os.environ.get("PROTONPATH", "")

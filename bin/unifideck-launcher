@@ -112,7 +112,27 @@ sync_cloud_saves() {
 }
 
 # Reset environment to avoid conflicts
-# Clear LD_PRELOAD to prevent Steam's 32-bit overlay from interfering with 64-bit games
+# Save Steam's LD_PRELOAD (contains overlay + Steam Input hooks) before clearing.
+# We filter out 32-bit libraries that cause ABI errors with 64-bit games,
+# then restore the filtered value before exec-ing the actual game process.
+STEAM_LD_PRELOAD="${LD_PRELOAD:-}"
+if [ -n "$STEAM_LD_PRELOAD" ]; then
+    FILTERED_PRELOAD=""
+    IFS=':' read -ra _PRELOAD_ENTRIES <<< "$STEAM_LD_PRELOAD"
+    for _entry in "${_PRELOAD_ENTRIES[@]}"; do
+        case "$_entry" in
+            */ubuntu12_32/*|*/i386-linux-gnu/*)
+                # Skip 32-bit libraries that cause ABI conflicts with 64-bit games
+                ;;
+            *)
+                FILTERED_PRELOAD="${FILTERED_PRELOAD:+$FILTERED_PRELOAD:}$_entry"
+                ;;
+        esac
+    done
+    STEAM_LD_PRELOAD="$FILTERED_PRELOAD"
+fi
+log "Saved Steam LD_PRELOAD (filtered): ${STEAM_LD_PRELOAD:-(empty)}"
+
 unset LD_PRELOAD
 unset LD_LIBRARY_PATH
 unset STEAM_RUNTIME
@@ -212,6 +232,15 @@ run_umu_with_retry() {
     return $exit_code
 }
 
+# Restore Steam's LD_PRELOAD (filtered) before launching the actual game.
+# This re-enables Steam Overlay and Steam Input for the game process.
+restore_steam_env() {
+    if [ -n "$STEAM_LD_PRELOAD" ]; then
+        export LD_PRELOAD="$STEAM_LD_PRELOAD"
+        log "[SteamEnv] Restored LD_PRELOAD for game process: $LD_PRELOAD"
+    fi
+}
+
 # Wait for all Wine processes in the prefix to exit.
 # umu-run returns before game processes exit (it only waits for the direct child).
 # wineserver --wait blocks until ALL Wine processes in the prefix exit,
@@ -219,6 +248,17 @@ run_umu_with_retry() {
 wait_for_game_exit() {
     local wineserver="$PROTONPATH/files/bin/wineserver"
     if [ -x "$wineserver" ]; then
+        # umu-run returns before Wine is fully started. Wait for wineserver
+        # to see active processes before entering the blocking --wait.
+        local retries=0
+        while [ $retries -lt 15 ]; do
+            if WINEPREFIX="$PREFIX_PATH/pfx" "$wineserver" --kill 0 2>/dev/null; then
+                break  # wineserver is running, proceed to --wait
+            fi
+            sleep 1
+            retries=$((retries + 1))
+        done
+        
         log "Waiting for game processes to exit (wineserver --wait)..."
         WINEPREFIX="$PREFIX_PATH/pfx" "$wineserver" --wait 2>/dev/null || true
         log "All game processes have exited"
@@ -845,9 +885,20 @@ if [[ "$EXE_PATH" == *.exe ]] || [[ "$EXE_PATH" == *.EXE ]] || \
         export HEROIC_APP_NAME="$GAME_ID"
         export HEROIC_APP_RUNNER="legendary"
         export HEROIC_APP_SOURCE="epic"
-        export SteamGameId="heroic-$GAME_ID"
-        export STEAM_COMPAT_APP_ID="0"
-        export SteamAppId="0"
+
+        # Use the non-Steam shortcut's AppID so Steam Input can find controller configs.
+        # Falling back to Heroic-style IDs if shortcut AppID is unavailable.
+        if [ -n "$SHORTCUT_APPID" ] && [ "$SHORTCUT_APPID" != "0" ]; then
+            export SteamGameId="$SHORTCUT_APPID"
+            export STEAM_COMPAT_APP_ID="$SHORTCUT_APPID"
+            export SteamAppId="$SHORTCUT_APPID"
+            log "[SteamInput] Using shortcut AppID for Steam Input: $SHORTCUT_APPID"
+        else
+            export SteamGameId="heroic-$GAME_ID"
+            export STEAM_COMPAT_APP_ID="0"
+            export SteamAppId="0"
+            log "[SteamInput] WARNING: No shortcut AppID found, using fallback (Steam Input may not work)"
+        fi
 
         # Enable NVAPI for modern Proton
         export PROTON_ENABLE_NVAPI="1"
@@ -990,7 +1041,7 @@ if [[ "$EXE_PATH" == *.exe ]] || [[ "$EXE_PATH" == *.EXE ]] || \
         
         if [ -f "$INSTALLED_JSON" ]; then
             UPLAY_ID=$(python3 -c "
-import json, sys
+import json, sys, re
 try:
     with open('$INSTALLED_JSON', 'r') as f:
         data = json.load(f)
@@ -999,10 +1050,10 @@ try:
             exe = app.get('executable', '').lower()
             if 'uplay' in exe:
                 params = app.get('launch_parameters', '')
-                for p in params.split():
-                    if p.startswith('-UplayId='):
-                        print(p.split('=')[1])
-                        sys.exit(0)
+                m = re.search(r'-UplayId=\s*(\d+)', params)
+                if m:
+                    print(m.group(1))
+                    sys.exit(0)
 except Exception:
     pass
 " 2>/dev/null)
@@ -1030,12 +1081,13 @@ except Exception:
             fi
 
             # Launch upc.exe directly — bypasses Epic SSO entirely
+            # Relies on linked accounts (server-side verify) and pfx/ registry injection
             export PROTON_VERB="waitforexitandrun"
-            UPC_EXE="$PREFIX_PATH/drive_c/Program Files (x86)/Ubisoft/Ubisoft Game Launcher/upc.exe"
+            UPC_EXE="$PREFIX_PATH/pfx/drive_c/Program Files (x86)/Ubisoft/Ubisoft Game Launcher/upc.exe"
             if [ ! -f "$UPC_EXE" ]; then
-                 UPC_EXE="$PREFIX_PATH/pfx/drive_c/Program Files (x86)/Ubisoft/Ubisoft Game Launcher/upc.exe"
+                 UPC_EXE="$PREFIX_PATH/drive_c/Program Files (x86)/Ubisoft/Ubisoft Game Launcher/upc.exe"
             fi
-            
+
             if [ -f "$UPC_EXE" ]; then
                 CMD_STR="\"$PYTHON_BIN\" \"$UMU_WRAPPER\" \"$UPC_EXE\" \"uplay://launch/$UPLAY_ID/0\""
                 log "[Uplay] Launching upc.exe directly: uplay://launch/$UPLAY_ID/0"
@@ -1048,7 +1100,7 @@ except Exception:
             # Standard Legendary launch
             CMD_STR="$LEGENDARY_BIN launch $GAME_ID --no-wine $OFFLINE_FLAG --wrapper \"$PYTHON_BIN $UMU_WRAPPER\" --language $EPIC_LANG"
         fi
-        
+
         log "Executing: $CMD_STR"
 
         # === CLOUD SAVE: Download before launch ===
@@ -1070,6 +1122,9 @@ except Exception:
         else
              notify_stage "toasts.launcher.launchingGame" "toasts.launcher.startingEpicGame" "low"
         fi
+
+        # Restore Steam Overlay/Input before launching game (controller support)
+        restore_steam_env
 
         # Execute launch command
         if [ "$IS_UBISOFT" = "true" ]; then
@@ -1163,6 +1218,9 @@ except Exception as e:
 
         # Notify user that game is launching
         notify_stage "toasts.launcher.launchingGame" "toasts.launcher.startingAmazonGame" "low"
+
+        # Restore Steam Overlay/Input before launching game (controller support)
+        restore_steam_env
 
         # Execute umu-run for Amazon game (with retry for network failures)
         if [ -n "$AMAZON_ARGS" ]; then
@@ -1334,6 +1392,9 @@ except Exception as e:
         # Notify user that game is launching
         notify_stage "toasts.launcher.launchingGame" "toasts.launcher.startingGogGame" "low"
 
+        # Restore Steam Overlay/Input before launching game (controller support)
+        restore_steam_env
+
         # Execute umu-run with retry for network failures
         # NOTE: Do NOT pass "$@" - it contains gog:GAME_ID which umu-run doesn't understand
         run_umu_with_retry "$PYTHON_BIN" "$UMU_WRAPPER" "$EXE_PATH"
@@ -1372,7 +1433,10 @@ else
     # Try Steam Runtime for legacy library support (libssl.so.1.0.0, etc)
     STEAM_RUNTIME_RUN="$HOME/.steam/steam/ubuntu12_32/steam-runtime/run.sh"
     STEAM_RUNTIME_ALT="$HOME/.local/share/Steam/ubuntu12_32/steam-runtime/run.sh"
-    
+
+    # Restore Steam Overlay/Input for native Linux games (critical for controller support)
+    restore_steam_env
+
     if [ -f "$STEAM_RUNTIME_RUN" ]; then
         log "Using Steam Runtime: $STEAM_RUNTIME_RUN"
         log "Executing: $STEAM_RUNTIME_RUN $EXE_PATH $*"

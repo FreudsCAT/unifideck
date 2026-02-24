@@ -135,6 +135,15 @@ Force Compatibility (Proton) is supported. The plugin automatically detects your
 1. Run another sync - artwork is fetched during the sync process
 2. Some games may not have artwork available in the SteamGridDB database
 
+### Ubisoft Connect Games (Epic)
+
+Ubisoft games purchased through Epic Games require a **one-time account link** before they can launch on Steam Deck:
+
+1. On a PC or browser, visit **[epicgames.com/id/link/ubisoft](https://epicgames.com/id/link/ubisoft)**
+2. Log into both your Epic and Ubisoft accounts and link them
+
+After linking, Ubisoft games will launch and authenticate automatically through the plugin. Without this step, games may get stuck on "Logging in..." or prompt for a product key.
+
 ### Game Won't Launch
 
 1. Check the launcher logs at `~/.local/share/unifideck/launcher.log`
