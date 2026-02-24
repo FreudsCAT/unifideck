@@ -258,8 +258,9 @@ class UnifideckCDPClient:
         """Hide native Play button area by finding it in DOM and hiding its container.
 
         Strategy: Find the native Play/Install button by its text content,
-        walk up parent levels adaptively (up to 6) to find the largest container
-        that's still under 50% viewport height, and set display:none.
+        walk up parent levels adaptively to find the largest safe container
+        (under 50% viewport height) that does NOT include our injected wrapper,
+        and set display:none.
         Uses a data attribute marker for reliable unhiding.
         Returns: 'hidden', 'not_found', or 'too_large'.
         """
@@ -300,20 +301,46 @@ class UnifideckCDPClient:
             '        console.log("[Unifideck CDP] No visible native play button found for app " + appId);\n'
             '        return "not_found";\n'
             '    }\n'
-            '    // Use the play button direct parent as the container to hide.\n'
-            '    // This hides the play button row AND the tab section beneath it,\n'
-            '    // which looks cleaner. Works in both online and offline mode.\n'
-            '    var container = playBtn.parentElement;\n'
-            '    if (!container) {\n'
+            '    // Walk up ancestors to find the full native play section container,\n'
+            '    // not just the button wrapper. Stop before containers that would also\n'
+            '    // include our injected Unifideck wrapper (to avoid hiding custom UI).\n'
+            '    var viewportH = window.innerHeight || document.documentElement.clientHeight || 720;\n'
+            '    var maxHeight = Math.max(220, viewportH * 0.5);\n'
+            '    var node = playBtn.parentElement;\n'
+            '    if (!node) {\n'
             '        console.warn("[Unifideck CDP] No parent element for play button of app " + appId);\n'
             '        return "not_found";\n'
             '    }\n'
+            '    var container = node;\n'
+            '    var depth = 0;\n'
+            '    while (node && node.parentElement && depth < 10) {\n'
+            '        var parent = node.parentElement;\n'
+            '        if (parent.querySelector && parent.querySelector(\'[data-unifideck-play-wrapper="true"]\')) {\n'
+            '            break;\n'
+            '        }\n'
+            '        var pRect = parent.getBoundingClientRect();\n'
+            '        if (pRect.width <= 0 || pRect.height <= 0) {\n'
+            '            node = parent;\n'
+            '            depth++;\n'
+            '            continue;\n'
+            '        }\n'
+            '        if (pRect.height > maxHeight) {\n'
+            '            break;\n'
+            '        }\n'
+            '        container = parent;\n'
+            '        node = parent;\n'
+            '        depth++;\n'
+            '    }\n'
             '    var cRect = container.getBoundingClientRect();\n'
+            '    if (cRect.height > maxHeight) {\n'
+            '        console.warn("[Unifideck CDP] Refusing to hide oversized container (" + Math.round(cRect.height) + "px) for app " + appId);\n'
+            '        return "too_large";\n'
+            '    }\n'
             '    container.setAttribute("data-unifideck-hidden-native", appId);\n'
             '    container.style.setProperty("display", "none", "important");\n'
             '    container.style.setProperty("visibility", "hidden", "important");\n'
             '    container.style.setProperty("pointer-events", "none", "important");\n'
-            '    console.log("[Unifideck CDP] Hidden native play section for app " + appId + " (container " + Math.round(cRect.height) + "px)");\n'
+            '    console.log("[Unifideck CDP] Hidden native play section for app " + appId + " (container " + Math.round(cRect.height) + "px, depth " + depth + ")");\n'
             '    return "hidden";\n'
             '})()'
         )
