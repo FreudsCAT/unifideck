@@ -975,13 +975,81 @@ if [[ "$EXE_PATH" == *.exe ]] || [[ "$EXE_PATH" == *.EXE ]] || \
             log "[Language] No Unifideck settings found, defaulting to: $EPIC_LANG"
         fi
 
-        # Construct the legendary launch command (add --offline if in offline mode)
+        # === UBISOFT CONNECT NATIVE BYPASS & SELF-HEALING ===
+        # 1. Self-Healing for renamed executables (from old wrapper.c workarounds)
+        ORIG_EXE="$WORK_DIR/UplayLaunch.orig.exe"
+        if [ -f "$ORIG_EXE" ]; then
+            log "[Uplay] Found UplayLaunch.orig.exe. Restoring to UplayLaunch.exe to fix sync map..."
+            mv "$ORIG_EXE" "$WORK_DIR/UplayLaunch.exe" 2>/dev/null || true
+        fi
+        
+        # 2. Check installed.json for Ubisoft integration
+        INSTALLED_JSON="$LEGENDARY_CONFIG_PATH/installed.json"
+        IS_UBISOFT="false"
+        UPLAY_ID=""
+        
+        if [ -f "$INSTALLED_JSON" ]; then
+            UPLAY_ID=$(python3 -c "
+import json, sys
+try:
+    with open('$INSTALLED_JSON', 'r') as f:
+        data = json.load(f)
+        if '$GAME_ID' in data:
+            app = data['$GAME_ID']
+            exe = app.get('executable', '').lower()
+            if 'uplay' in exe:
+                params = app.get('launch_parameters', '')
+                for p in params.split():
+                    if p.startswith('-UplayId='):
+                        print(p.split('=')[1])
+                        sys.exit(0)
+except Exception:
+    pass
+" 2>/dev/null)
+            
+            if [ -n "$UPLAY_ID" ]; then
+                IS_UBISOFT="true"
+                log "[Uplay] Detected Ubisoft Connect game (UplayId: $UPLAY_ID). Will bypass Legendary."
+            fi
+        fi
+
+        # Construct the launch command
         OFFLINE_FLAG=""
         if [ "$IS_OFFLINE" = true ]; then
             OFFLINE_FLAG="--offline"
         fi
-        CMD="$LEGENDARY_BIN launch $GAME_ID --no-wine $OFFLINE_FLAG --wrapper \"$PYTHON_BIN $UMU_WRAPPER\" --language $EPIC_LANG"
-        log "Executing: $CMD"
+        
+        if [ "$IS_UBISOFT" = "true" ]; then
+            # Inject Epic + Ubisoft registry keys into the pfx/ subdirectory
+            # (critical: Proton reads registry from pfx/, not the parent prefix)
+            REGISTRY_SCRIPT="$PLUGIN_DIR/bin/epic_registry_setup.py"
+            if python3 "$REGISTRY_SCRIPT" "$GAME_ID" "$PREFIX_PATH" "$LEGENDARY_CONFIG_PATH" >> "$LOG_FILE" 2>&1; then
+                log "[Uplay] Registry keys injected into pfx successfully."
+            else
+                log "[Uplay] WARNING: Registry injection failed. Game may prompt for install."
+            fi
+
+            # Launch upc.exe directly — bypasses Epic SSO entirely
+            export PROTON_VERB="waitforexitandrun"
+            UPC_EXE="$PREFIX_PATH/drive_c/Program Files (x86)/Ubisoft/Ubisoft Game Launcher/upc.exe"
+            if [ ! -f "$UPC_EXE" ]; then
+                 UPC_EXE="$PREFIX_PATH/pfx/drive_c/Program Files (x86)/Ubisoft/Ubisoft Game Launcher/upc.exe"
+            fi
+            
+            if [ -f "$UPC_EXE" ]; then
+                CMD_STR="\"$PYTHON_BIN\" \"$UMU_WRAPPER\" \"$UPC_EXE\" \"uplay://launch/$UPLAY_ID/0\""
+                log "[Uplay] Launching upc.exe directly: uplay://launch/$UPLAY_ID/0"
+            else
+                log "[Uplay] WARNING: upc.exe not found. Falling back to Legendary."
+                IS_UBISOFT="false"
+                CMD_STR="$LEGENDARY_BIN launch $GAME_ID --no-wine $OFFLINE_FLAG --wrapper \"$PYTHON_BIN $UMU_WRAPPER\" --language $EPIC_LANG"
+            fi
+        else
+            # Standard Legendary launch
+            CMD_STR="$LEGENDARY_BIN launch $GAME_ID --no-wine $OFFLINE_FLAG --wrapper \"$PYTHON_BIN $UMU_WRAPPER\" --language $EPIC_LANG"
+        fi
+        
+        log "Executing: $CMD_STR"
 
         # === CLOUD SAVE: Download before launch ===
         if [ "$IS_OFFLINE" = true ]; then
@@ -997,10 +1065,18 @@ if [[ "$EXE_PATH" == *.exe ]] || [[ "$EXE_PATH" == *.EXE ]] || \
         fi
 
         # Notify user that game is launching
-        notify_stage "toasts.launcher.launchingGame" "toasts.launcher.startingEpicGame" "low"
+        if [ "$IS_UBISOFT" = "true" ]; then
+             notify_stage "toasts.launcher.launchingGame" "Starting Ubisoft Connect..." "low"
+        else
+             notify_stage "toasts.launcher.launchingGame" "toasts.launcher.startingEpicGame" "low"
+        fi
 
-        # Execute legendary (launches wrapper and may return before game exits)
-        "$LEGENDARY_BIN" launch "$GAME_ID" --no-wine $OFFLINE_FLAG --wrapper "$PYTHON_BIN $UMU_WRAPPER" --language $EPIC_LANG 2>>"$LOG_FILE"
+        # Execute launch command
+        if [ "$IS_UBISOFT" = "true" ]; then
+             eval "$CMD_STR" 2>>"$LOG_FILE"
+        else
+             "$LEGENDARY_BIN" launch "$GAME_ID" --no-wine $OFFLINE_FLAG --wrapper "$PYTHON_BIN $UMU_WRAPPER" --language $EPIC_LANG 2>>"$LOG_FILE"
+        fi
 
         GAME_EXIT_CODE=$?
 
