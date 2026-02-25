@@ -153,7 +153,7 @@
     "uninstallCompleteMessage": "{{title}} verwijderd.",
     "uninstallCompleteMessageProton": "{{title}} verwijderd (inclusief Proton-bestanden).",
     "installComplete": "Installatie Voltooid!",
-    "installCompleteMessage": "{{title}} is klaar om te spelen. Herstart Steam om het in je bibliotheek te zien.",
+    "installCompleteMessage": "{{title}} is klaar om te spelen.",
     "syncComplete": "Synchronisatie Voltooid!",
     "syncCompleteMessage": "{{count}} games toegevoegd. HERSTART STEAM (volledig afsluiten, niet alleen terugkeren naar game-modus) om ze in je bibliotheek te zien.",
     "forceSyncComplete": "Geforceerde Synchronisatie Voltooid!",
@@ -205,7 +205,9 @@
       "prerequisitesInstalled": "Spelvereisten geïnstalleerd",
       "prerequisitesFailed": "Vereisten waarschuwing",
       "prerequisitesFailedMessage": "Vereisten zijn mogelijk niet correct geïnstalleerd"
-    }
+    },
+    "updateComplete": "Update Complete!",
+    "updateCompleteMessage": "{{title}} has been updated."
   },
   "uninstallModal": {
     "title": "Verwijdering bevestigen",

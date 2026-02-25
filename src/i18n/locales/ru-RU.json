@@ -153,7 +153,7 @@
     "uninstallCompleteMessage": "{{title}} удален.",
     "uninstallCompleteMessageProton": "{{title}} удалена (включая файлы Proton).",
     "installComplete": "Установка завершена!",
-    "installCompleteMessage": "{{title}} готов к игре. Перезапустите Steam, чтобы увидеть его в библиотеке.",
+    "installCompleteMessage": "{{title}} готов к игре.",
     "syncComplete": "Синхронизация завершена!",
     "syncCompleteMessage": "{{count}} игр добавлено. ПЕРЕЗАПУСТИТЕ STEAM (полностью закройте, не просто выйдите из игрового режима), чтобы увидеть их в библиотеке.",
     "forceSyncComplete": "Принудительная синхронизация завершена!",
@@ -205,7 +205,9 @@
       "prerequisitesInstalled": "Необходимые компоненты игры установлены",
       "prerequisitesFailed": "Предупреждение о компонентах",
       "prerequisitesFailedMessage": "Необходимые компоненты могли быть установлены некорректно"
-    }
+    },
+    "updateComplete": "Update Complete!",
+    "updateCompleteMessage": "{{title}} has been updated."
   },
   "uninstallModal": {
     "title": "Подтвердите удаление",

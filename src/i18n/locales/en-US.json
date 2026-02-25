@@ -153,7 +153,7 @@
     "uninstallCompleteMessage": "{{title}} removed.",
     "uninstallCompleteMessageProton": "{{title}} removed (including Proton files).",
     "installComplete": "Installation Complete!",
-    "installCompleteMessage": "{{title}} is ready to play. Restart Steam to see it in your library.",
+    "installCompleteMessage": "{{title}} is ready to play.",
     "syncComplete": "Sync Complete!",
     "syncCompleteMessage": "Added {{count}} games. RESTART STEAM (exit completely, not just return to game mode) to see them in your library.",
     "forceSyncComplete": "Force Sync Complete!",
@@ -205,7 +205,9 @@
       "prerequisitesInstalled": "Game prerequisites installed",
       "prerequisitesFailed": "Prerequisites Warning",
       "prerequisitesFailedMessage": "Prerequisites may not have installed correctly"
-    }
+    },
+    "updateComplete": "Update Complete!",
+    "updateCompleteMessage": "{{title}} has been updated."
   },
   "uninstallModal": {
     "title": "Confirm Uninstallation",

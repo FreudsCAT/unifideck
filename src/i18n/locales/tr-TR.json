@@ -156,7 +156,7 @@
     "uninstallCompleteMessage": "{{title}} kaldırıldı.",
     "uninstallCompleteMessageProton": "{{title}} kaldırıldı (Proton dosyaları dahil).",
     "installComplete": "Kurulum Tamamlandı!",
-    "installCompleteMessage": "{{title}} oynamaya hazır. Kütüphanenizde görmek için Steam'i yeniden başlatın.",
+    "installCompleteMessage": "{{title}} oynamaya hazır.",
     "syncComplete": "Senkronizasyon Tamamlandı!",
     "syncCompleteMessage": "{{count}} oyun eklendi. Kütüphanenizde görmek için STEAM'İ YENİDEN BAŞLATIN (sadece oyun moduna dönmeyin, tamamen çıkın).",
     "forceSyncComplete": "Zorunlu Senkronizasyon Tamamlandı!",
@@ -208,7 +208,9 @@
       "prerequisitesInstalled": "Oyun ön koşulları yüklendi",
       "prerequisitesFailed": "Ön Koşullar Uyarısı",
       "prerequisitesFailedMessage": "Ön koşullar doğru şekilde yüklenmemiş olabilir"
-    }
+    },
+    "updateComplete": "Update Complete!",
+    "updateCompleteMessage": "{{title}} has been updated."
   },
   "uninstallModal": {
     "title": "Kaldırmayı Onayla",

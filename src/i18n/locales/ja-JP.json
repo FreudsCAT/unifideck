@@ -153,7 +153,7 @@
     "uninstallCompleteMessage": "{{title}} が削除されました。",
     "uninstallCompleteMessageProton": "{{title}} を削除しました（Protonファイルを含む）。",
     "installComplete": "インストール完了！",
-    "installCompleteMessage": "{{title}} の準備ができました。ライブラリで表示するには Steam を再起動してください。",
+    "installCompleteMessage": "{{title}} の準備ができました。",
     "syncComplete": "同期完了！",
     "syncCompleteMessage": "{{count}} 件のゲームを追加しました。ライブラリで表示するには STEAM を完全に再起動してください。",
     "forceSyncComplete": "強制同期完了！",
@@ -205,7 +205,9 @@
       "prerequisitesInstalled": "ゲームの前提条件がインストールされました",
       "prerequisitesFailed": "前提条件の警告",
       "prerequisitesFailedMessage": "前提条件が正しくインストールされなかった可能性があります"
-    }
+    },
+    "updateComplete": "Update Complete!",
+    "updateCompleteMessage": "{{title}} has been updated."
   },
   "uninstallModal": {
     "title": "アンインストールの確認",

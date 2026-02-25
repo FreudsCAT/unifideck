@@ -689,8 +689,8 @@ class EpicConnector(Store):
     async def check_for_updates(self) -> List[str]:
         """Check which installed Epic games have updates available.
         
-        Uses `legendary list-installed --check-updates --json` which returns
-        an `update_available` boolean per game. Verified: ~1.7s for 18 games.
+        Uses `legendary list-installed --check-updates` which outputs update status in plaintext.
+        (Note: the --json flag drops the update_available field due to a legendary bug).
         
         Returns:
             List of app_name IDs that have updates available.
@@ -700,25 +700,35 @@ class EpicConnector(Store):
 
         try:
             proc = await asyncio.create_subprocess_exec(
-                self.legendary_bin, 'list-installed', '--check-updates', '--json',
+                self.legendary_bin, 'list-installed', '--check-updates',
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE
             )
             stdout, stderr = await proc.communicate()
 
             if proc.returncode != 0:
-                logger.error(f"[EPIC] check_for_updates failed: {stderr.decode()}")
+                logger.error(f"[EPIC] check_for_updates failed: {stderr.decode('utf-8', errors='replace')}")
                 return []
 
-            games_data = json.loads(stdout.decode())
+            output = stdout.decode('utf-8', errors='replace')
             updates = []
-
-            for game in games_data:
-                if game.get('update_available', False):
-                    app_name = game.get('app_name', '')
-                    if app_name:
-                        updates.append(app_name)
-                        logger.info(f"[EPIC] Update available: {game.get('title', app_name)}")
+            current_app = None
+            
+            # Parse legendary plaintext output
+            # Example: 
+            # * Bloons TD 6 (App name: 7786b355a13b47a6b3915335117cd0b2 | Version: 53.0.10320...)
+            #  -> Update available! Installed: 53.0.10320, Latest: 53.2.10346
+            for line in output.splitlines():
+                line = line.strip()
+                if line.startswith('*') and 'App name:' in line:
+                    try:
+                        current_app = line.split('App name:')[1].split('|')[0].strip()
+                    except IndexError:
+                        current_app = None
+                elif line.startswith('-> Update available!') and current_app:
+                    updates.append(current_app)
+                    logger.info(f"[EPIC] Update available: {current_app}")
+                    current_app = None
 
             logger.info(f"[EPIC] Found {len(updates)} games with updates")
             return updates

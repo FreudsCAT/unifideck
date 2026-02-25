@@ -43,6 +43,7 @@ except ImportError:
 
 # Import Download Manager (modular backend)
 from py_modules.unifideck.download.manager import get_download_queue, DownloadQueue
+from py_modules.unifideck.download.update_checker import UpdateChecker
 
 # Import Cloud Save Manager
 from py_modules.unifideck.cloud.cloud_save import CloudSaveManager
@@ -1968,6 +1969,9 @@ class Plugin:
         logger.info("[INIT] Initializing GOGAPIClient")
         self.gog = GOGAPIClient(plugin_dir=DECKY_PLUGIN_DIR, plugin_instance=self)
         
+        logger.info("[INIT] Initializing UpdateChecker")
+        self.update_checker = UpdateChecker(plugin=self)
+
         # Validate and auto-correct GOG executable paths that point to installers
         logger.info("[INIT] Validating GOG executable paths")
         gog_validation = self.shortcuts_manager.validate_gog_exe_paths(self.gog)
@@ -2155,6 +2159,11 @@ class Plugin:
             except Exception as e:
                 error_message = str(e)
                 logger.error(f"[DownloadComplete] Exception marking game installed: {e}")
+            
+            if registration_success:
+                # Clear update cache flag so the UI instantly switches to Play
+                if hasattr(self, 'update_checker'):
+                    self.update_checker.clear_cache_for_game(item.store, item.game_id)
             
             # FIX 1: Propagate registration failures to download status
             # This ensures users see an error in the UI instead of 'completed'
@@ -3872,10 +3881,15 @@ class Plugin:
                     except Exception as e:
                         logger.debug(f"[GameInfo] Could not get size for {game_id}: {e}")
 
-                    logger.info(f"[GameInfo] App {app_id}: {shortcut.get('AppName')} - Installed: {is_installed}, Size: {size_formatted}")
+                    has_update = None
+                    if is_installed and hasattr(self, 'update_checker'):
+                        has_update = self.update_checker.get_cached_update_status(store, game_id)
+
+                    logger.info(f"[GameInfo] App {app_id}: {shortcut.get('AppName')} - Installed: {is_installed}, Size: {size_formatted}, Update: {has_update}")
 
                     return {
                         'is_installed': is_installed,
+                        'has_update': has_update,
                         'store': store,
                         'game_id': game_id,
                         'title': shortcut.get('AppName', ''),
@@ -5037,16 +5051,11 @@ class Plugin:
 
     # ── Update Detection ──────────────────────────────────────────────
 
-    # In-memory cache for update check results (avoids redundant CLI calls)
-    _update_cache: Dict[str, Any] = {}
-    _update_cache_timestamp: float = 0
-    _UPDATE_CACHE_TTL = 300  # 5 minutes
-
     async def check_game_update(self, app_id: int) -> Dict[str, Any]:
         """Check if a single game has an update available.
         
-        Dispatches to the appropriate store connector's update check.
-        Results are cached for 5 minutes to avoid repeated CLI calls.
+        Dispatches to the centralized update checker service.
+        Results are cached for 1 hour per store to avoid repeated CLI calls.
         
         Args:
             app_id: Steam shortcut app ID.
@@ -5065,47 +5074,7 @@ class Plugin:
             if not store or not game_id:
                 return {'success': False, 'error': 'Missing store or game_id'}
 
-            has_update = None
-
-            if store == 'epic':
-                # Epic uses batch check — cache all results
-                import time
-                if (time.time() - self._update_cache_timestamp > self._UPDATE_CACHE_TTL or
-                    f'epic:{game_id}' not in self._update_cache):
-                    updates = await self.epic.check_for_updates()
-                    # Cache all epic results
-                    for uid in updates:
-                        self._update_cache[f'epic:{uid}'] = True
-                    self._update_cache_timestamp = time.time()
-
-                has_update = self._update_cache.get(f'epic:{game_id}', False)
-
-            elif store == 'gog':
-                # GOG checks per-game via Content System API
-                cache_key = f'gog:{game_id}'
-                import time
-                if (cache_key not in self._update_cache or
-                    time.time() - self._update_cache_timestamp > self._UPDATE_CACHE_TTL):
-                    result = await self.gog.check_for_game_update(game_id)
-                    self._update_cache[cache_key] = result
-                    self._update_cache_timestamp = time.time()
-
-                has_update = self._update_cache.get(cache_key)
-
-            elif store == 'amazon' and self.amazon:
-                # Amazon uses batch check — cache all results
-                import time
-                if (time.time() - self._update_cache_timestamp > self._UPDATE_CACHE_TTL or
-                    f'amazon:{game_id}' not in self._update_cache):
-                    updates = await self.amazon.check_for_updates()
-                    for uid in updates:
-                        self._update_cache[f'amazon:{uid}'] = True
-                    self._update_cache_timestamp = time.time()
-
-                has_update = self._update_cache.get(f'amazon:{game_id}', False)
-
-            else:
-                return {'success': True, 'has_update': None, 'store': store}
+            has_update = await self.update_checker.check_for_game_update(store, game_id)
 
             logger.info(f"[UpdateCheck] app_id={app_id}, store={store}, game_id={game_id}, has_update={has_update}")
             return {'success': True, 'has_update': has_update, 'store': store}
@@ -5148,8 +5117,7 @@ class Plugin:
 
             if result.get('success'):
                 # Clear the update cache entry so it re-checks after update
-                cache_key = f'{store}:{game_id}'
-                self._update_cache.pop(cache_key, None)
+                self.update_checker.clear_cache_for_game(store, game_id)
 
             return result
 

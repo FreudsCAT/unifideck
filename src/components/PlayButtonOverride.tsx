@@ -304,6 +304,12 @@ const PlaySectionWrapperInner: FC<PlaySectionWrapperProps> = ({
         );
         const processedInfo = info?.error ? null : info;
         setGameInfo(processedInfo);
+        if (
+          processedInfo?.has_update !== undefined &&
+          processedInfo?.has_update !== null
+        ) {
+          setUpdateAvailable(processedInfo.has_update);
+        }
         if (gameInfoCacheRef && processedInfo) {
           gameInfoCacheRef.set(appId, {
             info: processedInfo,
@@ -431,6 +437,12 @@ const PlaySectionWrapperInner: FC<PlaySectionWrapperProps> = ({
         .then((info) => {
           const processedInfo = info?.error ? null : info;
           setGameInfo(processedInfo);
+          if (
+            processedInfo?.has_update !== undefined &&
+            processedInfo?.has_update !== null
+          ) {
+            setUpdateAvailable(processedInfo.has_update);
+          }
           if (gameInfoCacheRef && processedInfo) {
             gameInfoCacheRef.set(appId, {
               info: processedInfo,
@@ -649,10 +661,12 @@ const PlaySectionWrapperInner: FC<PlaySectionWrapperProps> = ({
 
           toaster.toast({
             title: info.was_previously_installed
-              ? "Update Complete"
+              ? t("toasts.updateComplete", "Update Complete!")
               : t("toasts.installComplete"),
             body: info.was_previously_installed
-              ? `${gameInfo.title} has been updated.`
+              ? t("toasts.updateCompleteMessage", {
+                  title: gameInfo?.title || "Game",
+                })
               : t("toasts.installCompleteMessage", {
                   title: gameInfo?.title || "Game",
                 }),
@@ -674,6 +688,12 @@ const PlaySectionWrapperInner: FC<PlaySectionWrapperProps> = ({
                 store: processedInfo.store,
                 isInstalled: processedInfo.is_installed,
               });
+            }
+            if (
+              processedInfo?.has_update !== undefined &&
+              processedInfo?.has_update !== null
+            ) {
+              setUpdateAvailable(processedInfo.has_update);
             }
             setGameInfo(processedInfo);
           });

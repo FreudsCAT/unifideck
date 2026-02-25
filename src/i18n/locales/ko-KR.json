@@ -153,7 +153,7 @@
     "uninstallCompleteMessage": "{{title}}이(가) 제거되었습니다.",
     "uninstallCompleteMessageProton": "{{title}}이(가) 제거되었습니다(Proton 파일 포함).",
     "installComplete": "설치 완료!",
-    "installCompleteMessage": "{{title}}을(를) 플레이할 준비가 되었습니다. Steam을 다시 시작하여 라이브러리에서 확인하세요.",
+    "installCompleteMessage": "{{title}}을(를) 플레이할 준비가 되었습니다.",
     "syncComplete": "동기화 완료!",
     "syncCompleteMessage": "{{count}}개의 게임이 추가되었습니다. 라이브러리에서 보려면 STEAM을 다시 시작하세요(게임 모드로 돌아가는 것이 아니라 완전히 종료).",
     "forceSyncComplete": "강제 동기화 완료!",
@@ -205,7 +205,9 @@
       "prerequisitesInstalled": "게임 사전 요구 사항이 설치되었습니다",
       "prerequisitesFailed": "사전 요구 사항 경고",
       "prerequisitesFailedMessage": "사전 요구 사항이 올바르게 설치되지 않았을 수 있습니다"
-    }
+    },
+    "updateComplete": "Update Complete!",
+    "updateCompleteMessage": "{{title}} has been updated."
   },
   "uninstallModal": {
     "title": "제거 확인",

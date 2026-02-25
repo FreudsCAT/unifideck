@@ -153,7 +153,7 @@
     "uninstallCompleteMessage": "{{title}} entfernt.",
     "uninstallCompleteMessageProton": "{{title}} entfernt (einschließlich Proton-Dateien).",
     "installComplete": "Installation abgeschlossen!",
-    "installCompleteMessage": "{{title}} ist spielbereit. Starte Steam neu, um es in deiner Bibliothek zu sehen.",
+    "installCompleteMessage": "{{title}} ist spielbereit.",
     "syncComplete": "Synchronisierung abgeschlossen!",
     "syncCompleteMessage": "{{count}} Spiele hinzugefügt. STARTE STEAM NEU (komplett schließen, nicht nur Spielmodus verlassen), um sie in deiner Bibliothek zu sehen.",
     "forceSyncComplete": "Erzwungene Synchronisierung abgeschlossen!",
@@ -205,7 +205,9 @@
       "prerequisitesInstalled": "Spielvoraussetzungen installiert",
       "prerequisitesFailed": "Voraussetzungen Warnung",
       "prerequisitesFailedMessage": "Voraussetzungen wurden möglicherweise nicht korrekt installiert"
-    }
+    },
+    "updateComplete": "Update Complete!",
+    "updateCompleteMessage": "{{title}} has been updated."
   },
   "uninstallModal": {
     "title": "Deinstallation bestätigen",

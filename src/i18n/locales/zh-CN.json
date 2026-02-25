@@ -158,7 +158,7 @@
     "uninstallCompleteMessage": "{{title}} 已删除。",
     "uninstallCompleteMessageProton": "{{title}} 已删除（包括 Proton 文件）。",
     "installComplete": "安装完成！",
-    "installCompleteMessage": "{{title}} 已准备好游玩。重启 Steam 以在您的库中看到它。",
+    "installCompleteMessage": "{{title}} 已准备好游玩。",
     "syncComplete": "同步完成！",
     "syncCompleteMessage": "已添加 {{count}} 个游戏。重启 STEAM（完全退出，而不仅仅是返回游戏模式）以在您的库中看到它们。",
     "forceSyncComplete": "强制同步完成！",
@@ -210,7 +210,9 @@
       "prerequisitesInstalled": "游戏前置条件已安装",
       "prerequisitesFailed": "前置条件警告",
       "prerequisitesFailedMessage": "前置条件可能未正确安装"
-    }
+    },
+    "updateComplete": "Update Complete!",
+    "updateCompleteMessage": "{{title}} has been updated."
   },
   "uninstallModal": {
     "title": "确认卸载",
