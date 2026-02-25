@@ -295,7 +295,10 @@ const DownloadItemRow: FC<{
           </span>
           {item.error_message && (
             <span style={{ marginLeft: "8px", color: "#888" }}>
-              - {t(item.error_message)}
+              -{" "}
+              {t(item.error_message) !== item.error_message
+                ? t(item.error_message)
+                : t("errors.download.generic")}
             </span>
           )}
         </div>

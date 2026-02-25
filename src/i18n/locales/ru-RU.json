@@ -153,7 +153,7 @@
     "uninstallCompleteMessage": "{{title}} удален.",
     "uninstallCompleteMessageProton": "{{title}} удалена (включая файлы Proton).",
     "installComplete": "Установка завершена!",
-    "installCompleteMessage": "{{title}} готов к игре. Перезапустите Steam, чтобы увидеть его в библиотеке.",
+    "installCompleteMessage": "{{title}} готов к игре.",
     "syncComplete": "Синхронизация завершена!",
     "syncCompleteMessage": "{{count}} игр добавлено. ПЕРЕЗАПУСТИТЕ STEAM (полностью закройте, не просто выйдите из игрового режима), чтобы увидеть их в библиотеке.",
     "forceSyncComplete": "Принудительная синхронизация завершена!",
@@ -198,8 +198,16 @@
       "installingRedist": "Установка зависимостей",
       "installingRedistMessage": "Первичный запуск установки пакетов GOG...",
       "setupFailed": "Ошибка настройки",
-      "setupFailedMessage": "Установка не удалась, см. логи"
-    }
+      "setupFailedMessage": "Установка не удалась, см. логи",
+      "prerequisitesTitle": "Установка необходимых компонентов",
+      "installingPrerequisites": "Установка необходимых компонентов игры...",
+      "prerequisitesReady": "Компоненты готовы",
+      "prerequisitesInstalled": "Необходимые компоненты игры установлены",
+      "prerequisitesFailed": "Предупреждение о компонентах",
+      "prerequisitesFailedMessage": "Необходимые компоненты могли быть установлены некорректно"
+    },
+    "updateComplete": "Update Complete!",
+    "updateCompleteMessage": "{{title}} has been updated."
   },
   "uninstallModal": {
     "title": "Подтвердите удаление",
@@ -237,7 +245,17 @@
     "backgroundSyncDisabled": "Фоновая синхронизация отключена",
     "steamGridDbUnavailable": "Библиотека SteamGridDB недоступна",
     "deleteSyncInProgress": "Невозможно удалить во время синхронизации",
-    "alreadyInQueue": "Уже в очереди"
+    "alreadyInQueue": "Уже в очереди",
+    "download": {
+      "diskSpace": "Недостаточно места на диске",
+      "network": "Ошибка сети — проверьте подключение",
+      "authExpired": "Сессия истекла — войдите снова",
+      "toolMissing": "Необходимый инструмент загрузки не найден",
+      "processFailed": "Загрузка не удалась — попробуйте ещё раз",
+      "directoryNotFound": "Не удалось найти установленные файлы",
+      "lockConflict": "Другая операция выполняется — попробуйте позже",
+      "generic": "Установка не удалась — проверьте логи"
+    }
   },
   "sync": {
     "downloadingArtwork": "Загрузка арта для {{game}}...",

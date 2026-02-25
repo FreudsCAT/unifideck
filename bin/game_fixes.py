@@ -90,9 +90,17 @@ def get_required_winetricks(game_id: str) -> List[str]:
         logger.info(f"Using umu-protonfixes for {game_id}: {packages}")
         return packages
     
-    # Global defaults: Common dependencies that fix many games
-    # mfc140: Microsoft Foundation Classes runtime - fixes games like Shadow of Mordor
-    global_defaults = ["mfc140"]
+    # Global defaults: Essential dependencies that most Epic games need
+    # Mirrors the critical subset of what GOG/Heroic installs
+    global_defaults = [
+        "vcrun2022",        # Latest VC++ runtime (msvcp140 series)
+        "vcrun2019",        # VC++ 2015-2019 runtime (most games need this)
+        "d3dcompiler_47",   # DirectX shader compiler (modern games)
+        "d3dcompiler_43",   # Older shader compiler
+        "vcrun2013",        # VC++ 2013 runtime
+        "vcrun2010",        # VC++ 2010 runtime (msvcr100)
+        "mfc140",           # Microsoft Foundation Classes runtime
+    ]
     logger.info(f"Using global defaults for {game_id}: {global_defaults}")
     return global_defaults
 

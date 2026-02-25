@@ -153,7 +153,7 @@
     "uninstallCompleteMessage": "{{title}} eliminado.",
     "uninstallCompleteMessageProton": "{{title}} eliminado (incluyendo archivos Proton).",
     "installComplete": "Instalación Completa",
-    "installCompleteMessage": "{{title}} está listo para jugar. Reinicia Steam para verlo en tu biblioteca.",
+    "installCompleteMessage": "{{title}} está listo para jugar.",
     "syncComplete": "Sincronización Completa",
     "syncCompleteMessage": "{{count}} juegos agregados. REINICIA STEAM (sal completamente, no solo volver al modo juego) para verlos en tu biblioteca.",
     "forceSyncComplete": "Forzar Sincronización Completa",
@@ -198,8 +198,16 @@
       "installingRedist": "Instalando redistribuibles",
       "installingRedistMessage": "Ejecutando instalación inicial de redistribuibles de GOG...",
       "setupFailed": "Configuración fallida",
-      "setupFailedMessage": "La instalación falló, ver registros para más detalles"
-    }
+      "setupFailedMessage": "La instalación falló, ver registros para más detalles",
+      "prerequisitesTitle": "Instalando requisitos previos",
+      "installingPrerequisites": "Instalando requisitos previos del juego...",
+      "prerequisitesReady": "Requisitos listos",
+      "prerequisitesInstalled": "Requisitos previos del juego instalados",
+      "prerequisitesFailed": "Advertencia de requisitos",
+      "prerequisitesFailedMessage": "Es posible que los requisitos previos no se hayan instalado correctamente"
+    },
+    "updateComplete": "Update Complete!",
+    "updateCompleteMessage": "{{title}} has been updated."
   },
   "uninstallModal": {
     "title": "Confirmar desinstalación",
@@ -237,7 +245,17 @@
     "backgroundSyncDisabled": "Sincronización en segundo plano desactivada",
     "steamGridDbUnavailable": "Biblioteca SteamGridDB no disponible",
     "deleteSyncInProgress": "No se puede eliminar mientras la sincronización está en curso",
-    "alreadyInQueue": "Ya está en la cola"
+    "alreadyInQueue": "Ya está en la cola",
+    "download": {
+      "diskSpace": "No hay suficiente espacio en disco",
+      "network": "Error de red — comprueba tu conexión",
+      "authExpired": "Sesión expirada — inicia sesión de nuevo",
+      "toolMissing": "Herramienta de descarga requerida no encontrada",
+      "processFailed": "La descarga falló — inténtalo de nuevo",
+      "directoryNotFound": "No se pudieron localizar los archivos instalados",
+      "lockConflict": "Otra operación en curso — inténtalo de nuevo",
+      "generic": "La instalación falló — revisa los registros"
+    }
   },
   "sync": {
     "downloadingArtwork": "Descargando arte de {{game}}...",

@@ -16,14 +16,9 @@
  * Click handling triggers Steam's game action flow, which the interceptor catches.
  */
 
-import { FC, useState, useEffect, useRef } from "react";
+import React, { FC, useState, useEffect, useRef } from "react";
 import { call, toaster } from "@decky/api";
-import {
-  DialogButton,
-  Focusable,
-  showModal,
-  ConfirmModal,
-} from "@decky/ui";
+import { DialogButton, Focusable, showModal, ConfirmModal } from "@decky/ui";
 import { useTranslation } from "react-i18next";
 import { updateSingleGameStatus } from "../tabs";
 import { setDownloadStateRef as setInterceptorDownloadState } from "../hooks/gameActionInterceptor";
@@ -51,28 +46,18 @@ function chainCDPOp(appId: number, op: () => Promise<void>): void {
   });
 }
 
-/**
- * DEBUG: Find and log native PlaySection structure via CDP
- */
-async function debugLogPlaySectionStructureViaCDP(
-  appId: number,
-): Promise<void> {
-  try {
-    const result = await call<
-      [number],
-      { success: boolean; structure?: string; error?: string }
-    >("debug_log_playsection_structure", appId);
+const pendingUnhides: Map<number, NodeJS.Timeout> = new Map();
 
-    if (result.success && result.structure) {
-      console.log("[DEBUG CDP] ========== PlaySection Structure ==========");
-      console.log(result.structure);
-      console.log("[DEBUG CDP] ========================================");
-    } else {
-      console.error("[DEBUG CDP] Failed:", result.error);
-    }
-  } catch (error) {
-    console.error("[DEBUG CDP] Call failed:", error);
+export function scheduleRemoveHidePlaySectionCDP(appId: number) {
+  // Clear any existing timer for this app
+  if (pendingUnhides.has(appId)) {
+    clearTimeout(pendingUnhides.get(appId)!);
   }
+  const timer = setTimeout(() => {
+    pendingUnhides.delete(appId);
+    removeHidePlaySectionCDP(appId);
+  }, 150); // Small 150ms delay catches immediate React remounts
+  pendingUnhides.set(appId, timer);
 }
 
 /**
@@ -83,22 +68,40 @@ async function debugLogPlaySectionStructureViaCDP(
  * because React destroys and recreates DOM elements.
  */
 export async function injectHidePlaySectionCDP(appId: number): Promise<void> {
+  // Cancel any pending unhide for this app
+  const unhideTimer = pendingUnhides.get(appId);
+  if (unhideTimer) {
+    clearTimeout(unhideTimer);
+    pendingUnhides.delete(appId);
+    console.log(
+      `[PlaySectionWrapper] Cancelled pending unhide for ${appId} (React remounted)`,
+    );
+  }
+
   chainCDPOp(appId, async () => {
     try {
-      const result = await call<[number], { success: boolean; error?: string }>(
-        "hide_native_play_section",
-        appId,
+      const timeout = new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error("CDP hide timeout (10s)")), 10000),
       );
+      const result = await Promise.race([
+        call<[number], { success: boolean; error?: string }>(
+          "hide_native_play_section",
+          appId,
+        ),
+        timeout,
+      ]);
 
       if (result.success) {
         console.log(
           `[PlaySectionWrapper] Hidden native play section via CDP for app ${appId}`,
         );
+      } else if (result.error === "not_found") {
+        // Suppress "not_found" error, as it evaluates to expected state during component mount fast burst
       } else {
-        console.error(`[PlaySectionWrapper] CDP hide failed: ${result.error}`);
+        console.warn(`[PlaySectionWrapper] CDP hide failed: ${result.error}`);
       }
     } catch (error) {
-      console.error(`[PlaySectionWrapper] CDP hide call failed:`, error);
+      console.warn(`[PlaySectionWrapper] CDP hide call failed:`, error);
     }
   });
 }
@@ -111,10 +114,16 @@ export async function injectHidePlaySectionCDP(appId: number): Promise<void> {
 export async function removeHidePlaySectionCDP(appId: number): Promise<void> {
   chainCDPOp(appId, async () => {
     try {
-      const result = await call<[number], { success: boolean; error?: string }>(
-        "unhide_native_play_section",
-        appId,
+      const timeout = new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error("CDP unhide timeout (10s)")), 10000),
       );
+      const result = await Promise.race([
+        call<[number], { success: boolean; error?: string }>(
+          "unhide_native_play_section",
+          appId,
+        ),
+        timeout,
+      ]);
 
       if (result.success) {
         console.log(
@@ -150,45 +159,87 @@ function formatLastPlayed(timestamp: number): string {
   return date.toLocaleDateString();
 }
 
-function formatPlaytime(minutes: number): string {
-  if (minutes === 0) return "0 hours";
-  const hours = Math.floor(minutes / 60);
-  const mins = minutes % 60;
-  if (mins === 0) return `${hours} hours`;
-  return `${hours}.${Math.floor((mins / 60) * 10)} hours`;
-}
-
 interface PlaySectionWrapperProps {
   appId: number;
   playSectionClassName?: string;
 }
 
-export const PlaySectionWrapper: FC<PlaySectionWrapperProps> = ({ appId, playSectionClassName }) => {
-  const [gameInfo, setGameInfo] = useState<any>(null);
-  const [loading, setLoading] = useState(true);
-  const [downloadState, setDownloadState] = useState<{
-    isDownloading: boolean;
-    progress?: number;
-    downloadId?: string;
-  }>({ isDownloading: false });
+const PlaySectionWrapperInner: FC<PlaySectionWrapperProps> = ({
+  appId,
+  playSectionClassName,
+}) => {
+  // Lazy init from cache: avoids blank screen on remount (e.g. after Steam Settings → B → back).
+  // If any cached entry exists (even stale), use it immediately so the first render has data.
+  // Stale data is refreshed in the background by the useEffect below.
+  const [gameInfo, setGameInfo] = useState<any>(
+    () => gameInfoCacheRef?.get(appId)?.info ?? null,
+  );
+  const [loading, setLoading] = useState<boolean>(
+    () => !gameInfoCacheRef?.has(appId),
+  );
+  const [downloadInfo, setDownloadInfo] = useState<{
+    id: string;
+    status: string;
+    progress_percent: number;
+    downloaded_bytes?: number;
+    total_bytes?: number;
+    speed_mbps?: number;
+    eta_seconds?: number;
+    download_phase?: string;
+    phase_message?: string;
+    is_preparing?: boolean;
+    was_previously_installed?: boolean;
+  } | null>(null);
   const [isRunning, setIsRunning] = useState(false);
   const [lastPlayedTimestamp, setLastPlayedTimestamp] = useState(0);
-  const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const [updateAvailable, setUpdateAvailable] = useState<boolean | null>(null);
+  const [isUpdating, setIsUpdating] = useState(false);
   const debugLoggedRef = useRef(false);
   const wrapperRef = useRef<HTMLDivElement>(null);
   const { t } = useTranslation();
+
+  const isDownloading =
+    downloadInfo !== null &&
+    ["queued", "downloading", "extracting", "verifying"].includes(
+      downloadInfo.status,
+    );
 
   // Whether we should show our custom UI (and hide native PlaySection)
   // For Unifideck games: always show custom UI (install, cancel, OR play)
   // Non-Unifideck shortcuts: get_game_info returns null → gameInfo is null → false
   const shouldShowCustom = !loading && gameInfo && !gameInfo.error;
 
-  // Style management: The hide style is injected by the PATCHER via CDP.
-  // For Unifideck games, native PlaySection stays permanently hidden —
-  // our custom section handles all states (install, cancel, play).
-  // We do NOT remove on unmount — React re-renders cause unmount/remount cycles,
-  // and the patcher's deduplication prevents re-injection on remount.
-  // Cleanup of all hide styles happens in plugin _unload via shutdown_cdp_client.
+  // Style management: CDP hide with burst + persistent polling.
+  // React can recreate native PlaySection DOM elements at unpredictable times,
+  // especially when navigating from Decky settings, console, or Steam menu.
+  // Strategy: fast burst for immediate navigation, then slow poll to catch late re-renders.
+  // Safety: CDP's hide_native_play_section has a container-size check (>50% viewport)
+  // that prevents blanking the entire page in offline mode or unusual DOM structures.
+  useEffect(() => {
+    if (!shouldShowCustom) return;
+
+    const timers: NodeJS.Timeout[] = [];
+    const doHide = () => injectHidePlaySectionCDP(appId);
+
+    // Fast burst: catch the native PlaySection as soon as it appears
+    doHide(); // Immediate
+    timers.push(setTimeout(doHide, 50)); // Fast retry
+    timers.push(setTimeout(doHide, 150)); // DOM settle
+    timers.push(setTimeout(doHide, 300)); // React reconciliation
+    timers.push(setTimeout(doHide, 600)); // Late re-render
+
+    // Persistent poll: catch React re-renders that happen after the burst.
+    // CDP hide is idempotent (re-applying styles to already-hidden elements is harmless).
+    const interval = setInterval(doHide, 2000);
+
+    return () => {
+      timers.forEach(clearTimeout);
+      clearInterval(interval);
+      // Use scheduled removal! Decky UI might recreate this component rapidly
+      // during navigation/focus changes, so we wait 150ms before unhiding natively.
+      scheduleRemoveHidePlaySectionCDP(appId);
+    };
+  }, [shouldShowCustom, appId]);
 
   // Failure handling: if get_game_info fails or returns null/error,
   // remove the hide CSS so the native PlaySection is restored
@@ -214,21 +265,51 @@ export const PlaySectionWrapper: FC<PlaySectionWrapperProps> = ({ appId, playSec
     }
   }, [appId]);
 
-  // Fetch game info on mount
+  // Safety timeout: if loading hangs (e.g. get_game_info never resolves),
+  // force loading=false after 8s so the component falls back to showing
+  // the native Steam game details page instead of a blank placeholder.
   useEffect(() => {
-    if (gameInfoCacheRef) {
-      const cached = gameInfoCacheRef.get(appId);
-      if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
-        setGameInfo(cached.info);
-        setLoading(false);
-        return;
-      }
+    if (!loading) return;
+    const timer = setTimeout(() => {
+      console.warn(
+        `[PlaySectionWrapper] Loading timeout for app ${appId}, falling back to native`,
+      );
+      setLoading(false);
+    }, 8000);
+    return () => clearTimeout(timer);
+  }, [loading, appId]);
+
+  // Fetch game info on mount. With lazy state init above, any cached entry is already rendered.
+  // - Fresh cache (< TTL): skip fetch entirely — data is already shown.
+  // - Stale cache (≥ TTL): data is already shown from init; re-fetch in background and update.
+  // - No cache: loading=true from init; fetch and show when done.
+  useEffect(() => {
+    const cached = gameInfoCacheRef?.get(appId);
+    if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
+      return; // Fresh — already initialized, nothing to do
     }
 
     call<[number], any>("get_game_info", appId)
       .then((info) => {
+        console.log(
+          "[Unifideck DIAG] get_game_info result:",
+          "appId:",
+          appId,
+          "hasError:",
+          !!info?.error,
+          "isInstalled:",
+          info?.is_installed,
+          "store:",
+          info?.store,
+        );
         const processedInfo = info?.error ? null : info;
         setGameInfo(processedInfo);
+        if (
+          processedInfo?.has_update !== undefined &&
+          processedInfo?.has_update !== null
+        ) {
+          setUpdateAvailable(processedInfo.has_update);
+        }
         if (gameInfoCacheRef && processedInfo) {
           gameInfoCacheRef.set(appId, {
             info: processedInfo,
@@ -237,7 +318,7 @@ export const PlaySectionWrapper: FC<PlaySectionWrapperProps> = ({ appId, playSec
         }
       })
       .catch((err) => {
-        console.error(`[PlaySectionWrapper] Error fetching game info:`, err);
+        console.error(`[Unifideck DIAG] get_game_info FAILED:`, err);
         setGameInfo(null);
       })
       .finally(() => setLoading(false));
@@ -275,8 +356,10 @@ export const PlaySectionWrapper: FC<PlaySectionWrapperProps> = ({ appId, playSec
         if (!debugLoggedRef.current) {
           console.log(
             `[PlaySectionWrapper] Overview for ${appId}:`,
-            "local_per_client_data:", JSON.stringify(overview.local_per_client_data),
-            "per_client_data:", JSON.stringify(overview.per_client_data),
+            "local_per_client_data:",
+            JSON.stringify(overview.local_per_client_data),
+            "per_client_data:",
+            JSON.stringify(overview.per_client_data),
           );
           debugLoggedRef.current = true;
         }
@@ -354,6 +437,12 @@ export const PlaySectionWrapper: FC<PlaySectionWrapperProps> = ({ appId, playSec
         .then((info) => {
           const processedInfo = info?.error ? null : info;
           setGameInfo(processedInfo);
+          if (
+            processedInfo?.has_update !== undefined &&
+            processedInfo?.has_update !== null
+          ) {
+            setUpdateAvailable(processedInfo.has_update);
+          }
           if (gameInfoCacheRef && processedInfo) {
             gameInfoCacheRef.set(appId, {
               info: processedInfo,
@@ -386,11 +475,11 @@ export const PlaySectionWrapper: FC<PlaySectionWrapperProps> = ({ appId, playSec
   // Share download state with the game action interceptor
   useEffect(() => {
     setInterceptorDownloadState({
-      isDownloading: downloadState.isDownloading,
-      downloadId: downloadState.downloadId,
+      isDownloading,
+      downloadId: downloadInfo?.id,
       gameInfo,
     });
-  }, [downloadState, gameInfo]);
+  }, [isDownloading, downloadInfo?.id, gameInfo]);
 
   // Proton compat tool handling: When a Unifideck game page loads, check if
   // Steam's Force Compatibility is set with a Proton tool. If so:
@@ -398,7 +487,8 @@ export const PlaySectionWrapper: FC<PlaySectionWrapperProps> = ({ appId, playSec
   // 2. Set launch options to use %command% bypass trick so the bash launcher
   //    runs natively even when Proton is configured (Proton command is commented out)
   useEffect(() => {
-    if (!gameInfo?.is_installed || !gameInfo?.store || !gameInfo?.game_id) return;
+    if (!gameInfo?.is_installed || !gameInfo?.store || !gameInfo?.game_id)
+      return;
     if (appId <= 2000000000) return;
 
     let cancelled = false;
@@ -406,154 +496,240 @@ export const PlaySectionWrapper: FC<PlaySectionWrapperProps> = ({ appId, playSec
 
     (async () => {
       try {
-        const result = await call<[string], {
-          success: boolean;
-          tool_name?: string;
-          appid_unsigned?: number;
-          is_linux_runtime?: boolean;
-          launcher_path?: string;
-          error?: string;
-        }>("get_compat_tool_for_game", storeGameId);
+        const result = await call<
+          [string],
+          {
+            success: boolean;
+            tool_name?: string;
+            appid_unsigned?: number;
+            is_linux_runtime?: boolean;
+            launcher_path?: string;
+            current_launch_options?: string;
+            error?: string;
+          }
+        >("get_compat_tool_for_game", storeGameId);
 
         if (cancelled || !result?.success) return;
 
         const launcherPath = result.launcher_path;
         if (!launcherPath) return;
 
+        // Extract user-appended params from current launch options
+        // Strips: launcher path, quoted strings, bare store:game_id, #%command%
+        const currentOpts = result.current_launch_options ?? storeGameId;
+        const extractUserParams = (opts: string): string => {
+          return opts
+            .replace(/#%command%/g, "")
+            .replace(/"[^"]*"/g, "") // Remove quoted strings (launcher path, store id)
+            .replace(
+              new RegExp(
+                storeGameId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"),
+                "g",
+              ),
+              "",
+            ) // bare id
+            .replace(/\/\S+unifideck-launcher/g, "") // launcher path
+            .trim();
+        };
+        const userParams = extractUserParams(currentOpts);
+
         if (result.tool_name && !result.is_linux_runtime) {
           // Proton compat tool detected - save for the launcher
           await call<[string, string], { success: boolean }>(
-            "save_proton_setting", storeGameId, result.tool_name,
+            "save_proton_setting",
+            storeGameId,
+            result.tool_name,
           );
 
           if (cancelled) return;
 
-          // Set launch options with %command% bypass: runs launcher natively,
-          // Proton-wrapped command gets commented out after #
-          const bypassOptions = `${launcherPath} "${storeGameId}" #%command%`;
-          window.SteamClient?.Apps?.SetShortcutLaunchOptions(appId, bypassOptions);
+          // Set launch options with %command% bypass, preserving user params
+          const bypassOptions = userParams
+            ? `${launcherPath} "${storeGameId}" ${userParams} #%command%`
+            : `${launcherPath} "${storeGameId}" #%command%`;
+          window.SteamClient?.Apps?.SetShortcutLaunchOptions(
+            appId,
+            bypassOptions,
+          );
 
           console.log(
             `[PlaySectionWrapper] Set %command% bypass for "${gameInfo.title}" (${result.tool_name})`,
           );
         } else {
-          // No Proton tool (or Linux runtime) - restore original launch options
-          window.SteamClient?.Apps?.SetShortcutLaunchOptions(appId, storeGameId);
+          // No Proton tool (or Linux runtime) - restore launch options preserving user params
+          const restoredOptions = userParams
+            ? `${storeGameId} ${userParams}`
+            : storeGameId;
+
+          // Only write if actually different (avoids unnecessary overwrites every page load)
+          if (currentOpts !== restoredOptions) {
+            window.SteamClient?.Apps?.SetShortcutLaunchOptions(
+              appId,
+              restoredOptions,
+            );
+          }
 
           // Clear any previously saved proton setting
           await call<[string, string], { success: boolean }>(
-            "save_proton_setting", storeGameId, "",
+            "save_proton_setting",
+            storeGameId,
+            "",
           );
         }
       } catch (error) {
-        console.error("[PlaySectionWrapper] Error checking compat tool:", error);
+        console.error(
+          "[PlaySectionWrapper] Error checking compat tool:",
+          error,
+        );
       }
     })();
 
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, [appId, gameInfo?.is_installed, gameInfo?.store, gameInfo?.game_id]);
 
-  // Poll for download state
+  // Check for game updates once when installed & not downloading
+  useEffect(() => {
+    if (!gameInfo?.is_installed || isDownloading || isUpdating) return;
+    if (!gameInfo?.store || !gameInfo?.game_id) return;
+
+    let cancelled = false;
+
+    (async () => {
+      try {
+        const result = await call<
+          [number],
+          {
+            success: boolean;
+            has_update: boolean | null;
+            store: string;
+          }
+        >("check_game_update", appId);
+
+        if (cancelled) return;
+
+        if (result?.success) {
+          setUpdateAvailable(result.has_update ?? null);
+          console.log(
+            `[PlaySectionWrapper] Update check for ${appId}: has_update=${result.has_update}`,
+          );
+        }
+      } catch (error) {
+        console.error(`[PlaySectionWrapper] Update check error:`, error);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [appId, gameInfo?.is_installed, gameInfo?.store, gameInfo?.game_id]);
+
+  // Unified download and update progress polling
   useEffect(() => {
     if (!gameInfo) return;
 
-    const checkDownloadState = async () => {
+    const checkDownloadStatus = async () => {
       try {
         const result = await call<
           [string, string],
           {
             success: boolean;
             is_downloading: boolean;
-            download_info?: {
-              id: string;
-              progress_percent: number;
-              status: string;
-            };
+            download_info?: any;
           }
         >("is_game_downloading", gameInfo.game_id, gameInfo.store);
 
-        setDownloadState((prevState) => {
-          const newState = {
-            isDownloading: false,
-            progress: 0,
-            downloadId: undefined as string | undefined,
-          };
+        if (!result.success) return;
 
-          if (result.success && result.is_downloading && result.download_info) {
-            const status = result.download_info.status;
-            if (status === "downloading" || status === "queued") {
-              newState.isDownloading = true;
-              newState.progress = result.download_info.progress_percent;
-              newState.downloadId = result.download_info.id;
-            }
-          }
+        const info = result.download_info;
+        const prevStatus = downloadInfo?.status;
+        const newStatus = info?.status;
 
-          // Detect download completion
-          if (prevState.isDownloading && !newState.isDownloading) {
-            const finalStatus = result.download_info?.status;
+        // Update state
+        setDownloadInfo(info || null);
 
-            if (finalStatus === "completed") {
-              toaster.toast({
-                title: t("toasts.installComplete"),
-                body: t("toasts.installCompleteMessage", {
+        // Handle completion
+        if (
+          (prevStatus === "downloading" ||
+            prevStatus === "extracting" ||
+            prevStatus === "verifying") &&
+          newStatus === "completed"
+        ) {
+          setIsUpdating(false);
+          setUpdateAvailable(false);
+
+          toaster.toast({
+            title: info.was_previously_installed
+              ? t("toasts.updateComplete", "Update Complete!")
+              : t("toasts.installComplete"),
+            body: info.was_previously_installed
+              ? t("toasts.updateCompleteMessage", {
+                  title: gameInfo?.title || "Game",
+                })
+              : t("toasts.installCompleteMessage", {
                   title: gameInfo?.title || "Game",
                 }),
-                duration: 10000,
-                critical: true,
+            duration: 10000,
+            critical: true,
+          });
+
+          // Refresh game info to update UI
+          if (gameInfoCacheRef) gameInfoCacheRef.delete(appId);
+          call<[number], any>("get_game_info", appId).then((info) => {
+            const processedInfo = info?.error ? null : info;
+            if (processedInfo && gameInfoCacheRef) {
+              gameInfoCacheRef.set(appId, {
+                info: processedInfo,
+                timestamp: Date.now(),
               });
-
-              if (gameInfoCacheRef) gameInfoCacheRef.delete(appId);
-
-              call<[number], any>("get_game_info", appId).then((info) => {
-                const processedInfo = info?.error ? null : info;
-                // Update caches BEFORE setGameInfo to prevent patcher from
-                // seeing stale isInstalled=false and re-injecting CDP hide
-                if (processedInfo && gameInfoCacheRef) {
-                  gameInfoCacheRef.set(appId, {
-                    info: processedInfo,
-                    timestamp: Date.now(),
-                  });
-                  updateSingleGameStatus({
-                    appId,
-                    store: processedInfo.store,
-                    isInstalled: processedInfo.is_installed,
-                  });
-                }
-                setGameInfo(processedInfo);
+              updateSingleGameStatus({
+                appId,
+                store: processedInfo.store,
+                isInstalled: processedInfo.is_installed,
               });
             }
-          }
+            if (
+              processedInfo?.has_update !== undefined &&
+              processedInfo?.has_update !== null
+            ) {
+              setUpdateAvailable(processedInfo.has_update);
+            }
+            setGameInfo(processedInfo);
+          });
+        }
 
-          return newState;
-        });
+        // Handle error/cancel
+        if (newStatus === "error" || newStatus === "cancelled") {
+          setIsUpdating(false);
+        }
       } catch (error) {
         console.error(
-          "[PlaySectionWrapper] Error checking download state:",
+          "[PlaySectionWrapper] Error polling download status:",
           error,
         );
       }
     };
 
-    checkDownloadState();
-    pollIntervalRef.current = setInterval(checkDownloadState, 1000);
-
-    return () => {
-      if (pollIntervalRef.current) {
-        clearInterval(pollIntervalRef.current);
-      }
-    };
+    checkDownloadStatus();
+    const interval = setInterval(checkDownloadStatus, 1000);
+    return () => clearInterval(interval);
   }, [gameInfo, appId]);
 
   // Autofocus: Focus our action button via CDP after hiding the native one.
   // DOM .focus() doesn't work cross-process (plugin CEF ≠ SP tab), so we
   // use CDP to find and focus our button in the SP tab's DOM directly.
+  // Non-critical — short 3s timeout to avoid blocking on CDP degradation.
   useEffect(() => {
     if (!shouldShowCustom) return;
     const timer = setTimeout(() => {
-      call<[number], { success: boolean }>(
-        "focus_unifideck_button",
-        appId,
-      ).catch(() => {});
+      const focusTimeout = new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error("focus timeout")), 3000),
+      );
+      Promise.race([
+        call<[number], { success: boolean }>("focus_unifideck_button", appId),
+        focusTimeout,
+      ]).catch(() => {});
     }, 300);
     return () => clearTimeout(timer);
   }, [shouldShowCustom, appId]);
@@ -580,12 +756,6 @@ export const PlaySectionWrapper: FC<PlaySectionWrapperProps> = ({ appId, playSec
         body: t("toasts.downloadQueued", { title: gameInfo.title }),
         duration: 5000,
       });
-
-      setDownloadState((prev) => ({
-        ...prev,
-        isDownloading: true,
-        progress: 0,
-      }));
     } else {
       toaster.toast({
         title: t("toasts.downloadFailed"),
@@ -650,8 +820,7 @@ export const PlaySectionWrapper: FC<PlaySectionWrapperProps> = ({ appId, playSec
 
   // Cancel download handler
   const handleCancel = async () => {
-    const dlId =
-      downloadState.downloadId || `${gameInfo.store}:${gameInfo.game_id}`;
+    const dlId = downloadInfo?.id || `${gameInfo.store}:${gameInfo.game_id}`;
 
     const result = await call<[string], { success: boolean; error?: string }>(
       "cancel_download_by_id",
@@ -664,7 +833,6 @@ export const PlaySectionWrapper: FC<PlaySectionWrapperProps> = ({ appId, playSec
         body: t("toasts.downloadCancelledMessage", { title: gameInfo?.title }),
         duration: 5000,
       });
-      setDownloadState({ isDownloading: false, progress: 0 });
     } else {
       toaster.toast({
         title: t("toasts.cancelFailed"),
@@ -711,7 +879,7 @@ export const PlaySectionWrapper: FC<PlaySectionWrapperProps> = ({ appId, playSec
 
   // Handle install/cancel button click
   const handleClick = () => {
-    if (downloadState.isDownloading) {
+    if (isDownloading) {
       showCancelConfirmation();
     } else if (!gameInfo?.is_installed) {
       showInstallConfirmation();
@@ -753,16 +921,46 @@ export const PlaySectionWrapper: FC<PlaySectionWrapperProps> = ({ appId, playSec
     }
   };
 
-  // While loading, or not a Unifideck game — render hidden anchor only
-  // The anchor div stays in the DOM so our useEffect can find the parent container
+  // DIAG: Track component lifecycle (temporary)
+  console.log(
+    "[Unifideck DIAG] PlaySectionWrapper render:",
+    "appId:",
+    appId,
+    "loading:",
+    loading,
+    "gameInfo:",
+    !!gameInfo,
+    "shouldShowCustom:",
+    shouldShowCustom,
+    "isDownloading:",
+    isDownloading,
+  );
+
+  // While loading: show visible placeholder to prevent blank screen.
+  // Error (gameInfo null): return null so native PlaySection (unhidden via CDP) shows through.
   if (!shouldShowCustom) {
-    return (
-      <div
-        ref={wrapperRef}
-        data-unifideck-play-wrapper="true"
-        style={{ display: "none" }}
-      />
-    );
+    if (loading) {
+      return (
+        <div
+          ref={wrapperRef}
+          data-unifideck-play-wrapper="true"
+          className={playSectionClassName || undefined}
+          style={{
+            display: "flex",
+            alignItems: "center",
+            width: "100%",
+            padding: "16px",
+            boxSizing: "border-box",
+            background: "rgba(14, 20, 27, 0.33)",
+            position: "relative" as const,
+            zIndex: 2,
+            minHeight: "80px",
+          }}
+        />
+      );
+    }
+    // Error state: gameInfo is null/error — return null so native PlaySection shows
+    return null;
   }
 
   // Render a custom PlaySection that visually matches Steam's native layout.
@@ -776,6 +974,8 @@ export const PlaySectionWrapper: FC<PlaySectionWrapperProps> = ({ appId, playSec
     alignItems: "center",
     justifyContent: "flex-start",
     gap: "8px",
+    flex: "0 0 auto",
+    width: "auto",
     minWidth: "200px",
     height: "48px",
     padding: "0 24px",
@@ -799,7 +999,8 @@ export const PlaySectionWrapper: FC<PlaySectionWrapperProps> = ({ appId, playSec
     .unifideck-install-btn,
     .unifideck-play-btn,
     .unifideck-resume-btn,
-    .unifideck-stop-btn {
+    .unifideck-stop-btn,
+    .unifideck-cancel-btn {
       background: rgba(255, 255, 255, 0.1) !important;
       transition: background 0.15s ease, filter 0.15s ease !important;
     }
@@ -807,13 +1008,9 @@ export const PlaySectionWrapper: FC<PlaySectionWrapperProps> = ({ appId, playSec
     .unifideck-install-btn.gpfocus {
       background: linear-gradient(135deg, #1a9fff 0%, #1570b5 100%) !important;
     }
-    .unifideck-cancel-btn {
-      background: linear-gradient(135deg, #dc3545 0%, #c82333 100%) !important;
-      transition: background 0.15s ease, filter 0.15s ease !important;
-    }
     .unifideck-cancel-btn:hover,
     .unifideck-cancel-btn.gpfocus {
-      filter: brightness(1.2) !important;
+      background: linear-gradient(135deg, #dc3545 0%, #c82333 100%) !important;
     }
     .unifideck-play-btn:hover,
     .unifideck-play-btn.gpfocus {
@@ -827,22 +1024,237 @@ export const PlaySectionWrapper: FC<PlaySectionWrapperProps> = ({ appId, playSec
     .unifideck-stop-btn.gpfocus {
       background: rgba(255, 255, 255, 0.2) !important;
     }
+    .unifideck-update-btn {
+      background: linear-gradient(135deg, #1a9fff 0%, #1570b5 100%) !important;
+      transition: filter 0.15s ease !important;
+    }
+    .unifideck-update-btn:hover,
+    .unifideck-update-btn.gpfocus {
+      filter: brightness(1.15) !important;
+    }
+    .unifideck-update-btn:disabled {
+      opacity: 0.6 !important;
+      cursor: not-allowed !important;
+    }
     .unifideck-install-btn:active,
     .unifideck-cancel-btn:active,
     .unifideck-play-btn:active,
     .unifideck-resume-btn:active,
-    .unifideck-stop-btn:active {
+    .unifideck-stop-btn:active,
+    .unifideck-update-btn:active {
       filter: brightness(0.85) !important;
+    }
+    @keyframes unifideck-slide {
+      0% { transform: translateX(-100%); }
+      100% { transform: translateX(300%); }
     }
   `;
 
-  // ========== INSTALLED STATE: Play / Resume + X ==========
-  if (gameInfo.is_installed && !downloadState.isDownloading) {
+  // Helper: format bytes for update progress display
+  const formatBytes = (bytes: number): string => {
+    if (bytes === 0) return "0 B";
+    const k = 1024;
+    const sizes = ["B", "KB", "MB", "GB", "TB"];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + " " + sizes[i];
+  };
+
+  const formatETA = (seconds: number): string => {
+    if (!seconds || seconds <= 0) return "--:--";
+    const h = Math.floor(seconds / 3600);
+    const m = Math.floor((seconds % 3600) / 60);
+    const s = Math.floor(seconds % 60);
+    if (h > 0)
+      return `${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+    return `${m}:${String(s).padStart(2, "0")}`;
+  };
+
+  // Helper: Render unified rich progress UI
+  const renderUnifiedProgress = (info: NonNullable<typeof downloadInfo>) => {
+    const isIndeterminate =
+      info.download_phase === "extracting" ||
+      info.download_phase === "verifying";
+
     return (
       <div
+        style={{
+          display: "flex",
+          flexDirection: "column",
+          gap: "4px",
+          marginLeft: "32px",
+          flex: "0 0 50%",
+          maxWidth: "50%",
+          minWidth: 0,
+        }}
+      >
+        {/* Status label */}
+        <div
+          style={{
+            fontSize: "11px",
+            fontWeight: 600,
+            textTransform: "uppercase",
+            color: "#8f98a0",
+            letterSpacing: "0.08em",
+          }}
+        >
+          {info.download_phase === "extracting"
+            ? "Extracting..."
+            : info.download_phase === "verifying"
+            ? "Verifying..."
+            : info.status === "queued"
+            ? info.was_previously_installed
+              ? "Update Queued"
+              : "Download Queued"
+            : info.was_previously_installed
+            ? "Downloading Update"
+            : "Downloading..."}
+        </div>
+
+        {/* Progress bar */}
+        <div
+          style={{
+            width: "100%",
+            height: "4px",
+            background: "rgba(255, 255, 255, 0.1)",
+            borderRadius: "2px",
+            overflow: "hidden",
+            position: "relative",
+          }}
+        >
+          <div
+            style={{
+              position: "absolute",
+              top: 0,
+              left: 0,
+              height: "100%",
+              width: isIndeterminate ? "40%" : `${info.progress_percent}%`,
+              background: "#1a9fff",
+              borderRadius: "2px",
+              transition: isIndeterminate ? "none" : "width 0.3s ease",
+              animation: isIndeterminate
+                ? "unifideck-slide 1.5s infinite linear"
+                : "none",
+            }}
+          />
+        </div>
+
+        {/* Rich stats or Phase message */}
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            fontSize: "11px",
+            color: "#8f98a0",
+            fontWeight: 500,
+          }}
+        >
+          {isIndeterminate ? (
+            <span>{info.phase_message || "Finalizing installation..."}</span>
+          ) : (
+            <>
+              {info.total_bytes && info.total_bytes > 0 ? (
+                <span>
+                  {formatBytes(info.downloaded_bytes || 0)} /{" "}
+                  {formatBytes(info.total_bytes)}
+                </span>
+              ) : (
+                <span>{info.progress_percent.toFixed(1)}%</span>
+              )}
+              {info.status === "downloading" &&
+                info.speed_mbps !== undefined && (
+                  <span style={{ marginLeft: "auto" }}>
+                    {info.speed_mbps.toFixed(1)} MB/s · ETA:{" "}
+                    {formatETA(info.eta_seconds || 0)}
+                  </span>
+                )}
+            </>
+          )}
+        </div>
+      </div>
+    );
+  };
+
+  // Handle update button click
+  const handleUpdateClick = async () => {
+    if (isDownloading) {
+      // Cancel the update
+      const dlId = downloadInfo?.id || `${gameInfo.store}:${gameInfo.game_id}`;
+      const result = await call<[string], { success: boolean; error?: string }>(
+        "cancel_download_by_id",
+        dlId,
+      );
+      if (result.success) {
+        setIsUpdating(false);
+        toaster.toast({
+          title: "Update Cancelled",
+          body: `Update for ${gameInfo.title} was cancelled.`,
+          duration: 5000,
+        });
+      }
+      return;
+    }
+
+    // Amazon special case: confirm full re-download
+    if (gameInfo.store === "amazon") {
+      showModal(
+        <ConfirmModal
+          strTitle="Full Re-download Required"
+          strDescription={`Amazon updates require a full re-download of ${gameInfo.title}. This may take a while. Continue?`}
+          strOKButtonText="Update"
+          strCancelButtonText="Cancel"
+          onOK={async () => {
+            setIsUpdating(true);
+            const result = await call<
+              [number],
+              { success: boolean; error?: string }
+            >("update_game", appId);
+            if (!result.success) {
+              setIsUpdating(false);
+              toaster.toast({
+                title: "Update Failed",
+                body: result.error || "Failed to start update.",
+                duration: 10000,
+                critical: true,
+              });
+            }
+          }}
+        />,
+      );
+      return;
+    }
+
+    // Epic / GOG — start update directly
+    setIsUpdating(true);
+    const result = await call<[number], { success: boolean; error?: string }>(
+      "update_game",
+      appId,
+    );
+    if (!result.success) {
+      setIsUpdating(false);
+      toaster.toast({
+        title: "Update Failed",
+        body: result.error || "Failed to start update.",
+        duration: 10000,
+        critical: true,
+      });
+    }
+  };
+
+  // ========== UPDATE AVAILABLE / UPDATING STATE ==========
+  if (
+    gameInfo.is_installed &&
+    (updateAvailable || isUpdating || isDownloading) &&
+    !isRunning
+  ) {
+    return (
+      <Focusable
         ref={wrapperRef}
         data-unifideck-play-wrapper="true"
         className={playSectionClassName || undefined}
+        flow-children="row"
+        onFocus={(e: any) =>
+          e.target.scrollIntoView({ behavior: "smooth", block: "center" })
+        }
         style={{
           display: "flex",
           alignItems: "center",
@@ -856,85 +1268,38 @@ export const PlaySectionWrapper: FC<PlaySectionWrapperProps> = ({ appId, playSec
       >
         <style>{buttonStyles}</style>
 
-        {/* Action buttons — Play or Resume+X depending on running state */}
-        <Focusable style={{ flex: "0 0 auto", display: "flex", gap: "4px" }}>
-          {isRunning ? (
-            <>
-              {/* Resume button — brings running game to foreground */}
-              <DialogButton
-                className="unifideck-resume-btn"
-                onClick={handlePlay}
-                style={actionBtnStyle}
-              >
-                <svg
-                  viewBox="0 0 24 24"
-                  fill="currentColor"
-                  width="1em"
-                  height="1em"
-                >
-                  <path d="M8 5v14l11-7z" />
-                </svg>
-                {t("installButton.resume", "Resume")}
-              </DialogButton>
-              {/* X close button — terminates the running game */}
-              <DialogButton
-                className="unifideck-stop-btn"
-                onClick={handleStop}
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  width: "48px",
-                  height: "48px",
-                  minWidth: "48px",
-                  padding: "0",
-                  borderRadius: "4px",
-                  border: "none",
-                  color: "#fff",
-                }}
-              >
-                <svg
-                  viewBox="0 0 24 24"
-                  fill="currentColor"
-                  width="20"
-                  height="20"
-                >
-                  <path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z" />
-                </svg>
-              </DialogButton>
-            </>
-          ) : (
-            /* Play button — launches the game */
-            <DialogButton
-              className="unifideck-play-btn"
-              onClick={handlePlay}
-              style={actionBtnStyle}
-            >
-              <svg
-                viewBox="0 0 24 24"
-                fill="currentColor"
-                width="1em"
-                height="1em"
-              >
-                <path d="M8 5v14l11-7z" />
-              </svg>
-              {t("installButton.play", "Play")}
-            </DialogButton>
-          )}
-        </Focusable>
-
-        {/* Stats — LAST PLAYED only (Steam doesn't return playtime for non-Steam shortcuts) */}
-        {/* TODO: Add PLAY TIME stat when playtime API is available for non-Steam games */}
-        <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: "32px",
-            marginLeft: "20px",
-            flex: "0 1 auto",
-          }}
+        {/* Update button — acts as cancel when update is in progress */}
+        <DialogButton
+          className="unifideck-update-btn"
+          onClick={handleUpdateClick}
+          style={actionBtnStyle}
         >
-          <div>
+          <svg viewBox="0 0 24 24" fill="currentColor" width="1em" height="1em">
+            {isDownloading ? (
+              /* X icon when updating (acts as cancel) */
+              <path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z" />
+            ) : (
+              /* Sync/refresh icon when idle */
+              <path d="M12 4V1L8 5l4 4V6c3.31 0 6 2.69 6 6 0 1.01-.25 1.97-.7 2.8l1.46 1.46C19.54 15.03 20 13.57 20 12c0-4.42-3.58-8-8-8zm0 14c-3.31 0-6-2.69-6-6 0-1.01.25-1.97.7-2.8L5.24 7.74C4.46 8.97 4 10.43 4 12c0 4.42 3.58 8 8 8v3l4-4-4-4v3z" />
+            )}
+          </svg>
+          {isDownloading ? t("installButton.cancel", "Cancel") : "UPDATE"}
+        </DialogButton>
+
+        {/* Progress area — shows during update download or "Update Available" when idle */}
+        {isDownloading && downloadInfo ? (
+          renderUnifiedProgress(downloadInfo)
+        ) : (
+          <div
+            style={{
+              display: "flex",
+              flexDirection: "column",
+              gap: "4px",
+              marginLeft: "20px",
+              flex: "1 1 auto",
+              minWidth: 0,
+            }}
+          >
             <div
               style={{
                 fontSize: "11px",
@@ -942,20 +1307,17 @@ export const PlaySectionWrapper: FC<PlaySectionWrapperProps> = ({ appId, playSec
                 textTransform: "uppercase",
                 color: "#8f98a0",
                 letterSpacing: "0.08em",
-                lineHeight: "1",
-                marginBottom: "5px",
               }}
             >
-              LAST PLAYED
+              UPDATE AVAILABLE
             </div>
             <div style={{ fontSize: "14px", color: "#dcdedf" }}>
-              {formatLastPlayed(lastPlayedTimestamp)}
+              A new version is ready to install.
             </div>
           </div>
-        </div>
-
+        )}
         {/* Right icon buttons - controller config + app settings */}
-        <Focusable
+        <div
           style={{
             display: "flex",
             gap: "8px",
@@ -979,8 +1341,16 @@ export const PlaySectionWrapper: FC<PlaySectionWrapperProps> = ({ appId, playSec
               borderRadius: "4px",
             }}
           >
-            <svg viewBox="35 31 31 24" fill="currentColor" width="28" height="28">
-              <path fillRule="evenodd" d="M38.562 35.88C37.724 37.501 36.752 41.257 36.403 44.227C35.895 48.548 36.106 49.963 37.456 51.313C39.925 53.783 41.749 53.387 43.5 50C44.938 47.219 45.452 47 50.547 47C55.406 47 56.172 47.283 57.157 49.445C58.551 52.504 60.548 53.312 63.202 51.892C65.02 50.919 65.198 50.118 64.734 44.999C64.445 41.814 63.594 37.923 62.843 36.354C61.481 33.508 61.446 33.499 50.782 33.217L40.086 32.933 38.562 35.88zM40.037 36.931C39.254 38.395 39.394 39.251 40.618 40.475C41.506 41.363 42.71 41.93 43.295 41.735C45.057 41.148 46.359 38.377 45.691 36.636C44.829 34.391 41.298 34.575 40.037 36.931zM55.445 37.174C54.533 40.048 57.439 42.371 60.138 40.926C61.162 40.378 62 39.532 62 39.047C62 34.795 56.682 33.276 55.445 37.174z" />
+            <svg
+              viewBox="35 31 31 24"
+              fill="currentColor"
+              width="28"
+              height="28"
+            >
+              <path
+                fillRule="evenodd"
+                d="M38.562 35.88C37.724 37.501 36.752 41.257 36.403 44.227C35.895 48.548 36.106 49.963 37.456 51.313C39.925 53.783 41.749 53.387 43.5 50C44.938 47.219 45.452 47 50.547 47C55.406 47 56.172 47.283 57.157 49.445C58.551 52.504 60.548 53.312 63.202 51.892C65.02 50.919 65.198 50.118 64.734 44.999C64.445 41.814 63.594 37.923 62.843 36.354C61.481 33.508 61.446 33.499 50.782 33.217L40.086 32.933 38.562 35.88zM40.037 36.931C39.254 38.395 39.394 39.251 40.618 40.475C41.506 41.363 42.71 41.93 43.295 41.735C45.057 41.148 46.359 38.377 45.691 36.636C44.829 34.391 41.298 34.575 40.037 36.931zM55.445 37.174C54.533 40.048 57.439 42.371 60.138 40.926C61.162 40.378 62 39.532 62 39.047C62 34.795 56.682 33.276 55.445 37.174z"
+              />
             </svg>
           </DialogButton>
           <DialogButton
@@ -1002,29 +1372,230 @@ export const PlaySectionWrapper: FC<PlaySectionWrapperProps> = ({ appId, playSec
               borderRadius: "4px",
             }}
           >
-            <svg viewBox="-32 -32 64 64" fill="currentColor" width="24" height="24">
-              <path fillRule="evenodd" d="M-5.96-19.09L-5.79-26.37 5.79-26.37 5.96-19.09 9.29-17.71 14.56-22.74 22.74-14.56 17.71-9.29 19.09-5.96 26.37-5.79 26.37 5.79 19.09 5.96 17.71 9.29 22.74 14.56 14.56 22.74 9.29 17.71 5.96 19.09 5.79 26.37-5.79 26.37-5.96 19.09-9.29 17.71-14.56 22.74-22.74 14.56-17.71 9.29-19.09 5.96-26.37 5.79-26.37-5.79-19.09-5.96-17.71-9.29-22.74-14.56-14.56-22.74-9.29-17.71Z M9 0A9 9 0 1 0-9 0A9 9 0 1 0 9 0Z" />
+            <svg
+              viewBox="-32 -32 64 64"
+              fill="currentColor"
+              width="24"
+              height="24"
+            >
+              <path
+                fillRule="evenodd"
+                d="M-5.96-19.09L-5.79-26.37 5.79-26.37 5.96-19.09 9.29-17.71 14.56-22.74 22.74-14.56 17.71-9.29 19.09-5.96 26.37-5.79 26.37 5.79 19.09 5.96 17.71 9.29 22.74 14.56 14.56 22.74 9.29 17.71 5.96 19.09 5.79 26.37-5.79 26.37-5.96 19.09-9.29 17.71-14.56 22.74-22.74 14.56-17.71 9.29-19.09 5.96-26.37 5.79-26.37-5.79-19.09-5.96-17.71-9.29-22.74-14.56-14.56-22.74-9.29-17.71Z M9 0A9 9 0 1 0-9 0A9 9 0 1 0 9 0Z"
+              />
             </svg>
           </DialogButton>
-        </Focusable>
-      </div>
+        </div>
+      </Focusable>
+    );
+  }
+
+  // ========== INSTALLED STATE: Play / Resume + X ==========
+  if (gameInfo.is_installed && !isDownloading) {
+    return (
+      <Focusable
+        ref={wrapperRef}
+        data-unifideck-play-wrapper="true"
+        className={playSectionClassName || undefined}
+        flow-children="row"
+        onFocus={(e: any) =>
+          e.target.scrollIntoView({ behavior: "smooth", block: "center" })
+        }
+        style={{
+          display: "flex",
+          alignItems: "center",
+          width: "100%",
+          padding: "16px",
+          boxSizing: "border-box",
+          background: "rgba(14, 20, 27, 0.33)",
+          position: "relative" as const,
+          zIndex: 2,
+        }}
+      >
+        <style>{buttonStyles}</style>
+
+        {/* Action buttons — Play or Resume+X depending on running state */}
+        {isRunning ? (
+          <>
+            {/* Resume button — brings running game to foreground */}
+            <DialogButton
+              className="unifideck-resume-btn"
+              onClick={handlePlay}
+              style={actionBtnStyle}
+            >
+              <svg
+                viewBox="0 0 24 24"
+                fill="currentColor"
+                width="1em"
+                height="1em"
+              >
+                <path d="M8 5v14l11-7z" />
+              </svg>
+              {t("installButton.resume", "Resume")}
+            </DialogButton>
+            {/* X close button — terminates the running game */}
+            <DialogButton
+              className="unifideck-stop-btn"
+              onClick={handleStop}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                width: "48px",
+                height: "48px",
+                minWidth: "48px",
+                padding: "0",
+                borderRadius: "4px",
+                border: "none",
+                color: "#fff",
+              }}
+            >
+              <svg
+                viewBox="0 0 24 24"
+                fill="currentColor"
+                width="20"
+                height="20"
+              >
+                <path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z" />
+              </svg>
+            </DialogButton>
+          </>
+        ) : (
+          /* Play button — launches the game */
+          <DialogButton
+            className="unifideck-play-btn"
+            onClick={handlePlay}
+            style={actionBtnStyle}
+          >
+            <svg
+              viewBox="0 0 24 24"
+              fill="currentColor"
+              width="1em"
+              height="1em"
+            >
+              <path d="M8 5v14l11-7z" />
+            </svg>
+            {t("installButton.play", "Play")}
+          </DialogButton>
+        )}
+
+        {/* Last Played stat — hidden when background download is active */}
+        {!isDownloading && (
+          <div
+            style={{
+              display: "flex",
+              flexDirection: "column",
+              marginLeft: "24px",
+            }}
+          >
+            <div
+              style={{
+                fontSize: "11px",
+                fontWeight: 600,
+                textTransform: "uppercase",
+                color: "#8f98a0",
+                letterSpacing: "0.08em",
+                lineHeight: "1",
+                marginBottom: "5px",
+              }}
+            >
+              LAST PLAYED
+            </div>
+            <div style={{ fontSize: "14px", color: "#dcdedf" }}>
+              {formatLastPlayed(lastPlayedTimestamp)}
+            </div>
+          </div>
+        )}
+
+        {/* Unified progress bar — shown when background download/update is active */}
+        {isDownloading && downloadInfo && renderUnifiedProgress(downloadInfo)}
+
+        {/* Right icon buttons - controller config + app settings */}
+        <div
+          style={{
+            display: "flex",
+            gap: "8px",
+            marginLeft: "auto",
+            flex: "0 0 auto",
+          }}
+        >
+          <DialogButton
+            onClick={() =>
+              window.SteamClient?.Apps?.ShowControllerConfigurator?.(appId)
+            }
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              width: "48px",
+              height: "48px",
+              minWidth: "48px",
+              padding: "0",
+              background: "rgba(255, 255, 255, 0.1)",
+              borderRadius: "4px",
+            }}
+          >
+            <svg
+              viewBox="35 31 31 24"
+              fill="currentColor"
+              width="28"
+              height="28"
+            >
+              <path
+                fillRule="evenodd"
+                d="M38.562 35.88C37.724 37.501 36.752 41.257 36.403 44.227C35.895 48.548 36.106 49.963 37.456 51.313C39.925 53.783 41.749 53.387 43.5 50C44.938 47.219 45.452 47 50.547 47C55.406 47 56.172 47.283 57.157 49.445C58.551 52.504 60.548 53.312 63.202 51.892C65.02 50.919 65.198 50.118 64.734 44.999C64.445 41.814 63.594 37.923 62.843 36.354C61.481 33.508 61.446 33.499 50.782 33.217L40.086 32.933 38.562 35.88zM40.037 36.931C39.254 38.395 39.394 39.251 40.618 40.475C41.506 41.363 42.71 41.93 43.295 41.735C45.057 41.148 46.359 38.377 45.691 36.636C44.829 34.391 41.298 34.575 40.037 36.931zM55.445 37.174C54.533 40.048 57.439 42.371 60.138 40.926C61.162 40.378 62 39.532 62 39.047C62 34.795 56.682 33.276 55.445 37.174z"
+              />
+            </svg>
+          </DialogButton>
+          <DialogButton
+            onClick={() =>
+              window.SteamClient?.Apps?.OpenAppSettingsDialog?.(
+                appId,
+                "general",
+              )
+            }
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              width: "48px",
+              height: "48px",
+              minWidth: "48px",
+              padding: "0",
+              background: "rgba(255, 255, 255, 0.1)",
+              borderRadius: "4px",
+            }}
+          >
+            <svg
+              viewBox="-32 -32 64 64"
+              fill="currentColor"
+              width="24"
+              height="24"
+            >
+              <path
+                fillRule="evenodd"
+                d="M-5.96-19.09L-5.79-26.37 5.79-26.37 5.96-19.09 9.29-17.71 14.56-22.74 22.74-14.56 17.71-9.29 19.09-5.96 26.37-5.79 26.37 5.79 19.09 5.96 17.71 9.29 22.74 14.56 14.56 22.74 9.29 17.71 5.96 19.09 5.79 26.37-5.79 26.37-5.96 19.09-9.29 17.71-14.56 22.74-22.74 14.56-17.71 9.29-19.09 5.96-26.37 5.79-26.37-5.79-19.09-5.96-17.71-9.29-22.74-14.56-14.56-22.74-9.29-17.71Z M9 0A9 9 0 1 0-9 0A9 9 0 1 0 9 0Z"
+              />
+            </svg>
+          </DialogButton>
+        </div>
+      </Focusable>
     );
   }
 
   // ========== UNINSTALLED / DOWNLOADING STATE: Install/Cancel button ==========
-  const isDownloading = downloadState.isDownloading;
   const displayText = isDownloading
-    ? `${t("installButton.cancel")} (${Math.max(
-        0,
-        downloadState.progress || 0,
-      ).toFixed(1)}%)`
+    ? t("installButton.cancel")
     : t("installButton.installNative", "Install");
 
   return (
-    <div
+    <Focusable
       ref={wrapperRef}
       data-unifideck-play-wrapper="true"
       className={playSectionClassName || undefined}
+      flow-children="row"
+      onFocus={(e: any) =>
+        e.target.scrollIntoView({ behavior: "smooth", block: "center" })
+      }
       style={{
         display: "flex",
         alignItems: "center",
@@ -1039,78 +1610,75 @@ export const PlaySectionWrapper: FC<PlaySectionWrapperProps> = ({ appId, playSec
       <style>{buttonStyles}</style>
 
       {/* Install/Cancel button — explicit styling matching native Steam button */}
-      <Focusable style={{ flex: "0 0 auto" }}>
-        <DialogButton
-          className={
-            isDownloading ? "unifideck-cancel-btn" : "unifideck-install-btn"
-          }
-          onClick={handleClick}
-          style={actionBtnStyle}
-        >
-          {!isDownloading && (
-            <svg
-              viewBox="0 0 24 24"
-              fill="currentColor"
-              width="1em"
-              height="1em"
-            >
-              <path d="M5 20h14v-2H5v2zM19 9h-4V3H9v6H5l7 7 7-7z" />
-            </svg>
-          )}
-          {displayText}
-        </DialogButton>
-      </Focusable>
-
-      {/* Stats - inline layout matching native spacing */}
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          gap: "32px",
-          marginLeft: "20px",
-          flex: "0 1 auto",
-        }}
+      <DialogButton
+        className={
+          isDownloading ? "unifideck-cancel-btn" : "unifideck-install-btn"
+        }
+        onClick={handleClick}
+        style={actionBtnStyle}
       >
-        <div>
-          <div
-            style={{
-              fontSize: "11px",
-              fontWeight: 600,
-              textTransform: "uppercase",
-              color: "#8f98a0",
-              letterSpacing: "0.08em",
-              lineHeight: "1",
-              marginBottom: "5px",
-            }}
-          >
-            SPACE REQUIRED
+        {!isDownloading && (
+          <svg viewBox="0 0 24 24" fill="currentColor" width="1em" height="1em">
+            <path d="M5 20h14v-2H5v2zM19 9h-4V3H9v6H5l7 7 7-7z" />
+          </svg>
+        )}
+        {displayText}
+      </DialogButton>
+
+      {/* Stats or Progress - inline layout matching native spacing */}
+      {isDownloading && downloadInfo ? (
+        renderUnifiedProgress(downloadInfo)
+      ) : (
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: "32px",
+            marginLeft: "20px",
+            flex: "0 1 auto",
+          }}
+        >
+          <div>
+            <div
+              style={{
+                fontSize: "11px",
+                fontWeight: 600,
+                textTransform: "uppercase",
+                color: "#8f98a0",
+                letterSpacing: "0.08em",
+                lineHeight: "1",
+                marginBottom: "5px",
+              }}
+            >
+              SPACE REQUIRED
+            </div>
+            <div style={{ fontSize: "14px", color: "#dcdedf" }}>
+              {gameInfo?.size_formatted || "\u2014"}
+            </div>
           </div>
-          <div style={{ fontSize: "14px", color: "#dcdedf" }}>
-            {gameInfo?.size_formatted || "\u2014"}
+          <div>
+            <div
+              style={{
+                fontSize: "11px",
+                fontWeight: 600,
+                textTransform: "uppercase",
+                color: "#8f98a0",
+                letterSpacing: "0.08em",
+                lineHeight: "1",
+                marginBottom: "5px",
+              }}
+            >
+              LAST PLAYED
+            </div>
+            <div style={{ fontSize: "14px", color: "#dcdedf" }}>
+              {formatLastPlayed(lastPlayedTimestamp)}
+            </div>
           </div>
         </div>
-        <div>
-          <div
-            style={{
-              fontSize: "11px",
-              fontWeight: 600,
-              textTransform: "uppercase",
-              color: "#8f98a0",
-              letterSpacing: "0.08em",
-              lineHeight: "1",
-              marginBottom: "5px",
-            }}
-          >
-            LAST PLAYED
-          </div>
-          <div style={{ fontSize: "14px", color: "#dcdedf" }}>
-            {formatLastPlayed(lastPlayedTimestamp)}
-          </div>
-        </div>
-      </div>
+      )}
 
       {/* Right icon buttons - controller config + app settings */}
-      <Focusable
+      <div
         style={{
           display: "flex",
           gap: "8px",
@@ -1135,7 +1703,10 @@ export const PlaySectionWrapper: FC<PlaySectionWrapperProps> = ({ appId, playSec
           }}
         >
           <svg viewBox="35 31 31 24" fill="currentColor" width="28" height="28">
-            <path fillRule="evenodd" d="M38.562 35.88C37.724 37.501 36.752 41.257 36.403 44.227C35.895 48.548 36.106 49.963 37.456 51.313C39.925 53.783 41.749 53.387 43.5 50C44.938 47.219 45.452 47 50.547 47C55.406 47 56.172 47.283 57.157 49.445C58.551 52.504 60.548 53.312 63.202 51.892C65.02 50.919 65.198 50.118 64.734 44.999C64.445 41.814 63.594 37.923 62.843 36.354C61.481 33.508 61.446 33.499 50.782 33.217L40.086 32.933 38.562 35.88zM40.037 36.931C39.254 38.395 39.394 39.251 40.618 40.475C41.506 41.363 42.71 41.93 43.295 41.735C45.057 41.148 46.359 38.377 45.691 36.636C44.829 34.391 41.298 34.575 40.037 36.931zM55.445 37.174C54.533 40.048 57.439 42.371 60.138 40.926C61.162 40.378 62 39.532 62 39.047C62 34.795 56.682 33.276 55.445 37.174z" />
+            <path
+              fillRule="evenodd"
+              d="M38.562 35.88C37.724 37.501 36.752 41.257 36.403 44.227C35.895 48.548 36.106 49.963 37.456 51.313C39.925 53.783 41.749 53.387 43.5 50C44.938 47.219 45.452 47 50.547 47C55.406 47 56.172 47.283 57.157 49.445C58.551 52.504 60.548 53.312 63.202 51.892C65.02 50.919 65.198 50.118 64.734 44.999C64.445 41.814 63.594 37.923 62.843 36.354C61.481 33.508 61.446 33.499 50.782 33.217L40.086 32.933 38.562 35.88zM40.037 36.931C39.254 38.395 39.394 39.251 40.618 40.475C41.506 41.363 42.71 41.93 43.295 41.735C45.057 41.148 46.359 38.377 45.691 36.636C44.829 34.391 41.298 34.575 40.037 36.931zM55.445 37.174C54.533 40.048 57.439 42.371 60.138 40.926C61.162 40.378 62 39.532 62 39.047C62 34.795 56.682 33.276 55.445 37.174z"
+            />
           </svg>
         </DialogButton>
         <DialogButton
@@ -1154,13 +1725,56 @@ export const PlaySectionWrapper: FC<PlaySectionWrapperProps> = ({ appId, playSec
             borderRadius: "4px",
           }}
         >
-          <svg viewBox="-32 -32 64 64" fill="currentColor" width="24" height="24">
-            <path fillRule="evenodd" d="M-5.96-19.09L-5.79-26.37 5.79-26.37 5.96-19.09 9.29-17.71 14.56-22.74 22.74-14.56 17.71-9.29 19.09-5.96 26.37-5.79 26.37 5.79 19.09 5.96 17.71 9.29 22.74 14.56 14.56 22.74 9.29 17.71 5.96 19.09 5.79 26.37-5.79 26.37-5.96 19.09-9.29 17.71-14.56 22.74-22.74 14.56-17.71 9.29-19.09 5.96-26.37 5.79-26.37-5.79-19.09-5.96-17.71-9.29-22.74-14.56-14.56-22.74-9.29-17.71Z M9 0A9 9 0 1 0-9 0A9 9 0 1 0 9 0Z" />
+          <svg
+            viewBox="-32 -32 64 64"
+            fill="currentColor"
+            width="24"
+            height="24"
+          >
+            <path
+              fillRule="evenodd"
+              d="M-5.96-19.09L-5.79-26.37 5.79-26.37 5.96-19.09 9.29-17.71 14.56-22.74 22.74-14.56 17.71-9.29 19.09-5.96 26.37-5.79 26.37 5.79 19.09 5.96 17.71 9.29 22.74 14.56 14.56 22.74 9.29 17.71 5.96 19.09 5.79 26.37-5.79 26.37-5.96 19.09-9.29 17.71-14.56 22.74-22.74 14.56-17.71 9.29-19.09 5.96-26.37 5.79-26.37-5.79-19.09-5.96-17.71-9.29-22.74-14.56-14.56-22.74-9.29-17.71Z M9 0A9 9 0 1 0-9 0A9 9 0 1 0 9 0Z"
+            />
           </svg>
         </DialogButton>
-      </Focusable>
-    </div>
+      </div>
+    </Focusable>
   );
 };
+
+// Error boundary: catches render-time crashes (e.g. in Steam offline mode where
+// the React tree changes) and falls back to native Steam game details instead of
+// blanking the entire page.
+class PlaySectionErrorBoundary extends React.Component<
+  { children: React.ReactNode; appId: number },
+  { hasError: boolean }
+> {
+  state = { hasError: false };
+
+  static getDerivedStateFromError() {
+    return { hasError: true };
+  }
+
+  componentDidCatch(error: Error, info: React.ErrorInfo) {
+    console.error(
+      `[Unifideck] PlaySectionWrapper crashed for app ${this.props.appId}:`,
+      error,
+      info,
+    );
+    // Unhide native play section so Steam's default UI shows through
+    removeHidePlaySectionCDP(this.props.appId);
+  }
+
+  render() {
+    if (this.state.hasError) return null;
+    return this.props.children;
+  }
+}
+
+export const PlaySectionWrapper: FC<PlaySectionWrapperProps> = (props) => (
+  <PlaySectionErrorBoundary appId={props.appId}>
+    <PlaySectionWrapperInner {...props} />
+  </PlaySectionErrorBoundary>
+);
 
 export default PlaySectionWrapper;

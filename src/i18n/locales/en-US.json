@@ -153,7 +153,7 @@
     "uninstallCompleteMessage": "{{title}} removed.",
     "uninstallCompleteMessageProton": "{{title}} removed (including Proton files).",
     "installComplete": "Installation Complete!",
-    "installCompleteMessage": "{{title}} is ready to play. Restart Steam to see it in your library.",
+    "installCompleteMessage": "{{title}} is ready to play.",
     "syncComplete": "Sync Complete!",
     "syncCompleteMessage": "Added {{count}} games. RESTART STEAM (exit completely, not just return to game mode) to see them in your library.",
     "forceSyncComplete": "Force Sync Complete!",
@@ -198,8 +198,16 @@
       "installingRedist": "Installing Redistributables",
       "installingRedistMessage": "Running first-time GOG redistributable installation...",
       "setupFailed": "Setup Failed",
-      "setupFailedMessage": "Installation failed, see logs for details"
-    }
+      "setupFailedMessage": "Installation failed, see logs for details",
+      "prerequisitesTitle": "Installing Prerequisites",
+      "installingPrerequisites": "Installing required game prerequisites...",
+      "prerequisitesReady": "Prerequisites Ready",
+      "prerequisitesInstalled": "Game prerequisites installed",
+      "prerequisitesFailed": "Prerequisites Warning",
+      "prerequisitesFailedMessage": "Prerequisites may not have installed correctly"
+    },
+    "updateComplete": "Update Complete!",
+    "updateCompleteMessage": "{{title}} has been updated."
   },
   "uninstallModal": {
     "title": "Confirm Uninstallation",
@@ -237,7 +245,17 @@
     "backgroundSyncDisabled": "Background sync disabled",
     "steamGridDbUnavailable": "SteamGridDB library not available",
     "deleteSyncInProgress": "Cannot delete while sync is in progress",
-    "alreadyInQueue": "Already in queue"
+    "alreadyInQueue": "Already in queue",
+    "download": {
+      "diskSpace": "Not enough disk space available",
+      "network": "Network error — check your connection",
+      "authExpired": "Login expired — please sign in again",
+      "toolMissing": "Required download tool not found",
+      "processFailed": "Download failed — please try again",
+      "directoryNotFound": "Could not locate installed files",
+      "lockConflict": "Another operation is in progress — try again",
+      "generic": "Installation failed — check logs for details"
+    }
   },
   "sync": {
     "downloadingArtwork": "Downloading artwork for {{game}}...",

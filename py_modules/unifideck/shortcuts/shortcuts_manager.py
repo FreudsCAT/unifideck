@@ -20,7 +20,7 @@ from typing import Any, Dict, List, Optional
 
 from py_modules.unifideck.shortcuts.vdf import load_shortcuts_vdf, save_shortcuts_vdf
 from py_modules.unifideck.shortcuts.launch_options import (
-    extract_store_id, is_unifideck_shortcut, get_full_id, get_store_prefix
+    extract_store_id, is_unifideck_shortcut, get_full_id, get_store_prefix, preserve_user_params
 )
 from py_modules.unifideck.steam.steam_utils import get_logged_in_steam_user
 
@@ -761,8 +761,8 @@ class ShortcutsManager:
             for idx, shortcut in shortcuts.items():
                 launch_opts = shortcut.get('LaunchOptions', '')
                 
-                # Only check Unifideck shortcuts (store:game_id format)
-                if re.match(r'^(epic|gog|amazon):[a-zA-Z0-9_-]+$', launch_opts):
+                # Only check Unifideck shortcuts (resilient to user-appended params)
+                if is_unifideck_shortcut(launch_opts):
                     checked += 1
                     exe_path = shortcut.get('exe', '')
                     
@@ -1082,7 +1082,10 @@ class ShortcutsManager:
             runner_script = os.path.join(self.plugin_dir, 'bin', 'unifideck-launcher')
             target_shortcut['exe'] = f'"{runner_script}"'
             target_shortcut['StartDir'] = f'"{os.path.dirname(runner_script)}"'
-            target_shortcut['LaunchOptions'] = target_launch_options
+            # Preserve user-appended params (LSFG=1, MANGOHUD=1, etc.)
+            target_shortcut['LaunchOptions'] = preserve_user_params(
+                target_shortcut.get('LaunchOptions', ''), target_launch_options
+            )
             
             # 4. Clear Proton compatibility (Launcher handles it internally via UMU)
             app_id = target_shortcut.get('appid')
@@ -1381,8 +1384,12 @@ class ShortcutsManager:
             for game in games:
                 target_launch_options = f'{game.store}:{game.id}'
 
-                # Skip if already exists with correct LaunchOptions
-                if target_launch_options in existing_launch_options:
+                # Skip if already exists (resilient to user-appended params)
+                existing_match = any(
+                    get_full_id(opts) == target_launch_options
+                    for opts in existing_launch_options
+                )
+                if existing_match:
                     skipped += 1
                     continue
 
@@ -1533,8 +1540,10 @@ class ShortcutsManager:
                                 logger.info(f"[ForceSync] Repairing modified game ID: {shortcut.get('AppName')}")
                                 logger.info(f"[ForceSync]   Corrupted: {launch} -> Correct: {original_launch_opts}")
                                 
-                                # Restore correct LaunchOptions
-                                shortcut['LaunchOptions'] = original_launch_opts
+                                # Restore correct LaunchOptions (preserve user params)
+                                shortcut['LaunchOptions'] = preserve_user_params(
+                                    shortcut.get('LaunchOptions', ''), original_launch_opts
+                                )
                                 shortcut['exe'] = launcher_script
                                 shortcut['AppName'] = game.title
                                 
@@ -1591,7 +1600,10 @@ class ShortcutsManager:
                             # Update shortcut fields
                             shortcut['AppName'] = game.title
                             shortcut['exe'] = launcher_script
-                            shortcut['LaunchOptions'] = full_id  # Normalize to canonical form
+                            # Preserve user-appended params while normalizing the core ID
+                            shortcut['LaunchOptions'] = preserve_user_params(
+                                shortcut.get('LaunchOptions', ''), full_id
+                            )
                             
                             # Update icon from cover_image (set by artwork download)
                             if game.cover_image:
@@ -1632,8 +1644,10 @@ class ShortcutsManager:
                         if game:
                             logger.info(f"[ForceSync] Repairing shortcut: {shortcut.get('AppName')} (restoring {original_launch_opts})")
                             
-                            # Restore Unifideck ownership
-                            shortcut['LaunchOptions'] = original_launch_opts
+                            # Restore Unifideck ownership (preserve user params)
+                            shortcut['LaunchOptions'] = preserve_user_params(
+                                shortcut.get('LaunchOptions', ''), original_launch_opts
+                            )
                             shortcut['exe'] = launcher_script
                             shortcut['AppName'] = game.title
                             
@@ -1825,7 +1839,10 @@ class ShortcutsManager:
                 # CRITICAL: Keep exe as unifideck-runner to preserve AppID
                 target_shortcut['exe'] = f'"{runner_script}"'
                 target_shortcut['StartDir'] = f'"{os.path.dirname(runner_script)}"'
-                target_shortcut['LaunchOptions'] = target_launch_options  # No quotes!
+                # Preserve user-appended params (LSFG=1, MANGOHUD=1, etc.)
+                target_shortcut['LaunchOptions'] = preserve_user_params(
+                    target_shortcut.get('LaunchOptions', ''), target_launch_options
+                )
 
                 # Update tags
                 tags = target_shortcut.get('tags', {})

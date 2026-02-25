@@ -43,6 +43,7 @@ except ImportError:
 
 # Import Download Manager (modular backend)
 from py_modules.unifideck.download.manager import get_download_queue, DownloadQueue
+from py_modules.unifideck.download.update_checker import UpdateChecker
 
 # Import Cloud Save Manager
 from py_modules.unifideck.cloud.cloud_save import CloudSaveManager
@@ -51,7 +52,7 @@ from py_modules.unifideck.cloud.cloud_save import CloudSaveManager
 from py_modules.unifideck.shortcuts.launch_options import extract_store_id, is_unifideck_shortcut, get_full_id, get_store_prefix
 
 # Import CDP modules for native PlaySection hiding
-from py_modules.unifideck.cdp.cdp_utils import create_cef_debugging_flag
+from py_modules.unifideck.cdp.cdp_utils import create_cef_debugging_flag, ensure_dummy_network_interface
 from py_modules.unifideck.cdp.cdp_inject import get_cdp_client, shutdown_cdp_client
 
 # Import Account Manager for multi-account support
@@ -102,6 +103,53 @@ _legendary_info_cache = {}  # Per-game info cache
 
 # Artwork sync timeout (seconds per game)
 ARTWORK_FETCH_TIMEOUT = 90
+
+# Offline mode detection cache
+_offline_cache: Dict[str, Any] = {'is_offline': None, 'checked_at': 0.0}
+_OFFLINE_CACHE_TTL = 30  # seconds
+
+
+async def is_offline_mode() -> bool:
+    """Detect if the system is offline (Steam Offline Mode or no internet).
+
+    Checks two things:
+    1. Steam's loginusers.vdf for WantsOfflineMode (instant file read)
+    2. Quick async TCP probe to verify network connectivity (1.5s timeout)
+
+    Result is cached for 30 seconds to avoid repeated checks.
+    """
+    now = time.time()
+    if _offline_cache['is_offline'] is not None and (now - _offline_cache['checked_at']) < _OFFLINE_CACHE_TTL:
+        return _offline_cache['is_offline']
+
+    is_offline = False
+
+    # Method 1: Check Steam Offline Mode via loginusers.vdf
+    try:
+        login_vdf = os.path.expanduser("~/.steam/steam/config/loginusers.vdf")
+        if os.path.exists(login_vdf):
+            with open(login_vdf, 'r') as f:
+                content = f.read()
+            if re.search(r'"WantsOfflineMode"\s+"1"', content):
+                is_offline = True
+    except Exception:
+        pass
+
+    # Method 2: Quick network connectivity check (only if Steam isn't explicitly offline)
+    if not is_offline:
+        try:
+            _, writer = await asyncio.wait_for(
+                asyncio.open_connection("1.1.1.1", 53),
+                timeout=1.5
+            )
+            writer.close()
+            await writer.wait_closed()
+        except (asyncio.TimeoutError, OSError):
+            is_offline = True
+
+    _offline_cache['is_offline'] = is_offline
+    _offline_cache['checked_at'] = now
+    return is_offline
 
 
 # ============================================================================
@@ -1858,6 +1906,14 @@ class Plugin:
 
         logger.info("[INIT] Starting Unifideck plugin initialization")
 
+        # === DUMMY NETWORK INTERFACE (Chromium offline-mode localhost fix) ===
+        # When WiFi is off, Chromium's IPv6 probe fails and CEF blocks all renderer
+        # HTTP requests — including Decky Loader's import('http://localhost:1337/...')
+        # that loads plugin JS. A dummy interface with a non-loopback IP prevents this.
+        created = ensure_dummy_network_interface()
+        if created:
+            logger.info("[INIT CDP] dummy0 interface created - Chromium offline localhost fix applied")
+
         # === CDP INITIALIZATION (for native PlaySection hiding) ===
         # Enable CEF remote debugging flag (required for CDP access)
         flag_created = create_cef_debugging_flag()
@@ -1913,6 +1969,9 @@ class Plugin:
         logger.info("[INIT] Initializing GOGAPIClient")
         self.gog = GOGAPIClient(plugin_dir=DECKY_PLUGIN_DIR, plugin_instance=self)
         
+        logger.info("[INIT] Initializing UpdateChecker")
+        self.update_checker = UpdateChecker(plugin=self)
+
         # Validate and auto-correct GOG executable paths that point to installers
         logger.info("[INIT] Validating GOG executable paths")
         gog_validation = self.shortcuts_manager.validate_gog_exe_paths(self.gog)
@@ -2100,6 +2159,11 @@ class Plugin:
             except Exception as e:
                 error_message = str(e)
                 logger.error(f"[DownloadComplete] Exception marking game installed: {e}")
+            
+            if registration_success:
+                # Clear update cache flag so the UI instantly switches to Play
+                if hasattr(self, 'update_checker'):
+                    self.update_checker.clear_cache_for_game(item.store, item.game_id)
             
             # FIX 1: Propagate registration failures to download status
             # This ensures users see an error in the UI instead of 'completed'
@@ -3792,8 +3856,8 @@ class Plugin:
                         # Try persistent cache first (populated during sync)
                         size_bytes = get_cached_game_size(store, game_id)
                         
-                        if size_bytes is None:
-                            # Cache miss - fallback to live fetch (slow)
+                        if size_bytes is None and not await is_offline_mode():
+                            # Cache miss - fallback to live fetch (slow, skip if offline)
                             logger.debug(f"[GameInfo] Size cache miss for {store}:{game_id}, fetching from API...")
                             if store == 'epic':
                                 size_bytes = await self.epic.get_game_size(game_id)
@@ -3801,7 +3865,7 @@ class Plugin:
                                 size_bytes = await self.gog.get_game_size(game_id)
                             elif store == 'amazon':
                                 size_bytes = await self.amazon.get_game_size(game_id)
-                            
+
                             # Cache the result for next time
                             if size_bytes and size_bytes > 0:
                                 cache_game_size(store, game_id, size_bytes)
@@ -3817,10 +3881,15 @@ class Plugin:
                     except Exception as e:
                         logger.debug(f"[GameInfo] Could not get size for {game_id}: {e}")
 
-                    logger.info(f"[GameInfo] App {app_id}: {shortcut.get('AppName')} - Installed: {is_installed}, Size: {size_formatted}")
+                    has_update = None
+                    if is_installed and hasattr(self, 'update_checker'):
+                        has_update = self.update_checker.get_cached_update_status(store, game_id)
+
+                    logger.info(f"[GameInfo] App {app_id}: {shortcut.get('AppName')} - Installed: {is_installed}, Size: {size_formatted}, Update: {has_update}")
 
                     return {
                         'is_installed': is_installed,
+                        'has_update': has_update,
                         'store': store,
                         'game_id': game_id,
                         'title': shortcut.get('AppName', ''),
@@ -3912,9 +3981,12 @@ class Plugin:
         """
         try:
             client = await get_cdp_client()
-            hidden = await client.hide_native_play_section(appId)
-            logger.info(f"[CDP] hide_native_play_section({appId}) => {hidden}")
-            return {"success": hidden}
+            hidden_msg = await client.hide_native_play_section(appId)
+            logger.info(f"[CDP] hide_native_play_section({appId}) => {hidden_msg}")
+            if hidden_msg == "hidden":
+                return {"success": True}
+            else:
+                return {"success": False, "error": hidden_msg}
         except Exception as e:
             err_lower = str(e).lower()
             if any(kw in err_lower for kw in ["transport", "closing", "closed", "reset", "eof", "timeout", "not connected", "refused"]):
@@ -3922,9 +3994,12 @@ class Plugin:
                     logger.warning(f"[CDP] Connection error, reconnecting...")
                     await shutdown_cdp_client()
                     client = await get_cdp_client()
-                    hidden = await client.hide_native_play_section(appId)
-                    logger.info(f"[CDP] hide_native_play_section({appId}) => {hidden} (after reconnect)")
-                    return {"success": hidden}
+                    hidden_msg = await client.hide_native_play_section(appId)
+                    logger.info(f"[CDP] hide_native_play_section({appId}) => {hidden_msg} (after reconnect)")
+                    if hidden_msg == "hidden":
+                        return {"success": True}
+                    else:
+                        return {"success": False, "error": hidden_msg}
                 except Exception as retry_e:
                     logger.error(f"[CDP] Reconnection failed for app {appId}: {retry_e}")
                     return {"success": False, "error": str(retry_e)}
@@ -4346,6 +4421,11 @@ class Plugin:
             game_id = game_info.get('game_id')
             title = game_info.get('title', 'Unknown')
 
+            # Check offline mode - skip all network calls if offline
+            offline = await is_offline_mode()
+            if offline:
+                logger.info(f"[MetadataDisplay] Offline mode detected - using cache-only for '{title}'")
+
             # Get real Steam App ID from cache (for Steam store/community links)
             steam_real_cache = load_steam_real_appid_cache()
             steam_app_id = steam_real_cache.get(app_id_signed, 0)
@@ -4365,9 +4445,20 @@ class Plugin:
                 # Metadata cache also has int keys
                 steam_metadata = metadata_cache.get(steam_app_id, {}) if steam_app_id else {}
 
-                # Resolve Steam presence if missing or invalid
+                # Resolve Steam presence if missing or invalid (skip if offline)
                 if (not steam_app_id) or (not steam_metadata) or (not steam_metadata.get('name')):
-                    presence = await self.resolve_steam_presence(title)
+                    if offline:
+                        logger.debug(f"[MetadataDisplay] Offline - skipping Steam presence resolve for '{title}'")
+                        presence = {'steam_appid': 0, 'metadata': {}}
+                    else:
+                        try:
+                            presence = await asyncio.wait_for(
+                                self.resolve_steam_presence(title),
+                                timeout=15.0
+                            )
+                        except asyncio.TimeoutError:
+                            logger.warning(f"[MetadataDisplay] Steam presence resolve timed out for '{title}'")
+                            presence = {'steam_appid': 0, 'metadata': {}}
                     resolved_app_id = presence.get('steam_appid', 0)
                     resolved_metadata = presence.get('metadata', {})
                     if resolved_app_id:
@@ -4416,8 +4507,14 @@ class Plugin:
                 # Epic: Use search URL (game_id is catalog ID, not URL slug)
                 store_url = f"https://store.epicgames.com/en-US/browse?q={encoded_title}&sortBy=relevancy"
             elif store == 'gog':
-                # GOG: Try to get slug from API for direct link, fallback to search
-                gog_slug = await self._get_gog_slug(game_id)
+                # GOG: Try to get slug from API for direct link, fallback to search (skip if offline)
+                if offline:
+                    gog_slug = None
+                else:
+                    try:
+                        gog_slug = await asyncio.wait_for(self._get_gog_slug(game_id), timeout=10.0)
+                    except asyncio.TimeoutError:
+                        gog_slug = None
                 if gog_slug:
                     store_url = f"https://www.gog.com/en/game/{gog_slug}"
                 else:
@@ -4471,29 +4568,33 @@ class Plugin:
                     sources['metacritic'] = 'metacritic_cache'
                     logger.debug(f"[MetadataDisplay] Metacritic score for '{title}': {metacritic}")
             else:
-                # ON-DEMAND FETCH: Not in cache, so fetch live from Metacritic API
-                logger.debug(f"[MetadataDisplay] No Metacritic cache for '{title}', fetching on-demand...")
-                try:
-                    from py_modules.unifideck.metadata.metacritic import fetch_metacritic_metadata
-                    
-                    # Fetch with no delay (user is waiting for panel to open)
-                    metacritic_data = await fetch_metacritic_metadata(title, timeout=10.0, delay=0)
-                    
-                    if metacritic_data:
-                        # Cache the result for future use
-                        metacritic_cache[metacritic_cache_key] = metacritic_data
-                        save_metacritic_metadata_cache(metacritic_cache)
-                        
-                        metacritic = metacritic_data.get('metascore')
-                        if metacritic:
-                            sources['metacritic'] = 'metacritic_live'
-                            logger.info(f"[MetadataDisplay] Fetched Metacritic score for '{title}': {metacritic}")
-                    else:
-                        logger.debug(f"[MetadataDisplay] No Metacritic data found for '{title}'")
-                except ImportError as e:
-                    logger.error(f"[MetadataDisplay] Failed to import Metacritic module: {e}")
-                except Exception as e:
-                    logger.warning(f"[MetadataDisplay] Error fetching Metacritic data for '{title}': {e}")
+                if offline:
+                    # Skip on-demand fetch when offline - cache miss is acceptable
+                    logger.debug(f"[MetadataDisplay] Offline - skipping Metacritic fetch for '{title}'")
+                else:
+                    # ON-DEMAND FETCH: Not in cache, so fetch live from Metacritic API
+                    logger.debug(f"[MetadataDisplay] No Metacritic cache for '{title}', fetching on-demand...")
+                    try:
+                        from py_modules.unifideck.metadata.metacritic import fetch_metacritic_metadata
+
+                        # Fetch with no delay (user is waiting for panel to open)
+                        metacritic_data = await fetch_metacritic_metadata(title, timeout=10.0, delay=0)
+
+                        if metacritic_data:
+                            # Cache the result for future use
+                            metacritic_cache[metacritic_cache_key] = metacritic_data
+                            save_metacritic_metadata_cache(metacritic_cache)
+
+                            metacritic = metacritic_data.get('metascore')
+                            if metacritic:
+                                sources['metacritic'] = 'metacritic_live'
+                                logger.info(f"[MetadataDisplay] Fetched Metacritic score for '{title}': {metacritic}")
+                        else:
+                            logger.debug(f"[MetadataDisplay] No Metacritic data found for '{title}'")
+                    except ImportError as e:
+                        logger.error(f"[MetadataDisplay] Failed to import Metacritic module: {e}")
+                    except Exception as e:
+                        logger.warning(f"[MetadataDisplay] Error fetching Metacritic data for '{title}': {e}")
 
             # Check unifiDB cache for additional metadata
             unifidb_cache = load_unifidb_metadata_cache()
@@ -4552,7 +4653,7 @@ class Plugin:
                 deck_category = cached_deck_category
                 deck_test_results = cached_deck_results
                 sources['deck_compat'] = 'steam_cache'
-            elif steam_app_id > 0:
+            elif steam_app_id > 0 and not offline:
                 deck_info = await self.fetch_steam_deck_compatibility(steam_app_id)
                 deck_category = deck_info.get('category', 0)
                 deck_test_results = deck_info.get('testResults', [])
@@ -4948,6 +5049,82 @@ class Plugin:
             logger.error(f"[DownloadQueue] Error clearing stale downloads: {e}")
             return {'success': False, 'error': str(e)}
 
+    # ── Update Detection ──────────────────────────────────────────────
+
+    async def check_game_update(self, app_id: int) -> Dict[str, Any]:
+        """Check if a single game has an update available.
+        
+        Dispatches to the centralized update checker service.
+        Results are cached for 1 hour per store to avoid repeated CLI calls.
+        
+        Args:
+            app_id: Steam shortcut app ID.
+            
+        Returns:
+            Dict with 'success', 'has_update' (bool|None), 'store'.
+        """
+        try:
+            game_info = await self.get_game_info(app_id)
+            if not game_info.get('is_installed'):
+                return {'success': True, 'has_update': None, 'store': game_info.get('store', '')}
+
+            store = game_info.get('store', '')
+            game_id = game_info.get('game_id', '')
+
+            if not store or not game_id:
+                return {'success': False, 'error': 'Missing store or game_id'}
+
+            has_update = await self.update_checker.check_for_game_update(store, game_id)
+
+            logger.info(f"[UpdateCheck] app_id={app_id}, store={store}, game_id={game_id}, has_update={has_update}")
+            return {'success': True, 'has_update': has_update, 'store': store}
+
+        except Exception as e:
+            logger.error(f"[UpdateCheck] Error checking update for app_id={app_id}: {e}")
+            return {'success': False, 'error': str(e)}
+
+    async def update_game(self, app_id: int) -> Dict[str, Any]:
+        """Trigger an update for a game by adding it to the download queue.
+        
+        For Epic/GOG this uses delta patching. For Amazon, it's a full re-download.
+        The frontend should confirm with the user before calling this for Amazon games.
+        
+        Args:
+            app_id: Steam shortcut app ID.
+            
+        Returns:
+            Dict with 'success' and optionally 'error'.
+        """
+        try:
+            game_info = await self.get_game_info(app_id)
+            store = game_info.get('store', '')
+            game_id = game_info.get('game_id', '')
+            title = game_info.get('title', 'Unknown')
+
+            if not store or not game_id:
+                return {'success': False, 'error': 'Missing store or game_id'}
+
+            logger.info(f"[UpdateGame] Starting update: {title} ({store}:{game_id})")
+
+            # Add to download queue — the download worker will invoke
+            # the store connector's update_game method
+            result = await self.add_to_download_queue(
+                game_id=game_id,
+                game_title=title,
+                store=store,
+                was_previously_installed=True  # It's an update, game is installed
+            )
+
+            if result.get('success'):
+                # Clear the update cache entry so it re-checks after update
+                self.update_checker.clear_cache_for_game(store, game_id)
+
+            return result
+
+        except Exception as e:
+            logger.error(f"[UpdateGame] Error updating app_id={app_id}: {e}")
+            return {'success': False, 'error': str(e)}
+
     async def is_game_downloading(self, game_id: str, store: str) -> Dict[str, Any]:
         """Check if a specific game is currently downloading or in queue"""
         try:
@@ -5117,6 +5294,18 @@ class Plugin:
         from py_modules.unifideck.compat.proton_tools import get_compat_tool_for_game as _get
         result = _get(store_game_id)
         result["launcher_path"] = os.path.join(os.path.dirname(__file__), 'bin', 'unifideck-launcher')
+        
+        # Include current launch options so frontend can preserve user params
+        try:
+            shortcuts = await self.shortcuts_manager.read_shortcuts()
+            for idx, shortcut in shortcuts.get("shortcuts", {}).items():
+                from py_modules.unifideck.shortcuts.launch_options import get_full_id
+                if get_full_id(shortcut.get('LaunchOptions', '')) == store_game_id:
+                    result["current_launch_options"] = shortcut.get('LaunchOptions', '')
+                    break
+        except Exception as e:
+            logger.warning(f"Could not read current launch options: {e}")
+        
         return result
 
     async def temporarily_clear_compat_tool(self, appid_unsigned: int) -> Dict[str, Any]:

@@ -153,7 +153,7 @@
     "uninstallCompleteMessage": "{{title}} removido.",
     "uninstallCompleteMessageProton": "{{title}} removido (incluindo arquivos Proton).",
     "installComplete": "Instalação Concluída!",
-    "installCompleteMessage": "{{title}} está pronto para jogar. Reinicie o Steam para vê-lo na biblioteca.",
+    "installCompleteMessage": "{{title}} está pronto para jogar.",
     "syncComplete": "Sincronização Concluída!",
     "syncCompleteMessage": "{{count}} jogos adicionados. REINICIE O STEAM (saia completamente, não apenas do modo jogo) para vê-los na biblioteca.",
     "forceSyncComplete": "Ressincronização Concluída!",
@@ -198,8 +198,16 @@
       "installingRedist": "Instalando Redistribuíveis",
       "installingRedistMessage": "Executando instalação inicial de redistribuíveis GOG...",
       "setupFailed": "Falha na Configuração",
-      "setupFailedMessage": "Instalação falhou, veja logs para detalhes"
-    }
+      "setupFailedMessage": "Instalação falhou, veja logs para detalhes",
+      "prerequisitesTitle": "Instalando Pré-requisitos",
+      "installingPrerequisites": "Instalando pré-requisitos do jogo...",
+      "prerequisitesReady": "Pré-requisitos Prontos",
+      "prerequisitesInstalled": "Pré-requisitos do jogo instalados",
+      "prerequisitesFailed": "Aviso de Pré-requisitos",
+      "prerequisitesFailedMessage": "Os pré-requisitos podem não ter sido instalados corretamente"
+    },
+    "updateComplete": "Update Complete!",
+    "updateCompleteMessage": "{{title}} has been updated."
   },
   "uninstallModal": {
     "title": "Confirmar desinstalação",
@@ -237,7 +245,17 @@
     "backgroundSyncDisabled": "Sincronização em segundo plano desativada",
     "steamGridDbUnavailable": "Biblioteca SteamGridDB indisponível",
     "deleteSyncInProgress": "Não é possível excluir enquanto a sincronização está em andamento",
-    "alreadyInQueue": "Já na fila"
+    "alreadyInQueue": "Já na fila",
+    "download": {
+      "diskSpace": "Espaço em disco insuficiente",
+      "network": "Erro de rede — verifique sua conexão",
+      "authExpired": "Login expirado — faça login novamente",
+      "toolMissing": "Ferramenta de download necessária não encontrada",
+      "processFailed": "Download falhou — tente novamente",
+      "directoryNotFound": "Não foi possível localizar os arquivos instalados",
+      "lockConflict": "Outra operação em andamento — tente novamente",
+      "generic": "Instalação falhou — verifique os logs"
+    }
   },
   "sync": {
     "downloadingArtwork": "Baixando arte de {{game}}...",
