@@ -153,7 +153,7 @@
     "uninstallCompleteMessage": "{{title}} видалено.",
     "uninstallCompleteMessageProton": "{{title}} видалено (включно з файлами Proton).",
     "installComplete": "Встановлення завершено!",
-    "installCompleteMessage": "{{title}} готова до гри. Перезапустіть Steam, щоб побачити її у своїй бібліотеці.",
+    "installCompleteMessage": "{{title}} готова до гри.",
     "syncComplete": "Синхронізація завершена!",
     "syncCompleteMessage": "Додано {{count}} ігор. ПЕРЕЗАПУСТІТЬ STEAM (вийдіть повністю, а не просто поверніться до ігрового режиму), щоб побачити їх у своїй бібліотеці.",
     "forceSyncComplete": "Примусова синхронізація завершена!",
@@ -198,8 +198,16 @@
       "installingRedist": "Встановлення додаткових компонентів",
       "installingRedistMessage": "Запуск первинного встановлення компонентів GOG...",
       "setupFailed": "Помилка налаштування",
-      "setupFailedMessage": "Встановлення не вдалося, див. журнал"
-    }
+      "setupFailedMessage": "Встановлення не вдалося, див. журнал",
+      "prerequisitesTitle": "Встановлення передумов",
+      "installingPrerequisites": "Встановлення необхідних передумов гри...",
+      "prerequisitesReady": "Передумови готові",
+      "prerequisitesInstalled": "Передумови гри встановлені",
+      "prerequisitesFailed": "Попередження про передумови",
+      "prerequisitesFailedMessage": "Передумови можуть бути встановлені некоректно"
+    },
+    "updateComplete": "Update Complete!",
+    "updateCompleteMessage": "{{title}} has been updated."
   },
   "uninstallModal": {
     "title": "Підтвердження видалення",
@@ -237,7 +245,17 @@
     "backgroundSyncDisabled": "Фонову синхронізацію вимкнено",
     "steamGridDbUnavailable": "Бібліотека SteamGridDB недоступна",
     "deleteSyncInProgress": "Неможливо видалити під час синхронізації",
-    "alreadyInQueue": "Вже в черзі"
+    "alreadyInQueue": "Вже в черзі",
+    "download": {
+      "diskSpace": "Недостатньо місця на диску",
+      "network": "Помилка мережі — перевірте з'єднання",
+      "authExpired": "Сесія закінчилася — увійдіть знову",
+      "toolMissing": "Необхідний інструмент завантаження не знайдено",
+      "processFailed": "Завантаження не вдалося — спробуйте ще раз",
+      "directoryNotFound": "Не вдалося знайти встановлені файли",
+      "lockConflict": "Інша операція виконується — спробуйте пізніше",
+      "generic": "Встановлення не вдалося — перевірте логи"
+    }
   },
   "sync": {
     "downloadingArtwork": "Завантаження арту для {{game}}...",

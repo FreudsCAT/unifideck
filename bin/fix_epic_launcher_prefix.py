@@ -12,6 +12,13 @@ import logging
 logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
 logger = logging.getLogger("QuickFix")
 
+
+def normalize_prefix_root(prefix_path: str) -> str:
+    p = os.path.normpath(prefix_path)
+    while p.endswith(os.sep + "pfx"):
+        p = os.path.normpath(p[:-(len(os.sep) + 3)])
+    return p
+
 def copy_wrapper_to_prefix(drive_c: str, bundled_wrapper: str, prefix_label: str) -> bool:
     """Copy the Epic wrapper to a specific drive_c location. Returns True if any copy was made."""
     copied = False
@@ -58,7 +65,7 @@ def main():
         print("Usage: fix_epic_launcher_prefix.py <wine_prefix_path>")
         sys.exit(1)
 
-    prefix_path = sys.argv[1]
+    prefix_path = normalize_prefix_root(sys.argv[1])
     
     # Get bundled wrapper path
     script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -90,19 +97,30 @@ def main():
     # Apply registry fix to the pfx subdirectory if it exists (that's what umu uses)
     # Otherwise use the root prefix
     if os.path.exists(pfx_drive_c):
-        registry_prefix = os.path.join(prefix_path, "pfx")
+        candidate = os.path.join(prefix_path, "pfx")
+        # Avoid self-referential pfx symlink layouts (root/pfx -> root)
+        if os.path.islink(candidate) and os.path.realpath(candidate) == os.path.realpath(prefix_path):
+            registry_prefix = prefix_path
+        else:
+            registry_prefix = candidate
     else:
         registry_prefix = prefix_path
     
     env = os.environ.copy()
     env["WINEPREFIX"] = registry_prefix
     
-    # Find wine binary
-    proton_paths = [
+    # Find wine binary — check PROTONPATH first (set by launcher's select_proton_version)
+    proton_paths = []
+    env_proton = os.environ.get("PROTONPATH")
+    if env_proton:
+        proton_paths.append(os.path.join(env_proton, "files", "bin", "wine"))
+
+    proton_paths.extend([
         os.path.expanduser("~/.steam/steam/steamapps/common/Proton - Experimental/files/bin/wine"),
         os.path.expanduser("~/.steam/steam/steamapps/common/Proton 10.0/files/bin/wine"),
-    ]
-    
+        os.path.expanduser("~/.steam/steam/steamapps/common/Proton 9.0 (Beta)/files/bin/wine"),
+    ])
+
     wine_bin = None
     for path in proton_paths:
         if os.path.exists(path):
@@ -120,6 +138,18 @@ def main():
             logger.info("✓ Applied registry fix")
         except Exception as e:
             logger.warning(f"Registry fix failed (non-critical): {e}")
+        
+        # Kill wineserver spawned by 'wine reg add' to prevent it from
+        # interfering with the subsequent umu-run launch (socket contention,
+        # registry file locking, stale wineserver in prefix)
+        wineserver_bin = os.path.join(os.path.dirname(wine_bin), "wineserver")
+        if os.path.exists(wineserver_bin):
+            try:
+                subprocess.run([wineserver_bin, "--kill"], env=env,
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10)
+                logger.info("✓ Killed stale wineserver")
+            except Exception:
+                pass
     else:
         logger.warning("Wine not found, skipping registry fix")
     

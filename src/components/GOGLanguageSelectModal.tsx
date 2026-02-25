@@ -6,7 +6,7 @@
  */
 
 import { FC, useState } from "react";
-import { ConfirmModal, DialogButton, Dropdown, DropdownOption } from "@decky/ui";
+import { ConfirmModal, Dropdown, DropdownOption } from "@decky/ui";
 import { useTranslation } from "react-i18next";
 
 // Language code to display name mapping
@@ -73,93 +73,42 @@ export const GOGLanguageSelectModal: FC<GOGLanguageSelectModalProps> = ({
   );
 
   return (
-    <>
-      {/* Hide the default Confirm/Cancel button row */}
-      <style>{`
-        .gog-language-modal + div { display: none !important; }
-        .DialogFooter { display: none !important; }
-      `}</style>
-      <ConfirmModal
-        strTitle={t("gogLanguageModal.title", "Select Language")}
-        strDescription=""
-        bHideCloseIcon={false}
-        onOK={closeModal}
-        onCancel={closeModal}
+    <ConfirmModal
+      strTitle={t("gogLanguageModal.title", "Select Language")}
+      strDescription={t("gogLanguageModal.description", {
+        defaultValue: "Choose which language to download for {{title}}",
+        title: gameTitle,
+      })}
+      bHideCloseIcon={false}
+      strOKButtonText={t("gogLanguageModal.install", "Install")}
+      strCancelButtonText={t("gogLanguageModal.cancel", "Cancel")}
+      onOK={() => { closeModal?.(); onConfirm(selectedLanguage); }}
+      onCancel={closeModal}
+    >
+      <div
+        style={{
+          padding: "12px",
+          backgroundColor: "rgba(0, 0, 0, 0.2)",
+          borderRadius: "8px",
+        }}
       >
-        <div className="gog-language-modal" style={{ padding: "10px 0" }}>
-          {/* Game title and description */}
-          <div
-            style={{
-              marginBottom: "16px",
-              color: "#ccc",
-              fontSize: "14px",
-              lineHeight: "1.5",
-            }}
-          >
-            {t("gogLanguageModal.description", {
-              defaultValue: "Choose which language to download for {{title}}",
-              title: gameTitle,
-            })}
-          </div>
-
-          {/* Language dropdown */}
-          <div
-            style={{
-              marginBottom: "16px",
-              padding: "12px",
-              backgroundColor: "rgba(0, 0, 0, 0.2)",
-              borderRadius: "8px",
-            }}
-          >
-            <label
-              style={{
-                display: "block",
-                marginBottom: "8px",
-                color: "#fff",
-                fontSize: "14px",
-              }}
-            >
-              {t("gogLanguageModal.label", "Language")}
-            </label>
-            <Dropdown
-              rgOptions={dropdownOptions}
-              selectedOption={selectedOption?.data}
-              onChange={handleLanguageChange}
-            />
-          </div>
-
-          {/* Action buttons */}
-          <div
-            style={{
-              display: "flex",
-              gap: "10px",
-              justifyContent: "flex-end",
-            }}
-          >
-            <DialogButton
-              onClick={closeModal}
-              style={{
-                minWidth: "100px",
-              }}
-            >
-              {t("gogLanguageModal.cancel", "Cancel")}
-            </DialogButton>
-            <DialogButton
-              onClick={() => {
-                closeModal?.();
-                onConfirm(selectedLanguage);
-              }}
-              style={{
-                minWidth: "100px",
-                backgroundColor: "#1a9fff",
-              }}
-            >
-              {t("gogLanguageModal.install", "Install")}
-            </DialogButton>
-          </div>
-        </div>
-      </ConfirmModal>
-    </>
+        <label
+          style={{
+            display: "block",
+            marginBottom: "8px",
+            color: "#fff",
+            fontSize: "14px",
+          }}
+        >
+          {t("gogLanguageModal.label", "Language")}
+        </label>
+        <Dropdown
+          rgOptions={dropdownOptions}
+          selectedOption={selectedOption?.data}
+          onChange={handleLanguageChange}
+        />
+      </div>
+    </ConfirmModal>
   );
 };
 

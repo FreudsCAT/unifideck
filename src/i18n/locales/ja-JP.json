@@ -153,7 +153,7 @@
     "uninstallCompleteMessage": "{{title}} が削除されました。",
     "uninstallCompleteMessageProton": "{{title}} を削除しました（Protonファイルを含む）。",
     "installComplete": "インストール完了！",
-    "installCompleteMessage": "{{title}} の準備ができました。ライブラリで表示するには Steam を再起動してください。",
+    "installCompleteMessage": "{{title}} の準備ができました。",
     "syncComplete": "同期完了！",
     "syncCompleteMessage": "{{count}} 件のゲームを追加しました。ライブラリで表示するには STEAM を完全に再起動してください。",
     "forceSyncComplete": "強制同期完了！",
@@ -198,8 +198,16 @@
       "installingRedist": "再頒布可能パッケージをインストール中",
       "installingRedistMessage": "GOG再頒布可能パッケージの初回インストールを実行中...",
       "setupFailed": "セットアップに失敗しました",
-      "setupFailedMessage": "インストールに失敗しました。詳細はログを確認してください"
-    }
+      "setupFailedMessage": "インストールに失敗しました。詳細はログを確認してください",
+      "prerequisitesTitle": "前提条件のインストール",
+      "installingPrerequisites": "ゲームの前提条件をインストール中...",
+      "prerequisitesReady": "前提条件の準備完了",
+      "prerequisitesInstalled": "ゲームの前提条件がインストールされました",
+      "prerequisitesFailed": "前提条件の警告",
+      "prerequisitesFailedMessage": "前提条件が正しくインストールされなかった可能性があります"
+    },
+    "updateComplete": "Update Complete!",
+    "updateCompleteMessage": "{{title}} has been updated."
   },
   "uninstallModal": {
     "title": "アンインストールの確認",
@@ -237,7 +245,17 @@
     "backgroundSyncDisabled": "バックグラウンド同期が無効です",
     "steamGridDbUnavailable": "SteamGridDBライブラリが利用できません",
     "deleteSyncInProgress": "同期中は削除できません",
-    "alreadyInQueue": "すでにキューにあります"
+    "alreadyInQueue": "すでにキューにあります",
+    "download": {
+      "diskSpace": "ディスク容量が不足しています",
+      "network": "ネットワークエラー — 接続を確認してください",
+      "authExpired": "ログインの有効期限切れ — 再度サインインしてください",
+      "toolMissing": "必要なダウンロードツールが見つかりません",
+      "processFailed": "ダウンロードに失敗しました — もう一度お試しください",
+      "directoryNotFound": "インストールされたファイルが見つかりません",
+      "lockConflict": "別の操作が進行中です — もう一度お試しください",
+      "generic": "インストールに失敗しました — ログを確認してください"
+    }
   },
   "sync": {
     "downloadingArtwork": "{{game}} のアートをDL中...",

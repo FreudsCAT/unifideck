@@ -685,3 +685,103 @@ class EpicConnector(Store):
                 'success': False,
                 'error': str(e)
             }
+
+    async def check_for_updates(self) -> List[str]:
+        """Check which installed Epic games have updates available.
+        
+        Uses `legendary list-installed --check-updates` which outputs update status in plaintext.
+        (Note: the --json flag drops the update_available field due to a legendary bug).
+        
+        Returns:
+            List of app_name IDs that have updates available.
+        """
+        if not self.legendary_bin:
+            return []
+
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                self.legendary_bin, 'list-installed', '--check-updates',
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            stdout, stderr = await proc.communicate()
+
+            if proc.returncode != 0:
+                logger.error(f"[EPIC] check_for_updates failed: {stderr.decode('utf-8', errors='replace')}")
+                return []
+
+            output = stdout.decode('utf-8', errors='replace')
+            updates = []
+            current_app = None
+            
+            # Parse legendary plaintext output
+            # Example: 
+            # * Bloons TD 6 (App name: 7786b355a13b47a6b3915335117cd0b2 | Version: 53.0.10320...)
+            #  -> Update available! Installed: 53.0.10320, Latest: 53.2.10346
+            for line in output.splitlines():
+                line = line.strip()
+                if line.startswith('*') and 'App name:' in line:
+                    try:
+                        current_app = line.split('App name:')[1].split('|')[0].strip()
+                    except IndexError:
+                        current_app = None
+                elif line.startswith('-> Update available!') and current_app:
+                    updates.append(current_app)
+                    logger.info(f"[EPIC] Update available: {current_app}")
+                    current_app = None
+
+            logger.info(f"[EPIC] Found {len(updates)} games with updates")
+            return updates
+
+        except Exception as e:
+            logger.error(f"[EPIC] Error checking for updates: {e}")
+            return []
+
+    async def update_game(self, game_id: str, install_path: Optional[str] = None) -> Dict[str, Any]:
+        """Update an installed Epic game using legendary.
+        
+        Args:
+            game_id: Epic game app_name (ID).
+            install_path: Not used for Epic (legendary tracks install paths).
+            
+        Returns:
+            Dict with 'success' and optionally 'error'.
+        """
+        if not self.legendary_bin:
+            return {'success': False, 'error': 'Legendary CLI not found'}
+
+        try:
+            logger.info(f"[EPIC] Starting update for {game_id}")
+
+            proc = await asyncio.create_subprocess_exec(
+                self.legendary_bin, 'update', game_id, '--yes',
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT
+            )
+
+            while True:
+                line = await proc.stdout.readline()
+                if not line:
+                    break
+                line_str = line.decode().strip()
+                if line_str:
+                    logger.info(f"[EPIC Update] {line_str}")
+
+            await proc.wait()
+
+            if proc.returncode == 0:
+                # Invalidate installed cache so next query reflects the update
+                global _legendary_installed_cache
+                _legendary_installed_cache['data'] = None
+                _legendary_installed_cache['timestamp'] = 0
+
+                logger.info(f"[EPIC] Successfully updated {game_id}")
+                return {'success': True, 'message': f'Successfully updated {game_id}'}
+            else:
+                logger.error(f"[EPIC] Update failed for {game_id}")
+                return {'success': False, 'error': 'Update failed - check logs'}
+
+        except Exception as e:
+            logger.error(f"[EPIC] Error updating {game_id}: {e}")
+            return {'success': False, 'error': str(e)}
+

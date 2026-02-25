@@ -156,7 +156,7 @@
     "uninstallCompleteMessage": "{{title}} kaldırıldı.",
     "uninstallCompleteMessageProton": "{{title}} kaldırıldı (Proton dosyaları dahil).",
     "installComplete": "Kurulum Tamamlandı!",
-    "installCompleteMessage": "{{title}} oynamaya hazır. Kütüphanenizde görmek için Steam'i yeniden başlatın.",
+    "installCompleteMessage": "{{title}} oynamaya hazır.",
     "syncComplete": "Senkronizasyon Tamamlandı!",
     "syncCompleteMessage": "{{count}} oyun eklendi. Kütüphanenizde görmek için STEAM'İ YENİDEN BAŞLATIN (sadece oyun moduna dönmeyin, tamamen çıkın).",
     "forceSyncComplete": "Zorunlu Senkronizasyon Tamamlandı!",
@@ -201,8 +201,16 @@
       "installingRedist": "Yeniden Dağıtılabilir Paketler Yükleniyor",
       "installingRedistMessage": "İlk GOG paket kurulumu çalıştırılıyor...",
       "setupFailed": "Kurulum Başarısız",
-      "setupFailedMessage": "Kurulum başarısız, ayrıntılar için günlüklere bakın"
-    }
+      "setupFailedMessage": "Kurulum başarısız, ayrıntılar için günlüklere bakın",
+      "prerequisitesTitle": "Ön Koşullar Yükleniyor",
+      "installingPrerequisites": "Gerekli oyun ön koşulları yükleniyor...",
+      "prerequisitesReady": "Ön Koşullar Hazır",
+      "prerequisitesInstalled": "Oyun ön koşulları yüklendi",
+      "prerequisitesFailed": "Ön Koşullar Uyarısı",
+      "prerequisitesFailedMessage": "Ön koşullar doğru şekilde yüklenmemiş olabilir"
+    },
+    "updateComplete": "Update Complete!",
+    "updateCompleteMessage": "{{title}} has been updated."
   },
   "uninstallModal": {
     "title": "Kaldırmayı Onayla",
@@ -240,7 +248,17 @@
     "backgroundSyncDisabled": "Arka plan senkronizasyonu devre dışı",
     "steamGridDbUnavailable": "SteamGridDB kütüphanesi kullanılamıyor",
     "deleteSyncInProgress": "Senkronizasyon devam ederken silinemiyor",
-    "alreadyInQueue": "Zaten kuyrukta"
+    "alreadyInQueue": "Zaten kuyrukta",
+    "download": {
+      "diskSpace": "Yeterli disk alanı yok",
+      "network": "Ağ hatası — bağlantınızı kontrol edin",
+      "authExpired": "Oturum süresi doldu — tekrar giriş yapın",
+      "toolMissing": "Gerekli indirme aracı bulunamadı",
+      "processFailed": "İndirme başarısız — tekrar deneyin",
+      "directoryNotFound": "Yüklenen dosyalar bulunamadı",
+      "lockConflict": "Başka bir işlem devam ediyor — tekrar deneyin",
+      "generic": "Kurulum başarısız — günlükleri kontrol edin"
+    }
   },
   "sync": {
     "downloadingArtwork": "{{game}} için görsel indiriliyor...",

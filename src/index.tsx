@@ -12,7 +12,6 @@ import {
   playSectionClasses,
   appDetailsHeaderClasses,
   basicAppDetailsSectionStylerClasses,
-  DialogButton,
   ToggleField,
   showModal,
   Navigation,
@@ -29,11 +28,7 @@ loadTranslations();
 // Import views
 
 // Import tab system
-import {
-  patchLibrary,
-  loadCompatCacheFromBackend,
-  updateSingleGameStatus,
-} from "./tabs";
+import { patchLibrary, loadCompatCacheFromBackend } from "./tabs";
 
 import { syncUnifideckCollections } from "./spoofing/CollectionManager";
 import {
@@ -45,21 +40,24 @@ import {
 // Import Downloads feature components
 import { DownloadsTab } from "./components/DownloadsTab";
 import { StorageSettings } from "./components/StorageSettings";
-import { UninstallConfirmModal } from "./components/UninstallConfirmModal";
+
 import { SteamRestartModal } from "./components/SteamRestartModal";
 import { AccountSwitchModal } from "./components/AccountSwitchModal";
 import { LanguageSelector } from "./components/LanguageSelector";
 import StoreConnections from "./components/settings/StoreConnections";
 import { Store } from "./types/store";
 import LibrarySync from "./components/settings/LibrarySync";
-import StoreIcon from "./components/StoreIcon";
+
 import GameInfoPanel from "./components/GameInfoPanel";
 import {
   PlaySectionWrapper,
   setPlayButtonCacheRef,
-  injectHidePlaySectionCDP,
 } from "./components/PlayButtonOverride";
-import { unifideckGameCache, gameStateVersion, setForceRefreshCallback } from "./tabs";
+import {
+  unifideckGameCache,
+  gameStateVersion,
+  setForceRefreshCallback,
+} from "./tabs";
 import {
   registerGameActionInterceptor,
   setGameInfoCacheRef,
@@ -112,7 +110,6 @@ import { SyncProgress } from "./types/syncProgress";
 
 // Global cache for game info (5-second TTL for faster updates after installation)
 const gameInfoCache = new Map<number, { info: any; timestamp: number }>();
-const CACHE_TTL = 5000; // 5 seconds - reduced from 30s for faster button state updates
 
 // ========== END INSTALL BUTTON FEATURE ==========
 
@@ -146,351 +143,9 @@ const setStoredViewMode = (mode: GameDetailsViewMode) => {
 const VIEW_MODE_CHANGE_EVENT = "unifideck-view-mode-change";
 // ========== END GAME DETAILS VIEW MODE SETTING ==========
 
-// ========== NATIVE PLAY BUTTON OVERRIDE ==========
-//
-// This component shows alongside the native Play button for uninstalled Unifideck games.
-// For installed games, we hide this and let Steam's native Play button work.
-// For uninstalled games, we show an Install button with size info.
-//
-// ================================================
-
-// Install Info Display Component - shows download size next to play section
-const InstallInfoDisplay: FC<{ appId: number }> = ({ appId }) => {
-  const [gameInfo, setGameInfo] = useState<any>(null);
-  const [processing, setProcessing] = useState(false);
-  const [downloadState, setDownloadState] = useState<{
-    isDownloading: boolean;
-    progress?: number;
-    downloadId?: string;
-  }>({ isDownloading: false });
-  const pollIntervalRef = useRef<NodeJS.Timeout | null>(null);
-
-  // Track view mode with event listener for live updates
-  const [viewMode, setViewMode] = useState<GameDetailsViewMode>(
-    getStoredViewMode(),
-  );
-
-  useEffect(() => {
-    const handleViewModeChange = (e: Event) => {
-      const mode = (e as CustomEvent).detail as GameDetailsViewMode;
-      setViewMode(mode);
-    };
-    window.addEventListener(VIEW_MODE_CHANGE_EVENT, handleViewModeChange);
-    return () =>
-      window.removeEventListener(VIEW_MODE_CHANGE_EVENT, handleViewModeChange);
-  }, []);
-
-  const { t } = useTranslation();
-
-  // Fetch game info on mount
-  useEffect(() => {
-    const cached = gameInfoCache.get(appId);
-    if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
-      console.log("[InstallInfoDisplay] Using cached game info:", cached.info);
-      setGameInfo(cached.info);
-      return;
-    }
-
-    call<[number], any>("get_game_info", appId)
-      .then((info) => {
-        console.log("[InstallInfoDisplay] Fetched game info:", info);
-        const processedInfo = info?.error ? null : info;
-        setGameInfo(processedInfo);
-        gameInfoCache.set(appId, {
-          info: processedInfo,
-          timestamp: Date.now(),
-        });
-      })
-      .catch(() => setGameInfo(null));
-  }, [appId]);
-
-  // Poll for download state when we have game info
-  useEffect(() => {
-    if (!gameInfo) return;
-
-    const checkDownloadState = async () => {
-      try {
-        const result = await call<
-          [string, string],
-          {
-            success: boolean;
-            is_downloading: boolean;
-            download_info?: {
-              id: string;
-              progress_percent: number;
-              status: string;
-            };
-          }
-        >("is_game_downloading", gameInfo.game_id, gameInfo.store);
-
-        setDownloadState((prevState) => {
-          const newState = {
-            isDownloading: false,
-            progress: 0,
-            downloadId: undefined as string | undefined,
-          };
-
-          if (result.success && result.is_downloading && result.download_info) {
-            const status = result.download_info.status;
-            // Only show as downloading if status is actively downloading or queued
-            // Cancelled/error items should not be shown as active downloads
-            if (status === "downloading" || status === "queued") {
-              newState.isDownloading = true;
-              newState.progress = result.download_info.progress_percent;
-              newState.downloadId = result.download_info.id;
-            }
-            // If status is cancelled/error/completed, isDownloading stays false
-          }
-
-          // Detect transition from Downloading -> Not Downloading (Completion)
-          if (prevState.isDownloading && !newState.isDownloading) {
-            console.log(
-              "[InstallInfoDisplay] Download stopped, checking status...",
-            );
-
-            // Check the status from the download info to determine actual completion
-            // result.download_info might be available even if is_downloading is false
-            const finalStatus = result.download_info?.status;
-
-            if (finalStatus === "completed") {
-              console.log(
-                "[InstallInfoDisplay] Download successfully finished",
-              );
-
-              // Show installation complete toast
-              toaster.toast({
-                title: t("toasts.installComplete"),
-                body: t("toasts.installCompleteMessage", {
-                  title: gameInfo?.title || "Game",
-                }),
-                duration: 10000,
-                critical: true,
-              });
-
-              // Invalidate cache first to ensure fresh data
-              gameInfoCache.delete(appId);
-
-              // Refresh game info to update button state (Install -> Play/Uninstall)
-              call<[number], any>("get_game_info", appId).then((info) => {
-                const processedInfo = info?.error ? null : info;
-                setGameInfo(processedInfo);
-                if (processedInfo) {
-                  gameInfoCache.set(appId, {
-                    info: processedInfo,
-                    timestamp: Date.now(),
-                  });
-                  // Update tab cache immediately so UI reflects change
-                  updateSingleGameStatus({
-                    appId,
-                    store: processedInfo.store,
-                    isInstalled: processedInfo.is_installed,
-                  });
-                }
-              });
-            } else if (finalStatus === "cancelled") {
-              console.log(
-                "[InstallInfoDisplay] Download was cancelled - suppressing success message",
-              );
-            } else if (finalStatus === "error") {
-              console.log(
-                "[InstallInfoDisplay] Download failed - suppressing success message",
-              );
-            } else {
-              // Fallback: If no status info (legacy behavior or edge case), verify installation again
-              console.log(
-                "[InstallInfoDisplay] No final status, verifying installation...",
-              );
-              call<[number], any>("get_game_info", appId).then((info) => {
-                if (info && info.is_installed) {
-                  // It is installed, likely success
-                  toaster.toast({
-                    title: t("toasts.installComplete"),
-                    body: t("toasts.installCompleteMessage", {
-                      title: gameInfo?.title || "Game",
-                    }),
-                    duration: 10000,
-                  });
-                  setGameInfo(info);
-                }
-              });
-            }
-          }
-
-          return newState;
-        });
-      } catch (error) {
-        console.error(
-          "[InstallInfoDisplay] Error checking download state:",
-          error,
-        );
-      }
-    };
-
-    // Initial check
-    checkDownloadState();
-
-    // Poll every second when displaying
-    pollIntervalRef.current = setInterval(checkDownloadState, 1000);
-
-    return () => {
-      if (pollIntervalRef.current) {
-        clearInterval(pollIntervalRef.current);
-      }
-    };
-  }, [gameInfo, appId]);
-
-  const handleUninstall = async (deletePrefix: boolean = false) => {
-    if (!gameInfo) return;
-    setProcessing(true);
-
-    toaster.toast({
-      title: t("toasts.uninstalling"),
-      body: deletePrefix
-        ? t("toasts.uninstallingMessageProton", { title: gameInfo.title })
-        : t("toasts.uninstallingMessage", { title: gameInfo.title }),
-      duration: 5000,
-    });
-
-    const result = await call<[number, boolean], any>(
-      "uninstall_game_by_appid",
-      appId,
-      deletePrefix,
-    );
-
-    if (result.success) {
-      setGameInfo({ ...gameInfo, is_installed: false });
-      gameInfoCache.delete(appId);
-
-      // Update tab cache immediately so UI reflects change without restart
-      if (result.game_update) {
-        updateSingleGameStatus(result.game_update);
-      }
-
-      toaster.toast({
-        title: t("toasts.uninstallComplete"),
-        body: deletePrefix
-          ? t("toasts.uninstallCompleteMessageProton", {
-              title: gameInfo.title,
-            })
-          : t("toasts.uninstallCompleteMessage", { title: gameInfo.title }),
-        duration: 10000,
-      });
-    }
-    // Note: Failure case removed - current logic handles all edge cases:
-    // 1. Missing game files -> updates flag to not installed
-    // 2. Missing mapping -> updates flag to not installed
-    // 3. User clicks uninstall -> removes all flags/files
-    setProcessing(false);
-  };
-
-  const showUninstallConfirmation = () => {
-    showModal(
-      <UninstallConfirmModal
-        gameTitle={gameInfo?.title || "this game"}
-        onConfirm={(deletePrefix) => handleUninstall(deletePrefix)}
-      />,
-    );
-  };
-
-  // Not a Unifideck game - return null
-  if (!gameInfo || gameInfo.error) return null;
-
-  const isInstalled = gameInfo.is_installed;
-
-  // Install/Cancel buttons have been moved to PlayButtonOverride (in the play section).
-  // This component now only shows:
-  // - Uninstall button (for installed games, in simple view mode)
-  // - Nothing for uninstalled games (install is handled by PlayButtonOverride)
-
-  // Base button style for uninstall button
-  const baseButtonStyle: React.CSSProperties = {
-    padding: "10px 16px",
-    minHeight: "44px",
-    minWidth: "180px",
-    fontSize: "14px",
-    fontWeight: 600,
-    borderRadius: "4px",
-    cursor: "pointer",
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: "8px",
-    opacity: 1,
-    visibility: "visible",
-    backdropFilter: "none",
-    WebkitBackdropFilter: "none",
-  };
-
-  // CSS for controller focus state
-  const focusStyles = `
-    .unifideck-install-button.gpfocus,
-    .unifideck-install-button:hover {
-      filter: brightness(1.2) !important;
-      box-shadow: 0 0 12px rgba(26, 159, 255, 0.8) !important;
-      transform: scale(1.02);
-      transition: all 0.15s ease;
-    }
-    .unifideck-install-button.gpfocus {
-      outline: 2px solid #1a9fff !important;
-      outline-offset: 2px !important;
-    }
-  `;
-
-  // In "detailed" mode, the info is shown in GameInfoPanel
-  if (viewMode === "detailed") {
-    return null;
-  }
-
-  // For uninstalled games or active downloads, show nothing here
-  // (Install/Cancel is now in PlayButtonOverride in the play section)
-  if (!isInstalled || downloadState.isDownloading) {
-    return null;
-  }
-
-  // Simple mode: Show Uninstall button for installed games
-  const sizeText = gameInfo.size_formatted
-    ? ` (${gameInfo.size_formatted})`
-    : " (- GB)";
-  const buttonText =
-    t("installButton.uninstall", { title: gameInfo.title }) + sizeText;
-
-  return (
-    <>
-      <style>{focusStyles}</style>
-      <div
-        style={{
-          position: "absolute",
-          top: "40px",
-          right: "35px",
-          zIndex: 9999,
-        }}
-        className="unifideck-install-button-container"
-      >
-        <DialogButton
-          onClick={showUninstallConfirmation}
-          disabled={processing}
-          style={{
-            ...baseButtonStyle,
-            backgroundColor: "#d32f2f",
-            color: "#ffffff",
-            border: "2px solid #ff6b6b",
-            boxShadow: "0 2px 8px rgba(211, 47, 47, 0.5)",
-          }}
-          className="unifideck-install-button"
-        >
-          {processing ? (
-            t("installButton.processing")
-          ) : (
-            <>
-              <StoreIcon store={gameInfo.store} size="16px" color="#ffffff" />
-              {buttonText}
-            </>
-          )}
-        </DialogButton>
-      </div>
-    </>
-  );
-};
+import InstallInfoDisplay, {
+  setInstallInfoCacheRef,
+} from "./components/InstallInfoDisplay";
 
 /**
  * Find the correct insertion index for PlaySectionWrapper in InnerContainer.
@@ -504,9 +159,8 @@ const InstallInfoDisplay: FC<{ appId: number }> = ({ appId }) => {
 function findPlaySectionInsertIndex(children: any[]): number {
   // Heuristic 1: Find by PlaySection container class
   if (playSectionClasses?.Container) {
-    const idx = children.findIndex(
-      (child: any) =>
-        child?.props?.className?.includes?.(playSectionClasses.Container),
+    const idx = children.findIndex((child: any) =>
+      child?.props?.className?.includes?.(playSectionClasses.Container),
     );
     if (idx >= 0) return idx + 1;
   }
@@ -530,7 +184,24 @@ function findPlaySectionInsertIndex(children: any[]): number {
 function patchGameDetailsRoute() {
   return routerHook.addPatch("/library/app/:appid", (routerTree: any) => {
     const routeProps = findInReactTree(routerTree, (x: any) => x?.renderFunc);
+    // DIAG: Log at the very top of the callback (temporary)
+    console.log(
+      "[Unifideck DIAG] addPatch callback fired. routeProps found:",
+      !!routeProps,
+      "unifideckPatched:",
+      !!(routeProps?.renderFunc as any)?.__unifideckPatched,
+      "path:",
+      window.location?.pathname,
+    );
     if (!routeProps) return routerTree;
+
+    // Only re-patch if renderFunc is NOT already wrapped by OUR afterPatch.
+    // Uses a Unifideck-specific marker (not __deckyPatch, which is set by ANY
+    // plugin's afterPatch — e.g. ProtonDB, HLTB — causing us to skip entirely).
+    // This correctly handles:
+    // - Steam menu navigation (may reuse routeProps but replace renderFunc)
+    // - Co-existence with other plugins that patch the same route
+    if ((routeProps.renderFunc as any)?.__unifideckPatched) return routerTree;
 
     // Create tree patcher (SAFE: mutates BEFORE React reconciles)
     const patchHandler = createReactTreePatcher(
@@ -541,26 +212,45 @@ function patchGameDetailsRoute() {
             ?.props?.children,
       ],
       (_, ret) => {
-        // Patcher function: SAFE to mutate here (before reconciliation)
-        // Extract appId from ret (not from finder closure)
-        const overview = findInReactTree(
-          ret,
-          (x: any) => x?.props?.children?.props?.overview,
-        )?.props?.children?.props?.overview;
-
-        if (!overview) return ret;
-        const appId = overview.appid;
-
-        // DISABLED: Store patching disabled, so no metadata injection
-        // TODO: Re-enable once we figure out what's breaking Steam
-        // const isShortcut = appId > 2000000000;
-        // if (isShortcut) {
-        //   const signedAppId = appId > 0x7FFFFFFF ? appId - 0x100000000 : appId;
-        //   console.log(`[Unifideck] Game details opened for shortcut: ${appId} (signed: ${signedAppId})`);
-        //   injectGameToAppinfo(signedAppId);
-        // }
-
         try {
+          // DIAG: Confirm patcher handler actually executes (temporary)
+          console.log(
+            "[Unifideck DIAG] patcher handler executing. ret type:",
+            ret?.type?.name ||
+              ret?.type?.toString?.()?.substring(0, 60) ||
+              typeof ret,
+          );
+          // Patcher function: SAFE to mutate here (before reconciliation)
+          // Extract appId from ret (not from finder closure)
+          const overview = findInReactTree(
+            ret,
+            (x: any) => x?.props?.children?.props?.overview,
+          )?.props?.children?.props?.overview;
+
+          if (!overview) {
+            console.log(
+              "[Unifideck DIAG] overview NOT found in ret. ret keys:",
+              ret ? Object.keys(ret).join(",") : "null",
+              "ret.props keys:",
+              ret?.props ? Object.keys(ret.props).join(",") : "null",
+            );
+            return ret;
+          }
+          console.log(
+            "[Unifideck DIAG] overview found, appId:",
+            overview.appid,
+          );
+          const appId = overview.appid;
+
+          // DISABLED: Store patching disabled, so no metadata injection
+          // TODO: Re-enable once we figure out what's breaking Steam
+          // const isShortcut = appId > 2000000000;
+          // if (isShortcut) {
+          //   const signedAppId = appId > 0x7FFFFFFF ? appId - 0x100000000 : appId;
+          //   console.log(`[Unifideck] Game details opened for shortcut: ${appId} (signed: ${signedAppId})`);
+          //   injectGameToAppinfo(signedAppId);
+          // }
+
           // Strategy: Find the Header area (contains Play button and game info)
           // The Header is at the top of the game details page, above the scrollable content
 
@@ -618,6 +308,23 @@ function patchGameDetailsRoute() {
           // Determine game type early — needed for container selection and splice index decisions
           const isNonSteamGame = appId > 2000000000;
 
+          // DIAG: Log which containers were found (temporary)
+          console.log(
+            "[Unifideck DIAG] Container search results:",
+            "innerContainer:",
+            !!innerContainer,
+            "headerContainer:",
+            !!headerContainer,
+            "playSection:",
+            !!playSection,
+            "buttonsContainer:",
+            !!buttonsContainer,
+            "gameInfoRow:",
+            !!gameInfoRow,
+            "isNonSteam:",
+            isNonSteamGame,
+          );
+
           // CONTAINER SELECTION
           // For non-Steam games: REQUIRE InnerContainer. Fallback containers have different
           // children structures, causing hardcoded splice indices to put elements at the bottom.
@@ -627,7 +334,7 @@ function patchGameDetailsRoute() {
           if (isNonSteamGame) {
             if (!innerContainer) {
               console.log(
-                `[Unifideck] InnerContainer not found for non-Steam app ${appId}, skipping injection (will retry)`,
+                `[Unifideck DIAG] InnerContainer not found for non-Steam app ${appId}, skipping injection (will retry)`,
               );
               return ret;
             }
@@ -642,7 +349,7 @@ function patchGameDetailsRoute() {
 
             if (!container) {
               console.log(
-                `[Unifideck] No suitable container found for app ${appId}, skipping injection`,
+                `[Unifideck DIAG] No suitable container found for app ${appId}, skipping injection`,
               );
               return ret;
             }
@@ -678,10 +385,12 @@ function patchGameDetailsRoute() {
           const gameInfoKey = `unifideck-game-info-${appId}`;
 
           const alreadyHasInstallInfo = container.props.children.some(
-            (child: any) => child?.key?.startsWith?.(`unifideck-install-info-${appId}`),
+            (child: any) =>
+              child?.key?.startsWith?.(`unifideck-install-info-${appId}`),
           );
           const alreadyHasGameInfo = container.props.children.some(
-            (child: any) => child?.key?.startsWith?.(`unifideck-game-info-${appId}`),
+            (child: any) =>
+              child?.key?.startsWith?.(`unifideck-game-info-${appId}`),
           );
 
           // For non-Steam games: splice at index 4 (after HeaderCapsule[0],
@@ -691,9 +400,9 @@ function patchGameDetailsRoute() {
           // NOTE: For non-Steam games, InstallInfoDisplay injection is deferred
           // until after PlaySectionWrapper and GameInfoPanel are spliced.
 
-          // For Steam games, inject InstallInfoDisplay now (non-Steam handled below)
+          // For Steam games, inject InstallInfoDisplay before the native PlaySection (index 1)
           if (!isNonSteamGame && !alreadyHasInstallInfo) {
-            const spliceIndex = Math.min(2, container.props.children.length);
+            const spliceIndex = Math.min(1, container.props.children.length);
             container.props.children.splice(
               spliceIndex,
               0,
@@ -732,16 +441,10 @@ function patchGameDetailsRoute() {
             );
 
             if (!alreadyHasWrapper) {
-              // For Unifideck games, always hide native PlaySection —
-              // our custom section handles all states (install, cancel, play).
-              // Non-Unifideck shortcuts won't be in the cache and are unaffected.
-              const cached = unifideckGameCache.get(appId);
-              if (cached) {
-                // Inject hide style via CDP (async, non-blocking).
-                // CDP crosses the CEF process boundary to inject into Steam's SP tab DOM.
-                // Style persists across patcher re-runs (idempotent backend check).
-                injectHidePlaySectionCDP(appId);
-              }
+              // CDP hide is now handled by PlaySectionWrapper's useEffect —
+              // it only hides native PlaySection once shouldShowCustom is true.
+              // This prevents blank screens when get_game_info hasn't resolved yet
+              // (e.g., offline mode, slow backend).
 
               // Include version in key to force remount when state changes
               const version = gameStateVersion.get(appId) || 0;
@@ -758,7 +461,8 @@ function patchGameDetailsRoute() {
                 React.createElement(PlaySectionWrapper, {
                   key: versionedKey,
                   appId,
-                  playSectionClassName: basicAppDetailsSectionStylerClasses?.PlaySection,
+                  playSectionClassName:
+                    basicAppDetailsSectionStylerClasses?.PlaySection,
                 }),
               );
               console.log(
@@ -837,37 +541,31 @@ function patchGameDetailsRoute() {
               gameInfoIdx !== wrapperIdx + 1
             ) {
               console.log(
-                `[Unifideck] GameInfoPanel at index ${gameInfoIdx}, expected ${wrapperIdx + 1}, repositioning`,
+                `[Unifideck] GameInfoPanel at index ${gameInfoIdx}, expected ${
+                  wrapperIdx + 1
+                }, repositioning`,
               );
-              const [element] = container.props.children.splice(
-                gameInfoIdx,
-                1,
-              );
+              const [element] = container.props.children.splice(gameInfoIdx, 1);
               // Re-find wrapper index after splice (indices shifted)
               const newWrapperIdx = container.props.children.findIndex(
                 (child: any) => child?.key?.startsWith?.(playWrapperKey),
               );
-              container.props.children.splice(
-                newWrapperIdx + 1,
-                0,
-                element,
-              );
+              container.props.children.splice(newWrapperIdx + 1, 0, element);
             }
           }
 
           // ========== INSTALL INFO BADGE (Non-Steam) ==========
-          // For non-Steam games, inject InstallInfoDisplay AFTER GameInfoPanel.
-          // Position: absolute, so visual placement is CSS-controlled.
-          // Uses relative positioning (after GameInfoPanel) instead of hardcoded index.
+          // For non-Steam games, inject InstallInfoDisplay BEFORE PlaySectionWrapper.
+          // Position: absolute, so visual placement is CSS-controlled. This ensures
+          // the focal order hits the top-right button before the Play button.
           if (isNonSteamGame && !alreadyHasInstallInfo) {
-            const gameInfoIdx = container.props.children.findIndex(
-              (child: any) =>
-                child?.key?.startsWith?.(`unifideck-game-info-${appId}`),
+            const wrapperIdx = container.props.children.findIndex(
+              (child: any) => child?.key?.startsWith?.(playWrapperKey),
             );
             const installInfoSpliceIndex =
-              gameInfoIdx >= 0
-                ? gameInfoIdx + 1
-                : Math.min(4, container.props.children.length);
+              wrapperIdx >= 0
+                ? Math.max(0, wrapperIdx) // Inject exactly where Play wrapper is, pushing it down
+                : 1; // Fallback
 
             const version = gameStateVersion.get(appId) || 0;
             const versionedInstallInfoKey = `${installInfoKey}-v${version}`;
@@ -885,15 +583,16 @@ function patchGameDetailsRoute() {
             );
           }
         } catch (error) {
-          console.error("[Unifideck] Error injecting install info:", error);
+          console.error("[Unifideck] Patcher error:", error);
         }
 
         return ret; // Always return modified tree
       },
     );
 
-    // Apply patcher to renderFunc
+    // Apply patcher to renderFunc and mark with Unifideck-specific flag
     afterPatch(routeProps, "renderFunc", patchHandler);
+    (routeProps.renderFunc as any).__unifideckPatched = true;
 
     return routerTree;
   });
@@ -1822,9 +1521,10 @@ export default definePlugin(() => {
     .catch(() => {}); // Silently ignore if backend not ready
 
   // Check for account switch and show modal if needed
-  call<[], { show_modal: boolean; has_registry: boolean; has_auth_tokens: boolean }>(
-    "check_account_switch",
-  )
+  call<
+    [],
+    { show_modal: boolean; has_registry: boolean; has_auth_tokens: boolean }
+  >("check_account_switch")
     .then((result) => {
       if (result?.show_modal) {
         console.log("[Unifideck] Account switch detected, showing modal");
@@ -1833,9 +1533,10 @@ export default definePlugin(() => {
             hasRegistry={result.has_registry}
             hasAuthTokens={result.has_auth_tokens}
             onMigrate={async () => {
-              const r = await call<[], { shortcuts_created: number; artwork_copied: number }>(
-                "migrate_account_data",
-              );
+              const r = await call<
+                [],
+                { shortcuts_created: number; artwork_copied: number }
+              >("migrate_account_data");
               toaster.toast({
                 title: t("accountSwitch.toastMigrateTitle"),
                 body: t("accountSwitch.toastMigrateBody", {
@@ -1871,6 +1572,7 @@ export default definePlugin(() => {
   // Share game info cache with PlayButtonOverride and game action interceptor
   setPlayButtonCacheRef(gameInfoCache);
   setGameInfoCacheRef(gameInfoCache);
+  setInstallInfoCacheRef(gameInfoCache);
 
   // Register game action interceptor (safety net for play button presses on uninstalled games)
   const unregisterInterceptor = registerGameActionInterceptor();
@@ -1899,7 +1601,9 @@ export default definePlugin(() => {
     // Check if user is currently viewing this game's details page
     const currentPath = window.location.pathname;
     if (!currentPath.includes(`/library/app/${appId}`)) {
-      console.log(`[Unifideck] Not on game details page for app ${appId}, skipping refresh`);
+      console.log(
+        `[Unifideck] Not on game details page for app ${appId}, skipping refresh`,
+      );
       return;
     }
 
@@ -1907,7 +1611,11 @@ export default definePlugin(() => {
     const now = Date.now();
     const lastRefresh = refreshDebounceMap.get(appId) || 0;
     if (now - lastRefresh < 500) {
-      console.log(`[Unifideck] Debouncing refresh for app ${appId} (last refresh ${now - lastRefresh}ms ago)`);
+      console.log(
+        `[Unifideck] Debouncing refresh for app ${appId} (last refresh ${
+          now - lastRefresh
+        }ms ago)`,
+      );
       return;
     }
     refreshDebounceMap.set(appId, now);
@@ -1919,25 +1627,34 @@ export default definePlugin(() => {
     // CRITICAL: Clear gameInfoCache for this appId to force components to re-fetch fresh data
     const signedId = appId;
     const unsignedId = signedId < 0 ? signedId + 0x100000000 : signedId;
-    const altSignedId = signedId >= 0 && signedId > 0x7fffffff ? signedId - 0x100000000 : signedId;
+    const altSignedId =
+      signedId >= 0 && signedId > 0x7fffffff
+        ? signedId - 0x100000000
+        : signedId;
     gameInfoCache.delete(signedId);
     gameInfoCache.delete(unsignedId);
     if (altSignedId !== signedId) {
       gameInfoCache.delete(altSignedId);
     }
-    console.log(`[Unifideck] Cleared gameInfoCache for app ${appId} (all variants)`);
+    console.log(
+      `[Unifideck] Cleared gameInfoCache for app ${appId} (all variants)`,
+    );
 
-    // Always keep native play section hidden for Unifideck games —
-    // our custom section handles all states (install, cancel, play).
-    // Re-inject to ensure hide persists after state changes.
-    console.log(`[Unifideck] Game ${appId} state changed (installed=${isInstalled}), ensuring CDP hide active`);
-    injectHidePlaySectionCDP(appId);
+    // CDP hide management is now handled by PlaySectionWrapper's useEffect
+    // (gated on hasNativePlaySection prop). Direct CDP calls here are removed
+    // because they bypass the safety gate and can hide the wrong container
+    // in offline mode where no native PlaySection exists.
+    console.log(
+      `[Unifideck] Game ${appId} state changed (installed=${isInstalled})`,
+    );
 
     if (!isInstalled) {
       // Game is now uninstalled → navigate to trigger patcher re-run
       // Navigation as backup to CustomEvent (which handles the immediate update)
-      const normalizedPath = currentPath.replace(/^\/routes/, '');
-      console.log(`[Unifideck] Navigating back then forward to ${normalizedPath} to trigger patcher`);
+      const normalizedPath = currentPath.replace(/^\/routes/, "");
+      console.log(
+        `[Unifideck] Navigating back then forward to ${normalizedPath} to trigger patcher`,
+      );
       Navigation.NavigateBack();
 
       setTimeout(() => {

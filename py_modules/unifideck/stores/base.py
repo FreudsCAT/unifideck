@@ -142,3 +142,26 @@ class Store(ABC):
             Dict with 'success' and optionally 'error'.
         """
         return {'success': False, 'error': 'Not implemented'}
+
+    async def check_for_updates(self) -> List[str]:
+        """
+        Check which installed games have updates available.
+        
+        Returns:
+            List of game IDs that have updates available.
+        """
+        return []
+
+    async def update_game(self, game_id: str, install_path: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Update an installed game to the latest version.
+        
+        Args:
+            game_id: The store-specific game identifier.
+            install_path: Optional install path (required for some stores like GOG).
+            
+        Returns:
+            Dict with 'success' and optionally 'error'.
+        """
+        return {'success': False, 'error': 'Not implemented'}
+

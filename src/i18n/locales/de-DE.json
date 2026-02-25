@@ -153,7 +153,7 @@
     "uninstallCompleteMessage": "{{title}} entfernt.",
     "uninstallCompleteMessageProton": "{{title}} entfernt (einschließlich Proton-Dateien).",
     "installComplete": "Installation abgeschlossen!",
-    "installCompleteMessage": "{{title}} ist spielbereit. Starte Steam neu, um es in deiner Bibliothek zu sehen.",
+    "installCompleteMessage": "{{title}} ist spielbereit.",
     "syncComplete": "Synchronisierung abgeschlossen!",
     "syncCompleteMessage": "{{count}} Spiele hinzugefügt. STARTE STEAM NEU (komplett schließen, nicht nur Spielmodus verlassen), um sie in deiner Bibliothek zu sehen.",
     "forceSyncComplete": "Erzwungene Synchronisierung abgeschlossen!",
@@ -198,8 +198,16 @@
       "installingRedist": "Redistributables werden installiert",
       "installingRedistMessage": "Führe erstmalige GOG-Redistributable-Installation aus...",
       "setupFailed": "Einrichtung fehlgeschlagen",
-      "setupFailedMessage": "Installation fehlgeschlagen, siehe Protokolle für Details"
-    }
+      "setupFailedMessage": "Installation fehlgeschlagen, siehe Protokolle für Details",
+      "prerequisitesTitle": "Voraussetzungen installieren",
+      "installingPrerequisites": "Erforderliche Spielvoraussetzungen werden installiert...",
+      "prerequisitesReady": "Voraussetzungen bereit",
+      "prerequisitesInstalled": "Spielvoraussetzungen installiert",
+      "prerequisitesFailed": "Voraussetzungen Warnung",
+      "prerequisitesFailedMessage": "Voraussetzungen wurden möglicherweise nicht korrekt installiert"
+    },
+    "updateComplete": "Update Complete!",
+    "updateCompleteMessage": "{{title}} has been updated."
   },
   "uninstallModal": {
     "title": "Deinstallation bestätigen",
@@ -237,7 +245,17 @@
     "backgroundSyncDisabled": "Hintergrund-Synchronisierung deaktiviert",
     "steamGridDbUnavailable": "SteamGridDB-Bibliothek nicht verfügbar",
     "deleteSyncInProgress": "Löschen während einer Synchronisierung nicht möglich",
-    "alreadyInQueue": "Bereits in Warteschlange"
+    "alreadyInQueue": "Bereits in Warteschlange",
+    "download": {
+      "diskSpace": "Nicht genug Speicherplatz verfügbar",
+      "network": "Netzwerkfehler — Verbindung überprüfen",
+      "authExpired": "Anmeldung abgelaufen — bitte erneut anmelden",
+      "toolMissing": "Erforderliches Download-Tool nicht gefunden",
+      "processFailed": "Download fehlgeschlagen — bitte erneut versuchen",
+      "directoryNotFound": "Installierte Dateien konnten nicht gefunden werden",
+      "lockConflict": "Ein anderer Vorgang läuft — bitte erneut versuchen",
+      "generic": "Installation fehlgeschlagen — Protokolle prüfen"
+    }
   },
   "sync": {
     "downloadingArtwork": "Artwork für {{game}} lädt...",

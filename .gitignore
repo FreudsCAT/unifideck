@@ -62,11 +62,7 @@ Thumbs.db
 # ===========================================
 # Test and Debug Files
 # ===========================================
-test_*.py
-debug_*.py
-verify_*.py
-read_user_json.py
-test_cloud_saves/
+tests/
 
 # ===========================================
 # Development Tools

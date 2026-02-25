@@ -45,6 +45,56 @@ STORAGE_PATHS = {
 }
 
 
+def classify_download_error(raw_error: str) -> str:
+    """Map raw download error text to an i18n key for user-friendly display.
+    
+    Inspects the error string for known patterns and returns the appropriate
+    i18n key. The frontend calls t(key) to get the localized message.
+    """
+    if not raw_error:
+        return "errors.download.generic"
+    
+    lower = raw_error.lower()
+    
+    # Disk space
+    if any(p in lower for p in ['disk space', 'no space', 'enospc', 'not enough space',
+                                  'not enough available', 'insufficient space']):
+        return "errors.download.diskSpace"
+    
+    # Network / connection issues
+    if any(p in lower for p in ['connection', 'timeout', 'timed out', 'network',
+                                  'stalled', 'connection timeout', 'dns',
+                                  'could not resolve', 'ssl', 'certificate']):
+        return "errors.download.network"
+    
+    # Authentication expired
+    if any(p in lower for p in ['not authenticated', 'token expired', 'auth',
+                                  'login required', 'unauthorized', '401',
+                                  'credentials']):
+        return "errors.download.authExpired"
+    
+    # Required tool not found
+    if any(p in lower for p in ['binary not found', 'not found', 'cli not found',
+                                  'command not found', 'no such file']):
+        return "errors.download.toolMissing"
+    
+    # Could not find installed files after download
+    if any(p in lower for p in ['could not locate', 'directory not found',
+                                  'locate game directory']):
+        return "errors.download.directoryNotFound"
+    
+    # Lock conflicts
+    if 'lock' in lower:
+        return "errors.download.lockConflict"
+    
+    # Raw exit code (e.g., "Installation failed (code 1)")
+    if 'code ' in lower and any(c.isdigit() for c in lower):
+        return "errors.download.processFailed"
+    
+    # Catch-all
+    return "errors.download.generic"
+
+
 @dataclass
 class DownloadItem:
     """Represents a single download in the queue"""
@@ -506,30 +556,47 @@ class DownloadQueue:
                 
                 # Sanitize game title to match the folder name created during download
                 safe_title = "".join(c for c in current.game_title if c.isalnum() or c in (' ', '-', '_')).strip()
-                game_dir = os.path.join(install_path, safe_title)
                 
-                # ADDITIONAL GUARDRAIL: Only delete if path looks like a game install dir
-                # and contains expected partial download indicators
-                is_safe_path = (
-                    os.path.exists(game_dir) and 
-                    os.path.isdir(game_dir) and
-                    '/Games/' in game_dir and
-                    game_dir not in ['/', '/home/deck', '/home/deck/Games']
-                )
-                
-                # Check if this is actually a partial download (no .unifideck-id marker means unfinished)
-                # Completed installs should have a marker file from mark_installed
-                marker_file = os.path.join(game_dir, '.unifideck-id')
-                is_partial_download = not os.path.exists(marker_file)
-                
-                if is_safe_path and is_partial_download:
-                    logger.info(f"[DownloadQueue] Cleaning up cancelled PARTIAL download: {game_dir}")
-                    shutil.rmtree(game_dir, ignore_errors=True)
-                    logger.info(f"[DownloadQueue] Deleted partial download directory: {game_dir}")
-                elif not is_partial_download:
-                    logger.warning(f"[DownloadQueue] NOT deleting - found .unifideck-id marker (completed install): {game_dir}")
+                # GUARDRAIL 1: Abort if safe_title is empty — joining an empty
+                # string would resolve to install_path itself and wipe everything.
+                if not safe_title:
+                    logger.error(f"[DownloadQueue] BLOCKED cleanup — safe_title is empty for '{current.game_title}', refusing to delete")
                 else:
-                    logger.warning(f"[DownloadQueue] NOT deleting - failed safety checks: {game_dir}")
+                    game_dir = os.path.join(install_path, safe_title)
+                    
+                    # GUARDRAIL 2: Normalize both paths to eliminate trailing slashes,
+                    # symlinks, and '..' components so the comparison is reliable.
+                    real_install = os.path.realpath(install_path)
+                    real_game   = os.path.realpath(game_dir)
+                    
+                    # GUARDRAIL 3: game_dir must be a STRICT child of install_path
+                    # (starts with install_path + separator AND is not equal to it).
+                    is_strict_subdir = (
+                        real_game.startswith(real_install + os.sep) and
+                        real_game != real_install
+                    )
+                    
+                    is_safe_path = (
+                        os.path.exists(real_game) and
+                        os.path.isdir(real_game) and
+                        is_strict_subdir
+                    )
+                    
+                    # Check if this is actually a partial download (no .unifideck-id marker means unfinished)
+                    # Completed installs should have a marker file from mark_installed
+                    marker_file = os.path.join(real_game, '.unifideck-id')
+                    is_partial_download = not os.path.exists(marker_file)
+                    
+                    if is_safe_path and is_partial_download:
+                        logger.info(f"[DownloadQueue] Cleaning up cancelled PARTIAL download: {real_game}")
+                        shutil.rmtree(real_game, ignore_errors=True)
+                        logger.info(f"[DownloadQueue] Deleted partial download directory: {real_game}")
+                    elif not is_partial_download:
+                        logger.warning(f"[DownloadQueue] NOT deleting - found .unifideck-id marker (completed install): {real_game}")
+                    elif not is_strict_subdir:
+                        logger.error(f"[DownloadQueue] BLOCKED cleanup — path is not a strict subdirectory of install_path: {real_game}")
+                    else:
+                        logger.warning(f"[DownloadQueue] NOT deleting - failed safety checks: {real_game}")
             except Exception as e:
                 logger.error(f"[DownloadQueue] Error cleaning up cancelled download: {e}")
         
@@ -676,7 +743,7 @@ class DownloadQueue:
         if not legendary_bin:
             legendary_bin = os.path.expanduser("~/.local/bin/legendary")
             if not os.path.exists(legendary_bin):
-                item.error_message = "legendary binary not found"
+                item.error_message = classify_download_error("legendary binary not found")
                 logger.error(f"[DownloadQueue] legendary not found in plugin_dir or ~/.local/bin")
                 return False
         
@@ -714,11 +781,18 @@ class DownloadQueue:
             return_code = await self.current_process.wait()
             self.current_process = None
             
-            return return_code == 0
+            if return_code == 0:
+                return True
+            else:
+                # Classify error from captured output
+                last_output = getattr(item, '_last_output_lines', '')
+                item.error_message = classify_download_error(last_output)
+                logger.error(f"[DownloadQueue] Epic download failed (code {return_code}), classified as: {item.error_message}")
+                return False
             
         except Exception as e:
             logger.error(f"[DownloadQueue] Epic download error: {e}")
-            item.error_message = str(e)
+            item.error_message = classify_download_error(str(e))
             return False
 
     async def _download_gog(self, item: DownloadItem, install_path: str) -> bool:
@@ -811,8 +885,9 @@ class DownloadQueue:
                 logger.info(f"[DownloadQueue] GOG download completed: {item.game_title}")
                 return True
             else:
-                item.error_message = result.get('error', 'Unknown GOG download error')
-                logger.error(f"[DownloadQueue] GOG download failed: {item.error_message}")
+                raw_error = result.get('error', 'Unknown GOG download error')
+                item.error_message = classify_download_error(raw_error)
+                logger.error(f"[DownloadQueue] GOG download failed: {raw_error} -> {item.error_message}")
                 return False
         
         except asyncio.CancelledError:
@@ -822,7 +897,7 @@ class DownloadQueue:
                 
         except Exception as e:
             logger.error(f"[DownloadQueue] GOG download error: {e}")
-            item.error_message = str(e)
+            item.error_message = classify_download_error(str(e))
             return False
 
     async def _download_amazon(self, item: DownloadItem, install_path: str) -> bool:
@@ -838,7 +913,7 @@ class DownloadQueue:
         if not nile_bin:
             nile_bin = os.path.expanduser("~/.local/bin/nile")
             if not os.path.exists(nile_bin):
-                item.error_message = "nile binary not found"
+                item.error_message = classify_download_error("nile binary not found")
                 logger.error(f"[DownloadQueue] nile not found in plugin_dir or ~/.local/bin")
                 return False
         
@@ -864,11 +939,18 @@ class DownloadQueue:
             return_code = await self.current_process.wait()
             self.current_process = None
             
-            return return_code == 0
+            if return_code == 0:
+                return True
+            else:
+                # Classify error from captured output
+                last_output = getattr(item, '_last_output_lines', '')
+                item.error_message = classify_download_error(last_output)
+                logger.error(f"[DownloadQueue] Amazon download failed (code {return_code}), classified as: {item.error_message}")
+                return False
             
         except Exception as e:
             logger.error(f"[DownloadQueue] Amazon download error: {e}")
-            item.error_message = str(e)
+            item.error_message = classify_download_error(str(e))
             return False
 
     async def _parse_nile_output(self, item: DownloadItem) -> None:
@@ -888,6 +970,7 @@ class DownloadQueue:
         install_re = re.compile(r'\[Installation\]\s*\[(\d+)%\]')
         
         buffer = ""
+        recent_lines = []  # Capture last lines for error classification
         
         while self.current_process and self.current_process.returncode is None:
             try:
@@ -903,6 +986,11 @@ class DownloadQueue:
                 buffer = lines[-1]  # Keep incomplete line
                 
                 for line in lines[:-1]:
+                    # Keep last 20 lines for error classification
+                    recent_lines.append(line)
+                    if len(recent_lines) > 20:
+                        recent_lines.pop(0)
+                    item._last_output_lines = '\n'.join(recent_lines)
                     logger.debug(f"[Nile] {line}")
                     
                     # Parse rich download progress (from PROGRESS logger)
@@ -990,6 +1078,7 @@ class DownloadQueue:
         )
         
         buffer = ""
+        recent_lines = []  # Capture last lines for error classification
         
         while self.current_process and self.current_process.returncode is None:
             try:
@@ -1005,6 +1094,11 @@ class DownloadQueue:
                 buffer = lines[-1]  # Keep incomplete line
                 
                 for line in lines[:-1]:
+                    # Keep last 20 lines for error classification
+                    recent_lines.append(line)
+                    if len(recent_lines) > 20:
+                        recent_lines.pop(0)
+                    item._last_output_lines = '\n'.join(recent_lines)
                     # Parse progress
                     if match := progress_re.search(line):
                         item.progress_percent = float(match.group(1))

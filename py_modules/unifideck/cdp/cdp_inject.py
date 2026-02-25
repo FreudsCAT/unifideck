@@ -52,6 +52,7 @@ class UnifideckCDPClient:
         self.ws_url: Optional[str] = None
         self.msg_id = 0
         self.connected = False
+        self._exec_lock = asyncio.Lock()
 
     async def connect(self):
         """Connect to Steam's SP (library UI) tab via CDP.
@@ -130,46 +131,51 @@ class UnifideckCDPClient:
 
         Returns the CDP response dict. Raises on timeout, disconnect, or
         if the evaluated JS threw an exception.
+
+        Uses asyncio.Lock to serialize WebSocket access — prevents concurrent
+        readers from stealing each other's responses (message-stealing race).
         """
-        if not self.connected or not self.websocket:
-            raise Exception("CDP not connected")
+        async with self._exec_lock:
+            if not self.connected or not self.websocket:
+                raise Exception("CDP not connected")
 
-        self.msg_id += 1
-        msg_id = self.msg_id
+            self.msg_id += 1
+            msg_id = self.msg_id
 
-        await self.websocket.send_json({
-            "id": msg_id,
-            "method": "Runtime.evaluate",
-            "params": {
-                "expression": js,
-                "userGesture": True,
-                "awaitPromise": False,
-                "returnByValue": True,
-            },
-        })
+            await self.websocket.send_json({
+                "id": msg_id,
+                "method": "Runtime.evaluate",
+                "params": {
+                    "expression": js,
+                    "userGesture": True,
+                    "awaitPromise": False,
+                    "returnByValue": True,
+                },
+            })
 
-        # Wait for the matching response with a hard timeout
-        async def _wait_for_response():
-            async for msg in self.websocket:
-                data = msg.json()
-                if data.get("id") == msg_id:
-                    return data
-                # Discard unrelated CDP events/responses (keep reading)
-            raise Exception("CDP connection closed while waiting for response")
+            # Wait for the matching response with a hard timeout
+            async def _wait_for_response():
+                async for msg in self.websocket:
+                    data = msg.json()
+                    if data.get("id") == msg_id:
+                        return data
+                    # Discard unrelated CDP events/responses (keep reading)
+                raise Exception("CDP connection closed while waiting for response")
 
-        try:
-            result = await asyncio.wait_for(_wait_for_response(), timeout=8.0)
-        except asyncio.TimeoutError:
-            raise Exception("CDP timeout waiting for response (8s)")
+            try:
+                result = await asyncio.wait_for(_wait_for_response(), timeout=8.0)
+            except asyncio.TimeoutError:
+                self.connected = False  # Force reconnect on next call
+                raise Exception("CDP timeout waiting for response (8s)")
 
-        # Validate: check for JS exceptions in the result
-        if "exceptionDetails" in result.get("result", {}):
-            exc = result["result"]["exceptionDetails"]
-            text = exc.get("text", "")
-            desc = exc.get("exception", {}).get("description", "")
-            raise Exception(f"CDP JS exception: {text} — {desc}")
+            # Validate: check for JS exceptions in the result
+            if "exceptionDetails" in result.get("result", {}):
+                exc = result["result"]["exceptionDetails"]
+                text = exc.get("text", "")
+                desc = exc.get("exception", {}).get("description", "")
+                raise Exception(f"CDP JS exception: {text} — {desc}")
 
-        return result
+            return result
 
     async def inject_hide_css(self, appId: int, css_rules: str) -> str:
         """Inject CSS to hide native PlaySection in the SP tab's DOM.
@@ -248,13 +254,15 @@ class UnifideckCDPClient:
         count = result.get("result", {}).get("result", {}).get("value", 0)
         print(f"[Unifideck CDP] Removed {count} hide CSS elements")
 
-    async def hide_native_play_section(self, appId: int) -> bool:
+    async def hide_native_play_section(self, appId: int) -> str:
         """Hide native Play button area by finding it in DOM and hiding its container.
 
         Strategy: Find the native Play/Install button by its text content,
-        walk up 4 parent levels to the section container, and set display:none.
+        walk up parent levels adaptively to find the largest safe container
+        (under 50% viewport height) that does NOT include our injected wrapper,
+        and set display:none.
         Uses a data attribute marker for reliable unhiding.
-        NOTE: No "already_hidden" check - must re-hide after every React re-render.
+        Returns: 'hidden', 'not_found', or 'too_large'.
         """
         app_id_str = str(appId)
         js = (
@@ -264,32 +272,24 @@ class UnifideckCDPClient:
             '    var playBtn = null;\n'
             '    for (var i = 0; i < buttons.length; i++) {\n'
             '        var btn = buttons[i];\n'
-            '        // Skip buttons inside our custom play section\n'
+            '        // Walk ancestors: skip buttons inside custom play section, modals, or already-hidden elements\n'
             '        var parent = btn;\n'
-            '        var isCustom = false;\n'
+            '        var skip = false;\n'
             '        while (parent) {\n'
-            '            if (parent.getAttribute && parent.getAttribute("data-unifideck-play-wrapper") === "true") {\n'
-            '                isCustom = true;\n'
-            '                break;\n'
+            '            if (parent.getAttribute) {\n'
+            '                if (parent.getAttribute("data-unifideck-play-wrapper") === "true"\n'
+            '                    || parent.getAttribute("data-unifideck-hidden-native")\n'
+            '                    || parent.getAttribute("role") === "dialog") {\n'
+            '                    skip = true;\n'
+            '                    break;\n'
+            '                }\n'
             '            }\n'
             '            parent = parent.parentElement;\n'
             '        }\n'
-            '        if (isCustom) continue;\n'
-            '        \n'
-            '        // Skip already hidden elements\n'
-            '        var alreadyHidden = btn;\n'
-            '        var isHidden = false;\n'
-            '        while (alreadyHidden) {\n'
-            '            if (alreadyHidden.getAttribute && alreadyHidden.getAttribute("data-unifideck-hidden-native")) {\n'
-            '                isHidden = true;\n'
-            '                break;\n'
-            '            }\n'
-            '            alreadyHidden = alreadyHidden.parentElement;\n'
-            '        }\n'
-            '        if (isHidden) continue;\n'
+            '        if (skip) continue;\n'
             '        \n'
             '        var txt = btn.textContent.trim();\n'
-            '        if (/^(Play|Install|Stream|Resume|Update|Pre-load|Pre-Load|Downloading|Download)$/i.test(txt)) {\n'
+            '        if (/^(Téléchargement en cours|Wird heruntergeladen …|Предварително сваляне|Завчасно завантажити|Nạp trước nội dung|Download bezig \.\.\.|Alvast downloaden|Download in corso|Pobierz wstępnie|Mettre en pause|Đang tải xuống|Poner en pausa|กำลังดาวน์โหลด|التحميل المسبق|Транслировать|Aktualisieren|Предзагрузить|Herunterladen|Възобновяване|Mettre à jour|Förinstallera|Приостановить|Forhåndslast|Pré\-carregar|Předstáhnout|Γίνεται λήψη|Nainstalovat|หยุดชั่วคราว|Installieren|Retransmitir|A transferir|โหลดล่วงหน้า|Actualizează|ดำเนินการต่อ|Aktualizovat|Завантаження|Télécharger|Завантажити|Pre\-scarica|Zaktualizuj|Інсталювати|Descargando|Εγκατάσταση|جار التنزيل|Downloading|Se descarcă|Возобновить|Forudindlæs|İndiriliyor|Installeren|Vorausladen|Призупинити|Инсталиране|Strumieniuj|Devam ettir|Zainstaluj|Pokračovat|Preîncarcă|Instalează|إيقاف مؤقت|Downloader|Transferir|Установить|Трансляція|Installera|Pozastavit|Продолжить|Actualizar|Laster ned|Downloaden|Обновяване|Transmitir|Streamovat|Précharger|Pobieranie|Fortsetzen|Laddar ned|Továbbítás|Продовжити|Προφόρτωση|Atualizar|Întrerupe|Stahování|Előtöltés|Transmite|Bijwerken|Återuppta|Uppdatera|Trasmetti|Mengunduh|Излъчване|Reprendre|Επαναφορά|Ενημέρωση|Wstrzymaj|Загрузить|Folytatás|ดาวน์โหลด|Gjenoppta|Ladda ned|Lanjutkan|Descargar|Hervatten|Installer|Frissítés|Telepítés|Pausieren|Phát sóng|Precargar|Installa|Baixando|Обновить|Riprendi|Last ned|Streamen|Perbarui|Ön Yükle|Streamer|Esilataa|Duraklat|Güncelle|Tạm dừng|Ladataan|Tiếp tục|Μετάδοση|Cập nhật|Striimaa|Stáhnout|Εκκίνηση|Download|Keskeytä|Oppdater|Devam Et|Genoptag|Letöltés|Descarcă|Continuă|Aggiorna|Instalar|Загрузка|Pauzeren|Reanudar|Sospendi|Оновити|Scarica|Retomar|ダウンロード中|استئناف|Pobierz|ストリーミング|Opdater|Preload|Yayınla|Streama|ติดตั้ง|Пускане|Spielen|Install|Сваляне|Mainkan|Cài đặt|Pramuat|Päivitä|Szünet|Pausar|インストール|ダウンロード|Spelen|Update|อัปเดต|Baixar|다운로드 중|Stream|アップデート|Instal|Resume|Asenna|Играть|Tải về|Yükle|Pausa|미리 받기|Jugar|Spill|Παύση|Pelaa|Joacă|Lataa|تحديث|Wznów|Játék|プリロード|Jatka|Gioca|Jouer|تنزيل|Пауза|Jogar|สตรีม|Spela|تثبيت|Pause|Unduh|İndir|Грати|일시 정지|تشغيل|Strøm|正在下载|Λήψη|一時停止|스트리밍|Oyna|开始游戏|Hrát|Graj|다운로드|Chơi|Play|البث|開始遊戲|流式传输|Reia|계속하기|เล่น|업데이트|Jeda|Spil|플레이|プレイ|下載中|更新|설치|继续|下載|預載|预载|串流|暂停|安裝|安装|繼續|暫停|再開|下载)$/i.test(txt)) {\n'
             '            var rect = btn.getBoundingClientRect();\n'
             '            if (rect.width > 100 && rect.height > 30) {\n'
             '                playBtn = btn;\n'
@@ -301,19 +301,46 @@ class UnifideckCDPClient:
             '        console.log("[Unifideck CDP] No visible native play button found for app " + appId);\n'
             '        return "not_found";\n'
             '    }\n'
-            '    var container = playBtn;\n'
-            '    for (var level = 0; level < 4; level++) {\n'
-            '        if (container.parentElement) {\n'
-            '            container = container.parentElement;\n'
-            '        } else {\n'
+            '    // Walk up ancestors to find the full native play section container,\n'
+            '    // not just the button wrapper. Stop before containers that would also\n'
+            '    // include our injected Unifideck wrapper (to avoid hiding custom UI).\n'
+            '    var viewportH = window.innerHeight || document.documentElement.clientHeight || 720;\n'
+            '    var maxHeight = Math.max(220, viewportH * 0.5);\n'
+            '    var node = playBtn.parentElement;\n'
+            '    if (!node) {\n'
+            '        console.warn("[Unifideck CDP] No parent element for play button of app " + appId);\n'
+            '        return "not_found";\n'
+            '    }\n'
+            '    var container = node;\n'
+            '    var depth = 0;\n'
+            '    while (node && node.parentElement && depth < 10) {\n'
+            '        var parent = node.parentElement;\n'
+            '        if (parent.querySelector && parent.querySelector(\'[data-unifideck-play-wrapper="true"]\')) {\n'
             '            break;\n'
             '        }\n'
+            '        var pRect = parent.getBoundingClientRect();\n'
+            '        if (pRect.width <= 0 || pRect.height <= 0) {\n'
+            '            node = parent;\n'
+            '            depth++;\n'
+            '            continue;\n'
+            '        }\n'
+            '        if (pRect.height > maxHeight) {\n'
+            '            break;\n'
+            '        }\n'
+            '        container = parent;\n'
+            '        node = parent;\n'
+            '        depth++;\n'
+            '    }\n'
+            '    var cRect = container.getBoundingClientRect();\n'
+            '    if (cRect.height > maxHeight) {\n'
+            '        console.warn("[Unifideck CDP] Refusing to hide oversized container (" + Math.round(cRect.height) + "px) for app " + appId);\n'
+            '        return "too_large";\n'
             '    }\n'
             '    container.setAttribute("data-unifideck-hidden-native", appId);\n'
             '    container.style.setProperty("display", "none", "important");\n'
             '    container.style.setProperty("visibility", "hidden", "important");\n'
             '    container.style.setProperty("pointer-events", "none", "important");\n'
-            '    console.log("[Unifideck CDP] Hidden native play section for app " + appId);\n'
+            '    console.log("[Unifideck CDP] Hidden native play section for app " + appId + " (container " + Math.round(cRect.height) + "px, depth " + depth + ")");\n'
             '    return "hidden";\n'
             '})()'
         )
@@ -321,7 +348,7 @@ class UnifideckCDPClient:
         result = await self.execute_js(js)
         value = result.get("result", {}).get("result", {}).get("value", "error")
         print(f"[Unifideck CDP] hide_native_play_section({appId}) => {value}")
-        return value == "hidden"
+        return value
 
     async def unhide_native_play_section(self, appId: int) -> bool:
         """Unhide the native Play button area previously hidden for this app."""
@@ -393,18 +420,22 @@ _cdp_client: Optional[UnifideckCDPClient] = None
 
 
 async def get_cdp_client() -> UnifideckCDPClient:
-    """Get or create CDP client singleton"""
+    """Get or create CDP client singleton.
+
+    Wraps connect() with a 5s timeout so callers get either a working
+    client or a clean exception — never hanging indefinitely.
+    """
     global _cdp_client
 
     if _cdp_client is None:
         _cdp_client = UnifideckCDPClient()
-        await _cdp_client.connect()
+        await asyncio.wait_for(_cdp_client.connect(), timeout=5.0)
     elif not _cdp_client.connected:
         # Stale client — reconnect
         print("[Unifideck CDP] Singleton exists but disconnected, reconnecting...")
         await _cdp_client.disconnect()
         _cdp_client = UnifideckCDPClient()
-        await _cdp_client.connect()
+        await asyncio.wait_for(_cdp_client.connect(), timeout=5.0)
 
     return _cdp_client
 
@@ -416,8 +447,8 @@ async def shutdown_cdp_client():
     if _cdp_client:
         try:
             if _cdp_client.connected:
-                await _cdp_client.remove_all_hide_css()
-        except Exception as e:
-            print(f"[Unifideck CDP] Failed to remove styles during shutdown: {e}")
+                await asyncio.wait_for(_cdp_client.remove_all_hide_css(), timeout=3.0)
+        except (asyncio.TimeoutError, Exception) as e:
+            print(f"[Unifideck CDP] Cleanup during shutdown skipped: {e}")
         await _cdp_client.disconnect()
         _cdp_client = None

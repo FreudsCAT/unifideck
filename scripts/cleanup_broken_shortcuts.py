@@ -20,11 +20,12 @@ import sys
 import shutil
 from pathlib import Path
 
-# Add parent directory to path to import vdf_utils
-parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, parent_dir)
+# Add project root and py_modules to path
+root_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, root_dir)
+sys.path.insert(0, os.path.join(root_dir, "py_modules"))
 
-from vdf_utils import load_shortcuts_vdf, save_shortcuts_vdf
+from unifideck.shortcuts.vdf import load_shortcuts_vdf, save_shortcuts_vdf
 
 def find_active_user() -> tuple:
     """Find the most recently active Steam user"""

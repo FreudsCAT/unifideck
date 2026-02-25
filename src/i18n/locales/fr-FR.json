@@ -153,7 +153,7 @@
     "uninstallCompleteMessage": "{{title}} supprimé.",
     "uninstallCompleteMessageProton": "{{title}} supprimé (y compris les fichiers Proton).",
     "installComplete": "Installation terminée !",
-    "installCompleteMessage": "{{title}} est prêt à jouer. Redémarrez Steam pour le voir dans votre bibliothèque.",
+    "installCompleteMessage": "{{title}} est prêt à jouer.",
     "syncComplete": "Synchronisation terminée !",
     "syncCompleteMessage": "{{count}} jeux ajoutés. REDÉMARREZ STEAM (quittez complètement, ne retournez pas simplement au mode jeu) pour les voir dans votre bibliothèque.",
     "forceSyncComplete": "Synchronisation forcée terminée !",
@@ -198,8 +198,16 @@
       "installingRedist": "Installation des redistribuables",
       "installingRedistMessage": "Exécution de la première installation des redistribuables GOG...",
       "setupFailed": "Échec de l'installation",
-      "setupFailedMessage": "L'installation a échoué, voir les journaux pour plus de détails"
-    }
+      "setupFailedMessage": "L'installation a échoué, voir les journaux pour plus de détails",
+      "prerequisitesTitle": "Installation des prérequis",
+      "installingPrerequisites": "Installation des prérequis du jeu...",
+      "prerequisitesReady": "Prérequis prêts",
+      "prerequisitesInstalled": "Prérequis du jeu installés",
+      "prerequisitesFailed": "Avertissement prérequis",
+      "prerequisitesFailedMessage": "Les prérequis n'ont peut-être pas été installés correctement"
+    },
+    "updateComplete": "Update Complete!",
+    "updateCompleteMessage": "{{title}} has been updated."
   },
   "uninstallModal": {
     "title": "Confirmer la désinstallation",
@@ -237,7 +245,17 @@
     "backgroundSyncDisabled": "Synchronisation en arrière-plan désactivée",
     "steamGridDbUnavailable": "Bibliothèque SteamGridDB indisponible",
     "deleteSyncInProgress": "Impossible de supprimer pendant la synchronisation",
-    "alreadyInQueue": "Déjà dans la file d'attente"
+    "alreadyInQueue": "Déjà dans la file d'attente",
+    "download": {
+      "diskSpace": "Espace disque insuffisant",
+      "network": "Erreur réseau — vérifiez votre connexion",
+      "authExpired": "Connexion expirée — veuillez vous reconnecter",
+      "toolMissing": "Outil de téléchargement requis introuvable",
+      "processFailed": "Le téléchargement a échoué — veuillez réessayer",
+      "directoryNotFound": "Impossible de localiser les fichiers installés",
+      "lockConflict": "Une autre opération est en cours — réessayez",
+      "generic": "L'installation a échoué — consultez les journaux"
+    }
   },
   "sync": {
     "downloadingArtwork": "Téléchargement des illustrations pour {{game}}…",
