@@ -80,7 +80,7 @@ toast = {
 }
 existing.append(toast)
 print(json.dumps(existing))
-" > "$TOAST_FILE" 2>/dev/null
+" > "$TOAST_FILE" 2>/dev/null || true
 }
 
 # Cloud save sync script (Python - uses legendary/gogdl)
@@ -104,11 +104,10 @@ sync_cloud_saves() {
     
     if python3 "$CLOUD_SAVE_SCRIPT" "$store" "$game_id" "$direction" "$prefix_path" "$save_path" 2>>"$LOG_FILE"; then
         log "[CloudSave] Sync completed successfully"
-        return 0
     else
         log "[CloudSave] Sync failed (non-critical, continuing)"
-        return 1
     fi
+    return 0
 }
 
 # Reset environment to avoid conflicts
@@ -202,12 +201,16 @@ run_umu_with_retry() {
     while [ $attempt -le $max_attempts ]; do
         log "[UMU] Attempt $attempt/$max_attempts..."
         
-        # Run UMU command
-        if "$python_bin" "$umu_path" "$@" 2>>"$LOG_FILE"; then
+        # Run UMU command and capture the actual exit code
+        # NOTE: $? after 'if cmd; then...; fi' is always 0 in bash (the compound
+        # command's status), so we must capture the exit code directly.
+        # Only redirect stderr — stdout must stay inherited so umu-run/pressure-vessel
+        # see a real TTY (redirecting stdout changes container process behavior).
+        "$python_bin" "$umu_path" "$@" 2>>"$LOG_FILE" && exit_code=0 || exit_code=$?
+        
+        if [ $exit_code -eq 0 ]; then
             return 0
         fi
-        
-        exit_code=$?
         
         # If we still have retries left
         if [ $attempt -lt $max_attempts ]; then
@@ -242,29 +245,35 @@ restore_steam_env() {
 }
 
 # Wait for all Wine processes in the prefix to exit.
-# umu-run returns before game processes exit (it only waits for the direct child).
-# wineserver --wait blocks until ALL Wine processes in the prefix exit,
-# keeping this script alive so Steam tracks the game as running.
+# Keep the launcher script alive while the game runs inside pressure-vessel.
+# We ONLY read the process table via pgrep — we never run the host Proton's
+# wineserver binary, which would conflict with the container's wineserver and
+# corrupt the prefix (stale pfx.lock, socket collision, game won't start).
+#
+# Legendary exits immediately after spawning umu-run (Popen without wait),
+# orphaning umu-run to PID 1.  The actual process tree is:
+#   umu-run (python3) → steam-runtime-launch-client → bwrap → pv-adverb
+#     → proton → wine → game.exe
+# We wait for steam-runtime-launch-client (the long-lived container manager)
+# because it stays alive for the entire game session and has a unique name.
 wait_for_game_exit() {
-    local wineserver="$PROTONPATH/files/bin/wineserver"
-    if [ -x "$wineserver" ]; then
-        # umu-run returns before Wine is fully started. Wait for wineserver
-        # to see active processes before entering the blocking --wait.
-        local retries=0
-        while [ $retries -lt 15 ]; do
-            if WINEPREFIX="$PREFIX_PATH/pfx" "$wineserver" --kill 0 2>/dev/null; then
-                break  # wineserver is running, proceed to --wait
-            fi
-            sleep 1
-            retries=$((retries + 1))
-        done
-        
-        log "Waiting for game processes to exit (wineserver --wait)..."
-        WINEPREFIX="$PREFIX_PATH/pfx" "$wineserver" --wait 2>/dev/null || true
-        log "All game processes have exited"
-    else
-        log "WARNING: wineserver not found at $wineserver, cannot wait for game exit"
+    # Give umu-run / pressure-vessel a moment to fully start
+    sleep 3
+
+    # Check for the container manager process (steam-runtime-launch-client)
+    # or fall back to checking for umu-run itself
+    if ! pgrep -f "steam-runtime-launch-client" >/dev/null 2>&1 && \
+       ! pgrep -f "umu-run" >/dev/null 2>&1; then
+        log "[GameWait] No container processes found after launch, skipping wait"
+        return
     fi
+
+    log "[GameWait] Game container detected, waiting for exit..."
+    while pgrep -f "steam-runtime-launch-client" >/dev/null 2>&1 || \
+          pgrep -f "umu-run" >/dev/null 2>&1; do
+        sleep 5
+    done
+    log "[GameWait] Game container exited"
 }
 
 # ==============================================================================
@@ -282,8 +291,14 @@ detect_offline_mode() {
     fi
 
     # Method 2: Quick network connectivity check (3s timeout)
-    if ! ping -c 1 -W 3 8.8.8.8 >/dev/null 2>&1; then
-        log "[Offline] No network connectivity detected"
+    # ping may not be available on Steam Deck — fall back to curl
+    if command -v ping &>/dev/null; then
+        if ! ping -c 1 -W 3 8.8.8.8 >/dev/null 2>&1; then
+            log "[Offline] No network connectivity detected (ping)"
+            return 0
+        fi
+    elif ! curl -s --max-time 3 -o /dev/null https://epicgames.com 2>/dev/null; then
+        log "[Offline] No network connectivity detected (curl)"
         return 0
     fi
 
@@ -648,6 +663,10 @@ if [[ "$EXE_PATH" == *.exe ]] || [[ "$EXE_PATH" == *.EXE ]] || \
     # ALWAYS use Unifideck's own prefix directory (complete isolation from Heroic)
     # This ensures we don't accidentally modify or depend on Heroic's data
     PREFIX_PATH="$PREFIXES_DIR/$GAME_ID"
+    # Normalize accidental /pfx suffixes to keep a stable compat data root
+    while [[ "$PREFIX_PATH" == */pfx ]]; do
+        PREFIX_PATH="${PREFIX_PATH%/pfx}"
+    done
     mkdir -p "$PREFIX_PATH"
     log "Using Unifideck prefix: $PREFIX_PATH"
     
@@ -666,22 +685,18 @@ if [[ "$EXE_PATH" == *.exe ]] || [[ "$EXE_PATH" == *.EXE ]] || \
     fi
     
     # Set umu environment variables (allow override via env vars for debugging)
-    export WINEPREFIX="$PREFIX_PATH"
-    # Use UMU ID if found, otherwise fall back to manual override or game ID
-    export GAMEID="${GAMEID:-${UMU_ID:-$GAME_ID}}"
-    export STORE="${STORE:-$UMU_STORE}"
-    
-    # Heroic/Legendary workaround for games requiring Epic Games Launcher
-    if [ "$STORE" == "epic" ] || [ "$STORE" == "egs" ]; then
-        export LEGENDARY_WRAPPER_EXE="C:\\windows\\command\\EpicGamesLauncher.exe"
-    fi
+    # Use UMU ID if found, otherwise fall back to umu-0 (no protonfixes).
+    # Raw game IDs (e.g. Epic hashes) can trigger untested protonfixes that break games.
+    export GAMEID="${GAMEID:-${UMU_ID:-umu-0}}"
+    # Use umu-compatible store codes (egs/gog/amazon) — ProtonFixes doesn't recognize "epic"
+    export STORE="$UMU_STORE"
+    export STEAM_COMPAT_DATA_PATH="$PREFIX_PATH"
     
     
     # Select Proton version (respects PROTONPATH/PROTON env, Unifideck setting, Steam config, defaults)
     SHORTCUT_APPID=$(get_shortcut_appid_from_registry "$KEY" || true)
     select_proton_version "$GAME_ID" "$SHORTCUT_APPID" "$KEY"
     
-    log "WINEPREFIX: $WINEPREFIX"
     log "GAMEID: $GAMEID"
     log "STORE: $STORE"
     log "PROTONPATH: ${PROTONPATH:-<umu will download>}"
@@ -692,6 +707,17 @@ if [[ "$EXE_PATH" == *.exe ]] || [[ "$EXE_PATH" == *.EXE ]] || \
     # significantly, automatically reset the prefix to avoid compatibility issues.
     # ===========================================================================
     PREFIX_PFX="$PREFIX_PATH/pfx"
+    ACTIVE_WINEPREFIX="$PREFIX_PFX"
+    # Handle legacy/self-referential layouts where pfx points to prefix root.
+    if [ -L "$PREFIX_PFX" ] && [ "$(readlink -f "$PREFIX_PFX")" = "$(readlink -f "$PREFIX_PATH")" ]; then
+        log "[Prefix] Detected self-referential pfx symlink, using root prefix layout"
+        ACTIVE_WINEPREFIX="$PREFIX_PATH"
+    elif [ -f "$PREFIX_PATH/system.reg" ] && [ ! -f "$PREFIX_PFX/system.reg" ]; then
+        # Legacy root layout (no pfx subtree)
+        ACTIVE_WINEPREFIX="$PREFIX_PATH"
+    fi
+    export WINEPREFIX="$ACTIVE_WINEPREFIX"
+    log "WINEPREFIX: $WINEPREFIX"
     PROTON_MARKER="$PREFIX_PATH/.unifideck_proton_version"
     
     # Get the current Proton version name (basename of PROTONPATH)
@@ -778,7 +804,7 @@ if [[ "$EXE_PATH" == *.exe ]] || [[ "$EXE_PATH" == *.EXE ]] || \
     # SYNCHRONOUS PREFIX INITIALIZATION
     # Ensure prefix is fully ready before launching game (like Heroic/Steam)
     # ===========================================================================
-    SYSTEM_REG="$PREFIX_PFX/system.reg"
+    SYSTEM_REG="$ACTIVE_WINEPREFIX/system.reg"
 
     
     if [ ! -f "$SYSTEM_REG" ]; then
@@ -787,6 +813,10 @@ if [[ "$EXE_PATH" == *.exe ]] || [[ "$EXE_PATH" == *.EXE ]] || \
         
         # Ensure prefix directory exists
         mkdir -p "$PREFIX_PATH"
+        # Prefer modern Proton layout for newly created prefixes
+        if [ "$ACTIVE_WINEPREFIX" != "$PREFIX_PATH" ]; then
+            mkdir -p "$ACTIVE_WINEPREFIX"
+        fi
         
         # Find umu-run path for createprefix
         if [ -f "$UMU_RUN" ]; then
@@ -800,20 +830,49 @@ if [[ "$EXE_PATH" == *.exe ]] || [[ "$EXE_PATH" == *.EXE ]] || \
         
         log "[FirstLaunch] Running createprefix with umu-run (this may take 1-2 minutes)..."
         
-        # Run createprefix with retry wrapper for network resilience
-        if run_umu_with_retry "$PYTHON_BIN" "$SETUP_UMU" createprefix; then
-            log "[FirstLaunch] Prefix created successfully"
-            notify_stage "toasts.launcher.setupCompleteTitle" "toasts.launcher.prefixInitialized" "low"
-        else
-            log "[FirstLaunch] createprefix failed, trying wineboot fallback..."
-            notify_stage "toasts.launcher.setupFallback" "toasts.launcher.fallbackInitialization" "normal"
-            # Fallback: run any exe to trigger prefix creation (also with retry)
-            run_umu_with_retry "$PYTHON_BIN" "$SETUP_UMU" wineboot --init || true
-        fi
+        # Run createprefix with retry logic for network resilience (Steam Runtime download).
+        # NOTE: Proton returns non-zero for createprefix even on success because it
+        # tries to "run" the createprefix keyword as a program. We check for
+        # system.reg to confirm success instead of relying on the exit code.
+        # IMPORTANT: Do NOT use 'local' here — this is not inside a function.
+        # 'local' outside a function errors in bash and set -e kills the script.
+        _cp_attempt=1
+        _cp_max=3
+        _cp_wait=5
+        while [ $_cp_attempt -le $_cp_max ]; do
+            log "[UMU] Attempt $_cp_attempt/$_cp_max..."
+            "$PYTHON_BIN" "$SETUP_UMU" createprefix >>"$LOG_FILE" 2>&1 || true
+            
+            if [ -f "$SYSTEM_REG" ]; then
+                log "[FirstLaunch] Prefix created successfully"
+                notify_stage "toasts.launcher.setupCompleteTitle" "toasts.launcher.prefixInitialized" "low"
+                break
+            fi
+            
+            if [ $_cp_attempt -lt $_cp_max ]; then
+                log "[FirstLaunch] system.reg not found after attempt $_cp_attempt, retrying in ${_cp_wait}s..."
+                notify_stage "toasts.launcher.networkError" "toasts.launcher.retryingUmu|seconds=${_cp_wait}|attempt=$((_cp_attempt+1))|max=$_cp_max" "normal"
+                # Clean up partial Steam Runtime downloads
+                rm -rf "$HOME/.local/share/umu/umu_steam3" 2>/dev/null || true
+                rm -f "$HOME/.local/share/umu/"*.parts 2>/dev/null || true
+                sleep $_cp_wait
+                _cp_wait=$((_cp_wait * 2))
+            fi
+            _cp_attempt=$((_cp_attempt + 1))
+        done
         
-        # Verify prefix was created
+        # Final verification
         if [ ! -f "$SYSTEM_REG" ]; then
-            log "WARNING: system.reg still missing after createprefix, game may fail on first launch"
+            log "[FirstLaunch] WARNING: system.reg still missing after $_cp_max attempts"
+            # Last-resort fallback: wineboot
+            log "[FirstLaunch] Trying wineboot --init as fallback..."
+            notify_stage "toasts.launcher.setupFallback" "toasts.launcher.fallbackInitialization" "normal"
+            "$PYTHON_BIN" "$SETUP_UMU" wineboot --init >>"$LOG_FILE" 2>&1 || true
+            if [ -f "$SYSTEM_REG" ]; then
+                log "[FirstLaunch] wineboot fallback succeeded"
+            else
+                log "WARNING: system.reg still missing after all attempts, game may fail"
+            fi
         else
             log "[FirstLaunch] Verified: system.reg exists, prefix is ready"
         fi
@@ -839,14 +898,6 @@ if [[ "$EXE_PATH" == *.exe ]] || [[ "$EXE_PATH" == *.EXE ]] || \
     # For Epic games, we now use legendary to launch (like Heroic does)
     # This ensures proper Epic authentication and wrapper handling
     if [ "$STORE" == "epic" ] || [ "$STORE" == "egs" ]; then
-        # QUICK FIX: Copy wrapper and apply registry (non-blocking, <1 second)
-        # Winetricks installation now happens in background during download
-        FIX_SCRIPT="$PLUGIN_DIR/bin/fix_epic_launcher_prefix.py"
-        if [ -f "$FIX_SCRIPT" ]; then
-             log "Applying quick Epic launcher fix..."
-             python3 "$FIX_SCRIPT" "$PREFIX_PATH" >> "$LOG_FILE" 2>&1 || true
-        fi
-        
         log "Launching Epic game via legendary..."
 
         # Detect offline mode (Steam Offline Mode or no internet)
@@ -880,8 +931,10 @@ if [[ "$EXE_PATH" == *.exe ]] || [[ "$EXE_PATH" == *.EXE ]] || \
         fi
 
         # Set additional environment variables (matching Heroic's exact config)
+        # NOTE: GAMEID is already set correctly (line ~675) from UMU API lookup or game ID fallback.
+        # Do NOT override to umu-0 here — that disables game-specific ProtonFixes.
+        # Utility scripts (winetricks, prerequisites) set their own GAMEID=umu-0 internally.
         export STEAM_COMPAT_INSTALL_PATH="$WORK_DIR"
-        export GAMEID="umu-0"
         export HEROIC_APP_NAME="$GAME_ID"
         export HEROIC_APP_RUNNER="legendary"
         export HEROIC_APP_SOURCE="epic"
@@ -907,7 +960,20 @@ if [[ "$EXE_PATH" == *.exe ]] || [[ "$EXE_PATH" == *.EXE ]] || \
 
         log "STEAM_COMPAT_INSTALL_PATH: $STEAM_COMPAT_INSTALL_PATH"
         log "GAMEID: $GAMEID"
-        log "LEGENDARY_WRAPPER_EXE: $LEGENDARY_WRAPPER_EXE"
+
+        # Choose Legendary Config Path (Critical for Epic Auth AND EOS overlay)
+        # Must be set BEFORE eos-overlay install/enable — legendary needs this
+        # to find overlay_install.json and write the OverlayPath registry key.
+        if [ -f "$HOME/.config/legendary/user.json" ]; then
+            export LEGENDARY_CONFIG_PATH="$HOME/.config/legendary"
+            log "Using local LEGENDARY_CONFIG_PATH: $LEGENDARY_CONFIG_PATH"
+        elif [ -f "$HOME/.var/app/com.heroicgameslauncher.hgl/config/heroic/legendaryConfig/legendary/user.json" ]; then
+            export LEGENDARY_CONFIG_PATH="$HOME/.var/app/com.heroicgameslauncher.hgl/config/heroic/legendaryConfig/legendary"
+            log "Using External LEGENDARY_CONFIG_PATH: $LEGENDARY_CONFIG_PATH"
+        else
+            log "WARNING: No authenticated Legendary config found! Game may fail to launch."
+            notify_stage "toasts.launcher.epicAuthRequired" "toasts.launcher.epicAuthRequiredMessage" "critical"
+        fi
 
         # Install/Update EOS overlay if not installed (required for games like FM24)
         # Check if overlay_install.json exists in legendary config
@@ -923,10 +989,24 @@ if [[ "$EXE_PATH" == *.exe ]] || [[ "$EXE_PATH" == *.EXE ]] || \
 
         # Enable EOS overlay for the /pfx subdirectory (like Heroic)
         # Only if prefix is already initialized (has user.reg)
-        PFX_PATH="$PREFIX_PATH/pfx"
-        mkdir -p "$PFX_PATH"
-        if [ -f "$PFX_PATH/user.reg" ]; then
-            "$LEGENDARY_BIN" eos-overlay enable --prefix "$PFX_PATH" 2>>"$LOG_FILE" || true
+        if [ -f "$ACTIVE_WINEPREFIX/user.reg" ]; then
+            "$LEGENDARY_BIN" eos-overlay enable --prefix "$ACTIVE_WINEPREFIX" 2>>"$LOG_FILE" || true
+
+            # legendary only writes the OverlayPath to user.reg (HKCU).
+            # Some EOS SDK builds also probe HKLM, so mirror the key into
+            # system.reg as a safety net — pure text, no wineserver spawned.
+            _OVERLAY_PATH=""
+            if [ -f "$LEGENDARY_CONFIG_PATH/overlay_install.json" ]; then
+                _OVERLAY_PATH=$(python3 -c "import json,sys;d=json.load(open(sys.argv[1]));print('Z:'+d.get('install_path',''))" "$LEGENDARY_CONFIG_PATH/overlay_install.json" 2>/dev/null || true)
+            fi
+            if [ -n "$_OVERLAY_PATH" ] && [ -f "$ACTIVE_WINEPREFIX/system.reg" ]; then
+                _EOS_KEY_LINE="\"OverlayPath\"=\"${_OVERLAY_PATH//\\/\/}\""
+                if ! grep -q 'Epic Games.*EOS.*OverlayPath' "$ACTIVE_WINEPREFIX/system.reg" 2>/dev/null; then
+                    log "[EOS] Adding OverlayPath to system.reg (HKLM) for SDK compatibility"
+                    printf '\n[Software\\\\Epic Games\\\\EOS] %s\n#time=1dca63a02c1ccb0\n%s\n' \
+                        "$(date +%s)" "$_EOS_KEY_LINE" >> "$ACTIVE_WINEPREFIX/system.reg"
+                fi
+            fi
         else
             log "Prefix not initialized yet, skipping EOS overlay enable"
         fi
@@ -936,7 +1016,7 @@ if [[ "$EXE_PATH" == *.exe ]] || [[ "$EXE_PATH" == *.EXE ]] || \
         WINETRICKS_MARKER="$PREFIX_PATH/unifideck_winetricks_complete.marker"
         WINETRICKS_SCRIPT="$PLUGIN_DIR/bin/winetricks_installer.py"
 
-        if [ ! -f "$WINETRICKS_MARKER" ] || ! grep -qi "complete\|no redistributables" "$WINETRICKS_MARKER" 2>/dev/null; then
+        if [ ! -f "$WINETRICKS_MARKER" ] || ! grep -qi "complete\|no redistributables\|failed" "$WINETRICKS_MARKER" 2>/dev/null; then
             if [ -f "$WINETRICKS_SCRIPT" ]; then
                 log "[Winetricks] Running first-launch redistributables installation..."
                 notify_stage "toasts.launcher.dependenciesTitle" "toasts.launcher.installingRedistributables" "normal"
@@ -958,9 +1038,9 @@ if [[ "$EXE_PATH" == *.exe ]] || [[ "$EXE_PATH" == *.EXE ]] || \
         # This mirrors Heroic's legendarySetup which reads prereq_info from legendary metadata
         # and runs the installer (e.g., UplayInstaller.exe /S) inside the prefix.
         PREREQ_SCRIPT="$PLUGIN_DIR/bin/epic_prerequisites.py"
-        PREREQ_MARKER="$PREFIX_PATH/.unifideck_prereqs_${GAME_ID}.done"
+        PREREQ_MARKER_GLOB="$PREFIX_PATH/.unifideck_prereqs_${GAME_ID}"
 
-        if [ ! -f "$PREREQ_MARKER" ] && [ -f "$PREREQ_SCRIPT" ]; then
+        if [ -f "$PREREQ_SCRIPT" ] && ! ls "${PREREQ_MARKER_GLOB}"*.done 1>/dev/null 2>&1; then
             log "[Prerequisites] Checking for game prerequisites..."
             notify_stage "toasts.launcher.prerequisitesTitle" "toasts.launcher.installingPrerequisites" "normal"
 
@@ -995,20 +1075,7 @@ if [[ "$EXE_PATH" == *.exe ]] || [[ "$EXE_PATH" == *.EXE ]] || \
         # Python path is already set at startup with version verification (PYTHON_BIN)
         log "Using Python (verified 3.10+): $PYTHON_BIN"
 
-        # Choose Legendary Config Path (Critical for Epic Auth)
-        # Check standard legendary config location first
-        if [ -f "$HOME/.config/legendary/user.json" ]; then
-            export LEGENDARY_CONFIG_PATH="$HOME/.config/legendary"
-            log "Using local LEGENDARY_CONFIG_PATH: $LEGENDARY_CONFIG_PATH"
-        # Fallback to Shared config if local doesn't exist
-        elif [ -f "$HOME/.var/app/com.heroicgameslauncher.hgl/config/heroic/legendaryConfig/legendary/user.json" ]; then
-            export LEGENDARY_CONFIG_PATH="$HOME/.var/app/com.heroicgameslauncher.hgl/config/heroic/legendaryConfig/legendary"
-            log "Using External LEGENDARY_CONFIG_PATH: $LEGENDARY_CONFIG_PATH"
-        else
-            log "WARNING: No authenticated Legendary config found! Game may fail to launch."
-            # Show user-facing alert via toast system
-            notify_stage "toasts.launcher.epicAuthRequired" "toasts.launcher.epicAuthRequiredMessage" "critical"
-        fi
+        # (LEGENDARY_CONFIG_PATH already set above, before EOS overlay block)
 
         # === LANGUAGE: Read Unifideck language preference for Epic launch ===
         EPIC_LANG="en"
@@ -1035,32 +1102,43 @@ if [[ "$EXE_PATH" == *.exe ]] || [[ "$EXE_PATH" == *.EXE ]] || \
         fi
         
         # 2. Check installed.json for Ubisoft integration
+        # Ubisoft is an exception path: launcher/manifest-based detection only.
         INSTALLED_JSON="$LEGENDARY_CONFIG_PATH/installed.json"
         IS_UBISOFT="false"
         UPLAY_ID=""
         
         if [ -f "$INSTALLED_JSON" ]; then
-            UPLAY_ID=$(python3 -c "
-import json, sys, re
+            UBI_RESULT=$(python3 -c "
+import json, re
+result = 'false|'
 try:
     with open('$INSTALLED_JSON', 'r') as f:
         data = json.load(f)
-        if '$GAME_ID' in data:
-            app = data['$GAME_ID']
-            exe = app.get('executable', '').lower()
-            if 'uplay' in exe:
-                params = app.get('launch_parameters', '')
-                m = re.search(r'-UplayId=\s*(\d+)', params)
-                if m:
-                    print(m.group(1))
-                    sys.exit(0)
+    app = data.get('$GAME_ID') or {}
+    exe = (app.get('executable') or '').lower()
+    params = app.get('launch_parameters') or ''
+    prereq = app.get('prereq_info') or {}
+    prereq_path = (prereq.get('path') or '').lower()
+    prereq_name = (prereq.get('name') or '').lower()
+    prereq_ids = ' '.join(str(x).lower() for x in (prereq.get('ids') or []))
+
+    launcher_hit = ('uplaylaunch.exe' in exe) or ('ubisoft' in exe) or ('uplay' in exe)
+    manifest_hit = ('uplay' in params.lower()) or ('uplay' in prereq_path) or ('ubisoft' in prereq_name) or ('uplay' in prereq_ids)
+
+    m = re.search(r'-UplayId=\\s*(\\d+)', params)
+    uplay_id = m.group(1) if m else ''
+
+    if launcher_hit or manifest_hit:
+        result = f'true|{uplay_id}'
 except Exception:
     pass
+print(result)
 " 2>/dev/null)
-            
-            if [ -n "$UPLAY_ID" ]; then
+            IFS='|' read -r UBI_HIT UBI_ID <<< "$UBI_RESULT"
+            if [ "$UBI_HIT" = "true" ]; then
                 IS_UBISOFT="true"
-                log "[Uplay] Detected Ubisoft Connect game (UplayId: $UPLAY_ID). Will bypass Legendary."
+                UPLAY_ID="$UBI_ID"
+                log "[Uplay] Detected Ubisoft title from launcher/manifest metadata (UplayId: ${UPLAY_ID:-unknown})"
             fi
         fi
 
@@ -1071,6 +1149,17 @@ except Exception:
         fi
         
         if [ "$IS_UBISOFT" = "true" ]; then
+            # === UBISOFT-ONLY: Copy wrapper + apply registry ===
+            # These artifacts (EpicGamesLauncher.exe in PATH, com.epicgames.launcher
+            # registry key) are needed for Ubisoft Connect's Epic SSO flow.
+            # They MUST NOT be applied to non-Ubisoft games — the EOS SDK finds them
+            # and switches to launcher-IPC auth mode, causing instant exit (code 0).
+            FIX_SCRIPT="$PLUGIN_DIR/bin/fix_epic_launcher_prefix.py"
+            if [ -f "$FIX_SCRIPT" ]; then
+                 log "[Uplay] Applying Epic launcher wrapper fix for Ubisoft title..."
+                 python3 "$FIX_SCRIPT" "$PREFIX_PATH" >> "$LOG_FILE" 2>&1 || true
+            fi
+
             # Inject Epic + Ubisoft registry keys into the pfx/ subdirectory
             # (critical: Proton reads registry from pfx/, not the parent prefix)
             REGISTRY_SCRIPT="$PLUGIN_DIR/bin/epic_registry_setup.py"
@@ -1083,25 +1172,70 @@ except Exception:
             # Launch upc.exe directly — bypasses Epic SSO entirely
             # Relies on linked accounts (server-side verify) and pfx/ registry injection
             export PROTON_VERB="waitforexitandrun"
-            UPC_EXE="$PREFIX_PATH/pfx/drive_c/Program Files (x86)/Ubisoft/Ubisoft Game Launcher/upc.exe"
+            UPC_EXE="$ACTIVE_WINEPREFIX/drive_c/Program Files (x86)/Ubisoft/Ubisoft Game Launcher/upc.exe"
             if [ ! -f "$UPC_EXE" ]; then
                  UPC_EXE="$PREFIX_PATH/drive_c/Program Files (x86)/Ubisoft/Ubisoft Game Launcher/upc.exe"
             fi
 
-            if [ -f "$UPC_EXE" ]; then
+            if [ -f "$UPC_EXE" ] && [ -n "$UPLAY_ID" ]; then
                 CMD_STR="\"$PYTHON_BIN\" \"$UMU_WRAPPER\" \"$UPC_EXE\" \"uplay://launch/$UPLAY_ID/0\""
                 log "[Uplay] Launching upc.exe directly: uplay://launch/$UPLAY_ID/0"
             else
-                log "[Uplay] WARNING: upc.exe not found. Falling back to Legendary."
+                log "[Uplay] WARNING: direct Ubisoft launch prerequisites missing (upc.exe or UplayId). Falling back to Legendary."
                 IS_UBISOFT="false"
-                CMD_STR="$LEGENDARY_BIN launch $GAME_ID --no-wine $OFFLINE_FLAG --wrapper \"$PYTHON_BIN $UMU_WRAPPER\" --language $EPIC_LANG"
+                export LEGENDARY_WRAPPER_EXE="C:\\windows\\command\\EpicGamesLauncher.exe"
+                CMD_STR="$LEGENDARY_BIN launch $GAME_ID --no-wine --skip-version-check $OFFLINE_FLAG --wrapper \"$PYTHON_BIN $UMU_WRAPPER\" --language $EPIC_LANG"
             fi
         else
-            # Standard Legendary launch
-            CMD_STR="$LEGENDARY_BIN launch $GAME_ID --no-wine $OFFLINE_FLAG --wrapper \"$PYTHON_BIN $UMU_WRAPPER\" --language $EPIC_LANG"
+            # Standard Epic path for non-Ubisoft titles
+            # NOTE: Do NOT set LEGENDARY_WRAPPER_EXE here! When set, legendary
+            # passes the wrapper stub as args[0] to umu-run instead of the real
+            # game exe, so the stub runs and exits instantly — the game never
+            # launches.
+            unset LEGENDARY_WRAPPER_EXE
+            export PROTON_VERB="waitforexitandrun"
+
+            # Override STORE to prevent ProtonFixes EGS defaults from running.
+            # The EGS default fix does two harmful things:
+            #   1. protontricks('vcrun2022') — core-dumps inside pressure-vessel
+            #   2. regedit_add('HKCR\\com.epicgames.launcher') — adds a registry
+            #      key that makes EOS SDK switch to launcher-IPC auth, causing
+            #      instant exit for non-Ubisoft games.
+            # Unifideck handles redistributables separately (winetricks_installer.py)
+            # and EOS overlay (legendary eos-overlay enable), so EGS defaults are
+            # not needed and actively break non-Ubisoft titles.
+            export STORE="none"
+
+            # === LAZY CLEANUP: Remove Ubisoft wrapper artifacts from prefix ===
+            # Previous versions ran fix_epic_launcher_prefix.py on ALL Epic games,
+            # placing EpicGamesLauncher.exe in windows/command/ (Wine PATH) and
+            # creating a com.epicgames.launcher registry key. The EOS SDK finds these,
+            # switches to launcher-IPC auth, the stub doesn't respond, and the game
+            # exits with code 0. Clean them up so tainted prefixes self-heal.
+            for _dc in "$ACTIVE_WINEPREFIX/drive_c" "$PREFIX_PATH/drive_c"; do
+                if [ -d "$_dc" ]; then
+                    rm -f "$_dc/windows/command/EpicGamesLauncher.exe" 2>/dev/null || true
+                    rm -f "$_dc/Program Files (x86)/Epic Games/Launcher/Portal/Binaries/Win32/EpicGamesLauncher.exe" 2>/dev/null || true
+                fi
+            done
+            # Remove the hollow registry key that signals "launcher installed" to EOS SDK.
+            # Use sed on the registry files directly — do NOT spawn wine/wineserver here,
+            # as that creates process contention with the subsequent umu-run launch.
+            for _reg in "$ACTIVE_WINEPREFIX/user.reg" "$ACTIVE_WINEPREFIX/system.reg"; do
+                if [ -f "$_reg" ] && grep -q 'com\.epicgames\.launcher' "$_reg" 2>/dev/null; then
+                    # Remove the [HKEY_CLASSES_ROOT\\com.epicgames.launcher] section and its values
+                    sed -i '/^\[.*com\.epicgames\.launcher\]/,/^\[/{ /^\[.*com\.epicgames\.launcher\]/d; /^\[/!d; }' "$_reg" 2>/dev/null || true
+                    log "[Cleanup] Removed com.epicgames.launcher from $(basename "$_reg")"
+                fi
+            done
+            CMD_STR="$LEGENDARY_BIN launch $GAME_ID --no-wine --skip-version-check $OFFLINE_FLAG --wrapper \"$PYTHON_BIN $UMU_WRAPPER\" --language $EPIC_LANG"
         fi
 
         log "Executing: $CMD_STR"
+        log "IS_UBISOFT: $IS_UBISOFT"
+        log "LEGENDARY_WRAPPER_EXE: ${LEGENDARY_WRAPPER_EXE:-<unset>}"
+        log "PROTON_VERB: $PROTON_VERB"
+        log "STORE: $STORE"
 
         # === CLOUD SAVE: Download before launch ===
         if [ "$IS_OFFLINE" = true ]; then
@@ -1123,18 +1257,30 @@ except Exception:
              notify_stage "toasts.launcher.launchingGame" "toasts.launcher.startingEpicGame" "low"
         fi
 
-        # Restore Steam Overlay/Input before launching game (controller support)
-        restore_steam_env
+        # DO NOT restore Steam's LD_PRELOAD here.
+        # All umu-run launches go through pressure-vessel (a container) which has
+        # its own Steam overlay mechanism.  Re-exporting the host's
+        # gameoverlayrenderer.so via LD_PRELOAD causes "cannot be preloaded"
+        # errors and can crash/early-exit the game process.  The working version
+        # (commit 711adbf) simply unset LD_PRELOAD at startup and never restored
+        # it — we follow that same approach for Epic launches.
 
-        # Execute launch command
+        # Execute launch command (capture exit code explicitly to avoid set -e
+        # killing the script on non-zero game exits, skipping cleanup/cloud saves)
+        # NOTE: Only redirect stderr to log. Stdout must stay inherited (TTY) because
+        # legendary's Popen passes FDs to umu-run/pressure-vessel — if stdout points
+        # to a file instead of a TTY, container process management may change.
         if [ "$IS_UBISOFT" = "true" ]; then
-             eval "$CMD_STR" 2>>"$LOG_FILE"
+             eval "$CMD_STR" 2>>"$LOG_FILE" && GAME_EXIT_CODE=$? || GAME_EXIT_CODE=$?
         else
-             "$LEGENDARY_BIN" launch "$GAME_ID" --no-wine $OFFLINE_FLAG --wrapper "$PYTHON_BIN $UMU_WRAPPER" --language $EPIC_LANG 2>>"$LOG_FILE"
+             "$LEGENDARY_BIN" launch "$GAME_ID" --no-wine --skip-version-check $OFFLINE_FLAG \
+                 --wrapper "$PYTHON_BIN $UMU_WRAPPER" --language $EPIC_LANG 2>>"$LOG_FILE" \
+                 && GAME_EXIT_CODE=$? || GAME_EXIT_CODE=$?
         fi
 
-        GAME_EXIT_CODE=$?
-
+        # Legendary returns before the game/container fully exits.
+        # Keep the script alive so Steam shows "Running" for the correct duration
+        # and cloud-save upload runs AFTER the game truly exits.
         wait_for_game_exit
 
         # === CLOUD SAVE: Upload after exit ===
@@ -1224,11 +1370,12 @@ except Exception as e:
 
         # Execute umu-run for Amazon game (with retry for network failures)
         if [ -n "$AMAZON_ARGS" ]; then
-            eval run_umu_with_retry "$PYTHON_BIN" "$UMU_WRAPPER" "\"$EXE_PATH\"" $AMAZON_ARGS "$@"
+            eval run_umu_with_retry "$PYTHON_BIN" "$UMU_WRAPPER" "\"$EXE_PATH\"" $AMAZON_ARGS "$@" \
+                && GAME_EXIT_CODE=$? || GAME_EXIT_CODE=$?
         else
-            run_umu_with_retry "$PYTHON_BIN" "$UMU_WRAPPER" "$EXE_PATH" "$@"
+            run_umu_with_retry "$PYTHON_BIN" "$UMU_WRAPPER" "$EXE_PATH" "$@" \
+                && GAME_EXIT_CODE=$? || GAME_EXIT_CODE=$?
         fi
-        GAME_EXIT_CODE=$?
 
         wait_for_game_exit
 
@@ -1318,7 +1465,7 @@ except Exception as e:
         WINETRICKS_MARKER="$PREFIX_PATH/unifideck_winetricks_complete.marker"
         WINETRICKS_GOG_SCRIPT="$PLUGIN_DIR/bin/winetricks_gog.py"
 
-        if [ ! -f "$WINETRICKS_MARKER" ] || ! grep -qi "complete\|no redistributables" "$WINETRICKS_MARKER" 2>/dev/null; then
+        if [ ! -f "$WINETRICKS_MARKER" ] || ! grep -qi "complete\|no redistributables\|failed" "$WINETRICKS_MARKER" 2>/dev/null; then
             if [ -f "$WINETRICKS_GOG_SCRIPT" ]; then
                 log "[Winetricks] Running GOG redistributables installation..."
                 notify_stage "toasts.launcher.dependenciesTitle" "toasts.launcher.installingRedistributables" "normal"
@@ -1397,8 +1544,8 @@ except Exception as e:
 
         # Execute umu-run with retry for network failures
         # NOTE: Do NOT pass "$@" - it contains gog:GAME_ID which umu-run doesn't understand
-        run_umu_with_retry "$PYTHON_BIN" "$UMU_WRAPPER" "$EXE_PATH"
-        GAME_EXIT_CODE=$?
+        run_umu_with_retry "$PYTHON_BIN" "$UMU_WRAPPER" "$EXE_PATH" \
+            && GAME_EXIT_CODE=$? || GAME_EXIT_CODE=$?
 
         wait_for_game_exit
 

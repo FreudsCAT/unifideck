@@ -15,6 +15,7 @@ import shutil
 import subprocess
 import sys
 import logging
+import hashlib
 from pathlib import Path
 
 # Setup dedicated logger
@@ -33,6 +34,28 @@ logging.basicConfig(
 logger = logging.getLogger("EpicPrerequisites")
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+
+
+def normalize_prefix_root(prefix_path: str) -> str:
+    """Return canonical prefix root (strip repeated trailing /pfx segments)."""
+    if not prefix_path:
+        return prefix_path
+
+    p = os.path.normpath(prefix_path)
+    while p.endswith(os.sep + "pfx"):
+        p = p[:-(len(os.sep) + 3)]
+        p = os.path.normpath(p)
+
+    return p
+
+
+def get_marker_paths(game_id: str, prefix_path: str) -> tuple[str, str]:
+    """Return (new_marker_path, legacy_marker_path)."""
+    prefix_root = normalize_prefix_root(prefix_path)
+    prefix_hash = hashlib.sha1(prefix_root.encode("utf-8")).hexdigest()[:12]
+    new_marker = os.path.join(prefix_root, f".unifideck_prereqs_{game_id}_{prefix_hash}.done")
+    legacy_marker = os.path.join(prefix_root, f".unifideck_prereqs_{game_id}.done")
+    return new_marker, legacy_marker
 
 
 def find_legendary_config():
@@ -204,15 +227,15 @@ def main():
         sys.exit(1)
     
     game_id = sys.argv[1]
-    prefix_path = sys.argv[2]
-    marker_file = os.path.join(prefix_path, f".unifideck_prereqs_{game_id}.done")
+    prefix_path = normalize_prefix_root(sys.argv[2])
+    marker_file, legacy_marker = get_marker_paths(game_id, prefix_path)
     
     logger.info(f"{'='*60}")
     logger.info(f"Prerequisites check for {game_id}")
     logger.info(f"Prefix: {prefix_path}")
     
     # Check if already installed
-    if os.path.exists(marker_file):
+    if os.path.exists(marker_file) or os.path.exists(legacy_marker):
         logger.info("Prerequisites already installed, skipping")
         logger.info(f"{'='*60}")
         return
@@ -225,6 +248,11 @@ def main():
         # Create marker so we don't check again
         with open(marker_file, 'w') as f:
             f.write("no prerequisites")
+        if os.path.exists(legacy_marker):
+            try:
+                os.remove(legacy_marker)
+            except OSError:
+                pass
         logger.info(f"{'='*60}")
         return
     
@@ -243,6 +271,11 @@ def main():
         # Create marker file
         with open(marker_file, 'w') as f:
             f.write(f"installed: {prereq.get('name', 'Unknown')}")
+        if os.path.exists(legacy_marker):
+            try:
+                os.remove(legacy_marker)
+            except OSError:
+                pass
         logger.info("Prerequisites installation complete")
     else:
         logger.error("Prerequisites installation failed")

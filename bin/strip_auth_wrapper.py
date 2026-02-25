@@ -49,7 +49,11 @@ def main():
     # so this wrapper (and thus the parent launcher) stays alive until
     # all game processes exit.
     prefix = os.environ.get("WINEPREFIX", "")
-    pfx = os.path.join(prefix, "pfx") if prefix else ""
+    # Normalize trailing /pfx to avoid producing /pfx/pfx recursion
+    while prefix.endswith(os.sep + "pfx"):
+        prefix = prefix[:-(len(os.sep) + 3)]
+    pfx_candidate = os.path.join(prefix, "pfx") if prefix else ""
+    pfx = pfx_candidate if os.path.exists(pfx_candidate) else prefix
     proton = os.environ.get("PROTONPATH", "")
     wineserver = os.path.join(proton, "files", "bin", "wineserver") if proton else ""
 
