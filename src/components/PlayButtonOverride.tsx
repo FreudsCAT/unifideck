@@ -34,6 +34,10 @@ import { GOGLanguageSelectModal } from "./GOGLanguageSelectModal";
 // for the same app are chained sequentially.
 const pendingCDPOps: Map<number, Promise<void>> = new Map();
 
+// Generation counter per appId. Incremented on every hide request.
+// Used to detect stale unhide operations that should be suppressed.
+const hideGeneration: Map<number, number> = new Map();
+
 function chainCDPOp(appId: number, op: () => Promise<void>): void {
   const prev = pendingCDPOps.get(appId) || Promise.resolve();
   const next = prev.then(op, op); // run op even if prev rejected
@@ -68,6 +72,10 @@ export function scheduleRemoveHidePlaySectionCDP(appId: number) {
  * because React destroys and recreates DOM elements.
  */
 export async function injectHidePlaySectionCDP(appId: number): Promise<void> {
+  // Increment generation: any pending unhide for a lower generation is stale
+  const gen = (hideGeneration.get(appId) || 0) + 1;
+  hideGeneration.set(appId, gen);
+
   // Cancel any pending unhide for this app
   const unhideTimer = pendingUnhides.get(appId);
   if (unhideTimer) {
@@ -112,7 +120,20 @@ export async function injectHidePlaySectionCDP(appId: number): Promise<void> {
  * Operations for the same appId are chained to prevent race conditions.
  */
 export async function removeHidePlaySectionCDP(appId: number): Promise<void> {
+  // Capture the current generation at enqueue time.
+  // If a hide is requested after this unhide was enqueued, the generation
+  // will be higher when the chain executes, and we skip the stale unhide.
+  const genAtEnqueue = hideGeneration.get(appId) || 0;
+
   chainCDPOp(appId, async () => {
+    const currentGen = hideGeneration.get(appId) || 0;
+    if (currentGen > genAtEnqueue) {
+      console.log(
+        `[PlaySectionWrapper] Suppressed stale unhide for app ${appId} (gen ${genAtEnqueue} < ${currentGen})`,
+      );
+      return;
+    }
+
     try {
       const timeout = new Promise<never>((_, reject) =>
         setTimeout(() => reject(new Error("CDP unhide timeout (10s)")), 10000),
