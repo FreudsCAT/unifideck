@@ -587,31 +587,40 @@ log "Python 3.10+ found: $PYTHON_BIN"
 
 # ==============================================================================
 # PARSE LAUNCH OPTIONS FROM ANY POSITION
-# Extracts VAR=value patterns (PROTON=, LSFG=, MANGOHUD=, etc.) from arguments
-# and exports them as environment variables, regardless of their position.
+# Extracts VAR=value patterns from arguments and exports them as env variables.
+# Handles standard vars (PROTON=, MANGOHUD=, DXVK_*=) as well as any other
+# UPPER_SNAKE_CASE=value the user needs (e.g. PRESSURE_VESSEL_FILESYSTEMS_RW=,
+# PROTON_REMOTE_DEBUG_CMD=, STEAM_COMPAT_MOUNTS=, etc.).
+# Lowercase names (mangohud=1, lsfg=1) are also accepted and uppercased.
 # ==============================================================================
 KEY=""
 EXTRA_ARGS=()
 
 for arg in "$@"; do
     case "$arg" in
-        # Environment-style options - extract, uppercase, and export
-        # Case-insensitive matching so mangohud=1, lsfg=1, etc. all work
-        [Pp][Rr][Oo][Tt][Oo][Nn]=*|[Pp][Rr][Oo][Tt][Oo][Nn][Pp][Aa][Tt][Hh]=*|[Ll][Ss][Ff][Gg]=*|[Mm][Aa][Nn][Gg][Oo][Hh][Uu][Dd]=*|[Dd][Xx][Vv][Kk]_*=*|[Vv][Kk][Dd]3[Dd]_*=*|[Ww][Ii][Nn][Ee]_*=*|[Pp][Rr][Oo][Tt][Oo][Nn]_*=*)
-            # Extract var name and value, uppercase the name for consistency
-            var_name="${arg%%=*}"
-            var_value="${arg#*=}"
-            var_name_upper="${var_name^^}"
-            export "$var_name_upper=$var_value"
-            log "[LaunchOptions] Parsed: $var_name_upper=$var_value"
-            ;;
-        # Store:id pattern - this is the game key
+        # Store:id pattern - this is the game key (checked first — no = in it)
         epic:*|gog:*|amazon:*)
             KEY="$arg"
             ;;
-        # Other arguments - pass through
+        # Other arguments — check if it looks like a VAR=value env var
         *)
-            EXTRA_ARGS+=("$arg")
+            if [[ "$arg" == *=* ]]; then
+                var_name="${arg%%=*}"
+                var_name_upper="${var_name^^}"
+                # Accept any UPPER_SNAKE_CASE name (letters, digits, underscores, 2+ chars)
+                # This covers PROTON_*, MANGOHUD, DXVK_*, PRESSURE_VESSEL_*, STEAM_*, etc.
+                # Also accepts lowercase input (mangohud=1, lsfg=1) via ^^ uppercasing.
+                if [[ "$var_name_upper" =~ ^[A-Z][A-Z0-9_]{1,}$ ]]; then
+                    var_value="${arg#*=}"
+                    export "$var_name_upper=$var_value"
+                    log "[LaunchOptions] Parsed env: $var_name_upper=$var_value"
+                else
+                    # Not an env var (e.g. gamemoderun, ./script.sh=odd) — treat as arg
+                    EXTRA_ARGS+=("$arg")
+                fi
+            else
+                EXTRA_ARGS+=("$arg")
+            fi
             ;;
     esac
 done
