@@ -2439,7 +2439,7 @@ class Plugin:
                              exe_path = os.path.join(metadata['install_path'], metadata['executable'])
                              
                         if exe_path:
-                            work_dir = os.path.dirname(exe_path)
+                            work_dir = install_path or metadata.get('install_path') or os.path.dirname(exe_path)
                             await self.shortcuts_manager._update_game_map('epic', game.id, exe_path, work_dir)
                             logger.debug(f"Updated games.map for Epic game {game.id} (FAST)")
                         else:
@@ -2447,7 +2447,7 @@ class Plugin:
                             logger.debug(f"Metadata missing for {game.id}, falling back to slow check")
                             exe_path = await self.install_handler.get_epic_game_exe(game.id)
                             if exe_path:
-                                work_dir = os.path.dirname(exe_path)
+                                work_dir = install_path or metadata.get('install_path') or os.path.dirname(exe_path)
                                 await self.shortcuts_manager._update_game_map('epic', game.id, exe_path, work_dir)
 
                 for game in gog_games:
@@ -2457,7 +2457,7 @@ class Plugin:
                         game_info = self.gog.get_installed_game_info(game.id)
                         if game_info and game_info.get('executable'):
                             exe_path = game_info['executable']
-                            work_dir = os.path.dirname(exe_path)
+                            work_dir = game_info.get('install_path') or os.path.dirname(exe_path)
                             await self.shortcuts_manager._update_game_map('gog', game.id, exe_path, work_dir)
                             logger.debug(f"Updated games.map for GOG game {game.id}")
 
@@ -2468,7 +2468,7 @@ class Plugin:
                         game_info = self.amazon.get_installed_game_info(game.id)
                         if game_info and game_info.get('executable'):
                             exe_path = game_info['executable']
-                            work_dir = os.path.dirname(exe_path)
+                            work_dir = game_info.get('path') or os.path.dirname(exe_path)
                             await self.shortcuts_manager._update_game_map('amazon', game.id, exe_path, work_dir)
                             logger.debug(f"Updated games.map for Amazon game {game.id}")
 
@@ -3030,7 +3030,7 @@ class Plugin:
                             exe_path = os.path.join(metadata['install_path'], metadata['executable'])
                             
                         if exe_path:
-                            work_dir = os.path.dirname(exe_path)
+                            work_dir = install_path or metadata.get('install_path') or os.path.dirname(exe_path)
                             await self.shortcuts_manager._update_game_map('epic', game.id, exe_path, work_dir)
                             logger.debug(f"Updated games.map for Epic game {game.id} (FAST)")
 
@@ -3040,7 +3040,7 @@ class Plugin:
                         game_info = self.gog.get_installed_game_info(game.id)
                         if game_info and game_info.get('executable'):
                             exe_path = game_info['executable']
-                            work_dir = os.path.dirname(exe_path)
+                            work_dir = game_info.get('install_path') or os.path.dirname(exe_path)
                             await self.shortcuts_manager._update_game_map('gog', game.id, exe_path, work_dir)
                             logger.debug(f"Updated games.map for GOG game {game.id}")
 
@@ -3050,7 +3050,7 @@ class Plugin:
                         game_info = self.amazon.get_installed_game_info(game.id)
                         if game_info and game_info.get('executable'):
                             exe_path = game_info['executable']
-                            work_dir = os.path.dirname(exe_path)
+                            work_dir = game_info.get('path') or os.path.dirname(exe_path)
                             await self.shortcuts_manager._update_game_map('amazon', game.id, exe_path, work_dir)
                             logger.debug(f"Updated games.map for Amazon game {game.id}")
 

@@ -238,11 +238,16 @@ run_umu_with_retry() {
             log "[UMU] Failed with exit code $exit_code, retrying in ${wait_time}s..."
             notify_stage "toasts.launcher.networkError" "toasts.launcher.retryingUmu|seconds=${wait_time}|attempt=$((attempt+1))|max=$max_attempts" "normal"
             
-            # Clean up partial Steam Runtime downloads to avoid corruption
+            # Only clean up Steam Runtime if it's actually broken (incomplete download).
+            # If _v2-entry-point exists, steamrt3 is functional and the non-zero exit
+            # code came from the game itself — retrying won't help, and deleting
+            # steamrt3 would break all subsequent launches.
             if [ -d "$HOME/.local/share/umu" ]; then
-                log "[UMU] Cleaning up partial downloads..."
-                rm -rf "$HOME/.local/share/umu/steamrt3" 2>/dev/null || true
-                rm -rf "$HOME/.local/share/umu/umu_steam3" 2>/dev/null || true
+                if [ ! -f "$HOME/.local/share/umu/steamrt3/_v2-entry-point" ]; then
+                    log "[UMU] steamrt3 incomplete (missing _v2-entry-point), cleaning up..."
+                    rm -rf "$HOME/.local/share/umu/steamrt3" 2>/dev/null || true
+                    rm -rf "$HOME/.local/share/umu/umu_steam3" 2>/dev/null || true
+                fi
                 rm -f "$HOME/.local/share/umu/"*.parts 2>/dev/null || true
             fi
             
@@ -279,14 +284,26 @@ restore_steam_env() {
 # We wait for steam-runtime-launch-client (the long-lived container manager)
 # because it stays alive for the entire game session and has a unique name.
 wait_for_game_exit() {
-    # Give umu-run / pressure-vessel a moment to fully start
-    sleep 1
+    # Give umu-run / pressure-vessel a moment to fully start.
+    # The container can take several seconds to register, especially on first
+    # launch when Steam Runtime is being extracted.  Retry the detection check
+    # multiple times before concluding there is nothing to wait for.
+    local _detect_attempt=0
+    local _detect_max=5
+    local _found=false
 
-    # Check for the container manager process (steam-runtime-launch-client)
-    # or fall back to checking for umu-run itself
-    if ! pgrep -f "steam-runtime-launch-client" >/dev/null 2>&1 && \
-       ! pgrep -f "umu-run" >/dev/null 2>&1; then
-        log "[GameWait] No container processes found after launch, skipping wait"
+    while [ $_detect_attempt -lt $_detect_max ]; do
+        sleep 1
+        if pgrep -f "steam-runtime-launch-client" >/dev/null 2>&1 || \
+           pgrep -f "umu-run" >/dev/null 2>&1; then
+            _found=true
+            break
+        fi
+        _detect_attempt=$((_detect_attempt + 1))
+    done
+
+    if ! $_found; then
+        log "[GameWait] No container processes found after ${_detect_max}s, skipping wait"
         return
     fi
 
