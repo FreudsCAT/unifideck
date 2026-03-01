@@ -34,6 +34,10 @@ import { GOGLanguageSelectModal } from "./GOGLanguageSelectModal";
 // for the same app are chained sequentially.
 const pendingCDPOps: Map<number, Promise<void>> = new Map();
 
+// Generation counter per appId. Incremented on every hide request.
+// Used to detect stale unhide operations that should be suppressed.
+const hideGeneration: Map<number, number> = new Map();
+
 function chainCDPOp(appId: number, op: () => Promise<void>): void {
   const prev = pendingCDPOps.get(appId) || Promise.resolve();
   const next = prev.then(op, op); // run op even if prev rejected
@@ -68,6 +72,10 @@ export function scheduleRemoveHidePlaySectionCDP(appId: number) {
  * because React destroys and recreates DOM elements.
  */
 export async function injectHidePlaySectionCDP(appId: number): Promise<void> {
+  // Increment generation: any pending unhide for a lower generation is stale
+  const gen = (hideGeneration.get(appId) || 0) + 1;
+  hideGeneration.set(appId, gen);
+
   // Cancel any pending unhide for this app
   const unhideTimer = pendingUnhides.get(appId);
   if (unhideTimer) {
@@ -112,7 +120,20 @@ export async function injectHidePlaySectionCDP(appId: number): Promise<void> {
  * Operations for the same appId are chained to prevent race conditions.
  */
 export async function removeHidePlaySectionCDP(appId: number): Promise<void> {
+  // Capture the current generation at enqueue time.
+  // If a hide is requested after this unhide was enqueued, the generation
+  // will be higher when the chain executes, and we skip the stale unhide.
+  const genAtEnqueue = hideGeneration.get(appId) || 0;
+
   chainCDPOp(appId, async () => {
+    const currentGen = hideGeneration.get(appId) || 0;
+    if (currentGen > genAtEnqueue) {
+      console.log(
+        `[PlaySectionWrapper] Suppressed stale unhide for app ${appId} (gen ${genAtEnqueue} < ${currentGen})`,
+      );
+      return;
+    }
+
     try {
       const timeout = new Promise<never>((_, reject) =>
         setTimeout(() => reject(new Error("CDP unhide timeout (10s)")), 10000),
@@ -257,6 +278,14 @@ const PlaySectionWrapperInner: FC<PlaySectionWrapperProps> = ({
   // the appId changes. Remove the old appId's hide CSS so it doesn't
   // leak to other games. The new appId's CSS will be injected by the patcher.
   const prevAppIdRef = useRef(appId);
+  // Persists extracted user params so handlePlay can forward them to the backend
+  const userParamsRef = useRef<string>("");
+  // Tracks FC we cleared so we can restore it on unmount and guard against
+  // the else branch clearing the saved Proton tool on effect re-runs.
+  const clearedFCRef = useRef<{
+    tool_name: string;
+    bypassOptions: string;
+  } | null>(null);
   useEffect(() => {
     const prevAppId = prevAppIdRef.current;
     if (prevAppId !== appId) {
@@ -484,8 +513,8 @@ const PlaySectionWrapperInner: FC<PlaySectionWrapperProps> = ({
   // Proton compat tool handling: When a Unifideck game page loads, check if
   // Steam's Force Compatibility is set with a Proton tool. If so:
   // 1. Save the tool to proton_settings.json (launcher reads at Priority 2.5)
-  // 2. Set launch options to use %command% bypass trick so the bash launcher
-  //    runs natively even when Proton is configured (Proton command is commented out)
+  // 2. Clear FC from Steam (prevents gaming mode loading screen)
+  // 3. Restore simple launch options (user params preserved, no bypass needed)
   useEffect(() => {
     if (!gameInfo?.is_installed || !gameInfo?.store || !gameInfo?.game_id)
       return;
@@ -505,6 +534,7 @@ const PlaySectionWrapperInner: FC<PlaySectionWrapperProps> = ({
             is_linux_runtime?: boolean;
             launcher_path?: string;
             current_launch_options?: string;
+            saved_proton_tool?: string;
             error?: string;
           }
         >("get_compat_tool_for_game", storeGameId);
@@ -514,46 +544,72 @@ const PlaySectionWrapperInner: FC<PlaySectionWrapperProps> = ({
         const launcherPath = result.launcher_path;
         if (!launcherPath) return;
 
-        // Extract user-appended params from current launch options
-        // Strips: launcher path, quoted strings, bare store:game_id, #%command%
+        // Extract user-appended params from current launch options.
+        // Strips: launcher path, quoted storeGameId, bare storeGameId, #%command% suffix.
+        // Preserves: user-added quoted values, user %command% in wrappers (e.g. gamemoderun %command%).
         const currentOpts = result.current_launch_options ?? storeGameId;
+        const escapedStoreGameId = storeGameId.replace(
+          /[.*+?^${}()|[\]\\]/g,
+          "\\$&",
+        );
         const extractUserParams = (opts: string): string => {
           return opts
-            .replace(/#%command%/g, "")
-            .replace(/"[^"]*"/g, "") // Remove quoted strings (launcher path, store id)
+            .replace(/\s*#%command%\s*$/g, "") // Strip Unifideck's #%command% suffix only (not user's bare %command%)
             .replace(
-              new RegExp(
-                storeGameId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"),
-                "g",
-              ),
+              new RegExp('"' + escapedStoreGameId + '"', "g"),
               "",
-            ) // bare id
-            .replace(/\/\S+unifideck-launcher/g, "") // launcher path
+            ) // Remove quoted storeGameId only (preserves other quoted values)
+            .replace(new RegExp(escapedStoreGameId, "g"), "") // bare id
+            .replace(/\/\S+unifideck-launcher/g, "") // launcher path (unquoted)
+            .replace(/\s{2,}/g, " ") // Collapse multiple spaces from removals
             .trim();
         };
         const userParams = extractUserParams(currentOpts);
+        userParamsRef.current = userParams;
 
         if (result.tool_name && !result.is_linux_runtime) {
-          // Proton compat tool detected - save for the launcher
-          await call<[string, string], { success: boolean }>(
-            "save_proton_setting",
-            storeGameId,
-            result.tool_name,
-          );
+          // Proton compat tool detected - save for the launcher (only if changed)
+          if (result.saved_proton_tool !== result.tool_name) {
+            await call<[string, string], { success: boolean }>(
+              "save_proton_setting",
+              storeGameId,
+              result.tool_name,
+            );
+          }
 
           if (cancelled) return;
 
-          // Set launch options with %command% bypass, preserving user params
+          // Clear Force Compatibility from Steam so RunGame doesn't create
+          // a Proton session (which causes the perpetual loading screen in
+          // gaming mode). The launcher reads Proton from proton_settings.json
+          // independently, so the game still uses the correct Proton version.
+          window.SteamClient?.Apps?.SpecifyCompatTool?.(appId, "");
+
+          // Restore simple launch options (no #%command% bypass needed since FC
+          // is cleared). This makes the launch identical to games without FC.
+          const restoredOptions = userParams
+            ? `${storeGameId} ${userParams}`
+            : storeGameId;
+
+          if (currentOpts !== restoredOptions) {
+            window.SteamClient?.Apps?.SetShortcutLaunchOptions(
+              appId,
+              restoredOptions,
+            );
+          }
+
+          // Save what we cleared so cleanup can restore FC + bypass options
+          // when the user leaves the game page (preserves their FC selection).
           const bypassOptions = userParams
             ? `${launcherPath} "${storeGameId}" ${userParams} #%command%`
             : `${launcherPath} "${storeGameId}" #%command%`;
-          window.SteamClient?.Apps?.SetShortcutLaunchOptions(
-            appId,
+          clearedFCRef.current = {
+            tool_name: result.tool_name,
             bypassOptions,
-          );
+          };
 
           console.log(
-            `[PlaySectionWrapper] Set %command% bypass for "${gameInfo.title}" (${result.tool_name})`,
+            `[PlaySectionWrapper] Cleared FC for "${gameInfo.title}" — saved ${result.tool_name} to proton_settings.json`,
           );
         } else {
           // No Proton tool (or Linux runtime) - restore launch options preserving user params
@@ -569,12 +625,16 @@ const PlaySectionWrapperInner: FC<PlaySectionWrapperProps> = ({
             );
           }
 
-          // Clear any previously saved proton setting
-          await call<[string, string], { success: boolean }>(
-            "save_proton_setting",
-            storeGameId,
-            "",
-          );
+          // Clear saved proton setting only if the user genuinely has no FC.
+          // Skip if we're the ones who cleared FC (clearedFCRef is set) —
+          // otherwise we'd undo our own save on effect re-runs.
+          if (result.saved_proton_tool && !clearedFCRef.current) {
+            await call<[string, string], { success: boolean }>(
+              "save_proton_setting",
+              storeGameId,
+              "",
+            );
+          }
         }
       } catch (error) {
         console.error(
@@ -586,6 +646,21 @@ const PlaySectionWrapperInner: FC<PlaySectionWrapperProps> = ({
 
     return () => {
       cancelled = true;
+      // Restore FC + bypass options when leaving the game page so the user
+      // sees their FC selection in Steam Properties. FC will be cleared
+      // again on the next page load (the effect re-runs).
+      const cleared = clearedFCRef.current;
+      if (cleared) {
+        window.SteamClient?.Apps?.SpecifyCompatTool?.(appId, cleared.tool_name);
+        window.SteamClient?.Apps?.SetShortcutLaunchOptions?.(
+          appId,
+          cleared.bypassOptions,
+        );
+        clearedFCRef.current = null;
+        console.log(
+          `[PlaySectionWrapper] Restored FC (${cleared.tool_name}) for app ${appId}`,
+        );
+      }
     };
   }, [appId, gameInfo?.is_installed, gameInfo?.store, gameInfo?.game_id]);
 
@@ -886,18 +961,15 @@ const PlaySectionWrapperInner: FC<PlaySectionWrapperProps> = ({
     }
   };
 
-  // Handle play button click — triggers native Steam launch flow.
-  // RunGame requires the gameId (from app overview), NOT the appId directly.
-  // For non-Steam shortcuts, gameId differs from appId.
-  // Uses window.appStore.m_mapApps (MobX map) to get the overview — same as MoonDeck.
+  // Handle play button click — launches via Steam's RunGame.
+  // FC is cleared at page-load time, so RunGame works without a loading screen.
   const handlePlay = () => {
     try {
-      // Get gameId from appStore (MoonDeck pattern)
       const appStore = (window as any).appStore;
       const overview = appStore?.m_mapApps?.get?.(appId);
       const gameId = overview?.gameid ?? String(appId);
       console.log(
-        `[PlaySectionWrapper] Launching game ${appId} via RunGame (gameId=${gameId}, hasOverview=${!!overview})`,
+        `[PlaySectionWrapper] Launching game ${appId} via RunGame (gameId=${gameId})`,
       );
       window.SteamClient?.Apps?.RunGame?.(gameId, "", -1, 100);
     } catch (error) {
@@ -906,19 +978,25 @@ const PlaySectionWrapperInner: FC<PlaySectionWrapperProps> = ({
   };
 
   // Handle stop/close button — terminates the running game.
-  // Uses TerminateApp(gameId, false) — same as MoonDeck's terminateApp pattern.
+  // Kills processes via backend + tells Steam to terminate.
   const handleStop = () => {
-    try {
-      const appStore = (window as any).appStore;
-      const overview = appStore?.m_mapApps?.get?.(appId);
-      const gameId = overview?.gameid ?? String(appId);
-      console.log(
-        `[PlaySectionWrapper] Terminating game ${appId} (gameId=${gameId})`,
-      );
-      window.SteamClient?.Apps?.TerminateApp?.(gameId, false);
-    } catch (error) {
-      console.error(`[PlaySectionWrapper] TerminateApp failed:`, error);
-    }
+    setIsRunning(false);
+    console.log(`[PlaySectionWrapper] Stopping game ${appId}`);
+
+    // Kill actual game processes via backend
+    call<[number], { success: boolean }>("stop_game_processes", appId).catch(
+      (err) =>
+        console.error(
+          "[PlaySectionWrapper] stop_game_processes failed:",
+          err,
+        ),
+    );
+
+    // Tell Steam to terminate
+    const appStore = (window as any).appStore;
+    const overview = appStore?.m_mapApps?.get?.(appId);
+    const gameId = overview?.gameid ?? String(appId);
+    window.SteamClient?.Apps?.TerminateApp?.(gameId, false);
   };
 
   // DIAG: Track component lifecycle (temporary)

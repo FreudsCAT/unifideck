@@ -5292,8 +5292,10 @@ class Plugin:
             store_game_id: e.g., "gog:1234567890"
         """
         from py_modules.unifideck.compat.proton_tools import get_compat_tool_for_game as _get
+        from py_modules.unifideck.compat.proton_tools import get_saved_proton_tool as _get_saved
         result = _get(store_game_id)
         result["launcher_path"] = os.path.join(os.path.dirname(__file__), 'bin', 'unifideck-launcher')
+        result["saved_proton_tool"] = _get_saved(store_game_id)
         
         # Include current launch options so frontend can preserve user params
         try:
@@ -5326,6 +5328,42 @@ class Plugin:
         """Save proton tool preference for the launcher to read at Priority 2.5."""
         from py_modules.unifideck.compat.proton_tools import save_proton_setting as _save
         return _save(store_game_id, tool_name)
+
+    async def stop_game_processes(self, app_id: int) -> Dict[str, Any]:
+        """Kill running game container processes for a Unifideck game.
+
+        Legendary orphans umu-run (spawns via Popen without wait), so
+        Steam's TerminateApp alone cannot reach the game process tree.
+        Uses os.kill() with SIGKILL for reliable process termination
+        (subprocess.run pkill was not reaching processes from the systemd context).
+        """
+        import subprocess
+        import signal
+        import os
+
+        killed = []
+        patterns = ["steam-runtime-launch-client", "umu-run"]
+        for pattern in patterns:
+            result = subprocess.run(
+                ["pgrep", "-f", pattern],
+                capture_output=True, text=True
+            )
+            logger.info(f"[StopGame] pgrep -f '{pattern}': rc={result.returncode}, pids='{result.stdout.strip()}'")
+            if result.stdout.strip():
+                for pid_str in result.stdout.strip().split("\n"):
+                    try:
+                        pid = int(pid_str.strip())
+                        os.kill(pid, signal.SIGKILL)
+                        killed.append(pid)
+                        logger.info(f"[StopGame] Killed PID {pid} ({pattern})")
+                    except (ValueError, ProcessLookupError) as e:
+                        logger.warning(f"[StopGame] PID {pid_str} gone: {e}")
+                    except PermissionError as e:
+                        logger.error(f"[StopGame] Permission denied killing PID {pid_str}: {e}")
+
+        if not killed:
+            logger.info(f"[StopGame] No game processes found for app {app_id}")
+        return {"success": True, "killed_pids": killed}
 
     # ============== END PROTON COMPAT TOOL API ==============
 
