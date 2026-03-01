@@ -1474,8 +1474,12 @@ except Exception as e:
         # Notify user that game is launching
         notify_stage "toasts.launcher.launchingGame" "toasts.launcher.startingAmazonGame" "low"
 
-        # Restore Steam Overlay/Input before launching game (controller support)
-        restore_steam_env
+        # DO NOT restore Steam's LD_PRELOAD here.
+        # All umu-run launches go through pressure-vessel (a container) which has
+        # its own Steam overlay mechanism.  Re-exporting the host's
+        # gameoverlayrenderer.so via LD_PRELOAD causes "cannot be preloaded"
+        # errors and can crash/early-exit the game process (WARNING: Keyboard
+        # Interrupt).  Matches the Epic path (lines 1365-1371).
 
         # Execute umu-run for Amazon game (with retry for network failures)
         # WRAPPERS prepend the command, GAME_ARGS passed as game arguments.
@@ -1537,6 +1541,14 @@ except Exception as e:
         # Uses marker file to run only once per game prefix
         SETUP_MARKER="$PREFIX_PATH/.unifideck-gog-setup-done"
         GOG_SETUP_SCRIPT="$PLUGIN_DIR/bin/gog_setup.py"
+        
+        # Verify if goggame-*.info exists, if not, force setup
+        # This handles cases where the marker exists but setup failed to generate the info file
+        GOG_INFO_FILE=$(find "$WORK_DIR" -maxdepth 2 -iname "goggame-*.info" | head -n 1)
+        if [ -z "$GOG_INFO_FILE" ]; then
+            log "[Setup] goggame-*.info file is missing. Forcing setup to generate it."
+            rm -f "$SETUP_MARKER"
+        fi
 
         if [ ! -f "$SETUP_MARKER" ] && [ -f "$GOG_SETUP_SCRIPT" ]; then
             log "[Setup] Running first-time GOG redistributable installation..."
@@ -1649,8 +1661,12 @@ except Exception as e:
         # Notify user that game is launching
         notify_stage "toasts.launcher.launchingGame" "toasts.launcher.startingGogGame" "low"
 
-        # Restore Steam Overlay/Input before launching game (controller support)
-        restore_steam_env
+        # DO NOT restore Steam's LD_PRELOAD here.
+        # All umu-run launches go through pressure-vessel (a container) which has
+        # its own Steam overlay mechanism.  Re-exporting the host's
+        # gameoverlayrenderer.so via LD_PRELOAD causes "cannot be preloaded"
+        # errors and can crash/early-exit the game process (WARNING: Keyboard
+        # Interrupt).  Matches the Epic path (lines 1365-1371).
 
         # Execute umu-run with retry for network failures
         # WRAPPERS (from %command% split) prepend the game command.
