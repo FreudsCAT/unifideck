@@ -1684,6 +1684,28 @@ class GOGAPIClient:
                 # Don't fail the install, but log the warning
             
             logger.info(f"[GOG] Installation successful at {found_path}")
+            
+            # PHASE 4: Regenerate manifest for setup script
+            # Since we deleted the manifest before download to force language selection,
+            # we MUST recreate it now so gog_setup.py can run scriptinterpreter.exe
+            logger.info(f"[GOG] Regenerating manifest for {game_id} via gogdl info")
+            try:
+                info_cmd = [
+                    self.gogdl_bin,
+                    '--auth-config-path', self.gogdl_config_path,
+                    'info', '--platform', 'windows' if platform == 'windows' else 'linux', game_id
+                ]
+                info_proc = await asyncio.create_subprocess_exec(
+                    *info_cmd,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                    env=self._get_gogdl_env()
+                )
+                await info_proc.wait()
+                logger.info(f"[GOG] Manifest regenerated (code {info_proc.returncode})")
+            except Exception as e:
+                logger.error(f"[GOG] Failed to regenerate manifest: {e}")
+                
             return {
                 'success': True,
                 'install_path': found_path,

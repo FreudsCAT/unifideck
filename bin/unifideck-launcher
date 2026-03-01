@@ -17,9 +17,30 @@ LOG_FILE="$HOME/.local/share/unifideck/launcher.log"
 MAP_FILE="$HOME/.local/share/unifideck/games.map"
 PREFIXES_DIR="$HOME/.local/share/unifideck/prefixes"
 
+# Handle termination signals (SIGTERM from Steam's TerminateApp, SIGINT from Ctrl+C).
+# Legendary orphans umu-run (spawns via Popen without wait), so killing the launcher
+# alone leaves the game running. We must explicitly kill the container processes.
+on_terminate() {
+    echo "[$(date '+%H:%M:%S')] [Signal] Received termination signal, stopping game..." >> "$LOG_FILE"
+    pkill -TERM -f "steam-runtime-launch-client" 2>/dev/null || true
+    pkill -TERM -f "umu-run" 2>/dev/null || true
+    sleep 1
+    # Force kill if still alive
+    pkill -KILL -f "steam-runtime-launch-client" 2>/dev/null || true
+    pkill -KILL -f "umu-run" 2>/dev/null || true
+    echo "[$(date '+%H:%M:%S')] [Signal] Cleanup complete" >> "$LOG_FILE"
+    exit 143
+}
+trap on_terminate SIGTERM SIGINT
+
 # Get the plugin directory (parent of bin/)
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# Use pwd -P to resolve physical path (avoids Wine dosdevices/z: symlink issues)
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd -P)"
 PLUGIN_DIR="$(dirname "$SCRIPT_DIR")"
+# Canonicalize to avoid Wine dosdevices/z: symlink resolution
+if command -v realpath &>/dev/null; then
+    PLUGIN_DIR="$(realpath "$PLUGIN_DIR")"
+fi
 
 # umu-run location (bundled zipapp)
 UMU_RUN="$PLUGIN_DIR/bin/umu/umu/umu-run"
@@ -220,6 +241,7 @@ run_umu_with_retry() {
             # Clean up partial Steam Runtime downloads to avoid corruption
             if [ -d "$HOME/.local/share/umu" ]; then
                 log "[UMU] Cleaning up partial downloads..."
+                rm -rf "$HOME/.local/share/umu/steamrt3" 2>/dev/null || true
                 rm -rf "$HOME/.local/share/umu/umu_steam3" 2>/dev/null || true
                 rm -f "$HOME/.local/share/umu/"*.parts 2>/dev/null || true
             fi
@@ -258,7 +280,7 @@ restore_steam_env() {
 # because it stays alive for the entire game session and has a unique name.
 wait_for_game_exit() {
     # Give umu-run / pressure-vessel a moment to fully start
-    sleep 3
+    sleep 1
 
     # Check for the container manager process (steam-runtime-launch-client)
     # or fall back to checking for umu-run itself
@@ -271,7 +293,7 @@ wait_for_game_exit() {
     log "[GameWait] Game container detected, waiting for exit..."
     while pgrep -f "steam-runtime-launch-client" >/dev/null 2>&1 || \
           pgrep -f "umu-run" >/dev/null 2>&1; do
-        sleep 5
+        sleep 1
     done
     log "[GameWait] Game container exited"
 }
@@ -565,32 +587,93 @@ log "Python 3.10+ found: $PYTHON_BIN"
 
 # ==============================================================================
 # PARSE LAUNCH OPTIONS FROM ANY POSITION
-# Extracts VAR=value patterns (PROTON=, LSFG=, MANGOHUD=, etc.) from arguments
-# and exports them as environment variables, regardless of their position.
+# Extracts VAR=value patterns from arguments and exports them as env variables.
+# Handles standard vars (PROTON=, MANGOHUD=, DXVK_*=) as well as any other
+# UPPER_SNAKE_CASE=value the user needs (e.g. PRESSURE_VESSEL_FILESYSTEMS_RW=,
+# PROTON_REMOTE_DEBUG_CMD=, STEAM_COMPAT_MOUNTS=, etc.).
+# Lowercase names (mangohud=1, lsfg=1) are also accepted and uppercased.
 # ==============================================================================
 KEY=""
 EXTRA_ARGS=()
 
 for arg in "$@"; do
     case "$arg" in
-        # Environment-style options - extract and export
-        PROTON=*|PROTONPATH=*|LSFG=*|MANGOHUD=*|DXVK_*=*|VKD3D_*=*|WINE_*=*|PROTON_*=*)
-            # Extract var name and value
-            var_name="${arg%%=*}"
-            var_value="${arg#*=}"
-            export "$var_name=$var_value"
-            log "[LaunchOptions] Parsed: $var_name=$var_value"
-            ;;
-        # Store:id pattern - this is the game key
+        # Store:id pattern - this is the game key (checked first — no = in it)
         epic:*|gog:*|amazon:*)
             KEY="$arg"
             ;;
-        # Other arguments - pass through
+        # Other arguments — check if it looks like a VAR=value env var
         *)
-            EXTRA_ARGS+=("$arg")
+            if [[ "$arg" == *=* ]]; then
+                var_name="${arg%%=*}"
+                var_name_upper="${var_name^^}"
+                # Accept any UPPER_SNAKE_CASE name (letters, digits, underscores, 2+ chars)
+                # This covers PROTON_*, MANGOHUD, DXVK_*, PRESSURE_VESSEL_*, STEAM_*, etc.
+                # Also accepts lowercase input (mangohud=1, lsfg=1) via ^^ uppercasing.
+                if [[ "$var_name_upper" =~ ^[A-Z][A-Z0-9_]{1,}$ ]]; then
+                    var_value="${arg#*=}"
+                    export "$var_name_upper=$var_value"
+                    log "[LaunchOptions] Parsed env: $var_name_upper=$var_value"
+                else
+                    # Not an env var (e.g. gamemoderun, ./script.sh=odd) — treat as arg
+                    EXTRA_ARGS+=("$arg")
+                fi
+            else
+                EXTRA_ARGS+=("$arg")
+            fi
             ;;
     esac
 done
+
+if [ ${#EXTRA_ARGS[@]} -gt 0 ]; then
+    log "[LaunchOptions] Extra game arguments: ${EXTRA_ARGS[*]}"
+fi
+
+# Split EXTRA_ARGS into WRAPPERS (before %command%) and GAME_ARGS (after %command%).
+# Users can write launch options like "gamemoderun %command% --windowed" where:
+#   - Tokens before %command% are wrapper binaries that prepend the game command
+#   - Tokens after %command% are additional game arguments
+#   - %command% itself is stripped (it represents the game command)
+# If no %command% is found, all of EXTRA_ARGS becomes GAME_ARGS (backward compatible).
+WRAPPERS=()
+GAME_ARGS=()
+_found_cmd=false
+for arg in "${EXTRA_ARGS[@]}"; do
+    if [ "$arg" = "%command%" ]; then
+        _found_cmd=true
+        continue
+    fi
+    # Strip Steam's "suppress default command" token — meaningless for non-Steam launchers
+    [ "$arg" = "#%command%" ] && continue
+    if $_found_cmd; then
+        GAME_ARGS+=("$arg")
+    else
+        WRAPPERS+=("$arg")
+    fi
+done
+if ! $_found_cmd; then
+    # No %command% found — all extras become game args (backward compatible)
+    # Still strip #%command% tokens
+    GAME_ARGS=()
+    for arg in "${EXTRA_ARGS[@]}"; do
+        [ "$arg" = "#%command%" ] && continue
+        GAME_ARGS+=("$arg")
+    done
+    WRAPPERS=()
+fi
+
+# Expand ~ in wrapper paths — bash doesn't expand tilde inside "${array[@]}",
+# causing "No such file or directory" (exit 127) at launch time.
+for i in "${!WRAPPERS[@]}"; do
+    WRAPPERS[$i]="${WRAPPERS[$i]/#\~/$HOME}"
+done
+
+if [ ${#WRAPPERS[@]} -gt 0 ]; then
+    log "[LaunchOptions] Wrapper commands: ${WRAPPERS[*]}"
+fi
+if [ ${#GAME_ARGS[@]} -gt 0 ]; then
+    log "[LaunchOptions] Game arguments: ${GAME_ARGS[*]}"
+fi
 
 # 1. Validate game key
 if [ -z "$KEY" ]; then
@@ -600,13 +683,22 @@ fi
 
 log "=== Launching: $KEY ==="
 
-# 2. Look up in map file
+# 2. Look up in map file (with recovery for race conditions)
 if [ ! -f "$MAP_FILE" ]; then
-    log "ERROR: Map file not found at $MAP_FILE"
-    if command -v zenity &>/dev/null; then
-        zenity --error --title="Unifideck" --text="No games configured.\n\nPlease run Sync Libraries from the Unifideck plugin first." --width=350 2>/dev/null &
+    log "WARNING: Map file not found at $MAP_FILE, waiting for backend to create it..."
+    # Signal the plugin backend to rebuild the map
+    touch "$HOME/.local/share/unifideck/.rebuild_map_requested" 2>/dev/null || true
+    # Brief wait for the backend or a concurrent sync to create it
+    sleep 2
+    if [ ! -f "$MAP_FILE" ]; then
+        log "ERROR: Map file still not found after recovery attempt"
+        notify_stage "toasts.launcher.mapMissing" "toasts.launcher.syncRequired" "critical"
+        if command -v zenity &>/dev/null; then
+            zenity --error --title="Unifideck" --text="Game library not synced.\n\nPlease open the Unifideck plugin and run Sync Libraries, then try again." --width=350 2>/dev/null &
+        fi
+        exit 1
     fi
-    exit 1
+    log "Map file recovered at $MAP_FILE"
 fi
 
 # Find line starting with KEY|
@@ -700,7 +792,30 @@ if [[ "$EXE_PATH" == *.exe ]] || [[ "$EXE_PATH" == *.EXE ]] || \
     log "GAMEID: $GAMEID"
     log "STORE: $STORE"
     log "PROTONPATH: ${PROTONPATH:-<umu will download>}"
-    
+
+    # ===========================================================================
+    # STEAM APP ID SETUP (for gamescope window matching)
+    # Gamescope needs the STEAM_GAME X11 property on wine windows to match them
+    # to the Steam game session and dismiss the loading screen.
+    # umu-run's monitor_windows reads UMU_STEAM_GAME_ID from os.environ and
+    # right-shifts by 32 to get the AppID. The 64-bit encoding for non-Steam
+    # shortcuts is: (appid_unsigned << 32) | 0x02000000
+    # ===========================================================================
+    if [ -n "$SHORTCUT_APPID" ] && [ "$SHORTCUT_APPID" != "0" ]; then
+        export SteamGameId="$SHORTCUT_APPID"
+        export STEAM_COMPAT_APP_ID="$SHORTCUT_APPID"
+        export SteamAppId="$SHORTCUT_APPID"
+        # UMU_STEAM_GAME_ID: 64-bit encoded value that umu-run >> 32 to get AppID
+        export UMU_STEAM_GAME_ID=$(python3 -c "print(($SHORTCUT_APPID << 32) | 0x02000000)")
+        log "[SteamInput] Using shortcut AppID: $SHORTCUT_APPID (UMU_STEAM_GAME_ID=$UMU_STEAM_GAME_ID)"
+    else
+        export SteamGameId="0"
+        export STEAM_COMPAT_APP_ID="0"
+        export SteamAppId="0"
+        export UMU_STEAM_GAME_ID="0"
+        log "[SteamInput] WARNING: No shortcut AppID found (gamescope window matching may not work)"
+    fi
+
     # ===========================================================================
     # PROTON VERSION COMPATIBILITY CHECK
     # Track which Proton version was used to create the prefix. If version changes
@@ -853,6 +968,7 @@ if [[ "$EXE_PATH" == *.exe ]] || [[ "$EXE_PATH" == *.EXE ]] || \
                 log "[FirstLaunch] system.reg not found after attempt $_cp_attempt, retrying in ${_cp_wait}s..."
                 notify_stage "toasts.launcher.networkError" "toasts.launcher.retryingUmu|seconds=${_cp_wait}|attempt=$((_cp_attempt+1))|max=$_cp_max" "normal"
                 # Clean up partial Steam Runtime downloads
+                rm -rf "$HOME/.local/share/umu/steamrt3" 2>/dev/null || true
                 rm -rf "$HOME/.local/share/umu/umu_steam3" 2>/dev/null || true
                 rm -f "$HOME/.local/share/umu/"*.parts 2>/dev/null || true
                 sleep $_cp_wait
@@ -939,19 +1055,8 @@ if [[ "$EXE_PATH" == *.exe ]] || [[ "$EXE_PATH" == *.EXE ]] || \
         export HEROIC_APP_RUNNER="legendary"
         export HEROIC_APP_SOURCE="epic"
 
-        # Use the non-Steam shortcut's AppID so Steam Input can find controller configs.
-        # Falling back to Heroic-style IDs if shortcut AppID is unavailable.
-        if [ -n "$SHORTCUT_APPID" ] && [ "$SHORTCUT_APPID" != "0" ]; then
-            export SteamGameId="$SHORTCUT_APPID"
-            export STEAM_COMPAT_APP_ID="$SHORTCUT_APPID"
-            export SteamAppId="$SHORTCUT_APPID"
-            log "[SteamInput] Using shortcut AppID for Steam Input: $SHORTCUT_APPID"
-        else
-            export SteamGameId="heroic-$GAME_ID"
-            export STEAM_COMPAT_APP_ID="0"
-            export SteamAppId="0"
-            log "[SteamInput] WARNING: No shortcut AppID found, using fallback (Steam Input may not work)"
-        fi
+        # NOTE: SteamAppId/SteamGameId/STEAM_COMPAT_APP_ID/UMU_STEAM_GAME_ID are now
+        # set in the common section above (before Epic/GOG/Amazon branching).
 
         # Enable NVAPI for modern Proton
         export PROTON_ENABLE_NVAPI="1"
@@ -1184,7 +1289,7 @@ print(result)
                 log "[Uplay] WARNING: direct Ubisoft launch prerequisites missing (upc.exe or UplayId). Falling back to Legendary."
                 IS_UBISOFT="false"
                 export LEGENDARY_WRAPPER_EXE="C:\\windows\\command\\EpicGamesLauncher.exe"
-                CMD_STR="$LEGENDARY_BIN launch $GAME_ID --no-wine --skip-version-check $OFFLINE_FLAG --wrapper \"$PYTHON_BIN $UMU_WRAPPER\" --language $EPIC_LANG"
+                CMD_STR="${WRAPPERS[@]:+${WRAPPERS[*]} }$LEGENDARY_BIN launch $GAME_ID --no-wine --skip-version-check $OFFLINE_FLAG --wrapper \"$PYTHON_BIN $UMU_WRAPPER\" --language $EPIC_LANG${GAME_ARGS[@]:+ -- ${GAME_ARGS[*]}}"
             fi
         else
             # Standard Epic path for non-Ubisoft titles
@@ -1228,7 +1333,7 @@ print(result)
                     log "[Cleanup] Removed com.epicgames.launcher from $(basename "$_reg")"
                 fi
             done
-            CMD_STR="$LEGENDARY_BIN launch $GAME_ID --no-wine --skip-version-check $OFFLINE_FLAG --wrapper \"$PYTHON_BIN $UMU_WRAPPER\" --language $EPIC_LANG"
+            CMD_STR="${WRAPPERS[@]:+${WRAPPERS[*]} }$LEGENDARY_BIN launch $GAME_ID --no-wine --skip-version-check $OFFLINE_FLAG --wrapper \"$PYTHON_BIN $UMU_WRAPPER\" --language $EPIC_LANG${GAME_ARGS[@]:+ -- ${GAME_ARGS[*]}}"
         fi
 
         log "Executing: $CMD_STR"
@@ -1273,8 +1378,9 @@ print(result)
         if [ "$IS_UBISOFT" = "true" ]; then
              eval "$CMD_STR" 2>>"$LOG_FILE" && GAME_EXIT_CODE=$? || GAME_EXIT_CODE=$?
         else
-             "$LEGENDARY_BIN" launch "$GAME_ID" --no-wine --skip-version-check $OFFLINE_FLAG \
-                 --wrapper "$PYTHON_BIN $UMU_WRAPPER" --language $EPIC_LANG 2>>"$LOG_FILE" \
+             "${WRAPPERS[@]}" "$LEGENDARY_BIN" launch "$GAME_ID" --no-wine --skip-version-check $OFFLINE_FLAG \
+                 --wrapper "$PYTHON_BIN $UMU_WRAPPER" --language $EPIC_LANG \
+                 ${GAME_ARGS[@]:+-- "${GAME_ARGS[@]}"} 2>>"$LOG_FILE" \
                  && GAME_EXIT_CODE=$? || GAME_EXIT_CODE=$?
         fi
 
@@ -1284,7 +1390,10 @@ print(result)
         wait_for_game_exit
 
         # === CLOUD SAVE: Upload after exit ===
-        log "Epic game exited with code: $GAME_EXIT_CODE"
+        # NOTE: GAME_EXIT_CODE is legendary's exit code, not the game's.
+        # Legendary spawns umu-run via Popen without wait(), so it almost always returns 0.
+        # The actual game exit happens inside the container (waited by wait_for_game_exit above).
+        log "Epic game session ended (legendary exit code: $GAME_EXIT_CODE)"
         if [ "$IS_OFFLINE" = true ]; then
             log "[CloudSave] Offline mode - skipping post-launch sync"
         else
@@ -1356,24 +1465,29 @@ except Exception as e:
 
         # Build the command with any Amazon-specific args
         if [ -n "$AMAZON_ARGS" ]; then
-            CMD_STR="$PYTHON_BIN $UMU_WRAPPER \"$EXE_PATH\" $AMAZON_ARGS $*"
+            CMD_STR="$PYTHON_BIN $UMU_WRAPPER \"$EXE_PATH\" $AMAZON_ARGS ${GAME_ARGS[*]}"
         else
-            CMD_STR="$PYTHON_BIN $UMU_WRAPPER \"$EXE_PATH\" $*"
+            CMD_STR="$PYTHON_BIN $UMU_WRAPPER \"$EXE_PATH\" ${GAME_ARGS[*]}"
         fi
         log "Executing: $CMD_STR"
 
         # Notify user that game is launching
         notify_stage "toasts.launcher.launchingGame" "toasts.launcher.startingAmazonGame" "low"
 
-        # Restore Steam Overlay/Input before launching game (controller support)
-        restore_steam_env
+        # DO NOT restore Steam's LD_PRELOAD here.
+        # All umu-run launches go through pressure-vessel (a container) which has
+        # its own Steam overlay mechanism.  Re-exporting the host's
+        # gameoverlayrenderer.so via LD_PRELOAD causes "cannot be preloaded"
+        # errors and can crash/early-exit the game process (WARNING: Keyboard
+        # Interrupt).  Matches the Epic path (lines 1365-1371).
 
         # Execute umu-run for Amazon game (with retry for network failures)
+        # WRAPPERS prepend the command, GAME_ARGS passed as game arguments.
         if [ -n "$AMAZON_ARGS" ]; then
-            eval run_umu_with_retry "$PYTHON_BIN" "$UMU_WRAPPER" "\"$EXE_PATH\"" $AMAZON_ARGS "$@" \
+            eval "${WRAPPERS[@]}" run_umu_with_retry "$PYTHON_BIN" "$UMU_WRAPPER" "\"$EXE_PATH\"" $AMAZON_ARGS "${GAME_ARGS[@]}" \
                 && GAME_EXIT_CODE=$? || GAME_EXIT_CODE=$?
         else
-            run_umu_with_retry "$PYTHON_BIN" "$UMU_WRAPPER" "$EXE_PATH" "$@" \
+            "${WRAPPERS[@]}" run_umu_with_retry "$PYTHON_BIN" "$UMU_WRAPPER" "$EXE_PATH" "${GAME_ARGS[@]}" \
                 && GAME_EXIT_CODE=$? || GAME_EXIT_CODE=$?
         fi
 
@@ -1427,6 +1541,14 @@ except Exception as e:
         # Uses marker file to run only once per game prefix
         SETUP_MARKER="$PREFIX_PATH/.unifideck-gog-setup-done"
         GOG_SETUP_SCRIPT="$PLUGIN_DIR/bin/gog_setup.py"
+        
+        # Verify if goggame-*.info exists, if not, force setup
+        # This handles cases where the marker exists but setup failed to generate the info file
+        GOG_INFO_FILE=$(find "$WORK_DIR" -maxdepth 2 -iname "goggame-*.info" | head -n 1)
+        if [ -z "$GOG_INFO_FILE" ]; then
+            log "[Setup] goggame-*.info file is missing. Forcing setup to generate it."
+            rm -f "$SETUP_MARKER"
+        fi
 
         if [ ! -f "$SETUP_MARKER" ] && [ -f "$GOG_SETUP_SCRIPT" ]; then
             log "[Setup] Running first-time GOG redistributable installation..."
@@ -1539,12 +1661,17 @@ except Exception as e:
         # Notify user that game is launching
         notify_stage "toasts.launcher.launchingGame" "toasts.launcher.startingGogGame" "low"
 
-        # Restore Steam Overlay/Input before launching game (controller support)
-        restore_steam_env
+        # DO NOT restore Steam's LD_PRELOAD here.
+        # All umu-run launches go through pressure-vessel (a container) which has
+        # its own Steam overlay mechanism.  Re-exporting the host's
+        # gameoverlayrenderer.so via LD_PRELOAD causes "cannot be preloaded"
+        # errors and can crash/early-exit the game process (WARNING: Keyboard
+        # Interrupt).  Matches the Epic path (lines 1365-1371).
 
         # Execute umu-run with retry for network failures
-        # NOTE: Do NOT pass "$@" - it contains gog:GAME_ID which umu-run doesn't understand
-        run_umu_with_retry "$PYTHON_BIN" "$UMU_WRAPPER" "$EXE_PATH" \
+        # WRAPPERS (from %command% split) prepend the game command.
+        # GAME_ARGS (post-%command% tokens) are passed as game arguments.
+        "${WRAPPERS[@]}" run_umu_with_retry "$PYTHON_BIN" "$UMU_WRAPPER" "$EXE_PATH" "${GAME_ARGS[@]}" \
             && GAME_EXIT_CODE=$? || GAME_EXIT_CODE=$?
 
         wait_for_game_exit

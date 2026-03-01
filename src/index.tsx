@@ -149,11 +149,13 @@ import InstallInfoDisplay, {
 
 /**
  * Find the correct insertion index for PlaySectionWrapper in InnerContainer.
- * Strategy: Insert right after the native PlaySection element.
+ * Strategy: Insert right after the native PlaySection element, or right after
+ * the header capsule if the PlaySection can't be identified by class.
  * Identification heuristics (in priority order):
  *   1. Child with className matching playSectionClasses.Container
- *   2. Second non-injected native child (native order: [Header, PlaySection, Content])
- *   3. Fallback: Math.min(2, length)
+ *   2. Child with className matching header capsule classes (insert after it)
+ *   3. After first native child (header is always index 0)
+ *   4. Fallback: Math.min(1, length)
  * Returns the index to splice AT (i.e., the element will appear at this index).
  */
 function findPlaySectionInsertIndex(children: any[]): number {
@@ -165,18 +167,28 @@ function findPlaySectionInsertIndex(children: any[]): number {
     if (idx >= 0) return idx + 1;
   }
 
-  // Heuristic 2: Insert after the second native child (skip our injected elements).
-  // InnerContainer native order: [HeaderCapsule, PlaySection, AboutThisGame].
-  // We want to insert after PlaySection (the second native child).
-  let nativeCount = 0;
+  // Heuristic 2: Find the header capsule by class and insert right after it.
+  // For non-Steam games, the PlaySection might not be a separate child or might
+  // use different classes. Inserting after the header ensures correct visual position.
+  const headerIdx = children.findIndex((child: any) => {
+    const cn = child?.props?.className || "";
+    return (
+      (appDetailsHeaderClasses?.TopCapsule &&
+        cn.includes?.(appDetailsHeaderClasses.TopCapsule)) ||
+      (appDetailsClasses?.Header && cn.includes?.(appDetailsClasses.Header))
+    );
+  });
+  if (headerIdx >= 0) return headerIdx + 1;
+
+  // Heuristic 3: Insert after the first native child (skip our injected elements).
+  // InnerContainer's first native child is always the header capsule.
   for (let i = 0; i < children.length; i++) {
     if (children[i]?.key?.startsWith?.("unifideck-")) continue;
-    nativeCount++;
-    if (nativeCount === 2) return i + 1; // After second native child (PlaySection)
+    return i + 1;
   }
 
   // Final fallback
-  return Math.min(2, children.length);
+  return Math.min(1, children.length);
 }
 
 // Patch function for game details route - EXTRACTED TO MODULE SCOPE (ProtonDB/HLTB pattern)
