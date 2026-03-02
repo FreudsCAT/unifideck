@@ -917,6 +917,7 @@ if [[ "$EXE_PATH" == *.exe ]] || [[ "$EXE_PATH" == *.EXE ]] || \
                 rm -rf "$PREFIX_PFX" 2>/dev/null || true
                 rm -f "$PREFIX_PATH/unifideck_winetricks_complete.marker" 2>/dev/null || true
                 rm -f "$PREFIX_PATH/.unifideck_prereqs_"*.done 2>/dev/null || true
+                rm -f "$PREFIX_PATH/.unifideck-gog-setup-done" 2>/dev/null || true
 
                 log "[Proton] Prefix cleared, will be recreated on launch"
                 
@@ -1431,7 +1432,7 @@ print(result)
             # Parse launch args from fuel.json if present
             AMAZON_ARGS=$(python3 -c "import json, re, sys
 try:
-    with open('$FUEL_JSON', 'r') as f:
+    with open(sys.argv[1], 'r') as f:
         content = f.read()
         # Remove single-line comments (fuel.json may have them)
         content = re.sub(r'//.*$', '', content, flags=re.MULTILINE)
@@ -1442,7 +1443,7 @@ try:
             print(' '.join(f'\"{arg}\"' for arg in args))
 except Exception as e:
     print('', file=sys.stderr)
-" 2>> "$LOG_FILE" || true)
+" "$FUEL_JSON" 2>> "$LOG_FILE" || true)
             log "Obtained Amazon args: $AMAZON_ARGS"
         else
             log "No fuel.json found, launching without additional args"
@@ -1697,31 +1698,44 @@ except Exception as e:
             && GAME_EXIT_CODE=$? || GAME_EXIT_CODE=$?
 
         # === GOG LAUNCHER FALLBACK ===
-        # If the primary executable crashed quickly (< 45s including retry overhead),
-        # it may be a broken launcher stub (e.g., Uplay's Launcher.exe exits with 53).
-        # run_umu_with_retry adds ~20s of retry overhead (3 attempts + waits), so we
-        # use 45s to cover that. A real game session lasts much longer than this.
-        # Check for a "game" category task in goggame-*.info and retry with that.
+        # If the primary executable exited quickly (< 15s), it may be a broken
+        # launcher stub (e.g., Uplay's Launcher.exe for Prince of Persia).
+        # These stubs exit fast — sometimes with code 0, sometimes non-zero —
+        # because the backing service (Uplay/UConnect) isn't installed.
+        # We don't check the exit code: a real game session lasts minutes/hours,
+        # so any exit under 15s from a 'launcher'-category task is suspicious.
+        # 15s is tight enough to avoid false positives from a user manually
+        # closing a working launcher (Wine startup + window render + user
+        # interaction takes at least 15s). Only 'launcher'/'tool' category
+        # primary tasks can trigger this — game-category tasks are never bypassed.
         LAUNCH_ELAPSED=$(( $(date +%s) - LAUNCH_START ))
-        if [ "$GAME_EXIT_CODE" -ne 0 ] && [ "$LAUNCH_ELAPSED" -lt 45 ]; then
+        if [ "$LAUNCH_ELAPSED" -lt 15 ]; then
             FALLBACK_EXE=$("$PYTHON_BIN" -c "
 import json, glob, os, sys
-for f in glob.glob(os.path.join('''$WORK_DIR''', 'goggame-*.info')):
+for f in glob.glob(os.path.join(sys.argv[1], 'goggame-*.info')):
     try:
         data = json.load(open(f))
     except Exception:
         continue
-    for t in data.get('playTasks', []):
+    tasks = data.get('playTasks', [])
+    # Only fall back if the primary task is a launcher stub, not a real game exe.
+    # Real launchers (e.g. The Witcher's launcher) run for the full session so
+    # LAUNCH_ELAPSED will be >> 15s. If they DO crash fast, we still want to
+    # avoid silently bypassing them unless the task is explicitly a launcher type.
+    primary = next((t for t in tasks if t.get('isPrimary')), None)
+    if not primary or primary.get('category', '').lower() not in ('launcher', 'tool'):
+        break
+    for t in tasks:
         if t.get('category') == 'game' and t.get('type') == 'FileTask' and t.get('path'):
-            p = os.path.join('''$WORK_DIR''', t['path'].replace(chr(92), '/'))
+            p = os.path.join(sys.argv[1], t['path'].replace(chr(92), '/'))
             if os.path.isfile(p):
                 print(p)
                 sys.exit(0)
     break
-" 2>/dev/null)
+" "$WORK_DIR" 2>/dev/null)
 
             if [ -n "$FALLBACK_EXE" ] && [ "$FALLBACK_EXE" != "$EXE_PATH" ]; then
-                log "[GOG] Launcher failed (code $GAME_EXIT_CODE in ${LAUNCH_ELAPSED}s), retrying with game exe: $FALLBACK_EXE"
+                log "[GOG] Launcher stub exited early (code $GAME_EXIT_CODE in ${LAUNCH_ELAPSED}s), falling back to game exe: $FALLBACK_EXE"
                 notify_stage "toasts.launcher.launcherFallback" "toasts.launcher.retryingWithGameExe" "normal"
                 "${WRAPPERS[@]}" run_umu_with_retry "$PYTHON_BIN" "$UMU_WRAPPER" "$FALLBACK_EXE" "${GAME_ARGS[@]}" \
                     && GAME_EXIT_CODE=$? || GAME_EXIT_CODE=$?

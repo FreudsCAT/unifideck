@@ -446,12 +446,17 @@ def install_redistributables(deps: list[str], redist_manifest: dict, prefix_path
 
 
 def apply_script_registry(game_id: str, prefix_path: str, install_path: str) -> bool:
-    """Apply goggame-*.script registry actions to the Wine prefix.
+    """Apply goggame-*.script setRegistry actions to the Wine prefix.
 
     GOG Galaxy normally processes these at install time, but gogdl skips them.
     These contain critical registry entries that games need to find their
     installation directory, configure language, etc. Particularly important
     for older Ubisoft titles (Prince of Persia, Assassin's Creed, etc.).
+
+    Note: 'Execute' actions in the script file are intentionally skipped.
+    Running arbitrary executables here (in Gaming Mode, no display) risks
+    hanging on a GUI dialog and corrupting the Wine prefix. Redistributable
+    installation is handled separately by gog_setup.py's dedicated paths.
     """
     # Find goggame-*.script files in install directory
     script_files = glob.glob(os.path.join(install_path, f"goggame-{game_id}.script"))
@@ -535,32 +540,16 @@ def apply_script_registry(game_id: str, prefix_path: str, install_path: str) -> 
                     # Don't fail the whole setup for registry issues
 
             elif action_type == "Execute":
-                executable = args.get("executable", "")
-                working_dir = args.get("workingDir", "")
-
-                if not executable:
-                    log(f"[Script] Skipping {action_name}: no executable")
-                    continue
-
-                # Substitute {app} placeholder
-                executable = executable.replace("{app}", install_path)
-                if working_dir:
-                    working_dir = working_dir.replace("{app}", install_path)
-
-                # Determine if it's a .cmd/.bat or .exe
-                ext = os.path.splitext(executable)[1].lower()
-                if ext in (".cmd", ".bat"):
-                    # Convert to Windows path and run via cmd.exe
-                    win_exe = "Z:" + executable.replace("/", "\\")
-                    log(f"[Script] Executing: cmd.exe /c {win_exe}")
-                    if not run_wine_command("cmd.exe", ["/c", win_exe], prefix_path, install_path):
-                        log(f"[Script] WARNING: Failed to execute {action_name}")
-                elif ext == ".exe":
-                    log(f"[Script] Executing: {executable}")
-                    if not run_wine_command(executable, [], prefix_path, install_path):
-                        log(f"[Script] WARNING: Failed to execute {action_name}")
-                else:
-                    log(f"[Script] Skipping {action_name}: unsupported extension {ext}")
+                # Execute actions are intentionally skipped.
+                # GOG Galaxy runs these at install time (e.g. launchers, setup wizards),
+                # but running them here — inside a Wine prefix with no display manager
+                # in Gaming Mode — risks hanging indefinitely on a GUI dialog with no
+                # way for the user to interact. A hang here writes the setup marker
+                # BEFORE setup completes, permanently poisoning the prefix.
+                # The redistributable/setup work is already handled by gog_setup.py's
+                # dedicated install_redists / temp_executable paths.
+                executable = args.get("executable", "<unknown>")
+                log(f"[Script] Skipping Execute action '{action_name}' ({executable}) — skipped to avoid prefix corruption")
             else:
                 log(f"[Script] Skipping {action_name}: unhandled action type '{action_type}'")
 
