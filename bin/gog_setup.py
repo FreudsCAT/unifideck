@@ -9,6 +9,7 @@ This script:
 3. Downloads redistributables via gogdl if not present
 4. Runs scriptinterpreter.exe for v2 manifests
 5. Installs each redistributable into the Wine prefix
+6. Applies goggame-*.script registry actions (setRegistry, Execute)
 
 Usage: gog_setup.py <game_id> <prefix_path> <install_path> [language]
 
@@ -22,6 +23,7 @@ import json
 import subprocess
 import shlex
 import fcntl
+import glob
 import time
 from pathlib import Path
 
@@ -443,6 +445,129 @@ def install_redistributables(deps: list[str], redist_manifest: dict, prefix_path
     return success
 
 
+def apply_script_registry(game_id: str, prefix_path: str, install_path: str) -> bool:
+    """Apply goggame-*.script registry actions to the Wine prefix.
+
+    GOG Galaxy normally processes these at install time, but gogdl skips them.
+    These contain critical registry entries that games need to find their
+    installation directory, configure language, etc. Particularly important
+    for older Ubisoft titles (Prince of Persia, Assassin's Creed, etc.).
+    """
+    # Find goggame-*.script files in install directory
+    script_files = glob.glob(os.path.join(install_path, f"goggame-{game_id}.script"))
+    if not script_files:
+        # Also check with wildcard in case game_id doesn't match filename
+        script_files = glob.glob(os.path.join(install_path, "goggame-*.script"))
+    if not script_files:
+        log(f"[Script] No goggame-*.script found in {install_path}")
+        return True  # Not an error — many games don't have one
+
+    # Convert Linux install path to Windows path for {app} substitution
+    # Wine maps / to Z:\ drive
+    win_install_path = "Z:" + install_path.replace("/", "\\")
+
+    # Registry root mapping
+    root_map = {
+        "HKEY_LOCAL_MACHINE": "HKLM",
+        "HKLM": "HKLM",
+        "HKEY_CURRENT_USER": "HKCU",
+        "HKCU": "HKCU",
+        "HKEY_CLASSES_ROOT": "HKCR",
+        "HKCR": "HKCR",
+    }
+
+    # Value type mapping
+    type_map = {
+        "string": "REG_SZ",
+        "dword": "REG_DWORD",
+        "binary": "REG_BINARY",
+        "expandstring": "REG_EXPAND_SZ",
+        "multistring": "REG_MULTI_SZ",
+    }
+
+    success = True
+    for script_file in script_files:
+        try:
+            with open(script_file, 'r') as f:
+                script_data = json.load(f)
+        except Exception as e:
+            log(f"[Script] Failed to parse {script_file}: {e}")
+            continue
+
+        actions = script_data.get("actions", [])
+        log(f"[Script] Processing {os.path.basename(script_file)}: {len(actions)} actions")
+
+        for action in actions:
+            action_name = action.get("name", "unnamed")
+            install_info = action.get("install", {})
+            action_type = install_info.get("action", "")
+            args = install_info.get("arguments", {})
+
+            if action_type == "setRegistry":
+                root = args.get("root", "")
+                subkey = args.get("subkey", "")
+                value_name = args.get("valueName", "")
+                value_data = args.get("valueData", "")
+                value_type = args.get("valueType", "string")
+
+                # Map root to Wine format
+                wine_root = root_map.get(root, root)
+                if not wine_root or not subkey:
+                    log(f"[Script] Skipping {action_name}: missing root or subkey")
+                    continue
+
+                # Substitute {app} placeholder
+                if isinstance(value_data, str):
+                    value_data = value_data.replace("{app}", win_install_path)
+
+                # Build reg.exe add command
+                reg_key = f"{wine_root}\\{subkey}"
+                reg_args = ["add", reg_key, "/f"]
+
+                if value_name:
+                    reg_type = type_map.get(value_type.lower(), "REG_SZ")
+                    reg_args += ["/v", value_name, "/t", reg_type, "/d", str(value_data)]
+                # If no valueName, this is a "create key only" action (deleteSubkeys)
+
+                log(f"[Script] REG ADD {reg_key} /v {value_name} = {value_data} ({value_type})")
+                if not run_wine_command("reg.exe", reg_args, prefix_path, install_path):
+                    log(f"[Script] WARNING: Failed to set registry {action_name}")
+                    # Don't fail the whole setup for registry issues
+
+            elif action_type == "Execute":
+                executable = args.get("executable", "")
+                working_dir = args.get("workingDir", "")
+
+                if not executable:
+                    log(f"[Script] Skipping {action_name}: no executable")
+                    continue
+
+                # Substitute {app} placeholder
+                executable = executable.replace("{app}", install_path)
+                if working_dir:
+                    working_dir = working_dir.replace("{app}", install_path)
+
+                # Determine if it's a .cmd/.bat or .exe
+                ext = os.path.splitext(executable)[1].lower()
+                if ext in (".cmd", ".bat"):
+                    # Convert to Windows path and run via cmd.exe
+                    win_exe = "Z:" + executable.replace("/", "\\")
+                    log(f"[Script] Executing: cmd.exe /c {win_exe}")
+                    if not run_wine_command("cmd.exe", ["/c", win_exe], prefix_path, install_path):
+                        log(f"[Script] WARNING: Failed to execute {action_name}")
+                elif ext == ".exe":
+                    log(f"[Script] Executing: {executable}")
+                    if not run_wine_command(executable, [], prefix_path, install_path):
+                        log(f"[Script] WARNING: Failed to execute {action_name}")
+                else:
+                    log(f"[Script] Skipping {action_name}: unsupported extension {ext}")
+            else:
+                log(f"[Script] Skipping {action_name}: unhandled action type '{action_type}'")
+
+    log(f"[Script] Registry processing complete")
+    return success
+
+
 def run_setup(game_id: str, prefix_path: str, install_path: str, language: str = "en-US"):
     """Main setup function - installs redistributables.
     
@@ -505,6 +630,9 @@ def run_setup(game_id: str, prefix_path: str, install_path: str, language: str =
             errors.append("Redistributable manifest not found")
     else:
         log("No redistributable dependencies for this game")
+
+    # 6. Apply goggame-*.script registry actions (critical for older Ubisoft titles)
+    apply_script_registry(game_id, prefix_path, install_path)
 
     if errors:
         log(f"=== Setup FAILED with errors: {', '.join(errors)} ===")

@@ -1625,6 +1625,10 @@ except Exception as e:
         export PROTON_ENABLE_NVAPI="1"
         export DXVK_NVAPI_ALLOW_OTHER_DRIVERS="1"
 
+        # Explicitly set STEAM_COMPAT_INSTALL_PATH so umu-run uses the actual work dir
+        # (Needed for games where the executable is in a subdirectory like Launcher/)
+        export STEAM_COMPAT_INSTALL_PATH="$WORK_DIR"
+
         # === LANGUAGE FIX: Set game language based on Unifideck preference ===
         # GOG games read language from goggame-*.info in the install directory.
         # This modifies that file to use the user's preferred language.
@@ -1688,8 +1692,41 @@ except Exception as e:
         # Execute umu-run with retry for network failures
         # WRAPPERS (from %command% split) prepend the game command.
         # GAME_ARGS (post-%command% tokens) are passed as game arguments.
+        LAUNCH_START=$(date +%s)
         "${WRAPPERS[@]}" run_umu_with_retry "$PYTHON_BIN" "$UMU_WRAPPER" "$EXE_PATH" "${GAME_ARGS[@]}" \
             && GAME_EXIT_CODE=$? || GAME_EXIT_CODE=$?
+
+        # === GOG LAUNCHER FALLBACK ===
+        # If the primary executable crashed quickly (< 45s including retry overhead),
+        # it may be a broken launcher stub (e.g., Uplay's Launcher.exe exits with 53).
+        # run_umu_with_retry adds ~20s of retry overhead (3 attempts + waits), so we
+        # use 45s to cover that. A real game session lasts much longer than this.
+        # Check for a "game" category task in goggame-*.info and retry with that.
+        LAUNCH_ELAPSED=$(( $(date +%s) - LAUNCH_START ))
+        if [ "$GAME_EXIT_CODE" -ne 0 ] && [ "$LAUNCH_ELAPSED" -lt 45 ]; then
+            FALLBACK_EXE=$("$PYTHON_BIN" -c "
+import json, glob, os, sys
+for f in glob.glob(os.path.join('''$WORK_DIR''', 'goggame-*.info')):
+    try:
+        data = json.load(open(f))
+    except Exception:
+        continue
+    for t in data.get('playTasks', []):
+        if t.get('category') == 'game' and t.get('type') == 'FileTask' and t.get('path'):
+            p = os.path.join('''$WORK_DIR''', t['path'].replace(chr(92), '/'))
+            if os.path.isfile(p):
+                print(p)
+                sys.exit(0)
+    break
+" 2>/dev/null)
+
+            if [ -n "$FALLBACK_EXE" ] && [ "$FALLBACK_EXE" != "$EXE_PATH" ]; then
+                log "[GOG] Launcher failed (code $GAME_EXIT_CODE in ${LAUNCH_ELAPSED}s), retrying with game exe: $FALLBACK_EXE"
+                notify_stage "toasts.launcher.launcherFallback" "toasts.launcher.retryingWithGameExe" "normal"
+                "${WRAPPERS[@]}" run_umu_with_retry "$PYTHON_BIN" "$UMU_WRAPPER" "$FALLBACK_EXE" "${GAME_ARGS[@]}" \
+                    && GAME_EXIT_CODE=$? || GAME_EXIT_CODE=$?
+            fi
+        fi
 
         wait_for_game_exit
 

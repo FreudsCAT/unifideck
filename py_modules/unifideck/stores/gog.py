@@ -1920,12 +1920,17 @@ class GOGAPIClient:
                             full_exe = full_exe.replace('\\', '/')
                             full_work = full_work.replace('\\', '/')
                             
-                            # FIX: Some games (like Shadow of Mordor) have exe in x64/ subdir but data files
-                            # (.arch05) in the install root. If data files exist in root, use root as work_dir
+                            # FIX: Some games have exe in a subdir but data files in the install root.
+                            # Examples: Shadow of Mordor (.arch05), Prince of Persia (.forge)
+                            # If data files exist in root, use root as work_dir
                             if full_work != install_path:
-                                data_files_in_root = any(f.endswith('.arch05') for f in os.listdir(install_path) if os.path.isfile(os.path.join(install_path, f)))
+                                data_extensions = ('.arch05', '.forge')
+                                data_files_in_root = any(
+                                    any(f.endswith(ext) for ext in data_extensions)
+                                    for f in os.listdir(install_path) if os.path.isfile(os.path.join(install_path, f))
+                                )
                                 if data_files_in_root:
-                                    logger.info(f"[GOG] Data files (.arch05) found in install root, using install_path as work_dir")
+                                    logger.info(f"[GOG] Data files found in install root, using install_path as work_dir")
                                     full_work = install_path
                             
                             if os.path.exists(full_exe):
