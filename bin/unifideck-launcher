@@ -646,6 +646,43 @@ if [ ${#EXTRA_ARGS[@]} -gt 0 ]; then
     log "[LaunchOptions] Extra game arguments: ${EXTRA_ARGS[*]}"
 fi
 
+# ==============================================================================
+# LSFG (Lossless Scaling Frame Generation) PRE-SPLIT DETECTION
+#
+# ~/lsfg must be stripped from EXTRA_ARGS *before* the WRAPPERS/GAME_ARGS split
+# below. Without %command% in the launch options the splitter routes everything
+# to GAME_ARGS (WRAPPERS stays empty), so ~/lsfg would end up appended to the
+# game's argument list and the game exe receives it as an unknown flag.
+#
+# We detect and strip it here, before the split, so it never reaches either array.
+# ==============================================================================
+_lsfg_requested=false
+_lsfg_filtered_extra=()
+for _arg in "${EXTRA_ARGS[@]}"; do
+    # Expand ~ so path matching works regardless of how the user wrote it
+    _arg_expanded="${_arg/#\~/$HOME}"
+    case "$_arg_expanded" in
+        */lsfg)
+            _lsfg_requested=true
+            log "[LSFG] ~/lsfg detected — stripping from args, will export ENABLE_LSFG=1"
+            ;;
+        *)
+            _lsfg_filtered_extra+=("$_arg")
+            ;;
+    esac
+done
+EXTRA_ARGS=("${_lsfg_filtered_extra[@]}")
+
+# Also honour explicit LSFG=1 or ENABLE_LSFG=1 set via launch options env vars
+if [ "${LSFG:-0}" = "1" ] || [ "${ENABLE_LSFG:-0}" = "1" ]; then
+    _lsfg_requested=true
+fi
+
+if [ "$_lsfg_requested" = true ]; then
+    export ENABLE_LSFG=1
+    log "[LSFG] ENABLE_LSFG=1 — lsfg-vk layer will activate for this game"
+fi
+
 # Split EXTRA_ARGS into WRAPPERS (before %command%) and GAME_ARGS (after %command%).
 # Users can write launch options like "gamemoderun %command% --windowed" where:
 #   - Tokens before %command% are wrapper binaries that prepend the game command

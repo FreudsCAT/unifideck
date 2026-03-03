@@ -36,17 +36,17 @@ gog:1103900211 MANGOHUD=1 DXVK_HUD=fps
 
 Unifideck automatically recognises any `ALL_CAPS_NAME=value` style entry (letters, numbers, and underscores in the name) and exports it for the game. You don't need to stick to a predefined list — common examples:
 
-| What you type                                              | What it does                                                                                                                |
-| ---------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
-| `MANGOHUD=1`                                               | Turns on the MangoHud overlay                                                                                               |
-| `mangohud=1`                                               | Same — lowercase is fine too                                                                                                |
-| `DXVK_HUD=fps,frametime`                                   | Shows DXVK frame stats                                                                                                      |
-| `PROTON_ENABLE_NVAPI=1`                                    | Enables Nvidia API emulation                                                                                                |
-| `PROTON_REMOTE_DEBUG_CMD="/path/to/trainer.exe"`           | Runs a trainer alongside the game                                                                                           |
-| `PRESSURE_VESSEL_FILESYSTEMS_RW=/home/deck/Games/Trainers` | Grants the game access to a folder                                                                                          |
-| `STEAM_COMPAT_MOUNTS=/mnt/games`                           | Mounts extra storage inside the game container                                                                              |
-| `LSFG=1`                                                   | Enables [LSFG frame generation](https://www.lsfg.app/) (AI-powered framegen / lossless scaling, requires `fgmod` installed) |
-| `PROTON=GE-Proton10-10`                                    | Forces a specific Proton version                                                                                            |
+| What you type                                              | What it does                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| ---------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `MANGOHUD=1`                                               | Turns on the MangoHud overlay                                                                                                                                                                                                                                                                                                                                                                                                         |
+| `mangohud=1`                                               | Same — lowercase is fine too                                                                                                                                                                                                                                                                                                                                                                                                          |
+| `DXVK_HUD=fps,frametime`                                   | Shows DXVK frame stats                                                                                                                                                                                                                                                                                                                                                                                                                |
+| `PROTON_ENABLE_NVAPI=1`                                    | Enables Nvidia API emulation                                                                                                                                                                                                                                                                                                                                                                                                          |
+| `PROTON_REMOTE_DEBUG_CMD="/path/to/trainer.exe"`           | Runs a trainer alongside the game                                                                                                                                                                                                                                                                                                                                                                                                     |
+| `PRESSURE_VESSEL_FILESYSTEMS_RW=/home/deck/Games/Trainers` | Grants the game access to a folder                                                                                                                                                                                                                                                                                                                                                                                                    |
+| `STEAM_COMPAT_MOUNTS=/mnt/games`                           | Mounts extra storage inside the game container                                                                                                                                                                                                                                                                                                                                                                                        |
+| `LSFG=1` or `~/lsfg`                                       | Enables [LSFG frame generation](https://www.lsfg.app/) via the lsfg-vk Vulkan layer. Both forms are supported — `~/lsfg` is the standard Decky LSFG-VK wrapper and is translated automatically. Requires [Decky LSFG-VK](https://github.com/xXJSONDeruloXx/decky-lsfg-vk) plugin + [Lossless Scaling](https://store.steampowered.com/app/993090/Lossless_Scaling/) installed, and a matching profile in `~/.config/lsfg-vk/conf.toml` |
+| `PROTON=GE-Proton10-10`                                    | Forces a specific Proton version                                                                                                                                                                                                                                                                                                                                                                                                      |
 
 > [!NOTE]
 > Values with spaces must be quoted, e.g. `PROTON_REMOTE_DEBUG_CMD="/home/deck/Games/Trainers/My Trainer.exe"`
@@ -81,13 +81,31 @@ Or with a wrapper and game argument:
 epic:Salt ~/fgmod/fgmod MANGOHUD=1
 ```
 
-**Frame generation with LSFG** — run `fgmod` as a wrapper and enable LSFG:
+**Frame generation with LSFG** — use either form:
 
 ```
-epic:Salt ~/fgmod/fgmod LSFG=1
+epic:Salt ~/lsfg
 ```
 
-> [!NOTE] > `fgmod` must be installed separately. See the [LSFG guide](https://www.lsfg.app/) for setup instructions. Once installed, this works for Epic, GOG, and Amazon games alike.
+```
+epic:Salt LSFG=1
+```
+
+Both work identically. `~/lsfg` is the standard method recommended by the Decky LSFG-VK plugin — Unifideck intercepts it and translates it to `ENABLE_LSFG=1` so the lsfg-vk Vulkan layer activates correctly. You can combine with other options:
+
+```
+gog:1103900211 ~/lsfg MANGOHUD=1
+```
+
+> [!NOTE] > **Prerequisites**:
+>
+> - **Purchase [Lossless Scaling](https://store.steampowered.com/app/993090/Lossless_Scaling/) on Steam** — provides the `Lossless.dll` frame generation engine
+> - **Install [Decky LSFG-VK](https://github.com/xXJSONDeruloXx/decky-lsfg-vk) plugin** through Decky Loader — provides the Vulkan layer and configuration UI
+> - **Configure a profile** in the LSFG-VK plugin settings with the game's executable name in the `active_in` field
+>
+> The Lossless Scaling app does **not** need to be running — lsfg-vk loads the DLL directly from disk.
+>
+> `~/lsfg %command%` (the Steam-standard syntax) is also accepted — `%command%` is ignored for Unifideck shortcuts as usual.
 
 Unifideck sorts everything out:
 
