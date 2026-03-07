@@ -1206,7 +1206,7 @@ class GOGAPIClient:
         # IMPORTANT: We use 'repair' instead of 'download' because gogdl V2 has a bug
         # where 'download' sees an empty manifest and reports "Nothing to do" even when
         # no files exist. The 'repair' command always verifies and downloads missing files.
-        # Command: gogdl ... repair [id] --platform [plat] --path [path] --skip-dlcs
+        # Command: gogdl ... download/repair [id] --platform [plat] --path [path] --with-dlcs
         
         # IMPORTANT: Snapshot existing directories BEFORE gogdl runs
         # This prevents detecting games installed by Heroic or other launchers
@@ -1275,6 +1275,7 @@ class GOGAPIClient:
             '--platform', platform,
             '--path', gogdl_path,
             '--support', support_dir,
+            '--with-dlcs',  # Automatically install all owned DLCs
         ]
         
         # STRATEGY:
@@ -1519,6 +1520,7 @@ class GOGAPIClient:
             '--platform', platform,
             '--path', repair_path,  # Use game folder path so any downloaded files go there
             '--lang', preferred_lang,
+            '--with-dlcs',  # Automatically install all owned DLCs
         ]
         
         repair_proc = await asyncio.create_subprocess_exec(
