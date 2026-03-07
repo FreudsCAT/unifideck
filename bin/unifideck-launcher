@@ -973,12 +973,13 @@ if [[ "$EXE_PATH" == *.exe ]] || [[ "$EXE_PATH" == *.EXE ]] || \
                 
                 # Backup save data if it exists
                 SAVE_BACKUP=""
+                rm -rf "$PREFIX_PATH"/.save_backup_* 2>/dev/null || true
                 if [ -d "$PREFIX_PFX/drive_c/users" ]; then
-                    SAVE_BACKUP="$PREFIX_PATH/.save_backup_$$"
+                    SAVE_BACKUP="$PREFIX_PATH/.save_backup"
                     log "[Proton] Backing up user data..."
                     cp -r "$PREFIX_PFX/drive_c/users" "$SAVE_BACKUP" 2>/dev/null || true
                 fi
-                
+
                 # Remove the prefix and all installation markers
                 rm -rf "$PREFIX_PFX" 2>/dev/null || true
                 rm -f "$PREFIX_PATH/unifideck_winetricks_complete.marker" 2>/dev/null || true
@@ -986,9 +987,6 @@ if [[ "$EXE_PATH" == *.exe ]] || [[ "$EXE_PATH" == *.EXE ]] || \
                 rm -f "$PREFIX_PATH/.unifideck-gog-setup-done" 2>/dev/null || true
 
                 log "[Proton] Prefix cleared, will be recreated on launch"
-                
-                # Note: save backup is kept at $SAVE_BACKUP if needed
-                # A more sophisticated solution would restore specific save folders
             else
                 log "[Proton] Minor version change, keeping prefix (Proton will upgrade it)"
             fi
@@ -1079,7 +1077,17 @@ if [[ "$EXE_PATH" == *.exe ]] || [[ "$EXE_PATH" == *.EXE ]] || \
     else
         log "[FirstLaunch] Prefix already initialized (system.reg exists)"
     fi
-    
+
+    # Restore backed-up user data after prefix (re)creation
+    if [ -n "$SAVE_BACKUP" ] && [ -d "$SAVE_BACKUP" ]; then
+        if [ -d "$PREFIX_PFX/drive_c/users" ]; then
+            log "[Proton] Restoring user data from backup..."
+            cp -a "$SAVE_BACKUP"/. "$PREFIX_PFX/drive_c/users/" 2>/dev/null || true
+            log "[Proton] User data restored"
+        fi
+        rm -rf "$SAVE_BACKUP"
+    fi
+
     # Check for umu-run
     if [ ! -f "$UMU_RUN" ]; then
         log "ERROR: umu-run not found at $UMU_RUN"
@@ -1628,7 +1636,15 @@ except Exception as e:
         
         # Verify if goggame-*.info exists, if not, force setup
         # This handles cases where the marker exists but setup failed to generate the info file
-        GOG_INFO_FILE=$(find "$WORK_DIR" -maxdepth 2 -iname "goggame-*.info" | head -n 1)
+        # Search WORK_DIR and its parents for goggame-*.info
+        # (handles games where exe is in a subdirectory like Build/Final/)
+        GOG_INFO_FILE=""
+        _search_dir="$WORK_DIR"
+        while [ -n "$_search_dir" ] && [ "$_search_dir" != "/" ]; do
+            GOG_INFO_FILE=$(find "$_search_dir" -maxdepth 1 -iname "goggame-*.info" 2>/dev/null | head -n 1)
+            [ -n "$GOG_INFO_FILE" ] && break
+            _search_dir=$(dirname "$_search_dir")
+        done
         if [ -z "$GOG_INFO_FILE" ]; then
             log "[Setup] goggame-*.info file is missing. Forcing setup to generate it."
             rm -f "$SETUP_MARKER"

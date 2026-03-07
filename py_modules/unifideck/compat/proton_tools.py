@@ -94,11 +94,13 @@ def _load_proton_settings() -> Dict[str, Any]:
 
 
 def _save_proton_settings(data: Dict[str, Any]) -> bool:
-    """Save proton_settings.json. Returns True on success."""
+    """Save proton_settings.json atomically. Returns True on success."""
     try:
         PROTON_SETTINGS_FILE.parent.mkdir(parents=True, exist_ok=True)
-        with open(PROTON_SETTINGS_FILE, "w") as f:
+        tmp = PROTON_SETTINGS_FILE.with_suffix(".tmp")
+        with open(tmp, "w") as f:
             json.dump(data, f, indent=2)
+        tmp.rename(PROTON_SETTINGS_FILE)
         return True
     except Exception as e:
         logger.error(f"Error saving proton_settings.json: {e}")

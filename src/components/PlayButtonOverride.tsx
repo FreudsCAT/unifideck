@@ -625,10 +625,8 @@ const PlaySectionWrapperInner: FC<PlaySectionWrapperProps> = ({
             );
           }
 
-          // Clear saved proton setting only if the user genuinely has no FC.
-          // Skip if we're the ones who cleared FC (clearedFCRef is set) —
-          // otherwise we'd undo our own save on effect re-runs.
-          if (result.saved_proton_tool && !clearedFCRef.current) {
+          // No FC set — clear saved proton setting so launcher uses default
+          if (result.saved_proton_tool) {
             await call<[string, string], { success: boolean }>(
               "save_proton_setting",
               storeGameId,
