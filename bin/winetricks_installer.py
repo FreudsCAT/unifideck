@@ -221,6 +221,9 @@ def install_redistributables_via_umu(prefix_path: str, packages: list[str], game
         f.write(f"Installation failed after {max_attempts} attempts: {last_error}")
 
 
+
+
+
 def main():
     if len(sys.argv) < 3:
         print("Usage: winetricks_installer.py <game_id> <prefix_path>")
@@ -259,7 +262,7 @@ def main():
     
     # Install using umu-run
     install_redistributables_via_umu(prefix_path, packages, game_id)
-    
+
     logger.info(f"Winetricks installer complete for {game_id}")
     logger.info(f"{'='*60}")
 

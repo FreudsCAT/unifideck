@@ -1272,6 +1272,46 @@ if [[ "$EXE_PATH" == *.exe ]] || [[ "$EXE_PATH" == *.EXE ]] || \
         # Python path is already set at startup with version verification (PYTHON_BIN)
         log "Using Python (verified 3.10+): $PYTHON_BIN"
 
+        # === VCRUNTIME REGISTRY FIX ===
+        # Condition: marker absent or stale (Proton version changed).
+        # UE4 games call MsiQueryProductState to verify VC++ is installed.
+        # Winetricks copies DLLs but doesn't populate the MSI product database.
+        # Proton rewrites system.reg on prefix upgrades, erasing text-injected keys.
+        # Fix: import a .reg file via umu-run regedit AFTER Proton initializes.
+        # The marker is tied to the Proton directory name so this re-runs on switch.
+        VCREG_FILE="$PLUGIN_DIR/bin/vcruntime_fix.reg"
+        _PROTON_NAME="$(basename "$PROTONPATH" 2>/dev/null)"
+        VCREG_MARKER="$PREFIX_PATH/.unifideck_vcreg_${_PROTON_NAME}.done"
+        if [ -f "$VCREG_FILE" ] && [ ! -f "$VCREG_MARKER" ]; then
+            log "[VCRuntime] Importing VC++ registry keys for $_PROTON_NAME..."
+            # Place the .reg file where Wine can see it
+            _DRIVE_C=""
+            for _dc in "$ACTIVE_WINEPREFIX/drive_c" "$PREFIX_PATH/drive_c" "$PREFIX_PATH/pfx/drive_c"; do
+                [ -d "$_dc" ] && _DRIVE_C="$_dc" && break
+            done
+            if [ -n "$_DRIVE_C" ]; then
+                cp "$VCREG_FILE" "$_DRIVE_C/vcruntime_fix.reg"
+                # Run regedit inside Proton — same PROTONPATH/WINEPREFIX as game launch
+                # If using system umu-run, it doesn't need $PYTHON_BIN prefix
+                if [ "$UMU_WRAPPER" = "umu-run" ]; then
+                    _UMU_CMD="umu-run"
+                else
+                    _UMU_CMD="\"$PYTHON_BIN\" \"$UMU_WRAPPER\""
+                fi
+                if eval "$_UMU_CMD regedit \"C:\\vcruntime_fix.reg\"" >> "$LOG_FILE" 2>&1; then
+                    # Clean up stale markers from other Proton versions, write new one
+                    rm -f "$PREFIX_PATH"/.unifideck_vcreg_*.done 2>/dev/null
+                    touch "$VCREG_MARKER"
+                    log "[VCRuntime] ✓ Registry keys imported for $_PROTON_NAME"
+                else
+                    log "[VCRuntime] WARNING: regedit import failed (game may still work)"
+                fi
+                rm -f "$_DRIVE_C/vcruntime_fix.reg" 2>/dev/null
+            else
+                log "[VCRuntime] WARNING: drive_c not found, skipping registry import"
+            fi
+        fi
+
         # (LEGENDARY_CONFIG_PATH already set above, before EOS overlay block)
 
         # === LANGUAGE: Read Unifideck language preference for Epic launch ===
@@ -1425,7 +1465,35 @@ print(result)
                     log "[Cleanup] Removed com.epicgames.launcher from $(basename "$_reg")"
                 fi
             done
-            CMD_STR="${WRAPPERS[@]:+${WRAPPERS[*]} }$LEGENDARY_BIN launch $GAME_ID --no-wine --skip-version-check $OFFLINE_FLAG --wrapper \"$PYTHON_BIN $UMU_WRAPPER\" --language $EPIC_LANG${GAME_ARGS[@]:+ -- ${GAME_ARGS[*]}}"
+            # === EXE OVERRIDE: Bypass UE4 prerequisite launcher stubs ===
+            # Some UE4 games ship a tiny stub (e.g., Ghostrunner.exe, 540KB)
+            # that checks Windows registry for VC++ runtime versions before
+            # launching the real binary. Proton rewrites system.reg at startup,
+            # making registry injection impossible. We bypass the stub entirely.
+            EXE_OVERRIDE=""
+            EXE_OVERRIDE_FLAG=""
+            _EXE_OVERRIDE=$(python3 -c "
+import sys; sys.path.insert(0, '$PLUGIN_DIR/bin')
+from game_fixes import get_exe_override
+r = get_exe_override('$GAME_ID')
+print(r or '')
+" 2>/dev/null)
+            if [ -n "$_EXE_OVERRIDE" ]; then
+                # Resolve to absolute path and verify it exists
+                _INSTALL_PATH=$(python3 -c "
+import json
+with open('$HOME/.config/legendary/installed.json') as f:
+    d = json.load(f)
+print(d.get('$GAME_ID', {}).get('install_path', ''))
+" 2>/dev/null)
+                if [ -n "$_INSTALL_PATH" ] && [ -f "$_INSTALL_PATH/$_EXE_OVERRIDE" ]; then
+                    EXE_OVERRIDE_FLAG="--override-exe \"$_EXE_OVERRIDE\""
+                    log "[ExeOverride] Bypassing launcher stub: $_EXE_OVERRIDE"
+                else
+                    log "[ExeOverride] Override target not found: $_INSTALL_PATH/$_EXE_OVERRIDE"
+                fi
+            fi
+            CMD_STR="${WRAPPERS[@]:+${WRAPPERS[*]} }$LEGENDARY_BIN launch $GAME_ID --no-wine --skip-version-check $OFFLINE_FLAG $EXE_OVERRIDE_FLAG --wrapper \"$PYTHON_BIN $UMU_WRAPPER\" --language $EPIC_LANG${GAME_ARGS[@]:+ -- ${GAME_ARGS[*]}}"
         fi
 
         log "Executing: $CMD_STR"

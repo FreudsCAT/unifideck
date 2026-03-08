@@ -1,0 +1,32 @@
+Windows Registry Editor Version 5.00
+
+; VC++ 14.0 (2015-2022) Runtimes — satisfies UE4 MsiQueryProductState checks.
+; Imported via umu-run regedit after Proton initializes the prefix.
+
+[HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\VisualStudio\14.0\VC\Runtimes\x64]
+"Installed"=dword:00000001
+"Major"=dword:0000000e
+"Minor"=dword:0000001d
+"Bld"=dword:00007595
+"Version"="v14.29.30133.00"
+
+[HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\VisualStudio\14.0\VC\Runtimes\x86]
+"Installed"=dword:00000001
+"Major"=dword:0000000e
+"Minor"=dword:0000001d
+"Bld"=dword:00007595
+"Version"="v14.29.30133.00"
+
+[HKEY_LOCAL_MACHINE\SOFTWARE\WOW6432Node\Microsoft\VisualStudio\14.0\VC\Runtimes\x64]
+"Installed"=dword:00000001
+"Major"=dword:0000000e
+"Minor"=dword:0000001d
+"Bld"=dword:00007595
+"Version"="v14.29.30133.00"
+
+[HKEY_LOCAL_MACHINE\SOFTWARE\WOW6432Node\Microsoft\VisualStudio\14.0\VC\Runtimes\x86]
+"Installed"=dword:00000001
+"Major"=dword:0000000e
+"Minor"=dword:0000001d
+"Bld"=dword:00007595
+"Version"="v14.29.30133.00"
