@@ -1206,7 +1206,7 @@ class GOGAPIClient:
         # IMPORTANT: We use 'repair' instead of 'download' because gogdl V2 has a bug
         # where 'download' sees an empty manifest and reports "Nothing to do" even when
         # no files exist. The 'repair' command always verifies and downloads missing files.
-        # Command: gogdl ... repair [id] --platform [plat] --path [path] --skip-dlcs
+        # Command: gogdl ... download/repair [id] --platform [plat] --path [path] --with-dlcs
         
         # IMPORTANT: Snapshot existing directories BEFORE gogdl runs
         # This prevents detecting games installed by Heroic or other launchers
@@ -1275,6 +1275,7 @@ class GOGAPIClient:
             '--platform', platform,
             '--path', gogdl_path,
             '--support', support_dir,
+            '--with-dlcs',  # Automatically install all owned DLCs
         ]
         
         # STRATEGY:
@@ -1519,6 +1520,7 @@ class GOGAPIClient:
             '--platform', platform,
             '--path', repair_path,  # Use game folder path so any downloaded files go there
             '--lang', preferred_lang,
+            '--with-dlcs',  # Automatically install all owned DLCs
         ]
         
         repair_proc = await asyncio.create_subprocess_exec(
@@ -1920,12 +1922,17 @@ class GOGAPIClient:
                             full_exe = full_exe.replace('\\', '/')
                             full_work = full_work.replace('\\', '/')
                             
-                            # FIX: Some games (like Shadow of Mordor) have exe in x64/ subdir but data files
-                            # (.arch05) in the install root. If data files exist in root, use root as work_dir
+                            # FIX: Some games have exe in a subdir but data files in the install root.
+                            # Examples: Shadow of Mordor (.arch05), Prince of Persia (.forge)
+                            # If data files exist in root, use root as work_dir
                             if full_work != install_path:
-                                data_files_in_root = any(f.endswith('.arch05') for f in os.listdir(install_path) if os.path.isfile(os.path.join(install_path, f)))
+                                data_extensions = ('.arch05', '.forge')
+                                data_files_in_root = any(
+                                    any(f.endswith(ext) for ext in data_extensions)
+                                    for f in os.listdir(install_path) if os.path.isfile(os.path.join(install_path, f))
+                                )
                                 if data_files_in_root:
-                                    logger.info(f"[GOG] Data files (.arch05) found in install root, using install_path as work_dir")
+                                    logger.info(f"[GOG] Data files found in install root, using install_path as work_dir")
                                     full_work = install_path
                             
                             if os.path.exists(full_exe):

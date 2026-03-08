@@ -535,6 +535,7 @@ class EpicConnector(Store):
             proc = await asyncio.create_subprocess_exec(
                 self.legendary_bin, 'install', game_id,
                 '--base-path', base_path,
+                '--with-dlcs',  # Automatically install all owned DLCs
                 '--yes',  # Accept prompts automatically
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT
@@ -754,7 +755,7 @@ class EpicConnector(Store):
             logger.info(f"[EPIC] Starting update for {game_id}")
 
             proc = await asyncio.create_subprocess_exec(
-                self.legendary_bin, 'update', game_id, '--yes',
+                self.legendary_bin, 'update', game_id, '--with-dlcs', '--yes',
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT
             )

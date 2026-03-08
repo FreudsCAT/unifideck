@@ -140,6 +140,19 @@ def main():
     print(f"Amazon Language Setter")
     print(f"Prefix: {prefix_path}")
 
+    # Auto-detect prefix layout: modern Proton uses <prefix>/pfx/,
+    # legacy layouts have user.reg directly in the prefix root.
+    user_reg_direct = os.path.join(prefix_path, 'user.reg')
+    user_reg_pfx = os.path.join(prefix_path, 'pfx', 'user.reg')
+    if not os.path.exists(user_reg_direct) and os.path.exists(user_reg_pfx):
+        prefix_path = os.path.join(prefix_path, 'pfx')
+        print(f"Using pfx subdirectory: {prefix_path}")
+    elif not os.path.exists(user_reg_direct) and os.path.isdir(os.path.join(prefix_path, 'pfx')):
+        # pfx/ exists but user.reg not created yet — still use pfx/ path
+        # so that when the prefix is initialized, user.reg will be found
+        prefix_path = os.path.join(prefix_path, 'pfx')
+        print(f"Using pfx subdirectory (prefix not fully initialized): {prefix_path}")
+
     # Get user's preferred language
     preferred_lang = get_unifideck_language()
     print(f"User preferred language: {preferred_lang}")

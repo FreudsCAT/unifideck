@@ -111,3 +111,6 @@ build-plugin_old.sh
 .github/copilot-instructions.md
 __pycache__
 *.pyc
+.vscode
+.vscode/extensions.json
+docs/ubisoft-store-spec.md
