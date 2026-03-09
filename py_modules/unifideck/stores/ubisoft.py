@@ -399,7 +399,10 @@ class UbisoftConnector(Store):
             python_bin = self._find_python()
             env = self._build_umu_env(prefix_path, f"umu-ubisoft-{game_id}")
             launch_id = self.resolve_launch_id(game_id)
-            launch_url = f"uplay://launch/{launch_id}/0" if launch_id else ""
+            # Use install:// URL to open the game's install page directly.
+            # uplay://launch would try to run the game (shows "Activate a key"
+            # if not installed); uplay://install navigates to the install page.
+            launch_url = f"uplay://install/{launch_id}" if launch_id else ""
 
             cmd = [python_bin, umu_run, upc_path]
             if launch_url:
