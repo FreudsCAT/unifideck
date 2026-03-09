@@ -10,7 +10,9 @@ import glob
 import json
 import logging
 import os
+import re
 import shutil
+import subprocess
 from typing import Any, Dict, List, Optional
 
 from .base import Store, Game
@@ -32,11 +34,21 @@ INSTALLER_URL = "https://static3.cdn.ubi.com/orbit/launcher_installer/UbisoftCon
 BOOTSTRAP_MARKER = "unifideck_ubisoft_bootstrap.marker"
 DEFAULT_INSTALL_BASE = os.path.expanduser("~/Games/Ubisoft")
 
+# Static game ID database (community-maintained mapping of numeric IDs to names)
+GAME_ID_DB_URL = "https://raw.githubusercontent.com/iArtorias/ubisoft_game_ids/main/UBI_GAMES.txt"
+GAME_ID_DB_FILE = os.path.join(DATA_DIR, "ubisoft_game_db.txt")
+GAME_ID_DB_MAX_AGE = 7 * 24 * 3600  # Refresh weekly
+
+# UPC session token captured after first manual login (persists across runs)
+UPC_SESSION_FILE = os.path.join(DATA_DIR, "ubisoft_upc_session.txt")
+
 # SD card install path (mirrors download manager's StorageLocation.SDCARD)
 SDCARD_INSTALL_BASE = "/run/media/mmcblk0p1/Games/Ubisoft"
 
 # UPC paths within a Wine prefix
 UPC_RELATIVE_PATH = "drive_c/Program Files (x86)/Ubisoft/Ubisoft Game Launcher/upc.exe"
+# UbisoftConnect.exe is the registered uplay:// protocol handler — use this for install URLs
+UPC_CONNECT_RELATIVE_PATH = "drive_c/Program Files (x86)/Ubisoft/Ubisoft Game Launcher/UbisoftConnect.exe"
 CONFIGURATIONS_RELATIVE_PATH = (
     "drive_c/Program Files (x86)/Ubisoft/Ubisoft Game Launcher/"
     "cache/configuration/configurations"
@@ -59,6 +71,7 @@ class UbisoftConnector(Store):
         self._load_id_map()
         self._template_task: Optional[asyncio.Task] = None
         self._pending_2fa_ticket: Optional[str] = None  # Stored between login → 2FA
+        self._active_install_pids: Dict[str, int] = {}  # game_id → PID for cancel support
 
     # ========================================================================
     # Store ABC Implementation
@@ -121,10 +134,11 @@ class UbisoftConnector(Store):
             self._pending_2fa_ticket = result.get("2fa_ticket", "")
             logger.info("[Ubisoft] Login requires 2FA, ticket stored")
         elif result.get("success"):
-            # Auth succeeded -- trigger auto-sync
+            # Auth succeeded -- trigger auto-sync + auto UPC token capture
             if self.plugin_instance:
                 logger.info("[Ubisoft] Triggering library sync after auth")
                 asyncio.create_task(self.plugin_instance.force_sync_libraries())
+            asyncio.create_task(self._auto_capture_upc_token())
 
         return result
 
@@ -145,16 +159,41 @@ class UbisoftConnector(Store):
         self._pending_2fa_ticket = None  # Clear after use
 
         if result.get("success"):
-            # Auth succeeded -- trigger auto-sync
+            # Auth succeeded -- trigger auto-sync + auto UPC token capture
             if self.plugin_instance:
                 logger.info("[Ubisoft] Triggering library sync after 2FA auth")
                 asyncio.create_task(self.plugin_instance.force_sync_libraries())
+            asyncio.create_task(self._auto_capture_upc_token())
 
         return result
 
     async def logout(self) -> Dict[str, Any]:
         """Logout from Ubisoft Connect, clearing all state."""
         return self.api.logout()
+
+    async def _auto_capture_upc_token(self) -> None:
+        """
+        Auto-open UPC in the template prefix after REST auth to capture the
+        native session token. Runs as a background task so auth returns immediately.
+        """
+        try:
+            # Wait for template prefix to exist (may still be creating)
+            for _ in range(60):  # Up to 5 minutes
+                if self._template_exists():
+                    break
+                await asyncio.sleep(5)
+            else:
+                logger.warning("[Ubisoft] Template prefix not ready, skipping auto UPC token capture")
+                return
+
+            logger.info("[Ubisoft] Auto-opening UPC in template prefix for token capture")
+            result = await self.connect_ubisoft_account()
+            if result.get("success"):
+                logger.info("[Ubisoft] Auto UPC token capture succeeded")
+            else:
+                logger.warning(f"[Ubisoft] Auto UPC token capture: {result.get('error', 'unknown')}")
+        except Exception as e:
+            logger.warning(f"[Ubisoft] Auto UPC token capture failed: {e}")
 
     async def get_library(self) -> Optional[List[Game]]:
         """
@@ -213,6 +252,14 @@ class UbisoftConnector(Store):
 
             logger.info(f"[Ubisoft] Library: {len(games)} PC games")
 
+            # Resolve install_ids from static database for all games
+            if games:
+                game_list = [{"space_id": g.id, "name": g.title} for g in games]
+                try:
+                    await self._resolve_install_ids_from_database(game_list)
+                except Exception as e:
+                    logger.warning(f"[Ubisoft] Static ID resolution failed: {e}")
+
             # Trigger template prefix creation as background task if needed
             if games and not self._template_exists():
                 self._queue_template_creation()
@@ -267,15 +314,17 @@ class UbisoftConnector(Store):
 
     async def install_game(self, game_id: str, progress_callback=None, install_path: str = None) -> Dict[str, Any]:
         """
-        Install a game via upc.exe uplay://install protocol.
+        Install a game by opening UPC in the game's per-game prefix.
+
+        The user installs the game manually through UPC's UI while we monitor
+        the filesystem for new game directories to detect completion.
 
         Flow:
           1. Bootstrap per-game prefix (template clone or fresh install)
-          2. Resolve space_id → install_id
-          3. Inject UPC auth session + registry keys
-          4. Launch upc.exe with uplay://install/{install_id}
-          5. Monitor file system for progress
-          6. Detect completion via uplay_install.state
+          2. Inject UPC session token
+          3. Open UPC in the game's prefix (user installs manually)
+          4. Monitor filesystem for new game directories
+          5. Capture token on exit
 
         Args:
             game_id: The game's space_id.
@@ -294,37 +343,12 @@ class UbisoftConnector(Store):
             if not await self.bootstrap_game_prefix(game_id):
                 return {"success": False, "error": "Failed to bootstrap Wine prefix"}
 
-            # Step 2: Resolve install_id
-            install_id = self.resolve_install_id(game_id)
-            if not install_id:
-                # Try to populate ID map from configurations binary
-                await self._refresh_id_map(game_id)
-                install_id = self.resolve_install_id(game_id)
-
-            if not install_id:
-                return {
-                    "success": False,
-                    "error": "Could not resolve install_id for this game",
-                }
-
             prefix_path = self.get_prefix_path(game_id)
             game_name = self._get_game_name(game_id)
 
-            # Resolve install directory — use caller's install_path (SD card support)
-            # or fall back to default internal storage
-            install_base = install_path or DEFAULT_INSTALL_BASE
-            install_dir = os.path.join(install_base, game_name or game_id)
-
-            # Step 3: Inject session + registry
-            self.inject_upc_session(prefix_path)
-            self._inject_install_registry(prefix_path, install_id, install_dir)
-
-            # Step 4: Launch upc.exe with install protocol
-            upc_path = os.path.join(prefix_path, UPC_RELATIVE_PATH)
-            if not os.path.exists(upc_path):
-                # Try pfx/ subdirectory
-                upc_path = os.path.join(prefix_path, "pfx", UPC_RELATIVE_PATH)
-            if not os.path.exists(upc_path):
+            # Step 2: Find UPC + umu-run
+            upc_path = self._find_upc_exe(prefix_path)
+            if not upc_path:
                 return {"success": False, "error": "upc.exe not found in prefix"}
 
             umu_run = self._find_umu_run()
@@ -332,58 +356,140 @@ class UbisoftConnector(Store):
                 return {"success": False, "error": "umu-run not found"}
 
             python_bin = self._find_python()
+            env = self._build_umu_env(prefix_path, f"umu-ubisoft-{game_id}")
 
-            env = os.environ.copy()
-            env["WINEPREFIX"] = prefix_path
-            env["GAMEID"] = f"umu-ubisoft-{game_id}"
-            env["STORE"] = "ubisoft"
-            env["PROTON_VERB"] = "waitforexitandrun"
-            env["STEAM_COMPAT_INSTALL_PATH"] = install_dir
-
-            install_url = f"uplay://install/{install_id}"
-            logger.info(f"[Ubisoft] Launching upc.exe with {install_url}")
-
-            proc = await asyncio.create_subprocess_exec(
-                python_bin, umu_run, upc_path, install_url,
-                env=env,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
+            # Step 3: Open UPC for manual install
+            return await self._install_via_upc_ui(
+                game_id, game_name, prefix_path, upc_path,
+                umu_run, python_bin, env, progress_callback,
+                install_path,
             )
-
-            # Step 5: Monitor file system for progress
-            os.makedirs(install_dir, exist_ok=True)
-            success = await self._monitor_install_progress(
-                game_id, install_dir, proc, progress_callback
-            )
-
-            # Ensure process is terminated
-            if proc.returncode is None:
-                try:
-                    proc.terminate()
-                    await asyncio.wait_for(proc.wait(), timeout=10)
-                except Exception:
-                    try:
-                        proc.kill()
-                    except Exception:
-                        pass
-
-            if success:
-                # Write ownership marker
-                exe = self.find_game_executable(install_dir)
-                await self.write_install_marker(game_id, install_dir, exe or "", game_name or "")
-                final_size = self._get_directory_size(install_dir)
-                logger.info(f"[Ubisoft] Game {game_id} installed successfully ({final_size / 1024 / 1024:.0f} MB)")
-                return {
-                    "success": True,
-                    "install_path": install_dir,
-                    "executable": exe,
-                    "install_size": final_size,
-                }
-            else:
-                return {"success": False, "error": "Installation timed out or failed"}
 
         except Exception as e:
             logger.exception(f"[Ubisoft] Install error for {game_id}: {e}")
+            return {"success": False, "error": str(e)}
+
+    async def open_launcher_for_install(self, game_id: str) -> Dict[str, Any]:
+        """
+        Open Ubisoft Connect in the game's prefix for manual install.
+
+        Uses the standard launch URL (uplay://launch/{launch_id}/0) when available.
+        If launch_id is unavailable, opens UPC without a URL so the user can install
+        manually from the launcher UI.
+        """
+        try:
+            logger.info(f"[Ubisoft] open_launcher_for_install called for {game_id}")
+
+            if not await self.bootstrap_game_prefix(game_id):
+                logger.error(f"[Ubisoft] Bootstrap failed for {game_id}")
+                return {"success": False, "error": "Failed to bootstrap Wine prefix"}
+
+            prefix_path = self.get_prefix_path(game_id)
+            upc_path = self._find_upc_exe(prefix_path)
+            umu_run = self._find_umu_run()
+            if not upc_path:
+                logger.error(f"[Ubisoft] upc.exe not found in {prefix_path}")
+                return {"success": False, "error": "upc.exe not found in prefix"}
+            if not umu_run:
+                logger.error("[Ubisoft] umu-run not found")
+                return {"success": False, "error": "umu-run not found"}
+
+            self.inject_upc_session(prefix_path)
+
+            python_bin = self._find_python()
+            env = self._build_umu_env(prefix_path, f"umu-ubisoft-{game_id}")
+            launch_id = self.resolve_launch_id(game_id)
+            launch_url = f"uplay://launch/{launch_id}/0" if launch_id else ""
+
+            cmd = [python_bin, umu_run, upc_path]
+            if launch_url:
+                cmd.append(launch_url)
+
+            logger.info(f"[Ubisoft] Launch cmd: {' '.join(cmd)}")
+            logger.info(f"[Ubisoft] WINEPREFIX={env.get('WINEPREFIX')} "
+                        f"DISPLAY={env.get('DISPLAY')} "
+                        f"PROTONPATH={env.get('PROTONPATH')} "
+                        f"GAMEID={env.get('GAMEID')}")
+
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                env=env,
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            logger.info(f"[Ubisoft] Subprocess spawned PID={proc.pid}")
+
+            # Track this install session for Cancel support
+            self._active_install_pids[game_id] = proc.pid
+            spawned_pid = proc.pid
+
+            async def _monitor_after_exit() -> None:
+                try:
+                    # Read only stderr for diagnostics; stdout is discarded
+                    _, stderr = await proc.communicate()
+                    rc = proc.returncode
+                    logger.info(f"[Ubisoft] UPC exited (PID={spawned_pid}, rc={rc})")
+                    if stderr:
+                        stderr_text = stderr.decode(errors="replace")[:2000]
+                        logger.info(f"[Ubisoft] UPC stderr: {stderr_text}")
+                except Exception as exc:
+                    logger.warning(f"[Ubisoft] Monitor error: {exc}")
+                finally:
+                    # Only remove tracking if this PID is still the active one
+                    if self._active_install_pids.get(game_id) == spawned_pid:
+                        self._active_install_pids.pop(game_id, None)
+
+                captured = self._capture_upc_session(prefix_path)
+                if captured:
+                    self._propagate_upc_session_to_all_prefixes(captured)
+
+            asyncio.create_task(_monitor_after_exit())
+
+            # Wait briefly to detect immediate crashes
+            await asyncio.sleep(2)
+            if proc.returncode is not None:
+                logger.error(f"[Ubisoft] UPC exited immediately (rc={proc.returncode})")
+                if self._active_install_pids.get(game_id) == spawned_pid:
+                    self._active_install_pids.pop(game_id, None)
+                return {
+                    "success": False,
+                    "error": f"Ubisoft Connect exited immediately (code {proc.returncode})",
+                }
+
+            return {
+                "success": True,
+                "pid": proc.pid,
+                "launch_url": launch_url,
+            }
+        except Exception as e:
+            logger.exception(f"[Ubisoft] Failed to open launcher for install {game_id}: {e}")
+            return {"success": False, "error": str(e)}
+
+    def is_install_session_active(self, game_id: str) -> bool:
+        """Check if an install session (UPC) is currently running for a game."""
+        pid = self._active_install_pids.get(game_id)
+        if pid is None:
+            return False
+        try:
+            os.kill(pid, 0)
+            return True
+        except (ProcessLookupError, PermissionError):
+            self._active_install_pids.pop(game_id, None)
+            return False
+
+    async def cancel_install_session(self, game_id: str) -> Dict[str, Any]:
+        """Cancel a running install session by terminating UPC."""
+        pid = self._active_install_pids.pop(game_id, None)
+        if pid is None:
+            return {"success": False, "error": "No active install session"}
+        try:
+            os.kill(pid, 15)  # SIGTERM
+            logger.info(f"[Ubisoft] Sent SIGTERM to UPC PID {pid} for {game_id}")
+            return {"success": True}
+        except ProcessLookupError:
+            return {"success": True, "message": "Process already exited"}
+        except Exception as e:
+            logger.error(f"[Ubisoft] Failed to cancel install {game_id}: {e}")
             return {"success": False, "error": str(e)}
 
     async def uninstall_game(self, game_id: str) -> Dict[str, Any]:
@@ -408,19 +514,15 @@ class UbisoftConnector(Store):
             # Try protocol-based uninstall first
             install_id = self.resolve_install_id(game_id)
             prefix_path = self.get_prefix_path(game_id)
-            upc_path = os.path.join(prefix_path, UPC_RELATIVE_PATH)
+            upc_path = self._find_upc_exe(prefix_path)
 
-            if install_id and os.path.exists(upc_path):
+            if install_id and upc_path:
                 try:
                     umu_run = self._find_umu_run()
                     python_bin = self._find_python()
 
                     if umu_run:
-                        env = os.environ.copy()
-                        env["WINEPREFIX"] = prefix_path
-                        env["GAMEID"] = f"umu-ubisoft-{game_id}"
-                        env["STORE"] = "ubisoft"
-                        env["PROTON_VERB"] = "waitforexitandrun"
+                        env = self._build_umu_env(prefix_path, f"umu-ubisoft-{game_id}")
 
                         uninstall_url = f"uplay://uninstall/{install_id}"
                         logger.info(f"[Ubisoft] Trying protocol uninstall: {uninstall_url}")
@@ -499,9 +601,9 @@ class UbisoftConnector(Store):
         """
         try:
             prefix_path = self.get_prefix_path(game_id)
-            upc_path = os.path.join(prefix_path, UPC_RELATIVE_PATH)
+            upc_path = self._find_upc_exe(prefix_path)
 
-            if not os.path.exists(upc_path):
+            if not upc_path:
                 return {"success": False, "error": "upc.exe not found — game may need reinstall"}
 
             # Inject fresh session
@@ -516,11 +618,7 @@ class UbisoftConnector(Store):
             if not umu_run:
                 return {"success": False, "error": "umu-run not found"}
 
-            env = os.environ.copy()
-            env["WINEPREFIX"] = prefix_path
-            env["GAMEID"] = f"umu-ubisoft-{game_id}"
-            env["STORE"] = "ubisoft"
-            env["PROTON_VERB"] = "waitforexitandrun"
+            env = self._build_umu_env(prefix_path, f"umu-ubisoft-{game_id}")
 
             # Launch UPC — it will auto-patch the game
             launch_url = f"uplay://launch/{launch_id}/0"
@@ -685,6 +783,189 @@ class UbisoftConnector(Store):
         self._save_id_map()
 
     # ========================================================================
+    # Static Game ID Database
+    # ========================================================================
+
+    async def _fetch_game_id_database(self) -> List[tuple]:
+        """
+        Fetch the community game ID database (numeric install_id → name mapping).
+
+        Caches locally and refreshes weekly. Returns list of (install_id, name) tuples.
+        """
+        import time as _time
+
+        # Use cached file if fresh enough
+        if os.path.isfile(GAME_ID_DB_FILE):
+            age = _time.time() - os.path.getmtime(GAME_ID_DB_FILE)
+            if age < GAME_ID_DB_MAX_AGE:
+                return self._parse_game_id_database(GAME_ID_DB_FILE)
+
+        # Download fresh copy
+        try:
+            import urllib.request
+            os.makedirs(DATA_DIR, exist_ok=True)
+            tmp = GAME_ID_DB_FILE + ".tmp"
+            urllib.request.urlretrieve(GAME_ID_DB_URL, tmp)
+            os.replace(tmp, GAME_ID_DB_FILE)
+            logger.info("[Ubisoft] Game ID database downloaded")
+        except Exception as e:
+            logger.warning(f"[Ubisoft] Failed to download game ID database: {e}")
+            # Fall back to existing file if available
+            if not os.path.isfile(GAME_ID_DB_FILE):
+                return []
+
+        return self._parse_game_id_database(GAME_ID_DB_FILE)
+
+    @staticmethod
+    def _parse_game_id_database(filepath: str) -> List[tuple]:
+        """Parse the game ID database file. Format: '{numeric_id}, {game_name}' per line."""
+        entries = []
+        try:
+            with open(filepath, "r", encoding="utf-8", errors="replace") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line or line.startswith("#"):
+                        continue
+                    parts = line.split(", ", 1)
+                    if len(parts) == 2 and parts[0].isdigit():
+                        entries.append((parts[0], parts[1]))
+        except Exception as e:
+            logger.warning(f"[Ubisoft] Failed to parse game ID database: {e}")
+        return entries
+
+    @staticmethod
+    def _normalize_for_matching(name: str) -> str:
+        """Normalize a game name for fuzzy matching."""
+        import re as _re
+        name = name.lower()
+        # Remove trademark symbols and punctuation
+        name = _re.sub(r"[®™©''\-:.,!?()\"']", "", name)
+        # Normalize whitespace
+        name = " ".join(name.split())
+        return name
+
+    async def _resolve_install_ids_from_database(
+        self, games: List[Dict[str, str]]
+    ) -> int:
+        """
+        Match owned games against the static game ID database by name.
+
+        Args:
+            games: List of dicts with 'space_id' and 'name' keys.
+
+        Returns:
+            Number of new mappings added.
+        """
+        db_entries = await self._fetch_game_id_database()
+        if not db_entries:
+            return 0
+
+        # Build normalized lookup: {normalized_name: (install_id, original_name)}
+        db_lookup: Dict[str, tuple] = {}
+        for install_id, db_name in db_entries:
+            norm = self._normalize_for_matching(db_name)
+            db_lookup[norm] = (install_id, db_name)
+
+        added = 0
+        for game in games:
+            space_id = game["space_id"]
+            # Skip if already mapped
+            if space_id in self._id_map_cache and self._id_map_cache[space_id].get("install_id"):
+                continue
+
+            game_name = game["name"]
+            norm_name = self._normalize_for_matching(game_name)
+
+            # Try exact normalized match first
+            match = db_lookup.get(norm_name)
+
+            # Try without common suffixes/prefixes
+            if not match:
+                # Try stripping "edition" variants (e.g., "Gold Edition", "Deluxe Edition")
+                import re as _re
+                stripped = _re.sub(r"\s*(standard|gold|deluxe|ultimate|complete|definitive|goty)\s*edition\s*$", "", norm_name).strip()
+                if stripped != norm_name:
+                    match = db_lookup.get(stripped)
+
+            # Try word-set matching for close matches
+            if not match:
+                game_words = set(norm_name.split())
+                best_score = 0.0
+                best_match = None
+                for db_norm, (db_id, db_orig) in db_lookup.items():
+                    db_words = set(db_norm.split())
+                    if not game_words or not db_words:
+                        continue
+                    # Jaccard similarity
+                    intersection = len(game_words & db_words)
+                    union = len(game_words | db_words)
+                    score = intersection / union if union else 0
+                    # Require high similarity to avoid false matches
+                    if score > best_score and score >= 0.8:
+                        best_score = score
+                        best_match = (db_id, db_orig)
+                match = best_match
+
+            if match:
+                install_id, db_name = match
+                self._id_map_cache[space_id] = {
+                    "install_id": install_id,
+                    "launch_id": install_id,  # Usually same for Ubisoft
+                    "name": game_name,
+                }
+                added += 1
+                logger.info(f"[Ubisoft] Matched '{game_name}' → install_id={install_id} (db: '{db_name}')")
+            else:
+                logger.debug(f"[Ubisoft] No database match for '{game_name}'")
+
+        if added:
+            self._save_id_map()
+            logger.info(f"[Ubisoft] Resolved {added} install_ids from static database")
+
+        return added
+
+    # ========================================================================
+    # Prefix Utilities
+    # ========================================================================
+
+    def _find_upc_exe(self, prefix_path: str) -> Optional[str]:
+        """Find upc.exe in a prefix, checking both direct and pfx/ layouts.
+
+        Proton creates a pfx/ subdirectory; bare Wine uses the root directly.
+        """
+        for path in [
+            os.path.join(prefix_path, UPC_RELATIVE_PATH),
+            os.path.join(prefix_path, "pfx", UPC_RELATIVE_PATH),
+        ]:
+            if os.path.isfile(path):
+                return path
+        return None
+
+    def _find_connect_exe(self, prefix_path: str) -> Optional[str]:
+        """Find UbisoftConnect.exe — the registered uplay:// protocol handler.
+
+        Use this (not upc.exe) when launching with a uplay://install/ URL,
+        since only UbisoftConnect.exe is registered to process protocol URLs.
+        """
+        for path in [
+            os.path.join(prefix_path, UPC_CONNECT_RELATIVE_PATH),
+            os.path.join(prefix_path, "pfx", UPC_CONNECT_RELATIVE_PATH),
+        ]:
+            if os.path.isfile(path):
+                return path
+        return None
+
+    def _find_configurations(self, prefix_path: str) -> Optional[str]:
+        """Find configurations binary in prefix, checking both direct and pfx/ layouts."""
+        for path in [
+            os.path.join(prefix_path, CONFIGURATIONS_RELATIVE_PATH),
+            os.path.join(prefix_path, "pfx", CONFIGURATIONS_RELATIVE_PATH),
+        ]:
+            if os.path.isfile(path):
+                return path
+        return None
+
+    # ========================================================================
     # Template Prefix Management
     # ========================================================================
 
@@ -732,13 +1013,10 @@ class UbisoftConnector(Store):
                 logger.error("[Ubisoft] umu-run not found, aborting template creation")
                 return
 
-            env = os.environ.copy()
-            env["WINEPREFIX"] = TEMPLATE_DIR
-            env["GAMEID"] = "umu-ubisoft-template"
-            env["STORE"] = "ubisoft"
-            env["PROTON_VERB"] = "waitforexitandrun"
+            env = self._build_umu_env(TEMPLATE_DIR, "umu-ubisoft-template")
 
             python_bin = self._find_python()
+            logger.info(f"[Ubisoft] Template install: PROTONPATH={env.get('PROTONPATH')}")
             proc = await asyncio.create_subprocess_exec(
                 python_bin, umu_run, installer_path, "/S",
                 env=env,
@@ -754,9 +1032,8 @@ class UbisoftConnector(Store):
                 )
                 return
 
-            # Step 4: Verify upc.exe exists
-            upc_path = os.path.join(TEMPLATE_DIR, UPC_RELATIVE_PATH)
-            if not os.path.exists(upc_path):
+            # Step 4: Verify upc.exe exists (check both direct and pfx/ layouts)
+            if not self._find_upc_exe(TEMPLATE_DIR):
                 logger.error("[Ubisoft] upc.exe not found after install")
                 return
 
@@ -843,8 +1120,7 @@ class UbisoftConnector(Store):
 
         # Already bootstrapped?
         if os.path.exists(marker_path):
-            upc_path = os.path.join(prefix_path, UPC_RELATIVE_PATH)
-            if os.path.exists(upc_path):
+            if self._find_upc_exe(prefix_path):
                 return True
 
         # Path B: Clone from template (fast, ~30 seconds)
@@ -880,23 +1156,28 @@ class UbisoftConnector(Store):
             if not umu_run:
                 return False
 
-            env = os.environ.copy()
-            env["WINEPREFIX"] = prefix_path
-            env["GAMEID"] = f"umu-ubisoft-{space_id}"
-            env["STORE"] = "ubisoft"
-            env["PROTON_VERB"] = "waitforexitandrun"
+            env = self._build_umu_env(prefix_path, f"umu-ubisoft-{space_id}")
 
             python_bin = self._find_python()
+            logger.info(f"[Ubisoft] Running: {python_bin} {umu_run} {installer_path} /S")
+            logger.info(f"[Ubisoft] WINEPREFIX={prefix_path} GAMEID={env.get('GAMEID')} PROTONPATH={env.get('PROTONPATH')}")
             proc = await asyncio.create_subprocess_exec(
                 python_bin, umu_run, installer_path, "/S",
                 env=env,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
-            await proc.communicate()
+            stdout, stderr = await proc.communicate()
 
-            upc_path = os.path.join(prefix_path, UPC_RELATIVE_PATH)
-            if os.path.exists(upc_path):
+            stderr_text = stderr.decode(errors='replace')[:2000] if stderr else ''
+            stdout_text = stdout.decode(errors='replace')[:1000] if stdout else ''
+            logger.info(f"[Ubisoft] umu-run exited (rc={proc.returncode})")
+            if stderr_text:
+                logger.info(f"[Ubisoft] stderr: {stderr_text}")
+            if stdout_text:
+                logger.info(f"[Ubisoft] stdout: {stdout_text}")
+
+            if self._find_upc_exe(prefix_path):
                 with open(marker_path, "w") as f:
                     f.write(f"fresh_install\ngame={space_id}\n")
 
@@ -934,66 +1215,190 @@ class UbisoftConnector(Store):
         """
         Pre-inject auth session into UPC config so no login prompt appears.
 
-        Writes the current ticket into the UPC settings file inside the prefix.
+        Prefers a UPC-native restore_session token (captured after a real UPC login)
+        over the REST API ticket. Skips writing if the prefix already has the correct
+        token to avoid destroying a valid UPC-native token that UPC may have refreshed.
         """
+        # Prefer UPC-native token from session file
+        upc_session: Optional[str] = None
+        if os.path.isfile(UPC_SESSION_FILE):
+            try:
+                with open(UPC_SESSION_FILE) as f:
+                    upc_session = f.read().strip() or None
+            except Exception:
+                pass
+
+        if upc_session:
+            # Skip if prefix already has the correct token
+            existing = self._read_prefix_restore_session(prefix_path)
+            if existing == upc_session:
+                logger.info("[Ubisoft] inject_upc_session: prefix already has correct UPC token, skipping")
+                return True
+            logger.info("[Ubisoft] inject_upc_session: writing UPC session token")
+            return self._write_upc_session_to_prefix(prefix_path, upc_session)
+
+        # Fall back to API ticket
         if not self.api.has_tokens():
             logger.warning("[Ubisoft] No tokens available for session injection")
             return False
+        ticket = self.api.get_ticket() or ""
+        if not ticket:
+            logger.warning("[Ubisoft] No ticket available for session injection")
+            return False
+        logger.info("[Ubisoft] inject_upc_session: using API ticket (no UPC session captured yet)")
+        return self._write_upc_session_to_prefix(prefix_path, ticket)
 
+    def _write_upc_session_to_prefix(self, prefix_path: str, token: str) -> bool:
+        """Write a restore_session token into a prefix's UPC settings.yml."""
         try:
-            # UPC settings path within the prefix
+            user_id = self.api.get_user_id() or ""
             settings_dir = os.path.join(
-                prefix_path,
-                "drive_c", "users", "deck", "AppData", "Roaming",
-                "Ubisoft", "Ubisoft Connect",
+                prefix_path, "drive_c", "users", "deck",
+                "AppData", "Roaming", "Ubisoft", "Ubisoft Connect",
             )
             os.makedirs(settings_dir, exist_ok=True)
             settings_file = os.path.join(settings_dir, "settings.yml")
-
-            # Build minimal YAML config (avoid PyYAML dependency)
-            ticket = self.api.get_ticket() or ""
-            user_id = self.api.get_user_id() or ""
-
-            # Simple YAML write (no complex nested structures needed)
-            config_lines = [
-                "user:",
-                "  remember_me: true",
-                f"  restore_session: \"{ticket}\"",
-                f"  userId: \"{user_id}\"",
-                "",
-            ]
-
-            # If file exists, try to preserve other settings
-            existing_content = ""
-            if os.path.exists(settings_file):
-                try:
-                    with open(settings_file, "r") as f:
-                        existing_content = f.read()
-                except Exception:
-                    pass
-
-            # Write the config
+            config = (
+                "user:\n"
+                "  remember_me: true\n"
+                f'  restore_session: "{token}"\n'
+                f'  userId: "{user_id}"\n'
+            )
             with open(settings_file, "w") as f:
-                if existing_content and "user:" in existing_content:
-                    # Replace user section in existing config
-                    import re
-                    new_user_section = "\n".join(config_lines)
-                    result = re.sub(
-                        r"user:.*?(?=\n\w|\Z)",
-                        new_user_section,
-                        existing_content,
-                        flags=re.DOTALL,
-                    )
-                    f.write(result)
-                else:
-                    f.write("\n".join(config_lines))
-
-            logger.info("[Ubisoft] UPC session injected into prefix")
+                f.write(config)
+            logger.info(f"[Ubisoft] Wrote session to prefix {os.path.basename(prefix_path)}")
             return True
-
         except Exception as e:
-            logger.warning(f"[Ubisoft] Session injection failed: {e}")
+            logger.warning(f"[Ubisoft] Failed to write session to prefix {prefix_path}: {e}")
             return False
+
+    def _read_prefix_restore_session(self, prefix_path: str) -> Optional[str]:
+        """Read the current restore_session token from a prefix's settings.yml."""
+        for user_dir in ["deck", "steamuser"]:
+            settings_file = os.path.join(
+                prefix_path, "drive_c", "users", user_dir,
+                "AppData", "Roaming", "Ubisoft", "Ubisoft Connect", "settings.yml"
+            )
+            if not os.path.isfile(settings_file):
+                continue
+            try:
+                with open(settings_file) as f:
+                    content = f.read()
+                m = re.search(r'restore_session:\s+"([^"]+)"', content)
+                if m:
+                    return m.group(1)
+            except Exception:
+                continue
+        return None
+
+    def _propagate_upc_session_to_all_prefixes(self, token: str) -> None:
+        """Update restore_session in all existing per-game prefixes."""
+        if not os.path.isdir(PREFIXES_DIR):
+            return
+        count = 0
+        for entry in os.listdir(PREFIXES_DIR):
+            if entry.startswith("."):
+                continue  # skip .template and hidden dirs
+            prefix_path = os.path.join(PREFIXES_DIR, entry)
+            if not os.path.isdir(prefix_path):
+                continue
+            try:
+                self._write_upc_session_to_prefix(prefix_path, token)
+                count += 1
+            except Exception as e:
+                logger.warning(f"[Ubisoft] Failed to update prefix {entry}: {e}")
+        logger.info(f"[Ubisoft] Propagated session token to {count} existing prefixes")
+
+    def _capture_upc_session(self, prefix_path: str) -> Optional[str]:
+        """
+        Read back the restore_session token that UPC wrote to settings.yml
+        after a successful login and save it for future use.
+
+        UPC writes its own token (valid for rm_v1 auth) which differs from
+        the REST API ticket we have. Capturing it enables future auto-login.
+        Also writes the token back to the template prefix so future clones inherit it.
+
+        Returns the captured token, or None if not found / unchanged.
+        """
+        for user_dir in ["steamuser", "deck"]:
+            settings_file = os.path.join(
+                prefix_path, "drive_c", "users", user_dir,
+                "AppData", "Roaming", "Ubisoft", "Ubisoft Connect", "settings.yml"
+            )
+            if not os.path.isfile(settings_file):
+                continue
+            try:
+                with open(settings_file) as f:
+                    content = f.read()
+            except Exception:
+                continue
+            m = re.search(r'restore_session:\s+"([^"]+)"', content)
+            if not m:
+                continue
+            token = m.group(1)
+            # Only save if different from what we injected (i.e. UPC wrote its own)
+            current_api_ticket = self.api.get_ticket() or ""
+            if token and token != current_api_ticket:
+                try:
+                    os.makedirs(DATA_DIR, exist_ok=True)
+                    with open(UPC_SESSION_FILE, "w") as f:
+                        f.write(token)
+                    # Also update the template so future clones inherit it
+                    self._write_upc_session_to_prefix(TEMPLATE_DIR, token)
+                    logger.info("[Ubisoft] Captured UPC restore_session token → template updated")
+                    return token
+                except Exception as e:
+                    logger.warning(f"[Ubisoft] Failed to save UPC session token: {e}")
+        return None
+
+    async def connect_ubisoft_account(self) -> Dict[str, Any]:
+        """
+        Launch UPC in the template prefix so the user can log in once.
+
+        Captures the restore_session token UPC writes after login and propagates
+        it to all existing game prefixes. Future cloned prefixes inherit it via rsync.
+        Exposed as a backend RPC for the plugin settings "Connect" button.
+        """
+        if not self._template_exists():
+            return {"success": False, "error": "Template prefix not found. Install a game first."}
+
+        prefix_path = TEMPLATE_DIR
+        upc_path = self._find_upc_exe(prefix_path)
+        umu_run = self._find_umu_run()
+        if not upc_path or not umu_run:
+            return {"success": False, "error": "UPC not found in template prefix"}
+
+        python_bin = self._find_python()
+        env = self._build_umu_env(prefix_path, "umu-ubisoft-auth")
+
+        logger.info("[Ubisoft] Launching UPC in template prefix for login")
+        proc = await asyncio.create_subprocess_exec(
+            python_bin, umu_run, upc_path,
+            env=env,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+
+        try:
+            await asyncio.wait_for(proc.wait(), timeout=600)  # 10 min
+        except asyncio.TimeoutError:
+            try:
+                proc.terminate()
+                await asyncio.wait_for(proc.wait(), timeout=10)
+            except Exception:
+                proc.kill()
+
+        # Capture token UPC wrote to template's settings.yml
+        token = self._capture_upc_session(prefix_path)
+        if token:
+            # Propagate to all existing game prefixes
+            self._propagate_upc_session_to_all_prefixes(token)
+            return {"success": True, "message": "Ubisoft account connected successfully"}
+        else:
+            return {
+                "success": False,
+                "error": "Login not detected. Please log in and close Ubisoft Connect.",
+            }
 
     # ========================================================================
     # Installed Game Detection
@@ -1057,6 +1462,101 @@ class UbisoftConnector(Store):
     # Utility Methods
     # ========================================================================
 
+    def _build_umu_env(self, wineprefix: str, gameid: str) -> dict:
+        """Build a clean environment for umu-run, free of Steam/Decky interference.
+
+        The Decky plugin inherits Steam's env vars (STEAM_COMPAT_DATA_PATH,
+        SteamAppId, etc.) which can confuse umu-run into using wrong prefixes
+        or skipping execution. We build a minimal env with only what's needed.
+
+        NOTE: Decky Loader runs as a systemd service without display env vars.
+        We must detect them from the active user session (Steam/Gamescope).
+        """
+        home = os.environ.get("HOME", os.path.expanduser("~"))
+        uid = os.getuid()
+        env = {
+            "HOME": home,
+            "USER": os.environ.get("USER", "deck"),
+            "PATH": os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin"),
+            "LANG": os.environ.get("LANG", "en_US.UTF-8"),
+            "XDG_RUNTIME_DIR": os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{uid}"),
+            "XDG_DATA_HOME": os.environ.get("XDG_DATA_HOME", os.path.join(home, ".local", "share")),
+            "WINEPREFIX": wineprefix,
+            "GAMEID": gameid,
+            "STORE": "ubisoft",
+            "PROTON_VERB": "waitforexitandrun",
+        }
+
+        proton_path = self._find_proton_path()
+        if proton_path:
+            env["PROTONPATH"] = proton_path
+
+        # Display env: Decky runs as a systemd service so os.environ may not
+        # have DISPLAY etc.  Detect from the running session if needed.
+        display_vars = self._detect_display_env()
+        env.update(display_vars)
+
+        return env
+
+    def _detect_display_env(self) -> dict:
+        """Detect display environment variables for GUI subprocess spawning.
+
+        Checks os.environ first, then falls back to reading from a running
+        Steam or Gamescope process (since Decky Loader's systemd service
+        does not inherit the user's graphical session environment).
+        """
+        result: dict = {}
+        targets = ["DISPLAY", "WAYLAND_DISPLAY", "DBUS_SESSION_BUS_ADDRESS", "XAUTHORITY"]
+
+        # First pass: check our own env
+        for var in targets:
+            val = os.environ.get(var)
+            if val:
+                result[var] = val
+
+        if result.get("DISPLAY") or result.get("WAYLAND_DISPLAY"):
+            return result
+
+        # Fallback: read from a running Steam or gamescope-session process
+        try:
+            for proc_name in ["steam", "gamescope-session"]:
+                pids = subprocess.run(
+                    ["pgrep", "-u", str(os.getuid()), "-x", proc_name],
+                    capture_output=True, text=True, timeout=5,
+                ).stdout.strip().split("\n")
+                for pid in pids:
+                    pid = pid.strip()
+                    if not pid:
+                        continue
+                    try:
+                        env_path = f"/proc/{pid}/environ"
+                        with open(env_path, "rb") as f:
+                            env_bytes = f.read()
+                        for entry in env_bytes.split(b"\x00"):
+                            decoded = entry.decode("utf-8", errors="replace")
+                            if "=" in decoded:
+                                k, v = decoded.split("=", 1)
+                                if k in targets and k not in result:
+                                    result[k] = v
+                        if result.get("DISPLAY") or result.get("WAYLAND_DISPLAY"):
+                            logger.info(f"[Ubisoft] Display env detected from PID {pid} ({proc_name}): "
+                                        f"DISPLAY={result.get('DISPLAY')}")
+                            return result
+                    except (PermissionError, FileNotFoundError, OSError):
+                        continue
+        except Exception as e:
+            logger.debug(f"[Ubisoft] Display env detection error: {e}")
+
+        # Last resort: common Steam Deck defaults
+        if not result.get("DISPLAY"):
+            result["DISPLAY"] = ":0"
+            logger.info("[Ubisoft] Using fallback DISPLAY=:0")
+        xauth = os.path.join(os.path.expanduser("~"), ".Xauthority")
+        if not result.get("XAUTHORITY") and os.path.isfile(xauth):
+            result["XAUTHORITY"] = xauth
+
+        return result
+
     def _find_umu_run(self) -> Optional[str]:
         """Find the bundled umu-run path."""
         if self.plugin_dir:
@@ -1075,6 +1575,36 @@ class UbisoftConnector(Store):
         logger.warning("[Ubisoft] umu-run not found")
         return None
 
+    def _find_proton_path(self) -> Optional[str]:
+        """Find a suitable Proton installation for umu-run."""
+        compat_dir = os.path.expanduser("~/.local/share/Steam/compatibilitytools.d")
+        if not os.path.isdir(compat_dir):
+            return None
+
+        # Prefer UMU-Proton, then GE-Proton (newest first)
+        candidates = []
+        for entry in os.listdir(compat_dir):
+            full = os.path.join(compat_dir, entry)
+            if os.path.isdir(full):
+                if entry.startswith("UMU-Proton"):
+                    candidates.insert(0, full)  # UMU-Proton first
+                elif entry.startswith("GE-Proton"):
+                    candidates.append(full)
+
+        # Sort GE-Proton candidates by version (newest first)
+        candidates.sort(key=lambda p: os.path.basename(p), reverse=True)
+        # But keep UMU-Proton at front
+        umu = [c for c in candidates if "UMU-Proton" in c]
+        ge = [c for c in candidates if "GE-Proton" in c]
+        candidates = umu + ge
+
+        if candidates:
+            logger.info(f"[Ubisoft] Using Proton: {os.path.basename(candidates[0])}")
+            return candidates[0]
+
+        logger.warning("[Ubisoft] No Proton found in compatibilitytools.d")
+        return None
+
     def _find_python(self) -> str:
         """Find python3 executable."""
         import shutil as _shutil
@@ -1090,6 +1620,358 @@ class UbisoftConnector(Store):
         return os.path.join(PREFIXES_DIR, space_id)
 
     # ========================================================================
+    # UPC Warm-up (populate configurations cache)
+    # ========================================================================
+
+    async def _warmup_upc(self, prefix_path: str) -> bool:
+        """
+        Run UPC briefly to let it download its configuration cache.
+
+        After bootstrap, UPC is installed but hasn't run yet. Running it
+        briefly lets it connect and populate the configurations binary,
+        which we need to resolve space_id -> install_id mappings.
+
+        Returns True if configurations file was created.
+        """
+        logger.info("[Ubisoft] Running UPC warm-up to populate configuration cache...")
+
+        upc_path = self._find_upc_exe(prefix_path)
+        if not upc_path:
+            logger.warning("[Ubisoft] Cannot warm up UPC: upc.exe not found")
+            return False
+
+        # Inject session so UPC can authenticate
+        self.inject_upc_session(prefix_path)
+
+        umu_run = self._find_umu_run()
+        if not umu_run:
+            logger.warning("[Ubisoft] Cannot warm up UPC: umu-run not found")
+            return False
+
+        python_bin = self._find_python()
+        env = self._build_umu_env(prefix_path, "umu-ubisoft-warmup")
+
+        proc = await asyncio.create_subprocess_exec(
+            python_bin, umu_run, upc_path,
+            env=env,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+
+        # Wait for configurations file to appear (check every 5s, up to 120s)
+        configs_found = False
+        for i in range(24):  # 24 * 5s = 120s
+            await asyncio.sleep(5)
+
+            configs_path = self._find_configurations(prefix_path)
+            if configs_path:
+                logger.info(f"[Ubisoft] Configurations file found after {(i + 1) * 5}s")
+                configs_found = True
+                break
+
+            # Check if process died early
+            if proc.returncode is not None:
+                logger.warning(
+                    f"[Ubisoft] UPC warm-up exited early (rc={proc.returncode})"
+                )
+                break
+
+        # Terminate UPC
+        if proc.returncode is None:
+            try:
+                proc.terminate()
+                await asyncio.wait_for(proc.wait(), timeout=10)
+            except Exception:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+
+        if configs_found:
+            logger.info("[Ubisoft] UPC warm-up complete, configurations cached")
+        else:
+            logger.warning(
+                "[Ubisoft] UPC warm-up timed out without producing configurations"
+            )
+
+        # Capture any session token UPC wrote (only happens if user logged in)
+        captured = self._capture_upc_session(prefix_path)
+        if captured:
+            self._propagate_upc_session_to_all_prefixes(captured)
+
+        return configs_found
+
+    # ========================================================================
+    # Manual UPC Install Fallback
+    # ========================================================================
+
+    async def _install_via_upc_ui(
+        self,
+        game_id: str,
+        game_name: Optional[str],
+        prefix_path: str,
+        upc_path: str,
+        umu_run: str,
+        python_bin: str,
+        env: dict,
+        progress_callback=None,
+        install_path: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        Fallback install: launch UPC authenticated and let the user install
+        the game manually through the Ubisoft Connect UI.
+
+        Monitors the filesystem for new game directories to detect what was
+        installed and where.
+        """
+        logger.info(
+            f"[Ubisoft] install_id unavailable for {game_id} — "
+            "launching UPC for manual install"
+        )
+
+        # Inject session so UPC is pre-authenticated
+        self.inject_upc_session(prefix_path)
+
+        # Snapshot existing directories before UPC launches
+        install_base = install_path or DEFAULT_INSTALL_BASE
+        os.makedirs(install_base, exist_ok=True)
+        dirs_before = set()
+        try:
+            dirs_before = set(os.listdir(install_base))
+        except Exception:
+            pass
+
+        # Also snapshot the default UPC install location inside the prefix
+        upc_games_dir = os.path.join(
+            prefix_path, "drive_c", "Program Files (x86)",
+            "Ubisoft", "Ubisoft Game Launcher", "games"
+        )
+        pfx_games_dir = os.path.join(
+            prefix_path, "pfx", "drive_c", "Program Files (x86)",
+            "Ubisoft", "Ubisoft Game Launcher", "games"
+        )
+        upc_dirs_before: Dict[str, set] = {}
+        for gdir in [upc_games_dir, pfx_games_dir]:
+            if os.path.isdir(gdir):
+                upc_dirs_before[gdir] = set(os.listdir(gdir))
+
+        if progress_callback:
+            await progress_callback({
+                "status": "waiting",
+                "message": "Ubisoft Connect is opening. Please install the game from the UPC interface.",
+                "progress": 0,
+            })
+
+        # Launch UPC (no install URL — just open the client)
+        logger.info("[Ubisoft] Launching UPC for manual install")
+        proc = await asyncio.create_subprocess_exec(
+            python_bin, umu_run, upc_path,
+            env=env,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+
+        # Monitor for new directories (check every 10s, up to 2 hours)
+        install_dir = None
+        max_checks = 720  # 720 * 10s = 7200s = 2h
+        for i in range(max_checks):
+            await asyncio.sleep(10)
+
+            # Check for new directories in install base
+            try:
+                dirs_now = set(os.listdir(install_base))
+                new_dirs = dirs_now - dirs_before
+                for d in new_dirs:
+                    candidate = os.path.join(install_base, d)
+                    if os.path.isdir(candidate) and self._looks_like_game_install(candidate):
+                        install_dir = candidate
+                        break
+            except Exception:
+                pass
+
+            # Check UPC's default game directories
+            if not install_dir:
+                for gdir, before in upc_dirs_before.items():
+                    try:
+                        now = set(os.listdir(gdir))
+                        new = now - before
+                        for d in new:
+                            candidate = os.path.join(gdir, d)
+                            if os.path.isdir(candidate) and self._looks_like_game_install(candidate):
+                                install_dir = candidate
+                                break
+                    except Exception:
+                        pass
+                    if install_dir:
+                        break
+
+            if install_dir:
+                logger.info(f"[Ubisoft] Detected game install at: {install_dir}")
+                if progress_callback:
+                    await progress_callback({
+                        "status": "installing",
+                        "message": f"Game detected at {os.path.basename(install_dir)}",
+                        "progress": 50,
+                    })
+                # Wait a bit more for install to complete
+                await self._wait_for_install_completion(install_dir, progress_callback)
+                break
+
+            # Check if UPC exited
+            if proc.returncode is not None:
+                logger.info(f"[Ubisoft] UPC exited (rc={proc.returncode})")
+                break
+
+            if progress_callback and i % 6 == 0:  # Every 60s
+                await progress_callback({
+                    "status": "waiting",
+                    "message": "Waiting for game installation in Ubisoft Connect...",
+                    "progress": 0,
+                })
+
+        # Terminate UPC if still running
+        if proc.returncode is None:
+            try:
+                proc.terminate()
+                await asyncio.wait_for(proc.wait(), timeout=15)
+            except Exception:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+
+        # Capture any session token UPC wrote after login
+        captured = self._capture_upc_session(prefix_path)
+        if captured:
+            self._propagate_upc_session_to_all_prefixes(captured)
+
+        if install_dir:
+            exe = self.find_game_executable(install_dir)
+            await self.write_install_marker(
+                game_id, install_dir, exe or "", game_name or ""
+            )
+            final_size = self._get_directory_size(install_dir)
+            logger.info(
+                f"[Ubisoft] Manual install complete: {install_dir} "
+                f"({final_size / 1024 / 1024:.0f} MB)"
+            )
+
+            # Try to refresh ID map now that UPC has run
+            try:
+                await self._refresh_id_map(game_id)
+            except Exception:
+                pass
+
+            return {
+                "success": True,
+                "install_path": install_dir,
+                "executable": exe,
+                "install_size": final_size,
+            }
+
+        return {
+            "success": False,
+            "error": "No game installation detected. "
+                     "Please try again and install the game through Ubisoft Connect.",
+        }
+
+    async def _run_upc_for_login(self, prefix_path: str) -> bool:
+        """
+        Launch UPC without an install URL so the user can log in once.
+
+        After the user closes UPC, we capture the restore_session token it
+        wrote to settings.yml. Returns True if a token was captured.
+        """
+        upc_path = self._find_upc_exe(prefix_path)
+        umu_run = self._find_umu_run()
+        if not upc_path or not umu_run:
+            logger.warning("[Ubisoft] _run_upc_for_login: upc.exe or umu-run not found")
+            return False
+
+        python_bin = self._find_python()
+        env = self._build_umu_env(prefix_path, "umu-ubisoft-login")
+
+        logger.info("[Ubisoft] Launching UPC for first-time login (no install URL)")
+        proc = await asyncio.create_subprocess_exec(
+            python_bin, umu_run, upc_path,
+            env=env,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+
+        # Wait up to 5 minutes for user to log in and close UPC
+        try:
+            await asyncio.wait_for(proc.wait(), timeout=300)
+        except asyncio.TimeoutError:
+            logger.info("[Ubisoft] Login timeout — terminating UPC")
+            try:
+                proc.terminate()
+                await asyncio.wait_for(proc.wait(), timeout=10)
+            except Exception:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+
+        token = self._capture_upc_session(prefix_path)
+        if token:
+            logger.info("[Ubisoft] First-time login successful — UPC session captured")
+        else:
+            logger.warning("[Ubisoft] No UPC session captured after login flow")
+        return token is not None
+
+    @staticmethod
+    def _looks_like_game_install(path: str) -> bool:
+        """Check if a directory looks like a game installation (has .exe files or is >100MB)."""
+        try:
+            # Check for executables
+            for root, _dirs, files in os.walk(path):
+                for f in files:
+                    if f.lower().endswith(".exe"):
+                        return True
+                # Only check top 2 levels
+                depth = root[len(path):].count(os.sep)
+                if depth >= 2:
+                    break
+
+            # Check if directory is substantial (>100MB)
+            total = 0
+            for root, _dirs, files in os.walk(path):
+                for f in files:
+                    total += os.path.getsize(os.path.join(root, f))
+                    if total > 100 * 1024 * 1024:
+                        return True
+        except Exception:
+            pass
+        return False
+
+    async def _wait_for_install_completion(
+        self, install_dir: str, progress_callback=None
+    ) -> None:
+        """Wait for a game install directory to stop growing (install complete)."""
+        prev_size = 0
+        stable_count = 0
+        for _ in range(360):  # Up to 1 hour
+            await asyncio.sleep(10)
+            curr_size = self._get_directory_size(install_dir)
+
+            if curr_size == prev_size and curr_size > 0:
+                stable_count += 1
+                if stable_count >= 3:  # Stable for 30s
+                    break
+            else:
+                stable_count = 0
+
+            prev_size = curr_size
+
+            if progress_callback and curr_size > 0:
+                await progress_callback({
+                    "status": "installing",
+                    "message": f"Installing... ({curr_size / 1024 / 1024 / 1024:.1f} GB)",
+                    "progress": min(90, 50 + stable_count * 10),
+                })
+
+    # ========================================================================
     # Install/Uninstall Helpers
     # ========================================================================
 
@@ -1102,19 +1984,20 @@ class UbisoftConnector(Store):
         """
         Try to populate the ID map from the configurations binary.
 
-        Scans all existing per-game prefixes for the configurations file
-        and parses it to build the spaceId → installId/launchId mapping.
+        Scans template and per-game prefixes (checking both direct and pfx/
+        layouts) for the configurations file, then parses it.
         """
         try:
             from .ubisoft_parser import build_id_map_from_configurations
 
             # Check template prefix first
-            configs_path = os.path.join(TEMPLATE_DIR, CONFIGURATIONS_RELATIVE_PATH)
-            if os.path.isfile(configs_path):
+            configs_path = self._find_configurations(TEMPLATE_DIR)
+            if configs_path:
                 new_map = build_id_map_from_configurations(configs_path)
                 if new_map:
                     self._id_map_cache.update(new_map)
                     self._save_id_map()
+                    logger.info(f"[Ubisoft] ID map refreshed from template ({len(new_map)} entries)")
                     return
 
             # Check existing per-game prefixes
@@ -1122,15 +2005,17 @@ class UbisoftConnector(Store):
                 for entry in os.listdir(PREFIXES_DIR):
                     if entry.startswith("."):
                         continue
-                    configs_path = os.path.join(
-                        PREFIXES_DIR, entry, CONFIGURATIONS_RELATIVE_PATH
-                    )
-                    if os.path.isfile(configs_path):
+                    prefix_path = os.path.join(PREFIXES_DIR, entry)
+                    configs_path = self._find_configurations(prefix_path)
+                    if configs_path:
                         new_map = build_id_map_from_configurations(configs_path)
                         if new_map:
                             self._id_map_cache.update(new_map)
                             self._save_id_map()
+                            logger.info(f"[Ubisoft] ID map refreshed from prefix {entry} ({len(new_map)} entries)")
                             return
+
+            logger.info("[Ubisoft] No configurations binary found in any prefix")
 
         except Exception as e:
             logger.warning(f"[Ubisoft] ID map refresh failed: {e}")
@@ -1410,3 +2295,43 @@ class UbisoftConnector(Store):
         if os.path.isdir(SDCARD_INSTALL_BASE):
             bases.append(SDCARD_INSTALL_BASE)
         return bases
+
+    # ========================================================================
+    # Background API Token Refresh
+    # ========================================================================
+
+    async def _token_refresh_loop(self) -> None:
+        """
+        Background task: proactively refresh the Ubisoft API token every 30
+        minutes so it never expires while the plugin is running.
+
+        The REST API ticket lasts ~3-4 hours. Without proactive refresh,
+        tickets expire silently between user interactions.
+        """
+        while True:
+            try:
+                await asyncio.sleep(30 * 60)  # 30 minutes
+                if self.api.has_tokens():
+                    ok = await self.api.refresh_token()
+                    if ok:
+                        logger.info("[Ubisoft] Background token refresh succeeded")
+                    else:
+                        logger.error(
+                            "[Ubisoft] Background token refresh failed — "
+                            "user may need to re-authenticate via the plugin"
+                        )
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.warning(f"[Ubisoft] Token refresh loop error: {e}")
+
+    def start_token_refresh(self) -> None:
+        """Start the background token refresh loop."""
+        self._refresh_task = asyncio.create_task(self._token_refresh_loop())
+        logger.info("[Ubisoft] Background token refresh started (every 30 min)")
+
+    def stop_token_refresh(self) -> None:
+        """Stop the background token refresh loop."""
+        task = getattr(self, "_refresh_task", None)
+        if task and not task.done():
+            task.cancel()

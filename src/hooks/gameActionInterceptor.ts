@@ -96,9 +96,46 @@ async function startDownload(gameInfo: any, language?: string) {
 }
 
 /**
- * Handle install flow for a game (GOG language check + confirmation modal + download).
+ * Open Ubisoft Connect directly in the game's prefix for manual install.
+ */
+async function startUbisoftInstall(gameInfo: any) {
+  const t = i18n.t.bind(i18n);
+  const result = await call<
+    [string, string],
+    { success: boolean; already_running?: boolean; error?: string }
+  >("open_ubisoft_launcher_for_install", gameInfo.game_id, gameInfo.title);
+
+  if (result.success) {
+    toaster.toast({
+      title: t("toasts.ubisoftLauncherOpening"),
+      body: t(
+        result.already_running
+          ? "toasts.ubisoftLauncherAlreadyOpenMessage"
+          : "toasts.ubisoftLauncherOpeningMessage",
+        { title: gameInfo.title },
+      ),
+      duration: 7000,
+    });
+    return;
+  }
+
+  toaster.toast({
+    title: t("toasts.ubisoftLauncherOpenFailed"),
+    body: result.error ? t(result.error) : t("toasts.ubisoftLauncherOpenFailedMessage"),
+    duration: 10000,
+    critical: true,
+  });
+}
+
+/**
+ * Handle install flow for a game (Ubisoft launcher open, GOG language flow, or queue download).
  */
 async function handleInstallFlow(gameInfo: any) {
+  if (gameInfo.store === "ubisoft") {
+    await startUbisoftInstall(gameInfo);
+    return;
+  }
+
   // For GOG games, check if multiple languages are available
   if (gameInfo.store === "gog") {
     try {
@@ -138,15 +175,20 @@ async function handleInstallFlow(gameInfo: any) {
 
 /**
  * Show install confirmation modal, then trigger install flow.
+ * Ubisoft games get a store-specific modal explaining that UPC will open.
  */
 function showInstallConfirmation(gameInfo: any) {
   const t = i18n.t.bind(i18n);
+  const isUbisoft = gameInfo.store === "ubisoft";
 
   showModal(
     React.createElement(ConfirmModal, {
-      strTitle: t("confirmModals.installTitle"),
-      strDescription: t("confirmModals.installDescription", { title: gameInfo.title }),
-      strOKButtonText: t("confirmModals.yes"),
+      strTitle: t(isUbisoft ? "confirmModals.ubisoftInstallTitle" : "confirmModals.installTitle"),
+      strDescription: t(
+        isUbisoft ? "confirmModals.ubisoftInstallDescription" : "confirmModals.installDescription",
+        { title: gameInfo.title },
+      ),
+      strOKButtonText: t(isUbisoft ? "confirmModals.ubisoftInstallConfirm" : "confirmModals.yes"),
       strCancelButtonText: t("confirmModals.no"),
       onOK: () => {
         handleInstallFlow(gameInfo);

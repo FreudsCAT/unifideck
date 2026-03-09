@@ -215,7 +215,9 @@ const PlaySectionWrapperInner: FC<PlaySectionWrapperProps> = ({
   const [lastPlayedTimestamp, setLastPlayedTimestamp] = useState(0);
   const [updateAvailable, setUpdateAvailable] = useState<boolean | null>(null);
   const [isUpdating, setIsUpdating] = useState(false);
+  const [ubisoftInstalling, setUbisoftInstalling] = useState(false);
   const debugLoggedRef = useRef(false);
+  const ubisoftInstallPollTicksRef = useRef(0);
   const wrapperRef = useRef<HTMLDivElement>(null);
   const { t } = useTranslation();
 
@@ -776,6 +778,50 @@ const PlaySectionWrapperInner: FC<PlaySectionWrapperProps> = ({
         if (newStatus === "error" || newStatus === "cancelled") {
           setIsUpdating(false);
         }
+
+        // Ubisoft launcher-driven installs bypass the download queue.
+        // Poll get_game_info periodically so Install -> Play updates without requiring navigation.
+        // Also check if UPC is still running so we can clear the "Cancel" state.
+        if (gameInfo.store === "ubisoft" && !gameInfo.is_installed && !result.is_downloading) {
+          ubisoftInstallPollTicksRef.current += 1;
+          if (ubisoftInstallPollTicksRef.current % 10 === 0) {
+            // Check if install session is still active
+            const active = await call<[string], boolean>(
+              "is_ubisoft_install_active",
+              gameInfo.game_id,
+            );
+            if (!active) {
+              setUbisoftInstalling(false);
+            }
+
+            const refreshed = await call<[number], any>("get_game_info", appId);
+            const refreshedInfo = refreshed?.error ? null : refreshed;
+            if (refreshedInfo?.is_installed) {
+              setUbisoftInstalling(false);
+              setGameInfo(refreshedInfo);
+              if (gameInfoCacheRef) {
+                gameInfoCacheRef.set(appId, {
+                  info: refreshedInfo,
+                  timestamp: Date.now(),
+                });
+              }
+              updateSingleGameStatus({
+                appId,
+                store: refreshedInfo.store,
+                isInstalled: true,
+              });
+              toaster.toast({
+                title: t("toasts.installComplete"),
+                body: t("toasts.installCompleteMessage", {
+                  title: refreshedInfo.title || gameInfo?.title || "Game",
+                }),
+                duration: 10000,
+              });
+            }
+          }
+        } else {
+          ubisoftInstallPollTicksRef.current = 0;
+        }
       } catch (error) {
         console.error(
           "[PlaySectionWrapper] Error polling download status:",
@@ -841,9 +887,63 @@ const PlaySectionWrapperInner: FC<PlaySectionWrapperProps> = ({
     }
   };
 
+  const startUbisoftInstall = async () => {
+    if (!gameInfo) return;
+    setUbisoftInstalling(true);
+    const result = await call<
+      [string, string],
+      { success: boolean; already_running?: boolean; error?: string }
+    >("open_ubisoft_launcher_for_install", gameInfo.game_id, gameInfo.title);
+
+    if (result.success) {
+      toaster.toast({
+        title: t("toasts.ubisoftLauncherOpening"),
+        body: t(
+          result.already_running
+            ? "toasts.ubisoftLauncherAlreadyOpenMessage"
+            : "toasts.ubisoftLauncherOpeningMessage",
+          { title: gameInfo.title },
+        ),
+        duration: 7000,
+      });
+      return;
+    }
+
+    setUbisoftInstalling(false);
+    toaster.toast({
+      title: t("toasts.ubisoftLauncherOpenFailed"),
+      body: result.error
+        ? t(result.error)
+        : t("toasts.ubisoftLauncherOpenFailedMessage"),
+      duration: 10000,
+      critical: true,
+    });
+  };
+
+  const cancelUbisoftInstall = async () => {
+    if (!gameInfo) return;
+    const result = await call<[string], { success: boolean; error?: string }>(
+      "cancel_ubisoft_install",
+      gameInfo.game_id,
+    );
+    setUbisoftInstalling(false);
+    if (result.success) {
+      toaster.toast({
+        title: t("toasts.downloadCancelled"),
+        body: t("toasts.downloadCancelledMessage", { title: gameInfo.title }),
+        duration: 5000,
+      });
+    }
+  };
+
   // Install handler - checks for GOG language selection
   const handleInstall = async () => {
     if (!gameInfo) return;
+
+    if (gameInfo.store === "ubisoft") {
+      await startUbisoftInstall();
+      return;
+    }
 
     // For GOG games, check if multiple languages are available
     if (gameInfo.store === "gog") {
@@ -916,15 +1016,17 @@ const PlaySectionWrapperInner: FC<PlaySectionWrapperProps> = ({
     }
   };
 
-  // Show install confirmation modal
+  // Show install confirmation modal (Ubisoft gets a store-specific modal)
   const showInstallConfirmation = () => {
+    const isUbisoft = gameInfo?.store === "ubisoft";
     showModal(
       <ConfirmModal
-        strTitle={t("confirmModals.installTitle")}
-        strDescription={t("confirmModals.installDescription", {
-          title: gameInfo?.title,
-        })}
-        strOKButtonText={t("confirmModals.yes")}
+        strTitle={t(isUbisoft ? "confirmModals.ubisoftInstallTitle" : "confirmModals.installTitle")}
+        strDescription={t(
+          isUbisoft ? "confirmModals.ubisoftInstallDescription" : "confirmModals.installDescription",
+          { title: gameInfo?.title },
+        )}
+        strOKButtonText={t(isUbisoft ? "confirmModals.ubisoftInstallConfirm" : "confirmModals.yes")}
         strCancelButtonText={t("confirmModals.no")}
         onOK={() => {
           handleInstall();
@@ -952,7 +1054,9 @@ const PlaySectionWrapperInner: FC<PlaySectionWrapperProps> = ({
 
   // Handle install/cancel button click
   const handleClick = () => {
-    if (isDownloading) {
+    if (ubisoftInstalling) {
+      cancelUbisoftInstall();
+    } else if (isDownloading) {
       showCancelConfirmation();
     } else if (!gameInfo?.is_installed) {
       showInstallConfirmation();
@@ -1659,9 +1763,11 @@ const PlaySectionWrapperInner: FC<PlaySectionWrapperProps> = ({
   }
 
   // ========== UNINSTALLED / DOWNLOADING STATE: Install/Cancel button ==========
-  const displayText = isDownloading
+  const displayText = ubisoftInstalling
     ? t("installButton.cancel")
-    : t("installButton.installNative", "Install");
+    : isDownloading
+      ? t("installButton.cancel")
+      : t("installButton.installNative", "Install");
 
   return (
     <Focusable
@@ -1688,12 +1794,12 @@ const PlaySectionWrapperInner: FC<PlaySectionWrapperProps> = ({
       {/* Install/Cancel button — explicit styling matching native Steam button */}
       <DialogButton
         className={
-          isDownloading ? "unifideck-cancel-btn" : "unifideck-install-btn"
+          isDownloading || ubisoftInstalling ? "unifideck-cancel-btn" : "unifideck-install-btn"
         }
         onClick={handleClick}
         style={actionBtnStyle}
       >
-        {!isDownloading && (
+        {!isDownloading && !ubisoftInstalling && (
           <svg viewBox="0 0 24 24" fill="currentColor" width="1em" height="1em">
             <path d="M5 20h14v-2H5v2zM19 9h-4V3H9v6H5l7 7 7-7z" />
           </svg>

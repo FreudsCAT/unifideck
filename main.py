@@ -1036,6 +1036,40 @@ def normalize_title_for_matching(title: str) -> str:
     return t
 
 
+def _clean_title_for_comparison(title: str) -> str:
+    """Minimal cleaning for title comparison: lowercase, strip symbols, normalize whitespace.
+
+    Unlike normalize_title_for_matching, this preserves subtitles and edition suffixes
+    so 'Assassin's Creed IV: Black Flag' != 'Assassin's Creed'.
+    """
+    if not title:
+        return ''
+    t = title.lower().strip()
+    t = re.sub(r'[®™©]', '', t)
+    t = re.sub(r'[^\w\s]', '', t)
+    t = re.sub(r'\s+', ' ', t).strip()
+    return t
+
+
+def _score_steam_match(search_title: str, result_name: str) -> float:
+    """Score how well a Steam search result matches the search title (0.0–1.0)."""
+    search_clean = _clean_title_for_comparison(search_title)
+    result_clean = _clean_title_for_comparison(result_name)
+    if not search_clean or not result_clean:
+        return 0.0
+    if search_clean == result_clean:
+        return 1.0
+    search_words = set(search_clean.split())
+    result_words = set(result_clean.split())
+    if search_words == result_words:
+        return 0.95
+    if search_words.issubset(result_words) or result_words.issubset(search_words):
+        return 0.8
+    intersection = search_words & result_words
+    union = search_words | result_words
+    return len(intersection) / len(union) if union else 0.0
+
+
 async def extract_metadata_from_appinfo(games: List, appinfo_data: Dict[int, Dict]) -> Tuple[Dict[int, int], Dict[int, Dict]]:
     """
     Extract metadata for our games from appinfo data by matching titles.
@@ -1992,6 +2026,7 @@ class Plugin:
 
         logger.info("[INIT] Initializing UbisoftConnector")
         self.ubisoft = UbisoftConnector(plugin_dir=DECKY_PLUGIN_DIR)
+        self.ubisoft.start_token_refresh()
 
         # Repair games.map for Unifideck shortcuts missing entries (fixes "Game location not mapped" errors)
         logger.info("[INIT] Reconciling games.map from installed games")
@@ -2318,9 +2353,10 @@ class Plugin:
                         self.steamgriddb.fetch_game_art(
                             game.title,
                             game.app_id,
-                            store=game.store,      # 'epic', 'gog', or 'amazon'
+                            store=game.store,      # 'epic', 'gog', 'amazon', or 'ubisoft'
                             store_id=game.id,      # Store-specific game ID
-                            only_types=only_types  # Only fetch specified types (if any)
+                            only_types=only_types, # Only fetch specified types (if any)
+                            extra=getattr(game, 'extra', None)  # Ubisoft: coverUrl, backgroundUrl, bannerUrl
                         ),
                         timeout=ARTWORK_FETCH_TIMEOUT
                     )
@@ -3925,7 +3961,17 @@ class Plugin:
                                     logger.info(f"[GameInfo] Amazon game {game_id} found via nile (path verified)")
                                 else:
                                     logger.warning(f"[GameInfo] Amazon game {game_id} in config but path missing")
-                        elif store not in ('epic', 'gog', 'amazon'):
+                        elif store == 'ubisoft':
+                            installed_ids = await self.ubisoft.get_installed()
+                            if game_id in installed_ids:
+                                ubisoft_info = installed_ids.get(game_id, {})
+                                install_path = ubisoft_info.get('install_path', '') if isinstance(ubisoft_info, dict) else ''
+                                if install_path and os.path.exists(install_path):
+                                    is_installed = True
+                                    logger.info(f"[GameInfo] Ubisoft game {game_id} found via prefix scan (path verified)")
+                                else:
+                                    logger.warning(f"[GameInfo] Ubisoft game {game_id} in prefix but path missing")
+                        elif store not in ('epic', 'gog', 'amazon', 'ubisoft'):
                             return {'error': f'Unknown store: {store}'}
 
                     # Get game size - try cache first (instant), fallback to API (slow)
@@ -3944,6 +3990,8 @@ class Plugin:
                                 size_bytes = await self.gog.get_game_size(game_id)
                             elif store == 'amazon':
                                 size_bytes = await self.amazon.get_game_size(game_id)
+                            elif store == 'ubisoft':
+                                size_bytes = await self.ubisoft.get_game_size(game_id)
 
                             # Cache the result for next time
                             if size_bytes and size_bytes > 0:
@@ -4344,15 +4392,48 @@ class Plugin:
         # Steam API first
         results = await self.fetch_steam_store_search(game_title)
         if results:
-            target_norm = normalize_title_for_matching(game_title)
             top = None
+
+            # Pass 1: Exact full-title match (cleaned, no subtitle stripping)
+            search_clean = _clean_title_for_comparison(game_title)
             for item in results:
                 item_name = item.get('name', '') if isinstance(item, dict) else ''
-                if item_name and normalize_title_for_matching(item_name) == target_norm:
+                if item_name and _clean_title_for_comparison(item_name) == search_clean:
                     top = item
                     break
+
+            # Pass 2: Normalized match (with subtitle stripping)
             if top is None:
-                top = results[0]
+                target_norm = normalize_title_for_matching(game_title)
+                for item in results:
+                    item_name = item.get('name', '') if isinstance(item, dict) else ''
+                    if item_name and normalize_title_for_matching(item_name) == target_norm:
+                        top = item
+                        break
+
+            # Pass 3: Best scored match (replaces blind results[0] fallback)
+            if top is None:
+                best_score = 0.0
+                best_item = None
+                for item in results:
+                    item_name = item.get('name', '') if isinstance(item, dict) else ''
+                    if item_name:
+                        score = _score_steam_match(game_title, item_name)
+                        if score > best_score:
+                            best_score = score
+                            best_item = item
+                if best_score >= 0.6:
+                    top = best_item
+                    logger.debug(f"[Steam Presence] Scored match for '{game_title}': "
+                                f"'{best_item.get('name', '')}' (score={best_score:.2f})")
+                else:
+                    logger.debug(f"[Steam Presence] No confident match for '{game_title}' "
+                                f"(best score={best_score:.2f})")
+
+            if top is None:
+                logger.debug(f"[Steam Presence] No Steam match found for '{game_title}'")
+                return {'steam_appid': 0, 'metadata': {}}
+
             steam_app_id = top.get('id') or top.get('appid')
             if steam_app_id:
                 try:
@@ -4602,6 +4683,8 @@ class Plugin:
                 # Amazon: Use official website from metadata if available, otherwise gaming portal
                 official_url = self._get_amazon_official_url(game_id)
                 store_url = official_url or "https://gaming.amazon.com/intro"
+            elif store == 'ubisoft':
+                store_url = f"https://store.ubisoft.com/us/search?q={encoded_title}"
             else:
                 store_url = ''
 
@@ -5006,6 +5089,45 @@ class Plugin:
         except Exception as e:
             logger.error(f"[DownloadQueue] Error adding to queue: {e}")
             return {'success': False, 'error': str(e)}
+
+    async def open_ubisoft_launcher_for_install(
+        self, game_id: str, game_title: str = "", install_path: str = None
+    ) -> Dict[str, Any]:
+        """Open Ubisoft Connect in a game's prefix for manual install (no download queue)."""
+        try:
+            logger.info(f"[UbisoftInstall] RPC called: game_id={game_id} title={game_title}")
+            result = await self.ubisoft.open_launcher_for_install(game_id)
+            if not result.get("success"):
+                logger.error(f"[UbisoftInstall] Launch failed: {result}")
+                return result
+
+            logger.info(
+                f"[UbisoftInstall] Launcher opened for install: {game_title or game_id} ({game_id}) "
+                f"PID={result.get('pid')} URL={result.get('launch_url')}"
+            )
+            return {
+                "success": True,
+                "message": "Ubisoft Connect launcher opening for install",
+                "launch_url": result.get("launch_url", ""),
+            }
+        except Exception as e:
+            logger.error(f"[UbisoftInstall] Failed to start install session for {game_id}: {e}")
+            return {"success": False, "error": str(e)}
+
+    async def cancel_ubisoft_install(self, game_id: str) -> Dict[str, Any]:
+        """Cancel a running Ubisoft Connect install session."""
+        try:
+            return await self.ubisoft.cancel_install_session(game_id)
+        except Exception as e:
+            logger.error(f"[UbisoftInstall] Cancel failed for {game_id}: {e}")
+            return {"success": False, "error": str(e)}
+
+    async def is_ubisoft_install_active(self, game_id: str) -> bool:
+        """Check if UPC is running for a game install."""
+        try:
+            return self.ubisoft.is_install_session_active(game_id)
+        except Exception:
+            return False
 
     async def add_to_download_queue_by_appid(self, app_id: int) -> Dict[str, Any]:
         """Add a game to download queue by its Steam shortcut app ID"""
@@ -5657,12 +5779,21 @@ class Plugin:
         """Logout from Amazon Games"""
         return await self.amazon.logout()
 
-    async def start_ubisoft_auth(self, email: str, password: str) -> Dict[str, Any]:
-        """Start Ubisoft Connect authentication with credentials.
+    async def connect_ubisoft_account(self) -> Dict[str, Any]:
+        """Launch UPC in the template prefix for one-time Ubisoft account connection.
 
-        Unlike other stores, Ubisoft uses direct REST API login with email/password
-        instead of OAuth. This calls complete_auth which performs the actual login.
+        Replaces the REST API login flow for auth persistence. The user logs in
+        directly via UPC, which writes a long-lived restore_session token that
+        is propagated to all existing game prefixes automatically.
         """
+        logger.info("[RPC] connect_ubisoft_account")
+        return await self.ubisoft.connect_ubisoft_account()
+
+    # REST API auth for library queries. After successful login, UPC is
+    # auto-opened in the template prefix to capture the native session token.
+
+    async def start_ubisoft_auth(self, email: str, password: str) -> Dict[str, Any]:
+        """Start Ubisoft Connect authentication with credentials."""
         logger.info("[RPC] start_ubisoft_auth")
         auth_data = json.dumps({"email": email, "password": password})
         return await self.ubisoft.complete_auth(auth_data)
