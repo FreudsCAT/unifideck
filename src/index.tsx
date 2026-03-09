@@ -43,6 +43,7 @@ import { StorageSettings } from "./components/StorageSettings";
 
 import { SteamRestartModal } from "./components/SteamRestartModal";
 import { AccountSwitchModal } from "./components/AccountSwitchModal";
+import { UbisoftAuthModal } from "./components/UbisoftAuthModal";
 import { LanguageSelector } from "./components/LanguageSelector";
 import StoreConnections from "./components/settings/StoreConnections";
 import { Store } from "./types/store";
@@ -659,6 +660,7 @@ const Content: FC = () => {
     epic: "checking",
     gog: "checking",
     amazon: "checking",
+    ubisoft: "checking",
   });
 
   // Game Details View Mode - persisted via localStorage
@@ -846,6 +848,7 @@ const Content: FC = () => {
           epic: string;
           gog: string;
           amazon: string;
+          ubisoft: string;
           error?: string;
           legendary_installed?: boolean;
           nile_installed?: boolean;
@@ -862,6 +865,7 @@ const Content: FC = () => {
           epic: result.epic,
           gog: result.gog,
           amazon: result.amazon,
+          ubisoft: result.ubisoft,
         });
 
         // Show warning if legendary not installed
@@ -882,6 +886,7 @@ const Content: FC = () => {
           epic: "error",
           gog: "error",
           amazon: "error",
+          ubisoft: "error",
         });
       }
     } catch (error) {
@@ -890,6 +895,7 @@ const Content: FC = () => {
         epic: "error",
         gog: "error",
         amazon: "error",
+        ubisoft: "error",
       });
     }
   };
@@ -1111,6 +1117,7 @@ const Content: FC = () => {
             epic: string;
             gog: string;
             amazon: string;
+            ubisoft: string;
           }
         >("check_store_status");
 
@@ -1120,6 +1127,8 @@ const Content: FC = () => {
             status = result.epic;
           } else if (store === "gog") {
             status = result.gog;
+          } else if (store === "ubisoft") {
+            status = result.ubisoft;
           } else {
             status = result.amazon;
           }
@@ -1169,7 +1178,29 @@ const Content: FC = () => {
         ? t("storeConnections.epicGames")
         : store === "amazon"
         ? t("storeConnections.amazonGames")
+        : store === "ubisoft"
+        ? t("storeConnections.ubisoftConnect")
         : t("storeConnections.gog");
+
+    // Ubisoft uses credentials-based auth (modal form), not browser popup
+    if (store === "ubisoft") {
+      showModal(
+        <UbisoftAuthModal
+          onAuthComplete={async () => {
+            console.log(`[Unifideck] Ubisoft authentication successful!`);
+            // Show toast only after entire auth flow (credentials + 2FA if needed) completes
+            toaster.toast({
+              title: t("toasts.authConnected", { store: storeName }),
+              body: t("toasts.authConnectedMessage", { store: storeName }),
+              duration: 8000,
+              critical: true,
+            });
+            await checkStoreStatus();
+          }}
+        />,
+      );
+      return;
+    }
 
     try {
       let methodName: string;
@@ -1262,6 +1293,8 @@ const Content: FC = () => {
         methodName = "logout_epic";
       } else if (store === "gog") {
         methodName = "logout_gog";
+      } else if (store === "ubisoft") {
+        methodName = "logout_ubisoft";
       } else {
         methodName = "logout_amazon";
       }

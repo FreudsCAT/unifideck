@@ -77,6 +77,16 @@ def classify_download_error(raw_error: str) -> str:
     if any(p in lower for p in ['binary not found', 'not found', 'cli not found',
                                   'command not found', 'no such file']):
         return "errors.download.toolMissing"
+
+    # Ubisoft-specific errors
+    if 'bootstrap' in lower and ('ubisoft' in lower or 'prefix' in lower):
+        return "errors.download.ubisoftBootstrap"
+    if any(p in lower for p in ['upc', 'uplay', 'ubisoft connect']):
+        return "errors.download.ubisoftClient"
+    if 'connection refused' in lower and ('ubisoft' in lower or 'upc' in lower):
+        return "errors.download.ubisoftClientNotRunning"
+    if 'umu-run' in lower or 'umu_run' in lower:
+        return "errors.download.ubisoftUmuMissing"
     
     # Could not find installed files after download
     if any(p in lower for p in ['could not locate', 'directory not found',
@@ -156,6 +166,7 @@ class DownloadQueue:
         self._progress_callback: Optional[Callable] = None
         self._on_complete_callback: Optional[Callable] = None
         self._gog_install_callback: Optional[Callable] = None  # For GOG API-based downloads
+        self._ubisoft_install_callback: Optional[Callable] = None  # For Ubisoft UPC-based downloads
         self._size_cache_callback: Optional[Callable] = None  # For updating game size cache
         self._size_cached_items: set = set()  # Track which items have had size cached (store:game_id)
         
@@ -174,13 +185,14 @@ class DownloadQueue:
         logger.info(f"[DownloadQueue] Initialized with {len(self.queue)} queued items, plugin_dir={plugin_dir}")
 
     def cleanup_processes(self):
-        """Kill any lingering gogdl/legendary/nile processes from previous session"""
+        """Kill any lingering gogdl/legendary/nile/upc.exe processes from previous session"""
         try:
             # Simple kill by name - safer than PID which might be reused
             # We want to kill these specific binaries that might be hung
             subprocess.run(['pkill', '-f', 'gogdl'], capture_output=True)
             subprocess.run(['pkill', '-f', 'legendary'], capture_output=True)
             subprocess.run(['pkill', '-f', 'nile'], capture_output=True)
+            subprocess.run(['pkill', '-f', 'upc.exe'], capture_output=True)
             logger.info("[DownloadQueue] Cleaned up orphaned download processes")
         except Exception as e:
             logger.warning(f"[DownloadQueue] Error cleaning orphaned processes: {e}")
@@ -726,6 +738,8 @@ class DownloadQueue:
             return await self._download_gog(item, install_path)
         elif item.store == 'amazon':
             return await self._download_amazon(item, install_path)
+        elif item.store == 'ubisoft':
+            return await self._download_ubisoft(item, install_path)
         else:
             logger.error(f"[DownloadQueue] Unknown store: {item.store}")
             return False
@@ -953,6 +967,128 @@ class DownloadQueue:
             item.error_message = classify_download_error(str(e))
             return False
 
+    async def _download_ubisoft(self, item: DownloadItem, install_path: str) -> bool:
+        """Download/install Ubisoft game via upc.exe uplay://install protocol.
+
+        Unlike other stores that use CLI tools, Ubisoft delegates to upc.exe
+        running inside a per-game Wine prefix. Progress is monitored via
+        file system size polling since upc.exe is a GUI app.
+
+        Download tracking strategy:
+        Since upc.exe is a GUI app with no stdout/stderr progress output,
+        we cannot get precise download speeds or ETA from the process itself.
+        Instead we use file-system-based speed estimation:
+        - Poll install directory size every 3 seconds (done by connector)
+        - Calculate speed from size deltas between polls
+        - Apply EMA smoothing to ETA (same alpha as Epic/GOG)
+        - Size cache updated once accurate total_bytes is known
+
+        Reference: docs/ubisoft-store-spec.md §6 & §11
+        """
+        if not self._ubisoft_install_callback:
+            item.error_message = "Ubisoft install callback not set"
+            logger.error("[DownloadQueue] Ubisoft install callback not configured")
+            return False
+
+        logger.info(f"[DownloadQueue] Delegating Ubisoft download to connector: {item.game_id}")
+
+        # Track last known size for speed calculation
+        _last_bytes = [0]
+        _last_time = [time.time()]
+
+        try:
+            # Progress callback to update download item with speed/ETA tracking
+            async def progress_callback(progress):
+                # Check cancellation
+                if item.status == DownloadStatus.CANCELLED:
+                    logger.info("[DownloadQueue] Ubisoft download cancelled")
+                    raise asyncio.CancelledError("Download cancelled by user")
+
+                if isinstance(progress, dict):
+                    if 'phase' in progress:
+                        item.download_phase = progress['phase']
+                        if 'phase_message' in progress:
+                            item.phase_message = progress['phase_message']
+                        self._save()
+                        return
+
+                    if 'progress_percent' in progress:
+                        item.progress_percent = progress['progress_percent']
+                    if 'downloaded_bytes' in progress:
+                        current_bytes = int(progress['downloaded_bytes'])
+
+                        # Calculate speed from size delta
+                        now = time.time()
+                        elapsed = now - _last_time[0]
+                        if elapsed > 0 and current_bytes > _last_bytes[0]:
+                            delta_bytes = current_bytes - _last_bytes[0]
+                            speed_mbps = (delta_bytes / elapsed) / (1024 * 1024)
+                            item.speed_mbps = round(speed_mbps, 2)
+
+                            # ETA from speed (with EMA smoothing)
+                            if item.total_bytes > 0 and speed_mbps > 0:
+                                remaining_bytes = item.total_bytes - current_bytes
+                                raw_eta = int(remaining_bytes / (speed_mbps * 1024 * 1024))
+                                item.raw_eta_seconds = raw_eta
+                                item.eta_samples += 1
+                                # EMA: alpha=0.1 for first 15 samples, 0.3 after
+                                alpha = 0.1 if item.eta_samples < 15 else 0.3
+                                if item.eta_seconds == 0:
+                                    item.eta_seconds = raw_eta
+                                else:
+                                    item.eta_seconds = int(alpha * raw_eta + (1 - alpha) * item.eta_seconds)
+
+                        _last_bytes[0] = current_bytes
+                        _last_time[0] = now
+                        item.downloaded_bytes = current_bytes
+
+                        new_total = int(progress.get('total_bytes', 0))
+                        if new_total > 0:
+                            item.total_bytes = new_total
+                            # Update size cache once we know actual total
+                            self._update_size_cache_if_needed(item, new_total)
+                    if 'phase_message' in progress:
+                        item.phase_message = progress['phase_message']
+
+                    if item.progress_percent > 0 or item.downloaded_bytes > 0:
+                        item.is_preparing = False
+
+                    if int(item.progress_percent) % 5 == 0 or item.progress_percent >= 100:
+                        self._save()
+
+            result = await self._ubisoft_install_callback(
+                item.game_id, install_path, progress_callback
+            )
+
+            if result.get('success'):
+                # Update size cache from final install size if not already cached
+                final_size = result.get('install_size', 0)
+                if final_size > 0:
+                    self._update_size_cache_if_needed(item, final_size)
+                elif item.downloaded_bytes > 0:
+                    self._update_size_cache_if_needed(item, item.downloaded_bytes)
+                logger.info(f"[DownloadQueue] Ubisoft download completed: {item.game_title}")
+                return True
+            else:
+                raw_error = result.get('error', 'Unknown Ubisoft download error')
+                item.error_message = classify_download_error(raw_error)
+                logger.error(f"[DownloadQueue] Ubisoft download failed: {raw_error}")
+                return False
+
+        except asyncio.CancelledError:
+            logger.info(f"[DownloadQueue] Ubisoft download cancelled cleanly: {item.game_title}")
+            # Kill upc.exe process
+            try:
+                subprocess.run(['pkill', '-f', 'upc.exe'], capture_output=True)
+            except Exception:
+                pass
+            return False
+
+        except Exception as e:
+            logger.error(f"[DownloadQueue] Ubisoft download error: {e}")
+            item.error_message = classify_download_error(str(e))
+            return False
+
     async def _parse_nile_output(self, item: DownloadItem) -> None:
         """Parse nile output for progress updates"""
         # Nile download progress format (from ProgressBar):
@@ -1034,6 +1170,13 @@ class DownloadQueue:
     def set_gog_install_callback(self, callback: Callable) -> None:
         """Set callback for GOG game installation (uses GOGAPIClient)"""
         self._gog_install_callback = callback
+
+    def set_ubisoft_install_callback(self, callback: Callable) -> None:
+        """Set callback for Ubisoft game installation (uses UbisoftConnector)
+
+        Callback signature: callback(game_id: str, install_path: str, progress_callback) -> dict
+        """
+        self._ubisoft_install_callback = callback
 
     def set_size_cache_callback(self, callback: Callable) -> None:
         """Set callback for updating game size cache when accurate size is determined

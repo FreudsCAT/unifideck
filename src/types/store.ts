@@ -1,4 +1,4 @@
-export type Store = "epic" | "gog" | "amazon";
+export type Store = "epic" | "gog" | "amazon" | "ubisoft";
 
 export type StoreFinal =
   | "epic"

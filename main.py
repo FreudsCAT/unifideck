@@ -67,7 +67,8 @@ try:
         Store, Game as BackendGame, StoreManager,
         EpicConnector as BackendEpicConnector,
         AmazonConnector as BackendAmazonConnector,
-        GOGAPIClient as BackendGOGAPIClient
+        GOGAPIClient as BackendGOGAPIClient,
+        UbisoftConnector as BackendUbisoftConnector
     )
     from py_modules.unifideck.auth import CDPOAuthMonitor as BackendCDPOAuthMonitor
     from py_modules.unifideck.compat import (
@@ -1606,6 +1607,14 @@ if BACKEND_AVAILABLE:
 else:
     raise ImportError("backend.stores.gog module is required but not available")
 
+# ============================================================================
+# UbisoftConnector - Now imported from py_modules.unifideck.stores.ubisoft module
+# ============================================================================
+if BACKEND_AVAILABLE:
+    UbisoftConnector = BackendUbisoftConnector
+else:
+    raise ImportError("backend.stores.ubisoft module is required but not available")
+
 class InstallHandler:
     """Handles game installations across stores"""
 
@@ -1981,10 +1990,14 @@ class Plugin:
         logger.info("[INIT] Initializing AmazonConnector")
         self.amazon = AmazonConnector(plugin_dir=DECKY_PLUGIN_DIR, plugin_instance=self)
 
+        logger.info("[INIT] Initializing UbisoftConnector")
+        self.ubisoft = UbisoftConnector(plugin_dir=DECKY_PLUGIN_DIR)
+
         # Repair games.map for Unifideck shortcuts missing entries (fixes "Game location not mapped" errors)
         logger.info("[INIT] Reconciling games.map from installed games")
         map_reconcile = await self.shortcuts_manager.reconcile_games_map_from_installed(
-            epic_client=self.epic, gog_client=self.gog, amazon_client=self.amazon
+            epic_client=self.epic, gog_client=self.gog, amazon_client=self.amazon,
+            ubisoft_client=self.ubisoft
         )
         if map_reconcile.get('added', 0) > 0:
             logger.info(f"[INIT] Added {map_reconcile['added']} missing entries to games.map")
@@ -2156,6 +2169,25 @@ class Plugin:
                     else:
                         error_message = "Could not find Amazon install info"
                         logger.error(f"[DownloadComplete] {error_message} for {item.game_title}")
+                elif item.store == 'ubisoft':
+                    # Ubisoft installs - use prefix-based installed game detection
+                    game_info = self.ubisoft.get_installed_game_info(item.game_id)
+                    if game_info:
+                        game_install_path = game_info.get('install_path', '')
+                        exe_path = game_info.get('executable')
+
+                        if game_install_path and exe_path:
+                            await self.shortcuts_manager.mark_installed(
+                                item.game_id, item.store, game_install_path, exe_path
+                            )
+                            logger.info(f"[DownloadComplete] Marked {item.game_title} as installed")
+                            registration_success = True
+                        else:
+                            error_message = "Could not find Ubisoft game executable"
+                            logger.error(f"[DownloadComplete] {error_message} for {item.game_title}")
+                    else:
+                        error_message = "Could not find Ubisoft install info"
+                        logger.error(f"[DownloadComplete] {error_message} for {item.game_title}")
             except Exception as e:
                 error_message = str(e)
                 logger.error(f"[DownloadComplete] Exception marking game installed: {e}")
@@ -2182,6 +2214,13 @@ class Plugin:
             return await self.gog.install_game(game_id, install_path, progress_callback, language=language)
 
         self.download_queue.set_gog_install_callback(gog_install_callback)
+
+        # Set Ubisoft install callback to use UbisoftConnector
+        async def ubisoft_install_callback(game_id: str, install_path: str = None, progress_callback=None):
+            """Delegate Ubisoft downloads to UbisoftConnector.install_game"""
+            return await self.ubisoft.install_game(game_id, progress_callback, install_path=install_path)
+
+        self.download_queue.set_ubisoft_install_callback(ubisoft_install_callback)
         
         # Set size cache callback to update Install button sizes when accurate size is received
         self.download_queue.set_size_cache_callback(cache_game_size)
@@ -2348,6 +2387,7 @@ class Plugin:
                 epic_games = await self.epic.get_library()
                 gog_games = await self.gog.get_library()
                 amazon_games = await self.amazon.get_library()
+                ubisoft_games = await self.ubisoft.get_library()
 
                 # Robustly handle API failures (None returns)
                 valid_stores = []
@@ -2371,6 +2411,12 @@ class Plugin:
                 else:
                      amazon_games = []
 
+                if ubisoft_games is not None:
+                    valid_stores.append('ubisoft')
+                    all_games.extend(ubisoft_games)
+                else:
+                    ubisoft_games = []
+
                 # Check for cancellation
                 if self._cancel_sync:
                     logger.warning("Sync cancelled by user after fetching libraries")
@@ -2386,6 +2432,7 @@ class Plugin:
                         'epic_count': 0,
                         'gog_count': 0,
                         'amazon_count': 0,
+                        'ubisoft_count': 0,
                         'added_count': 0,
                         'updated_count': 0,
                         'artwork_count': 0
@@ -2394,7 +2441,7 @@ class Plugin:
                 self.sync_progress.synced_games = 0
 
                 # Log library composition for debugging game count discrepancies
-                logger.info(f"Sync: Library composition - Epic: {len(epic_games)}, GOG: {len(gog_games)}, Amazon: {len(amazon_games)}, Total: {len(all_games)}")
+                logger.info(f"Sync: Library composition - Epic: {len(epic_games)}, GOG: {len(gog_games)}, Amazon: {len(amazon_games)}, Ubisoft: {len(ubisoft_games)}, Total: {len(all_games)}")
                 logger.debug(f"  Total Unifideck games in all libraries: {len(all_games)} (these are from store APIs)")
                 logger.debug(f"  Note: Displayed game count may differ if some games fail shortcut registration or have invalid launch options")
 
@@ -2418,6 +2465,7 @@ class Plugin:
                 epic_installed = await self.epic.get_installed()
                 gog_installed = await self.gog.get_installed()
                 amazon_installed = await self.amazon.get_installed()
+                ubisoft_installed = await self.ubisoft.get_installed()
 
                 # Mark installed status
                 for game in epic_games:
@@ -2471,6 +2519,16 @@ class Plugin:
                             work_dir = game_info.get('path') or os.path.dirname(exe_path)
                             await self.shortcuts_manager._update_game_map('amazon', game.id, exe_path, work_dir)
                             logger.debug(f"Updated games.map for Amazon game {game.id}")
+
+                for game in ubisoft_games:
+                    if game.id in ubisoft_installed:
+                        game.is_installed = True
+                        game_info = self.ubisoft.get_installed_game_info(game.id)
+                        if game_info and game_info.get('executable'):
+                            exe_path = game_info['executable']
+                            work_dir = game_info.get('install_path') or os.path.dirname(exe_path)
+                            await self.shortcuts_manager._update_game_map('ubisoft', game.id, exe_path, work_dir)
+                            logger.debug(f"Updated games.map for Ubisoft game {game.id}")
 
                 # Get launcher script path (relative to plugin directory)
                 launcher_script = os.path.join(os.path.dirname(__file__), 'bin', 'unifideck-launcher')
@@ -2861,6 +2919,7 @@ class Plugin:
                     'epic_count': len(epic_games),
                     'gog_count': len(gog_games),
                     'amazon_count': len(amazon_games),
+                    'ubisoft_count': len(ubisoft_games),
                     'added_count': added_count,
                     'artwork_count': artwork_count
                 }
@@ -2968,6 +3027,7 @@ class Plugin:
                 epic_games = await self.epic.get_library()
                 gog_games = await self.gog.get_library()
                 amazon_games = await self.amazon.get_library()
+                ubisoft_games = await self.ubisoft.get_library()
 
                 # Robustly handle API failures (None returns)
                 valid_stores = []
@@ -2990,6 +3050,12 @@ class Plugin:
                     all_games.extend(amazon_games)
                 else:
                     amazon_games = []
+
+                if ubisoft_games is not None:
+                    valid_stores.append('ubisoft')
+                    all_games.extend(ubisoft_games)
+                else:
+                    ubisoft_games = []
                 self.sync_progress.total_games = len(all_games)
                 self.sync_progress.synced_games = 0
 
@@ -3009,6 +3075,7 @@ class Plugin:
                 epic_installed = await self.epic.get_installed()
                 gog_installed = await self.gog.get_installed()
                 amazon_installed = await self.amazon.get_installed()
+                ubisoft_installed = await self.ubisoft.get_installed()
 
                 # Mark installed status and update games.map
                 for game in epic_games:
@@ -3053,6 +3120,16 @@ class Plugin:
                             work_dir = game_info.get('path') or os.path.dirname(exe_path)
                             await self.shortcuts_manager._update_game_map('amazon', game.id, exe_path, work_dir)
                             logger.debug(f"Updated games.map for Amazon game {game.id}")
+
+                for game in ubisoft_games:
+                    if game.id in ubisoft_installed:
+                        game.is_installed = True
+                        game_info = self.ubisoft.get_installed_game_info(game.id)
+                        if game_info and game_info.get('executable'):
+                            exe_path = game_info['executable']
+                            work_dir = game_info.get('install_path') or os.path.dirname(exe_path)
+                            await self.shortcuts_manager._update_game_map('ubisoft', game.id, exe_path, work_dir)
+                            logger.debug(f"Updated games.map for Ubisoft game {game.id}")
 
                 # Get launcher script path
                 launcher_script = os.path.join(os.path.dirname(__file__), 'bin', 'unifideck-launcher')
@@ -3099,6 +3176,7 @@ class Plugin:
                         'epic_count': len(epic_games),
                         'gog_count': len(gog_games),
                         'amazon_count': len(amazon_games),
+                        'ubisoft_count': len(ubisoft_games),
                         'added_count': added_count,
                         'updated_count': updated_count,
                         'artwork_count': 0
@@ -3488,12 +3566,13 @@ class Plugin:
                     logger.warning("Please EXIT Steam completely and restart to see changes")
                     logger.warning("=" * 60)
 
-                logger.info(f"Force synced {len(epic_games)} Epic + {len(gog_games)} GOG + {len(amazon_games)} Amazon games ({added_count} added, {updated_count} updated, {artwork_count} artwork)")
+                logger.info(f"Force synced {len(epic_games)} Epic + {len(gog_games)} GOG + {len(amazon_games)} Amazon + {len(ubisoft_games)} Ubisoft games ({added_count} added, {updated_count} updated, {artwork_count} artwork)")
                 return {
                     'success': True,
                     'epic_count': len(epic_games),
                     'gog_count': len(gog_games),
                     'amazon_count': len(amazon_games),
+                    'ubisoft_count': len(ubisoft_games),
                     'added_count': added_count,
                     'updated_count': updated_count,
                     'artwork_count': artwork_count
@@ -5402,11 +5481,18 @@ class Plugin:
                 amazon_status = 'nile_not_installed'
                 logger.warning("[STATUS] Amazon Games: Nile CLI not installed")
 
+            # Check Ubisoft availability (no CLI binary needed - uses REST API)
+            logger.info("[STATUS] Checking Ubisoft Connect availability")
+            ubisoft_available = await self.ubisoft.is_available()
+            ubisoft_status = 'connected' if ubisoft_available else 'not_connected'
+            logger.info(f"[STATUS] Ubisoft Connect: {ubisoft_status}")
+
             result = {
                 'success': True,
                 'epic': epic_status,
                 'gog': gog_status,
                 'amazon': amazon_status,
+                'ubisoft': ubisoft_status,
                 'legendary_installed': legendary_installed,
                 'nile_installed': nile_installed
             }
@@ -5420,7 +5506,8 @@ class Plugin:
                 'error': str(e),
                 'epic': 'error',
                 'gog': 'error',
-                'amazon': 'error'
+                'amazon': 'error',
+                'ubisoft': 'error'
             }
 
     async def get_real_steam_appid_mappings(self) -> Dict[str, Any]:
@@ -5569,6 +5656,34 @@ class Plugin:
     async def logout_amazon(self) -> Dict[str, Any]:
         """Logout from Amazon Games"""
         return await self.amazon.logout()
+
+    async def start_ubisoft_auth(self, email: str, password: str) -> Dict[str, Any]:
+        """Start Ubisoft Connect authentication with credentials.
+
+        Unlike other stores, Ubisoft uses direct REST API login with email/password
+        instead of OAuth. This calls complete_auth which performs the actual login.
+        """
+        logger.info("[RPC] start_ubisoft_auth")
+        auth_data = json.dumps({"email": email, "password": password})
+        return await self.ubisoft.complete_auth(auth_data)
+
+    async def complete_ubisoft_2fa(self, code: str) -> Dict[str, Any]:
+        """Complete Ubisoft Connect 2FA verification"""
+        return await self.ubisoft.complete_auth_2fa(code)
+
+    async def logout_ubisoft(self) -> Dict[str, Any]:
+        """Logout from Ubisoft Connect"""
+        return await self.ubisoft.logout()
+
+    async def repair_ubisoft_prefix(self, space_id: str) -> Dict[str, Any]:
+        """Repair a Ubisoft game's Wine prefix (re-clone from template)"""
+        logger.info(f"[RPC] repair_ubisoft_prefix: {space_id}")
+        return await self.ubisoft.repair_prefix(space_id)
+
+    async def get_ubisoft_library(self) -> List[Dict[str, Any]]:
+        """Get Ubisoft Connect library"""
+        games = await self.ubisoft.get_library()
+        return [asdict(game) for game in games]
 
     async def get_amazon_library(self) -> List[Dict[str, Any]]:
         """Get Amazon Games library"""

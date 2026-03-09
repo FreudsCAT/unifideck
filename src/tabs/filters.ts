@@ -24,7 +24,7 @@ export type FilterType =
 export interface FilterParams {
   installed: { installed: boolean };
   platform: { platform: "steam" | "nonSteam" | "all" };
-  store: { store: "steam" | "epic" | "gog" | "amazon" | "all" };
+  store: { store: "steam" | "epic" | "gog" | "amazon" | "ubisoft" | "all" };
   deckCompat: {}; // No params needed - uses Native/Platinum/Verified only
   all: {};
   nonSteam: {}; // All non-Steam shortcuts except non-installed Unifideck
@@ -47,7 +47,7 @@ const DECK_VERIFIED = 3; // steam_deck_compat_category
 export const unifideckGameCache: Map<
   number,
   {
-    store: "epic" | "gog" | "amazon";
+    store: "epic" | "gog" | "amazon" | "ubisoft";
     isInstalled: boolean;
     steamAppId?: number; // Real Steam appId for ProtonDB lookups
   }
@@ -79,7 +79,7 @@ export const validThirdPartyCache: Set<number> = new Set();
 export function updateUnifideckCache(
   games: Array<{
     appId: number;
-    store: "epic" | "gog" | "amazon";
+    store: "epic" | "gog" | "amazon" | "ubisoft";
     isInstalled: boolean;
     steamAppId?: number;
   }>,
@@ -117,7 +117,7 @@ export function updateUnifideckCache(
  */
 export function updateSingleGameStatus(game: {
   appId: number;
-  store: "epic" | "gog" | "amazon";
+  store: "epic" | "gog" | "amazon" | "ubisoft";
   isInstalled: boolean;
 }) {
   const signedId = game.appId;
@@ -164,7 +164,11 @@ export function updateSingleGameStatus(game: {
   // Same pattern as VIEW_MODE_CHANGE_EVENT (confirmed working for cross-component updates)
   window.dispatchEvent(
     new CustomEvent("unifideck-game-state-changed", {
-      detail: { appId: game.appId, isInstalled: game.isInstalled, store: game.store },
+      detail: {
+        appId: game.appId,
+        isInstalled: game.isInstalled,
+        store: game.store,
+      },
     }),
   );
 }
@@ -212,7 +216,7 @@ export function isUnifideckGame(appId: number): boolean {
 export function getStoreForApp(
   appId: number,
   appType: number,
-): "steam" | "epic" | "gog" | "amazon" | null {
+): "steam" | "epic" | "gog" | "amazon" | "ubisoft" | null {
   // Check cache first (works for both signed and unsigned appId)
   const cached = unifideckGameCache.get(appId);
   if (cached) {

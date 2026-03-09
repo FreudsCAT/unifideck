@@ -463,7 +463,7 @@ class ShortcutsManager:
         
         return {'removed': removed, 'kept': kept, 'entries_removed': entries_removed}
 
-    async def reconcile_games_map_from_installed(self, epic_client=None, gog_client=None, amazon_client=None) -> Dict[str, Any]:
+    async def reconcile_games_map_from_installed(self, epic_client=None, gog_client=None, amazon_client=None, ubisoft_client=None) -> Dict[str, Any]:
         """
         Repair games.map for Unifideck shortcuts that are missing entries.
         
@@ -480,6 +480,7 @@ class ShortcutsManager:
             epic_client: EpicConnector instance for getting Epic install info
             gog_client: GOGAPIClient instance for getting GOG install info
             amazon_client: AmazonGamesClient instance for getting Amazon install info
+            ubisoft_client: UbisoftConnector instance for getting Ubisoft install info
             
         Returns:
             dict: {'added': int, 'already_mapped': int, 'skipped': int, 'errors': list}
@@ -535,6 +536,13 @@ class ShortcutsManager:
                 except Exception as e:
                     errors.append(f"Amazon fetch: {e}")
             
+            ubisoft_installed = {}
+            if ubisoft_client:
+                try:
+                    ubisoft_installed = await ubisoft_client.get_installed()
+                except Exception as e:
+                    errors.append(f"Ubisoft fetch: {e}")
+            
             # Iterate over shortcuts and find Unifideck ones missing from games.map
             for idx, shortcut in shortcuts.items():
                 launch_options = shortcut.get('LaunchOptions', '')
@@ -549,7 +557,7 @@ class ShortcutsManager:
                 game_id = parts[1] if len(parts) > 1 else ''
                 
                 # Only process known stores
-                if store not in ('epic', 'gog', 'amazon'):
+                if store not in ('epic', 'gog', 'amazon', 'ubisoft'):
                     continue
                 
                 key = f"{store}:{game_id}"
@@ -603,6 +611,19 @@ class ShortcutsManager:
                         else:
                             skipped += 1
                             logger.debug(f"[ReconcileMap] Amazon '{game_title}' not installed or path missing")
+                    
+                    elif store == 'ubisoft' and game_id in ubisoft_installed:
+                        game_data = ubisoft_installed[game_id]
+                        install_path = game_data.get('install_path', '')
+                        executable = game_data.get('executable', '')
+                        
+                        if install_path and os.path.exists(install_path):
+                            await self._update_game_map('ubisoft', game_id, executable or '', install_path)
+                            added += 1
+                            logger.info(f"[ReconcileMap] Added Ubisoft '{game_title}' to games.map")
+                        else:
+                            skipped += 1
+                            logger.debug(f"[ReconcileMap] Ubisoft '{game_title}' not installed or path missing")
                     else:
                         skipped += 1
                         

@@ -5,7 +5,7 @@ This module provides utilities for extracting store:game_id patterns from Steam
 shortcut LaunchOptions, even when additional parameters (like LSFG, MANGOHUD, etc.)
 are present before or after the ID.
 
-Pattern: (epic|gog|amazon):([a-zA-Z0-9][a-zA-Z0-9._-]*)
+Pattern: (epic|gog|amazon|ubisoft):([a-zA-Z0-9][a-zA-Z0-9._-]*)
 
 Examples:
     - "epic:4141431341" -> ("epic", "4141431341")
@@ -13,6 +13,7 @@ Examples:
     - "gog:1234567890" -> ("gog", "1234567890")
     - "amazon:amzn1.adg.product.8a584db6-f8e5-4bfa-87a8-256a9d3506c4"
         -> ("amazon", "amzn1.adg.product.8a584db6-f8e5-4bfa-87a8-256a9d3506c4")
+    - "ubisoft:some-space-id" -> ("ubisoft", "some-space-id")
 """
 
 import re
@@ -22,7 +23,7 @@ from typing import Optional, Tuple
 # Amazon game IDs contain dots (e.g., amzn1.adg.product.xxx), so we include '.' in the pattern
 # Note: Using word boundary at end won't work with trailing dots, so we use a non-greedy match
 # and require the ID to start with alphanumeric
-STORE_ID_PATTERN = re.compile(r'\b(epic|gog|amazon):([a-zA-Z0-9][a-zA-Z0-9._-]*)')
+STORE_ID_PATTERN = re.compile(r'\b(epic|gog|amazon|ubisoft):([a-zA-Z0-9][a-zA-Z0-9._-]*)')
 
 
 def extract_store_id(launch_options: str) -> Optional[Tuple[str, str]]:

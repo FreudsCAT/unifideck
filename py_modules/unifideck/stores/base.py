@@ -18,7 +18,7 @@ class Game:
     """Represents a game from any store"""
     id: str
     title: str
-    store: str  # 'steam', 'epic', 'gog', 'amazon'
+    store: str  # 'steam', 'epic', 'gog', 'amazon', 'ubisoft'
     is_installed: bool = False
     cover_image: Optional[str] = None
     install_path: Optional[str] = None
@@ -34,7 +34,7 @@ class Store(ABC):
     """
     Abstract base class for game store connectors.
     
-    Each store (Epic, GOG, Amazon) implements this interface to provide
+    Each store (Epic, GOG, Amazon, Ubisoft) implements this interface to provide
     a consistent API for authentication, library management, and game operations.
     """
     
