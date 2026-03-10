@@ -1,7 +1,7 @@
 export interface Game {
   id: string;
   title: string;
-  store: "steam" | "epic" | "gog" | "amazon";
+  store: "steam" | "epic" | "gog" | "amazon" | "microsoft";
   coverImage?: string;
   isInstalled: boolean;
   installPath?: string;
@@ -17,7 +17,7 @@ export interface InstallProgress {
 }
 
 export interface FilterOptions {
-  store: "all" | "steam" | "epic" | "gog" | "amazon";
+  store: "all" | "steam" | "epic" | "gog" | "amazon" | "microsoft";
   sortBy: "title" | "playtime" | "recent" | "size";
   deckRating?: "all" | "verified" | "playable";
 }

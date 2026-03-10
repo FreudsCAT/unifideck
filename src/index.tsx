@@ -659,6 +659,7 @@ const Content: FC = () => {
     epic: "checking",
     gog: "checking",
     amazon: "checking",
+    microsoft: "checking",
   });
 
   // Game Details View Mode - persisted via localStorage
@@ -846,6 +847,7 @@ const Content: FC = () => {
           epic: string;
           gog: string;
           amazon: string;
+          microsoft: string;
           error?: string;
           legendary_installed?: boolean;
           nile_installed?: boolean;
@@ -862,6 +864,7 @@ const Content: FC = () => {
           epic: result.epic,
           gog: result.gog,
           amazon: result.amazon,
+          microsoft: result.microsoft ?? "not_connected",
         });
 
         // Show warning if legendary not installed
@@ -882,6 +885,7 @@ const Content: FC = () => {
           epic: "error",
           gog: "error",
           amazon: "error",
+          microsoft: "error",
         });
       }
     } catch (error) {
@@ -890,6 +894,7 @@ const Content: FC = () => {
         epic: "error",
         gog: "error",
         amazon: "error",
+        microsoft: "error",
       });
     }
   };
@@ -1014,6 +1019,7 @@ const Content: FC = () => {
             epic_count: number;
             gog_count: number;
             amazon_count: number;
+            microsoft_count: number;
             added_count: number;
             artwork_count: number;
             updated_count?: number;
@@ -1028,6 +1034,7 @@ const Content: FC = () => {
             epic_count: number;
             gog_count: number;
             amazon_count: number;
+            microsoft_count: number;
             added_count: number;
             artwork_count: number;
             updated_count?: number;
@@ -1039,11 +1046,13 @@ const Content: FC = () => {
       console.log(`[Unifideck] Epic Games: ${syncResult.epic_count}`);
       console.log(`[Unifideck] GOG Games: ${syncResult.gog_count}`);
       console.log(`[Unifideck] Amazon Games: ${syncResult.amazon_count || 0}`);
+      console.log(`[Unifideck] Microsoft Games: ${syncResult.microsoft_count || 0}`);
       console.log(
         `[Unifideck] Total Games: ${
           syncResult.epic_count +
           syncResult.gog_count +
-          (syncResult.amazon_count || 0)
+          (syncResult.amazon_count || 0) +
+          (syncResult.microsoft_count || 0)
         }`,
       );
       console.log(`[Unifideck] Games Added: ${syncResult.added_count}`);
@@ -1111,6 +1120,7 @@ const Content: FC = () => {
             epic: string;
             gog: string;
             amazon: string;
+            microsoft: string;
           }
         >("check_store_status");
 
@@ -1120,6 +1130,8 @@ const Content: FC = () => {
             status = result.epic;
           } else if (store === "gog") {
             status = result.gog;
+          } else if (store === "microsoft") {
+            status = result.microsoft;
           } else {
             status = result.amazon;
           }
@@ -1169,6 +1181,8 @@ const Content: FC = () => {
         ? t("storeConnections.epicGames")
         : store === "amazon"
         ? t("storeConnections.amazonGames")
+        : store === "microsoft"
+        ? t("storeConnections.microsoftStore")
         : t("storeConnections.gog");
 
     try {
@@ -1177,6 +1191,8 @@ const Content: FC = () => {
         methodName = "start_epic_auth";
       } else if (store === "gog") {
         methodName = "start_gog_auth_auto";
+      } else if (store === "microsoft") {
+        methodName = "start_microsoft_auth";
       } else {
         methodName = "start_amazon_auth";
       }
@@ -1262,6 +1278,8 @@ const Content: FC = () => {
         methodName = "logout_epic";
       } else if (store === "gog") {
         methodName = "logout_gog";
+      } else if (store === "microsoft") {
+        methodName = "logout_microsoft";
       } else {
         methodName = "logout_amazon";
       }

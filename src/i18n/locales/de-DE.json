@@ -80,7 +80,8 @@
     "authenticate": "Anmelden",
     "legendaryNotInstalled": "⚠️ Epic Games CLI wird installiert...",
     "nileNotInstalled": "⚠️ Amazon Games CLI nicht gefunden",
-    "error": "Fehler - Protokolle prüfen"
+    "error": "Fehler - Protokolle prüfen",
+    "microsoftStore": "Microsoft Store"
   },
   "librarySync": {
     "title": "BIBLIOTHEKS-SYNCHRONISIERUNG",

@@ -80,7 +80,8 @@
     "authenticate": "Se connecter",
     "legendaryNotInstalled": "⚠️ Installation de l'interface Epic Games...",
     "nileNotInstalled": "⚠️ Interface Amazon Games introuvable",
-    "error": "Erreur - Vérifier les logs"
+    "error": "Erreur - Vérifier les logs",
+    "microsoftStore": "Microsoft Store"
   },
   "librarySync": {
     "title": "SYNCHRONISATION DE LA BIBLIOTHÈQUE",

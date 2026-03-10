@@ -67,7 +67,8 @@ try:
         Store, Game as BackendGame, StoreManager,
         EpicConnector as BackendEpicConnector,
         AmazonConnector as BackendAmazonConnector,
-        GOGAPIClient as BackendGOGAPIClient
+        GOGAPIClient as BackendGOGAPIClient,
+        MicrosoftConnector as BackendMicrosoftConnector,
     )
     from py_modules.unifideck.auth import CDPOAuthMonitor as BackendCDPOAuthMonitor
     from py_modules.unifideck.compat import (
@@ -1606,6 +1607,14 @@ if BACKEND_AVAILABLE:
 else:
     raise ImportError("backend.stores.gog module is required but not available")
 
+# ============================================================================
+# MicrosoftConnector - Read-only Microsoft Store / Xbox Live connector
+# ============================================================================
+if BACKEND_AVAILABLE:
+    MicrosoftConnector = BackendMicrosoftConnector
+else:
+    raise ImportError("backend.stores.microsoft module is required but not available")
+
 class InstallHandler:
     """Handles game installations across stores"""
 
@@ -1981,6 +1990,9 @@ class Plugin:
         logger.info("[INIT] Initializing AmazonConnector")
         self.amazon = AmazonConnector(plugin_dir=DECKY_PLUGIN_DIR, plugin_instance=self)
 
+        logger.info("[INIT] Initializing MicrosoftConnector")
+        self.microsoft = MicrosoftConnector(plugin_dir=DECKY_PLUGIN_DIR, plugin_instance=self)
+
         # Repair games.map for Unifideck shortcuts missing entries (fixes "Game location not mapped" errors)
         logger.info("[INIT] Reconciling games.map from installed games")
         map_reconcile = await self.shortcuts_manager.reconcile_games_map_from_installed(
@@ -2323,6 +2335,8 @@ class Plugin:
                 'error': 'errors.syncInProgress',
                 'epic_count': 0,
                 'gog_count': 0,
+                'amazon_count': 0,
+                'microsoft_count': 0,
                 'added_count': 0,
                 'artwork_count': 0
             }
@@ -2348,6 +2362,7 @@ class Plugin:
                 epic_games = await self.epic.get_library()
                 gog_games = await self.gog.get_library()
                 amazon_games = await self.amazon.get_library()
+                microsoft_games = await self.microsoft.get_library()
 
                 # Robustly handle API failures (None returns)
                 valid_stores = []
@@ -2371,6 +2386,12 @@ class Plugin:
                 else:
                      amazon_games = []
 
+                if microsoft_games is not None:
+                    valid_stores.append('microsoft')
+                    all_games.extend(microsoft_games)
+                else:
+                    microsoft_games = []
+
                 # Check for cancellation
                 if self._cancel_sync:
                     logger.warning("Sync cancelled by user after fetching libraries")
@@ -2386,6 +2407,7 @@ class Plugin:
                         'epic_count': 0,
                         'gog_count': 0,
                         'amazon_count': 0,
+                        'microsoft_count': 0,
                         'added_count': 0,
                         'updated_count': 0,
                         'artwork_count': 0
@@ -2394,7 +2416,7 @@ class Plugin:
                 self.sync_progress.synced_games = 0
 
                 # Log library composition for debugging game count discrepancies
-                logger.info(f"Sync: Library composition - Epic: {len(epic_games)}, GOG: {len(gog_games)}, Amazon: {len(amazon_games)}, Total: {len(all_games)}")
+                logger.info(f"Sync: Library composition - Epic: {len(epic_games)}, GOG: {len(gog_games)}, Amazon: {len(amazon_games)}, Microsoft: {len(microsoft_games)}, Total: {len(all_games)}")
                 logger.debug(f"  Total Unifideck games in all libraries: {len(all_games)} (these are from store APIs)")
                 logger.debug(f"  Note: Displayed game count may differ if some games fail shortcut registration or have invalid launch options")
 
@@ -2861,6 +2883,7 @@ class Plugin:
                     'epic_count': len(epic_games),
                     'gog_count': len(gog_games),
                     'amazon_count': len(amazon_games),
+                    'microsoft_count': len(microsoft_games),
                     'added_count': added_count,
                     'artwork_count': artwork_count
                 }
@@ -2893,6 +2916,8 @@ class Plugin:
                 'error': 'errors.syncInProgress',
                 'epic_count': 0,
                 'gog_count': 0,
+                'amazon_count': 0,
+                'microsoft_count': 0,
                 'added_count': 0,
                 'updated_count': 0,
                 'artwork_count': 0
@@ -2968,6 +2993,7 @@ class Plugin:
                 epic_games = await self.epic.get_library()
                 gog_games = await self.gog.get_library()
                 amazon_games = await self.amazon.get_library()
+                microsoft_games = await self.microsoft.get_library()
 
                 # Robustly handle API failures (None returns)
                 valid_stores = []
@@ -2990,6 +3016,13 @@ class Plugin:
                     all_games.extend(amazon_games)
                 else:
                     amazon_games = []
+
+                if microsoft_games is not None:
+                    valid_stores.append('microsoft')
+                    all_games.extend(microsoft_games)
+                else:
+                    microsoft_games = []
+
                 self.sync_progress.total_games = len(all_games)
                 self.sync_progress.synced_games = 0
 
@@ -3099,6 +3132,7 @@ class Plugin:
                         'epic_count': len(epic_games),
                         'gog_count': len(gog_games),
                         'amazon_count': len(amazon_games),
+                        'microsoft_count': len(microsoft_games),
                         'added_count': added_count,
                         'updated_count': updated_count,
                         'artwork_count': 0
@@ -3488,12 +3522,13 @@ class Plugin:
                     logger.warning("Please EXIT Steam completely and restart to see changes")
                     logger.warning("=" * 60)
 
-                logger.info(f"Force synced {len(epic_games)} Epic + {len(gog_games)} GOG + {len(amazon_games)} Amazon games ({added_count} added, {updated_count} updated, {artwork_count} artwork)")
+                logger.info(f"Force synced {len(epic_games)} Epic + {len(gog_games)} GOG + {len(amazon_games)} Amazon + {len(microsoft_games)} Microsoft games ({added_count} added, {updated_count} updated, {artwork_count} artwork)")
                 return {
                     'success': True,
                     'epic_count': len(epic_games),
                     'gog_count': len(gog_games),
                     'amazon_count': len(amazon_games),
+                    'microsoft_count': len(microsoft_games),
                     'added_count': added_count,
                     'updated_count': updated_count,
                     'artwork_count': artwork_count
@@ -3846,7 +3881,7 @@ class Plugin:
                                     logger.info(f"[GameInfo] Amazon game {game_id} found via nile (path verified)")
                                 else:
                                     logger.warning(f"[GameInfo] Amazon game {game_id} in config but path missing")
-                        elif store not in ('epic', 'gog', 'amazon'):
+                        elif store not in ('epic', 'gog', 'amazon', 'microsoft'):
                             return {'error': f'Unknown store: {store}'}
 
                     # Get game size - try cache first (instant), fallback to API (slow)
@@ -5273,6 +5308,7 @@ class Plugin:
         # Re-init store connectors so they reflect the cleared state
         self.gog = GOGAPIClient(plugin_dir=DECKY_PLUGIN_DIR, plugin_instance=self)
         self.amazon = AmazonConnector(plugin_dir=DECKY_PLUGIN_DIR, plugin_instance=self)
+        self.microsoft = MicrosoftConnector(plugin_dir=DECKY_PLUGIN_DIR, plugin_instance=self)
 
         self.account_manager.account_switch_detected = False
         return result
@@ -5402,11 +5438,18 @@ class Plugin:
                 amazon_status = 'nile_not_installed'
                 logger.warning("[STATUS] Amazon Games: Nile CLI not installed")
 
+            # Check Microsoft Store availability
+            logger.info("[STATUS] Checking Microsoft Store availability")
+            microsoft_available = await self.microsoft.is_available()
+            microsoft_status = 'connected' if microsoft_available else 'not_connected'
+            logger.info(f"[STATUS] Microsoft Store: {microsoft_status}")
+
             result = {
                 'success': True,
                 'epic': epic_status,
                 'gog': gog_status,
                 'amazon': amazon_status,
+                'microsoft': microsoft_status,
                 'legendary_installed': legendary_installed,
                 'nile_installed': nile_installed
             }
@@ -5420,7 +5463,8 @@ class Plugin:
                 'error': str(e),
                 'epic': 'error',
                 'gog': 'error',
-                'amazon': 'error'
+                'amazon': 'error',
+                'microsoft': 'error'
             }
 
     async def get_real_steam_appid_mappings(self) -> Dict[str, Any]:
@@ -5569,6 +5613,20 @@ class Plugin:
     async def logout_amazon(self) -> Dict[str, Any]:
         """Logout from Amazon Games"""
         return await self.amazon.logout()
+
+    # ── Microsoft Store ──────────────────────────────────────────────────
+
+    async def start_microsoft_auth(self) -> Dict[str, Any]:
+        """Start Microsoft / Xbox Live OAuth authentication"""
+        return await self.microsoft.start_auth()
+
+    async def complete_microsoft_auth(self, auth_code: str) -> Dict[str, Any]:
+        """Complete Microsoft OAuth with authorization code"""
+        return await self.microsoft.complete_auth(auth_code)
+
+    async def logout_microsoft(self) -> Dict[str, Any]:
+        """Logout from Microsoft Store"""
+        return await self.microsoft.logout()
 
     async def get_amazon_library(self) -> List[Dict[str, Any]]:
         """Get Amazon Games library"""
@@ -6023,10 +6081,16 @@ class Plugin:
                     if os.path.exists(amazon_auth):
                         os.remove(amazon_auth)
                         logger.info("[Cleanup] Deleted Amazon auth token")
+
+                    microsoft_auth = os.path.expanduser("~/.config/unifideck/microsoft_token.json")
+                    if os.path.exists(microsoft_auth):
+                        os.remove(microsoft_auth)
+                        logger.info("[Cleanup] Deleted Microsoft auth token")
                         
                     # Reset in-memory states
                     self.gog = GOGAPIClient(plugin_dir=DECKY_PLUGIN_DIR, plugin_instance=self) # Re-init to clear tokens
                     self.amazon = AmazonConnector(plugin_dir=DECKY_PLUGIN_DIR, plugin_instance=self) # Re-init Amazon too
+                    self.microsoft = MicrosoftConnector(plugin_dir=DECKY_PLUGIN_DIR, plugin_instance=self) # Re-init Microsoft too
                     # Epic relies on legendary CLI existence, which checks file, so it's auto-cleared
                     
                     stats['auth_deleted'] = True

@@ -549,7 +549,7 @@ class ShortcutsManager:
                 game_id = parts[1] if len(parts) > 1 else ''
                 
                 # Only process known stores
-                if store not in ('epic', 'gog', 'amazon'):
+                if store not in ('epic', 'gog', 'amazon', 'microsoft'):
                     continue
                 
                 key = f"{store}:{game_id}"

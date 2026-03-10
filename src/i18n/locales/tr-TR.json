@@ -80,7 +80,8 @@
     "authenticate": "Giriş yap",
     "legendaryNotInstalled": "⚠️ Epic Games CLI kuruluyor...",
     "nileNotInstalled": "⚠️ Amazon Games CLI bulunamadı",
-    "error": "Hata - Günlükleri kontrol edin"
+    "error": "Hata - Günlükleri kontrol edin",
+    "microsoftStore": "Microsoft Store"
   },
   "librarySync": {
     "title": "KÜTÜPHANESENKRONİZASYONU",

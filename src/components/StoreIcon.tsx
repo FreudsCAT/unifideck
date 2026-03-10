@@ -6,6 +6,7 @@ import {
   SiUbisoft,
   SiBattledotnet,
   SiItchdotio,
+  SiMicrosoft,
 } from "react-icons/si";
 import { FaGamepad } from "react-icons/fa";
 import { StoreFinal } from "../types/store";
@@ -18,6 +19,7 @@ const STORE_ICONS: Record<StoreFinal, IconType> = {
   epic: SiEpicgames,
   gog: SiGogdotcom,
   amazon: SiAmazongames,
+  microsoft: SiMicrosoft,
   ubisoft: SiUbisoft,
   ea: SiEa,
   battlenet: SiBattledotnet,

@@ -80,7 +80,8 @@
     "authenticate": "ログイン",
     "legendaryNotInstalled": "⚠️ Epic Games CLI をインストール中...",
     "nileNotInstalled": "⚠️ Amazon Games CLI が見つかりません",
-    "error": "エラー - ログを確認してください"
+    "error": "エラー - ログを確認してください",
+    "microsoftStore": "Microsoft Store"
   },
   "librarySync": {
     "title": "ライブラリ同期",

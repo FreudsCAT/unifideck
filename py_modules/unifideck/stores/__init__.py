@@ -4,3 +4,4 @@ from .manager import StoreManager
 from .epic import EpicConnector
 from .amazon import AmazonConnector
 from .gog import GOGAPIClient
+from .microsoft import MicrosoftConnector

@@ -80,7 +80,8 @@
     "authenticate": "Inloggen",
     "legendaryNotInstalled": "⚠️ Epic Games CLI installeren...",
     "nileNotInstalled": "⚠️ Amazon Games CLI niet gevonden",
-    "error": "Fout - Controleer logs"
+    "error": "Fout - Controleer logs",
+    "microsoftStore": "Microsoft Store"
   },
   "librarySync": {
     "title": "BIBLIOTHEEKSYNCHRONISATIE",

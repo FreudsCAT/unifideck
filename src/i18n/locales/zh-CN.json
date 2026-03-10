@@ -85,7 +85,8 @@
     "authenticate": "登录",
     "legendaryNotInstalled": "⚠️ 正在安装 Epic Games CLI...",
     "nileNotInstalled": "⚠️ 未找到 Amazon Games CLI",
-    "error": "错误 - 检查日志"
+    "error": "错误 - 检查日志",
+    "microsoftStore": "Microsoft Store"
   },
   "librarySync": {
     "title": "库同步",

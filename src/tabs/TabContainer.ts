@@ -73,9 +73,15 @@ export const UNIFIDECK_TABS: UnifideckTab[] = [
     filters: [{ type: "store", params: { store: "amazon" } }],
   },
   {
+    id: "unifideck-microsoft",
+    title: "Microsoft",
+    position: 7,
+    filters: [{ type: "store", params: { store: "microsoft" } }],
+  },
+  {
     id: "unifideck-nonsteam",
     title: t("deckTabs.nonSteam"),
-    position: 7,
+    position: 8,
     filters: [{ type: "nonSteam", params: {} }], // All non-Steam shortcuts except non-installed Unifideck
   },
 ];
@@ -250,6 +256,7 @@ class TabManager {
   private epicGameCount = 0;
   private gogGameCount = 0;
   private amazonGameCount = 0;
+  private microsoftGameCount = 0;
 
   async initialize() {
     if (this.initialized) return;
@@ -279,7 +286,7 @@ class TabManager {
       if (Array.isArray(games) && games.length > 0) {
         const cacheData = games.map((g) => ({
           appId: g.appId,
-          store: g.store as "epic" | "gog" | "amazon",
+          store: g.store as "epic" | "gog" | "amazon" | "microsoft",
           isInstalled: g.isInstalled,
           steamAppId: g.steamAppId,  // SteamGridDB ID for ProtonDB
           realSteamAppId: g.realSteamAppId,  // Real Steam Store App ID for spoofing
@@ -294,8 +301,11 @@ class TabManager {
         this.amazonGameCount = games.filter(
           (g: any) => g.store === "amazon",
         ).length;
+        this.microsoftGameCount = games.filter(
+          (g: any) => g.store === "microsoft",
+        ).length;
         console.log(
-          `[Unifideck] Loaded ${games.length} games into cache (Epic: ${this.epicGameCount}, GOG: ${this.gogGameCount}, Amazon: ${this.amazonGameCount})`,
+          `[Unifideck] Loaded ${games.length} games into cache (Epic: ${this.epicGameCount}, GOG: ${this.gogGameCount}, Amazon: ${this.amazonGameCount}, Microsoft: ${this.microsoftGameCount})`,
         );
 
         // Load compatibility cache from backend (ProtonDB + Deck Verified)
@@ -345,6 +355,9 @@ class TabManager {
     if (tabId === "unifideck-amazon" && this.amazonGameCount === 0) {
       return false;
     }
+    if (tabId === "unifideck-microsoft" && this.microsoftGameCount === 0) {
+      return false;
+    }
     return true;
   }
 
@@ -362,7 +375,7 @@ class TabManager {
   updateGameCache(
     games: Array<{
       appId: number;
-      store: "epic" | "gog" | "amazon";
+      store: "epic" | "gog" | "amazon" | "microsoft";
       isInstalled: boolean;
     }>,
   ) {

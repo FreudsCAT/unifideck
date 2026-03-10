@@ -55,7 +55,7 @@ class CDPOAuthMonitor:
                     self.monitored_urls.add(url)
 
                     # Check for OAuth patterns
-                    if any(p in url.lower() for p in ['auth', 'login', 'code=', 'epiclogin', 'on_login_success', 'oauth', 'authorizationcode', '/id/api/redirect']):
+                    if any(p in url.lower() for p in ['auth', 'login', 'code=', 'epiclogin', 'on_login_success', 'oauth', 'authorizationcode', '/id/api/redirect', 'oauth20_desktop.srf', 'live.com/oauth']):
                         logger.info(f"[CDP] OAuth page detected: {url[:80]}...")
 
                         # Special handling for Epic's redirect page (code in JSON body)
@@ -267,6 +267,15 @@ class CDPOAuthMonitor:
             match = re.search(r'openid\.oa2\.authorization_code=([^&\s]+)', url)
             if match:
                 return match.group(1), 'amazon'
+
+        # Microsoft / Xbox Live style
+        # Redirect URI: https://login.live.com/oauth20_desktop.srf?code=...
+        if 'login.live.com/oauth20_desktop.srf' in url and 'code=' in url:
+            parsed = urlparse(url)
+            params = parse_qs(parsed.query)
+            if 'code' in params:
+                logger.info(f"[CDP] Detected Microsoft OAuth redirect")
+                return params['code'][0], 'microsoft'
 
         # GOG style
         if 'code=' in url:

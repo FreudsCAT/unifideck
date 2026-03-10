@@ -31,6 +31,10 @@ const STORES: {
     notInstalledStatus: "nile_not_installed",
     notInstalledMessage: "storeConnections.nileNotInstalled",
   },
+  {
+    key: "microsoft",
+    label: "storeConnections.microsoftStore",
+  },
 ];
 
 const StoreConnections = ({
