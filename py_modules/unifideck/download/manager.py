@@ -156,6 +156,7 @@ class DownloadQueue:
         self._progress_callback: Optional[Callable] = None
         self._on_complete_callback: Optional[Callable] = None
         self._gog_install_callback: Optional[Callable] = None  # For GOG API-based downloads
+        self._ms_install_callback:  Optional[Callable] = None  # For Microsoft Win32 downloads
         self._size_cache_callback: Optional[Callable] = None  # For updating game size cache
         self._size_cached_items: set = set()  # Track which items have had size cached (store:game_id)
         
@@ -726,6 +727,8 @@ class DownloadQueue:
             return await self._download_gog(item, install_path)
         elif item.store == 'amazon':
             return await self._download_amazon(item, install_path)
+        elif item.store == 'microsoft':
+            return await self._download_microsoft(item, install_path)
         else:
             logger.error(f"[DownloadQueue] Unknown store: {item.store}")
             return False
@@ -953,7 +956,63 @@ class DownloadQueue:
             item.error_message = classify_download_error(str(e))
             return False
 
-    async def _parse_nile_output(self, item: DownloadItem) -> None:
+    async def _download_microsoft(self, item: DownloadItem, install_path: str) -> bool:
+        """Download a Win32 Microsoft Store game via MicrosoftConnector.install_game."""
+        if not self._ms_install_callback:
+            item.error_message = "Microsoft install callback not configured"
+            logger.error("[DownloadQueue] Microsoft install callback not set")
+            return False
+
+        logger.info(f"[DownloadQueue] Delegating Microsoft download to connector: {item.game_id}")
+
+        try:
+            async def progress_callback(progress: Any):
+                if item.status == DownloadStatus.CANCELLED:
+                    raise asyncio.CancelledError("Download cancelled by user")
+
+                if isinstance(progress, dict):
+                    if "phase" in progress:
+                        item.download_phase   = progress["phase"]
+                        item.phase_message    = progress.get("phase_message", "")
+                        self._save()
+                        return
+
+                    item.progress_percent = progress.get("progress_percent", item.progress_percent)
+                    dl = int(progress.get("downloaded_bytes", 0))
+                    tot = int(progress.get("total_bytes", 0))
+                    if dl:
+                        item.downloaded_bytes = dl
+                    if tot:
+                        item.total_bytes = tot
+                    if item.progress_percent > 0:
+                        item.is_preparing = False
+                    if int(item.progress_percent) % 5 == 0:
+                        self._save()
+                else:
+                    item.progress_percent = float(progress)
+                    if progress > 0:
+                        item.is_preparing = False
+
+            result = await self._ms_install_callback(item.game_id, progress_callback)
+
+            if result.get("success"):
+                logger.info(f"[DownloadQueue] Microsoft download complete: {item.game_title}")
+                return True
+            else:
+                raw_err = result.get("error", "Unknown Microsoft download error")
+                item.error_message = classify_download_error(raw_err)
+                logger.error(f"[DownloadQueue] Microsoft download failed: {raw_err}")
+                return False
+
+        except asyncio.CancelledError:
+            logger.info(f"[DownloadQueue] Microsoft download cancelled: {item.game_title}")
+            return False
+        except Exception as e:
+            logger.error(f"[DownloadQueue] Microsoft download error: {e}")
+            item.error_message = classify_download_error(str(e))
+            return False
+
+
         """Parse nile output for progress updates"""
         # Nile download progress format (from ProgressBar):
         # INFO [PROGRESS]:  = Progress: 25.06 137141589/442097801, Running for: 00:00:10, ETA: 00:00:29
@@ -1035,7 +1094,11 @@ class DownloadQueue:
         """Set callback for GOG game installation (uses GOGAPIClient)"""
         self._gog_install_callback = callback
 
-    def set_size_cache_callback(self, callback: Callable) -> None:
+    def set_ms_install_callback(self, callback: Callable) -> None:
+        """Set callback for Microsoft Win32 game installation (uses MicrosoftConnector)."""
+        self._ms_install_callback = callback
+
+
         """Set callback for updating game size cache when accurate size is determined
         
         Callback signature: callback(store: str, game_id: str, size_bytes: int)

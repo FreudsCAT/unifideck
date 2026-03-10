@@ -463,7 +463,7 @@ class ShortcutsManager:
         
         return {'removed': removed, 'kept': kept, 'entries_removed': entries_removed}
 
-    async def reconcile_games_map_from_installed(self, epic_client=None, gog_client=None, amazon_client=None) -> Dict[str, Any]:
+    async def reconcile_games_map_from_installed(self, epic_client=None, gog_client=None, amazon_client=None, microsoft_client=None) -> Dict[str, Any]:
         """
         Repair games.map for Unifideck shortcuts that are missing entries.
         
@@ -511,6 +511,7 @@ class ShortcutsManager:
             epic_installed = {}
             gog_installed = {}
             amazon_installed = {}
+            microsoft_installed = {}
             
             if epic_client and epic_client.legendary_bin:
                 try:
@@ -534,6 +535,12 @@ class ShortcutsManager:
                     amazon_installed = await amazon_client.get_installed()
                 except Exception as e:
                     errors.append(f"Amazon fetch: {e}")
+
+            if microsoft_client:
+                try:
+                    microsoft_installed = microsoft_client.get_installed()
+                except Exception as e:
+                    errors.append(f"Microsoft fetch: {e}")
             
             # Iterate over shortcuts and find Unifideck ones missing from games.map
             for idx, shortcut in shortcuts.items():
@@ -603,6 +610,19 @@ class ShortcutsManager:
                         else:
                             skipped += 1
                             logger.debug(f"[ReconcileMap] Amazon '{game_title}' not installed or path missing")
+
+                    elif store == 'microsoft' and game_id in microsoft_installed:
+                        ms_info     = microsoft_installed[game_id]
+                        install_path = ms_info.get('install_path', '')
+                        executable   = ms_info.get('executable', '')
+
+                        if install_path and os.path.exists(install_path):
+                            await self._update_game_map('microsoft', game_id, executable or '', install_path)
+                            added += 1
+                            logger.info(f"[ReconcileMap] Added Microsoft '{game_title}' to games.map")
+                        else:
+                            skipped += 1
+                            logger.debug(f"[ReconcileMap] Microsoft '{game_title}' not installed or path missing")
                     else:
                         skipped += 1
                         

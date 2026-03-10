@@ -1996,7 +1996,8 @@ class Plugin:
         # Repair games.map for Unifideck shortcuts missing entries (fixes "Game location not mapped" errors)
         logger.info("[INIT] Reconciling games.map from installed games")
         map_reconcile = await self.shortcuts_manager.reconcile_games_map_from_installed(
-            epic_client=self.epic, gog_client=self.gog, amazon_client=self.amazon
+            epic_client=self.epic, gog_client=self.gog, amazon_client=self.amazon,
+            microsoft_client=self.microsoft,
         )
         if map_reconcile.get('added', 0) > 0:
             logger.info(f"[INIT] Added {map_reconcile['added']} missing entries to games.map")
@@ -2168,6 +2169,24 @@ class Plugin:
                     else:
                         error_message = "Could not find Amazon install info"
                         logger.error(f"[DownloadComplete] {error_message} for {item.game_title}")
+                elif item.store == 'microsoft':
+                    # Microsoft Win32 installs — marker is written by install_game itself
+                    game_info = self.microsoft.get_installed_game_info(item.game_id)
+                    if game_info:
+                        game_install_path = game_info.get('install_path', '')
+                        exe_path          = game_info.get('executable', '')
+                        if game_install_path and exe_path:
+                            await self.shortcuts_manager.mark_installed(
+                                item.game_id, item.store, game_install_path, exe_path
+                            )
+                            logger.info(f"[DownloadComplete] Marked {item.game_title} (Microsoft) as installed")
+                            registration_success = True
+                        else:
+                            error_message = "Could not find Microsoft game executable"
+                            logger.error(f"[DownloadComplete] {error_message} for {item.game_title}")
+                    else:
+                        error_message = "Could not find Microsoft install info"
+                        logger.error(f"[DownloadComplete] {error_message} for {item.game_title}")
             except Exception as e:
                 error_message = str(e)
                 logger.error(f"[DownloadComplete] Exception marking game installed: {e}")
@@ -2194,6 +2213,12 @@ class Plugin:
             return await self.gog.install_game(game_id, install_path, progress_callback, language=language)
 
         self.download_queue.set_gog_install_callback(gog_install_callback)
+
+        async def ms_install_callback(game_id: str, progress_callback=None):
+            """Delegate Microsoft Win32 downloads to MicrosoftConnector.install_game"""
+            return await self.microsoft.install_game(game_id, progress_callback)
+
+        self.download_queue.set_ms_install_callback(ms_install_callback)
         
         # Set size cache callback to update Install button sizes when accurate size is received
         self.download_queue.set_size_cache_callback(cache_game_size)
@@ -2388,12 +2413,18 @@ class Plugin:
 
                 if microsoft_games is not None:
                     valid_stores.append('microsoft')
+                    # Mark already-installed Win32 games (get_library populates is_installed,
+                    # but a fast re-scan here ensures the flag is correct even if the connector
+                    # was initialised before any game was installed this session).
+                    ms_installed = self.microsoft.get_installed()
+                    for g in microsoft_games:
+                        if g.id in ms_installed:
+                            g.is_installed  = True
+                            g.install_path  = ms_installed[g.id].get("install_path")
+                            g.executable    = ms_installed[g.id].get("executable")
                     all_games.extend(microsoft_games)
                 else:
                     microsoft_games = []
-
-                # Check for cancellation
-                if self._cancel_sync:
                     logger.warning("Sync cancelled by user after fetching libraries")
                     self.sync_progress.status = "cancelled"
                     self.sync_progress.current_game = {
@@ -3019,15 +3050,15 @@ class Plugin:
 
                 if microsoft_games is not None:
                     valid_stores.append('microsoft')
+                    ms_installed = self.microsoft.get_installed()
+                    for g in microsoft_games:
+                        if g.id in ms_installed:
+                            g.is_installed = True
+                            g.install_path = ms_installed[g.id].get("install_path")
+                            g.executable   = ms_installed[g.id].get("executable")
                     all_games.extend(microsoft_games)
                 else:
                     microsoft_games = []
-
-                self.sync_progress.total_games = len(all_games)
-                self.sync_progress.synced_games = 0
-
-                # Queue games for background compat fetching (ProtonDB/Deck Verified)
-                logger.info("Force sync: Queueing games for compatibility lookup...")
                 self.compat_fetcher.queue_games(all_games)
                 self.compat_fetcher.start()  # Non-blocking background fetch
 
@@ -3636,6 +3667,8 @@ class Plugin:
                 return await self.install_handler.install_epic_game(game_id)
             elif store == 'gog':
                 return await self.install_handler.install_gog_game(game_id)
+            elif store == 'microsoft':
+                return await self.microsoft.install_game(game_id)
             else:
                 return {'success': False, 'error': f'Unknown store: {store}'}
 
