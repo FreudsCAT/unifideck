@@ -1,20 +1,40 @@
 """
 Microsoft Store connector for Unifideck.
 
-Authenticates via Microsoft OAuth + Xbox Live token chain, then queries
-the Microsoft Collections API to list owned (purchased) games — excluding
-Game Pass titles — that have a Windows PC (Desktop) release and are
-therefore potential candidates for Proton/SteamOS compatibility.
+Authenticates via Microsoft OAuth + Xbox Live token chain, queries the
+Microsoft Collections API to list owned (purchased) Win32 games, and can
+download and install them via the FE3 (Windows Update) delivery endpoint.
+Game Pass titles and UWP-only games (not runnable under Proton) are excluded.
 
-Auth flow:
-  1. Microsoft OAuth (live.com) → access_token + refresh_token
-  2. XBL user token       (user.auth.xboxlive.com)
-  3. XSTS token           (xsts.auth.xboxlive.com, RP = licensing.xboxlive.com)
-  4. Collections query    (collections.mp.microsoft.com)
-  5. Product details      (store.mp.microsoft.com) – PC-device-family filter
+Auth flow
+---------
+  1. Microsoft OAuth (live.com)         → access_token + refresh_token
+  2. XBL user token (user.auth.xboxlive.com)
+  3. XSTS token     (xsts.auth.xboxlive.com, RP = licensing.xboxlive.com)
+  4. Collections query (collections.mp.microsoft.com)
+  5. Product details   (store.mp.microsoft.com) — PC / Windows.Desktop filter
 
-Note: Microsoft Store UWP games generally cannot be run on Linux/Proton.
-      Only games with a Win32 / Windows.Desktop release are surfaced here.
+Win32 detection
+---------------
+A product is considered downloadable (Win32) when it exposes a non-empty
+``FulfillmentData.WuBundleId`` **and** lacks a ``PackageFamilyName`` (which
+would indicate an MSIX/UWP package).  UWP-only titles are silently dropped
+from the library.
+
+Download flow (Win32 games)
+---------------------------
+  1. ``install_game()`` refreshes the OAuth token and rebuilds the XSTS chain.
+  2. ``_get_fe3_download_urls()`` performs a ``GetExtendedUpdateInfo2`` SOAP
+     call against the FE3 /secured endpoint to obtain direct download URLs.
+  3. Packages are downloaded to a temp directory, extracted (ZIP / bundle),
+     and the main executable is located by priority name then size heuristic.
+  4. A ``.unifideck-ms-id`` JSON marker is written to the install directory so
+     the game survives library re-syncs.
+
+Locale
+------
+API calls (market=, locale= query parameters; FE3 device attributes) use the
+locale from Unifideck's central ``settings.json``; see ``utils/locale.py``.
 """
 
 import asyncio
@@ -81,8 +101,18 @@ PURCHASE_TYPES = {"Purchase", "Owned"}
 
 # ───────────────────────── SSL helper ──────────────────────────────────────
 
+def _ssl_ctx_strict() -> ssl.SSLContext:
+    """Standard SSL context used for all authentication and API endpoints."""
+    return ssl.create_default_context()
+
+
 def _ssl_ctx() -> ssl.SSLContext:
-    """Permissive SSL context for Steam Deck compatibility."""
+    """Permissive SSL context for CDN package downloads only.
+
+    Microsoft delivery CDN URLs sometimes present certificates that the Steam Deck
+    system CA bundle cannot verify.  This context is intentionally restricted to
+    unauthenticated binary downloads — never used for OAuth or token exchanges.
+    """
     ctx = ssl.create_default_context()
     ctx.check_hostname = False
     ctx.verify_mode = ssl.CERT_NONE
@@ -93,7 +123,7 @@ def _http_post(url: str, data: dict, headers: dict) -> dict:
     """Synchronous HTTP POST returning parsed JSON."""
     body = urllib.parse.urlencode(data).encode()
     req = urllib.request.Request(url, data=body, headers=headers, method="POST")
-    with urllib.request.urlopen(req, timeout=15, context=_ssl_ctx()) as r:
+    with urllib.request.urlopen(req, timeout=15, context=_ssl_ctx_strict()) as r:
         return json.loads(r.read().decode())
 
 
@@ -101,14 +131,14 @@ def _http_post_json(url: str, payload: dict, headers: dict) -> dict:
     """Synchronous HTTP POST with JSON body returning parsed JSON."""
     body = json.dumps(payload).encode()
     req = urllib.request.Request(url, data=body, headers=headers, method="POST")
-    with urllib.request.urlopen(req, timeout=20, context=_ssl_ctx()) as r:
+    with urllib.request.urlopen(req, timeout=20, context=_ssl_ctx_strict()) as r:
         return json.loads(r.read().decode())
 
 
 def _http_get(url: str, headers: dict) -> dict:
     """Synchronous HTTP GET returning parsed JSON."""
     req = urllib.request.Request(url, headers=headers)
-    with urllib.request.urlopen(req, timeout=15, context=_ssl_ctx()) as r:
+    with urllib.request.urlopen(req, timeout=15, context=_ssl_ctx_strict()) as r:
         return json.loads(r.read().decode())
 
 
@@ -164,6 +194,23 @@ class MicrosoftConnector(Store):
         """Build the FE3 device-attribute string with the user's locale injected."""
         loc = self._get_locale()
         return _FE3_DEVICE_ATTRS_TEMPLATE.format(locale=loc)
+
+    def _validated_install_dir(self, game_id: str) -> str:
+        """
+        Return the install directory path for *game_id* after verifying it
+        cannot escape MS_INSTALL_DIR via path-traversal sequences.
+
+        Raises ValueError if game_id produces a path outside MS_INSTALL_DIR.
+        """
+        install_dir = os.path.join(MS_INSTALL_DIR, game_id)
+        # Resolve symlinks / '..' before comparison
+        if not os.path.abspath(install_dir).startswith(
+            os.path.abspath(MS_INSTALL_DIR) + os.sep
+        ):
+            raise ValueError(
+                f"[MS] Refusing to use install path outside MS_INSTALL_DIR: {install_dir!r}"
+            )
+        return install_dir
 
     # ── Store interface ──────────────────────────────────────────────────
 
@@ -365,7 +412,9 @@ class MicrosoftConnector(Store):
     def _save_tokens(self):
         try:
             os.makedirs(os.path.dirname(TOKEN_FILE), exist_ok=True)
-            with open(TOKEN_FILE, "w") as f:
+            # Write with mode 0o600 so only the owning user can read the tokens.
+            fd = os.open(TOKEN_FILE, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(fd, "w") as f:
                 json.dump(
                     {
                         "access_token":  self._ms_access_token,
@@ -531,8 +580,11 @@ class MicrosoftConnector(Store):
                 "country":          self._get_market(),
                 "entitlementFilters": ["Game"],
                 "pageSize":         200,
-                "continuationToken": continuation_token,
             }
+            # Only include continuationToken when paginating — sending null on the
+            # first request can cause the Collections API to return an error.
+            if continuation_token:
+                payload["continuationToken"] = continuation_token
 
             try:
                 resp = _http_post_json(COLLECTIONS_URL, payload, headers)
@@ -715,14 +767,22 @@ class MicrosoftConnector(Store):
         if not wu_bundle_id:
             return {"success": False, "error": "No download bundle ID found for this game"}
 
-        install_dir = os.path.join(MS_INSTALL_DIR, game_id)
-        os.makedirs(install_dir, exist_ok=True)
+        # Validate path before touching the filesystem (Fix: path traversal + orphan dir).
+        try:
+            install_dir = self._validated_install_dir(game_id)
+        except ValueError as e:
+            logger.error(str(e))
+            return {"success": False, "error": "Invalid game identifier"}
 
         try:
             await self._ensure_fresh_ms_token()
             ok = await asyncio.get_event_loop().run_in_executor(None, self._build_xbl_chain)
             if not ok:
                 return {"success": False, "error": "Failed to build Xbox authentication chain"}
+
+            # Only create the directory once auth is confirmed — avoids orphan
+            # directories if the token refresh or XSTS chain fails.
+            os.makedirs(install_dir, exist_ok=True)
 
             if progress_callback:
                 await progress_callback({"phase": "preparing", "phase_message": "Requesting download links…"})
@@ -761,7 +821,11 @@ class MicrosoftConnector(Store):
     async def uninstall_game(self, game_id: str) -> dict:
         """Remove installed game files and the marker."""
         import shutil
-        install_dir = os.path.join(MS_INSTALL_DIR, game_id)
+        try:
+            install_dir = self._validated_install_dir(game_id)
+        except ValueError as e:
+            logger.error(str(e))
+            return {"success": False, "error": "Invalid game identifier"}
         if not os.path.exists(install_dir):
             return {"success": False, "error": "Game not found in install directory"}
         try:
@@ -805,6 +869,12 @@ class MicrosoftConnector(Store):
         expires = (now + timedelta(minutes=5)).strftime("%Y-%m-%dT%H:%M:%SZ")
         msg_id  = str(_uuid.uuid4())
 
+        from xml.sax.saxutils import escape as _xml_escape
+        xuid_safe       = _xml_escape(str(self._xuid or "0"))
+        user_hash_safe  = _xml_escape(str(self._user_hash or ""))
+        xsts_token_safe = _xml_escape(str(self._xsts_token or ""))
+        wu_bundle_safe  = _xml_escape(str(wu_bundle_id))
+
         soap = f"""<s:Envelope
     xmlns:s="http://www.w3.org/2003/05/soap-envelope"
     xmlns:a="http://www.w3.org/2005/08/addressing"
@@ -818,8 +888,8 @@ class MicrosoftConnector(Store):
         xmlns:o="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-secext-1.0.xsd">
       <u:Timestamp><u:Created>{created}</u:Created><u:Expires>{expires}</u:Expires></u:Timestamp>
       <o:UsernameToken>
-        <o:Username>{self._xuid or "0"}</o:Username>
-        <o:Password Type="http://schemas.xmlsoap.org/ws/2005/05/identity/NoProofKey">XBL3.0 x={self._user_hash};{self._xsts_token}</o:Password>
+        <o:Username>{xuid_safe}</o:Username>
+        <o:Password Type="http://schemas.xmlsoap.org/ws/2005/05/identity/NoProofKey">XBL3.0 x={user_hash_safe};{xsts_token_safe}</o:Password>
       </o:UsernameToken>
     </o:Security>
   </s:Header>
@@ -827,7 +897,7 @@ class MicrosoftConnector(Store):
     <GetExtendedUpdateInfo2 xmlns="http://www.microsoft.com/SoftwareDistribution/Server/ClientWebService">
       <updateIDs>
         <UpdateIdentity>
-          <UpdateID>{wu_bundle_id}</UpdateID>
+          <UpdateID>{wu_bundle_safe}</UpdateID>
           <RevisionNumber>1</RevisionNumber>
         </UpdateIdentity>
       </updateIDs>
@@ -847,7 +917,7 @@ class MicrosoftConnector(Store):
             headers={"Content-Type": "application/soap+xml; charset=UTF-8", "SOAPAction": ""},
             method="POST",
         )
-        with urllib.request.urlopen(req, timeout=30, context=_ssl_ctx()) as r:
+        with urllib.request.urlopen(req, timeout=30, context=_ssl_ctx_strict()) as r:
             response = r.read().decode("utf-8")
 
         import re as _re
@@ -881,15 +951,24 @@ class MicrosoftConnector(Store):
             logger.error(f"[MS] Download failed for {url}: {e}")
             return False
 
-    def _extract_package(self, pkg_path: str, dest_dir: str) -> bool:
+    def _extract_package(self, pkg_path: str, dest_dir: str, _depth: int = 0) -> bool:
         """
         Extract an .appx / .msix / bundle file into dest_dir.
 
         .appx/.msix files are ZIP archives.  Bundles contain inner .appx files.
         For Win32 games the outer layer typically contains a standard installer exe.
+
+        _depth is an internal recursion counter — callers should not set it.
         """
         import zipfile
         import tempfile
+
+        _MAX_DEPTH = 3
+        if _depth > _MAX_DEPTH:
+            logger.warning(f"[MS] _extract_package: max recursion depth ({_MAX_DEPTH}) reached, skipping {pkg_path}")
+            return False
+
+        real_dest = os.path.realpath(dest_dir)
 
         try:
             with zipfile.ZipFile(pkg_path, "r") as z:
@@ -906,16 +985,24 @@ class MicrosoftConnector(Store):
                     with tempfile.TemporaryDirectory() as tmp:
                         for inner in inner_pkgs:
                             z.extract(inner, tmp)
-                            self._extract_package(os.path.join(tmp, inner), dest_dir)
+                            self._extract_package(
+                                os.path.join(tmp, inner), dest_dir, _depth=_depth + 1
+                            )
                 else:
-                    # Plain package — extract everything except AppX metadata
+                    # Plain package — extract everything except AppX metadata,
+                    # with zip-slip protection on each member path.
                     extract = [
                         m for m in members
                         if not m.startswith("AppxMetadata/")
                         and m not in ("[Content_Types].xml", "AppxBlockMap.xml")
                         and not m.endswith(".appxsym")
                     ]
-                    z.extractall(dest_dir, members=extract)
+                    for member in extract:
+                        target = os.path.realpath(os.path.join(dest_dir, member))
+                        if not target.startswith(real_dest + os.sep) and target != real_dest:
+                            logger.warning(f"[MS] Zip-slip blocked: {member!r} → {target}")
+                            continue
+                        z.extract(member, dest_dir)
             return True
         except Exception as e:
             logger.error(f"[MS] Extraction failed for {pkg_path}: {e}")
@@ -930,8 +1017,8 @@ class MicrosoftConnector(Store):
           2. Largest .exe in the tree (typically the game binary).
         """
         PRIORITY_NAMES = {
-            "game.exe", "launcher.exe", "start.exe", "run.exe",
-            "play.exe", "setup.exe",
+            "game.exe", "launcher.exe", "start.exe", "run.exe", "play.exe",
+            # "setup.exe" intentionally excluded — it is an installer, not a launcher.
         }
         exe_files = []
         for root, dirs, files in os.walk(install_dir):
@@ -971,7 +1058,10 @@ class MicrosoftConnector(Store):
             total = len(urls)
 
             for idx, url in enumerate(urls):
-                filename = url.split("?")[0].split("/")[-1] or f"package_{idx}.appx"
+                # Sanitize the filename: decode percent-encoding, then strip any
+                # directory component so the file always lands in tmp_dir.
+                raw_name = urllib.parse.unquote(url.split("?")[0].split("/")[-1])
+                filename = os.path.basename(raw_name) or f"package_{idx}.appx"
                 dest     = os.path.join(tmp_dir, filename)
 
                 if progress_callback:

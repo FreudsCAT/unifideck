@@ -3668,7 +3668,15 @@ class Plugin:
             elif store == 'gog':
                 return await self.install_handler.install_gog_game(game_id)
             elif store == 'microsoft':
-                return await self.microsoft.install_game(game_id)
+                # Route through the download queue so progress is tracked
+                # and cancellation is supported (same pattern as Epic/GOG).
+                games = await self.microsoft.get_library()
+                title = next((g.title for g in games if g.id == game_id), game_id)
+                return await self.add_to_download_queue(
+                    game_id=game_id,
+                    game_title=title,
+                    store='microsoft',
+                )
             else:
                 return {'success': False, 'error': f'Unknown store: {store}'}
 
@@ -4915,7 +4923,15 @@ class Plugin:
                     await self.shortcuts_manager._remove_from_game_map(store, game_id)
                     logger.info(f"[Uninstall] Removed {store}:{game_id} from games.map despite uninstall failure")
                     return result
-            
+
+            elif store == 'microsoft':
+                result = await self.microsoft.uninstall_game(game_id)
+                if not result['success']:
+                    # Still remove from games.map so UI shows Install button
+                    await self.shortcuts_manager._remove_from_game_map(store, game_id)
+                    logger.info(f"[Uninstall] Removed {store}:{game_id} from games.map despite uninstall failure")
+                    return result
+
             else:
                 return {'success': False, 'error': f"Unsupported store for uninstall: {store}"}
 
