@@ -96,8 +96,10 @@ _FE3_DEVICE_ATTRS_TEMPLATE = (
 # How old (seconds) an access token can be before we proactively refresh it.
 TOKEN_REFRESH_THRESHOLD = 2400   # 40 min (MS tokens last ~60 min)
 
-# Acquisition types that mean the user *purchased* the title
-PURCHASE_TYPES = {"Purchase", "Owned"}
+# Acquisition types that mean the user owns the title.
+# "Free" / "FreeToPlay" cover F2P games the user has added to their library.
+# Game Pass / subscription titles use "GamePass" or "Subscription" — intentionally excluded.
+OWNED_TYPES = {"Purchase", "Owned", "Free", "FreeToPlay"}
 
 # ───────────────────────── SSL helper ──────────────────────────────────────
 
@@ -336,13 +338,13 @@ class MicrosoftConnector(Store):
             )
             logger.info(f"[MS] Collections returned {len(raw_items)} raw items")
 
-            # Filter: purchased only, exclude bundles/add-ons
+            # Filter: owned titles only (purchased + F2P), exclude Game Pass / subscriptions
             purchased = [
                 item for item in raw_items
-                if item.get("acquisitionType") in PURCHASE_TYPES
+                if item.get("acquisitionType") in OWNED_TYPES
                 and item.get("productKind") in ("Game", "game")
             ]
-            logger.info(f"[MS] {len(purchased)} purchased games after Game Pass filter")
+            logger.info(f"[MS] {len(purchased)} owned games after Game Pass filter")
 
             if not purchased:
                 return []
@@ -378,6 +380,7 @@ class MicrosoftConnector(Store):
                 )
                 inst_info    = installed.get(pid)
                 is_installed = inst_info is not None
+                store_tags   = ["play_anywhere"] if meta.get("is_play_anywhere") else None
                 game = Game(
                     id=pid,
                     title=title,
@@ -385,6 +388,7 @@ class MicrosoftConnector(Store):
                     is_installed=is_installed,
                     install_path=inst_info["install_path"] if inst_info else None,
                     executable=inst_info["executable"] if inst_info else None,
+                    store_tags=store_tags,
                 )
                 games.append(game)
 
@@ -658,14 +662,19 @@ class MicrosoftConnector(Store):
           • FulfillmentData.WuBundleId is non-empty  →  FE3 download available
           • FulfillmentData.PackageFamilyName is null/empty  →  not MSIX-packaged
 
+        The ``is_play_anywhere`` flag is set when any SKU exposes
+        ``Properties.IsXboxPlayAnywhere == True``.  It is stored in
+        ``store_tags`` as ``'play_anywhere'`` for the frontend.
+
         Returns:
             (is_win32: bool, metadata_dict)
         """
         meta: dict = {
-            "is_win32":       False,
-            "wu_bundle_id":   "",
-            "wu_category_id": "",
-            "title":          "",
+            "is_win32":         False,
+            "wu_bundle_id":     "",
+            "wu_category_id":   "",
+            "title":            "",
+            "is_play_anywhere": False,
         }
 
         # Try to extract a title from LocalizedProperties
@@ -680,6 +689,10 @@ class MicrosoftConnector(Store):
             props = sku.get("Properties", {})
             fd    = props.get("FulfillmentData", {}) or {}
 
+            # Detect Xbox Play Anywhere on any SKU (set once, never cleared)
+            if props.get("IsXboxPlayAnywhere"):
+                meta["is_play_anywhere"] = True
+
             package_family  = fd.get("PackageFamilyName") or ""
             wu_bundle_id    = fd.get("WuBundleId")        or ""
             wu_category_id  = fd.get("WuCategoryId")      or ""
@@ -689,7 +702,10 @@ class MicrosoftConnector(Store):
                 meta["is_win32"]       = True
                 meta["wu_bundle_id"]   = wu_bundle_id
                 meta["wu_category_id"] = wu_category_id
-                return True, meta
+                # Continue iterating so IsXboxPlayAnywhere on a later SKU is still caught
+
+        if meta["is_win32"]:
+            return True, meta
 
         return False, meta
 
