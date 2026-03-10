@@ -60,10 +60,12 @@ MS_INSTALL_DIR  = os.path.expanduser("~/.local/share/unifideck/microsoft")
 MS_MARKER_FILE  = ".unifideck-ms-id"
 
 # Device-attribute string required by FE3 — presents as a Windows 10 Desktop client.
-_FE3_DEVICE_ATTRS = (
+# Locale-sensitive fields (InstallLanguage, OSUILocale) are injected at call time
+# via MicrosoftConnector._fe3_device_attrs().
+_FE3_DEVICE_ATTRS_TEMPLATE = (
     "E:BranchReadinessLevel=CBB&ProcessorIdentifier=Intel64+Family+6+Model+142+Stepping+10&"
     "CurrentBranch=rs4_release&DataVer_RS5=1809&FlightRing=Retail&AttrDataVer=57&"
-    "InstallLanguage=en-US&OSUILocale=en-US&InstallationType=Client&"
+    "InstallLanguage={locale}&OSUILocale={locale}&InstallationType=Client&"
     "FlightingBranchName=&Version_RS5=10&UpgEx_RS5=Green&GStatus_RS5=2&OSSkuId=48&"
     "app=APPHOSTUI&ProcessorManufacturer=GenuineIntel&AppVer=10.0.17134.471&"
     "OSArchitecture=AMD64&UpdateManagementGroup=2&IsDeviceRetailDemo=0&"
@@ -145,6 +147,23 @@ class MicrosoftConnector(Store):
         # Schema: {product_id: {'is_win32': bool, 'wu_bundle_id': str, ...}}
         self._game_metadata: Dict[str, dict] = {}
         logger.info("[MS] MicrosoftConnector initialised")
+
+    # ── Locale helpers ───────────────────────────────────────────────────
+
+    def _get_locale(self) -> str:
+        """Return the BCP-47 locale from Unifideck settings (e.g. 'fr-FR')."""
+        from ..utils.locale import get_unifideck_locale
+        return get_unifideck_locale()
+
+    def _get_market(self) -> str:
+        """Return the ISO 3166-1 alpha-2 market code (e.g. 'FR')."""
+        from ..utils.locale import get_unifideck_market
+        return get_unifideck_market()
+
+    def _fe3_device_attrs(self) -> str:
+        """Build the FE3 device-attribute string with the user's locale injected."""
+        loc = self._get_locale()
+        return _FE3_DEVICE_ATTRS_TEMPLATE.format(locale=loc)
 
     # ── Store interface ──────────────────────────────────────────────────
 
@@ -507,9 +526,9 @@ class MicrosoftConnector(Store):
                         "localTicketReference": "1",
                     }
                 ],
-                "market":           "US",
+                "market":           self._get_market(),
                 "productSkuIds":    [],
-                "country":          "US",
+                "country":          self._get_market(),
                 "entitlementFilters": ["Game"],
                 "pageSize":         200,
                 "continuationToken": continuation_token,
@@ -558,7 +577,7 @@ class MicrosoftConnector(Store):
         for i in range(0, len(product_ids), batch_size):
             batch   = product_ids[i: i + batch_size]
             big_ids = ",".join(batch)
-            url     = f"{PRODUCT_URL}?bigIds={big_ids}&market=US&locale=en-US"
+            url     = f"{PRODUCT_URL}?bigIds={big_ids}&market={self._get_market()}&locale={self._get_locale()}"
 
             try:
                 data     = _http_get(url, {"Accept": "application/json", "User-Agent": "Unifideck/1.0", "MS-CV": "unifideck.2"})
@@ -758,7 +777,7 @@ class MicrosoftConnector(Store):
     def _fetch_single_product_meta(self, game_id: str) -> Optional[dict]:
         """Fetch and classify a single product from the catalog API."""
         try:
-            url  = f"{PRODUCT_URL}?bigIds={game_id}&market=US&locale=en-US"
+            url  = f"{PRODUCT_URL}?bigIds={game_id}&market={self._get_market()}&locale={self._get_locale()}"
             data = _http_get(url, {"Accept": "application/json", "User-Agent": "Unifideck/1.0", "MS-CV": "unifideck.3"})
             for product in data.get("Products", []):
                 is_win32, meta = self._classify_product(product)
@@ -817,7 +836,7 @@ class MicrosoftConnector(Store):
         <XmlUpdateFragmentType>FileDecryption</XmlUpdateFragmentType>
         <XmlUpdateFragmentType>Extended</XmlUpdateFragmentType>
       </infoTypes>
-      <deviceAttributes>{_FE3_DEVICE_ATTRS}</deviceAttributes>
+      <deviceAttributes>{self._fe3_device_attrs()}</deviceAttributes>
     </GetExtendedUpdateInfo2>
   </s:Body>
 </s:Envelope>"""

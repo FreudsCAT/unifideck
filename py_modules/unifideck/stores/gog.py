@@ -71,61 +71,14 @@ class GOGAPIClient:
     
     def _get_unifideck_language(self) -> str:
         """Get language code for GOG API from Unifideck settings.
-        
-        Unifideck centralizes language preference in ~/.local/share/unifideck/settings.json.
-        If set to 'auto' or not configured, falls back to system locale detection.
+
+        Delegates to the shared locale utility so GOG and all other store connectors
+        use a single source of truth (settings.json -> system locale -> 'en-US').
         """
-        import json
-        
-        # Try to read from Unifideck settings first
-        settings_path = os.path.expanduser("~/.local/share/unifideck/settings.json")
-        try:
-            if os.path.exists(settings_path):
-                with open(settings_path, 'r') as f:
-                    settings = json.load(f)
-                    saved_lang = settings.get('language', 'auto')
-                    
-                    # If not 'auto', use the saved language directly
-                    if saved_lang and saved_lang != 'auto':
-                        logger.info(f"[GOG] Using Unifideck language preference: {saved_lang}")
-                        return saved_lang
-        except Exception as e:
-            logger.debug(f"[GOG] Could not read Unifideck settings: {e}")
-        
-        # Fallback: detect from system locale
-        try:
-            lang_tuple = locale.getlocale()
-            if lang_tuple and lang_tuple[0]:
-                # Extract 2-letter code: 'en_US' -> 'en', 'de_DE' -> 'de'
-                lang_code = lang_tuple[0].split('_')[0].lower()
-                
-                # Map 2-letter codes to GOG depot full codes (important for depot matching!)
-                lang_map = {
-                    'en': 'en-US',
-                    'fr': 'fr-FR',
-                    'de': 'de-DE',
-                    'es': 'es-ES',
-                    'it': 'it-IT',
-                    'pt': 'pt-BR',  # Common for GOG
-                    'ru': 'ru-RU',
-                    'pl': 'pl-PL',
-                    'zh': 'zh-CN',
-                    'ja': 'ja-JP',
-                    'ko': 'ko-KR',
-                    'nl': 'nl-NL',
-                    'tr': 'tr-TR'
-                }
-                
-                # Use mapped code if available, otherwise fall back to 2-letter tag
-                final_lang = lang_map.get(lang_code, lang_code)
-                logger.debug(f"[GOG] Detected system language: {lang_code} -> {final_lang}")
-                return final_lang
-        except Exception as e:
-            logger.debug(f"[GOG] Could not detect system locale: {e}")
-        
-        # Default fallback
-        return 'en-US'
-    
+        from ..utils.locale import get_unifideck_locale
+        lang = get_unifideck_locale()
+        logger.debug(f"[GOG] Language preference: {lang}")
+        return lang    
     def _get_token_age(self) -> float:
         """Return age of token in seconds based on file modification time.
         
@@ -480,7 +433,8 @@ class GOGAPIClient:
 
             connector = aiohttp.TCPConnector(ssl=ssl_context)
             async with aiohttp.ClientSession(connector=connector) as session:
-                url = f'https://api.gog.com/products/{game_id}?locale=en-US'
+                from ..utils.locale import get_unifideck_locale
+                url = f'https://api.gog.com/products/{game_id}?locale={get_unifideck_locale()}'
                 headers = {'Authorization': f'Bearer {self.access_token}'}
 
                 async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=10)) as response:
@@ -773,7 +727,8 @@ class GOGAPIClient:
             
             try:
                 # Query GOG API for product details with downloads expanded
-                url = f'https://api.gog.com/products/{game_id}?expand=downloads&locale=en-US'
+                from ..utils.locale import get_unifideck_locale
+                url = f'https://api.gog.com/products/{game_id}?expand=downloads&locale={get_unifideck_locale()}'
                 headers = {'Authorization': f'Bearer {self.access_token}'}
                 
                 async with session.get(url, headers=headers) as response:
@@ -2009,7 +1964,8 @@ class GOGAPIClient:
             connector = aiohttp.TCPConnector(ssl=ssl_context)
             async with aiohttp.ClientSession(connector=connector) as session:
                 # Get game details to find DLC expand URL
-                url = f'https://api.gog.com/products/{game_id}?expand=downloads&locale=en-US'
+                from ..utils.locale import get_unifideck_locale
+                url = f'https://api.gog.com/products/{game_id}?expand=downloads&locale={get_unifideck_locale()}'
                 async with session.get(url, headers={'Authorization': f'Bearer {self.access_token}'}) as response:
                     if response.status != 200:
                         logger.error(f"[GOG] Failed to get game details for DLCs: {response.status}")
