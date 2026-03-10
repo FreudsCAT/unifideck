@@ -53,6 +53,11 @@ CONFIGURATIONS_RELATIVE_PATH = (
     "drive_c/Program Files (x86)/Ubisoft/Ubisoft Game Launcher/"
     "cache/configuration/configurations"
 )
+# Ubisoft Connect localStorage (contains ubisoftConnectGameId and other metadata)
+LOCALSTORAGE_RELATIVE_PATH = (
+    "drive_c/users/steamuser/AppData/Local/Ubisoft Game Launcher/"
+    "cache/http2/Default/Local Storage"
+)
 
 
 class UbisoftConnector(Store):
@@ -373,9 +378,9 @@ class UbisoftConnector(Store):
         """
         Open Ubisoft Connect in the game's prefix for manual install.
 
-        Uses the standard launch URL (uplay://launch/{launch_id}/0) when available.
-        If launch_id is unavailable, opens UPC without a URL so the user can install
-        manually from the launcher UI.
+        Uses UbisoftConnect.exe (the registered uplay:// protocol handler) with
+        uplay://install/{ubisoftConnectGameId} to open the game's install page directly.
+        Falls back to opening the launcher without a URL if ID resolution fails.
         """
         try:
             logger.info(f"[Ubisoft] open_launcher_for_install called for {game_id}")
@@ -385,11 +390,15 @@ class UbisoftConnector(Store):
                 return {"success": False, "error": "Failed to bootstrap Wine prefix"}
 
             prefix_path = self.get_prefix_path(game_id)
-            upc_path = self._find_upc_exe(prefix_path)
+            connect_exe = self._find_connect_exe(prefix_path)
+            if not connect_exe:
+                # Fallback to upc.exe if UbisoftConnect.exe not found
+                connect_exe = self._find_upc_exe(prefix_path)
+                if not connect_exe:
+                    logger.error(f"[Ubisoft] Neither UbisoftConnect.exe nor upc.exe found in {prefix_path}")
+                    return {"success": False, "error": "Ubisoft Connect executable not found in prefix"}
+            
             umu_run = self._find_umu_run()
-            if not upc_path:
-                logger.error(f"[Ubisoft] upc.exe not found in {prefix_path}")
-                return {"success": False, "error": "upc.exe not found in prefix"}
             if not umu_run:
                 logger.error("[Ubisoft] umu-run not found")
                 return {"success": False, "error": "umu-run not found"}
@@ -399,12 +408,11 @@ class UbisoftConnector(Store):
             python_bin = self._find_python()
             env = self._build_umu_env(prefix_path, f"umu-ubisoft-{game_id}")
             launch_id = self.resolve_launch_id(game_id)
-            # Use install:// URL to open the game's install page directly.
-            # uplay://launch would try to run the game (shows "Activate a key"
-            # if not installed); uplay://install navigates to the install page.
+            # Use uplay://install/ URL to open the game's install page directly.
+            # This works best with UbisoftConnect.exe (the registered protocol handler).
             launch_url = f"uplay://install/{launch_id}" if launch_id else ""
 
-            cmd = [python_bin, umu_run, upc_path]
+            cmd = [python_bin, umu_run, connect_exe]
             if launch_url:
                 cmd.append(launch_url)
 
@@ -768,13 +776,19 @@ class UbisoftConnector(Store):
             logger.warning(f"[Ubisoft] Failed to save ID map: {e}")
 
     def resolve_install_id(self, space_id: str) -> Optional[str]:
-        """Resolve spaceId to installId from cache."""
+        """Resolve spaceId to installId from cache, preferring ubisoftConnectGameId."""
         entry = self._id_map_cache.get(space_id, {})
+        # For native Ubisoft games, prefer ubisoftConnectGameId (more reliable for deeplinks)
+        if "ubisoftconnect_game_id" in entry:
+            return entry.get("ubisoftconnect_game_id")
         return entry.get("install_id")
 
     def resolve_launch_id(self, space_id: str) -> Optional[str]:
-        """Resolve spaceId to launchId from cache."""
+        """Resolve spaceId to launchId from cache, preferring ubisoftConnectGameId."""
         entry = self._id_map_cache.get(space_id, {})
+        # For native Ubisoft games, prefer ubisoftConnectGameId (more reliable for deeplinks)
+        if "ubisoftconnect_game_id" in entry:
+            return entry.get("ubisoftconnect_game_id")
         return entry.get("launch_id")
 
     def update_id_map(self, space_id: str, install_id: str, launch_id: str) -> None:
@@ -784,6 +798,100 @@ class UbisoftConnector(Store):
             "launch_id": launch_id,
         }
         self._save_id_map()
+
+    def resolve_ubisoftconnect_game_id(self, space_id: str) -> Optional[str]:
+        """Resolve spaceId to ubisoftConnectGameId from cache (preferred deeplink ID).
+        
+        Returns the cached ubisoftConnectGameId if available, which is more reliable
+        than the static install_id for native Ubisoft games.
+        """
+        entry = self._id_map_cache.get(space_id, {})
+        return entry.get("ubisoftconnect_game_id")
+
+    def _extract_cache_game_ids(self, prefix_path: str) -> Dict[str, str]:
+        """Extract ubisoftConnectGameId mappings from Ubisoft Connect's local cache.
+        
+        Reads Ubisoft Connect's localStorage leveldb cache to find spaceId -> ubisoftConnectGameId
+        mappings. This is more reliable for native games than static name-matching.
+        
+        Returns a dict of {spaceId: ubisoftConnectGameId}.
+        """
+        result = {}
+        
+        # Try to find localStorage leveldb path
+        for path_variant in [
+            os.path.join(prefix_path, LOCALSTORAGE_RELATIVE_PATH, "leveldb"),
+            os.path.join(prefix_path, "pfx", LOCALSTORAGE_RELATIVE_PATH, "leveldb"),
+        ]:
+            if not os.path.isdir(path_variant):
+                continue
+            
+            try:
+                # Read all leveldb files to look for game metadata
+                # The cache contains JSON-like game data with spaceId and ubisoftConnectGameId
+                leveldb_files = glob.glob(os.path.join(path_variant, "*.ldb"))
+                if not leveldb_files:
+                    leveldb_files = glob.glob(os.path.join(path_variant, "*.log"))
+                
+                for ldb_file in leveldb_files:
+                    try:
+                        with open(ldb_file, "rb") as f:
+                            content = f.read()
+                            # Search for patterns containing spaceId and ubisoftConnectGameId
+                            # These are stored in JSON-like format in the cache
+                            self._extract_ids_from_binary(content, result)
+                    except Exception as e:
+                        logger.debug(f"[Ubisoft] Error reading leveldb file {ldb_file}: {e}")
+                
+                if result:
+                    logger.info(f"[Ubisoft] Extracted {len(result)} ubisoftConnectGameId mappings from cache")
+                    return result
+                    
+            except Exception as e:
+                logger.debug(f"[Ubisoft] Error accessing localStorage leveldb: {e}")
+        
+        return result
+
+    @staticmethod
+    def _extract_ids_from_binary(data: bytes, result: Dict[str, str]) -> None:
+        """Search binary data for spaceId and ubisoftConnectGameId patterns.
+        
+        These are typically stored in JSON form within the leveldb cache.
+        Looks for patterns like "ubisoftConnectGameId" followed by a numeric value,
+        and associates it with nearby spaceId values.
+        """
+        try:
+            # Decode attempts to find readable strings in binary data
+            decoded = data.decode("utf-8", errors="ignore")
+            
+            # Look for JSON-like game entries with both fields
+            # Pattern: ...spaceId...ubisoftConnectGameId...
+            import re
+            
+            # Find all potential game entries (chunks containing both identifiers)
+            # UUIDs can vary in format, so use flexible pattern
+            for match in re.finditer(
+                r'"spaceId"\s*:\s*"([a-f0-9\-]+)".*?"ubisoftConnectGameId"\s*:\s*(\d+)',
+                decoded,
+                re.IGNORECASE | re.DOTALL
+            ):
+                space_id = match.group(1)
+                ubisoft_id = match.group(2)
+                if space_id and ubisoft_id:
+                    result[space_id] = ubisoft_id
+                    
+            # Also try reverse order: ubisoftConnectGameId then spaceId
+            for match in re.finditer(
+                r'"ubisoftConnectGameId"\s*:\s*(\d+).*?"spaceId"\s*:\s*"([a-f0-9\-]+)"',
+                decoded,
+                re.IGNORECASE | re.DOTALL
+            ):
+                ubisoft_id = match.group(1)
+                space_id = match.group(2)
+                if space_id and ubisoft_id:
+                    result[space_id] = ubisoft_id
+        except Exception as e:
+            logger.debug(f"[Ubisoft] Error extracting IDs from binary: {e}")
 
     # ========================================================================
     # Static Game ID Database
@@ -924,6 +1032,17 @@ class UbisoftConnector(Store):
         if added:
             self._save_id_map()
             logger.info(f"[Ubisoft] Resolved {added} install_ids from static database")
+        
+        # Try to extract ubisoftConnectGameId from Ubisoft Connect's local cache
+        # This is more reliable for native games than static database matching
+        cache_ids = self._extract_cache_game_ids(TEMPLATE_DIR)
+        for space_id, ubisoft_id in cache_ids.items():
+            if space_id in self._id_map_cache:
+                self._id_map_cache[space_id]["ubisoftconnect_game_id"] = ubisoft_id
+                logger.info(f"[Ubisoft] Added cache ubisoftConnectGameId {ubisoft_id} for spaceId {space_id}")
+        
+        if cache_ids:
+            self._save_id_map()
 
         return added
 
@@ -1415,49 +1534,126 @@ class UbisoftConnector(Store):
 
         Checks: .unifideck_ubisoft marker, uplay_install.state, registry keys.
         """
-        # Method 1: Check .unifideck_ubisoft marker in common install locations
-        for base_dir in [DEFAULT_INSTALL_BASE, SDCARD_INSTALL_BASE]:
-            if not os.path.exists(base_dir):
+        from .ubisoft_parser import check_install_state
+
+        known_name = self._get_game_name(space_id) or ""
+        normalized_known_name = self._normalize_for_matching(known_name) if known_name else ""
+
+        prefix_game_roots = [
+            os.path.join(
+                prefix_path,
+                "drive_c",
+                "Program Files (x86)",
+                "Ubisoft",
+                "Ubisoft Game Launcher",
+                "games",
+            ),
+            os.path.join(
+                prefix_path,
+                "pfx",
+                "drive_c",
+                "Program Files (x86)",
+                "Ubisoft",
+                "Ubisoft Game Launcher",
+                "games",
+            ),
+        ]
+        external_game_roots = [DEFAULT_INSTALL_BASE, SDCARD_INSTALL_BASE]
+
+        def _build_result(game_dir: str, title_hint: str = "") -> Dict[str, Any]:
+            exe = self.find_game_executable(game_dir) or ""
+            title = title_hint or os.path.basename(game_dir)
+            return {
+                "space_id": space_id,
+                "executable": exe,
+                "install_path": game_dir,
+                "work_dir": game_dir,
+                "title": title,
+            }
+
+        # Method 1: .unifideck_ubisoft marker lookup (authoritative when present)
+        marker_roots = [*prefix_game_roots, *external_game_roots]
+        for base_dir in marker_roots:
+            if not os.path.isdir(base_dir):
                 continue
             for folder in os.listdir(base_dir):
-                marker_path = os.path.join(base_dir, folder, ".unifideck_ubisoft")
-                if os.path.exists(marker_path):
-                    try:
-                        with open(marker_path, "r") as f:
-                            marker_data = json.load(f)
-                        if marker_data.get("space_id") == space_id:
-                            return {
-                                "space_id": space_id,
-                                "executable": marker_data.get("executable", ""),
-                                "install_path": marker_data.get("install_path", ""),
-                                "work_dir": marker_data.get("install_path", ""),
-                                "title": marker_data.get("game_title", ""),
-                            }
-                    except Exception:
+                game_dir = os.path.join(base_dir, folder)
+                if not os.path.isdir(game_dir):
+                    continue
+                marker_path = os.path.join(game_dir, ".unifideck_ubisoft")
+                if not os.path.isfile(marker_path):
+                    continue
+                try:
+                    with open(marker_path, "r", encoding="utf-8", errors="replace") as f:
+                        marker_data = json.load(f)
+                    if marker_data.get("space_id") != space_id:
                         continue
 
-        # Method 2: Check uplay_install.state binary in game directories
-        for base_dir in [DEFAULT_INSTALL_BASE, SDCARD_INSTALL_BASE]:
-            if not os.path.exists(base_dir):
+                    install_path = marker_data.get("install_path") or game_dir
+                    executable = marker_data.get("executable", "") or ""
+                    if executable and not os.path.isabs(executable):
+                        executable = os.path.join(install_path, executable)
+                    if not executable or not os.path.exists(executable):
+                        executable = self.find_game_executable(install_path) or ""
+
+                    return {
+                        "space_id": space_id,
+                        "executable": executable,
+                        "install_path": install_path,
+                        "work_dir": install_path,
+                        "title": marker_data.get("game_title") or known_name or folder,
+                    }
+                except Exception:
+                    continue
+
+        # Method 2: Prefix-local install state (most reliable for per-game Ubisoft prefixes)
+        prefix_state_candidates: List[str] = []
+        for base_dir in prefix_game_roots:
+            if not os.path.isdir(base_dir):
                 continue
             for folder in os.listdir(base_dir):
-                state_file = os.path.join(base_dir, folder, "uplay_install.state")
-                if os.path.exists(state_file):
-                    try:
-                        with open(state_file, "rb") as f:
-                            first_byte = f.read(1)
-                        if first_byte == b"\x0a":
-                            game_dir = os.path.join(base_dir, folder)
-                            exe = self.find_game_executable(game_dir)
-                            return {
-                                "space_id": space_id,
-                                "executable": exe or "",
-                                "install_path": game_dir,
-                                "work_dir": game_dir,
-                                "title": folder,
-                            }
-                    except Exception:
+                game_dir = os.path.join(base_dir, folder)
+                if not os.path.isdir(game_dir):
+                    continue
+                state_file = os.path.join(game_dir, "uplay_install.state")
+                if check_install_state(state_file):
+                    prefix_state_candidates.append(game_dir)
+
+        if prefix_state_candidates:
+            if normalized_known_name:
+                for game_dir in prefix_state_candidates:
+                    normalized_folder = self._normalize_for_matching(os.path.basename(game_dir))
+                    if (
+                        normalized_folder == normalized_known_name
+                        or normalized_folder in normalized_known_name
+                        or normalized_known_name in normalized_folder
+                    ):
+                        return _build_result(game_dir, known_name or os.path.basename(game_dir))
+            # Fallback: a per-game prefix should usually contain only one installed title.
+            first_dir = prefix_state_candidates[0]
+            return _build_result(first_dir, known_name or os.path.basename(first_dir))
+
+        # Method 3: External install dirs via install state + name match
+        # (avoid false positives by requiring a known title match)
+        if normalized_known_name:
+            for base_dir in external_game_roots:
+                if not os.path.isdir(base_dir):
+                    continue
+                for folder in os.listdir(base_dir):
+                    game_dir = os.path.join(base_dir, folder)
+                    if not os.path.isdir(game_dir):
                         continue
+                    state_file = os.path.join(game_dir, "uplay_install.state")
+                    if not check_install_state(state_file):
+                        continue
+                    normalized_folder = self._normalize_for_matching(folder)
+                    if (
+                        normalized_folder != normalized_known_name
+                        and normalized_folder not in normalized_known_name
+                        and normalized_known_name not in normalized_folder
+                    ):
+                        continue
+                    return _build_result(game_dir, known_name or folder)
 
         return None
 

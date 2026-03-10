@@ -1604,6 +1604,13 @@ class ShortcutsManager:
                                             exe_path = game_info['executable']
                                             work_dir = os.path.dirname(exe_path)
                                             await self._update_game_map(game.store, game.id, exe_path, work_dir)
+                                    elif game.store == 'ubisoft':
+                                        game_info = ubisoft_client.get_installed_game_info(game.id) if ubisoft_client else None
+                                        if game_info and game_info.get('install_path'):
+                                            install_path = game_info.get('install_path', '')
+                                            exe_path = game_info.get('executable', '') or ''
+                                            work_dir = install_path or (os.path.dirname(exe_path) if exe_path else '')
+                                            await self._update_game_map(game.store, game.id, exe_path, work_dir)
                                 
                                 # Track repaired LaunchOptions to prevent duplicate additions in STEP 5
                                 current_launch_options.add(original_launch_opts)
@@ -1708,6 +1715,13 @@ class ShortcutsManager:
                                     if game_info and game_info.get('executable'):
                                         exe_path = game_info['executable']
                                         work_dir = os.path.dirname(exe_path)
+                                        await self._update_game_map(game.store, game.id, exe_path, work_dir)
+                                elif game.store == 'ubisoft':
+                                    game_info = ubisoft_client.get_installed_game_info(game.id) if ubisoft_client else None
+                                    if game_info and game_info.get('install_path'):
+                                        install_path = game_info.get('install_path', '')
+                                        exe_path = game_info.get('executable', '') or ''
+                                        work_dir = install_path or (os.path.dirname(exe_path) if exe_path else '')
                                         await self._update_game_map(game.store, game.id, exe_path, work_dir)
                             
                             repaired_count += 1
@@ -1963,4 +1977,3 @@ class ShortcutsManager:
         except Exception as e:
             logger.error(f"Error removing game: {e}")
             return False
-

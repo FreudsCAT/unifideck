@@ -40,6 +40,7 @@ INSTALLER_URL = (
 )
 ID_MAP_FILE = DATA_DIR / "ubisoft_id_map.json"
 TOKEN_FILE = DATA_DIR / "ubisoft_token.json"
+UPC_SESSION_FILE = DATA_DIR / "ubisoft_upc_session.txt"
 SETTINGS_FILE = DATA_DIR / "settings.json"
 BOOTSTRAP_MARKER = "unifideck_ubisoft_bootstrap.marker"
 
@@ -253,23 +254,39 @@ def inject_upc_session(prefix_path: str) -> bool:
     """
     Pre-authenticate UPC by injecting the stored session token.
 
-    Writes ticket + userId into UPC's settings.yml so no login prompt appears.
+    Prefers UPC-native session token (from ubisoft_upc_session.txt) over
+    REST API ticket. Writes restore_session + userId into UPC's settings.yml
+    so no login prompt appears.
     """
-    if not os.path.isfile(str(TOKEN_FILE)):
-        log("No token file found, skipping session injection")
-        return False
+    ticket = ""
+    user_id = ""
 
-    try:
-        with open(str(TOKEN_FILE), "r") as f:
-            tokens = json.load(f)
-    except Exception as e:
-        log(f"Failed to read tokens: {e}")
-        return False
+    # Prefer UPC-native session token
+    if os.path.isfile(str(UPC_SESSION_FILE)):
+        try:
+            with open(str(UPC_SESSION_FILE), "r") as f:
+                upc_token = f.read().strip()
+            if upc_token:
+                ticket = upc_token
+                log("Using UPC-native session token")
+        except Exception:
+            pass
 
-    ticket = tokens.get("ticket", "")
-    user_id = tokens.get("user_id", "")
+    # Read userId (and fall back to API ticket if no UPC session)
+    if os.path.isfile(str(TOKEN_FILE)):
+        try:
+            with open(str(TOKEN_FILE), "r") as f:
+                tokens = json.load(f)
+            user_id = tokens.get("userId", "")
+            if not ticket:
+                ticket = tokens.get("ticket", "")
+                if ticket:
+                    log("Using API ticket (no UPC session available)")
+        except Exception as e:
+            log(f"Failed to read tokens: {e}")
+
     if not ticket:
-        log("No ticket in token file, skipping session injection")
+        log("No session token available, skipping session injection")
         return False
 
     active_prefix = get_active_prefix(prefix_path)

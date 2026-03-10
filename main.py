@@ -3969,6 +3969,19 @@ class Plugin:
                                 if install_path and os.path.exists(install_path):
                                     is_installed = True
                                     logger.info(f"[GameInfo] Ubisoft game {game_id} found via prefix scan (path verified)")
+                                    # Keep games.map in sync so Installed tabs and cache-based
+                                    # filters reflect Ubisoft installs immediately.
+                                    try:
+                                        executable = ubisoft_info.get('executable', '') if isinstance(ubisoft_info, dict) else ''
+                                        work_dir = ubisoft_info.get('work_dir', '') if isinstance(ubisoft_info, dict) else ''
+                                        await self.shortcuts_manager._update_game_map(
+                                            'ubisoft',
+                                            game_id,
+                                            executable or '',
+                                            work_dir or install_path,
+                                        )
+                                    except Exception as map_err:
+                                        logger.warning(f"[GameInfo] Failed to update games.map for Ubisoft {game_id}: {map_err}")
                                 else:
                                     logger.warning(f"[GameInfo] Ubisoft game {game_id} in prefix but path missing")
                         elif store not in ('epic', 'gog', 'amazon', 'ubisoft'):

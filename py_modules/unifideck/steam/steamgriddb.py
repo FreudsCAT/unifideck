@@ -682,7 +682,7 @@ class SteamGridDBClient:
         
         return None
 
-    async def fetch_game_art(self, title: str, app_id: int, store: str = None, store_id: str = None, only_types: set = None) -> Dict[str, Any]:
+    async def fetch_game_art(self, title: str, app_id: int, store: str = None, store_id: str = None, only_types: set = None, extra: dict = None) -> Dict[str, Any]:
         """
         Orchestrated Artwork Pipeline:
         1. Metadata Phase: Fetch URLs from all sources CONCURRENTLY
@@ -725,6 +725,15 @@ class SteamGridDBClient:
                 tasks.append(self.get_epic_metadata(store_id))
             elif store == 'amazon' and store_id:
                 tasks.append(self.get_amazon_metadata(store_id))
+            elif store == 'ubisoft' and extra:
+                # Ubisoft provides artwork URLs directly from GraphQL API (stored in game.extra)
+                ubisoft_urls = {}
+                if extra.get('coverUrl'):
+                    ubisoft_urls['grid'] = extra['coverUrl']
+                if extra.get('backgroundUrl'):
+                    ubisoft_urls['hero'] = extra['backgroundUrl']
+                tasks.append(asyncio.sleep(0, result={'urls': ubisoft_urls}))
+                logger.info(f"[Artwork] Using Ubisoft API artwork: {list(ubisoft_urls.keys())}")
             else:
                 tasks.append(asyncio.sleep(0, result={'urls': {}})) # Dummy to keep parallel structure simple
                 

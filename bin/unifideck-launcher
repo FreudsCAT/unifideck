@@ -1659,7 +1659,8 @@ except Exception as e:
     elif [ "$STORE" == "ubisoft" ]; then
         # ==================================================================
         # UBISOFT NATIVE STORE LAUNCH (separate from Epic SSO path above)
-        # Uses per-game prefix with upc.exe and uplay://launch protocol
+        # Uses per-game prefix with UbisoftConnect.exe and uplay://launch protocol
+        # Prefers ubisoftConnectGameId from local cache (more reliable for native games)
         # Reference: docs/ubisoft-store-spec.md §7 & §12
         # ==================================================================
         log "Launching Ubisoft native store game..."
@@ -1667,13 +1668,18 @@ except Exception as e:
         # Use the per-game Ubisoft prefix instead of standard Unifideck prefix
         GAME_PREFIX="$HOME/.local/share/unifideck/prefixes/ubisoft/$GAME_ID"
 
-        # Resolve launch_id from ID map
+        # Resolve launch_id from ID map, preferring ubisoftConnectGameId if available
         LAUNCH_ID=$(python3 -c "
 import json
 try:
     with open('$HOME/.local/share/unifideck/ubisoft_id_map.json') as f:
         m = json.load(f)
-    print(m.get('$GAME_ID', {}).get('launch_id', ''))
+    entry = m.get('$GAME_ID', {})
+    # Prefer ubisoftConnectGameId (more reliable for deeplinks)
+    if 'ubisoftconnect_game_id' in entry:
+        print(entry.get('ubisoftconnect_game_id', ''))
+    else:
+        print(entry.get('launch_id', ''))
 except Exception:
     print('')
 " 2>/dev/null || echo "")
@@ -1687,35 +1693,62 @@ except Exception:
         fi
         log "[Ubisoft] Resolved launch_id: $LAUNCH_ID"
 
-        # Verify prefix + upc.exe (bootstrap if needed)
+        # Verify prefix + UbisoftConnect.exe (the registered uplay:// protocol handler)
+        CONNECT_EXE="$GAME_PREFIX/drive_c/Program Files (x86)/Ubisoft/Ubisoft Game Launcher/UbisoftConnect.exe"
+        if [ ! -f "$CONNECT_EXE" ]; then
+            # Try pfx/ subdirectory
+            CONNECT_EXE="$GAME_PREFIX/pfx/drive_c/Program Files (x86)/Ubisoft/Ubisoft Game Launcher/UbisoftConnect.exe"
+        fi
+        # Fallback to upc.exe if UbisoftConnect.exe not found
         UPC_EXE="$GAME_PREFIX/drive_c/Program Files (x86)/Ubisoft/Ubisoft Game Launcher/upc.exe"
         if [ ! -f "$UPC_EXE" ]; then
-            # Try pfx/ subdirectory
             UPC_EXE="$GAME_PREFIX/pfx/drive_c/Program Files (x86)/Ubisoft/Ubisoft Game Launcher/upc.exe"
         fi
-        if [ ! -f "$UPC_EXE" ]; then
-            log "[Ubisoft] upc.exe not found, running bootstrap..."
+        
+        if [ -f "$CONNECT_EXE" ]; then
+            LAUNCHER_EXE="$CONNECT_EXE"
+            log "[Ubisoft] Using UbisoftConnect.exe: $LAUNCHER_EXE"
+        elif [ -f "$UPC_EXE" ]; then
+            LAUNCHER_EXE="$UPC_EXE"
+            log "[Ubisoft] Using upc.exe: $LAUNCHER_EXE"
+        else
+            log "[Ubisoft] Neither executable found, running bootstrap..."
             SETUP_SCRIPT="$PLUGIN_DIR/bin/ubisoft_setup.py"
             if [ -f "$SETUP_SCRIPT" ]; then
                 python3 "$SETUP_SCRIPT" "$GAME_ID" "$GAME_PREFIX" >> "$LOG_FILE" 2>&1 || true
             fi
             # Re-check after bootstrap
+            CONNECT_EXE="$GAME_PREFIX/drive_c/Program Files (x86)/Ubisoft/Ubisoft Game Launcher/UbisoftConnect.exe"
+            if [ ! -f "$CONNECT_EXE" ]; then
+                CONNECT_EXE="$GAME_PREFIX/pfx/drive_c/Program Files (x86)/Ubisoft/Ubisoft Game Launcher/UbisoftConnect.exe"
+            fi
             UPC_EXE="$GAME_PREFIX/drive_c/Program Files (x86)/Ubisoft/Ubisoft Game Launcher/upc.exe"
             if [ ! -f "$UPC_EXE" ]; then
                 UPC_EXE="$GAME_PREFIX/pfx/drive_c/Program Files (x86)/Ubisoft/Ubisoft Game Launcher/upc.exe"
             fi
-            if [ ! -f "$UPC_EXE" ]; then
-                log "ERROR: upc.exe still not found after bootstrap"
+            
+            if [ -f "$CONNECT_EXE" ]; then
+                LAUNCHER_EXE="$CONNECT_EXE"
+            elif [ -f "$UPC_EXE" ]; then
+                LAUNCHER_EXE="$UPC_EXE"
+            else
+                log "ERROR: Neither UbisoftConnect.exe nor upc.exe found after bootstrap"
                 exit 1
             fi
         fi
-        log "[Ubisoft] Using upc.exe: $UPC_EXE"
 
         # Set language in this game's prefix
         UBISOFT_LANG_SCRIPT="$PLUGIN_DIR/bin/ubisoft_set_language.py"
         if [ -f "$UBISOFT_LANG_SCRIPT" ]; then
             log "[Language] Setting locale for Ubisoft game..."
             python3 "$UBISOFT_LANG_SCRIPT" "$GAME_PREFIX" "$GAME_ID" >> "$LOG_FILE" 2>&1 || true
+        fi
+
+        # Inject session token before launch
+        INJECT_SCRIPT="$PLUGIN_DIR/bin/ubisoft_inject_session.py"
+        if [ -f "$INJECT_SCRIPT" ]; then
+            log "[Ubisoft] Injecting session token..."
+            python3 "$INJECT_SCRIPT" "$GAME_PREFIX" >> "$LOG_FILE" 2>&1 || true
         fi
 
         # Python + umu-run setup
@@ -1770,14 +1803,21 @@ except Exception:
         # Notify user
         notify_stage "toasts.launcher.launchingGame" "toasts.launcher.startingUbisoftGame" "low"
 
-        # Launch via upc.exe with uplay:// protocol
-        CMD_STR="$PYTHON_BIN $UMU_WRAPPER \"$UPC_EXE\" \"uplay://launch/$LAUNCH_ID/0\""
+        # Launch via launcher executable with uplay:// protocol
+        CMD_STR="$PYTHON_BIN $UMU_WRAPPER \"$LAUNCHER_EXE\" \"uplay://launch/$LAUNCH_ID/0\""
         log "Executing: $CMD_STR"
 
-        "${WRAPPERS[@]}" run_umu_with_retry "$PYTHON_BIN" "$UMU_WRAPPER" "$UPC_EXE" "uplay://launch/$LAUNCH_ID/0" \
+        "${WRAPPERS[@]}" run_umu_with_retry "$PYTHON_BIN" "$UMU_WRAPPER" "$LAUNCHER_EXE" "uplay://launch/$LAUNCH_ID/0" \
             && GAME_EXIT_CODE=$? || GAME_EXIT_CODE=$?
 
         wait_for_game_exit
+
+        # Capture any refreshed session token from prefix
+        CAPTURE_SCRIPT="$PLUGIN_DIR/bin/ubisoft_capture_session.py"
+        if [ -f "$CAPTURE_SCRIPT" ]; then
+            log "[Ubisoft] Capturing session token..."
+            python3 "$CAPTURE_SCRIPT" "$GAME_PREFIX" >> "$LOG_FILE" 2>&1 || true
+        fi
 
         log "Ubisoft game exited with code: $GAME_EXIT_CODE"
         exit $GAME_EXIT_CODE
