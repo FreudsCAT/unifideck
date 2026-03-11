@@ -297,12 +297,16 @@ class MicrosoftConnector(Store):
             logger.warning(f"[MS] Could not remove token file: {e}")
 
         # Clear browser cookies for Microsoft domains via CDP
+        # Also close any lingering oauth20_desktop.srf redirect page so that
+        # the stale one-time code it contains cannot be mistakenly replayed
+        # when the user tries to reconnect.
         try:
             from ..auth.browser import CDPOAuthMonitor
             monitor = CDPOAuthMonitor()
             await monitor.clear_cookies_for_domain("login.live.com")
             await monitor.clear_cookies_for_domain("live.com")
             await monitor.clear_cookies_for_domain("microsoft.com")
+            await monitor.close_page_by_url("oauth20_desktop.srf")
         except Exception:
             pass
 
@@ -1144,7 +1148,29 @@ class MicrosoftConnector(Store):
                 if result["success"]:
                     logger.info("[MS] ✓ Authentication completed automatically")
                 else:
-                    logger.error(f"[MS] Auto-auth failed: {result.get('error')}")
+                    # The captured code was stale (e.g. leftover redirect page from a
+                    # previous session that was not closed before logout).  Don't give
+                    # up — resume monitoring so we can capture the fresh code the user
+                    # is about to obtain by completing the login form.
+                    logger.warning(
+                        f"[MS] complete_auth failed for captured code "
+                        f"({result.get('error')}) — likely a stale code; "
+                        f"resuming monitor for a fresh one"
+                    )
+                    # The bad URL is already in monitor.monitored_urls so it won't
+                    # be replayed.  Keep remaining timeout budget.
+                    fresh_code, fresh_store = await monitor.monitor_for_oauth_code(
+                        expected_store="microsoft", timeout=240
+                    )
+                    if fresh_code and fresh_store == "microsoft":
+                        logger.info("[MS] ✓ Captured fresh Microsoft auth code on retry")
+                        retry = await self.complete_auth(fresh_code)
+                        if retry["success"]:
+                            logger.info("[MS] ✓ Authentication completed on retry")
+                        else:
+                            logger.error(f"[MS] Auth retry also failed: {retry.get('error')}")
+                    else:
+                        logger.warning("[MS] CDP monitor timed out waiting for fresh code")
             else:
                 logger.warning("[MS] CDP monitor timed out without capturing a Microsoft code")
         except Exception as e:
