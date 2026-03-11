@@ -4952,6 +4952,7 @@ class Plugin:
             logger.info(f"[Uninstall] Starting uninstallation: {title} ({store}:{game_id}), delete_prefix={delete_prefix}")
 
             # Perform store-specific uninstall
+            prefix_deleted = False
             if store == 'epic':
                 # legendary uninstall <id> --yes
                 if not self.epic.legendary_bin:
@@ -5022,13 +5023,21 @@ class Plugin:
                     await self.shortcuts_manager._remove_from_game_map(store, game_id)
                     logger.info(f"[Uninstall] Removed {store}:{game_id} from games.map despite uninstall failure")
                     return result
+
+            elif store == 'ubisoft':
+                result = await self.ubisoft.uninstall_game(game_id, delete_prefix=delete_prefix)
+                if not result.get('success'):
+                    # Keep UI consistent even if uninstall fails
+                    await self.shortcuts_manager._remove_from_game_map(store, game_id)
+                    logger.info(f"[Uninstall] Removed {store}:{game_id} from games.map despite uninstall failure")
+                    return result
+                prefix_deleted = bool(result.get('prefix_deleted', False))
             
             else:
                 return {'success': False, 'error': f"Unsupported store for uninstall: {store}"}
 
-            # Delete prefix if requested
-            prefix_deleted = False
-            if delete_prefix:
+            # Delete prefix if requested (handled internally for Ubisoft)
+            if delete_prefix and store != 'ubisoft':
                 prefix_path = os.path.expanduser(f"~/.local/share/unifideck/prefixes/{game_id}")
                 if os.path.exists(prefix_path):
                     try:
@@ -5902,6 +5911,7 @@ class Plugin:
         try:
             # Load steam_app_id cache for ProtonDB lookups
             steam_appid_cache = load_steam_appid_cache()
+            ubisoft_installed_cache: Optional[Dict[str, Any]] = None
             
             shortcuts = await self.shortcuts_manager.read_shortcuts()
             games = []
@@ -5922,6 +5932,33 @@ class Plugin:
                 # Check installation status using games.map (authoritative source)
                 # This works for any install location and auto-cleans stale entries
                 is_installed = self.shortcuts_manager._is_in_game_map(store, game_id)
+
+                # Ubisoft installs can complete outside download queue updates.
+                # If games.map is stale/missing, fall back to direct prefix scan and
+                # immediately rehydrate games.map so Installed tab stays accurate.
+                if store == 'ubisoft' and not is_installed:
+                    if ubisoft_installed_cache is None:
+                        try:
+                            ubisoft_installed_cache = await self.ubisoft.get_installed()
+                        except Exception as e:
+                            logger.warning(f"[GamesList] Ubisoft installed scan failed: {e}")
+                            ubisoft_installed_cache = {}
+
+                    ubisoft_info = ubisoft_installed_cache.get(game_id, {}) if isinstance(ubisoft_installed_cache, dict) else {}
+                    install_path = ubisoft_info.get('install_path', '') if isinstance(ubisoft_info, dict) else ''
+                    if install_path and os.path.exists(install_path):
+                        is_installed = True
+                        try:
+                            executable = ubisoft_info.get('executable', '') if isinstance(ubisoft_info, dict) else ''
+                            work_dir = ubisoft_info.get('work_dir', '') if isinstance(ubisoft_info, dict) else ''
+                            await self.shortcuts_manager._update_game_map(
+                                'ubisoft',
+                                game_id,
+                                executable or '',
+                                work_dir or install_path,
+                            )
+                        except Exception as map_err:
+                            logger.warning(f"[GamesList] Failed to update games.map for Ubisoft {game_id}: {map_err}")
                 
                 # Get appId
                 app_id = shortcut.get('appid')

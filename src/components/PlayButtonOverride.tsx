@@ -335,6 +335,13 @@ const PlaySectionWrapperInner: FC<PlaySectionWrapperProps> = ({
         );
         const processedInfo = info?.error ? null : info;
         setGameInfo(processedInfo);
+        if (processedInfo?.is_installed) {
+          updateSingleGameStatus({
+            appId,
+            store: processedInfo.store,
+            isInstalled: true,
+          });
+        }
         if (
           processedInfo?.has_update !== undefined &&
           processedInfo?.has_update !== null

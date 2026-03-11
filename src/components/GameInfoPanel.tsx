@@ -181,7 +181,15 @@ const GameInfoPanelInner: React.FC<GameInfoPanelProps> = ({ appId }) => {
   useEffect(() => {
     call<[number], any>("get_game_info", appId)
       .then((info) => {
-        setGameInfo(info?.error ? null : info);
+        const processedInfo = info?.error ? null : info;
+        setGameInfo(processedInfo);
+        if (processedInfo?.is_installed) {
+          updateSingleGameStatus({
+            appId,
+            store: processedInfo.store,
+            isInstalled: true,
+          });
+        }
       })
       .catch(() => setGameInfo(null));
   }, [appId]);
@@ -518,6 +526,13 @@ const GameInfoPanelInner: React.FC<GameInfoPanelProps> = ({ appId }) => {
             })
           : t("toasts.uninstallCompleteMessage", { title: gameInfo.title }),
         duration: 10000,
+      });
+    } else {
+      toaster.toast({
+        title: t("errors.uninstallFailed"),
+        body: result?.error ? t(result.error) : t("errors.uninstallFailed"),
+        duration: 10000,
+        critical: true,
       });
     }
     setProcessing(false);

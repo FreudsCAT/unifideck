@@ -524,7 +524,53 @@ class UbisoftConnector(Store):
             logger.error(f"[Ubisoft] Failed to cancel install {game_id}: {e}")
             return {"success": False, "error": str(e)}
 
-    async def uninstall_game(self, game_id: str) -> Dict[str, Any]:
+    async def _delete_tree_with_retries(
+        self,
+        target_path: str,
+        label: str,
+        retries: int = 3,
+    ) -> bool:
+        """Delete a directory with retries and path safety guards."""
+        if not target_path:
+            logger.error(f"[Ubisoft] Refusing to delete empty path for {label}")
+            return False
+
+        resolved = os.path.realpath(target_path)
+        home_dir = os.path.realpath(os.path.expanduser("~"))
+        protected_paths = {
+            "/",
+            home_dir,
+            os.path.realpath(DATA_DIR),
+            os.path.realpath(PREFIXES_DIR),
+            os.path.realpath(DEFAULT_INSTALL_BASE),
+            os.path.realpath(SDCARD_INSTALL_BASE),
+        }
+        if resolved in protected_paths or len(resolved.strip("/")) < 8:
+            logger.error(
+                f"[Ubisoft] Refusing to delete unsafe path for {label}: {resolved}"
+            )
+            return False
+
+        if not os.path.isdir(resolved):
+            logger.info(f"[Ubisoft] Nothing to delete for {label}: {resolved}")
+            return True
+
+        for attempt in range(1, retries + 1):
+            try:
+                shutil.rmtree(resolved)
+                logger.info(f"[Ubisoft] Deleted {label}: {resolved}")
+                return True
+            except OSError as e:
+                logger.warning(
+                    f"[Ubisoft] Failed deleting {label} (attempt {attempt}/{retries}): {e}"
+                )
+                if attempt < retries:
+                    await asyncio.sleep(1.5)
+
+        logger.error(f"[Ubisoft] Failed to delete {label} after {retries} attempts: {resolved}")
+        return False
+
+    async def uninstall_game(self, game_id: str, delete_prefix: bool = False) -> Dict[str, Any]:
         """
         Uninstall a game.
 
@@ -532,24 +578,26 @@ class UbisoftConnector(Store):
 
         Args:
             game_id: The game's space_id.
+            delete_prefix: If True, also delete the game's entire Ubisoft prefix.
 
         Returns:
-            {"success": True} or {"success": False, "error": "..."}
+            {"success": True, "prefix_deleted": bool} or {"success": False, "error": "..."}
         """
         try:
-            logger.info(f"[Ubisoft] Uninstalling game {game_id}")
+            logger.info(f"[Ubisoft] Uninstalling game {game_id} (delete_prefix={delete_prefix})")
 
-            # Find the game's install directory
-            game_info = self._detect_installed_game(game_id, self.get_prefix_path(game_id))
+            prefix_path = self.get_prefix_path(game_id)
+            game_info = self._detect_installed_game(game_id, prefix_path)
             install_path = game_info.get("install_path") if game_info else None
 
             # Try protocol-based uninstall first
-            install_id = self.resolve_install_id(game_id)
-            prefix_path = self.get_prefix_path(game_id)
+            install_id = self.resolve_install_id(game_id) or self.resolve_launch_id(game_id)
             upc_path = self._find_upc_exe(prefix_path)
 
-            if install_id and upc_path:
+            protocol_attempted = False
+            if not delete_prefix and install_id and upc_path:
                 try:
+                    protocol_attempted = True
                     umu_run = self._find_umu_run()
                     python_bin = self._find_python()
 
@@ -566,50 +614,62 @@ class UbisoftConnector(Store):
                             stderr=asyncio.subprocess.PIPE,
                         )
                         try:
-                            await asyncio.wait_for(proc.wait(), timeout=120)
+                            await asyncio.wait_for(proc.wait(), timeout=90)
                         except asyncio.TimeoutError:
                             proc.kill()
-                            logger.warning("[Ubisoft] Protocol uninstall timed out")
+                            logger.warning("[Ubisoft] Protocol uninstall timed out, continuing with fallback deletion")
                 except Exception as e:
                     logger.warning(f"[Ubisoft] Protocol uninstall failed: {e}")
+            elif delete_prefix:
+                logger.info("[Ubisoft] delete_prefix=True: skipping uninstall URI and deleting files directly")
 
-            # Fallback: Direct deletion of game directory
+            # Refresh install info after uninstall attempt
+            post_uninstall_info = self._detect_installed_game(game_id, prefix_path)
+            if post_uninstall_info:
+                install_path = post_uninstall_info.get("install_path") or install_path
+
+            # Fallback: direct deletion when uninstall protocol did not remove files
             if install_path and os.path.isdir(install_path):
-                logger.info(f"[Ubisoft] Deleting game directory: {install_path}")
-                max_retries = 3
-                for attempt in range(max_retries):
-                    try:
-                        shutil.rmtree(install_path)
-                        logger.info(f"[Ubisoft] Game directory removed")
-                        break
-                    except OSError as e:
-                        if attempt < max_retries - 1:
-                            logger.warning(f"[Ubisoft] Retry {attempt + 1}/{max_retries}: {e}")
-                            await asyncio.sleep(2)
-                        else:
-                            # File-by-file fallback
-                            logger.warning("[Ubisoft] Trying file-by-file deletion")
-                            for root, dirs, files in os.walk(install_path, topdown=False):
-                                for name in files:
-                                    try:
-                                        os.remove(os.path.join(root, name))
-                                    except Exception:
-                                        pass
-                                for name in dirs:
-                                    try:
-                                        os.rmdir(os.path.join(root, name))
-                                    except Exception:
-                                        pass
-                            try:
-                                os.rmdir(install_path)
-                            except Exception:
-                                pass
+                path_inside_prefix = os.path.realpath(install_path).startswith(
+                    os.path.realpath(prefix_path) + os.sep
+                )
+                if not path_inside_prefix or not delete_prefix:
+                    logger.info(f"[Ubisoft] Fallback deleting game directory: {install_path}")
+                    deleted = await self._delete_tree_with_retries(
+                        install_path, "Ubisoft game install directory"
+                    )
+                    if not deleted:
+                        return {
+                            "success": False,
+                            "error": f"Failed to remove Ubisoft game directory: {install_path}",
+                        }
 
-            # Clean up registry keys from prefix
-            self._clean_install_registry(prefix_path, install_id or "")
+            prefix_deleted = False
+            if delete_prefix and os.path.isdir(prefix_path):
+                deleted_prefix = await self._delete_tree_with_retries(
+                    prefix_path, "Ubisoft game prefix"
+                )
+                if not deleted_prefix:
+                    return {
+                        "success": False,
+                        "error": f"Failed to remove Ubisoft prefix: {prefix_path}",
+                    }
+                prefix_deleted = True
 
-            logger.info(f"[Ubisoft] Game {game_id} uninstalled")
-            return {"success": True}
+            if not prefix_deleted:
+                # Clean up registry keys from remaining prefix
+                self._clean_install_registry(prefix_path, install_id or "")
+            else:
+                # Prefix removal invalidates cached launch/install IDs for this space_id
+                if game_id in self._id_map_cache:
+                    self._id_map_cache.pop(game_id, None)
+                    self._save_id_map()
+
+            logger.info(
+                f"[Ubisoft] Game {game_id} uninstalled "
+                f"(protocol_attempted={protocol_attempted}, prefix_deleted={prefix_deleted})"
+            )
+            return {"success": True, "prefix_deleted": prefix_deleted}
 
         except Exception as e:
             logger.exception(f"[Ubisoft] Uninstall error for {game_id}: {e}")
@@ -1586,6 +1646,13 @@ class UbisoftConnector(Store):
             current_api_ticket = self.api.get_ticket() or ""
             if token and token != current_api_ticket:
                 try:
+                    previous_token = ""
+                    if os.path.isfile(UPC_SESSION_FILE):
+                        with open(UPC_SESSION_FILE, "r") as f:
+                            previous_token = f.read().strip()
+                    if token == previous_token:
+                        return None
+
                     os.makedirs(DATA_DIR, exist_ok=True)
                     with open(UPC_SESSION_FILE, "w") as f:
                         f.write(token)
@@ -1625,26 +1692,55 @@ class UbisoftConnector(Store):
             stderr=asyncio.subprocess.DEVNULL,
         )
 
-        try:
-            await asyncio.wait_for(proc.wait(), timeout=600)  # 10 min
-        except asyncio.TimeoutError:
+        loop = asyncio.get_event_loop()
+        start = loop.time()
+        timeout_seconds = 600  # 10 min
+        captured_token: Optional[str] = None
+
+        while loop.time() - start < timeout_seconds:
+            if proc.returncode is not None:
+                break
+
+            # Close template UPC as soon as a new restore_session token is captured.
+            captured_token = self._capture_upc_session(prefix_path)
+            if captured_token:
+                logger.info("[Ubisoft] UPC session captured during auth; closing template UPC")
+                try:
+                    proc.terminate()
+                    await asyncio.wait_for(proc.wait(), timeout=10)
+                except Exception:
+                    try:
+                        proc.kill()
+                        await asyncio.wait_for(proc.wait(), timeout=5)
+                    except Exception:
+                        pass
+                break
+
+            await asyncio.sleep(2)
+        else:
+            logger.warning("[Ubisoft] Template UPC auth timed out")
             try:
                 proc.terminate()
                 await asyncio.wait_for(proc.wait(), timeout=10)
             except Exception:
-                proc.kill()
+                try:
+                    proc.kill()
+                    await asyncio.wait_for(proc.wait(), timeout=5)
+                except Exception:
+                    pass
 
-        # Capture token UPC wrote to template's settings.yml
-        token = self._capture_upc_session(prefix_path)
-        if token:
+        if not captured_token:
+            captured_token = self._capture_upc_session(prefix_path)
+
+        if captured_token:
             # Propagate to all existing game prefixes
-            self._propagate_upc_session_to_all_prefixes(token)
+            self._propagate_upc_session_to_all_prefixes(captured_token)
             return {"success": True, "message": "Ubisoft account connected successfully"}
-        else:
-            return {
-                "success": False,
-                "error": "Login not detected. Please log in and close Ubisoft Connect.",
-            }
+
+        return {
+            "success": False,
+            "error": "Login not detected. Please log in and close Ubisoft Connect.",
+        }
 
     # ========================================================================
     # Installed Game Detection
