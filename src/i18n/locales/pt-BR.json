@@ -371,5 +371,8 @@
     "toastMigrateBody": "Migrados {{shortcuts}} atalhos e {{artwork}} arquivos de arte",
     "toastClearTitle": "Tokens de autenticação limpos",
     "toastClearBody": "Os logins das lojas foram limpos. Agora você pode entrar com contas diferentes."
+  },
+  "microsoft": {
+    "notCompatible": "O formato deste jogo não é compatível com SteamOS"
   }
 }

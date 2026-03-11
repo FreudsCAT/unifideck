@@ -371,5 +371,8 @@
     "toastMigrateBody": "{{shortcuts}} Verknüpfungen und {{artwork}} Artwork-Dateien migriert",
     "toastClearTitle": "Authentifizierungstokens gelöscht",
     "toastClearBody": "Shop-Anmeldungen wurden gelöscht. Du kannst dich jetzt mit anderen Konten anmelden."
+  },
+  "microsoft": {
+    "notCompatible": "Das Format dieses Spiels ist nicht kompatibel mit SteamOS"
   }
 }

@@ -371,5 +371,8 @@
     "toastMigrateBody": "{{shortcuts}}개의 바로가기와 {{artwork}}개의 아트워크 파일이 마이그레이션되었습니다",
     "toastClearTitle": "인증 토큰 초기화됨",
     "toastClearBody": "스토어 로그인이 초기화되었습니다. 이제 다른 계정으로 로그인할 수 있습니다."
+  },
+  "microsoft": {
+    "notCompatible": "이 게임의 포맷은 SteamOS와 호환되지 않습니다"
   }
 }

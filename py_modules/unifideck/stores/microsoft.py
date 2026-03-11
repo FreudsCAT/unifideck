@@ -354,18 +354,23 @@ class MicrosoftConnector(Store):
             game_meta = await asyncio.get_event_loop().run_in_executor(
                 None, lambda: self._scan_pc_games(product_ids)
             )
+            win32_count = sum(1 for m in game_meta.values() if m.get("is_win32"))
             logger.info(
-                f"[MS] {len(game_meta)} Win32 games found "
-                f"(UWP-only titles filtered out)"
+                f"[MS] {len(game_meta)} products classified "
+                f"({win32_count} Win32 installable, {len(game_meta) - win32_count} UWP not compatible)"
             )
 
-            # Cache metadata for install_game to use later
-            self._game_metadata.update(game_meta)
+            # Cache Win32 metadata for install_game to use later
+            self._game_metadata.update(
+                {pid: m for pid, m in game_meta.items() if m.get("is_win32")}
+            )
 
             # Detect already-installed games
             installed = self.get_installed()
 
-            # Build Game objects — only Win32 titles are returned
+            # Build Game objects for ALL owned titles.
+            # UWP-only games get store_tags=["not_compatible"] so the frontend
+            # can show an informational notice instead of an Install button.
             id_to_item = {item["productId"]: item for item in purchased if item.get("productId")}
             games: List[Game] = []
             for pid, meta in game_meta.items():
@@ -380,7 +385,15 @@ class MicrosoftConnector(Store):
                 )
                 inst_info    = installed.get(pid)
                 is_installed = inst_info is not None
-                store_tags   = ["play_anywhere"] if meta.get("is_play_anywhere") else None
+
+                # Build store_tags list
+                tags: List[str] = []
+                if not meta.get("is_win32"):
+                    tags.append("not_compatible")
+                if meta.get("is_play_anywhere"):
+                    tags.append("play_anywhere")
+                store_tags = tags if tags else None
+
                 game = Game(
                     id=pid,
                     title=title,
@@ -610,18 +623,19 @@ class MicrosoftConnector(Store):
 
     def _scan_pc_games(self, product_ids: List[str]) -> Dict[str, dict]:
         """
-        Batch-scan products for Windows.Desktop compatibility AND package type.
+        Batch-scan products and classify them as Win32 or UWP.
 
-        Only Win32 (non-UWP) games are returned — those with a WuBundleId and no
-        PackageFamilyName in their FulfillmentData.  UWP/MSIX-only titles are
-        silently dropped because they cannot run on Linux.
+        All products are returned so the caller can decide what to show;
+        use ``meta["is_win32"]`` to distinguish downloadable games from
+        UWP-only titles that carry ``"not_compatible"`` in their tags.
 
         Returns:
             Dict mapping product_id → {
-                'is_win32':       bool,   # always True for entries in this dict
-                'wu_bundle_id':   str,    # Windows Update bundle ID for FE3 download
-                'wu_category_id': str,    # Windows Update category ID
-                'title':          str,    # product title if available from catalog
+                'is_win32':         bool,
+                'wu_bundle_id':     str,    # non-empty only for Win32
+                'wu_category_id':   str,
+                'title':            str,
+                'is_play_anywhere': bool,
             }
         """
         if not product_ids:
@@ -644,13 +658,11 @@ class MicrosoftConnector(Store):
                     if not pid:
                         continue
 
-                    is_win32, meta = self._classify_product(product)
-                    if is_win32:
-                        result[pid] = meta
+                    _is_win32, meta = self._classify_product(product)
+                    result[pid] = meta  # include Win32 AND UWP
 
             except Exception as e:
                 logger.warning(f"[MS] Product scan failed for batch {i // batch_size}: {e}")
-                # Conservative: skip rather than include unknown titles
 
         return result
 

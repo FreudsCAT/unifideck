@@ -788,52 +788,52 @@ const GameInfoPanelInner: React.FC<GameInfoPanelProps> = ({ appId }) => {
           </DialogButton>
         )}
 
-        {/* Install/Uninstall/Cancel Button */}
+        {/* Install/Uninstall/Cancel Button — only shown for compatible installed games */}
         {gameInfo &&
           !gameInfo.error &&
-          gameInfo.is_installed &&
-          !downloadState.isDownloading && (
-            <DialogButton
-              onClick={
-                processing
-                  ? undefined
-                  : downloadState.isDownloading
-                  ? showCancelConfirmation
-                  : gameInfo.is_installed
-                  ? showUninstallConfirmation
-                  : showInstallConfirmation
-              }
-              disabled={processing}
-              style={{
-                ...buttonStyle,
-                padding: "4px 12px",
-                fontSize: "12px",
-                display: "flex",
-                alignItems: "center",
-                gap: "6px",
-                opacity: processing ? 0.5 : 1,
-              }}
-              className={`unifideck-nav-button unifideck-install-button ${
-                downloadState.isDownloading
-                  ? "cancel-state"
-                  : gameInfo.is_installed
-                  ? "uninstall-state"
-                  : "install-state"
-              }`}
-            >
-              <span>
-                {processing
-                  ? "..."
-                  : downloadState.isDownloading
-                  ? `${t("gameInfoPanel.buttons.cancel")} (${
-                      downloadState.progress || 0
-                    }%)`
-                  : gameInfo.is_installed
-                  ? t("gameInfoPanel.buttons.uninstall")
-                  : t("gameInfoPanel.buttons.install")}
-              </span>
-            </DialogButton>
-          )}
+          !gameInfo.store_tags?.includes("not_compatible") &&
+          gameInfo.is_installed && !downloadState.isDownloading && (
+                <DialogButton
+                  onClick={
+                    processing
+                      ? undefined
+                      : downloadState.isDownloading
+                      ? showCancelConfirmation
+                      : gameInfo.is_installed
+                      ? showUninstallConfirmation
+                      : showInstallConfirmation
+                  }
+                  disabled={processing}
+                  style={{
+                    ...buttonStyle,
+                    padding: "4px 12px",
+                    fontSize: "12px",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "6px",
+                    opacity: processing ? 0.5 : 1,
+                  }}
+                  className={`unifideck-nav-button unifideck-install-button ${
+                    downloadState.isDownloading
+                      ? "cancel-state"
+                      : gameInfo.is_installed
+                      ? "uninstall-state"
+                      : "install-state"
+                  }`}
+                >
+                  <span>
+                    {processing
+                      ? "..."
+                      : downloadState.isDownloading
+                      ? `${t("gameInfoPanel.buttons.cancel")} (${
+                          downloadState.progress || 0
+                        }%)`
+                      : gameInfo.is_installed
+                      ? t("gameInfoPanel.buttons.uninstall")
+                      : t("gameInfoPanel.buttons.install")}
+                  </span>
+                </DialogButton>
+              )}
 
         {/* Genre Tags */}
         {metadata.genres && metadata.genres.length > 0 && (

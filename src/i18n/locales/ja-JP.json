@@ -371,5 +371,8 @@
     "toastMigrateBody": "{{shortcuts}} 件のショートカットと {{artwork}} 件のアートワークファイルを移行しました",
     "toastClearTitle": "認証トークンをクリアしました",
     "toastClearBody": "ストアのログインがクリアされました。別のアカウントでサインインできます。"
+  },
+  "microsoft": {
+    "notCompatible": "このゲームのフォーマットはSteamOSに対応していません"
   }
 }

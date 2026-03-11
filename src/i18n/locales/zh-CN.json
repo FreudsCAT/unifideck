@@ -376,5 +376,8 @@
     "toastMigrateBody": "已迁移 {{shortcuts}} 个快捷方式和 {{artwork}} 个封面文件",
     "toastClearTitle": "认证令牌已清除",
     "toastClearBody": "商店登录信息已清除。您现在可以使用不同的账户登录。"
+  },
+  "microsoft": {
+    "notCompatible": "该游戏的格式不兼容 SteamOS"
   }
 }

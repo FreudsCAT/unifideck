@@ -371,5 +371,8 @@
     "toastMigrateBody": "Migrati {{shortcuts}} collegamenti e {{artwork}} file di copertine",
     "toastClearTitle": "Token di autenticazione cancellati",
     "toastClearBody": "Gli accessi ai negozi sono stati cancellati. Ora puoi accedere con account diversi."
+  },
+  "microsoft": {
+    "notCompatible": "Il formato di questo gioco non è compatibile con SteamOS"
   }
 }

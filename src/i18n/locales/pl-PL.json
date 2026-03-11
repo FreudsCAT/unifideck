@@ -371,5 +371,8 @@
     "toastMigrateBody": "Zmigrowano {{shortcuts}} skrótów i {{artwork}} plików grafik",
     "toastClearTitle": "Tokeny uwierzytelniania wyczyszczone",
     "toastClearBody": "Logowania do sklepów zostały wyczyszczone. Możesz teraz zalogować się innymi kontami."
+  },
+  "microsoft": {
+    "notCompatible": "Format tej gry nie jest zgodny ze SteamOS"
   }
 }

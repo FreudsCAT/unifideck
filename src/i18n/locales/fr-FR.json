@@ -371,5 +371,8 @@
     "toastMigrateBody": "{{shortcuts}} raccourcis et {{artwork}} fichiers de visuels migrés",
     "toastClearTitle": "Jetons d'authentification effacés",
     "toastClearBody": "Les connexions aux boutiques ont été effacées. Vous pouvez maintenant vous connecter avec d'autres comptes."
+  },
+  "microsoft": {
+    "notCompatible": "Le format de ce jeu n'est pas compatible avec SteamOS"
   }
 }

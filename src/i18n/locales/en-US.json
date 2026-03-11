@@ -371,5 +371,8 @@
     "toastMigrateBody": "Migrated {{shortcuts}} shortcuts and {{artwork}} artwork files",
     "toastClearTitle": "Auth Tokens Cleared",
     "toastClearBody": "Store logins have been cleared. You can now sign in with different accounts."
+  },
+  "microsoft": {
+    "notCompatible": "This game format is not compatible with SteamOS"
   }
 }

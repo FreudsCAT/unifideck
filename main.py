@@ -54,6 +54,7 @@ from py_modules.unifideck.shortcuts.launch_options import extract_store_id, is_u
 # Import CDP modules for native PlaySection hiding
 from py_modules.unifideck.cdp.cdp_utils import create_cef_debugging_flag, ensure_dummy_network_interface
 from py_modules.unifideck.cdp.cdp_inject import get_cdp_client, shutdown_cdp_client
+from py_modules.unifideck.utils.game_tags import get_game_tags
 
 # Import Account Manager for multi-account support
 from py_modules.unifideck.accounts.account_manager import AccountManager
@@ -3961,6 +3962,8 @@ class Plugin:
                     if is_installed and hasattr(self, 'update_checker'):
                         has_update = self.update_checker.get_cached_update_status(store, game_id)
 
+                    store_tags = get_game_tags(store, game_id) or None
+
                     logger.info(f"[GameInfo] App {app_id}: {shortcut.get('AppName')} - Installed: {is_installed}, Size: {size_formatted}, Update: {has_update}")
 
                     return {
@@ -3971,7 +3974,8 @@ class Plugin:
                         'title': shortcut.get('AppName', ''),
                         'size_bytes': size_bytes,
                         'size_formatted': size_formatted,
-                        'app_id': app_id
+                        'app_id': app_id,
+                        'store_tags': store_tags,
                     }
 
             logger.warning(f"[GameInfo] App ID {app_id} not found in shortcuts")

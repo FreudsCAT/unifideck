@@ -374,5 +374,8 @@
     "toastMigrateBody": "{{shortcuts}} kısayol ve {{artwork}} görsel dosyası taşındı",
     "toastClearTitle": "Kimlik Doğrulama Jetonları Temizlendi",
     "toastClearBody": "Mağaza girişleri temizlendi. Artık farklı hesaplarla giriş yapabilirsiniz."
+  },
+  "microsoft": {
+    "notCompatible": "Bu oyunun formatı SteamOS ile uyumlu değil"
   }
 }

@@ -371,5 +371,8 @@
     "toastMigrateBody": "Se migraron {{shortcuts}} accesos directos y {{artwork}} archivos de artwork",
     "toastClearTitle": "Tokens de autenticación borrados",
     "toastClearBody": "Los inicios de sesión de tiendas han sido borrados. Ahora puedes iniciar sesión con cuentas diferentes."
+  },
+  "microsoft": {
+    "notCompatible": "El formato de este juego no es compatible con SteamOS"
   }
 }

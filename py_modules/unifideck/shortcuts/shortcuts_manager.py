@@ -23,6 +23,7 @@ from py_modules.unifideck.shortcuts.launch_options import (
     extract_store_id, is_unifideck_shortcut, get_full_id, get_store_prefix, preserve_user_params
 )
 from py_modules.unifideck.steam.steam_utils import get_logged_in_steam_user
+from py_modules.unifideck.utils.game_tags import save_game_tags
 
 # Use standard logging (decky.logger is only available in main.py)
 logger = logging.getLogger("unifideck")
@@ -1439,6 +1440,9 @@ class ShortcutsManager:
                     
                     existing_launch_options.add(target_launch_options)
                     reclaimed += 1
+                    # Persist store_tags (e.g. "not_compatible" for UWP MS games)
+                    if game.store_tags:
+                        save_game_tags(game.store, game.id, game.store_tags)
                     continue
 
                 # Generate AppID (using launcher_script for consistent ID generation)
@@ -1464,6 +1468,10 @@ class ShortcutsManager:
                 
                 # Register this shortcut for future reconciliation
                 register_shortcut(target_launch_options, app_id, game.title)
+
+                # Persist store_tags (e.g. "not_compatible" for UWP MS games)
+                if game.store_tags:
+                    save_game_tags(game.store, game.id, game.store_tags)
 
                 existing_launch_options.add(target_launch_options)
                 next_index += 1
@@ -1789,6 +1797,9 @@ class ShortcutsManager:
                     
                     existing_app_ids.add(registered_appid)
                     reclaimed += 1
+                    # Persist store_tags (e.g. "not_compatible" for UWP MS games)
+                    if game.store_tags:
+                        save_game_tags(game.store, game.id, game.store_tags)
                     continue
 
                 # Add new shortcut
@@ -1811,6 +1822,10 @@ class ShortcutsManager:
                 
                 # Register this shortcut for future reconciliation
                 register_shortcut(target_launch_options, app_id, game.title)
+
+                # Persist store_tags (e.g. "not_compatible" for UWP MS games)
+                if game.store_tags:
+                    save_game_tags(game.store, game.id, game.store_tags)
 
                 existing_app_ids.add(app_id)
                 next_index += 1
