@@ -306,6 +306,27 @@ class UbisoftConnector(Store):
                 if game_info:
                     installed[entry] = game_info
 
+                    # Auto-resolve game ID if missing from the map
+                    existing = self._id_map_cache.get(entry, {})
+                    has_id = existing.get("launch_id") or existing.get("ubisoftconnect_game_id")
+                    if not has_id:
+                        # Primary: extract from Wine registry (authoritative, local)
+                        reg_id = self._extract_game_id_from_registry(prefix_path)
+                        if not reg_id:
+                            # Fallback: online database by exact name match
+                            game_title = game_info.get("title", "")
+                            reg_id = await self._lookup_game_id_by_name(game_title)
+                        if reg_id:
+                            self._id_map_cache[entry] = {
+                                **existing,
+                                "install_id": reg_id,
+                                "launch_id": reg_id,
+                                "ubisoftconnect_game_id": reg_id,
+                                "name": game_info.get("title", ""),
+                            }
+                            self._save_id_map()
+                            logger.info(f"[Ubisoft] Auto-resolved game ID for {entry}: {reg_id}")
+
         except Exception as e:
             logger.warning(f"[Ubisoft] Error scanning installed games: {e}")
 
@@ -677,7 +698,23 @@ class UbisoftConnector(Store):
         if not os.path.exists(marker_path):
             return None
 
-        return self._detect_installed_game(game_id, prefix_path)
+        info = self._detect_installed_game(game_id, prefix_path)
+        if info:
+            # Ensure game ID is resolved in the map (registry-based, no network)
+            existing = self._id_map_cache.get(game_id, {})
+            if not (existing.get("launch_id") or existing.get("ubisoftconnect_game_id")):
+                reg_id = self._extract_game_id_from_registry(prefix_path)
+                if reg_id:
+                    self._id_map_cache[game_id] = {
+                        **existing,
+                        "install_id": reg_id,
+                        "launch_id": reg_id,
+                        "ubisoftconnect_game_id": reg_id,
+                        "name": info.get("title", ""),
+                    }
+                    self._save_id_map()
+                    logger.info(f"[Ubisoft] Auto-resolved game ID for {game_id}: {reg_id}")
+        return info
 
     async def write_install_marker(
         self, space_id: str, install_path: str, executable: str, game_title: str = ""
@@ -954,6 +991,93 @@ class UbisoftConnector(Store):
         # Normalize whitespace
         name = " ".join(name.split())
         return name
+
+    @staticmethod
+    def _extract_game_id_from_registry(prefix_path: str) -> Optional[str]:
+        """Extract the Ubisoft numeric game ID from the Wine prefix registry.
+
+        Reads system.reg for entries under
+        ``Software\\Wow6432Node\\Ubisoft\\Launcher\\Installs\\<GAME_ID>``
+        where ``InstallDir`` points into the Ubisoft Game Launcher games folder
+        (i.e. the *real* per-prefix install, not an external/stale entry).
+
+        This is the authoritative, fully-local source — no network or fuzzy
+        matching required.
+        """
+        for reg_name in ("system.reg", os.path.join("pfx", "system.reg")):
+            reg_path = os.path.join(prefix_path, reg_name)
+            if not os.path.isfile(reg_path):
+                continue
+
+            try:
+                with open(reg_path, "r", encoding="utf-8", errors="replace") as f:
+                    content = f.read()
+            except OSError:
+                continue
+
+            # Pattern: [Software\\Wow6432Node\\Ubisoft\\Launcher\\Installs\\<ID>]
+            # followed by "InstallDir"="<path>"
+            for m in re.finditer(
+                r'\[Software\\\\Wow6432Node\\\\Ubisoft\\\\Launcher\\\\Installs\\\\(\d+)\]'
+                r'[^\[]*?"InstallDir"\s*=\s*"([^"]*)"',
+                content,
+                re.DOTALL,
+            ):
+                game_id = m.group(1)
+                install_dir = m.group(2).replace("\\\\", "/")
+                # Prefer the entry whose InstallDir is inside the prefix
+                # (the per-prefix local install, not an external/stale one)
+                if "Ubisoft Game Launcher/games/" in install_dir or \
+                   "Ubisoft Game Launcher\\games\\" in install_dir:
+                    logger.info(
+                        f"[Ubisoft] Extracted game ID {game_id} from registry "
+                        f"(InstallDir={install_dir[:60]})"
+                    )
+                    return game_id
+
+            # Fallback: also check user.reg for HKCU Installs entries
+            user_reg = os.path.join(prefix_path, reg_name.replace("system.reg", "user.reg"))
+            if os.path.isfile(user_reg):
+                try:
+                    with open(user_reg, "r", encoding="utf-8", errors="replace") as f:
+                        content = f.read()
+                except OSError:
+                    continue
+
+                for m in re.finditer(
+                    r'\[Software\\\\Ubisoft\\\\Launcher\\\\Installs\\\\(\d+)\]',
+                    content,
+                ):
+                    game_id = m.group(1)
+                    logger.info(f"[Ubisoft] Extracted game ID {game_id} from user.reg")
+                    return game_id
+
+        return None
+
+    async def _lookup_game_id_by_name(self, game_name: str) -> Optional[str]:
+        """Fallback: look up a Ubisoft game ID by name from the online database.
+
+        Only used when registry extraction fails (e.g. prefix not yet created).
+        """
+        if not game_name:
+            return None
+
+        try:
+            db_entries = await self._fetch_game_id_database()
+        except Exception as e:
+            logger.debug(f"[Ubisoft] Failed to fetch game ID database: {e}")
+            return None
+        if not db_entries:
+            return None
+
+        normalized_query = self._normalize_for_matching(game_name)
+
+        for install_id, db_name in db_entries:
+            if self._normalize_for_matching(db_name) == normalized_query:
+                logger.info(f"[Ubisoft] DB match for '{game_name}': ID {install_id}")
+                return install_id
+
+        return None
 
     async def _resolve_install_ids_from_database(
         self, games: List[Dict[str, str]]

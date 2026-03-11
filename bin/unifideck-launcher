@@ -616,7 +616,7 @@ EXTRA_ARGS=()
 for arg in "$@"; do
     case "$arg" in
         # Store:id pattern - this is the game key (checked first — no = in it)
-        epic:*|gog:*|amazon:*)
+        epic:*|gog:*|amazon:*|ubisoft:*)
             KEY="$arg"
             ;;
         # Other arguments — check if it looks like a VAR=value env var
@@ -766,6 +766,10 @@ fi
 
 log "=== Launching: $KEY ==="
 
+# Parse store and game ID from key once (used by map and launch paths)
+STORE="${KEY%%:*}"
+GAME_ID="${KEY#*:}"
+
 # 2. Look up in map file (with recovery for race conditions)
 if [ ! -f "$MAP_FILE" ]; then
     log "WARNING: Map file not found at $MAP_FILE, waiting for backend to create it..."
@@ -788,19 +792,30 @@ fi
 GAME_ENTRY=$(grep "^$KEY|" "$MAP_FILE" | head -n 1)
 
 if [ -z "$GAME_ENTRY" ]; then
-    log "ERROR: Game not found in map for key: $KEY"
-    # Show user-friendly error using zenity if available
-    if command -v zenity &>/dev/null; then
-        zenity --error --title="Unifideck" --text="Game location not mapped.\n\nPlease run Force Sync from the Unifideck plugin and try again." --width=350 2>/dev/null &
+    if [ "$STORE" = "ubisoft" ]; then
+        # Ubisoft native launches can proceed via launcher URI even if games.map
+        # is missing/stale. Install status still uses games.map when available.
+        log "[Ubisoft] No games.map entry for $KEY, proceeding with URI launch fallback"
+    else
+        log "ERROR: Game not found in map for key: $KEY"
+        # Show user-friendly error using zenity if available
+        if command -v zenity &>/dev/null; then
+            zenity --error --title="Unifideck" --text="Game location not mapped.\n\nPlease run Force Sync from the Unifideck plugin and try again." --width=350 2>/dev/null &
+        fi
+        exit 1
     fi
-    exit 1
 fi
 
 # 3. Parse entry
 # Format: key|exe|workdir
-IFS='|' read -r _ EXE_PATH WORK_DIR <<< "$GAME_ENTRY"
+if [ -n "$GAME_ENTRY" ]; then
+    IFS='|' read -r _ EXE_PATH WORK_DIR <<< "$GAME_ENTRY"
+else
+    EXE_PATH=""
+    WORK_DIR=""
+fi
 
-if [ -z "$EXE_PATH" ]; then
+if [ -z "$EXE_PATH" ] && [ "$STORE" != "ubisoft" ]; then
     log "ERROR: No executable path in map entry"
     exit 1
 fi
@@ -809,7 +824,7 @@ log "Executable: $EXE_PATH"
 log "Work Dir: $WORK_DIR"
 
 # 4. Check if executable exists
-if [ ! -f "$EXE_PATH" ]; then
+if [ "$STORE" != "ubisoft" ] && [ ! -f "$EXE_PATH" ]; then
     log "ERROR: Executable not found: $EXE_PATH"
     if command -v zenity &>/dev/null; then
         zenity --error --title="Unifideck" --text="Game executable not found.\n\nThe game may have been uninstalled. Please reinstall." --width=350 2>/dev/null &
@@ -818,14 +833,11 @@ if [ ! -f "$EXE_PATH" ]; then
 fi
 
 # 5. Check if this is a Windows game (.exe, .cmd, .bat)
-if [[ "$EXE_PATH" == *.exe ]] || [[ "$EXE_PATH" == *.EXE ]] || \
+if [ "$STORE" = "ubisoft" ] || \
+   [[ "$EXE_PATH" == *.exe ]] || [[ "$EXE_PATH" == *.EXE ]] || \
    [[ "$EXE_PATH" == *.cmd ]] || [[ "$EXE_PATH" == *.CMD ]] || \
    [[ "$EXE_PATH" == *.bat ]] || [[ "$EXE_PATH" == *.BAT ]]; then
     log "Windows game detected, using umu-launcher with Proton"
-    
-    # Parse store and game ID from key
-    STORE="${KEY%%:*}"      # 'epic', 'gog', or 'amazon'
-    GAME_ID="${KEY#*:}"     # Game ID after colon
     
     # Map store names to umu store codes
     case "$STORE" in
@@ -837,8 +849,13 @@ if [[ "$EXE_PATH" == *.exe ]] || [[ "$EXE_PATH" == *.EXE ]] || \
     esac
     
     # ALWAYS use Unifideck's own prefix directory (complete isolation from Heroic)
-    # This ensures we don't accidentally modify or depend on Heroic's data
-    PREFIX_PATH="$PREFIXES_DIR/$GAME_ID"
+    # This ensures we don't accidentally modify or depend on Heroic's data.
+    # Ubisoft uses a dedicated subfolder to keep Connect-specific state isolated.
+    if [ "$STORE" = "ubisoft" ]; then
+        PREFIX_PATH="$HOME/.local/share/unifideck/prefixes/ubisoft/$GAME_ID"
+    else
+        PREFIX_PATH="$PREFIXES_DIR/$GAME_ID"
+    fi
     # Normalize accidental /pfx suffixes to keep a stable compat data root
     while [[ "$PREFIX_PATH" == */pfx ]]; do
         PREFIX_PATH="${PREFIX_PATH%/pfx}"
@@ -1658,31 +1675,51 @@ except Exception as e:
         exit $GAME_EXIT_CODE
     elif [ "$STORE" == "ubisoft" ]; then
         # ==================================================================
-        # UBISOFT NATIVE STORE LAUNCH (separate from Epic SSO path above)
-        # Uses per-game prefix with UbisoftConnect.exe and uplay://launch protocol
-        # Prefers ubisoftConnectGameId from local cache (more reliable for native games)
-        # Reference: docs/ubisoft-store-spec.md §7 & §12
+        # UBISOFT NATIVE STORE LAUNCH
+        # Uses per-game prefix with UbisoftConnect.exe and uplay://launch protocol.
+        # Game ID is extracted from the Wine registry (authoritative, local).
         # ==================================================================
         log "Launching Ubisoft native store game..."
 
-        # Use the per-game Ubisoft prefix instead of standard Unifideck prefix
         GAME_PREFIX="$HOME/.local/share/unifideck/prefixes/ubisoft/$GAME_ID"
 
-        # Resolve launch_id from ID map, preferring ubisoftConnectGameId if available
-        LAUNCH_ID=$(python3 -c "
-import json
-try:
-    with open('$HOME/.local/share/unifideck/ubisoft_id_map.json') as f:
-        m = json.load(f)
-    entry = m.get('$GAME_ID', {})
-    # Prefer ubisoftConnectGameId (more reliable for deeplinks)
-    if 'ubisoftconnect_game_id' in entry:
-        print(entry.get('ubisoftconnect_game_id', ''))
-    else:
-        print(entry.get('launch_id', ''))
-except Exception:
-    print('')
-" 2>/dev/null || echo "")
+        # ---- Resolve launch_id: registry → ID map → error ----
+        # Primary: extract directly from Wine registry (no Python, instant)
+        LAUNCH_ID=""
+        for _reg in "$GAME_PREFIX/system.reg" "$GAME_PREFIX/pfx/system.reg"; do
+            [ -f "$_reg" ] || continue
+            # Match: [Software\\...\\Installs\\<ID>]
+            # Prefer the ID whose InstallDir is inside Ubisoft Game Launcher/games/
+            LAUNCH_ID=$(grep -oP '(?<=Installs\\\\)\d+(?=\])' "$_reg" | while read _cid; do
+                if grep -F -A3 "Installs\\\\${_cid}]" "$_reg" | grep -q "Ubisoft Game Launcher"; then
+                    echo "$_cid"
+                    break
+                fi
+            done)
+            [ -n "$LAUNCH_ID" ] && break
+            # If no prefix-local ID found, take the first one from this file
+            [ -z "$LAUNCH_ID" ] && \
+            LAUNCH_ID=$(grep -oP '(?<=Installs\\\\)\d+(?=\])' "$_reg" | head -1)
+            [ -n "$LAUNCH_ID" ] && break
+        done
+        # Fallback: check user.reg
+        if [ -z "$LAUNCH_ID" ]; then
+            for _reg in "$GAME_PREFIX/user.reg" "$GAME_PREFIX/pfx/user.reg"; do
+                [ -f "$_reg" ] || continue
+                LAUNCH_ID=$(grep -oP '(?<=Installs\\\\)\d+(?=\])' "$_reg" | head -1)
+                [ -n "$LAUNCH_ID" ] && break
+            done
+        fi
+        # Second fallback: ID map JSON (fast grep, no Python)
+        if [ -z "$LAUNCH_ID" ]; then
+            _MAP="$HOME/.local/share/unifideck/ubisoft_id_map.json"
+            if [ -f "$_MAP" ]; then
+                # Extract ubisoftconnect_game_id or launch_id for this space_id
+                LAUNCH_ID=$(grep -A5 "\"$GAME_ID\"" "$_MAP" | grep -oP '"ubisoftconnect_game_id"\s*:\s*"\K[^"]+' | head -1)
+                [ -z "$LAUNCH_ID" ] && \
+                LAUNCH_ID=$(grep -A5 "\"$GAME_ID\"" "$_MAP" | grep -oP '"launch_id"\s*:\s*"\K[^"]+' | head -1)
+            fi
+        fi
 
         if [ -z "$LAUNCH_ID" ]; then
             log "ERROR: Could not resolve launch_id for space_id=$GAME_ID"
@@ -1693,76 +1730,57 @@ except Exception:
         fi
         log "[Ubisoft] Resolved launch_id: $LAUNCH_ID"
 
-        # Verify prefix + UbisoftConnect.exe (the registered uplay:// protocol handler)
-        CONNECT_EXE="$GAME_PREFIX/drive_c/Program Files (x86)/Ubisoft/Ubisoft Game Launcher/UbisoftConnect.exe"
-        if [ ! -f "$CONNECT_EXE" ]; then
-            # Try pfx/ subdirectory
-            CONNECT_EXE="$GAME_PREFIX/pfx/drive_c/Program Files (x86)/Ubisoft/Ubisoft Game Launcher/UbisoftConnect.exe"
-        fi
-        # Fallback to upc.exe if UbisoftConnect.exe not found
-        UPC_EXE="$GAME_PREFIX/drive_c/Program Files (x86)/Ubisoft/Ubisoft Game Launcher/upc.exe"
-        if [ ! -f "$UPC_EXE" ]; then
-            UPC_EXE="$GAME_PREFIX/pfx/drive_c/Program Files (x86)/Ubisoft/Ubisoft Game Launcher/upc.exe"
-        fi
-        
-        if [ -f "$CONNECT_EXE" ]; then
-            LAUNCHER_EXE="$CONNECT_EXE"
-            log "[Ubisoft] Using UbisoftConnect.exe: $LAUNCHER_EXE"
-        elif [ -f "$UPC_EXE" ]; then
-            LAUNCHER_EXE="$UPC_EXE"
-            log "[Ubisoft] Using upc.exe: $LAUNCHER_EXE"
-        else
-            log "[Ubisoft] Neither executable found, running bootstrap..."
-            SETUP_SCRIPT="$PLUGIN_DIR/bin/ubisoft_setup.py"
-            if [ -f "$SETUP_SCRIPT" ]; then
-                python3 "$SETUP_SCRIPT" "$GAME_ID" "$GAME_PREFIX" >> "$LOG_FILE" 2>&1 || true
-            fi
-            # Re-check after bootstrap
-            CONNECT_EXE="$GAME_PREFIX/drive_c/Program Files (x86)/Ubisoft/Ubisoft Game Launcher/UbisoftConnect.exe"
-            if [ ! -f "$CONNECT_EXE" ]; then
-                CONNECT_EXE="$GAME_PREFIX/pfx/drive_c/Program Files (x86)/Ubisoft/Ubisoft Game Launcher/UbisoftConnect.exe"
-            fi
-            UPC_EXE="$GAME_PREFIX/drive_c/Program Files (x86)/Ubisoft/Ubisoft Game Launcher/upc.exe"
-            if [ ! -f "$UPC_EXE" ]; then
-                UPC_EXE="$GAME_PREFIX/pfx/drive_c/Program Files (x86)/Ubisoft/Ubisoft Game Launcher/upc.exe"
-            fi
-            
-            if [ -f "$CONNECT_EXE" ]; then
-                LAUNCHER_EXE="$CONNECT_EXE"
-            elif [ -f "$UPC_EXE" ]; then
-                LAUNCHER_EXE="$UPC_EXE"
-            else
-                log "ERROR: Neither UbisoftConnect.exe nor upc.exe found after bootstrap"
-                exit 1
-            fi
-        fi
-
-        # Set language in this game's prefix
-        UBISOFT_LANG_SCRIPT="$PLUGIN_DIR/bin/ubisoft_set_language.py"
-        if [ -f "$UBISOFT_LANG_SCRIPT" ]; then
-            log "[Language] Setting locale for Ubisoft game..."
-            python3 "$UBISOFT_LANG_SCRIPT" "$GAME_PREFIX" "$GAME_ID" >> "$LOG_FILE" 2>&1 || true
-        fi
-
-        # Inject session token before launch
-        INJECT_SCRIPT="$PLUGIN_DIR/bin/ubisoft_inject_session.py"
-        if [ -f "$INJECT_SCRIPT" ]; then
-            log "[Ubisoft] Injecting session token..."
-            python3 "$INJECT_SCRIPT" "$GAME_PREFIX" >> "$LOG_FILE" 2>&1 || true
-        fi
-
-        # Python + umu-run setup
-        PYTHON_BIN=""
-        for py in /usr/bin/python3.13 /usr/bin/python3.12 /usr/bin/python3.11 /usr/bin/python3.10 /usr/bin/python3; do
-            if [ -x "$py" ]; then
-                PYTHON_BIN="$py"
+        # ---- Find launcher executable ----
+        LAUNCHER_EXE=""
+        for _base in "$GAME_PREFIX" "$GAME_PREFIX/pfx"; do
+            _ubi="$_base/drive_c/Program Files (x86)/Ubisoft/Ubisoft Game Launcher"
+            if [ -f "$_ubi/UbisoftConnect.exe" ]; then
+                LAUNCHER_EXE="$_ubi/UbisoftConnect.exe"
+                break
+            elif [ -f "$_ubi/upc.exe" ]; then
+                LAUNCHER_EXE="$_ubi/upc.exe"
                 break
             fi
         done
-        if [ -z "$PYTHON_BIN" ]; then
-            PYTHON_BIN="python3"
+        if [ -z "$LAUNCHER_EXE" ]; then
+            log "[Ubisoft] Launcher exe not found, running bootstrap..."
+            SETUP_SCRIPT="$PLUGIN_DIR/bin/ubisoft_setup.py"
+            if [ -f "$SETUP_SCRIPT" ]; then
+                "$PYTHON_BIN" "$SETUP_SCRIPT" "$GAME_ID" "$GAME_PREFIX" >> "$LOG_FILE" 2>&1 || true
+            fi
+            for _base in "$GAME_PREFIX" "$GAME_PREFIX/pfx"; do
+                _ubi="$_base/drive_c/Program Files (x86)/Ubisoft/Ubisoft Game Launcher"
+                if [ -f "$_ubi/UbisoftConnect.exe" ]; then
+                    LAUNCHER_EXE="$_ubi/UbisoftConnect.exe"; break
+                elif [ -f "$_ubi/upc.exe" ]; then
+                    LAUNCHER_EXE="$_ubi/upc.exe"; break
+                fi
+            done
+            if [ -z "$LAUNCHER_EXE" ]; then
+                log "ERROR: UbisoftConnect.exe / upc.exe not found after bootstrap"
+                exit 1
+            fi
         fi
+        log "[Ubisoft] Using: $LAUNCHER_EXE"
 
+        # ---- Pre-launch helpers (language + session token) in parallel ----
+        UBISOFT_LANG_SCRIPT="$PLUGIN_DIR/bin/ubisoft_set_language.py"
+        INJECT_SCRIPT="$PLUGIN_DIR/bin/ubisoft_inject_session.py"
+        _lang_pid=""
+        _inject_pid=""
+        if [ -f "$UBISOFT_LANG_SCRIPT" ]; then
+            "$PYTHON_BIN" "$UBISOFT_LANG_SCRIPT" "$GAME_PREFIX" "$GAME_ID" >> "$LOG_FILE" 2>&1 &
+            _lang_pid=$!
+        fi
+        if [ -f "$INJECT_SCRIPT" ]; then
+            "$PYTHON_BIN" "$INJECT_SCRIPT" "$GAME_PREFIX" >> "$LOG_FILE" 2>&1 &
+            _inject_pid=$!
+        fi
+        # Wait for both (they run in parallel)
+        [ -n "$_lang_pid" ] && wait "$_lang_pid" 2>/dev/null
+        [ -n "$_inject_pid" ] && wait "$_inject_pid" 2>/dev/null
+
+        # ---- UMU wrapper (reuse already-resolved PYTHON_BIN + UMU_RUN) ----
         if [ -f "$UMU_RUN" ]; then
             UMU_WRAPPER="$UMU_RUN"
         elif command -v umu-run &>/dev/null; then
@@ -1772,7 +1790,7 @@ except Exception:
             exit 1
         fi
 
-        # Override umu environment for Ubisoft's per-game prefix
+        # ---- Environment for Ubisoft per-game prefix ----
         export WINEPREFIX="$GAME_PREFIX"
         export STEAM_COMPAT_DATA_PATH="$GAME_PREFIX"
         export GAMEID="${GAMEID:-umu-ubisoft-$GAME_ID}"
@@ -1781,29 +1799,21 @@ except Exception:
         export PROTON_ENABLE_NVAPI=1
         export DXVK_NVAPI_ALLOW_OTHER_DRIVERS=1
 
-        # Get game install path for STEAM_COMPAT_INSTALL_PATH
-        GAME_INSTALL_PATH=$(python3 -c "
-import json, os
-try:
-    base = os.path.expanduser('~/Games/Ubisoft')
-    with open('$HOME/.local/share/unifideck/ubisoft_id_map.json') as f:
-        m = json.load(f)
-    name = m.get('$GAME_ID', {}).get('name', '$GAME_ID')
-    print(os.path.join(base, name))
-except Exception:
-    print(os.path.join(os.path.expanduser('~/Games/Ubisoft'), '$GAME_ID'))
-" 2>/dev/null || echo "$HOME/Games/Ubisoft/$GAME_ID")
-        export STEAM_COMPAT_INSTALL_PATH="$GAME_INSTALL_PATH"
+        # STEAM_COMPAT_INSTALL_PATH — use work dir if available, else ~/Games/Ubisoft
+        if [ -n "$WORK_DIR" ] && [ -d "$WORK_DIR" ]; then
+            export STEAM_COMPAT_INSTALL_PATH="$WORK_DIR"
+        else
+            export STEAM_COMPAT_INSTALL_PATH="$HOME/Games/Ubisoft/$GAME_ID"
+        fi
 
         log "WINEPREFIX: $WINEPREFIX"
         log "GAMEID: $GAMEID"
         log "STORE: $STORE"
         log "STEAM_COMPAT_INSTALL_PATH: $STEAM_COMPAT_INSTALL_PATH"
 
-        # Notify user
         notify_stage "toasts.launcher.launchingGame" "toasts.launcher.startingUbisoftGame" "low"
 
-        # Launch via launcher executable with uplay:// protocol
+        # ---- Launch ----
         CMD_STR="$PYTHON_BIN $UMU_WRAPPER \"$LAUNCHER_EXE\" \"uplay://launch/$LAUNCH_ID/0\""
         log "Executing: $CMD_STR"
 
@@ -1812,11 +1822,11 @@ except Exception:
 
         wait_for_game_exit
 
-        # Capture any refreshed session token from prefix
+        # Capture refreshed session token
         CAPTURE_SCRIPT="$PLUGIN_DIR/bin/ubisoft_capture_session.py"
         if [ -f "$CAPTURE_SCRIPT" ]; then
             log "[Ubisoft] Capturing session token..."
-            python3 "$CAPTURE_SCRIPT" "$GAME_PREFIX" >> "$LOG_FILE" 2>&1 || true
+            "$PYTHON_BIN" "$CAPTURE_SCRIPT" "$GAME_PREFIX" >> "$LOG_FILE" 2>&1 || true
         fi
 
         log "Ubisoft game exited with code: $GAME_EXIT_CODE"

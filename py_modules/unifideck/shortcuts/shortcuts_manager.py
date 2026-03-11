@@ -298,7 +298,12 @@ class ShortcutsManager:
         if len(parts) >= 3:
             exe_path = parts[1]
             work_dir = parts[2]
-            path_to_check = exe_path if exe_path else work_dir
+            # Ubisoft launches via uplay:// URI, not direct game exe. Prefer work_dir
+            # so installed status does not flap if executable filenames change.
+            if store == "ubisoft":
+                path_to_check = work_dir if work_dir else exe_path
+            else:
+                path_to_check = exe_path if exe_path else work_dir
             if path_to_check and os.path.exists(path_to_check):
                 return True
             else:
