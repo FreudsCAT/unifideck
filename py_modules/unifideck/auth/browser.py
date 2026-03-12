@@ -331,8 +331,9 @@ class CDPOAuthMonitor:
 
                 logger.info(f"[CDP] Closing MS page: {url[:80]}")
 
-                # Step 1: navigate to about:blank — clears visible content and
-                # often causes Steam CEF to dismiss the popup window on its own.
+                # Step 1: call window.close() via Runtime.evaluate.
+                # This only works if the window was opened via window.open() —
+                # which is exactly how Steam CEF opens OAuth popups.
                 if ws_url:
                     try:
                         import websockets
@@ -341,15 +342,15 @@ class CDPOAuthMonitor:
                         ) as ws:
                             await ws.send(json.dumps({
                                 "id": 1,
-                                "method": "Page.navigate",
-                                "params": {"url": "about:blank"},
+                                "method": "Runtime.evaluate",
+                                "params": {"expression": "window.close()"},
                             }))
                             await asyncio.wait_for(ws.recv(), timeout=3)
-                            logger.debug(f"[CDP] Navigated to about:blank: {url[:60]}")
+                            logger.debug(f"[CDP] window.close() sent: {url[:60]}")
                     except Exception as e:
-                        logger.debug(f"[CDP] Page.navigate about:blank failed: {e}")
+                        logger.debug(f"[CDP] window.close() failed: {e}")
 
-                await asyncio.sleep(0.1)
+                await asyncio.sleep(0.2)
 
                 # Step 2: /json/close/{id}
                 closed_ok = False
