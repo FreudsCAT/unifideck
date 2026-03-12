@@ -239,7 +239,7 @@ class MicrosoftConnector(Store):
             f"&redirect_uri={urllib.parse.quote(MS_REDIRECT)}"
             f"&response_type=code"
             f"&scope={urllib.parse.quote(MS_SCOPE)}"
-            f"&display=touch"   # Mobile-friendly layout, easier in the Deck browser
+            f"&prompt=login"   # Force full credential entry; prevents silent SSO redirect
         )
 
         # Background CDP monitor auto-completes auth when the browser redirects
@@ -1140,6 +1140,33 @@ class MicrosoftConnector(Store):
         try:
             from ..auth.browser import CDPOAuthMonitor
             monitor = CDPOAuthMonitor()
+            # ── Fast path: check if oauth20_desktop.srf is already open ──────
+            # This handles the case where Microsoft's SSO session auto-completes
+            # the redirect before our monitor has a chance to attach — the popup
+            # window shows the redirect page immediately and the code is already
+            # present in the URL visible in /json.
+            try:
+                import urllib.request, json as _json
+                with urllib.request.urlopen(monitor.cef_url, timeout=2) as r:
+                    pages = _json.loads(r.read().decode())
+                for page in pages:
+                    url = page.get('url', '')
+                    if 'oauth20_desktop.srf' in url and 'code=' in url:
+                        from urllib.parse import urlparse, parse_qs
+                        params = parse_qs(urlparse(url).query)
+                        code = params.get('code', [None])[0]
+                        if code:
+                            logger.info("[MS] Fast-path: found oauth20_desktop.srf already open, extracting code")
+                            monitor.monitored_urls.add(url)  # prevent re-processing
+                            result = await self.complete_auth(code)
+                            if result["success"]:
+                                logger.info("[MS] ✓ Authentication completed via fast-path")
+                                return
+                            logger.warning(f"[MS] Fast-path code rejected ({result.get('error')}), falling through to monitor")
+            except Exception as e:
+                logger.debug(f"[MS] Fast-path check error (non-fatal): {e}")
+
+            # ── Normal path: run the full CDP monitor ─────────────────────────
             code, store = await monitor.monitor_for_oauth_code(expected_store="microsoft", timeout=300)
 
             if code and store == "microsoft":
