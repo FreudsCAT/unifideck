@@ -1213,16 +1213,20 @@ class MicrosoftConnector(Store):
 
     async def _intercept_oauth_code_via_network(self, timeout: float = 300) -> Optional[str]:
         """
-        Capture the OAuth code by maintaining ONE active Network.requestWillBeSent
-        listener on whichever Microsoft login page is currently open in CEF.
+        Capture the OAuth code via Network.requestWillBeSent on the MS login popup.
 
-        Why one connection instead of many:
-          - Opening 15+ simultaneous WebSocket connections to CEF throttles it;
-            Network.enable responses time out silently and listeners never fire.
-          - One connection at a time is reliable.  When the page navigates (the
-            WebSocket closes), we immediately scan /json for the next MS page and
-            reattach.  This covers the full login flow regardless of how many
-            intermediate pages Microsoft uses.
+        Key problem solved here: when the login page navigates (email → password
+        → 2FA → ...), CEF creates a NEW /json target with a new webSocketDebuggerUrl
+        but keeps the OLD WebSocket connection open indefinitely.  Our listener must
+        detect when a newer MS target has appeared and switch to it, otherwise it
+        stays attached to a dead target for the full timeout.
+
+        Strategy:
+          - Attach to the current MS login page
+          - Every second, check /json for a NEWER MS target (higher timestamp / new
+            ws_url not yet seen)
+          - If found: break the inner loop, close current WS, reattach to new target
+          - If the WS closes on its own: also rescan immediately
         """
         import time
         try:
@@ -1237,43 +1241,52 @@ class MicrosoftConnector(Store):
             "account.microsoft.com",
         )
 
-        start    = time.time()
-        deadline = start + timeout
-        seen_ws  = set()
+        deadline = time.time() + timeout
+        seen_ws: set = set()
+        current_ws_url = None
 
-        def find_active_login_page():
+        def scan_pages():
+            """Return list of (url, ws_url) for unseen MS login pages."""
             try:
-                with urllib.request.urlopen("http://127.0.0.1:8080/json", timeout=2) as r:
+                with urllib.request.urlopen(
+                    "http://127.0.0.1:8080/json", timeout=2
+                ) as r:
                     pages = json.loads(r.read().decode())
-                candidates = []
+                result = []
                 for page in pages:
                     url    = page.get("url", "")
                     ws_url = page.get("webSocketDebuggerUrl", "")
                     if not ws_url or ws_url in seen_ws:
                         continue
                     if "removed=true" in url:
+                        seen_ws.add(ws_url)   # mark seen, skip
                         continue
                     if any(p in url for p in MS_LOGIN_PATTERNS):
-                        candidates.append((url, ws_url))
-                if candidates:
-                    return candidates[-1][1], candidates[-1][0]
+                        result.append((url, ws_url))
+                return result
             except Exception as e:
-                logger.debug(f"[MS-net] /json scan error: {e}")
-            return None, None
+                logger.debug(f"[MS-net] scan error: {e}")
+                return []
 
-        logger.info("[MS-net] Starting single-target Network interception")
+        logger.info("[MS-net] Starting Network interception with live target tracking")
+
+        # Wait for first MS page to appear
+        while time.time() < deadline:
+            pages = scan_pages()
+            if pages:
+                break
+            await asyncio.sleep(0.3)
 
         while time.time() < deadline:
-            ws_url, page_url = None, None
-            while not ws_url and time.time() < deadline:
-                ws_url, page_url = find_active_login_page()
-                if not ws_url:
-                    await asyncio.sleep(0.3)
+            pages = scan_pages()
+            if not pages:
+                await asyncio.sleep(0.3)
+                continue
 
-            if not ws_url:
-                break
-
+            # Take the latest unseen page
+            page_url, ws_url = pages[-1]
             seen_ws.add(ws_url)
+            current_ws_url = ws_url
             remaining = deadline - time.time()
             logger.info(f"[MS-net] Attaching to: {page_url[:80]} ({remaining:.0f}s left)")
 
@@ -1292,12 +1305,24 @@ class MicrosoftConnector(Store):
 
                     await send_cmd("Network.enable", {})
                     await asyncio.wait_for(ws.recv(), timeout=10)
-                    logger.info("[MS-net] Network.enable OK — listening for redirect")
+                    logger.info("[MS-net] Network.enable OK")
+
+                    last_scan = time.time()
 
                     while time.time() < deadline:
                         try:
                             raw = await asyncio.wait_for(ws.recv(), timeout=1.0)
                         except asyncio.TimeoutError:
+                            # Every second: check if a newer target appeared
+                            if time.time() - last_scan >= 1.0:
+                                last_scan = time.time()
+                                newer = scan_pages()
+                                if newer:
+                                    logger.info(
+                                        f"[MS-net] Newer target detected: "
+                                        f"{newer[-1][0][:60]} — switching"
+                                    )
+                                    break   # break inner loop → reattach
                             continue
 
                         try:
@@ -1327,11 +1352,11 @@ class MicrosoftConnector(Store):
                                 return code
 
                         elif "removed=true" in req_url:
-                            logger.warning("[MS-net] removed=true — rescanning for fresh page")
+                            logger.warning("[MS-net] removed=true — switching target")
                             break
 
             except websockets.exceptions.ConnectionClosed:
-                logger.info("[MS-net] Page navigated (WS closed) — rescanning")
+                logger.info("[MS-net] WS closed — rescanning")
             except Exception as e:
                 logger.debug(f"[MS-net] Listener error: {e}")
 
