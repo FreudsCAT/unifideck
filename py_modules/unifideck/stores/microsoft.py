@@ -233,28 +233,24 @@ class MicrosoftConnector(Store):
 
     async def start_auth(self) -> Dict[str, Any]:
         """Build the Microsoft OAuth URL and launch CDP monitoring."""
-        # Clear Microsoft browser cookies first so the user always sees a fresh
-        # login form — no silent SSO redirect, no "removed=true" intermediate.
-        # This is safer than prompt=login which generates a spurious removed=true
-        # redirect before the real ?code= one, confusing the CDP monitor.
-        try:
-            from ..auth.browser import CDPOAuthMonitor as _Mon
-            _monitor = _Mon()
-            await _monitor.clear_cookies_for_domain("login.live.com")
-            await _monitor.clear_cookies_for_domain("live.com")
-            await _monitor.clear_cookies_for_domain("microsoft.com")
-            logger.info("[MS] Cleared Microsoft browser cookies before auth")
-        except Exception as e:
-            logger.debug(f"[MS] Could not clear cookies before auth (non-fatal): {e}")
-
+        # NOTE: do NOT clear cookies here.  Clearing cookies before opening the
+        # auth URL causes Microsoft to issue an oauth20_desktop.srf?removed=true
+        # intermediate redirect (session teardown) that the CEF browser never
+        # follows with the real ?code= redirect, resulting in a permanent timeout.
+        # Cookie/session cleanup belongs only in logout().
+        # The fast-path in _monitor_and_complete_auth handles the case where an
+        # existing SSO session auto-completes the redirect immediately.
         auth_url = (
             f"{MS_AUTH_URL}"
             f"?client_id={MS_CLIENT_ID}"
             f"&redirect_uri={urllib.parse.quote(MS_REDIRECT)}"
             f"&response_type=code"
             f"&scope={urllib.parse.quote(MS_SCOPE)}"
-            f"&prompt=select_account"  # Show account picker; cookie clearing ensures fresh login
+            f"&prompt=select_account"  # Show account picker; forces explicit selection
         )
+
+        # Store auth_url so the monitor can re-navigate if it hits removed=true.
+        self._pending_auth_url = auth_url
 
         # Cancel any previous monitor task before starting a new one so that
         # double-clicking "Connect" doesn't spawn two competing monitors.
@@ -1172,33 +1168,54 @@ class MicrosoftConnector(Store):
             from ..auth.browser import CDPOAuthMonitor
             monitor = CDPOAuthMonitor()
             # ── Fast path: check if oauth20_desktop.srf is already open ──────
-            # This handles the case where Microsoft's SSO session auto-completes
-            # the redirect before our monitor has a chance to attach — the popup
-            # window shows the redirect page immediately and the code is already
-            # present in the URL visible in /json.
+            # Handles two cases:
+            #  - code= already present: SSO completed before monitor attached
+            #  - removed=true: CEF won't follow the next redirect; re-navigate to
+            #    restart the flow so the user doesn't have to click Connect again.
             try:
                 import urllib.request, json as _json
                 with urllib.request.urlopen(monitor.cef_url, timeout=2) as r:
                     pages = _json.loads(r.read().decode())
                 for page in pages:
                     url = page.get('url', '')
-                    if 'oauth20_desktop.srf' in url and 'code=' in url:
-                        from urllib.parse import urlparse, parse_qs
-                        params = parse_qs(urlparse(url).query)
-                        code = params.get('code', [None])[0]
-                        if code:
-                            logger.info("[MS] Fast-path: found oauth20_desktop.srf already open, extracting code")
-                            monitor.monitored_urls.add(url)  # prevent re-processing
-                            result = await self.complete_auth(code)
-                            if result["success"]:
-                                logger.info("[MS] ✓ Authentication completed via fast-path")
-                                return
-                            logger.warning(f"[MS] Fast-path code rejected ({result.get('error')}), falling through to monitor")
+                    if 'oauth20_desktop.srf' in url:
+                        if 'code=' in url:
+                            from urllib.parse import urlparse, parse_qs
+                            params = parse_qs(urlparse(url).query)
+                            code = params.get('code', [None])[0]
+                            if code:
+                                logger.info("[MS] Fast-path: found oauth20_desktop.srf with code, extracting")
+                                monitor.monitored_urls.add(url)
+                                result = await self.complete_auth(code)
+                                if result["success"]:
+                                    logger.info("[MS] ✓ Authentication completed via fast-path")
+                                    return
+                                logger.warning(f"[MS] Fast-path code rejected ({result.get('error')}), falling through to monitor")
+                        elif 'removed=true' in url:
+                            pending_url = getattr(self, '_pending_auth_url', None)
+                            if pending_url:
+                                logger.info("[MS] Fast-path: detected removed=true, re-navigating to auth URL")
+                                monitor.monitored_urls.add(url)
+                                await monitor.navigate_page_to_url("oauth20_desktop.srf", pending_url)
+                                await asyncio.sleep(1)
             except Exception as e:
                 logger.debug(f"[MS] Fast-path check error (non-fatal): {e}")
 
             # ── Normal path: run the full CDP monitor ─────────────────────────
             code, store = await monitor.monitor_for_oauth_code(expected_store="microsoft", timeout=300)
+
+            # Handle removed=true sentinel: re-navigate and wait for the real code
+            if code == '__removed__' and store == 'microsoft':
+                pending_url = getattr(self, '_pending_auth_url', None)
+                if pending_url:
+                    logger.info("[MS] removed=true detected — re-navigating to auth URL and resuming")
+                    await monitor.navigate_page_to_url("oauth20_desktop.srf", pending_url)
+                    await asyncio.sleep(1)
+                    code, store = await monitor.monitor_for_oauth_code(
+                        expected_store="microsoft", timeout=240
+                    )
+                else:
+                    code = None
 
             if code and store == "microsoft":
                 logger.info("[MS] ✓ Auto-captured Microsoft auth code via CDP")

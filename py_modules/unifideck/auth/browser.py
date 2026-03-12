@@ -192,6 +192,15 @@ class CDPOAuthMonitor:
                     if method == 'Page.frameNavigated':
                         nav_url = params.get('frame', {}).get('url', '')
                         logger.debug(f"[CDP-events] frameNavigated: {nav_url[:100]}")
+
+                        # removed=true: Microsoft cleared an existing session before
+                        # re-issuing the auth code.  CEF stops here and never follows
+                        # the next step automatically.  Return a sentinel so
+                        # _monitor_and_complete_auth can re-navigate and resume.
+                        if 'oauth20_desktop.srf' in nav_url and 'removed=true' in nav_url:
+                            logger.info("[CDP-events] Detected removed=true — returning sentinel for re-navigation")
+                            return '__removed__', 'microsoft'
+
                         code, store = self._extract_code(nav_url)
                         if code and store == 'microsoft':
                             logger.info("[CDP-events] Microsoft code captured via frameNavigated")
@@ -254,6 +263,35 @@ class CDPOAuthMonitor:
 
         except Exception as e:
             logger.error(f"[CDP] Error closing page: {e}")
+            return False
+
+    async def navigate_page_to_url(self, url_pattern: str, new_url: str) -> bool:
+        """Navigate a browser page matching url_pattern to new_url via CDP."""
+        try:
+            with urllib.request.urlopen(self.cef_url, timeout=2) as response:
+                pages = json.loads(response.read().decode())
+
+            for page in pages:
+                if url_pattern in page.get('url', ''):
+                    ws_url = page.get('webSocketDebuggerUrl')
+                    if ws_url:
+                        logger.info(f"[CDP] Navigating page to new URL: {new_url[:80]}...")
+                        import websockets
+                        async with websockets.connect(ws_url, ping_interval=None) as websocket:
+                            await websocket.send(json.dumps({
+                                'id': 1,
+                                'method': 'Page.navigate',
+                                'params': {'url': new_url}
+                            }))
+                            await asyncio.wait_for(websocket.recv(), timeout=5)
+                            logger.info("[CDP] Page navigation command sent")
+                            return True
+
+            logger.warning(f"[CDP] No page found matching: {url_pattern}")
+            return False
+
+        except Exception as e:
+            logger.error(f"[CDP] Error navigating page: {e}")
             return False
 
     async def refresh_page_by_url(self, url_pattern: str) -> bool:
