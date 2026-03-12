@@ -1196,7 +1196,7 @@ class MicrosoftConnector(Store):
 
 
     async def _monitor_and_complete_auth(self):
-        """Background task: intercept the OAuth redirect via Network events on the login popup."""
+        """Background task: intercept the OAuth redirect via Network events."""
         try:
             code = await self._intercept_oauth_code_via_network(timeout=300)
             if code:
@@ -1213,23 +1213,16 @@ class MicrosoftConnector(Store):
 
     async def _intercept_oauth_code_via_network(self, timeout: float = 300) -> Optional[str]:
         """
-        Capture the OAuth code by attaching to every Microsoft-related page target
-        that appears in /json and enabling Network.requestWillBeSent on each one.
+        Capture the OAuth code by maintaining ONE active Network.requestWillBeSent
+        listener on whichever Microsoft login page is currently open in CEF.
 
-        The key problem with previous approaches: during login, Microsoft navigates
-        the popup through several intermediate pages (email entry, password, 2FA,
-        consent...).  Each navigation creates a NEW CDP target with a new
-        webSocketDebuggerUrl.  A single WebSocket connection to the initial page
-        disconnects when the page navigates away, missing the final ?code= redirect.
-
-        Fix: run a tight polling loop that:
-          1. Scans /json every 0.3 s for all Microsoft-related pages
-          2. For each new target, opens a WebSocket and enables Network.enable
-          3. All active WebSockets listen concurrently for requestWillBeSent
-          4. The first one that sees oauth20_desktop.srf?code= wins
-
-        This way we never lose the redirect regardless of how many intermediate
-        pages Microsoft uses during the login flow.
+        Why one connection instead of many:
+          - Opening 15+ simultaneous WebSocket connections to CEF throttles it;
+            Network.enable responses time out silently and listeners never fire.
+          - One connection at a time is reliable.  When the page navigates (the
+            WebSocket closes), we immediately scan /json for the next MS page and
+            reattach.  This covers the full login flow regardless of how many
+            intermediate pages Microsoft uses.
         """
         import time
         try:
@@ -1238,43 +1231,75 @@ class MicrosoftConnector(Store):
             logger.warning("[MS-net] websockets not available")
             return None
 
-        MS_PATTERNS = (
+        MS_LOGIN_PATTERNS = (
             "login.live.com",
             "login.microsoftonline.com",
-            "microsoftonline.com",
             "account.microsoft.com",
-            "oauth20_desktop.srf",
         )
 
-        # Queue shared between all page listeners — any one can post the code here
-        code_queue: asyncio.Queue = asyncio.Queue()
-        # Set of WS urls already connected to — avoid double-attaching
-        attached: set = set()
+        start    = time.time()
+        deadline = start + timeout
+        seen_ws  = set()
 
-        async def listen_on_page(page_ws_url: str):
-            """Connect to one page target and forward oauth20_desktop.srf events."""
+        def find_active_login_page():
+            try:
+                with urllib.request.urlopen("http://127.0.0.1:8080/json", timeout=2) as r:
+                    pages = json.loads(r.read().decode())
+                candidates = []
+                for page in pages:
+                    url    = page.get("url", "")
+                    ws_url = page.get("webSocketDebuggerUrl", "")
+                    if not ws_url or ws_url in seen_ws:
+                        continue
+                    if "removed=true" in url:
+                        continue
+                    if any(p in url for p in MS_LOGIN_PATTERNS):
+                        candidates.append((url, ws_url))
+                if candidates:
+                    return candidates[-1][1], candidates[-1][0]
+            except Exception as e:
+                logger.debug(f"[MS-net] /json scan error: {e}")
+            return None, None
+
+        logger.info("[MS-net] Starting single-target Network interception")
+
+        while time.time() < deadline:
+            ws_url, page_url = None, None
+            while not ws_url and time.time() < deadline:
+                ws_url, page_url = find_active_login_page()
+                if not ws_url:
+                    await asyncio.sleep(0.3)
+
+            if not ws_url:
+                break
+
+            seen_ws.add(ws_url)
+            remaining = deadline - time.time()
+            logger.info(f"[MS-net] Attaching to: {page_url[:80]} ({remaining:.0f}s left)")
+
             try:
                 async with websockets.connect(
-                    page_ws_url, ping_interval=None, open_timeout=5
+                    ws_url, ping_interval=None, open_timeout=10
                 ) as ws:
                     msg_id = 1
 
-                    async def send(method, params=None):
+                    async def send_cmd(method, params=None):
                         nonlocal msg_id
                         await ws.send(json.dumps(
                             {"id": msg_id, "method": method, "params": params or {}}
                         ))
                         msg_id += 1
 
-                    await send("Network.enable", {})
-                    await asyncio.wait_for(ws.recv(), timeout=3)
-                    logger.debug(f"[MS-net] Network.enable on {page_ws_url[:60]}")
+                    await send_cmd("Network.enable", {})
+                    await asyncio.wait_for(ws.recv(), timeout=10)
+                    logger.info("[MS-net] Network.enable OK — listening for redirect")
 
-                    while True:
+                    while time.time() < deadline:
                         try:
-                            raw = await asyncio.wait_for(ws.recv(), timeout=2.0)
+                            raw = await asyncio.wait_for(ws.recv(), timeout=1.0)
                         except asyncio.TimeoutError:
                             continue
+
                         try:
                             msg = json.loads(raw)
                         except json.JSONDecodeError:
@@ -1283,7 +1308,11 @@ class MicrosoftConnector(Store):
                         if msg.get("method") != "Network.requestWillBeSent":
                             continue
 
-                        req_url = msg.get("params", {}).get("request", {}).get("url", "")
+                        req_url = (
+                            msg.get("params", {})
+                               .get("request", {})
+                               .get("url", "")
+                        )
                         if "oauth20_desktop.srf" not in req_url:
                             continue
 
@@ -1295,49 +1324,18 @@ class MicrosoftConnector(Store):
                             code = params.get("code", [None])[0]
                             if code:
                                 logger.info("[MS-net] ✓ OAuth code captured")
-                                await code_queue.put(code)
-                                return
+                                return code
 
                         elif "removed=true" in req_url:
-                            logger.warning("[MS-net] removed=true without prior code")
+                            logger.warning("[MS-net] removed=true — rescanning for fresh page")
+                            break
 
+            except websockets.exceptions.ConnectionClosed:
+                logger.info("[MS-net] Page navigated (WS closed) — rescanning")
             except Exception as e:
-                logger.debug(f"[MS-net] Listener closed ({page_ws_url[:40]}): {e}")
+                logger.debug(f"[MS-net] Listener error: {e}")
 
-        async def scan_and_attach():
-            """Continuously scan /json and spawn a listener for every new MS page."""
-            while True:
-                try:
-                    with urllib.request.urlopen(
-                        "http://127.0.0.1:8080/json", timeout=2
-                    ) as r:
-                        pages = json.loads(r.read().decode())
+            await asyncio.sleep(0.3)
 
-                    for page in pages:
-                        url    = page.get("url", "")
-                        ws_url = page.get("webSocketDebuggerUrl", "")
-                        if not ws_url or ws_url in attached:
-                            continue
-                        if any(p in url for p in MS_PATTERNS):
-                            logger.info(f"[MS-net] Attaching to: {url[:80]}")
-                            attached.add(ws_url)
-                            asyncio.create_task(listen_on_page(ws_url))
-
-                except Exception as e:
-                    logger.debug(f"[MS-net] Scan error: {e}")
-
-                await asyncio.sleep(0.3)
-
-        # Run scanner + wait for the first code, with overall timeout
-        logger.info("[MS-net] Starting multi-target Network interception")
-        scan_task = asyncio.create_task(scan_and_attach())
-
-        try:
-            code = await asyncio.wait_for(code_queue.get(), timeout=timeout)
-            logger.info(f"[MS-net] ✓ Code received from queue")
-            return code
-        except asyncio.TimeoutError:
-            logger.warning("[MS-net] Timed out waiting for OAuth code")
-            return None
-        finally:
-            scan_task.cancel()
+        logger.warning("[MS-net] Timed out waiting for OAuth code")
+        return None
