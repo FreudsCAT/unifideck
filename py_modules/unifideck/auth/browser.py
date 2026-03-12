@@ -115,65 +115,80 @@ class CDPOAuthMonitor:
         logger.warning(f"[CDP] Poll timeout - no {expected_store} code found")
         return None, None
 
-    # ── internal: CDP event listener (Microsoft only) ───────────────────────
+    # ── internal: Fetch interception (Microsoft only) ───────────────────────
 
     async def _monitor_ms_page_events(self, timeout: float) -> Tuple[Optional[str], Optional[str]]:
         """
-        Connect to the Microsoft login page via CDP WebSocket and subscribe to
-        Page.frameNavigated + Network.requestWillBeSent events.
+        Intercept ALL network requests to oauth20_desktop.srf using the CDP
+        Fetch domain connected to the browser-level target (/json/version).
 
-        This catches the oauth20_desktop.srf redirect the instant it is issued,
-        even if the popup closes before the next polling cycle.
+        This catches the ?code= redirect at the network layer — before CEF
+        processes or follows the redirect — regardless of which page or frame
+        issues it.  The intercepted request is always continued so the browser
+        behaves normally afterward.
+
+        Why Fetch interception instead of Network events or page polling:
+          - Network.requestWillBeSent fires AFTER the browser already decided to
+            follow a redirect; for 302s the ?code= URL is gone before the next
+            poll cycle.
+          - Fetch.requestPaused fires BEFORE the request is processed, giving us
+            a reliable synchronous hook into the redirect chain.
+          - Browser-level target captures requests from ALL pages/popups.
         """
         import time
         try:
             import websockets
         except ImportError:
-            logger.warning("[CDP-events] websockets not available; falling back to poll-only")
+            logger.warning("[CDP-fetch] websockets not available; falling back to poll-only")
             return None, None
 
-        MS_LOGIN_PATTERNS = ('login.live.com', 'login.microsoftonline.com', 'microsoft.com/login')
+        # ── connect to the browser-level CDP target ───────────────────────────
+        # /json/version returns the webSocketDebuggerUrl for the browser itself
+        # (not a specific tab), which lets us intercept network requests globally.
+        cef_port = self.cef_url.split(':')[2].split('/')[0]
+        browser_ws_url = None
+        try:
+            with urllib.request.urlopen(
+                f"http://127.0.0.1:{cef_port}/json/version", timeout=2
+            ) as r:
+                version_data = json.loads(r.read().decode())
+            browser_ws_url = version_data.get('webSocketDebuggerUrl')
+        except Exception as e:
+            logger.debug(f"[CDP-fetch] /json/version failed: {e}")
 
-        start_time = time.time()
-        ws_url = None
-
-        # ── step 1: wait for the Microsoft login page to appear in /json ────
-        logger.info("[CDP-events] Waiting for Microsoft login page in CEF...")
-        while time.time() - start_time < min(timeout, 60):
+        if not browser_ws_url:
+            # Fallback: use first available page target
             try:
                 with urllib.request.urlopen(self.cef_url, timeout=2) as r:
                     pages = json.loads(r.read().decode())
-                for page in pages:
-                    url = page.get('url', '')
-                    if any(p in url for p in MS_LOGIN_PATTERNS):
-                        ws_url = page.get('webSocketDebuggerUrl')
-                        if ws_url:
-                            logger.info(f"[CDP-events] Found MS login page: {url[:80]}")
-                            break
-                if ws_url:
-                    break
-            except Exception as e:
-                logger.debug(f"[CDP-events] Wait error: {e}")
-            await asyncio.sleep(0.5)
+                browser_ws_url = pages[0].get('webSocketDebuggerUrl') if pages else None
+            except Exception:
+                pass
 
-        if not ws_url:
-            logger.warning("[CDP-events] No Microsoft login page found in time")
+        if not browser_ws_url:
+            logger.warning("[CDP-fetch] No WebSocket URL available for Fetch interception")
             return None, None
 
-        # ── step 2: subscribe to CDP events and listen for the redirect ──────
-        remaining = timeout - (time.time() - start_time)
-        logger.info(f"[CDP-events] Connecting to CDP, {remaining:.0f}s remaining")
+        logger.info(f"[CDP-fetch] Connecting for Fetch interception, timeout={timeout:.0f}s")
 
         try:
-            async with websockets.connect(ws_url, ping_interval=None, open_timeout=10) as ws:
-                # Enable Page and Network domains so we receive their events
-                for domain in ('Page', 'Network'):
-                    await ws.send(json.dumps({'id': 1, 'method': f'{domain}.enable', 'params': {}}))
-                    await ws.recv()   # consume the command response
+            async with websockets.connect(browser_ws_url, ping_interval=None, open_timeout=10) as ws:
+                msg_id = 1
 
-                logger.info("[CDP-events] Page + Network domains enabled; listening for redirect...")
-                deadline = time.time() + remaining
+                async def send(method, params=None):
+                    nonlocal msg_id
+                    payload = json.dumps({'id': msg_id, 'method': method, 'params': params or {}})
+                    await ws.send(payload)
+                    msg_id += 1
 
+                # Enable Fetch interception for oauth20_desktop.srf only
+                await send('Fetch.enable', {
+                    'patterns': [{'urlPattern': '*oauth20_desktop.srf*'}],
+                })
+                await asyncio.wait_for(ws.recv(), timeout=5)
+                logger.info("[CDP-fetch] Fetch interception enabled for oauth20_desktop.srf")
+
+                deadline = time.time() + timeout
                 while time.time() < deadline:
                     try:
                         raw = await asyncio.wait_for(ws.recv(), timeout=1.0)
@@ -185,54 +200,41 @@ class CDPOAuthMonitor:
                     except json.JSONDecodeError:
                         continue
 
-                    method = msg.get('method', '')
-                    params = msg.get('params', {})
+                    if msg.get('method') != 'Fetch.requestPaused':
+                        continue
 
-                    # ── Page.frameNavigated ───────────────────────────────
-                    if method == 'Page.frameNavigated':
-                        nav_url = params.get('frame', {}).get('url', '')
-                        logger.debug(f"[CDP-events] frameNavigated: {nav_url[:100]}")
+                    params_     = msg.get('params', {})
+                    request_id  = params_.get('requestId')
+                    req_url     = params_.get('request', {}).get('url', '')
 
-                        # removed=true: Microsoft cleared an existing session before
-                        # re-issuing the auth code.  CEF stops here and never follows
-                        # the next step automatically.  Return a sentinel so
-                        # _monitor_and_complete_auth can re-navigate and resume.
-                        if 'oauth20_desktop.srf' in nav_url and 'removed=true' in nav_url:
-                            logger.info("[CDP-events] Detected removed=true — returning sentinel for re-navigation")
-                            return '__removed__', 'microsoft'
+                    logger.debug(f"[CDP-fetch] Fetch.requestPaused: {req_url[:120]}")
 
-                        code, store = self._extract_code(nav_url)
+                    # Always continue so the browser behaves normally
+                    await send('Fetch.continueRequest', {'requestId': request_id})
+
+                    if 'code=' in req_url:
+                        code, store = self._extract_code(req_url)
                         if code and store == 'microsoft':
-                            logger.info("[CDP-events] Microsoft code captured via frameNavigated")
+                            logger.info("[CDP-fetch] ✓ Microsoft code captured via Fetch interception")
+                            try:
+                                await send('Fetch.disable', {})
+                            except Exception:
+                                pass
                             return code, store
 
-                    # ── Network.requestWillBeSent ─────────────────────────
-                    # Fires for EVERY outgoing request before the browser decides
-                    # whether to follow or block it — catches the redirect even if
-                    # the popup closes before the next poll tick.
-                    elif method == 'Network.requestWillBeSent':
-                        req_url = params.get('request', {}).get('url', '')
-                        if 'oauth20_desktop.srf' in req_url:
-                            logger.debug(f"[CDP-events] requestWillBeSent (MS redirect): {req_url[:120]}")
-                            code, store = self._extract_code(req_url)
-                            if code and store == 'microsoft':
-                                logger.info("[CDP-events] Microsoft code captured via requestWillBeSent")
-                                return code, store
-
-                        # Also watch redirect chains
-                        redirect_resp = params.get('redirectResponse', {})
-                        if redirect_resp:
-                            redirect_url = redirect_resp.get('url', '')
-                            if 'oauth20_desktop.srf' in redirect_url:
-                                code, store = self._extract_code(redirect_url)
-                                if code and store == 'microsoft':
-                                    logger.info("[CDP-events] Microsoft code captured via redirectResponse")
-                                    return code, store
+                    elif 'removed=true' in req_url:
+                        # Seen removed=true without a prior ?code= in this session
+                        logger.info("[CDP-fetch] removed=true without prior code — returning sentinel")
+                        try:
+                            await send('Fetch.disable', {})
+                        except Exception:
+                            pass
+                        return '__removed__', 'microsoft'
 
         except Exception as e:
-            logger.warning(f"[CDP-events] WebSocket error: {e}")
+            logger.warning(f"[CDP-fetch] WebSocket error: {e}")
 
-        logger.warning("[CDP-events] Event listener timed out")
+        logger.warning("[CDP-fetch] Fetch interception timed out")
         return None, None
 
     # ── public helpers ───────────────────────────────────────────────────────
