@@ -304,6 +304,66 @@ class CDPOAuthMonitor:
             logger.error(f"[CDP] Error closing page: {e}")
             return False
 
+    async def close_all_pages_by_domains(self, domains: list) -> int:
+        """Close all open CEF pages whose URL matches any of the given domains.
+
+        Returns the number of pages successfully closed.
+        Used after Microsoft auth to clean up all login pages
+        (oauth20_authorize, ppsecure, oauth20_desktop, etc.).
+        """
+        closed = 0
+        try:
+            with urllib.request.urlopen(self.cef_url, timeout=2) as r:
+                pages = json.loads(r.read().decode())
+
+            for page in pages:
+                url     = page.get("url", "")
+                page_id = page.get("id", "")
+                if not any(d in url for d in domains):
+                    continue
+
+                logger.info(f"[CDP] Closing MS page: {url[:80]}")
+
+                # Try /json/close/{id} first
+                closed_ok = False
+                if page_id:
+                    try:
+                        with urllib.request.urlopen(
+                            f"http://127.0.0.1:8080/json/close/{page_id}", timeout=2
+                        ) as r:
+                            r.read()
+                        closed_ok = True
+                    except Exception as e:
+                        logger.debug(f"[CDP] /json/close failed: {e}")
+
+                # Fallback: Target.closeTarget via WebSocket
+                if not closed_ok:
+                    ws_url = page.get("webSocketDebuggerUrl")
+                    if ws_url:
+                        try:
+                            import websockets
+                            async with websockets.connect(
+                                ws_url, ping_interval=None, open_timeout=5
+                            ) as ws:
+                                await ws.send(json.dumps({
+                                    "id": 1,
+                                    "method": "Target.closeTarget",
+                                    "params": {"targetId": page_id},
+                                }))
+                                await asyncio.wait_for(ws.recv(), timeout=3)
+                            closed_ok = True
+                        except Exception as e:
+                            logger.debug(f"[CDP] Target.closeTarget failed: {e}")
+
+                if closed_ok:
+                    closed += 1
+
+        except Exception as e:
+            logger.error(f"[CDP] Error closing MS pages: {e}")
+
+        logger.info(f"[CDP] Closed {closed} Microsoft page(s)")
+        return closed
+
     async def navigate_page_to_url(self, url_pattern: str, new_url: str) -> bool:
         """Navigate a browser page matching url_pattern to new_url via CDP."""
         try:

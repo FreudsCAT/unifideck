@@ -323,13 +323,18 @@ class MicrosoftConnector(Store):
 
             logger.info("[MS] ✓ Authentication complete")
 
-            # Close the oauth20_desktop.srf popup — it shows a "not meant to be
-            # displayed" message and confuses users if left open.
+            # Close ALL Microsoft login pages left open during the auth flow
+            # (oauth20_authorize, ppsecure, oauth20_desktop, etc.).
             try:
                 from ..auth.browser import CDPOAuthMonitor as _Mon
-                await _Mon().close_page_by_url("oauth20_desktop.srf")
-            except Exception:
-                pass
+                n = await _Mon().close_all_pages_by_domains([
+                    "login.live.com",
+                    "login.microsoftonline.com",
+                    "account.microsoft.com",
+                ])
+                logger.info(f"[MS] Closed {n} Microsoft browser page(s) after auth")
+            except Exception as e:
+                logger.debug(f"[MS] Page cleanup (non-fatal): {e}")
 
             return {"success": True, "message": "Microsoft account connected"}
 
@@ -361,7 +366,11 @@ class MicrosoftConnector(Store):
             await monitor.clear_cookies_for_domain("login.live.com")
             await monitor.clear_cookies_for_domain("live.com")
             await monitor.clear_cookies_for_domain("microsoft.com")
-            await monitor.close_page_by_url("oauth20_desktop.srf")
+            await monitor.close_all_pages_by_domains([
+                "login.live.com",
+                "login.microsoftonline.com",
+                "account.microsoft.com",
+            ])
         except Exception:
             pass
 
@@ -1260,6 +1269,12 @@ class MicrosoftConnector(Store):
                         continue
                     if "removed=true" in url:
                         seen_ws.add(ws_url)   # mark seen, skip
+                        continue
+                    # Skip stale oauth20_desktop.srf?code= pages left open from a
+                    # previous session — the code is already expired and attaching
+                    # to that page would waste time before switching to the new one.
+                    if "oauth20_desktop.srf" in url and "code=" in url:
+                        seen_ws.add(ws_url)
                         continue
                     if any(p in url for p in MS_LOGIN_PATTERNS):
                         result.append((url, ws_url))
