@@ -240,25 +240,62 @@ class CDPOAuthMonitor:
     # ── public helpers ───────────────────────────────────────────────────────
 
     async def close_page_by_url(self, url_pattern: str) -> bool:
-        """Close browser page matching URL pattern via CDP"""
+        """Close browser page matching URL pattern via CDP.
+
+        Uses /json/close/{id} HTTP endpoint first (most reliable in Steam CEF),
+        then falls back to Target.closeTarget, then Page.close.
+        """
         try:
             with urllib.request.urlopen(self.cef_url, timeout=2) as response:
                 pages = json.loads(response.read().decode())
 
             for page in pages:
                 if url_pattern in page.get('url', ''):
+                    page_id = page.get('id', '')
+                    page_url = page.get('url', '')[:80]
+                    logger.info(f"[CDP] Closing page: {page_url}...")
+
+                    # Method 1: HTTP /json/close/{id} — simplest, works in most CEF builds
+                    if page_id:
+                        try:
+                            close_url = f"http://127.0.0.1:8080/json/close/{page_id}"
+                            with urllib.request.urlopen(close_url, timeout=2) as r:
+                                result = r.read().decode()
+                            logger.info(f"[CDP] Page closed via /json/close: {result}")
+                            return True
+                        except Exception as e:
+                            logger.debug(f"[CDP] /json/close failed: {e}, trying WS")
+
+                    # Method 2: Target.closeTarget via WebSocket
                     ws_url = page.get('webSocketDebuggerUrl')
                     if ws_url:
-                        logger.info(f"[CDP] Closing page via CDP: {page.get('url', '')[:80]}...")
-                        import websockets
-                        async with websockets.connect(ws_url, ping_interval=None) as websocket:
-                            await websocket.send(json.dumps({
-                                'id': 1,
-                                'method': 'Page.close',
-                                'params': {}
-                            }))
-                            logger.info("[CDP] Page close command sent")
-                            return True
+                        try:
+                            import websockets
+                            async with websockets.connect(ws_url, ping_interval=None, open_timeout=5) as ws:
+                                # Try Target.closeTarget first
+                                await ws.send(json.dumps({
+                                    'id': 1,
+                                    'method': 'Target.closeTarget',
+                                    'params': {'targetId': page_id}
+                                }))
+                                await asyncio.wait_for(ws.recv(), timeout=3)
+                                logger.info("[CDP] Page closed via Target.closeTarget")
+                                return True
+                        except Exception as e:
+                            logger.debug(f"[CDP] Target.closeTarget failed: {e}, trying Page.close")
+
+                        try:
+                            import websockets
+                            async with websockets.connect(ws_url, ping_interval=None, open_timeout=5) as ws:
+                                await ws.send(json.dumps({
+                                    'id': 1,
+                                    'method': 'Page.close',
+                                    'params': {}
+                                }))
+                                logger.info("[CDP] Page.close command sent")
+                                return True
+                        except Exception as e:
+                            logger.debug(f"[CDP] Page.close failed: {e}")
 
             logger.warning(f"[CDP] No page found matching: {url_pattern}")
             return False
