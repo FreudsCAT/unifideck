@@ -233,17 +233,34 @@ class MicrosoftConnector(Store):
 
     async def start_auth(self) -> Dict[str, Any]:
         """Build the Microsoft OAuth URL and launch CDP monitoring."""
+        # Clear Microsoft browser cookies first so the user always sees a fresh
+        # login form — no silent SSO redirect, no "removed=true" intermediate.
+        # This is safer than prompt=login which generates a spurious removed=true
+        # redirect before the real ?code= one, confusing the CDP monitor.
+        try:
+            from ..auth.browser import CDPOAuthMonitor as _Mon
+            _monitor = _Mon()
+            await _monitor.clear_cookies_for_domain("login.live.com")
+            await _monitor.clear_cookies_for_domain("live.com")
+            await _monitor.clear_cookies_for_domain("microsoft.com")
+            logger.info("[MS] Cleared Microsoft browser cookies before auth")
+        except Exception as e:
+            logger.debug(f"[MS] Could not clear cookies before auth (non-fatal): {e}")
+
         auth_url = (
             f"{MS_AUTH_URL}"
             f"?client_id={MS_CLIENT_ID}"
             f"&redirect_uri={urllib.parse.quote(MS_REDIRECT)}"
             f"&response_type=code"
             f"&scope={urllib.parse.quote(MS_SCOPE)}"
-            f"&prompt=login"   # Force full credential entry; prevents silent SSO redirect
+            f"&prompt=select_account"  # Show account picker; cookie clearing ensures fresh login
         )
 
-        # Background CDP monitor auto-completes auth when the browser redirects
-        asyncio.create_task(self._monitor_and_complete_auth())
+        # Cancel any previous monitor task before starting a new one so that
+        # double-clicking "Connect" doesn't spawn two competing monitors.
+        if hasattr(self, "_auth_monitor_task") and self._auth_monitor_task and not self._auth_monitor_task.done():
+            self._auth_monitor_task.cancel()
+        self._auth_monitor_task = asyncio.create_task(self._monitor_and_complete_auth())
 
         return {
             "success": True,
@@ -276,6 +293,15 @@ class MicrosoftConnector(Store):
             self._save_tokens()
 
             logger.info("[MS] ✓ Authentication complete")
+
+            # Close the oauth20_desktop.srf popup — it shows a "not meant to be
+            # displayed" message and confuses users if left open.
+            try:
+                from ..auth.browser import CDPOAuthMonitor as _Mon
+                await _Mon().close_page_by_url("oauth20_desktop.srf")
+            except Exception:
+                pass
+
             return {"success": True, "message": "Microsoft account connected"}
 
         except Exception as e:
@@ -490,6 +516,11 @@ class MicrosoftConnector(Store):
         Build XBL user token → XSTS token chain.
         Returns True on success, False on failure.
         """
+        # Always reset the chain so a partial previous attempt cannot leave
+        # an inconsistent state (xbl_token set but xsts_token None).
+        self._xbl_token  = None
+        self._xsts_token = None
+        self._user_hash  = None
         try:
             # Step A: XBL user token
             xbl_resp = _http_post_json(

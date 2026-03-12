@@ -285,7 +285,12 @@ class CDPOAuthMonitor:
             return False
 
     async def clear_cookies_for_domain(self, domain: str) -> bool:
-        """Clear browser cookies for specific domain via CDP"""
+        """Clear browser cookies for a specific domain via CDP.
+
+        Uses Network.getCookies + Network.deleteCookies to remove only cookies
+        that belong to the requested domain — does NOT wipe all browser cookies
+        (which would log the user out of Epic, GOG, Amazon, etc.).
+        """
         try:
             logger.info(f"[CDP] Clearing cookies for domain: {domain}")
 
@@ -303,13 +308,38 @@ class CDPOAuthMonitor:
 
             import websockets
             async with websockets.connect(ws_url, ping_interval=None) as websocket:
+
+                # Step 1: fetch all cookies
                 await websocket.send(json.dumps({
                     'id': 1,
-                    'method': 'Network.clearBrowserCookies',
+                    'method': 'Network.getAllCookies',
                     'params': {}
                 }))
-                await asyncio.wait_for(websocket.recv(), timeout=5)
-                logger.info(f"[CDP] Cleared browser cookies for {domain}")
+                raw = await asyncio.wait_for(websocket.recv(), timeout=5)
+                data = json.loads(raw)
+                cookies = data.get('result', {}).get('cookies', [])
+
+                # Step 2: delete only cookies whose domain matches
+                deleted = 0
+                msg_id = 2
+                for cookie in cookies:
+                    cookie_domain = cookie.get('domain', '')
+                    # cookie_domain may be ".live.com" or "login.live.com" etc.
+                    if domain in cookie_domain or cookie_domain.lstrip('.') in domain:
+                        await websocket.send(json.dumps({
+                            'id': msg_id,
+                            'method': 'Network.deleteCookies',
+                            'params': {
+                                'name':   cookie['name'],
+                                'domain': cookie_domain,
+                                'path':   cookie.get('path', '/'),
+                            }
+                        }))
+                        await asyncio.wait_for(websocket.recv(), timeout=5)
+                        msg_id += 1
+                        deleted += 1
+
+                logger.info(f"[CDP] Cleared {deleted} cookies for domain: {domain}")
                 return True
 
         except Exception as e:
