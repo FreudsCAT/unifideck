@@ -56,8 +56,6 @@ logger = logging.getLogger(__name__)
 # Public client ID used by many open-source Xbox tools (no secret required).
 MS_CLIENT_ID   = "000000004C12AE6F"
 MS_REDIRECT    = "https://login.live.com/oauth20_desktop.srf"
-MS_LOCAL_PORT  = 47682   # Local redirect server port (arbitrary, unlikely to conflict)
-MS_LOCAL_REDIRECT = f"http://127.0.0.1:{MS_LOCAL_PORT}/callback"
 MS_AUTH_URL    = "https://login.live.com/oauth20_authorize.srf"
 MS_TOKEN_URL   = "https://login.live.com/oauth20_token.srf"
 MS_SCOPE       = "Xboxlive.signin Xboxlive.offline_access"
@@ -234,16 +232,14 @@ class MicrosoftConnector(Store):
             return False
 
     async def start_auth(self) -> Dict[str, Any]:
-        """Build the Microsoft OAuth URL and start a local redirect server.
-
-        Strategy: instead of intercepting CEF browser redirects (unreliable —
-        Microsoft's oauth20_desktop.srf ?code= redirect disappears in < 50 ms
-        before any CDP hook can capture it), we start a lightweight HTTP server
-        on localhost and use it as the redirect_uri.  When Microsoft redirects
-        the browser to http://127.0.0.1:{port}/callback?code=..., our server
-        receives the code directly — no timing races, no CEF interception needed.
-        """
-        # Clear Microsoft cookies so the user always sees a fresh login form.
+        """Build the Microsoft OAuth URL and launch CDP monitoring."""
+        # Clear Microsoft cookies from CEF so the user always sees the login form.
+        # Without this, stale cookies cause Microsoft to silently SSO and emit
+        # oauth20_desktop.srf?removed=true immediately — before the form appears.
+        # We do NOT use prompt=login or prompt=select_account because those also
+        # trigger removed=true (Microsoft tears down the session before re-issuing
+        # the code, and CEF never follows that second redirect).
+        # Strategy: clear cookies (forces fresh form) + no prompt (clean code flow).
         try:
             from ..auth.browser import CDPOAuthMonitor as _Mon
             _mon = _Mon()
@@ -252,18 +248,23 @@ class MicrosoftConnector(Store):
             await _mon.clear_cookies_for_domain("microsoft.com")
             logger.info("[MS] Cleared Microsoft cookies before auth")
         except Exception as e:
-            logger.debug(f"[MS] Cookie clear (non-fatal): {e}")
+            logger.debug(f"[MS] Cookie clear before auth (non-fatal): {e}")
 
         auth_url = (
             f"{MS_AUTH_URL}"
             f"?client_id={MS_CLIENT_ID}"
-            f"&redirect_uri={urllib.parse.quote(MS_LOCAL_REDIRECT)}"
+            f"&redirect_uri={urllib.parse.quote(MS_REDIRECT)}"
             f"&response_type=code"
             f"&scope={urllib.parse.quote(MS_SCOPE)}"
-            f"&display=touch"
+            # No prompt= — after cookie clearing Microsoft shows the login form
+            # directly and issues ?code= on success with no removed=true detour.
         )
 
-        # Cancel any previous monitor task before starting a new one.
+        # Store auth_url so the monitor can re-navigate if it hits removed=true.
+        self._pending_auth_url = auth_url
+
+        # Cancel any previous monitor task before starting a new one so that
+        # double-clicking "Connect" doesn't spawn two competing monitors.
         if hasattr(self, "_auth_monitor_task") and self._auth_monitor_task and not self._auth_monitor_task.done():
             self._auth_monitor_task.cancel()
         self._auth_monitor_task = asyncio.create_task(self._monitor_and_complete_auth())
@@ -283,7 +284,7 @@ class MicrosoftConnector(Store):
                     MS_TOKEN_URL,
                     {
                         "client_id":    MS_CLIENT_ID,
-                        "redirect_uri": MS_LOCAL_REDIRECT,
+                        "redirect_uri": MS_REDIRECT,
                         "code":         auth_code,
                         "grant_type":   "authorization_code",
                     },
@@ -1173,80 +1174,131 @@ class MicrosoftConnector(Store):
 
 
     async def _monitor_and_complete_auth(self):
-        """Background task: wait for the local redirect server to receive the OAuth code."""
+        """Background task: intercept the OAuth redirect via Fetch on the login popup."""
         try:
-            code = await self._wait_for_local_redirect(timeout=300)
+            code = await self._intercept_oauth_code_via_fetch(timeout=300)
             if code:
-                logger.info("[MS] ✓ Received OAuth code via local redirect server")
+                logger.info("[MS] ✓ Received OAuth code via Fetch interception")
                 result = await self.complete_auth(code)
                 if result["success"]:
                     logger.info("[MS] ✓ Authentication completed")
                 else:
                     logger.error(f"[MS] complete_auth failed: {result.get('error')}")
             else:
-                logger.warning("[MS] Local redirect server timed out — no code received")
+                logger.warning("[MS] Fetch interception timed out — no code received")
         except Exception as e:
             logger.error(f"[MS] Auth monitor error: {e}", exc_info=True)
 
-    async def _wait_for_local_redirect(self, timeout: float = 300) -> Optional[str]:
+    async def _intercept_oauth_code_via_fetch(self, timeout: float = 300) -> Optional[str]:
         """
-        Start a temporary HTTP server on MS_LOCAL_PORT that waits for Microsoft
-        to redirect the browser to http://127.0.0.1:{port}/callback?code=...
+        Intercept the oauth20_desktop.srf?code= redirect using CDP Fetch.enable
+        connected directly to the Microsoft login popup page target.
 
-        Returns the auth code on success, None on timeout.
+        Flow:
+          1. Wait for the MS login popup to appear in /json
+          2. Connect to that page's WebSocket debugger
+          3. Enable Fetch interception for *oauth20_desktop.srf*
+          4. When Fetch.requestPaused fires, extract ?code= and continue the request
+
+        Connecting to the popup page target (not /json/version browser target)
+        is essential — Steam's CEF does not expose a browser-level target.
         """
-        import http.server
-        import threading
-        from urllib.parse import urlparse, parse_qs
+        import time
+        try:
+            import websockets
+        except ImportError:
+            logger.warning("[MS-fetch] websockets not available")
+            return None
 
-        code_holder: Dict[str, Any] = {"code": None, "received": False}
+        MS_LOGIN_PATTERNS = ("login.live.com", "login.microsoftonline.com")
 
-        class _CallbackHandler(http.server.BaseHTTPRequestHandler):
-            def do_GET(self):
-                parsed = urlparse(self.path)
-                if parsed.path == "/callback":
-                    params = parse_qs(parsed.query)
-                    code = params.get("code", [None])[0]
-                    if code:
-                        code_holder["code"]     = code
-                        code_holder["received"] = True
-                        # Return a simple success page visible in CEF
-                        body = (
-                            "<html><body style='font-family:sans-serif;text-align:center;"
-                            "padding-top:80px'>"
-                            "<h2>&#10003; Connected to Microsoft</h2>"
-                            "<p>You can close this window.</p></body></html>"
-                        ).encode("utf-8")
-                        self.send_response(200)
-                        self.send_header("Content-Type", "text/html; charset=utf-8")
-                        self.send_header("Content-Length", str(len(body)))
-                        self.end_headers()
-                        self.wfile.write(body)
-                    else:
-                        self.send_response(400)
-                        self.end_headers()
-                else:
-                    self.send_response(404)
-                    self.end_headers()
+        start = time.time()
+        ws_url = None
 
-            def log_message(self, fmt, *args):
-                logger.debug(f"[MS-server] {fmt % args}")
+        # ── Step 1: wait for the MS login popup to appear ────────────────────
+        logger.info("[MS-fetch] Waiting for Microsoft login popup in CEF...")
+        while time.time() - start < min(timeout, 60):
+            try:
+                with urllib.request.urlopen(
+                    "http://127.0.0.1:8080/json", timeout=2
+                ) as r:
+                    pages = json.loads(r.read().decode())
+                for page in pages:
+                    url = page.get("url", "")
+                    if any(p in url for p in MS_LOGIN_PATTERNS):
+                        ws_url = page.get("webSocketDebuggerUrl")
+                        if ws_url:
+                            logger.info(f"[MS-fetch] Found login popup: {url[:80]}")
+                            break
+                if ws_url:
+                    break
+            except Exception as e:
+                logger.debug(f"[MS-fetch] Wait error: {e}")
+            await asyncio.sleep(0.5)
 
-        # Start the server in a background thread
-        server = http.server.HTTPServer(("127.0.0.1", MS_LOCAL_PORT), _CallbackHandler)
-        server.timeout = 1   # poll every 1 s so we can check code_holder
-        thread = threading.Thread(target=server.serve_forever, daemon=True)
-        thread.start()
-        logger.info(f"[MS] Local redirect server listening on port {MS_LOCAL_PORT}")
+        if not ws_url:
+            logger.warning("[MS-fetch] Login popup not found within 60 s")
+            return None
+
+        # ── Step 2: connect and enable Fetch interception on this page ───────
+        remaining = timeout - (time.time() - start)
+        logger.info(f"[MS-fetch] Connecting to popup WS, {remaining:.0f}s remaining")
 
         try:
-            deadline = asyncio.get_event_loop().time() + timeout
-            while asyncio.get_event_loop().time() < deadline:
-                if code_holder["received"]:
-                    return code_holder["code"]
-                await asyncio.sleep(0.5)
-            logger.warning("[MS] Local redirect server timed out")
-            return None
-        finally:
-            server.shutdown()
-            logger.info("[MS] Local redirect server stopped")
+            async with websockets.connect(ws_url, ping_interval=None, open_timeout=10) as ws:
+                msg_id = 1
+
+                async def send_cmd(method, params=None):
+                    nonlocal msg_id
+                    await ws.send(json.dumps(
+                        {"id": msg_id, "method": method, "params": params or {}}
+                    ))
+                    msg_id += 1
+
+                # Enable Fetch on this page for oauth20_desktop.srf only
+                await send_cmd("Fetch.enable", {
+                    "patterns": [{"urlPattern": "*oauth20_desktop.srf*"}]
+                })
+                # Consume the Fetch.enable response
+                await asyncio.wait_for(ws.recv(), timeout=5)
+                logger.info("[MS-fetch] Fetch interception enabled on login popup")
+
+                deadline = time.time() + remaining
+                while time.time() < deadline:
+                    try:
+                        raw = await asyncio.wait_for(ws.recv(), timeout=1.0)
+                    except asyncio.TimeoutError:
+                        continue
+                    try:
+                        msg = json.loads(raw)
+                    except json.JSONDecodeError:
+                        continue
+
+                    if msg.get("method") != "Fetch.requestPaused":
+                        continue
+
+                    p          = msg.get("params", {})
+                    request_id = p.get("requestId")
+                    req_url    = p.get("request", {}).get("url", "")
+                    logger.debug(f"[MS-fetch] Fetch.requestPaused: {req_url[:120]}")
+
+                    # Always continue so CEF behaves normally
+                    await send_cmd("Fetch.continueRequest", {"requestId": request_id})
+
+                    if "code=" in req_url and "oauth20_desktop.srf" in req_url:
+                        from urllib.parse import urlparse, parse_qs as _pqs
+                        params = _pqs(urlparse(req_url).query)
+                        code = params.get("code", [None])[0]
+                        if code:
+                            logger.info("[MS-fetch] ✓ OAuth code captured via Fetch.requestPaused")
+                            try:
+                                await send_cmd("Fetch.disable", {})
+                            except Exception:
+                                pass
+                            return code
+
+        except Exception as e:
+            logger.warning(f"[MS-fetch] WebSocket error: {e}")
+
+        logger.warning("[MS-fetch] Fetch interception timed out")
+        return None
