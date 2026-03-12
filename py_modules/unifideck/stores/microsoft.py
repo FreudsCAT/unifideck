@@ -56,6 +56,8 @@ logger = logging.getLogger(__name__)
 # Public client ID used by many open-source Xbox tools (no secret required).
 MS_CLIENT_ID   = "000000004C12AE6F"
 MS_REDIRECT    = "https://login.live.com/oauth20_desktop.srf"
+MS_LOCAL_PORT  = 47682   # Local redirect server port (arbitrary, unlikely to conflict)
+MS_LOCAL_REDIRECT = f"http://127.0.0.1:{MS_LOCAL_PORT}/callback"
 MS_AUTH_URL    = "https://login.live.com/oauth20_authorize.srf"
 MS_TOKEN_URL   = "https://login.live.com/oauth20_token.srf"
 MS_SCOPE       = "Xboxlive.signin Xboxlive.offline_access"
@@ -232,14 +234,16 @@ class MicrosoftConnector(Store):
             return False
 
     async def start_auth(self) -> Dict[str, Any]:
-        """Build the Microsoft OAuth URL and launch CDP monitoring."""
-        # Clear Microsoft cookies from CEF so the user always sees the login form.
-        # Without this, stale cookies cause Microsoft to silently SSO and emit
-        # oauth20_desktop.srf?removed=true immediately — before the form appears.
-        # We do NOT use prompt=login or prompt=select_account because those also
-        # trigger removed=true (Microsoft tears down the session before re-issuing
-        # the code, and CEF never follows that second redirect).
-        # Strategy: clear cookies (forces fresh form) + no prompt (clean code flow).
+        """Build the Microsoft OAuth URL and start a local redirect server.
+
+        Strategy: instead of intercepting CEF browser redirects (unreliable —
+        Microsoft's oauth20_desktop.srf ?code= redirect disappears in < 50 ms
+        before any CDP hook can capture it), we start a lightweight HTTP server
+        on localhost and use it as the redirect_uri.  When Microsoft redirects
+        the browser to http://127.0.0.1:{port}/callback?code=..., our server
+        receives the code directly — no timing races, no CEF interception needed.
+        """
+        # Clear Microsoft cookies so the user always sees a fresh login form.
         try:
             from ..auth.browser import CDPOAuthMonitor as _Mon
             _mon = _Mon()
@@ -248,23 +252,18 @@ class MicrosoftConnector(Store):
             await _mon.clear_cookies_for_domain("microsoft.com")
             logger.info("[MS] Cleared Microsoft cookies before auth")
         except Exception as e:
-            logger.debug(f"[MS] Cookie clear before auth (non-fatal): {e}")
+            logger.debug(f"[MS] Cookie clear (non-fatal): {e}")
 
         auth_url = (
             f"{MS_AUTH_URL}"
             f"?client_id={MS_CLIENT_ID}"
-            f"&redirect_uri={urllib.parse.quote(MS_REDIRECT)}"
+            f"&redirect_uri={urllib.parse.quote(MS_LOCAL_REDIRECT)}"
             f"&response_type=code"
             f"&scope={urllib.parse.quote(MS_SCOPE)}"
-            # No prompt= — after cookie clearing Microsoft shows the login form
-            # directly and issues ?code= on success with no removed=true detour.
+            f"&display=touch"
         )
 
-        # Store auth_url so the monitor can re-navigate if it hits removed=true.
-        self._pending_auth_url = auth_url
-
-        # Cancel any previous monitor task before starting a new one so that
-        # double-clicking "Connect" doesn't spawn two competing monitors.
+        # Cancel any previous monitor task before starting a new one.
         if hasattr(self, "_auth_monitor_task") and self._auth_monitor_task and not self._auth_monitor_task.done():
             self._auth_monitor_task.cancel()
         self._auth_monitor_task = asyncio.create_task(self._monitor_and_complete_auth())
@@ -284,7 +283,7 @@ class MicrosoftConnector(Store):
                     MS_TOKEN_URL,
                     {
                         "client_id":    MS_CLIENT_ID,
-                        "redirect_uri": MS_REDIRECT,
+                        "redirect_uri": MS_LOCAL_REDIRECT,
                         "code":         auth_code,
                         "grant_type":   "authorization_code",
                     },
@@ -1174,90 +1173,80 @@ class MicrosoftConnector(Store):
 
 
     async def _monitor_and_complete_auth(self):
-        """Background task: detect Microsoft OAuth redirect in the browser and auto-complete."""
+        """Background task: wait for the local redirect server to receive the OAuth code."""
         try:
-            from ..auth.browser import CDPOAuthMonitor
-            monitor = CDPOAuthMonitor()
-            # ── Fast path: check if oauth20_desktop.srf is already open ──────
-            # Handles two cases:
-            #  - code= already present: SSO completed before monitor attached
-            #  - removed=true: CEF won't follow the next redirect; re-navigate to
-            #    restart the flow so the user doesn't have to click Connect again.
-            try:
-                import urllib.request, json as _json
-                with urllib.request.urlopen(monitor.cef_url, timeout=2) as r:
-                    pages = _json.loads(r.read().decode())
-                for page in pages:
-                    url = page.get('url', '')
-                    if 'oauth20_desktop.srf' in url:
-                        if 'code=' in url:
-                            from urllib.parse import urlparse, parse_qs
-                            params = parse_qs(urlparse(url).query)
-                            code = params.get('code', [None])[0]
-                            if code:
-                                logger.info("[MS] Fast-path: found oauth20_desktop.srf with code, extracting")
-                                monitor.monitored_urls.add(url)
-                                result = await self.complete_auth(code)
-                                if result["success"]:
-                                    logger.info("[MS] ✓ Authentication completed via fast-path")
-                                    return
-                                logger.warning(f"[MS] Fast-path code rejected ({result.get('error')}), falling through to monitor")
-                        elif 'removed=true' in url:
-                            pending_url = getattr(self, '_pending_auth_url', None)
-                            if pending_url:
-                                logger.info("[MS] Fast-path: detected removed=true, re-navigating to auth URL")
-                                monitor.monitored_urls.add(url)
-                                await monitor.navigate_page_to_url("oauth20_desktop.srf", pending_url)
-                                await asyncio.sleep(1)
-            except Exception as e:
-                logger.debug(f"[MS] Fast-path check error (non-fatal): {e}")
-
-            # ── Normal path: run the full CDP monitor ─────────────────────────
-            code, store = await monitor.monitor_for_oauth_code(expected_store="microsoft", timeout=300)
-
-            # Handle removed=true sentinel: re-navigate and wait for the real code
-            if code == '__removed__' and store == 'microsoft':
-                pending_url = getattr(self, '_pending_auth_url', None)
-                if pending_url:
-                    logger.info("[MS] removed=true detected — re-navigating to auth URL and resuming")
-                    await monitor.navigate_page_to_url("oauth20_desktop.srf", pending_url)
-                    await asyncio.sleep(1)
-                    code, store = await monitor.monitor_for_oauth_code(
-                        expected_store="microsoft", timeout=240
-                    )
-                else:
-                    code = None
-
-            if code and store == "microsoft":
-                logger.info("[MS] ✓ Auto-captured Microsoft auth code via CDP")
+            code = await self._wait_for_local_redirect(timeout=300)
+            if code:
+                logger.info("[MS] ✓ Received OAuth code via local redirect server")
                 result = await self.complete_auth(code)
                 if result["success"]:
-                    logger.info("[MS] ✓ Authentication completed automatically")
+                    logger.info("[MS] ✓ Authentication completed")
                 else:
-                    # The captured code was stale (e.g. leftover redirect page from a
-                    # previous session that was not closed before logout).  Don't give
-                    # up — resume monitoring so we can capture the fresh code the user
-                    # is about to obtain by completing the login form.
-                    logger.warning(
-                        f"[MS] complete_auth failed for captured code "
-                        f"({result.get('error')}) — likely a stale code; "
-                        f"resuming monitor for a fresh one"
-                    )
-                    # The bad URL is already in monitor.monitored_urls so it won't
-                    # be replayed.  Keep remaining timeout budget.
-                    fresh_code, fresh_store = await monitor.monitor_for_oauth_code(
-                        expected_store="microsoft", timeout=240
-                    )
-                    if fresh_code and fresh_store == "microsoft":
-                        logger.info("[MS] ✓ Captured fresh Microsoft auth code on retry")
-                        retry = await self.complete_auth(fresh_code)
-                        if retry["success"]:
-                            logger.info("[MS] ✓ Authentication completed on retry")
-                        else:
-                            logger.error(f"[MS] Auth retry also failed: {retry.get('error')}")
-                    else:
-                        logger.warning("[MS] CDP monitor timed out waiting for fresh code")
+                    logger.error(f"[MS] complete_auth failed: {result.get('error')}")
             else:
-                logger.warning("[MS] CDP monitor timed out without capturing a Microsoft code")
+                logger.warning("[MS] Local redirect server timed out — no code received")
         except Exception as e:
-            logger.error(f"[MS] CDP monitor error: {e}", exc_info=True)
+            logger.error(f"[MS] Auth monitor error: {e}", exc_info=True)
+
+    async def _wait_for_local_redirect(self, timeout: float = 300) -> Optional[str]:
+        """
+        Start a temporary HTTP server on MS_LOCAL_PORT that waits for Microsoft
+        to redirect the browser to http://127.0.0.1:{port}/callback?code=...
+
+        Returns the auth code on success, None on timeout.
+        """
+        import http.server
+        import threading
+        from urllib.parse import urlparse, parse_qs
+
+        code_holder: Dict[str, Any] = {"code": None, "received": False}
+
+        class _CallbackHandler(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                parsed = urlparse(self.path)
+                if parsed.path == "/callback":
+                    params = parse_qs(parsed.query)
+                    code = params.get("code", [None])[0]
+                    if code:
+                        code_holder["code"]     = code
+                        code_holder["received"] = True
+                        # Return a simple success page visible in CEF
+                        body = (
+                            "<html><body style='font-family:sans-serif;text-align:center;"
+                            "padding-top:80px'>"
+                            "<h2>&#10003; Connected to Microsoft</h2>"
+                            "<p>You can close this window.</p></body></html>"
+                        ).encode("utf-8")
+                        self.send_response(200)
+                        self.send_header("Content-Type", "text/html; charset=utf-8")
+                        self.send_header("Content-Length", str(len(body)))
+                        self.end_headers()
+                        self.wfile.write(body)
+                    else:
+                        self.send_response(400)
+                        self.end_headers()
+                else:
+                    self.send_response(404)
+                    self.end_headers()
+
+            def log_message(self, fmt, *args):
+                logger.debug(f"[MS-server] {fmt % args}")
+
+        # Start the server in a background thread
+        server = http.server.HTTPServer(("127.0.0.1", MS_LOCAL_PORT), _CallbackHandler)
+        server.timeout = 1   # poll every 1 s so we can check code_holder
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        logger.info(f"[MS] Local redirect server listening on port {MS_LOCAL_PORT}")
+
+        try:
+            deadline = asyncio.get_event_loop().time() + timeout
+            while asyncio.get_event_loop().time() < deadline:
+                if code_holder["received"]:
+                    return code_holder["code"]
+                await asyncio.sleep(0.5)
+            logger.warning("[MS] Local redirect server timed out")
+            return None
+        finally:
+            server.shutdown()
+            logger.info("[MS] Local redirect server stopped")
