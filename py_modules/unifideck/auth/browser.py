@@ -308,8 +308,14 @@ class CDPOAuthMonitor:
         """Close all open CEF pages whose URL matches any of the given domains.
 
         Returns the number of pages successfully closed.
-        Used after Microsoft auth to clean up all login pages
-        (oauth20_authorize, ppsecure, oauth20_desktop, etc.).
+
+        Strategy (most → least reliable in Steam CEF):
+          1. Navigate to about:blank via Page.navigate — frees the page context and
+             dismisses the visible content before closing, which is the most reliable
+             way to make CEF actually hide the popup.
+          2. /json/close/{id} HTTP endpoint
+          3. Target.closeTarget via WebSocket
+          4. Page.close via WebSocket (last resort)
         """
         closed = 0
         try:
@@ -319,12 +325,33 @@ class CDPOAuthMonitor:
             for page in pages:
                 url     = page.get("url", "")
                 page_id = page.get("id", "")
+                ws_url  = page.get("webSocketDebuggerUrl", "")
                 if not any(d in url for d in domains):
                     continue
 
                 logger.info(f"[CDP] Closing MS page: {url[:80]}")
 
-                # Try /json/close/{id} first
+                # Step 1: navigate to about:blank — clears visible content and
+                # often causes Steam CEF to dismiss the popup window on its own.
+                if ws_url:
+                    try:
+                        import websockets
+                        async with websockets.connect(
+                            ws_url, ping_interval=None, open_timeout=5
+                        ) as ws:
+                            await ws.send(json.dumps({
+                                "id": 1,
+                                "method": "Page.navigate",
+                                "params": {"url": "about:blank"},
+                            }))
+                            await asyncio.wait_for(ws.recv(), timeout=3)
+                            logger.debug(f"[CDP] Navigated to about:blank: {url[:60]}")
+                    except Exception as e:
+                        logger.debug(f"[CDP] Page.navigate about:blank failed: {e}")
+
+                await asyncio.sleep(0.1)
+
+                # Step 2: /json/close/{id}
                 closed_ok = False
                 if page_id:
                     try:
@@ -333,30 +360,50 @@ class CDPOAuthMonitor:
                         ) as r:
                             r.read()
                         closed_ok = True
+                        logger.debug(f"[CDP] Closed via /json/close: {url[:60]}")
                     except Exception as e:
                         logger.debug(f"[CDP] /json/close failed: {e}")
 
-                # Fallback: Target.closeTarget via WebSocket
-                if not closed_ok:
-                    ws_url = page.get("webSocketDebuggerUrl")
-                    if ws_url:
-                        try:
-                            import websockets
-                            async with websockets.connect(
-                                ws_url, ping_interval=None, open_timeout=5
-                            ) as ws:
-                                await ws.send(json.dumps({
-                                    "id": 1,
-                                    "method": "Target.closeTarget",
-                                    "params": {"targetId": page_id},
-                                }))
-                                await asyncio.wait_for(ws.recv(), timeout=3)
-                            closed_ok = True
-                        except Exception as e:
-                            logger.debug(f"[CDP] Target.closeTarget failed: {e}")
+                # Step 3: Target.closeTarget
+                if not closed_ok and ws_url:
+                    try:
+                        import websockets
+                        async with websockets.connect(
+                            ws_url, ping_interval=None, open_timeout=5
+                        ) as ws:
+                            await ws.send(json.dumps({
+                                "id": 1,
+                                "method": "Target.closeTarget",
+                                "params": {"targetId": page_id},
+                            }))
+                            await asyncio.wait_for(ws.recv(), timeout=3)
+                        closed_ok = True
+                        logger.debug(f"[CDP] Closed via Target.closeTarget: {url[:60]}")
+                    except Exception as e:
+                        logger.debug(f"[CDP] Target.closeTarget failed: {e}")
+
+                # Step 4: Page.close
+                if not closed_ok and ws_url:
+                    try:
+                        import websockets
+                        async with websockets.connect(
+                            ws_url, ping_interval=None, open_timeout=5
+                        ) as ws:
+                            await ws.send(json.dumps({
+                                "id": 1,
+                                "method": "Page.close",
+                                "params": {},
+                            }))
+                            await asyncio.wait_for(ws.recv(), timeout=3)
+                        closed_ok = True
+                        logger.debug(f"[CDP] Closed via Page.close: {url[:60]}")
+                    except Exception as e:
+                        logger.debug(f"[CDP] Page.close failed: {e}")
 
                 if closed_ok:
                     closed += 1
+                else:
+                    logger.warning(f"[CDP] Could not close page: {url[:80]}")
 
         except Exception as e:
             logger.error(f"[CDP] Error closing MS pages: {e}")
