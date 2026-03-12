@@ -1364,6 +1364,17 @@ class MicrosoftConnector(Store):
                             code = params.get("code", [None])[0]
                             if code:
                                 logger.info("[MS-net] ✓ OAuth code captured")
+                                # Close the popup NOW while we still have an active
+                                # WebSocket to the login page.  Once CEF follows the
+                                # redirect to ?removed=true that page has no debugger
+                                # URL and cannot be reached via CDP at all.
+                                try:
+                                    await send_cmd("Runtime.evaluate", {
+                                        "expression": "window.close()"
+                                    })
+                                    logger.info("[MS-net] window.close() sent to login popup")
+                                except Exception as e:
+                                    logger.debug(f"[MS-net] window.close() failed: {e}")
                                 return code
 
                         elif "removed=true" in req_url:
