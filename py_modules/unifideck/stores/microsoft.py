@@ -1174,40 +1174,41 @@ class MicrosoftConnector(Store):
 
 
     async def _monitor_and_complete_auth(self):
-        """Background task: intercept the OAuth redirect via Fetch on the login popup."""
+        """Background task: intercept the OAuth redirect via Network events on the login popup."""
         try:
-            code = await self._intercept_oauth_code_via_fetch(timeout=300)
+            code = await self._intercept_oauth_code_via_network(timeout=300)
             if code:
-                logger.info("[MS] ✓ Received OAuth code via Fetch interception")
+                logger.info("[MS] \u2713 Received OAuth code via Network interception")
                 result = await self.complete_auth(code)
                 if result["success"]:
-                    logger.info("[MS] ✓ Authentication completed")
+                    logger.info("[MS] \u2713 Authentication completed")
                 else:
                     logger.error(f"[MS] complete_auth failed: {result.get('error')}")
             else:
-                logger.warning("[MS] Fetch interception timed out — no code received")
+                logger.warning("[MS] Network interception timed out — no code received")
         except Exception as e:
             logger.error(f"[MS] Auth monitor error: {e}", exc_info=True)
 
-    async def _intercept_oauth_code_via_fetch(self, timeout: float = 300) -> Optional[str]:
+    async def _intercept_oauth_code_via_network(self, timeout: float = 300) -> Optional[str]:
         """
-        Intercept the oauth20_desktop.srf?code= redirect using CDP Fetch.enable
-        connected directly to the Microsoft login popup page target.
+        Capture the OAuth code by listening to Network.requestWillBeSent on the
+        Microsoft login popup page.
 
-        Flow:
-          1. Wait for the MS login popup to appear in /json
-          2. Connect to that page's WebSocket debugger
-          3. Enable Fetch interception for *oauth20_desktop.srf*
-          4. When Fetch.requestPaused fires, extract ?code= and continue the request
-
-        Connecting to the popup page target (not /json/version browser target)
-        is essential — Steam's CEF does not expose a browser-level target.
+        Why Network instead of Fetch:
+          - Fetch.requestPaused does NOT fire for top-level document navigations
+            in Steam's embedded CEF (confirmed via logs — Fetch.enable succeeded
+            but Fetch.requestPaused never fired during the redirect).
+          - Network.requestWillBeSent fires for EVERY step in a redirect chain,
+            including intermediate 302 hops.  When Microsoft redirects the browser
+            to oauth20_desktop.srf?code=XXX, this event fires with that URL in
+            params.request.url BEFORE the browser follows the next 302 to
+            ?removed=true.  We extract the code at that moment.
         """
         import time
         try:
             import websockets
         except ImportError:
-            logger.warning("[MS-fetch] websockets not available")
+            logger.warning("[MS-net] websockets not available")
             return None
 
         MS_LOGIN_PATTERNS = ("login.live.com", "login.microsoftonline.com")
@@ -1215,8 +1216,8 @@ class MicrosoftConnector(Store):
         start = time.time()
         ws_url = None
 
-        # ── Step 1: wait for the MS login popup to appear ────────────────────
-        logger.info("[MS-fetch] Waiting for Microsoft login popup in CEF...")
+        # ── Step 1: wait for the MS login popup ──────────────────────────────
+        logger.info("[MS-net] Waiting for Microsoft login popup in CEF...")
         while time.time() - start < min(timeout, 60):
             try:
                 with urllib.request.urlopen(
@@ -1228,21 +1229,21 @@ class MicrosoftConnector(Store):
                     if any(p in url for p in MS_LOGIN_PATTERNS):
                         ws_url = page.get("webSocketDebuggerUrl")
                         if ws_url:
-                            logger.info(f"[MS-fetch] Found login popup: {url[:80]}")
+                            logger.info(f"[MS-net] Found login popup: {url[:80]}")
                             break
                 if ws_url:
                     break
             except Exception as e:
-                logger.debug(f"[MS-fetch] Wait error: {e}")
-            await asyncio.sleep(0.5)
+                logger.debug(f"[MS-net] Wait error: {e}")
+            await asyncio.sleep(0.3)
 
         if not ws_url:
-            logger.warning("[MS-fetch] Login popup not found within 60 s")
+            logger.warning("[MS-net] Login popup not found within 60 s")
             return None
 
-        # ── Step 2: connect and enable Fetch interception on this page ───────
+        # ── Step 2: enable Network domain and listen for redirect ─────────────
         remaining = timeout - (time.time() - start)
-        logger.info(f"[MS-fetch] Connecting to popup WS, {remaining:.0f}s remaining")
+        logger.info(f"[MS-net] Connecting to popup WS, {remaining:.0f}s remaining")
 
         try:
             async with websockets.connect(ws_url, ping_interval=None, open_timeout=10) as ws:
@@ -1255,13 +1256,9 @@ class MicrosoftConnector(Store):
                     ))
                     msg_id += 1
 
-                # Enable Fetch on this page for oauth20_desktop.srf only
-                await send_cmd("Fetch.enable", {
-                    "patterns": [{"urlPattern": "*oauth20_desktop.srf*"}]
-                })
-                # Consume the Fetch.enable response
+                await send_cmd("Network.enable", {})
                 await asyncio.wait_for(ws.recv(), timeout=5)
-                logger.info("[MS-fetch] Fetch interception enabled on login popup")
+                logger.info("[MS-net] Network domain enabled on login popup")
 
                 deadline = time.time() + remaining
                 while time.time() < deadline:
@@ -1274,31 +1271,31 @@ class MicrosoftConnector(Store):
                     except json.JSONDecodeError:
                         continue
 
-                    if msg.get("method") != "Fetch.requestPaused":
+                    if msg.get("method") != "Network.requestWillBeSent":
                         continue
 
-                    p          = msg.get("params", {})
-                    request_id = p.get("requestId")
-                    req_url    = p.get("request", {}).get("url", "")
-                    logger.debug(f"[MS-fetch] Fetch.requestPaused: {req_url[:120]}")
+                    req_url = msg.get("params", {}).get("request", {}).get("url", "")
 
-                    # Always continue so CEF behaves normally
-                    await send_cmd("Fetch.continueRequest", {"requestId": request_id})
+                    if "oauth20_desktop.srf" not in req_url:
+                        continue
 
-                    if "code=" in req_url and "oauth20_desktop.srf" in req_url:
+                    logger.debug(f"[MS-net] requestWillBeSent → {req_url[:120]}")
+
+                    if "code=" in req_url:
                         from urllib.parse import urlparse, parse_qs as _pqs
                         params = _pqs(urlparse(req_url).query)
                         code = params.get("code", [None])[0]
                         if code:
-                            logger.info("[MS-fetch] ✓ OAuth code captured via Fetch.requestPaused")
-                            try:
-                                await send_cmd("Fetch.disable", {})
-                            except Exception:
-                                pass
+                            logger.info("[MS-net] \u2713 OAuth code captured via Network.requestWillBeSent")
                             return code
 
-        except Exception as e:
-            logger.warning(f"[MS-fetch] WebSocket error: {e}")
+                    elif "removed=true" in req_url:
+                        # code= should have appeared before this — if not, something
+                        # went wrong upstream; log and fall through to timeout.
+                        logger.warning("[MS-net] removed=true received without prior code")
 
-        logger.warning("[MS-fetch] Fetch interception timed out")
+        except Exception as e:
+            logger.warning(f"[MS-net] WebSocket error: {e}")
+
+        logger.warning("[MS-net] Network interception timed out")
         return None
