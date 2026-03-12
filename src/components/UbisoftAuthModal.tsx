@@ -10,9 +10,10 @@
  */
 
 import { FC, useState } from "react";
-import { ModalRoot, DialogButton } from "@decky/ui";
-import { call } from "@decky/api";
+import { ModalRoot, DialogButton, TextField } from "@decky/ui";
+import { call, toaster } from "@decky/api";
 import { useTranslation } from "react-i18next";
+import { launchUbisoftAuthViaShortcut } from "../utils/ubisoftShortcutLaunch";
 
 interface UbisoftAuthModalProps {
   onAuthComplete: () => void;
@@ -30,7 +31,6 @@ const CredentialsForm: FC<{
   const { t } = useTranslation();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [showPassword, setShowPassword] = useState(false);
 
   const handleSubmit = () => {
     if (!email.trim() || !password.trim()) {
@@ -40,197 +40,99 @@ const CredentialsForm: FC<{
   };
 
   return (
-    <>
-      <style>{`
-        .ubisoft-password-wrapper {
-          position: relative;
-          display: flex;
-          align-items: center;
-          gap: 8px;
-        }
-        .ubisoft-password-input {
-          flex: 1;
-          padding: 8px 12px;
-          background-color: rgba(0, 0, 0, 0.3);
-          border: 1px solid rgba(255, 255, 255, 0.2);
-          border-radius: 4px;
-          color: #fff;
-          font-size: 14px;
-          font-family: inherit;
-        }
-        .ubisoft-password-input::placeholder {
-          color: rgba(255, 255, 255, 0.4);
-        }
-        .ubisoft-password-input:focus {
-          outline: 2px solid #1a9fff;
-          outline-offset: -1px;
-          background-color: rgba(0, 0, 0, 0.4);
-        }
-        .ubisoft-toggle-btn {
-          padding: 4px 8px;
-          background-color: transparent;
-          border: 1px solid rgba(255, 255, 255, 0.2);
-          border-radius: 4px;
-          color: #888;
-          cursor: pointer;
-          font-size: 11px;
-          white-space: nowrap;
-        }
-        .ubisoft-toggle-btn:hover {
-          color: #fff;
-          border-color: rgba(255, 255, 255, 0.4);
-        }
-      `}</style>
+    <div
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        gap: "20px",
+        padding: "20px",
+        minWidth: "500px",
+      }}
+    >
+      {/* Title */}
+      <div>
+        <h2 style={{ margin: 0, fontSize: "20px", fontWeight: "bold" }}>
+          {t("ubisoftAuth.title")}
+        </h2>
+        <p
+          style={{
+            margin: "8px 0 0 0",
+            fontSize: "14px",
+            color: "#aaa",
+          }}
+        >
+          {t("ubisoftAuth.description")}
+        </p>
+        <p
+          style={{
+            margin: "8px 0 0 0",
+            fontSize: "13px",
+            color: "#ff6b6b",
+            fontWeight: 700,
+          }}
+        >
+          You will be required to login twice for Ubisoft
+        </p>
+      </div>
+
+      {/* Form */}
       <div
         style={{
           display: "flex",
           flexDirection: "column",
-          gap: "20px",
-          padding: "20px",
-          minWidth: "500px",
+          gap: "12px",
         }}
       >
-        {/* Title */}
-        <div>
-          <h2 style={{ margin: 0, fontSize: "20px", fontWeight: "bold" }}>
-            {t("ubisoftAuth.title")}
-          </h2>
-          <p
-            style={{
-              margin: "8px 0 0 0",
-              fontSize: "14px",
-              color: "#aaa",
-            }}
-          >
-            {t("ubisoftAuth.description")}
-          </p>
-          <p
-            style={{
-              margin: "8px 0 0 0",
-              fontSize: "13px",
-              color: "#ff6b6b",
-              fontWeight: 700,
-            }}
-          >
-            You will be required to login twice for Ubisoft
-          </p>
-        </div>
-
-        {/* Form */}
-        <div
-          style={{
-            display: "flex",
-            flexDirection: "column",
-            gap: "12px",
+        <TextField
+          label={t("ubisoftAuth.emailLabel")}
+          value={email}
+          onChange={(e) => setEmail(e.currentTarget.value)}
+          disabled={isLoading}
+          focusOnMount={true}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && !isLoading) handleSubmit();
           }}
-        >
-          {/* Email */}
-          <div>
-            <label
-              style={{
-                display: "block",
-                marginBottom: "4px",
-                fontSize: "12px",
-                color: "#aaa",
-              }}
-            >
-              {t("ubisoftAuth.emailLabel")}
-            </label>
-            <input
-              type="text"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              placeholder="user@example.com"
-              disabled={isLoading}
-              style={{
-                width: "100%",
-                padding: "8px 12px",
-                backgroundColor: "rgba(0, 0, 0, 0.3)",
-                border: "1px solid rgba(255, 255, 255, 0.2)",
-                borderRadius: "4px",
-                color: "#fff",
-                fontSize: "14px",
-                fontFamily: "inherit",
-                boxSizing: "border-box",
-              }}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && !isLoading) handleSubmit();
-              }}
-            />
-          </div>
+        />
 
-          {/* Password */}
-          <div>
-            <label
-              style={{
-                display: "block",
-                marginBottom: "4px",
-                fontSize: "12px",
-                color: "#aaa",
-              }}
-            >
-              {t("ubisoftAuth.passwordLabel")}
-            </label>
-            <div className="ubisoft-password-wrapper">
-              <input
-                type={showPassword ? "text" : "password"}
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                placeholder="••••••••"
-                disabled={isLoading}
-                className="ubisoft-password-input"
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" && !isLoading) handleSubmit();
-                }}
-              />
-              <button
-                type="button"
-                className="ubisoft-toggle-btn"
-                onClick={() => setShowPassword((s) => !s)}
-                disabled={isLoading}
-              >
-                {showPassword
-                  ? t("ubisoftAuth.hidePassword")
-                  : t("ubisoftAuth.showPassword")}
-              </button>
-            </div>
-          </div>
-
-          {/* Error */}
-          {error && (
-            <div style={{ color: "#ff6b6b", fontSize: "12px" }}>
-              {error}
-            </div>
-          )}
-        </div>
-
-        {/* Action buttons */}
-        <div
-          style={{
-            display: "flex",
-            justifyContent: "flex-end",
-            gap: "12px",
+        <TextField
+          label={t("ubisoftAuth.passwordLabel")}
+          value={password}
+          onChange={(e) => setPassword(e.currentTarget.value)}
+          disabled={isLoading}
+          bIsPassword={true}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && !isLoading) handleSubmit();
           }}
-        >
-          <DialogButton
-            onClick={onCancel}
-            disabled={isLoading}
-            style={{ minWidth: "140px" }}
-          >
-            {t("ubisoftAuth.cancel")}
-          </DialogButton>
-          <DialogButton
-            onClick={handleSubmit}
-            disabled={isLoading || !email.trim() || !password.trim()}
-            style={{ minWidth: "140px" }}
-          >
-            {isLoading
-              ? t("ubisoftAuth.signingIn")
-              : t("ubisoftAuth.signIn")}
-          </DialogButton>
-        </div>
+        />
+
+        {/* Error */}
+        {error && <div style={{ color: "#ff6b6b", fontSize: "12px" }}>{error}</div>}
       </div>
-    </>
+
+      {/* Action buttons */}
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "flex-end",
+          gap: "12px",
+        }}
+      >
+        <DialogButton
+          onClick={onCancel}
+          disabled={isLoading}
+          style={{ minWidth: "140px" }}
+        >
+          {t("ubisoftAuth.cancel")}
+        </DialogButton>
+        <DialogButton
+          onClick={handleSubmit}
+          disabled={isLoading || !email.trim() || !password.trim()}
+          style={{ minWidth: "140px" }}
+        >
+          {isLoading ? t("ubisoftAuth.signingIn") : t("ubisoftAuth.signIn")}
+        </DialogButton>
+      </div>
+    </div>
   );
 };
 
@@ -286,39 +188,20 @@ const TwoFactorForm: FC<{
       >
         {/* 2FA Code */}
         <div>
-          <label
-            style={{
-              display: "block",
-              marginBottom: "4px",
-              fontSize: "12px",
-              color: "#aaa",
-            }}
-          >
-            {t("ubisoftAuth.twoFactorLabel")}
-          </label>
-          <input
-            type="text"
+          <TextField
+            label={t("ubisoftAuth.twoFactorLabel")}
             value={code}
             onChange={(e) =>
-              setCode(e.target.value.replace(/\D/g, "").slice(0, 6))
+              setCode(e.currentTarget.value.replace(/\D/g, "").slice(0, 6))
             }
-            placeholder="000000"
             disabled={isLoading}
-            maxLength={6}
+            mustBeNumeric={true}
+            focusOnMount={true}
             style={{
-              width: "100%",
-              padding: "8px 12px",
-              backgroundColor: "rgba(0, 0, 0, 0.3)",
-              border: "1px solid rgba(255, 255, 255, 0.2)",
-              borderRadius: "4px",
-              color: "#fff",
-              fontSize: "14px",
               fontFamily: "monospace",
               letterSpacing: "4px",
               textAlign: "center",
-              boxSizing: "border-box",
             }}
-            autoFocus
             onKeyDown={(e) => {
               if (e.key === "Enter" && !isLoading && code.length === 6) {
                 handleSubmit();
@@ -378,6 +261,31 @@ export const UbisoftAuthModal: FC<UbisoftAuthModalProps> = ({
     }
   };
 
+  const finishSuccessfulAuth = async (launchUpcAuth?: boolean) => {
+    closeModal?.();
+    onAuthComplete();
+
+    if (!launchUpcAuth) {
+      return;
+    }
+
+    let launchResult = await launchUbisoftAuthViaShortcut();
+    if (!launchResult.success) {
+      launchResult = await call<[], { success: boolean; error?: string }>(
+        "connect_ubisoft_account",
+      );
+    }
+
+    if (!launchResult.success) {
+      toaster.toast({
+        title: t("toasts.ubisoftLauncherOpenFailed"),
+        body: launchResult.error || t("toasts.ubisoftLauncherOpenFailedMessage"),
+        duration: 10000,
+        critical: true,
+      });
+    }
+  };
+
   const handleCredentialsSubmit = async (
     email: string,
     password: string,
@@ -391,6 +299,7 @@ export const UbisoftAuthModal: FC<UbisoftAuthModalProps> = ({
         {
           success: boolean;
           requires_2fa?: boolean;
+          launch_upc_auth?: boolean;
           error?: string;
           message?: string;
         }
@@ -404,8 +313,7 @@ export const UbisoftAuthModal: FC<UbisoftAuthModalProps> = ({
           setStep("2fa");
         } else {
           // Auth complete without 2FA
-          closeModal?.();
-          onAuthComplete();
+          await finishSuccessfulAuth(result.launch_upc_auth);
         }
       } else {
         setCredError(
@@ -424,15 +332,17 @@ export const UbisoftAuthModal: FC<UbisoftAuthModalProps> = ({
     setIsLoading(true);
 
     try {
-      const result = await call<[string], { success: boolean; error?: string }>(
+      const result = await call<
+        [string],
+        { success: boolean; launch_upc_auth?: boolean; error?: string }
+      >(
         "complete_ubisoft_2fa",
         code,
       );
 
       if (result.success) {
         // Auth fully complete
-        closeModal?.();
-        onAuthComplete();
+        await finishSuccessfulAuth(result.launch_upc_auth);
       } else {
         setTwoFAError(result.error || t("ubisoftAuth.errorInvalid2FA"));
       }

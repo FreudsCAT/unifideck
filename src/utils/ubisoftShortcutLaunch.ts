@@ -1,0 +1,301 @@
+import { call } from "@decky/api";
+
+export type ShortcutLaunchContext = {
+  success: boolean;
+  store_game_id?: string;
+  tool_name?: string;
+  appid_unsigned?: number;
+  is_linux_runtime?: boolean;
+  launcher_path?: string;
+  current_launch_options?: string;
+  saved_proton_tool?: string;
+  error?: string;
+};
+
+export type ShortcutLaunchResult = {
+  success: boolean;
+  already_running?: boolean;
+  error?: string;
+};
+
+const RESTORE_POLL_DELAY_MS = 250;
+const RESTORE_START_DELAY_MS = 500;
+const RESTORE_TIMEOUT_MS = 5000;
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function extractUserParams(
+  launchOptions: string,
+  storeGameId: string,
+  launcherPath?: string,
+): string {
+  let cleaned = launchOptions.replace(/\s*#%command%\s*$/g, "");
+  const escapedStoreGameId = escapeRegExp(storeGameId);
+
+  cleaned = cleaned
+    .replace(new RegExp(`"${escapedStoreGameId}"`, "g"), "")
+    .replace(new RegExp(escapedStoreGameId, "g"), "")
+    .replace(/\bUNIFIDECK_[A-Z0-9_]+=(?:"[^"]*"|\S+)/g, "");
+
+  if (launcherPath) {
+    const escapedLauncherPath = escapeRegExp(launcherPath);
+    cleaned = cleaned
+      .replace(new RegExp(`"${escapedLauncherPath}"`, "g"), "")
+      .replace(new RegExp(escapedLauncherPath, "g"), "");
+  }
+
+  return cleaned.replace(/\s{2,}/g, " ").trim();
+}
+
+function buildTemporaryLaunchOptions(
+  context: ShortcutLaunchContext,
+  extraEnv: Record<string, string>,
+  launchStoreGameId?: string,
+): string {
+  const sourceStoreGameId = context.store_game_id ?? "";
+  const storeGameId = launchStoreGameId ?? sourceStoreGameId;
+  const currentOptions = context.current_launch_options ?? sourceStoreGameId;
+  const userParams = extractUserParams(
+    currentOptions,
+    sourceStoreGameId,
+    context.launcher_path,
+  );
+  const envTokens = Object.entries(extraEnv)
+    .filter(([, value]) => Boolean(value))
+    .map(([key, value]) => `${key}=${value}`)
+    .join(" ");
+
+  return [storeGameId, envTokens, userParams].filter(Boolean).join(" ").trim();
+}
+
+export function getShortcutRunGameId(appId: number): string {
+  const appStore = (window as any).appStore;
+  const overview = appStore?.m_mapApps?.get?.(appId);
+  return overview?.gameid ?? String(appId);
+}
+
+function getShortcutDisplayStatus(appId: number): number | undefined {
+  const appStore = (window as any).appStore;
+  const overview = appStore?.m_mapApps?.get?.(appId);
+  if (!overview) {
+    return undefined;
+  }
+
+  return (
+    overview.local_per_client_data?.display_status ??
+    overview.per_client_data?.[0]?.display_status
+  );
+}
+
+export function isShortcutAppRunning(appId: number): boolean {
+  const displayStatus = getShortcutDisplayStatus(appId);
+  return displayStatus === 1 || displayStatus === 4;
+}
+
+export function terminateShortcutApp(appId: number): boolean {
+  try {
+    window.SteamClient?.Apps?.TerminateApp?.(getShortcutRunGameId(appId), false);
+    return true;
+  } catch (error) {
+    console.error("[UbisoftShortcutLaunch] TerminateApp failed:", error);
+    return false;
+  }
+}
+
+function scheduleLaunchStateRestore(
+  appId: number,
+  originalLaunchOptions: string,
+  compatToolName: string,
+  alreadyRunning: boolean,
+): void {
+  let restored = false;
+
+  const restore = () => {
+    if (restored) {
+      return;
+    }
+    restored = true;
+
+    if (compatToolName) {
+      window.SteamClient?.Apps?.SpecifyCompatTool?.(appId, compatToolName);
+    }
+    window.SteamClient?.Apps?.SetShortcutLaunchOptions?.(
+      appId,
+      originalLaunchOptions,
+    );
+  };
+
+  const startedAt = Date.now();
+  const poll = () => {
+    if (
+      (!alreadyRunning && isShortcutAppRunning(appId)) ||
+      Date.now() - startedAt >= RESTORE_TIMEOUT_MS
+    ) {
+      restore();
+      return;
+    }
+
+    window.setTimeout(poll, RESTORE_POLL_DELAY_MS);
+  };
+
+  window.setTimeout(poll, RESTORE_START_DELAY_MS);
+}
+
+async function launchShortcutWithTemporaryOptions(
+  context: ShortcutLaunchContext,
+  extraEnv: Record<string, string>,
+  launchStoreGameId?: string,
+): Promise<ShortcutLaunchResult> {
+  if (!context?.success) {
+    return {
+      success: false,
+      error: context?.error || "Shortcut launch context unavailable",
+    };
+  }
+
+  const appId = context.appid_unsigned;
+  const storeGameId = context.store_game_id;
+  if (typeof appId !== "number" || !storeGameId) {
+    return {
+      success: false,
+      error: "Shortcut launch context is incomplete",
+    };
+  }
+
+  const steamApps = window.SteamClient?.Apps;
+  if (!steamApps?.RunGame || !steamApps?.SetShortcutLaunchOptions) {
+    return {
+      success: false,
+      error: "Steam shortcut launch APIs are unavailable",
+    };
+  }
+
+  const alreadyRunning = isShortcutAppRunning(appId);
+  const originalLaunchOptions = context.current_launch_options ?? storeGameId;
+  const temporaryLaunchOptions = buildTemporaryLaunchOptions(
+    context,
+    extraEnv,
+    launchStoreGameId,
+  );
+  const compatToolName =
+    context.tool_name && !context.is_linux_runtime ? context.tool_name : "";
+
+  try {
+    if (compatToolName && context.saved_proton_tool !== compatToolName) {
+      await call<[string, string], { success: boolean }>(
+        "save_proton_setting",
+        storeGameId,
+        compatToolName,
+      );
+    }
+
+    if (compatToolName) {
+      steamApps.SpecifyCompatTool?.(appId, "");
+    }
+
+    steamApps.SetShortcutLaunchOptions(appId, temporaryLaunchOptions);
+    steamApps.RunGame(getShortcutRunGameId(appId), "", -1, 100);
+    scheduleLaunchStateRestore(
+      appId,
+      originalLaunchOptions,
+      compatToolName,
+      alreadyRunning,
+    );
+
+    return { success: true, already_running: alreadyRunning };
+  } catch (error) {
+    console.error("[UbisoftShortcutLaunch] Shortcut launch failed:", error);
+
+    if (compatToolName) {
+      steamApps.SpecifyCompatTool?.(appId, compatToolName);
+    }
+    steamApps.SetShortcutLaunchOptions?.(appId, originalLaunchOptions);
+
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+export async function launchUbisoftInstallViaShortcut(
+  storeGameId: string,
+): Promise<ShortcutLaunchResult> {
+  const context = await call<[string], ShortcutLaunchContext>(
+    "get_compat_tool_for_game",
+    storeGameId,
+  );
+  return launchShortcutWithTemporaryOptions(context, {
+    UNIFIDECK_UBISOFT_ACTION: "install",
+  });
+}
+
+type AuthShortcutContext = {
+  success: boolean;
+  upc_exe_path?: string;
+  upc_dir?: string;
+  auth_prefix_path?: string;
+  compat_tool?: string;
+  error?: string;
+};
+
+// Track the live auth shortcut appId so we can clean up on subsequent calls
+let authShortcutAppId: number | null = null;
+
+export async function launchUbisoftAuthViaShortcut(): Promise<ShortcutLaunchResult> {
+  const steamApps = window.SteamClient?.Apps;
+  if (!steamApps?.AddShortcut || !steamApps?.RunGame) {
+    return { success: false, error: "Steam shortcut APIs unavailable" };
+  }
+
+  // Get auth prefix paths from backend (creates prefix if needed)
+  const context = await call<[], AuthShortcutContext>(
+    "get_ubisoft_auth_shortcut_context",
+  );
+  if (!context.success || !context.upc_exe_path || !context.auth_prefix_path) {
+    return { success: false, error: context.error || "Auth prefix not available" };
+  }
+
+  // Clean up previous ephemeral shortcut if it exists
+  if (authShortcutAppId !== null) {
+    if (isShortcutAppRunning(authShortcutAppId)) {
+      return { success: true, already_running: true };
+    }
+    try {
+      steamApps.RemoveShortcut?.(authShortcutAppId);
+    } catch {
+      // Ignore cleanup errors
+    }
+    authShortcutAppId = null;
+  }
+
+  // Create a live shortcut via Steam's API (immediately available in app cache)
+  const launchOptions =
+    `STEAM_COMPAT_DATA_PATH="${context.auth_prefix_path}" %command%`;
+  const appId = await steamApps.AddShortcut(
+    "Ubisoft Connect",
+    context.upc_exe_path,
+    context.upc_dir ?? "",
+    launchOptions,
+  );
+
+  if (!appId) {
+    return { success: false, error: "Failed to create Steam shortcut" };
+  }
+
+  authShortcutAppId = appId;
+
+  // Assign Proton compat tool so Steam/gamescope tracks the window
+  if (context.compat_tool) {
+    steamApps.SpecifyCompatTool?.(appId, context.compat_tool);
+  }
+
+  // Start backend session monitor before launching
+  await call<[], { success: boolean }>("start_ubisoft_auth_session_monitor");
+
+  // Launch — compat tool is set, Steam will run UPC through Proton
+  steamApps.RunGame(getShortcutRunGameId(appId), "", -1, 100);
+  return { success: true };
+}

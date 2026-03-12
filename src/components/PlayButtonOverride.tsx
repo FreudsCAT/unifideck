@@ -23,6 +23,12 @@ import { useTranslation } from "react-i18next";
 import { updateSingleGameStatus } from "../tabs";
 import { setDownloadStateRef as setInterceptorDownloadState } from "../hooks/gameActionInterceptor";
 import { GOGLanguageSelectModal } from "./GOGLanguageSelectModal";
+import {
+  getShortcutRunGameId,
+  isShortcutAppRunning,
+  launchUbisoftInstallViaShortcut,
+  terminateShortcutApp,
+} from "../utils/ubisoftShortcutLaunch";
 
 // ============================================================
 // CDP-based style management (CSSLoader pattern)
@@ -797,7 +803,7 @@ const PlaySectionWrapperInner: FC<PlaySectionWrapperProps> = ({
               "is_ubisoft_install_active",
               gameInfo.game_id,
             );
-            if (!active) {
+            if (!active && !isShortcutAppRunning(appId)) {
               setUbisoftInstalling(false);
             }
 
@@ -897,10 +903,16 @@ const PlaySectionWrapperInner: FC<PlaySectionWrapperProps> = ({
   const startUbisoftInstall = async () => {
     if (!gameInfo) return;
     setUbisoftInstalling(true);
-    const result = await call<
-      [string, string],
-      { success: boolean; already_running?: boolean; error?: string }
-    >("open_ubisoft_launcher_for_install", gameInfo.game_id, gameInfo.title);
+    let result = await launchUbisoftInstallViaShortcut(
+      `${gameInfo.store}:${gameInfo.game_id}`,
+    );
+
+    if (!result.success) {
+      result = await call<
+        [string, string],
+        { success: boolean; already_running?: boolean; error?: string }
+      >("open_ubisoft_launcher_for_install", gameInfo.game_id, gameInfo.title);
+    }
 
     if (result.success) {
       toaster.toast({
@@ -929,18 +941,27 @@ const PlaySectionWrapperInner: FC<PlaySectionWrapperProps> = ({
 
   const cancelUbisoftInstall = async () => {
     if (!gameInfo) return;
+    const terminated = terminateShortcutApp(appId);
     const result = await call<[string], { success: boolean; error?: string }>(
       "cancel_ubisoft_install",
       gameInfo.game_id,
     );
     setUbisoftInstalling(false);
-    if (result.success) {
+    if (terminated || result.success) {
       toaster.toast({
         title: t("toasts.downloadCancelled"),
         body: t("toasts.downloadCancelledMessage", { title: gameInfo.title }),
         duration: 5000,
       });
+      return;
     }
+
+    toaster.toast({
+      title: t("toasts.cancelFailed"),
+      body: result.error ? t(result.error) : t("toasts.cancelFailedMessage"),
+      duration: 5000,
+      critical: true,
+    });
   };
 
   // Install handler - checks for GOG language selection
@@ -1074,9 +1095,7 @@ const PlaySectionWrapperInner: FC<PlaySectionWrapperProps> = ({
   // FC is cleared at page-load time, so RunGame works without a loading screen.
   const handlePlay = () => {
     try {
-      const appStore = (window as any).appStore;
-      const overview = appStore?.m_mapApps?.get?.(appId);
-      const gameId = overview?.gameid ?? String(appId);
+      const gameId = getShortcutRunGameId(appId);
       console.log(
         `[PlaySectionWrapper] Launching game ${appId} via RunGame (gameId=${gameId})`,
       );

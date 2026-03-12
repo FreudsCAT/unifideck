@@ -26,8 +26,11 @@ logger = logging.getLogger(__name__)
 
 DATA_DIR = os.path.expanduser("~/.local/share/unifideck")
 ID_MAP_FILE = os.path.join(DATA_DIR, "ubisoft_id_map.json")
+SHORTCUTS_REGISTRY_PATH = os.path.join(DATA_DIR, "shortcuts_registry.json")
 PREFIXES_DIR = os.path.join(DATA_DIR, "prefixes", "ubisoft")
 TEMPLATE_DIR = os.path.join(PREFIXES_DIR, ".template")
+AUTH_PREFIX_DIR = os.path.join(PREFIXES_DIR, ".upc-auth")
+AUTH_SHORTCUT_STORE_ID = "ubisoft:upc-auth"
 INSTALLER_CACHE_DIR = os.path.join(DATA_DIR, "ubisoft_installer_cache")
 INSTALLER_FILENAME = "UbisoftConnectInstaller.exe"
 INSTALLER_URL = "https://static3.cdn.ubi.com/orbit/launcher_installer/UbisoftConnectInstaller.exe"
@@ -139,11 +142,12 @@ class UbisoftConnector(Store):
             self._pending_2fa_ticket = result.get("2fa_ticket", "")
             logger.info("[Ubisoft] Login requires 2FA, ticket stored")
         elif result.get("success"):
-            # Auth succeeded -- trigger auto-sync + auto UPC token capture
+            # Auth succeeded -- trigger auto-sync. Launcher-based UPC auth is
+            # now initiated by the frontend so it stays visible in Gaming Mode.
             if self.plugin_instance:
                 logger.info("[Ubisoft] Triggering library sync after auth")
                 asyncio.create_task(self.plugin_instance.force_sync_libraries())
-            asyncio.create_task(self._auto_capture_upc_token())
+            result["launch_upc_auth"] = self._template_exists()
 
         return result
 
@@ -164,11 +168,12 @@ class UbisoftConnector(Store):
         self._pending_2fa_ticket = None  # Clear after use
 
         if result.get("success"):
-            # Auth succeeded -- trigger auto-sync + auto UPC token capture
+            # Auth succeeded -- trigger auto-sync. Launcher-based UPC auth is
+            # now initiated by the frontend so it stays visible in Gaming Mode.
             if self.plugin_instance:
                 logger.info("[Ubisoft] Triggering library sync after 2FA auth")
                 asyncio.create_task(self.plugin_instance.force_sync_libraries())
-            asyncio.create_task(self._auto_capture_upc_token())
+            result["launch_upc_auth"] = self._template_exists()
 
         return result
 
@@ -382,7 +387,9 @@ class UbisoftConnector(Store):
                 return {"success": False, "error": "umu-run not found"}
 
             python_bin = self._find_python()
-            env = self._build_umu_env(prefix_path, f"umu-ubisoft-{game_id}")
+            env = self._build_umu_env(
+                prefix_path, f"umu-ubisoft-{game_id}", f"ubisoft:{game_id}"
+            )
 
             # Step 3: Open UPC for manual install
             return await self._install_via_upc_ui(
@@ -427,7 +434,9 @@ class UbisoftConnector(Store):
             self.inject_upc_session(prefix_path)
 
             python_bin = self._find_python()
-            env = self._build_umu_env(prefix_path, f"umu-ubisoft-{game_id}")
+            env = self._build_umu_env(
+                prefix_path, f"umu-ubisoft-{game_id}", f"ubisoft:{game_id}"
+            )
             launch_id = self.resolve_launch_id(game_id)
             # Use uplay://install/ URL to open the game's install page directly.
             # This works best with UbisoftConnect.exe (the registered protocol handler).
@@ -441,7 +450,9 @@ class UbisoftConnector(Store):
             logger.info(f"[Ubisoft] WINEPREFIX={env.get('WINEPREFIX')} "
                         f"DISPLAY={env.get('DISPLAY')} "
                         f"PROTONPATH={env.get('PROTONPATH')} "
-                        f"GAMEID={env.get('GAMEID')}")
+                        f"GAMEID={env.get('GAMEID')} "
+                        f"SteamAppId={env.get('SteamAppId')} "
+                        f"UMU_STEAM_GAME_ID={env.get('UMU_STEAM_GAME_ID')}")
 
             proc = await asyncio.create_subprocess_exec(
                 *cmd,
@@ -602,7 +613,9 @@ class UbisoftConnector(Store):
                     python_bin = self._find_python()
 
                     if umu_run:
-                        env = self._build_umu_env(prefix_path, f"umu-ubisoft-{game_id}")
+                        env = self._build_umu_env(
+                            prefix_path, f"umu-ubisoft-{game_id}", f"ubisoft:{game_id}"
+                        )
 
                         uninstall_url = f"uplay://uninstall/{install_id}"
                         logger.info(f"[Ubisoft] Trying protocol uninstall: {uninstall_url}")
@@ -710,7 +723,9 @@ class UbisoftConnector(Store):
             if not umu_run:
                 return {"success": False, "error": "umu-run not found"}
 
-            env = self._build_umu_env(prefix_path, f"umu-ubisoft-{game_id}")
+            env = self._build_umu_env(
+                prefix_path, f"umu-ubisoft-{game_id}", f"ubisoft:{game_id}"
+            )
 
             # Launch UPC — it will auto-patch the game
             launch_url = f"uplay://launch/{launch_id}/0"
@@ -1350,8 +1365,77 @@ class UbisoftConnector(Store):
 
             logger.info("[Ubisoft] Template prefix created successfully")
 
+            # Clean up legacy .template shortcut if present (migration)
+            await self._cleanup_legacy_auth_shortcut()
+
         except Exception as e:
             logger.exception(f"[Ubisoft] Template prefix creation failed: {e}")
+
+    async def _ensure_auth_prefix(self) -> Optional[str]:
+        """Ensure the dedicated UPC auth prefix exists and return the upc.exe path.
+
+        Clones from template if needed. Returns None if template doesn't exist yet.
+        """
+        upc_path = self._find_upc_exe(AUTH_PREFIX_DIR)
+        if upc_path:
+            return upc_path
+
+        # Corrupted: exists but no upc.exe — wipe and re-clone
+        if os.path.isdir(AUTH_PREFIX_DIR):
+            logger.warning("[Ubisoft] Auth prefix exists but upc.exe missing; re-cloning")
+            shutil.rmtree(AUTH_PREFIX_DIR, ignore_errors=True)
+
+        if not self._template_exists():
+            logger.debug("[Ubisoft] Template not ready; cannot create auth prefix")
+            return None
+
+        logger.info("[Ubisoft] Cloning template → .upc-auth prefix")
+        os.makedirs(AUTH_PREFIX_DIR, exist_ok=True)
+        proc = await asyncio.create_subprocess_exec(
+            "rsync", "-a", f"{TEMPLATE_DIR}/", f"{AUTH_PREFIX_DIR}/",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        await proc.communicate()
+        if proc.returncode != 0:
+            logger.error("[Ubisoft] rsync failed for auth prefix clone")
+            return None
+
+        upc_path = self._find_upc_exe(AUTH_PREFIX_DIR)
+        if upc_path:
+            logger.info("[Ubisoft] Auth prefix created successfully")
+        return upc_path
+
+    async def _cleanup_legacy_auth_shortcut(self) -> None:
+        """Remove the old .template auth shortcut from VDF and registry (migration)."""
+        if not self.plugin_instance or not hasattr(self.plugin_instance, 'shortcuts_manager'):
+            return
+
+        try:
+            from py_modules.unifideck.shortcuts.shortcuts_manager import (
+                load_shortcuts_registry, save_shortcuts_registry
+            )
+
+            registry = load_shortcuts_registry()
+            if "ubisoft:.template" in registry:
+                logger.info("[Ubisoft] Removing legacy .template auth shortcut from registry")
+                del registry["ubisoft:.template"]
+                save_shortcuts_registry(registry)
+
+            sm = self.plugin_instance.shortcuts_manager
+            shortcuts_data = await sm.read_shortcuts()
+            shortcuts = shortcuts_data.get('shortcuts', {})
+            removed = False
+            for idx in list(shortcuts.keys()):
+                if shortcuts[idx].get('LaunchOptions', '') == 'ubisoft:.template':
+                    del shortcuts[idx]
+                    removed = True
+            if removed:
+                await sm.write_shortcuts(shortcuts_data)
+                logger.info("[Ubisoft] Removed legacy .template shortcut from shortcuts.vdf")
+
+        except Exception as e:
+            logger.warning(f"[Ubisoft] Legacy shortcut cleanup failed: {e}")
 
     async def _ensure_installer_cached(self) -> Optional[str]:
         """
@@ -1462,7 +1546,9 @@ class UbisoftConnector(Store):
             if not umu_run:
                 return False
 
-            env = self._build_umu_env(prefix_path, f"umu-ubisoft-{space_id}")
+            env = self._build_umu_env(
+                prefix_path, f"umu-ubisoft-{space_id}", f"ubisoft:{space_id}"
+            )
 
             python_bin = self._find_python()
             logger.info(f"[Ubisoft] Running: {python_bin} {umu_run} {installer_path} /S")
@@ -1743,6 +1829,102 @@ class UbisoftConnector(Store):
         }
 
     # ========================================================================
+    # Auth Shortcut Context & Session Monitor
+    # ========================================================================
+
+    async def get_ubisoft_auth_shortcut_context(self) -> Dict[str, Any]:
+        """Get auth prefix info so the frontend can create a live shortcut.
+
+        Ensures the auth prefix exists (cloned from template) and returns
+        the UPC exe path and compat data path. The frontend uses
+        SteamClient.Apps.AddShortcut() to register it in Steam's live cache.
+        """
+        upc_exe_path = await self._ensure_auth_prefix()
+        if not upc_exe_path:
+            return {"success": False, "error": "Template prefix not ready"}
+
+        upc_dir = os.path.dirname(upc_exe_path)
+
+        # Find a Proton tool name for the frontend to assign
+        compat_tool = ""
+        try:
+            from py_modules.unifideck.compat.proton_tools import get_compat_tool_for_app
+            from py_modules.unifideck.shortcuts.shortcuts_manager import load_shortcuts_registry
+            from py_modules.unifideck.shortcuts.launch_options import get_store_prefix
+            registry = load_shortcuts_registry()
+            for store_id, entry in registry.items():
+                if get_store_prefix(store_id) == "ubisoft" and store_id != AUTH_SHORTCUT_STORE_ID:
+                    game_appid = entry.get("appid_unsigned")
+                    if game_appid:
+                        compat_tool = get_compat_tool_for_app(game_appid)
+                        if compat_tool:
+                            break
+        except Exception:
+            pass
+
+        if not compat_tool:
+            proton_path = self._find_proton_path()
+            if proton_path:
+                compat_tool = os.path.basename(proton_path)
+            else:
+                compat_tool = "proton_experimental"
+
+        return {
+            "success": True,
+            "upc_exe_path": upc_exe_path,
+            "upc_dir": upc_dir,
+            "auth_prefix_path": AUTH_PREFIX_DIR,
+            "compat_tool": compat_tool,
+        }
+
+    async def start_ubisoft_auth_session_monitor(self) -> Dict[str, Any]:
+        """Start a background task that polls for UPC session capture in the auth prefix.
+
+        Idempotent — cancels any existing monitor before starting a new one.
+        """
+        # Cancel existing monitor
+        if hasattr(self, '_auth_monitor_task') and self._auth_monitor_task and not self._auth_monitor_task.done():
+            self._auth_monitor_task.cancel()
+            try:
+                await self._auth_monitor_task
+            except (asyncio.CancelledError, Exception):
+                pass
+
+        self._auth_session_captured = False
+        self._auth_monitor_task = asyncio.create_task(self._auth_session_monitor_loop())
+        logger.info("[Ubisoft] Started auth session monitor")
+        return {"success": True}
+
+    async def _auth_session_monitor_loop(self) -> None:
+        """Poll auth prefix for session token capture (background task)."""
+        timeout_seconds = 600
+        poll_interval = 2
+        elapsed = 0.0
+
+        while elapsed < timeout_seconds:
+            await asyncio.sleep(poll_interval)
+            elapsed += poll_interval
+
+            captured_token = self._capture_upc_session(AUTH_PREFIX_DIR)
+            if captured_token:
+                logger.info("[Ubisoft] Auth session monitor: token captured!")
+                self._propagate_upc_session_to_all_prefixes(captured_token)
+                self._auth_session_captured = True
+                return
+
+        logger.warning("[Ubisoft] Auth session monitor timed out after 600s")
+
+    def check_ubisoft_auth_session_status(self) -> Dict[str, Any]:
+        """Check whether the auth session monitor has captured a token."""
+        captured = getattr(self, '_auth_session_captured', False)
+        monitoring = (
+            hasattr(self, '_auth_monitor_task')
+            and self._auth_monitor_task
+            and not self._auth_monitor_task.done()
+        )
+        return {"captured": captured, "monitoring": monitoring}
+
+    # ========================================================================
     # Installed Game Detection
     # ========================================================================
 
@@ -1881,7 +2063,9 @@ class UbisoftConnector(Store):
     # Utility Methods
     # ========================================================================
 
-    def _build_umu_env(self, wineprefix: str, gameid: str) -> dict:
+    def _build_umu_env(
+        self, wineprefix: str, gameid: str, store_game_id: Optional[str] = None
+    ) -> dict:
         """Build a clean environment for umu-run, free of Steam/Decky interference.
 
         The Decky plugin inherits Steam's env vars (STEAM_COMPAT_DATA_PATH,
@@ -1906,7 +2090,10 @@ class UbisoftConnector(Store):
             "PROTON_VERB": "waitforexitandrun",
         }
 
-        proton_path = self._find_proton_path()
+        resolved_store_game_id = store_game_id or self._derive_store_game_id(gameid)
+        env.update(self._build_steam_window_env(resolved_store_game_id))
+
+        proton_path = self._resolve_proton_path_for_gameid(gameid, resolved_store_game_id)
         if proton_path:
             env["PROTONPATH"] = proton_path
 
@@ -1916,6 +2103,157 @@ class UbisoftConnector(Store):
         env.update(display_vars)
 
         return env
+
+    def _derive_store_game_id(self, gameid: str) -> Optional[str]:
+        """Derive store:game_id from a Ubisoft UMU GAMEID string."""
+        prefix = "umu-ubisoft-"
+        if not gameid.startswith(prefix):
+            return None
+        suffix = gameid[len(prefix):]
+        if not suffix or suffix in {"template", "auth", "warmup", "login"}:
+            return None
+        return f"ubisoft:{suffix}"
+
+    def _load_shortcuts_registry(self) -> Dict[str, Any]:
+        """Load shortcuts registry used for shortcut appid lookup."""
+        try:
+            if os.path.isfile(SHORTCUTS_REGISTRY_PATH):
+                with open(SHORTCUTS_REGISTRY_PATH, "r") as f:
+                    data = json.load(f)
+                    if isinstance(data, dict):
+                        return data
+        except Exception as e:
+            logger.warning(f"[Ubisoft] Failed loading shortcuts registry: {e}")
+        return {}
+
+    @staticmethod
+    def _parse_positive_int(value: Any) -> Optional[int]:
+        """Parse a value as a positive integer."""
+        try:
+            parsed = int(value)
+        except (TypeError, ValueError):
+            return None
+        return parsed if parsed > 0 else None
+
+    def _resolve_shortcut_appid(self, store_game_id: Optional[str]) -> Optional[int]:
+        """Resolve an unsigned shortcut appid for Steam/gamescope window matching."""
+        registry = self._load_shortcuts_registry()
+
+        if store_game_id:
+            entry = registry.get(store_game_id, {})
+            appid = self._parse_positive_int(entry.get("appid_unsigned"))
+            if appid:
+                return appid
+        else:
+            for key, entry in registry.items():
+                if not isinstance(key, str) or not key.startswith("ubisoft:"):
+                    continue
+                if not isinstance(entry, dict):
+                    continue
+                appid = self._parse_positive_int(entry.get("appid_unsigned"))
+                if appid:
+                    return appid
+
+        for env_var in ("SteamAppId", "SteamGameId", "STEAM_COMPAT_APP_ID"):
+            appid = self._parse_positive_int(os.environ.get(env_var))
+            if appid:
+                return appid
+
+        if store_game_id:
+            for key, entry in registry.items():
+                if not isinstance(key, str) or not key.startswith("ubisoft:"):
+                    continue
+                if not isinstance(entry, dict):
+                    continue
+                appid = self._parse_positive_int(entry.get("appid_unsigned"))
+                if appid:
+                    return appid
+
+        return None
+
+    def _build_steam_window_env(self, store_game_id: Optional[str]) -> Dict[str, str]:
+        """
+        Build Steam app-id env vars so gamescope can attach UMU windows to Steam UI.
+
+        Mirrors bin/unifideck-launcher behavior for SteamGameId/SteamAppId and
+        UMU_STEAM_GAME_ID, which helps launcher/login/install windows appear in
+        gaming mode instead of launching invisibly in the background.
+        """
+        appid = self._resolve_shortcut_appid(store_game_id)
+        if appid:
+            encoded = str((appid << 32) | 0x02000000)
+            logger.info(
+                f"[Ubisoft] Steam window env: appid={appid} store_game_id={store_game_id or '<none>'}"
+            )
+            appid_str = str(appid)
+            return {
+                "SteamGameId": appid_str,
+                "STEAM_COMPAT_APP_ID": appid_str,
+                "SteamAppId": appid_str,
+                "UMU_STEAM_GAME_ID": encoded,
+            }
+
+        logger.info("[Ubisoft] Steam window env: no shortcut appid resolved, using 0")
+        return {
+            "SteamGameId": "0",
+            "STEAM_COMPAT_APP_ID": "0",
+            "SteamAppId": "0",
+            "UMU_STEAM_GAME_ID": "0",
+        }
+
+    def _resolve_proton_path_for_gameid(
+        self, gameid: str, store_game_id: Optional[str] = None
+    ) -> Optional[str]:
+        """Resolve PROTONPATH with launcher-matching priority for Ubisoft flows."""
+        env_protonpath = os.environ.get("PROTONPATH", "").strip()
+        if env_protonpath and os.path.isdir(env_protonpath):
+            return env_protonpath
+
+        try:
+            from ..compat.proton_tools import (
+                get_compat_tool_for_game,
+                get_saved_proton_tool,
+                resolve_proton_path,
+            )
+        except ImportError as e:
+            logger.warning(f"[Ubisoft] Proton tools import failed: {e}")
+            return self._find_proton_path()
+
+        env_proton = os.environ.get("PROTON", "").strip()
+        if env_proton:
+            resolved = resolve_proton_path(env_proton)
+            if resolved:
+                logger.info(f"[Ubisoft] Using PROTON env override: {env_proton}")
+                return resolved
+            logger.warning(f"[Ubisoft] PROTON={env_proton} could not be resolved")
+
+        resolved_store_game_id = store_game_id or self._derive_store_game_id(gameid)
+
+        if resolved_store_game_id:
+            saved_tool = get_saved_proton_tool(resolved_store_game_id)
+            if saved_tool:
+                saved_path = resolve_proton_path(saved_tool)
+                if saved_path:
+                    logger.info(
+                        f"[Ubisoft] Using saved Proton setting for {resolved_store_game_id}: {saved_tool}"
+                    )
+                    return saved_path
+                logger.warning(
+                    f"[Ubisoft] Saved Proton tool for {resolved_store_game_id} not found: {saved_tool}"
+                )
+
+            compat_info = get_compat_tool_for_game(resolved_store_game_id)
+            if compat_info.get("success"):
+                compat_tool = (compat_info.get("tool_name") or "").strip()
+                if compat_tool and not compat_info.get("is_linux_runtime"):
+                    compat_path = resolve_proton_path(compat_tool)
+                    if compat_path:
+                        logger.info(
+                            f"[Ubisoft] Using Steam compat tool for {resolved_store_game_id}: {compat_tool}"
+                        )
+                        return compat_path
+
+        return self._find_proton_path()
 
     def _detect_display_env(self) -> dict:
         """Detect display environment variables for GUI subprocess spawning.

@@ -63,6 +63,16 @@ def get_api_ticket() -> str:
         return ""
 
 
+def iter_ubisoft_prefixes():
+    """Yield all Ubisoft prefix directories, including the template."""
+    if not os.path.isdir(PREFIXES_DIR):
+        return
+    for entry in sorted(os.listdir(PREFIXES_DIR)):
+        prefix_path = os.path.join(PREFIXES_DIR, entry)
+        if os.path.isdir(prefix_path):
+            yield prefix_path
+
+
 def write_session_to_prefix(prefix_path: str, token: str) -> None:
     """Write restore_session into a prefix's settings.yml."""
     active_prefix = get_active_prefix(prefix_path)
@@ -115,13 +125,16 @@ def capture_session(prefix_path: str) -> bool:
         print(f"[capture] Failed to save session token: {e}")
         return False
 
-    # Write to template prefix so future clones inherit it
-    if os.path.isdir(TEMPLATE_DIR):
+    updated_prefixes = 0
+    for target_prefix in iter_ubisoft_prefixes() or []:
         try:
-            write_session_to_prefix(TEMPLATE_DIR, token)
-            print("[capture] Updated template prefix with new token")
+            write_session_to_prefix(target_prefix, token)
+            updated_prefixes += 1
         except Exception as e:
-            print(f"[capture] Failed to update template: {e}")
+            print(f"[capture] Failed to update prefix {target_prefix}: {e}")
+
+    if updated_prefixes:
+        print(f"[capture] Updated {updated_prefixes} Ubisoft prefixes with new token")
 
     return True
 

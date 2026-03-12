@@ -16,6 +16,7 @@ import { ConfirmModal, showModal } from "@decky/ui";
 import React from "react";
 import { GOGLanguageSelectModal } from "../components/GOGLanguageSelectModal";
 import i18n from "i18next";
+import { launchUbisoftInstallViaShortcut } from "../utils/ubisoftShortcutLaunch";
 
 // Reference to the shared game info cache from index.tsx
 let gameInfoCacheRef: Map<number, { info: any; timestamp: number }> | null = null;
@@ -100,10 +101,16 @@ async function startDownload(gameInfo: any, language?: string) {
  */
 async function startUbisoftInstall(gameInfo: any) {
   const t = i18n.t.bind(i18n);
-  const result = await call<
-    [string, string],
-    { success: boolean; already_running?: boolean; error?: string }
-  >("open_ubisoft_launcher_for_install", gameInfo.game_id, gameInfo.title);
+  let result = await launchUbisoftInstallViaShortcut(
+    `${gameInfo.store}:${gameInfo.game_id}`,
+  );
+
+  if (!result.success) {
+    result = await call<
+      [string, string],
+      { success: boolean; already_running?: boolean; error?: string }
+    >("open_ubisoft_launcher_for_install", gameInfo.game_id, gameInfo.title);
+  }
 
   if (result.success) {
     toaster.toast({

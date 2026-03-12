@@ -49,7 +49,7 @@ from py_modules.unifideck.download.update_checker import UpdateChecker
 from py_modules.unifideck.cloud.cloud_save import CloudSaveManager
 
 # Import resilient launch options parser
-from py_modules.unifideck.shortcuts.launch_options import extract_store_id, is_unifideck_shortcut, get_full_id, get_store_prefix
+from py_modules.unifideck.shortcuts.launch_options import extract_store_id, is_unifideck_shortcut, get_full_id
 
 # Import CDP modules for native PlaySection hiding
 from py_modules.unifideck.cdp.cdp_utils import create_cef_debugging_flag, ensure_dummy_network_interface
@@ -2025,7 +2025,7 @@ class Plugin:
         self.amazon = AmazonConnector(plugin_dir=DECKY_PLUGIN_DIR, plugin_instance=self)
 
         logger.info("[INIT] Initializing UbisoftConnector")
-        self.ubisoft = UbisoftConnector(plugin_dir=DECKY_PLUGIN_DIR)
+        self.ubisoft = UbisoftConnector(plugin_dir=DECKY_PLUGIN_DIR, plugin_instance=self)
         self.ubisoft.start_token_refresh()
 
         # Repair games.map for Unifideck shortcuts missing entries (fixes "Game location not mapped" errors)
@@ -5504,22 +5504,15 @@ class Plugin:
 
     # ============== PROTON COMPAT TOOL API ==============
 
-    async def get_compat_tool_for_game(self, store_game_id: str) -> Dict[str, Any]:
-        """Get the Steam compatibility tool set for a Unifideck shortcut.
-
-        Reads config.vdf CompatToolMapping using the shortcut's appID
-        from shortcuts_registry.json. Also returns the launcher path
-        for building %command% bypass launch options.
-
-        Args:
-            store_game_id: e.g., "gog:1234567890"
-        """
+    async def _build_shortcut_launch_context(self, store_game_id: str) -> Dict[str, Any]:
+        """Build frontend launch context for a Unifideck shortcut."""
         from py_modules.unifideck.compat.proton_tools import get_compat_tool_for_game as _get
         from py_modules.unifideck.compat.proton_tools import get_saved_proton_tool as _get_saved
         result = _get(store_game_id)
+        result["store_game_id"] = store_game_id
         result["launcher_path"] = os.path.join(os.path.dirname(__file__), 'bin', 'unifideck-launcher')
         result["saved_proton_tool"] = _get_saved(store_game_id)
-        
+
         # Include current launch options so frontend can preserve user params
         try:
             shortcuts = await self.shortcuts_manager.read_shortcuts()
@@ -5530,8 +5523,38 @@ class Plugin:
                     break
         except Exception as e:
             logger.warning(f"Could not read current launch options: {e}")
-        
+
         return result
+
+    async def get_compat_tool_for_game(self, store_game_id: str) -> Dict[str, Any]:
+        """Get the Steam compatibility tool set for a Unifideck shortcut.
+
+        Reads config.vdf CompatToolMapping using the shortcut's appID
+        from shortcuts_registry.json. Also returns the launcher path
+        for building %command% bypass launch options.
+
+        Args:
+            store_game_id: e.g., "gog:1234567890"
+        """
+        return await self._build_shortcut_launch_context(store_game_id)
+
+    async def get_ubisoft_auth_shortcut_context(self) -> Dict[str, Any]:
+        """Get the dedicated UPC auth shortcut context for frontend RunGame() launch.
+
+        Creates auth prefix + shortcut if needed, returns appid_unsigned for
+        direct RunGame() call (no compat tool clearing needed).
+        """
+        logger.info("[RPC] get_ubisoft_auth_shortcut_context")
+        return await self.ubisoft.get_ubisoft_auth_shortcut_context()
+
+    async def start_ubisoft_auth_session_monitor(self) -> Dict[str, Any]:
+        """Start background polling for UPC session capture in the auth prefix."""
+        logger.info("[RPC] start_ubisoft_auth_session_monitor")
+        return await self.ubisoft.start_ubisoft_auth_session_monitor()
+
+    async def check_ubisoft_auth_session_status(self) -> Dict[str, Any]:
+        """Check whether the auth session monitor has captured a token."""
+        return self.ubisoft.check_ubisoft_auth_session_status()
 
     async def temporarily_clear_compat_tool(self, appid_unsigned: int) -> Dict[str, Any]:
         """Temporarily remove a compat tool entry from config.vdf.

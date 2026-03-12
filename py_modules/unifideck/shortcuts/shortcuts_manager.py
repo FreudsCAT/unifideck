@@ -1373,6 +1373,8 @@ class ShortcutsManager:
 
                     # If this game no longer exists in current library, it's orphaned
                     full_id = get_full_id(launch)
+                    if full_id == "ubisoft:upc-auth":
+                        continue  # Protected auth shortcut
                     if full_id not in current_launch_options:
                         logger.debug(f"Removing orphaned shortcut: {shortcut.get('AppName')} ({launch})")
                         del shortcuts["shortcuts"][idx]
@@ -1552,6 +1554,8 @@ class ShortcutsManager:
                         continue
 
                     full_id = get_full_id(launch)
+                    if full_id == "ubisoft:upc-auth":
+                        continue  # Protected auth shortcut
                     if full_id not in current_launch_options:
                         # Game ID in LaunchOptions doesn't match library
                         # BUT check if we can recover by appid BEFORE marking as orphan
