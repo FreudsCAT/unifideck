@@ -246,7 +246,11 @@ class MicrosoftConnector(Store):
             f"&redirect_uri={urllib.parse.quote(MS_REDIRECT)}"
             f"&response_type=code"
             f"&scope={urllib.parse.quote(MS_SCOPE)}"
-            f"&prompt=select_account"  # Show account picker; forces explicit selection
+            # No prompt= parameter: Microsoft handles the flow naturally and
+            # issues ?code= directly after login without a removed=true detour.
+            # Silent SSO (immediate redirect) is handled by the fast-path in
+            # _monitor_and_complete_auth which checks for an already-open
+            # oauth20_desktop.srf?code= page before starting the full monitor.
         )
 
         # Store auth_url so the monitor can re-navigate if it hits removed=true.
