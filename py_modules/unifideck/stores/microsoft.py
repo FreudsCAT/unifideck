@@ -233,24 +233,31 @@ class MicrosoftConnector(Store):
 
     async def start_auth(self) -> Dict[str, Any]:
         """Build the Microsoft OAuth URL and launch CDP monitoring."""
-        # NOTE: do NOT clear cookies here.  Clearing cookies before opening the
-        # auth URL causes Microsoft to issue an oauth20_desktop.srf?removed=true
-        # intermediate redirect (session teardown) that the CEF browser never
-        # follows with the real ?code= redirect, resulting in a permanent timeout.
-        # Cookie/session cleanup belongs only in logout().
-        # The fast-path in _monitor_and_complete_auth handles the case where an
-        # existing SSO session auto-completes the redirect immediately.
+        # Clear Microsoft cookies from CEF so the user always sees the login form.
+        # Without this, stale cookies cause Microsoft to silently SSO and emit
+        # oauth20_desktop.srf?removed=true immediately — before the form appears.
+        # We do NOT use prompt=login or prompt=select_account because those also
+        # trigger removed=true (Microsoft tears down the session before re-issuing
+        # the code, and CEF never follows that second redirect).
+        # Strategy: clear cookies (forces fresh form) + no prompt (clean code flow).
+        try:
+            from ..auth.browser import CDPOAuthMonitor as _Mon
+            _mon = _Mon()
+            await _mon.clear_cookies_for_domain("login.live.com")
+            await _mon.clear_cookies_for_domain("live.com")
+            await _mon.clear_cookies_for_domain("microsoft.com")
+            logger.info("[MS] Cleared Microsoft cookies before auth")
+        except Exception as e:
+            logger.debug(f"[MS] Cookie clear before auth (non-fatal): {e}")
+
         auth_url = (
             f"{MS_AUTH_URL}"
             f"?client_id={MS_CLIENT_ID}"
             f"&redirect_uri={urllib.parse.quote(MS_REDIRECT)}"
             f"&response_type=code"
             f"&scope={urllib.parse.quote(MS_SCOPE)}"
-            # No prompt= parameter: Microsoft handles the flow naturally and
-            # issues ?code= directly after login without a removed=true detour.
-            # Silent SSO (immediate redirect) is handled by the fast-path in
-            # _monitor_and_complete_auth which checks for an already-open
-            # oauth20_desktop.srf?code= page before starting the full monitor.
+            # No prompt= — after cookie clearing Microsoft shows the login form
+            # directly and issues ?code= on success with no removed=true detour.
         )
 
         # Store auth_url so the monitor can re-navigate if it hits removed=true.
