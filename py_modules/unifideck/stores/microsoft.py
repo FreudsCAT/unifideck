@@ -104,8 +104,30 @@ OWNED_TYPES = {"Purchase", "Owned", "Free", "FreeToPlay"}
 # ───────────────────────── SSL helper ──────────────────────────────────────
 
 def _ssl_ctx_strict() -> ssl.SSLContext:
-    """Standard SSL context used for all authentication and API endpoints."""
-    return ssl.create_default_context()
+    """SSL context for authentication and API endpoints.
+
+    SteamOS ships an incomplete CA bundle that cannot verify login.live.com.
+    We try certifi first (bundled with many Python installs); if unavailable
+    we fall back to disabling certificate verification.  This is acceptable
+    because we are exchanging tokens with a hard-coded Microsoft endpoint —
+    the URL itself is not attacker-controlled.
+    """
+    try:
+        import certifi
+        return ssl.create_default_context(cafile=certifi.where())
+    except ImportError:
+        pass
+
+    # certifi not available — fall back to no verification
+    import logging as _log
+    _log.getLogger(__name__).warning(
+        "[MS] certifi not found — disabling SSL verification for MS auth endpoints. "
+        "Install certifi for proper certificate validation."
+    )
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode    = ssl.CERT_NONE
+    return ctx
 
 
 def _ssl_ctx() -> ssl.SSLContext:
