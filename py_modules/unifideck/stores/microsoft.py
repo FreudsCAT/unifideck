@@ -549,7 +549,6 @@ class MicrosoftConnector(Store):
                     "Properties": {
                         "AuthMethod": "RPS",
                         "SiteName":   "user.auth.xboxlive.com",
-                        "RpsTicket":  f"t={self._ms_access_token}",
                     },
                     "RelyingParty": "http://auth.xboxlive.com",
                     "TokenType":    "JWT",
@@ -558,6 +557,8 @@ class MicrosoftConnector(Store):
                     "Content-Type": "application/json",
                     "Accept":       "application/json",
                     "x-xbl-contract-version": "1",
+                    "User-Agent": "XboxReplay; XboxLiveAuth/3.0",
+                    "Accept-Language": self._get_locale(),
                 },
             )
             self._xbl_token = xbl_resp.get("Token")
@@ -587,6 +588,8 @@ class MicrosoftConnector(Store):
                     "Content-Type": "application/json",
                     "Accept":       "application/json",
                     "x-xbl-contract-version": "1",
+                    "User-Agent": "XboxReplay; XboxLiveAuth/3.0",
+                    "Accept-Language": self._get_locale(),
                 },
             )
 
