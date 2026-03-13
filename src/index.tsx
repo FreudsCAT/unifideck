@@ -1230,10 +1230,15 @@ const Content: FC = () => {
               console.log(
                 `[Unifideck] ✓ ${storeName} authentication successful!`,
               );
-              // Close the OAuth popup — works because it was opened via
-              // window.open(), which allows popup.close() by the opener.
-              if (popup && !popup.closed) {
-                popup.close();
+              // Close the Microsoft browser via CDP on the backend.
+              // window.open() returns null in Decky's CEF context so
+              // popup.close() is not available — backend uses /json/close.
+              if (store === "microsoft") {
+                call<[], { success: boolean; closed: number }>(
+                  "close_microsoft_browser",
+                ).catch((e) =>
+                  console.error("[Unifideck] close_microsoft_browser error:", e),
+                );
               }
               toaster.toast({
                 title: t("toasts.authConnected", { store: storeName }),

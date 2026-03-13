@@ -5700,6 +5700,64 @@ class Plugin:
             logger.error(f"[BROWSER] Failed to open browser: {e}", exc_info=True)
             return {'success': False, 'error': str(e)}
 
+    async def close_microsoft_browser(self) -> Dict[str, Any]:
+        """Close any open Microsoft OAuth pages in Steam's CEF browser via CDP."""
+        import json
+        import urllib.request
+        import asyncio
+
+        MS_DOMAINS = ["login.live.com", "login.microsoftonline.com", "account.microsoft.com"]
+        CEF_URL = "http://127.0.0.1:8080/json"
+        closed = 0
+
+        try:
+            with urllib.request.urlopen(CEF_URL, timeout=2) as r:
+                pages = json.loads(r.read().decode())
+        except Exception as e:
+            logger.debug(f"[MS-close] Could not reach CEF: {e}")
+            return {'success': True, 'closed': 0}
+
+        for page in pages:
+            url     = page.get("url", "")
+            page_id = page.get("id", "")
+            ws_url  = page.get("webSocketDebuggerUrl", "")
+
+            if not any(d in url for d in MS_DOMAINS):
+                continue
+
+            logger.info(f"[MS-close] Closing: {url[:80]}")
+
+            # /json/close is the most reliable method in Steam CEF
+            if page_id:
+                try:
+                    with urllib.request.urlopen(
+                        f"http://127.0.0.1:8080/json/close/{page_id}", timeout=2
+                    ) as r:
+                        r.read()
+                    closed += 1
+                    logger.info(f"[MS-close] Closed via /json/close: {url[:60]}")
+                    continue
+                except Exception as e:
+                    logger.debug(f"[MS-close] /json/close failed: {e}")
+
+            # Fallback: Target.closeTarget
+            if ws_url:
+                try:
+                    import websockets
+                    async with websockets.connect(ws_url, ping_interval=None, open_timeout=5) as ws:
+                        await ws.send(json.dumps({
+                            "id": 1, "method": "Target.closeTarget",
+                            "params": {"targetId": page_id},
+                        }))
+                        await asyncio.wait_for(ws.recv(), timeout=3)
+                    closed += 1
+                    logger.info(f"[MS-close] Closed via Target.closeTarget: {url[:60]}")
+                except Exception as e:
+                    logger.debug(f"[MS-close] Target.closeTarget failed: {e}")
+
+        logger.info(f"[MS-close] Closed {closed} Microsoft page(s)")
+        return {'success': True, 'closed': closed}
+
     async def get_game_metadata(self) -> Dict[int, str]:
         """
         Get metadata for all Unifideck-managed games
