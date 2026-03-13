@@ -1230,6 +1230,11 @@ const Content: FC = () => {
               console.log(
                 `[Unifideck] ✓ ${storeName} authentication successful!`,
               );
+              // Close the OAuth popup — works because it was opened via
+              // window.open(), which allows popup.close() by the opener.
+              if (popup && !popup.closed) {
+                popup.close();
+              }
               toaster.toast({
                 title: t("toasts.authConnected", { store: storeName }),
                 body: t("toasts.authConnectedMessage", { store: storeName }),

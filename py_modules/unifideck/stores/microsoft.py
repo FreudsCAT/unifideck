@@ -323,19 +323,6 @@ class MicrosoftConnector(Store):
 
             logger.info("[MS] ✓ Authentication complete")
 
-            # Close ALL Microsoft login pages left open during the auth flow
-            # (oauth20_authorize, ppsecure, oauth20_desktop, etc.).
-            try:
-                from ..auth.browser import CDPOAuthMonitor as _Mon
-                n = await _Mon().close_all_pages_by_domains([
-                    "login.live.com",
-                    "login.microsoftonline.com",
-                    "account.microsoft.com",
-                ])
-                logger.info(f"[MS] Closed {n} Microsoft browser page(s) after auth")
-            except Exception as e:
-                logger.debug(f"[MS] Page cleanup (non-fatal): {e}")
-
             return {"success": True, "message": "Microsoft account connected"}
 
         except Exception as e:
@@ -366,11 +353,6 @@ class MicrosoftConnector(Store):
             await monitor.clear_cookies_for_domain("login.live.com")
             await monitor.clear_cookies_for_domain("live.com")
             await monitor.clear_cookies_for_domain("microsoft.com")
-            await monitor.close_all_pages_by_domains([
-                "login.live.com",
-                "login.microsoftonline.com",
-                "account.microsoft.com",
-            ])
         except Exception:
             pass
 
@@ -1364,17 +1346,6 @@ class MicrosoftConnector(Store):
                             code = params.get("code", [None])[0]
                             if code:
                                 logger.info("[MS-net] ✓ OAuth code captured")
-                                # Close the popup NOW while we still have an active
-                                # WebSocket to the login page.  Once CEF follows the
-                                # redirect to ?removed=true that page has no debugger
-                                # URL and cannot be reached via CDP at all.
-                                try:
-                                    await send_cmd("Runtime.evaluate", {
-                                        "expression": "window.close()"
-                                    })
-                                    logger.info("[MS-net] window.close() sent to login popup")
-                                except Exception as e:
-                                    logger.debug(f"[MS-net] window.close() failed: {e}")
                                 return code
 
                         elif "removed=true" in req_url:

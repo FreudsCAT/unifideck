@@ -40,8 +40,7 @@ const COMPAT_COLORS: Record<
 const SUPPORT_URLS: Record<StoreFinal | "steam" | "other", string> = {
   epic: "https://www.epicgames.com/help/assistant",
   gog: "https://support.gog.com/hc/en-us?product=gog",
-  amazon:
-    "https://www.amazon.in/gp/help/customer/display.html?nodeId=GA5ZHN5T2JX8UGF7",
+  amazon: "https://www.amazon.in/gp/help/customer/display.html?nodeId=GA5ZHN5T2JX8UGF7",
   ubisoft: "https://www.ubisoft.com/en-us/help",
   ea: "https://help.ea.com/en/",
   battlenet: "https://us.battle.net/support/en/",
