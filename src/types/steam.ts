@@ -62,6 +62,7 @@ declare global {
         OpenAppSettingsDialog(appId: number, section: string): void;
         AddShortcut(appName: string, exePath: string, startDir: string, launchOptions: string): Promise<number>;
         RemoveShortcut(appId: number): void;
+        SetShortcutName?(appId: number, name: string): void;
         SpecifyCompatTool(appId: number, strToolName: string): void;
         SetShortcutLaunchOptions(appId: number, options: string): void;
         GetPlaytime(appId: number): Promise<{ nPlaytimeForever: number; rtLastTimePlayed: number }>;

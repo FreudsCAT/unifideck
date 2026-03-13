@@ -139,6 +139,18 @@ export function updateSingleGameStatus(game: {
     unifideckGameCache.set(altSignedId, entry);
   }
 
+  // If state hasn't actually changed, skip event dispatch + version increment.
+  // This prevents a re-fetch cascade: component mounts → get_game_info →
+  // updateSingleGameStatus → event → handleGameStateChange → clears cache →
+  // re-fetches with loading=true → brief native PlaySection flash (flicker).
+  if (
+    existingEntry &&
+    existingEntry.isInstalled === game.isInstalled &&
+    existingEntry.store === game.store
+  ) {
+    return;
+  }
+
   // Increment version counter to force patcher re-run
   // This causes React to remount components with fresh cache data
   const currentVersion = gameStateVersion.get(signedId) || 0;

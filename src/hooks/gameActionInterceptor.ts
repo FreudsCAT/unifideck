@@ -273,6 +273,14 @@ export function registerGameActionInterceptor(): () => void {
           return;
         }
 
+        // Auth shortcut: start session monitor then let Steam launch normally
+        if (cachedInfo.game_id === "upc-auth") {
+          call<[], { success: boolean }>("start_ubisoft_auth_session_monitor").catch(
+            () => {},
+          );
+          return;
+        }
+
         // Game is installed and not downloading - let Steam handle it normally
         if (cachedInfo.is_installed && !downloadStateRef.isDownloading) {
           return;

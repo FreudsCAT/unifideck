@@ -34,10 +34,14 @@ function extractUserParams(
   let cleaned = launchOptions.replace(/\s*#%command%\s*$/g, "");
   const escapedStoreGameId = escapeRegExp(storeGameId);
 
+  // Remove UNIFIDECK_* env vars FIRST so KEY=storeGameId is removed as a unit
+  // (prevents leaving broken "UNIFIDECK_AUTH=" when storeGameId is stripped later)
+  cleaned = cleaned.replace(/\bUNIFIDECK_[A-Z0-9_]+=(?:"[^"]*"|\S+)/g, "");
+
+  // Then remove standalone storeGameId tokens (not inside KEY=value pairs)
   cleaned = cleaned
     .replace(new RegExp(`"${escapedStoreGameId}"`, "g"), "")
-    .replace(new RegExp(escapedStoreGameId, "g"), "")
-    .replace(/\bUNIFIDECK_[A-Z0-9_]+=(?:"[^"]*"|\S+)/g, "");
+    .replace(new RegExp(`(?<=^|\\s)${escapedStoreGameId}(?=\\s|$)`, "g"), "");
 
   if (launcherPath) {
     const escapedLauncherPath = escapeRegExp(launcherPath);
@@ -232,70 +236,23 @@ export async function launchUbisoftInstallViaShortcut(
   });
 }
 
-type AuthShortcutContext = {
-  success: boolean;
-  upc_exe_path?: string;
-  upc_dir?: string;
-  auth_prefix_path?: string;
-  compat_tool?: string;
-  error?: string;
-};
-
-// Track the live auth shortcut appId so we can clean up on subsequent calls
-let authShortcutAppId: number | null = null;
-
 export async function launchUbisoftAuthViaShortcut(): Promise<ShortcutLaunchResult> {
-  const steamApps = window.SteamClient?.Apps;
-  if (!steamApps?.AddShortcut || !steamApps?.RunGame) {
-    return { success: false, error: "Steam shortcut APIs unavailable" };
-  }
-
-  // Get auth prefix paths from backend (creates prefix if needed)
-  const context = await call<[], AuthShortcutContext>(
+  // Backend returns a ShortcutLaunchContext — same format as game shortcuts.
+  // This lets us reuse launchShortcutWithTemporaryOptions which handles
+  // compat tool clearing, temp launch options, RunGame, and restore.
+  const context = await call<[], ShortcutLaunchContext>(
     "get_ubisoft_auth_shortcut_context",
   );
-  if (!context.success || !context.upc_exe_path || !context.auth_prefix_path) {
-    return { success: false, error: context.error || "Auth prefix not available" };
+  if (!context?.success) {
+    return { success: false, error: context?.error || "Auth shortcut not available" };
   }
 
-  // Clean up previous ephemeral shortcut if it exists
-  if (authShortcutAppId !== null) {
-    if (isShortcutAppRunning(authShortcutAppId)) {
-      return { success: true, already_running: true };
-    }
-    try {
-      steamApps.RemoveShortcut?.(authShortcutAppId);
-    } catch {
-      // Ignore cleanup errors
-    }
-    authShortcutAppId = null;
-  }
-
-  // Create a live shortcut via Steam's API (immediately available in app cache)
-  const launchOptions =
-    `STEAM_COMPAT_DATA_PATH="${context.auth_prefix_path}" %command%`;
-  const appId = await steamApps.AddShortcut(
-    "Ubisoft Connect",
-    context.upc_exe_path,
-    context.upc_dir ?? "",
-    launchOptions,
+  await call<[], { success: boolean }>("start_ubisoft_auth_session_monitor").catch(
+    () => {},
   );
 
-  if (!appId) {
-    return { success: false, error: "Failed to create Steam shortcut" };
-  }
-
-  authShortcutAppId = appId;
-
-  // Assign Proton compat tool so Steam/gamescope tracks the window
-  if (context.compat_tool) {
-    steamApps.SpecifyCompatTool?.(appId, context.compat_tool);
-  }
-
-  // Start backend session monitor before launching
-  await call<[], { success: boolean }>("start_ubisoft_auth_session_monitor");
-
-  // Launch — compat tool is set, Steam will run UPC through Proton
-  steamApps.RunGame(getShortcutRunGameId(appId), "", -1, 100);
-  return { success: true };
+  return launchShortcutWithTemporaryOptions(context, {
+    UNIFIDECK_UBISOFT_ACTION: "auth",
+    UNIFIDECK_UBISOFT_PREFIX_NAME: ".upc-auth",
+  });
 }

@@ -1365,8 +1365,8 @@ class UbisoftConnector(Store):
 
             logger.info("[Ubisoft] Template prefix created successfully")
 
-            # Clean up legacy .template shortcut if present (migration)
-            await self._cleanup_legacy_auth_shortcut()
+            # Create persistent VDF shortcut for auth (also cleans up legacy)
+            await self._ensure_ubisoft_auth_shortcut()
 
         except Exception as e:
             logger.exception(f"[Ubisoft] Template prefix creation failed: {e}")
@@ -1374,7 +1374,8 @@ class UbisoftConnector(Store):
     async def _ensure_auth_prefix(self) -> Optional[str]:
         """Ensure the dedicated UPC auth prefix exists and return the upc.exe path.
 
-        Clones from template if needed. Returns None if template doesn't exist yet.
+        Clones from template if available, or falls back to any existing game prefix.
+        Returns None only if no prefix with UPC is available anywhere.
         """
         upc_path = self._find_upc_exe(AUTH_PREFIX_DIR)
         if upc_path:
@@ -1385,14 +1386,30 @@ class UbisoftConnector(Store):
             logger.warning("[Ubisoft] Auth prefix exists but upc.exe missing; re-cloning")
             shutil.rmtree(AUTH_PREFIX_DIR, ignore_errors=True)
 
-        if not self._template_exists():
-            logger.debug("[Ubisoft] Template not ready; cannot create auth prefix")
+        # Choose source: template preferred, game prefix as fallback
+        src = None
+        label = ""
+        if self._template_exists():
+            src = TEMPLATE_DIR
+            label = "template"
+        elif os.path.isdir(PREFIXES_DIR):
+            for entry in sorted(os.listdir(PREFIXES_DIR)):
+                if entry.startswith('.'):
+                    continue
+                candidate = os.path.join(PREFIXES_DIR, entry)
+                if self._find_upc_exe(candidate):
+                    src = candidate
+                    label = f"game prefix {entry[:8]}"
+                    break
+
+        if not src:
+            logger.debug("[Ubisoft] No template or game prefix available; cannot create auth prefix")
             return None
 
-        logger.info("[Ubisoft] Cloning template → .upc-auth prefix")
+        logger.info(f"[Ubisoft] Cloning {label} → .upc-auth prefix")
         os.makedirs(AUTH_PREFIX_DIR, exist_ok=True)
         proc = await asyncio.create_subprocess_exec(
-            "rsync", "-a", f"{TEMPLATE_DIR}/", f"{AUTH_PREFIX_DIR}/",
+            "rsync", "-a", "--exclude=games", f"{src}/", f"{AUTH_PREFIX_DIR}/",
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
@@ -1401,10 +1418,307 @@ class UbisoftConnector(Store):
             logger.error("[Ubisoft] rsync failed for auth prefix clone")
             return None
 
+        # Fix pfx symlink: rsync preserves the source's symlink target, but
+        # Proton expects pfx/ to point to the prefix itself (not the source).
+        pfx_link = os.path.join(AUTH_PREFIX_DIR, "pfx")
+        if os.path.islink(pfx_link):
+            current_target = os.readlink(pfx_link)
+            if current_target != AUTH_PREFIX_DIR and current_target != ".":
+                os.remove(pfx_link)
+                os.symlink(AUTH_PREFIX_DIR, pfx_link)
+                logger.info(f"[Ubisoft] Fixed pfx symlink: {current_target} → {AUTH_PREFIX_DIR}")
+
         upc_path = self._find_upc_exe(AUTH_PREFIX_DIR)
         if upc_path:
             logger.info("[Ubisoft] Auth prefix created successfully")
         return upc_path
+
+    def _build_auth_launch_options(self) -> str:
+        """Build the canonical launch options for the auth shortcut.
+
+        Uses the unifideck-launcher with auth action + prefix override,
+        same as game shortcuts but with #%command% to bypass Steam's Proton
+        (umu-run handles Proton internally for proper gamescope integration).
+        """
+        return (
+            'ubisoft:upc-auth '
+            'UNIFIDECK_UBISOFT_ACTION=auth '
+            'UNIFIDECK_UBISOFT_PREFIX_NAME=.upc-auth '
+            '#%command%'
+        )
+
+    def _get_launcher_path(self) -> str:
+        """Return the path to the unifideck-launcher script."""
+        # Use self.plugin_dir (set from DECKY_PLUGIN_DIR in __init__),
+        # NOT self.plugin_instance.plugin_dir (Plugin class doesn't have it).
+        plugin_dir = self.plugin_dir
+        if not plugin_dir:
+            # Fallback: derive from __file__ (4 levels up from stores/ubisoft.py)
+            plugin_dir = os.path.dirname(os.path.dirname(os.path.dirname(
+                os.path.dirname(os.path.abspath(__file__))
+            )))
+        return os.path.join(plugin_dir, 'bin', 'unifideck-launcher')
+
+    async def _ensure_ubisoft_auth_shortcut(self) -> Optional[int]:
+        """Create a persistent VDF shortcut for the UPC auth flow.
+
+        Uses the unifideck-launcher as the exe (same as game shortcuts) so
+        that umu-run handles Proton with proper gamescope integration.
+        Writes to shortcuts.vdf, registers in shortcuts_registry.json,
+        sets Proton compat tool, and downloads SteamGridDB artwork.
+        Returns unsigned appId, or None if template/prefix not ready.
+        """
+        if not self.plugin_instance or not hasattr(self.plugin_instance, 'shortcuts_manager'):
+            return None
+
+        try:
+            from py_modules.unifideck.shortcuts.shortcuts_manager import (
+                load_shortcuts_registry, register_shortcut
+            )
+            from py_modules.unifideck.shortcuts.launch_options import get_full_id
+
+            # Check if already registered AND present in VDF
+            registry = load_shortcuts_registry()
+            if AUTH_SHORTCUT_STORE_ID in registry:
+                vdf_found = await self._validate_auth_shortcut()
+                if vdf_found:
+                    return registry[AUTH_SHORTCUT_STORE_ID].get("appid_unsigned")
+                # VDF entry missing (user deleted shortcut) — fall through to recreate
+                logger.info("[Ubisoft] Auth shortcut in registry but missing from VDF, recreating")
+
+            # Ensure auth prefix exists and find upc.exe
+            upc_exe_path = await self._ensure_auth_prefix()
+            if not upc_exe_path:
+                return None
+
+            sm = self.plugin_instance.shortcuts_manager
+            launcher_path = self._get_launcher_path()
+
+            # Compute appId using same CRC32 algorithm as Steam
+            # Use the launcher as exe (same as game shortcuts)
+            appid = sm.generate_app_id("Ubisoft Connect", launcher_path)
+            unsigned_id = appid if appid >= 0 else appid + 2**32
+
+            launch_options = self._build_auth_launch_options()
+
+            # Read VDF once, batch all modifications, then write once.
+            # This minimizes VDF writes which trigger Steam to reload all shortcuts.
+            shortcuts_data = await sm.read_shortcuts()
+            shortcuts = shortcuts_data.get('shortcuts', {})
+            vdf_dirty = False
+
+            # Remove orphaned AddShortcut entries: empty exe+LaunchOptions with
+            # a name that matches our shortcut names. These are debris from old
+            # ephemeral AddShortcut calls that Steam persisted to VDF.
+            orphan_names = {'upc.exe', 'ubisoft connect'}
+            orphan_ids = [
+                idx for idx, s in shortcuts.items()
+                if s.get('AppName', '').lower() in orphan_names
+                and not s.get('exe', '').strip('"')
+                and not s.get('LaunchOptions', '')
+            ]
+            for idx in orphan_ids:
+                name = shortcuts[idx].get('AppName', '?')
+                logger.info(f"[Ubisoft] Removing orphaned shortcut [{idx}] '{name}'")
+                del shortcuts[idx]
+                vdf_dirty = True
+
+            # Remove legacy .template auth shortcut entries (migration)
+            legacy_ids = [
+                idx for idx, s in shortcuts.items()
+                if s.get('LaunchOptions', '') == 'ubisoft:.template'
+            ]
+            for idx in legacy_ids:
+                logger.info(f"[Ubisoft] Removing legacy .template shortcut [{idx}]")
+                del shortcuts[idx]
+                vdf_dirty = True
+
+            # Add canonical auth shortcut if not already in VDF
+            already_in_vdf = any(
+                get_full_id(s.get('LaunchOptions', '')) == AUTH_SHORTCUT_STORE_ID
+                for s in shortcuts.values()
+            )
+
+            if not already_in_vdf:
+                existing_indices = [int(k) for k in shortcuts.keys() if k.isdigit()]
+                next_idx = max(existing_indices, default=-1) + 1
+                shortcuts[str(next_idx)] = {
+                    'appid': appid,
+                    'AppName': 'Ubisoft Connect',
+                    'exe': f'"{launcher_path}"',
+                    'StartDir': f'"{os.path.dirname(launcher_path)}"',
+                    'LaunchOptions': launch_options,
+                    'IsHidden': 0,
+                    'AllowDesktopConfig': 1,
+                    'OpenVR': 0,
+                    'tags': {'0': 'Ubisoft'},
+                }
+                logger.info(f"[Ubisoft] Created auth shortcut in VDF (appid={unsigned_id})")
+                vdf_dirty = True
+
+            # Single VDF write for all batched changes
+            if vdf_dirty:
+                await sm.write_shortcuts(shortcuts_data)
+                logger.info(
+                    f"[Ubisoft] VDF updated: orphans={len(orphan_ids)} "
+                    f"legacy={len(legacy_ids)} added={not already_in_vdf}"
+                )
+
+            # Register in shortcuts_registry.json
+            register_shortcut(AUTH_SHORTCUT_STORE_ID, appid, "Ubisoft Connect")
+
+            # Clean up legacy .template from registry too
+            if "ubisoft:.template" in registry:
+                from py_modules.unifideck.shortcuts.shortcuts_manager import save_shortcuts_registry
+                del registry["ubisoft:.template"]
+                save_shortcuts_registry(registry)
+                logger.info("[Ubisoft] Removed legacy .template from shortcuts registry")
+
+            # Set Proton compat tool in config.vdf
+            compat_tool = self._find_compat_tool_for_auth()
+            if compat_tool:
+                await sm._set_proton_compatibility(appid, compat_tool)
+
+            # Download SteamGridDB artwork
+            await self._fetch_auth_shortcut_artwork(unsigned_id)
+
+            return unsigned_id
+
+        except Exception as e:
+            logger.warning(f"[Ubisoft] Auth shortcut creation failed: {e}")
+            return None
+
+    async def _validate_auth_shortcut(self) -> bool:
+        """Validate the auth shortcut VDF entry, fixing if needed.
+
+        Runs on every plugin init (fast: just reads + compares).
+        Ensures launch options use the unifideck-launcher format,
+        the exe points to the launcher, and the compat tool is set.
+
+        Returns True if the VDF entry was found (even if it needed fixing),
+        False if the entry is missing from VDF entirely.
+        """
+        if not self.plugin_instance or not hasattr(self.plugin_instance, 'shortcuts_manager'):
+            return True  # Can't check — assume OK to avoid unnecessary recreation
+
+        try:
+            from py_modules.unifideck.shortcuts.launch_options import get_full_id
+
+            sm = self.plugin_instance.shortcuts_manager
+            launcher_path = self._get_launcher_path()
+            expected_launch_options = self._build_auth_launch_options()
+
+            # Recompute appId from current launcher path (may differ from old upc.exe-based ID)
+            expected_appid = sm.generate_app_id("Ubisoft Connect", launcher_path)
+
+            # Scan VDF for auth shortcut entry (match by launch options content)
+            shortcuts_data = await sm.read_shortcuts()
+            shortcuts = shortcuts_data.get('shortcuts', {})
+            vdf_updated = False
+            found = False
+
+            for idx, s in shortcuts.items():
+                full_id = get_full_id(s.get('LaunchOptions', ''))
+                if full_id == AUTH_SHORTCUT_STORE_ID:
+                    found = True
+                    # Fix launch options if corrupted
+                    if s.get('LaunchOptions', '') != expected_launch_options:
+                        logger.info(
+                            f"[Ubisoft] Auth shortcut launch options outdated, fixing. "
+                            f"Was: {s.get('LaunchOptions', '')!r}"
+                        )
+                        s['LaunchOptions'] = expected_launch_options
+                        vdf_updated = True
+                    # Fix exe if it points to upc.exe instead of launcher
+                    current_exe = s.get('exe', '').strip('"')
+                    if current_exe != launcher_path:
+                        logger.info(f"[Ubisoft] Auth shortcut exe outdated, fixing")
+                        s['exe'] = f'"{launcher_path}"'
+                        s['StartDir'] = f'"{os.path.dirname(launcher_path)}"'
+                        vdf_updated = True
+                    # Fix appid if it changed (exe path changed → CRC changed)
+                    if s.get('appid') != expected_appid:
+                        logger.info(f"[Ubisoft] Auth shortcut appid changed, fixing")
+                        s['appid'] = expected_appid
+                        vdf_updated = True
+                    break
+
+            if vdf_updated:
+                await sm.write_shortcuts(shortcuts_data)
+                # Update registry if appid changed
+                from py_modules.unifideck.shortcuts.shortcuts_manager import register_shortcut
+                register_shortcut(AUTH_SHORTCUT_STORE_ID, expected_appid, "Ubisoft Connect")
+
+            if not found:
+                logger.warning("[Ubisoft] Auth shortcut not found in VDF during validation")
+                return False
+
+            # Validate compat tool mapping
+            compat_tool = self._find_compat_tool_for_auth()
+            if compat_tool:
+                await sm._set_proton_compatibility(expected_appid, compat_tool)
+
+            return True
+
+        except Exception as e:
+            logger.warning(f"[Ubisoft] Auth shortcut validation failed: {e}")
+            return True  # Safe default — don't trigger recreation on error
+
+    def _find_compat_tool_for_auth(self) -> str:
+        """Find a Proton compat tool name for the auth shortcut.
+
+        Checks existing Ubisoft game shortcuts first, then reads the config.vdf
+        default (key "0"), then falls back to proton_experimental.
+        """
+        try:
+            from py_modules.unifideck.compat.proton_tools import get_compat_tool_for_app
+            from py_modules.unifideck.shortcuts.shortcuts_manager import load_shortcuts_registry
+            from py_modules.unifideck.shortcuts.launch_options import get_store_prefix
+            registry = load_shortcuts_registry()
+            for store_id, entry in registry.items():
+                if get_store_prefix(store_id) == "ubisoft" and store_id != AUTH_SHORTCUT_STORE_ID:
+                    game_appid = entry.get("appid_unsigned")
+                    if game_appid:
+                        tool = get_compat_tool_for_app(game_appid)
+                        if tool:
+                            return tool
+        except Exception:
+            pass
+
+        # Read the system default compat tool from config.vdf ("0" key = default)
+        try:
+            config_path = os.path.expanduser("~/.steam/steam/config/config.vdf")
+            if os.path.isfile(config_path):
+                with open(config_path, 'r', errors='ignore') as f:
+                    content = f.read()
+                m = re.search(r'"0"\s*\{\s*"name"\s+"([^"]+)"', content)
+                if m and m.group(1):
+                    return m.group(1)
+        except Exception:
+            pass
+
+        return "proton_experimental"
+
+    async def _fetch_auth_shortcut_artwork(self, unsigned_id: int) -> None:
+        """Download SteamGridDB artwork for the auth shortcut."""
+        try:
+            plugin = self.plugin_instance
+            if not plugin or not hasattr(plugin, 'steamgriddb') or not plugin.steamgriddb:
+                logger.debug("[Ubisoft] SteamGridDB client not available, skipping artwork")
+                return
+
+            # Check if artwork already exists
+            if hasattr(plugin, 'has_artwork') and await plugin.has_artwork(unsigned_id):
+                logger.debug("[Ubisoft] Auth shortcut artwork already exists")
+                return
+
+            logger.info("[Ubisoft] Fetching SteamGridDB artwork for Ubisoft Connect")
+            await plugin.steamgriddb.fetch_game_art(
+                title="Ubisoft Connect",
+                app_id=unsigned_id,
+            )
+        except Exception as e:
+            logger.warning(f"[Ubisoft] Auth shortcut artwork fetch failed: {e}")
 
     async def _cleanup_legacy_auth_shortcut(self) -> None:
         """Remove the old .template auth shortcut from VDF and registry (migration)."""
@@ -1641,25 +1955,37 @@ class UbisoftConnector(Store):
         return self._write_upc_session_to_prefix(prefix_path, ticket)
 
     def _write_upc_session_to_prefix(self, prefix_path: str, token: str) -> bool:
-        """Write a restore_session token into a prefix's UPC settings.yml."""
+        """Write a restore_session token into a prefix's UPC settings.yml.
+
+        Writes to ALL existing user dirs in both root and pfx/ layouts,
+        so the token is available regardless of how Proton created the prefix.
+        Only writes to user dirs that already exist (avoids creating wrong layout).
+        """
         try:
             user_id = self.api.get_user_id() or ""
-            settings_dir = os.path.join(
-                prefix_path, "drive_c", "users", "deck",
-                "AppData", "Roaming", "Ubisoft", "Ubisoft Connect",
-            )
-            os.makedirs(settings_dir, exist_ok=True)
-            settings_file = os.path.join(settings_dir, "settings.yml")
             config = (
                 "user:\n"
                 "  remember_me: true\n"
                 f'  restore_session: "{token}"\n'
                 f'  userId: "{user_id}"\n'
             )
-            with open(settings_file, "w") as f:
-                f.write(config)
-            logger.info(f"[Ubisoft] Wrote session to prefix {os.path.basename(prefix_path)}")
-            return True
+            wrote_any = False
+            for prefix_root in [prefix_path, os.path.join(prefix_path, "pfx")]:
+                for user_dir in ["steamuser", "deck"]:
+                    user_home = os.path.join(prefix_root, "drive_c", "users", user_dir)
+                    if not os.path.isdir(user_home):
+                        continue
+                    settings_dir = os.path.join(
+                        user_home, "AppData", "Roaming", "Ubisoft", "Ubisoft Connect",
+                    )
+                    os.makedirs(settings_dir, exist_ok=True)
+                    settings_file = os.path.join(settings_dir, "settings.yml")
+                    with open(settings_file, "w") as f:
+                        f.write(config)
+                    wrote_any = True
+            if wrote_any:
+                logger.info(f"[Ubisoft] Wrote session to prefix {os.path.basename(prefix_path)}")
+            return wrote_any
         except Exception as e:
             logger.warning(f"[Ubisoft] Failed to write session to prefix {prefix_path}: {e}")
             return False
@@ -1710,44 +2036,50 @@ class UbisoftConnector(Store):
         the REST API ticket we have. Capturing it enables future auto-login.
         Also writes the token back to the template prefix so future clones inherit it.
 
+        Checks both root and pfx/ layouts (Proton creates a pfx/ subdirectory),
+        and both steamuser and deck user directories.
+
         Returns the captured token, or None if not found / unchanged.
         """
-        for user_dir in ["steamuser", "deck"]:
-            settings_file = os.path.join(
-                prefix_path, "drive_c", "users", user_dir,
-                "AppData", "Roaming", "Ubisoft", "Ubisoft Connect", "settings.yml"
-            )
-            if not os.path.isfile(settings_file):
-                continue
-            try:
-                with open(settings_file) as f:
-                    content = f.read()
-            except Exception:
-                continue
-            m = re.search(r'restore_session:\s+"([^"]+)"', content)
-            if not m:
-                continue
-            token = m.group(1)
-            # Only save if different from what we injected (i.e. UPC wrote its own)
-            current_api_ticket = self.api.get_ticket() or ""
-            if token and token != current_api_ticket:
+        # Check both root and pfx/ layouts — Proton uses pfx/ subdirectory
+        prefix_roots = [prefix_path, os.path.join(prefix_path, "pfx")]
+        for prefix_root in prefix_roots:
+            for user_dir in ["steamuser", "deck"]:
+                settings_file = os.path.join(
+                    prefix_root, "drive_c", "users", user_dir,
+                    "AppData", "Roaming", "Ubisoft", "Ubisoft Connect", "settings.yml"
+                )
+                if not os.path.isfile(settings_file):
+                    continue
                 try:
-                    previous_token = ""
-                    if os.path.isfile(UPC_SESSION_FILE):
-                        with open(UPC_SESSION_FILE, "r") as f:
-                            previous_token = f.read().strip()
-                    if token == previous_token:
-                        return None
+                    with open(settings_file) as f:
+                        content = f.read()
+                except Exception:
+                    continue
+                m = re.search(r'restore_session:\s+"([^"]+)"', content)
+                if not m:
+                    continue
+                token = m.group(1)
+                # Only save if different from what we injected (i.e. UPC wrote its own)
+                current_api_ticket = self.api.get_ticket() or ""
+                if token and token != current_api_ticket:
+                    try:
+                        previous_token = ""
+                        if os.path.isfile(UPC_SESSION_FILE):
+                            with open(UPC_SESSION_FILE, "r") as f:
+                                previous_token = f.read().strip()
+                        if token == previous_token:
+                            return None
 
-                    os.makedirs(DATA_DIR, exist_ok=True)
-                    with open(UPC_SESSION_FILE, "w") as f:
-                        f.write(token)
-                    # Also update the template so future clones inherit it
-                    self._write_upc_session_to_prefix(TEMPLATE_DIR, token)
-                    logger.info("[Ubisoft] Captured UPC restore_session token → template updated")
-                    return token
-                except Exception as e:
-                    logger.warning(f"[Ubisoft] Failed to save UPC session token: {e}")
+                        os.makedirs(DATA_DIR, exist_ok=True)
+                        with open(UPC_SESSION_FILE, "w") as f:
+                            f.write(token)
+                        # Also update the template so future clones inherit it
+                        self._write_upc_session_to_prefix(TEMPLATE_DIR, token)
+                        logger.info("[Ubisoft] Captured UPC restore_session token → template updated")
+                        return token
+                    except Exception as e:
+                        logger.warning(f"[Ubisoft] Failed to save UPC session token: {e}")
         return None
 
     async def connect_ubisoft_account(self) -> Dict[str, Any]:
@@ -1833,48 +2165,29 @@ class UbisoftConnector(Store):
     # ========================================================================
 
     async def get_ubisoft_auth_shortcut_context(self) -> Dict[str, Any]:
-        """Get auth prefix info so the frontend can create a live shortcut.
+        """Get auth shortcut context for the frontend launch flow.
 
-        Ensures the auth prefix exists (cloned from template) and returns
-        the UPC exe path and compat data path. The frontend uses
-        SteamClient.Apps.AddShortcut() to register it in Steam's live cache.
+        Returns a ShortcutLaunchContext-compatible dict so the frontend can
+        use launchShortcutWithTemporaryOptions (same as game installs).
         """
-        upc_exe_path = await self._ensure_auth_prefix()
-        if not upc_exe_path:
-            return {"success": False, "error": "Template prefix not ready"}
+        unsigned_id = await self._ensure_ubisoft_auth_shortcut()
+        if not unsigned_id:
+            return {"success": False, "error": "Auth prefix not ready"}
 
-        upc_dir = os.path.dirname(upc_exe_path)
+        from py_modules.unifideck.compat.proton_tools import get_compat_tool_for_app
 
-        # Find a Proton tool name for the frontend to assign
-        compat_tool = ""
-        try:
-            from py_modules.unifideck.compat.proton_tools import get_compat_tool_for_app
-            from py_modules.unifideck.shortcuts.shortcuts_manager import load_shortcuts_registry
-            from py_modules.unifideck.shortcuts.launch_options import get_store_prefix
-            registry = load_shortcuts_registry()
-            for store_id, entry in registry.items():
-                if get_store_prefix(store_id) == "ubisoft" and store_id != AUTH_SHORTCUT_STORE_ID:
-                    game_appid = entry.get("appid_unsigned")
-                    if game_appid:
-                        compat_tool = get_compat_tool_for_app(game_appid)
-                        if compat_tool:
-                            break
-        except Exception:
-            pass
-
-        if not compat_tool:
-            proton_path = self._find_proton_path()
-            if proton_path:
-                compat_tool = os.path.basename(proton_path)
-            else:
-                compat_tool = "proton_experimental"
+        launcher_path = self._get_launcher_path()
+        compat_tool = get_compat_tool_for_app(unsigned_id) or ""
+        launch_options = self._build_auth_launch_options()
 
         return {
             "success": True,
-            "upc_exe_path": upc_exe_path,
-            "upc_dir": upc_dir,
-            "auth_prefix_path": AUTH_PREFIX_DIR,
-            "compat_tool": compat_tool,
+            "store_game_id": AUTH_SHORTCUT_STORE_ID,
+            "appid_unsigned": unsigned_id,
+            "tool_name": compat_tool,
+            "is_linux_runtime": True,
+            "launcher_path": launcher_path,
+            "current_launch_options": launch_options,
         }
 
     async def start_ubisoft_auth_session_monitor(self) -> Dict[str, Any]:

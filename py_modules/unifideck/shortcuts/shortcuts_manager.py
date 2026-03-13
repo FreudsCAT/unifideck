@@ -972,11 +972,32 @@ class ShortcutsManager:
             unsigned_app_id = app_id & 0xFFFFFFFF
             app_id_str = str(unsigned_app_id)
             
-            # Check if this app already has a mapping
-            if f'"{app_id_str}"' in content:
-                logger.info(f"App {app_id_str} already has a compat mapping")
-                return True
-            
+            # Check if CompatToolMapping section exists
+            insert_marker = '"CompatToolMapping"'
+            marker_pos = content.find(insert_marker)
+            if marker_pos < 0:
+                logger.warning("CompatToolMapping section not found in config.vdf")
+                return False
+
+            # Check if this app already has a mapping WITHIN CompatToolMapping
+            # (not elsewhere in config.vdf, e.g. SizeOnDisk sections)
+            compat_brace = content.find('{', marker_pos)
+            if compat_brace >= 0:
+                depth = 0
+                compat_end = compat_brace
+                for i in range(compat_brace, len(content)):
+                    if content[i] == '{':
+                        depth += 1
+                    elif content[i] == '}':
+                        depth -= 1
+                    if depth == 0:
+                        compat_end = i
+                        break
+                compat_section = content[compat_brace:compat_end]
+                if f'"{app_id_str}"' in compat_section:
+                    logger.info(f"App {app_id_str} already has a compat mapping")
+                    return True
+
             # Create compat entry with proper indentation (tabs as in config.vdf)
             compat_entry = f'''
 					"{app_id_str}"
@@ -985,15 +1006,8 @@ class ShortcutsManager:
 						"config"		""
 						"priority"		"250"
 					}}'''
-            
-            # Check if CompatToolMapping section exists
-            if '"CompatToolMapping"' not in content:
-                logger.warning("CompatToolMapping section not found in config.vdf")
-                return False
-            
+
             # Find CompatToolMapping and insert our entry
-            insert_marker = '"CompatToolMapping"'
-            marker_pos = content.find(insert_marker)
             if marker_pos >= 0:
                 # Find the opening brace after CompatToolMapping
                 brace_pos = content.find('{', marker_pos)

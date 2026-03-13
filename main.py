@@ -2028,6 +2028,11 @@ class Plugin:
         self.ubisoft = UbisoftConnector(plugin_dir=DECKY_PLUGIN_DIR, plugin_instance=self)
         self.ubisoft.start_token_refresh()
 
+        # Ensure the "Ubisoft Connect" auth shortcut is in VDF with artwork.
+        # Awaited (not background) so VDF writes complete before the frontend
+        # mounts components — prevents Play/Install flickering on all shortcuts.
+        await self.ubisoft._ensure_ubisoft_auth_shortcut()
+
         # Repair games.map for Unifideck shortcuts missing entries (fixes "Game location not mapped" errors)
         logger.info("[INIT] Reconciling games.map from installed games")
         map_reconcile = await self.shortcuts_manager.reconcile_games_map_from_installed(
@@ -3914,6 +3919,19 @@ class Plugin:
                         return {'error': 'No valid store:game_id found in launch options'}
 
                     store, game_id = result
+
+                    # Auth shortcut is a launcher, not an installable game — always "installed"
+                    if game_id == "upc-auth":
+                        return {
+                            'is_installed': True,
+                            'has_update': None,
+                            'store': store,
+                            'game_id': game_id,
+                            'title': shortcut.get('AppName', ''),
+                            'size_bytes': None,
+                            'size_formatted': None,
+                            'app_id': app_id
+                        }
 
                     # Check installation status
                     # Check if there's ANY entry in games.map before checking validity
