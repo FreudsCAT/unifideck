@@ -574,25 +574,45 @@ class MicrosoftConnector(Store):
 
             logger.info(f"[MS] ✓ XBL user token obtained (uhs={self._user_hash})")
 
-            # Step B: XSTS token with licensing relying party
-            xsts_resp = _http_post_json(
-                XSTS_URL,
-                {
-                    "Properties": {
-                        "SandboxId":  "RETAIL",
-                        "UserTokens": [self._xbl_token],
-                    },
-                    "RelyingParty": XSTS_RP,
-                    "TokenType":    "JWT",
-                },
-                {
-                    "Content-Type": "application/json",
-                    "Accept":       "application/json",
-                    "x-xbl-contract-version": "1",
-                    "User-Agent": "XboxReplay; XboxLiveAuth/3.0",
-                    "Accept-Language": self._get_locale(),
-                },
-            )
+            # Step B: XSTS token — try relying parties in order of preference
+            # Some accounts reject https://licensing.xboxlive.com/ → fall back
+            # to the generic RP which works with all accounts and still grants
+            # access to the Collections API via XBL3.0 auth header.
+            _xsts_rp_candidates = [
+                XSTS_RP,                          # https://licensing.xboxlive.com/
+                "http://licensing.xboxlive.com/", # legacy HTTP variant
+                "http://xboxlive.com",            # generic RP (universal fallback)
+            ]
+            _xsts_headers = {
+                "Content-Type":           "application/json",
+                "Accept":                 "application/json",
+                "x-xbl-contract-version": "1",
+                "User-Agent":             "XboxReplay; XboxLiveAuth/3.0",
+                "Accept-Language":        self._get_locale(),
+            }
+            xsts_resp = None
+            for _rp in _xsts_rp_candidates:
+                try:
+                    xsts_resp = _http_post_json(
+                        XSTS_URL,
+                        {
+                            "Properties": {
+                                "SandboxId":  "RETAIL",
+                                "UserTokens": [self._xbl_token],
+                            },
+                            "RelyingParty": _rp,
+                            "TokenType":    "JWT",
+                        },
+                        _xsts_headers,
+                    )
+                    logger.info(f"[MS] ✓ XSTS obtained with RP: {_rp}")
+                    break
+                except Exception as _xsts_err:
+                    logger.warning(f"[MS] XSTS failed with RP {_rp}: {_xsts_err}")
+                    xsts_resp = None
+            if xsts_resp is None:
+                logger.error("[MS] XSTS failed with all relying parties")
+                return False
 
             # Error 2148916238 = account does not have an Xbox profile yet
             if "XErr" in xsts_resp:
