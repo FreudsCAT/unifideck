@@ -854,7 +854,7 @@ if [ "$STORE" = "ubisoft" ] || \
     if [ "$STORE" = "ubisoft" ]; then
         # For Ubisoft, use UNIFIDECK_UBISOFT_PREFIX_NAME if available (includes leading dot
         # for special prefixes like .upc-auth), otherwise fall back to GAME_ID.
-        local _ubi_pfx_name="${UNIFIDECK_UBISOFT_PREFIX_NAME:-$GAME_ID}"
+        _ubi_pfx_name="${UNIFIDECK_UBISOFT_PREFIX_NAME:-$GAME_ID}"
         PREFIX_PATH="$HOME/.local/share/unifideck/prefixes/ubisoft/$_ubi_pfx_name"
     else
         PREFIX_PATH="$PREFIXES_DIR/$GAME_ID"
