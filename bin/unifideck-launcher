@@ -852,7 +852,10 @@ if [ "$STORE" = "ubisoft" ] || \
     # This ensures we don't accidentally modify or depend on Heroic's data.
     # Ubisoft uses a dedicated subfolder to keep Connect-specific state isolated.
     if [ "$STORE" = "ubisoft" ]; then
-        PREFIX_PATH="$HOME/.local/share/unifideck/prefixes/ubisoft/$GAME_ID"
+        # For Ubisoft, use UNIFIDECK_UBISOFT_PREFIX_NAME if available (includes leading dot
+        # for special prefixes like .upc-auth), otherwise fall back to GAME_ID.
+        local _ubi_pfx_name="${UNIFIDECK_UBISOFT_PREFIX_NAME:-$GAME_ID}"
+        PREFIX_PATH="$HOME/.local/share/unifideck/prefixes/ubisoft/$_ubi_pfx_name"
     else
         PREFIX_PATH="$PREFIXES_DIR/$GAME_ID"
     fi
@@ -1833,7 +1836,9 @@ except Exception as e:
             LAUNCH_TARGET_ARG="uplay://install/$LAUNCH_ID"
             log "[Ubisoft] Opening install screen for launch_id=$LAUNCH_ID"
         elif [ "$UBISOFT_ACTION" = "auth" ]; then
-            [ -n "$UPC_EXE" ] && LAUNCH_TARGET_EXE="$UPC_EXE"
+            # Keep LAUNCH_TARGET_EXE as UbisoftConnect.exe for auth —
+            # upc.exe is the background service that exits immediately,
+            # but UbisoftConnect.exe shows the full UI for interactive login.
             log "[Ubisoft] Opening launcher for native auth capture"
         else
             LAUNCH_TARGET_ARG="uplay://launch/$LAUNCH_ID/0"
