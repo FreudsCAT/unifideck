@@ -1502,7 +1502,7 @@ class ShortcutsManager:
             traceback.print_exc()
             return {'added': 0, 'skipped': 0, 'removed': 0, 'reclaimed': 0, 'error': str(e)}
 
-    async def force_update_games_batch(self, games: List[Game], launcher_script: str, valid_stores: List[str] = None, epic_client=None, gog_client=None, amazon_client=None) -> Dict[str, Any]:
+    async def force_update_games_batch(self, games: List[Game], launcher_script: str, valid_stores: List[str] = None, epic_client=None, gog_client=None, amazon_client=None, microsoft_client=None) -> Dict[str, Any]:
         """
         Force update all games - rewrites existing shortcuts with fresh data.
         
@@ -1611,7 +1611,12 @@ class ShortcutsManager:
                                             exe_path = game_info['executable']
                                             work_dir = os.path.dirname(exe_path)
                                             await self._update_game_map(game.store, game.id, exe_path, work_dir)
-                                
+                                    elif game.store == 'microsoft':
+                                        game_info = microsoft_client.get_installed_game_info(game.id) if microsoft_client else None
+                                        if game_info and game_info.get('executable'):
+                                            exe_path = game_info['executable']
+                                            work_dir = game_info.get('install_path') or os.path.dirname(exe_path)
+                                            await self._update_game_map(game.store, game.id, exe_path, work_dir)
                                 # Track repaired LaunchOptions to prevent duplicate additions in STEP 5
                                 current_launch_options.add(original_launch_opts)
                                 repaired_count += 1
