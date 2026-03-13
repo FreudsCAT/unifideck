@@ -616,7 +616,7 @@ EXTRA_ARGS=()
 for arg in "$@"; do
     case "$arg" in
         # Store:id pattern - this is the game key (checked first — no = in it)
-        epic:*|gog:*|amazon:*)
+        epic:*|gog:*|amazon:*|microsoft:*)
             KEY="$arg"
             ;;
         # Other arguments — check if it looks like a VAR=value env var
@@ -824,15 +824,16 @@ if [[ "$EXE_PATH" == *.exe ]] || [[ "$EXE_PATH" == *.EXE ]] || \
     log "Windows game detected, using umu-launcher with Proton"
     
     # Parse store and game ID from key
-    STORE="${KEY%%:*}"      # 'epic', 'gog', or 'amazon'
+    STORE="${KEY%%:*}"      # 'epic', 'gog', 'amazon', or 'microsoft'
     GAME_ID="${KEY#*:}"     # Game ID after colon
     
     # Map store names to umu store codes
     case "$STORE" in
-        epic)   UMU_STORE="egs" ;;
-        gog)    UMU_STORE="gog" ;;
-        amazon) UMU_STORE="amazon" ;;
-        *)      UMU_STORE="none" ;;
+        epic)      UMU_STORE="egs" ;;
+        gog)       UMU_STORE="gog" ;;
+        amazon)    UMU_STORE="amazon" ;;
+        microsoft) UMU_STORE="none" ;;
+        *)         UMU_STORE="none" ;;
     esac
     
     # ALWAYS use Unifideck's own prefix directory (complete isolation from Heroic)

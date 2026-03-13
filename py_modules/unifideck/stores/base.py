@@ -18,14 +18,14 @@ class Game:
     """Represents a game from any store"""
     id: str
     title: str
-    store: str  # 'steam', 'epic', 'gog', 'amazon'
+    store: str  # 'steam', 'epic', 'gog', 'amazon', 'microsoft'
     is_installed: bool = False
     cover_image: Optional[str] = None
     install_path: Optional[str] = None
     executable: Optional[str] = None
     app_id: Optional[int] = None  # For shortcuts.vdf (our generated ID)
     steam_app_id: Optional[int] = None  # Real Steam appId for ProtonDB lookups
-    store_tags: Optional[List[str]] = None  # Store-specific tags (e.g. ['play_anywhere'])
+    store_tags: Optional[List[str]] = None  # e.g. ['not_compatible', 'play_anywhere']
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)

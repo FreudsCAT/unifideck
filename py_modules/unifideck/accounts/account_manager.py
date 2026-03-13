@@ -34,6 +34,7 @@ AUTH_TOKEN_PATHS = {
     'gog': os.path.expanduser("~/.config/unifideck/gog_token.json"),
     'gogdl': os.path.expanduser("~/.config/unifideck/gogdl/auth.json"),
     'amazon': os.path.expanduser("~/.config/nile/user.json"),
+    'microsoft': os.path.expanduser("~/.config/unifideck/microsoft_token.json"),
 }
 
 # Shared Unifideck data files

@@ -2526,6 +2526,13 @@ class Plugin:
                             await self.shortcuts_manager._update_game_map('amazon', game.id, exe_path, work_dir)
                             logger.debug(f"Updated games.map for Amazon game {game.id}")
 
+                for game in microsoft_games:
+                    if game.is_installed and game.executable:
+                        exe_path = game.executable
+                        work_dir = game.install_path or os.path.dirname(exe_path)
+                        await self.shortcuts_manager._update_game_map('microsoft', game.id, exe_path, work_dir)
+                        logger.debug(f"Updated games.map for Microsoft game {game.id}")
+
                 # Get launcher script path (relative to plugin directory)
                 launcher_script = os.path.join(os.path.dirname(__file__), 'bin', 'unifideck-launcher')
 
@@ -3118,6 +3125,13 @@ class Plugin:
                             work_dir = game_info.get('path') or os.path.dirname(exe_path)
                             await self.shortcuts_manager._update_game_map('amazon', game.id, exe_path, work_dir)
                             logger.debug(f"Updated games.map for Amazon game {game.id}")
+
+                for game in microsoft_games:
+                    if game.is_installed and game.executable:
+                        exe_path = game.executable
+                        work_dir = game.install_path or os.path.dirname(exe_path)
+                        await self.shortcuts_manager._update_game_map('microsoft', game.id, exe_path, work_dir)
+                        logger.debug(f"Updated games.map for Microsoft game {game.id}")
 
                 # Get launcher script path
                 launcher_script = os.path.join(os.path.dirname(__file__), 'bin', 'unifideck-launcher')

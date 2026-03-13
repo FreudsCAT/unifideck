@@ -86,7 +86,7 @@ def main():
         launch_opts = shortcut.get('LaunchOptions', '')
 
         # Unifideck games have LaunchOptions like "epic:xxx" or "gog:xxx"
-        if launch_opts.startswith('epic:') or launch_opts.startswith('gog:'):
+        ifif any(launch_opts.startswith(p) for p in ('epic:', 'gog:', 'amazon:', 'microsoft:')): launch_opts.startswith('epic:') or launch_opts.startswith('gog:'):
             unifideck_shortcuts.append((idx, shortcut.get('AppName', 'Unknown'), launch_opts))
         else:
             # Keep original non-steam games
@@ -102,7 +102,7 @@ def main():
     # Show what will be removed
     print(f"\n  Will remove {len(unifideck_shortcuts)} Unifideck games:")
     for idx, name, launch in unifideck_shortcuts[:5]:
-        store = 'EPIC' if launch.startswith('epic:') else 'GOG'
+        store = launch.split(':')[0].upper()
         print(f"    - [{store}] {name}")
     if len(unifideck_shortcuts) > 5:
         print(f"    ... and {len(unifideck_shortcuts) - 5} more")
