@@ -205,6 +205,42 @@ find_python310_plus() {
 }
 
 # ==============================================================================
+# UMU RUNTIME CACHE SELF-HEAL
+# umu-run can report steamrt3 as "up to date" even when the cached runtime is
+# incomplete and missing _v2-entry-point. Clear incomplete cache state so the
+# next launch can re-download a clean runtime instead of tripping fallback paths.
+# ==============================================================================
+cleanup_umu_runtime_cache() {
+    local umu_cache_dir="$HOME/.local/share/umu"
+    [ -d "$umu_cache_dir" ] || return 0
+
+    rm -rf "$umu_cache_dir/steamrt3" 2>/dev/null || true
+    rm -rf "$umu_cache_dir/umu_steam3" 2>/dev/null || true
+    rm -f "$umu_cache_dir/"*.parts 2>/dev/null || true
+}
+
+ensure_umu_runtime_ready() {
+    local reason="${1:-launch preflight}"
+    local umu_cache_dir="$HOME/.local/share/umu"
+    local steamrt_dir="$umu_cache_dir/steamrt3"
+    local entrypoint="$steamrt_dir/_v2-entry-point"
+    local has_partial=false
+
+    [ -d "$umu_cache_dir" ] || return 0
+
+    if [ -d "$steamrt_dir" ] || [ -d "$umu_cache_dir/umu_steam3" ]; then
+        has_partial=true
+    elif compgen -G "$umu_cache_dir/*.parts" >/dev/null; then
+        has_partial=true
+    fi
+
+    if [ "$has_partial" = true ] && [ ! -f "$entrypoint" ]; then
+        log "[UMU] steamrt3 cache is incomplete during $reason (missing _v2-entry-point); clearing cached runtime"
+        cleanup_umu_runtime_cache
+    fi
+}
+
+# ==============================================================================
 # UMU RETRY WRAPPER
 # Wraps UMU invocations with retry logic for network failures
 # (e.g., Steam Runtime download failures)
@@ -245,10 +281,10 @@ run_umu_with_retry() {
             if [ -d "$HOME/.local/share/umu" ]; then
                 if [ ! -f "$HOME/.local/share/umu/steamrt3/_v2-entry-point" ]; then
                     log "[UMU] steamrt3 incomplete (missing _v2-entry-point), cleaning up..."
-                    rm -rf "$HOME/.local/share/umu/steamrt3" 2>/dev/null || true
-                    rm -rf "$HOME/.local/share/umu/umu_steam3" 2>/dev/null || true
+                    cleanup_umu_runtime_cache
+                else
+                    rm -f "$HOME/.local/share/umu/"*.parts 2>/dev/null || true
                 fi
-                rm -f "$HOME/.local/share/umu/"*.parts 2>/dev/null || true
             fi
             
             sleep $wait_time
@@ -946,9 +982,24 @@ if [ "$STORE" = "ubisoft" ] || \
         CURRENT_PROTON="default"
     fi
     
-    # Check if prefix exists and has a different Proton version
-    if [ -f "$PROTON_MARKER" ] && [ -d "$PREFIX_PFX" ]; then
+    # Check if prefix exists and has a different Proton version.
+    # Priority: read our marker first, fall back to Proton's own "version" file
+    # (cloned prefixes from template may have Proton's version but no marker).
+    _have_marker=false
+    PREVIOUS_PROTON=""
+    if [ -f "$PROTON_MARKER" ]; then
+        _have_marker=true
         PREVIOUS_PROTON=$(cat "$PROTON_MARKER" 2>/dev/null || echo "unknown")
+    elif [ -f "$PREFIX_PATH/version" ]; then
+        # Proton writes its version string (e.g. "UMU-Proton-9.0-4e") into
+        # the prefix's version file. Use it as fallback for cloned prefixes.
+        PREVIOUS_PROTON=$(cat "$PREFIX_PATH/version" 2>/dev/null || echo "")
+        if [ -n "$PREVIOUS_PROTON" ]; then
+            log "[Proton] No marker, using prefix version file: $PREVIOUS_PROTON"
+        fi
+    fi
+
+    if [ -n "$PREVIOUS_PROTON" ] && { $_have_marker || [ -d "$PREFIX_PFX" ] || [ -f "$PREFIX_PATH/system.reg" ]; }; then
         
         if [ "$PREVIOUS_PROTON" != "$CURRENT_PROTON" ]; then
             log "[Proton] Version change detected: $PREVIOUS_PROTON -> $CURRENT_PROTON"
@@ -956,32 +1007,19 @@ if [ "$STORE" = "ubisoft" ] || \
             # Check if this is a major version change (experimental <-> GE, or major version number change)
             NEED_RESET=false
             
-            # Detect major family change (experimental vs GE-Proton vs Proton 9/10)
-            case "$PREVIOUS_PROTON" in
-                *Experimental*|*experimental*)
-                    PREV_FAMILY="experimental" ;;
-                GE-Proton*)
-                    PREV_FAMILY="ge-proton" ;;
-                *Proton\ 9*|*proton_9*|*proton9*)
-                    PREV_FAMILY="proton9" ;;
-                *Proton\ 10*|*proton_10*|*proton10*)
-                    PREV_FAMILY="proton10" ;;
-                *)
-                    PREV_FAMILY="other" ;;
-            esac
-            
-            case "$CURRENT_PROTON" in
-                *Experimental*|*experimental*)
-                    CURR_FAMILY="experimental" ;;
-                GE-Proton*)
-                    CURR_FAMILY="ge-proton" ;;
-                *Proton\ 9*|*proton_9*|*proton9*)
-                    CURR_FAMILY="proton9" ;;
-                *Proton\ 10*|*proton_10*|*proton10*)
-                    CURR_FAMILY="proton10" ;;
-                *)
-                    CURR_FAMILY="other" ;;
-            esac
+            # Detect major family change (experimental vs GE-Proton vs UMU-Proton vs Proton 9/10)
+            _proton_family() {
+                case "$1" in
+                    *Experimental*|*experimental*) echo "experimental" ;;
+                    GE-Proton*)                    echo "ge-proton" ;;
+                    UMU-Proton*)                   echo "umu-proton" ;;
+                    *Proton\ 9*|*proton_9*|*proton9*|*9.0*) echo "proton9" ;;
+                    *Proton\ 10*|*proton_10*|*proton10*|10.*) echo "proton10" ;;
+                    *)                             echo "other" ;;
+                esac
+            }
+            PREV_FAMILY=$(_proton_family "$PREVIOUS_PROTON")
+            CURR_FAMILY=$(_proton_family "$CURRENT_PROTON")
             
             if [ "$PREV_FAMILY" != "$CURR_FAMILY" ]; then
                 NEED_RESET=true
@@ -1047,6 +1085,7 @@ if [ "$STORE" = "ubisoft" ] || \
         fi
         
         log "[FirstLaunch] Running createprefix with umu-run (this may take 1-2 minutes)..."
+        ensure_umu_runtime_ready "prefix setup preflight"
         
         # Run createprefix with retry logic for network resilience (Steam Runtime download).
         # NOTE: Proton returns non-zero for createprefix even on success because it
@@ -1071,9 +1110,7 @@ if [ "$STORE" = "ubisoft" ] || \
                 log "[FirstLaunch] system.reg not found after attempt $_cp_attempt, retrying in ${_cp_wait}s..."
                 notify_stage "toasts.launcher.networkError" "toasts.launcher.retryingUmu|seconds=${_cp_wait}|attempt=$((_cp_attempt+1))|max=$_cp_max" "normal"
                 # Clean up partial Steam Runtime downloads
-                rm -rf "$HOME/.local/share/umu/steamrt3" 2>/dev/null || true
-                rm -rf "$HOME/.local/share/umu/umu_steam3" 2>/dev/null || true
-                rm -f "$HOME/.local/share/umu/"*.parts 2>/dev/null || true
+                cleanup_umu_runtime_cache
                 sleep $_cp_wait
                 _cp_wait=$((_cp_wait * 2))
             fi
@@ -1114,6 +1151,8 @@ if [ "$STORE" = "ubisoft" ] || \
         log "ERROR: umu-run not found at $UMU_RUN"
         exit 1
     fi
+
+    ensure_umu_runtime_ready "windows launch preflight for $STORE:$GAME_ID"
 
     
     # Change to work directory
@@ -1557,12 +1596,19 @@ print(d.get('$GAME_ID', {}).get('install_path', ''))
         # legendary's Popen passes FDs to umu-run/pressure-vessel — if stdout points
         # to a file instead of a TTY, container process management may change.
         if [ "$IS_UBISOFT" = "true" ]; then
-             eval "$CMD_STR" 2>>"$LOG_FILE" && GAME_EXIT_CODE=$? || GAME_EXIT_CODE=$?
+             if eval "$CMD_STR" 2>>"$LOG_FILE"; then
+                 GAME_EXIT_CODE=0
+             else
+                 GAME_EXIT_CODE=$?
+             fi
         else
-             "${WRAPPERS[@]}" "$LEGENDARY_BIN" launch "$GAME_ID" --no-wine --skip-version-check $OFFLINE_FLAG \
+             if "${WRAPPERS[@]}" "$LEGENDARY_BIN" launch "$GAME_ID" --no-wine --skip-version-check $OFFLINE_FLAG \
                  --wrapper "$PYTHON_BIN $UMU_WRAPPER" --language $EPIC_LANG \
-                 ${GAME_ARGS[@]:+-- "${GAME_ARGS[@]}"} 2>>"$LOG_FILE" \
-                 && GAME_EXIT_CODE=$? || GAME_EXIT_CODE=$?
+                 ${GAME_ARGS[@]:+-- "${GAME_ARGS[@]}"} 2>>"$LOG_FILE"; then
+                 GAME_EXIT_CODE=0
+             else
+                 GAME_EXIT_CODE=$?
+             fi
         fi
 
         # Legendary returns before the game/container fully exits.
@@ -1665,11 +1711,17 @@ except Exception as e:
         # Execute umu-run for Amazon game (with retry for network failures)
         # WRAPPERS prepend the command, GAME_ARGS passed as game arguments.
         if [ -n "$AMAZON_ARGS" ]; then
-            eval "${WRAPPERS[@]}" run_umu_with_retry "$PYTHON_BIN" "$UMU_WRAPPER" "\"$EXE_PATH\"" $AMAZON_ARGS "${GAME_ARGS[@]}" \
-                && GAME_EXIT_CODE=$? || GAME_EXIT_CODE=$?
+            if eval "${WRAPPERS[@]}" run_umu_with_retry "$PYTHON_BIN" "$UMU_WRAPPER" "\"$EXE_PATH\"" $AMAZON_ARGS "${GAME_ARGS[@]}"; then
+                GAME_EXIT_CODE=0
+            else
+                GAME_EXIT_CODE=$?
+            fi
         else
-            "${WRAPPERS[@]}" run_umu_with_retry "$PYTHON_BIN" "$UMU_WRAPPER" "$EXE_PATH" "${GAME_ARGS[@]}" \
-                && GAME_EXIT_CODE=$? || GAME_EXIT_CODE=$?
+            if "${WRAPPERS[@]}" run_umu_with_retry "$PYTHON_BIN" "$UMU_WRAPPER" "$EXE_PATH" "${GAME_ARGS[@]}"; then
+                GAME_EXIT_CODE=0
+            else
+                GAME_EXIT_CODE=$?
+            fi
         fi
 
         wait_for_game_exit
@@ -1848,13 +1900,19 @@ except Exception as e:
         if [ -n "$LAUNCH_TARGET_ARG" ]; then
             CMD_STR="$PYTHON_BIN $UMU_WRAPPER \"$LAUNCH_TARGET_EXE\" \"$LAUNCH_TARGET_ARG\""
             log "Executing: $CMD_STR"
-            "${WRAPPERS[@]}" run_umu_with_retry "$PYTHON_BIN" "$UMU_WRAPPER" "$LAUNCH_TARGET_EXE" "$LAUNCH_TARGET_ARG" \
-                && GAME_EXIT_CODE=$? || GAME_EXIT_CODE=$?
+            if "${WRAPPERS[@]}" run_umu_with_retry "$PYTHON_BIN" "$UMU_WRAPPER" "$LAUNCH_TARGET_EXE" "$LAUNCH_TARGET_ARG"; then
+                GAME_EXIT_CODE=0
+            else
+                GAME_EXIT_CODE=$?
+            fi
         else
             CMD_STR="$PYTHON_BIN $UMU_WRAPPER \"$LAUNCH_TARGET_EXE\""
             log "Executing: $CMD_STR"
-            "${WRAPPERS[@]}" run_umu_with_retry "$PYTHON_BIN" "$UMU_WRAPPER" "$LAUNCH_TARGET_EXE" \
-                && GAME_EXIT_CODE=$? || GAME_EXIT_CODE=$?
+            if "${WRAPPERS[@]}" run_umu_with_retry "$PYTHON_BIN" "$UMU_WRAPPER" "$LAUNCH_TARGET_EXE"; then
+                GAME_EXIT_CODE=0
+            else
+                GAME_EXIT_CODE=$?
+            fi
         fi
 
         wait_for_game_exit
@@ -2056,8 +2114,11 @@ except Exception as e:
         # WRAPPERS (from %command% split) prepend the game command.
         # GAME_ARGS (post-%command% tokens) are passed as game arguments.
         LAUNCH_START=$(date +%s)
-        "${WRAPPERS[@]}" run_umu_with_retry "$PYTHON_BIN" "$UMU_WRAPPER" "$EXE_PATH" "${GAME_ARGS[@]}" \
-            && GAME_EXIT_CODE=$? || GAME_EXIT_CODE=$?
+        if "${WRAPPERS[@]}" run_umu_with_retry "$PYTHON_BIN" "$UMU_WRAPPER" "$EXE_PATH" "${GAME_ARGS[@]}"; then
+            GAME_EXIT_CODE=0
+        else
+            GAME_EXIT_CODE=$?
+        fi
 
         # === GOG LAUNCHER FALLBACK ===
         # If the primary executable exited quickly (< 15s), it may be a broken
@@ -2099,8 +2160,11 @@ for f in glob.glob(os.path.join(sys.argv[1], 'goggame-*.info')):
             if [ -n "$FALLBACK_EXE" ] && [ "$FALLBACK_EXE" != "$EXE_PATH" ]; then
                 log "[GOG] Launcher stub exited early (code $GAME_EXIT_CODE in ${LAUNCH_ELAPSED}s), falling back to game exe: $FALLBACK_EXE"
                 notify_stage "toasts.launcher.launcherFallback" "toasts.launcher.retryingWithGameExe" "normal"
-                "${WRAPPERS[@]}" run_umu_with_retry "$PYTHON_BIN" "$UMU_WRAPPER" "$FALLBACK_EXE" "${GAME_ARGS[@]}" \
-                    && GAME_EXIT_CODE=$? || GAME_EXIT_CODE=$?
+                if "${WRAPPERS[@]}" run_umu_with_retry "$PYTHON_BIN" "$UMU_WRAPPER" "$FALLBACK_EXE" "${GAME_ARGS[@]}"; then
+                    GAME_EXIT_CODE=0
+                else
+                    GAME_EXIT_CODE=$?
+                fi
             fi
         fi
 

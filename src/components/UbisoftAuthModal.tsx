@@ -263,27 +263,29 @@ export const UbisoftAuthModal: FC<UbisoftAuthModalProps> = ({
 
   const finishSuccessfulAuth = async (launchUpcAuth?: boolean) => {
     closeModal?.();
+
+    // Launch auth shortcut FIRST, before onAuthComplete triggers state refresh
+    if (launchUpcAuth) {
+      let launchResult = await launchUbisoftAuthViaShortcut();
+      if (!launchResult.success) {
+        launchResult = await call<[], { success: boolean; error?: string }>(
+          "connect_ubisoft_account",
+        );
+      }
+
+      if (!launchResult.success) {
+        toaster.toast({
+          title: t("toasts.ubisoftLauncherOpenFailed"),
+          body:
+            launchResult.error ||
+            t("toasts.ubisoftLauncherOpenFailedMessage"),
+          duration: 10000,
+          critical: true,
+        });
+      }
+    }
+
     onAuthComplete();
-
-    if (!launchUpcAuth) {
-      return;
-    }
-
-    let launchResult = await launchUbisoftAuthViaShortcut();
-    if (!launchResult.success) {
-      launchResult = await call<[], { success: boolean; error?: string }>(
-        "connect_ubisoft_account",
-      );
-    }
-
-    if (!launchResult.success) {
-      toaster.toast({
-        title: t("toasts.ubisoftLauncherOpenFailed"),
-        body: launchResult.error || t("toasts.ubisoftLauncherOpenFailedMessage"),
-        duration: 10000,
-        critical: true,
-      });
-    }
   };
 
   const handleCredentialsSubmit = async (

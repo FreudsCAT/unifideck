@@ -237,22 +237,36 @@ export async function launchUbisoftInstallViaShortcut(
 }
 
 export async function launchUbisoftAuthViaShortcut(): Promise<ShortcutLaunchResult> {
-  // Backend returns a ShortcutLaunchContext — same format as game shortcuts.
-  // This lets us reuse launchShortcutWithTemporaryOptions which handles
-  // compat tool clearing, temp launch options, RunGame, and restore.
-  const context = await call<[], ShortcutLaunchContext>(
-    "get_ubisoft_auth_shortcut_context",
-  );
-  if (!context?.success) {
-    return { success: false, error: context?.error || "Auth shortcut not available" };
+  // Get the auth shortcut's appid from the backend registry.
+  const context = await call<
+    [],
+    { success: boolean; appid_unsigned?: number; error?: string }
+  >("get_ubisoft_auth_shortcut_context");
+  if (!context?.success || !context.appid_unsigned) {
+    return {
+      success: false,
+      error: context?.error || "Auth shortcut not available",
+    };
   }
 
-  await call<[], { success: boolean }>("start_ubisoft_auth_session_monitor").catch(
+  // Start session monitor (captures UPC credentials after user logs in)
+  call<[], { success: boolean }>("start_ubisoft_auth_session_monitor").catch(
     () => {},
   );
 
-  return launchShortcutWithTemporaryOptions(context, {
-    UNIFIDECK_UBISOFT_ACTION: "auth",
-    UNIFIDECK_UBISOFT_PREFIX_NAME: ".upc-auth",
-  });
+  // Launch directly via RunGame — identical to clicking "Play".
+  // The permanent VDF launch options already have #%command% (skip compat tool)
+  // and the UNIFIDECK_* env vars baked in. No temp options needed.
+  const steamApps = window.SteamClient?.Apps;
+  if (!steamApps?.RunGame) {
+    return { success: false, error: "Steam launch API unavailable" };
+  }
+
+  steamApps.RunGame(
+    getShortcutRunGameId(context.appid_unsigned),
+    "",
+    -1,
+    100,
+  );
+  return { success: true };
 }
