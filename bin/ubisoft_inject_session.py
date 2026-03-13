@@ -14,19 +14,39 @@ Usage:
 import json
 import os
 import re
+import shutil
 import sys
 
 DATA_DIR = os.path.expanduser("~/.local/share/unifideck")
 UPC_SESSION_FILE = os.path.join(DATA_DIR, "ubisoft_upc_session.txt")
 TOKEN_FILE = os.path.join(DATA_DIR, "ubisoft_token.json")
+PREFIXES_DIR = os.path.join(DATA_DIR, "prefixes", "ubisoft")
+AUTH_PREFIX_DIR = os.path.join(PREFIXES_DIR, ".upc-auth")
+
+# UPC credential files that must be synced alongside the session token
+_UPC_CREDENTIAL_FILES = ("ConnectSecureStorage.dat", "user.dat")
+_UPC_LOCAL_SUBDIR = os.path.join("AppData", "Local", "Ubisoft Game Launcher")
 
 
-def get_active_prefix(prefix_path: str) -> str:
-    """Detect the active Wine prefix root (may be prefix_path or prefix_path/pfx)."""
-    pfx = os.path.join(prefix_path, "pfx")
-    if os.path.isdir(pfx) and os.path.isfile(os.path.join(pfx, "system.reg")):
-        return pfx
-    return prefix_path
+_WINE_SYSTEM_USERS = {"Public", "All Users", "Default", "Default User"}
+
+
+def iter_prefix_user_homes(prefix_path: str):
+    """Yield user_home paths for all real user dirs across both layouts."""
+    for prefix_root in [prefix_path, os.path.join(prefix_path, "pfx")]:
+        users_dir = os.path.join(prefix_root, "drive_c", "users")
+        if not os.path.isdir(users_dir):
+            continue
+        try:
+            entries = os.listdir(users_dir)
+        except OSError:
+            continue
+        for entry in entries:
+            if entry in _WINE_SYSTEM_USERS:
+                continue
+            user_home = os.path.join(users_dir, entry)
+            if os.path.isdir(user_home):
+                yield user_home
 
 
 def read_token() -> tuple:
@@ -65,72 +85,139 @@ def read_token() -> tuple:
     return None, None
 
 
+def _find_best_credential_source():
+    """Find the prefix with the freshest ConnectSecureStorage.dat to use as credential source.
+
+    Prefers the auth prefix (.upc-auth). Falls back to whichever prefix has the
+    largest (freshest) ConnectSecureStorage.dat.
+    """
+    best_path = None
+    best_size = 0
+
+    # Check auth prefix first (preferred source)
+    for user_home in iter_prefix_user_homes(AUTH_PREFIX_DIR):
+        css = os.path.join(user_home, _UPC_LOCAL_SUBDIR, "ConnectSecureStorage.dat")
+        if os.path.isfile(css):
+            size = os.path.getsize(css)
+            if size > best_size:
+                best_size = size
+                best_path = AUTH_PREFIX_DIR
+
+    # If auth prefix has credentials, use it
+    if best_path:
+        return best_path
+
+    # Fall back: scan all prefixes for freshest credentials
+    if os.path.isdir(PREFIXES_DIR):
+        for entry in os.listdir(PREFIXES_DIR):
+            prefix = os.path.join(PREFIXES_DIR, entry)
+            if not os.path.isdir(prefix):
+                continue
+            for user_home in iter_prefix_user_homes(prefix):
+                css = os.path.join(user_home, _UPC_LOCAL_SUBDIR, "ConnectSecureStorage.dat")
+                if os.path.isfile(css):
+                    size = os.path.getsize(css)
+                    if size > best_size:
+                        best_size = size
+                        best_path = prefix
+
+    return best_path
+
+
+def sync_credentials(prefix_path: str) -> bool:
+    """Copy UPC credential files from the auth prefix into the target prefix.
+
+    Copies ConnectSecureStorage.dat and user.dat into all user homes
+    (both root and pfx/ layouts) so UPC can validate the session token.
+    Skips files that are already identical (same size).
+    """
+    source_prefix = _find_best_credential_source()
+    if not source_prefix:
+        print("[inject] No credential source found, skipping credential sync")
+        return False
+
+    if os.path.realpath(source_prefix) == os.path.realpath(prefix_path):
+        return True  # Target is the source
+
+    # Collect source credential files (pick the first valid one found)
+    source_files = {}  # filename -> source_path
+    for user_home in iter_prefix_user_homes(source_prefix):
+        for fname in _UPC_CREDENTIAL_FILES:
+            if fname in source_files:
+                continue
+            src = os.path.join(user_home, _UPC_LOCAL_SUBDIR, fname)
+            if os.path.isfile(src) and os.path.getsize(src) > 10:
+                source_files[fname] = src
+
+    if not source_files:
+        print("[inject] No valid credential files in source prefix")
+        return False
+
+    synced = 0
+    for user_home in iter_prefix_user_homes(prefix_path):
+        target_dir = os.path.join(user_home, _UPC_LOCAL_SUBDIR)
+        for fname, src_path in source_files.items():
+            dst_path = os.path.join(target_dir, fname)
+            src_size = os.path.getsize(src_path)
+
+            # Skip if target already has identical file
+            if os.path.isfile(dst_path) and os.path.getsize(dst_path) == src_size:
+                continue
+
+            os.makedirs(target_dir, exist_ok=True)
+            shutil.copy2(src_path, dst_path)
+            synced += 1
+            rel = os.path.relpath(dst_path, prefix_path)
+            print(f"[inject] Synced {fname} → {rel}")
+
+    if synced:
+        print(f"[inject] Synced {synced} credential file(s) from {os.path.basename(source_prefix)}")
+    return synced > 0
+
+
 def inject_session(prefix_path: str) -> bool:
-    """Inject session token into prefix's UPC settings.yml."""
+    """Inject session token and credential files into prefix."""
+    # Sync binary credential files first (ConnectSecureStorage.dat, user.dat)
+    sync_credentials(prefix_path)
+
     token, user_id = read_token()
     if not token:
         print("[inject] No session token available, skipping")
         return False
 
-    active_prefix = get_active_prefix(prefix_path)
+    config = (
+        "user:\n"
+        "  remember_me: true\n"
+        f'  restore_session: "{token}"\n'
+        f'  userId: "{user_id}"\n'
+    )
 
-    # Check both user directories
-    for user_dir in ["deck", "steamuser"]:
+    for user_home in iter_prefix_user_homes(prefix_path):
         settings_dir = os.path.join(
-            active_prefix, "drive_c", "users", user_dir,
-            "AppData", "Roaming", "Ubisoft", "Ubisoft Connect",
+            user_home, "AppData", "Roaming", "Ubisoft", "Ubisoft Connect",
         )
         settings_file = os.path.join(settings_dir, "settings.yml")
 
-        # Skip if token already matches (avoid overwriting UPC-refreshed token)
+        # Skip if token already matches
         if os.path.isfile(settings_file):
             try:
                 with open(settings_file) as f:
                     content = f.read()
                 m = re.search(r'restore_session:\s+"([^"]+)"', content)
                 if m and m.group(1) == token:
-                    print(f"[inject] {user_dir}: token already matches, skipping")
                     continue
             except Exception:
                 pass
 
-        if not os.path.isdir(settings_dir):
-            # Only create for "deck" user dir (primary)
-            if user_dir != "deck":
-                continue
-            os.makedirs(settings_dir, exist_ok=True)
-
-        config = (
-            "user:\n"
-            "  remember_me: true\n"
-            f'  restore_session: "{token}"\n'
-            f'  userId: "{user_id}"\n'
-        )
-
+        os.makedirs(settings_dir, exist_ok=True)
         try:
-            # Preserve non-user settings if file exists
-            if os.path.isfile(settings_file):
-                with open(settings_file) as f:
-                    existing = f.read()
-                if "user:" in existing:
-                    result = re.sub(
-                        r"user:.*?(?=\n\w|\Z)",
-                        config.rstrip("\n"),
-                        existing,
-                        flags=re.DOTALL,
-                    )
-                    with open(settings_file, "w") as f:
-                        f.write(result)
-                else:
-                    with open(settings_file, "a") as f:
-                        f.write("\n" + config)
-            else:
-                with open(settings_file, "w") as f:
-                    f.write(config)
-
-            print(f"[inject] Session injected into {user_dir}/settings.yml")
+            with open(settings_file, "w") as f:
+                f.write(config)
+            # Show relative path for readability
+            rel = os.path.relpath(user_home, prefix_path)
+            print(f"[inject] Session injected into {rel}")
         except Exception as e:
-            print(f"[inject] Failed to write {user_dir}/settings.yml: {e}")
+            print(f"[inject] Failed to write {user_home}: {e}")
 
     return True
 

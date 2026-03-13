@@ -1885,8 +1885,7 @@ except Exception as e:
         LAUNCH_TARGET_EXE="$LAUNCHER_EXE"
         LAUNCH_TARGET_ARG=""
         if [ "$UBISOFT_ACTION" = "install" ]; then
-            LAUNCH_TARGET_ARG="uplay://install/$LAUNCH_ID"
-            log "[Ubisoft] Opening install screen for launch_id=$LAUNCH_ID"
+            log "[Ubisoft] Opening launcher for game install"
         elif [ "$UBISOFT_ACTION" = "auth" ]; then
             # Keep LAUNCH_TARGET_EXE as UbisoftConnect.exe for auth —
             # upc.exe is the background service that exits immediately,

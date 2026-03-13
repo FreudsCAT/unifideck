@@ -5574,6 +5574,11 @@ class Plugin:
         """Check whether the auth session monitor has captured a token."""
         return self.ubisoft.check_ubisoft_auth_session_status()
 
+    async def sync_ubisoft_credentials(self) -> Dict[str, Any]:
+        """Retroactively sync UPC credentials and session token to all prefixes."""
+        logger.info("[RPC] sync_ubisoft_credentials")
+        return self.ubisoft.sync_ubisoft_credentials()
+
     async def temporarily_clear_compat_tool(self, appid_unsigned: int) -> Dict[str, Any]:
         """Temporarily remove a compat tool entry from config.vdf.
 

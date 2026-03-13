@@ -12,6 +12,7 @@ Usage:
 import json
 import os
 import re
+import shutil
 import sys
 
 DATA_DIR = os.path.expanduser("~/.local/share/unifideck")
@@ -20,23 +21,38 @@ TOKEN_FILE = os.path.join(DATA_DIR, "ubisoft_token.json")
 PREFIXES_DIR = os.path.join(DATA_DIR, "prefixes", "ubisoft")
 TEMPLATE_DIR = os.path.join(PREFIXES_DIR, ".template")
 
+# UPC credential files that must be synced alongside the session token
+_UPC_CREDENTIAL_FILES = ("ConnectSecureStorage.dat", "user.dat")
+_UPC_LOCAL_SUBDIR = os.path.join("AppData", "Local", "Ubisoft Game Launcher")
 
-def get_active_prefix(prefix_path: str) -> str:
-    """Detect the active Wine prefix root (may be prefix_path or prefix_path/pfx)."""
-    pfx = os.path.join(prefix_path, "pfx")
-    if os.path.isdir(pfx) and os.path.isfile(os.path.join(pfx, "system.reg")):
-        return pfx
-    return prefix_path
+
+_WINE_SYSTEM_USERS = {"Public", "All Users", "Default", "Default User"}
+
+
+def iter_prefix_user_homes(prefix_path: str):
+    """Yield user_home paths for all real user dirs across both layouts."""
+    for prefix_root in [prefix_path, os.path.join(prefix_path, "pfx")]:
+        users_dir = os.path.join(prefix_root, "drive_c", "users")
+        if not os.path.isdir(users_dir):
+            continue
+        try:
+            entries = os.listdir(users_dir)
+        except OSError:
+            continue
+        for entry in entries:
+            if entry in _WINE_SYSTEM_USERS:
+                continue
+            user_home = os.path.join(users_dir, entry)
+            if os.path.isdir(user_home):
+                yield user_home
 
 
 def read_restore_session(prefix_path: str) -> str | None:
     """Read restore_session from a prefix's settings.yml."""
-    active_prefix = get_active_prefix(prefix_path)
-
-    for user_dir in ["deck", "steamuser"]:
+    for user_home in iter_prefix_user_homes(prefix_path):
         settings_file = os.path.join(
-            active_prefix, "drive_c", "users", user_dir,
-            "AppData", "Roaming", "Ubisoft", "Ubisoft Connect", "settings.yml",
+            user_home, "AppData", "Roaming", "Ubisoft",
+            "Ubisoft Connect", "settings.yml",
         )
         if not os.path.isfile(settings_file):
             continue
@@ -74,8 +90,7 @@ def iter_ubisoft_prefixes():
 
 
 def write_session_to_prefix(prefix_path: str, token: str) -> None:
-    """Write restore_session into a prefix's settings.yml."""
-    active_prefix = get_active_prefix(prefix_path)
+    """Write restore_session into a prefix's settings.yml (both layouts, both users)."""
     user_id = ""
     if os.path.isfile(TOKEN_FILE):
         try:
@@ -85,21 +100,65 @@ def write_session_to_prefix(prefix_path: str, token: str) -> None:
         except Exception:
             pass
 
-    settings_dir = os.path.join(
-        active_prefix, "drive_c", "users", "deck",
-        "AppData", "Roaming", "Ubisoft", "Ubisoft Connect",
-    )
-    os.makedirs(settings_dir, exist_ok=True)
-    settings_file = os.path.join(settings_dir, "settings.yml")
-
     config = (
         "user:\n"
         "  remember_me: true\n"
         f'  restore_session: "{token}"\n'
         f'  userId: "{user_id}"\n'
     )
-    with open(settings_file, "w") as f:
-        f.write(config)
+
+    for user_home in iter_prefix_user_homes(prefix_path):
+        settings_dir = os.path.join(
+            user_home, "AppData", "Roaming", "Ubisoft", "Ubisoft Connect",
+        )
+        os.makedirs(settings_dir, exist_ok=True)
+        settings_file = os.path.join(settings_dir, "settings.yml")
+        with open(settings_file, "w") as f:
+            f.write(config)
+
+
+def propagate_credentials(source_prefix: str) -> int:
+    """Copy UPC credential files from source prefix to all other Ubisoft prefixes.
+
+    Syncs ConnectSecureStorage.dat and user.dat so all prefixes share
+    the same encrypted credential store. Returns number of files synced.
+    """
+    # Collect source credential files
+    source_files = {}  # filename -> source_path
+    for user_home in iter_prefix_user_homes(source_prefix):
+        for fname in _UPC_CREDENTIAL_FILES:
+            if fname in source_files:
+                continue
+            src = os.path.join(user_home, _UPC_LOCAL_SUBDIR, fname)
+            if os.path.isfile(src) and os.path.getsize(src) > 10:
+                source_files[fname] = src
+
+    if not source_files:
+        print("[capture] No valid credential files to propagate")
+        return 0
+
+    source_real = os.path.realpath(source_prefix)
+    total_synced = 0
+
+    for target_prefix in iter_ubisoft_prefixes():
+        if os.path.realpath(target_prefix) == source_real:
+            continue  # Skip source prefix
+
+        for user_home in iter_prefix_user_homes(target_prefix):
+            target_dir = os.path.join(user_home, _UPC_LOCAL_SUBDIR)
+            for fname, src_path in source_files.items():
+                dst_path = os.path.join(target_dir, fname)
+                src_size = os.path.getsize(src_path)
+
+                # Skip if already identical
+                if os.path.isfile(dst_path) and os.path.getsize(dst_path) == src_size:
+                    continue
+
+                os.makedirs(target_dir, exist_ok=True)
+                shutil.copy2(src_path, dst_path)
+                total_synced += 1
+
+    return total_synced
 
 
 def capture_session(prefix_path: str) -> bool:
@@ -135,6 +194,14 @@ def capture_session(prefix_path: str) -> bool:
 
     if updated_prefixes:
         print(f"[capture] Updated {updated_prefixes} Ubisoft prefixes with new token")
+
+    # Propagate binary credential files (ConnectSecureStorage.dat, user.dat)
+    try:
+        cred_count = propagate_credentials(prefix_path)
+        if cred_count:
+            print(f"[capture] Propagated {cred_count} credential file(s) to other prefixes")
+    except Exception as e:
+        print(f"[capture] Credential propagation failed: {e}")
 
     return True
 

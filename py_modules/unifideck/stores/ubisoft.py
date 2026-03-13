@@ -45,6 +45,34 @@ GAME_ID_DB_MAX_AGE = 7 * 24 * 3600  # Refresh weekly
 # UPC session token captured after first manual login (persists across runs)
 UPC_SESSION_FILE = os.path.join(DATA_DIR, "ubisoft_upc_session.txt")
 
+# UPC credential files that must be synced alongside the session token.
+# restore_session alone is insufficient — UPC validates against its encrypted
+# credential store (ConnectSecureStorage.dat) and user identity (user.dat).
+_UPC_CREDENTIAL_FILES = ("ConnectSecureStorage.dat", "user.dat")
+_UPC_LOCAL_SUBDIR = os.path.join("AppData", "Local", "Ubisoft Game Launcher")
+
+# Wine system user directories that should never contain UPC settings
+_WINE_SYSTEM_USERS = {"Public", "All Users", "Default", "Default User"}
+
+
+def _iter_prefix_user_homes(prefix_path: str):
+    """Yield (prefix_root, user_home) for all real user dirs across both layouts."""
+    for prefix_root in [prefix_path, os.path.join(prefix_path, "pfx")]:
+        users_dir = os.path.join(prefix_root, "drive_c", "users")
+        if not os.path.isdir(users_dir):
+            continue
+        try:
+            entries = os.listdir(users_dir)
+        except OSError:
+            continue
+        for entry in entries:
+            if entry in _WINE_SYSTEM_USERS:
+                continue
+            user_home = os.path.join(users_dir, entry)
+            if os.path.isdir(user_home):
+                yield prefix_root, user_home
+
+
 # SD card install path (mirrors download manager's StorageLocation.SDCARD)
 SDCARD_INSTALL_BASE = "/run/media/mmcblk0p1/Games/Ubisoft"
 
@@ -2038,12 +2066,22 @@ class UbisoftConnector(Store):
 
     def inject_upc_session(self, prefix_path: str) -> bool:
         """
-        Pre-inject auth session into UPC config so no login prompt appears.
+        Pre-inject auth session and credential files into UPC config so no login
+        prompt appears.
 
-        Prefers a UPC-native restore_session token (captured after a real UPC login)
-        over the REST API ticket. Skips writing if the prefix already has the correct
-        token to avoid destroying a valid UPC-native token that UPC may have refreshed.
+        Syncs ConnectSecureStorage.dat and user.dat from the auth prefix, then
+        writes restore_session token. Prefers UPC-native token over API ticket.
         """
+        # Sync binary credential files from auth prefix
+        source = self._find_best_credential_source()
+        if source:
+            try:
+                synced = self._sync_upc_credentials_to_prefix(source, prefix_path)
+                if synced:
+                    logger.info(f"[Ubisoft] inject_upc_session: synced {synced} credential file(s)")
+            except Exception as e:
+                logger.warning(f"[Ubisoft] inject_upc_session: credential sync failed: {e}")
+
         # Prefer UPC-native token from session file
         upc_session: Optional[str] = None
         if os.path.isfile(UPC_SESSION_FILE):
@@ -2089,19 +2127,15 @@ class UbisoftConnector(Store):
                 f'  userId: "{user_id}"\n'
             )
             wrote_any = False
-            for prefix_root in [prefix_path, os.path.join(prefix_path, "pfx")]:
-                for user_dir in ["steamuser", "deck"]:
-                    user_home = os.path.join(prefix_root, "drive_c", "users", user_dir)
-                    if not os.path.isdir(user_home):
-                        continue
-                    settings_dir = os.path.join(
-                        user_home, "AppData", "Roaming", "Ubisoft", "Ubisoft Connect",
-                    )
-                    os.makedirs(settings_dir, exist_ok=True)
-                    settings_file = os.path.join(settings_dir, "settings.yml")
-                    with open(settings_file, "w") as f:
-                        f.write(config)
-                    wrote_any = True
+            for _prefix_root, user_home in _iter_prefix_user_homes(prefix_path):
+                settings_dir = os.path.join(
+                    user_home, "AppData", "Roaming", "Ubisoft", "Ubisoft Connect",
+                )
+                os.makedirs(settings_dir, exist_ok=True)
+                settings_file = os.path.join(settings_dir, "settings.yml")
+                with open(settings_file, "w") as f:
+                    f.write(config)
+                wrote_any = True
             if wrote_any:
                 logger.info(f"[Ubisoft] Wrote session to prefix {os.path.basename(prefix_path)}")
             return wrote_any
@@ -2109,12 +2143,112 @@ class UbisoftConnector(Store):
             logger.warning(f"[Ubisoft] Failed to write session to prefix {prefix_path}: {e}")
             return False
 
+    def _sync_upc_credentials_to_prefix(self, source_prefix: str, target_prefix: str) -> int:
+        """Copy UPC credential files from source prefix to target prefix.
+
+        Copies ConnectSecureStorage.dat and user.dat into all user homes
+        (both root and pfx/ layouts) so UPC can validate the session token.
+        Returns number of files synced.
+        """
+        if os.path.realpath(source_prefix) == os.path.realpath(target_prefix):
+            return 0
+
+        # Collect source credential files (first valid one per filename)
+        source_files: Dict[str, str] = {}
+        for _root, user_home in _iter_prefix_user_homes(source_prefix):
+            for fname in _UPC_CREDENTIAL_FILES:
+                if fname in source_files:
+                    continue
+                src = os.path.join(user_home, _UPC_LOCAL_SUBDIR, fname)
+                if os.path.isfile(src) and os.path.getsize(src) > 10:
+                    source_files[fname] = src
+
+        if not source_files:
+            return 0
+
+        synced = 0
+        for _root, user_home in _iter_prefix_user_homes(target_prefix):
+            target_dir = os.path.join(user_home, _UPC_LOCAL_SUBDIR)
+            for fname, src_path in source_files.items():
+                dst_path = os.path.join(target_dir, fname)
+                src_size = os.path.getsize(src_path)
+                if os.path.isfile(dst_path) and os.path.getsize(dst_path) == src_size:
+                    continue
+                os.makedirs(target_dir, exist_ok=True)
+                shutil.copy2(src_path, dst_path)
+                synced += 1
+        return synced
+
+    def _find_best_credential_source(self) -> Optional[str]:
+        """Find the prefix with the freshest UPC credentials.
+
+        Prefers .upc-auth, falls back to whichever prefix has the largest
+        ConnectSecureStorage.dat.
+        """
+        best_path = None
+        best_size = 0
+
+        for prefix_dir in [AUTH_PREFIX_DIR]:
+            if not os.path.isdir(prefix_dir):
+                continue
+            for _root, user_home in _iter_prefix_user_homes(prefix_dir):
+                css = os.path.join(user_home, _UPC_LOCAL_SUBDIR, "ConnectSecureStorage.dat")
+                if os.path.isfile(css):
+                    size = os.path.getsize(css)
+                    if size > best_size:
+                        best_size = size
+                        best_path = prefix_dir
+
+        if best_path:
+            return best_path
+
+        # Fallback: scan all prefixes
+        if os.path.isdir(PREFIXES_DIR):
+            for entry in os.listdir(PREFIXES_DIR):
+                prefix = os.path.join(PREFIXES_DIR, entry)
+                if not os.path.isdir(prefix):
+                    continue
+                for _root, user_home in _iter_prefix_user_homes(prefix):
+                    css = os.path.join(user_home, _UPC_LOCAL_SUBDIR, "ConnectSecureStorage.dat")
+                    if os.path.isfile(css):
+                        size = os.path.getsize(css)
+                        if size > best_size:
+                            best_size = size
+                            best_path = prefix
+        return best_path
+
+    def _propagate_upc_credentials_to_all_prefixes(self) -> int:
+        """Sync UPC credential files from the best source to all game prefixes.
+
+        Called after auth capture and as a retroactive sync.
+        Returns total number of files synced.
+        """
+        source = self._find_best_credential_source()
+        if not source:
+            logger.info("[Ubisoft] No credential source found for propagation")
+            return 0
+
+        total = 0
+        if not os.path.isdir(PREFIXES_DIR):
+            return 0
+        for entry in os.listdir(PREFIXES_DIR):
+            prefix_path = os.path.join(PREFIXES_DIR, entry)
+            if not os.path.isdir(prefix_path):
+                continue
+            try:
+                total += self._sync_upc_credentials_to_prefix(source, prefix_path)
+            except Exception as e:
+                logger.warning(f"[Ubisoft] Failed to sync credentials to {entry}: {e}")
+        if total:
+            logger.info(f"[Ubisoft] Propagated {total} credential file(s) across prefixes")
+        return total
+
     def _read_prefix_restore_session(self, prefix_path: str) -> Optional[str]:
         """Read the current restore_session token from a prefix's settings.yml."""
-        for user_dir in ["deck", "steamuser"]:
+        for _prefix_root, user_home in _iter_prefix_user_homes(prefix_path):
             settings_file = os.path.join(
-                prefix_path, "drive_c", "users", user_dir,
-                "AppData", "Roaming", "Ubisoft", "Ubisoft Connect", "settings.yml"
+                user_home, "AppData", "Roaming", "Ubisoft",
+                "Ubisoft Connect", "settings.yml"
             )
             if not os.path.isfile(settings_file):
                 continue
@@ -2129,7 +2263,7 @@ class UbisoftConnector(Store):
         return None
 
     def _propagate_upc_session_to_all_prefixes(self, token: str) -> None:
-        """Update restore_session in all existing per-game prefixes."""
+        """Update restore_session and credential files in all existing per-game prefixes."""
         if not os.path.isdir(PREFIXES_DIR):
             return
         count = 0
@@ -2146,6 +2280,9 @@ class UbisoftConnector(Store):
                 logger.warning(f"[Ubisoft] Failed to update prefix {entry}: {e}")
         logger.info(f"[Ubisoft] Propagated session token to {count} existing prefixes")
 
+        # Also propagate binary credential files
+        self._propagate_upc_credentials_to_all_prefixes()
+
     def _capture_upc_session(self, prefix_path: str) -> Optional[str]:
         """
         Read back the restore_session token that UPC wrote to settings.yml
@@ -2153,52 +2290,51 @@ class UbisoftConnector(Store):
 
         UPC writes its own token (valid for rm_v1 auth) which differs from
         the REST API ticket we have. Capturing it enables future auto-login.
-        Also writes the token back to the template prefix so future clones inherit it.
+        Also writes the token back to the template prefix so future clones inherit it,
+        and syncs credential files (ConnectSecureStorage.dat, user.dat).
 
-        Checks both root and pfx/ layouts (Proton creates a pfx/ subdirectory),
-        and both steamuser and deck user directories.
+        Checks both root and pfx/ layouts across all user directories.
 
         Returns the captured token, or None if not found / unchanged.
         """
-        # Check both root and pfx/ layouts — Proton uses pfx/ subdirectory
-        prefix_roots = [prefix_path, os.path.join(prefix_path, "pfx")]
-        for prefix_root in prefix_roots:
-            for user_dir in ["steamuser", "deck"]:
-                settings_file = os.path.join(
-                    prefix_root, "drive_c", "users", user_dir,
-                    "AppData", "Roaming", "Ubisoft", "Ubisoft Connect", "settings.yml"
-                )
-                if not os.path.isfile(settings_file):
-                    continue
-                try:
-                    with open(settings_file) as f:
-                        content = f.read()
-                except Exception:
-                    continue
-                m = re.search(r'restore_session:\s+"([^"]+)"', content)
-                if not m:
-                    continue
-                token = m.group(1)
-                # Only save if different from what we injected (i.e. UPC wrote its own)
-                current_api_ticket = self.api.get_ticket() or ""
-                if token and token != current_api_ticket:
-                    try:
-                        previous_token = ""
-                        if os.path.isfile(UPC_SESSION_FILE):
-                            with open(UPC_SESSION_FILE, "r") as f:
-                                previous_token = f.read().strip()
-                        if token == previous_token:
-                            return None
+        for _prefix_root, user_home in _iter_prefix_user_homes(prefix_path):
+            settings_file = os.path.join(
+                user_home, "AppData", "Roaming", "Ubisoft",
+                "Ubisoft Connect", "settings.yml"
+            )
+            if not os.path.isfile(settings_file):
+                continue
+            try:
+                with open(settings_file) as f:
+                    content = f.read()
+            except Exception:
+                continue
 
-                        os.makedirs(DATA_DIR, exist_ok=True)
-                        with open(UPC_SESSION_FILE, "w") as f:
-                            f.write(token)
-                        # Also update the template so future clones inherit it
-                        self._write_upc_session_to_prefix(TEMPLATE_DIR, token)
-                        logger.info("[Ubisoft] Captured UPC restore_session token → template updated")
-                        return token
-                    except Exception as e:
-                        logger.warning(f"[Ubisoft] Failed to save UPC session token: {e}")
+            m = re.search(r'restore_session:\s+"([^"]+)"', content)
+            if not m:
+                continue
+            token = m.group(1)
+            # Only save if different from what we injected (i.e. UPC wrote its own)
+            current_api_ticket = self.api.get_ticket() or ""
+            if token and token != current_api_ticket:
+                try:
+                    previous_token = ""
+                    if os.path.isfile(UPC_SESSION_FILE):
+                        with open(UPC_SESSION_FILE, "r") as f:
+                            previous_token = f.read().strip()
+                    if token == previous_token:
+                        return None
+
+                    os.makedirs(DATA_DIR, exist_ok=True)
+                    with open(UPC_SESSION_FILE, "w") as f:
+                        f.write(token)
+                    # Update template so future clones inherit token + credentials
+                    self._write_upc_session_to_prefix(TEMPLATE_DIR, token)
+                    self._sync_upc_credentials_to_prefix(prefix_path, TEMPLATE_DIR)
+                    logger.info("[Ubisoft] Captured UPC restore_session token → template updated")
+                    return token
+                except Exception as e:
+                    logger.warning(f"[Ubisoft] Failed to save UPC session token: {e}")
         return None
 
     async def connect_ubisoft_account(self) -> Dict[str, Any]:
@@ -2354,6 +2490,37 @@ class UbisoftConnector(Store):
             and not self._auth_monitor_task.done()
         )
         return {"captured": captured, "monitoring": monitoring}
+
+    def sync_ubisoft_credentials(self) -> Dict[str, Any]:
+        """Retroactively sync UPC credentials and session token to all prefixes.
+
+        Exposed as a backend RPC. Finds the freshest credential source and
+        propagates both binary credential files and the session token to
+        every Ubisoft prefix (including template).
+        """
+        try:
+            cred_count = self._propagate_upc_credentials_to_all_prefixes()
+
+            # Also propagate session token if available
+            token_count = 0
+            if os.path.isfile(UPC_SESSION_FILE):
+                try:
+                    with open(UPC_SESSION_FILE) as f:
+                        token = f.read().strip()
+                    if token:
+                        self._propagate_upc_session_to_all_prefixes(token)
+                        token_count = 1
+                except Exception:
+                    pass
+
+            return {
+                "success": True,
+                "credentials_synced": cred_count,
+                "token_propagated": token_count > 0,
+            }
+        except Exception as e:
+            logger.error(f"[Ubisoft] Retroactive credential sync failed: {e}")
+            return {"success": False, "error": str(e)}
 
     # ========================================================================
     # Installed Game Detection
