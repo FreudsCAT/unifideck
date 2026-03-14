@@ -381,8 +381,10 @@ class MicrosoftConnector(Store):
             # ── 2. XBL / XSTS token chain ────────────────────────────────
             ok = await asyncio.get_event_loop().run_in_executor(None, self._build_xbl_chain)
             if not ok:
-                logger.error("[MS] Could not build XBL/XSTS token chain")
-                return []
+                logger.warning(
+                    "[MS] Could not build XBL/XSTS token chain — "
+                    "proceeding with Bearer only library query"
+                )
 
             # ── 3. Collections API ────────────────────────────────────────
             raw_items = await asyncio.get_event_loop().run_in_executor(
