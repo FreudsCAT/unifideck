@@ -244,13 +244,17 @@ class MicrosoftConnector(Store):
         return "microsoft"
 
     async def is_available(self) -> bool:
-        """Return True if we have a saved (and refreshable) token with the correct scope."""
+        """Return True if we have a saved (and refreshable) token."""
         if not os.path.exists(TOKEN_FILE):
             return False
         try:
             with open(TOKEN_FILE) as f:
                 data = json.load(f)
-            return bool(data.get("refresh_token")) and data.get("scope") == MS_SCOPE
+            # Only check for a refresh_token.  The scope is hard-coded in the
+            # auth flow (MS_SCOPE) so a valid token file always implies the
+            # correct scope.  Checking it here was fragile — _save_tokens
+            # previously omitted the field, making every sync silently fail.
+            return bool(data.get("refresh_token"))
         except Exception:
             return False
 
@@ -372,7 +376,24 @@ class MicrosoftConnector(Store):
           4. Batch-fetch product details to filter Windows.Desktop games
         """
         if not await self.is_available():
-            logger.warning("[MS] Not authenticated — skipping library fetch")
+            # Provide an actionable diagnostic instead of a generic warning.
+            if not os.path.exists(TOKEN_FILE):
+                logger.error(
+                    "[MS] Not authenticated — token file does not exist. "
+                    "Authenticate via Quick Access Menu → Unifideck → Microsoft."
+                )
+            else:
+                try:
+                    with open(TOKEN_FILE) as f:
+                        data = json.load(f)
+                    has_refresh = bool(data.get("refresh_token"))
+                    logger.error(
+                        f"[MS] Not authenticated — token file exists but "
+                        f"refresh_token={'present' if has_refresh else 'MISSING'}. "
+                        f"Re-authenticate to fix."
+                    )
+                except Exception as e:
+                    logger.error(f"[MS] Not authenticated — token file unreadable: {e}")
             return []
 
         try:
@@ -492,6 +513,7 @@ class MicrosoftConnector(Store):
                         "access_token":  self._ms_access_token,
                         "refresh_token": self._ms_refresh_token,
                         "saved_at":      self._token_saved_at,
+                        "scope":         MS_SCOPE,
                     },
                     f,
                 )
