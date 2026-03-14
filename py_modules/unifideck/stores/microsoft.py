@@ -768,7 +768,6 @@ class MicrosoftConnector(Store):
                 "market":           self._get_market(),
                 "productSkuIds":    [],
                 "country":          self._get_market(),
-                "entitlementFilters": ["Game"],
                 "pageSize":         200,
             }
             # Only include continuationToken when paginating — sending null on the
