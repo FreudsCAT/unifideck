@@ -58,7 +58,7 @@ MS_CLIENT_ID   = "000000004C12AE6F"
 MS_REDIRECT    = "https://login.live.com/oauth20_desktop.srf"
 MS_AUTH_URL    = "https://login.live.com/oauth20_authorize.srf"
 MS_TOKEN_URL   = "https://login.live.com/oauth20_token.srf"
-MS_SCOPE       = "Xboxlive.signin Xboxlive.offline_access"
+MS_SCOPE       = "service::user.auth.xboxlive.com::MBI_SSL offline_access"
 
 XBL_AUTH_URL   = "https://user.auth.xboxlive.com/user/authenticate"
 XSTS_URL       = "https://xsts.auth.xboxlive.com/xsts/authorize"
@@ -471,6 +471,15 @@ class MicrosoftConnector(Store):
             if os.path.exists(TOKEN_FILE):
                 with open(TOKEN_FILE) as f:
                     data = json.load(f)
+                # Invalidate tokens obtained with old Xboxlive.signin scope —
+                # they cannot be used with the licensing XSTS RP.
+                if data.get("scope") != MS_SCOPE:
+                    logger.warning(
+                        "[MS] Stored token scope mismatch "
+                        f"(stored: {data.get('scope')!r}, current: {MS_SCOPE!r}) — "
+                        "clearing tokens, re-authentication required."
+                    )
+                    return
                 self._ms_access_token  = data.get("access_token")
                 self._ms_refresh_token = data.get("refresh_token")
                 self._token_saved_at   = data.get("saved_at", 0.0)
@@ -489,6 +498,7 @@ class MicrosoftConnector(Store):
                         "access_token":  self._ms_access_token,
                         "refresh_token": self._ms_refresh_token,
                         "saved_at":      self._token_saved_at,
+                        "scope":         MS_SCOPE,
                     },
                     f,
                 )
