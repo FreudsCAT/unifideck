@@ -711,21 +711,23 @@ class MicrosoftConnector(Store):
     def _query_collections(self) -> List[Dict]:
         """
         Query the Microsoft Collections API and return raw item dicts.
-        Handles pagination automatically.
+        Handles pagination automatically.  Requires a valid XSTS token
+        with the licensing relying party — returns an empty list with an
+        explicit error log if the token chain is incomplete.
         """
-        # If XBL/XSTS failed entirely, or if we only have the generic RP token,
-        # fall back to the MS Store Library API which accepts Bearer auth directly.
         _LICENSING_RPS = {
             "https://licensing.xboxlive.com/",
             "http://licensing.xboxlive.com/",
         }
         if not self._xsts_token or not self._user_hash or self._xsts_rp not in _LICENSING_RPS:
-            logger.info(
-                "[MS] XBL/XSTS unavailable or non-licensing RP "
+            logger.error(
+                "[MS] Cannot query Collections — XBL/XSTS unavailable or non-licensing RP "
                 f"(xsts_token={'set' if self._xsts_token else 'None'}, "
-                f"rp={self._xsts_rp!r}) — falling back to MS Store Library API"
+                f"rp={self._xsts_rp!r}).  The OAuth scope ({MS_SCOPE!r}) does not grant "
+                f"Bearer access to the Store Library API, so no fallback is possible. "
+                f"Ensure the XBL → XSTS chain completes successfully."
             )
-            return self._query_store_library_bearer()
+            return []
 
         auth_header = f"XBL3.0 x={self._user_hash};{self._xsts_token}"
         headers = {
