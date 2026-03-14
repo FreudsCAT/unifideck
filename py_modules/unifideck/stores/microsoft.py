@@ -58,7 +58,7 @@ MS_CLIENT_ID   = "000000004C12AE6F"
 MS_REDIRECT    = "https://login.live.com/oauth20_desktop.srf"
 MS_AUTH_URL    = "https://login.live.com/oauth20_authorize.srf"
 MS_TOKEN_URL   = "https://login.live.com/oauth20_token.srf"
-MS_SCOPE       = "service::user.auth.xboxlive.com::MBI_SSL offline_access"
+MS_SCOPE       = "service::user.auth.xboxlive.com::MBI_SSL Xboxlive.offline_access"
 
 XBL_AUTH_URL   = "https://user.auth.xboxlive.com/user/authenticate"
 XSTS_URL       = "https://xsts.auth.xboxlive.com/xsts/authorize"
