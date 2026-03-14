@@ -56,8 +56,13 @@ logger = logging.getLogger(__name__)
 # Public client ID used by many open-source Xbox tools (no secret required).
 MS_CLIENT_ID   = "000000004C12AE6F"
 MS_REDIRECT    = "https://login.live.com/oauth20_desktop.srf"
-MS_AUTH_URL    = "https://login.live.com/oauth20_authorize.srf"
-MS_TOKEN_URL   = "https://login.live.com/oauth20_token.srf"
+# Azure AD v2.0 consumer endpoint returns JWT tokens (not compact MSA tickets).
+# JWTs are required for XBL contract-v2 which is in turn required to obtain
+# an XSTS token with the licensing.xboxlive.com relying party (Collections API).
+# The legacy login.live.com endpoint returns compact tokens that only work with
+# XBL contract-v1 -- those tokens are rejected by the licensing XSTS RP (400).
+MS_AUTH_URL    = "https://login.microsoftonline.com/consumers/oauth2/v2.0/authorize"
+MS_TOKEN_URL   = "https://login.microsoftonline.com/consumers/oauth2/v2.0/token"
 MS_SCOPE       = "Xboxlive.signin Xboxlive.offline_access"
 
 XBL_AUTH_URL   = "https://user.auth.xboxlive.com/user/authenticate"
@@ -277,6 +282,7 @@ class MicrosoftConnector(Store):
             await _mon.clear_cookies_for_domain("login.live.com")
             await _mon.clear_cookies_for_domain("live.com")
             await _mon.clear_cookies_for_domain("microsoft.com")
+            await _mon.clear_cookies_for_domain("login.microsoftonline.com")
             logger.info("[MS] Cleared Microsoft cookies before auth")
         except Exception as e:
             logger.debug(f"[MS] Cookie clear before auth (non-fatal): {e}")
@@ -364,6 +370,7 @@ class MicrosoftConnector(Store):
             await monitor.clear_cookies_for_domain("login.live.com")
             await monitor.clear_cookies_for_domain("live.com")
             await monitor.clear_cookies_for_domain("microsoft.com")
+            await monitor.clear_cookies_for_domain("login.microsoftonline.com")
         except Exception:
             pass
 
@@ -631,9 +638,16 @@ class MicrosoftConnector(Store):
                         )
                         xbl_resp = None
                 except Exception as _xbl_err:
+                    _body = ""
+                    if hasattr(_xbl_err, "read"):
+                        try:
+                            _body = _xbl_err.read().decode("utf-8", errors="replace")
+                        except Exception:
+                            pass
                     logger.debug(
                         f"[MS] XBL failed (contract-v{_cv}, "
                         f"prefix={_rps[:2]!r}): {_xbl_err}"
+                        f"{(' body=' + _body[:500]) if _body else ''}"
                     )
                     xbl_resp = None
 
@@ -690,7 +704,16 @@ class MicrosoftConnector(Store):
                     logger.info(f"[MS] ✓ XSTS obtained with RP={_rp!r} sandbox={_sandbox!r}")
                     break
                 except Exception as _xsts_err:
-                    logger.warning(f"[MS] XSTS failed (RP={_rp!r} sandbox={_sandbox!r}): {_xsts_err}")
+                    _body = ""
+                    if hasattr(_xsts_err, "read"):
+                        try:
+                            _body = _xsts_err.read().decode("utf-8", errors="replace")
+                        except Exception:
+                            pass
+                    logger.warning(
+                        f"[MS] XSTS failed (RP={_rp!r} sandbox={_sandbox!r}): "
+                        f"{_xsts_err}{(' body=' + _body[:500]) if _body else ''}"
+                    )
                     xsts_resp = None
             if xsts_resp is None:
                 logger.error("[MS] XSTS failed with all RP/SandboxId combinations")
