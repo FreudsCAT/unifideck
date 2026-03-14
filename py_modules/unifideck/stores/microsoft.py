@@ -12,7 +12,7 @@ Auth flow
   2. XBL user token  (user.auth.xboxlive.com)
   3. XSTS token      (xsts.auth.xboxlive.com, RP = xboxlive.com)
   4. Title Hub query  (titlehub.xboxlive.com) — user's game history
-  5. Product details  (store.mp.microsoft.com) — PC / Windows.Desktop filter
+  5. Product details  (displaycatalog.mp.microsoft.com) — PC / Windows.Desktop filter
 
 Win32 detection
 ---------------
@@ -254,10 +254,16 @@ class MicrosoftConnector(Store):
         return cid
 
     def _get_product_url(self) -> str:
-        return self._get_ms_setting("product_url", "https://store.mp.microsoft.com/v8.0/sdk/products")
+        url = self._get_ms_setting("product_url")
+        if not url:
+            logger.error("[MS] No product_url in settings.json. Product scan will fail.")
+        return url
 
     def _get_titlehub_url(self) -> str:
-        return self._get_ms_setting("titlehub_url", "https://titlehub.xboxlive.com")
+        url = self._get_ms_setting("titlehub_url")
+        if not url:
+            logger.error("[MS] No titlehub_url in settings.json. Library sync will fail.")
+        return url
 
     def _validated_install_dir(self, game_id: str) -> str:
         """
@@ -854,7 +860,7 @@ class MicrosoftConnector(Store):
         for i in range(0, len(product_ids), batch_size):
             batch   = product_ids[i: i + batch_size]
             big_ids = ",".join(batch)
-            url     = f"{self._get_product_url()}?bigIds={big_ids}&market={self._get_market()}&locale={self._get_locale()}"
+            url     = f"{self._get_product_url()}?bigIds={big_ids}&market={self._get_market()}&languages={self._get_locale()}"
 
             try:
                 data     = _http_get(url, {"Accept": "application/json", "User-Agent": "Unifideck/1.0", "MS-CV": "unifideck.2"})
@@ -1076,7 +1082,7 @@ class MicrosoftConnector(Store):
     def _fetch_single_product_meta(self, game_id: str) -> Optional[dict]:
         """Fetch and classify a single product from the catalog API."""
         try:
-            url  = f"{self._get_product_url()}?bigIds={game_id}&market={self._get_market()}&locale={self._get_locale()}"
+            url  = f"{self._get_product_url()}?bigIds={game_id}&market={self._get_market()}&languages={self._get_locale()}"
             data = _http_get(url, {"Accept": "application/json", "User-Agent": "Unifideck/1.0", "MS-CV": "unifideck.3"})
             for product in data.get("Products", []):
                 is_win32, meta = self._classify_product(product)
