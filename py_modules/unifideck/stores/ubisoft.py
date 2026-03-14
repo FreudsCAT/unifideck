@@ -47,9 +47,9 @@ GAME_ID_DB_MAX_AGE = 7 * 24 * 3600  # Refresh weekly
 # UPC session token captured after first manual login (persists across runs)
 UPC_SESSION_FILE = os.path.join(DATA_DIR, "ubisoft_upc_session.txt")
 
-# UPC credential files that must be synced alongside the session token.
-# restore_session alone is insufficient — UPC validates against its encrypted
-# credential store (ConnectSecureStorage.dat) and user identity (user.dat).
+# UPC credential files synced alongside the session token.
+# These are DPAPI-encrypted — they can only be shared between prefixes that
+# share the same Wine MachineGuid (enforced by _ensure_auth_prefix).
 _UPC_CREDENTIAL_FILES = ("ConnectSecureStorage.dat", "user.dat")
 _UPC_LOCAL_SUBDIR = os.path.join("AppData", "Local", "Ubisoft Game Launcher")
 _UPC_AUTH_CACHE_ARTIFACTS = (
@@ -62,6 +62,7 @@ _UPC_AUTH_CACHE_ARTIFACTS = (
     os.path.join("cache", "http2", "Default", "IndexedDB"),
     os.path.join("cache", "http2", "Default", "Preferences"),
     os.path.join("cache", "http2", "Default", "Session Storage"),
+    os.path.join("cache", "ownership"),
 )
 
 # Wine system user directories that should never contain UPC settings
@@ -1530,21 +1531,57 @@ class UbisoftConnector(Store):
         Clones from template if available, or falls back to any existing game prefix.
         On a fresh install with no Ubisoft prefixes yet, performs a direct UPC
         install into `.upc-auth` so auth never depends on installing a game first.
-        Automatically rebuilds if prefix Proton version doesn't match current.
+        Automatically rebuilds if prefix Proton version doesn't match current
+        or if DPAPI keys (MachineGuid) differ from the .template prefix.
         """
         upc_path = self._find_upc_exe(AUTH_PREFIX_DIR)
+        rebuild_required = False
+
         if upc_path:
-            # Check for Proton version mismatch before returning
+            # Check for Proton version mismatch
             if self._is_prefix_version_stale(AUTH_PREFIX_DIR):
                 logger.warning("[Ubisoft] Auth prefix Proton version stale, rebuilding")
-                shutil.rmtree(AUTH_PREFIX_DIR, ignore_errors=True)
-            else:
-                return upc_path
+                rebuild_required = True
+            
+            # Check for DPAPI mismatch against template
+            elif self._template_exists():
+                auth_reg = os.path.join(AUTH_PREFIX_DIR, "system.reg")
+                tmpl_reg = os.path.join(TEMPLATE_DIR, "system.reg")
+                
+                # Proton creates a pfx/ subdirectory
+                if not os.path.isfile(auth_reg):
+                    auth_reg = os.path.join(AUTH_PREFIX_DIR, "pfx", "system.reg")
+                if not os.path.isfile(tmpl_reg):
+                    tmpl_reg = os.path.join(TEMPLATE_DIR, "pfx", "system.reg")
 
-        # Corrupted: exists but no upc.exe — wipe and re-clone
-        if os.path.isdir(AUTH_PREFIX_DIR):
-            logger.warning("[Ubisoft] Auth prefix exists but upc.exe missing; re-cloning")
+                auth_guid, tmpl_guid = "", ""
+                if os.path.isfile(auth_reg) and os.path.isfile(tmpl_reg):
+                    import re
+                    try:
+                        with open(auth_reg, "r", encoding="utf-8", errors="ignore") as f:
+                            m = re.search(r'"MachineGuid"="([^"]+)"', f.read())
+                            if m: auth_guid = m.group(1)
+                        with open(tmpl_reg, "r", encoding="utf-8", errors="ignore") as f:
+                            m = re.search(r'"MachineGuid"="([^"]+)"', f.read())
+                            if m: tmpl_guid = m.group(1)
+                    except Exception as e:
+                        logger.warning(f"[Ubisoft] Failed to read MachineGuid: {e}")
+
+                if tmpl_guid and auth_guid and tmpl_guid != auth_guid:
+                    logger.warning(
+                        "[Ubisoft] Auth prefix DPAPI keys (MachineGuid) desynced from template. "
+                        "Rebuilding .upc-auth to ensure ConnectSecureStorage.dat portability."
+                    )
+                    rebuild_required = True
+
+        if rebuild_required or (os.path.isdir(AUTH_PREFIX_DIR) and not upc_path):
+            if not rebuild_required:
+                logger.warning("[Ubisoft] Auth prefix exists but upc.exe missing; re-cloning")
             shutil.rmtree(AUTH_PREFIX_DIR, ignore_errors=True)
+            upc_path = None
+
+        if upc_path:
+            return upc_path
 
         # Regenerate template if stale (prevents cloning an outdated prefix)
         await self._regenerate_template_if_stale()

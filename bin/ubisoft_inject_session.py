@@ -24,7 +24,9 @@ TOKEN_FILE = os.path.join(DATA_DIR, "ubisoft_token.json")
 PREFIXES_DIR = os.path.join(DATA_DIR, "prefixes", "ubisoft")
 AUTH_PREFIX_DIR = os.path.join(PREFIXES_DIR, ".upc-auth")
 
-# UPC credential files that must be synced alongside the session token
+# UPC credential files synced alongside the session token.
+# These are DPAPI-encrypted — they can only be shared between prefixes that
+# share the same Wine MachineGuid (enforced by _ensure_auth_prefix in ubisoft.py).
 _UPC_CREDENTIAL_FILES = ("ConnectSecureStorage.dat", "user.dat")
 _UPC_LOCAL_SUBDIR = os.path.join("AppData", "Local", "Ubisoft Game Launcher")
 _UPC_AUTH_CACHE_ARTIFACTS = (
@@ -37,15 +39,23 @@ _UPC_AUTH_CACHE_ARTIFACTS = (
     os.path.join("cache", "http2", "Default", "IndexedDB"),
     os.path.join("cache", "http2", "Default", "Preferences"),
     os.path.join("cache", "http2", "Default", "Session Storage"),
+    os.path.join("cache", "ownership"),
 )
 
 
 _WINE_SYSTEM_USERS = {"Public", "All Users", "Default", "Default User"}
 
 
-def iter_prefix_user_homes(prefix_path: str):
-    """Yield user_home paths for all real user dirs across both layouts."""
-    for prefix_root in [prefix_path, os.path.join(prefix_path, "pfx")]:
+def iter_prefix_user_homes(prefix_path: str, pfx_first: bool = False):
+    """Yield user_home paths for all real user dirs across both layouts.
+
+    When pfx_first is True, yield pfx/ layout before bare drive_c/ layout.
+    UPC reads from pfx/ so this ensures the freshest files are found first.
+    """
+    roots = [prefix_path, os.path.join(prefix_path, "pfx")]
+    if pfx_first:
+        roots = list(reversed(roots))
+    for prefix_root in roots:
         users_dir = os.path.join(prefix_root, "drive_c", "users")
         if not os.path.isdir(users_dir):
             continue
@@ -100,38 +110,33 @@ def read_token() -> tuple:
 def _find_best_credential_source():
     """Find the prefix with the freshest ConnectSecureStorage.dat to use as credential source.
 
-    Prefers the auth prefix (.upc-auth). Falls back to whichever prefix has the
-    largest (freshest) ConnectSecureStorage.dat.
+    Prefers the auth prefix (.upc-auth), checking pfx/ layout first since that's
+    where UPC writes fresh credentials.  Falls back to whichever prefix has the
+    most recently modified ConnectSecureStorage.dat.
     """
     best_path = None
-    best_size = 0
+    best_mtime = 0
 
-    # Check auth prefix first (preferred source)
-    for user_home in iter_prefix_user_homes(AUTH_PREFIX_DIR):
+    # Check auth prefix first (preferred source) — pfx/ layout first
+    for user_home in iter_prefix_user_homes(AUTH_PREFIX_DIR, pfx_first=True):
         css = os.path.join(user_home, _UPC_LOCAL_SUBDIR, "ConnectSecureStorage.dat")
-        if os.path.isfile(css):
-            size = os.path.getsize(css)
-            if size > best_size:
-                best_size = size
-                best_path = AUTH_PREFIX_DIR
+        if os.path.isfile(css) and os.path.getsize(css) > 10:
+            return AUTH_PREFIX_DIR  # Always prefer auth if it has any valid CSS
 
-    # If auth prefix has credentials, use it
-    if best_path:
-        return best_path
-
-    # Fall back: scan all prefixes for freshest credentials
+    # Fall back: scan all prefixes for most recently modified credentials
     if os.path.isdir(PREFIXES_DIR):
         for entry in os.listdir(PREFIXES_DIR):
             prefix = os.path.join(PREFIXES_DIR, entry)
             if not os.path.isdir(prefix):
                 continue
-            for user_home in iter_prefix_user_homes(prefix):
+            for user_home in iter_prefix_user_homes(prefix, pfx_first=True):
                 css = os.path.join(user_home, _UPC_LOCAL_SUBDIR, "ConnectSecureStorage.dat")
-                if os.path.isfile(css):
-                    size = os.path.getsize(css)
-                    if size > best_size:
-                        best_size = size
+                if os.path.isfile(css) and os.path.getsize(css) > 10:
+                    mtime = os.path.getmtime(css)
+                    if mtime > best_mtime:
+                        best_mtime = mtime
                         best_path = prefix
+                    break  # Use first valid user_home per prefix
 
     return best_path
 
@@ -176,8 +181,7 @@ def sync_credentials(prefix_path: str) -> bool:
     """Copy UPC credential files from the auth prefix into the target prefix.
 
     Copies ConnectSecureStorage.dat and user.dat into all user homes
-    (both root and pfx/ layouts) so UPC can validate the session token.
-    Skips files that are already identical (same size).
+    (prioritizing pfx/ layout) so UPC can validate the session token.
     """
     source_prefix = _find_best_credential_source()
     if not source_prefix:
@@ -187,14 +191,14 @@ def sync_credentials(prefix_path: str) -> bool:
     if os.path.realpath(source_prefix) == os.path.realpath(prefix_path):
         return True  # Target is the source
 
-    # Collect source credential files (pick the first valid one found)
+    # Collect source credential files — prefer pfx/ layout (where UPC writes)
     source_files = {}  # filename -> source_path
-    for user_home in iter_prefix_user_homes(source_prefix):
+    for user_home in iter_prefix_user_homes(source_prefix, pfx_first=True):
         for fname in _UPC_CREDENTIAL_FILES:
             if fname in source_files:
                 continue
             src = os.path.join(user_home, _UPC_LOCAL_SUBDIR, fname)
-            if os.path.isfile(src) and os.path.getsize(src) > 10:
+            if os.path.isfile(src) and os.path.getsize(src) > 100:
                 source_files[fname] = src
 
     if not source_files:
@@ -202,19 +206,24 @@ def sync_credentials(prefix_path: str) -> bool:
         return False
 
     synced = 0
-    for user_home in iter_prefix_user_homes(prefix_path):
+    # Prioritize pfx/ layout to ensure live files are updated first
+    for user_home in iter_prefix_user_homes(prefix_path, pfx_first=True):
         target_dir = os.path.join(user_home, _UPC_LOCAL_SUBDIR)
         for fname, src_path in source_files.items():
             dst_path = os.path.join(target_dir, fname)
-            src_size = os.path.getsize(src_path)
 
-            # Skip if target already has identical file
-            if os.path.isfile(dst_path) and os.path.getsize(dst_path) == src_size:
-                continue
+            # Skip if target already has identical file (by content hash)
+            if os.path.isfile(dst_path):
+                try:
+                    if _hash_upc_artifact(src_path) == _hash_upc_artifact(dst_path):
+                        continue
+                except Exception:
+                    pass
 
             os.makedirs(target_dir, exist_ok=True)
             shutil.copy2(src_path, dst_path)
             synced += 1
+            # Show relative path from prefix for clarity
             rel = os.path.relpath(dst_path, prefix_path)
             print(f"[inject] Synced {fname} → {rel}")
 
@@ -287,7 +296,7 @@ def inject_session(prefix_path: str) -> bool:
         f'  userId: "{user_id}"\n'
     )
 
-    for user_home in iter_prefix_user_homes(prefix_path):
+    for user_home in iter_prefix_user_homes(prefix_path, pfx_first=True):
         settings_dir = os.path.join(
             user_home, "AppData", "Roaming", "Ubisoft", "Ubisoft Connect",
         )

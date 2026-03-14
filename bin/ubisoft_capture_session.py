@@ -21,8 +21,11 @@ UPC_SESSION_FILE = os.path.join(DATA_DIR, "ubisoft_upc_session.txt")
 TOKEN_FILE = os.path.join(DATA_DIR, "ubisoft_token.json")
 PREFIXES_DIR = os.path.join(DATA_DIR, "prefixes", "ubisoft")
 TEMPLATE_DIR = os.path.join(PREFIXES_DIR, ".template")
+AUTH_PREFIX_DIR = os.path.join(PREFIXES_DIR, ".upc-auth")
 
-# UPC credential files that must be synced alongside the session token
+# UPC credential files synced alongside the session token.
+# These are DPAPI-encrypted — they can only be shared between prefixes that
+# share the same Wine MachineGuid (enforced by _ensure_auth_prefix in ubisoft.py).
 _UPC_CREDENTIAL_FILES = ("ConnectSecureStorage.dat", "user.dat")
 _UPC_LOCAL_SUBDIR = os.path.join("AppData", "Local", "Ubisoft Game Launcher")
 _UPC_AUTH_CACHE_ARTIFACTS = (
@@ -35,15 +38,23 @@ _UPC_AUTH_CACHE_ARTIFACTS = (
     os.path.join("cache", "http2", "Default", "IndexedDB"),
     os.path.join("cache", "http2", "Default", "Preferences"),
     os.path.join("cache", "http2", "Default", "Session Storage"),
+    os.path.join("cache", "ownership"),
 )
 
 
 _WINE_SYSTEM_USERS = {"Public", "All Users", "Default", "Default User"}
 
 
-def iter_prefix_user_homes(prefix_path: str):
-    """Yield user_home paths for all real user dirs across both layouts."""
-    for prefix_root in [prefix_path, os.path.join(prefix_path, "pfx")]:
+def iter_prefix_user_homes(prefix_path: str, pfx_first: bool = False):
+    """Yield user_home paths for all real user dirs across both layouts.
+
+    When pfx_first is True, yield pfx/ layout before bare drive_c/ layout.
+    UPC reads from pfx/ so this ensures the freshest files are found first.
+    """
+    roots = [prefix_path, os.path.join(prefix_path, "pfx")]
+    if pfx_first:
+        roots = list(reversed(roots))
+    for prefix_root in roots:
         users_dir = os.path.join(prefix_root, "drive_c", "users")
         if not os.path.isdir(users_dir):
             continue
@@ -61,7 +72,7 @@ def iter_prefix_user_homes(prefix_path: str):
 
 def read_restore_session(prefix_path: str) -> str | None:
     """Read restore_session from a prefix's settings.yml."""
-    for user_home in iter_prefix_user_homes(prefix_path):
+    for user_home in iter_prefix_user_homes(prefix_path, pfx_first=True):
         settings_file = os.path.join(
             user_home, "AppData", "Roaming", "Ubisoft",
             "Ubisoft Connect", "settings.yml",
@@ -154,7 +165,7 @@ def _hash_upc_artifact(path: str) -> str:
 def _collect_auth_artifact_sources(source_prefix: str) -> dict:
     """Collect auth-adjacent cache/config artifacts from the source prefix."""
     source_artifacts = {}
-    for user_home in iter_prefix_user_homes(source_prefix):
+    for user_home in iter_prefix_user_homes(source_prefix, pfx_first=True):
         local_root = os.path.join(user_home, _UPC_LOCAL_SUBDIR)
         for rel_path in _UPC_AUTH_CACHE_ARTIFACTS:
             if rel_path in source_artifacts:
@@ -173,7 +184,7 @@ def propagate_credentials(source_prefix: str) -> int:
     """
     # Collect source credential files
     source_files = {}  # filename -> source_path
-    for user_home in iter_prefix_user_homes(source_prefix):
+    for user_home in iter_prefix_user_homes(source_prefix, pfx_first=True):
         for fname in _UPC_CREDENTIAL_FILES:
             if fname in source_files:
                 continue
@@ -196,11 +207,14 @@ def propagate_credentials(source_prefix: str) -> int:
             target_dir = os.path.join(user_home, _UPC_LOCAL_SUBDIR)
             for fname, src_path in source_files.items():
                 dst_path = os.path.join(target_dir, fname)
-                src_size = os.path.getsize(src_path)
 
-                # Skip if already identical
-                if os.path.isfile(dst_path) and os.path.getsize(dst_path) == src_size:
-                    continue
+                # Skip if already identical (by content hash)
+                if os.path.isfile(dst_path):
+                    try:
+                        if _hash_upc_artifact(src_path) == _hash_upc_artifact(dst_path):
+                            continue
+                    except Exception:
+                        pass
 
                 os.makedirs(target_dir, exist_ok=True)
                 shutil.copy2(src_path, dst_path)
@@ -249,41 +263,76 @@ def propagate_auth_artifacts(source_prefix: str) -> int:
     return total_synced
 
 
+def _check_prefix_health(prefix_path: str) -> bool:
+    """Check if a prefix has a healthy, logged-in session.
+
+    A prefix is healthy if it has a non-empty restore_session in settings.yml
+    AND a non-empty ConnectSecureStorage.dat.
+    """
+    token = read_restore_session(prefix_path)
+    if not token or len(token) < 50:
+        return False
+
+    has_credentials = False
+    for user_home in iter_prefix_user_homes(prefix_path, pfx_first=True):
+        css = os.path.join(user_home, _UPC_LOCAL_SUBDIR, "ConnectSecureStorage.dat")
+        if os.path.isfile(css) and os.path.getsize(css) > 100:
+            has_credentials = True
+            break
+    
+    return has_credentials
+
+
 def capture_session(prefix_path: str) -> bool:
-    """Capture UPC session token from the game prefix."""
+    """Capture UPC session token and credentials from a prefix.
+
+    Implements a "Healthy-Source Reconciliation" policy:
+    - If the prefix is .upc-auth, it always allowed to capture.
+    - If it's a game prefix, it's only allowed to capture if it's "Healthy"
+      (has both a token and credentials).
+    - If allowed, it propagates its state (token + binaries) to every other prefix.
+    """
+    is_auth_prefix = os.path.realpath(prefix_path) == os.path.realpath(AUTH_PREFIX_DIR)
+    
+    if not is_auth_prefix:
+        if not _check_prefix_health(prefix_path):
+            print(f"[capture] Skipping session capture: {os.path.basename(prefix_path)} is logged out or unhealthy")
+            return True
+        print(f"[capture] Healthy session detected in {os.path.basename(prefix_path)}; reconciling globally")
+
     token = read_restore_session(prefix_path)
     if not token:
         print("[capture] No restore_session found in prefix")
         return False
 
-    # Only save if different from API ticket (UPC wrote its own token)
+    # Save to session file if it's a new UPC-native token OR if the global file is missing
     api_ticket = get_api_ticket()
-    if token == api_ticket:
-        print("[capture] Token matches API ticket, no UPC-native token to capture")
-        return False
-
-    # Save to session file
-    try:
-        os.makedirs(DATA_DIR, exist_ok=True)
-        with open(UPC_SESSION_FILE, "w") as f:
-            f.write(token)
-        print(f"[capture] Saved UPC session token ({len(token)} chars)")
-    except Exception as e:
-        print(f"[capture] Failed to save session token: {e}")
-        return False
-
-    updated_prefixes = 0
-    for target_prefix in iter_ubisoft_prefixes() or []:
+    if token != api_ticket or not os.path.isfile(UPC_SESSION_FILE):
         try:
-            write_session_to_prefix(target_prefix, token)
-            updated_prefixes += 1
-        except Exception as e:
-            print(f"[capture] Failed to update prefix {target_prefix}: {e}")
+            os.makedirs(DATA_DIR, exist_ok=True)
+            with open(UPC_SESSION_FILE, "w") as f:
+                f.write(token)
+            print(f"[capture] Saved UPC session token ({len(token)} chars)")
 
-    if updated_prefixes:
-        print(f"[capture] Updated {updated_prefixes} Ubisoft prefixes with new token")
+            # Propagate the new token to all other prefixes
+            updated_prefixes = 0
+            for target_prefix in iter_ubisoft_prefixes() or []:
+                try:
+                    write_session_to_prefix(target_prefix, token)
+                    updated_prefixes += 1
+                except Exception as e:
+                    print(f"[capture] Failed to update prefix {target_prefix}: {e}")
+            if updated_prefixes:
+                print(f"[capture] Updated {updated_prefixes} Ubisoft prefixes with new token")
+        except Exception as e:
+            print(f"[capture] Failed to save session token: {e}")
+            return False
+    else:
+        print("[capture] Token matches API ticket, skipping token file write")
 
     # Propagate binary credential files (ConnectSecureStorage.dat, user.dat)
+    # ALWAYS do this if we are allowed to capture, to ensure the 'matched pair'
+    # of token+credentials is reconciled across the system.
     try:
         cred_count = propagate_credentials(prefix_path)
         if cred_count:
