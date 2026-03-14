@@ -9,6 +9,15 @@
     "gog": {
       "enabled": true,
       "auto_sync": true
+    },
+    "amazon": {
+      "enabled": true,
+      "auto_sync": true
+    },
+    "microsoft": {
+      "enabled": true,
+      "auto_sync": true,
+      "client_id": "3f63e417-e042-4b7d-b766-5e0780d3ae1b"
     }
   },
   "ui": {

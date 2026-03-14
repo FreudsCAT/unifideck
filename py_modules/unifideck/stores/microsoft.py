@@ -53,8 +53,6 @@ logger = logging.getLogger(__name__)
 
 # ──────────────────────────── constants ────────────────────────────────────
 
-# Public client ID used by many open-source Xbox tools (no secret required).
-MS_CLIENT_ID   = "000000004C12AE6F"
 MS_REDIRECT    = "https://login.live.com/oauth20_desktop.srf"
 # Azure AD v2.0 consumer endpoint returns JWT tokens (not compact MSA tickets).
 # JWTs are required for XBL contract-v2 which is in turn required to obtain
@@ -229,6 +227,29 @@ class MicrosoftConnector(Store):
         loc = self._get_locale()
         return _FE3_DEVICE_ATTRS_TEMPLATE.format(locale=loc)
 
+    def _get_client_id(self) -> str:
+        """Return the MS OAuth client ID from settings.json.
+
+        Reads ``stores.microsoft.client_id`` from
+        ``~/.local/share/unifideck/settings.json``.
+        Must be a GUID-format Azure AD app ID, not a legacy hex Windows Live ID.
+        """
+        try:
+            settings_path = os.path.expanduser("~/.local/share/unifideck/settings.json")
+            if os.path.exists(settings_path):
+                with open(settings_path) as f:
+                    data = json.load(f)
+                cid = data.get("stores", {}).get("microsoft", {}).get("client_id", "")
+                if cid:
+                    return cid
+        except Exception as e:
+            logger.error(f"[MS] Could not read client_id from settings: {e}")
+        logger.error(
+            "[MS] No client_id found in settings.json (stores.microsoft.client_id). "
+            "Microsoft Store authentication will fail."
+        )
+        return ""
+
     def _validated_install_dir(self, game_id: str) -> str:
         """
         Return the install directory path for *game_id* after verifying it
@@ -289,7 +310,7 @@ class MicrosoftConnector(Store):
 
         auth_url = (
             f"{MS_AUTH_URL}"
-            f"?client_id={MS_CLIENT_ID}"
+            f"?client_id={self._get_client_id()}"
             f"&redirect_uri={urllib.parse.quote(MS_REDIRECT)}"
             f"&response_type=code"
             f"&scope={urllib.parse.quote(MS_SCOPE)}"
@@ -320,7 +341,7 @@ class MicrosoftConnector(Store):
                 lambda: _http_post(
                     MS_TOKEN_URL,
                     {
-                        "client_id":    MS_CLIENT_ID,
+                        "client_id":    self._get_client_id(),
                         "redirect_uri": MS_REDIRECT,
                         "code":         auth_code,
                         "grant_type":   "authorization_code",
@@ -560,7 +581,7 @@ class MicrosoftConnector(Store):
                 lambda: _http_post(
                     MS_TOKEN_URL,
                     {
-                        "client_id":     MS_CLIENT_ID,
+                        "client_id":     self._get_client_id(),
                         "redirect_uri":  MS_REDIRECT,
                         "refresh_token": self._ms_refresh_token,
                         "grant_type":    "refresh_token",
@@ -626,10 +647,18 @@ class MicrosoftConnector(Store):
                         },
                     )
                     if xbl_resp.get("Token"):
+                        self._xbl_contract = _cv
                         logger.info(
                             f"[MS] XBL auth OK (contract-v{_cv}, "
                             f"prefix={_rps[:2]!r})"
                         )
+                        if _cv != "2":
+                            logger.warning(
+                                "[MS] XBL fell back to contract-v1 (compact MSA token). "
+                                "The licensing XSTS RP will reject this. "
+                                "Check that stores.microsoft.client_id in settings.json "
+                                "is a GUID-format Azure AD app, not a legacy hex ID."
+                            )
                         break
                     else:
                         logger.debug(
@@ -677,12 +706,17 @@ class MicrosoftConnector(Store):
                 "User-Agent":             "XboxReplay; XboxLiveAuth/3.0",
                 "Accept-Language":        self._get_locale(),
             }
-            _xsts_candidates = [
-                (XSTS_RP,                          ""),        # licensing + empty sandbox ← preferred
-                (XSTS_RP,                          "RETAIL"),  # licensing + RETAIL
-                ("http://licensing.xboxlive.com/", ""),        # legacy HTTP + empty sandbox
-                ("http://xboxlive.com",            "RETAIL"),  # generic RP fallback
-            ]
+            if getattr(self, "_xbl_contract", "2") != "2":
+                _xsts_candidates = [
+                    ("http://xboxlive.com", "RETAIL"),
+                ]
+            else:
+                _xsts_candidates = [
+                    (XSTS_RP,                          ""),
+                    (XSTS_RP,                          "RETAIL"),
+                    ("http://licensing.xboxlive.com/", ""),
+                    ("http://xboxlive.com",            "RETAIL"),
+                ]
             xsts_resp = None
             _used_rp  = None
             for _rp, _sandbox in _xsts_candidates:
