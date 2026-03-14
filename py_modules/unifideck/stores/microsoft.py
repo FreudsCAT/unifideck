@@ -230,20 +230,28 @@ class MicrosoftConnector(Store):
     def _get_client_id(self) -> str:
         """Return the MS OAuth client ID from settings.json.
 
-        Reads ``stores.microsoft.client_id`` from
-        ``~/.local/share/unifideck/settings.json``.
+        Priority:
+          1. User settings:    ~/.local/share/unifideck/settings.json
+          2. Plugin defaults:  {plugin_dir}/defaults/settings.json
         Must be a GUID-format Azure AD app ID, not a legacy hex Windows Live ID.
         """
-        try:
-            settings_path = os.path.expanduser("~/.local/share/unifideck/settings.json")
-            if os.path.exists(settings_path):
-                with open(settings_path) as f:
-                    data = json.load(f)
-                cid = data.get("stores", {}).get("microsoft", {}).get("client_id", "")
-                if cid:
-                    return cid
-        except Exception as e:
-            logger.error(f"[MS] Could not read client_id from settings: {e}")
+        paths = [
+            os.path.expanduser("~/.local/share/unifideck/settings.json"),
+        ]
+        if self.plugin_dir:
+            paths.append(os.path.join(self.plugin_dir, "defaults", "settings.json"))
+
+        for path in paths:
+            try:
+                if os.path.exists(path):
+                    with open(path) as f:
+                        data = json.load(f)
+                    cid = data.get("stores", {}).get("microsoft", {}).get("client_id", "")
+                    if cid:
+                        logger.debug(f"[MS] Using client_id from {path}")
+                        return cid
+            except Exception as e:
+                logger.debug(f"[MS] Could not read client_id from {path}: {e}")
         logger.error(
             "[MS] No client_id found in settings.json (stores.microsoft.client_id). "
             "Microsoft Store authentication will fail."
