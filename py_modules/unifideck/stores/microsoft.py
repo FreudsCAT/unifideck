@@ -562,7 +562,7 @@ class MicrosoftConnector(Store):
                     "Properties": {
                         "AuthMethod": "RPS",
                         "SiteName":   "user.auth.xboxlive.com",
-                        "RpsTicket":  f"d={self._ms_access_token}",
+                        "RpsTicket":  f"t={self._ms_access_token}",
                     },
                     "RelyingParty": "http://auth.xboxlive.com",
                     "TokenType":    "JWT",
