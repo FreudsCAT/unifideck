@@ -244,13 +244,13 @@ class MicrosoftConnector(Store):
         return "microsoft"
 
     async def is_available(self) -> bool:
-        """Return True if we have a saved (and refreshable) token."""
+        """Return True if we have a saved (and refreshable) token with the correct scope."""
         if not os.path.exists(TOKEN_FILE):
             return False
         try:
             with open(TOKEN_FILE) as f:
                 data = json.load(f)
-            return bool(data.get("refresh_token"))
+            return bool(data.get("refresh_token")) and data.get("scope") == MS_SCOPE
         except Exception:
             return False
 
@@ -310,6 +310,7 @@ class MicrosoftConnector(Store):
                         "redirect_uri": MS_REDIRECT,
                         "code":         auth_code,
                         "grant_type":   "authorization_code",
+                        "scope":        MS_SCOPE,
                     },
                     {"Content-Type": "application/x-www-form-urlencoded"},
                 ),
@@ -528,6 +529,7 @@ class MicrosoftConnector(Store):
                         "redirect_uri":  MS_REDIRECT,
                         "refresh_token": self._ms_refresh_token,
                         "grant_type":    "refresh_token",
+                        "scope":         MS_SCOPE,
                     },
                     {"Content-Type": "application/x-www-form-urlencoded"},
                 ),
