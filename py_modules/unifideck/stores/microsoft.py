@@ -43,6 +43,7 @@ import logging
 import os
 import time
 import urllib.parse
+import urllib.error
 import urllib.request
 import ssl
 from typing import Dict, Any, List, Optional, Tuple
@@ -733,16 +734,19 @@ class MicrosoftConnector(Store):
                     self._xsts_rp = _rp
                     logger.info(f"[MS] ✓ XSTS obtained with RP={_rp!r} sandbox={_sandbox!r}")
                     break
-                except Exception as _xsts_err:
-                    _body = ""
-                    if hasattr(_xsts_err, "read"):
-                        try:
-                            _body = _xsts_err.read().decode("utf-8", errors="replace")
-                        except Exception:
-                            pass
+                except urllib.error.HTTPError as _xsts_err:
+                    try:
+                        _body = _xsts_err.read().decode("utf-8", errors="replace")
+                    except Exception:
+                        _body = ""
                     logger.warning(
                         f"[MS] XSTS failed (RP={_rp!r} sandbox={_sandbox!r}): "
-                        f"{_xsts_err}{(' body=' + _body[:500]) if _body else ''}"
+                        f"HTTP {_xsts_err.code} — {_body[:800]}"
+                    )
+                    xsts_resp = None
+                except Exception as _xsts_err:
+                    logger.warning(
+                        f"[MS] XSTS failed (RP={_rp!r} sandbox={_sandbox!r}): {_xsts_err}"
                     )
                     xsts_resp = None
             if xsts_resp is None:
