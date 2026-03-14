@@ -101,6 +101,10 @@ TOKEN_REFRESH_THRESHOLD = 2400   # 40 min (MS tokens last ~60 min)
 # Game Pass / subscription titles use "GamePass" or "Subscription" — intentionally excluded.
 OWNED_TYPES = {"Purchase", "Owned", "Free", "FreeToPlay"}
 
+# Product kinds that may contain launchable games.
+# Case-insensitive comparison — see get_library() filter.
+_GAME_KINDS = {"game", "durable", "application"}
+
 # ───────────────────────── SSL helper ──────────────────────────────────────
 
 def _ssl_ctx_strict() -> ssl.SSLContext:
@@ -414,11 +418,23 @@ class MicrosoftConnector(Store):
             )
             logger.info(f"[MS] Collections returned {len(raw_items)} raw items")
 
+            # Log productKind distribution for diagnostics — helps identify
+            # items dropped by the filter below.
+            kind_counts: Dict[str, int] = {}
+            acq_counts:  Dict[str, int] = {}
+            for item in raw_items:
+                k = item.get("productKind", "unknown")
+                a = item.get("acquisitionType", "unknown")
+                kind_counts[k] = kind_counts.get(k, 0) + 1
+                acq_counts[a]  = acq_counts.get(a, 0) + 1
+            logger.info(f"[MS] Collections productKind breakdown: {kind_counts}")
+            logger.info(f"[MS] Collections acquisitionType breakdown: {acq_counts}")
+
             # Filter: owned titles only (purchased + F2P), exclude Game Pass / subscriptions
             purchased = [
                 item for item in raw_items
                 if item.get("acquisitionType") in OWNED_TYPES
-                and item.get("productKind") in ("Game", "game")
+                and (item.get("productKind") or "").lower() in _GAME_KINDS
             ]
             logger.info(f"[MS] {len(purchased)} owned games after Game Pass filter")
 
