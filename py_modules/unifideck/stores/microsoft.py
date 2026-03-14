@@ -193,6 +193,7 @@ class MicrosoftConnector(Store):
         # Cached XBL/XSTS tokens (short-lived, rebuilt per sync)
         self._xbl_token:  Optional[str] = None
         self._xsts_token: Optional[str] = None
+        self._xsts_rp:    Optional[str] = None
         self._user_hash:  Optional[str] = None
         self._xuid:       Optional[str] = None
 
@@ -335,6 +336,7 @@ class MicrosoftConnector(Store):
         self._ms_refresh_token = None
         self._xbl_token        = None
         self._xsts_token       = None
+        self._xsts_rp          = None
         self._user_hash        = None
         self._xuid             = None
         try:
@@ -540,6 +542,7 @@ class MicrosoftConnector(Store):
         # an inconsistent state (xbl_token set but xsts_token None).
         self._xbl_token  = None
         self._xsts_token = None
+        self._xsts_rp    = None
         self._user_hash  = None
         try:
             # Step A: XBL user token
@@ -606,7 +609,8 @@ class MicrosoftConnector(Store):
                         },
                         _xsts_headers,
                     )
-                    _used_rp = _rp
+                    _used_rp      = _rp
+                    self._xsts_rp = _rp
                     logger.info(f"[MS] ✓ XSTS obtained with RP={_rp!r} sandbox={_sandbox!r}")
                     break
                 except Exception as _xsts_err:
@@ -652,6 +656,19 @@ class MicrosoftConnector(Store):
         if not self._xsts_token or not self._user_hash:
             logger.error("[MS] XSTS token or user hash missing")
             return []
+
+        # If only the generic RP token is available, Collections v8 returns 404.
+        # Fall back to the MS Store Library API which accepts Bearer auth.
+        _LICENSING_RPS = {
+            "https://licensing.xboxlive.com/",
+            "http://licensing.xboxlive.com/",
+        }
+        if self._xsts_rp not in _LICENSING_RPS:
+            logger.info(
+                f"[MS] Licensing XSTS unavailable (used RP: {self._xsts_rp!r}), "
+                "falling back to MS Store Library API"
+            )
+            return self._query_store_library_bearer()
 
         auth_header = f"XBL3.0 x={self._user_hash};{self._xsts_token}"
         headers = {
@@ -701,6 +718,66 @@ class MicrosoftConnector(Store):
         return all_items
 
     # ── Product detail + PC filter (synchronous, run in executor) ─────────
+
+    def _query_store_library_bearer(self) -> List[Dict]:
+        """
+        Fallback: query owned PC games via the Microsoft Store Library API
+        using Bearer auth (MS access token) — no licensing XSTS required.
+        Returns items in the same format as _query_collections.
+        """
+        if not self._ms_access_token:
+            logger.error("[MS] No MS access token for store library query")
+            return []
+
+        all_items: List[Dict] = []
+        skip_items = 0
+        page_size  = 100
+
+        for page_num in range(20):
+            url = (
+                "https://storeedgefd.dsx.mp.microsoft.com/v9.0/me/library"
+                f"?market={self._get_market()}"
+                f"&locale={self._get_locale()}"
+                "&deviceFamily=windows.desktop"
+                f"&$skip={skip_items}"
+                f"&$top={page_size}"
+            )
+            headers = {
+                "Authorization": f"Bearer {self._ms_access_token}",
+                "Accept":        "application/json",
+                "User-Agent":    "Microsoft.WindowsStore/11910.1002.5.0",
+                "MS-CV":         "unifideck.store.1",
+            }
+            try:
+                resp = _http_get(url, headers)
+            except Exception as e:
+                logger.error(f"[MS] Store library page {page_num} failed: {e}")
+                break
+
+            products = resp.get("productsList", [])
+            if not products:
+                break
+
+            for p in products:
+                pid = p.get("productId") or p.get("ProductId")
+                if not pid:
+                    continue
+                kind = p.get("productType") or p.get("ProductType", "Game")
+                all_items.append({
+                    "productId":       pid,
+                    "productTitle":    p.get("name") or p.get("title") or "",
+                    "productKind":     kind,
+                    "acquisitionType": "Purchase",
+                })
+
+            logger.info(f"[MS] Store library page {page_num}: {len(products)} items")
+
+            if len(products) < page_size:
+                break
+            skip_items += page_size
+
+        logger.info(f"[MS] Store library (Bearer): {len(all_items)} total items")
+        return all_items
 
     def _scan_pc_games(self, product_ids: List[str]) -> Dict[str, dict]:
         """
