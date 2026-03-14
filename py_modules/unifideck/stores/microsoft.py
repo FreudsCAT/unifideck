@@ -574,15 +574,9 @@ class MicrosoftConnector(Store):
 
             logger.info(f"[MS] ✓ XBL user token obtained (uhs={self._user_hash})")
 
-            # Step B: XSTS token — try relying parties in order of preference
-            # Some accounts reject https://licensing.xboxlive.com/ → fall back
-            # to the generic RP which works with all accounts and still grants
-            # access to the Collections API via XBL3.0 auth header.
-            _xsts_rp_candidates = [
-                XSTS_RP,                          # https://licensing.xboxlive.com/
-                "http://licensing.xboxlive.com/", # legacy HTTP variant
-                "http://xboxlive.com",            # generic RP (universal fallback)
-            ]
+            # Step B: XSTS token — try RP + SandboxId combinations in order.
+            # https://licensing.xboxlive.com/ is required for the Collections API
+            # but rejects SandboxId="RETAIL" on most accounts — use "" instead.
             _xsts_headers = {
                 "Content-Type":           "application/json",
                 "Accept":                 "application/json",
@@ -590,14 +584,21 @@ class MicrosoftConnector(Store):
                 "User-Agent":             "XboxReplay; XboxLiveAuth/3.0",
                 "Accept-Language":        self._get_locale(),
             }
+            _xsts_candidates = [
+                (XSTS_RP,                          ""),        # licensing + empty sandbox ← preferred
+                (XSTS_RP,                          "RETAIL"),  # licensing + RETAIL
+                ("http://licensing.xboxlive.com/", ""),        # legacy HTTP + empty sandbox
+                ("http://xboxlive.com",            "RETAIL"),  # generic RP fallback
+            ]
             xsts_resp = None
-            for _rp in _xsts_rp_candidates:
+            _used_rp  = None
+            for _rp, _sandbox in _xsts_candidates:
                 try:
                     xsts_resp = _http_post_json(
                         XSTS_URL,
                         {
                             "Properties": {
-                                "SandboxId":  "RETAIL",
+                                "SandboxId":  _sandbox,
                                 "UserTokens": [self._xbl_token],
                             },
                             "RelyingParty": _rp,
@@ -605,13 +606,14 @@ class MicrosoftConnector(Store):
                         },
                         _xsts_headers,
                     )
-                    logger.info(f"[MS] ✓ XSTS obtained with RP: {_rp}")
+                    _used_rp = _rp
+                    logger.info(f"[MS] ✓ XSTS obtained with RP={_rp!r} sandbox={_sandbox!r}")
                     break
                 except Exception as _xsts_err:
-                    logger.warning(f"[MS] XSTS failed with RP {_rp}: {_xsts_err}")
+                    logger.warning(f"[MS] XSTS failed (RP={_rp!r} sandbox={_sandbox!r}): {_xsts_err}")
                     xsts_resp = None
             if xsts_resp is None:
-                logger.error("[MS] XSTS failed with all relying parties")
+                logger.error("[MS] XSTS failed with all RP/SandboxId combinations")
                 return False
 
             # Error 2148916238 = account does not have an Xbox profile yet
