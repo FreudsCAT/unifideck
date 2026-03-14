@@ -45,6 +45,24 @@ _UPC_AUTH_CACHE_ARTIFACTS = (
 _WINE_SYSTEM_USERS = {"Public", "All Users", "Default", "Default User"}
 
 
+def read_machine_guid(prefix_path: str) -> str:
+    """Read Wine MachineGuid from a prefix's system.reg."""
+    for reg in [
+        os.path.join(prefix_path, "system.reg"),
+        os.path.join(prefix_path, "pfx", "system.reg"),
+    ]:
+        if not os.path.isfile(reg):
+            continue
+        try:
+            with open(reg, "r", encoding="utf-8", errors="ignore") as f:
+                m = re.search(r'"MachineGuid"="([^"]+)"', f.read())
+                if m:
+                    return m.group(1)
+        except Exception:
+            pass
+    return ""
+
+
 def iter_prefix_user_homes(prefix_path: str, pfx_first: bool = False):
     """Yield user_home paths for all real user dirs across both layouts.
 
@@ -197,11 +215,17 @@ def propagate_credentials(source_prefix: str) -> int:
         return 0
 
     source_real = os.path.realpath(source_prefix)
+    source_guid = read_machine_guid(source_prefix)
     total_synced = 0
 
     for target_prefix in iter_ubisoft_prefixes():
         if os.path.realpath(target_prefix) == source_real:
             continue  # Skip source prefix
+
+        # DPAPI-encrypted files require matching MachineGuid
+        target_guid = read_machine_guid(target_prefix)
+        if source_guid and target_guid and source_guid != target_guid:
+            continue  # Skip this target, DPAPI keys won't match
 
         for user_home in iter_prefix_user_homes(target_prefix):
             target_dir = os.path.join(user_home, _UPC_LOCAL_SUBDIR)
@@ -286,20 +310,13 @@ def _check_prefix_health(prefix_path: str) -> bool:
 def capture_session(prefix_path: str) -> bool:
     """Capture UPC session token and credentials from a prefix.
 
-    Implements a "Healthy-Source Reconciliation" policy:
-    - If the prefix is .upc-auth, it always allowed to capture.
-    - If it's a game prefix, it's only allowed to capture if it's "Healthy"
-      (has both a token and credentials).
-    - If allowed, it propagates its state (token + binaries) to every other prefix.
+    Token capture is always attempted (tokens are portable, not DPAPI-gated).
+    Credential propagation is only performed from "healthy" prefixes (those
+    with both a valid token and ConnectSecureStorage.dat) or from .upc-auth.
     """
     is_auth_prefix = os.path.realpath(prefix_path) == os.path.realpath(AUTH_PREFIX_DIR)
-    
-    if not is_auth_prefix:
-        if not _check_prefix_health(prefix_path):
-            print(f"[capture] Skipping session capture: {os.path.basename(prefix_path)} is logged out or unhealthy")
-            return True
-        print(f"[capture] Healthy session detected in {os.path.basename(prefix_path)}; reconciling globally")
 
+    # Always try to capture the token (it's portable, no DPAPI)
     token = read_restore_session(prefix_path)
     if not token:
         print("[capture] No restore_session found in prefix")
@@ -330,22 +347,25 @@ def capture_session(prefix_path: str) -> bool:
     else:
         print("[capture] Token matches API ticket, skipping token file write")
 
-    # Propagate binary credential files (ConnectSecureStorage.dat, user.dat)
-    # ALWAYS do this if we are allowed to capture, to ensure the 'matched pair'
-    # of token+credentials is reconciled across the system.
-    try:
-        cred_count = propagate_credentials(prefix_path)
-        if cred_count:
-            print(f"[capture] Propagated {cred_count} credential file(s) to other prefixes")
-    except Exception as e:
-        print(f"[capture] Credential propagation failed: {e}")
+    # Credential propagation: only from healthy prefixes (or auth prefix)
+    should_propagate_creds = is_auth_prefix or _check_prefix_health(prefix_path)
 
-    try:
-        artifact_count = propagate_auth_artifacts(prefix_path)
-        if artifact_count:
-            print(f"[capture] Propagated {artifact_count} auth cache artifact(s) to other prefixes")
-    except Exception as e:
-        print(f"[capture] Auth artifact propagation failed: {e}")
+    if should_propagate_creds:
+        try:
+            cred_count = propagate_credentials(prefix_path)
+            if cred_count:
+                print(f"[capture] Propagated {cred_count} credential file(s) to other prefixes")
+        except Exception as e:
+            print(f"[capture] Credential propagation failed: {e}")
+
+        try:
+            artifact_count = propagate_auth_artifacts(prefix_path)
+            if artifact_count:
+                print(f"[capture] Propagated {artifact_count} auth cache artifact(s) to other prefixes")
+        except Exception as e:
+            print(f"[capture] Auth artifact propagation failed: {e}")
+    else:
+        print(f"[capture] Prefix not healthy for credential propagation, token-only capture done")
 
     return True
 

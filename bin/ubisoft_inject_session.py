@@ -46,6 +46,24 @@ _UPC_AUTH_CACHE_ARTIFACTS = (
 _WINE_SYSTEM_USERS = {"Public", "All Users", "Default", "Default User"}
 
 
+def read_machine_guid(prefix_path: str) -> str:
+    """Read Wine MachineGuid from a prefix's system.reg."""
+    for reg in [
+        os.path.join(prefix_path, "system.reg"),
+        os.path.join(prefix_path, "pfx", "system.reg"),
+    ]:
+        if not os.path.isfile(reg):
+            continue
+        try:
+            with open(reg, "r", encoding="utf-8", errors="ignore") as f:
+                m = re.search(r'"MachineGuid"="([^"]+)"', f.read())
+                if m:
+                    return m.group(1)
+        except Exception:
+            pass
+    return ""
+
+
 def iter_prefix_user_homes(prefix_path: str, pfx_first: bool = False):
     """Yield user_home paths for all real user dirs across both layouts.
 
@@ -190,6 +208,13 @@ def sync_credentials(prefix_path: str) -> bool:
 
     if os.path.realpath(source_prefix) == os.path.realpath(prefix_path):
         return True  # Target is the source
+
+    # DPAPI-encrypted files require matching MachineGuid
+    source_guid = read_machine_guid(source_prefix)
+    target_guid = read_machine_guid(prefix_path)
+    if source_guid and target_guid and source_guid != target_guid:
+        print(f"[inject] MachineGuid mismatch: skipping DPAPI credential sync")
+        return False
 
     # Collect source credential files — prefer pfx/ layout (where UPC writes)
     source_files = {}  # filename -> source_path
