@@ -807,34 +807,37 @@ STORE="${KEY%%:*}"
 GAME_ID="${KEY#*:}"
 
 # 2. Look up in map file (with recovery for race conditions)
-if [ ! -f "$MAP_FILE" ]; then
-    log "WARNING: Map file not found at $MAP_FILE, waiting for backend to create it..."
-    # Signal the plugin backend to rebuild the map
-    touch "$HOME/.local/share/unifideck/.rebuild_map_requested" 2>/dev/null || true
-    # Brief wait for the backend or a concurrent sync to create it
-    sleep 2
-    if [ ! -f "$MAP_FILE" ]; then
-        log "ERROR: Map file still not found after recovery attempt"
-        notify_stage "toasts.launcher.mapMissing" "toasts.launcher.syncRequired" "critical"
-        if command -v zenity &>/dev/null; then
-            zenity --error --title="Unifideck" --text="Game library not synced.\n\nPlease open the Unifideck plugin and run Sync Libraries, then try again." --width=350 2>/dev/null &
-        fi
-        exit 1
+# Ubisoft native launches use launcher URIs (uplay://) and don't need games.map
+# at all — they bypass the map both when the file is missing AND when the entry
+# is absent. Check the store early so Ubisoft never blocks on the map file.
+GAME_ENTRY=""
+if [ "$STORE" = "ubisoft" ]; then
+    if [ -f "$MAP_FILE" ]; then
+        GAME_ENTRY=$(grep "^$KEY|" "$MAP_FILE" | head -n 1)
     fi
-    log "Map file recovered at $MAP_FILE"
-fi
-
-# Find line starting with KEY|
-GAME_ENTRY=$(grep "^$KEY|" "$MAP_FILE" | head -n 1)
-
-if [ -z "$GAME_ENTRY" ]; then
-    if [ "$STORE" = "ubisoft" ]; then
-        # Ubisoft native launches can proceed via launcher URI even if games.map
-        # is missing/stale. Install status still uses games.map when available.
+    if [ -z "$GAME_ENTRY" ]; then
         log "[Ubisoft] No games.map entry for $KEY, proceeding with URI launch fallback"
-    else
+    fi
+else
+    if [ ! -f "$MAP_FILE" ]; then
+        log "WARNING: Map file not found at $MAP_FILE, waiting for backend to create it..."
+        touch "$HOME/.local/share/unifideck/.rebuild_map_requested" 2>/dev/null || true
+        sleep 2
+        if [ ! -f "$MAP_FILE" ]; then
+            log "ERROR: Map file still not found after recovery attempt"
+            notify_stage "toasts.launcher.mapMissing" "toasts.launcher.syncRequired" "critical"
+            if command -v zenity &>/dev/null; then
+                zenity --error --title="Unifideck" --text="Game library not synced.\n\nPlease open the Unifideck plugin and run Sync Libraries, then try again." --width=350 2>/dev/null &
+            fi
+            exit 1
+        fi
+        log "Map file recovered at $MAP_FILE"
+    fi
+
+    GAME_ENTRY=$(grep "^$KEY|" "$MAP_FILE" | head -n 1)
+
+    if [ -z "$GAME_ENTRY" ]; then
         log "ERROR: Game not found in map for key: $KEY"
-        # Show user-friendly error using zenity if available
         if command -v zenity &>/dev/null; then
             zenity --error --title="Unifideck" --text="Game location not mapped.\n\nPlease run Force Sync from the Unifideck plugin and try again." --width=350 2>/dev/null &
         fi
@@ -1743,7 +1746,7 @@ except Exception as e:
         log "[Ubisoft] Prefix: $UBISOFT_PREFIX_NAME"
 
         LAUNCH_ID=""
-        if [ "$UBISOFT_ACTION" != "auth" ]; then
+        if [ "$UBISOFT_ACTION" = "play" ]; then
             # ---- Resolve launch_id: registry → ID map → error ----
             for _reg in "$GAME_PREFIX/system.reg" "$GAME_PREFIX/pfx/system.reg"; do
                 [ -f "$_reg" ] || continue

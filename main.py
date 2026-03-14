@@ -2029,9 +2029,10 @@ class Plugin:
         self.ubisoft.start_token_refresh()
 
         # Ensure the "Ubisoft Connect" auth shortcut is in VDF with artwork.
-        # Awaited (not background) so VDF writes complete before the frontend
-        # mounts components — prevents Play/Install flickering on all shortcuts.
+        # This is quick now because the shortcut no longer depends on a pre-existing
+        # Ubisoft prefix/template. The launcher can bootstrap `.upc-auth` on first run.
         await self.ubisoft._ensure_ubisoft_auth_shortcut()
+        self.ubisoft.queue_auth_assets_ensure("plugin-init")
 
         # Repair games.map for Unifideck shortcuts missing entries (fixes "Game location not mapped" errors)
         logger.info("[INIT] Reconciling games.map from installed games")
