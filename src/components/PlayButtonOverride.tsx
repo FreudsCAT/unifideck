@@ -1107,6 +1107,9 @@ const PlaySectionWrapperInner: FC<PlaySectionWrapperProps> = ({
 
   // Handle stop/close button — terminates the running game.
   // Kills processes via backend + tells Steam to terminate.
+  // For Ubisoft games, also captures the session from the Python backend
+  // since Steam's TerminateApp kills the bash launcher before its
+  // capture_session.py can run.
   const handleStop = () => {
     setIsRunning(false);
     console.log(`[PlaySectionWrapper] Stopping game ${appId}`);
@@ -1125,6 +1128,16 @@ const PlaySectionWrapperInner: FC<PlaySectionWrapperProps> = ({
     const overview = appStore?.m_mapApps?.get?.(appId);
     const gameId = overview?.gameid ?? String(appId);
     window.SteamClient?.Apps?.TerminateApp?.(gameId, false);
+
+    // Ubisoft: capture session from Python backend (bash launcher is killed by Steam)
+    if (gameInfo?.store === "ubisoft" && gameInfo?.game_id) {
+      call<[string], { success: boolean }>(
+        "capture_ubisoft_session",
+        gameInfo.game_id,
+      ).catch((err) =>
+        console.error("[PlaySectionWrapper] capture_ubisoft_session failed:", err),
+      );
+    }
   };
 
   // DIAG: Track component lifecycle (temporary)

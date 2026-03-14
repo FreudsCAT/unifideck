@@ -1981,6 +1981,7 @@ class UbisoftConnector(Store):
             await plugin.steamgriddb.fetch_game_art(
                 title="Ubisoft Connect",
                 app_id=unsigned_id,
+                store="ubisoft",
             )
         except Exception as e:
             logger.warning(f"[Ubisoft] Auth shortcut artwork fetch failed: {e}")

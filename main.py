@@ -5163,6 +5163,30 @@ class Plugin:
             logger.error(f"[UbisoftInstall] Cancel failed for {game_id}: {e}")
             return {"success": False, "error": str(e)}
 
+    async def capture_ubisoft_session(self, game_id: str) -> Dict[str, Any]:
+        """Capture UPC session from a game prefix after the game stops.
+
+        Called by the frontend when a Ubisoft game is stopped via the UI,
+        since Steam's TerminateApp kills the bash launcher before its
+        capture_session.py can run.
+        """
+        try:
+            prefix_path = self.ubisoft.get_prefix_path(game_id)
+            if not prefix_path or not os.path.isdir(prefix_path):
+                return {"success": False, "error": "Prefix not found"}
+
+            await asyncio.sleep(2)  # Give UPC a moment to flush state
+            captured = self.ubisoft._capture_upc_session(prefix_path)
+            if captured:
+                self.ubisoft._propagate_upc_session_to_all_prefixes(captured)
+                logger.info(f"[Ubisoft] Post-stop capture: propagated session from {game_id}")
+            else:
+                logger.info(f"[Ubisoft] Post-stop capture: credentials synced for {game_id}")
+            return {"success": True}
+        except Exception as e:
+            logger.error(f"[Ubisoft] Post-stop capture failed for {game_id}: {e}")
+            return {"success": False, "error": str(e)}
+
     async def is_ubisoft_install_active(self, game_id: str) -> bool:
         """Check if UPC is running for a game install."""
         try:
