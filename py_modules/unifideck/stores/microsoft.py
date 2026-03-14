@@ -656,18 +656,10 @@ class MicrosoftConnector(Store):
                         },
                     )
                     if xbl_resp.get("Token"):
-                        self._xbl_contract = _cv
                         logger.info(
                             f"[MS] XBL auth OK (contract-v{_cv}, "
                             f"prefix={_rps[:2]!r})"
                         )
-                        if _cv != "2":
-                            logger.warning(
-                                "[MS] XBL fell back to contract-v1 (compact MSA token). "
-                                "The licensing XSTS RP will reject this. "
-                                "Check that stores.microsoft.client_id in settings.json "
-                                "is a GUID-format Azure AD app, not a legacy hex ID."
-                            )
                         break
                     else:
                         logger.debug(
@@ -715,17 +707,12 @@ class MicrosoftConnector(Store):
                 "User-Agent":             "XboxReplay; XboxLiveAuth/3.0",
                 "Accept-Language":        self._get_locale(),
             }
-            if getattr(self, "_xbl_contract", "2") != "2":
-                _xsts_candidates = [
-                    ("http://xboxlive.com", "RETAIL"),
-                ]
-            else:
-                _xsts_candidates = [
-                    (XSTS_RP,                          ""),
-                    (XSTS_RP,                          "RETAIL"),
-                    ("http://licensing.xboxlive.com/", ""),
-                    ("http://xboxlive.com",            "RETAIL"),
-                ]
+            _xsts_candidates = [
+                (XSTS_RP,                          ""),
+                (XSTS_RP,                          "RETAIL"),
+                ("http://licensing.xboxlive.com/", ""),
+                ("http://xboxlive.com",            "RETAIL"),
+            ]
             xsts_resp = None
             _used_rp  = None
             for _rp, _sandbox in _xsts_candidates:
