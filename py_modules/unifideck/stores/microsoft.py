@@ -742,7 +742,7 @@ class MicrosoftConnector(Store):
             payload: Dict[str, Any] = {
                 "beneficiaries": [
                     {
-                        "identitytype":         "b2b",
+                        "identityType":         "b2b",
                         "identityValue":        self._xuid or "0",
                         "localTicketReference": "1",
                     }
