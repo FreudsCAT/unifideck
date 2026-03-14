@@ -2426,24 +2426,7 @@ class Plugin:
                     all_games.extend(microsoft_games)
                 else:
                     microsoft_games = []
-                    logger.warning("Sync cancelled by user after fetching libraries")
-                    self.sync_progress.status = "cancelled"
-                    self.sync_progress.current_game = {
-                        "label": "sync.cancelledByUser",
-                        "values": {}
-                    }
-                    return {
-                        'success': False,
-                        'error': 'errors.syncCancelled',
-                        'cancelled': True,
-                        'epic_count': 0,
-                        'gog_count': 0,
-                        'amazon_count': 0,
-                        'microsoft_count': 0,
-                        'added_count': 0,
-                        'updated_count': 0,
-                        'artwork_count': 0
-                    }
+                    logger.warning("[MS] Microsoft library fetch returned None, continuing sync with other stores")
                 self.sync_progress.total_games = len(all_games)
                 self.sync_progress.synced_games = 0
 
