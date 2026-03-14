@@ -58,7 +58,7 @@ MS_CLIENT_ID   = "000000004C12AE6F"
 MS_REDIRECT    = "https://login.live.com/oauth20_desktop.srf"
 MS_AUTH_URL    = "https://login.live.com/oauth20_authorize.srf"
 MS_TOKEN_URL   = "https://login.live.com/oauth20_token.srf"
-MS_SCOPE       = "service::user.auth.xboxlive.com::MBI_SSL Xboxlive.offline_access"
+MS_SCOPE       = "Xboxlive.signin Xboxlive.offline_access"
 
 XBL_AUTH_URL   = "https://user.auth.xboxlive.com/user/authenticate"
 XSTS_URL       = "https://xsts.auth.xboxlive.com/xsts/authorize"
@@ -474,15 +474,6 @@ class MicrosoftConnector(Store):
             if os.path.exists(TOKEN_FILE):
                 with open(TOKEN_FILE) as f:
                     data = json.load(f)
-                # Invalidate tokens obtained with old Xboxlive.signin scope —
-                # they cannot be used with the licensing XSTS RP.
-                if data.get("scope") != MS_SCOPE:
-                    logger.warning(
-                        "[MS] Stored token scope mismatch "
-                        f"(stored: {data.get('scope')!r}, current: {MS_SCOPE!r}) — "
-                        "clearing tokens, re-authentication required."
-                    )
-                    return
                 self._ms_access_token  = data.get("access_token")
                 self._ms_refresh_token = data.get("refresh_token")
                 self._token_saved_at   = data.get("saved_at", 0.0)
@@ -501,7 +492,6 @@ class MicrosoftConnector(Store):
                         "access_token":  self._ms_access_token,
                         "refresh_token": self._ms_refresh_token,
                         "saved_at":      self._token_saved_at,
-                        "scope":         MS_SCOPE,
                     },
                     f,
                 )
@@ -560,25 +550,59 @@ class MicrosoftConnector(Store):
         self._user_hash  = None
         try:
             # Step A: XBL user token
-            xbl_resp = _http_post_json(
-                XBL_AUTH_URL,
-                {
-                    "Properties": {
-                        "AuthMethod": "RPS",
-                        "SiteName":   "user.auth.xboxlive.com",
-                        "RpsTicket":  f"t={self._ms_access_token}",
-                    },
-                    "RelyingParty": "http://auth.xboxlive.com",
-                    "TokenType":    "JWT",
-                },
-                {
-                    "Content-Type": "application/json",
-                    "Accept":       "application/json",
-                    "x-xbl-contract-version": "1",
-                    "User-Agent": "XboxReplay; XboxLiveAuth/3.0",
-                    "Accept-Language": self._get_locale(),
-                },
-            )
+            # Try multiple contract-version / prefix combos:
+            #   v2 + t= : designed for OAuth2 JWT tokens (Xboxlive.signin scope)
+            #   v1 + d= : legacy compact MSA tickets (MBI_SSL scope)
+            _xbl_candidates = [
+                ("2", f"t={self._ms_access_token}"),  # JWT / contract v2
+                ("1", f"d={self._ms_access_token}"),  # compact MSA / contract v1
+                ("1", f"t={self._ms_access_token}"),  # JWT / contract v1 fallback
+            ]
+            xbl_resp = None
+            for _cv, _rps in _xbl_candidates:
+                try:
+                    xbl_resp = _http_post_json(
+                        XBL_AUTH_URL,
+                        {
+                            "Properties": {
+                                "AuthMethod": "RPS",
+                                "SiteName":   "user.auth.xboxlive.com",
+                                "RpsTicket":  _rps,
+                            },
+                            "RelyingParty": "http://auth.xboxlive.com",
+                            "TokenType":    "JWT",
+                        },
+                        {
+                            "Content-Type":           "application/json",
+                            "Accept":                 "application/json",
+                            "x-xbl-contract-version": _cv,
+                            "User-Agent":             "XboxReplay; XboxLiveAuth/3.0",
+                            "Accept-Language":        self._get_locale(),
+                        },
+                    )
+                    if xbl_resp.get("Token"):
+                        logger.info(
+                            f"[MS] XBL auth OK (contract-v{_cv}, "
+                            f"prefix={_rps[:2]!r})"
+                        )
+                        break
+                    else:
+                        logger.debug(
+                            f"[MS] XBL no token (contract-v{_cv}, "
+                            f"prefix={_rps[:2]!r}): {xbl_resp}"
+                        )
+                        xbl_resp = None
+                except Exception as _xbl_err:
+                    logger.debug(
+                        f"[MS] XBL failed (contract-v{_cv}, "
+                        f"prefix={_rps[:2]!r}): {_xbl_err}"
+                    )
+                    xbl_resp = None
+
+            if xbl_resp is None or not xbl_resp.get("Token"):
+                logger.error("[MS] XBL user token failed with all contract/prefix combos")
+                return False
+
             self._xbl_token = xbl_resp.get("Token")
             if not self._xbl_token:
                 logger.error(f"[MS] XBL token missing in response: {xbl_resp}")
