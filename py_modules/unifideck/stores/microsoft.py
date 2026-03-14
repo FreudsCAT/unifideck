@@ -665,20 +665,17 @@ class MicrosoftConnector(Store):
         Query the Microsoft Collections API and return raw item dicts.
         Handles pagination automatically.
         """
-        if not self._xsts_token or not self._user_hash:
-            logger.error("[MS] XSTS token or user hash missing")
-            return []
-
-        # If only the generic RP token is available, Collections v8 returns 404.
-        # Fall back to the MS Store Library API which accepts Bearer auth.
+        # If XBL/XSTS failed entirely, or if we only have the generic RP token,
+        # fall back to the MS Store Library API which accepts Bearer auth directly.
         _LICENSING_RPS = {
             "https://licensing.xboxlive.com/",
             "http://licensing.xboxlive.com/",
         }
-        if self._xsts_rp not in _LICENSING_RPS:
+        if not self._xsts_token or not self._user_hash or self._xsts_rp not in _LICENSING_RPS:
             logger.info(
-                f"[MS] Licensing XSTS unavailable (used RP: {self._xsts_rp!r}), "
-                "falling back to MS Store Library API"
+                "[MS] XBL/XSTS unavailable or non-licensing RP "
+                f"(xsts_token={'set' if self._xsts_token else 'None'}, "
+                f"rp={self._xsts_rp!r}) — falling back to MS Store Library API"
             )
             return self._query_store_library_bearer()
 
