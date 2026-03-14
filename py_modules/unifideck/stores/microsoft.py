@@ -1349,6 +1349,7 @@ class MicrosoftConnector(Store):
         deadline = time.time() + timeout
         seen_ws: set = set()
         current_ws_url = None
+        self._removed_count = 0  # reset counter for this auth attempt
 
         def scan_pages():
             """Return list of (url, ws_url) for unseen MS login pages."""
@@ -1463,8 +1464,40 @@ class MicrosoftConnector(Store):
                                 return code
 
                         elif "removed=true" in req_url:
-                            logger.warning("[MS-net] removed=true — switching target")
-                            break
+                            _removed_count = getattr(self, '_removed_count', 0) + 1
+                            self._removed_count = _removed_count
+                            logger.warning(
+                                f"[MS-net] removed=true (attempt {_removed_count}) — "
+                                "clearing cookies and re-navigating"
+                            )
+                            if _removed_count > 3:
+                                logger.error(
+                                    "[MS-net] removed=true persists after 3 attempts — "
+                                    "giving up"
+                                )
+                                return None
+                            if self._pending_auth_url:
+                                try:
+                                    # Clear all Microsoft cookies on this page first
+                                    await send_cmd("Network.enable", {})
+                                    await send_cmd(
+                                        "Network.clearBrowserCookies", {}
+                                    )
+                                    logger.info("[MS-net] Cookies cleared")
+                                    await asyncio.sleep(0.3)
+                                    await send_cmd(
+                                        "Page.navigate",
+                                        {"url": self._pending_auth_url}
+                                    )
+                                    logger.info("[MS-net] Re-navigated to auth URL")
+                                    # Stay on this WS and wait for code=
+                                except Exception as _nav_err:
+                                    logger.debug(
+                                        f"[MS-net] Re-navigation failed: {_nav_err}"
+                                    )
+                                    break
+                            else:
+                                break
 
             except websockets.exceptions.ConnectionClosed:
                 logger.info("[MS-net] WS closed — rescanning")
