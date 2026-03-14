@@ -239,6 +239,7 @@ class MicrosoftConnector(Store):
             os.path.expanduser("~/.local/share/unifideck/settings.json"),
         ]
         if self.plugin_dir:
+            paths.append(os.path.join(self.plugin_dir, "settings.json"))
             paths.append(os.path.join(self.plugin_dir, "defaults", "settings.json"))
 
         for path in paths:
