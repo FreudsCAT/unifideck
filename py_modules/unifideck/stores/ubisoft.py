@@ -575,19 +575,37 @@ class UbisoftConnector(Store):
             return False
 
     async def cancel_install_session(self, game_id: str) -> Dict[str, Any]:
-        """Cancel a running install session by terminating UPC."""
+        """Cancel a running install session by terminating UPC.
+
+        Always captures the session from the game prefix after cancellation,
+        since the bash launcher (killed by Steam's TerminateApp) cannot run
+        its own post-game capture.
+        """
         pid = self._active_install_pids.pop(game_id, None)
-        if pid is None:
-            return {"success": False, "error": "No active install session"}
-        try:
-            os.kill(pid, 15)  # SIGTERM
-            logger.info(f"[Ubisoft] Sent SIGTERM to UPC PID {pid} for {game_id}")
-            return {"success": True}
-        except ProcessLookupError:
-            return {"success": True, "message": "Process already exited"}
-        except Exception as e:
-            logger.error(f"[Ubisoft] Failed to cancel install {game_id}: {e}")
-            return {"success": False, "error": str(e)}
+        if pid is not None:
+            try:
+                os.kill(pid, 15)  # SIGTERM
+                logger.info(f"[Ubisoft] Sent SIGTERM to UPC PID {pid} for {game_id}")
+            except ProcessLookupError:
+                logger.info(f"[Ubisoft] Install process already exited for {game_id}")
+            except Exception as e:
+                logger.error(f"[Ubisoft] Failed to kill install PID {pid}: {e}")
+
+        # Capture session from the game prefix — the bash launcher's
+        # capture_session.py is bypassed when Steam kills the shortcut,
+        # so the Python backend must handle it.
+        prefix_path = self.get_prefix_path(game_id)
+        if prefix_path and os.path.isdir(prefix_path):
+            await asyncio.sleep(2)  # Give UPC a moment to flush state
+            captured = self._capture_upc_session(prefix_path)
+            if captured:
+                self._propagate_upc_session_to_all_prefixes(captured)
+                logger.info(f"[Ubisoft] Post-cancel capture: propagated session from {game_id}")
+            else:
+                # Even if token didn't change, credentials were synced by _capture_upc_session
+                logger.info(f"[Ubisoft] Post-cancel capture: credentials synced for {game_id}")
+
+        return {"success": True}
 
     async def _delete_tree_with_retries(
         self,
