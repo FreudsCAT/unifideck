@@ -2,17 +2,17 @@
 Microsoft Store connector for Unifideck.
 
 Authenticates via Microsoft OAuth + Xbox Live token chain, queries the
-Microsoft Collections API to list owned (purchased) Win32 games, and can
-download and install them via the FE3 (Windows Update) delivery endpoint.
-Game Pass titles and UWP-only games (not runnable under Proton) are excluded.
+Xbox Title Hub API to list the user's game library, then filters for
+PC-compatible titles.  Download/install uses the FE3 (Windows Update)
+delivery endpoint.  Game Pass and UWP-only games are excluded.
 
 Auth flow
 ---------
-  1. Microsoft OAuth (live.com)         → access_token + refresh_token
-  2. XBL user token (user.auth.xboxlive.com)
-  3. XSTS token     (xsts.auth.xboxlive.com, RP = licensing.xboxlive.com)
-  4. Collections query (collections.mp.microsoft.com)
-  5. Product details   (store.mp.microsoft.com) — PC / Windows.Desktop filter
+  1. Microsoft OAuth (microsoftonline.com) → access_token + refresh_token
+  2. XBL user token  (user.auth.xboxlive.com)
+  3. XSTS token      (xsts.auth.xboxlive.com, RP = xboxlive.com)
+  4. Title Hub query  (titlehub.xboxlive.com) — user's game history
+  5. Product details  (store.mp.microsoft.com) — PC / Windows.Desktop filter
 
 Win32 detection
 ---------------
@@ -55,21 +55,13 @@ logger = logging.getLogger(__name__)
 # ──────────────────────────── constants ────────────────────────────────────
 
 MS_REDIRECT    = "https://login.live.com/oauth20_desktop.srf"
-# Azure AD v2.0 consumer endpoint returns JWT tokens (not compact MSA tickets).
-# JWTs are required for XBL contract-v2 which is in turn required to obtain
-# an XSTS token with the licensing.xboxlive.com relying party (Collections API).
-# The legacy login.live.com endpoint returns compact tokens that only work with
-# XBL contract-v1 -- those tokens are rejected by the licensing XSTS RP (400).
+# Azure AD v2.0 consumer endpoint for OAuth.
 MS_AUTH_URL    = "https://login.microsoftonline.com/consumers/oauth2/v2.0/authorize"
 MS_TOKEN_URL   = "https://login.microsoftonline.com/consumers/oauth2/v2.0/token"
 MS_SCOPE       = "Xboxlive.signin Xboxlive.offline_access"
 
 XBL_AUTH_URL   = "https://user.auth.xboxlive.com/user/authenticate"
 XSTS_URL       = "https://xsts.auth.xboxlive.com/xsts/authorize"
-XSTS_RP        = "https://licensing.xboxlive.com/"   # relying party for Collections
-
-COLLECTIONS_URL = "https://collections.mp.microsoft.com/v8.0/collections/query"
-PRODUCT_URL     = "https://store.mp.microsoft.com/v8.0/sdk/products"
 
 TOKEN_FILE    = os.path.expanduser("~/.config/unifideck/microsoft_token.json")
 
@@ -184,9 +176,8 @@ class MicrosoftConnector(Store):
     Windows.Desktop device family compatibility — the subset most likely
     to work (or be attempted) via Proton on SteamOS.
 
-    Installation is NOT supported: Microsoft Store DRM packages cannot be
-    unpacked and run on Linux.  The connector is intentionally read-only
-    (library display + ProtonDB compatibility lookup).
+    Win32 games can be downloaded and installed via the FE3 delivery API.
+    UWP-only titles are surfaced but marked as not compatible.
     """
 
     def __init__(self, plugin_dir: Optional[str] = None, plugin_instance=None):
@@ -228,13 +219,14 @@ class MicrosoftConnector(Store):
         loc = self._get_locale()
         return _FE3_DEVICE_ATTRS_TEMPLATE.format(locale=loc)
 
-    def _get_client_id(self) -> str:
-        """Return the MS OAuth client ID from settings.json.
+    def _get_ms_setting(self, key: str, default: str = "") -> str:
+        """Read ``stores.microsoft.<key>`` from settings.json.
 
-        Priority:
+        Search order:
           1. User settings:    ~/.local/share/unifideck/settings.json
-          2. Plugin defaults:  {plugin_dir}/defaults/settings.json
-        Must be a GUID-format Azure AD app ID, not a legacy hex Windows Live ID.
+          2. Plugin root:      {plugin_dir}/settings.json
+          3. Plugin defaults:  {plugin_dir}/defaults/settings.json
+        Returns *default* if the key is absent from all files.
         """
         paths = [
             os.path.expanduser("~/.local/share/unifideck/settings.json"),
@@ -242,23 +234,30 @@ class MicrosoftConnector(Store):
         if self.plugin_dir:
             paths.append(os.path.join(self.plugin_dir, "settings.json"))
             paths.append(os.path.join(self.plugin_dir, "defaults", "settings.json"))
-
         for path in paths:
             try:
                 if os.path.exists(path):
                     with open(path) as f:
                         data = json.load(f)
-                    cid = data.get("stores", {}).get("microsoft", {}).get("client_id", "")
-                    if cid:
-                        logger.debug(f"[MS] Using client_id from {path}")
-                        return cid
-            except Exception as e:
-                logger.debug(f"[MS] Could not read client_id from {path}: {e}")
-        logger.error(
-            "[MS] No client_id found in settings.json (stores.microsoft.client_id). "
-            "Microsoft Store authentication will fail."
-        )
-        return ""
+                    val = data.get("stores", {}).get("microsoft", {}).get(key, "")
+                    if val:
+                        return val
+            except Exception:
+                pass
+        return default
+
+    def _get_client_id(self) -> str:
+        """Return the Azure AD client ID.  Empty string + error log if missing."""
+        cid = self._get_ms_setting("client_id")
+        if not cid:
+            logger.error("[MS] No client_id in settings.json. Microsoft auth will fail.")
+        return cid
+
+    def _get_product_url(self) -> str:
+        return self._get_ms_setting("product_url", "https://store.mp.microsoft.com/v8.0/sdk/products")
+
+    def _get_titlehub_url(self) -> str:
+        return self._get_ms_setting("titlehub_url", "https://titlehub.xboxlive.com")
 
     def _validated_install_dir(self, game_id: str) -> str:
         """
@@ -450,11 +449,11 @@ class MicrosoftConnector(Store):
                     "proceeding with Bearer only library query"
                 )
 
-            # ── 3. Collections API ────────────────────────────────────────
+            # ── 3. Xbox Title Hub — enumerate user's game library ─────────
             raw_items = await asyncio.get_event_loop().run_in_executor(
-                None, self._query_collections
+                None, self._query_titlehub
             )
-            logger.info(f"[MS] Collections returned {len(raw_items)} raw items")
+            logger.info(f"[MS] Title Hub returned {len(raw_items)} items")
 
             # Log productKind distribution for diagnostics — helps identify
             # items dropped by the filter below.
@@ -668,18 +667,15 @@ class MicrosoftConnector(Store):
                             f"prefix={_rps[:2]!r}): {xbl_resp}"
                         )
                         xbl_resp = None
+                except urllib.error.HTTPError as _xbl_err:
+                    try:
+                        _body = _xbl_err.read().decode("utf-8", errors="replace")
+                    except Exception:
+                        _body = ""
+                    logger.debug(f"[MS] XBL failed (v{_cv}, {_rps[:2]!r}): HTTP {_xbl_err.code} {_body[:500]}")
+                    xbl_resp = None
                 except Exception as _xbl_err:
-                    _body = ""
-                    if hasattr(_xbl_err, "read"):
-                        try:
-                            _body = _xbl_err.read().decode("utf-8", errors="replace")
-                        except Exception:
-                            pass
-                    logger.debug(
-                        f"[MS] XBL failed (contract-v{_cv}, "
-                        f"prefix={_rps[:2]!r}): {_xbl_err}"
-                        f"{(' body=' + _body[:500]) if _body else ''}"
-                    )
+                    logger.debug(f"[MS] XBL failed (v{_cv}, {_rps[:2]!r}): {_xbl_err}")
                     xbl_resp = None
 
             if xbl_resp is None or not xbl_resp.get("Token"):
@@ -698,9 +694,7 @@ class MicrosoftConnector(Store):
 
             logger.info(f"[MS] ✓ XBL user token obtained (uhs={self._user_hash})")
 
-            # Step B: XSTS token — try RP + SandboxId combinations in order.
-            # https://licensing.xboxlive.com/ is required for the Collections API
-            # but rejects SandboxId="RETAIL" on most accounts — use "" instead.
+            # Step B: XSTS token with generic RP (Title Hub + FE3).
             _xsts_headers = {
                 "Content-Type":           "application/json",
                 "Accept":                 "application/json",
@@ -709,10 +703,7 @@ class MicrosoftConnector(Store):
                 "Accept-Language":        self._get_locale(),
             }
             _xsts_candidates = [
-                (XSTS_RP,                          ""),
-                (XSTS_RP,                          "RETAIL"),
-                ("http://licensing.xboxlive.com/", ""),
-                ("http://xboxlive.com",            "RETAIL"),
+                ("http://xboxlive.com", "RETAIL"),
             ]
             xsts_resp = None
             _used_rp  = None
@@ -779,126 +770,63 @@ class MicrosoftConnector(Store):
             logger.error(f"[MS] XBL chain error: {e}", exc_info=True)
             return False
 
-    # ── Collections API (synchronous, run in executor) ────────────────────
+    # ── Title Hub API (synchronous, run in executor) ────────────────────────
 
-    def _query_collections(self) -> List[Dict]:
+    def _query_titlehub(self) -> List[Dict]:
         """
-        Query the Microsoft Collections API and return raw item dicts.
-        Handles pagination automatically.
+        Query the Xbox Title Hub API for the user's game library.
+
+        Uses the generic http://xboxlive.com XSTS RP — accessible to any
+        Azure AD public client app (no Xbox Developer Program required).
         """
-        if not self._xsts_token or not self._user_hash:
-            logger.error("[MS] Cannot query Collections — XSTS token or user hash missing")
+        if not self._xsts_token or not self._user_hash or not self._xuid:
+            logger.error("[MS] Cannot query Title Hub — XSTS token, user hash, or XUID missing")
             return []
 
-        logger.info(f"[MS] Querying Collections API with RP={self._xsts_rp!r}")
-
         auth_header = f"XBL3.0 x={self._user_hash};{self._xsts_token}"
+        titlehub_url = self._get_titlehub_url()
+        url = (
+            f"{titlehub_url}/users/xuid({self._xuid})/titles/titlehistory"
+            f"/decoration/detail,image,scid"
+        )
         headers = {
             "Authorization":          auth_header,
-            "Content-Type":           "application/json",
-            "MS-CV":                  "unifideck.1",
+            "x-xbl-contract-version": "2",
             "Accept":                 "application/json",
+            "Accept-Language":        self._get_locale(),
         }
 
-        all_items: List[Dict] = []
-        continuation_token = None
+        try:
+            data = _http_get(url, headers)
+        except Exception as e:
+            logger.error(f"[MS] Title Hub query failed: {e}")
+            return []
 
-        for page_num in range(20):   # safety cap: 20 pages × 200 = 4000 items
-            payload: Dict[str, Any] = {
-                "beneficiaries": [
-                    {
-                        "identityType":         "b2b",
-                        "identityValue":        self._xuid or "0",
-                        "localTicketReference": "1",
-                    }
-                ],
-                "market":           self._get_market(),
-                "productSkuIds":    [],
-                "country":          self._get_market(),
-                "pageSize":         200,
-            }
-            # Only include continuationToken when paginating — sending null on the
-            # first request can cause the Collections API to return an error.
-            if continuation_token:
-                payload["continuationToken"] = continuation_token
+        titles = data.get("titles", [])
+        logger.info(f"[MS] Title Hub raw: {len(titles)} titles")
 
-            try:
-                resp = _http_post_json(COLLECTIONS_URL, payload, headers)
-            except Exception as e:
-                logger.error(f"[MS] Collections query page {page_num} failed: {e}")
-                break
+        items: List[Dict] = []
+        for t in titles:
+            devices = [d.lower() for d in t.get("devices", [])]
+            if "pc" not in devices and "win32" not in devices:
+                continue
+            if t.get("type", "").lower() != "game":
+                continue
+            pid = t.get("modernTitleId") or t.get("titleId") or ""
+            if not pid:
+                continue
+            items.append({
+                "productId":       str(pid),
+                "productTitle":    t.get("name", ""),
+                "productKind":     "Game",
+                "acquisitionType": "Purchase",
+            })
 
-            items = resp.get("items", [])
-            all_items.extend(items)
-            logger.info(f"[MS] Collections page {page_num}: {len(items)} items")
-
-            continuation_token = resp.get("continuationToken")
-            if not continuation_token:
-                break
-
-        return all_items
+        logger.info(f"[MS] Title Hub: {len(items)} PC games after device/type filter")
+        return items
 
     # ── Product detail + PC filter (synchronous, run in executor) ─────────
 
-    def _query_store_library_bearer(self) -> List[Dict]:
-        """
-        Fallback: query owned PC games via the Microsoft Store Library API
-        using Bearer auth (MS access token) — no licensing XSTS required.
-        Returns items in the same format as _query_collections.
-        """
-        if not self._ms_access_token:
-            logger.error("[MS] No MS access token for store library query")
-            return []
-
-        all_items: List[Dict] = []
-        skip_items = 0
-        page_size  = 100
-
-        for page_num in range(20):
-            url = (
-                "https://storeedgefd.dsx.mp.microsoft.com/v9.0/me/library"
-                f"?market={self._get_market()}"
-                f"&locale={self._get_locale()}"
-                "&deviceFamily=windows.desktop"
-                f"&$skip={skip_items}"
-                f"&$top={page_size}"
-            )
-            headers = {
-                "Authorization": f"Bearer {self._ms_access_token}",
-                "Accept":        "application/json",
-                "User-Agent":    "Microsoft.WindowsStore/11910.1002.5.0",
-                "MS-CV":         "unifideck.store.1",
-            }
-            try:
-                resp = _http_get(url, headers)
-            except Exception as e:
-                logger.error(f"[MS] Store library page {page_num} failed: {e}")
-                break
-
-            products = resp.get("productsList", [])
-            if not products:
-                break
-
-            for p in products:
-                pid = p.get("productId") or p.get("ProductId")
-                if not pid:
-                    continue
-                kind = p.get("productType") or p.get("ProductType", "Game")
-                all_items.append({
-                    "productId":       pid,
-                    "productTitle":    p.get("name") or p.get("title") or "",
-                    "productKind":     kind,
-                    "acquisitionType": "Purchase",
-                })
-
-            logger.info(f"[MS] Store library page {page_num}: {len(products)} items")
-
-            if len(products) < page_size:
-                break
-            skip_items += page_size
-
-        logger.info(f"[MS] Store library (Bearer): {len(all_items)} total items")
-        return all_items
 
     def _scan_pc_games(self, product_ids: List[str]) -> Dict[str, dict]:
         """
@@ -926,7 +854,7 @@ class MicrosoftConnector(Store):
         for i in range(0, len(product_ids), batch_size):
             batch   = product_ids[i: i + batch_size]
             big_ids = ",".join(batch)
-            url     = f"{PRODUCT_URL}?bigIds={big_ids}&market={self._get_market()}&locale={self._get_locale()}"
+            url     = f"{self._get_product_url()}?bigIds={big_ids}&market={self._get_market()}&locale={self._get_locale()}"
 
             try:
                 data     = _http_get(url, {"Accept": "application/json", "User-Agent": "Unifideck/1.0", "MS-CV": "unifideck.2"})
@@ -1148,7 +1076,7 @@ class MicrosoftConnector(Store):
     def _fetch_single_product_meta(self, game_id: str) -> Optional[dict]:
         """Fetch and classify a single product from the catalog API."""
         try:
-            url  = f"{PRODUCT_URL}?bigIds={game_id}&market={self._get_market()}&locale={self._get_locale()}"
+            url  = f"{self._get_product_url()}?bigIds={game_id}&market={self._get_market()}&locale={self._get_locale()}"
             data = _http_get(url, {"Accept": "application/json", "User-Agent": "Unifideck/1.0", "MS-CV": "unifideck.3"})
             for product in data.get("Products", []):
                 is_win32, meta = self._classify_product(product)
@@ -1163,7 +1091,7 @@ class MicrosoftConnector(Store):
         Call the FE3 GetExtendedUpdateInfo2 SOAP endpoint and return package download URLs.
 
         Authentication: XBL3.0 x=<user_hash>;<xsts_token> in a WS-Security header.
-        The existing XSTS token (RP = licensing.xboxlive.com) is accepted by FE3.
+        The existing XSTS token is passed to FE3 via WS-Security.
         """
         if not self._xsts_token or not self._user_hash:
             raise RuntimeError("[MS] XSTS token not available for FE3")

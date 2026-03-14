@@ -17,7 +17,9 @@
     "microsoft": {
       "enabled": true,
       "auto_sync": true,
-      "client_id": "3f63e417-e042-4b7d-b766-5e0780d3ae1b"
+      "client_id": "3f63e417-e042-4b7d-b766-5e0780d3ae1b",
+      "titlehub_url": "https://titlehub.xboxlive.com",
+      "product_url": "https://store.mp.microsoft.com/v8.0/sdk/products"
     }
   },
   "ui": {
