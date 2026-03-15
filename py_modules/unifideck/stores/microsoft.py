@@ -671,10 +671,14 @@ class MicrosoftConnector(Store):
     def _classify_product(self, product: dict) -> Tuple[bool, dict]:
         """Determine whether a product is downloadable via FE3.
 
-        A product is considered installable if any SKU has a WuBundleId in its
-        FulfillmentData.  In 2024+, Microsoft packages all games (including
-        Win32) in MSIX containers with a PackageFamilyName, so the old check
-        'WuBundleId present AND PackageFamilyName absent' is obsolete.
+        Classification uses the FulfillmentType field from the SKU properties:
+          - 'MSIXVC': Win32 game in MSIX Virtual Container — installable
+          - 'XVC': Xbox Virtual Container (UWP-only) — not installable on Linux
+          - None: delisted or unavailable — attempt download, will fail gracefully
+
+        In 2024+, Microsoft packages all games (including Win32) in MSIX
+        containers with a PackageFamilyName, so the presence of a PFN no
+        longer indicates UWP-only.
         """
         meta: dict = {
             "is_win32":         False,
@@ -690,51 +694,20 @@ class MicrosoftConnector(Store):
                 meta["title"] = loc_props[0].get("SkuTitle", "")
                 break
 
-        pid = product.get("ProductId", "?")
-
-        # Diagnostic: log Packages for Win32/UWP identification
-        top_props = product.get("Properties", {})
-        top_packages = top_props.get("Packages", [])
-        logger.info(
-            f"[MS] DIAG {pid}: "
-            f"top.PackageFamilyName={top_props.get('PackageFamilyName', '<none>')!r} "
-            f"top.Packages count={len(top_packages)}"
-        )
-        if top_packages:
-            for pkg_idx, pkg in enumerate(top_packages[:3]):
-                logger.info(
-                    f"[MS] DIAG {pid} Package[{pkg_idx}]: "
-                    f"PackageFormat={pkg.get('PackageFormat', '<none>')!r} "
-                    f"PlatformDependencies={pkg.get('PlatformDependencies', [])!r} "
-                    f"Architectures={pkg.get('Architectures', [])!r} "
-                    f"PlatformName={pkg.get('PlatformName', '<none>')!r} "
-                    f"PackageRank={pkg.get('PackageRank', '<none>')!r} "
-                    f"keys={list(pkg.keys())[:12]}"
-                )
-
         for sku_avail in product.get("DisplaySkuAvailabilities", []):
             sku   = sku_avail.get("Sku", {})
             props = sku.get("Properties", {})
             fd    = props.get("FulfillmentData", {}) or {}
 
-            # Diagnostic: log fields that may distinguish Win32 from UWP
-            pkg_features = fd.get("PackageFeatures", None)
-            content = fd.get("Content", None)
-            logger.info(
-                f"[MS] DIAG {pid} SKU: "
-                f"PackageFeatures={pkg_features!r} "
-                f"Content keys={list(content.keys())[:8] if isinstance(content, dict) else content!r} "
-                f"FulfillmentType={props.get('FulfillmentType', '<none>')!r} "
-                f"PFN={fd.get('PackageFamilyName', '')!r}"
-            )
-
             if props.get("IsXboxPlayAnywhere"):
                 meta["is_play_anywhere"] = True
 
-            wu_bundle  = fd.get("WuBundleId", "")
-            wu_cat     = fd.get("WuCategoryId", "")
+            wu_bundle        = fd.get("WuBundleId", "")
+            wu_cat           = fd.get("WuCategoryId", "")
+            fulfillment_type = props.get("FulfillmentType", "")
 
-            if wu_bundle:
+            # XVC = Xbox Virtual Container (UWP-only) — skip
+            if wu_bundle and fulfillment_type != "XVC":
                 meta["is_win32"]       = True
                 meta["wu_bundle_id"]   = wu_bundle
                 meta["wu_category_id"] = wu_cat
