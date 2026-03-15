@@ -270,7 +270,7 @@ class UbisoftConnector(Store):
 
         Combines two data sources:
         1. GraphQL API (purchased/owned games with full metadata)
-        2. Ownership binary (free claimed + F2P games that the API misses)
+        2. Ownership binary (free claimed games that the API misses)
 
         Returns:
             List of Game objects, None on auth failure.
@@ -288,14 +288,28 @@ class UbisoftConnector(Store):
 
             games = []
             seen_space_ids = set()
+            seen_names: set = set()
 
             for node in nodes:
                 space_id = node.get("spaceId", "")
                 if not space_id or space_id in seen_space_ids:
                     continue
-                seen_space_ids.add(space_id)
 
                 name = node.get("name", "Unknown")
+                norm_name = self._normalize_for_matching(name)
+
+                # Deduplicate by name (e.g. Far Cry 5 appears twice
+                # with different spaceIds in the current API)
+                if norm_name in seen_names:
+                    logger.debug(
+                        f"[Ubisoft] Skipping duplicate name: {name} "
+                        f"[spaceId={space_id[:8]}]"
+                    )
+                    continue
+
+                seen_space_ids.add(space_id)
+                seen_names.add(norm_name)
+
                 cover_url = node.get("coverUrl", "")
                 background_url = node.get("backgroundUrl", "")
                 banner_url = node.get("bannerUrl", "")
@@ -324,7 +338,7 @@ class UbisoftConnector(Store):
 
                 games.append(game)
 
-            logger.info(f"[Ubisoft] Library: {len(games)} PC games from GraphQL")
+            logger.info(f"[Ubisoft] Library: {len(games)} games from GraphQL")
 
             # Resolve install_ids from static database for all games
             if games:
@@ -334,7 +348,21 @@ class UbisoftConnector(Store):
                 except Exception as e:
                     logger.warning(f"[Ubisoft] Static ID resolution failed: {e}")
 
-            # Supplement with ownership binary (free/claimed/F2P games)
+            # Purge stale binary-sourced entries from the id_map cache
+            # so that previous runs' junk doesn't persist across syncs.
+            stale_keys = [
+                k for k, v in self._id_map_cache.items()
+                if v.get("source") == "ownership_binary"
+            ]
+            for k in stale_keys:
+                del self._id_map_cache[k]
+            if stale_keys:
+                logger.debug(
+                    f"[Ubisoft] Cleared {len(stale_keys)} stale binary "
+                    f"id_map entries"
+                )
+
+            # Supplement with ownership binary (free/claimed games)
             try:
                 # Collect install_ids already known from GraphQL games
                 graphql_install_ids: set = set()
@@ -362,105 +390,6 @@ class UbisoftConnector(Store):
                     )
             except Exception as e:
                 logger.warning(f"[Ubisoft] Ownership binary scan failed: {e}")
-
-            # Supplementary query: fetch ALL games (not just isOwned) to discover
-            # free-to-play games and free claimed games the isOwned filter misses.
-            try:
-                all_nodes = await self.api.get_all_games()
-                if all_nodes:
-                    known_space_ids = {g.id for g in games}
-                    known_names = {
-                        self._normalize_for_matching(g.title) for g in games
-                    }
-                    added_sup = 0
-                    for node in all_nodes:
-                        space_id = node.get("spaceId", "")
-                        name = node.get("name", "Unknown")
-                        if not space_id or space_id in known_space_ids:
-                            continue
-                        norm = self._normalize_for_matching(name)
-                        if norm in known_names:
-                            continue
-
-                        cover_url = node.get("coverUrl", "")
-                        game = Game(
-                            id=space_id,
-                            title=name,
-                            store="ubisoft",
-                            is_installed=space_id in installed,
-                            cover_image=cover_url,
-                            ownership_type="free",
-                        )
-                        games.append(game)
-                        known_space_ids.add(space_id)
-                        known_names.add(norm)
-                        added_sup += 1
-                        logger.info(
-                            f"[Ubisoft] Supplementary game: {name} "
-                            f"[spaceId={space_id[:8]}..] "
-                            f"(productType={node.get('productType', '?')})"
-                        )
-                    if added_sup:
-                        logger.info(
-                            f"[Ubisoft] Added {added_sup} games from "
-                            f"supplementary (unfiltered) query"
-                        )
-            except Exception as e:
-                logger.debug(f"[Ubisoft] Supplementary query failed: {e}")
-
-            # Probe Ubisoft+ subscription games (graceful no-op if unavailable)
-            try:
-                sub_games = await self.api.get_subscription_games()
-                if sub_games:
-                    known_names = {
-                        self._normalize_for_matching(g.title) for g in games
-                    }
-                    added = 0
-                    for sg in sub_games:
-                        sg_name = sg.get("name", "")
-                        if not sg_name:
-                            continue
-                        if self._normalize_for_matching(sg_name) in known_names:
-                            continue
-                        game = Game(
-                            id=f"ubisub-{sg.get('id', sg_name)}",
-                            title=sg_name,
-                            store="ubisoft",
-                            is_installed=False,
-                            ownership_type="subscription",
-                        )
-                        games.append(game)
-                        added += 1
-                    if added:
-                        logger.info(
-                            f"[Ubisoft] Added {added} Ubisoft+ subscription games"
-                        )
-            except Exception as e:
-                logger.debug(f"[Ubisoft] Subscription probe skipped: {e}")
-
-            # Filter out games the user already has installed on Steam
-            try:
-                steam_titles = self._get_steam_game_titles()
-                if steam_titles:
-                    before = len(games)
-                    filtered = []
-                    for g in games:
-                        norm = self._normalize_for_matching(g.title)
-                        if norm in steam_titles:
-                            logger.info(
-                                f"[Ubisoft] Filtering Steam-linked game: {g.title}"
-                            )
-                        else:
-                            filtered.append(g)
-                    games = filtered
-                    removed = before - len(games)
-                    if removed:
-                        logger.info(
-                            f"[Ubisoft] Filtered {removed} Steam-linked games "
-                            f"({len(games)} remaining)"
-                        )
-            except Exception as e:
-                logger.warning(f"[Ubisoft] Steam filtering failed: {e}")
 
             # Trigger template prefix creation as background task if needed
             if games and not self._template_exists():
@@ -1666,12 +1595,23 @@ class UbisoftConnector(Store):
                 logger.debug(f"[Ubisoft] Ownership skip (localized): {name}")
                 continue
 
+            # Free-to-play games appear in the binary because the user
+            # launched them, but they are not "owned" purchases.
+            if re.search(
+                r'^(Brawlhalla|Hyper Scape|Roller Champions|'
+                r'Tom Clancy.s XDefiant|XDefiant|UNO)$',
+                name, re.IGNORECASE
+            ):
+                logger.debug(f"[Ubisoft] Ownership skip (F2P): {name}")
+                continue
+
             # DLC keyword filter (expanded)
             if re.search(
                 r'\b(dlc|season pass|expansion|pack|bonus|soundtrack|'
                 r'art ?book|skins?|outfit|costume|weapon|map|mission|episode|'
                 r'revolver|kukri|sword|cane-sword|hammer|knife|dagger|'
-                r'conspiracy|runaway train)\b',
+                r'conspiracy|runaway train|texture|language|'
+                r'of the dead|starter edition)\b',
                 name, re.IGNORECASE
             ):
                 logger.debug(f"[Ubisoft] Ownership skip (DLC keyword): {name}")
@@ -1695,6 +1635,29 @@ class UbisoftConnector(Store):
                 if is_dlc:
                     logger.debug(
                         f"[Ubisoft] Ownership skip (DLC of {parent_part}): {name}"
+                    )
+                    continue
+
+            # Same pattern for ": " separator (e.g. "Game: Preorder").
+            # NOTE: Only check against known_base_names (currently owned
+            # games), NOT all_db_names.  The ": " separator is widely used
+            # for franchise titles (Prince of Persia: The Sands of Time,
+            # Tom Clancy's Splinter Cell: Chaos Theory) where the prefix
+            # is also a standalone game in the DB.  Checking all_db_names
+            # would false-positive those as "DLC of Prince of Persia".
+            if ": " in name:
+                parent_part = name.split(": ", 1)[0].strip()
+                parent_norm = self._normalize_for_matching(parent_part)
+                is_dlc = parent_norm in known_base_names
+                if not is_dlc and len(parent_norm) > 5:
+                    is_dlc = any(
+                        parent_norm in kn or kn in parent_norm
+                        for kn in known_base_names
+                    )
+                if is_dlc:
+                    logger.debug(
+                        f"[Ubisoft] Ownership skip (DLC/sub of "
+                        f"{parent_part}): {name}"
                     )
                     continue
 
@@ -3759,18 +3722,47 @@ class UbisoftConnector(Store):
         return None
 
     def _find_proton_path(self) -> Optional[str]:
-        """Find a suitable Proton installation for umu-run."""
+        """Find a suitable Proton installation for umu-run.
+
+        Priority matches the launcher script (unifideck-launcher):
+        1. Proton Experimental (steamapps/common/)
+        2. Proton 10.0 (steamapps/common/)
+        3. Proton 9.0 Beta (steamapps/common/)
+        4. UMU-Proton (compatibilitytools.d/)
+        5. GE-Proton newest (compatibilitytools.d/)
+        """
+        home = os.path.expanduser("~")
+
+        # Priority 1-3: Official Proton from Steam (matches launcher default order)
+        steam_common_dirs = [
+            os.path.join(home, ".steam", "steam", "steamapps", "common"),
+            os.path.join(home, ".local", "share", "Steam", "steamapps", "common"),
+            os.path.join(home, ".steam", "root", "steamapps", "common"),
+        ]
+        proton_names = [
+            "Proton - Experimental",
+            "Proton 10.0",
+            "Proton 9.0 (Beta)",
+        ]
+        for steam_common in steam_common_dirs:
+            for name in proton_names:
+                candidate = os.path.join(steam_common, name)
+                if os.path.isdir(candidate):
+                    logger.info(f"[Ubisoft] Using Proton: {name}")
+                    return candidate
+
+        # Priority 4-5: Custom Proton from compatibilitytools.d
         compat_dir = os.path.expanduser("~/.local/share/Steam/compatibilitytools.d")
         if not os.path.isdir(compat_dir):
+            logger.warning("[Ubisoft] No Proton found")
             return None
 
-        # Prefer UMU-Proton, then GE-Proton (newest first)
         candidates = []
         for entry in os.listdir(compat_dir):
             full = os.path.join(compat_dir, entry)
             if os.path.isdir(full):
                 if entry.startswith("UMU-Proton"):
-                    candidates.insert(0, full)  # UMU-Proton first
+                    candidates.insert(0, full)
                 elif entry.startswith("GE-Proton"):
                     candidates.append(full)
 
@@ -3785,7 +3777,7 @@ class UbisoftConnector(Store):
             logger.info(f"[Ubisoft] Using Proton: {os.path.basename(candidates[0])}")
             return candidates[0]
 
-        logger.warning("[Ubisoft] No Proton found in compatibilitytools.d")
+        logger.warning("[Ubisoft] No Proton found in steamapps or compatibilitytools.d")
         return None
 
     def _find_python(self) -> str:

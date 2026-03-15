@@ -38,30 +38,23 @@ GRAPHQL_URL = "https://public-ubiservices.ubi.com/v1/profiles/me/uplay/graphql"
 DATA_DIR = os.path.expanduser("~/.local/share/unifideck")
 TOKEN_FILE = os.path.join(DATA_DIR, "ubisoft_token.json")
 
-# GraphQL query for fetching owned games
+# GraphQL query for fetching owned games.
+# The Ubisoft API migrated away from `games(filterBy: { isOwned: true })`
+# with `ownedPlatformGroups`.  The current schema exposes the user's
+# library through `viewer { games { ... } }` with `limit`/`offset`
+# pagination, and no longer provides per-game platform information.
 LIBRARY_QUERY = """
-query AllGames {
+query OwnedGames($limit: Int, $offset: Int) {
   viewer {
-    id
-    ownedGames: games(filterBy: { isOwned: true }) {
+    games(limit: $limit, offset: $offset) {
       totalCount
       nodes {
-        id
         spaceId
         name
         coverUrl
         backgroundUrl
         bannerUrl
-        viewer {
-          meta {
-            id
-            ownedPlatformGroups {
-              id
-              name
-              type
-            }
-          }
-        }
+        releaseDate
       }
     }
   }
@@ -521,12 +514,14 @@ class UbisoftAPIClient:
                 async with session.post(
                     GRAPHQL_URL,
                     headers=headers,
-                    json={"query": LIBRARY_QUERY},
+                    json={
+                        "query": LIBRARY_QUERY,
+                        "variables": {"limit": 100, "offset": 0},
+                    },
                     timeout=aiohttp.ClientTimeout(total=30),
                 ) as resp:
                     if resp.status == 401:
                         logger.warning("[Ubisoft API] Library query: auth expired")
-                        # Try refresh and retry once
                         if await self.refresh_token():
                             return await self._retry_library_query()
                         return None
@@ -536,22 +531,27 @@ class UbisoftAPIClient:
                         return []
 
                     body = await resp.json()
-                    nodes = (
+
+                    if body.get("errors"):
+                        logger.error(
+                            f"[Ubisoft API] Library query GraphQL error: "
+                            f"{body['errors'][0].get('message', '')}"
+                        )
+                        return []
+
+                    games_data = (
                         body.get("data", {})
                         .get("viewer", {})
-                        .get("ownedGames", {})
-                        .get("nodes", [])
+                        .get("games", {})
                     )
-
-                    # Filter for PC games only
-                    pc_games = [node for node in nodes if self._is_pc_game(node)]
-                    total = body.get("data", {}).get("viewer", {}).get("ownedGames", {}).get("totalCount", 0)
+                    nodes = games_data.get("nodes", [])
+                    total = games_data.get("totalCount", 0)
 
                     logger.info(
-                        f"[Ubisoft API] Library: {len(pc_games)} PC games "
-                        f"(out of {total} total)"
+                        f"[Ubisoft API] Library: {len(nodes)} games "
+                        f"(totalCount={total})"
                     )
-                    return pc_games
+                    return nodes
             finally:
                 await session.close()
 
@@ -579,19 +579,23 @@ class UbisoftAPIClient:
                 async with session.post(
                     GRAPHQL_URL,
                     headers=headers,
-                    json={"query": LIBRARY_QUERY},
+                    json={
+                        "query": LIBRARY_QUERY,
+                        "variables": {"limit": 100, "offset": 0},
+                    },
                     timeout=aiohttp.ClientTimeout(total=30),
                 ) as resp:
                     if resp.status != 200:
                         return None
                     body = await resp.json()
-                    nodes = (
+                    if body.get("errors"):
+                        return None
+                    return (
                         body.get("data", {})
                         .get("viewer", {})
-                        .get("ownedGames", {})
+                        .get("games", {})
                         .get("nodes", [])
                     )
-                    return [node for node in nodes if self._is_pc_game(node)]
             finally:
                 await session.close()
         except Exception as e:
@@ -650,124 +654,15 @@ class UbisoftAPIClient:
             "refreshTime": refresh_time,
         }
 
-    @staticmethod
-    def _is_pc_game(node: Dict[str, Any]) -> bool:
-        """Return True if the game has a PC platform entry.
-
-        ownedPlatformGroups is a list-of-lists: [[{type: "PC"}, ...], ...]
-        Each element of the outer list is itself a list of platform objects.
-        """
-        platform_groups = (
-            node.get("viewer", {})
-            .get("meta", {})
-            .get("ownedPlatformGroups", [])
-        )
-        # Flatten list-of-lists
-        flat_platforms = [
-            p
-            for group in platform_groups
-            for p in (group if isinstance(group, list) else [group])
-        ]
-        return any(p.get("type") == "PC" for p in flat_platforms)
-
     async def get_all_games(self) -> Optional[List[Dict[str, Any]]]:
-        """Fetch ALL games the user has any entitlement to (not just isOwned).
+        """Fetch ALL games the user has any entitlement to.
 
-        This supplementary query omits the ``filterBy: {isOwned: true}``
-        clause, which may return free-to-play or claimed-free games that
-        ``get_owned_games()`` misses.
-        Returns None on auth failure, empty list on API error.
+        Since the Ubisoft GraphQL schema was simplified, this now returns
+        the same data as ``get_owned_games()`` (``viewer { games }`` has
+        no ``isOwned`` filter anymore).  Kept as an alias for callers
+        that still reference it.
         """
-        ALL_GAMES_QUERY = """
-            query AllEntitlements {
-              viewer {
-                id
-                allGames: games {
-                  totalCount
-                  nodes {
-                    id
-                    spaceId
-                    name
-                    coverUrl
-                    backgroundUrl
-                    bannerUrl
-                    viewer {
-                      meta {
-                        id
-                        ownedPlatformGroups {
-                          id
-                          name
-                          type
-                        }
-                      }
-                    }
-                  }
-                }
-              }
-            }
-        """
-
-        if not await self.ensure_valid_token():
-            return None
-
-        headers = self._base_headers()
-        headers["Authorization"] = f"Ubi_v1 t={self.tokens['ticket']}"
-        session_id = self.tokens.get("sessionId", "")
-        if session_id:
-            headers["Ubi-SessionId"] = session_id
-
-        try:
-            session = await self._create_session()
-            try:
-                async with session.post(
-                    GRAPHQL_URL,
-                    headers=headers,
-                    json={"query": ALL_GAMES_QUERY},
-                    timeout=aiohttp.ClientTimeout(total=30),
-                ) as resp:
-                    if resp.status == 401:
-                        return None
-                    if resp.status != 200:
-                        logger.debug(
-                            f"[Ubisoft API] All-games query: HTTP {resp.status}"
-                        )
-                        return []
-
-                    body = await resp.json()
-                    if body.get("errors"):
-                        logger.debug(
-                            f"[Ubisoft API] All-games query rejected: "
-                            f"{body['errors'][0].get('message', '')}"
-                        )
-                        return []
-
-                    nodes = (
-                        body.get("data", {})
-                        .get("viewer", {})
-                        .get("allGames", {})
-                        .get("nodes", [])
-                    )
-                    total = (
-                        body.get("data", {})
-                        .get("viewer", {})
-                        .get("allGames", {})
-                        .get("totalCount", 0)
-                    )
-
-                    pc_games = [n for n in nodes if self._is_pc_game(n)]
-                    logger.info(
-                        f"[Ubisoft API] All-games: {len(pc_games)} PC games "
-                        f"(out of {total} total)"
-                    )
-                    return pc_games
-            finally:
-                await session.close()
-        except asyncio.TimeoutError:
-            logger.error("[Ubisoft API] All-games query timed out")
-            return []
-        except Exception as e:
-            logger.debug(f"[Ubisoft API] All-games query failed: {e}")
-            return []
+        return await self.get_owned_games()
 
     async def get_subscription_games(self) -> List[Dict[str, Any]]:
         """Fetch Ubisoft+ subscription games (if user has active subscription).
