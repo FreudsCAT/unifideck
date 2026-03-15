@@ -444,6 +444,8 @@ const PlaySectionWrapperInner: FC<PlaySectionWrapperProps> = ({
             // Use bRunning directly — proven reliable for non-Steam shortcuts
             // (MoonDeck pattern). display_status is NOT reliably populated for shortcuts.
             setIsRunning(data.bRunning);
+            // Ubisoft session capture on stop is handled by the global listener
+            // in index.tsx (works in gaming mode where this component isn't mounted).
           },
         ) ?? null;
     } catch {

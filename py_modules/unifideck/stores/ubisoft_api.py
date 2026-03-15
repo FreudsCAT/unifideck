@@ -13,7 +13,7 @@ import logging
 import os
 import time
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 import aiohttp
 
@@ -669,6 +669,145 @@ class UbisoftAPIClient:
             for p in (group if isinstance(group, list) else [group])
         ]
         return any(p.get("type") == "PC" for p in flat_platforms)
+
+    async def get_all_games(self) -> Optional[List[Dict[str, Any]]]:
+        """Fetch ALL games the user has any entitlement to (not just isOwned).
+
+        This supplementary query omits the ``filterBy: {isOwned: true}``
+        clause, which may return free-to-play or claimed-free games that
+        ``get_owned_games()`` misses.
+        Returns None on auth failure, empty list on API error.
+        """
+        ALL_GAMES_QUERY = """
+            query AllEntitlements {
+              viewer {
+                id
+                allGames: games {
+                  totalCount
+                  nodes {
+                    id
+                    spaceId
+                    name
+                    coverUrl
+                    backgroundUrl
+                    bannerUrl
+                    viewer {
+                      meta {
+                        id
+                        ownedPlatformGroups {
+                          id
+                          name
+                          type
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+        """
+
+        if not await self.ensure_valid_token():
+            return None
+
+        headers = self._base_headers()
+        headers["Authorization"] = f"Ubi_v1 t={self.tokens['ticket']}"
+        session_id = self.tokens.get("sessionId", "")
+        if session_id:
+            headers["Ubi-SessionId"] = session_id
+
+        try:
+            session = await self._create_session()
+            try:
+                async with session.post(
+                    GRAPHQL_URL,
+                    headers=headers,
+                    json={"query": ALL_GAMES_QUERY},
+                    timeout=aiohttp.ClientTimeout(total=30),
+                ) as resp:
+                    if resp.status == 401:
+                        return None
+                    if resp.status != 200:
+                        logger.debug(
+                            f"[Ubisoft API] All-games query: HTTP {resp.status}"
+                        )
+                        return []
+
+                    body = await resp.json()
+                    if body.get("errors"):
+                        logger.debug(
+                            f"[Ubisoft API] All-games query rejected: "
+                            f"{body['errors'][0].get('message', '')}"
+                        )
+                        return []
+
+                    nodes = (
+                        body.get("data", {})
+                        .get("viewer", {})
+                        .get("allGames", {})
+                        .get("nodes", [])
+                    )
+                    total = (
+                        body.get("data", {})
+                        .get("viewer", {})
+                        .get("allGames", {})
+                        .get("totalCount", 0)
+                    )
+
+                    pc_games = [n for n in nodes if self._is_pc_game(n)]
+                    logger.info(
+                        f"[Ubisoft API] All-games: {len(pc_games)} PC games "
+                        f"(out of {total} total)"
+                    )
+                    return pc_games
+            finally:
+                await session.close()
+        except asyncio.TimeoutError:
+            logger.error("[Ubisoft API] All-games query timed out")
+            return []
+        except Exception as e:
+            logger.debug(f"[Ubisoft API] All-games query failed: {e}")
+            return []
+
+    async def get_subscription_games(self) -> List[Dict[str, Any]]:
+        """Fetch Ubisoft+ subscription games (if user has active subscription).
+
+        The vault API (api-uplayplusvault.ubi.com) is currently unreachable.
+        This stub returns an empty list gracefully until the endpoint is
+        discoverable or Ubisoft exposes subscription data through GraphQL.
+        """
+        VAULT_URL = "https://api-uplayplusvault.ubi.com/v1/games"
+
+        if not await self.ensure_valid_token():
+            return []
+
+        try:
+            headers = self._base_headers()
+            headers["Authorization"] = f"Ubi_v1 t={self.tokens['ticket']}"
+
+            session = await self._create_session()
+            try:
+                async with session.get(
+                    VAULT_URL,
+                    headers=headers,
+                    timeout=aiohttp.ClientTimeout(total=10),
+                ) as resp:
+                    if resp.status == 200:
+                        body = await resp.json()
+                        games = body if isinstance(body, list) else body.get("games", [])
+                        logger.info(
+                            f"[Ubisoft API] Subscription: {len(games)} games"
+                        )
+                        return games
+                    logger.debug(
+                        f"[Ubisoft API] Subscription endpoint: HTTP {resp.status}"
+                    )
+            finally:
+                await session.close()
+        except Exception as e:
+            logger.debug(f"[Ubisoft API] Subscription endpoint unreachable: {e}")
+
+        return []
 
     def get_user_id(self) -> Optional[str]:
         """Get the currently authenticated user's ID."""

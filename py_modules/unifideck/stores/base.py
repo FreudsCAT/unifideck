@@ -25,6 +25,7 @@ class Game:
     executable: Optional[str] = None
     app_id: Optional[int] = None  # For shortcuts.vdf (our generated ID)
     steam_app_id: Optional[int] = None  # Real Steam appId for ProtonDB lookups
+    ownership_type: Optional[str] = None  # "owned", "free", "subscription", or None
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)

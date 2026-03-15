@@ -3555,12 +3555,22 @@ class Plugin:
                              # If we have a local icon, use it!
                              game.cover_image = str(icon_path)
 
+                # --- UBISOFT AUTH SHORTCUT ---
+                # Re-ensure the auth shortcut VDF + artwork (handles user deletion
+                # and force artwork resync).  Not part of all_games so must run separately.
+                try:
+                    auth_uid = await self.ubisoft._ensure_ubisoft_auth_shortcut()
+                    if auth_uid and resync_artwork:
+                        await self.ubisoft._fetch_auth_shortcut_artwork(auth_uid, force=True)
+                except Exception as e:
+                    logger.warning(f"[FORCE SYNC] Auth shortcut re-ensure failed: {e}")
+
                 # --- STEP 3: WRITE SHORTCUTS ---
                 self.sync_progress.current_game = {
                     "label": "force_sync.writingShortcuts",
                     "values": {}
                 }
-                
+
                 # Force update all games - rewrites existing shortcuts with fresh data (and local icons)
                 force_result = await self.shortcuts_manager.force_update_games_batch(all_games, launcher_script, epic_client=self.epic, gog_client=self.gog, amazon_client=self.amazon)
                 
@@ -5185,6 +5195,34 @@ class Plugin:
             return {"success": True}
         except Exception as e:
             logger.error(f"[Ubisoft] Post-stop capture failed for {game_id}: {e}")
+            return {"success": False, "error": str(e)}
+
+    async def capture_ubisoft_session_by_appid(self, app_id: int) -> Dict[str, Any]:
+        """Capture UPC session after a Ubisoft game stops, looked up by Steam appId.
+
+        Called by the global lifetime notification listener (works in gaming mode
+        where the per-component listener and handleStop are not mounted).
+        """
+        try:
+            # Resolve appId → game_id via shortcuts VDF
+            if app_id > 2**31:
+                app_id_signed = app_id - 2**32
+            else:
+                app_id_signed = app_id
+
+            shortcuts = await self.shortcuts_manager.read_shortcuts()
+            for _idx, shortcut in shortcuts.get("shortcuts", {}).items():
+                if shortcut.get("appid") == app_id_signed:
+                    result = extract_store_id(shortcut.get("LaunchOptions", ""))
+                    if result:
+                        store, game_id = result
+                        if store == "ubisoft" and game_id != "upc-auth":
+                            return await self.capture_ubisoft_session(game_id)
+                    break
+
+            return {"success": False, "error": "Not a Ubisoft game shortcut"}
+        except Exception as e:
+            logger.error(f"[Ubisoft] Post-stop capture by appId failed for {app_id}: {e}")
             return {"success": False, "error": str(e)}
 
     async def is_ubisoft_install_active(self, game_id: str) -> bool:

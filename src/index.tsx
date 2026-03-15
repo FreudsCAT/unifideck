@@ -1618,6 +1618,42 @@ export default definePlugin(() => {
   const unregisterInterceptor = registerGameActionInterceptor();
   console.log("[Unifideck] ✓ Game action interceptor registered");
 
+  // Global listener: capture Ubisoft session when ANY game stops.
+  // This fires in gaming mode, desktop mode, overlay abort — everywhere.
+  // The per-component listener in PlaySectionWrapper only works when
+  // the library page is open; this covers all other scenarios.
+  let unregLifetimeGlobal: { unregister(): void } | null = null;
+  try {
+    unregLifetimeGlobal =
+      window.SteamClient?.GameSessions?.RegisterForAppLifetimeNotifications?.(
+        (data: { unAppID: number; bRunning: boolean }) => {
+          if (data.bRunning) return; // Only interested in stop events
+
+          // Quick check: is this a Ubisoft game? (unifideckGameCache is always populated)
+          const cached = unifideckGameCache.get(data.unAppID);
+          if (!cached || cached.store !== "ubisoft") return;
+
+          console.log(
+            `[Unifideck] Global: Ubisoft game stopped (appId=${data.unAppID}), capturing session`,
+          );
+          call<[number], { success: boolean }>(
+            "capture_ubisoft_session_by_appid",
+            data.unAppID,
+          ).catch((err) =>
+            console.error(
+              "[Unifideck] Global: capture_ubisoft_session_by_appid failed:",
+              err,
+            ),
+          );
+        },
+      ) ?? null;
+    if (unregLifetimeGlobal) {
+      console.log("[Unifideck] ✓ Global Ubisoft session capture listener registered");
+    }
+  } catch {
+    // GameSessions may not be available
+  }
+
   // Patch the library to add Unifideck tabs (All, Installed, Great on Deck, Steam, Epic, GOG, Amazon)
   // This uses TabMaster's approach: intercept useMemo hook to inject custom tabs
   const libraryPatch = patchLibrary();
@@ -1818,6 +1854,9 @@ export default definePlugin(() => {
 
       // Unregister game action interceptor
       unregisterInterceptor();
+
+      // Unregister global Ubisoft session capture listener
+      unregLifetimeGlobal?.unregister?.();
 
       // Unpatch Steam stores
       if (unpatchSteamStores) {
