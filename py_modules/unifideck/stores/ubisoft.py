@@ -14,7 +14,7 @@ import os
 import re
 import shutil
 import subprocess
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from .base import Store, Game
 from .ubisoft_api import UbisoftAPIClient
@@ -27,6 +27,7 @@ logger = logging.getLogger(__name__)
 
 DATA_DIR = os.path.expanduser("~/.local/share/unifideck")
 ID_MAP_FILE = os.path.join(DATA_DIR, "ubisoft_id_map.json")
+VISIBLE_GAMES_FILE = os.path.join(DATA_DIR, "ubisoft_visible_games.json")
 SHORTCUTS_REGISTRY_PATH = os.path.join(DATA_DIR, "shortcuts_registry.json")
 PREFIXES_DIR = os.path.join(DATA_DIR, "prefixes", "ubisoft")
 TEMPLATE_DIR = os.path.join(PREFIXES_DIR, ".template")
@@ -390,6 +391,23 @@ class UbisoftConnector(Store):
                     )
             except Exception as e:
                 logger.warning(f"[Ubisoft] Ownership binary scan failed: {e}")
+
+            auto_manifest = await self._build_auto_visible_manifest(nodes)
+            games = self._apply_visible_manifest_filter(
+                games,
+                installed,
+                auto_manifest,
+                source_label="auto",
+            )
+
+            override_manifest = self._load_visible_manifest()
+            if override_manifest:
+                games = self._apply_visible_manifest_filter(
+                    games,
+                    installed,
+                    override_manifest,
+                    source_label="override",
+                )
 
             # Trigger template prefix creation as background task if needed
             if games and not self._template_exists():
@@ -1025,6 +1043,607 @@ class UbisoftConnector(Store):
             os.replace(tmp_path, ID_MAP_FILE)
         except Exception as e:
             logger.warning(f"[Ubisoft] Failed to save ID map: {e}")
+
+    def _load_visible_manifest(self) -> List[Dict[str, Any]]:
+        """Load a locally-resolved Ubisoft visible-library manifest.
+
+        This file is optional and lives under the Unifideck data directory.
+        When present, it acts as the final allowlist for which Ubisoft titles
+        should appear in the UI on this machine.
+        """
+        if not os.path.isfile(VISIBLE_GAMES_FILE):
+            return []
+
+        try:
+            with open(VISIBLE_GAMES_FILE, "r", encoding="utf-8") as f:
+                payload = json.load(f)
+        except Exception as e:
+            logger.warning(f"[Ubisoft] Failed to load visible manifest: {e}")
+            return []
+
+        raw_games: Any
+        if isinstance(payload, dict):
+            raw_games = payload.get("games", [])
+        else:
+            raw_games = payload
+
+        manifest: List[Dict[str, Any]] = []
+        for raw in raw_games or []:
+            if not isinstance(raw, dict):
+                continue
+
+            title = str(raw.get("title") or raw.get("name") or "").strip()
+            if not title:
+                continue
+
+            space_id = str(raw.get("space_id") or raw.get("spaceId") or "").strip()
+            install_id = str(raw.get("install_id") or "").strip()
+            launch_id = str(raw.get("launch_id") or install_id or "").strip()
+            ubisoftconnect_game_id = str(
+                raw.get("ubisoftconnect_game_id")
+                or raw.get("product_id")
+                or ""
+            ).strip()
+            cover_image = str(
+                raw.get("cover_image")
+                or raw.get("coverUrl")
+                or raw.get("thumb_url")
+                or ""
+            ).strip()
+
+            manifest.append({
+                "title": title,
+                "space_id": space_id,
+                "install_id": install_id,
+                "launch_id": launch_id,
+                "ubisoftconnect_game_id": ubisoftconnect_game_id,
+                "cover_image": cover_image,
+                "ownership_type": str(raw.get("ownership_type") or "owned").strip(),
+                "source": str(raw.get("source") or "visible_manifest").strip(),
+            })
+
+        return manifest
+
+    @staticmethod
+    def _clean_launcher_title(title: str) -> str:
+        """Normalize mojibake-heavy launcher/cache titles into readable text."""
+        return (
+            (title or "")
+            .strip()
+            .strip('"')
+            .strip("'")
+            .replace("Â®", "®")
+            .replace("â¢", "™")
+            .replace("â„¢", "™")
+            .replace("â", "’")
+            .replace("Â", "")
+        )
+
+    @staticmethod
+    def _is_launcher_placeholder_title(title: str) -> bool:
+        """Return True when a launcher/cache title is clearly a placeholder."""
+        cleaned = UbisoftConnector._clean_launcher_title(title)
+        if not cleaned:
+            return True
+        normalized = UbisoftConnector._normalize_for_matching(cleaned)
+        return bool(
+            re.fullmatch(r"(l\d+|[A-Z0-9_]+)", cleaned)
+            or normalized in {"a ubisoft game"}
+        )
+
+    def _should_skip_launcher_title(self, title: str) -> bool:
+        """Reject non-library launcher config entries such as DLC, trials, or packs."""
+        cleaned = self._clean_launcher_title(title)
+        if not cleaned or len(cleaned.strip()) <= 2:
+            return True
+        if self._is_launcher_placeholder_title(cleaned):
+            return True
+        if re.search(r"\[STEAM\]|\[Uplay", cleaned, re.IGNORECASE):
+            return True
+        if re.search(
+            r"\b(test\b|beta|alpha|closed|preorder|pre-order|promotion|"
+            r"internal|dev/qc|pts|test server|demo|trial)\b",
+            cleaned,
+            re.IGNORECASE,
+        ):
+            return True
+        if re.search(r"[\u0400-\u04FF]", cleaned):
+            return True
+        if re.search(
+            r"\b(dlc|season pass|expansion|pack|bonus|soundtrack|art ?book|"
+            r"skins?|outfit|costume|weapon|map|mission|episode|revolver|"
+            r"kukri|cane-sword|hammer|knife|dagger|conspiracy|runaway train|"
+            r"texture|language|starter edition|battle pass|car shipment|"
+            r"full stock|full ownership|master unlock|paint|perk|club|"
+            r"credit pack|currency pack|ownership|ubicollectibles|"
+            r"legion of the dead|calling all units)\b",
+            cleaned,
+            re.IGNORECASE,
+        ):
+            return True
+        return False
+
+    def _find_visible_configurations_path(self) -> Optional[str]:
+        """Locate the Ubisoft launcher configurations blob in the auth/template prefixes."""
+        for prefix_dir in (TEMPLATE_DIR, AUTH_PREFIX_DIR):
+            cfg_path = self._find_configurations(prefix_dir)
+            if cfg_path:
+                return cfg_path
+        return None
+
+    def _extract_launcher_config_entries(
+        self,
+        graphql_names_normalized: Set[str],
+    ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+        """Extract launcher-correlated base-game entries from Ubisoft's config cache."""
+        cfg_path = self._find_visible_configurations_path()
+        if not cfg_path:
+            return [], []
+
+        try:
+            from .ubisoft_parser import parse_configurations
+        except Exception as e:
+            logger.debug(f"[Ubisoft] Config parser unavailable: {e}")
+            return [], []
+
+        parsed_entries: List[Dict[str, Any]] = []
+        parsed_names: Set[str] = set()
+        try:
+            for cfg in parse_configurations(cfg_path):
+                title = self._clean_launcher_title(cfg.name)
+                if self._should_skip_launcher_title(title):
+                    continue
+
+                norm_title = self._normalize_for_matching(title)
+                if norm_title in parsed_names:
+                    continue
+
+                parsed_entries.append({
+                    "title": title,
+                    "space_id": cfg.space_id or "",
+                    "install_id": str(cfg.install_id or ""),
+                    "launch_id": str(cfg.launch_id or cfg.install_id or ""),
+                    "source": "parsed_config",
+                    "ownership_type": "owned",
+                })
+                parsed_names.add(norm_title)
+        except Exception as e:
+            logger.debug(f"[Ubisoft] Parsed configurations load failed: {e}")
+
+        try:
+            with open(cfg_path, "rb") as f:
+                config_text = f.read().decode("latin-1", "ignore")
+        except OSError as e:
+            logger.debug(f"[Ubisoft] Failed to read configurations blob: {e}")
+            return [], parsed_entries
+
+        raw_entries: List[Dict[str, Any]] = []
+        raw_by_norm: Dict[str, Dict[str, Any]] = {}
+        for part in config_text.split("version: 2.0")[1:]:
+            chunk = "version: 2.0" + part[:8000]
+            if "root:" not in chunk:
+                continue
+
+            title_candidates: List[str] = []
+            for key in ("display_name", "game_identifier", "name"):
+                match = re.search(
+                    rf"\b{key}:\s*(?:\"([^\"]+)\"|([^\n]+))",
+                    chunk,
+                )
+                if match:
+                    title_candidates.append(
+                        self._clean_launcher_title(
+                            match.group(1) or match.group(2) or ""
+                        )
+                    )
+
+            localization_match = re.search(
+                r"localizations:\s*\n\s*default:\s*\n\s*l1:\s*"
+                r"(?:\"([^\"]+)\"|([^\n]+))",
+                chunk,
+            )
+            if localization_match:
+                title_candidates.append(
+                    self._clean_launcher_title(
+                        localization_match.group(1)
+                        or localization_match.group(2)
+                        or ""
+                    )
+                )
+
+            title = next(
+                (
+                    candidate for candidate in title_candidates
+                    if candidate and not self._is_launcher_placeholder_title(candidate)
+                ),
+                "",
+            )
+            if self._should_skip_launcher_title(title):
+                continue
+
+            space_match = re.search(
+                r"\bspace_id:\s*([0-9a-f-]{36})",
+                chunk,
+                re.IGNORECASE,
+            )
+            space_id = space_match.group(1) if space_match else ""
+            norm_title = self._normalize_for_matching(title)
+
+            if (
+                not space_id
+                and norm_title not in parsed_names
+                and norm_title not in graphql_names_normalized
+            ):
+                continue
+
+            candidate = {
+                "title": title,
+                "space_id": space_id,
+                "source": "launcher_config",
+                "ownership_type": "owned",
+            }
+            existing = raw_by_norm.get(norm_title)
+            if existing is None or (space_id and not existing.get("space_id")):
+                raw_by_norm[norm_title] = candidate
+
+        raw_entries = list(raw_by_norm.values())
+        return raw_entries, parsed_entries
+
+    async def _fetch_free_to_play_manifest_entries(self) -> List[Dict[str, Any]]:
+        """Fetch Ubisoft's current free-to-play catalog and resolve clean titles."""
+        entries: List[Dict[str, Any]] = []
+
+        session = await self.api._create_session()
+        try:
+            async with session.get(
+                "https://static3.cdn.ubi.com/orbit/uplay_launcher_14_0/free_games/latest.txt",
+                timeout=30,
+            ) as resp:
+                version = (await resp.text()).strip()
+
+            async with session.get(
+                "https://static3.cdn.ubi.com/orbit/uplay_launcher_14_0/"
+                f"free_games/{version}/free_game_configs.json",
+                timeout=30,
+            ) as resp:
+                payload = json.loads(await resp.text())
+        except Exception as e:
+            logger.warning(f"[Ubisoft] Free-to-play feed failed: {e}")
+            await session.close()
+            return []
+
+        for item in payload.get("root", []):
+            if (item.get("type") or "").lower() != "freetoplay":
+                continue
+
+            entries.append({
+                "title": self._clean_launcher_title(item.get("name", "")),
+                "space_id": str(item.get("space_id") or "").strip(),
+                "install_id": str(
+                    item.get("after_activation_product_id")
+                    or item.get("product_id")
+                    or ""
+                ).strip(),
+                "launch_id": str(
+                    item.get("after_activation_product_id")
+                    or item.get("product_id")
+                    or ""
+                ).strip(),
+                "ubisoftconnect_game_id": str(item.get("product_id") or "").strip(),
+                "cover_image": str(item.get("thumb_url") or "").strip(),
+                "source": "free_feed",
+                "ownership_type": "free",
+            })
+
+        if not entries or not await self.api.ensure_valid_token():
+            await session.close()
+            return entries
+
+        headers = self.api._base_headers()
+        headers["Authorization"] = f"Ubi_v1 t={self.api.tokens['ticket']}"
+        session_id = self.api.tokens.get("sessionId", "")
+        if session_id:
+            headers["Ubi-SessionId"] = session_id
+
+        async def fetch_space_metadata(space_id: str) -> Tuple[str, Dict[str, Any]]:
+            url = (
+                "https://public-ubiservices.ubi.com/v1/spaces/"
+                f"{space_id}/global/ubiconnect/games/api"
+            )
+            try:
+                async with session.get(url, headers=headers, timeout=30) as resp:
+                    if resp.status != 200:
+                        return space_id, {}
+                    body = await resp.json(content_type=None)
+                    images = body.get("imageUrls") or {}
+                    return space_id, {
+                        "title": self._clean_launcher_title(
+                            body.get("displayName", "")
+                        ),
+                        "cover_image": (
+                            images.get("lowBoxArt")
+                            or images.get("highBoxArt")
+                            or images.get("lowThumbnail")
+                            or ""
+                        ),
+                    }
+            except Exception:
+                return space_id, {}
+
+        metadata_results = await asyncio.gather(*[
+            fetch_space_metadata(entry["space_id"])
+            for entry in entries
+            if entry.get("space_id")
+        ])
+        await session.close()
+
+        metadata_by_space = {
+            space_id: metadata
+            for space_id, metadata in metadata_results
+            if metadata
+        }
+        for entry in entries:
+            metadata = metadata_by_space.get(entry.get("space_id", ""))
+            if not metadata:
+                continue
+            if metadata.get("title") and not self._is_launcher_placeholder_title(
+                metadata["title"]
+            ):
+                entry["title"] = metadata["title"]
+            if metadata.get("cover_image"):
+                entry["cover_image"] = metadata["cover_image"]
+
+        return entries
+
+    def _merge_visible_manifest_entry(
+        self,
+        manifest: List[Dict[str, Any]],
+        entry: Dict[str, Any],
+    ) -> None:
+        """Merge a visible-library candidate into a manifest entry list."""
+        norm_title = self._normalize_for_matching(entry.get("title", ""))
+        if not norm_title:
+            return
+
+        existing = None
+        space_id = str(entry.get("space_id") or "").strip()
+        if space_id:
+            existing = next(
+                (
+                    item for item in manifest
+                    if str(item.get("space_id") or "").strip() == space_id
+                ),
+                None,
+            )
+        if existing is None:
+            existing = next(
+                (
+                    item for item in manifest
+                    if self._normalize_for_matching(item.get("title", "")) == norm_title
+                ),
+                None,
+            )
+
+        if existing is None:
+            manifest.append(dict(entry))
+            return
+
+        if (
+            self._is_launcher_placeholder_title(existing.get("title", ""))
+            and not self._is_launcher_placeholder_title(entry.get("title", ""))
+        ):
+            existing["title"] = entry["title"]
+
+        for field in (
+            "space_id",
+            "install_id",
+            "launch_id",
+            "ubisoftconnect_game_id",
+            "cover_image",
+        ):
+            value = str(entry.get(field) or "").strip()
+            if value and not existing.get(field):
+                existing[field] = value
+
+        if entry.get("ownership_type") == "owned":
+            existing["ownership_type"] = "owned"
+        elif not existing.get("ownership_type"):
+            existing["ownership_type"] = entry.get("ownership_type")
+
+    async def _build_auto_visible_manifest(
+        self,
+        graphql_nodes: List[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        """Build a generalized launcher-visible Ubisoft manifest for any user."""
+        graphql_entries: List[Dict[str, Any]] = []
+        graphql_names_normalized: Set[str] = set()
+        for node in graphql_nodes or []:
+            title = self._clean_launcher_title(node.get("name", ""))
+            if not title:
+                continue
+            graphql_entries.append({
+                "title": title,
+                "space_id": str(node.get("spaceId") or "").strip(),
+                "cover_image": str(node.get("coverUrl") or "").strip(),
+                "source": "graphql",
+                "ownership_type": "owned",
+            })
+            graphql_names_normalized.add(self._normalize_for_matching(title))
+
+        raw_config_entries, parsed_entries = self._extract_launcher_config_entries(
+            graphql_names_normalized
+        )
+        raw_names = {
+            self._normalize_for_matching(entry["title"])
+            for entry in raw_config_entries
+        }
+        raw_space_ids = {
+            str(entry.get("space_id") or "").strip()
+            for entry in raw_config_entries
+            if entry.get("space_id")
+        }
+
+        corroborated_graphql = [
+            entry for entry in graphql_entries
+            if entry.get("space_id") in raw_space_ids
+            or self._normalize_for_matching(entry["title"]) in raw_names
+        ]
+        free_entries = await self._fetch_free_to_play_manifest_entries()
+
+        manifest: List[Dict[str, Any]] = []
+        for group in (free_entries, corroborated_graphql, raw_config_entries, parsed_entries):
+            for entry in group:
+                self._merge_visible_manifest_entry(manifest, entry)
+
+        logger.info(
+            f"[Ubisoft] Auto visible manifest built {len(manifest)} entries "
+            f"({len(corroborated_graphql)} GraphQL, {len(raw_config_entries)} config, "
+            f"{len(parsed_entries)} parsed, {len(free_entries)} free)"
+        )
+        return manifest
+
+    @staticmethod
+    def _visible_manifest_game_id(entry: Dict[str, Any]) -> str:
+        """Return the runtime game id for a visible-manifest entry."""
+        space_id = str(entry.get("space_id") or "").strip()
+        if space_id:
+            return space_id
+
+        install_id = str(entry.get("install_id") or "").strip()
+        if install_id:
+            return f"ubi-{install_id}"
+
+        digest = hashlib.sha1(
+            str(entry.get("title", "")).encode("utf-8")
+        ).hexdigest()[:12]
+        return f"ubi-visible-{digest}"
+
+    def _merge_visible_manifest_into_id_map(self, entry: Dict[str, Any]) -> bool:
+        """Persist visible-manifest IDs into the shared Ubisoft id map."""
+        cache_key = self._visible_manifest_game_id(entry)
+        current = dict(self._id_map_cache.get(cache_key, {}))
+        updated = dict(current)
+
+        updated["name"] = entry.get("title") or updated.get("name")
+        updated["source"] = "visible_manifest"
+
+        for field in ("install_id", "launch_id", "ubisoftconnect_game_id"):
+            value = str(entry.get(field) or "").strip()
+            if value:
+                updated[field] = value
+
+        if updated != current:
+            self._id_map_cache[cache_key] = updated
+            return True
+        return False
+
+    def _apply_visible_manifest_filter(
+        self,
+        games: List[Game],
+        installed: Dict[str, Any],
+        manifest: Optional[List[Dict[str, Any]]] = None,
+        source_label: str = "manifest",
+    ) -> List[Game]:
+        """Restrict the Ubisoft library to a resolved visible manifest."""
+        manifest = manifest if manifest is not None else self._load_visible_manifest()
+        if not manifest:
+            return games
+
+        allowed_norms = {
+            self._normalize_for_matching(entry["title"])
+            for entry in manifest
+            if entry.get("title")
+        }
+        allowed_ids = {
+            self._visible_manifest_game_id(entry)
+            for entry in manifest
+        }
+        manifest_by_norm = {
+            self._normalize_for_matching(entry["title"]): entry
+            for entry in manifest
+            if entry.get("title")
+        }
+        manifest_by_id = {
+            self._visible_manifest_game_id(entry): entry
+            for entry in manifest
+        }
+
+        id_map_changed = False
+        for entry in manifest:
+            id_map_changed |= self._merge_visible_manifest_into_id_map(entry)
+
+        filtered: List[Game] = []
+        seen_norms: Set[str] = set()
+        seen_ids: Set[str] = set()
+        for game in games:
+            norm_title = self._normalize_for_matching(game.title)
+            if game.id not in allowed_ids and norm_title not in allowed_norms:
+                logger.debug(f"[Ubisoft] Visible {source_label} skip: {game.title}")
+                continue
+
+            entry = manifest_by_id.get(game.id) or manifest_by_norm.get(norm_title)
+            if entry:
+                if entry.get("title"):
+                    game.title = entry["title"]
+                if entry.get("ownership_type"):
+                    game.ownership_type = entry["ownership_type"]
+                if entry.get("cover_image"):
+                    game.cover_image = entry["cover_image"]
+                    if not hasattr(game, "extra") or game.extra is None:
+                        game.extra = {}
+                    game.extra.setdefault("coverUrl", entry["cover_image"])
+
+            filtered.append(game)
+            seen_norms.add(norm_title)
+            seen_ids.add(game.id)
+
+        injected = 0
+        for entry in manifest:
+            game_id = self._visible_manifest_game_id(entry)
+            norm_title = self._normalize_for_matching(entry["title"])
+            if game_id in seen_ids or norm_title in seen_norms:
+                continue
+
+            install_meta = (
+                installed.get(entry.get("space_id", ""))
+                or installed.get(game_id)
+                or {}
+            )
+            cover_image = entry.get("cover_image") or None
+            game = Game(
+                id=game_id,
+                title=entry["title"],
+                store="ubisoft",
+                is_installed=bool(install_meta),
+                cover_image=cover_image,
+                ownership_type=entry.get("ownership_type") or "owned",
+                install_path=install_meta.get("install_path"),
+                executable=install_meta.get("executable"),
+            )
+            if cover_image:
+                game.extra = {
+                    "coverUrl": cover_image,
+                    "backgroundUrl": "",
+                    "bannerUrl": "",
+                }
+
+            filtered.append(game)
+            seen_ids.add(game_id)
+            seen_norms.add(norm_title)
+            injected += 1
+            logger.info(
+                f"[Ubisoft] Visible {source_label} injected: {entry['title']} "
+                f"[id={game_id}]"
+            )
+
+        if id_map_changed:
+            self._save_id_map()
+
+        logger.info(
+            f"[Ubisoft] Visible {source_label} filter kept {len(filtered)} games "
+            f"from {len(games)} base entries (+{injected} injected)"
+        )
+        return filtered
 
     def resolve_install_id(self, space_id: str) -> Optional[str]:
         """Resolve spaceId to installId from cache, preferring ubisoftConnectGameId."""

@@ -509,51 +509,13 @@ class UbisoftAPIClient:
             if session_id:
                 headers["Ubi-SessionId"] = session_id
 
-            session = await self._create_session()
-            try:
-                async with session.post(
-                    GRAPHQL_URL,
-                    headers=headers,
-                    json={
-                        "query": LIBRARY_QUERY,
-                        "variables": {"limit": 100, "offset": 0},
-                    },
-                    timeout=aiohttp.ClientTimeout(total=30),
-                ) as resp:
-                    if resp.status == 401:
-                        logger.warning("[Ubisoft API] Library query: auth expired")
-                        if await self.refresh_token():
-                            return await self._retry_library_query()
-                        return None
-
-                    if resp.status != 200:
-                        logger.error(f"[Ubisoft API] Library query: HTTP {resp.status}")
-                        return []
-
-                    body = await resp.json()
-
-                    if body.get("errors"):
-                        logger.error(
-                            f"[Ubisoft API] Library query GraphQL error: "
-                            f"{body['errors'][0].get('message', '')}"
-                        )
-                        return []
-
-                    games_data = (
-                        body.get("data", {})
-                        .get("viewer", {})
-                        .get("games", {})
-                    )
-                    nodes = games_data.get("nodes", [])
-                    total = games_data.get("totalCount", 0)
-
-                    logger.info(
-                        f"[Ubisoft API] Library: {len(nodes)} games "
-                        f"(totalCount={total})"
-                    )
-                    return nodes
-            finally:
-                await session.close()
+            nodes = await self._fetch_owned_games_pages(headers)
+            if nodes is None:
+                logger.warning("[Ubisoft API] Library query: auth expired")
+                if await self.refresh_token():
+                    return await self._retry_library_query()
+                return None
+            return nodes
 
         except asyncio.TimeoutError:
             logger.error("[Ubisoft API] Library query timed out")
@@ -561,6 +523,93 @@ class UbisoftAPIClient:
         except Exception as e:
             logger.exception(f"[Ubisoft API] Library query error: {e}")
             return []
+
+    async def _fetch_owned_games_pages(
+        self, headers: Dict[str, str]
+    ) -> Optional[List[Dict[str, Any]]]:
+        """Fetch paginated library pages.
+
+        Ubisoft currently rejects `viewer.games(limit)` values above 50, so
+        fetch the library in 50-item pages until `totalCount` is satisfied.
+
+        Returns:
+            List of nodes on success.
+            [] on non-auth API errors.
+            None when the server returned 401/auth expired.
+        """
+        page_size = 50
+        max_pages = 100
+        nodes: List[Dict[str, Any]] = []
+        offset = 0
+        total: Optional[int] = None
+        page_count = 0
+
+        session = await self._create_session()
+        try:
+            while True:
+                page_count += 1
+                if page_count > max_pages:
+                    logger.warning(
+                        "[Ubisoft API] Library pagination aborted after "
+                        f"{max_pages} pages without a terminating response"
+                    )
+                    break
+
+                async with session.post(
+                    GRAPHQL_URL,
+                    headers=headers,
+                    json={
+                        "query": LIBRARY_QUERY,
+                        "variables": {"limit": page_size, "offset": offset},
+                    },
+                    timeout=aiohttp.ClientTimeout(total=30),
+                ) as resp:
+                    if resp.status == 401:
+                        return None
+
+                    if resp.status != 200:
+                        logger.error(
+                            f"[Ubisoft API] Library query: HTTP {resp.status}"
+                        )
+                        return []
+
+                    body = await resp.json()
+
+                if body.get("errors"):
+                    logger.error(
+                        f"[Ubisoft API] Library query GraphQL error: "
+                        f"{body['errors'][0].get('message', '')}"
+                    )
+                    return []
+
+                games_data = (
+                    body.get("data", {})
+                    .get("viewer", {})
+                    .get("games", {})
+                )
+                page_nodes = games_data.get("nodes", [])
+                if total is None:
+                    raw_total = games_data.get("totalCount")
+                    total = raw_total if isinstance(raw_total, int) and raw_total > 0 else None
+
+                nodes.extend(page_nodes)
+
+                if (
+                    not page_nodes
+                    or len(page_nodes) < page_size
+                    or (total is not None and len(nodes) >= total)
+                ):
+                    break
+
+                offset += len(page_nodes)
+
+            logger.info(
+                f"[Ubisoft API] Library: {len(nodes)} games "
+                f"(totalCount={total or len(nodes)})"
+            )
+            return nodes
+        finally:
+            await session.close()
 
     async def _retry_library_query(self) -> Optional[List[Dict[str, Any]]]:
         """Retry library query after token refresh."""
@@ -574,30 +623,7 @@ class UbisoftAPIClient:
             if session_id:
                 headers["Ubi-SessionId"] = session_id
 
-            session = await self._create_session()
-            try:
-                async with session.post(
-                    GRAPHQL_URL,
-                    headers=headers,
-                    json={
-                        "query": LIBRARY_QUERY,
-                        "variables": {"limit": 100, "offset": 0},
-                    },
-                    timeout=aiohttp.ClientTimeout(total=30),
-                ) as resp:
-                    if resp.status != 200:
-                        return None
-                    body = await resp.json()
-                    if body.get("errors"):
-                        return None
-                    return (
-                        body.get("data", {})
-                        .get("viewer", {})
-                        .get("games", {})
-                        .get("nodes", [])
-                    )
-            finally:
-                await session.close()
+            return await self._fetch_owned_games_pages(headers)
         except Exception as e:
             logger.error(f"[Ubisoft API] Retry library query failed: {e}")
             return None
