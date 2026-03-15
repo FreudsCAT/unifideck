@@ -605,25 +605,6 @@ class MicrosoftConnector(Store):
             })
 
         logger.info(f"[MS] Title Hub: {len(items)} PC games after device/type filter")
-
-        # Diagnostic: log ownership indicators for first 10 titles
-        for idx, t in enumerate(titles[:10]):
-            big_id = ""
-            actions = []
-            for av in t.get("detail", {}).get("availabilities", []):
-                big_id = av.get("ProductId", "")
-                actions = av.get("Actions", [])
-                if big_id:
-                    break
-            gp = t.get("gamePass", {})
-            logger.info(
-                f"[MS] DIAG title[{idx}]: "
-                f"name={t.get('name', '?')!r} "
-                f"bigId={big_id!r} "
-                f"gamePass={gp!r} "
-                f"actions={actions!r} "
-                f"titleHistory={t.get('titleHistory', {})!r}"
-            )
         return items
 
     # ── Product detail + PC filter ───────────────────────────────────────
@@ -683,14 +664,18 @@ class MicrosoftConnector(Store):
                 logger.warning(f"[MS] Product scan failed for batch {i // batch_size}: {e}")
                 if _body:
                     logger.warning(f"[MS] Product scan error body: {_body}")
-                if i == 0:
-                    logger.info(f"[MS] DIAG scan URL: {url[:200]}")
 
         return result
 
 
     def _classify_product(self, product: dict) -> Tuple[bool, dict]:
-        """Determine whether a product is Win32 (installable) or UWP."""
+        """Determine whether a product is downloadable via FE3.
+
+        A product is considered installable if any SKU has a WuBundleId in its
+        FulfillmentData.  In 2024+, Microsoft packages all games (including
+        Win32) in MSIX containers with a PackageFamilyName, so the old check
+        'WuBundleId present AND PackageFamilyName absent' is obsolete.
+        """
         meta: dict = {
             "is_win32":         False,
             "wu_bundle_id":     "",
@@ -706,37 +691,50 @@ class MicrosoftConnector(Store):
                 break
 
         pid = product.get("ProductId", "?")
-        skus = product.get("DisplaySkuAvailabilities", [])
-        logged_diag = False
-        for idx, sku_avail in enumerate(skus):
+
+        # Diagnostic: log Packages for Win32/UWP identification
+        top_props = product.get("Properties", {})
+        top_packages = top_props.get("Packages", [])
+        logger.info(
+            f"[MS] DIAG {pid}: "
+            f"top.PackageFamilyName={top_props.get('PackageFamilyName', '<none>')!r} "
+            f"top.Packages count={len(top_packages)}"
+        )
+        if top_packages:
+            for pkg_idx, pkg in enumerate(top_packages[:3]):
+                logger.info(
+                    f"[MS] DIAG {pid} Package[{pkg_idx}]: "
+                    f"PackageFormat={pkg.get('PackageFormat', '<none>')!r} "
+                    f"PlatformDependencies={pkg.get('PlatformDependencies', [])!r} "
+                    f"Architectures={pkg.get('Architectures', [])!r} "
+                    f"PlatformName={pkg.get('PlatformName', '<none>')!r} "
+                    f"PackageRank={pkg.get('PackageRank', '<none>')!r} "
+                    f"keys={list(pkg.keys())[:12]}"
+                )
+
+        for sku_avail in product.get("DisplaySkuAvailabilities", []):
             sku   = sku_avail.get("Sku", {})
             props = sku.get("Properties", {})
             fd    = props.get("FulfillmentData", {}) or {}
 
-            # Diagnostic: log first SKU structure for first product
-            if not logged_diag:
-                logged_diag = True
-                fd_type = type(fd).__name__
-                logger.info(
-                    f"[MS] DIAG classify {pid} SKU[{idx}]: "
-                    f"FulfillmentData type={fd_type}, "
-                    f"keys={list(fd.keys())[:10] if isinstance(fd, dict) else 'N/A'}, "
-                    f"WuBundleId={fd.get('WuBundleId', '<missing>')!r}, "
-                    f"PackageFamilyName={fd.get('PackageFamilyName', '<missing>')!r}, "
-                    f"props.keys={list(props.keys())[:10]}"
-                )
-                # If FulfillmentData is a string (JSON encoded), log it
-                if isinstance(fd, str):
-                    logger.info(f"[MS] DIAG classify {pid} FD is string: {fd[:300]}")
+            # Diagnostic: log fields that may distinguish Win32 from UWP
+            pkg_features = fd.get("PackageFeatures", None)
+            content = fd.get("Content", None)
+            logger.info(
+                f"[MS] DIAG {pid} SKU: "
+                f"PackageFeatures={pkg_features!r} "
+                f"Content keys={list(content.keys())[:8] if isinstance(content, dict) else content!r} "
+                f"FulfillmentType={props.get('FulfillmentType', '<none>')!r} "
+                f"PFN={fd.get('PackageFamilyName', '')!r}"
+            )
 
             if props.get("IsXboxPlayAnywhere"):
                 meta["is_play_anywhere"] = True
 
             wu_bundle  = fd.get("WuBundleId", "")
             wu_cat     = fd.get("WuCategoryId", "")
-            pkg_family = fd.get("PackageFamilyName", "")
 
-            if wu_bundle and not pkg_family:
+            if wu_bundle:
                 meta["is_win32"]       = True
                 meta["wu_bundle_id"]   = wu_bundle
                 meta["wu_category_id"] = wu_cat
