@@ -606,24 +606,24 @@ class MicrosoftConnector(Store):
 
         logger.info(f"[MS] Title Hub: {len(items)} PC games after device/type filter")
 
-        # Diagnostic: search for BigId pattern in raw Title Hub response
-        if titles:
-            t0 = titles[0]
-            logger.info(f"[MS] DIAG title[0] top keys: {list(t0.keys())}")
-            detail = t0.get("detail", {})
-            if detail:
-                avail = detail.get("availabilities", [])
-                if avail:
-                    logger.info(f"[MS] DIAG title[0] availabilities[0]: {str(avail[0])[:500]}")
-                else:
-                    logger.info(f"[MS] DIAG title[0] detail keys: {list(detail.keys())}")
-            import re as _re
-            bigids = _re.findall(r"\b9[A-Z0-9]{10,11}\b", str(t0))
-            if bigids:
-                logger.info(f"[MS] DIAG title[0] BigId candidates: {bigids[:5]}")
-            else:
-                logger.info("[MS] DIAG title[0] no BigId pattern in raw data")
-
+        # Diagnostic: log ownership indicators for first 10 titles
+        for idx, t in enumerate(titles[:10]):
+            big_id = ""
+            actions = []
+            for av in t.get("detail", {}).get("availabilities", []):
+                big_id = av.get("ProductId", "")
+                actions = av.get("Actions", [])
+                if big_id:
+                    break
+            gp = t.get("gamePass", {})
+            logger.info(
+                f"[MS] DIAG title[{idx}]: "
+                f"name={t.get('name', '?')!r} "
+                f"bigId={big_id!r} "
+                f"gamePass={gp!r} "
+                f"actions={actions!r} "
+                f"titleHistory={t.get('titleHistory', {})!r}"
+            )
         return items
 
     # ── Product detail + PC filter ───────────────────────────────────────
@@ -705,10 +705,29 @@ class MicrosoftConnector(Store):
                 meta["title"] = loc_props[0].get("SkuTitle", "")
                 break
 
-        for sku_avail in product.get("DisplaySkuAvailabilities", []):
+        pid = product.get("ProductId", "?")
+        skus = product.get("DisplaySkuAvailabilities", [])
+        logged_diag = False
+        for idx, sku_avail in enumerate(skus):
             sku   = sku_avail.get("Sku", {})
             props = sku.get("Properties", {})
             fd    = props.get("FulfillmentData", {}) or {}
+
+            # Diagnostic: log first SKU structure for first product
+            if not logged_diag:
+                logged_diag = True
+                fd_type = type(fd).__name__
+                logger.info(
+                    f"[MS] DIAG classify {pid} SKU[{idx}]: "
+                    f"FulfillmentData type={fd_type}, "
+                    f"keys={list(fd.keys())[:10] if isinstance(fd, dict) else 'N/A'}, "
+                    f"WuBundleId={fd.get('WuBundleId', '<missing>')!r}, "
+                    f"PackageFamilyName={fd.get('PackageFamilyName', '<missing>')!r}, "
+                    f"props.keys={list(props.keys())[:10]}"
+                )
+                # If FulfillmentData is a string (JSON encoded), log it
+                if isinstance(fd, str):
+                    logger.info(f"[MS] DIAG classify {pid} FD is string: {fd[:300]}")
 
             if props.get("IsXboxPlayAnywhere"):
                 meta["is_play_anywhere"] = True
