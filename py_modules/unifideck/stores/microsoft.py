@@ -98,7 +98,6 @@ class MicrosoftConnector(Store):
 
         self._load_tokens()
         self._game_metadata: Dict[str, dict] = {}
-        self._pfn_map: Dict[str, str] = {}  # modernTitleId → PFN
         self._settings_cache: Optional[Dict[str, Any]] = None
         logger.info("[MS] MicrosoftConnector initialised")
 
@@ -384,12 +383,6 @@ class MicrosoftConnector(Store):
             if not purchased:
                 return []
 
-            # Cache PFN → modernTitleId mapping for install_game lookups
-            self._pfn_map.update({
-                item["productId"]: item.get("pfn", "")
-                for item in purchased if item.get("productId") and item.get("pfn")
-            })
-
             game_meta = await asyncio.get_event_loop().run_in_executor(
                 None, lambda: self._scan_pc_games(purchased)
             )
@@ -589,11 +582,22 @@ class MicrosoftConnector(Store):
                 continue
             if t.get("type", "").lower() != "game":
                 continue
-            pid = t.get("modernTitleId") or t.get("titleId") or ""
-            if not pid:
+            # Extract the MS Store BigId from detail.availabilities.
+            # The modernTitleId is a numeric Xbox ID that the catalog
+            # API does not accept — we need the alphanumeric ProductId
+            # (e.g. "9NBLGGH3ZB9T") from the availability data.
+            title_id = t.get("modernTitleId") or t.get("titleId") or ""
+            big_id = ""
+            for avail in t.get("detail", {}).get("availabilities", []):
+                big_id = avail.get("ProductId", "")
+                if big_id:
+                    break
+            if not big_id:
+                logger.debug(f"[MS] Title Hub: no BigId for {t.get('name', '?')} (titleId={title_id}) — skipping")
                 continue
             items.append({
-                "productId":       str(pid),
+                "productId":       big_id,
+                "titleId":         str(title_id),
                 "productTitle":    t.get("name", ""),
                 "pfn":             t.get("pfn", ""),
                 "productKind":     "Game",
@@ -627,44 +631,34 @@ class MicrosoftConnector(Store):
     def _scan_pc_games(self, items: List[Dict]) -> Dict[str, dict]:
         """Batch-scan products via displaycatalog and classify Win32 vs UWP.
 
-        Queries the catalog by Package Family Name (pfns= parameter) since
-        Title Hub returns numeric modernTitleId values that don't match the
-        BigId format expected by the bigIds= parameter.
+        Queries the catalog by BigId (bigIds= parameter) extracted from the
+        Title Hub detail.availabilities data.
 
         Args:
             items: List of dicts from _query_titlehub, each with
-                   'productId' (modernTitleId) and 'pfn' (Package Family Name).
+                   'productId' (BigId from catalog) and 'titleId' (Xbox numeric ID).
 
         Returns:
-            Dict mapping productId (modernTitleId) → classification metadata.
+            Dict mapping productId (BigId) → classification metadata.
         """
         if not items:
             return {}
 
-        # Build PFN → modernTitleId mapping for reverse-lookup after catalog query
-        pfn_to_id: Dict[str, str] = {}
-        pfns: List[str] = []
-        for item in items:
-            pfn = item.get("pfn", "")
-            pid = item.get("productId", "")
-            if pfn and pid:
-                pfn_to_id[pfn] = pid
-                pfns.append(pfn)
-
-        if not pfns:
-            logger.warning("[MS] No PFN available for any game — cannot query product catalog")
+        big_ids = [item["productId"] for item in items if item.get("productId")]
+        if not big_ids:
+            logger.warning("[MS] No BigId available for any game — cannot query product catalog")
             return {}
 
-        logger.info(f"[MS] Scanning {len(pfns)} product(s) by PFN for Win32/UWP classification")
+        logger.info(f"[MS] Scanning {len(big_ids)} product(s) by BigId for Win32/UWP classification")
         result: Dict[str, dict] = {}
         batch_size = 20
 
-        for i in range(0, len(pfns), batch_size):
-            batch     = pfns[i: i + batch_size]
-            pfn_param = ",".join(batch)
+        for i in range(0, len(big_ids), batch_size):
+            batch = big_ids[i: i + batch_size]
+            ids_param = ",".join(batch)
             url = (
                 f"{self._get_product_url()}"
-                f"?pfns={pfn_param}"
+                f"?bigIds={ids_param}"
                 f"&market={self._get_market()}"
                 f"&languages={self._get_locale()}"
             )
@@ -675,19 +669,11 @@ class MicrosoftConnector(Store):
                 logger.info(f"[MS] Product scan batch {i // batch_size}: {len(products)} products returned for {len(batch)} queried")
 
                 for product in products:
+                    pid = product.get("ProductId", "")
+                    if not pid:
+                        continue
                     _is_win32, meta = self._classify_product(product)
-
-                    # Map the product back to the modernTitleId via PFN
-                    product_pfn = self._extract_pfn(product)
-                    title_id = pfn_to_id.get(product_pfn)
-                    if title_id:
-                        result[title_id] = meta
-                    else:
-                        # Fallback: store by BigId (ProductId from catalog)
-                        big_id = product.get("ProductId", "")
-                        if big_id:
-                            logger.debug(f"[MS] Product {big_id} PFN {product_pfn!r} not in mapping — storing by BigId")
-                            result[big_id] = meta
+                    result[pid] = meta
 
             except Exception as e:
                 _body = ""
@@ -702,25 +688,6 @@ class MicrosoftConnector(Store):
 
         return result
 
-    def _extract_pfn(self, product: dict) -> str:
-        """Extract the Package Family Name from a displaycatalog Product.
-
-        Checks Properties.PackageFamilyName first, then walks SKUs'
-        FulfillmentData as fallback.
-        """
-        # Top-level product properties
-        pfn = product.get("Properties", {}).get("PackageFamilyName", "")
-        if pfn:
-            return pfn
-
-        # Fallback: walk SKU FulfillmentData
-        for sku_avail in product.get("DisplaySkuAvailabilities", []):
-            fd = sku_avail.get("Sku", {}).get("Properties", {}).get("FulfillmentData", {}) or {}
-            pfn = fd.get("PackageFamilyName", "")
-            if pfn:
-                return pfn
-
-        return ""
 
     def _classify_product(self, product: dict) -> Tuple[bool, dict]:
         """Determine whether a product is Win32 (installable) or UWP."""
@@ -761,18 +728,11 @@ class MicrosoftConnector(Store):
     def _fetch_single_product_meta(self, game_id: str) -> Optional[dict]:
         """Fetch and classify a single product from the catalog API.
 
-        Uses the PFN from _pfn_map if available, falls back to bigIds= query.
         Returns the metadata dict if the product is Win32, else None.
         """
-        pfn = self._pfn_map.get(game_id, "")
-        if pfn:
-            logger.debug(f"[MS] Fetching product metadata for {game_id} via PFN {pfn}")
-            query_param = f"pfns={pfn}"
-        else:
-            logger.debug(f"[MS] Fetching product metadata for {game_id} via bigIds (no PFN cached)")
-            query_param = f"bigIds={game_id}"
+        logger.debug(f"[MS] Fetching product metadata for {game_id}")
         try:
-            url = f"{self._get_product_url()}?{query_param}&market={self._get_market()}&languages={self._get_locale()}"
+            url = f"{self._get_product_url()}?bigIds={game_id}&market={self._get_market()}&languages={self._get_locale()}"
             data = http_get(url, {"Accept": "application/json", "User-Agent": self._get_catalog_user_agent(), "MS-CV": "unifideck.3"})
             for product in data.get("Products", []):
                 is_win32, meta = self._classify_product(product)
