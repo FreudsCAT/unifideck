@@ -559,6 +559,25 @@ class MicrosoftConnector(Store):
         titles = data.get("titles", [])
         logger.info(f"[MS] Title Hub raw: {len(titles)} titles")
 
+        # Diagnostic: log the first 3 titles to identify available ID fields
+        for idx, t in enumerate(titles[:3]):
+            logger.info(
+                f"[MS] Title Hub sample [{idx}]: "
+                f"titleId={t.get('titleId')!r} "
+                f"modernTitleId={t.get('modernTitleId')!r} "
+                f"pfn={t.get('pfn')!r} "
+                f"productId={t.get('productId')!r} "
+                f"name={t.get('name')!r} "
+                f"type={t.get('type')!r} "
+                f"devices={t.get('devices')!r}"
+            )
+            # Log detail sub-object if present (from /decoration/detail)
+            detail = t.get("detail", {})
+            if detail:
+                logger.info(
+                    f"[MS] Title Hub sample [{idx}] detail keys: {list(detail.keys())[:15]}"
+                )
+
         items: List[Dict] = []
         for t in titles:
             devices = [d.lower() for d in t.get("devices", [])]
@@ -577,6 +596,9 @@ class MicrosoftConnector(Store):
             })
 
         logger.info(f"[MS] Title Hub: {len(items)} PC games after device/type filter")
+        if items:
+            sample_ids = [it["productId"] for it in items[:5]]
+            logger.info(f"[MS] Title Hub sample IDs being sent to product scan: {sample_ids}")
         return items
 
     # ── Product detail + PC filter ───────────────────────────────────────
@@ -595,10 +617,20 @@ class MicrosoftConnector(Store):
             big_ids = ",".join(batch)
             url     = f"{self._get_product_url()}?bigIds={big_ids}&market={self._get_market()}&languages={self._get_locale()}"
 
+            # Diagnostic: log the IDs being sent and the response shape
+            if i == 0:
+                logger.info(f"[MS] Product scan batch 0 — querying IDs: {batch[:5]}{'...' if len(batch) > 5 else ''}")
+
             try:
                 data     = http_get(url, {"Accept": "application/json", "User-Agent": self._get_catalog_user_agent(), "MS-CV": "unifideck.2"})
                 products = data.get("Products", [])
                 logger.debug(f"[MS] Product scan batch {i // batch_size}: {len(products)} products returned for {len(batch)} queried")
+
+                # Diagnostic: log response structure for first batch
+                if i == 0:
+                    logger.info(f"[MS] Product scan response keys: {list(data.keys())[:10]}")
+                    if not products:
+                        logger.warning(f"[MS] Product scan batch 0 returned 0 products. Response (first 500 chars): {str(data)[:500]}")
 
                 for product in products:
                     pid = product.get("ProductId", "")
