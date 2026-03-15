@@ -347,8 +347,13 @@ class MicrosoftConnector(Store):
             return []
 
         try:
-            await self._ensure_fresh_ms_token()
+            # ── 1. Refresh MS access token if stale ──────────────────────
+            token_ok = await self._ensure_fresh_ms_token()
+            if not token_ok:
+                logger.error("[MS] Session expired — re-authenticate via Unifideck → Microsoft.")
+                return []
 
+            # ── 2. XBL / XSTS token chain ────────────────────────────────
             ok = await asyncio.get_event_loop().run_in_executor(None, self._build_xbl_chain)
             if not ok:
                 logger.warning("[MS] Could not build XBL/XSTS token chain")
@@ -466,16 +471,22 @@ class MicrosoftConnector(Store):
                     f,
                 )
         except Exception as e:
-            logger.warning(f"[MS] Could not save tokens: {e} on dksk")
+            logger.warning(f"[MS] Could not save tokens: {e}")
 
-    async def _ensure_fresh_ms_token(self) -> None:
-        """Proactively refresh the MS access token if it is near expiry."""
+    async def _ensure_fresh_ms_token(self) -> bool:
+        """Proactively refresh the MS access token if it is near expiry.
+
+        Returns True if the token is usable (fresh or successfully refreshed).
+        Returns False and auto-logs-out if the session is unrecoverable
+        (missing refresh_token or Microsoft rejected it).
+        """
         age = time.time() - self._token_saved_at
         if age < self._get_token_refresh_threshold():
-            return
+            return True
         if not self._ms_refresh_token:
-            logger.warning("[MS] No refresh token available")
-            return
+            logger.error("[MS] No refresh token — session expired. Logging out.")
+            await self.logout()
+            return False
         try:
             logger.info(f"[MS] Refreshing MS access token (age={age:.0f}s)")
             token_data = await asyncio.get_event_loop().run_in_executor(
@@ -498,10 +509,16 @@ class MicrosoftConnector(Store):
                 self._token_saved_at   = time.time()
                 self._save_tokens()
                 logger.info("[MS] ✓ Access token refreshed")
-            else:
-                logger.warning(f"[MS] Token refresh failed: {token_data}")
+                return True
+
+            error_code = token_data.get("error", "unknown")
+            logger.error(f"[MS] Token refresh rejected ({error_code}). Logging out.")
+            await self.logout()
+            return False
+
         except Exception as e:
             logger.error(f"[MS] Token refresh error: {e}", exc_info=True)
+            return False
 
     # ── XBL token chain ──────────────────────────────────────────────────
 
@@ -765,7 +782,11 @@ class MicrosoftConnector(Store):
             return {"success": False, "error": "Invalid game identifier"}
 
         try:
-            await self._ensure_fresh_ms_token()
+            token_ok = await self._ensure_fresh_ms_token()
+            if not token_ok:
+                logger.error("[MS] Session expired — logging out automatically")
+                await self.logout()
+                return {"success": False, "error": "Session expired — please re-authenticate"}
             ok = await asyncio.get_event_loop().run_in_executor(None, self._build_xbl_chain)
             if not ok:
                 return {"success": False, "error": "Failed to build Xbox authentication chain"}
