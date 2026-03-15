@@ -601,6 +601,25 @@ class MicrosoftConnector(Store):
             })
 
         logger.info(f"[MS] Title Hub: {len(items)} PC games after device/type filter")
+
+        # Diagnostic: search for BigId pattern in raw Title Hub response
+        if titles:
+            t0 = titles[0]
+            logger.info(f"[MS] DIAG title[0] top keys: {list(t0.keys())}")
+            detail = t0.get("detail", {})
+            if detail:
+                avail = detail.get("availabilities", [])
+                if avail:
+                    logger.info(f"[MS] DIAG title[0] availabilities[0]: {str(avail[0])[:500]}")
+                else:
+                    logger.info(f"[MS] DIAG title[0] detail keys: {list(detail.keys())}")
+            import re as _re
+            bigids = _re.findall(r"\b9[A-Z0-9]{10,11}\b", str(t0))
+            if bigids:
+                logger.info(f"[MS] DIAG title[0] BigId candidates: {bigids[:5]}")
+            else:
+                logger.info("[MS] DIAG title[0] no BigId pattern in raw data")
+
         return items
 
     # ── Product detail + PC filter ───────────────────────────────────────
@@ -671,7 +690,15 @@ class MicrosoftConnector(Store):
                             result[big_id] = meta
 
             except Exception as e:
+                _body = ""
+                if hasattr(e, "read"):
+                    try: _body = e.read().decode("utf-8", errors="replace")[:500]
+                    except Exception: pass
                 logger.warning(f"[MS] Product scan failed for batch {i // batch_size}: {e}")
+                if _body:
+                    logger.warning(f"[MS] Product scan error body: {_body}")
+                if i == 0:
+                    logger.info(f"[MS] DIAG scan URL: {url[:200]}")
 
         return result
 
