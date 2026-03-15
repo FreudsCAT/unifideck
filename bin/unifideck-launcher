@@ -1907,6 +1907,24 @@ except Exception as e:
             # upc.exe is the background service that exits immediately,
             # but UbisoftConnect.exe shows the full UI for interactive login.
             log "[Ubisoft] Opening launcher for native auth capture"
+
+            # Clear any pre-injected restore_session from settings.yml so
+            # UbisoftConnect is forced to show the login UI instead of
+            # silently authenticating and exiting to system tray (which
+            # doesn't exist under Gamescope, causing the window to close).
+            for _settings_yml in "$GAME_PREFIX"/drive_c/users/*/AppData/Roaming/Ubisoft/"Ubisoft Connect"/settings.yml \
+                                 "$GAME_PREFIX"/pfx/drive_c/users/*/AppData/Roaming/Ubisoft/"Ubisoft Connect"/settings.yml; do
+                if [ -f "$_settings_yml" ]; then
+                    log "[Ubisoft] Clearing restore_session from $(basename "$(dirname "$_settings_yml")")/settings.yml"
+                    rm -f "$_settings_yml"
+                fi
+            done
+
+            # Use wined3d instead of DXVK for auth — UplayWebCore.exe (CEF
+            # renderer) can fail to initialize its swapchain under DXVK,
+            # resulting in a black window that immediately closes.
+            export PROTON_USE_WINED3D=1
+            log "[Ubisoft] Using wined3d for auth (CEF compatibility)"
         else
             LAUNCH_TARGET_ARG="uplay://launch/$LAUNCH_ID/0"
             log "[Ubisoft] Launching game for launch_id=$LAUNCH_ID"
