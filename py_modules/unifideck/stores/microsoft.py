@@ -1036,55 +1036,71 @@ class MicrosoftConnector(Store):
     # ── CDP auto-auth monitor ────────────────────────────────────────────
 
     async def _close_auth_browser(self) -> None:
-        """Close any open Microsoft OAuth pages in Steam's CEF browser.
+        """Close the Microsoft OAuth popup window in Steam's CEF browser.
 
-        Called automatically after successful authentication. Scans all
-        open CEF pages and closes those matching Microsoft login domains.
+        /json/close detaches the CDP tab but does NOT close the visible
+        window.  We use Runtime.evaluate('window.close()') via WebSocket
+        to actually dismiss the popup.
         """
         import urllib.request as _req
 
         MS_DOMAINS = [
-            "login.live.com",
-            "live.com",
-            "login.microsoftonline.com",
-            "microsoftonline.com",
-            "account.microsoft.com",
-            "oauth20_desktop.srf",
+            "login.live.com", "live.com",
+            "login.microsoftonline.com", "microsoftonline.com",
+            "account.microsoft.com", "oauth20_desktop.srf",
         ]
-        CEF_URL = "http://127.0.0.1:8080/json"
-        logger.info(f"[MS-close] Fetching CEF pages from {CEF_URL}")
         try:
-            with _req.urlopen(CEF_URL, timeout=5) as r:
-                raw = r.read().decode()
-                pages = json.loads(raw)
+            with _req.urlopen("http://127.0.0.1:8080/json", timeout=5) as r:
+                pages = json.loads(r.read().decode())
         except Exception as e:
             logger.info(f"[MS-close] Could not reach CEF: {e}")
             return
 
         logger.info(f"[MS-close] Found {len(pages)} CEF page(s)")
-        for p in pages:
-            logger.info(f"[MS-close]   → {p.get('url', '?')[:100]}")
-
         closed = 0
+
         for page in pages:
-            url     = page.get("url", "")
-            page_id = page.get("id", "")
-            if not page_id:
-                continue
+            url    = page.get("url", "")
+            ws_url = page.get("webSocketDebuggerUrl", "")
+            logger.info(f"[MS-close]   {url[:100]}")
+
             if not any(d in url for d in MS_DOMAINS):
                 continue
-            logger.info(f"[MS-close] Closing: {url[:80]}")
-            try:
-                with _req.urlopen(
-                    f"http://127.0.0.1:8080/json/close/{page_id}", timeout=2
-                ) as r:
-                    r.read()
-                closed += 1
-                logger.info(f"[MS-close] ✓ Closed page: {url[:60]}")
-            except Exception as e:
-                logger.info(f"[MS-close] /json/close failed for {page_id}: {e}")
 
-        logger.info(f"[MS-close] Closed {closed} page(s)")
+            logger.info(f"[MS-close] Closing via window.close(): {url[:80]}")
+            if ws_url:
+                closed += await self._ws_window_close(ws_url)
+            else:
+                logger.info("[MS-close] No webSocketDebuggerUrl for page")
+
+        # Also close popup containers that held the auth page
+        for page in pages:
+            url    = page.get("url", "")
+            ws_url = page.get("webSocketDebuggerUrl", "")
+            if "browserviewpopup=1" in url and ws_url:
+                logger.info(f"[MS-close] Closing popup container: {url[:80]}")
+                closed += await self._ws_window_close(ws_url)
+
+        logger.info(f"[MS-close] Closed {closed} page(s) total")
+
+    async def _ws_window_close(self, ws_url: str) -> int:
+        """Close a CEF page by executing window.close() via WebSocket CDP."""
+        try:
+            import websockets
+            async with websockets.connect(
+                ws_url, ping_interval=None, open_timeout=5
+            ) as ws:
+                await ws.send(json.dumps({
+                    "id": 1,
+                    "method": "Runtime.evaluate",
+                    "params": {"expression": "window.close()"},
+                }))
+                await asyncio.wait_for(ws.recv(), timeout=3)
+                logger.info("[MS-close] window.close() sent OK")
+                return 1
+        except Exception as e:
+            logger.info(f"[MS-close] window.close() failed: {e}")
+            return 0
 
     async def _monitor_and_complete_auth(self) -> None:
         """Background task: intercept the OAuth redirect via CDP Network events."""
