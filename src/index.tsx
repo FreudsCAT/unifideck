@@ -777,12 +777,11 @@ const Content: FC = () => {
                       console.log(`[Unifideck] ⚠ Sync cancelled by user`);
                     }
 
-                    // Show restart notification when sync completes (if library has games)
+                    // Show restart notification only when NEW games were added to shortcuts.vdf
                     if (result.status === "complete") {
-                      const totalGames = result.synced_games || 0;
+                      const addedGames = Number(result.current_game?.values?.added) || 0;
 
-                      // Show modal if there are any games in the library
-                      if (totalGames > 0) {
+                      if (addedGames > 0) {
                         showModal(<SteamRestartModal closeModal={() => {}} />);
                       }
                     } else if (result.status === "cancelled") {
@@ -972,13 +971,11 @@ const Content: FC = () => {
               console.log(`[Unifideck] ⚠ Sync cancelled by user`);
             }
 
-            // Show restart notification when sync completes (if library has games)
+            // Show restart notification only when NEW games were added to shortcuts.vdf
             if (result.status === "complete") {
-              const totalGames = result.synced_games || 0;
+              const addedGames = Number(result.current_game?.values?.added) || 0;
 
-              // Show modal if there are any games in the library
-              // (user explicitly triggered sync, so remind them to restart)
-              if (totalGames > 0) {
+              if (addedGames > 0) {
                 showModal(<SteamRestartModal closeModal={() => {}} />);
               }
             } else if (result.status === "cancelled") {
@@ -1239,12 +1236,17 @@ const Content: FC = () => {
               // Close the Microsoft browser via CDP on the backend.
               // window.open() returns null in Decky's CEF context so
               // popup.close() is not available — backend uses /json/close.
+              // Small delay lets the page settle at its final URL after redirect.
               if (store === "microsoft") {
-                call<[], { success: boolean; closed: number }>(
-                  "close_microsoft_browser",
-                ).catch((e) =>
-                  console.error("[Unifideck] close_microsoft_browser error:", e),
-                );
+                setTimeout(() => {
+                  call<[], { success: boolean; closed: number }>(
+                    "close_microsoft_browser",
+                  ).then((r) => {
+                    console.log(`[Unifideck] close_microsoft_browser: closed ${r?.closed || 0} page(s)`);
+                  }).catch((e) =>
+                    console.error("[Unifideck] close_microsoft_browser error:", e),
+                  );
+                }, 1500);
               }
               toaster.toast({
                 title: t("toasts.authConnected", { store: storeName }),

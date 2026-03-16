@@ -5698,12 +5698,27 @@ class Plugin:
             return {'success': False, 'error': str(e)}
 
     async def close_microsoft_browser(self) -> Dict[str, Any]:
-        """Close any open Microsoft OAuth pages in Steam's CEF browser via CDP."""
+        """Close any open Microsoft OAuth pages in Steam's CEF browser via CDP.
+
+        After OAuth login, the browser may be at various Microsoft domains
+        (login.live.com, microsoftonline.com, oauth20_desktop.srf redirect,
+        etc.).  We match broadly on several known domains and also catch
+        the redirect page.
+        """
         import json
         import urllib.request
         import asyncio
 
-        MS_DOMAINS = ["login.live.com", "login.microsoftonline.com", "account.microsoft.com"]
+        # Broad domain list: covers login pages, OAuth redirects, and account pages
+        MS_DOMAINS = [
+            "login.live.com",
+            "live.com",
+            "login.microsoftonline.com",
+            "microsoftonline.com",
+            "account.microsoft.com",
+            "microsoft.com/consumers",
+            "oauth20_desktop.srf",
+        ]
         CEF_URL = "http://127.0.0.1:8080/json"
         closed = 0
 
@@ -5713,6 +5728,11 @@ class Plugin:
         except Exception as e:
             logger.debug(f"[MS-close] Could not reach CEF: {e}")
             return {'success': True, 'closed': 0}
+
+        # Log all open pages for diagnostics
+        logger.info(f"[MS-close] {len(pages)} CEF page(s) open")
+        for p in pages:
+            logger.debug(f"[MS-close]   page: {p.get('url', '?')[:80]}")
 
         for page in pages:
             url     = page.get("url", "")
@@ -5732,12 +5752,12 @@ class Plugin:
                     ) as r:
                         r.read()
                     closed += 1
-                    logger.info(f"[MS-close] Closed via /json/close: {url[:60]}")
+                    logger.info(f"[MS-close] ✓ Closed via /json/close: {url[:60]}")
                     continue
                 except Exception as e:
                     logger.debug(f"[MS-close] /json/close failed: {e}")
 
-            # Fallback: Target.closeTarget
+            # Fallback: Target.closeTarget via WebSocket
             if ws_url:
                 try:
                     import websockets
@@ -5748,7 +5768,7 @@ class Plugin:
                         }))
                         await asyncio.wait_for(ws.recv(), timeout=3)
                     closed += 1
-                    logger.info(f"[MS-close] Closed via Target.closeTarget: {url[:60]}")
+                    logger.info(f"[MS-close] ✓ Closed via Target.closeTarget: {url[:60]}")
                 except Exception as e:
                     logger.debug(f"[MS-close] Target.closeTarget failed: {e}")
 

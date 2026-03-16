@@ -121,7 +121,21 @@ def get_fe3_download_urls(
     urls = [u.strip() for u in raw_urls if u.strip().startswith("http")]
     if not urls:
         logger.warning(f"[MS] FE3 response contained no URLs for {wu_bundle_id}")
+        # Log SOAP faults or error messages
+        faults = re.findall(r"<(?:\w+:)?Fault[^>]*>(.+?)</(?:\w+:)?Fault>", response, re.DOTALL)
+        if faults:
+            logger.warning(f"[MS] FE3 SOAP fault: {faults[0][:500]}")
+        # Log SyncUpdates error codes
+        errors = re.findall(r"<ErrorCode>([^<]+)</ErrorCode>", response)
+        if errors:
+            logger.warning(f"[MS] FE3 error codes: {errors}")
         logger.debug(f"[MS] FE3 raw response (first 2000 chars): {response[:2000]}")
+    else:
+        # Log URL info for diagnostics
+        for idx, u in enumerate(urls[:3]):
+            # Extract filename and approximate size hint from URL
+            name = u.split("?")[0].split("/")[-1] if "/" in u else "?"
+            logger.info(f"[MS] FE3 URL[{idx}]: {name[:80]}")
     return urls
 
 
@@ -180,6 +194,10 @@ def extract_package(pkg_path: str, dest_dir: str, _depth: int = 0) -> bool:
     real_dest = os.path.realpath(dest_dir)
 
     try:
+        # Log package info before extraction
+        pkg_size = os.path.getsize(pkg_path) / (1024 * 1024)
+        logger.info(f"[MS] Extracting {os.path.basename(pkg_path)} ({pkg_size:.1f} MB, depth={_depth})")
+
         with zipfile.ZipFile(pkg_path, "r") as z:
             members = z.namelist()
 
@@ -189,6 +207,7 @@ def extract_package(pkg_path: str, dest_dir: str, _depth: int = 0) -> bool:
                 and not m.startswith("_")
             ]
             if inner_pkgs:
+                logger.info(f"[MS] Bundle contains {len(inner_pkgs)} inner package(s): {[p[:40] for p in inner_pkgs[:5]]}")
                 with tempfile.TemporaryDirectory() as tmp:
                     for inner in inner_pkgs:
                         z.extract(inner, tmp)
@@ -202,6 +221,10 @@ def extract_package(pkg_path: str, dest_dir: str, _depth: int = 0) -> bool:
                     and m not in ("[Content_Types].xml", "AppxBlockMap.xml")
                     and not m.endswith(".appxsym")
                 ]
+                logger.info(f"[MS] Extracting {len(extract)} files (total members: {len(members)})")
+                exe_count = sum(1 for m in extract if m.lower().endswith(".exe"))
+                if exe_count:
+                    logger.info(f"[MS] Found {exe_count} .exe file(s) in package")
                 for member in extract:
                     target = os.path.realpath(os.path.join(dest_dir, member))
                     if not target.startswith(real_dest + os.sep) and target != real_dest:
