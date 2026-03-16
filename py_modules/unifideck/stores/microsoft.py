@@ -392,7 +392,7 @@ class MicrosoftConnector(Store):
 
             # ── DIAG: Test Collections API for ownership ────────────
             all_big_ids = [item["productId"] for item in purchased if item.get("productId")]
-            self._diag_test_collections_api(all_big_ids)
+            self._diag_collections_variants(all_big_ids)
 
             installed = self.get_installed()
 
@@ -599,129 +599,127 @@ class MicrosoftConnector(Store):
         return items
 
 
-    # ── DIAG: Collections API test ───────────────────────────────────────
 
-    def _diag_test_collections_api(self, big_ids: List[str]) -> None:
-        """Diagnostic: test if the Collections API returns ownership data."""
-        if not big_ids or not self._user_hash or not self._xuid:
-            logger.info("[MS] DIAG collections: skipped (no data)")
+    # ── DIAG: Collections API variants ───────────────────────────────────
+
+    def _diag_collections_variants(self, big_ids: List[str]) -> None:
+        """Test multiple Collections API approaches to find one that works."""
+        if not self._user_hash or not self._xuid:
             return
 
-        from .microsoft_auth import http_post_json, ssl_ctx_strict
+        from .microsoft_auth import http_post_json, ssl_ctx_strict, build_xbl_chain
         import urllib.request
 
         xsts_url = self._get_xsts_url()
         xbl_ua   = self._get_xbl_user_agent()
 
-        # Step 1: Get XBL token (reuse existing chain)
-        from .microsoft_auth import build_xbl_chain
         chain = build_xbl_chain(
-            self._ms_access_token,
-            self._get_locale(),
+            self._ms_access_token, self._get_locale(),
             xbl_auth_url=self._get_xbl_auth_url(),
-            xsts_url=xsts_url,
-            xbl_user_agent=xbl_ua,
+            xsts_url=xsts_url, xbl_user_agent=xbl_ua,
         )
         if not chain:
-            logger.info("[MS] DIAG collections: XBL chain failed")
+            logger.info("[MS] DIAG: XBL chain failed for licensing test")
             return
 
         xbl_token = chain["xbl_token"]
 
-        # Step 2: XSTS with licensing RP
-        licensing_rp = "http://licensing.xboxlive.com"
-        try:
-            xsts_resp = http_post_json(
-                xsts_url,
-                {
-                    "Properties": {
-                        "SandboxId":  "RETAIL",
-                        "UserTokens": [xbl_token],
+        rp_variants = [
+            "http://licensing.xboxlive.com",
+            "https://licensing.xboxlive.com",
+            "http://licensing.mp.microsoft.com",
+        ]
+
+        for rp in rp_variants:
+            try:
+                xsts_resp = http_post_json(
+                    xsts_url,
+                    {
+                        "Properties": {"SandboxId": "RETAIL", "UserTokens": [xbl_token]},
+                        "RelyingParty": rp,
+                        "TokenType": "JWT",
                     },
-                    "RelyingParty": licensing_rp,
-                    "TokenType":    "JWT",
-                },
-                {
-                    "Content-Type":           "application/json",
-                    "Accept":                 "application/json",
-                    "x-xbl-contract-version": "1",
-                    "User-Agent":             xbl_ua,
-                },
-            )
-        except Exception as e:
-            _body = ""
-            if hasattr(e, "read"):
-                try: _body = e.read().decode("utf-8", errors="replace")[:500]
-                except Exception: pass
-            logger.info(f"[MS] DIAG collections: XSTS licensing failed: {e}")
-            if _body:
-                logger.info(f"[MS] DIAG collections: XSTS error body: {_body}")
-            return
+                    {
+                        "Content-Type": "application/json",
+                        "Accept": "application/json",
+                        "x-xbl-contract-version": "1",
+                        "User-Agent": xbl_ua,
+                    },
+                )
+                if xsts_resp.get("XErr"):
+                    logger.info(f"[MS] DIAG RP={rp!r}: XErr={xsts_resp['XErr']}")
+                    continue
+                token = xsts_resp.get("Token", "")
+                uhs = xsts_resp.get("DisplayClaims", {}).get("xui", [{}])[0].get("uhs", "")
+                if not token:
+                    logger.info(f"[MS] DIAG RP={rp!r}: no token")
+                    continue
+                logger.info(f"[MS] DIAG RP={rp!r}: ✓ token OK")
 
-        if "XErr" in xsts_resp:
-            logger.info(f"[MS] DIAG collections: XSTS XErr={xsts_resp['XErr']}")
-            return
+                auth = f"XBL3.0 x={uhs};{token}"
+                self._diag_collections_call(auth, big_ids[:5], "with_ids", rp)
+                self._diag_collections_call(auth, None, "no_ids", rp)
+                self._diag_collections_call(auth, big_ids[:5], "no_filters", rp)
 
-        lic_token = xsts_resp.get("Token", "")
-        lic_uhs   = xsts_resp.get("DisplayClaims", {}).get("xui", [{}])[0].get("uhs", "")
-        if not lic_token:
-            logger.info(f"[MS] DIAG collections: no licensing token")
-            return
-        logger.info(f"[MS] DIAG collections: ✓ XSTS licensing token OK (uhs={lic_uhs})")
+            except Exception as e:
+                _body = ""
+                if hasattr(e, "read"):
+                    try: _body = e.read().decode("utf-8", errors="replace")[:300]
+                    except Exception: pass
+                logger.info(f"[MS] DIAG RP={rp!r}: XSTS failed: {e} {_body}")
 
-        # Step 3: Call B2bLicensePreview with ALL BigIds
-        auth = f"XBL3.0 x={lic_uhs};{lic_token}"
+    def _diag_collections_call(self, auth: str, big_ids: Optional[List[str]], variant: str, rp: str) -> None:
+        """Single Collections API call for diagnostics."""
+        import urllib.request
+        from .microsoft_auth import ssl_ctx_strict
+
         url = "https://collections.mp.microsoft.com/v8.0/collections/b2blicensepreview"
-
-        product_sku_ids = [{"productId": bid} for bid in big_ids[:100]]
-        body = json.dumps({
-            "maxPageSize": 100,
+        body_dict: dict = {
+            "maxPageSize": 25,
             "excludeDuplicates": True,
-            "entitlementFilters": ["*:Game"],
             "market": "neutral",
-            "expandSatisfyingItems": False,
-            "productSkuIds": product_sku_ids,
-        }).encode()
+        }
+        if variant == "no_filters":
+            if big_ids:
+                body_dict["productSkuIds"] = [{"productId": bid} for bid in big_ids]
+        elif variant == "with_ids":
+            body_dict["entitlementFilters"] = ["*:Game"]
+            if big_ids:
+                body_dict["productSkuIds"] = [{"productId": bid} for bid in big_ids]
+        elif variant == "no_ids":
+            body_dict["entitlementFilters"] = ["*:Game", "*:Durable"]
 
+        body = json.dumps(body_dict).encode()
         req = urllib.request.Request(
-            url,
-            data=body,
+            url, data=body,
             headers={
                 "Authorization": auth,
-                "Content-Type":  "application/json; charset=utf-8",
-                "User-Agent":    "Unifideck/1.0",
+                "Content-Type": "application/json; charset=utf-8",
+                "User-Agent": "Unifideck/1.0",
             },
             method="POST",
         )
         try:
-            with urllib.request.urlopen(req, timeout=20, context=ssl_ctx_strict()) as r:
+            with urllib.request.urlopen(req, timeout=30, context=ssl_ctx_strict()) as r:
                 resp = json.loads(r.read().decode())
+            items = resp.get("items", [])
+            logger.info(f"[MS] DIAG collections [{variant}] RP={rp!r}: {len(items)} items")
+            for idx, item in enumerate(items[:3]):
+                logger.info(
+                    f"[MS] DIAG [{variant}] item[{idx}]: "
+                    f"productId={item.get('productId', '?')!r} "
+                    f"acqType={item.get('acquisitionType', '?')!r} "
+                    f"status={item.get('status', '?')!r}"
+                )
         except Exception as e:
             _body = ""
             if hasattr(e, "read"):
-                try: _body = e.read().decode("utf-8", errors="replace")[:500]
+                try: _body = e.read().decode("utf-8", errors="replace")[:300]
                 except Exception: pass
-            logger.info(f"[MS] DIAG collections: API call failed: {e}")
+            logger.info(f"[MS] DIAG collections [{variant}] RP={rp!r}: FAILED {e}")
             if _body:
-                logger.info(f"[MS] DIAG collections: error body: {_body}")
-            return
+                logger.info(f"[MS] DIAG [{variant}] body: {_body}")
 
-        # Step 4: Log results
-        items = resp.get("items", [])
-        logger.info(f"[MS] DIAG collections: API returned {len(items)} items for {len(big_ids)} queried")
-        logger.info(f"[MS] DIAG collections: response keys: {list(resp.keys())}")
-
-        for idx, item in enumerate(items[:5]):
-            logger.info(
-                f"[MS] DIAG collections item[{idx}]: "
-                f"productId={item.get('productId', '?')!r} "
-                f"acquisitionType={item.get('acquisitionType', '?')!r} "
-                f"status={item.get('status', '?')!r} "
-                f"productKind={item.get('productKind', '?')!r}"
-            )
-
-        if not items:
-            logger.info("[MS] DIAG collections: 0 items — API likely requires Partner Center config")
 
     # ── Product detail + PC filter ───────────────────────────────────────
 
