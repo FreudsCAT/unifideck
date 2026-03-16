@@ -96,9 +96,9 @@ class MicrosoftConnector(Store):
         self._user_hash:  Optional[str] = None
         self._xuid:       Optional[str] = None
 
-        self._load_tokens()
-        self._game_metadata: Dict[str, dict] = {}
         self._settings_cache: Optional[Dict[str, Any]] = None
+        self._game_metadata: Dict[str, dict] = {}
+        self._load_tokens()
         logger.info("[MS] MicrosoftConnector initialised")
 
     # ── Locale helpers ───────────────────────────────────────────────────
@@ -400,6 +400,12 @@ class MicrosoftConnector(Store):
                     "[MS] Product scan returned 0 results — "
                     "returning all games without Win32/UWP classification"
                 )
+
+            # Debug: identify any purchased items not found in product scan
+            missing = [item.get("productId") for item in purchased
+                       if item.get("productId") and item.get("productId") not in game_meta]
+            if missing:
+                logger.warning(f"[MS] {len(missing)} purchased items not in scan results: {missing[:5]}")
 
             installed = self.get_installed()
 
