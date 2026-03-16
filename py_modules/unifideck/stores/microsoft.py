@@ -1035,6 +1035,55 @@ class MicrosoftConnector(Store):
 
     # ── CDP auto-auth monitor ────────────────────────────────────────────
 
+    async def _close_auth_browser(self) -> None:
+        """Close any open Microsoft OAuth pages in Steam's CEF browser.
+
+        Called automatically after successful authentication. Scans all
+        open CEF pages and closes those matching Microsoft login domains.
+        """
+        import urllib.request as _req
+
+        MS_DOMAINS = [
+            "login.live.com",
+            "live.com",
+            "login.microsoftonline.com",
+            "microsoftonline.com",
+            "account.microsoft.com",
+            "oauth20_desktop.srf",
+        ]
+        try:
+            with _req.urlopen("http://127.0.0.1:8080/json", timeout=2) as r:
+                pages = json.loads(r.read().decode())
+        except Exception as e:
+            logger.debug(f"[MS-close] Could not reach CEF: {e}")
+            return
+
+        logger.info(f"[MS-close] Scanning {len(pages)} CEF page(s)")
+        closed = 0
+        for page in pages:
+            url     = page.get("url", "")
+            page_id = page.get("id", "")
+            if not page_id:
+                continue
+            if not any(d in url for d in MS_DOMAINS):
+                continue
+            logger.info(f"[MS-close] Closing: {url[:80]}")
+            try:
+                with _req.urlopen(
+                    f"http://127.0.0.1:8080/json/close/{page_id}", timeout=2
+                ) as r:
+                    r.read()
+                closed += 1
+                logger.info(f"[MS-close] ✓ Closed page: {url[:60]}")
+            except Exception as e:
+                logger.debug(f"[MS-close] /json/close failed for {page_id}: {e}")
+
+        if closed == 0:
+            # Log all URLs for debugging if nothing was closed
+            for page in pages:
+                logger.info(f"[MS-close] Open page: {page.get('url', '?')[:80]}")
+        logger.info(f"[MS-close] Closed {closed} page(s)")
+
     async def _monitor_and_complete_auth(self) -> None:
         """Background task: intercept the OAuth redirect via CDP Network events."""
         try:
@@ -1047,6 +1096,10 @@ class MicrosoftConnector(Store):
                 result = await self.complete_auth(code)
                 if result["success"]:
                     logger.info("[MS] ✓ Authentication completed")
+                    # Close the browser after successful auth.
+                    # Small delay to let the page settle after redirect.
+                    await asyncio.sleep(1.5)
+                    await self._close_auth_browser()
                 else:
                     logger.error(f"[MS] complete_auth failed: {result.get('error')}")
             else:
