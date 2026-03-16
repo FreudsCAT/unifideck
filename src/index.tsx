@@ -31,6 +31,7 @@ loadTranslations();
 import { patchLibrary, loadCompatCacheFromBackend } from "./tabs";
 
 import { syncUnifideckCollections } from "./spoofing/CollectionManager";
+import { tabManager } from "./tabs";
 import {
   loadSteamAppIdMappings,
   patchSteamStores,
@@ -1063,6 +1064,11 @@ const Content: FC = () => {
       // Update collections ([Unifideck] Epic Games, etc.) with new games
       await syncUnifideckCollections().catch((err) =>
         console.error("[Unifideck] Failed to sync collections:", err),
+      );
+
+      // Phase 4: Reload tab game counts (so Microsoft tab appears if games were added)
+      await tabManager.forceReloadGameCache().catch((err) =>
+        console.error("[Unifideck] Failed to reload tab cache:", err),
       );
 
       // Reload compat cache from backend (so Great on Deck tab updates immediately)

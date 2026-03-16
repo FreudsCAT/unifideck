@@ -27,7 +27,7 @@ export interface FilterParams {
   store: { store: "steam" | "epic" | "gog" | "amazon" | "microsoft" | "all" };
   deckCompat: {}; // No params needed - uses Native/Platinum/Verified only
   all: {};
-  nonSteam: {}; // All non-Steam shortcuts except non-installed Unifideck
+  nonSteam: {}; // Non-Steam shortcuts excluding all Unifideck-managed games
 }
 
 // A filter setting combines type with its params
@@ -350,18 +350,18 @@ export const filterFunctions: {
     return false;
   },
 
-  // Non-Steam tab: All non-Steam shortcuts EXCEPT non-installed Unifideck games
+  // Non-Steam tab: All non-Steam shortcuts EXCEPT Unifideck-managed games.
+  // Unifideck games (Epic, GOG, Amazon, Microsoft) have their own dedicated
+  // tabs and collections — they should not appear in Non-Steam.
   nonSteam: (_params, app) => {
     // Only include non-Steam shortcuts
     if (app.app_type !== NON_STEAM_APP_TYPE) {
       return false;
     }
 
-    // Check if it's a Unifideck game
-    const cached = unifideckGameCache.get(app.appid);
-    if (cached) {
-      // It's a Unifideck game - only show if installed
-      return cached.isInstalled;
+    // Exclude all Unifideck-managed games — they have dedicated store tabs
+    if (unifideckGameCache.has(app.appid)) {
+      return false;
     }
 
     // Not a Unifideck game - show all other non-Steam shortcuts

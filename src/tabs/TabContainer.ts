@@ -338,6 +338,18 @@ class TabManager {
     }
   }
 
+  /**
+   * Force reload the game cache from backend.
+   * Called after sync completes to update game counts and tab visibility.
+   */
+  async forceReloadGameCache(): Promise<void> {
+    this.cacheLoaded = false;
+    await this.loadGameCache();
+    // Rebuild tabs with fresh data
+    this.tabs = UNIFIDECK_TABS.map((tab) => new UnifideckTabContainer(tab));
+    console.log("[Unifideck] TabManager force-reloaded after sync");
+  }
+
   getTabs(): UnifideckTabContainer[] {
     return this.tabs.filter((tab) => this.shouldShowTab(tab.id));
   }

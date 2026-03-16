@@ -16,10 +16,9 @@ Auth flow
 
 Win32 detection
 ---------------
-A product is considered downloadable (Win32) when it exposes a non-empty
-``FulfillmentData.WuBundleId`` **and** lacks a ``PackageFamilyName`` (which
-would indicate an MSIX/UWP package).  UWP-only titles are silently dropped
-from the library.
+A product is considered downloadable when its SKU has a ``WuBundleId``
+and ``FulfillmentType`` is not ``XVC`` (Xbox Virtual Container = UWP-only).
+UWP-only titles are shown but marked as ``not_compatible``.
 
 Download flow (Win32 games)
 ---------------------------
@@ -60,8 +59,6 @@ logger = logging.getLogger(__name__)
 # Only internal logic constants remain here.
 
 MS_MARKER_FILE  = ".unifideck-ms-id"
-OWNED_TYPES = {"Purchase", "Owned", "Free", "FreeToPlay"}
-_GAME_KINDS = {"game", "durable", "application"}
 
 
 # ──────────────────────────── connector ────────────────────────────────────
@@ -70,8 +67,8 @@ class MicrosoftConnector(Store):
     """
     Microsoft Store / Xbox Live library connector.
 
-    Surfaces only *purchased* (non-Game Pass) titles that declare
-    Windows.Desktop device family compatibility — the subset most likely
+    Surfaces titles from the Xbox Title Hub that have a valid MS Store
+    BigId and declare PC device compatibility — the subset most likely
     to work (or be attempted) via Proton on SteamOS.
 
     Win32 games can be downloaded and installed via the FE3 delivery API.
@@ -363,22 +360,14 @@ class MicrosoftConnector(Store):
             )
             logger.info(f"[MS] Title Hub returned {len(raw_items)} items")
 
-            kind_counts: Dict[str, int] = {}
-            acq_counts:  Dict[str, int] = {}
-            for item in raw_items:
-                k = item.get("productKind", "unknown")
-                a = item.get("acquisitionType", "unknown")
-                kind_counts[k] = kind_counts.get(k, 0) + 1
-                acq_counts[a]  = acq_counts.get(a, 0) + 1
-            logger.info(f"[MS] Title Hub productKind breakdown: {kind_counts}")
-            logger.info(f"[MS] Title Hub acquisitionType breakdown: {acq_counts}")
-
-            purchased = [
-                item for item in raw_items
-                if item.get("acquisitionType") in OWNED_TYPES
-                and (item.get("productKind") or "").lower() in _GAME_KINDS
-            ]
-            logger.info(f"[MS] {len(purchased)} owned games after Game Pass filter")
+            # NOTE: The Title Hub API returns all games the user has ever
+            # interacted with (purchases, Game Pass, Xbox overlay, etc.).
+            # There is no reliable way to filter only purchased games without
+            # the MS Store Collections API (requires Partner Center config).
+            # Games without a BigId were already filtered in _query_titlehub.
+            # Users can hide unwanted games via Steam's built-in hide feature.
+            purchased = raw_items
+            logger.info(f"[MS] {len(purchased)} games with valid MS Store BigId")
 
             if not purchased:
                 return []
@@ -606,8 +595,6 @@ class MicrosoftConnector(Store):
                 "titleId":         str(title_id),
                 "productTitle":    t.get("name", ""),
                 "pfn":             t.get("pfn", ""),
-                "productKind":     "Game",
-                "acquisitionType": "Purchase",
             })
 
         logger.info(f"[MS] Title Hub: {len(items)} PC games after device/type filter")
