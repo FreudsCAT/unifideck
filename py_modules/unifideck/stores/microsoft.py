@@ -1051,14 +1051,20 @@ class MicrosoftConnector(Store):
             "account.microsoft.com",
             "oauth20_desktop.srf",
         ]
+        CEF_URL = "http://127.0.0.1:8080/json"
+        logger.info(f"[MS-close] Fetching CEF pages from {CEF_URL}")
         try:
-            with _req.urlopen("http://127.0.0.1:8080/json", timeout=2) as r:
-                pages = json.loads(r.read().decode())
+            with _req.urlopen(CEF_URL, timeout=5) as r:
+                raw = r.read().decode()
+                pages = json.loads(raw)
         except Exception as e:
-            logger.debug(f"[MS-close] Could not reach CEF: {e}")
+            logger.info(f"[MS-close] Could not reach CEF: {e}")
             return
 
-        logger.info(f"[MS-close] Scanning {len(pages)} CEF page(s)")
+        logger.info(f"[MS-close] Found {len(pages)} CEF page(s)")
+        for p in pages:
+            logger.info(f"[MS-close]   → {p.get('url', '?')[:100]}")
+
         closed = 0
         for page in pages:
             url     = page.get("url", "")
@@ -1076,12 +1082,8 @@ class MicrosoftConnector(Store):
                 closed += 1
                 logger.info(f"[MS-close] ✓ Closed page: {url[:60]}")
             except Exception as e:
-                logger.debug(f"[MS-close] /json/close failed for {page_id}: {e}")
+                logger.info(f"[MS-close] /json/close failed for {page_id}: {e}")
 
-        if closed == 0:
-            # Log all URLs for debugging if nothing was closed
-            for page in pages:
-                logger.info(f"[MS-close] Open page: {page.get('url', '?')[:80]}")
         logger.info(f"[MS-close] Closed {closed} page(s)")
 
     async def _monitor_and_complete_auth(self) -> None:
