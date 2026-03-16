@@ -5577,6 +5577,8 @@ class Plugin:
         # Re-init store connectors so they reflect the cleared state
         self.gog = GOGAPIClient(plugin_dir=DECKY_PLUGIN_DIR, plugin_instance=self)
         self.amazon = AmazonConnector(plugin_dir=DECKY_PLUGIN_DIR, plugin_instance=self)
+        if hasattr(self, 'ubisoft') and self.ubisoft:
+            self.ubisoft.api._clear_tokens()
 
         self.account_manager.account_switch_detected = False
         return result
@@ -6409,31 +6411,30 @@ class Plugin:
                                 stats['deleted_artwork'] += 1
                         await asyncio.sleep(0.01)
 
-                # 3. DELETE AUTH TOKENS
-                # Epic - ~/.config/legendary/user.json
-                # GOG - ~/.config/unifideck/gog_token.json
-                # Amazon - ~/.config/nile/user.json
+                # 3. DELETE AUTH TOKENS (ALL stores)
                 try:
-                    epic_auth = os.path.expanduser("~/.config/legendary/user.json")
-                    if os.path.exists(epic_auth):
-                        os.remove(epic_auth)
-                        logger.info("[Cleanup] Deleted Epic auth token")
-                    
-                    gog_auth = os.path.expanduser("~/.config/unifideck/gog_token.json")
-                    if os.path.exists(gog_auth):
-                        os.remove(gog_auth)
-                        logger.info("[Cleanup] Deleted GOG auth token")
-                    
-                    amazon_auth = os.path.expanduser("~/.config/nile/user.json")
-                    if os.path.exists(amazon_auth):
-                        os.remove(amazon_auth)
-                        logger.info("[Cleanup] Deleted Amazon auth token")
-                        
+                    auth_files = [
+                        "~/.config/legendary/user.json",                    # Epic
+                        "~/.config/unifideck/gog_token.json",               # GOG
+                        "~/.config/unifideck/gogdl/auth.json",              # GOG DL
+                        "~/.config/nile/user.json",                         # Amazon auth
+                        "~/.config/nile/library.json",                      # Amazon cached library
+                        "~/.config/nile/installed.json",                    # Amazon installed tracking
+                        "~/.local/share/unifideck/ubisoft_token.json",      # Ubisoft API
+                        "~/.local/share/unifideck/ubisoft_upc_session.txt", # Ubisoft UPC session
+                    ]
+                    for auth_path in auth_files:
+                        full = os.path.expanduser(auth_path)
+                        if os.path.exists(full):
+                            os.remove(full)
+                            logger.info(f"[Cleanup] Deleted auth: {full}")
+
                     # Reset in-memory states
-                    self.gog = GOGAPIClient(plugin_dir=DECKY_PLUGIN_DIR, plugin_instance=self) # Re-init to clear tokens
-                    self.amazon = AmazonConnector(plugin_dir=DECKY_PLUGIN_DIR, plugin_instance=self) # Re-init Amazon too
-                    # Epic relies on legendary CLI existence, which checks file, so it's auto-cleared
-                    
+                    self.gog = GOGAPIClient(plugin_dir=DECKY_PLUGIN_DIR, plugin_instance=self)
+                    self.amazon = AmazonConnector(plugin_dir=DECKY_PLUGIN_DIR, plugin_instance=self)
+                    if hasattr(self, 'ubisoft') and self.ubisoft:
+                        self.ubisoft.api._clear_tokens()
+
                     stats['auth_deleted'] = True
                 except Exception as e:
                     logger.error(f"[Cleanup] Error deleting auth tokens: {e}")
@@ -6452,13 +6453,28 @@ class Plugin:
                     os.path.join(get_rawg_metadata_cache_path()), # RAWG metadata cache
                     os.path.join(get_unifidb_metadata_cache_path()), # unifiDB metadata cache
                     os.path.join(get_metacritic_metadata_cache_path()), # Metacritic metadata cache
-                    os.path.join(get_artwork_attempts_cache_path()) # Artwork attempts cache
+                    os.path.join(get_artwork_attempts_cache_path()), # Artwork attempts cache
+                    "~/.local/share/unifideck/compat_cache.json",
+                    "~/.local/share/unifideck/ubisoft_id_map.json",
+                    "~/.local/share/unifideck/ubisoft_visible_games.json",
+                    "~/.local/share/unifideck/ubisoft_game_db.txt",
+                    "~/.config/unifideck/cloud_sync_state.json",
                 ]
-                
+
                 # Only delete games.map and registry if we're also deleting game files (destructive mode)
                 if delete_files:
                     files_to_delete.append("~/.local/share/unifideck/games.map")
                     files_to_delete.append("~/.local/share/unifideck/games_registry.json")
+                    files_to_delete.append("~/.local/share/unifideck/settings.json")
+                    # Delete Ubisoft Wine prefixes (contain DPAPI-encrypted credentials)
+                    for dir_path in [
+                        "~/.local/share/unifideck/prefixes/ubisoft",
+                        "~/.local/share/unifideck/ubisoft_installer_cache",
+                    ]:
+                        full_dir = os.path.expanduser(dir_path)
+                        if os.path.isdir(full_dir):
+                            shutil.rmtree(full_dir, ignore_errors=True)
+                            logger.info(f"[Cleanup] Deleted directory: {full_dir}")
 
                 for file_path in files_to_delete:
                     try:

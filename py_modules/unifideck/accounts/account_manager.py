@@ -34,6 +34,10 @@ AUTH_TOKEN_PATHS = {
     'gog': os.path.expanduser("~/.config/unifideck/gog_token.json"),
     'gogdl': os.path.expanduser("~/.config/unifideck/gogdl/auth.json"),
     'amazon': os.path.expanduser("~/.config/nile/user.json"),
+    'amazon_library': os.path.expanduser("~/.config/nile/library.json"),
+    'amazon_installed': os.path.expanduser("~/.config/nile/installed.json"),
+    'ubisoft': os.path.expanduser("~/.local/share/unifideck/ubisoft_token.json"),
+    'ubisoft_session': os.path.expanduser("~/.local/share/unifideck/ubisoft_upc_session.txt"),
 }
 
 # Shared Unifideck data files
