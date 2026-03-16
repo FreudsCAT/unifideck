@@ -1097,9 +1097,14 @@ class MicrosoftConnector(Store):
                 if result["success"]:
                     logger.info("[MS] ✓ Authentication completed")
                     # Close the browser after successful auth.
-                    # Small delay to let the page settle after redirect.
-                    await asyncio.sleep(1.5)
-                    await self._close_auth_browser()
+                    try:
+                        logger.info("[MS] Waiting 1.5s before closing browser...")
+                        await asyncio.sleep(1.5)
+                        logger.info("[MS] Calling _close_auth_browser...")
+                        await self._close_auth_browser()
+                        logger.info("[MS] _close_auth_browser returned")
+                    except Exception as close_err:
+                        logger.error(f"[MS] Error closing browser: {close_err}", exc_info=True)
                 else:
                     logger.error(f"[MS] complete_auth failed: {result.get('error')}")
             else:
