@@ -1036,11 +1036,17 @@ class MicrosoftConnector(Store):
     # ── CDP auto-auth monitor ────────────────────────────────────────────
 
     async def _close_auth_browser(self) -> None:
-        """Close the Microsoft OAuth popup via CDP Target.closeTarget.
+        """Dismiss the Microsoft OAuth popup after successful auth.
 
-        Uses the browser-level WebSocket (/devtools/browser/...) to send
-        Target.closeTarget — this closes the actual tab/window, unlike
-        page-level window.close() which CEF blocks on popups.
+        Steam's CEF popup windows cannot be closed programmatically:
+        - window.close() is blocked (popup not created by JS)
+        - /json/close detaches CDP but leaves window open
+        - Target.closeTarget closes the target but leaves the native window
+        - Closing browserviewpopup containers crashes Big Picture
+
+        Best we can do: navigate the MS page to a friendly "done" screen
+        so the user sees a clear completion message instead of the login page.
+        The popup window will close when the user navigates away or presses B.
         """
         import urllib.request as _req
 
@@ -1049,64 +1055,66 @@ class MicrosoftConnector(Store):
             "login.microsoftonline.com", "microsoftonline.com",
             "account.microsoft.com", "oauth20_desktop.srf",
         ]
-
-        # Step 1: Get browser-level WS URL
-        try:
-            with _req.urlopen("http://127.0.0.1:8080/json/version", timeout=5) as r:
-                version_info = json.loads(r.read().decode())
-            browser_ws = version_info.get("webSocketDebuggerUrl", "")
-        except Exception as e:
-            logger.info(f"[MS-close] Could not get browser WS URL: {e}")
-            return
-
-        if not browser_ws:
-            logger.info("[MS-close] No browser webSocketDebuggerUrl available")
-            return
-
-        # Step 2: Get page list to find MS login target IDs
         try:
             with _req.urlopen("http://127.0.0.1:8080/json", timeout=5) as r:
                 pages = json.loads(r.read().decode())
         except Exception as e:
-            logger.info(f"[MS-close] Could not list CEF pages: {e}")
+            logger.info(f"[MS-close] Could not reach CEF: {e}")
             return
 
         logger.info(f"[MS-close] Found {len(pages)} CEF page(s)")
-        targets_to_close = []
-        for page in pages:
-            url       = page.get("url", "")
-            target_id = page.get("id", "")
-            if target_id and any(d in url for d in MS_DOMAINS):
-                targets_to_close.append((target_id, url))
-
-        if not targets_to_close:
-            logger.info("[MS-close] No Microsoft pages found to close")
-            return
-
-        # Step 3: Connect to browser-level WS and close targets
         closed = 0
-        try:
-            import websockets
-            async with websockets.connect(
-                browser_ws, ping_interval=None, open_timeout=5
-            ) as ws:
-                for idx, (target_id, url) in enumerate(targets_to_close):
-                    logger.info(f"[MS-close] Target.closeTarget: {url[:80]}")
-                    await ws.send(json.dumps({
-                        "id": idx + 1,
-                        "method": "Target.closeTarget",
-                        "params": {"targetId": target_id},
-                    }))
-                    try:
-                        resp = await asyncio.wait_for(ws.recv(), timeout=3)
-                        logger.info(f"[MS-close] closeTarget response: {resp[:200]}")
-                        closed += 1
-                    except asyncio.TimeoutError:
-                        logger.info(f"[MS-close] closeTarget timeout for {target_id}")
-        except Exception as e:
-            logger.info(f"[MS-close] Browser WS error: {e}")
 
-        logger.info(f"[MS-close] Closed {closed} target(s)")
+        for page in pages:
+            url    = page.get("url", "")
+            ws_url = page.get("webSocketDebuggerUrl", "")
+
+            if not any(d in url for d in MS_DOMAINS):
+                continue
+
+            if not ws_url:
+                continue
+
+            logger.info(f"[MS-close] Navigating to done screen: {url[:80]}")
+            try:
+                import websockets
+                async with websockets.connect(
+                    ws_url, ping_interval=None, open_timeout=5
+                ) as ws:
+                    done_html = (
+                        "data:text/html;charset=utf-8,"
+                        "%3Chtml%3E%3Cbody%20style%3D%22"
+                        "background%3A%23171d25%3B"
+                        "color%3A%23dcdedf%3B"
+                        "font-family%3A-apple-system%2Csans-serif%3B"
+                        "display%3Aflex%3B"
+                        "flex-direction%3Acolumn%3B"
+                        "align-items%3Acenter%3B"
+                        "justify-content%3Acenter%3B"
+                        "height%3A100vh%3B"
+                        "margin%3A0%22%3E"
+                        "%3Csvg%20width%3D%2264%22%20height%3D%2264%22%20viewBox%3D%220%200%2024%2024%22%20fill%3D%22%2366c0f4%22%3E"
+                        "%3Cpath%20d%3D%22M9%2016.17L4.83%2012l-1.42%201.41L9%2019%2021%207l-1.41-1.41z%22%2F%3E%3C%2Fsvg%3E"
+                        "%3Ch2%20style%3D%22margin-top%3A16px%22%3E"
+                        "Authentication%20complete"
+                        "%3C%2Fh2%3E"
+                        "%3Cp%20style%3D%22color%3A%23898989%22%3E"
+                        "Press%20B%20to%20close%20this%20window"
+                        "%3C%2Fp%3E"
+                        "%3C%2Fbody%3E%3C%2Fhtml%3E"
+                    )
+                    await ws.send(json.dumps({
+                        "id": 1,
+                        "method": "Page.navigate",
+                        "params": {"url": done_html},
+                    }))
+                    await asyncio.wait_for(ws.recv(), timeout=3)
+                    closed += 1
+                    logger.info("[MS-close] Navigated to done screen OK")
+            except Exception as e:
+                logger.info(f"[MS-close] Navigate failed: {e}")
+
+        logger.info(f"[MS-close] Dismissed {closed} page(s)")
 
     async def _monitor_and_complete_auth(self) -> None:
         """Background task: intercept the OAuth redirect via CDP Network events."""
