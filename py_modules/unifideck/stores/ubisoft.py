@@ -2480,6 +2480,9 @@ class UbisoftConnector(Store):
 
             if os.path.isdir(AUTH_PREFIX_DIR):
                 self._backfill_hidden_prefix_session(AUTH_PREFIX_DIR)
+            elif self.api.has_tokens():
+                logger.info("[Ubisoft] Auth prefix missing but user is authenticated; recreating")
+                await self._ensure_auth_prefix()
 
             self._ensure_upc_auth_state_in_prefixes(list(self._iter_game_prefix_paths() or []))
 
