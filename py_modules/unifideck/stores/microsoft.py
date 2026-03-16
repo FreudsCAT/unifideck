@@ -390,11 +390,9 @@ class MicrosoftConnector(Store):
                     "returning all games without Win32/UWP classification"
                 )
 
-            # Debug: identify any purchased items not found in product scan
-            missing = [item.get("productId") for item in purchased
-                       if item.get("productId") and item.get("productId") not in game_meta]
-            if missing:
-                logger.warning(f"[MS] {len(missing)} purchased items not in scan results: {missing[:5]}")
+            # ── DIAG: Test Collections API for ownership ────────────
+            all_big_ids = [item["productId"] for item in purchased if item.get("productId")]
+            self._diag_test_collections_api(all_big_ids)
 
             installed = self.get_installed()
 
@@ -599,6 +597,131 @@ class MicrosoftConnector(Store):
 
         logger.info(f"[MS] Title Hub: {len(items)} PC games after device/type filter")
         return items
+
+
+    # ── DIAG: Collections API test ───────────────────────────────────────
+
+    def _diag_test_collections_api(self, big_ids: List[str]) -> None:
+        """Diagnostic: test if the Collections API returns ownership data."""
+        if not big_ids or not self._user_hash or not self._xuid:
+            logger.info("[MS] DIAG collections: skipped (no data)")
+            return
+
+        from .microsoft_auth import http_post_json, ssl_ctx_strict
+        import urllib.request
+
+        xsts_url = self._get_xsts_url()
+        xbl_ua   = self._get_xbl_user_agent()
+
+        # Step 1: Get XBL token (reuse existing chain)
+        from .microsoft_auth import build_xbl_chain
+        chain = build_xbl_chain(
+            self._ms_access_token,
+            self._get_locale(),
+            xbl_auth_url=self._get_xbl_auth_url(),
+            xsts_url=xsts_url,
+            xbl_user_agent=xbl_ua,
+        )
+        if not chain:
+            logger.info("[MS] DIAG collections: XBL chain failed")
+            return
+
+        xbl_token = chain["xbl_token"]
+
+        # Step 2: XSTS with licensing RP
+        licensing_rp = "http://licensing.xboxlive.com"
+        try:
+            xsts_resp = http_post_json(
+                xsts_url,
+                {
+                    "Properties": {
+                        "SandboxId":  "RETAIL",
+                        "UserTokens": [xbl_token],
+                    },
+                    "RelyingParty": licensing_rp,
+                    "TokenType":    "JWT",
+                },
+                {
+                    "Content-Type":           "application/json",
+                    "Accept":                 "application/json",
+                    "x-xbl-contract-version": "1",
+                    "User-Agent":             xbl_ua,
+                },
+            )
+        except Exception as e:
+            _body = ""
+            if hasattr(e, "read"):
+                try: _body = e.read().decode("utf-8", errors="replace")[:500]
+                except Exception: pass
+            logger.info(f"[MS] DIAG collections: XSTS licensing failed: {e}")
+            if _body:
+                logger.info(f"[MS] DIAG collections: XSTS error body: {_body}")
+            return
+
+        if "XErr" in xsts_resp:
+            logger.info(f"[MS] DIAG collections: XSTS XErr={xsts_resp['XErr']}")
+            return
+
+        lic_token = xsts_resp.get("Token", "")
+        lic_uhs   = xsts_resp.get("DisplayClaims", {}).get("xui", [{}])[0].get("uhs", "")
+        if not lic_token:
+            logger.info(f"[MS] DIAG collections: no licensing token")
+            return
+        logger.info(f"[MS] DIAG collections: ✓ XSTS licensing token OK (uhs={lic_uhs})")
+
+        # Step 3: Call B2bLicensePreview with ALL BigIds
+        auth = f"XBL3.0 x={lic_uhs};{lic_token}"
+        url = "https://collections.mp.microsoft.com/v8.0/collections/b2blicensepreview"
+
+        product_sku_ids = [{"productId": bid} for bid in big_ids[:100]]
+        body = json.dumps({
+            "maxPageSize": 100,
+            "excludeDuplicates": True,
+            "entitlementFilters": ["*:Game"],
+            "market": "neutral",
+            "expandSatisfyingItems": False,
+            "productSkuIds": product_sku_ids,
+        }).encode()
+
+        req = urllib.request.Request(
+            url,
+            data=body,
+            headers={
+                "Authorization": auth,
+                "Content-Type":  "application/json; charset=utf-8",
+                "User-Agent":    "Unifideck/1.0",
+            },
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=20, context=ssl_ctx_strict()) as r:
+                resp = json.loads(r.read().decode())
+        except Exception as e:
+            _body = ""
+            if hasattr(e, "read"):
+                try: _body = e.read().decode("utf-8", errors="replace")[:500]
+                except Exception: pass
+            logger.info(f"[MS] DIAG collections: API call failed: {e}")
+            if _body:
+                logger.info(f"[MS] DIAG collections: error body: {_body}")
+            return
+
+        # Step 4: Log results
+        items = resp.get("items", [])
+        logger.info(f"[MS] DIAG collections: API returned {len(items)} items for {len(big_ids)} queried")
+        logger.info(f"[MS] DIAG collections: response keys: {list(resp.keys())}")
+
+        for idx, item in enumerate(items[:5]):
+            logger.info(
+                f"[MS] DIAG collections item[{idx}]: "
+                f"productId={item.get('productId', '?')!r} "
+                f"acquisitionType={item.get('acquisitionType', '?')!r} "
+                f"status={item.get('status', '?')!r} "
+                f"productKind={item.get('productKind', '?')!r}"
+            )
+
+        if not items:
+            logger.info("[MS] DIAG collections: 0 items — API likely requires Partner Center config")
 
     # ── Product detail + PC filter ───────────────────────────────────────
 
