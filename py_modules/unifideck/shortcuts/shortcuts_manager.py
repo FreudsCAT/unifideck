@@ -1441,8 +1441,8 @@ class ShortcutsManager:
                     existing_launch_options.add(target_launch_options)
                     reclaimed += 1
                     # Persist store_tags (e.g. "not_compatible" for UWP MS games)
-                    if game.store_tags:
-                        save_game_tags(game.store, game.id, game.store_tags)
+                    # Always call save_game_tags — passing None/[] clears stale tags
+                    save_game_tags(game.store, game.id, game.store_tags)
                     continue
 
                 # Generate AppID (using launcher_script for consistent ID generation)
@@ -1470,8 +1470,8 @@ class ShortcutsManager:
                 register_shortcut(target_launch_options, app_id, game.title)
 
                 # Persist store_tags (e.g. "not_compatible" for UWP MS games)
-                if game.store_tags:
-                    save_game_tags(game.store, game.id, game.store_tags)
+                # Always call save_game_tags — passing None/[] clears stale tags
+                save_game_tags(game.store, game.id, game.store_tags)
 
                 existing_launch_options.add(target_launch_options)
                 next_index += 1
@@ -1803,8 +1803,8 @@ class ShortcutsManager:
                     existing_app_ids.add(registered_appid)
                     reclaimed += 1
                     # Persist store_tags (e.g. "not_compatible" for UWP MS games)
-                    if game.store_tags:
-                        save_game_tags(game.store, game.id, game.store_tags)
+                    # Always call save_game_tags — passing None/[] clears stale tags
+                    save_game_tags(game.store, game.id, game.store_tags)
                     continue
 
                 # Add new shortcut
@@ -1829,8 +1829,8 @@ class ShortcutsManager:
                 register_shortcut(target_launch_options, app_id, game.title)
 
                 # Persist store_tags (e.g. "not_compatible" for UWP MS games)
-                if game.store_tags:
-                    save_game_tags(game.store, game.id, game.store_tags)
+                # Always call save_game_tags — passing None/[] clears stale tags
+                save_game_tags(game.store, game.id, game.store_tags)
 
                 existing_app_ids.add(app_id)
                 next_index += 1
