@@ -43,6 +43,7 @@ import { DownloadsTab } from "./components/DownloadsTab";
 import { StorageSettings } from "./components/StorageSettings";
 
 import { SteamRestartModal } from "./components/SteamRestartModal";
+import { AuthSuccessModal } from "./components/AuthSuccessModal";
 import { AccountSwitchModal } from "./components/AccountSwitchModal";
 import { LanguageSelector } from "./components/LanguageSelector";
 import StoreConnections from "./components/settings/StoreConnections";
@@ -1233,27 +1234,11 @@ const Content: FC = () => {
               console.log(
                 `[Unifideck] ✓ ${storeName} authentication successful!`,
               );
-              // Close the Microsoft browser via CDP on the backend.
-              // window.open() returns null in Decky's CEF context so
-              // popup.close() is not available — backend uses /json/close.
-              // Small delay lets the page settle at its final URL after redirect.
-              if (store === "microsoft") {
-                setTimeout(() => {
-                  call<[], { success: boolean; closed: number }>(
-                    "close_microsoft_browser",
-                  ).then((r) => {
-                    console.log(`[Unifideck] close_microsoft_browser: closed ${r?.closed || 0} page(s)`);
-                  }).catch((e) =>
-                    console.error("[Unifideck] close_microsoft_browser error:", e),
-                  );
-                }, 1500);
-              }
-              toaster.toast({
-                title: t("toasts.authConnected", { store: storeName }),
-                body: t("toasts.authConnectedMessage", { store: storeName }),
-                duration: 8000,
-                critical: true,
-              });
+              // Show full-screen success modal — covers the CEF popup
+              // which cannot be closed programmatically in Steam's CEF.
+              showModal(
+                <AuthSuccessModal store={storeName} closeModal={() => {}} />,
+              );
               await checkStoreStatus(); // Refresh status
             } else {
               console.log(`[Unifideck] ${storeName} authentication timed out`);

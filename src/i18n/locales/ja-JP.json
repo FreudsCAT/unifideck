@@ -374,5 +374,11 @@
   },
   "microsoft": {
     "notCompatible": "このゲームのフォーマットはSteamOSに対応していません"
+  },
+  "authSuccess": {
+    "title": "認証が完了しました！",
+    "titleStore": "{{store}} — 認証が完了しました！",
+    "subtitle": "Bボタンを押してこのウィンドウを閉じてください",
+    "close": "閉じる"
   }
 }

@@ -377,5 +377,11 @@
   },
   "microsoft": {
     "notCompatible": "Bu oyunun formatı SteamOS ile uyumlu değil"
+  },
+  "authSuccess": {
+    "title": "Kimlik doğrulama tamamlandı!",
+    "titleStore": "{{store}} — Kimlik doğrulama tamamlandı!",
+    "subtitle": "Bu pencereyi kapatmak için B düğmesine basın",
+    "close": "Kapat"
   }
 }

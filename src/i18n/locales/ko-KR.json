@@ -374,5 +374,11 @@
   },
   "microsoft": {
     "notCompatible": "이 게임의 포맷은 SteamOS와 호환되지 않습니다"
+  },
+  "authSuccess": {
+    "title": "인증 완료!",
+    "titleStore": "{{store}} — 인증 완료!",
+    "subtitle": "B 버튼을 눌러 이 창을 닫으세요",
+    "close": "닫기"
   }
 }

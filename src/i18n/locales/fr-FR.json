@@ -374,5 +374,11 @@
   },
   "microsoft": {
     "notCompatible": "Le format de ce jeu n'est pas compatible avec SteamOS"
+  },
+  "authSuccess": {
+    "title": "Authentification réussie !",
+    "titleStore": "{{store}} — Authentification réussie !",
+    "subtitle": "Appuyez sur le bouton B pour fermer cette fenêtre",
+    "close": "Fermer"
   }
 }

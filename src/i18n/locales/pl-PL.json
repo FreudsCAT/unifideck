@@ -374,5 +374,11 @@
   },
   "microsoft": {
     "notCompatible": "Format tej gry nie jest zgodny ze SteamOS"
+  },
+  "authSuccess": {
+    "title": "Uwierzytelnianie zakończone!",
+    "titleStore": "{{store}} — Uwierzytelnianie zakończone!",
+    "subtitle": "Naciśnij przycisk B, aby zamknąć to okno",
+    "close": "Zamknij"
   }
 }

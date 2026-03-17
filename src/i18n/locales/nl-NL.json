@@ -374,5 +374,11 @@
   },
   "microsoft": {
     "notCompatible": "Het formaat van dit spel is niet compatibel met SteamOS"
+  },
+  "authSuccess": {
+    "title": "Authenticatie voltooid!",
+    "titleStore": "{{store}} — Authenticatie voltooid!",
+    "subtitle": "Druk op de B-knop om dit venster te sluiten",
+    "close": "Sluiten"
   }
 }

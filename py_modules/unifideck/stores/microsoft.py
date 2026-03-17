@@ -390,10 +390,6 @@ class MicrosoftConnector(Store):
                     "returning all games without Win32/UWP classification"
                 )
 
-            # ── DIAG: Test Collections API for ownership ────────────
-            all_big_ids = [item["productId"] for item in purchased if item.get("productId")]
-            self._diag_collections_variants(all_big_ids)
-
             installed = self.get_installed()
 
             games: List[Game] = []
@@ -598,127 +594,6 @@ class MicrosoftConnector(Store):
         logger.info(f"[MS] Title Hub: {len(items)} PC games after device/type filter")
         return items
 
-
-
-    # ── DIAG: Collections API variants ───────────────────────────────────
-
-    def _diag_collections_variants(self, big_ids: List[str]) -> None:
-        """Test multiple Collections API approaches to find one that works."""
-        if not self._user_hash or not self._xuid:
-            return
-
-        from .microsoft_auth import http_post_json, ssl_ctx_strict, build_xbl_chain
-        import urllib.request
-
-        xsts_url = self._get_xsts_url()
-        xbl_ua   = self._get_xbl_user_agent()
-
-        chain = build_xbl_chain(
-            self._ms_access_token, self._get_locale(),
-            xbl_auth_url=self._get_xbl_auth_url(),
-            xsts_url=xsts_url, xbl_user_agent=xbl_ua,
-        )
-        if not chain:
-            logger.info("[MS] DIAG: XBL chain failed for licensing test")
-            return
-
-        xbl_token = chain["xbl_token"]
-
-        rp_variants = [
-            "http://licensing.xboxlive.com",
-            "https://licensing.xboxlive.com",
-            "http://licensing.mp.microsoft.com",
-        ]
-
-        for rp in rp_variants:
-            try:
-                xsts_resp = http_post_json(
-                    xsts_url,
-                    {
-                        "Properties": {"SandboxId": "RETAIL", "UserTokens": [xbl_token]},
-                        "RelyingParty": rp,
-                        "TokenType": "JWT",
-                    },
-                    {
-                        "Content-Type": "application/json",
-                        "Accept": "application/json",
-                        "x-xbl-contract-version": "1",
-                        "User-Agent": xbl_ua,
-                    },
-                )
-                if xsts_resp.get("XErr"):
-                    logger.info(f"[MS] DIAG RP={rp!r}: XErr={xsts_resp['XErr']}")
-                    continue
-                token = xsts_resp.get("Token", "")
-                uhs = xsts_resp.get("DisplayClaims", {}).get("xui", [{}])[0].get("uhs", "")
-                if not token:
-                    logger.info(f"[MS] DIAG RP={rp!r}: no token")
-                    continue
-                logger.info(f"[MS] DIAG RP={rp!r}: ✓ token OK")
-
-                auth = f"XBL3.0 x={uhs};{token}"
-                self._diag_collections_call(auth, big_ids[:5], "with_ids", rp)
-                self._diag_collections_call(auth, None, "no_ids", rp)
-                self._diag_collections_call(auth, big_ids[:5], "no_filters", rp)
-
-            except Exception as e:
-                _body = ""
-                if hasattr(e, "read"):
-                    try: _body = e.read().decode("utf-8", errors="replace")[:300]
-                    except Exception: pass
-                logger.info(f"[MS] DIAG RP={rp!r}: XSTS failed: {e} {_body}")
-
-    def _diag_collections_call(self, auth: str, big_ids: Optional[List[str]], variant: str, rp: str) -> None:
-        """Single Collections API call for diagnostics."""
-        import urllib.request
-        from .microsoft_auth import ssl_ctx_strict
-
-        url = "https://collections.mp.microsoft.com/v8.0/collections/b2blicensepreview"
-        body_dict: dict = {
-            "maxPageSize": 25,
-            "excludeDuplicates": True,
-            "market": "neutral",
-        }
-        if variant == "no_filters":
-            if big_ids:
-                body_dict["productSkuIds"] = [{"productId": bid} for bid in big_ids]
-        elif variant == "with_ids":
-            body_dict["entitlementFilters"] = ["*:Game"]
-            if big_ids:
-                body_dict["productSkuIds"] = [{"productId": bid} for bid in big_ids]
-        elif variant == "no_ids":
-            body_dict["entitlementFilters"] = ["*:Game", "*:Durable"]
-
-        body = json.dumps(body_dict).encode()
-        req = urllib.request.Request(
-            url, data=body,
-            headers={
-                "Authorization": auth,
-                "Content-Type": "application/json; charset=utf-8",
-                "User-Agent": "Unifideck/1.0",
-            },
-            method="POST",
-        )
-        try:
-            with urllib.request.urlopen(req, timeout=30, context=ssl_ctx_strict()) as r:
-                resp = json.loads(r.read().decode())
-            items = resp.get("items", [])
-            logger.info(f"[MS] DIAG collections [{variant}] RP={rp!r}: {len(items)} items")
-            for idx, item in enumerate(items[:3]):
-                logger.info(
-                    f"[MS] DIAG [{variant}] item[{idx}]: "
-                    f"productId={item.get('productId', '?')!r} "
-                    f"acqType={item.get('acquisitionType', '?')!r} "
-                    f"status={item.get('status', '?')!r}"
-                )
-        except Exception as e:
-            _body = ""
-            if hasattr(e, "read"):
-                try: _body = e.read().decode("utf-8", errors="replace")[:300]
-                except Exception: pass
-            logger.info(f"[MS] DIAG collections [{variant}] RP={rp!r}: FAILED {e}")
-            if _body:
-                logger.info(f"[MS] DIAG [{variant}] body: {_body}")
 
 
     # ── Product detail + PC filter ───────────────────────────────────────
@@ -1035,73 +910,6 @@ class MicrosoftConnector(Store):
 
     # ── CDP auto-auth monitor ────────────────────────────────────────────
 
-    async def _close_auth_browser(self) -> None:
-        """Close the Microsoft OAuth popup window after successful auth.
-
-        Steam's CEF popup windows cannot be closed via CDP:
-        - window.close() blocked, /json/close and Target.closeTarget
-          only detach the tab, closing browserviewpopup crashes Big Picture.
-
-        Solution: use xdotool at the OS level to find the popup window
-        by its title and close it. CEF popup titles contain the page URL
-        or title, so we match on Microsoft login domains.
-        """
-        import subprocess
-
-        # Patterns that appear in the window title of MS auth popups
-        TITLE_PATTERNS = [
-            "login.live.com",
-            "login.microsoftonline.com",
-            "oauth20_desktop",
-            "Sign in to your account",
-            "Sign in - Microsoft",
-            "Connectez-vous",
-        ]
-
-        try:
-            # List all window IDs
-            result = subprocess.run(
-                ["xdotool", "search", "--name", ""],
-                capture_output=True, text=True, timeout=5,
-            )
-            if result.returncode != 0:
-                logger.info(f"[MS-close] xdotool search failed: {result.stderr.strip()}")
-                return
-
-            window_ids = [wid.strip() for wid in result.stdout.strip().split("\n") if wid.strip()]
-            logger.info(f"[MS-close] xdotool found {len(window_ids)} windows")
-
-            closed = 0
-            for wid in window_ids:
-                try:
-                    name_result = subprocess.run(
-                        ["xdotool", "getwindowname", wid],
-                        capture_output=True, text=True, timeout=2,
-                    )
-                    title = name_result.stdout.strip()
-                    if not title:
-                        continue
-
-                    if any(p.lower() in title.lower() for p in TITLE_PATTERNS):
-                        logger.info(f"[MS-close] Closing window {wid}: {title[:80]}")
-                        subprocess.run(
-                            ["xdotool", "windowclose", wid],
-                            capture_output=True, timeout=5,
-                        )
-                        closed += 1
-                        logger.info(f"[MS-close] ✓ Window {wid} closed")
-                except subprocess.TimeoutExpired:
-                    continue
-                except Exception as e:
-                    logger.debug(f"[MS-close] Error on window {wid}: {e}")
-
-            logger.info(f"[MS-close] Closed {closed} window(s) via xdotool")
-
-        except FileNotFoundError:
-            logger.info("[MS-close] xdotool not installed — cannot close popup window")
-        except Exception as e:
-            logger.info(f"[MS-close] xdotool error: {e}")
-
     async def _monitor_and_complete_auth(self) -> None:
         """Background task: intercept the OAuth redirect via CDP Network events."""
         try:
@@ -1114,15 +922,6 @@ class MicrosoftConnector(Store):
                 result = await self.complete_auth(code)
                 if result["success"]:
                     logger.info("[MS] ✓ Authentication completed")
-                    # Close the browser after successful auth.
-                    try:
-                        logger.info("[MS] Waiting 1.5s before closing browser...")
-                        await asyncio.sleep(1.5)
-                        logger.info("[MS] Calling _close_auth_browser...")
-                        await self._close_auth_browser()
-                        logger.info("[MS] _close_auth_browser returned")
-                    except Exception as close_err:
-                        logger.error(f"[MS] Error closing browser: {close_err}", exc_info=True)
                 else:
                     logger.error(f"[MS] complete_auth failed: {result.get('error')}")
             else:
