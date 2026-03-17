@@ -1036,85 +1036,71 @@ class MicrosoftConnector(Store):
     # ── CDP auto-auth monitor ────────────────────────────────────────────
 
     async def _close_auth_browser(self) -> None:
-        """Dismiss the Microsoft OAuth popup after successful auth.
+        """Close the Microsoft OAuth popup window after successful auth.
 
-        Steam's CEF popup windows cannot be closed programmatically:
-        - window.close() is blocked (popup not created by JS)
-        - /json/close detaches CDP but leaves window open
-        - Target.closeTarget closes the target but leaves the native window
-        - Closing browserviewpopup containers crashes Big Picture
+        Steam's CEF popup windows cannot be closed via CDP:
+        - window.close() blocked, /json/close and Target.closeTarget
+          only detach the tab, closing browserviewpopup crashes Big Picture.
 
-        Best we can do: navigate the MS page to a friendly "done" screen
-        so the user sees a clear completion message instead of the login page.
-        The popup window will close when the user navigates away or presses B.
+        Solution: use xdotool at the OS level to find the popup window
+        by its title and close it. CEF popup titles contain the page URL
+        or title, so we match on Microsoft login domains.
         """
-        import urllib.request as _req
+        import subprocess
 
-        MS_DOMAINS = [
-            "login.live.com", "live.com",
-            "login.microsoftonline.com", "microsoftonline.com",
-            "account.microsoft.com", "oauth20_desktop.srf",
+        # Patterns that appear in the window title of MS auth popups
+        TITLE_PATTERNS = [
+            "login.live.com",
+            "login.microsoftonline.com",
+            "oauth20_desktop",
+            "Sign in to your account",
+            "Sign in - Microsoft",
+            "Connectez-vous",
         ]
+
         try:
-            with _req.urlopen("http://127.0.0.1:8080/json", timeout=5) as r:
-                pages = json.loads(r.read().decode())
-        except Exception as e:
-            logger.info(f"[MS-close] Could not reach CEF: {e}")
-            return
+            # List all window IDs
+            result = subprocess.run(
+                ["xdotool", "search", "--name", ""],
+                capture_output=True, text=True, timeout=5,
+            )
+            if result.returncode != 0:
+                logger.info(f"[MS-close] xdotool search failed: {result.stderr.strip()}")
+                return
 
-        logger.info(f"[MS-close] Found {len(pages)} CEF page(s)")
-        closed = 0
+            window_ids = [wid.strip() for wid in result.stdout.strip().split("\n") if wid.strip()]
+            logger.info(f"[MS-close] xdotool found {len(window_ids)} windows")
 
-        for page in pages:
-            url    = page.get("url", "")
-            ws_url = page.get("webSocketDebuggerUrl", "")
-
-            if not any(d in url for d in MS_DOMAINS):
-                continue
-
-            if not ws_url:
-                continue
-
-            logger.info(f"[MS-close] Navigating to done screen: {url[:80]}")
-            try:
-                import websockets
-                async with websockets.connect(
-                    ws_url, ping_interval=None, open_timeout=5
-                ) as ws:
-                    done_html = (
-                        "data:text/html;charset=utf-8,"
-                        "%3Chtml%3E%3Cbody%20style%3D%22"
-                        "background%3A%23171d25%3B"
-                        "color%3A%23dcdedf%3B"
-                        "font-family%3A-apple-system%2Csans-serif%3B"
-                        "display%3Aflex%3B"
-                        "flex-direction%3Acolumn%3B"
-                        "align-items%3Acenter%3B"
-                        "justify-content%3Acenter%3B"
-                        "height%3A100vh%3B"
-                        "margin%3A0%22%3E"
-                        "%3Csvg%20width%3D%2264%22%20height%3D%2264%22%20viewBox%3D%220%200%2024%2024%22%20fill%3D%22%2366c0f4%22%3E"
-                        "%3Cpath%20d%3D%22M9%2016.17L4.83%2012l-1.42%201.41L9%2019%2021%207l-1.41-1.41z%22%2F%3E%3C%2Fsvg%3E"
-                        "%3Ch2%20style%3D%22margin-top%3A16px%22%3E"
-                        "Authentication%20complete"
-                        "%3C%2Fh2%3E"
-                        "%3Cp%20style%3D%22color%3A%23898989%22%3E"
-                        "Press%20B%20to%20close%20this%20window"
-                        "%3C%2Fp%3E"
-                        "%3C%2Fbody%3E%3C%2Fhtml%3E"
+            closed = 0
+            for wid in window_ids:
+                try:
+                    name_result = subprocess.run(
+                        ["xdotool", "getwindowname", wid],
+                        capture_output=True, text=True, timeout=2,
                     )
-                    await ws.send(json.dumps({
-                        "id": 1,
-                        "method": "Page.navigate",
-                        "params": {"url": done_html},
-                    }))
-                    await asyncio.wait_for(ws.recv(), timeout=3)
-                    closed += 1
-                    logger.info("[MS-close] Navigated to done screen OK")
-            except Exception as e:
-                logger.info(f"[MS-close] Navigate failed: {e}")
+                    title = name_result.stdout.strip()
+                    if not title:
+                        continue
 
-        logger.info(f"[MS-close] Dismissed {closed} page(s)")
+                    if any(p.lower() in title.lower() for p in TITLE_PATTERNS):
+                        logger.info(f"[MS-close] Closing window {wid}: {title[:80]}")
+                        subprocess.run(
+                            ["xdotool", "windowclose", wid],
+                            capture_output=True, timeout=5,
+                        )
+                        closed += 1
+                        logger.info(f"[MS-close] ✓ Window {wid} closed")
+                except subprocess.TimeoutExpired:
+                    continue
+                except Exception as e:
+                    logger.debug(f"[MS-close] Error on window {wid}: {e}")
+
+            logger.info(f"[MS-close] Closed {closed} window(s) via xdotool")
+
+        except FileNotFoundError:
+            logger.info("[MS-close] xdotool not installed — cannot close popup window")
+        except Exception as e:
+            logger.info(f"[MS-close] xdotool error: {e}")
 
     async def _monitor_and_complete_auth(self) -> None:
         """Background task: intercept the OAuth redirect via CDP Network events."""
