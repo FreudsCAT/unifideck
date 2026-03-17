@@ -376,9 +376,8 @@
     "notCompatible": "Format tej gry nie jest zgodny ze SteamOS"
   },
   "authSuccess": {
-    "title": "Uwierzytelnianie",
-    "titleStore": "{{store}} — Uwierzytelnianie",
-    "subtitle": "Naciśnij przycisk B, aby zamknąć to okno",
-    "close": ""
+    "title": "Uwierzytelnianie ✓",
+    "titleStore": "{{store}} — Uwierzytelnianie ✓",
+    "subtitle": "Naciśnij przycisk B, aby zamknąć to okno"
   }
 }

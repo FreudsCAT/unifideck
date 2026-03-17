@@ -381,9 +381,8 @@
     "notCompatible": "该游戏的格式不兼容 SteamOS"
   },
   "authSuccess": {
-    "title": "认证",
-    "titleStore": "{{store}} — 认证",
-    "subtitle": "按 B 按钮关闭此窗口",
-    "close": ""
+    "title": "认证 ✓",
+    "titleStore": "{{store}} — 认证 ✓",
+    "subtitle": "按 B 按钮关闭此窗口"
   }
 }

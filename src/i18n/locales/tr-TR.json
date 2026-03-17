@@ -379,9 +379,8 @@
     "notCompatible": "Bu oyunun formatı SteamOS ile uyumlu değil"
   },
   "authSuccess": {
-    "title": "Kimlik doğrulama",
-    "titleStore": "{{store}} — Kimlik doğrulama",
-    "subtitle": "Bu pencereyi kapatmak için B düğmesine basın",
-    "close": ""
+    "title": "Kimlik doğrulama ✓",
+    "titleStore": "{{store}} — Kimlik doğrulama ✓",
+    "subtitle": "Bu pencereyi kapatmak için B düğmesine basın"
   }
 }
