@@ -376,7 +376,7 @@
     "notCompatible": "Het formaat van dit spel is niet compatibel met SteamOS"
   },
   "authSuccess": {
-    "title": "Authenticatie ✓",
+    "title": "Authenticatie",
     "titleStore": "{{store}} — Authenticatie ✓",
     "subtitle": "Druk op de B-knop om dit venster te sluiten"
   }

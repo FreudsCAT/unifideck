@@ -376,7 +376,7 @@
     "notCompatible": "Le format de ce jeu n'est pas compatible avec SteamOS"
   },
   "authSuccess": {
-    "title": "Authentification ✓",
+    "title": "Authentification",
     "titleStore": "{{store}} — Authentification ✓",
     "subtitle": "Appuyez sur le bouton B pour fermer cette fenêtre"
   }
