@@ -2240,19 +2240,29 @@ else
     # Restore Steam Overlay/Input for native Linux games (critical for controller support)
     restore_steam_env
 
+    # Classic GOG Linux releases wrap DOSBox in start.sh, but that wrapper overwrites
+    # LD_LIBRARY_PATH and drops Steam Runtime's legacy libraries (e.g. libFLAC.so.8).
+    # Route those wrappers through a helper that preserves the bundled DOSBox libs
+    # while also layering in Steam Runtime's old compatibility libraries.
+    GOG_LINUX_DOSBOX_HELPER="$PLUGIN_DIR/bin/gog_linux_dosbox.py"
+    if [ "$STORE" = "gog" ] && [ "$(basename "$EXE_PATH")" = "start.sh" ] && [ -f "$GOG_LINUX_DOSBOX_HELPER" ]; then
+        log "[GOG] Using native DOSBox start.sh helper"
+        exec "$PYTHON_BIN" "$GOG_LINUX_DOSBOX_HELPER" "$EXE_PATH" "${GAME_ARGS[@]}" 2>>"$LOG_FILE"
+    fi
+
     if [ -f "$STEAM_RUNTIME_RUN" ]; then
         log "Using Steam Runtime: $STEAM_RUNTIME_RUN"
-        log "Executing: $STEAM_RUNTIME_RUN $EXE_PATH $*"
-        exec "$STEAM_RUNTIME_RUN" "$EXE_PATH" "$@" 2>>"$LOG_FILE"
+        log "Executing: $STEAM_RUNTIME_RUN $EXE_PATH ${GAME_ARGS[*]}"
+        exec "$STEAM_RUNTIME_RUN" "$EXE_PATH" "${GAME_ARGS[@]}" 2>>"$LOG_FILE"
     elif [ -f "$STEAM_RUNTIME_ALT" ]; then
         log "Using Steam Runtime (alt): $STEAM_RUNTIME_ALT"
-        log "Executing: $STEAM_RUNTIME_ALT $EXE_PATH $*"
-        exec "$STEAM_RUNTIME_ALT" "$EXE_PATH" "$@" 2>>"$LOG_FILE"
+        log "Executing: $STEAM_RUNTIME_ALT $EXE_PATH ${GAME_ARGS[*]}"
+        exec "$STEAM_RUNTIME_ALT" "$EXE_PATH" "${GAME_ARGS[@]}" 2>>"$LOG_FILE"
     else
         # Fallback: direct execution (may fail for old games needing legacy libs)
         log "No Steam Runtime found, executing directly"
-        log "Executing: $EXE_PATH $*"
-        exec "$EXE_PATH" "$@" 2>>"$LOG_FILE"
+        log "Executing: $EXE_PATH ${GAME_ARGS[*]}"
+        exec "$EXE_PATH" "${GAME_ARGS[@]}" 2>>"$LOG_FILE"
     fi
 fi
 

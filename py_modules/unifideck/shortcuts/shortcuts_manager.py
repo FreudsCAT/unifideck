@@ -649,9 +649,10 @@ class ShortcutsManager:
 
     def validate_gog_exe_paths(self, gog_client=None) -> Dict[str, Any]:
         """
-        Validate and auto-correct GOG executable paths that point to installers.
+        Validate and auto-correct GOG executable paths that point to installers or wrapper internals.
         
-        If a GOG game's exe_path looks like an installer file (large .sh, contains colon, etc.),
+        If a GOG game's exe_path looks like an installer file or an internal wrapper target
+        (for example a raw DOSBox.exe instead of the GOG-provided run-game.bat),
         this function re-runs the game executable detection and updates games.map.
         
         Args:
@@ -669,6 +670,25 @@ class ShortcutsManager:
         checked = 0
         corrections = []
         modified_lines = []
+
+        def get_candidate_install_dirs(exe_path: str, work_dir: str) -> List[str]:
+            candidates: List[str] = []
+            for candidate in (
+                work_dir,
+                os.path.dirname(exe_path) if exe_path else '',
+                os.path.dirname(work_dir) if work_dir else '',
+                os.path.dirname(os.path.dirname(exe_path)) if exe_path else '',
+            ):
+                if not candidate:
+                    continue
+                normalized = os.path.normpath(candidate)
+                if os.path.exists(normalized) and normalized not in candidates:
+                    candidates.append(normalized)
+            return candidates
+
+        def is_likely_suboptimal_wrapper_target(exe_path: str) -> bool:
+            basename = os.path.basename(exe_path).lower()
+            return basename in {'dosbox.exe', 'scummvm.exe', 'dosbox_x86_64', 'dosbox_i686'}
         
         try:
             with open(map_file, 'r') as f:
@@ -697,13 +717,13 @@ class ShortcutsManager:
                 checked += 1
                 
                 # Check if exe_path looks like an installer
-                is_likely_installer = False
+                needs_redetect = False
                 if exe_path and exe_path.endswith('.sh'):
                     try:
                         if os.path.exists(exe_path):
                             file_size = os.path.getsize(exe_path)
                             filename = os.path.basename(exe_path)
-                            is_likely_installer = (
+                            needs_redetect = (
                                 file_size > 50 * 1024 * 1024 or  # Over 50MB
                                 filename.startswith('gog_') or
                                 filename.startswith('setup_') or
@@ -711,34 +731,41 @@ class ShortcutsManager:
                             )
                     except Exception:
                         pass
+
+                if not needs_redetect and exe_path:
+                    needs_redetect = is_likely_suboptimal_wrapper_target(exe_path)
                 
-                if is_likely_installer and gog_client:
-                    logger.info(f"[ValidateGOG] Detected installer path for {key}: {exe_path}")
-                    
-                    # Get the install directory (parent of exe or work_dir)
-                    install_dir = work_dir if work_dir else os.path.dirname(exe_path)
-                    
-                    if install_dir and os.path.exists(install_dir):
-                        # Re-run executable detection
-                        new_exe = gog_client._find_game_executable(install_dir)
-                        
-                        if new_exe and new_exe != exe_path:
-                            logger.info(f"[ValidateGOG] Correcting path: {exe_path} -> {new_exe}")
-                            
-                            # Update the line
-                            new_work_dir = os.path.dirname(new_exe)
-                            parts[1] = new_exe
-                            parts[2] = new_work_dir
-                            corrected_line = '|'.join(parts) + '\n'
-                            modified_lines.append(corrected_line)
-                            
-                            corrections.append({
-                                'game_id': key,
-                                'old_path': exe_path,
-                                'new_path': new_exe
-                            })
-                            corrected += 1
+                if needs_redetect and gog_client:
+                    logger.info(f"[ValidateGOG] Re-detecting launch target for {key}: {exe_path}")
+
+                    for install_dir in get_candidate_install_dirs(exe_path, work_dir):
+                        new_target = gog_client._find_game_executable_with_workdir(install_dir)
+                        if not new_target:
                             continue
+
+                        new_exe, new_work_dir = new_target
+                        if new_exe == exe_path and new_work_dir == work_dir:
+                            break
+
+                        logger.info(f"[ValidateGOG] Correcting path: {exe_path} -> {new_exe}")
+
+                        parts[1] = new_exe
+                        parts[2] = new_work_dir
+                        corrected_line = '|'.join(parts) + '\n'
+                        modified_lines.append(corrected_line)
+
+                        corrections.append({
+                            'game_id': key,
+                            'old_path': exe_path,
+                            'new_path': new_exe
+                        })
+                        corrected += 1
+                        break
+                    else:
+                        modified_lines.append(line)
+                        continue
+
+                    continue
                 
                 # Keep original line if no correction needed
                 modified_lines.append(line)
@@ -747,7 +774,7 @@ class ShortcutsManager:
             if corrected > 0:
                 with open(map_file, 'w') as f:
                     f.writelines(modified_lines)
-                logger.info(f"[ValidateGOG] Corrected {corrected} installer paths in games.map")
+                logger.info(f"[ValidateGOG] Corrected {corrected} GOG launch targets in games.map")
             
         except Exception as e:
             logger.error(f"[ValidateGOG] Error: {e}")
