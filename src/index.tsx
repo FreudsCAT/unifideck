@@ -30,7 +30,7 @@ loadTranslations();
 // Import tab system
 import { patchLibrary, loadCompatCacheFromBackend } from "./tabs";
 
-import { syncUnifideckCollections } from "./spoofing/CollectionManager";
+import { syncUnifideckCollections, deleteAllUnifideckCollections } from "./spoofing/CollectionManager";
 
 // Import Downloads feature components
 import { DownloadsTab } from "./components/DownloadsTab";
@@ -1324,6 +1324,7 @@ const Content: FC = () => {
           deleted_artwork: number;
           deleted_files_count: number;
           preserved_shortcuts: number;
+          deleted_app_ids?: number[];
           error?: string;
         }
       >("perform_full_cleanup", { delete_files: deleteFiles });
@@ -1337,6 +1338,29 @@ const Content: FC = () => {
             `${result.deleted_artwork} artwork sets, ${result.deleted_files_count} files deleted`,
         );
 
+        // Remove shortcuts via Steam API so Steam's in-memory state is updated
+        // (writing shortcuts.vdf alone is not enough — Steam overwrites it)
+        if (result.deleted_app_ids?.length) {
+          console.log(
+            `[Unifideck] Removing ${result.deleted_app_ids.length} shortcuts via Steam API...`,
+          );
+          for (const appId of result.deleted_app_ids) {
+            try {
+              window.SteamClient.Apps.RemoveShortcut(appId);
+            } catch (err) {
+              console.warn(
+                `[Unifideck] Failed to remove shortcut ${appId}:`,
+                err,
+              );
+            }
+          }
+        }
+
+        // Delete all Unifideck Steam collections
+        await deleteAllUnifideckCollections().catch((err) =>
+          console.error("[Unifideck] Failed to delete collections:", err),
+        );
+
         toaster.toast({
           title: t("toasts.cleanupSuccessful"),
           body: t("toasts.cleanupSuccessfulMessage", {
@@ -1346,6 +1370,9 @@ const Content: FC = () => {
           }),
           duration: 8000,
         });
+
+        // Prompt user to restart Steam so changes take effect
+        showModal(<SteamRestartModal closeModal={() => {}} />);
       } else {
         console.error(`[Unifideck] Delete failed: ${result.error}`);
         toaster.toast({

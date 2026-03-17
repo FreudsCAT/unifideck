@@ -6396,10 +6396,18 @@ class Plugin:
                     new_shortcuts["shortcuts"][str(next_idx)] = shortcut
                     next_idx += 1
 
+                # Collect appIds of shortcuts to remove (for frontend Steam API calls)
+                deleted_app_ids = []
+                for idx, shortcut in unifideck_shortcuts.items():
+                    app_id = shortcut.get('appid')
+                    if app_id:
+                        deleted_app_ids.append(app_id)
+
                 # Write shortcuts
                 await self.shortcuts_manager.write_shortcuts(new_shortcuts)
                 stats['deleted_games'] = len(unifideck_shortcuts)
                 stats['preserved_shortcuts'] = len(original_shortcuts)
+                stats['deleted_app_ids'] = deleted_app_ids
 
                 # Delete artwork
                 if self.steamgriddb:
