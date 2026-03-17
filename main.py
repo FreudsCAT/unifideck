@@ -1445,6 +1445,7 @@ class SyncProgress:
         'sgdb_lookup': (50, 60),
         'checking_artwork': (60, 65),
         'artwork': (65, 95),
+        'artwork_retry': (65, 95),
         'proton_setup': (95, 98),
         'complete': (100, 100),
         'error': (100, 100),
@@ -1553,8 +1554,12 @@ class SyncProgress:
             sub_progress = self.unifidb_synced / self.unifidb_total
             return int(start_pct + (end_pct - start_pct) * sub_progress)
         
-        if self.status == 'syncing' and self.steam_total > 0:
-            sub_progress = self.steam_synced / self.steam_total
+        if self.status == 'sgdb_lookup' and self.total_games > 0:
+            sub_progress = self.synced_games / self.total_games
+            return int(start_pct + (end_pct - start_pct) * sub_progress)
+        
+        if self.status == 'syncing' and self.total_games > 0:
+            sub_progress = self.synced_games / self.total_games
             return int(start_pct + (end_pct - start_pct) * sub_progress)
         
         # For phases without counters, return the start of the phase range
@@ -2384,10 +2389,17 @@ class Plugin:
                     "values": {}
                 }
 
-                # Get games from all stores
+                # Get games from all stores (update progress per store)
+                self.sync_progress.current_game = {"label": "sync.fetchingStore", "values": {"store": "Epic Games"}}
                 epic_games = await self.epic.get_library()
+
+                self.sync_progress.current_game = {"label": "sync.fetchingStore", "values": {"store": "GOG"}}
                 gog_games = await self.gog.get_library()
+
+                self.sync_progress.current_game = {"label": "sync.fetchingStore", "values": {"store": "Amazon Games"}}
                 amazon_games = await self.amazon.get_library()
+
+                self.sync_progress.current_game = {"label": "sync.fetchingStore", "values": {"store": "Microsoft Store"}}
                 microsoft_games = await self.microsoft.get_library()
 
                 # Robustly handle API failures (None returns)
@@ -3011,10 +3023,17 @@ class Plugin:
                     "values": {}
                 }
 
-                # Get games from all stores
+                # Get games from all stores (update progress per store)
+                self.sync_progress.current_game = {"label": "sync.fetchingStore", "values": {"store": "Epic Games"}}
                 epic_games = await self.epic.get_library()
+
+                self.sync_progress.current_game = {"label": "sync.fetchingStore", "values": {"store": "GOG"}}
                 gog_games = await self.gog.get_library()
+
+                self.sync_progress.current_game = {"label": "sync.fetchingStore", "values": {"store": "Amazon Games"}}
                 amazon_games = await self.amazon.get_library()
+
+                self.sync_progress.current_game = {"label": "sync.fetchingStore", "values": {"store": "Microsoft Store"}}
                 microsoft_games = await self.microsoft.get_library()
 
                 # Robustly handle API failures (None returns)

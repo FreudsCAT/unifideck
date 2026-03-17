@@ -272,7 +272,8 @@
     "cleaningOrphanedArtwork": "Verwaiste Grafiken werden bereinigt...",
     "retryingMissingArtwork": "{{synced}}/{{total}} Spiele werden mit fehlenden Grafiken erneut versucht...",
     "savingShortcuts": "Verknüpfungen speichern...",
-    "completed": "Sync fertig! {{added}} hinzugefügt, {{artwork}} Artwork."
+    "completed": "Sync fertig! {{added}} hinzugefügt, {{artwork}} Artwork.",
+    "fetchingStore": "{{store}} wird abgerufen…"
   },
   "force_sync": {
     "migratingOldInstallations": "Force-Sync: Alte Installationen migrieren...",

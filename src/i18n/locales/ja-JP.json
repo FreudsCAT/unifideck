@@ -272,7 +272,8 @@
     "cleaningOrphanedArtwork": "孤立したアートワークをクリーンアップしています...",
     "retryingMissingArtwork": "アートワークが不足している{{synced}}/{{total}}個のゲームを再試行しています...",
     "savingShortcuts": "ショートカット保存中...",
-    "completed": "同期完了！{{added}}追加、アート{{artwork}}。"
+    "completed": "同期完了！{{added}}追加、アート{{artwork}}。",
+    "fetchingStore": "{{store}} を取得中…"
   },
   "force_sync": {
     "migratingOldInstallations": "強制同期：移行中...",

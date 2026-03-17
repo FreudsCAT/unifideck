@@ -272,7 +272,8 @@
     "cleaningOrphanedArtwork": "Pulizia delle immagini orfane...",
     "retryingMissingArtwork": "Riprovo {{synced}}/{{total}} giochi con immagini mancanti...",
     "savingShortcuts": "Salvataggio collegamenti...",
-    "completed": "Sync completata! {{added}} aggiunti, {{artwork}} artwork."
+    "completed": "Sync completata! {{added}} aggiunti, {{artwork}} artwork.",
+    "fetchingStore": "Recupero di {{store}}…"
   },
   "force_sync": {
     "migratingOldInstallations": "Sync forzata: Migrazione installazioni...",

@@ -272,7 +272,8 @@
     "cleaningOrphanedArtwork": "Очищення осиротілих обкладинок...",
     "retryingMissingArtwork": "Повторна спроба для {{synced}}/{{total}} ігор з відсутніми обкладинками...",
     "savingShortcuts": "Збереження ярликів...",
-    "completed": "Синхронізацію завершено! {{added}} додано, арт {{artwork}}."
+    "completed": "Синхронізацію завершено! {{added}} додано, арт {{artwork}}.",
+    "fetchingStore": "Завантаження {{store}}…"
   },
   "force_sync": {
     "migratingOldInstallations": "Примус. синхр.: Міграція інсталяцій...",

@@ -272,7 +272,8 @@
     "cleaningOrphanedArtwork": "Nettoyage des illustrations orphelines...",
     "retryingMissingArtwork": "Nouvelle tentative pour {{synced}}/{{total}} jeux avec illustrations manquantes...",
     "savingShortcuts": "Enregistrement des raccourcis…",
-    "completed": "Synchronisation terminée ! {{added}} ajoutés, {{artwork}} illustrations."
+    "completed": "Synchronisation terminée ! {{added}} ajoutés, {{artwork}} illustrations.",
+    "fetchingStore": "Récupération de {{store}}…"
   },
   "force_sync": {
     "migratingOldInstallations": "Synchronisation forcée : migration des anciennes installations…",

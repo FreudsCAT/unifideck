@@ -272,7 +272,8 @@
     "cleaningOrphanedArtwork": "Wees-artwork opruimen...",
     "retryingMissingArtwork": "{{synced}}/{{total}} spellen met ontbrekend artwork opnieuw proberen...",
     "savingShortcuts": "Snelkoppelingen opslaan...",
-    "completed": "Sync klaar! {{added}} toegevoegd, artwork {{artwork}}."
+    "completed": "Sync klaar! {{added}} toegevoegd, artwork {{artwork}}.",
+    "fetchingStore": "{{store}} ophalen…"
   },
   "force_sync": {
     "migratingOldInstallations": "Geforceerde sync: Migreren...",

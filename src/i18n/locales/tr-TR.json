@@ -275,7 +275,8 @@
     "cleaningOrphanedArtwork": "Sahipsiz görseller temizleniyor...",
     "retryingMissingArtwork": "Eksik görselleri olan {{count}} oyun tekrar deneniyor...",
     "savingShortcuts": "Kısayollar kaydediliyor...",
-    "completed": "Sync tamamlandı! {{added}} eklendi, görsel {{artwork}}."
+    "completed": "Sync tamamlandı! {{added}} eklendi, görsel {{artwork}}.",
+    "fetchingStore": "{{store}} alınıyor…"
   },
   "force_sync": {
     "migratingOldInstallations": "Zorla sync: Kurulumlar taşınıyor...",

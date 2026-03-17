@@ -272,7 +272,8 @@
     "cleaningOrphanedArtwork": "Cleaning up orphaned artwork...",
     "retryingMissingArtwork": "Retrying {{synced}} / {{total}} games with missing artwork...",
     "savingShortcuts": "Saving shortcuts...",
-    "completed": "Sync completed! Added {{added}}, Art {{artwork}}."
+    "completed": "Sync completed! Added {{added}}, Art {{artwork}}.",
+    "fetchingStore": "Fetching {{store}}..."
   },
   "force_sync": {
     "migratingOldInstallations": "Force sync: Migrating old installations...",

@@ -272,7 +272,8 @@
     "cleaningOrphanedArtwork": "고아 아트워크 정리 중...",
     "retryingMissingArtwork": "아트웍이 누락된 {{synced}}/{{total}}개 게임을 다시 시도하는 중...",
     "savingShortcuts": "바로가기 저장 중...",
-    "completed": "동기화 완료! {{added}} 추가, 아트워크 {{artwork}}."
+    "completed": "동기화 완료! {{added}} 추가, 아트워크 {{artwork}}.",
+    "fetchingStore": "{{store}} 가져오는 중…"
   },
   "force_sync": {
     "migratingOldInstallations": "강제 동기화: 설치 이전 중...",
