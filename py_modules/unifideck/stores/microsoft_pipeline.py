@@ -16,7 +16,7 @@ import urllib.parse
 import urllib.request
 from typing import List, Optional
 
-from .microsoft_auth import ssl_ctx_strict, ssl_ctx_permissive
+from .microsoft_auth import ssl_ctx_permissive
 
 logger = logging.getLogger(__name__)
 
@@ -114,7 +114,8 @@ def get_fe3_download_urls(
         headers={"Content-Type": "application/soap+xml; charset=UTF-8", "SOAPAction": ""},
         method="POST",
     )
-    with urllib.request.urlopen(req, timeout=30, context=ssl_ctx_strict()) as r:
+    # FE3 delivery servers may use certificates not in certifi's CA bundle
+    with urllib.request.urlopen(req, timeout=30, context=ssl_ctx_permissive()) as r:
         response = r.read().decode("utf-8")
 
     raw_urls = re.findall(r"<Url>([^<]+)</Url>", response)
