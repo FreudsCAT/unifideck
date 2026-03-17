@@ -4,7 +4,14 @@ Microsoft Store connector for Unifideck.
 Authenticates via Microsoft OAuth + Xbox Live token chain, queries the
 Xbox Title Hub API to list the user's game library, then filters for
 PC-compatible titles.  Download/install uses the FE3 (Windows Update)
-delivery endpoint.  Game Pass and UWP-only games are excluded.
+delivery endpoint.  UWP-only titles (FulfillmentType=XVC) are marked
+as not compatible.
+
+Ownership limitation: the Title Hub returns all games the user has ever
+interacted with (purchases, Game Pass, Xbox overlay).  The Collections
+API that verifies actual ownership requires Partner Center configuration
+that is unavailable to third-party tools.  Users can hide unwanted games
+via Steam's built-in hide feature.
 
 Auth flow
 ---------

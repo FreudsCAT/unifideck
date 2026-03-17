@@ -2,7 +2,9 @@
  * AuthSuccessModal.tsx
  *
  * Full-screen modal displayed after successful store authentication.
- * Pressing B/OK closes the modal and navigates to Steam library home.
+ * Shows a checkmark with "Authentication" message.
+ * Pressing B closes the modal and navigates to Steam library home.
+ * No buttons — B is the only interaction.
  *
  * Reusable for any store (Microsoft, Epic, GOG, Amazon).
  * Uses the i18n system for translations (14 locales).
@@ -27,7 +29,6 @@ export const AuthSuccessModal: FC<AuthSuccessModalProps> = ({
 
   const handleClose = () => {
     closeModal?.();
-    // Navigate to the Steam library home
     try {
       Navigation.Navigate("/library/home");
     } catch (e) {
@@ -43,7 +44,8 @@ export const AuthSuccessModal: FC<AuthSuccessModalProps> = ({
           : t("authSuccess.title")
       }
       strDescription={t("authSuccess.subtitle")}
-      strOKButtonText={t("authSuccess.close")}
+      strOKButtonText=""
+      strCancelButtonText=""
       onOK={handleClose}
       onCancel={handleClose}
     />

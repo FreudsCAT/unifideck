@@ -376,9 +376,9 @@
     "notCompatible": "このゲームのフォーマットはSteamOSに対応していません"
   },
   "authSuccess": {
-    "title": "認証が完了しました！",
-    "titleStore": "{{store}} — 認証が完了しました！",
+    "title": "認証",
+    "titleStore": "{{store}} — 認証",
     "subtitle": "Bボタンを押してこのウィンドウを閉じてください",
-    "close": "閉じる"
+    "close": ""
   }
 }

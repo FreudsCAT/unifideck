@@ -376,9 +376,9 @@
     "notCompatible": "This game format is not compatible with SteamOS"
   },
   "authSuccess": {
-    "title": "Authentication complete!",
-    "titleStore": "{{store}} — Authentication complete!",
+    "title": "Authentication",
+    "titleStore": "{{store}} — Authentication",
     "subtitle": "Press the B button to close this window",
-    "close": "Close"
+    "close": ""
   }
 }
