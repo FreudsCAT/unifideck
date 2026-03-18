@@ -85,6 +85,9 @@ class MicrosoftConnector(Store):
         self._settings_cache: Optional[Dict[str, Any]] = None
         # xCloud subscription status (set during get_library)
         self._no_subscription: bool = False
+        # Chromium subprocess for auth (CDP interception on port 9222)
+        self._chromium_process = None
+        self._chromium_cdp_port: int = 9222
         self._load_tokens()
         logger.info("[MS] MicrosoftConnector initialised")
 
