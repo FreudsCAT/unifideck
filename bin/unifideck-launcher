@@ -831,6 +831,9 @@ if [ "$EXE_PATH" = "xcloud" ]; then
         "--disable-features=TranslateUI"
         "--autoplay-policy=no-user-gesture-required"
         "--window-size=1280,800"
+        # Gamepad support — ensures Steam Deck controls work in xCloud
+        "--enable-gamepad-button-axis-events"
+        "--enable-features=WebGamepad"
     )
 
     if command -v flatpak &>/dev/null && flatpak info org.chromium.Chromium &>/dev/null 2>&1; then
