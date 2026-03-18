@@ -310,7 +310,7 @@ class MicrosoftConnector(Store):
             proc = await asyncio.get_event_loop().run_in_executor(
                 None,
                 lambda: subprocess.run(
-                    ["flatpak", "install", "-y", "flathub", "org.chromium.Chromium"],
+                    ["flatpak", "install", "--user", "-y", "flathub", "org.chromium.Chromium"],
                     capture_output=True, timeout=300,
                 ),
             )
