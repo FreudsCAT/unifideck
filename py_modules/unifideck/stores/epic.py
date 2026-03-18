@@ -509,11 +509,12 @@ class EpicConnector(Store):
         logger.info(f"[Epic] Found {len(candidates)} executable candidates, selecting: {candidates[0][0]}")
         return candidates[0][0]
 
-    async def install_game(self, game_id: str, progress_callback=None) -> Dict[str, Any]:
+    async def install_game(self, game_id: str, base_path: str = None, progress_callback=None) -> Dict[str, Any]:
         """Install Epic game using legendary CLI
 
         Args:
             game_id: Epic game app_name (ID)
+            base_path: Optional install directory (defaults to ~/Games/Epic)
             progress_callback: Optional async function to call with progress updates
 
         Returns:
@@ -527,7 +528,8 @@ class EpicConnector(Store):
 
         try:
             # legendary install GAME_ID --base-path ~/Games/Epic
-            base_path = os.path.expanduser("~/Games/Epic")
+            if not base_path:
+                base_path = os.path.expanduser("~/Games/Epic")
             os.makedirs(base_path, exist_ok=True)
 
             logger.info(f"[Epic] Starting installation of {game_id} to {base_path}")

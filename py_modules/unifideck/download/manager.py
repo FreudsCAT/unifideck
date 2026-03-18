@@ -5,7 +5,7 @@ Manages download queue for Epic and GOG games with:
 - Queue persistence across plugin restarts
 - Real-time progress tracking via CLI output parsing
 - Cancel functionality
-- Storage location selection (Internal/SD Card)
+- Storage location selection (Internal/SD Card/Custom)
 """
 
 import os
@@ -35,6 +35,7 @@ class DownloadStatus(str, Enum):
 class StorageLocation(str, Enum):
     INTERNAL = "internal"
     SDCARD = "sdcard"
+    CUSTOM = "custom"
 
 
 # Storage paths
@@ -300,11 +301,11 @@ class DownloadQueue:
     def get_storage_locations(self) -> List[Dict[str, Any]]:
         """Get available storage locations with free space info"""
         locations = []
-        
+
         for loc, path in STORAGE_PATHS.items():
             available = False
             free_space_gb = 0
-            
+
             # Check if path exists or can be created
             if loc == StorageLocation.INTERNAL:
                 available = True
@@ -325,7 +326,7 @@ class DownloadQueue:
                         free_space_gb = (statvfs.f_frsize * statvfs.f_bavail) / (1024**3)
                     except:
                         pass
-            
+
             locations.append({
                 'id': loc,
                 'label': 'downloadsTab.internalStorage' if loc == StorageLocation.INTERNAL else 'downloadsTab.sdCard',
@@ -333,12 +334,38 @@ class DownloadQueue:
                 'available': available,
                 'free_space_gb': round(free_space_gb, 1) if available else 0
             })
-        
+
+        # Add custom location if configured
+        custom_path = self._get_custom_path()
+        if custom_path:
+            available = os.path.isdir(custom_path)
+            free_space_gb = 0
+            if available:
+                try:
+                    statvfs = os.statvfs(custom_path)
+                    free_space_gb = round((statvfs.f_frsize * statvfs.f_bavail) / (1024**3), 1)
+                except:
+                    pass
+
+            locations.append({
+                'id': StorageLocation.CUSTOM,
+                'label': 'downloadsTab.customLocation',
+                'path': custom_path,
+                'available': available,
+                'free_space_gb': free_space_gb
+            })
+
         return locations
 
     def get_install_path(self, storage_location: str) -> str:
         """Get the install path for a storage location"""
-        if storage_location == StorageLocation.SDCARD:
+        if storage_location == StorageLocation.CUSTOM:
+            custom_path = self._get_custom_path()
+            if custom_path and os.path.isdir(custom_path):
+                return custom_path
+            logger.warning("[DownloadQueue] Custom path unavailable, falling back to internal")
+            return os.path.expanduser("~/Games")
+        elif storage_location == StorageLocation.SDCARD:
             sd_root = self._resolve_sd_path()
             if sd_root:
                 return os.path.join(sd_root, "Games")
@@ -378,6 +405,196 @@ class DownloadQueue:
             if os.path.exists(path) and os.path.isdir(path):
                 return path
         return None
+
+    def _get_custom_path(self) -> Optional[str]:
+        """Get the saved custom install path from settings"""
+        try:
+            if os.path.exists(self.SETTINGS_FILE):
+                with open(self.SETTINGS_FILE, 'r') as f:
+                    settings = json.load(f)
+                return settings.get('custom_path')
+        except Exception:
+            pass
+        return None
+
+    def set_custom_path(self, path: str) -> Dict[str, Any]:
+        """Validate and save a custom install path.
+
+        Returns:
+            Dict with success, error (i18n key), and free_space_gb
+        """
+        validation = self.validate_install_path(path)
+        if not validation.get('valid'):
+            return {'success': False, 'error': validation.get('error', 'Unknown error')}
+
+        try:
+            os.makedirs(os.path.dirname(self.SETTINGS_FILE), exist_ok=True)
+            settings = {}
+            if os.path.exists(self.SETTINGS_FILE):
+                with open(self.SETTINGS_FILE, 'r') as f:
+                    settings = json.load(f)
+            settings['custom_path'] = path
+            settings['default_storage'] = StorageLocation.CUSTOM
+            with open(self.SETTINGS_FILE, 'w') as f:
+                json.dump(settings, f)
+            logger.info(f"[DownloadQueue] Set custom install path: {path}")
+            return {
+                'success': True,
+                'free_space_gb': validation.get('free_space_gb', 0)
+            }
+        except Exception as e:
+            logger.error(f"[DownloadQueue] Error saving custom path: {e}")
+            return {'success': False, 'error': str(e)}
+
+    def clear_custom_path(self) -> bool:
+        """Remove the custom install path and revert to internal storage."""
+        try:
+            if os.path.exists(self.SETTINGS_FILE):
+                with open(self.SETTINGS_FILE, 'r') as f:
+                    settings = json.load(f)
+                settings.pop('custom_path', None)
+                if settings.get('default_storage') == StorageLocation.CUSTOM:
+                    settings['default_storage'] = StorageLocation.INTERNAL
+                with open(self.SETTINGS_FILE, 'w') as f:
+                    json.dump(settings, f)
+            logger.info("[DownloadQueue] Cleared custom install path")
+            return True
+        except Exception as e:
+            logger.error(f"[DownloadQueue] Error clearing custom path: {e}")
+            return False
+
+    def validate_install_path(self, path: str) -> Dict[str, Any]:
+        """Validate a path is suitable for game installation.
+
+        Returns:
+            Dict with 'valid' bool, optional 'error' i18n key, and 'free_space_gb'
+        """
+        # 1. Must be absolute
+        if not os.path.isabs(path):
+            return {'valid': False, 'error': 'storageSettings.validationErrors.notAbsolute'}
+
+        # 2. Resolve symlinks for safety
+        real_path = os.path.realpath(path)
+
+        # 3. Not a system directory
+        BLOCKED = {'/', '/usr', '/etc', '/bin', '/sbin', '/boot',
+                   '/dev', '/proc', '/sys', '/tmp', '/var', '/lib'}
+        if real_path in BLOCKED:
+            return {'valid': False, 'error': 'storageSettings.validationErrors.systemDir'}
+
+        # Also block paths directly under system dirs (e.g. /usr/games)
+        top_level = '/' + real_path.strip('/').split('/')[0] if real_path != '/' else '/'
+        if top_level in BLOCKED and top_level != '/':
+            return {'valid': False, 'error': 'storageSettings.validationErrors.systemDir'}
+
+        # 4. Not home root
+        home = os.path.realpath(os.path.expanduser("~"))
+        if real_path == home:
+            return {'valid': False, 'error': 'storageSettings.validationErrors.homeRoot'}
+
+        # 5. Directory exists or parent is writable
+        if os.path.exists(real_path):
+            if not os.path.isdir(real_path):
+                return {'valid': False, 'error': 'storageSettings.validationErrors.notWritable'}
+        else:
+            parent = os.path.dirname(real_path)
+            if not os.path.isdir(parent) or not os.access(parent, os.W_OK):
+                return {'valid': False, 'error': 'storageSettings.validationErrors.notFound'}
+
+        # 6. Writable check via temp file
+        test_dir = real_path if os.path.isdir(real_path) else os.path.dirname(real_path)
+        try:
+            test_file = os.path.join(test_dir, '.unifideck_write_test')
+            with open(test_file, 'w') as f:
+                f.write('test')
+            os.remove(test_file)
+        except (OSError, PermissionError):
+            return {'valid': False, 'error': 'storageSettings.validationErrors.notWritable'}
+
+        # 7. Free space
+        free_space_gb = 0
+        try:
+            statvfs = os.statvfs(test_dir)
+            free_space_gb = round((statvfs.f_frsize * statvfs.f_bavail) / (1024**3), 1)
+        except Exception:
+            pass
+
+        return {'valid': True, 'free_space_gb': free_space_gb}
+
+    def get_browseable_devices(self) -> List[Dict[str, Any]]:
+        """Get available device roots for quick navigation in the file picker."""
+        devices = []
+
+        # Internal storage (home directory)
+        home = os.path.expanduser("~")
+        devices.append({
+            'id': 'internal',
+            'label': 'Internal Storage',
+            'path': home,
+        })
+
+        # SD card
+        sd_root = self._resolve_sd_path()
+        sd_real = os.path.realpath(sd_root) if sd_root else None
+        if sd_root:
+            # Use the mount name as the label (e.g., "microSTEAMDECK")
+            sd_name = os.path.basename(sd_root)
+            devices.append({
+                'id': 'sdcard',
+                'label': f'SD Card ({sd_name})',
+                'path': sd_root,
+            })
+
+        # Other mounted devices under /run/media/
+        media_base = "/run/media"
+        if os.path.isdir(media_base):
+            try:
+                for user_dir in os.listdir(media_base):
+                    user_path = os.path.join(media_base, user_dir)
+                    if not os.path.isdir(user_path):
+                        continue
+                    for mount in os.listdir(user_path):
+                        mount_path = os.path.join(user_path, mount)
+                        if not os.path.isdir(mount_path):
+                            continue
+                        mount_real = os.path.realpath(mount_path)
+                        # Skip if this is the SD card we already added
+                        if sd_real and mount_real == sd_real:
+                            continue
+                        devices.append({
+                            'id': f'usb:{mount}',
+                            'label': f'USB: {mount}',
+                            'path': mount_path,
+                        })
+            except Exception as e:
+                logger.debug(f"[DownloadQueue] Error scanning media devices: {e}")
+
+        return devices
+
+    def create_directory(self, path: str) -> Dict[str, Any]:
+        """Create a directory at the given path (with safety validation)."""
+        if not os.path.isabs(path):
+            return {'success': False, 'error': 'storageSettings.validationErrors.notAbsolute'}
+
+        real_path = os.path.realpath(path)
+        BLOCKED = {'/', '/usr', '/etc', '/bin', '/sbin', '/boot',
+                   '/dev', '/proc', '/sys', '/tmp', '/var', '/lib'}
+        if real_path in BLOCKED:
+            return {'success': False, 'error': 'storageSettings.validationErrors.systemDir'}
+
+        home = os.path.realpath(os.path.expanduser("~"))
+        if real_path == home:
+            return {'success': False, 'error': 'storageSettings.validationErrors.homeRoot'}
+
+        try:
+            os.makedirs(path, exist_ok=True)
+            logger.info(f"[DownloadQueue] Created directory: {path}")
+            return {'success': True, 'path': path}
+        except PermissionError:
+            return {'success': False, 'error': 'storageSettings.validationErrors.notWritable'}
+        except Exception as e:
+            logger.error(f"[DownloadQueue] Error creating directory: {e}")
+            return {'success': False, 'error': str(e)}
 
     async def add_to_queue(
         self,

@@ -13,7 +13,23 @@
     "toastUpdatedBody": "New games will be installed to {{location}}",
     "toastFailedTitle": "Failed to Update",
     "toastFailedBody": "{{error}}",
-    "unknown": "Unknown"
+    "unknown": "Unknown",
+    "browseButton": "Browse...",
+    "browseFromDevice": "Browse from device:",
+    "clearCustom": "Clear Custom Location",
+    "customPathSet": "Custom install location set",
+    "newFolder": "New Folder",
+    "newFolderTitle": "Create New Folder",
+    "newFolderDevice": "Location",
+    "newFolderName": "Folder Name",
+    "newFolderCreate": "Create",
+    "newFolderHint": "The folder will be created and opened for selection.",
+    "folderCreated": "Folder created",
+    "validationErrors.notAbsolute": "Path must be absolute",
+    "validationErrors.systemDir": "Cannot use a system directory",
+    "validationErrors.notWritable": "Location is not writable",
+    "validationErrors.notFound": "Directory does not exist",
+    "validationErrors.homeRoot": "Cannot use home directory root"
   },
   "gameGrid": {
     "loading": "Loading games...",
@@ -52,7 +68,8 @@
     "phaseExtracting": "Extracting {{game}}...",
     "phaseVerifying": "Verifying {{game}}...",
     "internalStorage": "Internal Storage ({{freeSpace}} GB free)",
-    "sdCard": "SD Card ({{freeSpace}} GB free)"
+    "sdCard": "SD Card ({{freeSpace}} GB free)",
+    "customLocation": "Custom: {{path}} ({{freeSpace}} GB free)"
   },
   "cloudSave": {
     "title": "Cloud Save Conflict",

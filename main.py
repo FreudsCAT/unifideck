@@ -5473,6 +5473,48 @@ class Plugin:
             logger.error(f"[DownloadQueue] Error setting storage location: {e}")
             return {'success': False, 'error': str(e)}
 
+    async def set_custom_install_path(self, path: str) -> Dict[str, Any]:
+        """Validate and set a custom install path for game downloads"""
+        try:
+            return self.download_queue.set_custom_path(path)
+        except Exception as e:
+            logger.error(f"[DownloadQueue] Error setting custom install path: {e}")
+            return {'success': False, 'error': str(e)}
+
+    async def validate_install_path(self, path: str) -> Dict[str, Any]:
+        """Validate a path for game installation without saving it"""
+        try:
+            return self.download_queue.validate_install_path(path)
+        except Exception as e:
+            logger.error(f"[DownloadQueue] Error validating install path: {e}")
+            return {'valid': False, 'error': str(e)}
+
+    async def clear_custom_install_path(self) -> Dict[str, Any]:
+        """Clear the custom install path and revert to internal storage"""
+        try:
+            success = self.download_queue.clear_custom_path()
+            return {'success': success}
+        except Exception as e:
+            logger.error(f"[DownloadQueue] Error clearing custom install path: {e}")
+            return {'success': False, 'error': str(e)}
+
+    async def get_browseable_devices(self) -> Dict[str, Any]:
+        """Get available device roots for quick-access file picker navigation"""
+        try:
+            devices = self.download_queue.get_browseable_devices()
+            return {'success': True, 'devices': devices}
+        except Exception as e:
+            logger.error(f"[DownloadQueue] Error getting browseable devices: {e}")
+            return {'success': False, 'error': str(e)}
+
+    async def create_directory(self, path: str) -> Dict[str, Any]:
+        """Create a directory at the given path for game installation"""
+        try:
+            return self.download_queue.create_directory(path)
+        except Exception as e:
+            logger.error(f"[DownloadQueue] Error creating directory: {e}")
+            return {'success': False, 'error': str(e)}
+
     # ============== END DOWNLOAD QUEUE API ==============
 
     # ============== LANGUAGE SETTINGS API ==============
@@ -6360,9 +6402,12 @@ class Plugin:
                                         install_dir = parts[2]
                                         
                                         # Safety check: ensure we're deleting from expected locations
-                                        # Only delete if path contains "Games", "Epic", "GOG", or "unifideck"
-                                        # and is NOT root or home root
+                                        # Only delete if path contains "Games", "Epic", "GOG", "unifideck",
+                                        # or is under the user's custom install path
                                         safe_keywords = ['/Games/', '/Epic', '/GOG', 'unifideck']
+                                        custom_path = self.download_queue._get_custom_path()
+                                        if custom_path:
+                                            safe_keywords.append(os.path.realpath(custom_path))
                                         is_safe = any(k in install_dir for k in safe_keywords)
                                         home_dir = os.path.expanduser("~")
                                         games_dir = os.path.join(home_dir, "Games")

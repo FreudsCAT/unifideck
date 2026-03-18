@@ -5,6 +5,7 @@ This module provides consistent path handling across all store connectors,
 ensuring SD cards and external drives are properly detected.
 """
 import os
+import json
 import logging
 from typing import List
 
@@ -19,6 +20,9 @@ DEFAULT_PATHS = {
 
 # games.map location (user data, survives plugin reinstall)
 GAMES_MAP_PATH = os.path.expanduser("~/.local/share/unifideck/games.map")
+
+# Download settings (stores custom_path)
+DOWNLOAD_SETTINGS_PATH = os.path.expanduser("~/.local/share/unifideck/download_settings.json")
 
 
 def get_all_game_directories() -> List[str]:
@@ -49,6 +53,17 @@ def get_all_game_directories() -> List[str]:
     if os.path.isdir(gog_home) and gog_home not in paths:
         paths.append(gog_home)
     
+    # Add custom install path from download settings (if configured)
+    try:
+        if os.path.exists(DOWNLOAD_SETTINGS_PATH):
+            with open(DOWNLOAD_SETTINGS_PATH, 'r') as f:
+                settings = json.load(f)
+            custom_path = settings.get('custom_path')
+            if custom_path and os.path.isdir(custom_path):
+                paths.append(custom_path)
+    except Exception as e:
+        logger.debug(f"[Paths] Could not read custom path from download settings: {e}")
+
     # Scan mounted media (SD cards, USB drives)
     media_base = "/run/media"
     if os.path.exists(media_base):
