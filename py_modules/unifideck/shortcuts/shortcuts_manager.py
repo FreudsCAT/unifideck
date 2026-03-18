@@ -299,6 +299,9 @@ class ShortcutsManager:
         if len(parts) >= 3:
             exe_path = parts[1]
             work_dir = parts[2]
+            # xCloud entries use 'xcloud' as exe_path — not a real file
+            if exe_path == "xcloud":
+                return True
             path_to_check = exe_path if exe_path else work_dir
             if path_to_check and os.path.exists(path_to_check):
                 return True
@@ -436,6 +439,12 @@ class ShortcutsManager:
                 exe_path = parts[1]
                 work_dir = parts[2]
                 
+                # xCloud entries use 'xcloud' as exe_path — always valid
+                if exe_path == "xcloud":
+                    valid_lines.append(line)
+                    kept += 1
+                    continue
+
                 # Check if executable exists (primary check)
                 # If exe_path is empty, check work_dir instead
                 path_to_check = exe_path if exe_path else work_dir
@@ -621,6 +630,19 @@ class ShortcutsManager:
                             await self._update_game_map('microsoft', game_id, executable or '', install_path)
                             added += 1
                             logger.info(f"[ReconcileMap] Added Microsoft '{game_title}' to games.map")
+                        else:
+                            skipped += 1
+                            logger.debug(f"[ReconcileMap] Microsoft '{game_title}' not installed or path missing")
+
+                    elif store == 'microsoft' and game_id not in microsoft_installed:
+                        # xCloud games are not locally installed — add with xcloud marker
+                        from ..utils.game_tags import load_game_tags
+                        tags = load_game_tags('microsoft', game_id)
+                        if tags and 'xcloud' in tags:
+                            xcloud_url = f"https://www.xbox.com/play/launch/{game_id}"
+                            await self._update_game_map('microsoft', game_id, 'xcloud', xcloud_url)
+                            added += 1
+                            logger.info(f"[ReconcileMap] Added xCloud '{game_title}' to games.map")
                         else:
                             skipped += 1
                             logger.debug(f"[ReconcileMap] Microsoft '{game_title}' not installed or path missing")
