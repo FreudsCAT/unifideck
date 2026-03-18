@@ -2524,7 +2524,13 @@ class Plugin:
                             logger.debug(f"Updated games.map for Amazon game {game.id}")
 
                 for game in microsoft_games:
-                    if game.is_installed and game.executable:
+                    if game.store_tags and "xcloud" in game.store_tags:
+                        # xCloud games: map entry with special marker for the launcher
+                        xcloud_url = f"https://www.xbox.com/play/launch/{game.id}"
+                        await self.shortcuts_manager._update_game_map(
+                            'microsoft', game.id, 'xcloud', xcloud_url
+                        )
+                    elif game.is_installed and game.executable:
                         exe_path = game.executable
                         work_dir = game.install_path or os.path.dirname(exe_path)
                         await self.shortcuts_manager._update_game_map('microsoft', game.id, exe_path, work_dir)
@@ -3131,7 +3137,13 @@ class Plugin:
                             logger.debug(f"Updated games.map for Amazon game {game.id}")
 
                 for game in microsoft_games:
-                    if game.is_installed and game.executable:
+                    if game.store_tags and "xcloud" in game.store_tags:
+                        # xCloud games: map entry with special marker for the launcher
+                        xcloud_url = f"https://www.xbox.com/play/launch/{game.id}"
+                        await self.shortcuts_manager._update_game_map(
+                            'microsoft', game.id, 'xcloud', xcloud_url
+                        )
+                    elif game.is_installed and game.executable:
                         exe_path = game.executable
                         work_dir = game.install_path or os.path.dirname(exe_path)
                         await self.shortcuts_manager._update_game_map('microsoft', game.id, exe_path, work_dir)

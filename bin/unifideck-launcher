@@ -808,6 +808,25 @@ fi
 log "Executable: $EXE_PATH"
 log "Work Dir: $WORK_DIR"
 
+# 4a. Xbox Cloud Gaming — stream via browser instead of running a local exe
+if [ "$EXE_PATH" = "xcloud" ]; then
+    log "xCloud game detected — launching via browser: $WORK_DIR"
+    notify_stage "toasts.launcher.launchingGame" "Xbox Cloud Gaming" "low"
+
+    # Open the xCloud URL in Steam's CEF browser.
+    # WORK_DIR contains the full URL (https://www.xbox.com/play/launch/{productId}).
+    if command -v xdg-open &>/dev/null; then
+        xdg-open "$WORK_DIR" 2>>"$LOG_FILE" &
+    else
+        python3 -c "import webbrowser; webbrowser.open('$WORK_DIR')" 2>>"$LOG_FILE" &
+    fi
+
+    # Keep the launcher alive briefly so Steam shows "Running" state
+    sleep 3
+    log "xCloud browser launched, exiting launcher"
+    exit 0
+fi
+
 # 4. Check if executable exists
 if [ ! -f "$EXE_PATH" ]; then
     log "ERROR: Executable not found: $EXE_PATH"
