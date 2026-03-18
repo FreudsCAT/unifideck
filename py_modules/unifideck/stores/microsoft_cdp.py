@@ -22,6 +22,7 @@ __all__ = ["intercept_oauth_code"]
 async def intercept_oauth_code(
     pending_auth_url: str,
     timeout: float = 300,
+    cdp_port: int = 8080,
 ) -> Optional[str]:
     """
     Capture the OAuth code via Network.requestWillBeSent on the MS login popup.
@@ -34,6 +35,7 @@ async def intercept_oauth_code(
     Args:
         pending_auth_url: The full OAuth URL to re-navigate to if removed=true.
         timeout: Maximum seconds to wait for the OAuth code.
+        cdp_port: CDP debugging port (8080 for Steam CEF, 9222 for Chromium).
 
     Returns:
         The OAuth authorization code, or None on timeout/failure.
@@ -60,7 +62,7 @@ async def intercept_oauth_code(
     def scan_pages():
         """Return list of (url, ws_url) for unseen MS login pages."""
         try:
-            with _req.urlopen("http://127.0.0.1:8080/json", timeout=2) as r:
+            with _req.urlopen(f"http://127.0.0.1:{cdp_port}/json", timeout=2) as r:
                 pages = json.loads(r.read().decode())
             result = []
             for page in pages:

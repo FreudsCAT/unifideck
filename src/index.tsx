@@ -1226,7 +1226,7 @@ const Content: FC = () => {
 
       const result = await call<
         [],
-        { success: boolean; url?: string; message?: string; error?: string }
+        { success: boolean; url?: string; chromium_auth?: boolean; message?: string; error?: string }
       >(methodName);
 
       if (result.success && result.url) {
@@ -1278,6 +1278,38 @@ const Content: FC = () => {
           });
 
         // Return immediately - don't block waiting for auth to complete
+      } else if (result.success && result.chromium_auth) {
+        // Chromium handles the browser window — no popup needed.
+        // Backend kills Chromium when auth completes.
+        console.log(
+          `[Unifideck] ${store} auth opened in Chromium. Backend monitoring via CDP...`,
+        );
+
+        pollForAuthCompletion(store)
+          .then(async (completed) => {
+            if (completed) {
+              console.log(
+                `[Unifideck] ✓ ${storeName} authentication successful!`,
+              );
+              toaster.toast({
+                title: t("toasts.authConnected"),
+                body: t("toasts.authConnectedMessage", { store: storeName }),
+                duration: 5000,
+              });
+              await checkStoreStatus();
+            } else {
+              console.log(`[Unifideck] ${storeName} authentication timed out`);
+              toaster.toast({
+                title: t("toasts.authTimeout"),
+                body: t("toasts.authTimeoutMessage", { store: storeName }),
+                critical: true,
+                duration: 5000,
+              });
+            }
+          })
+          .catch((error) => {
+            console.error(`[Unifideck] Error polling ${store} auth:`, error);
+          });
       } else {
         toaster.toast({
           title: t("toasts.authFailed"),

@@ -378,7 +378,11 @@
     "notCompatible": "이 게임의 포맷은 SteamOS와 호환되지 않습니다",
     "playOnCloud": "클라우드에서 플레이",
     "xcloudStreaming": "Xbox Cloud Gaming",
-    "noSubscription": "계정에서 Xbox Game Pass 구독을 찾을 수 없습니다. xCloud 게임이 동기화되지 않습니다."
+    "noSubscription": "계정에서 Xbox Game Pass 구독을 찾을 수 없습니다. xCloud 게임이 동기화되지 않습니다.",
+    "signInMessage": "Microsoft / Xbox 계정으로 로그인",
+    "accountConnected": "Microsoft 계정이 연결되었습니다",
+    "loggedOut": "Microsoft Store에서 로그아웃되었습니다",
+    "xcloudNotInstalled": "xCloud 게임이 로컬에 설치되어 있지 않습니다"
   },
   "authSuccess": {
     "title": "인증",

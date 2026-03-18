@@ -378,7 +378,11 @@
     "notCompatible": "このゲームのフォーマットはSteamOSに対応していません",
     "playOnCloud": "クラウドでプレイ",
     "xcloudStreaming": "Xbox Cloud Gaming",
-    "noSubscription": "アカウントにXbox Game Passのサブスクリプションが見つかりません。xCloudゲームは同期されません。"
+    "noSubscription": "アカウントにXbox Game Passのサブスクリプションが見つかりません。xCloudゲームは同期されません。",
+    "signInMessage": "Microsoft / Xbox アカウントでサインイン",
+    "accountConnected": "Microsoft アカウントが接続されました",
+    "loggedOut": "Microsoft Store からログアウトしました",
+    "xcloudNotInstalled": "xCloud ゲームはローカルにインストールされていません"
   },
   "authSuccess": {
     "title": "認証",

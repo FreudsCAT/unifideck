@@ -25,6 +25,7 @@ see ``utils/locale.py``.
 """
 
 import asyncio
+import subprocess
 import json
 import logging
 import os
@@ -206,6 +207,90 @@ class MicrosoftConnector(Store):
         except Exception:
             return False
 
+
+    # ── Chromium auth browser ────────────────────────────────────────────
+
+    def _find_chromium_cmd(self) -> Optional[list]:
+        """Find available Chromium/Chrome command.
+
+        Returns:
+            Command as a list (for subprocess), or None if not found.
+        """
+        import shutil
+        # Flatpak Chromium
+        if shutil.which("flatpak"):
+            for app_id in ("org.chromium.Chromium", "com.google.Chrome"):
+                try:
+                    result = subprocess.run(
+                        ["flatpak", "info", app_id],
+                        capture_output=True, timeout=5
+                    )
+                    if result.returncode == 0:
+                        return ["flatpak", "run", app_id]
+                except Exception:
+                    pass
+        # Native installs
+        for binary in ("chromium", "chromium-browser", "google-chrome"):
+            if shutil.which(binary):
+                return [binary]
+        return None
+
+    def _launch_chromium_auth(self, auth_url: str) -> bool:
+        """Launch Chromium with remote debugging for OAuth interception.
+
+        Opens Chromium in app mode (no tabs/address bar) with
+        ``--remote-debugging-port`` so CDP can intercept the OAuth redirect.
+        Cookies persist in Chromium's default profile, so xbox.com/play
+        will reuse the session for xCloud streaming.
+
+        Returns:
+            True if Chromium was launched successfully.
+        """
+        self._kill_chromium()  # Kill any lingering instance
+
+        cmd = self._find_chromium_cmd()
+        if not cmd:
+            logger.warning("[MS] No Chromium/Chrome found for auth")
+            return False
+
+        args = cmd + [
+            f"--app={auth_url}",
+            f"--remote-debugging-port={self._chromium_cdp_port}",
+            "--no-first-run",
+            "--disable-translate",
+            "--disable-infobars",
+            "--disable-session-crashed-bubble",
+            "--disable-features=TranslateUI",
+            "--window-size=800,600",
+        ]
+        logger.info(f"[MS] Launching Chromium for auth: {' '.join(args[:4])}...")
+
+        try:
+            self._chromium_process = subprocess.Popen(
+                args,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            return True
+        except Exception as e:
+            logger.error(f"[MS] Failed to launch Chromium: {e}")
+            return False
+
+    def _kill_chromium(self) -> None:
+        """Terminate the Chromium auth subprocess if running."""
+        if self._chromium_process is not None:
+            try:
+                self._chromium_process.terminate()
+                self._chromium_process.wait(timeout=5)
+                logger.info("[MS] Chromium auth browser closed")
+            except Exception as e:
+                logger.debug(f"[MS] Chromium kill error (non-fatal): {e}")
+                try:
+                    self._chromium_process.kill()
+                except Exception:
+                    pass
+            self._chromium_process = None
+
     async def _clear_ms_cookies(self) -> None:
         """Clear Microsoft login cookies from CEF via CDP."""
         try:
@@ -217,10 +302,16 @@ class MicrosoftConnector(Store):
             logger.debug(f"[MS] Cookie clear (non-fatal): {e}")
 
     async def start_auth(self) -> Dict[str, Any]:
-        """Build the Microsoft OAuth URL and launch CDP monitoring."""
-        await self._clear_ms_cookies()
-        logger.info("[MS] Cleared Microsoft cookies before auth")
+        """Launch Chromium with the OAuth URL and start CDP monitoring.
 
+        Chromium is used instead of Steam's CEF browser so that login
+        cookies persist — xbox.com/play reuses the session for xCloud.
+        CDP intercepts the OAuth redirect on the Chromium debugging port.
+
+        Returns:
+            Dict with ``success=True``.  No ``url`` is returned because
+            Chromium handles the browser window directly.
+        """
         auth_url = (
             f"{self._get_auth_url()}"
             f"?client_id={self._get_client_id()}"
@@ -230,14 +321,29 @@ class MicrosoftConnector(Store):
         )
         self._pending_auth_url = auth_url
 
+        # Launch Chromium with remote debugging for CDP interception
+        launched = self._launch_chromium_auth(auth_url)
+        if not launched:
+            # Fallback: return URL for Steam's CEF browser
+            logger.warning("[MS] Chromium not found — falling back to CEF auth")
+            if hasattr(self, "_auth_monitor_task") and self._auth_monitor_task and not self._auth_monitor_task.done():
+                self._auth_monitor_task.cancel()
+            self._auth_monitor_task = asyncio.create_task(self._monitor_and_complete_auth())
+            return {
+                "success": True,
+                "url":     auth_url,
+                "message": "microsoft.signInMessage",
+            }
+
+        # Start CDP monitor targeting Chromium's debugging port
         if hasattr(self, "_auth_monitor_task") and self._auth_monitor_task and not self._auth_monitor_task.done():
             self._auth_monitor_task.cancel()
         self._auth_monitor_task = asyncio.create_task(self._monitor_and_complete_auth())
 
         return {
-            "success": True,
-            "url":     auth_url,
-            "message": "Sign in with your Microsoft / Xbox account",
+            "success":        True,
+            "chromium_auth":  True,
+            "message":        "microsoft.signInMessage",
         }
 
     async def complete_auth(self, auth_code: str) -> Dict[str, Any]:
@@ -266,7 +372,7 @@ class MicrosoftConnector(Store):
             self._save_tokens()
 
             logger.info("[MS] ✓ Authentication complete")
-            return {"success": True, "message": "Microsoft account connected"}
+            return {"success": True, "message": "microsoft.accountConnected"}
 
         except Exception as e:
             logger.error(f"[MS] complete_auth error: {e}", exc_info=True)
@@ -287,7 +393,7 @@ class MicrosoftConnector(Store):
 
         await self._clear_ms_cookies()
 
-        return {"success": True, "message": "Logged out from Microsoft Store"}
+        return {"success": True, "message": "microsoft.loggedOut"}
 
     # ── Library sync ─────────────────────────────────────────────────────
 
@@ -600,14 +706,17 @@ class MicrosoftConnector(Store):
 
     async def uninstall_game(self, game_id: str) -> dict:
         """No-op — xCloud games are streamed, not installed locally."""
-        return {"success": True, "message": "xCloud games are not installed locally"}
+        return {"success": True, "message": "microsoft.xcloudNotInstalled"}
 
     async def _monitor_and_complete_auth(self) -> None:
         """Background task: intercept the OAuth redirect via CDP Network events."""
+        # Use Chromium's debugging port if Chromium is running, else CEF (8080)
+        cdp_port = self._chromium_cdp_port if self._chromium_process else 8080
         try:
             code = await intercept_oauth_code(
                 pending_auth_url=getattr(self, "_pending_auth_url", ""),
                 timeout=300,
+                cdp_port=cdp_port,
             )
             if code:
                 logger.info("[MS] ✓ Received OAuth code via Network interception")
@@ -620,3 +729,6 @@ class MicrosoftConnector(Store):
                 logger.warning("[MS] Network interception timed out — no code received")
         except Exception as e:
             logger.error(f"[MS] Auth monitor error: {e}", exc_info=True)
+        finally:
+            # Close Chromium auth window after auth completes or times out
+            self._kill_chromium()

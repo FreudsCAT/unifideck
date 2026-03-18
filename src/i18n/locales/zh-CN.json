@@ -383,7 +383,11 @@
     "notCompatible": "该游戏的格式不兼容 SteamOS",
     "playOnCloud": "云端游玩",
     "xcloudStreaming": "Xbox Cloud Gaming",
-    "noSubscription": "未在您的账户上找到 Xbox Game Pass 订阅。xCloud 游戏将不会同步。"
+    "noSubscription": "未在您的账户上找到 Xbox Game Pass 订阅。xCloud 游戏将不会同步。",
+    "signInMessage": "使用 Microsoft / Xbox 账户登录",
+    "accountConnected": "Microsoft 账户已连接",
+    "loggedOut": "已从 Microsoft Store 登出",
+    "xcloudNotInstalled": "xCloud 游戏未在本地安装"
   },
   "authSuccess": {
     "title": "认证",

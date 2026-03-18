@@ -378,7 +378,11 @@
     "notCompatible": "Формат цієї гри не сумісний зі SteamOS",
     "playOnCloud": "Грати в хмарі",
     "xcloudStreaming": "Xbox Cloud Gaming",
-    "noSubscription": "Підписку Xbox Game Pass не знайдено у вашому обліковому записі. Ігри xCloud не буде синхронізовано."
+    "noSubscription": "Підписку Xbox Game Pass не знайдено у вашому обліковому записі. Ігри xCloud не буде синхронізовано.",
+    "signInMessage": "Увійдіть за допомогою облікового запису Microsoft / Xbox",
+    "accountConnected": "Обліковий запис Microsoft підключено",
+    "loggedOut": "Вихід з Microsoft Store",
+    "xcloudNotInstalled": "Ігри xCloud не встановлені локально"
   },
   "authSuccess": {
     "title": "Автентифікація",

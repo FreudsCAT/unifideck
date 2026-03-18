@@ -381,7 +381,11 @@
     "notCompatible": "Bu oyunun formatı SteamOS ile uyumlu değil",
     "playOnCloud": "Bulutta oyna",
     "xcloudStreaming": "Xbox Cloud Gaming",
-    "noSubscription": "Hesabınızda Xbox Game Pass aboneliği bulunamadı. xCloud oyunları senkronize edilmeyecek."
+    "noSubscription": "Hesabınızda Xbox Game Pass aboneliği bulunamadı. xCloud oyunları senkronize edilmeyecek.",
+    "signInMessage": "Microsoft / Xbox hesabınızla giriş yapın",
+    "accountConnected": "Microsoft hesabı bağlandı",
+    "loggedOut": "Microsoft Store oturumu kapatıldı",
+    "xcloudNotInstalled": "xCloud oyunları yerel olarak yüklü değil"
   },
   "authSuccess": {
     "title": "Kimlik doğrulama",

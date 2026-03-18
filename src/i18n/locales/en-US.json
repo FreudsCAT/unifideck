@@ -378,7 +378,11 @@
     "notCompatible": "This game format is not compatible with SteamOS",
     "playOnCloud": "Play on Cloud",
     "xcloudStreaming": "Xbox Cloud Gaming",
-    "noSubscription": "No Xbox Game Pass subscription found on your account. xCloud games will not be synced."
+    "noSubscription": "No Xbox Game Pass subscription found on your account. xCloud games will not be synced.",
+    "signInMessage": "Sign in with your Microsoft / Xbox account",
+    "accountConnected": "Microsoft account connected",
+    "loggedOut": "Logged out from Microsoft Store",
+    "xcloudNotInstalled": "xCloud games are not installed locally"
   },
   "authSuccess": {
     "title": "Authentication",
