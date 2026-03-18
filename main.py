@@ -2180,23 +2180,8 @@ class Plugin:
                         error_message = "Could not find Amazon install info"
                         logger.error(f"[DownloadComplete] {error_message} for {item.game_title}")
                 elif item.store == 'microsoft':
-                    # Microsoft Win32 installs — marker is written by install_game itself
-                    game_info = self.microsoft.get_installed_game_info(item.game_id)
-                    if game_info:
-                        game_install_path = game_info.get('install_path', '')
-                        exe_path          = game_info.get('executable', '')
-                        if game_install_path and exe_path:
-                            await self.shortcuts_manager.mark_installed(
-                                item.game_id, item.store, game_install_path, exe_path
-                            )
-                            logger.info(f"[DownloadComplete] Marked {item.game_title} (Microsoft) as installed")
-                            registration_success = True
-                        else:
-                            error_message = "Could not find Microsoft game executable"
-                            logger.error(f"[DownloadComplete] {error_message} for {item.game_title}")
-                    else:
-                        error_message = "Could not find Microsoft install info"
-                        logger.error(f"[DownloadComplete] {error_message} for {item.game_title}")
+                    # xCloud games are streamed, not downloaded — this should not be reached
+                    logger.warning(f"[DownloadComplete] Microsoft xCloud game download complete handler called for {item.game_title} — unexpected")
             except Exception as e:
                 error_message = str(e)
                 logger.error(f"[DownloadComplete] Exception marking game installed: {e}")
@@ -2224,11 +2209,6 @@ class Plugin:
 
         self.download_queue.set_gog_install_callback(gog_install_callback)
 
-        async def ms_install_callback(game_id: str, progress_callback=None):
-            """Delegate Microsoft Win32 downloads to MicrosoftConnector.install_game"""
-            return await self.microsoft.install_game(game_id, progress_callback)
-
-        self.download_queue.set_ms_install_callback(ms_install_callback)
         
         # Set size cache callback to update Install button sizes when accurate size is received
         self.download_queue.set_size_cache_callback(cache_game_size)

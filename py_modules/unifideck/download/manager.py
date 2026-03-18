@@ -156,7 +156,6 @@ class DownloadQueue:
         self._progress_callback: Optional[Callable] = None
         self._on_complete_callback: Optional[Callable] = None
         self._gog_install_callback: Optional[Callable] = None  # For GOG API-based downloads
-        self._ms_install_callback:  Optional[Callable] = None  # For Microsoft Win32 downloads
         self._size_cache_callback: Optional[Callable] = None  # For updating game size cache
         self._size_cached_items: set = set()  # Track which items have had size cached (store:game_id)
         
@@ -728,7 +727,9 @@ class DownloadQueue:
         elif item.store == 'amazon':
             return await self._download_amazon(item, install_path)
         elif item.store == 'microsoft':
-            return await self._download_microsoft(item, install_path)
+            # xCloud games are streamed, not downloaded
+            item.error_message = "Microsoft games are streamed via Xbox Cloud Gaming"
+            return False
         else:
             logger.error(f"[DownloadQueue] Unknown store: {item.store}")
             return False
@@ -956,154 +957,11 @@ class DownloadQueue:
             item.error_message = classify_download_error(str(e))
             return False
 
-    async def _download_microsoft(self, item: DownloadItem, install_path: str) -> bool:
-        """Download a Win32 Microsoft Store game via MicrosoftConnector.install_game."""
-        if not self._ms_install_callback:
-            item.error_message = "Microsoft install callback not configured"
-            logger.error("[DownloadQueue] Microsoft install callback not set")
-            return False
-
-        logger.info(f"[DownloadQueue] Delegating Microsoft download to connector: {item.game_id}")
-
-        try:
-            async def progress_callback(progress: Any):
-                if item.status == DownloadStatus.CANCELLED:
-                    raise asyncio.CancelledError("Download cancelled by user")
-
-                if isinstance(progress, dict):
-                    if "phase" in progress:
-                        item.download_phase   = progress["phase"]
-                        item.phase_message    = progress.get("phase_message", "")
-                        self._save()
-                        return
-
-                    item.progress_percent = progress.get("progress_percent", item.progress_percent)
-                    dl = int(progress.get("downloaded_bytes", 0))
-                    tot = int(progress.get("total_bytes", 0))
-                    if dl:
-                        item.downloaded_bytes = dl
-                    if tot:
-                        item.total_bytes = tot
-                    if item.progress_percent > 0:
-                        item.is_preparing = False
-                    if int(item.progress_percent) % 5 == 0:
-                        self._save()
-                else:
-                    item.progress_percent = float(progress)
-                    if progress > 0:
-                        item.is_preparing = False
-
-            result = await self._ms_install_callback(item.game_id, progress_callback)
-
-            if result.get("success"):
-                logger.info(f"[DownloadQueue] Microsoft download complete: {item.game_title}")
-                return True
-            else:
-                raw_err = result.get("error", "Unknown Microsoft download error")
-                item.error_message = classify_download_error(raw_err)
-                logger.error(f"[DownloadQueue] Microsoft download failed: {raw_err}")
-                return False
-
-        except asyncio.CancelledError:
-            logger.info(f"[DownloadQueue] Microsoft download cancelled: {item.game_title}")
-            return False
-        except Exception as e:
-            logger.error(f"[DownloadQueue] Microsoft download error: {e}")
-            item.error_message = classify_download_error(str(e))
-            return False
-
-
-        """Parse nile output for progress updates"""
-        # Nile download progress format (from ProgressBar):
-        # INFO [PROGRESS]:  = Progress: 25.06 137141589/442097801, Running for: 00:00:10, ETA: 00:00:29
-        # INFO [PROGRESS]:  = Downloaded: 130.79 MiB, Written: 130.79 MiB
-        # INFO [PROGRESS]:   + Download    - 25.14 MiB/s
-        
-        progress_re = re.compile(
-            r'= Progress:\s+(\d+\.?\d*)\s+(\d+)/(\d+),.*ETA:\s+(\d+):(\d+):(\d+)'
-        )
-        downloaded_re = re.compile(r'= Downloaded:\s+(\d+\.?\d*)\s+MiB')
-        speed_re = re.compile(r'\+ Download\s+-\s+(\d+\.?\d*)\s+MiB/s')
-        
-        # Installation/verification phase (simpler format)
-        install_re = re.compile(r'\[Installation\]\s*\[(\d+)%\]')
-        
-        buffer = ""
-        recent_lines = []  # Capture last lines for error classification
-        
-        while self.current_process and self.current_process.returncode is None:
-            try:
-                chunk = await asyncio.wait_for(
-                    self.current_process.stdout.read(4096),
-                    timeout=1.0
-                )
-                if not chunk:
-                    break
-                    
-                buffer += chunk.decode('utf-8', errors='ignore')
-                lines = buffer.split('\n')
-                buffer = lines[-1]  # Keep incomplete line
-                
-                for line in lines[:-1]:
-                    # Keep last 20 lines for error classification
-                    recent_lines.append(line)
-                    if len(recent_lines) > 20:
-                        recent_lines.pop(0)
-                    item._last_output_lines = '\n'.join(recent_lines)
-                    logger.debug(f"[Nile] {line}")
-                    
-                    # Parse rich download progress (from PROGRESS logger)
-                    if match := progress_re.search(line):
-                        item.progress_percent = float(match.group(1))
-                        item.downloaded_bytes = int(match.group(2))
-                        item.total_bytes = int(match.group(3))
-                        
-                        # Parse ETA (HH:MM:SS format)
-                        hours = int(match.group(4))
-                        minutes = int(match.group(5))
-                        seconds = int(match.group(6))
-                        item.eta_seconds = hours * 3600 + minutes * 60 + seconds
-                        item.is_preparing = False
-                    
-                    # Parse download speed
-                    elif match := speed_re.search(line):
-                        item.speed_mbps = float(match.group(1))
-                    
-                    # Parse installation phase (simpler format - after download)
-                    elif match := install_re.search(line):
-                        item.progress_percent = float(match.group(1))
-                        item.is_preparing = False
-                        logger.info(f"[DownloadQueue] Amazon game {item.game_id} installation at {item.progress_percent}%")
-                    
-                    # Check for verification
-                    elif '[Verification]' in line:
-                        item.is_preparing = False
-                        logger.info(f"[DownloadQueue] Amazon game {item.game_id} verification in progress")
-                    
-                    # Save progress periodically
-                    if int(item.progress_percent) % 5 == 0:
-                        self._save()
-                            
-            except asyncio.TimeoutError:
-                continue
-            except Exception as e:
-                logger.warning(f"[DownloadQueue] Error parsing nile output: {e}")
-                break
 
     def set_gog_install_callback(self, callback: Callable) -> None:
         """Set callback for GOG game installation (uses GOGAPIClient)"""
         self._gog_install_callback = callback
 
-    def set_ms_install_callback(self, callback: Callable) -> None:
-        """Set callback for Microsoft Win32 game installation (uses MicrosoftConnector)."""
-        self._ms_install_callback = callback
-
-
-        """Set callback for updating game size cache when accurate size is determined
-        
-        Callback signature: callback(store: str, game_id: str, size_bytes: int)
-        """
-        self._size_cache_callback = callback
 
     def _update_size_cache_if_needed(self, item: DownloadItem, new_total_bytes: int) -> None:
         """Update game size cache if this is the first accurate size for this download

@@ -30,14 +30,11 @@ import logging
 import os
 import time
 import urllib.parse
-from typing import Dict, Any, List, Optional, Tuple
+from typing import Dict, Any, List, Optional
 
 from .base import Store, Game
 from .microsoft_auth import (
     http_post, http_get, build_xbl_chain,
-)
-from .microsoft_pipeline import (
-    get_fe3_download_urls, download_file, extract_package, find_executable,
 )
 from .microsoft_cdp import intercept_oauth_code
 
@@ -85,7 +82,6 @@ class MicrosoftConnector(Store):
         self._xuid:       Optional[str] = None
 
         self._settings_cache: Optional[Dict[str, Any]] = None
-        self._game_metadata: Dict[str, dict] = {}
         # xCloud subscription status (set during get_library)
         self._no_subscription: bool = False
         self._load_tokens()
@@ -103,10 +99,6 @@ class MicrosoftConnector(Store):
         from ..utils.locale import get_unifideck_market
         return get_unifideck_market()
 
-    def _fe3_device_attrs(self) -> str:
-        """Build the FE3 device-attribute string with the user's locale."""
-        template = self._get_required_setting("fe3_device_attrs_template")
-        return template.format(locale=self._get_locale())
 
     # ── Settings helpers ─────────────────────────────────────────────────
 
@@ -174,11 +166,8 @@ class MicrosoftConnector(Store):
     def _get_xbl_auth_url(self) -> str:      return self._get_required_setting("xbl_auth_url")
     def _get_xsts_url(self) -> str:          return self._get_required_setting("xsts_url")
     def _get_product_url(self) -> str:       return self._get_required_setting("product_url")
-    def _get_titlehub_url(self) -> str:      return self._get_required_setting("titlehub_url")
-    def _get_fe3_url(self) -> str:           return self._get_required_setting("fe3_url")
     def _get_xbl_user_agent(self) -> str:    return self._get_required_setting("xbl_user_agent")
     def _get_catalog_user_agent(self) -> str: return self._get_required_setting("catalog_user_agent")
-    def _get_cdn_user_agent(self) -> str:    return self._get_required_setting("cdn_user_agent")
     def _get_xcloud_catalog_id(self) -> str: return self._get_required_setting("xcloud_catalog_id")
     def _get_gamepass_catalog_url(self) -> str: return self._get_required_setting("gamepass_catalog_url")
 
@@ -188,9 +177,6 @@ class MicrosoftConnector(Store):
         """Filesystem path for persisted OAuth tokens (with ~ expansion)."""
         return os.path.expanduser(self._get_required_setting("token_file"))
 
-    def _get_install_dir(self) -> str:
-        """Root directory for downloaded MS Store games (with ~ expansion)."""
-        return os.path.expanduser(self._get_required_setting("install_dir"))
 
     def _get_token_refresh_threshold(self) -> int:
         """Max token age (seconds) before proactive refresh.  Default 2400."""
@@ -201,17 +187,6 @@ class MicrosoftConnector(Store):
             logger.warning(f"[MS] Invalid token_refresh_threshold {raw!r}, using 2400")
             return 2400
 
-    def _validated_install_dir(self, game_id: str) -> str:
-        """Return install path for *game_id*, rejecting path-traversal attempts."""
-        base = self._get_install_dir()
-        install_dir = os.path.join(base, game_id)
-        if not os.path.abspath(install_dir).startswith(
-            os.path.abspath(base) + os.sep
-        ):
-            raise ValueError(
-                f"[MS] Refusing to use install path outside install_dir: {install_dir!r}"
-            )
-        return install_dir
 
     # ── Store interface ──────────────────────────────────────────────────
 
@@ -622,379 +597,10 @@ class MicrosoftConnector(Store):
         logger.info(f"[MS] Resolved {len(result)} titles from {len(product_ids)} product IDs")
         return result
 
-    def _query_titlehub(self) -> List[Dict]:
-        """Query the Xbox Title Hub API for the user's game library."""
-        if not self._xsts_token or not self._user_hash or not self._xuid:
-            logger.error("[MS] Cannot query Title Hub — XSTS token, user hash, or XUID missing")
-            return []
-
-        auth_header = f"XBL3.0 x={self._user_hash};{self._xsts_token}"
-        titlehub_url = self._get_titlehub_url()
-        url = (
-            f"{titlehub_url}/users/xuid({self._xuid})/titles/titlehistory"
-            f"/decoration/detail,image,scid"
-        )
-        headers = {
-            "Authorization":          auth_header,
-            "x-xbl-contract-version": "2",
-            "Accept":                 "application/json",
-            "Accept-Language":        self._get_locale(),
-        }
-
-        try:
-            data = http_get(url, headers)
-        except Exception as e:
-            logger.error(f"[MS] Title Hub query failed: {e}")
-            return []
-
-        titles = data.get("titles", [])
-        logger.info(f"[MS] Title Hub raw: {len(titles)} titles")
-
-        items: List[Dict] = []
-        for t in titles:
-            devices = [d.lower() for d in t.get("devices", [])]
-            if "pc" not in devices and "win32" not in devices:
-                continue
-            if t.get("type", "").lower() != "game":
-                continue
-            # Extract the MS Store BigId from detail.availabilities.
-            # The modernTitleId is a numeric Xbox ID that the catalog
-            # API does not accept — we need the alphanumeric ProductId
-            # (e.g. "9NBLGGH3ZB9T") from the availability data.
-            title_id = t.get("modernTitleId") or t.get("titleId") or ""
-            big_id = ""
-            for avail in t.get("detail", {}).get("availabilities", []):
-                big_id = avail.get("ProductId", "")
-                if big_id:
-                    break
-            if not big_id:
-                logger.debug(f"[MS] Title Hub: no BigId for {t.get('name', '?')} (titleId={title_id}) — skipping")
-                continue
-            items.append({
-                "productId":       big_id,
-                "titleId":         str(title_id),
-                "productTitle":    t.get("name", ""),
-                "pfn":             t.get("pfn", ""),
-            })
-
-        logger.info(f"[MS] Title Hub: {len(items)} PC games after device/type filter")
-        return items
-
-
-
-    # ── Product detail + PC filter ───────────────────────────────────────
-
-    def _scan_pc_games(self, items: List[Dict]) -> Dict[str, dict]:
-        """Batch-scan products via displaycatalog and classify Win32 vs UWP.
-
-        Queries the catalog by BigId (bigIds= parameter) extracted from the
-        Title Hub detail.availabilities data.
-
-        Args:
-            items: List of dicts from _query_titlehub, each with
-                   'productId' (BigId from catalog) and 'titleId' (Xbox numeric ID).
-
-        Returns:
-            Dict mapping productId (BigId) → classification metadata.
-        """
-        if not items:
-            return {}
-
-        big_ids = [item["productId"] for item in items if item.get("productId")]
-        if not big_ids:
-            logger.warning("[MS] No BigId available for any game — cannot query product catalog")
-            return {}
-
-        logger.info(f"[MS] Scanning {len(big_ids)} product(s) by BigId for Win32/UWP classification")
-        result: Dict[str, dict] = {}
-        batch_size = 20
-
-        for i in range(0, len(big_ids), batch_size):
-            batch = big_ids[i: i + batch_size]
-            ids_param = ",".join(batch)
-            url = (
-                f"{self._get_product_url()}"
-                f"?bigIds={ids_param}"
-                f"&market={self._get_market()}"
-                f"&languages={self._get_locale()}"
-            )
-
-            try:
-                data     = http_get(url, {"Accept": "application/json", "User-Agent": self._get_catalog_user_agent(), "MS-CV": "unifideck.2"})
-                products = data.get("Products", [])
-                logger.info(f"[MS] Product scan batch {i // batch_size}: {len(products)} products returned for {len(batch)} queried")
-
-                for product in products:
-                    pid = product.get("ProductId", "")
-                    if not pid:
-                        continue
-                    _is_win32, meta = self._classify_product(product)
-                    result[pid] = meta
-
-            except Exception as e:
-                _body = ""
-                if hasattr(e, "read"):
-                    try: _body = e.read().decode("utf-8", errors="replace")[:500]
-                    except Exception: pass
-                logger.warning(f"[MS] Product scan failed for batch {i // batch_size}: {e}")
-                if _body:
-                    logger.warning(f"[MS] Product scan error body: {_body}")
-
-        return result
-
-
-    def _classify_product(self, product: dict) -> Tuple[bool, dict]:
-        """Determine whether a product is downloadable via FE3.
-
-        Classification uses the FulfillmentType field from the SKU properties:
-          - 'MSIXVC': Win32 game in MSIX Virtual Container — installable
-          - 'XVC': Xbox Virtual Container (UWP-only) — not installable on Linux
-          - None: delisted or unavailable — attempt download, will fail gracefully
-
-        In 2024+, Microsoft packages all games (including Win32) in MSIX
-        containers with a PackageFamilyName, so the presence of a PFN no
-        longer indicates UWP-only.
-        """
-        meta: dict = {
-            "is_win32":         False,
-            "wu_bundle_id":     "",
-            "wu_category_id":   "",
-            "title":            "",
-            "is_play_anywhere": False,
-        }
-
-        for sku_avail in product.get("DisplaySkuAvailabilities", []):
-            loc_props = sku_avail.get("Sku", {}).get("LocalizedProperties", [])
-            if loc_props:
-                meta["title"] = loc_props[0].get("SkuTitle", "")
-                break
-
-        for sku_avail in product.get("DisplaySkuAvailabilities", []):
-            sku   = sku_avail.get("Sku", {})
-            props = sku.get("Properties", {})
-            fd    = props.get("FulfillmentData", {}) or {}
-
-            if props.get("IsXboxPlayAnywhere"):
-                meta["is_play_anywhere"] = True
-
-            wu_bundle        = fd.get("WuBundleId", "")
-            wu_cat           = fd.get("WuCategoryId", "")
-            fulfillment_type = props.get("FulfillmentType", "")
-
-            # XVC = Xbox Virtual Container (UWP-only) — skip
-            if wu_bundle and fulfillment_type != "XVC":
-                meta["is_win32"]       = True
-                meta["wu_bundle_id"]   = wu_bundle
-                meta["wu_category_id"] = wu_cat
-                return True, meta
-
-        return False, meta
-
-    def _fetch_single_product_meta(self, game_id: str) -> Optional[dict]:
-        """Fetch and classify a single product from the catalog API.
-
-        Returns the metadata dict if the product is Win32, else None.
-        """
-        logger.debug(f"[MS] Fetching product metadata for {game_id}")
-        try:
-            url = f"{self._get_product_url()}?bigIds={game_id}&market={self._get_market()}&languages={self._get_locale()}"
-            data = http_get(url, {"Accept": "application/json", "User-Agent": self._get_catalog_user_agent(), "MS-CV": "unifideck.3"})
-            for product in data.get("Products", []):
-                is_win32, meta = self._classify_product(product)
-                if is_win32:
-                    return meta
-        except Exception as e:
-            logger.error(f"[MS] Single product fetch failed for {game_id}: {e}")
-        return None
-
-    # ── Installed games tracking ─────────────────────────────────────────
-
-    def get_installed(self) -> Dict[str, dict]:
-        """Scan the MS install directory for installed Win32 games.
-
-        Returns:
-            Dict mapping game_id → {'install_path', 'executable', 'installed_at'}
-        """
-        installed: Dict[str, dict] = {}
-        base_dir = self._get_install_dir()
-        if not os.path.exists(base_dir):
-            return installed
-        try:
-            for entry in os.listdir(base_dir):
-                entry_path = os.path.join(base_dir, entry)
-                if not os.path.isdir(entry_path):
-                    continue
-                marker = os.path.join(entry_path, MS_MARKER_FILE)
-                if not os.path.exists(marker):
-                    continue
-                try:
-                    with open(marker) as f:
-                        data = json.load(f)
-                    game_id = data.get("game_id", entry)
-                    installed[game_id] = {
-                        "install_path":  entry_path,
-                        "executable":    data.get("executable", ""),
-                        "installed_at":  data.get("installed_at", 0),
-                    }
-                except Exception as e:
-                    logger.warning(f"[MS] Could not read marker {marker}: {e}")
-        except Exception as e:
-            logger.error(f"[MS] Error scanning install dir: {e}")
-        return installed
-
-    def get_installed_game_info(self, game_id: str) -> Optional[dict]:
-        """Return install info for a single game, or None if not installed."""
-        return self.get_installed().get(game_id)
-
-    # ── Installation ─────────────────────────────────────────────────────
-
-    async def install_game(self, game_id: str, progress_callback=None) -> dict:
-        """Download and install a Win32 MS Store game via FE3."""
-        if not await self.is_available():
-            return {"success": False, "error": "Not authenticated with Microsoft"}
-
-        meta = self._game_metadata.get(game_id)
-        if not meta:
-            meta = await asyncio.get_event_loop().run_in_executor(
-                None, lambda: self._fetch_single_product_meta(game_id),
-            )
-            if meta:
-                self._game_metadata[game_id] = meta
-
-        if not meta or not meta.get("is_win32"):
-            return {"success": False, "error": "Game is UWP-only and cannot be installed on Linux"}
-
-        wu_bundle_id = meta.get("wu_bundle_id", "")
-        if not wu_bundle_id:
-            return {"success": False, "error": "No download bundle ID found for this game"}
-
-        try:
-            install_dir = self._validated_install_dir(game_id)
-        except ValueError as e:
-            logger.error(str(e))
-            return {"success": False, "error": "Invalid game identifier"}
-
-        try:
-            token_ok = await self._ensure_fresh_ms_token()
-            if not token_ok:
-                logger.error("[MS] Session expired — logging out automatically")
-                await self.logout()
-                return {"success": False, "error": "Session expired — please re-authenticate"}
-            ok = await asyncio.get_event_loop().run_in_executor(None, self._build_xbl_chain)
-            if not ok:
-                return {"success": False, "error": "Failed to build Xbox authentication chain"}
-
-            os.makedirs(install_dir, exist_ok=True)
-
-            if progress_callback:
-                await progress_callback({"phase": "preparing", "phase_message": "Requesting download links…"})
-
-            urls = await asyncio.get_event_loop().run_in_executor(
-                None, lambda: get_fe3_download_urls(
-                    wu_bundle_id, self._xsts_token, self._user_hash,
-                    self._xuid, self._fe3_device_attrs(), self._get_fe3_url()
-                )
-            )
-            if not urls:
-                return {"success": False, "error": "Microsoft delivery service returned no download URLs"}
-
-            logger.info(f"[MS] Got {len(urls)} download URL(s) for {game_id}")
-
-            exe_path = await self._download_and_install(urls, install_dir, game_id, progress_callback)
-            if not exe_path:
-                return {"success": False, "error": "Installation complete but no executable found — check logs"}
-
-            marker_data = {
-                "game_id":      game_id,
-                "install_path": install_dir,
-                "executable":   exe_path,
-                "installed_at": time.time(),
-            }
-            with open(os.path.join(install_dir, MS_MARKER_FILE), "w") as f:
-                json.dump(marker_data, f, indent=2)
-
-            logger.info(f"[MS] ✓ {game_id} installed at {install_dir}, exe={exe_path}")
-            return {"success": True, "install_path": install_dir, "executable": exe_path}
-
-        except Exception as e:
-            logger.error(f"[MS] install_game error for {game_id}: {e}", exc_info=True)
-            return {"success": False, "error": str(e)}
 
     async def uninstall_game(self, game_id: str) -> dict:
-        """Remove installed game files and the marker."""
-        import shutil
-        try:
-            install_dir = self._validated_install_dir(game_id)
-        except ValueError as e:
-            logger.error(str(e))
-            return {"success": False, "error": "Invalid game identifier"}
-        if not os.path.exists(install_dir):
-            return {"success": False, "error": "Game not found in install directory"}
-        try:
-            shutil.rmtree(install_dir)
-            logger.info(f"[MS] Uninstalled {game_id}")
-            return {"success": True}
-        except Exception as e:
-            logger.error(f"[MS] Uninstall error for {game_id}: {e}")
-            return {"success": False, "error": str(e)}
-
-    # ── Download + extract (delegates to microsoft_pipeline) ─────────────
-
-    async def _download_and_install(
-        self, urls: List[str], install_dir: str,
-        game_id: str, progress_callback=None,
-    ) -> Optional[str]:
-        """Download all package URLs, extract them, and return the exe path."""
-        import tempfile
-        import shutil
-
-        logger.info(f"[MS] Downloading {len(urls)} package(s) for {game_id}")
-        tmp_dir = tempfile.mkdtemp(prefix=f"unifideck_ms_{game_id}_")
-        try:
-            downloaded: List[str] = []
-            total = len(urls)
-
-            for idx, url in enumerate(urls):
-                raw_name = urllib.parse.unquote(url.split("?")[0].split("/")[-1])
-                filename = os.path.basename(raw_name) or f"package_{idx}.appx"
-                dest     = os.path.join(tmp_dir, filename)
-
-                if progress_callback:
-                    pct = int((idx / total) * 70)
-                    await progress_callback({
-                        "phase":         "downloading",
-                        "phase_message": f"Downloading package {idx + 1}/{total}…",
-                        "progress_percent": pct,
-                    })
-
-                cdn_ua = self._get_cdn_user_agent()
-                ok = await asyncio.get_event_loop().run_in_executor(
-                    None, lambda u=url, d=dest, ua=cdn_ua: download_file(u, d, ua)
-                )
-                if ok:
-                    downloaded.append(dest)
-
-            if not downloaded:
-                logger.error("[MS] No packages downloaded successfully")
-                return None
-
-            if progress_callback:
-                await progress_callback({"phase": "extracting", "phase_message": "Extracting…", "progress_percent": 75})
-
-            for pkg in downloaded:
-                await asyncio.get_event_loop().run_in_executor(
-                    None, lambda p=pkg: extract_package(p, install_dir)
-                )
-
-            if progress_callback:
-                await progress_callback({"phase": "verifying", "phase_message": "Locating executable…", "progress_percent": 95})
-
-            return find_executable(install_dir)
-
-        finally:
-            shutil.rmtree(tmp_dir, ignore_errors=True)
-
-    # ── CDP auto-auth monitor ────────────────────────────────────────────
+        """No-op — xCloud games are streamed, not installed locally."""
+        return {"success": True, "message": "xCloud games are not installed locally"}
 
     async def _monitor_and_complete_auth(self) -> None:
         """Background task: intercept the OAuth redirect via CDP Network events."""

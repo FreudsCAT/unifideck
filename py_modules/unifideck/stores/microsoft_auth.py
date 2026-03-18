@@ -5,7 +5,7 @@ Provides SSL contexts, HTTP request helpers, and the Xbox Live token chain
 (XBL user token → XSTS token) as pure functions with no class-level state.
 
 These are the lowest-level building blocks — imported by both the connector
-(microsoft.py) and the download pipeline (microsoft_pipeline.py).
+(microsoft.py).
 """
 
 import json
