@@ -19,6 +19,10 @@ export type SyncProgress = {
   steam_synced?: number;
   rawg_total?: number;
   rawg_synced?: number;
-  // Warnings from sync (e.g. no Game Pass subscription)
-  warnings?: Array<{ label: string; values: Record<string, string | number> }>;
+  // UnifiDB metadata tracking fields
+  unifidb_total?: number;
+  unifidb_synced?: number;
+  // Metacritic tracking fields
+  metacritic_total?: number;
+  metacritic_synced?: number;
 };

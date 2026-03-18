@@ -32,11 +32,6 @@ import { patchLibrary, loadCompatCacheFromBackend } from "./tabs";
 
 import { syncUnifideckCollections } from "./spoofing/CollectionManager";
 import { tabManager } from "./tabs";
-import {
-  loadSteamAppIdMappings,
-  patchSteamStores,
-  injectGameToAppinfo,
-} from "./spoofing/SteamStorePatcher";
 
 // Import Downloads feature components
 import { DownloadsTab } from "./components/DownloadsTab";
