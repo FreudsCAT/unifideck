@@ -808,38 +808,37 @@ fi
 log "Executable: $EXE_PATH"
 log "Work Dir: $WORK_DIR"
 
-# 4a. Xbox Cloud Gaming — stream via Chromium in kiosk (fullscreen) mode
+# 4a. Xbox Cloud Gaming — stream via Chromium in fullscreen app mode
 if [ "$EXE_PATH" = "xcloud" ]; then
     log "xCloud game detected — launching via Chromium: $WORK_DIR"
     notify_stage "toasts.launcher.launchingGame" "Xbox Cloud Gaming" "low"
 
     # WORK_DIR contains the full URL (https://www.xbox.com/play/launch/{productId}).
-    # Launch Chromium in kiosk mode (fullscreen, no address bar).
-    # Steam Input handles the controller — B goes to the game, Steam+B quits.
+    # Launch Chromium in app + fullscreen mode:
+    #   --app=URL     → no address bar, no tabs (clean game-like window)
+    #   --start-fullscreen → fullscreen but does NOT capture all input
+    # Unlike --kiosk, this allows Steam overlay (virtual keyboard, Steam+B to quit).
     XCLOUD_URL="$WORK_DIR"
 
+    # Common Chromium flags for xCloud streaming
+    CHROME_FLAGS=(
+        "--app=$XCLOUD_URL"
+        "--start-fullscreen"
+        "--no-first-run"
+        "--disable-translate"
+        "--disable-infobars"
+        "--disable-session-crashed-bubble"
+        "--disable-features=TranslateUI"
+        "--autoplay-policy=no-user-gesture-required"
+        "--window-size=1280,800"
+    )
+
     if command -v flatpak &>/dev/null && flatpak info org.chromium.Chromium &>/dev/null 2>&1; then
-        log "Using Chromium flatpak in kiosk mode"
-        flatpak run org.chromium.Chromium \
-            --kiosk \
-            --no-first-run \
-            --disable-translate \
-            --disable-infobars \
-            --disable-session-crashed-bubble \
-            --disable-features=TranslateUI \
-            --autoplay-policy=no-user-gesture-required \
-            "$XCLOUD_URL" 2>>"$LOG_FILE"
+        log "Using Chromium flatpak in fullscreen app mode"
+        flatpak run org.chromium.Chromium "${CHROME_FLAGS[@]}" 2>>"$LOG_FILE"
     elif command -v flatpak &>/dev/null && flatpak info com.google.Chrome &>/dev/null 2>&1; then
-        log "Using Google Chrome flatpak in kiosk mode"
-        flatpak run com.google.Chrome \
-            --kiosk \
-            --no-first-run \
-            --disable-translate \
-            --disable-infobars \
-            --disable-session-crashed-bubble \
-            --disable-features=TranslateUI \
-            --autoplay-policy=no-user-gesture-required \
-            "$XCLOUD_URL" 2>>"$LOG_FILE"
+        log "Using Google Chrome flatpak in fullscreen app mode"
+        flatpak run com.google.Chrome "${CHROME_FLAGS[@]}" 2>>"$LOG_FILE"
     else
         # Fallback: Steam built-in browser (B closes the window)
         log "WARNING: No Chromium/Chrome found — falling back to Steam browser"
