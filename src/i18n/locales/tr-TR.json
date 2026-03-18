@@ -211,7 +211,8 @@
       "prerequisitesFailedMessage": "Ön koşullar doğru şekilde yüklenmemiş olabilir"
     },
     "updateComplete": "Update Complete!",
-    "updateCompleteMessage": "{{title}} has been updated."
+    "updateCompleteMessage": "{{title}} has been updated.",
+    "syncWarning": "Senkronizasyon uyarısı"
   },
   "uninstallModal": {
     "title": "Kaldırmayı Onayla",
@@ -377,7 +378,10 @@
     "toastClearBody": "Mağaza girişleri temizlendi. Artık farklı hesaplarla giriş yapabilirsiniz."
   },
   "microsoft": {
-    "notCompatible": "Bu oyunun formatı SteamOS ile uyumlu değil"
+    "notCompatible": "Bu oyunun formatı SteamOS ile uyumlu değil",
+    "playOnCloud": "Bulutta oyna",
+    "xcloudStreaming": "Xbox Cloud Gaming",
+    "noSubscription": "Hesabınızda Xbox Game Pass aboneliği bulunamadı. xCloud oyunları senkronize edilmeyecek."
   },
   "authSuccess": {
     "title": "Kimlik doğrulama",

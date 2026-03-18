@@ -208,7 +208,8 @@
       "prerequisitesFailedMessage": "Prerequisites may not have installed correctly"
     },
     "updateComplete": "Update Complete!",
-    "updateCompleteMessage": "{{title}} has been updated."
+    "updateCompleteMessage": "{{title}} has been updated.",
+    "syncWarning": "Sync Warning"
   },
   "uninstallModal": {
     "title": "Confirm Uninstallation",
@@ -374,7 +375,10 @@
     "toastClearBody": "Store logins have been cleared. You can now sign in with different accounts."
   },
   "microsoft": {
-    "notCompatible": "This game format is not compatible with SteamOS"
+    "notCompatible": "This game format is not compatible with SteamOS",
+    "playOnCloud": "Play on Cloud",
+    "xcloudStreaming": "Xbox Cloud Gaming",
+    "noSubscription": "No Xbox Game Pass subscription found on your account. xCloud games will not be synced."
   },
   "authSuccess": {
     "title": "Authentication",

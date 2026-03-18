@@ -1,38 +1,22 @@
 """
-Microsoft Store connector for Unifideck.
+Microsoft / Xbox Cloud Gaming connector for Unifideck.
 
-Authenticates via Microsoft OAuth + Xbox Live token chain, queries the
-Xbox Title Hub API to list the user's game library, then filters for
-PC-compatible titles.  Download/install uses the FE3 (Windows Update)
-delivery endpoint.  UWP-only titles (FulfillmentType=XVC) are marked
-as not compatible.
+Authenticates via Microsoft OAuth + Xbox Live token chain, checks for an
+active Game Pass subscription, then syncs the full xCloud catalog.  Games
+are launched via Xbox Cloud Gaming (streaming) in the Steam CEF browser
+at ``https://www.xbox.com/play/launch/{productId}``.
 
-Ownership limitation: the Title Hub returns all games the user has ever
-interacted with (purchases, Game Pass, Xbox overlay).  The Collections
-API that verifies actual ownership requires Partner Center configuration
-that is unavailable to third-party tools.  Users can hide unwanted games
-via Steam's built-in hide feature.
+If the user has no Game Pass subscription, a warning notification is
+shown and no games are synced.
 
 Auth flow
 ---------
   1. Microsoft OAuth (microsoftonline.com) → access_token + refresh_token
   2. XBL user token  (user.auth.xboxlive.com)
   3. XSTS token      (xsts.auth.xboxlive.com, RP = xboxlive.com)
-  4. Title Hub query  (titlehub.xboxlive.com) — user's game history
-  5. Product details  (displaycatalog.mp.microsoft.com) — PC / Windows.Desktop filter
-
-Win32 detection
----------------
-A product is considered downloadable when its SKU has a ``WuBundleId``
-and ``FulfillmentType`` is not ``XVC`` (Xbox Virtual Container = UWP-only).
-UWP-only titles are shown but marked as ``not_compatible``.
-
-Download flow (Win32 games)
----------------------------
-  1. ``install_game()`` refreshes the OAuth token and rebuilds the XSTS chain.
-  2. FE3 ``GetExtendedUpdateInfo2`` SOAP call → direct download URLs.
-  3. Packages are downloaded, extracted (ZIP / bundle), main exe located.
-  4. A ``.unifideck-ms-id`` JSON marker is written so the game survives re-syncs.
+  4. Game Pass subscription check (catalog.gamepass.com, signed catalog)
+  5. xCloud catalog  (catalog.gamepass.com, public ~500+ games)
+  6. Title resolution (displaycatalog.mp.microsoft.com, batch title lookup)
 
 Locale
 ------
@@ -102,6 +86,8 @@ class MicrosoftConnector(Store):
 
         self._settings_cache: Optional[Dict[str, Any]] = None
         self._game_metadata: Dict[str, dict] = {}
+        # xCloud subscription status (set during get_library)
+        self._no_subscription: bool = False
         self._load_tokens()
         logger.info("[MS] MicrosoftConnector initialised")
 
@@ -193,6 +179,8 @@ class MicrosoftConnector(Store):
     def _get_xbl_user_agent(self) -> str:    return self._get_required_setting("xbl_user_agent")
     def _get_catalog_user_agent(self) -> str: return self._get_required_setting("catalog_user_agent")
     def _get_cdn_user_agent(self) -> str:    return self._get_required_setting("cdn_user_agent")
+    def _get_xcloud_catalog_id(self) -> str: return self._get_required_setting("xcloud_catalog_id")
+    def _get_gamepass_catalog_url(self) -> str: return self._get_required_setting("gamepass_catalog_url")
 
     # Settings with special handling (path expansion, type conversion).
 
@@ -329,7 +317,18 @@ class MicrosoftConnector(Store):
     # ── Library sync ─────────────────────────────────────────────────────
 
     async def get_library(self) -> List[Game]:
-        """Fetch the user's owned (purchased) PC-compatible games."""
+        """Fetch xCloud-playable games for the authenticated user.
+
+        Flow:
+          1. Refresh tokens and build XBL/XSTS chain.
+          2. Check Game Pass subscription via signed catalog.
+          3. If no subscription → set _no_subscription flag, return [].
+          4. Fetch the full xCloud catalog (public API, ~500+ games).
+          5. Batch-query displaycatalog for game titles.
+          6. Return Game objects tagged "xcloud" (launchable via browser).
+        """
+        self._no_subscription = False
+
         if not await self.is_available():
             if not os.path.exists(self._get_token_file()):
                 logger.error(
@@ -358,77 +357,48 @@ class MicrosoftConnector(Store):
                 return []
 
             # ── 2. XBL / XSTS token chain ────────────────────────────────
-            ok = await asyncio.get_event_loop().run_in_executor(None, self._build_xbl_chain)
+            ok = await asyncio.get_event_loop().run_in_executor(
+                None, self._build_xbl_chain
+            )
             if not ok:
                 logger.warning("[MS] Could not build XBL/XSTS token chain")
 
-            raw_items = await asyncio.get_event_loop().run_in_executor(
-                None, self._query_titlehub
+            # ── 3. Check Game Pass subscription ──────────────────────────
+            has_gamepass = await asyncio.get_event_loop().run_in_executor(
+                None, self._check_gamepass_subscription
             )
-            logger.info(f"[MS] Title Hub returned {len(raw_items)} items")
-
-            # NOTE: The Title Hub API returns all games the user has ever
-            # interacted with (purchases, Game Pass, Xbox overlay, etc.).
-            # There is no reliable way to filter only purchased games without
-            # the MS Store Collections API (requires Partner Center config).
-            # Games without a BigId were already filtered in _query_titlehub.
-            # Users can hide unwanted games via Steam's built-in hide feature.
-            purchased = raw_items
-            logger.info(f"[MS] {len(purchased)} games with valid MS Store BigId")
-
-            if not purchased:
+            if not has_gamepass:
+                logger.info("[MS] No active Game Pass subscription detected")
+                self._no_subscription = True
                 return []
 
-            game_meta = await asyncio.get_event_loop().run_in_executor(
-                None, lambda: self._scan_pc_games(purchased)
+            # ── 4. Fetch xCloud catalog ──────────────────────────────────
+            xcloud_ids = await asyncio.get_event_loop().run_in_executor(
+                None, self._fetch_xcloud_catalog
             )
-            if game_meta:
-                win32_count = sum(1 for m in game_meta.values() if m.get("is_win32"))
-                logger.info(
-                    f"[MS] {len(game_meta)} products classified "
-                    f"({win32_count} Win32, {len(game_meta) - win32_count} UWP)"
-                )
-                self._game_metadata.update(
-                    {pid: m for pid, m in game_meta.items() if m.get("is_win32")}
-                )
-            else:
-                logger.warning(
-                    "[MS] Product scan returned 0 results — "
-                    "returning all games without Win32/UWP classification"
-                )
+            if not xcloud_ids:
+                logger.warning("[MS] xCloud catalog is empty or unreachable")
+                return []
 
-            installed = self.get_installed()
+            # ── 5. Batch-resolve titles from displaycatalog ──────────────
+            titles = await asyncio.get_event_loop().run_in_executor(
+                None, lambda: self._batch_get_titles(xcloud_ids)
+            )
 
+            # ── 6. Build Game objects ────────────────────────────────────
             games: List[Game] = []
-            for item in purchased:
-                pid = item.get("productId", "")
-                if not pid:
-                    continue
-                meta  = game_meta.get(pid, {})
-                title = item.get("productTitle") or meta.get("title") or pid
-
-                inst_info    = installed.get(pid)
-                is_installed = inst_info is not None
-
-                tags: List[str] = []
-                if game_meta and not meta.get("is_win32"):
-                    tags.append("not_compatible")
-                if meta.get("is_play_anywhere"):
-                    tags.append("play_anywhere")
-                store_tags = tags if tags else None
-
+            for pid in xcloud_ids:
+                title = titles.get(pid, pid)
                 game = Game(
                     id=pid,
                     title=title,
                     store="microsoft",
-                    is_installed=is_installed,
-                    install_path=inst_info["install_path"] if inst_info else None,
-                    executable=inst_info["executable"] if inst_info else None,
-                    store_tags=store_tags,
+                    is_installed=False,
+                    store_tags=["xcloud"],
                 )
                 games.append(game)
 
-            logger.info(f"[MS] Returning {len(games)} Microsoft Store games")
+            logger.info(f"[MS] Returning {len(games)} xCloud games")
             return games
 
         except Exception as e:
@@ -542,6 +512,115 @@ class MicrosoftConnector(Store):
         return True
 
     # ── Title Hub API (synchronous, run in executor) ─────────────────────
+
+
+    # ── xCloud / Game Pass ───────────────────────────────────────────────
+
+    def _fetch_xcloud_catalog(self) -> List[str]:
+        """Fetch the list of product IDs available on Xbox Cloud Gaming.
+
+        Uses the public Game Pass catalog API — no auth required.
+
+        Returns:
+            List of product IDs (BigIds) playable via xCloud.
+        """
+        catalog_url = self._get_gamepass_catalog_url()
+        catalog_id  = self._get_xcloud_catalog_id()
+        url = (
+            f"{catalog_url}?id={catalog_id}"
+            f"&language={self._get_locale()}"
+            f"&market={self._get_market()}"
+        )
+        try:
+            data = http_get(url, {"User-Agent": self._get_catalog_user_agent()})
+            # First entry is catalog metadata, rest are game entries
+            ids = [item["id"] for item in data if item.get("id")]
+            logger.info(f"[MS] xCloud catalog: {len(ids)} games available")
+            return ids
+        except Exception as e:
+            logger.error(f"[MS] Failed to fetch xCloud catalog: {e}")
+            return []
+
+    def _check_gamepass_subscription(self) -> bool:
+        """Check if the user has an active Game Pass subscription.
+
+        Attempts to query the signed-in Game Pass catalog with XSTS auth.
+        The signed-in endpoint returns personalized data for subscribers;
+        non-subscribers receive a 401/403 or empty result.
+
+        Returns:
+            True if the user appears to have an active Game Pass subscription.
+        """
+        if not self._xsts_token or not self._user_hash:
+            logger.warning("[MS] Cannot check subscription — no XSTS token")
+            return False
+
+        auth = f"XBL3.0 x={self._user_hash};{self._xsts_token}"
+        catalog_url = self._get_gamepass_catalog_url()
+        # Use the "signed-in" Game Pass PC catalog
+        url = (
+            f"{catalog_url}"
+            f"?id=fdd9e2a7-0fee-49f6-ad69-4354098401ff"
+            f"&language={self._get_locale()}"
+            f"&market={self._get_market()}"
+        )
+        try:
+            data = http_get(url, {
+                "Authorization": auth,
+                "User-Agent":    self._get_catalog_user_agent(),
+            })
+            # Catalog returns a list; first entry is metadata, rest are games
+            game_count = sum(1 for item in data if item.get("id"))
+            logger.info(f"[MS] Game Pass subscription check: {game_count} games accessible")
+            return game_count > 0
+        except Exception as e:
+            logger.info(f"[MS] Game Pass subscription check failed: {e}")
+            return False
+
+    def _batch_get_titles(self, product_ids: List[str]) -> Dict[str, str]:
+        """Batch-fetch game titles from the displaycatalog API.
+
+        Args:
+            product_ids: List of product IDs (BigIds) to look up.
+
+        Returns:
+            Dict mapping productId → title string.
+        """
+        result: Dict[str, str] = {}
+        batch_size = 20
+
+        for i in range(0, len(product_ids), batch_size):
+            batch = product_ids[i: i + batch_size]
+            ids_param = ",".join(batch)
+            url = (
+                f"{self._get_product_url()}"
+                f"?bigIds={ids_param}"
+                f"&market={self._get_market()}"
+                f"&languages={self._get_locale()}"
+                f"&fieldsTemplate=Browse"
+            )
+            try:
+                data = http_get(url, {
+                    "Accept":     "application/json",
+                    "User-Agent": self._get_catalog_user_agent(),
+                    "MS-CV":      "unifideck.xcloud",
+                })
+                for product in data.get("Products", []):
+                    pid   = product.get("ProductId", "")
+                    title = ""
+                    for loc in product.get("LocalizedProperties", []):
+                        title = loc.get("ProductTitle", "")
+                        if title:
+                            break
+                    if pid and title:
+                        result[pid] = title
+            except Exception as e:
+                logger.warning(
+                    f"[MS] xCloud title batch {i // batch_size} failed: {e}"
+                )
+
+        logger.info(f"[MS] Resolved {len(result)} titles from {len(product_ids)} product IDs")
+        return result
 
     def _query_titlehub(self) -> List[Dict]:
         """Query the Xbox Title Hub API for the user's game library."""

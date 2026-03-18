@@ -208,7 +208,8 @@
       "prerequisitesFailedMessage": "Es posible que los requisitos previos no se hayan instalado correctamente"
     },
     "updateComplete": "Update Complete!",
-    "updateCompleteMessage": "{{title}} has been updated."
+    "updateCompleteMessage": "{{title}} has been updated.",
+    "syncWarning": "Aviso de sincronización"
   },
   "uninstallModal": {
     "title": "Confirmar desinstalación",
@@ -374,7 +375,10 @@
     "toastClearBody": "Los inicios de sesión de tiendas han sido borrados. Ahora puedes iniciar sesión con cuentas diferentes."
   },
   "microsoft": {
-    "notCompatible": "El formato de este juego no es compatible con SteamOS"
+    "notCompatible": "El formato de este juego no es compatible con SteamOS",
+    "playOnCloud": "Jugar en la nube",
+    "xcloudStreaming": "Xbox Cloud Gaming",
+    "noSubscription": "No se encontró ninguna suscripción a Xbox Game Pass en su cuenta. Los juegos de xCloud no se sincronizarán."
   },
   "authSuccess": {
     "title": "Autenticación",

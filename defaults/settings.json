@@ -33,7 +33,9 @@
       "xbl_user_agent": "XboxReplay; XboxLiveAuth/3.0",
       "catalog_user_agent": "Unifideck/1.0",
       "cdn_user_agent": "Microsoft-Delivery-Optimization/10.0",
-      "fe3_device_attrs_template": "E:BranchReadinessLevel=CBB&ProcessorIdentifier=Intel64+Family+6+Model+142+Stepping+10&CurrentBranch=rs4_release&DataVer_RS5=1809&FlightRing=Retail&AttrDataVer=57&InstallLanguage={locale}&OSUILocale={locale}&InstallationType=Client&FlightingBranchName=&Version_RS5=10&UpgEx_RS5=Green&GStatus_RS5=2&OSSkuId=48&app=APPHOSTUI&ProcessorManufacturer=GenuineIntel&AppVer=10.0.17134.471&OSArchitecture=AMD64&UpdateManagementGroup=2&IsDeviceRetailDemo=0&IsFlightingEnabled=0&TelemetryLevel=1&DefaultUserRegion=244&OSVersion=10.0.17134.471&OSRollbackAllowed=0&DeviceFamily=Windows.Desktop"
+      "fe3_device_attrs_template": "E:BranchReadinessLevel=CBB&ProcessorIdentifier=Intel64+Family+6+Model+142+Stepping+10&CurrentBranch=rs4_release&DataVer_RS5=1809&FlightRing=Retail&AttrDataVer=57&InstallLanguage={locale}&OSUILocale={locale}&InstallationType=Client&FlightingBranchName=&Version_RS5=10&UpgEx_RS5=Green&GStatus_RS5=2&OSSkuId=48&app=APPHOSTUI&ProcessorManufacturer=GenuineIntel&AppVer=10.0.17134.471&OSArchitecture=AMD64&UpdateManagementGroup=2&IsDeviceRetailDemo=0&IsFlightingEnabled=0&TelemetryLevel=1&DefaultUserRegion=244&OSVersion=10.0.17134.471&OSRollbackAllowed=0&DeviceFamily=Windows.Desktop",
+      "xcloud_catalog_id": "29a81209-df6f-41fd-a528-2ae6b91f719c",
+      "gamepass_catalog_url": "https://catalog.gamepass.com/sigls/v2"
     }
   },
   "ui": {

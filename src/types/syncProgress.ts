@@ -19,4 +19,6 @@ export type SyncProgress = {
   steam_synced?: number;
   rawg_total?: number;
   rawg_synced?: number;
+  // Warnings from sync (e.g. no Game Pass subscription)
+  warnings?: Array<{ label: string; values: Record<string, string | number> }>;
 };

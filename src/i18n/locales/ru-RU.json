@@ -208,7 +208,8 @@
       "prerequisitesFailedMessage": "Необходимые компоненты могли быть установлены некорректно"
     },
     "updateComplete": "Update Complete!",
-    "updateCompleteMessage": "{{title}} has been updated."
+    "updateCompleteMessage": "{{title}} has been updated.",
+    "syncWarning": "Предупреждение синхронизации"
   },
   "uninstallModal": {
     "title": "Подтвердите удаление",
@@ -374,7 +375,10 @@
     "toastClearBody": "Логины магазинов были очищены. Теперь вы можете войти с другими аккаунтами."
   },
   "microsoft": {
-    "notCompatible": "Формат этой игры несовместим со SteamOS"
+    "notCompatible": "Формат этой игры несовместим со SteamOS",
+    "playOnCloud": "Играть в облаке",
+    "xcloudStreaming": "Xbox Cloud Gaming",
+    "noSubscription": "Подписка Xbox Game Pass не найдена в вашем аккаунте. Игры xCloud не будут синхронизированы."
   },
   "authSuccess": {
     "title": "Аутентификация",

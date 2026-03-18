@@ -208,7 +208,8 @@
       "prerequisitesFailedMessage": "Vereisten zijn mogelijk niet correct geïnstalleerd"
     },
     "updateComplete": "Update Complete!",
-    "updateCompleteMessage": "{{title}} has been updated."
+    "updateCompleteMessage": "{{title}} has been updated.",
+    "syncWarning": "Synchronisatiewaarschuwing"
   },
   "uninstallModal": {
     "title": "Verwijdering bevestigen",
@@ -374,7 +375,10 @@
     "toastClearBody": "Winkelaanmeldingen zijn gewist. Je kunt nu inloggen met andere accounts."
   },
   "microsoft": {
-    "notCompatible": "Het formaat van dit spel is niet compatibel met SteamOS"
+    "notCompatible": "Het formaat van dit spel is niet compatibel met SteamOS",
+    "playOnCloud": "Speel in de cloud",
+    "xcloudStreaming": "Xbox Cloud Gaming",
+    "noSubscription": "Geen Xbox Game Pass-abonnement gevonden op uw account. xCloud-games worden niet gesynchroniseerd."
   },
   "authSuccess": {
     "title": "Authenticatie",

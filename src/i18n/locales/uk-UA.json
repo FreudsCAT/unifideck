@@ -208,7 +208,8 @@
       "prerequisitesFailedMessage": "Передумови можуть бути встановлені некоректно"
     },
     "updateComplete": "Update Complete!",
-    "updateCompleteMessage": "{{title}} has been updated."
+    "updateCompleteMessage": "{{title}} has been updated.",
+    "syncWarning": "Попередження синхронізації"
   },
   "uninstallModal": {
     "title": "Підтвердження видалення",
@@ -374,7 +375,10 @@
     "toastClearBody": "Авторизації магазинів були очищені. Тепер ви можете увійти з іншими обліковими записами."
   },
   "microsoft": {
-    "notCompatible": "Формат цієї гри не сумісний зі SteamOS"
+    "notCompatible": "Формат цієї гри не сумісний зі SteamOS",
+    "playOnCloud": "Грати в хмарі",
+    "xcloudStreaming": "Xbox Cloud Gaming",
+    "noSubscription": "Підписку Xbox Game Pass не знайдено у вашому обліковому записі. Ігри xCloud не буде синхронізовано."
   },
   "authSuccess": {
     "title": "Автентифікація",

@@ -785,6 +785,17 @@ const Content: FC = () => {
                       if (addedGames > 0) {
                         showModal(<SteamRestartModal closeModal={() => {}} />);
                       }
+                    // Show sync warnings as toasts (e.g. no Game Pass subscription)
+                    if (result.warnings && result.warnings.length > 0) {
+                      for (const warn of result.warnings) {
+                        toaster.toast({
+                          title: t("toasts.syncWarning", "Sync Warning"),
+                          body: t(warn.label, warn.values),
+                          duration: 10000,
+                          critical: true,
+                        });
+                      }
+                    }
                     } else if (result.status === "cancelled") {
                       toaster.toast({
                         title: t("toasts.syncCancelled"),
@@ -978,6 +989,18 @@ const Content: FC = () => {
 
               if (addedGames > 0) {
                 showModal(<SteamRestartModal closeModal={() => {}} />);
+              }
+
+              // Show sync warnings as toasts (e.g. no Game Pass subscription)
+              if (result.warnings && result.warnings.length > 0) {
+                for (const warn of result.warnings) {
+                  toaster.toast({
+                    title: t("toasts.syncWarning", "Sync Warning"),
+                    body: t(warn.label, warn.values),
+                    duration: 10000,
+                    critical: true,
+                  });
+                }
               }
             } else if (result.status === "cancelled") {
               toaster.toast({
