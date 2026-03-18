@@ -210,6 +210,18 @@ class MicrosoftConnector(Store):
 
     # ── Chromium auth browser ────────────────────────────────────────────
 
+    @staticmethod
+    def _clean_env() -> dict:
+        """Return a copy of os.environ without LD_LIBRARY_PATH/LD_PRELOAD.
+
+        PluginLoader bundles its own OpenSSL which conflicts with system
+        libraries required by flatpak and Chromium.
+        """
+        return {
+            k: v for k, v in os.environ.items()
+            if k not in ("LD_LIBRARY_PATH", "LD_PRELOAD")
+        }
+
     def _find_chromium_cmd(self) -> Optional[list]:
         """Find available Chromium/Chrome command.
 
@@ -221,12 +233,15 @@ class MicrosoftConnector(Store):
         if shutil.which("flatpak"):
             for app_id in ("org.chromium.Chromium", "com.google.Chrome"):
                 try:
-                    result = subprocess.run(
-                        ["flatpak", "info", app_id],
-                        capture_output=True, timeout=5
-                    )
-                    if result.returncode == 0:
-                        return ["flatpak", "run", app_id]
+                    # Check both --user and --system installations
+                    for flag in ("--user", "--system"):
+                        result = subprocess.run(
+                            ["flatpak", "info", flag, app_id],
+                            capture_output=True, timeout=5,
+                            env=self._clean_env(),
+                        )
+                        if result.returncode == 0:
+                            return ["flatpak", "run", app_id]
                 except Exception:
                     pass
         # Native installs
@@ -270,6 +285,7 @@ class MicrosoftConnector(Store):
                 args,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
+                env=self._clean_env(),
             )
             return True
         except Exception as e:
@@ -312,6 +328,7 @@ class MicrosoftConnector(Store):
                 lambda: subprocess.run(
                     ["flatpak", "install", "--user", "-y", "flathub", "org.chromium.Chromium"],
                     capture_output=True, timeout=300,
+                    env=self._clean_env(),
                 ),
             )
             if proc.returncode == 0:
