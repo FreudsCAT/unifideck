@@ -1340,10 +1340,20 @@ const PlaySectionWrapperInner: FC<PlaySectionWrapperProps> = ({
       >
         <style>{buttonStyles}</style>
 
-        {/* Play button — launches xCloud streaming in the browser */}
+        {/* Play button — launches xCloud via Steam's RunGame (→ launcher → Chromium kiosk) */}
         <DialogButton
           className="unifideck-install-btn"
-          onClick={() => window.open(xcloudUrl, "_blank", "width=1280,height=800,popup=yes")}
+          onClick={() => {
+            try {
+              const appStore = (window as any).appStore;
+              const overview = appStore?.m_mapApps?.get?.(appId);
+              const gameId = overview?.gameid ?? String(appId);
+              window.SteamClient?.Apps?.RunGame?.(gameId, "", -1, 100);
+            } catch (e) {
+              // Fallback: open in Steam browser if RunGame fails
+              window.open(`steam://openurl/${xcloudUrl}`, "_blank");
+            }
+          }}
           style={actionBtnStyle}
         >
           <svg viewBox="0 0 24 24" fill="currentColor" width="1em" height="1em">
