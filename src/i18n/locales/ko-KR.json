@@ -382,7 +382,16 @@
     "signInMessage": "Microsoft / Xbox 계정으로 로그인",
     "accountConnected": "Microsoft 계정이 연결되었습니다",
     "loggedOut": "Microsoft Store에서 로그아웃되었습니다",
-    "xcloudNotInstalled": "xCloud 게임이 로컬에 설치되어 있지 않습니다"
+    "xcloudNotInstalled": "xCloud 게임이 로컬에 설치되어 있지 않습니다",
+    "chromiumRequired": "Chromium 필요",
+    "chromiumRequiredMessage": "Xbox Cloud Gaming에는 Chromium 브라우저가 필요합니다. 자동으로 설치하시겠습니까? (한 번만 수행하면 됩니다.)",
+    "chromiumInstallButton": "Chromium 설치",
+    "chromiumInstalling": "Chromium 설치 중...",
+    "chromiumInstalled": "Chromium이 설치되었습니다!",
+    "chromiumAlreadyInstalled": "Chromium이 이미 설치되어 있습니다",
+    "chromiumInstallFailed": "Chromium 설치에 실패했습니다. 수동으로 설치하세요: flatpak install org.chromium.Chromium",
+    "chromiumInstallTimeout": "Chromium 설치 시간이 초과되었습니다.",
+    "flatpakNotFound": "이 시스템에서는 Flatpak을 사용할 수 없습니다"
   },
   "authSuccess": {
     "title": "인증",

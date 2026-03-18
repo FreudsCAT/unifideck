@@ -382,7 +382,16 @@
     "signInMessage": "Connectez-vous avec votre compte Microsoft / Xbox",
     "accountConnected": "Compte Microsoft connecté",
     "loggedOut": "Déconnecté du Microsoft Store",
-    "xcloudNotInstalled": "Les jeux xCloud ne sont pas installés localement"
+    "xcloudNotInstalled": "Les jeux xCloud ne sont pas installés localement",
+    "chromiumRequired": "Chromium requis",
+    "chromiumRequiredMessage": "Xbox Cloud Gaming nécessite le navigateur Chromium. Voulez-vous l'installer automatiquement ? (Cette opération n'est nécessaire qu'une seule fois.)",
+    "chromiumInstallButton": "Installer Chromium",
+    "chromiumInstalling": "Installation de Chromium...",
+    "chromiumInstalled": "Chromium installé !",
+    "chromiumAlreadyInstalled": "Chromium est déjà installé",
+    "chromiumInstallFailed": "L'installation de Chromium a échoué. Installez manuellement : flatpak install org.chromium.Chromium",
+    "chromiumInstallTimeout": "L'installation de Chromium a expiré. Vérifiez votre connexion internet.",
+    "flatpakNotFound": "Flatpak n'est pas disponible sur ce système"
   },
   "authSuccess": {
     "title": "Authentification",

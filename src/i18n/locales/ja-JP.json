@@ -382,7 +382,16 @@
     "signInMessage": "Microsoft / Xbox アカウントでサインイン",
     "accountConnected": "Microsoft アカウントが接続されました",
     "loggedOut": "Microsoft Store からログアウトしました",
-    "xcloudNotInstalled": "xCloud ゲームはローカルにインストールされていません"
+    "xcloudNotInstalled": "xCloud ゲームはローカルにインストールされていません",
+    "chromiumRequired": "Chromium が必要です",
+    "chromiumRequiredMessage": "Xbox Cloud Gaming には Chromium ブラウザが必要です。自動でインストールしますか？（この操作は一度だけ必要です。）",
+    "chromiumInstallButton": "Chromium をインストール",
+    "chromiumInstalling": "Chromium をインストール中...",
+    "chromiumInstalled": "Chromium がインストールされました！",
+    "chromiumAlreadyInstalled": "Chromium はすでにインストールされています",
+    "chromiumInstallFailed": "Chromium のインストールに失敗しました。手動でインストールしてください: flatpak install org.chromium.Chromium",
+    "chromiumInstallTimeout": "Chromium のインストールがタイムアウトしました。",
+    "flatpakNotFound": "このシステムでは Flatpak が利用できません"
   },
   "authSuccess": {
     "title": "認証",

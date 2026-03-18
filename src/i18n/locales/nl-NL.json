@@ -382,7 +382,16 @@
     "signInMessage": "Log in met uw Microsoft / Xbox account",
     "accountConnected": "Microsoft-account verbonden",
     "loggedOut": "Afgemeld bij Microsoft Store",
-    "xcloudNotInstalled": "xCloud-games zijn niet lokaal geïnstalleerd"
+    "xcloudNotInstalled": "xCloud-games zijn niet lokaal geïnstalleerd",
+    "chromiumRequired": "Chromium vereist",
+    "chromiumRequiredMessage": "Xbox Cloud Gaming vereist de Chromium-browser. Wilt u deze automatisch installeren? (Dit hoeft maar één keer te worden gedaan.)",
+    "chromiumInstallButton": "Chromium installeren",
+    "chromiumInstalling": "Chromium wordt geïnstalleerd...",
+    "chromiumInstalled": "Chromium geïnstalleerd!",
+    "chromiumAlreadyInstalled": "Chromium is al geïnstalleerd",
+    "chromiumInstallFailed": "Chromium-installatie mislukt. Installeer handmatig: flatpak install org.chromium.Chromium",
+    "chromiumInstallTimeout": "Chromium-installatie verlopen.",
+    "flatpakNotFound": "Flatpak is niet beschikbaar op dit systeem"
   },
   "authSuccess": {
     "title": "Authenticatie",

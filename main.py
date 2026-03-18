@@ -5683,6 +5683,14 @@ class Plugin:
         """Start Microsoft / Xbox Live OAuth authentication"""
         return await self.microsoft.start_auth()
 
+    async def install_chromium(self) -> Dict[str, Any]:
+        """Install Chromium browser via flatpak for xCloud support"""
+        return await self.microsoft.install_chromium()
+
+    async def check_chromium_installed(self) -> Dict[str, Any]:
+        """Check if Chromium is installed for xCloud support"""
+        return {"installed": self.microsoft.is_chromium_installed()}
+
     async def complete_microsoft_auth(self, auth_code: str) -> Dict[str, Any]:
         """Complete Microsoft OAuth with authorization code"""
         return await self.microsoft.complete_auth(auth_code)

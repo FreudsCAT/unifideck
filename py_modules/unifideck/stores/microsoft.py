@@ -291,6 +291,42 @@ class MicrosoftConnector(Store):
                     pass
             self._chromium_process = None
 
+    def is_chromium_installed(self) -> bool:
+        """Check if Chromium or Chrome is available on the system."""
+        return self._find_chromium_cmd() is not None
+
+    async def install_chromium(self) -> Dict[str, Any]:
+        """Install Chromium via flatpak.
+
+        Runs ``flatpak install -y org.chromium.Chromium`` in the background.
+        """
+        import shutil
+        if not shutil.which("flatpak"):
+            return {"success": False, "error": "microsoft.flatpakNotFound"}
+        if self.is_chromium_installed():
+            return {"success": True, "message": "microsoft.chromiumAlreadyInstalled"}
+        logger.info("[MS] Installing Chromium via flatpak...")
+        try:
+            proc = await asyncio.get_event_loop().run_in_executor(
+                None,
+                lambda: subprocess.run(
+                    ["flatpak", "install", "-y", "flathub", "org.chromium.Chromium"],
+                    capture_output=True, timeout=300,
+                ),
+            )
+            if proc.returncode == 0:
+                logger.info("[MS] Chromium installed successfully")
+                return {"success": True, "message": "microsoft.chromiumInstalled"}
+            else:
+                stderr = proc.stderr.decode("utf-8", errors="replace")[:200]
+                logger.error(f"[MS] Chromium install failed: {stderr}")
+                return {"success": False, "error": "microsoft.chromiumInstallFailed"}
+        except subprocess.TimeoutExpired:
+            return {"success": False, "error": "microsoft.chromiumInstallTimeout"}
+        except Exception as e:
+            logger.error(f"[MS] Chromium install error: {e}")
+            return {"success": False, "error": "microsoft.chromiumInstallFailed"}
+
     async def _clear_ms_cookies(self) -> None:
         """Clear Microsoft login cookies from CEF via CDP."""
         try:
@@ -320,6 +356,15 @@ class MicrosoftConnector(Store):
             f"&scope={urllib.parse.quote(self._get_scope())}"
         )
         self._pending_auth_url = auth_url
+
+        # Check if Chromium is available
+        if not self.is_chromium_installed():
+            logger.info("[MS] Chromium not installed — prompting user to install")
+            return {
+                "success": True,
+                "needs_chromium": True,
+                "message": "microsoft.chromiumRequired",
+            }
 
         # Launch Chromium with remote debugging for CDP interception
         launched = self._launch_chromium_auth(auth_url)

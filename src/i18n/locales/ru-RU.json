@@ -382,7 +382,16 @@
     "signInMessage": "Войдите в свою учётную запись Microsoft / Xbox",
     "accountConnected": "Учётная запись Microsoft подключена",
     "loggedOut": "Выход из Microsoft Store",
-    "xcloudNotInstalled": "Игры xCloud не установлены локально"
+    "xcloudNotInstalled": "Игры xCloud не установлены локально",
+    "chromiumRequired": "Требуется Chromium",
+    "chromiumRequiredMessage": "Xbox Cloud Gaming требует браузер Chromium. Установить автоматически? (Это нужно сделать только один раз.)",
+    "chromiumInstallButton": "Установить Chromium",
+    "chromiumInstalling": "Установка Chromium...",
+    "chromiumInstalled": "Chromium установлен!",
+    "chromiumAlreadyInstalled": "Chromium уже установлен",
+    "chromiumInstallFailed": "Не удалось установить Chromium. Установите вручную: flatpak install org.chromium.Chromium",
+    "chromiumInstallTimeout": "Истекло время установки Chromium.",
+    "flatpakNotFound": "Flatpak недоступен в этой системе"
   },
   "authSuccess": {
     "title": "Аутентификация",

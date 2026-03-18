@@ -44,6 +44,7 @@ import { StorageSettings } from "./components/StorageSettings";
 
 import { SteamRestartModal } from "./components/SteamRestartModal";
 import { AuthSuccessModal } from "./components/AuthSuccessModal";
+import { ChromiumInstallModal } from "./components/ChromiumInstallModal";
 import { AccountSwitchModal } from "./components/AccountSwitchModal";
 import { LanguageSelector } from "./components/LanguageSelector";
 import StoreConnections from "./components/settings/StoreConnections";
@@ -1226,8 +1227,19 @@ const Content: FC = () => {
 
       const result = await call<
         [],
-        { success: boolean; url?: string; chromium_auth?: boolean; message?: string; error?: string }
+        { success: boolean; url?: string; chromium_auth?: boolean; needs_chromium?: boolean; message?: string; error?: string }
       >(methodName);
+
+      // Chromium not installed — show install modal
+      if (result.success && result.needs_chromium) {
+        showModal(
+          <ChromiumInstallModal
+            closeModal={() => {}}
+            onInstalled={() => startAuth(store)}
+          />,
+        );
+        return;
+      }
 
       if (result.success && result.url) {
         const authUrl = result.url;
