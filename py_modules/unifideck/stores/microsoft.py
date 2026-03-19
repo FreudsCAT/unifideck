@@ -241,9 +241,16 @@ class MicrosoftConnector(Store):
         installations belong to the ``deck`` user.
         ``runuser -u deck --`` runs the command as deck without
         requiring a password (only works from root).
+        ``env DISPLAY=:0 ...`` injects display variables since
+        runuser does not inherit the parent environment.
         """
         if os.getuid() == 0:
-            return ["runuser", "-u", "deck", "--"] + cmd
+            return [
+                "runuser", "-u", "deck", "--",
+                "env",
+                "DISPLAY=:0",
+                f"XDG_RUNTIME_DIR=/run/user/{os.stat('/home/deck').st_uid}",
+            ] + cmd
         return cmd
 
     def _find_chromium_cmd(self) -> Optional[list]:
