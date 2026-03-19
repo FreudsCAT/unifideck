@@ -215,15 +215,23 @@ class MicrosoftConnector(Store):
 
     @staticmethod
     def _clean_env() -> dict:
-        """Return a copy of os.environ without LD_LIBRARY_PATH/LD_PRELOAD.
+        """Return a clean environment for launching Chromium/flatpak.
 
-        PluginLoader bundles its own OpenSSL which conflicts with system
-        libraries required by flatpak and Chromium.
+        - Strips LD_LIBRARY_PATH/LD_PRELOAD (PluginLoader bundles its own
+          OpenSSL which conflicts with system libraries).
+        - Ensures DISPLAY and XDG_RUNTIME_DIR are set so Chromium can
+          open a window (PluginLoader runs as a service without a display).
         """
-        return {
+        env = {
             k: v for k, v in os.environ.items()
             if k not in ("LD_LIBRARY_PATH", "LD_PRELOAD")
         }
+        # Steam Deck Game Mode: gamescope provides display :0 or :1
+        if "DISPLAY" not in env:
+            env["DISPLAY"] = ":0"
+        if "XDG_RUNTIME_DIR" not in env:
+            env["XDG_RUNTIME_DIR"] = f"/run/user/{os.getuid()}"
+        return env
 
     def _find_chromium_cmd(self) -> Optional[list]:
         """Find available Chromium/Chrome command.
