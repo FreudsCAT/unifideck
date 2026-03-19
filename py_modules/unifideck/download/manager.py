@@ -522,7 +522,11 @@ class DownloadQueue:
         return {'valid': True, 'free_space_gb': free_space_gb}
 
     def get_browseable_devices(self) -> List[Dict[str, Any]]:
-        """Get available device roots for quick navigation in the file picker."""
+        """Get available device roots for quick navigation in the file picker.
+
+        Uses /proc/mounts to identify real mount points instead of listing
+        directory contents (which would show SD card subdirectories as USB).
+        """
         devices = []
 
         # Internal storage (home directory)
@@ -537,7 +541,6 @@ class DownloadQueue:
         sd_root = self._resolve_sd_path()
         sd_real = os.path.realpath(sd_root) if sd_root else None
         if sd_root:
-            # Use the mount name as the label (e.g., "microSTEAMDECK")
             sd_name = os.path.basename(sd_root)
             devices.append({
                 'id': 'sdcard',
@@ -545,31 +548,55 @@ class DownloadQueue:
                 'path': sd_root,
             })
 
-        # Other mounted devices under /run/media/
-        media_base = "/run/media"
-        if os.path.isdir(media_base):
-            try:
-                for user_dir in os.listdir(media_base):
-                    user_path = os.path.join(media_base, user_dir)
-                    if not os.path.isdir(user_path):
+        # Other mounted devices: parse /proc/mounts for real mount points
+        # under /run/media/ that are NOT the SD card
+        try:
+            with open('/proc/mounts', 'r') as f:
+                for line in f:
+                    parts = line.split()
+                    if len(parts) < 2:
                         continue
-                    for mount in os.listdir(user_path):
-                        mount_path = os.path.join(user_path, mount)
-                        if not os.path.isdir(mount_path):
-                            continue
-                        mount_real = os.path.realpath(mount_path)
-                        # Skip if this is the SD card we already added
-                        if sd_real and mount_real == sd_real:
-                            continue
-                        devices.append({
-                            'id': f'usb:{mount}',
-                            'label': f'USB: {mount}',
-                            'path': mount_path,
-                        })
-            except Exception as e:
-                logger.debug(f"[DownloadQueue] Error scanning media devices: {e}")
+                    mount_point = parts[1]
+                    # Only consider mounts under /run/media/
+                    if not mount_point.startswith('/run/media/'):
+                        continue
+                    if not os.path.isdir(mount_point):
+                        continue
+                    mount_real = os.path.realpath(mount_point)
+                    # Skip if this is the SD card we already added
+                    if sd_real and mount_real == sd_real:
+                        continue
+                    mount_name = os.path.basename(mount_point)
+                    devices.append({
+                        'id': f'usb:{mount_name}',
+                        'label': f'USB: {mount_name}',
+                        'path': mount_point,
+                    })
+        except Exception as e:
+            logger.debug(f"[DownloadQueue] Error reading /proc/mounts: {e}")
 
         return devices
+
+    def list_directory(self, path: str) -> Dict[str, Any]:
+        """List subdirectories in the given path for the custom file browser."""
+        if not os.path.isabs(path):
+            return {'success': False, 'error': 'Path must be absolute'}
+
+        real_path = os.path.realpath(path)
+        if not os.path.isdir(real_path):
+            return {'success': False, 'error': 'Not a directory'}
+
+        try:
+            entries = []
+            for item in sorted(os.listdir(real_path)):
+                item_path = os.path.join(real_path, item)
+                if os.path.isdir(item_path):
+                    entries.append(item)
+            return {'success': True, 'path': real_path, 'directories': entries}
+        except PermissionError:
+            return {'success': False, 'error': 'Permission denied'}
+        except Exception as e:
+            return {'success': False, 'error': str(e)}
 
     def create_directory(self, path: str) -> Dict[str, Any]:
         """Create a directory at the given path (with safety validation)."""

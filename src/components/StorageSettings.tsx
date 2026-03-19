@@ -1,13 +1,13 @@
 /**
  * Settings Tab Component
  *
- * Contains storage location configuration with custom path support,
- * device quick-access navigation, and folder creation.
+ * Contains storage location configuration with custom path support.
+ * Includes a custom file browser with device quick-access, directory
+ * navigation, folder creation, and path selection.
  */
 
 import { FC, useState, useEffect, useCallback } from "react";
-import { call, toaster, openFilePicker } from "@decky/api";
-import { FileSelectionType } from "@decky/api";
+import { call, toaster } from "@decky/api";
 import {
   PanelSection,
   PanelSectionRow,
@@ -16,8 +16,9 @@ import {
   DropdownOption,
   DialogButton,
   showModal,
-  ConfirmModal,
+  ModalRoot,
   TextField,
+  Focusable,
 } from "@decky/ui";
 
 import type {
@@ -40,7 +41,6 @@ export const StorageSettings: FC = () => {
   const [locations, setLocations] = useState<StorageLocationInfo[]>([]);
   const [defaultStorage, setDefaultStorage] = useState<string>("internal");
   const [saving, setSaving] = useState(false);
-  const [devices, setDevices] = useState<BrowseableDevice[]>([]);
 
   const fetchLocations = useCallback(async () => {
     try {
@@ -56,27 +56,10 @@ export const StorageSettings: FC = () => {
     }
   }, []);
 
-  const fetchDevices = useCallback(async () => {
-    try {
-      const result = await call<
-        [],
-        { success: boolean; devices: BrowseableDevice[] }
-      >("get_browseable_devices");
-      if (result.success) {
-        setDevices(result.devices);
-      }
-    } catch (error) {
-      console.error("[StorageSettings] Error fetching devices:", error);
-    }
-  }, []);
-
-  // Fetch storage locations and devices on mount
   useEffect(() => {
     fetchLocations();
-    fetchDevices();
-  }, [fetchLocations, fetchDevices]);
+  }, [fetchLocations]);
 
-  // Handle storage location change
   const handleStorageChange = async (option: DropdownOption) => {
     const newLocation = option.data as string;
     setSaving(true);
@@ -113,46 +96,52 @@ export const StorageSettings: FC = () => {
     setSaving(false);
   };
 
-  // Browse from a specific device root and set as custom path
-  const handleBrowseFrom = async (startPath: string) => {
+  // Open the custom file browser and set result as custom install path
+  const handleBrowse = async () => {
+    let devices: BrowseableDevice[] = [];
     try {
-      const result = await openFilePicker(
-        FileSelectionType.FOLDER,
-        startPath,
-        false,
-        true,
-      );
-
-      if (!result?.realpath) return;
-
-      setSaving(true);
-      const setResult = await call<
-        [string],
-        { success: boolean; error?: string; free_space_gb?: number }
-      >("set_custom_install_path", result.realpath);
-
-      if (setResult.success) {
-        toaster.toast({
-          title: t("storageSettings.customPathSet"),
-          body: result.realpath,
-          duration: 3000,
-        });
-        await fetchLocations();
-      } else {
-        toaster.toast({
-          title: t("storageSettings.toastFailedTitle"),
-          body: t(setResult.error || "Unknown error"),
-          duration: 5000,
-          critical: true,
-        });
+      const result = await call<
+        [],
+        { success: boolean; devices: BrowseableDevice[] }
+      >("get_browseable_devices");
+      if (result.success) {
+        devices = result.devices;
       }
-    } catch (error) {
-      console.error("[StorageSettings] Error browsing for path:", error);
+    } catch {
+      // proceed with empty devices
     }
-    setSaving(false);
+
+    showModal(
+      <CustomFileBrowser
+        devices={devices}
+        onSelect={async (selectedPath) => {
+          setSaving(true);
+          const setResult = await call<
+            [string],
+            { success: boolean; error?: string; free_space_gb?: number }
+          >("set_custom_install_path", selectedPath);
+
+          if (setResult.success) {
+            toaster.toast({
+              title: t("storageSettings.customPathSet"),
+              body: selectedPath,
+              duration: 3000,
+            });
+            await fetchLocations();
+          } else {
+            toaster.toast({
+              title: t("storageSettings.toastFailedTitle"),
+              body: t(setResult.error || "Unknown error"),
+              duration: 5000,
+              critical: true,
+            });
+          }
+          setSaving(false);
+        }}
+      />,
+    );
   };
 
-  // Handle clearing custom path
   const handleClearCustom = async () => {
     setSaving(true);
     try {
@@ -168,89 +157,6 @@ export const StorageSettings: FC = () => {
     setSaving(false);
   };
 
-  // Show create folder modal
-  const handleNewFolder = () => {
-    let folderName = "";
-    let selectedDevicePath = devices.length > 0 ? devices[0].path : "/";
-
-    const deviceOptions: DropdownOption[] = devices.map((d) => ({
-      data: d.path,
-      label: d.label,
-    }));
-
-    showModal(
-      <ConfirmModal
-        strTitle={t("storageSettings.newFolderTitle")}
-        strOKButtonText={t("storageSettings.newFolderCreate")}
-        strCancelButtonText={t("confirmModals.no")}
-        onOK={async () => {
-          if (!folderName.trim()) return;
-          const fullPath = `${selectedDevicePath}/${folderName.trim()}`;
-          const result = await call<
-            [string],
-            { success: boolean; error?: string; path?: string }
-          >("create_directory", fullPath);
-
-          if (result.success) {
-            toaster.toast({
-              title: t("storageSettings.folderCreated"),
-              body: fullPath,
-              duration: 3000,
-            });
-            // Open file picker at the new folder so user can confirm
-            handleBrowseFrom(fullPath);
-          } else {
-            toaster.toast({
-              title: t("storageSettings.toastFailedTitle"),
-              body: t(result.error || "Unknown error"),
-              duration: 5000,
-              critical: true,
-            });
-          }
-        }}
-      >
-        <div
-          style={{
-            display: "flex",
-            flexDirection: "column",
-            gap: "12px",
-            padding: "8px 0",
-          }}
-        >
-          {deviceOptions.length > 0 && (
-            <div>
-              <label style={{ fontSize: "12px", color: "#999", marginBottom: "4px", display: "block" }}>
-                {t("storageSettings.newFolderDevice")}
-              </label>
-              <Dropdown
-                rgOptions={deviceOptions}
-                selectedOption={selectedDevicePath}
-                onChange={(opt: DropdownOption) => {
-                  selectedDevicePath = opt.data as string;
-                }}
-              />
-            </div>
-          )}
-          <div>
-            <label style={{ fontSize: "12px", color: "#999", marginBottom: "4px", display: "block" }}>
-              {t("storageSettings.newFolderName")}
-            </label>
-            <TextField
-              onChange={(e) => {
-                folderName = e.currentTarget.value;
-              }}
-              focusOnMount={true}
-            />
-          </div>
-          <p style={{ fontSize: "12px", color: "#888" }}>
-            {t("storageSettings.newFolderHint")}
-          </p>
-        </div>
-      </ConfirmModal>,
-    );
-  };
-
-  // Build dropdown options
   const dropdownOptions: DropdownOption[] = locations
     .filter((loc) => loc.available)
     .map((loc) => ({
@@ -302,47 +208,10 @@ export const StorageSettings: FC = () => {
         </p>
       </div>
 
-      {/* Device quick-access buttons */}
-      {devices.length > 0 && (
-        <PanelSectionRow>
-          <div
-            style={{
-              display: "flex",
-              flexDirection: "column",
-              gap: "4px",
-              width: "100%",
-            }}
-          >
-            <label style={{ fontSize: "12px", color: "#999" }}>
-              {t("storageSettings.browseFromDevice")}
-            </label>
-            <div
-              style={{
-                display: "flex",
-                flexWrap: "wrap",
-                gap: "6px",
-                width: "100%",
-              }}
-            >
-              {devices.map((device) => (
-                <DialogButton
-                  key={device.id}
-                  onClick={() => handleBrowseFrom(device.path)}
-                  disabled={saving}
-                  style={{ flex: "1 1 auto", minWidth: "120px", fontSize: "12px", padding: "8px" }}
-                >
-                  {device.label}
-                </DialogButton>
-              ))}
-            </div>
-          </div>
-        </PanelSectionRow>
-      )}
-
       <PanelSectionRow>
         <div style={{ display: "flex", gap: "8px", width: "100%" }}>
-          <DialogButton onClick={handleNewFolder} disabled={saving}>
-            {t("storageSettings.newFolder")}
+          <DialogButton onClick={handleBrowse} disabled={saving}>
+            {t("storageSettings.browseButton")}
           </DialogButton>
           {hasCustomPath && (
             <DialogButton onClick={handleClearCustom} disabled={saving}>
@@ -363,6 +232,234 @@ export const StorageSettings: FC = () => {
         </PanelSectionRow>
       )}
     </PanelSection>
+  );
+};
+
+/**
+ * Custom file browser modal with device shortcuts, directory listing,
+ * folder creation, and path selection — all in one view.
+ */
+const CustomFileBrowser: FC<{
+  devices: BrowseableDevice[];
+  onSelect: (path: string) => void;
+  closeModal?: () => void;
+}> = ({ devices, onSelect, closeModal }) => {
+  const [currentPath, setCurrentPath] = useState(
+    devices.length > 0 ? devices[0].path : "/",
+  );
+  const [directories, setDirectories] = useState<string[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [creatingFolder, setCreatingFolder] = useState(false);
+  const [newFolderName, setNewFolderName] = useState("");
+
+  const fetchDirectory = useCallback(async (path: string) => {
+    setLoading(true);
+    try {
+      const result = await call<
+        [string],
+        { success: boolean; path: string; directories: string[] }
+      >("list_directory", path);
+      if (result.success) {
+        setCurrentPath(result.path);
+        setDirectories(result.directories);
+      }
+    } catch (e) {
+      console.error("[FileBrowser] Error listing directory:", e);
+    }
+    setLoading(false);
+  }, []);
+
+  useEffect(() => {
+    fetchDirectory(currentPath);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const navigateTo = (dir: string) => {
+    const next =
+      currentPath === "/" ? `/${dir}` : `${currentPath}/${dir}`;
+    fetchDirectory(next);
+  };
+
+  const navigateUp = () => {
+    if (currentPath === "/") return;
+    const parent =
+      currentPath.substring(0, currentPath.lastIndexOf("/")) || "/";
+    fetchDirectory(parent);
+  };
+
+  const handleCreateFolder = async () => {
+    const name = newFolderName.trim();
+    if (!name) return;
+    const fullPath = `${currentPath}/${name}`;
+    const result = await call<
+      [string],
+      { success: boolean; error?: string; path?: string }
+    >("create_directory", fullPath);
+
+    if (result.success) {
+      setNewFolderName("");
+      setCreatingFolder(false);
+      // Refresh and navigate into the new folder
+      await fetchDirectory(fullPath);
+    } else {
+      toaster.toast({
+        title: t("storageSettings.toastFailedTitle"),
+        body: t(result.error || "Unknown error"),
+        duration: 5000,
+        critical: true,
+      });
+    }
+  };
+
+  const handleSelect = () => {
+    closeModal?.();
+    onSelect(currentPath);
+  };
+
+  return (
+    <ModalRoot onCancel={closeModal} closeModal={closeModal}>
+      <div
+        style={{
+          padding: "16px",
+          display: "flex",
+          flexDirection: "column",
+          gap: "10px",
+          minWidth: "320px",
+        }}
+      >
+        {/* Device shortcuts */}
+        {devices.length > 0 && (
+          <Focusable
+            style={{ display: "flex", gap: "6px", flexWrap: "wrap" }}
+          >
+            {devices.map((d) => (
+              <DialogButton
+                key={d.id}
+                onClick={() => fetchDirectory(d.path)}
+                style={{
+                  flex: "1 1 auto",
+                  fontSize: "11px",
+                  padding: "6px 8px",
+                  minWidth: 0,
+                }}
+              >
+                {d.label}
+              </DialogButton>
+            ))}
+          </Focusable>
+        )}
+
+        {/* Current path */}
+        <div
+          style={{
+            fontSize: "12px",
+            color: "#b0b0b0",
+            wordBreak: "break-all",
+            padding: "4px 0",
+          }}
+        >
+          {currentPath}
+        </div>
+
+        {/* Directory listing */}
+        <Focusable
+          style={{
+            maxHeight: "280px",
+            overflowY: "auto",
+            display: "flex",
+            flexDirection: "column",
+            gap: "2px",
+          }}
+        >
+          {currentPath !== "/" && (
+            <DialogButton
+              onClick={navigateUp}
+              style={{
+                width: "100%",
+                textAlign: "left",
+                fontSize: "13px",
+                padding: "8px 12px",
+              }}
+            >
+              ..
+            </DialogButton>
+          )}
+          {loading && directories.length === 0 && (
+            <div style={{ color: "#666", fontSize: "12px", padding: "8px" }}>
+              {t("storageSettings.loading")}
+            </div>
+          )}
+          {!loading && directories.length === 0 && (
+            <div style={{ color: "#666", fontSize: "12px", padding: "8px" }}>
+              {t("storageSettings.emptyDirectory")}
+            </div>
+          )}
+          {directories.map((dir) => (
+            <DialogButton
+              key={dir}
+              onClick={() => navigateTo(dir)}
+              style={{
+                width: "100%",
+                textAlign: "left",
+                fontSize: "13px",
+                padding: "8px 12px",
+              }}
+            >
+              {dir}
+            </DialogButton>
+          ))}
+        </Focusable>
+
+        {/* New folder inline input */}
+        {creatingFolder && (
+          <Focusable
+            style={{ display: "flex", gap: "6px", alignItems: "center" }}
+          >
+            <div style={{ flex: 1 }}>
+              <TextField
+                value={newFolderName}
+                onChange={(e) => setNewFolderName(e.currentTarget.value)}
+                focusOnMount={true}
+              />
+            </div>
+            <DialogButton
+              onClick={handleCreateFolder}
+              disabled={!newFolderName.trim()}
+              style={{ minWidth: "60px", padding: "6px 10px", fontSize: "12px" }}
+            >
+              {t("storageSettings.newFolderCreate")}
+            </DialogButton>
+            <DialogButton
+              onClick={() => {
+                setCreatingFolder(false);
+                setNewFolderName("");
+              }}
+              style={{ minWidth: "60px", padding: "6px 10px", fontSize: "12px" }}
+            >
+              {t("confirmModals.cancelTitle") ? t("confirmModals.no") : "Cancel"}
+            </DialogButton>
+          </Focusable>
+        )}
+
+        {/* Action buttons */}
+        <Focusable style={{ display: "flex", gap: "8px" }}>
+          {!creatingFolder && (
+            <DialogButton
+              onClick={() => setCreatingFolder(true)}
+              style={{ fontSize: "13px" }}
+            >
+              {t("storageSettings.newFolder")}
+            </DialogButton>
+          )}
+          <DialogButton
+            onClick={handleSelect}
+            style={{ flex: 1, fontSize: "13px" }}
+          >
+            {t("storageSettings.selectFolder")}
+          </DialogButton>
+        </Focusable>
+      </div>
+    </ModalRoot>
   );
 };
 

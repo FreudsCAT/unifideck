@@ -5507,6 +5507,14 @@ class Plugin:
             logger.error(f"[DownloadQueue] Error getting browseable devices: {e}")
             return {'success': False, 'error': str(e)}
 
+    async def list_directory(self, path: str) -> Dict[str, Any]:
+        """List subdirectories in a path for the custom file browser"""
+        try:
+            return self.download_queue.list_directory(path)
+        except Exception as e:
+            logger.error(f"[DownloadQueue] Error listing directory: {e}")
+            return {'success': False, 'error': str(e)}
+
     async def create_directory(self, path: str) -> Dict[str, Any]:
         """Create a directory at the given path for game installation"""
         try:
