@@ -322,13 +322,34 @@ class MicrosoftConnector(Store):
                 stderr=subprocess.DEVNULL,
                 env=self._clean_env(),
             )
+            # Wait for Chromium to be ready (CDP responding)
+            import urllib.request as _req
+            for _i in range(15):
+                time.sleep(1)
+                if self._chromium_process.poll() is not None:
+                    logger.error("[MS] Chromium exited immediately — another instance may be running")
+                    self._chromium_process = None
+                    return False
+                try:
+                    with _req.urlopen(
+                        f"http://127.0.0.1:{self._chromium_cdp_port}/json",
+                        timeout=2,
+                    ) as r:
+                        import json as _json
+                        pages = _json.loads(r.read())
+                    if pages:
+                        logger.info(f"[MS] Chromium CDP ready: {len(pages)} page(s)")
+                        return True
+                except Exception:
+                    pass
+            logger.warning("[MS] Chromium started but CDP not responding after 15s")
             return True
         except Exception as e:
             logger.error(f"[MS] Failed to launch Chromium: {e}")
             return False
 
     def _kill_chromium(self) -> None:
-        """Terminate the Chromium auth subprocess if running."""
+        """Terminate the Chromium auth subprocess and any orphan instances."""
         if self._chromium_process is not None:
             try:
                 self._chromium_process.terminate()
@@ -341,6 +362,14 @@ class MicrosoftConnector(Store):
                 except Exception:
                     pass
             self._chromium_process = None
+        # Also kill any orphan Chromium using our auth profile
+        try:
+            subprocess.run(
+                ["pkill", "-f", "chromium-auth"],
+                capture_output=True, timeout=5,
+            )
+        except Exception:
+            pass
 
     def is_chromium_installed(self) -> bool:
         """Check if Chromium or Chrome is available on the system."""
