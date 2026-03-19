@@ -235,13 +235,15 @@ class MicrosoftConnector(Store):
 
     @staticmethod
     def _deck_cmd(cmd: list) -> list:
-        """Prefix a command with sudo -u deck if running as root.
+        """Prefix a command with runuser if running as root.
 
         PluginLoader runs as root but Chromium and flatpak user
         installations belong to the ``deck`` user.
+        ``runuser -u deck --`` runs the command as deck without
+        requiring a password (only works from root).
         """
         if os.getuid() == 0:
-            return ["sudo", "-E", "-u", "deck"] + cmd
+            return ["runuser", "-u", "deck", "--"] + cmd
         return cmd
 
     def _find_chromium_cmd(self) -> Optional[list]:
