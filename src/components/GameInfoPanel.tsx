@@ -234,19 +234,10 @@ const GameInfoPanelInner: React.FC<GameInfoPanelProps> = ({ appId }) => {
             }
           }
 
-          // Detect completion
+          // Detect completion (toast handled by PlaySectionWrapper)
           if (prevState.isDownloading && !newState.isDownloading) {
             const finalStatus = result.download_info?.status;
             if (finalStatus === "completed") {
-              toaster.toast({
-                title: t("toasts.installComplete"),
-                body: t("toasts.installCompleteMessage", {
-                  title: gameInfo?.title || "Game",
-                }),
-                duration: 10000,
-                critical: true,
-              });
-
               // Refresh game info
               call<[number], any>("get_game_info", appId).then((info) => {
                 const processedInfo = info?.error ? null : info;
@@ -292,13 +283,6 @@ const GameInfoPanelInner: React.FC<GameInfoPanelProps> = ({ appId }) => {
                 appId,
                 store: refreshedInfo.store,
                 isInstalled: true,
-              });
-              toaster.toast({
-                title: t("toasts.installComplete"),
-                body: t("toasts.installCompleteMessage", {
-                  title: refreshedInfo.title || gameInfo?.title || "Game",
-                }),
-                duration: 10000,
               });
             }
           }

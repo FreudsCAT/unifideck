@@ -925,7 +925,7 @@ class DownloadQueue:
             item.start_time = time.time()
             self._save()
             
-            logger.info(f"[DownloadQueue] Starting download: {item.game_title}")
+            logger.info(f"[DownloadQueue] Starting download: {item.game_title} (store={item.store}, game_id={item.game_id})")
             
             try:
                 success = await self._execute_download(item)
@@ -1021,10 +1021,12 @@ class DownloadQueue:
             "install",
             item.game_id,
             "--base-path", install_path,
+            "--with-dlcs",  # Automatically install all owned DLCs
             "-y"  # Non-interactive
         ]
-        
+
         logger.info(f"[DownloadQueue] Running: {' '.join(cmd)}")
+        logger.info(f"[DownloadQueue] DLC download enabled for {item.game_title}")
         
         try:
             self.current_process = await asyncio.create_subprocess_exec(
@@ -1064,19 +1066,20 @@ class DownloadQueue:
             logger.error("[DownloadQueue] GOG install callback not configured")
             return False
         
-        logger.info(f"[DownloadQueue] Delegating GOG download to API client: {item.game_id}")
-        
+        logger.info(f"[DownloadQueue] Delegating GOG download to API client: {item.game_id} (DLC support enabled)")
+
         try:
             # Progress callback to update download item
             # Can receive float (percentage) or dict (full stats)
             outer_self = self  # For nested function to access DownloadQueue methods
+            last_logged_milestone = [-1]  # Mutable container for nested function access
             async def progress_callback(progress: Any):
                 # Check if cancelled before processing more progress
                 # This allows early exit from long-running downloads
                 if item.status == DownloadStatus.CANCELLED:
                     logger.info(f"[DownloadQueue] GOG download cancelled, raising CancelledError")
                     raise asyncio.CancelledError("Download cancelled by user")
-                
+
                 if isinstance(progress, dict):
                     # Handle phase updates (for extraction/verification phases)
                     if 'phase' in progress:
@@ -1085,14 +1088,14 @@ class DownloadQueue:
                         logger.info(f"[DownloadQueue] Phase update: {item.download_phase} - {item.phase_message}")
                         self._save()
                         return  # Phase-only update, no need to process other fields
-                    
+
                     item.progress_percent = progress.get('progress_percent', 0)
                     item.downloaded_bytes = int(progress.get('downloaded_bytes', 0))
                     new_total = int(progress.get('total_bytes', 0))
                     item.total_bytes = new_total
                     # Update size cache for Install button accuracy (use self from outer scope)
                     outer_self._update_size_cache_if_needed(item, new_total)
-                    
+
                     # Update phase message during download if provided
                     if 'phase_message' in progress:
                         item.phase_message = progress['phase_message']
@@ -1101,16 +1104,16 @@ class DownloadQueue:
                         mb_down = item.downloaded_bytes / (1024 * 1024)
                         mb_total = item.total_bytes / (1024 * 1024)
                         item.phase_message = f"Downloading: {mb_down:.0f} MB / {mb_total:.0f} MB"
-                    
+
                     # Convert speed from bytes/sec to MB/s
                     speed_bps = progress.get('speed_bps', 0)
                     item.speed_mbps = speed_bps / (1024 * 1024)
-                    
+
                     # Apply ETA smoothing (same logic as Epic for uniformity)
                     raw_eta = int(progress.get('eta_seconds', 0))
                     item.raw_eta_seconds = raw_eta
                     item.eta_samples += 1
-                    
+
                     if item.eta_samples == 1:
                         # First sample: cap at reasonable max
                         item.eta_seconds = min(raw_eta, 7200)  # Cap at 2 hours initially
@@ -1119,11 +1122,19 @@ class DownloadQueue:
                         alpha = 0.3 if item.eta_samples > 15 else 0.1
                         smoothed = alpha * raw_eta + (1 - alpha) * item.eta_seconds
                         item.eta_seconds = int(smoothed)
-                    
+
                     # Mark as no longer preparing once we have real progress
                     if item.progress_percent > 0 or item.downloaded_bytes > 0:
                         item.is_preparing = False
-                    
+
+                    # Log at every 10% milestone
+                    current_milestone = int(item.progress_percent // 10) * 10
+                    if current_milestone > last_logged_milestone[0] and current_milestone > 0:
+                        last_logged_milestone[0] = current_milestone
+                        eta_h, eta_rem = divmod(item.eta_seconds, 3600)
+                        eta_m, eta_s = divmod(eta_rem, 60)
+                        logger.info(f"[DownloadQueue] GOG progress: {item.game_title} - {current_milestone}% ({item.speed_mbps:.1f} MB/s, ETA: {eta_h}:{eta_m:02d}:{eta_s:02d})")
+
                     # Save periodically (every 5% or if finished)
                     if int(item.progress_percent) % 5 == 0 or item.progress_percent >= 100:
                         self._save()
@@ -1351,7 +1362,8 @@ class DownloadQueue:
         
         buffer = ""
         recent_lines = []  # Capture last lines for error classification
-        
+        last_logged_milestone = -1  # Track last logged 10% milestone
+
         while self.current_process and self.current_process.returncode is None:
             try:
                 chunk = await asyncio.wait_for(
@@ -1360,11 +1372,11 @@ class DownloadQueue:
                 )
                 if not chunk:
                     break
-                    
+
                 buffer += chunk.decode('utf-8', errors='ignore')
                 lines = buffer.split('\n')
                 buffer = lines[-1]  # Keep incomplete line
-                
+
                 for line in lines[:-1]:
                     # Keep last 20 lines for error classification
                     recent_lines.append(line)
@@ -1372,39 +1384,45 @@ class DownloadQueue:
                         recent_lines.pop(0)
                     item._last_output_lines = '\n'.join(recent_lines)
                     logger.debug(f"[Nile] {line}")
-                    
+
                     # Parse rich download progress (from PROGRESS logger)
                     if match := progress_re.search(line):
                         item.progress_percent = float(match.group(1))
                         item.downloaded_bytes = int(match.group(2))
                         item.total_bytes = int(match.group(3))
-                        
+
                         # Parse ETA (HH:MM:SS format)
                         hours = int(match.group(4))
                         minutes = int(match.group(5))
                         seconds = int(match.group(6))
                         item.eta_seconds = hours * 3600 + minutes * 60 + seconds
                         item.is_preparing = False
-                    
+
+                        # Log at every 10% milestone
+                        current_milestone = int(item.progress_percent // 10) * 10
+                        if current_milestone > last_logged_milestone and current_milestone > 0:
+                            last_logged_milestone = current_milestone
+                            logger.info(f"[DownloadQueue] Amazon progress: {item.game_title} - {current_milestone}% ({item.speed_mbps:.1f} MB/s, ETA: {hours}:{minutes:02d}:{seconds:02d})")
+
                     # Parse download speed
                     elif match := speed_re.search(line):
                         item.speed_mbps = float(match.group(1))
-                    
+
                     # Parse installation phase (simpler format - after download)
                     elif match := install_re.search(line):
                         item.progress_percent = float(match.group(1))
                         item.is_preparing = False
                         logger.info(f"[DownloadQueue] Amazon game {item.game_id} installation at {item.progress_percent}%")
-                    
+
                     # Check for verification
                     elif '[Verification]' in line:
                         item.is_preparing = False
                         logger.info(f"[DownloadQueue] Amazon game {item.game_id} verification in progress")
-                    
+
                     # Save progress periodically
                     if int(item.progress_percent) % 5 == 0:
                         self._save()
-                            
+
             except asyncio.TimeoutError:
                 continue
             except Exception as e:
@@ -1463,10 +1481,17 @@ class DownloadQueue:
         total_size_re = re.compile(
             r"Download size: (\d+\.?\d*) (MiB|GiB)"
         )
-        
+        # DLC/download phase detection patterns
+        dlc_available_re = re.compile(r'The following DLCs? (?:are|is) available')
+        preparing_re = re.compile(r'Preparing download for "(.+?)"')
+        finished_re = re.compile(r'Finished installation process in (\d+\.?\d*)')
+
         buffer = ""
         recent_lines = []  # Capture last lines for error classification
-        
+        last_logged_milestone = -1  # Track last logged 10% milestone
+        current_download_name = None  # Track which component is downloading (main game or DLC name)
+        download_count = 0  # How many downloads started (1 = main game, 2+ = DLCs)
+
         while self.current_process and self.current_process.returncode is None:
             try:
                 chunk = await asyncio.wait_for(
@@ -1475,24 +1500,48 @@ class DownloadQueue:
                 )
                 if not chunk:
                     break
-                    
+
                 buffer += chunk.decode('utf-8', errors='ignore')
                 lines = buffer.split('\n')
                 buffer = lines[-1]  # Keep incomplete line
-                
+
                 for line in lines[:-1]:
                     # Keep last 20 lines for error classification
                     recent_lines.append(line)
                     if len(recent_lines) > 20:
                         recent_lines.pop(0)
                     item._last_output_lines = '\n'.join(recent_lines)
+
+                    # Detect DLC availability
+                    if dlc_available_re.search(line):
+                        logger.info(f"[DownloadQueue] DLCs available for {item.game_title}")
+
+                    # Detect download phase transitions (main game + each DLC)
+                    if match := preparing_re.search(line):
+                        download_count += 1
+                        current_download_name = match.group(1)
+                        last_logged_milestone = -1  # Reset milestones for new download
+                        if download_count == 1:
+                            logger.info(f"[DownloadQueue] Preparing download: {current_download_name}")
+                        else:
+                            logger.info(f"[DownloadQueue] Downloading DLC/extra for {item.game_title}: {current_download_name}")
+
+                    # Detect individual download completion
+                    if match := finished_re.search(line):
+                        elapsed = float(match.group(1))
+                        label = current_download_name or item.game_title
+                        if download_count > 1:
+                            logger.info(f"[DownloadQueue] DLC/extra download finished: {label} ({elapsed:.0f}s)")
+                        else:
+                            logger.info(f"[DownloadQueue] Main download finished: {label} ({elapsed:.0f}s)")
+
                     # Parse progress
                     if match := progress_re.search(line):
                         item.progress_percent = float(match.group(1))
                         eta_parts = match.group(2).split(':')
                         raw_eta = int(eta_parts[0]) * 3600 + int(eta_parts[1]) * 60 + int(eta_parts[2])
                         item.raw_eta_seconds = raw_eta
-                        
+
                         # Apply Exponential Moving Average (EMA) smoothing
                         # Use lower alpha (more smoothing) in early samples to dampen wild initial ETAs
                         # Gradually increase alpha (faster response) as we get more samples
@@ -1506,22 +1555,34 @@ class DownloadQueue:
                             alpha = 0.3 if item.eta_samples > 15 else 0.1
                             smoothed = alpha * raw_eta + (1 - alpha) * item.eta_seconds
                             item.eta_seconds = int(smoothed)
-                        
+
                         # Mark as no longer preparing once we have real progress
                         if item.progress_percent > 0:
                             item.is_preparing = False
-                    
+
+                        # Log at every 10% milestone
+                        current_milestone = int(item.progress_percent // 10) * 10
+                        if current_milestone > last_logged_milestone and current_milestone > 0:
+                            last_logged_milestone = current_milestone
+                            eta_h, eta_rem = divmod(item.eta_seconds, 3600)
+                            eta_m, eta_s = divmod(eta_rem, 60)
+                            dl_label = current_download_name or item.game_title
+                            if download_count > 1:
+                                logger.info(f"[DownloadQueue] DLC progress: {dl_label} - {current_milestone}% ({item.speed_mbps:.1f} MB/s, ETA: {eta_h}:{eta_m:02d}:{eta_s:02d})")
+                            else:
+                                logger.info(f"[DownloadQueue] Epic progress: {item.game_title} - {current_milestone}% ({item.speed_mbps:.1f} MB/s, ETA: {eta_h}:{eta_m:02d}:{eta_s:02d})")
+
                     # Parse downloaded bytes
                     if match := downloaded_re.search(line):
                         item.downloaded_bytes = int(float(match.group(1)) * 1024 * 1024)
                         # Also mark as no longer preparing
                         if item.downloaded_bytes > 0:
                             item.is_preparing = False
-                    
+
                     # Parse speed
                     if match := speed_re.search(line):
                         item.speed_mbps = float(match.group(1))
-                    
+
                     # Parse total size
                     if match := total_size_re.search(line):
                         size = float(match.group(1))
@@ -1531,10 +1592,10 @@ class DownloadQueue:
                         item.total_bytes = new_total
                         # Update size cache for Install button accuracy
                         self._update_size_cache_if_needed(item, new_total)
-                    
+
                     # Save progress periodically
                     self._save()
-                    
+
             except asyncio.TimeoutError:
                 continue
 

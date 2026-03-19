@@ -1,8 +1,11 @@
 import aiohttp
 import asyncio
 import json
+import logging
 import re
 from typing import Optional
+
+logger = logging.getLogger("unifideck")
 
 # Known CEF tab identifiers for Steam's library UI (SP = Steam Platform)
 _SP_TAB_PATTERNS = [
@@ -347,7 +350,7 @@ class UnifideckCDPClient:
 
         result = await self.execute_js(js)
         value = result.get("result", {}).get("result", {}).get("value", "error")
-        print(f"[Unifideck CDP] hide_native_play_section({appId}) => {value}")
+        logger.debug(f"[CDP] hide_native_play_section({appId}) => {value}")
         return value
 
     async def unhide_native_play_section(self, appId: int) -> bool:
@@ -372,7 +375,7 @@ class UnifideckCDPClient:
 
         result = await self.execute_js(js)
         value = result.get("result", {}).get("result", {}).get("value", False)
-        print(f"[Unifideck CDP] unhide_native_play_section({appId}) => {value}")
+        logger.debug(f"[CDP] unhide_native_play_section({appId}) => {value}")
         return value
 
     async def focus_unifideck_button(self, appId: int) -> bool:
@@ -432,7 +435,7 @@ async def get_cdp_client() -> UnifideckCDPClient:
         await asyncio.wait_for(_cdp_client.connect(), timeout=5.0)
     elif not _cdp_client.connected:
         # Stale client — reconnect
-        print("[Unifideck CDP] Singleton exists but disconnected, reconnecting...")
+        logger.debug("[CDP] Singleton exists but disconnected, reconnecting...")
         await _cdp_client.disconnect()
         _cdp_client = UnifideckCDPClient()
         await asyncio.wait_for(_cdp_client.connect(), timeout=5.0)

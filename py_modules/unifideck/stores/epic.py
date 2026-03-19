@@ -410,7 +410,12 @@ class EpicConnector(Store):
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE
             )
-            stdout, stderr = await proc.communicate()
+            try:
+                stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=30)
+            except asyncio.TimeoutError:
+                proc.kill()
+                logger.warning(f"legendary info timed out for {game_id}")
+                return None
 
             if proc.returncode == 0:
                 info = json.loads(stdout.decode())

@@ -4089,7 +4089,7 @@ class Plugin:
         try:
             client = await get_cdp_client()
             css_id = await client.inject_hide_css(appId, css_rules)
-            logger.info(f"[CDP] Successfully injected hide CSS for app {appId}")
+            logger.debug(f"[CDP] Successfully injected hide CSS for app {appId}")
             return {"success": True, "css_id": css_id}
         except Exception as e:
             # Try reconnecting once on any connection-related error
@@ -4100,7 +4100,7 @@ class Plugin:
                     await shutdown_cdp_client()
                     client = await get_cdp_client()
                     css_id = await client.inject_hide_css(appId, css_rules)
-                    logger.info(f"[CDP] Successfully injected hide CSS for app {appId} (after reconnect)")
+                    logger.debug(f"[CDP] Successfully injected hide CSS for app {appId} (after reconnect)")
                     return {"success": True, "css_id": css_id}
                 except Exception as retry_e:
                     logger.error(f"[CDP] Reconnection failed for app {appId}: {retry_e}")
@@ -4120,7 +4120,7 @@ class Plugin:
         try:
             client = await get_cdp_client()
             await client.remove_hide_css(appId)
-            logger.info(f"[CDP] Successfully removed hide CSS for app {appId}")
+            logger.debug(f"[CDP] Successfully removed hide CSS for app {appId}")
             return {"success": True}
         except Exception as e:
             # Try reconnecting once on any connection-related error
@@ -4131,7 +4131,7 @@ class Plugin:
                     await shutdown_cdp_client()
                     client = await get_cdp_client()
                     await client.remove_hide_css(appId)
-                    logger.info(f"[CDP] Successfully removed hide CSS for app {appId} (after reconnect)")
+                    logger.debug(f"[CDP] Successfully removed hide CSS for app {appId} (after reconnect)")
                     return {"success": True}
                 except Exception as retry_e:
                     logger.error(f"[CDP] Reconnection failed for app {appId}: {retry_e}")
@@ -4151,7 +4151,7 @@ class Plugin:
         try:
             client = await get_cdp_client()
             hidden_msg = await client.hide_native_play_section(appId)
-            logger.info(f"[CDP] hide_native_play_section({appId}) => {hidden_msg}")
+            logger.debug(f"[CDP] hide_native_play_section({appId}) => {hidden_msg}")
             if hidden_msg == "hidden":
                 return {"success": True}
             else:
@@ -4164,7 +4164,7 @@ class Plugin:
                     await shutdown_cdp_client()
                     client = await get_cdp_client()
                     hidden_msg = await client.hide_native_play_section(appId)
-                    logger.info(f"[CDP] hide_native_play_section({appId}) => {hidden_msg} (after reconnect)")
+                    logger.debug(f"[CDP] hide_native_play_section({appId}) => {hidden_msg} (after reconnect)")
                     if hidden_msg == "hidden":
                         return {"success": True}
                     else:
@@ -4187,7 +4187,7 @@ class Plugin:
         try:
             client = await get_cdp_client()
             unhidden = await client.unhide_native_play_section(appId)
-            logger.info(f"[CDP] unhide_native_play_section({appId}) => {unhidden}")
+            logger.debug(f"[CDP] unhide_native_play_section({appId}) => {unhidden}")
             return {"success": True}
         except Exception as e:
             err_lower = str(e).lower()
@@ -4197,7 +4197,7 @@ class Plugin:
                     await shutdown_cdp_client()
                     client = await get_cdp_client()
                     unhidden = await client.unhide_native_play_section(appId)
-                    logger.info(f"[CDP] unhide_native_play_section({appId}) => {unhidden} (after reconnect)")
+                    logger.debug(f"[CDP] unhide_native_play_section({appId}) => {unhidden} (after reconnect)")
                     return {"success": True}
                 except Exception as retry_e:
                     logger.error(f"[CDP] Reconnection failed for app {appId}: {retry_e}")

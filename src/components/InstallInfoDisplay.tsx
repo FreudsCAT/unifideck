@@ -134,20 +134,9 @@ const InstallInfoDisplayInner: FC<{ appId: number }> = ({ appId }) => {
                 "[InstallInfoDisplay] Download successfully finished",
               );
 
-              // Show installation complete toast
-              toaster.toast({
-                title: t("toasts.installComplete"),
-                body: t("toasts.installCompleteMessage", {
-                  title: gameInfo?.title || "Game",
-                }),
-                duration: 10000,
-                critical: true,
-              });
-
-              // Invalidate cache first to ensure fresh data
+              // Toast handled by PlaySectionWrapper — just refresh game info
               gameInfoCacheRef?.delete(appId);
 
-              // Refresh game info to update button state (Install -> Play/Uninstall)
               call<[number], any>("get_game_info", appId).then((info) => {
                 const processedInfo = info?.error ? null : info;
                 setGameInfo(processedInfo);
@@ -156,7 +145,6 @@ const InstallInfoDisplayInner: FC<{ appId: number }> = ({ appId }) => {
                     info: processedInfo,
                     timestamp: Date.now(),
                   });
-                  // Update tab cache immediately so UI reflects change
                   updateSingleGameStatus({
                     appId,
                     store: processedInfo.store,
@@ -179,14 +167,6 @@ const InstallInfoDisplayInner: FC<{ appId: number }> = ({ appId }) => {
               );
               call<[number], any>("get_game_info", appId).then((info) => {
                 if (info && info.is_installed) {
-                  // It is installed, likely success
-                  toaster.toast({
-                    title: t("toasts.installComplete"),
-                    body: t("toasts.installCompleteMessage", {
-                      title: gameInfo?.title || "Game",
-                    }),
-                    duration: 10000,
-                  });
                   setGameInfo(info);
                 }
               });
