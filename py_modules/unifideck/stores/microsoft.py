@@ -302,9 +302,16 @@ class MicrosoftConnector(Store):
             logger.warning("[MS] No Chromium/Chrome found for auth")
             return False
 
+        # Use a dedicated profile dir so Chromium starts a NEW instance
+        # even if another Chromium window is already open.  This ensures
+        # our --remote-debugging-port is active on this process.
+        auth_profile = os.path.expanduser("~/.local/share/unifideck/chromium-auth")
+        os.makedirs(auth_profile, exist_ok=True)
+
         args = cmd + [
             f"--app={auth_url}",
             f"--remote-debugging-port={self._chromium_cdp_port}",
+            f"--user-data-dir={auth_profile}",
             "--no-first-run",
             "--disable-translate",
             "--disable-infobars",
