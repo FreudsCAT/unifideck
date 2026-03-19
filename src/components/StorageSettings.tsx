@@ -6,7 +6,7 @@
  * navigation, folder creation, and path selection.
  */
 
-import { FC, useState, useEffect, useCallback } from "react";
+import { FC, useState, useEffect, useCallback, useRef } from "react";
 import { call, toaster } from "@decky/api";
 import {
   PanelSection,
@@ -15,11 +15,14 @@ import {
   Dropdown,
   DropdownOption,
   DialogButton,
+  ButtonItem,
   showModal,
   ModalRoot,
   TextField,
+  Toggle,
   Focusable,
 } from "@decky/ui";
+import { FaFolder, FaTimes } from "react-icons/fa";
 
 import type {
   StorageLocationInfo,
@@ -32,6 +35,7 @@ interface BrowseableDevice {
   id: string;
   label: string;
   path: string;
+  free_space_gb?: number;
 }
 
 /**
@@ -208,19 +212,6 @@ export const StorageSettings: FC = () => {
         </p>
       </div>
 
-      <PanelSectionRow>
-        <div style={{ display: "flex", gap: "8px", width: "100%" }}>
-          <DialogButton onClick={handleBrowse} disabled={saving}>
-            {t("storageSettings.browseButton")}
-          </DialogButton>
-          {hasCustomPath && (
-            <DialogButton onClick={handleClearCustom} disabled={saving}>
-              {t("storageSettings.clearCustom")}
-            </DialogButton>
-          )}
-        </div>
-      </PanelSectionRow>
-
       {locations.length > 0 && (
         <PanelSectionRow>
           <Field label={t("storageSettings.pathLabel")}>
@@ -231,13 +222,79 @@ export const StorageSettings: FC = () => {
           </Field>
         </PanelSectionRow>
       )}
+
+      <PanelSectionRow>
+        <ButtonItem layout="below" onClick={handleBrowse} disabled={saving}>
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: "8px",
+              justifyContent: "center",
+            }}
+          >
+            <FaFolder />
+            {t("storageSettings.browseButton")}
+          </div>
+        </ButtonItem>
+      </PanelSectionRow>
+      {hasCustomPath && (
+        <PanelSectionRow>
+          <ButtonItem
+            layout="below"
+            onClick={handleClearCustom}
+            disabled={saving}
+          >
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: "8px",
+                justifyContent: "center",
+              }}
+            >
+              <FaTimes />
+              {t("storageSettings.clearCustom")}
+            </div>
+          </ButtonItem>
+        </PanelSectionRow>
+      )}
     </PanelSection>
   );
 };
 
+const FolderIcon: FC = () => (
+  <svg
+    viewBox="0 0 24 24"
+    fill="currentColor"
+    width="1em"
+    height="1em"
+    style={{ flexShrink: 0, opacity: 0.7 }}
+  >
+    <path d="M10 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z" />
+  </svg>
+);
+
+const UpArrowIcon: FC = () => (
+  <svg viewBox="0 0 24 24" fill="currentColor" width="1em" height="1em">
+    <path d="M4 12l1.41 1.41L11 7.83V20h2V7.83l5.58 5.59L20 12l-8-8-8 8z" />
+  </svg>
+);
+
+const SORT_OPTIONS: DropdownOption[] = [
+  { data: "name", label: "A-Z" },
+  { data: "name_desc", label: "Z-A" },
+  { data: "modified_newest", label: "Modified (Newest)" },
+  { data: "modified_oldest", label: "Modified (Oldest)" },
+  { data: "created_newest", label: "Created (Newest)" },
+  { data: "created_oldest", label: "Created (Oldest)" },
+  { data: "size_largest", label: "Size (Largest)" },
+  { data: "size_smallest", label: "Size (Smallest)" },
+];
+
 /**
- * Custom file browser modal with device shortcuts, directory listing,
- * folder creation, and path selection — all in one view.
+ * Custom file browser modal with device dropdown, directory listing,
+ * sorting, hidden file toggle, folder creation, and path selection.
  */
 const CustomFileBrowser: FC<{
   devices: BrowseableDevice[];
@@ -251,14 +308,21 @@ const CustomFileBrowser: FC<{
   const [loading, setLoading] = useState(true);
   const [creatingFolder, setCreatingFolder] = useState(false);
   const [newFolderName, setNewFolderName] = useState("");
+  const [showHidden, setShowHidden] = useState(false);
+  const [sortBy, setSortBy] = useState<string>("name");
+
+  const showHiddenRef = useRef(showHidden);
+  const sortByRef = useRef(sortBy);
+  showHiddenRef.current = showHidden;
+  sortByRef.current = sortBy;
 
   const fetchDirectory = useCallback(async (path: string) => {
     setLoading(true);
     try {
       const result = await call<
-        [string],
+        [string, boolean, string],
         { success: boolean; path: string; directories: string[] }
-      >("list_directory", path);
+      >("list_directory", path, showHiddenRef.current, sortByRef.current);
       if (result.success) {
         setCurrentPath(result.path);
         setDirectories(result.directories);
@@ -273,6 +337,11 @@ const CustomFileBrowser: FC<{
     fetchDirectory(currentPath);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    fetchDirectory(currentPath);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showHidden, sortBy]);
 
   const navigateTo = (dir: string) => {
     const next =
@@ -299,7 +368,6 @@ const CustomFileBrowser: FC<{
     if (result.success) {
       setNewFolderName("");
       setCreatingFolder(false);
-      // Refresh and navigate into the new folder
       await fetchDirectory(fullPath);
     } else {
       toaster.toast({
@@ -316,6 +384,19 @@ const CustomFileBrowser: FC<{
     onSelect(currentPath);
   };
 
+  // Device dropdown
+  const deviceOptions: DropdownOption[] = devices.map((d) => ({
+    data: d.path,
+    label:
+      d.free_space_gb != null
+        ? `${d.label} (${d.free_space_gb} GB free)`
+        : d.label,
+  }));
+
+  const currentDevicePath = devices.find(
+    (d) => currentPath === d.path || currentPath.startsWith(d.path + "/"),
+  )?.path;
+
   return (
     <ModalRoot onCancel={closeModal} closeModal={closeModal}>
       <div
@@ -327,27 +408,40 @@ const CustomFileBrowser: FC<{
           minWidth: "320px",
         }}
       >
-        {/* Device shortcuts */}
-        {devices.length > 0 && (
-          <Focusable
-            style={{ display: "flex", gap: "6px", flexWrap: "wrap" }}
+        {/* Header: device dropdown + up arrow */}
+        <Focusable
+          style={{
+            display: "flex",
+            gap: "8px",
+            alignItems: "center",
+          }}
+        >
+          {devices.length > 0 && (
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <Dropdown
+                rgOptions={deviceOptions}
+                selectedOption={currentDevicePath}
+                onChange={(opt) => fetchDirectory(opt.data as string)}
+                strDefaultLabel={t("storageSettings.selectDevice")}
+              />
+            </div>
+          )}
+          <DialogButton
+            onClick={navigateUp}
+            disabled={currentPath === "/"}
+            style={{
+              minWidth: "48px",
+              width: "48px",
+              height: "40px",
+              padding: "0",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+            }}
           >
-            {devices.map((d) => (
-              <DialogButton
-                key={d.id}
-                onClick={() => fetchDirectory(d.path)}
-                style={{
-                  flex: "1 1 auto",
-                  fontSize: "11px",
-                  padding: "6px 8px",
-                  minWidth: 0,
-                }}
-              >
-                {d.label}
-              </DialogButton>
-            ))}
-          </Focusable>
-        )}
+            <UpArrowIcon />
+          </DialogButton>
+        </Focusable>
 
         {/* Current path */}
         <div
@@ -361,6 +455,42 @@ const CustomFileBrowser: FC<{
           {currentPath}
         </div>
 
+        {/* Toolbar: show hidden toggle + sort dropdown */}
+        <Focusable
+          style={{
+            display: "flex",
+            gap: "8px",
+            alignItems: "center",
+          }}
+        >
+          <Focusable
+            onActivate={() => setShowHidden(!showHidden)}
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: "8px",
+              padding: "6px 12px",
+              cursor: "pointer",
+            }}
+            onClick={() => setShowHidden(!showHidden)}
+          >
+            <Toggle
+              value={showHidden}
+              onChange={(checked) => setShowHidden(checked)}
+            />
+            <span style={{ fontSize: "12px", whiteSpace: "nowrap" }}>
+              {t("storageSettings.showHidden")}
+            </span>
+          </Focusable>
+          <div style={{ minWidth: "140px", flexShrink: 0 }}>
+            <Dropdown
+              rgOptions={SORT_OPTIONS}
+              selectedOption={sortBy}
+              onChange={(opt) => setSortBy(opt.data as string)}
+            />
+          </div>
+        </Focusable>
+
         {/* Directory listing */}
         <Focusable
           style={{
@@ -371,19 +501,6 @@ const CustomFileBrowser: FC<{
             gap: "2px",
           }}
         >
-          {currentPath !== "/" && (
-            <DialogButton
-              onClick={navigateUp}
-              style={{
-                width: "100%",
-                textAlign: "left",
-                fontSize: "13px",
-                padding: "8px 12px",
-              }}
-            >
-              ..
-            </DialogButton>
-          )}
           {loading && directories.length === 0 && (
             <div style={{ color: "#666", fontSize: "12px", padding: "8px" }}>
               {t("storageSettings.loading")}
@@ -405,7 +522,16 @@ const CustomFileBrowser: FC<{
                 padding: "8px 12px",
               }}
             >
-              {dir}
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "8px",
+                }}
+              >
+                <FolderIcon />
+                <span>{dir}</span>
+              </div>
             </DialogButton>
           ))}
         </Focusable>
@@ -425,7 +551,13 @@ const CustomFileBrowser: FC<{
             <DialogButton
               onClick={handleCreateFolder}
               disabled={!newFolderName.trim()}
-              style={{ minWidth: "60px", padding: "6px 10px", fontSize: "12px" }}
+              style={{
+                width: "48px",
+                minWidth: "48px",
+                height: "40px",
+                padding: "0",
+                fontSize: "12px",
+              }}
             >
               {t("storageSettings.newFolderCreate")}
             </DialogButton>
@@ -434,15 +566,29 @@ const CustomFileBrowser: FC<{
                 setCreatingFolder(false);
                 setNewFolderName("");
               }}
-              style={{ minWidth: "60px", padding: "6px 10px", fontSize: "12px" }}
+              style={{
+                width: "48px",
+                minWidth: "48px",
+                height: "40px",
+                padding: "0",
+                fontSize: "12px",
+              }}
             >
-              {t("confirmModals.cancelTitle") ? t("confirmModals.no") : "Cancel"}
+              {t("confirmModals.cancelTitle")
+                ? t("confirmModals.no")
+                : "Cancel"}
             </DialogButton>
           </Focusable>
         )}
 
         {/* Action buttons */}
         <Focusable style={{ display: "flex", gap: "8px" }}>
+          <DialogButton
+            onClick={handleSelect}
+            style={{ flex: 1, fontSize: "13px" }}
+          >
+            {t("storageSettings.selectFolder")}
+          </DialogButton>
           {!creatingFolder && (
             <DialogButton
               onClick={() => setCreatingFolder(true)}
@@ -451,12 +597,6 @@ const CustomFileBrowser: FC<{
               {t("storageSettings.newFolder")}
             </DialogButton>
           )}
-          <DialogButton
-            onClick={handleSelect}
-            style={{ flex: 1, fontSize: "13px" }}
-          >
-            {t("storageSettings.selectFolder")}
-          </DialogButton>
         </Focusable>
       </div>
     </ModalRoot>

@@ -529,12 +529,20 @@ class DownloadQueue:
         """
         devices = []
 
+        def _get_free_gb(path: str) -> float:
+            try:
+                st = os.statvfs(path)
+                return round((st.f_frsize * st.f_bavail) / (1024**3), 1)
+            except OSError:
+                return 0.0
+
         # Internal storage (home directory)
         home = os.path.expanduser("~")
         devices.append({
             'id': 'internal',
             'label': 'Internal Storage',
             'path': home,
+            'free_space_gb': _get_free_gb(home),
         })
 
         # SD card
@@ -546,6 +554,7 @@ class DownloadQueue:
                 'id': 'sdcard',
                 'label': f'SD Card ({sd_name})',
                 'path': sd_root,
+                'free_space_gb': _get_free_gb(sd_root),
             })
 
         # Other mounted devices: parse /proc/mounts for real mount points
@@ -571,13 +580,14 @@ class DownloadQueue:
                         'id': f'usb:{mount_name}',
                         'label': f'USB: {mount_name}',
                         'path': mount_point,
+                        'free_space_gb': _get_free_gb(mount_point),
                     })
         except Exception as e:
             logger.debug(f"[DownloadQueue] Error reading /proc/mounts: {e}")
 
         return devices
 
-    def list_directory(self, path: str) -> Dict[str, Any]:
+    def list_directory(self, path: str, include_hidden: bool = False, sort_by: str = 'name') -> Dict[str, Any]:
         """List subdirectories in the given path for the custom file browser."""
         if not os.path.isabs(path):
             return {'success': False, 'error': 'Path must be absolute'}
@@ -588,15 +598,50 @@ class DownloadQueue:
 
         try:
             entries = []
-            for item in sorted(os.listdir(real_path)):
+            for item in os.listdir(real_path):
+                if not include_hidden and item.startswith('.'):
+                    continue
                 item_path = os.path.join(real_path, item)
                 if os.path.isdir(item_path):
                     entries.append(item)
+
+            # Apply sorting
+            if sort_by == 'name_desc':
+                entries.sort(key=str.lower, reverse=True)
+            elif sort_by == 'modified_newest':
+                entries.sort(key=lambda x: self._safe_stat(os.path.join(real_path, x), 'mtime'), reverse=True)
+            elif sort_by == 'modified_oldest':
+                entries.sort(key=lambda x: self._safe_stat(os.path.join(real_path, x), 'mtime'))
+            elif sort_by == 'created_newest':
+                entries.sort(key=lambda x: self._safe_stat(os.path.join(real_path, x), 'ctime'), reverse=True)
+            elif sort_by == 'created_oldest':
+                entries.sort(key=lambda x: self._safe_stat(os.path.join(real_path, x), 'ctime'))
+            elif sort_by == 'size_largest':
+                entries.sort(key=lambda x: self._safe_stat(os.path.join(real_path, x), 'size'), reverse=True)
+            elif sort_by == 'size_smallest':
+                entries.sort(key=lambda x: self._safe_stat(os.path.join(real_path, x), 'size'))
+            else:  # 'name' (A-Z)
+                entries.sort(key=str.lower)
+
             return {'success': True, 'path': real_path, 'directories': entries}
         except PermissionError:
             return {'success': False, 'error': 'Permission denied'}
         except Exception as e:
             return {'success': False, 'error': str(e)}
+
+    @staticmethod
+    def _safe_stat(path: str, attr: str) -> float:
+        """Get file stat safely, returning 0 on error."""
+        try:
+            if attr == 'mtime':
+                return os.path.getmtime(path)
+            elif attr == 'ctime':
+                return os.path.getctime(path)
+            elif attr == 'size':
+                return float(os.path.getsize(path))
+        except OSError:
+            pass
+        return 0.0
 
     def create_directory(self, path: str) -> Dict[str, Any]:
         """Create a directory at the given path (with safety validation)."""

@@ -5507,10 +5507,10 @@ class Plugin:
             logger.error(f"[DownloadQueue] Error getting browseable devices: {e}")
             return {'success': False, 'error': str(e)}
 
-    async def list_directory(self, path: str) -> Dict[str, Any]:
+    async def list_directory(self, path: str, include_hidden: bool = False, sort_by: str = 'name') -> Dict[str, Any]:
         """List subdirectories in a path for the custom file browser"""
         try:
-            return self.download_queue.list_directory(path)
+            return self.download_queue.list_directory(path, include_hidden, sort_by)
         except Exception as e:
             logger.error(f"[DownloadQueue] Error listing directory: {e}")
             return {'success': False, 'error': str(e)}
