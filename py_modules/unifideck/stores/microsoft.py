@@ -235,26 +235,26 @@ class MicrosoftConnector(Store):
 
     @staticmethod
     def _deck_cmd(cmd: list) -> list:
-        """Prefix a command with runuser if running as root.
+        """Wrap a command with display environment variables.
 
-        PluginLoader runs as root but Chromium and flatpak user
-        installations belong to the ``deck`` user.
-        ``runuser -u deck --`` runs the command as deck without
-        requiring a password (only works from root).
-        ``env DISPLAY=:0 ...`` injects display variables since
-        runuser does not inherit the parent environment.
+        PluginLoader runs as a systemd service without DISPLAY or
+        DBUS_SESSION_BUS_ADDRESS.  These must be injected explicitly
+        via the ``env`` command so Chromium/flatpak can open windows.
+
+        If running as root, ``runuser -u deck --`` drops privileges
+        to the ``deck`` user (flatpak refuses to run under sudo/root).
         """
+        uid = os.stat("/home/deck").st_uid
+        env_prefix = [
+            "env",
+            "DISPLAY=:0",
+            f"XDG_RUNTIME_DIR=/run/user/{uid}",
+            f"DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/{uid}/bus",
+            "GTK_MODULES=",
+        ]
         if os.getuid() == 0:
-            uid = os.stat("/home/deck").st_uid
-            return [
-                "runuser", "-u", "deck", "--",
-                "env",
-                "DISPLAY=:0",
-                f"XDG_RUNTIME_DIR=/run/user/{uid}",
-                f"DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/{uid}/bus",
-                "GTK_MODULES=",
-            ] + cmd
-        return cmd
+            return ["runuser", "-u", "deck", "--"] + env_prefix + cmd
+        return env_prefix + cmd
 
     def _find_chromium_cmd(self) -> Optional[list]:
         """Find available Chromium/Chrome command.
