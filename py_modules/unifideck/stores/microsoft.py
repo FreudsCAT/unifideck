@@ -219,42 +219,33 @@ class MicrosoftConnector(Store):
 
         - Strips LD_LIBRARY_PATH/LD_PRELOAD (PluginLoader bundles its own
           OpenSSL which conflicts with system libraries).
-        - Ensures DISPLAY and XDG_RUNTIME_DIR are set so Chromium can
-          open a window (PluginLoader runs as a service without a display).
+        - Injects DISPLAY, XDG_RUNTIME_DIR, DBUS_SESSION_BUS_ADDRESS
+          (PluginLoader is a systemd service without a display session).
+        - Clears GTK_MODULES to suppress canberra-gtk-module warnings.
         """
+        uid = os.stat("/home/deck").st_uid
         env = {
             k: v for k, v in os.environ.items()
             if k not in ("LD_LIBRARY_PATH", "LD_PRELOAD")
         }
-        # Steam Deck Game Mode: gamescope provides display :0 or :1
-        if "DISPLAY" not in env:
-            env["DISPLAY"] = ":0"
-        if "XDG_RUNTIME_DIR" not in env:
-            env["XDG_RUNTIME_DIR"] = f"/run/user/{os.getuid()}"
+        env.setdefault("DISPLAY", ":0")
+        env.setdefault("XDG_RUNTIME_DIR", f"/run/user/{uid}")
+        env.setdefault("DBUS_SESSION_BUS_ADDRESS", f"unix:path=/run/user/{uid}/bus")
+        env["GTK_MODULES"] = ""
         return env
 
     @staticmethod
     def _deck_cmd(cmd: list) -> list:
-        """Wrap a command with display environment variables.
+        """Prefix a command for the deck user if running as root.
 
-        PluginLoader runs as a systemd service without DISPLAY or
-        DBUS_SESSION_BUS_ADDRESS.  These must be injected explicitly
-        via the ``env`` command so Chromium/flatpak can open windows.
-
-        If running as root, ``runuser -u deck --`` drops privileges
-        to the ``deck`` user (flatpak refuses to run under sudo/root).
+        If running as root (unlikely on Steam Deck but possible),
+        ``runuser -u deck --`` drops privileges to the ``deck`` user.
+        Otherwise returns the command unchanged — env vars are handled
+        by ``_clean_env()`` passed to subprocess via ``env=``.
         """
-        uid = os.stat("/home/deck").st_uid
-        env_prefix = [
-            "env",
-            "DISPLAY=:0",
-            f"XDG_RUNTIME_DIR=/run/user/{uid}",
-            f"DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/{uid}/bus",
-            "GTK_MODULES=",
-        ]
         if os.getuid() == 0:
-            return ["runuser", "-u", "deck", "--"] + env_prefix + cmd
-        return env_prefix + cmd
+            return ["runuser", "-u", "deck", "--"] + cmd
+        return cmd
 
     def _find_chromium_cmd(self) -> Optional[list]:
         """Find available Chromium/Chrome command.
@@ -270,12 +261,12 @@ class MicrosoftConnector(Store):
                     # Check both --user and --system installations
                     for flag in ("--user", "--system"):
                         result = subprocess.run(
-                            self._deck_cmd(["flatpak", "info", flag, app_id]),
+                            ["flatpak", "info", flag, app_id],
                             capture_output=True, timeout=5,
                             env=self._clean_env(),
                         )
                         if result.returncode == 0:
-                            return self._deck_cmd(["flatpak", "run", app_id])
+                            return ["flatpak", "run", app_id]
                 except Exception:
                     pass
         # Native installs
@@ -370,7 +361,7 @@ class MicrosoftConnector(Store):
             proc = await asyncio.get_event_loop().run_in_executor(
                 None,
                 lambda: subprocess.run(
-                    self._deck_cmd(["flatpak", "install", "--user", "-y", "flathub", "org.chromium.Chromium"]),
+                    ["flatpak", "install", "--user", "-y", "flathub", "org.chromium.Chromium"],
                     capture_output=True, timeout=300,
                     env=self._clean_env(),
                 ),
