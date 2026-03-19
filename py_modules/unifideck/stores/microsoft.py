@@ -245,11 +245,14 @@ class MicrosoftConnector(Store):
         runuser does not inherit the parent environment.
         """
         if os.getuid() == 0:
+            uid = os.stat("/home/deck").st_uid
             return [
                 "runuser", "-u", "deck", "--",
                 "env",
                 "DISPLAY=:0",
-                f"XDG_RUNTIME_DIR=/run/user/{os.stat('/home/deck').st_uid}",
+                f"XDG_RUNTIME_DIR=/run/user/{uid}",
+                f"DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/{uid}/bus",
+                "GTK_MODULES=",
             ] + cmd
         return cmd
 
@@ -307,6 +310,9 @@ class MicrosoftConnector(Store):
             "--disable-infobars",
             "--disable-session-crashed-bubble",
             "--disable-features=TranslateUI",
+            "--password-store=basic",
+            "--disable-dev-shm-usage",
+            "--disable-background-networking",
             "--window-size=800,600",
         ]
         logger.info(f"[MS] Launching Chromium for auth: {' '.join(args[:4])}...")
