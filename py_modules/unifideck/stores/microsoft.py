@@ -233,6 +233,17 @@ class MicrosoftConnector(Store):
             env["XDG_RUNTIME_DIR"] = f"/run/user/{os.getuid()}"
         return env
 
+    @staticmethod
+    def _deck_cmd(cmd: list) -> list:
+        """Prefix a command with sudo -u deck if running as root.
+
+        PluginLoader runs as root but Chromium and flatpak user
+        installations belong to the ``deck`` user.
+        """
+        if os.getuid() == 0:
+            return ["sudo", "-E", "-u", "deck"] + cmd
+        return cmd
+
     def _find_chromium_cmd(self) -> Optional[list]:
         """Find available Chromium/Chrome command.
 
@@ -247,12 +258,12 @@ class MicrosoftConnector(Store):
                     # Check both --user and --system installations
                     for flag in ("--user", "--system"):
                         result = subprocess.run(
-                            ["flatpak", "info", flag, app_id],
+                            self._deck_cmd(["flatpak", "info", flag, app_id]),
                             capture_output=True, timeout=5,
                             env=self._clean_env(),
                         )
                         if result.returncode == 0:
-                            return ["flatpak", "run", app_id]
+                            return self._deck_cmd(["flatpak", "run", app_id])
                 except Exception:
                     pass
         # Native installs
@@ -337,7 +348,7 @@ class MicrosoftConnector(Store):
             proc = await asyncio.get_event_loop().run_in_executor(
                 None,
                 lambda: subprocess.run(
-                    ["flatpak", "install", "--user", "-y", "flathub", "org.chromium.Chromium"],
+                    self._deck_cmd(["flatpak", "install", "--user", "-y", "flathub", "org.chromium.Chromium"]),
                     capture_output=True, timeout=300,
                     env=self._clean_env(),
                 ),
