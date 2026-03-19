@@ -35,7 +35,8 @@
     "validationErrors.systemDir": "Cannot use a system directory",
     "validationErrors.notWritable": "Location is not writable",
     "validationErrors.notFound": "Directory does not exist",
-    "validationErrors.homeRoot": "Cannot use home directory root"
+    "validationErrors.homeRoot": "Cannot use home directory root",
+    "freeSpaceLabel": "{{label}} ({{freeSpace}} GB free)"
   },
   "gameGrid": {
     "loading": "Loading games...",
@@ -75,7 +76,16 @@
     "phaseVerifying": "Verifying {{game}}...",
     "internalStorage": "Internal Storage ({{freeSpace}} GB free)",
     "sdCard": "SD Card ({{freeSpace}} GB free)",
-    "customLocation": "Custom: {{path}} ({{freeSpace}} GB free)"
+    "customLocation": "Custom: {{path}} ({{freeSpace}} GB free)",
+    "extractingLabel": "Extracting...",
+    "verifyingLabel": "Verifying...",
+    "updateQueuedLabel": "Update Queued",
+    "downloadQueuedLabel": "Download Queued",
+    "downloadingUpdateLabel": "Downloading Update",
+    "downloadingLabel": "Downloading...",
+    "finalizingInstallation": "Finalizing installation...",
+    "speedMbps": "{{speed}} MB/s",
+    "etaLabel": "ETA: {{eta}}"
   },
   "cloudSave": {
     "title": "Cloud Save Conflict",
@@ -138,7 +148,10 @@
     "cancel": "✖ Cancel",
     "processing": "Processing...",
     "checking": "Checking...",
-    "size": "{{size}} GB"
+    "size": "{{size}} GB",
+    "update": "UPDATE",
+    "updateAvailable": "UPDATE AVAILABLE",
+    "updateAvailableDescription": "A new version is ready to install."
   },
   "confirmModals": {
     "installTitle": "Confirm Installation",
@@ -160,7 +173,10 @@
     "ubisoftInstallDescription": "This will load the Ubisoft Connect Launcher which you will need to install {{title}}.",
     "ubisoftInstallConfirm": "Open Ubisoft Connect",
     "yes": "Yes",
-    "no": "No"
+    "no": "No",
+    "amazonUpdateTitle": "Full Re-download Required",
+    "amazonUpdateDescription": "Amazon updates require a full re-download of {{title}}. This may take a while. Continue?",
+    "updateConfirm": "Update"
   },
   "toasts": {
     "downloadStarted": "Download Started. Check UNIFIDECK > Downloads",
@@ -244,7 +260,11 @@
       "prerequisitesFailedMessage": "Prerequisites may not have installed correctly"
     },
     "updateComplete": "Update Complete!",
-    "updateCompleteMessage": "{{title}} has been updated."
+    "updateCompleteMessage": "{{title}} has been updated.",
+    "updateCancelled": "Update Cancelled",
+    "updateCancelledMessage": "Update for {{title}} was cancelled.",
+    "updateFailed": "Update Failed",
+    "updateFailedMessage": "Failed to start update."
   },
   "uninstallModal": {
     "title": "Confirm Uninstallation",
@@ -296,7 +316,9 @@
       "ubisoftBootstrap": "Failed to set up Ubisoft Connect prefix",
       "ubisoftUmuMissing": "umu-run not found — required for Ubisoft games",
       "generic": "Installation failed — check logs for details"
-    }
+    },
+    "unknown": "Unknown error",
+    "steamAppsUnavailable": "SteamClient.Apps API not available"
   },
   "sync": {
     "downloadingArtwork": "Downloading artwork for {{game}}...",
@@ -333,7 +355,12 @@
     "greatOnDeck": "Great on Deck",
     "allGames": "All Games",
     "installed": "Installed",
-    "nonSteam": "Non-Steam"
+    "nonSteam": "Non-Steam",
+    "steam": "Steam",
+    "epic": "Epic",
+    "gog": "GOG",
+    "amazon": "Amazon",
+    "ubisoft": "Ubisoft"
   },
   "unifiedLibrary": {
     "error": "Unifideck Error",
@@ -385,7 +412,8 @@
       "playable": "PLAYABLE",
       "unsupported": "UNSUPPORTED",
       "unknown": "UNKNOWN"
-    }
+    },
+    "failedToLoadMetadata": "Failed to load metadata"
   },
   "gameDetailsSettings": {
     "title": "GAME DETAILS VIEW",
@@ -430,6 +458,16 @@
     "errorLoginFailed": "Login failed. Please check your credentials.",
     "errorInvalid2FA": "Invalid verification code. Please try again.",
     "showPassword": "Show password",
-    "hidePassword": "Hide password"
+    "hidePassword": "Hide password",
+    "doubleLoginWarning": "You will need to sign in twice for Ubisoft."
+  },
+  "relativeDate": {
+    "today": "Today",
+    "yesterday": "Yesterday"
+  },
+  "common": {
+    "thisGame": "this game",
+    "game": "Game",
+    "unknown": "Unknown"
   }
 }

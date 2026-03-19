@@ -224,8 +224,16 @@ const DownloadItemRow: FC<{
                         ? formatBytes(item.total_bytes)
                         : "--"}
                     </span>
-                    <span>{item.speed_mbps.toFixed(1)} MB/s</span>
-                    <span>ETA: {formatETA(item.eta_seconds)}</span>
+                    <span>
+                      {t("downloadsTab.speedMbps", {
+                        speed: item.speed_mbps.toFixed(1),
+                      })}
+                    </span>
+                    <span>
+                      {t("downloadsTab.etaLabel", {
+                        eta: formatETA(item.eta_seconds),
+                      })}
+                    </span>
                   </div>
                 </>
               );

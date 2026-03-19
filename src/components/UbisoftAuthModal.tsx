@@ -71,7 +71,7 @@ const CredentialsForm: FC<{
             fontWeight: 700,
           }}
         >
-          You will be required to login twice for Ubisoft
+          {t("ubisoftAuth.doubleLoginWarning")}
         </p>
       </div>
 

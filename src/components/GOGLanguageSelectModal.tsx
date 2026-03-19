@@ -74,14 +74,13 @@ export const GOGLanguageSelectModal: FC<GOGLanguageSelectModalProps> = ({
 
   return (
     <ConfirmModal
-      strTitle={t("gogLanguageModal.title", "Select Language")}
+      strTitle={t("gogLanguageModal.title")}
       strDescription={t("gogLanguageModal.description", {
-        defaultValue: "Choose which language to download for {{title}}",
         title: gameTitle,
       })}
       bHideCloseIcon={false}
-      strOKButtonText={t("gogLanguageModal.install", "Install")}
-      strCancelButtonText={t("gogLanguageModal.cancel", "Cancel")}
+      strOKButtonText={t("gogLanguageModal.install")}
+      strCancelButtonText={t("gogLanguageModal.cancel")}
       onOK={() => { closeModal?.(); onConfirm(selectedLanguage); }}
       onCancel={closeModal}
     >
@@ -100,7 +99,7 @@ export const GOGLanguageSelectModal: FC<GOGLanguageSelectModalProps> = ({
             fontSize: "14px",
           }}
         >
-          {t("gogLanguageModal.label", "Language")}
+          {t("gogLanguageModal.label")}
         </label>
         <Dropdown
           rgOptions={dropdownOptions}

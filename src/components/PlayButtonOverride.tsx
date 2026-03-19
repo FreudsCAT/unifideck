@@ -173,19 +173,6 @@ export function setPlayButtonCacheRef(
   gameInfoCacheRef = cache;
 }
 
-// Helper functions for formatting stats
-function formatLastPlayed(timestamp: number): string {
-  if (!timestamp) return "Never";
-  const date = new Date(timestamp * 1000);
-  const now = new Date();
-  const diffDays = Math.floor(
-    (now.getTime() - date.getTime()) / (1000 * 60 * 60 * 24),
-  );
-  if (diffDays === 0) return "Today";
-  if (diffDays === 1) return "Yesterday";
-  return date.toLocaleDateString();
-}
-
 interface PlaySectionWrapperProps {
   appId: number;
   playSectionClassName?: string;
@@ -226,6 +213,17 @@ const PlaySectionWrapperInner: FC<PlaySectionWrapperProps> = ({
   const ubisoftInstallPollTicksRef = useRef(0);
   const wrapperRef = useRef<HTMLDivElement>(null);
   const { t } = useTranslation();
+  const formatLastPlayed = (timestamp: number): string => {
+    if (!timestamp) return t("gameInfoPanel.labels.never");
+    const date = new Date(timestamp * 1000);
+    const now = new Date();
+    const diffDays = Math.floor(
+      (now.getTime() - date.getTime()) / (1000 * 60 * 60 * 24),
+    );
+    if (diffDays === 0) return t("relativeDate.today");
+    if (diffDays === 1) return t("relativeDate.yesterday");
+    return date.toLocaleDateString();
+  };
 
   const isDownloading =
     downloadInfo !== null &&
@@ -751,14 +749,14 @@ const PlaySectionWrapperInner: FC<PlaySectionWrapperProps> = ({
 
           toaster.toast({
             title: info.was_previously_installed
-              ? t("toasts.updateComplete", "Update Complete!")
+              ? t("toasts.updateComplete")
               : t("toasts.installComplete"),
             body: info.was_previously_installed
               ? t("toasts.updateCompleteMessage", {
-                  title: gameInfo?.title || "Game",
+                  title: gameInfo?.title || t("common.game"),
                 })
               : t("toasts.installCompleteMessage", {
-                  title: gameInfo?.title || "Game",
+                  title: gameInfo?.title || t("common.game"),
                 }),
             duration: 10000,
             critical: true,
@@ -828,7 +826,8 @@ const PlaySectionWrapperInner: FC<PlaySectionWrapperProps> = ({
               toaster.toast({
                 title: t("toasts.installComplete"),
                 body: t("toasts.installCompleteMessage", {
-                  title: refreshedInfo.title || gameInfo?.title || "Game",
+                  title:
+                    refreshedInfo.title || gameInfo?.title || t("common.game"),
                 }),
                 duration: 10000,
               });
@@ -1319,16 +1318,16 @@ const PlaySectionWrapperInner: FC<PlaySectionWrapperProps> = ({
           }}
         >
           {info.download_phase === "extracting"
-            ? "Extracting..."
+            ? t("downloadsTab.extractingLabel")
             : info.download_phase === "verifying"
-            ? "Verifying..."
+            ? t("downloadsTab.verifyingLabel")
             : info.status === "queued"
             ? info.was_previously_installed
-              ? "Update Queued"
-              : "Download Queued"
+              ? t("downloadsTab.updateQueuedLabel")
+              : t("downloadsTab.downloadQueuedLabel")
             : info.was_previously_installed
-            ? "Downloading Update"
-            : "Downloading..."}
+            ? t("downloadsTab.downloadingUpdateLabel")
+            : t("downloadsTab.downloadingLabel")}
         </div>
 
         {/* Progress bar */}
@@ -1370,7 +1369,9 @@ const PlaySectionWrapperInner: FC<PlaySectionWrapperProps> = ({
           }}
         >
           {isIndeterminate ? (
-            <span>{info.phase_message || "Finalizing installation..."}</span>
+            <span>
+              {info.phase_message || t("downloadsTab.finalizingInstallation")}
+            </span>
           ) : (
             <>
               {info.total_bytes && info.total_bytes > 0 ? (
@@ -1384,8 +1385,13 @@ const PlaySectionWrapperInner: FC<PlaySectionWrapperProps> = ({
               {info.status === "downloading" &&
                 info.speed_mbps !== undefined && (
                   <span style={{ marginLeft: "auto" }}>
-                    {info.speed_mbps.toFixed(1)} MB/s · ETA:{" "}
-                    {formatETA(info.eta_seconds || 0)}
+                    {t("downloadsTab.speedMbps", {
+                      speed: info.speed_mbps.toFixed(1),
+                    })}{" "}
+                    ·{" "}
+                    {t("downloadsTab.etaLabel", {
+                      eta: formatETA(info.eta_seconds || 0),
+                    })}
                   </span>
                 )}
             </>
@@ -1407,8 +1413,8 @@ const PlaySectionWrapperInner: FC<PlaySectionWrapperProps> = ({
       if (result.success) {
         setIsUpdating(false);
         toaster.toast({
-          title: "Update Cancelled",
-          body: `Update for ${gameInfo.title} was cancelled.`,
+          title: t("toasts.updateCancelled"),
+          body: t("toasts.updateCancelledMessage", { title: gameInfo.title }),
           duration: 5000,
         });
       }
@@ -1419,10 +1425,12 @@ const PlaySectionWrapperInner: FC<PlaySectionWrapperProps> = ({
     if (gameInfo.store === "amazon") {
       showModal(
         <ConfirmModal
-          strTitle="Full Re-download Required"
-          strDescription={`Amazon updates require a full re-download of ${gameInfo.title}. This may take a while. Continue?`}
-          strOKButtonText="Update"
-          strCancelButtonText="Cancel"
+          strTitle={t("confirmModals.amazonUpdateTitle")}
+          strDescription={t("confirmModals.amazonUpdateDescription", {
+            title: gameInfo.title,
+          })}
+          strOKButtonText={t("confirmModals.updateConfirm")}
+          strCancelButtonText={t("confirmModals.no")}
           onOK={async () => {
             setIsUpdating(true);
             const result = await call<
@@ -1432,8 +1440,10 @@ const PlaySectionWrapperInner: FC<PlaySectionWrapperProps> = ({
             if (!result.success) {
               setIsUpdating(false);
               toaster.toast({
-                title: "Update Failed",
-                body: result.error || "Failed to start update.",
+                title: t("toasts.updateFailed"),
+                body: result.error
+                  ? t(result.error)
+                  : t("toasts.updateFailedMessage"),
                 duration: 10000,
                 critical: true,
               });
@@ -1453,8 +1463,8 @@ const PlaySectionWrapperInner: FC<PlaySectionWrapperProps> = ({
     if (!result.success) {
       setIsUpdating(false);
       toaster.toast({
-        title: "Update Failed",
-        body: result.error || "Failed to start update.",
+        title: t("toasts.updateFailed"),
+        body: result.error ? t(result.error) : t("toasts.updateFailedMessage"),
         duration: 10000,
         critical: true,
       });
@@ -1504,7 +1514,7 @@ const PlaySectionWrapperInner: FC<PlaySectionWrapperProps> = ({
               <path d="M12 4V1L8 5l4 4V6c3.31 0 6 2.69 6 6 0 1.01-.25 1.97-.7 2.8l1.46 1.46C19.54 15.03 20 13.57 20 12c0-4.42-3.58-8-8-8zm0 14c-3.31 0-6-2.69-6-6 0-1.01.25-1.97.7-2.8L5.24 7.74C4.46 8.97 4 10.43 4 12c0 4.42 3.58 8 8 8v3l4-4-4-4v3z" />
             )}
           </svg>
-          {isDownloading ? t("installButton.cancel", "Cancel") : "UPDATE"}
+          {isDownloading ? t("installButton.cancel") : t("installButton.update")}
         </DialogButton>
 
         {/* Progress area — shows during update download or "Update Available" when idle */}
@@ -1530,10 +1540,10 @@ const PlaySectionWrapperInner: FC<PlaySectionWrapperProps> = ({
                 letterSpacing: "0.08em",
               }}
             >
-              UPDATE AVAILABLE
+              {t("installButton.updateAvailable")}
             </div>
             <div style={{ fontSize: "14px", color: "#dcdedf" }}>
-              A new version is ready to install.
+              {t("installButton.updateAvailableDescription")}
             </div>
           </div>
         )}
@@ -1651,7 +1661,7 @@ const PlaySectionWrapperInner: FC<PlaySectionWrapperProps> = ({
               >
                 <path d="M8 5v14l11-7z" />
               </svg>
-              {t("installButton.resume", "Resume")}
+              {t("installButton.resume")}
             </DialogButton>
             {/* X close button — terminates the running game */}
             <DialogButton
@@ -1695,7 +1705,7 @@ const PlaySectionWrapperInner: FC<PlaySectionWrapperProps> = ({
             >
               <path d="M8 5v14l11-7z" />
             </svg>
-            {t("installButton.play", "Play")}
+            {t("installButton.play")}
           </DialogButton>
         )}
 
@@ -1719,7 +1729,7 @@ const PlaySectionWrapperInner: FC<PlaySectionWrapperProps> = ({
                 marginBottom: "5px",
               }}
             >
-              LAST PLAYED
+              {t("gameInfoPanel.labels.lastPlayed")}
             </div>
             <div style={{ fontSize: "14px", color: "#dcdedf" }}>
               {formatLastPlayed(lastPlayedTimestamp)}
@@ -1808,7 +1818,7 @@ const PlaySectionWrapperInner: FC<PlaySectionWrapperProps> = ({
     ? t("installButton.cancel")
     : isDownloading
       ? t("installButton.cancel")
-      : t("installButton.installNative", "Install");
+      : t("installButton.installNative");
 
   return (
     <Focusable
@@ -1873,7 +1883,7 @@ const PlaySectionWrapperInner: FC<PlaySectionWrapperProps> = ({
                 marginBottom: "5px",
               }}
             >
-              SPACE REQUIRED
+              {t("gameInfoPanel.labels.spaceRequired")}
             </div>
             <div style={{ fontSize: "14px", color: "#dcdedf" }}>
               {gameInfo?.size_formatted || "\u2014"}
@@ -1891,7 +1901,7 @@ const PlaySectionWrapperInner: FC<PlaySectionWrapperProps> = ({
                 marginBottom: "5px",
               }}
             >
-              LAST PLAYED
+              {t("gameInfoPanel.labels.lastPlayed")}
             </div>
             <div style={{ fontSize: "14px", color: "#dcdedf" }}>
               {formatLastPlayed(lastPlayedTimestamp)}

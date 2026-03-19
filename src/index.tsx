@@ -1377,7 +1377,7 @@ const Content: FC = () => {
         console.error(`[Unifideck] Delete failed: ${result.error}`);
         toaster.toast({
           title: t("toasts.deleteFailed"),
-          body: result.error ? t(result.error) : "Unknown error",
+          body: result.error ? t(result.error) : t("errors.unknown"),
           duration: 5000,
         });
       }

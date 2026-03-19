@@ -1,7 +1,7 @@
 {
   "tabs": {
     "settings": "Configurações",
-    "downloads": "Downloads"
+    "downloads": "Transferências"
   },
   "storageSettings": {
     "title": "Configurações de Download",
@@ -13,7 +13,30 @@
     "toastUpdatedBody": "Novos jogos serão instalados em {{location}}",
     "toastFailedTitle": "Falha ao Atualizar",
     "toastFailedBody": "{{error}}",
-    "unknown": "Desconhecido"
+    "unknown": "Desconhecido",
+    "browseButton": "Procurar...",
+    "clearCustom": "Limpar local personalizado",
+    "customPathSet": "Local de instalação personalizado definido",
+    "newFolder": "Nova pasta",
+    "newFolderCreate": "Criar",
+    "selectFolder": "Usar esta pasta",
+    "emptyDirectory": "Pasta vazia",
+    "showHidden": "Mostrar arquivos ocultos",
+    "selectDevice": "Selecionar dispositivo",
+    "sortAZ": "A-Z",
+    "sortZA": "Z-A",
+    "sortModifiedNewest": "Modificado (mais recente)",
+    "sortModifiedOldest": "Modificado (mais antigo)",
+    "sortCreatedNewest": "Criado (mais recente)",
+    "sortCreatedOldest": "Criado (mais antigo)",
+    "sortSizeLargest": "Tamanho (maior)",
+    "sortSizeSmallest": "Tamanho (menor)",
+    "validationErrors.notAbsolute": "O caminho deve ser absoluto",
+    "validationErrors.systemDir": "Não é possível usar um diretório do sistema",
+    "validationErrors.notWritable": "O local não é gravável",
+    "validationErrors.notFound": "O diretório não existe",
+    "validationErrors.homeRoot": "Não é possível usar a raiz do diretório pessoal",
+    "freeSpaceLabel": "{{label}} ({{freeSpace}} GB livres)"
   },
   "gameGrid": {
     "loading": "Carregando jogos...",
@@ -52,7 +75,17 @@
     "phaseExtracting": "Extraindo {{game}}...",
     "phaseVerifying": "Verificando {{game}}...",
     "internalStorage": "Armazenamento interno ({{freeSpace}} GB livres)",
-    "sdCard": "Cartão SD ({{freeSpace}} GB livres)"
+    "sdCard": "Cartão SD ({{freeSpace}} GB livres)",
+    "customLocation": "Personalizado: {{path}} ({{freeSpace}} GB livres)",
+    "extractingLabel": "Extraindo...",
+    "verifyingLabel": "Verificando...",
+    "updateQueuedLabel": "Atualização na fila",
+    "downloadQueuedLabel": "Download na fila",
+    "downloadingUpdateLabel": "Baixando atualização",
+    "downloadingLabel": "Baixando...",
+    "finalizingInstallation": "Finalizando instalação...",
+    "speedMbps": "{{speed}} MB/s",
+    "etaLabel": "Tempo restante: {{eta}}"
   },
   "cloudSave": {
     "title": "Conflito de Save na Nuvem",
@@ -75,6 +108,7 @@
     "epicGames": "Epic Games",
     "gog": "GOG",
     "amazonGames": "Amazon Games",
+    "ubisoftConnect": "Ubisoft Connect",
     "connected": "Conectado",
     "checking": "Verificando...",
     "authenticate": "Entrar",
@@ -114,7 +148,10 @@
     "cancel": "✖ Cancelar",
     "processing": "Processando...",
     "checking": "Verificando...",
-    "size": "{{size}} GB"
+    "size": "{{size}} GB",
+    "update": "ATUALIZAR",
+    "updateAvailable": "ATUALIZAÇÃO DISPONÍVEL",
+    "updateAvailableDescription": "Uma nova versão está pronta para ser instalada."
   },
   "confirmModals": {
     "installTitle": "Confirmar Instalação",
@@ -132,12 +169,23 @@
     "steamRestartDescriptionStore": "Reinicie o Steam para aplicar seus novos jogos e artes da {{store}}",
     "restartNow": "Reiniciar agora",
     "later": "Mais tarde",
+    "ubisoftInstallTitle": "Ubisoft Connect necessário",
+    "ubisoftInstallDescription": "Isso abrirá o Launcher do Ubisoft Connect, onde você precisará instalar {{title}}.",
+    "ubisoftInstallConfirm": "Abrir Ubisoft Connect",
     "yes": "Sim",
-    "no": "Não"
+    "no": "Não",
+    "amazonUpdateTitle": "É necessário baixar tudo novamente",
+    "amazonUpdateDescription": "As atualizações da Amazon exigem um novo download completo de {{title}}. Isso pode levar algum tempo. Continuar?",
+    "updateConfirm": "Atualizar"
   },
   "toasts": {
     "downloadStarted": "Download Iniciado. Verifique UNIFIDECK > Downloads",
     "downloadQueued": "{{title}} foi adicionado à fila.",
+    "ubisoftLauncherOpening": "Abrindo Ubisoft Connect",
+    "ubisoftLauncherOpeningMessage": "O Ubisoft Connect está sendo aberto para {{title}}. Instale o jogo por lá e depois volte para jogar.",
+    "ubisoftLauncherAlreadyOpenMessage": "O Ubisoft Connect já está aberto para esta instalação.",
+    "ubisoftLauncherOpenFailed": "Não foi possível abrir o Ubisoft Connect",
+    "ubisoftLauncherOpenFailedMessage": "Falha ao abrir o Ubisoft Connect para instalação.",
     "multipartDetected": "Download Multipart Detectado",
     "multipartMessage": "Por favor, aguarde até a conclusão",
     "downloadFailed": "Falha no Download",
@@ -169,6 +217,10 @@
     "cleanupSuccessful": "Limpeza Concluída",
     "cleanupSuccessfulMessage": "{{games}} jogos, {{artwork}} artes e {{files}} pastas removidas. Autenticação e cache limpos.",
     "deleteFailed": "Falha ao Excluir",
+    "repairPrefixSuccess": "Prefixo reparado",
+    "repairPrefixSuccessMessage": "O prefixo do Ubisoft Connect foi reconstruído",
+    "repairPrefixFailed": "Falha no reparo",
+    "repairPrefixFailedMessage": "Não foi possível reparar o prefixo: {{error}}",
     "unifideck": "Unifideck:",
     "launcher": {
       "networkError": "Erro de Rede",
@@ -185,6 +237,7 @@
       "startingEpicGame": "Iniciando jogo da Epic...",
       "startingAmazonGame": "Iniciando jogo da Amazon...",
       "startingGogGame": "Iniciando jogo da GOG...",
+      "startingUbisoftGame": "Iniciando jogo da Ubisoft...",
       "dependenciesTitle": "Instalando Dependências",
       "installingRedistributables": "Instalando redistribuíveis do jogo...",
       "dependenciesReady": "Dependências Prontas",
@@ -206,8 +259,12 @@
       "prerequisitesFailed": "Aviso de Pré-requisitos",
       "prerequisitesFailedMessage": "Os pré-requisitos podem não ter sido instalados corretamente"
     },
-    "updateComplete": "Update Complete!",
-    "updateCompleteMessage": "{{title}} has been updated."
+    "updateComplete": "Atualização concluída!",
+    "updateCompleteMessage": "{{title}} foi atualizado.",
+    "updateCancelled": "Atualização cancelada",
+    "updateCancelledMessage": "A atualização de {{title}} foi cancelada.",
+    "updateFailed": "Falha na atualização",
+    "updateFailedMessage": "Não foi possível iniciar a atualização."
   },
   "uninstallModal": {
     "title": "Confirmar desinstalação",
@@ -254,8 +311,14 @@
       "processFailed": "Download falhou — tente novamente",
       "directoryNotFound": "Não foi possível localizar os arquivos instalados",
       "lockConflict": "Outra operação em andamento — tente novamente",
+      "ubisoftClient": "Erro no cliente do Ubisoft Connect — tente reparar o prefixo",
+      "ubisoftClientNotRunning": "O cliente do Ubisoft Connect não está respondendo",
+      "ubisoftBootstrap": "Falha ao configurar o prefixo do Ubisoft Connect",
+      "ubisoftUmuMissing": "umu-run não encontrado — necessário para jogos da Ubisoft",
       "generic": "Instalação falhou — verifique os logs"
-    }
+    },
+    "unknown": "Erro desconhecido",
+    "steamAppsUnavailable": "A API SteamClient.Apps não está disponível"
   },
   "sync": {
     "downloadingArtwork": "Baixando arte de {{game}}...",
@@ -292,7 +355,12 @@
     "greatOnDeck": "Perfeitos para Steam Deck",
     "allGames": "Todos os Jogos",
     "installed": "Instalados",
-    "nonSteam": "Não Steam"
+    "nonSteam": "Não Steam",
+    "steam": "Steam",
+    "epic": "Epic",
+    "gog": "GOG",
+    "amazon": "Amazon",
+    "ubisoft": "Ubisoft"
   },
   "unifiedLibrary": {
     "error": "Erro do Unifideck",
@@ -331,7 +399,7 @@
       "publisher": "Editora:",
       "released": "Lançado:",
       "metacritic": "Metacritic:",
-      "status": "Status:",
+      "status": "Estado:",
       "spaceRequired": "Espaço necessário",
       "lastPlayed": "Última vez jogado",
       "never": "Nunca"
@@ -344,7 +412,8 @@
       "playable": "JOGÁVEL",
       "unsupported": "NÃO SUPORTADO",
       "unknown": "DESCONHECIDO"
-    }
+    },
+    "failedToLoadMetadata": "Falha ao carregar os metadados"
   },
   "gameDetailsSettings": {
     "title": "VISUALIZAÇÃO DE DETALHES DO JOGO",
@@ -370,5 +439,35 @@
     "toastMigrateBody": "Migrados {{shortcuts}} atalhos e {{artwork}} arquivos de arte",
     "toastClearTitle": "Tokens de autenticação limpos",
     "toastClearBody": "Os logins das lojas foram limpos. Agora você pode entrar com contas diferentes."
+  },
+  "ubisoftAuth": {
+    "title": "Entrar no Ubisoft Connect",
+    "description": "Digite as credenciais da sua conta Ubisoft para conectar sua biblioteca.",
+    "emailLabel": "E-mail",
+    "passwordLabel": "Senha",
+    "signIn": "Entrar",
+    "signingIn": "Entrando...",
+    "cancel": "Cancelar",
+    "twoFactorTitle": "Autenticação de dois fatores",
+    "twoFactorDescription": "Digite o código de verificação do seu aplicativo autenticador.",
+    "twoFactorLabel": "Código de verificação",
+    "verify": "Verificar",
+    "verifying": "Verificando...",
+    "errorEmptyFields": "Digite seu e-mail e senha",
+    "errorEmpty2FA": "Digite o código de verificação",
+    "errorLoginFailed": "Falha no login. Verifique suas credenciais.",
+    "errorInvalid2FA": "Código de verificação inválido. Tente novamente.",
+    "showPassword": "Mostrar senha",
+    "hidePassword": "Ocultar senha",
+    "doubleLoginWarning": "Você precisará entrar duas vezes para a Ubisoft."
+  },
+  "relativeDate": {
+    "today": "Hoje",
+    "yesterday": "Ontem"
+  },
+  "common": {
+    "thisGame": "este jogo",
+    "game": "Jogo",
+    "unknown": "Desconhecido"
   }
 }

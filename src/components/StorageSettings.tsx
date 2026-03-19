@@ -87,7 +87,7 @@ export const StorageSettings: FC = () => {
         toaster.toast({
           title: t("storageSettings.toastFailedTitle"),
           body: t("storageSettings.toastFailedBody", {
-            error: t(result.error || "Unknown error"),
+            error: t(result.error || "errors.unknown"),
           }),
           duration: 5000,
           critical: true,
@@ -135,7 +135,7 @@ export const StorageSettings: FC = () => {
           } else {
             toaster.toast({
               title: t("storageSettings.toastFailedTitle"),
-              body: t(setResult.error || "Unknown error"),
+              body: t(setResult.error || "errors.unknown"),
               duration: 5000,
               critical: true,
             });
@@ -281,17 +281,6 @@ const UpArrowIcon: FC = () => (
   </svg>
 );
 
-const SORT_OPTIONS: DropdownOption[] = [
-  { data: "name", label: "A-Z" },
-  { data: "name_desc", label: "Z-A" },
-  { data: "modified_newest", label: "Modified (Newest)" },
-  { data: "modified_oldest", label: "Modified (Oldest)" },
-  { data: "created_newest", label: "Created (Newest)" },
-  { data: "created_oldest", label: "Created (Oldest)" },
-  { data: "size_largest", label: "Size (Largest)" },
-  { data: "size_smallest", label: "Size (Smallest)" },
-];
-
 /**
  * Custom file browser modal with device dropdown, directory listing,
  * sorting, hidden file toggle, folder creation, and path selection.
@@ -372,7 +361,7 @@ const CustomFileBrowser: FC<{
     } else {
       toaster.toast({
         title: t("storageSettings.toastFailedTitle"),
-        body: t(result.error || "Unknown error"),
+        body: t(result.error || "errors.unknown"),
         duration: 5000,
         critical: true,
       });
@@ -389,13 +378,41 @@ const CustomFileBrowser: FC<{
     data: d.path,
     label:
       d.free_space_gb != null
-        ? `${d.label} (${d.free_space_gb} GB free)`
+        ? t("storageSettings.freeSpaceLabel", {
+            label: d.label,
+            freeSpace: d.free_space_gb,
+          })
         : d.label,
   }));
 
   const currentDevicePath = devices.find(
     (d) => currentPath === d.path || currentPath.startsWith(d.path + "/"),
   )?.path;
+  const sortOptions: DropdownOption[] = [
+    { data: "name", label: t("storageSettings.sortAZ") },
+    { data: "name_desc", label: t("storageSettings.sortZA") },
+    {
+      data: "modified_newest",
+      label: t("storageSettings.sortModifiedNewest"),
+    },
+    {
+      data: "modified_oldest",
+      label: t("storageSettings.sortModifiedOldest"),
+    },
+    {
+      data: "created_newest",
+      label: t("storageSettings.sortCreatedNewest"),
+    },
+    {
+      data: "created_oldest",
+      label: t("storageSettings.sortCreatedOldest"),
+    },
+    { data: "size_largest", label: t("storageSettings.sortSizeLargest") },
+    {
+      data: "size_smallest",
+      label: t("storageSettings.sortSizeSmallest"),
+    },
+  ];
 
   return (
     <ModalRoot onCancel={closeModal} closeModal={closeModal}>
@@ -483,11 +500,11 @@ const CustomFileBrowser: FC<{
             </span>
           </Focusable>
           <div style={{ minWidth: "140px", flexShrink: 0 }}>
-            <Dropdown
-              rgOptions={SORT_OPTIONS}
-              selectedOption={sortBy}
-              onChange={(opt) => setSortBy(opt.data as string)}
-            />
+              <Dropdown
+                rgOptions={sortOptions}
+                selectedOption={sortBy}
+                onChange={(opt) => setSortBy(opt.data as string)}
+              />
           </div>
         </Focusable>
 

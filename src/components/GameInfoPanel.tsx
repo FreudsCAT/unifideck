@@ -158,7 +158,7 @@ const GameInfoPanelInner: React.FC<GameInfoPanelProps> = ({ appId }) => {
               `[Unifideck GameInfoPanel] Metadata set for ${result.title}`,
             );
           } else {
-            setError("No metadata available");
+            setError("gameInfoPanel.noMetadata");
             console.log(`[Unifideck GameInfoPanel] No metadata returned`);
           }
           setLoading(false);
@@ -169,7 +169,7 @@ const GameInfoPanelInner: React.FC<GameInfoPanelProps> = ({ appId }) => {
           err,
         );
         if (!cancelled) {
-          setError("Failed to load metadata");
+          setError("gameInfoPanel.failedToLoadMetadata");
           setLoading(false);
         }
       }
@@ -574,7 +574,7 @@ const GameInfoPanelInner: React.FC<GameInfoPanelProps> = ({ appId }) => {
   const showUninstallConfirmation = () => {
     showModal(
       <UninstallConfirmModal
-        gameTitle={gameInfo?.title || "this game"}
+        gameTitle={gameInfo?.title || t("common.thisGame")}
         onConfirm={(deletePrefix) => handleUninstall(deletePrefix)}
       />,
     );
@@ -847,7 +847,7 @@ const GameInfoPanelInner: React.FC<GameInfoPanelProps> = ({ appId }) => {
     return (
       <div style={containerStyle}>
         <div style={{ color: "#8f98a0", fontSize: "14px" }}>
-          {error || t("gameInfoPanel.noMetadata")}
+          {error ? t(error) : t("gameInfoPanel.noMetadata")}
         </div>
       </div>
     );

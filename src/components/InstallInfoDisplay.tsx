@@ -243,7 +243,7 @@ const InstallInfoDisplayInner: FC<{ appId: number }> = ({ appId }) => {
   const showUninstallConfirmation = () => {
     showModal(
       <UninstallConfirmModal
-        gameTitle={gameInfo?.title || "this game"}
+        gameTitle={gameInfo?.title || t("common.thisGame")}
         onConfirm={(deletePrefix) => handleUninstall(deletePrefix)}
       />,
     );
@@ -307,7 +307,7 @@ const InstallInfoDisplayInner: FC<{ appId: number }> = ({ appId }) => {
   // Simple mode: Show Uninstall button for installed games
   const sizeText = gameInfo.size_formatted
     ? ` (${gameInfo.size_formatted})`
-    : " (- GB)";
+    : ` (${t("installButton.size", { size: "-" })})`;
   const buttonText =
     t("installButton.uninstall", { title: gameInfo.title }) + sizeText;
 

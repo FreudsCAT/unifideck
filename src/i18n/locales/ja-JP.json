@@ -13,7 +13,30 @@
     "toastUpdatedBody": "新しいゲームは {{location}} にインストールされます",
     "toastFailedTitle": "更新に失敗しました",
     "toastFailedBody": "{{error}}",
-    "unknown": "不明"
+    "unknown": "不明",
+    "browseButton": "参照...",
+    "clearCustom": "カスタムインストール場所をクリア",
+    "customPathSet": "カスタムインストール場所を設定しました",
+    "newFolder": "新しいフォルダー",
+    "newFolderCreate": "作成",
+    "selectFolder": "このフォルダーを使用",
+    "emptyDirectory": "空のフォルダー",
+    "showHidden": "隠し項目を表示",
+    "selectDevice": "デバイスを選択",
+    "sortAZ": "A-Z",
+    "sortZA": "Z-A",
+    "sortModifiedNewest": "更新日時（新しい順）",
+    "sortModifiedOldest": "更新日時（古い順）",
+    "sortCreatedNewest": "作成日時（新しい順）",
+    "sortCreatedOldest": "作成日時（古い順）",
+    "sortSizeLargest": "サイズ（大きい順）",
+    "sortSizeSmallest": "サイズ（小さい順）",
+    "validationErrors.notAbsolute": "パスは絶対パスである必要があります",
+    "validationErrors.systemDir": "システムディレクトリは使用できません",
+    "validationErrors.notWritable": "この場所には書き込みできません",
+    "validationErrors.notFound": "ディレクトリが存在しません",
+    "validationErrors.homeRoot": "ホームディレクトリのルートは使用できません",
+    "freeSpaceLabel": "{{label}} (空き {{freeSpace}} GB)"
   },
   "gameGrid": {
     "loading": "ゲームを読み込み中...",
@@ -52,7 +75,17 @@
     "phaseExtracting": "{{game}} を展開中...",
     "phaseVerifying": "{{game}} を検証中...",
     "internalStorage": "内部ストレージ（空き {{freeSpace}}GB）",
-    "sdCard": "SDカード（空き {{freeSpace}}GB）"
+    "sdCard": "SDカード（空き {{freeSpace}}GB）",
+    "customLocation": "カスタム: {{path}}（空き {{freeSpace}}GB）",
+    "extractingLabel": "展開中...",
+    "verifyingLabel": "検証中...",
+    "updateQueuedLabel": "アップデート待機中",
+    "downloadQueuedLabel": "ダウンロード待機中",
+    "downloadingUpdateLabel": "アップデートをダウンロード中",
+    "downloadingLabel": "ダウンロード中...",
+    "finalizingInstallation": "インストールを完了しています...",
+    "speedMbps": "{{speed}} MB/s",
+    "etaLabel": "残り時間: {{eta}}"
   },
   "cloudSave": {
     "title": "クラウドセーブの競合",
@@ -75,6 +108,7 @@
     "epicGames": "Epic Games",
     "gog": "GOG",
     "amazonGames": "Amazon Games",
+    "ubisoftConnect": "Ubisoft Connect",
     "connected": "接続済み",
     "checking": "確認中...",
     "authenticate": "ログイン",
@@ -114,7 +148,10 @@
     "cancel": "✖ キャンセル",
     "processing": "処理中...",
     "checking": "確認中...",
-    "size": "{{size}} GB"
+    "size": "{{size}} GB",
+    "update": "更新",
+    "updateAvailable": "アップデートあり",
+    "updateAvailableDescription": "新しいバージョンをインストールできます。"
   },
   "confirmModals": {
     "installTitle": "インストールの確認",
@@ -132,12 +169,23 @@
     "steamRestartDescriptionStore": "新しい {{store}} のゲームとアートワークを適用するには、Steamを再起動してください",
     "restartNow": "今すぐ再起動",
     "later": "後で",
+    "ubisoftInstallTitle": "Ubisoft Connect が必要です",
+    "ubisoftInstallDescription": "Ubisoft Connect ランチャーを起動します。そこで {{title}} をインストールする必要があります。",
+    "ubisoftInstallConfirm": "Ubisoft Connect を開く",
     "yes": "はい",
-    "no": "いいえ"
+    "no": "いいえ",
+    "amazonUpdateTitle": "完全な再ダウンロードが必要です",
+    "amazonUpdateDescription": "Amazon のアップデートでは {{title}} を完全に再ダウンロードする必要があります。しばらく時間がかかる場合があります。続行しますか？",
+    "updateConfirm": "更新"
   },
   "toasts": {
     "downloadStarted": "ダウンロード開始。UNIFIDECK > ダウンロードを確認してください",
     "downloadQueued": "{{title}} がキューに追加されました。",
+    "ubisoftLauncherOpening": "Ubisoft Connect を起動中",
+    "ubisoftLauncherOpeningMessage": "{{title}} のために Ubisoft Connect を起動しています。そこでゲームをインストールしてから、戻ってプレイしてください。",
+    "ubisoftLauncherAlreadyOpenMessage": "このインストール用の Ubisoft Connect はすでに開いています。",
+    "ubisoftLauncherOpenFailed": "Ubisoft Connect を開けませんでした",
+    "ubisoftLauncherOpenFailedMessage": "インストール用に Ubisoft Connect を開けませんでした。",
     "multipartDetected": "マルチパートダウンロードを検出",
     "multipartMessage": "完了するまでお待ちください",
     "downloadFailed": "ダウンロード失敗",
@@ -169,6 +217,10 @@
     "cleanupSuccessful": "クリーンアップ成功",
     "cleanupSuccessfulMessage": "{{games}} 件のゲーム、{{artwork}} 件のアート、{{files}} 件のフォルダを削除しました。認証とキャッシュをクリアしました。",
     "deleteFailed": "削除失敗",
+    "repairPrefixSuccess": "プレフィックスを修復しました",
+    "repairPrefixSuccessMessage": "Ubisoft Connect のプレフィックスを再構築しました",
+    "repairPrefixFailed": "修復に失敗しました",
+    "repairPrefixFailedMessage": "プレフィックスを修復できませんでした: {{error}}",
     "unifideck": "Unifideck:",
     "launcher": {
       "networkError": "ネットワークエラー",
@@ -185,6 +237,7 @@
       "startingEpicGame": "Epicゲームを起動中...",
       "startingAmazonGame": "Amazonゲームを起動中...",
       "startingGogGame": "GOGゲームを起動中...",
+      "startingUbisoftGame": "Ubisoft ゲームを起動中...",
       "dependenciesTitle": "依存関係をインストール中",
       "installingRedistributables": "ゲームの再頒布可能パッケージをインストール中...",
       "dependenciesReady": "依存関係の準備完了",
@@ -206,8 +259,12 @@
       "prerequisitesFailed": "前提条件の警告",
       "prerequisitesFailedMessage": "前提条件が正しくインストールされなかった可能性があります"
     },
-    "updateComplete": "Update Complete!",
-    "updateCompleteMessage": "{{title}} has been updated."
+    "updateComplete": "更新完了！",
+    "updateCompleteMessage": "{{title}} の更新が完了しました。",
+    "updateCancelled": "更新がキャンセルされました",
+    "updateCancelledMessage": "{{title}} の更新がキャンセルされました。",
+    "updateFailed": "更新に失敗しました",
+    "updateFailedMessage": "更新を開始できませんでした。"
   },
   "uninstallModal": {
     "title": "アンインストールの確認",
@@ -254,8 +311,14 @@
       "processFailed": "ダウンロードに失敗しました — もう一度お試しください",
       "directoryNotFound": "インストールされたファイルが見つかりません",
       "lockConflict": "別の操作が進行中です — もう一度お試しください",
+      "ubisoftClient": "Ubisoft Connect クライアントエラー — プレフィックスの修復をお試しください",
+      "ubisoftClientNotRunning": "Ubisoft Connect クライアントが応答していません",
+      "ubisoftBootstrap": "Ubisoft Connect プレフィックスのセットアップに失敗しました",
+      "ubisoftUmuMissing": "umu-run が見つかりません — Ubisoft ゲームに必要です",
       "generic": "インストールに失敗しました — ログを確認してください"
-    }
+    },
+    "unknown": "不明なエラー",
+    "steamAppsUnavailable": "SteamClient.Apps API を利用できません"
   },
   "sync": {
     "downloadingArtwork": "{{game}} のアートをDL中...",
@@ -292,7 +355,12 @@
     "greatOnDeck": "Steam Deckに最適",
     "allGames": "すべてのゲーム",
     "installed": "インストール済み",
-    "nonSteam": "非Steam"
+    "nonSteam": "非Steam",
+    "steam": "Steam",
+    "epic": "Epic",
+    "gog": "GOG",
+    "amazon": "Amazon",
+    "ubisoft": "Ubisoft"
   },
   "unifiedLibrary": {
     "error": "Unifideckエラー",
@@ -344,7 +412,8 @@
       "playable": "プレイ可能",
       "unsupported": "非対応",
       "unknown": "不明"
-    }
+    },
+    "failedToLoadMetadata": "メタデータの読み込みに失敗しました"
   },
   "gameDetailsSettings": {
     "title": "ゲーム詳細ビュー",
@@ -370,5 +439,35 @@
     "toastMigrateBody": "{{shortcuts}} 件のショートカットと {{artwork}} 件のアートワークファイルを移行しました",
     "toastClearTitle": "認証トークンをクリアしました",
     "toastClearBody": "ストアのログインがクリアされました。別のアカウントでサインインできます。"
+  },
+  "ubisoftAuth": {
+    "title": "Ubisoft Connect にサインイン",
+    "description": "ライブラリを接続するには、Ubisoft アカウントの認証情報を入力してください。",
+    "emailLabel": "メールアドレス",
+    "passwordLabel": "パスワード",
+    "signIn": "サインイン",
+    "signingIn": "サインイン中...",
+    "cancel": "キャンセル",
+    "twoFactorTitle": "二要素認証",
+    "twoFactorDescription": "認証アプリの確認コードを入力してください。",
+    "twoFactorLabel": "確認コード",
+    "verify": "確認",
+    "verifying": "確認中...",
+    "errorEmptyFields": "メールアドレスとパスワードを入力してください",
+    "errorEmpty2FA": "確認コードを入力してください",
+    "errorLoginFailed": "サインインに失敗しました。認証情報を確認してください。",
+    "errorInvalid2FA": "確認コードが無効です。もう一度お試しください。",
+    "showPassword": "パスワードを表示",
+    "hidePassword": "パスワードを非表示",
+    "doubleLoginWarning": "Ubisoft では 2 回サインインする必要があります。"
+  },
+  "relativeDate": {
+    "today": "今日",
+    "yesterday": "昨日"
+  },
+  "common": {
+    "thisGame": "このゲーム",
+    "game": "ゲーム",
+    "unknown": "不明"
   }
 }

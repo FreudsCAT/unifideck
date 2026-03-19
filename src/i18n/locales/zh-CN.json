@@ -13,7 +13,30 @@
     "toastUpdatedBody": "新游戏将安装到 {{location}}",
     "toastFailedTitle": "更新失败",
     "toastFailedBody": "{{error}}",
-    "unknown": "未知"
+    "unknown": "未知",
+    "browseButton": "浏览...",
+    "clearCustom": "清除自定义安装位置",
+    "customPathSet": "已设置自定义安装位置",
+    "newFolder": "新建文件夹",
+    "newFolderCreate": "创建",
+    "selectFolder": "使用此文件夹",
+    "emptyDirectory": "空文件夹",
+    "showHidden": "显示隐藏项",
+    "selectDevice": "选择设备",
+    "sortAZ": "A-Z",
+    "sortZA": "Z-A",
+    "sortModifiedNewest": "修改时间（最新优先）",
+    "sortModifiedOldest": "修改时间（最早优先）",
+    "sortCreatedNewest": "创建时间（最新优先）",
+    "sortCreatedOldest": "创建时间（最早优先）",
+    "sortSizeLargest": "大小（从大到小）",
+    "sortSizeSmallest": "大小（从小到大）",
+    "validationErrors.notAbsolute": "路径必须是绝对路径",
+    "validationErrors.systemDir": "不能使用系统目录",
+    "validationErrors.notWritable": "该位置不可写",
+    "validationErrors.notFound": "目录不存在",
+    "validationErrors.homeRoot": "不能使用主目录根目录",
+    "freeSpaceLabel": "{{label}}（剩余 {{freeSpace}} GB）"
   },
   "gameGrid": {
     "loading": "正在加载游戏...",
@@ -30,11 +53,6 @@
     "recentlyCompleted": "最近完成",
     "noActiveDownloads": "没有活动下载",
     "noDownloads": "没有下载。从您的库中安装游戏以在此处查看。",
-    "launchingGame": "正在启动游戏",
-    "startingEpicGame": "正在启动 Epic 游戏...",
-    "startingAmazonGame": "正在启动 Amazon 游戏...",
-    "startingGogGame": "正在启动 GOG 游戏...",
-    "dependenciesTitle": "正在安装依赖项",
     "loadingLabel": "加载中...",
     "loadingMessage": "正在获取下载队列...",
     "confirmCancelTitle": "确认取消",
@@ -57,7 +75,17 @@
     "phaseExtracting": "正在解压 {{game}}...",
     "phaseVerifying": "正在验证 {{game}}...",
     "internalStorage": "内置存储（剩余 {{freeSpace}} GB）",
-    "sdCard": "SD 卡（剩余 {{freeSpace}} GB）"
+    "sdCard": "SD 卡（剩余 {{freeSpace}} GB）",
+    "customLocation": "自定义：{{path}}（剩余 {{freeSpace}} GB）",
+    "extractingLabel": "正在提取...",
+    "verifyingLabel": "正在验证...",
+    "updateQueuedLabel": "更新已排队",
+    "downloadQueuedLabel": "下载已排队",
+    "downloadingUpdateLabel": "正在下载更新",
+    "downloadingLabel": "正在下载...",
+    "finalizingInstallation": "正在完成安装...",
+    "speedMbps": "{{speed}} MB/s",
+    "etaLabel": "预计剩余时间：{{eta}}"
   },
   "cloudSave": {
     "title": "云存档冲突",
@@ -80,6 +108,7 @@
     "epicGames": "Epic Games",
     "gog": "GOG",
     "amazonGames": "Amazon Games",
+    "ubisoftConnect": "Ubisoft Connect",
     "connected": "已连接",
     "checking": "正在检查...",
     "authenticate": "登录",
@@ -119,7 +148,10 @@
     "cancel": "✖ 取消",
     "processing": "正在处理...",
     "checking": "正在检查...",
-    "size": "{{size}} GB"
+    "size": "{{size}} GB",
+    "update": "更新",
+    "updateAvailable": "有可用更新",
+    "updateAvailableDescription": "新版本已可安装。"
   },
   "confirmModals": {
     "installTitle": "确认安装",
@@ -137,12 +169,23 @@
     "steamRestartDescriptionStore": "请重启 Steam 以应用新的 {{store}} 游戏和封面",
     "restartNow": "立即重启",
     "later": "稍后",
+    "ubisoftInstallTitle": "需要 Ubisoft Connect",
+    "ubisoftInstallDescription": "这将启动 Ubisoft Connect 启动器，您需要在那里安装 {{title}}。",
+    "ubisoftInstallConfirm": "打开 Ubisoft Connect",
     "yes": "是",
-    "no": "否"
+    "no": "否",
+    "amazonUpdateTitle": "需要完整重新下载",
+    "amazonUpdateDescription": "Amazon 更新需要完整重新下载 {{title}}。这可能需要一些时间。是否继续？",
+    "updateConfirm": "更新"
   },
   "toasts": {
     "downloadStarted": "下载已开始。检查 UNIFIDECK > 下载",
     "downloadQueued": "{{title}} 已添加到队列。",
+    "ubisoftLauncherOpening": "正在打开 Ubisoft Connect",
+    "ubisoftLauncherOpeningMessage": "正在为 {{title}} 打开 Ubisoft Connect。请先在其中安装游戏，然后返回这里开始游玩。",
+    "ubisoftLauncherAlreadyOpenMessage": "此次安装所需的 Ubisoft Connect 已经打开。",
+    "ubisoftLauncherOpenFailed": "无法打开 Ubisoft Connect",
+    "ubisoftLauncherOpenFailedMessage": "无法为安装打开 Ubisoft Connect。",
     "multipartDetected": "检测到多部分下载",
     "multipartMessage": "请耐心等待完成",
     "downloadFailed": "下载失败",
@@ -174,6 +217,10 @@
     "cleanupSuccessful": "清理成功",
     "cleanupSuccessfulMessage": "已删除 {{games}} 个游戏、{{artwork}} 个封面集和 {{files}} 个文件目录。认证和缓存已清除。",
     "deleteFailed": "删除失败",
+    "repairPrefixSuccess": "前缀已修复",
+    "repairPrefixSuccessMessage": "Ubisoft Connect 前缀已重新构建",
+    "repairPrefixFailed": "修复失败",
+    "repairPrefixFailedMessage": "无法修复前缀：{{error}}",
     "unifideck": "Unifideck:",
     "launcher": {
       "networkError": "网络错误",
@@ -190,6 +237,7 @@
       "startingEpicGame": "正在启动 Epic 游戏...",
       "startingAmazonGame": "正在启动 Amazon 游戏...",
       "startingGogGame": "正在启动 GOG 游戏...",
+      "startingUbisoftGame": "正在启动 Ubisoft 游戏...",
       "dependenciesTitle": "正在安装依赖项",
       "installingRedistributables": "正在安装游戏可再发行版...",
       "dependenciesReady": "依赖项已就绪",
@@ -211,8 +259,12 @@
       "prerequisitesFailed": "前置条件警告",
       "prerequisitesFailedMessage": "前置条件可能未正确安装"
     },
-    "updateComplete": "Update Complete!",
-    "updateCompleteMessage": "{{title}} has been updated."
+    "updateComplete": "更新完成！",
+    "updateCompleteMessage": "{{title}} 已更新。",
+    "updateCancelled": "更新已取消",
+    "updateCancelledMessage": "{{title}} 的更新已取消。",
+    "updateFailed": "更新失败",
+    "updateFailedMessage": "无法开始更新。"
   },
   "uninstallModal": {
     "title": "确认卸载",
@@ -259,8 +311,14 @@
       "processFailed": "下载失败 — 请重试",
       "directoryNotFound": "无法找到已安装的文件",
       "lockConflict": "另一个操作正在进行中 — 请重试",
+      "ubisoftClient": "Ubisoft Connect 客户端错误 — 请尝试修复前缀",
+      "ubisoftClientNotRunning": "Ubisoft Connect 客户端无响应",
+      "ubisoftBootstrap": "设置 Ubisoft Connect 前缀失败",
+      "ubisoftUmuMissing": "未找到 umu-run — Ubisoft 游戏需要它",
       "generic": "安装失败 — 请查看日志"
-    }
+    },
+    "unknown": "未知错误",
+    "steamAppsUnavailable": "SteamClient.Apps API 不可用"
   },
   "sync": {
     "downloadingArtwork": "正在下载 {{game}} 的封面...",
@@ -297,7 +355,12 @@
     "greatOnDeck": "非常适合 Deck",
     "allGames": "所有游戏",
     "installed": "已安装",
-    "nonSteam": "非 Steam"
+    "nonSteam": "非 Steam",
+    "steam": "Steam",
+    "epic": "Epic",
+    "gog": "GOG",
+    "amazon": "Amazon",
+    "ubisoft": "Ubisoft"
   },
   "unifiedLibrary": {
     "error": "Unifideck 错误",
@@ -349,7 +412,8 @@
       "playable": "可玩",
       "unsupported": "不支持",
       "unknown": "未知"
-    }
+    },
+    "failedToLoadMetadata": "无法加载元数据"
   },
   "gameDetailsSettings": {
     "title": "游戏详情视图",
@@ -375,5 +439,35 @@
     "toastMigrateBody": "已迁移 {{shortcuts}} 个快捷方式和 {{artwork}} 个封面文件",
     "toastClearTitle": "认证令牌已清除",
     "toastClearBody": "商店登录信息已清除。您现在可以使用不同的账户登录。"
+  },
+  "ubisoftAuth": {
+    "title": "登录 Ubisoft Connect",
+    "description": "请输入您的 Ubisoft 账户凭据以连接您的游戏库。",
+    "emailLabel": "电子邮箱",
+    "passwordLabel": "密码",
+    "signIn": "登录",
+    "signingIn": "登录中...",
+    "cancel": "取消",
+    "twoFactorTitle": "双重身份验证",
+    "twoFactorDescription": "请输入来自身份验证器应用的验证码。",
+    "twoFactorLabel": "验证码",
+    "verify": "验证",
+    "verifying": "验证中...",
+    "errorEmptyFields": "请输入电子邮箱和密码",
+    "errorEmpty2FA": "请输入验证码",
+    "errorLoginFailed": "登录失败。请检查您的凭据。",
+    "errorInvalid2FA": "验证码无效。请重试。",
+    "showPassword": "显示密码",
+    "hidePassword": "隐藏密码",
+    "doubleLoginWarning": "Ubisoft 需要您登录两次。"
+  },
+  "relativeDate": {
+    "today": "今天",
+    "yesterday": "昨天"
+  },
+  "common": {
+    "thisGame": "这款游戏",
+    "game": "游戏",
+    "unknown": "未知"
   }
 }

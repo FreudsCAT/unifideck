@@ -85,14 +85,14 @@ export const DownloadsTab: FC = () => {
           duration: 3000,
         });
         fetchQueueInfo(); // Refresh immediately
-      } else {
-        toaster.toast({
-          title: t("downloadsTab.toastCancelFailedTitle"),
-          body: t("downloadsTab.toastCancelFailedBody", {
-            error: t(result.error || "Unknown error"),
-          }),
-          duration: 5000,
-          critical: true,
+        } else {
+          toaster.toast({
+            title: t("downloadsTab.toastCancelFailedTitle"),
+            body: t("downloadsTab.toastCancelFailedBody", {
+              error: t(result.error || "errors.unknown"),
+            }),
+            duration: 5000,
+            critical: true,
         });
       }
     } catch (error) {
