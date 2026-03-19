@@ -408,12 +408,17 @@
       "modalTitle": "Сумісність Steam Deck",
       "viewOnProtonDb": "Подивитися на ProtonDB",
       "close": "Закрити",
-      "verified": "ПОТВЕРДЖЕНО",
-      "playable": "ІГРІЙТЕ",
+      "verified": "СУМІСНА",
+      "playable": "МОЖНА ГРАТИ",
       "unsupported": "НЕ ПІДТРИМУЄТЬСЯ",
+<<<<<<< ubisoft
       "unknown": "НЕВІДОМА"
     },
     "failedToLoadMetadata": "Не вдалося завантажити метадані"
+=======
+      "unknown": "НЕВІДОМО"
+    }
+>>>>>>> staging
   },
   "gameDetailsSettings": {
     "title": "ПЕРЕГЛЯД ДЕТАЛЕЙ ГРИ",

@@ -1,6 +1,6 @@
 # Unifideck - Unified Game Library for Steam Deck
 
-A Decky Loader plugin that brings together games from Steam, Epic Games Store, GOG and Amazon into a single, unified library experience on your Steam Deck.
+A Decky Loader plugin that brings together games from Steam, Epic Games Store, GOG, Microsoft Store, Ubisoft store and Amazon into a single, unified library experience on your Steam Deck.
 
 ![License](https://img.shields.io/badge/license-GPL--3.0-blue.svg)
 ![Platform](https://img.shields.io/badge/platform-Steam%20Deck-orange.svg)

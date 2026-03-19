@@ -6,7 +6,7 @@ Thank you for your interest in contributing to Unifideck! We welcome contributio
 
 To maintain the quality and direction of the project, please adhere to these mandatory rules:
 
-1.  **Discuss Before You Start**: All new contributions must be discussed beforehand via Discord (https://discord.gg/H8aTyGH9) or Email. Do not start working on a significant change without prior communication.
+1.  **Discuss Before You Start**: All new contributions must be discussed beforehand via Discord (https://discord.gg/a9FUFKjHgv) or Email. Do not start working on a significant change without prior communication.
 2.  **Approval Required**: New features and Pull Requests (PRs) must be approved and integrated into the implementation plan/roadmap _before_ you submit a PR. Unsolicited PRs for major features may be rejected if they haven't been planned for.
 3.  **Follow Existing Style**: You must follow the existing programming style and architecture of the codebase. Consistency is key.
 4.  **No Sweeping Changes**: We cannot accept sweeping changes that refactor large portions of the codebase at once. Please keep changes focused and modular.
