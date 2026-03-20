@@ -231,6 +231,7 @@ class MicrosoftConnector(Store):
         env.setdefault("DISPLAY", ":0")
         env.setdefault("XDG_RUNTIME_DIR", f"/run/user/{uid}")
         env.setdefault("DBUS_SESSION_BUS_ADDRESS", f"unix:path=/run/user/{uid}/bus")
+        env.setdefault("XAUTHORITY", f"/home/deck/.Xauthority")
         env["GTK_MODULES"] = ""
         return env
 
