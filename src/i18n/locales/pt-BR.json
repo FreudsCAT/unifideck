@@ -389,7 +389,8 @@
     "chromiumAlreadyInstalled": "Chromium já está instalado",
     "chromiumInstallFailed": "A instalação do Chromium falhou. Instale manualmente: flatpak install org.chromium.Chromium",
     "chromiumInstallTimeout": "A instalação do Chromium expirou.",
-    "flatpakNotFound": "Flatpak não está disponível neste sistema"
+    "flatpakNotFound": "Flatpak não está disponível neste sistema",
+    "signInRequired": "Faça login para jogar"
   },
   "authSuccess": {
     "title": "Autenticação",

@@ -389,7 +389,8 @@
     "chromiumAlreadyInstalled": "Chromium jest już zainstalowany",
     "chromiumInstallFailed": "Instalacja Chromium nie powiodła się. Zainstaluj ręcznie: flatpak install org.chromium.Chromium",
     "chromiumInstallTimeout": "Instalacja Chromium przekroczyła limit czasu.",
-    "flatpakNotFound": "Flatpak nie jest dostępny w tym systemie"
+    "flatpakNotFound": "Flatpak nie jest dostępny w tym systemie",
+    "signInRequired": "Zaloguj się, aby grać"
   },
   "authSuccess": {
     "title": "Uwierzytelnianie",

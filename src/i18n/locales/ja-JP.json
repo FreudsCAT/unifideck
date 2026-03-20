@@ -389,7 +389,8 @@
     "chromiumAlreadyInstalled": "Chromium はすでにインストールされています",
     "chromiumInstallFailed": "Chromium のインストールに失敗しました。手動でインストールしてください: flatpak install org.chromium.Chromium",
     "chromiumInstallTimeout": "Chromium のインストールがタイムアウトしました。",
-    "flatpakNotFound": "このシステムでは Flatpak が利用できません"
+    "flatpakNotFound": "このシステムでは Flatpak が利用できません",
+    "signInRequired": "プレイするにはサインインしてください"
   },
   "authSuccess": {
     "title": "認証",

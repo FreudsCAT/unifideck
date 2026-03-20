@@ -389,7 +389,8 @@
     "chromiumAlreadyInstalled": "Chromium is al geïnstalleerd",
     "chromiumInstallFailed": "Chromium-installatie mislukt. Installeer handmatig: flatpak install org.chromium.Chromium",
     "chromiumInstallTimeout": "Chromium-installatie verlopen.",
-    "flatpakNotFound": "Flatpak is niet beschikbaar op dit systeem"
+    "flatpakNotFound": "Flatpak is niet beschikbaar op dit systeem",
+    "signInRequired": "Log in om te spelen"
   },
   "authSuccess": {
     "title": "Authenticatie",

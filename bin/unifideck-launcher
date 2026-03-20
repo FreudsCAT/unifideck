@@ -848,10 +848,18 @@ if [ "$EXE_PATH" = "xcloud" ]; then
     unset LD_LIBRARY_PATH
     unset LD_PRELOAD
 
-    if command -v flatpak &>/dev/null && flatpak info org.chromium.Chromium &>/dev/null 2>&1; then
+    # Ensure XAUTHORITY is set (SteamOS uses a random name in /run/user/)
+    if [ -z "$XAUTHORITY" ]; then
+        for f in /run/user/$(id -u)/xauth_*; do
+            [ -f "$f" ] && export XAUTHORITY="$f" && break
+        done
+    fi
+    log "XAUTHORITY=$XAUTHORITY DISPLAY=$DISPLAY"
+
+    if command -v flatpak &>/dev/null && (flatpak info --user org.chromium.Chromium &>/dev/null 2>&1 || flatpak info org.chromium.Chromium &>/dev/null 2>&1); then
         log "Using Chromium flatpak in fullscreen app mode"
         flatpak run org.chromium.Chromium "${CHROME_FLAGS[@]}" 2>>"$LOG_FILE"
-    elif command -v flatpak &>/dev/null && flatpak info com.google.Chrome &>/dev/null 2>&1; then
+    elif command -v flatpak &>/dev/null && (flatpak info --user com.google.Chrome &>/dev/null 2>&1 || flatpak info com.google.Chrome &>/dev/null 2>&1); then
         log "Using Google Chrome flatpak in fullscreen app mode"
         flatpak run com.google.Chrome "${CHROME_FLAGS[@]}" 2>>"$LOG_FILE"
     else

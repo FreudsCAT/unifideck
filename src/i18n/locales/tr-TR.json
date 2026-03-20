@@ -392,7 +392,8 @@
     "chromiumAlreadyInstalled": "Chromium zaten yüklü",
     "chromiumInstallFailed": "Chromium kurulumu başarısız oldu. Manuel olarak kurun: flatpak install org.chromium.Chromium",
     "chromiumInstallTimeout": "Chromium kurulumu zaman aşımına uğradı.",
-    "flatpakNotFound": "Bu sistemde Flatpak mevcut değil"
+    "flatpakNotFound": "Bu sistemde Flatpak mevcut değil",
+    "signInRequired": "Oynamak için giriş yapın"
   },
   "authSuccess": {
     "title": "Kimlik doğrulama",

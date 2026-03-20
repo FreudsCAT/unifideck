@@ -394,7 +394,8 @@
     "chromiumAlreadyInstalled": "Chromium 已安装",
     "chromiumInstallFailed": "Chromium 安装失败。请手动安装: flatpak install org.chromium.Chromium",
     "chromiumInstallTimeout": "Chromium 安装超时。",
-    "flatpakNotFound": "此系统上没有 Flatpak"
+    "flatpakNotFound": "此系统上没有 Flatpak",
+    "signInRequired": "登录以游玩"
   },
   "authSuccess": {
     "title": "认证",

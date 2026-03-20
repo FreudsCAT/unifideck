@@ -1321,6 +1321,7 @@ const PlaySectionWrapperInner: FC<PlaySectionWrapperProps> = ({
   // The Play button opens xbox.com/play/launch/{productId} which starts streaming.
   if (gameInfo.store_tags?.includes("xcloud")) {
     const xcloudUrl = `https://www.xbox.com/play/launch/${gameInfo.game_id}`;
+    const msConnected = gameInfo.store_connected !== false;
     return (
       <Focusable
         ref={wrapperRef}
@@ -1343,7 +1344,9 @@ const PlaySectionWrapperInner: FC<PlaySectionWrapperProps> = ({
         {/* Play button — launches xCloud via Steam's RunGame (→ launcher → Chromium kiosk) */}
         <DialogButton
           className="unifideck-install-btn"
+          disabled={!msConnected}
           onClick={() => {
+            if (!msConnected) return;
             try {
               const appStore = (window as any).appStore;
               const overview = appStore?.m_mapApps?.get?.(appId);
@@ -1354,12 +1357,18 @@ const PlaySectionWrapperInner: FC<PlaySectionWrapperProps> = ({
               window.open(`steam://openurl/${xcloudUrl}`, "_blank");
             }
           }}
-          style={actionBtnStyle}
+          style={{
+            ...actionBtnStyle,
+            opacity: msConnected ? 1 : 0.4,
+          }}
         >
           <svg viewBox="0 0 24 24" fill="currentColor" width="1em" height="1em">
             <path d="M8 5v14l11-7z" />
           </svg>
-          {t("microsoft.playOnCloud", "Play on Cloud")}
+          {msConnected
+            ? t("microsoft.playOnCloud", "Play on Cloud")
+            : t("microsoft.signInRequired", "Sign in to play")
+          }
         </DialogButton>
 
         {/* Cloud gaming badge */}

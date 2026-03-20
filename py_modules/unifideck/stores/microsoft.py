@@ -318,7 +318,8 @@ class MicrosoftConnector(Store):
             "--password-store=basic",
             "--disable-dev-shm-usage",
             "--disable-background-networking",
-            "--window-size=800,600",
+            "--start-fullscreen",
+            "--window-size=1280,800",
         ]
         logger.info(f"[MS] Launching Chromium for auth: {' '.join(args[:4])}...")
 

@@ -389,7 +389,8 @@
     "chromiumAlreadyInstalled": "Chromium이 이미 설치되어 있습니다",
     "chromiumInstallFailed": "Chromium 설치에 실패했습니다. 수동으로 설치하세요: flatpak install org.chromium.Chromium",
     "chromiumInstallTimeout": "Chromium 설치 시간이 초과되었습니다.",
-    "flatpakNotFound": "이 시스템에서는 Flatpak을 사용할 수 없습니다"
+    "flatpakNotFound": "이 시스템에서는 Flatpak을 사용할 수 없습니다",
+    "signInRequired": "플레이하려면 로그인하세요"
   },
   "authSuccess": {
     "title": "인증",

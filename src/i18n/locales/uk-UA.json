@@ -389,7 +389,8 @@
     "chromiumAlreadyInstalled": "Chromium вже встановлено",
     "chromiumInstallFailed": "Встановлення Chromium не вдалось. Встановіть вручну: flatpak install org.chromium.Chromium",
     "chromiumInstallTimeout": "Час встановлення Chromium вичерпано.",
-    "flatpakNotFound": "Flatpak недоступний у цій системі"
+    "flatpakNotFound": "Flatpak недоступний у цій системі",
+    "signInRequired": "Увійдіть, щоб грати"
   },
   "authSuccess": {
     "title": "Автентифікація",

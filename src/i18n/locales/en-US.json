@@ -389,7 +389,8 @@
     "chromiumAlreadyInstalled": "Chromium is already installed",
     "chromiumInstallFailed": "Chromium installation failed. Please install manually: flatpak install org.chromium.Chromium",
     "chromiumInstallTimeout": "Chromium installation timed out. Please check your internet connection.",
-    "flatpakNotFound": "Flatpak is not available on this system"
+    "flatpakNotFound": "Flatpak is not available on this system",
+    "signInRequired": "Sign in to play"
   },
   "authSuccess": {
     "title": "Authentication",

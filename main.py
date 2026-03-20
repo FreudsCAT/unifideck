@@ -3959,6 +3959,11 @@ class Plugin:
 
                     logger.info(f"[GameInfo] App {app_id}: {shortcut.get('AppName')} - Installed: {is_installed}, Size: {size_formatted}, Update: {has_update}")
 
+                    # Check if the store is connected (for xCloud "Play on Cloud" button)
+                    store_connected = True
+                    if store == "microsoft":
+                        store_connected = await self.microsoft.is_available()
+
                     return {
                         'is_installed': is_installed,
                         'has_update': has_update,
@@ -3969,6 +3974,7 @@ class Plugin:
                         'size_formatted': size_formatted,
                         'app_id': app_id,
                         'store_tags': store_tags,
+                        'store_connected': store_connected,
                     }
 
             logger.warning(f"[GameInfo] App ID {app_id} not found in shortcuts")
