@@ -320,10 +320,6 @@ class MicrosoftConnector(Store):
             "--disable-background-networking",
             "--start-fullscreen",
             "--window-size=1280,800",
-            # Enable Chromium's built-in virtual keyboard (Steam overlay
-            # keyboard is not available since auth runs outside Steam)
-            "--enable-features=VirtualKeyboard",
-            "--enable-touch-events",
         ]
         logger.info(f"[MS] Launching Chromium for auth: {' '.join(args[:4])}...")
 
@@ -787,6 +783,172 @@ class MicrosoftConnector(Store):
         """No-op — xCloud games are streamed, not installed locally."""
         return {"success": True, "message": "microsoft.xcloudNotInstalled"}
 
+
+    async def _inject_virtual_keyboard(self) -> None:
+        """Inject a touch-friendly virtual keyboard into the auth page via CDP.
+
+        Steam's overlay keyboard is not available because Chromium auth
+        runs outside of Steam.  This injects a minimal on-screen keyboard
+        via ``Page.addScriptToEvaluateOnNewDocument`` so it persists across
+        page navigations (email → password → 2FA).
+        """
+        try:
+            import websockets
+        except ImportError:
+            logger.warning("[MS] websockets not available — no virtual keyboard")
+            return
+
+        import urllib.request as _req
+
+        # Find a page to connect to
+        try:
+            with _req.urlopen(
+                f"http://127.0.0.1:{self._chromium_cdp_port}/json", timeout=3
+            ) as r:
+                pages = json.loads(r.read().decode())
+            ws_url = None
+            for page in pages:
+                ws_url = page.get("webSocketDebuggerUrl")
+                if ws_url:
+                    break
+            if not ws_url:
+                logger.warning("[MS] No CDP page found for keyboard injection")
+                return
+        except Exception as e:
+            logger.warning(f"[MS] CDP keyboard: cannot list pages: {e}")
+            return
+
+        # JavaScript virtual keyboard — auto-shows on input focus
+        kb_js = r"""
+(function() {
+  if (window.__unifideck_kb) return;
+  window.__unifideck_kb = true;
+
+  var KEYS = [
+    ['1','2','3','4','5','6','7','8','9','0'],
+    ['q','w','e','r','t','y','u','i','o','p'],
+    ['a','s','d','f','g','h','j','k','l'],
+    ['z','x','c','v','b','n','m','@','.'],
+    ['SHIFT','SPACE','BACK','ENTER']
+  ];
+
+  var shifted = false;
+  var target = null;
+
+  var overlay = document.createElement('div');
+  overlay.id = 'unifideck-kb';
+  overlay.style.cssText = 'position:fixed;bottom:0;left:0;right:0;z-index:999999;' +
+    'background:#1a1a2e;padding:6px;display:none;touch-action:manipulation;' +
+    'border-top:2px solid #3a3a5a;';
+
+  function type(ch) {
+    if (!target) return;
+    target.focus();
+    if (ch === 'BACK') {
+      var s = target.selectionStart || 0;
+      if (s > 0) {
+        var v = target.value;
+        target.value = v.slice(0, s-1) + v.slice(s);
+        target.selectionStart = target.selectionEnd = s - 1;
+      }
+    } else if (ch === 'SPACE') {
+      document.execCommand('insertText', false, ' ');
+    } else if (ch === 'ENTER') {
+      var ev = new KeyboardEvent('keydown', {key:'Enter',code:'Enter',keyCode:13,bubbles:true});
+      target.dispatchEvent(ev);
+      var form = target.closest('form');
+      if (form) form.dispatchEvent(new Event('submit',{bubbles:true}));
+    } else if (ch === 'SHIFT') {
+      shifted = !shifted;
+      render();
+      return;
+    } else {
+      var c = shifted ? ch.toUpperCase() : ch;
+      document.execCommand('insertText', false, c);
+    }
+    target.dispatchEvent(new Event('input', {bubbles:true}));
+    target.dispatchEvent(new Event('change', {bubbles:true}));
+  }
+
+  function render() {
+    overlay.innerHTML = '';
+    KEYS.forEach(function(row) {
+      var r = document.createElement('div');
+      r.style.cssText = 'display:flex;justify-content:center;gap:3px;margin:3px 0;';
+      row.forEach(function(k) {
+        var b = document.createElement('button');
+        var label = k;
+        if (k === 'SPACE') label = '⎵';
+        else if (k === 'BACK') label = '⌫';
+        else if (k === 'ENTER') label = '↵';
+        else if (k === 'SHIFT') label = shifted ? '⬆' : '⇧';
+        else label = shifted ? k.toUpperCase() : k;
+        b.textContent = label;
+        var wide = (k==='SPACE') ? 'flex:3;' : (k.length > 1) ? 'flex:1.5;' : '';
+        b.style.cssText = wide + 'min-width:32px;height:42px;font-size:16px;' +
+          'border:1px solid #3a3a5a;border-radius:4px;color:#e0e0e0;' +
+          'background:' + (k==='SHIFT' && shifted ? '#4a4a7a' : '#2a2a4a') + ';' +
+          'touch-action:manipulation;-webkit-tap-highlight-color:transparent;';
+        b.addEventListener('touchstart', function(e) {
+          e.preventDefault();
+          type(k);
+        }, {passive:false});
+        b.addEventListener('mousedown', function(e) {
+          e.preventDefault();
+          type(k);
+        });
+        r.appendChild(b);
+      });
+      overlay.appendChild(r);
+    });
+  }
+
+  render();
+  document.body.appendChild(overlay);
+
+  document.addEventListener('focusin', function(e) {
+    var tag = e.target.tagName;
+    var type = (e.target.type || '').toLowerCase();
+    if (tag === 'INPUT' && type !== 'hidden' && type !== 'checkbox' && type !== 'radio'
+        || tag === 'TEXTAREA') {
+      target = e.target;
+      overlay.style.display = 'block';
+    }
+  }, true);
+
+  document.addEventListener('focusout', function(e) {
+    setTimeout(function() {
+      if (!document.activeElement || document.activeElement === document.body) {
+        overlay.style.display = 'none';
+        target = null;
+      }
+    }, 200);
+  }, true);
+})();
+"""
+
+        try:
+            async with websockets.connect(ws_url, close_timeout=3) as ws:
+                # Inject on every new page (survives navigation)
+                await ws.send(json.dumps({
+                    "id": 9001,
+                    "method": "Page.addScriptToEvaluateOnNewDocument",
+                    "params": {"source": kb_js},
+                }))
+                await asyncio.wait_for(ws.recv(), timeout=3)
+
+                # Also inject now for the current page
+                await ws.send(json.dumps({
+                    "id": 9002,
+                    "method": "Runtime.evaluate",
+                    "params": {"expression": kb_js},
+                }))
+                await asyncio.wait_for(ws.recv(), timeout=3)
+
+            logger.info("[MS] Virtual keyboard injected via CDP")
+        except Exception as e:
+            logger.warning(f"[MS] CDP keyboard injection failed: {e}")
+
     async def _monitor_and_complete_auth(self) -> None:
         """Background task: intercept the OAuth redirect via CDP Network events."""
         # Use Chromium's debugging port if Chromium is running, else CEF (8080)
@@ -806,6 +968,9 @@ class MicrosoftConnector(Store):
                 logger.error(f"[MS] Chromium crashed before CDP. stderr: {err}")
                 self._chromium_process = None
                 return
+
+        # Inject virtual keyboard (Steam overlay not available outside Steam)
+        await self._inject_virtual_keyboard()
 
         try:
             code = await intercept_oauth_code(
