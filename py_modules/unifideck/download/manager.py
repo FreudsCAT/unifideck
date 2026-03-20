@@ -962,6 +962,10 @@ class DownloadQueue:
         """Set callback for GOG game installation (uses GOGAPIClient)"""
         self._gog_install_callback = callback
 
+    def set_size_cache_callback(self, callback: Callable) -> None:
+        """Set callback for updating the game size cache on first accurate size."""
+        self._size_cache_callback = callback
+
 
     def _update_size_cache_if_needed(self, item: DownloadItem, new_total_bytes: int) -> None:
         """Update game size cache if this is the first accurate size for this download
