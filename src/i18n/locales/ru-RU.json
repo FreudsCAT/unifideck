@@ -208,8 +208,7 @@
       "prerequisitesFailedMessage": "Необходимые компоненты могли быть установлены некорректно"
     },
     "updateComplete": "Update Complete!",
-    "updateCompleteMessage": "{{title}} has been updated.",
-    "syncWarning": "Предупреждение синхронизации"
+    "updateCompleteMessage": "{{title}} has been updated."
   },
   "uninstallModal": {
     "title": "Подтвердите удаление",
@@ -378,7 +377,6 @@
     "notCompatible": "Формат этой игры несовместим со SteamOS",
     "playOnCloud": "Играть в облаке",
     "xcloudStreaming": "Xbox Cloud Gaming",
-    "noSubscription": "Подписка Xbox Game Pass не найдена в вашем аккаунте. Игры xCloud не будут синхронизированы.",
     "signInMessage": "Войдите в свою учётную запись Microsoft / Xbox",
     "accountConnected": "Учётная запись Microsoft подключена",
     "loggedOut": "Выход из Microsoft Store",

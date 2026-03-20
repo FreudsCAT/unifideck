@@ -208,8 +208,7 @@
       "prerequisitesFailedMessage": "Vereisten zijn mogelijk niet correct geïnstalleerd"
     },
     "updateComplete": "Update Complete!",
-    "updateCompleteMessage": "{{title}} has been updated.",
-    "syncWarning": "Synchronisatiewaarschuwing"
+    "updateCompleteMessage": "{{title}} has been updated."
   },
   "uninstallModal": {
     "title": "Verwijdering bevestigen",
@@ -378,7 +377,6 @@
     "notCompatible": "Het formaat van dit spel is niet compatibel met SteamOS",
     "playOnCloud": "Speel in de cloud",
     "xcloudStreaming": "Xbox Cloud Gaming",
-    "noSubscription": "Geen Xbox Game Pass-abonnement gevonden op uw account. xCloud-games worden niet gesynchroniseerd.",
     "signInMessage": "Log in met uw Microsoft / Xbox account",
     "accountConnected": "Microsoft-account verbonden",
     "loggedOut": "Afgemeld bij Microsoft Store",

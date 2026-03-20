@@ -211,8 +211,7 @@
       "prerequisitesFailedMessage": "Ön koşullar doğru şekilde yüklenmemiş olabilir"
     },
     "updateComplete": "Update Complete!",
-    "updateCompleteMessage": "{{title}} has been updated.",
-    "syncWarning": "Senkronizasyon uyarısı"
+    "updateCompleteMessage": "{{title}} has been updated."
   },
   "uninstallModal": {
     "title": "Kaldırmayı Onayla",
@@ -381,7 +380,6 @@
     "notCompatible": "Bu oyunun formatı SteamOS ile uyumlu değil",
     "playOnCloud": "Bulutta oyna",
     "xcloudStreaming": "Xbox Cloud Gaming",
-    "noSubscription": "Hesabınızda Xbox Game Pass aboneliği bulunamadı. xCloud oyunları senkronize edilmeyecek.",
     "signInMessage": "Microsoft / Xbox hesabınızla giriş yapın",
     "accountConnected": "Microsoft hesabı bağlandı",
     "loggedOut": "Microsoft Store oturumu kapatıldı",

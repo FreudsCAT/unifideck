@@ -208,8 +208,7 @@
       "prerequisitesFailedMessage": "前提条件が正しくインストールされなかった可能性があります"
     },
     "updateComplete": "Update Complete!",
-    "updateCompleteMessage": "{{title}} has been updated.",
-    "syncWarning": "同期の警告"
+    "updateCompleteMessage": "{{title}} has been updated."
   },
   "uninstallModal": {
     "title": "アンインストールの確認",
@@ -378,7 +377,6 @@
     "notCompatible": "このゲームのフォーマットはSteamOSに対応していません",
     "playOnCloud": "クラウドでプレイ",
     "xcloudStreaming": "Xbox Cloud Gaming",
-    "noSubscription": "アカウントにXbox Game Passのサブスクリプションが見つかりません。xCloudゲームは同期されません。",
     "signInMessage": "Microsoft / Xbox アカウントでサインイン",
     "accountConnected": "Microsoft アカウントが接続されました",
     "loggedOut": "Microsoft Store からログアウトしました",

@@ -821,9 +821,14 @@ if [ "$EXE_PATH" = "xcloud" ]; then
     XCLOUD_URL="$WORK_DIR"
 
     # Common Chromium flags for xCloud streaming
+    # Use the same Chromium profile as auth so cookies are shared
+    AUTH_PROFILE="$HOME/.local/share/unifideck/chromium-auth"
+    mkdir -p "$AUTH_PROFILE"
+
     CHROME_FLAGS=(
         "--app=$XCLOUD_URL"
         "--start-fullscreen"
+        "--user-data-dir=$AUTH_PROFILE"
         "--no-first-run"
         "--disable-translate"
         "--disable-infobars"

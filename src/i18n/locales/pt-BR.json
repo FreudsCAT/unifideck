@@ -208,8 +208,7 @@
       "prerequisitesFailedMessage": "Os pré-requisitos podem não ter sido instalados corretamente"
     },
     "updateComplete": "Update Complete!",
-    "updateCompleteMessage": "{{title}} has been updated.",
-    "syncWarning": "Aviso de sincronização"
+    "updateCompleteMessage": "{{title}} has been updated."
   },
   "uninstallModal": {
     "title": "Confirmar desinstalação",
@@ -378,7 +377,6 @@
     "notCompatible": "O formato deste jogo não é compatível com SteamOS",
     "playOnCloud": "Jogar na Nuvem",
     "xcloudStreaming": "Xbox Cloud Gaming",
-    "noSubscription": "Nenhuma assinatura do Xbox Game Pass encontrada na sua conta. Os jogos xCloud não serão sincronizados.",
     "signInMessage": "Entre com sua conta Microsoft / Xbox",
     "accountConnected": "Conta Microsoft conectada",
     "loggedOut": "Desconectado da Microsoft Store",

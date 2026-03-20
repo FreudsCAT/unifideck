@@ -1473,9 +1473,6 @@ class SyncProgress:
         self.unifidb_total = 0
         self.unifidb_synced = 0
 
-        # Warnings accumulated during sync (shown as toasts)
-        self.warnings: List[Dict[str, str]] = []
-
         # Lock for thread-safe updates during parallel downloads
         self._lock = asyncio.Lock()
 
@@ -1586,7 +1583,6 @@ class SyncProgress:
             'steam_synced': self.steam_synced,
             'unifidb_total': self.unifidb_total,
             'unifidb_synced': self.unifidb_synced,
-            'warnings': self.warnings,
         }
 
 
@@ -2411,13 +2407,6 @@ class Plugin:
                 if microsoft_games is not None:
                     valid_stores.append('microsoft')
                     all_games.extend(microsoft_games)
-                    # Warn if no Game Pass subscription was detected
-                    if self.microsoft._no_subscription:
-                        self.sync_progress.warnings.append({
-                            "label": "microsoft.noSubscription",
-                            "values": {},
-                        })
-                        logger.info("[MS] No Game Pass subscription — xCloud games not synced")
                 else:
                     microsoft_games = []
                     logger.warning("[MS] Microsoft library fetch returned None, continuing sync with other stores")
@@ -3049,12 +3038,6 @@ class Plugin:
                 if microsoft_games is not None:
                     valid_stores.append('microsoft')
                     all_games.extend(microsoft_games)
-                    if self.microsoft._no_subscription:
-                        self.sync_progress.warnings.append({
-                            "label": "microsoft.noSubscription",
-                            "values": {},
-                        })
-                        logger.info("[MS] No Game Pass subscription — xCloud games not synced")
                 else:
                     microsoft_games = []
                 self.compat_fetcher.queue_games(all_games)

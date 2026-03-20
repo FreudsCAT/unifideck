@@ -83,8 +83,6 @@ class MicrosoftConnector(Store):
         self._xuid:       Optional[str] = None
 
         self._settings_cache: Optional[Dict[str, Any]] = None
-        # xCloud subscription status (set during get_library)
-        self._no_subscription: bool = False
         # Chromium subprocess for auth (CDP interception on port 9222)
         self._chromium_process = None
         self._chromium_cdp_port: int = 9222
@@ -511,17 +509,17 @@ class MicrosoftConnector(Store):
     # ── Library sync ─────────────────────────────────────────────────────
 
     async def get_library(self) -> List[Game]:
-        """Fetch xCloud-playable games for the authenticated user.
+        """Fetch xCloud-playable games from the public catalog.
 
         Flow:
           1. Refresh tokens and build XBL/XSTS chain.
-          2. Check Game Pass subscription via signed catalog.
-          3. If no subscription → set _no_subscription flag, return [].
-          4. Fetch the full xCloud catalog (public API, ~500+ games).
-          5. Batch-query displaycatalog for game titles.
-          6. Return Game objects tagged "xcloud" (launchable via browser).
+          2. Fetch the full xCloud catalog (public API, ~500+ games).
+          3. Batch-query displaycatalog for game titles.
+          4. Return Game objects tagged "xcloud" (launchable via browser).
+
+        Note: subscription validation is handled by xbox.com/play when
+        the user clicks "Play on Cloud" — no client-side check needed.
         """
-        self._no_subscription = False
 
         if not await self.is_available():
             if not os.path.exists(self._get_token_file()):
@@ -557,16 +555,7 @@ class MicrosoftConnector(Store):
             if not ok:
                 logger.warning("[MS] Could not build XBL/XSTS token chain")
 
-            # ── 3. Check Game Pass subscription ──────────────────────────
-            has_gamepass = await asyncio.get_event_loop().run_in_executor(
-                None, self._check_gamepass_subscription
-            )
-            if not has_gamepass:
-                logger.info("[MS] No active Game Pass subscription detected")
-                self._no_subscription = True
-                return []
-
-            # ── 4. Fetch xCloud catalog ──────────────────────────────────
+            # ── 3. Fetch xCloud catalog ───────────────────────────────
             xcloud_ids = await asyncio.get_event_loop().run_in_executor(
                 None, self._fetch_xcloud_catalog
             )
@@ -734,42 +723,6 @@ class MicrosoftConnector(Store):
         except Exception as e:
             logger.error(f"[MS] Failed to fetch xCloud catalog: {e}")
             return []
-
-    def _check_gamepass_subscription(self) -> bool:
-        """Check if the user has an active Game Pass subscription.
-
-        Attempts to query the signed-in Game Pass catalog with XSTS auth.
-        The signed-in endpoint returns personalized data for subscribers;
-        non-subscribers receive a 401/403 or empty result.
-
-        Returns:
-            True if the user appears to have an active Game Pass subscription.
-        """
-        if not self._xsts_token or not self._user_hash:
-            logger.warning("[MS] Cannot check subscription — no XSTS token")
-            return False
-
-        auth = f"XBL3.0 x={self._user_hash};{self._xsts_token}"
-        catalog_url = self._get_gamepass_catalog_url()
-        # Use the "signed-in" Game Pass PC catalog
-        url = (
-            f"{catalog_url}"
-            f"?id=fdd9e2a7-0fee-49f6-ad69-4354098401ff"
-            f"&language={self._get_locale()}"
-            f"&market={self._get_market()}"
-        )
-        try:
-            data = http_get(url, {
-                "Authorization": auth,
-                "User-Agent":    self._get_catalog_user_agent(),
-            })
-            # Catalog returns a list; first entry is metadata, rest are games
-            game_count = sum(1 for item in data if item.get("id"))
-            logger.info(f"[MS] Game Pass subscription check: {game_count} games accessible")
-            return game_count > 0
-        except Exception as e:
-            logger.info(f"[MS] Game Pass subscription check failed: {e}")
-            return False
 
     def _batch_get_titles(self, product_ids: List[str]) -> Dict[str, str]:
         """Batch-fetch game titles from the displaycatalog API.
