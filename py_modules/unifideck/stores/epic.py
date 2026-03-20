@@ -179,7 +179,7 @@ class EpicConnector(Store):
                     # Auto-sync library after successful auth
                     if self.plugin_instance:
                         logger.info("[EPIC] Starting automatic library sync...")
-                        await self.plugin_instance.sync_libraries(fetch_artwork=False)
+                        await self.plugin_instance.sync_libraries()
                         logger.info("[EPIC] ✓ Library sync completed!")
                 else:
                     logger.error(f"[EPIC] Auto-auth failed: {result.get('error')}")

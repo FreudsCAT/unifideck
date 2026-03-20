@@ -384,7 +384,7 @@ class GOGAPIClient:
                     # Auto-sync library after successful auth
                     if self.plugin_instance:
                         logger.info("[GOG] Starting automatic library sync...")
-                        await self.plugin_instance.sync_libraries(fetch_artwork=False)
+                        await self.plugin_instance.sync_libraries()
                         logger.info("[GOG] ✓ Library sync completed!")
                 else:
                     logger.error(f"[GOG] Auto-auth failed: {result.get('error')}")
