@@ -30,7 +30,10 @@ loadTranslations();
 // Import tab system
 import { patchLibrary, loadCompatCacheFromBackend } from "./tabs";
 
-import { syncUnifideckCollections, deleteAllUnifideckCollections } from "./spoofing/CollectionManager";
+import {
+  syncUnifideckCollections,
+  deleteAllUnifideckCollections,
+} from "./spoofing/CollectionManager";
 
 // Import Downloads feature components
 import { DownloadsTab } from "./components/DownloadsTab";
@@ -59,6 +62,7 @@ import {
   setGameInfoCacheRef,
 } from "./hooks/gameActionInterceptor";
 import { SyncProgress } from "./types/syncProgress";
+import type { DownloadItem, DownloadQueueInfo } from "./types/downloads";
 
 // ========== INSTALL BUTTON FEATURE ==========
 //
@@ -106,6 +110,23 @@ import { SyncProgress } from "./types/syncProgress";
 
 // Global cache for game info (5-second TTL for faster updates after installation)
 const gameInfoCache = new Map<number, { info: any; timestamp: number }>();
+
+const getDownloadFinishedAt = (item: DownloadItem): number =>
+  item.end_time ?? item.start_time ?? item.added_time ?? 0;
+
+const getDownloadFailureKey = (item: DownloadItem): string =>
+  `${item.id}:${getDownloadFinishedAt(item)}`;
+
+const getTranslatedDownloadError = (item: DownloadItem): string => {
+  if (!item.error_message) {
+    return t("errors.download.generic");
+  }
+
+  const translatedError = t(item.error_message);
+  return translatedError !== item.error_message
+    ? translatedError
+    : t("errors.download.generic");
+};
 
 // ========== END INSTALL BUTTON FEATURE ==========
 
@@ -1675,7 +1696,9 @@ export default definePlugin(() => {
         },
       ) ?? null;
     if (unregLifetimeGlobal) {
-      console.log("[Unifideck] ✓ Global Ubisoft session capture listener registered");
+      console.log(
+        "[Unifideck] ✓ Global Ubisoft session capture listener registered",
+      );
     }
   } catch {
     // GameSessions may not be available
@@ -1865,6 +1888,52 @@ export default definePlugin(() => {
   // Store interval ID for cleanup
   (window as any).__unifideck_toast_interval = launcherToastInterval;
 
+  let downloadErrorToastInterval: NodeJS.Timeout | null = null;
+  const seenDownloadFailures = new Set<string>();
+  let seededDownloadFailures = false;
+  downloadErrorToastInterval = setInterval(async () => {
+    try {
+      const queueInfo = await call<[], DownloadQueueInfo>(
+        "get_download_queue_info",
+      );
+      if (!queueInfo.success) {
+        return;
+      }
+
+      const failedItems = (queueInfo.finished || []).filter(
+        (item) => item.status === "error",
+      );
+
+      if (!seededDownloadFailures) {
+        failedItems.forEach((item) =>
+          seenDownloadFailures.add(getDownloadFailureKey(item)),
+        );
+        seededDownloadFailures = true;
+        return;
+      }
+
+      for (const item of failedItems) {
+        const failureKey = getDownloadFailureKey(item);
+        if (seenDownloadFailures.has(failureKey)) {
+          continue;
+        }
+
+        seenDownloadFailures.add(failureKey);
+        toaster.toast({
+          title: `${t("downloadsTab.status.error")}: ${item.game_title}`,
+          body: getTranslatedDownloadError(item),
+          duration: 10000,
+          critical: true,
+        });
+      }
+    } catch (error) {
+      console.error("[Unifideck] Error polling download failures:", error);
+    }
+  }, 1500);
+
+  (window as any).__unifideck_download_error_interval =
+    downloadErrorToastInterval;
+
   // Background sync disabled - users manually sync via UI when needed
   console.log("[Unifideck] Background sync disabled (use manual sync button)");
 
@@ -1896,6 +1965,13 @@ export default definePlugin(() => {
       if (toastInterval) {
         clearInterval(toastInterval);
         (window as any).__unifideck_toast_interval = null;
+      }
+
+      const downloadErrorInterval = (window as any)
+        .__unifideck_download_error_interval;
+      if (downloadErrorInterval) {
+        clearInterval(downloadErrorInterval);
+        (window as any).__unifideck_download_error_interval = null;
       }
 
       // Remove CSS injections

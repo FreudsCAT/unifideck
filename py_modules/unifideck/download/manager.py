@@ -916,10 +916,15 @@ class DownloadQueue:
 
     def get_queue_info(self) -> Dict[str, Any]:
         """Get full queue information"""
+        finished_items = sorted(
+            self.finished,
+            key=lambda item: item.end_time or item.start_time or item.added_time or 0,
+            reverse=True,
+        )
         return {
             'current': self.get_current(),
             'queued': [item.to_dict() for item in self.queue[1:] if item.status == DownloadStatus.QUEUED],
-            'finished': [item.to_dict() for item in reversed(self.finished[-10:])],
+            'finished': [item.to_dict() for item in finished_items],
             'state': self.state
         }
 
