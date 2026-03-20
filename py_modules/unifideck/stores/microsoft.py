@@ -320,6 +320,10 @@ class MicrosoftConnector(Store):
             "--disable-background-networking",
             "--start-fullscreen",
             "--window-size=1280,800",
+            # Enable Chromium's built-in virtual keyboard (Steam overlay
+            # keyboard is not available since auth runs outside Steam)
+            "--enable-features=VirtualKeyboard",
+            "--enable-touch-events",
         ]
         logger.info(f"[MS] Launching Chromium for auth: {' '.join(args[:4])}...")
 
