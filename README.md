@@ -2,7 +2,7 @@
 
 A Decky Loader plugin that brings together games from Steam, Epic Games Store, GOG, Microsoft Store, Ubisoft store and Amazon into a single, unified library experience on your Steam Deck.
 
-![License](https://img.shields.io/badge/license-GPL--3.0-blue.svg)
+![License](https://img.shields.io/badge/license-GPL--3.0--or--later-blue.svg)
 ![Platform](https://img.shields.io/badge/platform-Steam%20Deck-orange.svg)
 [![Sponsor](https://img.shields.io/badge/Sponsor-GitHub-ea4aaa?logo=github&logoColor=white)](https://github.com/sponsors/mubaraknumann) [![Ko-fi](https://img.shields.io/badge/Ko--fi-F16061?logo=ko-fi&logoColor=white)](https://ko-fi.com/mubaraknumann)
 
@@ -178,7 +178,7 @@ To add a new language, create a JSON file in `src/i18n/locales/` using `en-US.js
 
 ## License
 
-GNU General Public License v3.0 - see [LICENSE](./LICENSE) file for details
+GNU General Public License v3.0 or later - see [LICENSE](./LICENSE) file for details
 
 ## Credits
 
