@@ -1316,9 +1316,11 @@ else:
 
 class BackgroundSizeFetcher:
     """Background service to fetch game sizes asynchronously without blocking sync.
-    
+
     - Runs in background (fire-and-forget from sync)
-    - Fetches all pending sizes in parallel (30 concurrent)
+    - Waits for network connectivity before starting
+    - Epic: 3 concurrent (PyInstaller processes, higher causes extraction failures)
+    - GOG/Amazon: 20 concurrent (lightweight HTTP calls)
     - Persists progress to game_sizes.json (survives restarts)
     - Starts automatically on plugin load if pending games exist
     """
@@ -1401,23 +1403,50 @@ class BackgroundSizeFetcher:
         self._running = False
         logger.info("[SizeService] Stopped")
     
+    async def _wait_for_network(self, max_wait: int = 30) -> bool:
+        """Wait for network connectivity before fetching sizes.
+
+        Returns True if network is available, False if timed out.
+        """
+        import socket
+        for attempt in range(max_wait):
+            try:
+                socket.getaddrinfo("account-public-service-prod03.ol.epicgames.com", 443, socket.AF_INET)
+                return True
+            except socket.gaierror:
+                if attempt == 0:
+                    logger.info("[SizeService] Waiting for network connectivity...")
+                await asyncio.sleep(1)
+        logger.warning(f"[SizeService] Network not available after {max_wait}s, skipping size fetch")
+        return False
+
     async def _fetch_all(self):
         """Fetch all pending sizes in parallel"""
         try:
+            # Wait for network before spawning processes
+            if not await self._wait_for_network():
+                return
+
             import aiohttp
             import ssl
-            
+
             # Create shared session for GOG reuse (critical for performance)
             ssl_context = ssl.create_default_context()
             ssl_context.check_hostname = False
             ssl_context.verify_mode = ssl.CERT_NONE
             connector = aiohttp.TCPConnector(ssl=ssl_context)
-            
+
             async with aiohttp.ClientSession(connector=connector) as session:
-                semaphore = asyncio.Semaphore(30)
-                
+                # Epic uses a low concurrency limit because each legendary info call
+                # spawns a full PyInstaller process — too many concurrent extractions
+                # cause decompression failures in /tmp
+                epic_semaphore = asyncio.Semaphore(3)
+                # GOG/Amazon use lightweight HTTP calls, higher concurrency is fine
+                api_semaphore = asyncio.Semaphore(20)
+
                 async def fetch_one(store: str, game_id: str):
-                    async with semaphore:
+                    sem = epic_semaphore if store == 'epic' else api_semaphore
+                    async with sem:
                         try:
                             if store == 'epic':
                                 size_bytes = await self.epic.get_game_size(game_id)
@@ -1427,7 +1456,7 @@ class BackgroundSizeFetcher:
                                 size_bytes = await self.amazon.get_game_size(game_id)
                             else:
                                 return (store, game_id, None)
-                            
+
                             if size_bytes and size_bytes > 0:
                                 # Update cache immediately (persist progress)
                                 cache = load_game_sizes_cache()
@@ -1445,14 +1474,14 @@ class BackgroundSizeFetcher:
                         except Exception as e:
                             logger.warning(f"[SizeService] Error fetching {store}:{game_id}: {e}")
                             return (store, game_id, None)
-                
-                # Fire all at once
+
+                # Fire all at once (semaphores control actual concurrency per store)
                 tasks = [fetch_one(store, gid) for store, gid in self._pending_games]
                 results = await asyncio.gather(*tasks, return_exceptions=True)
-            
+
             success = sum(1 for r in results if isinstance(r, tuple) and r[2] is not None)
             logger.info(f"[SizeService] Complete: {success}/{len(self._pending_games)} sizes cached")
-            
+
         except asyncio.CancelledError:
             logger.info("[SizeService] Cancelled")
         except Exception as e:
