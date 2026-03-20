@@ -219,8 +219,10 @@ class MicrosoftConnector(Store):
           OpenSSL which conflicts with system libraries).
         - Injects DISPLAY, XDG_RUNTIME_DIR, DBUS_SESSION_BUS_ADDRESS
           (PluginLoader is a systemd service without a display session).
+        - Finds the real XAUTHORITY file (randomly named in /run/user/).
         - Clears GTK_MODULES to suppress canberra-gtk-module warnings.
         """
+        import glob
         uid = os.stat("/home/deck").st_uid
         env = {
             k: v for k, v in os.environ.items()
@@ -229,7 +231,13 @@ class MicrosoftConnector(Store):
         env.setdefault("DISPLAY", ":0")
         env.setdefault("XDG_RUNTIME_DIR", f"/run/user/{uid}")
         env.setdefault("DBUS_SESSION_BUS_ADDRESS", f"unix:path=/run/user/{uid}/bus")
-        env.setdefault("XAUTHORITY", f"/home/deck/.Xauthority")
+        # XAUTHORITY: SteamOS uses a randomly-named file in /run/user/<uid>/
+        if "XAUTHORITY" not in env:
+            xauth_files = glob.glob(f"/run/user/{uid}/xauth_*")
+            if xauth_files:
+                env["XAUTHORITY"] = xauth_files[0]
+            elif os.path.exists("/home/deck/.Xauthority"):
+                env["XAUTHORITY"] = "/home/deck/.Xauthority"
         env["GTK_MODULES"] = ""
         return env
 
