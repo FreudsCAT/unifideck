@@ -315,19 +315,40 @@ class MicrosoftConnector(Store):
         ]
         logger.info(f"[MS] Launching Chromium for auth: {' '.join(args[:4])}...")
 
+        log_file = os.path.expanduser("~/.local/share/unifideck/chromium-auth.log")
+        try:
+            stderr_fh = open(log_file, "w")
+        except Exception:
+            stderr_fh = subprocess.DEVNULL
+
+        logger.info(f"[MS] Chromium command: {' '.join(args[:6])}...")
+        logger.info(f"[MS] Chromium env DISPLAY={self._clean_env().get('DISPLAY')}")
+
         try:
             self._chromium_process = subprocess.Popen(
                 args,
                 stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
+                stderr=stderr_fh,
                 env=self._clean_env(),
             )
+            logger.info(f"[MS] Chromium PID: {self._chromium_process.pid}")
+
             # Wait for Chromium to be ready (CDP responding)
             import urllib.request as _req
             for _i in range(15):
                 time.sleep(1)
-                if self._chromium_process.poll() is not None:
-                    logger.error("[MS] Chromium exited immediately — another instance may be running")
+                poll = self._chromium_process.poll()
+                if poll is not None:
+                    err_msg = ""
+                    try:
+                        with open(log_file) as ef:
+                            err_msg = ef.read()[:500]
+                    except Exception:
+                        pass
+                    logger.error(
+                        f"[MS] Chromium exited with code {poll} after {_i+1}s. "
+                        f"stderr: {err_msg}"
+                    )
                     self._chromium_process = None
                     return False
                 try:
@@ -340,12 +361,13 @@ class MicrosoftConnector(Store):
                     if pages:
                         logger.info(f"[MS] Chromium CDP ready: {len(pages)} page(s)")
                         return True
-                except Exception:
-                    pass
+                except Exception as cdp_err:
+                    logger.debug(f"[MS] CDP not ready ({_i+1}s): {cdp_err}")
+
             logger.warning("[MS] Chromium started but CDP not responding after 15s")
             return True
         except Exception as e:
-            logger.error(f"[MS] Failed to launch Chromium: {e}")
+            logger.error(f"[MS] Failed to launch Chromium: {e}", exc_info=True)
             return False
 
     def _kill_chromium(self) -> None:
@@ -450,15 +472,10 @@ class MicrosoftConnector(Store):
         # Launch Chromium with remote debugging for CDP interception
         launched = self._launch_chromium_auth(auth_url)
         if not launched:
-            # Fallback: return URL for Steam's CEF browser
-            logger.warning("[MS] Chromium not found — falling back to CEF auth")
-            if hasattr(self, "_auth_monitor_task") and self._auth_monitor_task and not self._auth_monitor_task.done():
-                self._auth_monitor_task.cancel()
-            self._auth_monitor_task = asyncio.create_task(self._monitor_and_complete_auth())
+            logger.error("[MS] Failed to launch Chromium for auth")
             return {
-                "success": True,
-                "url":     auth_url,
-                "message": "microsoft.signInMessage",
+                "success": False,
+                "error": "microsoft.chromiumInstallFailed",
             }
 
         # Start CDP monitor targeting Chromium's debugging port
