@@ -1072,29 +1072,87 @@ class DownloadQueue:
 
         logger.info(f"[DownloadQueue] Running: {' '.join(cmd)}")
         logger.info(f"[DownloadQueue] DLC download enabled for {item.game_title}")
-        
+
+        # Initialize phase tracking flags (set by _parse_legendary_output)
+        item._main_game_finished = False
+        item._dlc_phase_entered = False
+
         try:
             self.current_process = await asyncio.create_subprocess_exec(
                 *cmd,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT
             )
-            
+
             # Parse progress from output
             await self._parse_legendary_output(item)
-            
+
             return_code = await self.current_process.wait()
             self.current_process = None
-            
+
             if return_code == 0:
                 return True
-            else:
-                # Classify error from captured output
-                last_output = getattr(item, '_last_output_lines', '')
-                item.error_message = classify_download_error(last_output)
-                logger.error(f"[DownloadQueue] Epic download failed (code {return_code}), classified as: {item.error_message}")
-                return False
-            
+
+            # Non-zero exit — check if the base game installed OK but DLC failed
+            main_done = getattr(item, '_main_game_finished', False)
+            dlc_phase = getattr(item, '_dlc_phase_entered', False)
+            # Fallback: progress reaching 100% also indicates main game finished
+            progress_done = item.progress_percent >= 99.5
+
+            if (main_done or progress_done) and dlc_phase:
+                # Base game installed successfully, DLC download failed.
+                # Retry the same command — legendary will skip the installed
+                # base game and only attempt the DLC downloads.
+                logger.warning(
+                    f"[DownloadQueue] Base game installed OK but DLC phase failed "
+                    f"(code {return_code}). Retrying DLC downloads..."
+                )
+
+                max_dlc_retries = 2
+                for attempt in range(1, max_dlc_retries + 1):
+                    # Brief pause before retry (network may need a moment)
+                    await asyncio.sleep(3)
+
+                    # Clean lock files before retry
+                    for lock_file in ['installed.json.lock', 'user.json.lock']:
+                        lock_path = os.path.join(lock_dir, lock_file)
+                        if os.path.exists(lock_path):
+                            try:
+                                os.remove(lock_path)
+                            except Exception:
+                                pass
+
+                    logger.info(f"[DownloadQueue] DLC retry {attempt}/{max_dlc_retries}: {' '.join(cmd)}")
+
+                    self.current_process = await asyncio.create_subprocess_exec(
+                        *cmd,
+                        stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.STDOUT
+                    )
+
+                    await self._parse_legendary_output(item)
+                    retry_code = await self.current_process.wait()
+                    self.current_process = None
+
+                    if retry_code == 0:
+                        logger.info(f"[DownloadQueue] DLC retry {attempt} succeeded for {item.game_title}")
+                        return True
+
+                    logger.warning(f"[DownloadQueue] DLC retry {attempt} failed (code {retry_code})")
+
+                # All DLC retries exhausted — base game is still installed and playable
+                logger.warning(
+                    f"[DownloadQueue] DLC retries exhausted for {item.game_title}. "
+                    f"Base game is installed and playable. DLCs can be synced later via Repair/Verify."
+                )
+                return True
+
+            # Base game itself failed (not a DLC-only failure)
+            last_output = getattr(item, '_last_output_lines', '')
+            item.error_message = classify_download_error(last_output)
+            logger.error(f"[DownloadQueue] Epic download failed (code {return_code}), classified as: {item.error_message}")
+            return False
+
         except Exception as e:
             logger.error(f"[DownloadQueue] Epic download error: {e}")
             item.error_message = classify_download_error(str(e))
@@ -1560,6 +1618,7 @@ class DownloadQueue:
                     # Detect DLC availability
                     if dlc_available_re.search(line):
                         logger.info(f"[DownloadQueue] DLCs available for {item.game_title}")
+                        item._dlc_phase_entered = True
 
                     # Detect download phase transitions (main game + each DLC)
                     if match := preparing_re.search(line):
@@ -1579,6 +1638,7 @@ class DownloadQueue:
                             logger.info(f"[DownloadQueue] DLC/extra download finished: {label} ({elapsed:.0f}s)")
                         else:
                             logger.info(f"[DownloadQueue] Main download finished: {label} ({elapsed:.0f}s)")
+                            item._main_game_finished = True
 
                     # Parse progress
                     if match := progress_re.search(line):

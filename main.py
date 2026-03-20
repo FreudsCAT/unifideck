@@ -431,8 +431,8 @@ def get_artwork_attempts_cache_path() -> Path:
     return Path.home() / ".local" / "share" / "unifideck" / ARTWORK_ATTEMPTS_CACHE_FILE
 
 
-def load_artwork_attempts_cache() -> Dict[str, bool]:
-    """Load artwork attempts cache. Returns {str(app_id): bool}"""
+def load_artwork_attempts_cache() -> Dict[str, Any]:
+    """Load artwork attempts cache. Returns {str(app_id): True | sorted list of missing types}"""
     cache_path = get_artwork_attempts_cache_path()
     try:
         if cache_path.exists():
@@ -443,7 +443,7 @@ def load_artwork_attempts_cache() -> Dict[str, bool]:
     return {}
 
 
-def save_artwork_attempts_cache(cache: Dict[str, bool]) -> bool:
+def save_artwork_attempts_cache(cache: Dict[str, Any]) -> bool:
     """Save artwork attempts cache"""
     cache_path = get_artwork_attempts_cache_path()
     try:
@@ -2839,6 +2839,14 @@ class Plugin:
                     # NOTE: Cleanup moved to AFTER shortcuts are written (line ~4480)
                     # This prevents deleting newly downloaded artwork for games not yet in old shortcuts.vdf
 
+                    # Ensure grid_path is valid (may have been None at plugin init during early boot)
+                    if self.steamgriddb and not self.steamgriddb.grid_path:
+                        self.steamgriddb.grid_path = self.steamgriddb._find_grid_path()
+                        if self.steamgriddb.grid_path:
+                            logger.info(f"[SYNC PHASE] Refreshed grid_path: {self.steamgriddb.grid_path}")
+                        else:
+                            logger.warning("[SYNC PHASE] grid_path still None - artwork download will be limited")
+
                     # STEP 3: Check which games need artwork (quick local file check)
                     logger.info(f"[SYNC PHASE] Checking artwork for {len(all_games)} games")
                     self.sync_progress.status = "checking_artwork"
@@ -2848,18 +2856,25 @@ class Plugin:
                     }
                     artwork_attempts = load_artwork_attempts_cache()
                     skipped_artwork_attempts = 0
+                    games_missing_types = {}
                     for game in all_games:
                         if game.app_id in seen_app_ids:
                             str_id = str(game.app_id)
-                            # Skip games we already tried and confirmed have no artwork available
-                            if str_id in artwork_attempts and not artwork_attempts[str_id]:
+                            # Check what's actually missing on disk right now
+                            missing = await self.get_missing_artwork_types(game.app_id)
+                            if not missing:
+                                pass  # Complete artwork, skip
+                            elif str_id in artwork_attempts and artwork_attempts[str_id] == sorted(missing):
+                                # Same types were missing last time — sources still won't have them
                                 skipped_artwork_attempts += 1
-                            elif not await self.has_artwork(game.app_id):
+                            else:
+                                # New game, or missing types changed (partial progress) — retry
                                 games_needing_art.append(game)
+                                games_missing_types[str_id] = missing
                             seen_app_ids.discard(game.app_id)  # Only check once per app_id
 
                     if skipped_artwork_attempts > 0:
-                        logger.info(f"[SYNC PHASE] Skipping {skipped_artwork_attempts} games with no available artwork (incremental)")
+                        logger.info(f"[SYNC PHASE] Skipping {skipped_artwork_attempts} games with unchanged missing artwork (incremental)")
                     logger.info(f"[SYNC PHASE] Artwork check complete: {len(games_needing_art)}/{len(all_games)} games need artwork")
 
                     if games_needing_art:
@@ -2881,7 +2896,10 @@ class Plugin:
                         # === PASS 1: Initial artwork fetch ===
                         logger.info(f"  [Pass 1] Starting parallel download (concurrency: 30)")
                         semaphore = asyncio.Semaphore(30)
-                        tasks = [self.fetch_artwork_with_progress(game, semaphore) for game in games_needing_art]
+                        tasks = []
+                        for game in games_needing_art:
+                            only_types = games_missing_types.get(str(game.app_id))
+                            tasks.append(self.fetch_artwork_with_progress(game, semaphore, only_types=only_types))
                         results = await asyncio.gather(*tasks, return_exceptions=True)
 
                         # Count successes (results are now dicts)
@@ -2905,7 +2923,10 @@ class Plugin:
                             self.sync_progress.artwork_total = len(games_to_retry)
                             self.sync_progress.artwork_synced = 0
 
-                            retry_tasks = [self.fetch_artwork_with_progress(game, semaphore) for game in games_to_retry]
+                            retry_tasks = []
+                            for game in games_to_retry:
+                                only_types = games_missing_types.get(str(game.app_id))
+                                retry_tasks.append(self.fetch_artwork_with_progress(game, semaphore, only_types=only_types))
                             await asyncio.gather(*retry_tasks, return_exceptions=True)
 
                             # Count recovered games (can't use await in generator expression)
@@ -2930,9 +2951,10 @@ class Plugin:
                         logger.info(f"Artwork download complete: {artwork_count}/{len(games_needing_art)} games fully successful")
 
                         # Save artwork attempt results for incremental sync
+                        # Store the specific missing types so we can skip only when unchanged
                         for game in games_needing_art:
-                            has_art = await self.has_artwork(game.app_id)
-                            artwork_attempts[str(game.app_id)] = has_art
+                            missing = await self.get_missing_artwork_types(game.app_id)
+                            artwork_attempts[str(game.app_id)] = sorted(missing) if missing else True
                         save_artwork_attempts_cache(artwork_attempts)
                     else:
                         logger.info(f"[SYNC PHASE] All games have complete artwork, skipping download")
@@ -3459,6 +3481,14 @@ class Plugin:
                         cleanup_result = await self.cleanup_orphaned_artwork()
                         if cleanup_result.get('removed_count', 0) > 0:
                             logger.info(f"Cleaned up {cleanup_result['removed_count']} orphaned artwork files")
+
+                    # Ensure grid_path is valid (may have been None at plugin init during early boot)
+                    if self.steamgriddb and not self.steamgriddb.grid_path:
+                        self.steamgriddb.grid_path = self.steamgriddb._find_grid_path()
+                        if self.steamgriddb.grid_path:
+                            logger.info(f"[FORCE SYNC PHASE] Refreshed grid_path: {self.steamgriddb.grid_path}")
+                        else:
+                            logger.warning("[FORCE SYNC PHASE] grid_path still None - artwork download will be limited")
 
                     # ARTWORK: Download based on user preference
                     # If resync_artwork=True, re-download ALL artwork (overwrites everything)
