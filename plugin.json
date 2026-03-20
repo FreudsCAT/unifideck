@@ -3,7 +3,7 @@
   "version": "0.5.7",
   "main": "dist/index.js",
   "author": "numan",
-  "flags": ["_root"],
+  "flags": [],
   "api_version": 2,
   "publish": {
     "tags": ["library", "games", "epic", "gog", "amazon", "ubisoft", "multi-store"],
