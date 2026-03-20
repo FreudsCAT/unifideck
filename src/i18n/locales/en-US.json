@@ -167,6 +167,8 @@
     "steamRestartTitle": "Sync Complete!",
     "steamRestartDescription": "Please Restart Steam to apply your new games and artwork",
     "steamRestartDescriptionStore": "Please Restart Steam to apply your new {{store}} games and artwork",
+    "steamRestartCleanupTitle": "Cleanup Complete!",
+    "steamRestartCleanupDescription": "Please Restart Steam to fully remove deleted games and artwork",
     "restartNow": "Restart Now",
     "later": "Later",
     "ubisoftInstallTitle": "Ubisoft Connect Required",

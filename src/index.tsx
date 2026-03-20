@@ -1393,7 +1393,7 @@ const Content: FC = () => {
         });
 
         // Prompt user to restart Steam so changes take effect
-        showModal(<SteamRestartModal closeModal={() => {}} />);
+        showModal(<SteamRestartModal reason="cleanup" closeModal={() => {}} />);
       } else {
         console.error(`[Unifideck] Delete failed: ${result.error}`);
         toaster.toast({
