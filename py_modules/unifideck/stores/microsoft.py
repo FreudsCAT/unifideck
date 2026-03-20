@@ -333,39 +333,8 @@ class MicrosoftConnector(Store):
                 env=self._clean_env(),
             )
             logger.info(f"[MS] Chromium PID: {self._chromium_process.pid}")
-
-            # Wait for Chromium to be ready (CDP responding)
-            import urllib.request as _req
-            for _i in range(15):
-                time.sleep(1)
-                poll = self._chromium_process.poll()
-                if poll is not None:
-                    err_msg = ""
-                    try:
-                        with open(log_file) as ef:
-                            err_msg = ef.read()[:500]
-                    except Exception:
-                        pass
-                    logger.error(
-                        f"[MS] Chromium exited with code {poll} after {_i+1}s. "
-                        f"stderr: {err_msg}"
-                    )
-                    self._chromium_process = None
-                    return False
-                try:
-                    with _req.urlopen(
-                        f"http://127.0.0.1:{self._chromium_cdp_port}/json",
-                        timeout=2,
-                    ) as r:
-                        import json as _json
-                        pages = _json.loads(r.read())
-                    if pages:
-                        logger.info(f"[MS] Chromium CDP ready: {len(pages)} page(s)")
-                        return True
-                except Exception as cdp_err:
-                    logger.debug(f"[MS] CDP not ready ({_i+1}s): {cdp_err}")
-
-            logger.warning("[MS] Chromium started but CDP not responding after 15s")
+            # Don't block — CDP readiness is checked asynchronously
+            # by _monitor_and_complete_auth which runs in a background task.
             return True
         except Exception as e:
             logger.error(f"[MS] Failed to launch Chromium: {e}", exc_info=True)
@@ -856,6 +825,22 @@ class MicrosoftConnector(Store):
         """Background task: intercept the OAuth redirect via CDP Network events."""
         # Use Chromium's debugging port if Chromium is running, else CEF (8080)
         cdp_port = self._chromium_cdp_port if self._chromium_process else 8080
+
+        # Give Chromium a moment to start and open its CDP port (non-blocking)
+        if self._chromium_process:
+            await asyncio.sleep(2)
+            if self._chromium_process.poll() is not None:
+                log_file = os.path.expanduser("~/.local/share/unifideck/chromium-auth.log")
+                err = ""
+                try:
+                    with open(log_file) as f:
+                        err = f.read()[:300]
+                except Exception:
+                    pass
+                logger.error(f"[MS] Chromium crashed before CDP. stderr: {err}")
+                self._chromium_process = None
+                return
+
         try:
             code = await intercept_oauth_code(
                 pending_auth_url=getattr(self, "_pending_auth_url", ""),
