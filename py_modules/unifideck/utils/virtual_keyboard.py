@@ -1,25 +1,29 @@
-/**
- * VirtualKeyboard — On-screen keyboard for the Microsoft auth page.
- *
- * This component is NOT rendered as React — it is read as raw text by the
- * Python backend and injected via CDP (Page.addScriptToEvaluateOnNewDocument)
- * into the Chromium auth browser.  This ensures the keyboard persists across
- * page navigations (email → password → 2FA → redirect).
- *
- * Steam's overlay keyboard is unavailable because Chromium auth runs outside
- * of Steam.  No native Chromium API exists for virtual keyboards on Linux.
- *
- * The JS source between the KEYBOARD_SOURCE markers is extracted by
- * ``microsoft.py::_inject_virtual_keyboard()``.
- *
- * Locale placeholder ``__UNIFIDECK_LOCALE__`` is replaced at runtime by
- * the Python backend with the user's BCP-47 locale (e.g. "fr-FR").
- *
- * @module VirtualKeyboard
- */
+"""
+Virtual keyboard for the Microsoft auth page on Steam Deck.
 
-// ─── BEGIN_KEYBOARD_SOURCE ───────────────────────────────────────────────────
-export const KEYBOARD_SOURCE = `
+Injected via CDP (Page.addScriptToEvaluateOnNewDocument) into the
+Chromium auth browser.  Steam's overlay keyboard is unavailable
+because Chromium auth runs outside of Steam.  No native Chromium API
+exists for virtual keyboards on Linux.
+
+The keyboard persists across page navigations (email → password → 2FA)
+and auto-shows when an input or textarea gains focus.
+
+Layout selection
+----------------
+The placeholder ``__UNIFIDECK_LOCALE__`` is replaced at injection time
+with the user's BCP-47 locale (e.g. ``fr-FR``).  French locales get
+AZERTY; everything else gets QWERTY.
+
+Usage in ``microsoft.py``::
+
+    from ..utils.virtual_keyboard import get_keyboard_js
+    kb_js = get_keyboard_js(locale="fr-FR")
+"""
+
+# ── Keyboard JavaScript ──────────────────────────────────────────────────────
+
+_KEYBOARD_JS = r"""
 (function() {
   'use strict';
   if (window.__unifideck_kb) return;
@@ -37,7 +41,7 @@ export const KEYBOARD_SOURCE = `
         ['SHIFT','@','.','SPACE','-','_','BACK','ENTER']
       ],
       upper: [
-        ['&','\\u00e9','"','\\'','(','\\u00a7','\\u00e8','!','\\u00e7','\\u00e0'],
+        ['&','\u00e9','"','\'','(','\u00a7','\u00e8','!','\u00e7','\u00e0'],
         ['A','Z','E','R','T','Y','U','I','O','P'],
         ['Q','S','D','F','G','H','J','K','L','M'],
         ['W','X','C','V','B','N','?','.','/','*'],
@@ -87,13 +91,13 @@ export const KEYBOARD_SOURCE = `
   /* ── Key labels ─────────────────────────────────────────────────── */
 
   var LABELS = {
-    'SPACE': '\\u2423',
-    'BACK':  '\\u232B',
-    'ENTER': '\\u21B5',
-    'SHIFT': '\\u21E7'
+    'SPACE': '\u2423',
+    'BACK':  '\u232B',
+    'ENTER': '\u21B5',
+    'SHIFT': '\u21E7'
   };
   var LABELS_SHIFTED = {
-    'SHIFT': '\\u2B06'
+    'SHIFT': '\u2B06'
   };
 
   /* ── Key handler ────────────────────────────────────────────────── */
@@ -236,7 +240,17 @@ export const KEYBOARD_SOURCE = `
     }
   }, true);
 })();
-`;
-// ─── END_KEYBOARD_SOURCE ─────────────────────────────────────────────────────
+"""
 
-export default KEYBOARD_SOURCE;
+
+def get_keyboard_js(locale: str = "en-US") -> str:
+    """Return the virtual keyboard JavaScript with the given locale injected.
+
+    Args:
+        locale: BCP-47 locale string (e.g. "fr-FR", "en-US").
+                French locales select AZERTY; all others select QWERTY.
+
+    Returns:
+        Ready-to-inject JavaScript string.
+    """
+    return _KEYBOARD_JS.replace("__UNIFIDECK_LOCALE__", locale)

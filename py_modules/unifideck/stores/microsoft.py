@@ -819,28 +819,9 @@ class MicrosoftConnector(Store):
             logger.warning(f"[MS] CDP keyboard: cannot list pages: {e}")
             return
 
-        # Load VirtualKeyboard component (src/components/VirtualKeyboard.tsx).
-        # The TSX file exports the keyboard JS between BEGIN/END markers.
-        # Only injected on the Microsoft auth page — not part of the React bundle.
-        import re as _re
-        plugin_root = os.path.dirname(os.path.dirname(os.path.dirname(
-            os.path.dirname(os.path.abspath(__file__)))))
-        kb_path = os.path.join(plugin_root, "src", "components", "VirtualKeyboard.tsx")
-        try:
-            with open(kb_path) as f:
-                raw = f.read()
-            # Extract JS between the template literal backticks after KEYBOARD_SOURCE
-            match = _re.search(r"KEYBOARD_SOURCE\s*=\s*`([^`]+)`", raw, _re.DOTALL)
-            if not match:
-                logger.warning("[MS] Could not extract JS from VirtualKeyboard.tsx")
-                return
-            kb_js = match.group(1)
-        except FileNotFoundError:
-            logger.warning(f"[MS] VirtualKeyboard.tsx not found: {kb_path}")
-            return
-
-        # Inject locale so the keyboard selects AZERTY (fr) or QWERTY
-        kb_js = kb_js.replace("__UNIFIDECK_LOCALE__", self._get_locale())
+        # Load virtual keyboard JS with the correct layout for the user's locale
+        from ..utils.virtual_keyboard import get_keyboard_js
+        kb_js = get_keyboard_js(self._get_locale())
 
         try:
             async with websockets.connect(ws_url, close_timeout=3) as ws:
