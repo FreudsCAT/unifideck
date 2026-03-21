@@ -319,6 +319,7 @@ class MicrosoftConnector(Store):
             "--disable-dev-shm-usage",
             "--disable-background-networking",
             "--start-fullscreen",
+            "--enable-touch-events",
             "--window-size=1280,800",
         ]
         logger.info(f"[MS] Launching Chromium for auth: {' '.join(args[:4])}...")
@@ -818,114 +819,28 @@ class MicrosoftConnector(Store):
             logger.warning(f"[MS] CDP keyboard: cannot list pages: {e}")
             return
 
-        # JavaScript virtual keyboard — auto-shows on input focus
-        kb_js = r"""
-(function() {
-  if (window.__unifideck_kb) return;
-  window.__unifideck_kb = true;
+        # Load VirtualKeyboard component (src/components/VirtualKeyboard.tsx).
+        # The TSX file exports the keyboard JS between BEGIN/END markers.
+        # Only injected on the Microsoft auth page — not part of the React bundle.
+        import re as _re
+        plugin_root = os.path.dirname(os.path.dirname(os.path.dirname(
+            os.path.dirname(os.path.abspath(__file__)))))
+        kb_path = os.path.join(plugin_root, "src", "components", "VirtualKeyboard.tsx")
+        try:
+            with open(kb_path) as f:
+                raw = f.read()
+            # Extract JS between the template literal backticks after KEYBOARD_SOURCE
+            match = _re.search(r"KEYBOARD_SOURCE\s*=\s*`([^`]+)`", raw, _re.DOTALL)
+            if not match:
+                logger.warning("[MS] Could not extract JS from VirtualKeyboard.tsx")
+                return
+            kb_js = match.group(1)
+        except FileNotFoundError:
+            logger.warning(f"[MS] VirtualKeyboard.tsx not found: {kb_path}")
+            return
 
-  var KEYS = [
-    ['1','2','3','4','5','6','7','8','9','0'],
-    ['q','w','e','r','t','y','u','i','o','p'],
-    ['a','s','d','f','g','h','j','k','l'],
-    ['z','x','c','v','b','n','m','@','.'],
-    ['SHIFT','SPACE','BACK','ENTER']
-  ];
-
-  var shifted = false;
-  var target = null;
-
-  var overlay = document.createElement('div');
-  overlay.id = 'unifideck-kb';
-  overlay.style.cssText = 'position:fixed;bottom:0;left:0;right:0;z-index:999999;' +
-    'background:#1a1a2e;padding:6px;display:none;touch-action:manipulation;' +
-    'border-top:2px solid #3a3a5a;';
-
-  function type(ch) {
-    if (!target) return;
-    target.focus();
-    if (ch === 'BACK') {
-      var s = target.selectionStart || 0;
-      if (s > 0) {
-        var v = target.value;
-        target.value = v.slice(0, s-1) + v.slice(s);
-        target.selectionStart = target.selectionEnd = s - 1;
-      }
-    } else if (ch === 'SPACE') {
-      document.execCommand('insertText', false, ' ');
-    } else if (ch === 'ENTER') {
-      var ev = new KeyboardEvent('keydown', {key:'Enter',code:'Enter',keyCode:13,bubbles:true});
-      target.dispatchEvent(ev);
-      var form = target.closest('form');
-      if (form) form.dispatchEvent(new Event('submit',{bubbles:true}));
-    } else if (ch === 'SHIFT') {
-      shifted = !shifted;
-      render();
-      return;
-    } else {
-      var c = shifted ? ch.toUpperCase() : ch;
-      document.execCommand('insertText', false, c);
-    }
-    target.dispatchEvent(new Event('input', {bubbles:true}));
-    target.dispatchEvent(new Event('change', {bubbles:true}));
-  }
-
-  function render() {
-    overlay.innerHTML = '';
-    KEYS.forEach(function(row) {
-      var r = document.createElement('div');
-      r.style.cssText = 'display:flex;justify-content:center;gap:3px;margin:3px 0;';
-      row.forEach(function(k) {
-        var b = document.createElement('button');
-        var label = k;
-        if (k === 'SPACE') label = '⎵';
-        else if (k === 'BACK') label = '⌫';
-        else if (k === 'ENTER') label = '↵';
-        else if (k === 'SHIFT') label = shifted ? '⬆' : '⇧';
-        else label = shifted ? k.toUpperCase() : k;
-        b.textContent = label;
-        var wide = (k==='SPACE') ? 'flex:3;' : (k.length > 1) ? 'flex:1.5;' : '';
-        b.style.cssText = wide + 'min-width:32px;height:42px;font-size:16px;' +
-          'border:1px solid #3a3a5a;border-radius:4px;color:#e0e0e0;' +
-          'background:' + (k==='SHIFT' && shifted ? '#4a4a7a' : '#2a2a4a') + ';' +
-          'touch-action:manipulation;-webkit-tap-highlight-color:transparent;';
-        b.addEventListener('touchstart', function(e) {
-          e.preventDefault();
-          type(k);
-        }, {passive:false});
-        b.addEventListener('mousedown', function(e) {
-          e.preventDefault();
-          type(k);
-        });
-        r.appendChild(b);
-      });
-      overlay.appendChild(r);
-    });
-  }
-
-  render();
-  document.body.appendChild(overlay);
-
-  document.addEventListener('focusin', function(e) {
-    var tag = e.target.tagName;
-    var type = (e.target.type || '').toLowerCase();
-    if (tag === 'INPUT' && type !== 'hidden' && type !== 'checkbox' && type !== 'radio'
-        || tag === 'TEXTAREA') {
-      target = e.target;
-      overlay.style.display = 'block';
-    }
-  }, true);
-
-  document.addEventListener('focusout', function(e) {
-    setTimeout(function() {
-      if (!document.activeElement || document.activeElement === document.body) {
-        overlay.style.display = 'none';
-        target = null;
-      }
-    }, 200);
-  }, true);
-})();
-"""
+        # Inject locale so the keyboard selects AZERTY (fr) or QWERTY
+        kb_js = kb_js.replace("__UNIFIDECK_LOCALE__", self._get_locale())
 
         try:
             async with websockets.connect(ws_url, close_timeout=3) as ws:
