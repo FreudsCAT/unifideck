@@ -1,9 +1,9 @@
 """
 CDP (Chrome DevTools Protocol) OAuth interception for the Microsoft connector.
 
-Captures the OAuth authorization code by attaching to the CEF browser's
-Network events via WebSocket.  Handles target switching when CEF creates
-new pages during the login flow (email → password → 2FA → redirect).
+Captures the OAuth authorization code by attaching to Chromium's
+Network events via WebSocket.  Handles target switching when Chromium
+creates new pages during the login flow (email → password → 2FA → redirect).
 
 This is a standalone async function with no class state — all inputs
 are explicit parameters.
@@ -27,15 +27,15 @@ async def intercept_oauth_code(
     """
     Capture the OAuth code via Network.requestWillBeSent on the MS login popup.
 
-    When the login page navigates (email → password → 2FA → …), CEF creates
-    a NEW /json target with a new webSocketDebuggerUrl but keeps the OLD
-    WebSocket connection open.  This function detects newer targets and
-    switches to them automatically.
+    When the login page navigates (email → password → 2FA → …), Chromium
+    creates a NEW /json target with a new webSocketDebuggerUrl but keeps
+    the OLD WebSocket connection open.  This function detects newer targets
+    and switches to them automatically.
 
     Args:
         pending_auth_url: The full OAuth URL to re-navigate to if removed=true.
         timeout: Maximum seconds to wait for the OAuth code.
-        cdp_port: CDP debugging port (8080 for Steam CEF, 9222 for Chromium).
+        cdp_port: CDP debugging port (default 9222 for Chromium).
 
     Returns:
         The OAuth authorization code, or None on timeout/failure.

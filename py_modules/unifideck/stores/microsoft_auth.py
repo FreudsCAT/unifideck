@@ -19,8 +19,8 @@ from typing import Dict, Optional
 logger = logging.getLogger(__name__)
 
 __all__ = [
-    "ssl_ctx_strict", "ssl_ctx_permissive",
-    "http_post", "http_post_json", "http_get",
+    "ssl_ctx_strict",
+    "http_post", "http_get",
     "build_xbl_chain",
 ]
 
@@ -52,19 +52,6 @@ def ssl_ctx_strict() -> ssl.SSLContext:
     return ctx
 
 
-def ssl_ctx_permissive() -> ssl.SSLContext:
-    """Permissive SSL context for CDN package downloads only.
-
-    Microsoft delivery CDN URLs sometimes present certificates that the
-    Steam Deck system CA bundle cannot verify.  This context is intentionally
-    restricted to unauthenticated binary downloads.
-    """
-    ctx = ssl.create_default_context()
-    ctx.check_hostname = False
-    ctx.verify_mode = ssl.CERT_NONE
-    return ctx
-
-# ───────────────────────── HTTP helpers ──────────────────────────────────
 
 def http_post(url: str, data: dict, headers: dict) -> dict:
     """Synchronous HTTP POST (form-encoded) returning parsed JSON."""

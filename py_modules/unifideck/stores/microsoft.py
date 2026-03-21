@@ -1,22 +1,22 @@
 """
 Microsoft / Xbox Cloud Gaming connector for Unifideck.
 
-Authenticates via Microsoft OAuth + Xbox Live token chain, checks for an
-active Game Pass subscription, then syncs the full xCloud catalog.  Games
-are launched via Xbox Cloud Gaming (streaming) in the Steam CEF browser
-at ``https://www.xbox.com/play/launch/{productId}``.
+Authenticates via Microsoft OAuth + Xbox Live token chain, then syncs
+the public xCloud catalog.  Games are launched via Xbox Cloud Gaming
+(streaming) in Chromium at ``https://www.xbox.com/play/launch/{productId}``.
 
-If the user has no Game Pass subscription, a warning notification is
-shown and no games are synced.
+Subscription validation is handled by xbox.com at game launch time — no
+client-side check is needed.
 
 Auth flow
 ---------
   1. Microsoft OAuth (microsoftonline.com) → access_token + refresh_token
   2. XBL user token  (user.auth.xboxlive.com)
   3. XSTS token      (xsts.auth.xboxlive.com, RP = xboxlive.com)
-  4. Game Pass subscription check (catalog.gamepass.com, signed catalog)
-  5. xCloud catalog  (catalog.gamepass.com, public ~500+ games)
-  6. Title resolution (displaycatalog.mp.microsoft.com, batch title lookup)
+  4. xCloud catalog  (catalog.gamepass.com, public ~500+ games)
+  5. Title resolution (displaycatalog.mp.microsoft.com, batch title lookup)
+
+Browser management is delegated to ``microsoft_chromium.ChromiumBrowser``.
 
 Locale
 ------
@@ -25,7 +25,6 @@ see ``utils/locale.py``.
 """
 
 import asyncio
-import subprocess
 import json
 import logging
 import os
@@ -38,6 +37,7 @@ from .microsoft_auth import (
     http_post, http_get, build_xbl_chain,
 )
 from .microsoft_cdp import intercept_oauth_code
+from .microsoft_chromium import ChromiumBrowser
 
 logger = logging.getLogger(__name__)
 
@@ -54,14 +54,11 @@ MS_MARKER_FILE  = ".unifideck-ms-id"
 
 class MicrosoftConnector(Store):
     """
-    Microsoft Store / Xbox Live library connector.
+    Microsoft / Xbox Cloud Gaming connector.
 
-    Surfaces titles from the Xbox Title Hub that have a valid MS Store
-    BigId and declare PC device compatibility — the subset most likely
-    to work (or be attempted) via Proton on SteamOS.
-
-    Win32 games can be downloaded and installed via the FE3 delivery API.
-    UWP-only titles are surfaced but marked as not compatible.
+    Syncs xCloud-playable titles from the public Game Pass catalog.
+    Auth uses Chromium (managed by ``ChromiumBrowser``) for OAuth +
+    CDP interception.  Games are streamed via xbox.com/play.
     """
 
     def __init__(self, plugin_dir: Optional[str] = None, plugin_instance=None):
@@ -83,10 +80,13 @@ class MicrosoftConnector(Store):
         self._xuid:       Optional[str] = None
 
         self._settings_cache: Optional[Dict[str, Any]] = None
-        # Chromium subprocess for auth (CDP interception on port 9222)
-        self._chromium_process = None
-        self._chromium_cdp_port: int = 9222
         self._load_tokens()
+
+        # Browser manager for Chromium auth and xCloud (composition)
+        self._browser = ChromiumBrowser(
+            cdp_port=9222,
+            locale_fn=self._get_locale,
+        )
         logger.info("[MS] MicrosoftConnector initialised")
 
     # ── Locale helpers ───────────────────────────────────────────────────
@@ -209,7 +209,7 @@ class MicrosoftConnector(Store):
         except Exception:
             return False
 
-        if not self._has_xbox_browser_session():
+        if not self._browser.has_xbox_session():
             logger.info("[MS] Xbox browser session lost — user logged out from Game Pass")
             await self.logout()
             return False
@@ -217,225 +217,13 @@ class MicrosoftConnector(Store):
         return True
 
 
-    # ── Chromium auth browser ────────────────────────────────────────────
-
-    @staticmethod
-    def _clean_env() -> dict:
-        """Return a clean environment for launching Chromium/flatpak.
-
-        - Strips LD_LIBRARY_PATH/LD_PRELOAD (PluginLoader bundles its own
-          OpenSSL which conflicts with system libraries).
-        - Injects DISPLAY, XDG_RUNTIME_DIR, DBUS_SESSION_BUS_ADDRESS
-          (PluginLoader is a systemd service without a display session).
-        - Finds the real XAUTHORITY file (randomly named in /run/user/).
-        - Clears GTK_MODULES to suppress canberra-gtk-module warnings.
-        """
-        import glob
-        uid = os.stat("/home/deck").st_uid
-        env = {
-            k: v for k, v in os.environ.items()
-            if k not in ("LD_LIBRARY_PATH", "LD_PRELOAD")
-        }
-        env.setdefault("DISPLAY", ":0")
-        env.setdefault("XDG_RUNTIME_DIR", f"/run/user/{uid}")
-        env.setdefault("DBUS_SESSION_BUS_ADDRESS", f"unix:path=/run/user/{uid}/bus")
-        # XAUTHORITY: SteamOS uses a randomly-named file in /run/user/<uid>/
-        if "XAUTHORITY" not in env:
-            xauth_files = glob.glob(f"/run/user/{uid}/xauth_*")
-            if xauth_files:
-                env["XAUTHORITY"] = xauth_files[0]
-            elif os.path.exists("/home/deck/.Xauthority"):
-                env["XAUTHORITY"] = "/home/deck/.Xauthority"
-        env["GTK_MODULES"] = ""
-        return env
-
-    @staticmethod
-    def _deck_cmd(cmd: list) -> list:
-        """Prefix a command for the deck user if running as root.
-
-        If running as root (unlikely on Steam Deck but possible),
-        ``runuser -u deck --`` drops privileges to the ``deck`` user.
-        Otherwise returns the command unchanged — env vars are handled
-        by ``_clean_env()`` passed to subprocess via ``env=``.
-        """
-        if os.getuid() == 0:
-            return ["runuser", "-u", "deck", "--"] + cmd
-        return cmd
-
-    def _find_chromium_cmd(self) -> Optional[list]:
-        """Find available Chromium/Chrome command.
-
-        Returns:
-            Command as a list (for subprocess), or None if not found.
-        """
-        import shutil
-        # Flatpak Chromium
-        if shutil.which("flatpak"):
-            for app_id in ("org.chromium.Chromium", "com.google.Chrome"):
-                try:
-                    # Check both --user and --system installations
-                    for flag in ("--user", "--system"):
-                        result = subprocess.run(
-                            ["flatpak", "info", flag, app_id],
-                            capture_output=True, timeout=5,
-                            env=self._clean_env(),
-                        )
-                        if result.returncode == 0:
-                            return ["flatpak", "run", app_id]
-                except Exception:
-                    pass
-        # Native installs
-        for binary in ("chromium", "chromium-browser", "google-chrome"):
-            if shutil.which(binary):
-                return [binary]
-        return None
-
-    def _launch_chromium_auth(self, auth_url: str) -> bool:
-        """Launch Chromium with remote debugging for OAuth interception.
-
-        Opens Chromium in app mode (no tabs/address bar) with
-        ``--remote-debugging-port`` so CDP can intercept the OAuth redirect.
-        Cookies persist in Chromium's default profile, so xbox.com/play
-        will reuse the session for xCloud streaming.
-
-        Returns:
-            True if Chromium was launched successfully.
-        """
-        self._kill_chromium()  # Kill any lingering instance
-
-        cmd = self._find_chromium_cmd()
-        if not cmd:
-            logger.warning("[MS] No Chromium/Chrome found for auth")
-            return False
-
-        # Use a dedicated profile dir so Chromium starts a NEW instance
-        # even if another Chromium window is already open.  This ensures
-        # our --remote-debugging-port is active on this process.
-        auth_profile = os.path.expanduser("~/.local/share/unifideck/chromium-auth")
-        os.makedirs(auth_profile, exist_ok=True)
-
-        args = cmd + [
-            f"--app={auth_url}",
-            f"--remote-debugging-port={self._chromium_cdp_port}",
-            f"--user-data-dir={auth_profile}",
-            "--no-first-run",
-            "--disable-translate",
-            "--disable-infobars",
-            "--disable-session-crashed-bubble",
-            "--disable-features=TranslateUI",
-            "--password-store=basic",
-            "--disable-dev-shm-usage",
-            "--disable-background-networking",
-            "--start-fullscreen",
-            "--enable-touch-events",
-            "--window-size=1280,800",
-        ]
-        logger.info(f"[MS] Launching Chromium for auth: {' '.join(args[:4])}...")
-
-        log_file = os.path.expanduser("~/.local/share/unifideck/chromium-auth.log")
-        try:
-            stderr_fh = open(log_file, "w")
-        except Exception:
-            stderr_fh = subprocess.DEVNULL
-
-        logger.info(f"[MS] Chromium command: {' '.join(args[:6])}...")
-        logger.info(f"[MS] Chromium env DISPLAY={self._clean_env().get('DISPLAY')}")
-
-        try:
-            self._chromium_process = subprocess.Popen(
-                args,
-                stdout=subprocess.DEVNULL,
-                stderr=stderr_fh,
-                env=self._clean_env(),
-            )
-            logger.info(f"[MS] Chromium PID: {self._chromium_process.pid}")
-            # Don't block — CDP readiness is checked asynchronously
-            # by _monitor_and_complete_auth which runs in a background task.
-            return True
-        except Exception as e:
-            logger.error(f"[MS] Failed to launch Chromium: {e}", exc_info=True)
-            return False
-
-    def _kill_chromium(self) -> None:
-        """Gracefully terminate the Chromium auth subprocess.
-
-        Waits briefly before sending SIGTERM so Chromium can flush
-        cookies and session data to disk.  Does NOT pkill by profile
-        name — that would kill game sessions launched by the launcher
-        that share the same ``chromium-auth`` profile.
-        """
-        if self._chromium_process is not None:
-            try:
-                # Give Chromium time to flush cookies to disk
-                import time as _time
-                _time.sleep(1)
-                self._chromium_process.terminate()
-                self._chromium_process.wait(timeout=10)
-                logger.info("[MS] Chromium auth browser closed (cookies flushed)")
-            except subprocess.TimeoutExpired:
-                logger.debug("[MS] Chromium did not exit in time — sending SIGKILL")
-                try:
-                    self._chromium_process.kill()
-                    self._chromium_process.wait(timeout=3)
-                except Exception:
-                    pass
-            except Exception as e:
-                logger.debug(f"[MS] Chromium kill error (non-fatal): {e}")
-            self._chromium_process = None
-
-    def is_chromium_installed(self) -> bool:
-        """Check if Chromium or Chrome is available on the system."""
-        return self._find_chromium_cmd() is not None
-
-    async def install_chromium(self) -> Dict[str, Any]:
-        """Install Chromium via flatpak.
-
-        Runs ``flatpak install -y org.chromium.Chromium`` in the background.
-        """
-        import shutil
-        if not shutil.which("flatpak"):
-            return {"success": False, "error": "microsoft.flatpakNotFound"}
-        if self.is_chromium_installed():
-            return {"success": True, "message": "microsoft.chromiumAlreadyInstalled"}
-        logger.info("[MS] Installing Chromium via flatpak...")
-        try:
-            proc = await asyncio.get_event_loop().run_in_executor(
-                None,
-                lambda: subprocess.run(
-                    ["flatpak", "install", "--user", "-y", "flathub", "org.chromium.Chromium"],
-                    capture_output=True, timeout=300,
-                    env=self._clean_env(),
-                ),
-            )
-            if proc.returncode == 0:
-                logger.info("[MS] Chromium installed successfully")
-                return {"success": True, "message": "microsoft.chromiumInstalled"}
-            else:
-                stderr = proc.stderr.decode("utf-8", errors="replace")[:200]
-                logger.error(f"[MS] Chromium install failed: {stderr}")
-                return {"success": False, "error": "microsoft.chromiumInstallFailed"}
-        except subprocess.TimeoutExpired:
-            return {"success": False, "error": "microsoft.chromiumInstallTimeout"}
-        except Exception as e:
-            logger.error(f"[MS] Chromium install error: {e}")
-            return {"success": False, "error": "microsoft.chromiumInstallFailed"}
-
-    async def _clear_ms_cookies(self) -> None:
-        """Clear Microsoft login cookies from CEF via CDP."""
-        try:
-            from ..auth.browser import CDPOAuthMonitor
-            monitor = CDPOAuthMonitor()
-            for domain in ("login.live.com", "live.com", "microsoft.com", "login.microsoftonline.com"):
-                await monitor.clear_cookies_for_domain(domain)
-        except Exception as e:
-            logger.debug(f"[MS] Cookie clear (non-fatal): {e}")
 
     async def start_auth(self) -> Dict[str, Any]:
         """Launch Chromium with the OAuth URL and start CDP monitoring.
 
-        Chromium is used instead of Steam's CEF browser so that login
-        cookies persist — xbox.com/play reuses the session for xCloud.
-        CDP intercepts the OAuth redirect on the Chromium debugging port.
+        Chromium opens in fullscreen app mode; CDP intercepts the OAuth
+        redirect on the debugging port.  Cookies persist in the shared
+        profile so xbox.com/play reuses the session for xCloud.
 
         Returns:
             Dict with ``success=True``.  No ``url`` is returned because
@@ -451,7 +239,7 @@ class MicrosoftConnector(Store):
         self._pending_auth_url = auth_url
 
         # Check if Chromium is available
-        if not self.is_chromium_installed():
+        if not self._browser.is_installed:
             logger.info("[MS] Chromium not installed — prompting user to install")
             return {
                 "success": True,
@@ -460,7 +248,7 @@ class MicrosoftConnector(Store):
             }
 
         # Launch Chromium with remote debugging for CDP interception
-        launched = self._launch_chromium_auth(auth_url)
+        launched = self._browser.launch_auth(auth_url)
         if not launched:
             logger.error("[MS] Failed to launch Chromium for auth")
             return {
@@ -524,59 +312,10 @@ class MicrosoftConnector(Store):
         except Exception as e:
             logger.warning(f"[MS] Could not remove token file: {e}")
 
-        await self._clear_ms_cookies()
-        self._clear_chromium_cookies()
+        self._browser.clear_cookies()
 
         return {"success": True, "message": "microsoft.loggedOut"}
 
-    def _get_chromium_profile_path(self) -> str:
-        """Return the path to the shared Chromium auth profile."""
-        return os.path.expanduser("~/.local/share/unifideck/chromium-auth")
-
-    def _has_xbox_browser_session(self) -> bool:
-        """Check if xbox.com session cookies exist in the Chromium profile."""
-        import sqlite3
-        cookie_db = os.path.join(
-            self._get_chromium_profile_path(), "Default", "Cookies"
-        )
-        if not os.path.exists(cookie_db):
-            return True
-        try:
-            import shutil, tempfile
-            with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
-                tmp_path = tmp.name
-            shutil.copy2(cookie_db, tmp_path)
-            try:
-                conn = sqlite3.connect(tmp_path)
-                cursor = conn.execute(
-                    "SELECT COUNT(*) FROM cookies WHERE host_key LIKE '%xbox.com%'"
-                )
-                count = cursor.fetchone()[0]
-                conn.close()
-                return count > 0
-            finally:
-                os.unlink(tmp_path)
-        except Exception as e:
-            logger.debug(f"[MS] Could not read cookie DB: {e}")
-            return True
-
-    def _clear_chromium_cookies(self) -> None:
-        """Clear xbox.com and Microsoft cookies from the Chromium auth profile."""
-        import sqlite3
-        cookie_db = os.path.join(
-            self._get_chromium_profile_path(), "Default", "Cookies"
-        )
-        if not os.path.exists(cookie_db):
-            return
-        try:
-            conn = sqlite3.connect(cookie_db)
-            for domain in ("%xbox.com%", "%microsoft.com%", "%live.com%", "%microsoftonline.com%"):
-                conn.execute("DELETE FROM cookies WHERE host_key LIKE ?", (domain,))
-            conn.commit()
-            conn.close()
-            logger.info("[MS] Cleared xbox/Microsoft cookies from Chromium profile")
-        except Exception as e:
-            logger.debug(f"[MS] Could not clear Chromium cookies: {e}")
 
     # ── Library sync ─────────────────────────────────────────────────────
 
@@ -766,9 +505,6 @@ class MicrosoftConnector(Store):
         self._xuid       = result["xuid"]
         return True
 
-    # ── Title Hub API (synchronous, run in executor) ─────────────────────
-
-
     # ── xCloud / Game Pass ───────────────────────────────────────────────
 
     def _fetch_xcloud_catalog(self) -> List[str]:
@@ -846,89 +582,29 @@ class MicrosoftConnector(Store):
         """No-op — xCloud games are streamed, not installed locally."""
         return {"success": True, "message": "microsoft.xcloudNotInstalled"}
 
+    # ── Browser delegates (called by main.py API routes) ─────────────────
 
-    async def _inject_virtual_keyboard(self) -> None:
-        """Inject a touch-friendly virtual keyboard into the auth page via CDP.
+    def is_chromium_installed(self) -> bool:
+        """Check if Chromium or Chrome is available."""
+        return self._browser.is_installed
 
-        Steam's overlay keyboard is not available because Chromium auth
-        runs outside of Steam.  This injects a minimal on-screen keyboard
-        via ``Page.addScriptToEvaluateOnNewDocument`` so it persists across
-        page navigations (email → password → 2FA).
-        """
-        try:
-            import websockets
-        except ImportError:
-            logger.warning("[MS] websockets not available — no virtual keyboard")
-            return
+    async def install_chromium(self) -> Dict[str, Any]:
+        """Install Chromium via flatpak."""
+        return await self._browser.install()
 
-        import urllib.request as _req
-
-        # Find a page to connect to
-        try:
-            with _req.urlopen(
-                f"http://127.0.0.1:{self._chromium_cdp_port}/json", timeout=3
-            ) as r:
-                pages = json.loads(r.read().decode())
-            ws_url = None
-            for page in pages:
-                ws_url = page.get("webSocketDebuggerUrl")
-                if ws_url:
-                    break
-            if not ws_url:
-                logger.warning("[MS] No CDP page found for keyboard injection")
-                return
-        except Exception as e:
-            logger.warning(f"[MS] CDP keyboard: cannot list pages: {e}")
-            return
-
-        # Load virtual keyboard JS with the correct layout for the user's locale
-        from ..utils.virtual_keyboard import get_keyboard_js
-        kb_js = get_keyboard_js(self._get_locale())
-
-        try:
-            async with websockets.connect(ws_url, close_timeout=3) as ws:
-                # Inject on every new page (survives navigation)
-                await ws.send(json.dumps({
-                    "id": 9001,
-                    "method": "Page.addScriptToEvaluateOnNewDocument",
-                    "params": {"source": kb_js},
-                }))
-                await asyncio.wait_for(ws.recv(), timeout=3)
-
-                # Also inject now for the current page
-                await ws.send(json.dumps({
-                    "id": 9002,
-                    "method": "Runtime.evaluate",
-                    "params": {"expression": kb_js},
-                }))
-                await asyncio.wait_for(ws.recv(), timeout=3)
-
-            logger.info("[MS] Virtual keyboard injected via CDP")
-        except Exception as e:
-            logger.warning(f"[MS] CDP keyboard injection failed: {e}")
 
     async def _monitor_and_complete_auth(self) -> None:
         """Background task: intercept the OAuth redirect via CDP Network events."""
-        # Use Chromium's debugging port if Chromium is running, else CEF (8080)
-        cdp_port = self._chromium_cdp_port if self._chromium_process else 8080
+        cdp_port = self._browser.cdp_port if self._browser.process else 8080
 
-        # Give Chromium a moment to start and open its CDP port (non-blocking)
-        if self._chromium_process:
-            await asyncio.sleep(2)
-            if self._chromium_process.poll() is not None:
-                log_file = os.path.expanduser("~/.local/share/unifideck/chromium-auth.log")
-                err = ""
-                try:
-                    with open(log_file) as f:
-                        err = f.read()[:300]
-                except Exception:
-                    pass
-                logger.error(f"[MS] Chromium crashed before CDP. stderr: {err}")
-                self._chromium_process = None
+        # Wait for Chromium to start
+        if self._browser.process:
+            ok = await self._browser.wait_and_check_crash()
+            if not ok:
                 return
 
         # Inject virtual keyboard (Steam overlay not available outside Steam)
-        await self._inject_virtual_keyboard()
+        await self._browser.inject_virtual_keyboard()
 
         try:
             code = await intercept_oauth_code(
@@ -948,5 +624,4 @@ class MicrosoftConnector(Store):
         except Exception as e:
             logger.error(f"[MS] Auth monitor error: {e}", exc_info=True)
         finally:
-            # Close Chromium auth window after auth completes or times out
-            self._kill_chromium()
+            self._browser.kill()
