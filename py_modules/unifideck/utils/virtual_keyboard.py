@@ -295,8 +295,19 @@ _KEYBOARD_JS = r"""
 
   /* -- Mount & listeners -------------------------------------------------- */
 
-  render();
-  document.body.appendChild(overlay);
+  function mount() {
+    if (!document.body) {
+      if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', mount);
+      } else {
+        setTimeout(mount, 50);
+      }
+      return;
+    }
+    render();
+    document.body.appendChild(overlay);
+  }
+  mount();
 
   document.addEventListener('focusin', function(e) {
     var el = e.target, tag = el.tagName;
