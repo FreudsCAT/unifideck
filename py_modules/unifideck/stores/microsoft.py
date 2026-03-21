@@ -198,15 +198,23 @@ class MicrosoftConnector(Store):
         return "microsoft"
 
     async def is_available(self) -> bool:
-        """Return True if we have a saved (and refreshable) token."""
+        """Return True if we have a saved token AND the browser session is active."""
         if not os.path.exists(self._get_token_file()):
             return False
         try:
             with open(self._get_token_file()) as f:
                 data = json.load(f)
-            return bool(data.get("refresh_token"))
+            if not data.get("refresh_token"):
+                return False
         except Exception:
             return False
+
+        if not self._has_xbox_browser_session():
+            logger.info("[MS] Xbox browser session lost — user logged out from Game Pass")
+            await self.logout()
+            return False
+
+        return True
 
 
     # ── Chromium auth browser ────────────────────────────────────────────
@@ -517,8 +525,58 @@ class MicrosoftConnector(Store):
             logger.warning(f"[MS] Could not remove token file: {e}")
 
         await self._clear_ms_cookies()
+        self._clear_chromium_cookies()
 
         return {"success": True, "message": "microsoft.loggedOut"}
+
+    def _get_chromium_profile_path(self) -> str:
+        """Return the path to the shared Chromium auth profile."""
+        return os.path.expanduser("~/.local/share/unifideck/chromium-auth")
+
+    def _has_xbox_browser_session(self) -> bool:
+        """Check if xbox.com session cookies exist in the Chromium profile."""
+        import sqlite3
+        cookie_db = os.path.join(
+            self._get_chromium_profile_path(), "Default", "Cookies"
+        )
+        if not os.path.exists(cookie_db):
+            return True
+        try:
+            import shutil, tempfile
+            with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
+                tmp_path = tmp.name
+            shutil.copy2(cookie_db, tmp_path)
+            try:
+                conn = sqlite3.connect(tmp_path)
+                cursor = conn.execute(
+                    "SELECT COUNT(*) FROM cookies WHERE host_key LIKE '%xbox.com%'"
+                )
+                count = cursor.fetchone()[0]
+                conn.close()
+                return count > 0
+            finally:
+                os.unlink(tmp_path)
+        except Exception as e:
+            logger.debug(f"[MS] Could not read cookie DB: {e}")
+            return True
+
+    def _clear_chromium_cookies(self) -> None:
+        """Clear xbox.com and Microsoft cookies from the Chromium auth profile."""
+        import sqlite3
+        cookie_db = os.path.join(
+            self._get_chromium_profile_path(), "Default", "Cookies"
+        )
+        if not os.path.exists(cookie_db):
+            return
+        try:
+            conn = sqlite3.connect(cookie_db)
+            for domain in ("%xbox.com%", "%microsoft.com%", "%live.com%", "%microsoftonline.com%"):
+                conn.execute("DELETE FROM cookies WHERE host_key LIKE ?", (domain,))
+            conn.commit()
+            conn.close()
+            logger.info("[MS] Cleared xbox/Microsoft cookies from Chromium profile")
+        except Exception as e:
+            logger.debug(f"[MS] Could not clear Chromium cookies: {e}")
 
     # ── Library sync ─────────────────────────────────────────────────────
 
