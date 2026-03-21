@@ -103,18 +103,7 @@ _KEYBOARD_JS = r"""
     '  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;',
     '  letter-spacing:1px; pointer-events:none;',
     '}',
-    '#unifideck-kb .kb-close {',
-    '  position:absolute; top:-32px; left:12px;',
-    '  width:28px; height:28px; border-radius:14px; border:none;',
-    '  background: rgba(40,44,58,0.9); color:#8a90a0;',
-    '  font-size:16px; cursor:pointer;',
-    '  display:flex; align-items:center; justify-content:center;',
-    '  box-shadow: 0 2px 6px rgba(0,0,0,0.3);',
-    '  touch-action:manipulation;',
-    '}',
-    '#unifideck-kb .kb-close:active {',
-    '  background: rgba(80,60,60,0.9); color:#ff8080;',
-    '}'
+
   ].join('\n');
   document.head.appendChild(style);
 
@@ -187,12 +176,7 @@ _KEYBOARD_JS = r"""
 
     switch (ch) {
       case 'BACK':
-        var s = target.selectionStart || 0;
-        if (s > 0) {
-          var v = target.value;
-          target.value = v.slice(0, s - 1) + v.slice(s);
-          target.selectionStart = target.selectionEnd = s - 1;
-        }
+        document.execCommand('delete', false);
         break;
       case 'SPACE':
         document.execCommand('insertText', false, ' ');
@@ -263,14 +247,7 @@ _KEYBOARD_JS = r"""
     badge.textContent = layoutName.toUpperCase();
     overlay.appendChild(badge);
 
-    /* Close button */
-    var closeBtn = document.createElement('button');
-    closeBtn.className = 'kb-close';
-    closeBtn.innerHTML = '\u2715';
-    function closePress(e) { e.preventDefault(); hideKB(); }
-    closeBtn.addEventListener('touchstart', closePress, { passive: false });
-    closeBtn.addEventListener('mousedown',  closePress);
-    overlay.appendChild(closeBtn);
+
   }
 
   /* -- Show / Hide with animation ----------------------------------------- */
