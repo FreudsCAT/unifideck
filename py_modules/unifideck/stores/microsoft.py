@@ -349,27 +349,31 @@ class MicrosoftConnector(Store):
             return False
 
     def _kill_chromium(self) -> None:
-        """Terminate the Chromium auth subprocess and any orphan instances."""
+        """Gracefully terminate the Chromium auth subprocess.
+
+        Waits briefly before sending SIGTERM so Chromium can flush
+        cookies and session data to disk.  Does NOT pkill by profile
+        name — that would kill game sessions launched by the launcher
+        that share the same ``chromium-auth`` profile.
+        """
         if self._chromium_process is not None:
             try:
+                # Give Chromium time to flush cookies to disk
+                import time as _time
+                _time.sleep(1)
                 self._chromium_process.terminate()
-                self._chromium_process.wait(timeout=5)
-                logger.info("[MS] Chromium auth browser closed")
-            except Exception as e:
-                logger.debug(f"[MS] Chromium kill error (non-fatal): {e}")
+                self._chromium_process.wait(timeout=10)
+                logger.info("[MS] Chromium auth browser closed (cookies flushed)")
+            except subprocess.TimeoutExpired:
+                logger.debug("[MS] Chromium did not exit in time — sending SIGKILL")
                 try:
                     self._chromium_process.kill()
+                    self._chromium_process.wait(timeout=3)
                 except Exception:
                     pass
+            except Exception as e:
+                logger.debug(f"[MS] Chromium kill error (non-fatal): {e}")
             self._chromium_process = None
-        # Also kill any orphan Chromium using our auth profile
-        try:
-            subprocess.run(
-                ["pkill", "-f", "chromium-auth"],
-                capture_output=True, timeout=5,
-            )
-        except Exception:
-            pass
 
     def is_chromium_installed(self) -> bool:
         """Check if Chromium or Chrome is available on the system."""
@@ -845,6 +849,50 @@ class MicrosoftConnector(Store):
         except Exception as e:
             logger.warning(f"[MS] CDP keyboard injection failed: {e}")
 
+    async def _establish_xbox_session(self) -> None:
+        """Navigate the auth Chromium to xbox.com/play to trigger SSO.
+
+        After OAuth, cookies for login.microsoftonline.com are in the
+        shared Chromium profile.  Visiting xbox.com/play triggers
+        Microsoft SSO automatically, creating xbox.com session cookies.
+        These persist in the profile so the launcher can reuse them.
+        """
+        if not self._chromium_process or self._chromium_process.poll() is not None:
+            return
+
+        import urllib.request as _req
+        try:
+            with _req.urlopen(
+                f"http://127.0.0.1:{self._chromium_cdp_port}/json", timeout=3
+            ) as r:
+                pages = json.loads(r.read().decode())
+
+            ws_url = None
+            for page in pages:
+                ws_url = page.get("webSocketDebuggerUrl")
+                if ws_url:
+                    break
+            if not ws_url:
+                return
+
+            import websockets
+            async with websockets.connect(ws_url, close_timeout=5) as ws:
+                # Navigate to xbox.com/play — triggers Microsoft SSO
+                await ws.send(json.dumps({
+                    "id": 8001,
+                    "method": "Page.navigate",
+                    "params": {"url": "https://www.xbox.com/play"},
+                }))
+                await asyncio.wait_for(ws.recv(), timeout=5)
+                logger.info("[MS] Navigating to xbox.com/play for SSO cookie setup")
+
+                # Wait for SSO redirect to complete and cookies to settle
+                await asyncio.sleep(8)
+                logger.info("[MS] Xbox session cookies established")
+
+        except Exception as e:
+            logger.debug(f"[MS] Xbox SSO navigation failed (non-fatal): {e}")
+
     async def _monitor_and_complete_auth(self) -> None:
         """Background task: intercept the OAuth redirect via CDP Network events."""
         # Use Chromium's debugging port if Chromium is running, else CEF (8080)
@@ -879,6 +927,11 @@ class MicrosoftConnector(Store):
                 result = await self.complete_auth(code)
                 if result["success"]:
                     logger.info("[MS] ✓ Authentication completed")
+                    # Navigate to xbox.com/play to establish SSO session cookies.
+                    # The Microsoft login cookies are now in the shared profile;
+                    # visiting xbox.com triggers automatic SSO sign-in, so the
+                    # launcher won't need to sign in again when starting a game.
+                    await self._establish_xbox_session()
                 else:
                     logger.error(f"[MS] complete_auth failed: {result.get('error')}")
             else:
