@@ -235,6 +235,7 @@ class MicrosoftConnector(Store):
             f"&redirect_uri={urllib.parse.quote(self._get_redirect_uri())}"
             f"&response_type=code"
             f"&scope={urllib.parse.quote(self._get_scope())}"
+            f"&ui_locales={self._get_locale()}"
         )
         self._pending_auth_url = auth_url
 
