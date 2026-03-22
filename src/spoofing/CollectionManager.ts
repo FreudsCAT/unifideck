@@ -312,6 +312,39 @@ export async function syncUnifideckCollections(): Promise<void> {
 }
 
 /**
+ * Delete ALL Unifideck collections (used during cleanup/reset).
+ */
+export async function deleteAllUnifideckCollections(): Promise<void> {
+  const collectionStore = getCollectionStore();
+  if (!collectionStore) return;
+
+  let userCollections: Collection[] | null = null;
+  try {
+    userCollections = collectionStore.userCollections;
+  } catch (e) {
+    console.log(
+      "[Unifideck Collections] Error accessing userCollections during cleanup:",
+      e,
+    );
+    return;
+  }
+
+  if (!userCollections || !Array.isArray(userCollections)) return;
+
+  let deleted = 0;
+  for (const collection of userCollections) {
+    if (collection?.displayName?.startsWith(COLLECTION_PREFIX)) {
+      await deleteCollection(collection);
+      deleted++;
+    }
+  }
+
+  console.log(
+    `[Unifideck Collections] Cleanup: deleted ${deleted} collections`,
+  );
+}
+
+/**
  * Check if collections feature is available
  */
 export function isCollectionsAvailable(): boolean {

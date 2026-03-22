@@ -298,7 +298,12 @@ class ShortcutsManager:
         if len(parts) >= 3:
             exe_path = parts[1]
             work_dir = parts[2]
-            path_to_check = exe_path if exe_path else work_dir
+            # Ubisoft launches via uplay:// URI, not direct game exe. Prefer work_dir
+            # so installed status does not flap if executable filenames change.
+            if store == "ubisoft":
+                path_to_check = work_dir if work_dir else exe_path
+            else:
+                path_to_check = exe_path if exe_path else work_dir
             if path_to_check and os.path.exists(path_to_check):
                 return True
             else:
@@ -463,7 +468,7 @@ class ShortcutsManager:
         
         return {'removed': removed, 'kept': kept, 'entries_removed': entries_removed}
 
-    async def reconcile_games_map_from_installed(self, epic_client=None, gog_client=None, amazon_client=None) -> Dict[str, Any]:
+    async def reconcile_games_map_from_installed(self, epic_client=None, gog_client=None, amazon_client=None, ubisoft_client=None) -> Dict[str, Any]:
         """
         Repair games.map for Unifideck shortcuts that are missing entries.
         
@@ -480,6 +485,7 @@ class ShortcutsManager:
             epic_client: EpicConnector instance for getting Epic install info
             gog_client: GOGAPIClient instance for getting GOG install info
             amazon_client: AmazonGamesClient instance for getting Amazon install info
+            ubisoft_client: UbisoftConnector instance for getting Ubisoft install info
             
         Returns:
             dict: {'added': int, 'already_mapped': int, 'skipped': int, 'errors': list}
@@ -535,6 +541,13 @@ class ShortcutsManager:
                 except Exception as e:
                     errors.append(f"Amazon fetch: {e}")
             
+            ubisoft_installed = {}
+            if ubisoft_client:
+                try:
+                    ubisoft_installed = await ubisoft_client.get_installed()
+                except Exception as e:
+                    errors.append(f"Ubisoft fetch: {e}")
+            
             # Iterate over shortcuts and find Unifideck ones missing from games.map
             for idx, shortcut in shortcuts.items():
                 launch_options = shortcut.get('LaunchOptions', '')
@@ -549,7 +562,7 @@ class ShortcutsManager:
                 game_id = parts[1] if len(parts) > 1 else ''
                 
                 # Only process known stores
-                if store not in ('epic', 'gog', 'amazon'):
+                if store not in ('epic', 'gog', 'amazon', 'ubisoft'):
                     continue
                 
                 key = f"{store}:{game_id}"
@@ -603,6 +616,19 @@ class ShortcutsManager:
                         else:
                             skipped += 1
                             logger.debug(f"[ReconcileMap] Amazon '{game_title}' not installed or path missing")
+                    
+                    elif store == 'ubisoft' and game_id in ubisoft_installed:
+                        game_data = ubisoft_installed[game_id]
+                        install_path = game_data.get('install_path', '')
+                        executable = game_data.get('executable', '')
+                        
+                        if install_path and os.path.exists(install_path):
+                            await self._update_game_map('ubisoft', game_id, executable or '', install_path)
+                            added += 1
+                            logger.info(f"[ReconcileMap] Added Ubisoft '{game_title}' to games.map")
+                        else:
+                            skipped += 1
+                            logger.debug(f"[ReconcileMap] Ubisoft '{game_title}' not installed or path missing")
                     else:
                         skipped += 1
                         
@@ -623,9 +649,10 @@ class ShortcutsManager:
 
     def validate_gog_exe_paths(self, gog_client=None) -> Dict[str, Any]:
         """
-        Validate and auto-correct GOG executable paths that point to installers.
+        Validate and auto-correct GOG executable paths that point to installers or wrapper internals.
         
-        If a GOG game's exe_path looks like an installer file (large .sh, contains colon, etc.),
+        If a GOG game's exe_path looks like an installer file or an internal wrapper target
+        (for example a raw DOSBox.exe instead of the GOG-provided run-game.bat),
         this function re-runs the game executable detection and updates games.map.
         
         Args:
@@ -643,6 +670,25 @@ class ShortcutsManager:
         checked = 0
         corrections = []
         modified_lines = []
+
+        def get_candidate_install_dirs(exe_path: str, work_dir: str) -> List[str]:
+            candidates: List[str] = []
+            for candidate in (
+                work_dir,
+                os.path.dirname(exe_path) if exe_path else '',
+                os.path.dirname(work_dir) if work_dir else '',
+                os.path.dirname(os.path.dirname(exe_path)) if exe_path else '',
+            ):
+                if not candidate:
+                    continue
+                normalized = os.path.normpath(candidate)
+                if os.path.exists(normalized) and normalized not in candidates:
+                    candidates.append(normalized)
+            return candidates
+
+        def is_likely_suboptimal_wrapper_target(exe_path: str) -> bool:
+            basename = os.path.basename(exe_path).lower()
+            return basename in {'dosbox.exe', 'scummvm.exe', 'dosbox_x86_64', 'dosbox_i686'}
         
         try:
             with open(map_file, 'r') as f:
@@ -671,13 +717,13 @@ class ShortcutsManager:
                 checked += 1
                 
                 # Check if exe_path looks like an installer
-                is_likely_installer = False
+                needs_redetect = False
                 if exe_path and exe_path.endswith('.sh'):
                     try:
                         if os.path.exists(exe_path):
                             file_size = os.path.getsize(exe_path)
                             filename = os.path.basename(exe_path)
-                            is_likely_installer = (
+                            needs_redetect = (
                                 file_size > 50 * 1024 * 1024 or  # Over 50MB
                                 filename.startswith('gog_') or
                                 filename.startswith('setup_') or
@@ -685,34 +731,41 @@ class ShortcutsManager:
                             )
                     except Exception:
                         pass
+
+                if not needs_redetect and exe_path:
+                    needs_redetect = is_likely_suboptimal_wrapper_target(exe_path)
                 
-                if is_likely_installer and gog_client:
-                    logger.info(f"[ValidateGOG] Detected installer path for {key}: {exe_path}")
-                    
-                    # Get the install directory (parent of exe or work_dir)
-                    install_dir = work_dir if work_dir else os.path.dirname(exe_path)
-                    
-                    if install_dir and os.path.exists(install_dir):
-                        # Re-run executable detection
-                        new_exe = gog_client._find_game_executable(install_dir)
-                        
-                        if new_exe and new_exe != exe_path:
-                            logger.info(f"[ValidateGOG] Correcting path: {exe_path} -> {new_exe}")
-                            
-                            # Update the line
-                            new_work_dir = os.path.dirname(new_exe)
-                            parts[1] = new_exe
-                            parts[2] = new_work_dir
-                            corrected_line = '|'.join(parts) + '\n'
-                            modified_lines.append(corrected_line)
-                            
-                            corrections.append({
-                                'game_id': key,
-                                'old_path': exe_path,
-                                'new_path': new_exe
-                            })
-                            corrected += 1
+                if needs_redetect and gog_client:
+                    logger.info(f"[ValidateGOG] Re-detecting launch target for {key}: {exe_path}")
+
+                    for install_dir in get_candidate_install_dirs(exe_path, work_dir):
+                        new_target = gog_client._find_game_executable_with_workdir(install_dir)
+                        if not new_target:
                             continue
+
+                        new_exe, new_work_dir = new_target
+                        if new_exe == exe_path and new_work_dir == work_dir:
+                            break
+
+                        logger.info(f"[ValidateGOG] Correcting path: {exe_path} -> {new_exe}")
+
+                        parts[1] = new_exe
+                        parts[2] = new_work_dir
+                        corrected_line = '|'.join(parts) + '\n'
+                        modified_lines.append(corrected_line)
+
+                        corrections.append({
+                            'game_id': key,
+                            'old_path': exe_path,
+                            'new_path': new_exe
+                        })
+                        corrected += 1
+                        break
+                    else:
+                        modified_lines.append(line)
+                        continue
+
+                    continue
                 
                 # Keep original line if no correction needed
                 modified_lines.append(line)
@@ -721,7 +774,7 @@ class ShortcutsManager:
             if corrected > 0:
                 with open(map_file, 'w') as f:
                     f.writelines(modified_lines)
-                logger.info(f"[ValidateGOG] Corrected {corrected} installer paths in games.map")
+                logger.info(f"[ValidateGOG] Corrected {corrected} GOG launch targets in games.map")
             
         except Exception as e:
             logger.error(f"[ValidateGOG] Error: {e}")
@@ -946,11 +999,32 @@ class ShortcutsManager:
             unsigned_app_id = app_id & 0xFFFFFFFF
             app_id_str = str(unsigned_app_id)
             
-            # Check if this app already has a mapping
-            if f'"{app_id_str}"' in content:
-                logger.info(f"App {app_id_str} already has a compat mapping")
-                return True
-            
+            # Check if CompatToolMapping section exists
+            insert_marker = '"CompatToolMapping"'
+            marker_pos = content.find(insert_marker)
+            if marker_pos < 0:
+                logger.warning("CompatToolMapping section not found in config.vdf")
+                return False
+
+            # Check if this app already has a mapping WITHIN CompatToolMapping
+            # (not elsewhere in config.vdf, e.g. SizeOnDisk sections)
+            compat_brace = content.find('{', marker_pos)
+            if compat_brace >= 0:
+                depth = 0
+                compat_end = compat_brace
+                for i in range(compat_brace, len(content)):
+                    if content[i] == '{':
+                        depth += 1
+                    elif content[i] == '}':
+                        depth -= 1
+                    if depth == 0:
+                        compat_end = i
+                        break
+                compat_section = content[compat_brace:compat_end]
+                if f'"{app_id_str}"' in compat_section:
+                    logger.info(f"App {app_id_str} already has a compat mapping")
+                    return True
+
             # Create compat entry with proper indentation (tabs as in config.vdf)
             compat_entry = f'''
 					"{app_id_str}"
@@ -959,15 +1033,8 @@ class ShortcutsManager:
 						"config"		""
 						"priority"		"250"
 					}}'''
-            
-            # Check if CompatToolMapping section exists
-            if '"CompatToolMapping"' not in content:
-                logger.warning("CompatToolMapping section not found in config.vdf")
-                return False
-            
+
             # Find CompatToolMapping and insert our entry
-            insert_marker = '"CompatToolMapping"'
-            marker_pos = content.find(insert_marker)
             if marker_pos >= 0:
                 # Find the opening brace after CompatToolMapping
                 brace_pos = content.find('{', marker_pos)
@@ -1347,6 +1414,8 @@ class ShortcutsManager:
 
                     # If this game no longer exists in current library, it's orphaned
                     full_id = get_full_id(launch)
+                    if full_id == "ubisoft:upc-auth":
+                        continue  # Protected auth shortcut
                     if full_id not in current_launch_options:
                         logger.debug(f"Removing orphaned shortcut: {shortcut.get('AppName')} ({launch})")
                         del shortcuts["shortcuts"][idx]
@@ -1526,6 +1595,8 @@ class ShortcutsManager:
                         continue
 
                     full_id = get_full_id(launch)
+                    if full_id == "ubisoft:upc-auth":
+                        continue  # Protected auth shortcut
                     if full_id not in current_launch_options:
                         # Game ID in LaunchOptions doesn't match library
                         # BUT check if we can recover by appid BEFORE marking as orphan
@@ -1582,6 +1653,13 @@ class ShortcutsManager:
                                         if game_info and game_info.get('executable'):
                                             exe_path = game_info['executable']
                                             work_dir = os.path.dirname(exe_path)
+                                            await self._update_game_map(game.store, game.id, exe_path, work_dir)
+                                    elif game.store == 'ubisoft':
+                                        game_info = ubisoft_client.get_installed_game_info(game.id) if ubisoft_client else None
+                                        if game_info and game_info.get('install_path'):
+                                            install_path = game_info.get('install_path', '')
+                                            exe_path = game_info.get('executable', '') or ''
+                                            work_dir = install_path or (os.path.dirname(exe_path) if exe_path else '')
                                             await self._update_game_map(game.store, game.id, exe_path, work_dir)
                                 
                                 # Track repaired LaunchOptions to prevent duplicate additions in STEP 5
@@ -1687,6 +1765,13 @@ class ShortcutsManager:
                                     if game_info and game_info.get('executable'):
                                         exe_path = game_info['executable']
                                         work_dir = os.path.dirname(exe_path)
+                                        await self._update_game_map(game.store, game.id, exe_path, work_dir)
+                                elif game.store == 'ubisoft':
+                                    game_info = ubisoft_client.get_installed_game_info(game.id) if ubisoft_client else None
+                                    if game_info and game_info.get('install_path'):
+                                        install_path = game_info.get('install_path', '')
+                                        exe_path = game_info.get('executable', '') or ''
+                                        work_dir = install_path or (os.path.dirname(exe_path) if exe_path else '')
                                         await self._update_game_map(game.store, game.id, exe_path, work_dir)
                             
                             repaired_count += 1
@@ -1942,4 +2027,3 @@ class ShortcutsManager:
         except Exception as e:
             logger.error(f"Error removing game: {e}")
             return False
-

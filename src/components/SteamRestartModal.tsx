@@ -4,11 +4,13 @@ import { ConfirmModal } from "@decky/ui";
 
 interface SteamRestartModalProps {
   store?: string;
+  reason?: "sync" | "cleanup";
   closeModal?: () => void;
 }
 
 export const SteamRestartModal: FC<SteamRestartModalProps> = ({
   store,
+  reason = "sync",
   closeModal,
 }) => {
   const { t } = useTranslation();
@@ -34,14 +36,22 @@ export const SteamRestartModal: FC<SteamRestartModalProps> = ({
     closeModal?.();
   };
 
+  const title =
+    reason === "cleanup"
+      ? t("confirmModals.steamRestartCleanupTitle")
+      : t("confirmModals.steamRestartTitle");
+
+  const description =
+    reason === "cleanup"
+      ? t("confirmModals.steamRestartCleanupDescription")
+      : store
+        ? t("confirmModals.steamRestartDescriptionStore", { store })
+        : t("confirmModals.steamRestartDescription");
+
   return (
     <ConfirmModal
-      strTitle={t("confirmModals.steamRestartTitle")}
-      strDescription={
-        store
-          ? t("confirmModals.steamRestartDescriptionStore", { store })
-          : t("confirmModals.steamRestartDescription")
-      }
+      strTitle={title}
+      strDescription={description}
       strOKButtonText={t("confirmModals.restartNow")}
       strCancelButtonText={t("confirmModals.later")}
       onOK={handleRestartNow}

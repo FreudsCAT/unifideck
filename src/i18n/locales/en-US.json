@@ -13,7 +13,30 @@
     "toastUpdatedBody": "New games will be installed to {{location}}",
     "toastFailedTitle": "Failed to Update",
     "toastFailedBody": "{{error}}",
-    "unknown": "Unknown"
+    "unknown": "Unknown",
+    "browseButton": "Browse...",
+    "clearCustom": "Clear Custom Location",
+    "customPathSet": "Custom install location set",
+    "newFolder": "New Folder",
+    "newFolderCreate": "Create",
+    "selectFolder": "Use This Folder",
+    "emptyDirectory": "Empty folder",
+    "showHidden": "Show Hidden",
+    "selectDevice": "Select Device",
+    "sortAZ": "A-Z",
+    "sortZA": "Z-A",
+    "sortModifiedNewest": "Modified (Newest)",
+    "sortModifiedOldest": "Modified (Oldest)",
+    "sortCreatedNewest": "Created (Newest)",
+    "sortCreatedOldest": "Created (Oldest)",
+    "sortSizeLargest": "Size (Largest)",
+    "sortSizeSmallest": "Size (Smallest)",
+    "validationErrors.notAbsolute": "Path must be absolute",
+    "validationErrors.systemDir": "Cannot use a system directory",
+    "validationErrors.notWritable": "Location is not writable",
+    "validationErrors.notFound": "Directory does not exist",
+    "validationErrors.homeRoot": "Cannot use home directory root",
+    "freeSpaceLabel": "{{label}} ({{freeSpace}} GB free)"
   },
   "gameGrid": {
     "loading": "Loading games...",
@@ -52,7 +75,17 @@
     "phaseExtracting": "Extracting {{game}}...",
     "phaseVerifying": "Verifying {{game}}...",
     "internalStorage": "Internal Storage ({{freeSpace}} GB free)",
-    "sdCard": "SD Card ({{freeSpace}} GB free)"
+    "sdCard": "SD Card ({{freeSpace}} GB free)",
+    "customLocation": "Custom: {{path}} ({{freeSpace}} GB free)",
+    "extractingLabel": "Extracting...",
+    "verifyingLabel": "Verifying...",
+    "updateQueuedLabel": "Update Queued",
+    "downloadQueuedLabel": "Download Queued",
+    "downloadingUpdateLabel": "Downloading Update",
+    "downloadingLabel": "Downloading...",
+    "finalizingInstallation": "Finalizing installation...",
+    "speedMbps": "{{speed}} MB/s",
+    "etaLabel": "ETA: {{eta}}"
   },
   "cloudSave": {
     "title": "Cloud Save Conflict",
@@ -75,6 +108,7 @@
     "epicGames": "Epic Games",
     "gog": "GOG",
     "amazonGames": "Amazon Games",
+    "ubisoftConnect": "Ubisoft Connect",
     "connected": "Connected",
     "checking": "Checking...",
     "authenticate": "Sign in",
@@ -114,7 +148,10 @@
     "cancel": "✖ Cancel",
     "processing": "Processing...",
     "checking": "Checking...",
-    "size": "{{size}} GB"
+    "size": "{{size}} GB",
+    "update": "UPDATE",
+    "updateAvailable": "UPDATE AVAILABLE",
+    "updateAvailableDescription": "A new version is ready to install."
   },
   "confirmModals": {
     "installTitle": "Confirm Installation",
@@ -130,14 +167,27 @@
     "steamRestartTitle": "Sync Complete!",
     "steamRestartDescription": "Please Restart Steam to apply your new games and artwork",
     "steamRestartDescriptionStore": "Please Restart Steam to apply your new {{store}} games and artwork",
+    "steamRestartCleanupTitle": "Cleanup Complete!",
+    "steamRestartCleanupDescription": "Please Restart Steam to fully remove deleted games and artwork",
     "restartNow": "Restart Now",
     "later": "Later",
+    "ubisoftInstallTitle": "Ubisoft Connect Required",
+    "ubisoftInstallDescription": "This will load the Ubisoft Connect Launcher which you will need to install {{title}}.",
+    "ubisoftInstallConfirm": "Open Ubisoft Connect",
     "yes": "Yes",
-    "no": "No"
+    "no": "No",
+    "amazonUpdateTitle": "Full Re-download Required",
+    "amazonUpdateDescription": "Amazon updates require a full re-download of {{title}}. This may take a while. Continue?",
+    "updateConfirm": "Update"
   },
   "toasts": {
     "downloadStarted": "Download Started. Check UNIFIDECK > Downloads",
     "downloadQueued": "{{title}} has been added to the queue.",
+    "ubisoftLauncherOpening": "Opening Ubisoft Connect",
+    "ubisoftLauncherOpeningMessage": "Ubisoft Connect is opening for {{title}}. Install the game there, then return to play.",
+    "ubisoftLauncherAlreadyOpenMessage": "Ubisoft Connect is already open for this install.",
+    "ubisoftLauncherOpenFailed": "Could Not Open Ubisoft Connect",
+    "ubisoftLauncherOpenFailedMessage": "Failed to open Ubisoft Connect for installation.",
     "multipartDetected": "Multi-Part Download Detected",
     "multipartMessage": "Please be patient and wait for completion",
     "downloadFailed": "Download Failed",
@@ -169,6 +219,10 @@
     "cleanupSuccessful": "Cleanup Successful",
     "cleanupSuccessfulMessage": "Removed {{games}} games, {{artwork}} artwork sets, and {{files}} file directories. Auth & cache cleared.",
     "deleteFailed": "Delete Failed",
+    "repairPrefixSuccess": "Prefix Repaired",
+    "repairPrefixSuccessMessage": "Ubisoft Connect prefix has been rebuilt",
+    "repairPrefixFailed": "Repair Failed",
+    "repairPrefixFailedMessage": "Could not repair prefix: {{error}}",
     "unifideck": "Unifideck:",
     "launcher": {
       "networkError": "Network Error",
@@ -185,6 +239,7 @@
       "startingEpicGame": "Starting Epic game...",
       "startingAmazonGame": "Starting Amazon game...",
       "startingGogGame": "Starting GOG game...",
+      "startingUbisoftGame": "Starting Ubisoft game...",
       "dependenciesTitle": "Installing Dependencies",
       "installingRedistributables": "Installing game redistributables...",
       "dependenciesReady": "Dependencies Ready",
@@ -207,7 +262,11 @@
       "prerequisitesFailedMessage": "Prerequisites may not have installed correctly"
     },
     "updateComplete": "Update Complete!",
-    "updateCompleteMessage": "{{title}} has been updated."
+    "updateCompleteMessage": "{{title}} has been updated.",
+    "updateCancelled": "Update Cancelled",
+    "updateCancelledMessage": "Update for {{title}} was cancelled.",
+    "updateFailed": "Update Failed",
+    "updateFailedMessage": "Failed to start update."
   },
   "uninstallModal": {
     "title": "Confirm Uninstallation",
@@ -254,8 +313,14 @@
       "processFailed": "Download failed — please try again",
       "directoryNotFound": "Could not locate installed files",
       "lockConflict": "Another operation is in progress — try again",
+      "ubisoftClient": "Ubisoft Connect client error — try repairing the prefix",
+      "ubisoftClientNotRunning": "Ubisoft Connect client not responding",
+      "ubisoftBootstrap": "Failed to set up Ubisoft Connect prefix",
+      "ubisoftUmuMissing": "umu-run not found — required for Ubisoft games",
       "generic": "Installation failed — check logs for details"
-    }
+    },
+    "unknown": "Unknown error",
+    "steamAppsUnavailable": "SteamClient.Apps API not available"
   },
   "sync": {
     "downloadingArtwork": "Downloading artwork for {{game}}...",
@@ -292,7 +357,12 @@
     "greatOnDeck": "Great on Deck",
     "allGames": "All Games",
     "installed": "Installed",
-    "nonSteam": "Non-Steam"
+    "nonSteam": "Non-Steam",
+    "steam": "Steam",
+    "epic": "Epic",
+    "gog": "GOG",
+    "amazon": "Amazon",
+    "ubisoft": "Ubisoft"
   },
   "unifiedLibrary": {
     "error": "Unifideck Error",
@@ -344,7 +414,8 @@
       "playable": "PLAYABLE",
       "unsupported": "UNSUPPORTED",
       "unknown": "UNKNOWN"
-    }
+    },
+    "failedToLoadMetadata": "Failed to load metadata"
   },
   "gameDetailsSettings": {
     "title": "GAME DETAILS VIEW",
@@ -364,11 +435,41 @@
     "migrate": "Migrate Unifideck Data",
     "migrateDescription": "Copy games & artwork from previous account",
     "freshStart": "Fresh Start",
-    "freshStartDescription": "Clear store logins to connect different Epic/GOG/Amazon accounts",
+    "freshStartDescription": "Clear store logins to connect different Epic/GOG/Amazon/Ubisoft accounts",
     "skip": "Skip",
     "toastMigrateTitle": "Migration Complete",
     "toastMigrateBody": "Migrated {{shortcuts}} shortcuts and {{artwork}} artwork files",
     "toastClearTitle": "Auth Tokens Cleared",
     "toastClearBody": "Store logins have been cleared. You can now sign in with different accounts."
+  },
+  "ubisoftAuth": {
+    "title": "Ubisoft Connect Sign In",
+    "description": "Enter your Ubisoft account credentials to connect your library.",
+    "emailLabel": "Email",
+    "passwordLabel": "Password",
+    "signIn": "Sign In",
+    "signingIn": "Signing In...",
+    "cancel": "Cancel",
+    "twoFactorTitle": "Two-Factor Authentication",
+    "twoFactorDescription": "Enter the verification code from your authenticator app.",
+    "twoFactorLabel": "Verification Code",
+    "verify": "Verify",
+    "verifying": "Verifying...",
+    "errorEmptyFields": "Please enter your email and password",
+    "errorEmpty2FA": "Please enter the verification code",
+    "errorLoginFailed": "Login failed. Please check your credentials.",
+    "errorInvalid2FA": "Invalid verification code. Please try again.",
+    "showPassword": "Show password",
+    "hidePassword": "Hide password",
+    "doubleLoginWarning": "You will need to sign in twice for Ubisoft."
+  },
+  "relativeDate": {
+    "today": "Today",
+    "yesterday": "Yesterday"
+  },
+  "common": {
+    "thisGame": "this game",
+    "game": "Game",
+    "unknown": "Unknown"
   }
 }

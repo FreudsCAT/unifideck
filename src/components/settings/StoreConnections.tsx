@@ -31,6 +31,7 @@ const STORES: {
     notInstalledStatus: "nile_not_installed",
     notInstalledMessage: "storeConnections.nileNotInstalled",
   },
+  { key: "ubisoft", label: "storeConnections.ubisoftConnect" },
 ];
 
 const StoreConnections = ({

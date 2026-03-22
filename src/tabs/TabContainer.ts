@@ -28,7 +28,7 @@ export interface UnifideckTab {
   icon?: string;
 }
 
-// Default Unifideck tabs - ORDERED: Great on Deck, All Games, Installed, Steam, Epic, GOG, Amazon, Non-Steam
+// Default Unifideck tabs - ORDERED: Great on Deck, All Games, Installed, Steam, Epic, GOG, Amazon, Ubisoft, Non-Steam
 export const UNIFIDECK_TABS: UnifideckTab[] = [
   {
     id: "unifideck-deck",
@@ -50,32 +50,38 @@ export const UNIFIDECK_TABS: UnifideckTab[] = [
   },
   {
     id: "unifideck-steam",
-    title: "Steam",
+    title: t("deckTabs.steam"),
     position: 3,
     filters: [{ type: "store", params: { store: "steam" } }],
   },
   {
     id: "unifideck-epic",
-    title: "Epic",
+    title: t("deckTabs.epic"),
     position: 4,
     filters: [{ type: "store", params: { store: "epic" } }],
   },
   {
     id: "unifideck-gog",
-    title: "GOG",
+    title: t("deckTabs.gog"),
     position: 5,
     filters: [{ type: "store", params: { store: "gog" } }],
   },
   {
     id: "unifideck-amazon",
-    title: "Amazon",
+    title: t("deckTabs.amazon"),
     position: 6,
     filters: [{ type: "store", params: { store: "amazon" } }],
   },
   {
+    id: "unifideck-ubisoft",
+    title: t("deckTabs.ubisoft"),
+    position: 7,
+    filters: [{ type: "store", params: { store: "ubisoft" } }],
+  },
+  {
     id: "unifideck-nonsteam",
     title: t("deckTabs.nonSteam"),
-    position: 7,
+    position: 8,
     filters: [{ type: "nonSteam", params: {} }], // All non-Steam shortcuts except non-installed Unifideck
   },
 ];
@@ -250,6 +256,7 @@ class TabManager {
   private epicGameCount = 0;
   private gogGameCount = 0;
   private amazonGameCount = 0;
+  private ubisoftGameCount = 0;
 
   async initialize() {
     if (this.initialized) return;
@@ -279,10 +286,10 @@ class TabManager {
       if (Array.isArray(games) && games.length > 0) {
         const cacheData = games.map((g) => ({
           appId: g.appId,
-          store: g.store as "epic" | "gog" | "amazon",
+          store: g.store as "epic" | "gog" | "amazon" | "ubisoft",
           isInstalled: g.isInstalled,
-          steamAppId: g.steamAppId,  // SteamGridDB ID for ProtonDB
-          realSteamAppId: g.realSteamAppId,  // Real Steam Store App ID for spoofing
+          steamAppId: g.steamAppId, // SteamGridDB ID for ProtonDB
+          realSteamAppId: g.realSteamAppId, // Real Steam Store App ID for spoofing
         }));
         updateUnifideckCache(cacheData);
 
@@ -294,8 +301,11 @@ class TabManager {
         this.amazonGameCount = games.filter(
           (g: any) => g.store === "amazon",
         ).length;
+        this.ubisoftGameCount = games.filter(
+          (g: any) => g.store === "ubisoft",
+        ).length;
         console.log(
-          `[Unifideck] Loaded ${games.length} games into cache (Epic: ${this.epicGameCount}, GOG: ${this.gogGameCount}, Amazon: ${this.amazonGameCount})`,
+          `[Unifideck] Loaded ${games.length} games into cache (Epic: ${this.epicGameCount}, GOG: ${this.gogGameCount}, Amazon: ${this.amazonGameCount}, Ubisoft: ${this.ubisoftGameCount})`,
         );
 
         // Load compatibility cache from backend (ProtonDB + Deck Verified)
@@ -345,6 +355,9 @@ class TabManager {
     if (tabId === "unifideck-amazon" && this.amazonGameCount === 0) {
       return false;
     }
+    if (tabId === "unifideck-ubisoft" && this.ubisoftGameCount === 0) {
+      return false;
+    }
     return true;
   }
 
@@ -362,7 +375,7 @@ class TabManager {
   updateGameCache(
     games: Array<{
       appId: number;
-      store: "epic" | "gog" | "amazon";
+      store: "epic" | "gog" | "amazon" | "ubisoft";
       isInstalled: boolean;
     }>,
   ) {

@@ -124,7 +124,7 @@ export function getCachedRating(appId: number): ProtonDBTier | null {
 
 /**
  * Get cached compatibility info by title (synchronous - for filtering)
- * Used for Epic/GOG/Amazon games
+ * Used for Epic/GOG/Amazon/Ubisoft games
  */
 export function getCachedCompatByTitle(title: string): GameCompatInfo | null {
   const key = normalizeTitle(title);

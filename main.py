@@ -49,7 +49,7 @@ from py_modules.unifideck.download.update_checker import UpdateChecker
 from py_modules.unifideck.cloud.cloud_save import CloudSaveManager
 
 # Import resilient launch options parser
-from py_modules.unifideck.shortcuts.launch_options import extract_store_id, is_unifideck_shortcut, get_full_id, get_store_prefix
+from py_modules.unifideck.shortcuts.launch_options import extract_store_id, is_unifideck_shortcut, get_full_id
 
 # Import CDP modules for native PlaySection hiding
 from py_modules.unifideck.cdp.cdp_utils import create_cef_debugging_flag, ensure_dummy_network_interface
@@ -67,7 +67,8 @@ try:
         Store, Game as BackendGame, StoreManager,
         EpicConnector as BackendEpicConnector,
         AmazonConnector as BackendAmazonConnector,
-        GOGAPIClient as BackendGOGAPIClient
+        GOGAPIClient as BackendGOGAPIClient,
+        UbisoftConnector as BackendUbisoftConnector
     )
     from py_modules.unifideck.auth import CDPOAuthMonitor as BackendCDPOAuthMonitor
     from py_modules.unifideck.compat import (
@@ -430,8 +431,8 @@ def get_artwork_attempts_cache_path() -> Path:
     return Path.home() / ".local" / "share" / "unifideck" / ARTWORK_ATTEMPTS_CACHE_FILE
 
 
-def load_artwork_attempts_cache() -> Dict[str, bool]:
-    """Load artwork attempts cache. Returns {str(app_id): bool}"""
+def load_artwork_attempts_cache() -> Dict[str, Any]:
+    """Load artwork attempts cache. Returns {str(app_id): True | sorted list of missing types}"""
     cache_path = get_artwork_attempts_cache_path()
     try:
         if cache_path.exists():
@@ -442,7 +443,7 @@ def load_artwork_attempts_cache() -> Dict[str, bool]:
     return {}
 
 
-def save_artwork_attempts_cache(cache: Dict[str, bool]) -> bool:
+def save_artwork_attempts_cache(cache: Dict[str, Any]) -> bool:
     """Save artwork attempts cache"""
     cache_path = get_artwork_attempts_cache_path()
     try:
@@ -1035,6 +1036,40 @@ def normalize_title_for_matching(title: str) -> str:
     return t
 
 
+def _clean_title_for_comparison(title: str) -> str:
+    """Minimal cleaning for title comparison: lowercase, strip symbols, normalize whitespace.
+
+    Unlike normalize_title_for_matching, this preserves subtitles and edition suffixes
+    so 'Assassin's Creed IV: Black Flag' != 'Assassin's Creed'.
+    """
+    if not title:
+        return ''
+    t = title.lower().strip()
+    t = re.sub(r'[®™©]', '', t)
+    t = re.sub(r'[^\w\s]', '', t)
+    t = re.sub(r'\s+', ' ', t).strip()
+    return t
+
+
+def _score_steam_match(search_title: str, result_name: str) -> float:
+    """Score how well a Steam search result matches the search title (0.0–1.0)."""
+    search_clean = _clean_title_for_comparison(search_title)
+    result_clean = _clean_title_for_comparison(result_name)
+    if not search_clean or not result_clean:
+        return 0.0
+    if search_clean == result_clean:
+        return 1.0
+    search_words = set(search_clean.split())
+    result_words = set(result_clean.split())
+    if search_words == result_words:
+        return 0.95
+    if search_words.issubset(result_words) or result_words.issubset(search_words):
+        return 0.8
+    intersection = search_words & result_words
+    union = search_words | result_words
+    return len(intersection) / len(union) if union else 0.0
+
+
 async def extract_metadata_from_appinfo(games: List, appinfo_data: Dict[int, Dict]) -> Tuple[Dict[int, int], Dict[int, Dict]]:
     """
     Extract metadata for our games from appinfo data by matching titles.
@@ -1281,9 +1316,11 @@ else:
 
 class BackgroundSizeFetcher:
     """Background service to fetch game sizes asynchronously without blocking sync.
-    
+
     - Runs in background (fire-and-forget from sync)
-    - Fetches all pending sizes in parallel (30 concurrent)
+    - Waits for network connectivity before starting
+    - Epic: 3 concurrent (PyInstaller processes, higher causes extraction failures)
+    - GOG/Amazon: 20 concurrent (lightweight HTTP calls)
     - Persists progress to game_sizes.json (survives restarts)
     - Starts automatically on plugin load if pending games exist
     """
@@ -1366,23 +1403,50 @@ class BackgroundSizeFetcher:
         self._running = False
         logger.info("[SizeService] Stopped")
     
+    async def _wait_for_network(self, max_wait: int = 30) -> bool:
+        """Wait for network connectivity before fetching sizes.
+
+        Returns True if network is available, False if timed out.
+        """
+        import socket
+        for attempt in range(max_wait):
+            try:
+                socket.getaddrinfo("account-public-service-prod03.ol.epicgames.com", 443, socket.AF_INET)
+                return True
+            except socket.gaierror:
+                if attempt == 0:
+                    logger.info("[SizeService] Waiting for network connectivity...")
+                await asyncio.sleep(1)
+        logger.warning(f"[SizeService] Network not available after {max_wait}s, skipping size fetch")
+        return False
+
     async def _fetch_all(self):
         """Fetch all pending sizes in parallel"""
         try:
+            # Wait for network before spawning processes
+            if not await self._wait_for_network():
+                return
+
             import aiohttp
             import ssl
-            
+
             # Create shared session for GOG reuse (critical for performance)
             ssl_context = ssl.create_default_context()
             ssl_context.check_hostname = False
             ssl_context.verify_mode = ssl.CERT_NONE
             connector = aiohttp.TCPConnector(ssl=ssl_context)
-            
+
             async with aiohttp.ClientSession(connector=connector) as session:
-                semaphore = asyncio.Semaphore(30)
-                
+                # Epic uses a low concurrency limit because each legendary info call
+                # spawns a full PyInstaller process — too many concurrent extractions
+                # cause decompression failures in /tmp
+                epic_semaphore = asyncio.Semaphore(3)
+                # GOG/Amazon use lightweight HTTP calls, higher concurrency is fine
+                api_semaphore = asyncio.Semaphore(20)
+
                 async def fetch_one(store: str, game_id: str):
-                    async with semaphore:
+                    sem = epic_semaphore if store == 'epic' else api_semaphore
+                    async with sem:
                         try:
                             if store == 'epic':
                                 size_bytes = await self.epic.get_game_size(game_id)
@@ -1392,7 +1456,7 @@ class BackgroundSizeFetcher:
                                 size_bytes = await self.amazon.get_game_size(game_id)
                             else:
                                 return (store, game_id, None)
-                            
+
                             if size_bytes and size_bytes > 0:
                                 # Update cache immediately (persist progress)
                                 cache = load_game_sizes_cache()
@@ -1410,14 +1474,14 @@ class BackgroundSizeFetcher:
                         except Exception as e:
                             logger.warning(f"[SizeService] Error fetching {store}:{game_id}: {e}")
                             return (store, game_id, None)
-                
-                # Fire all at once
+
+                # Fire all at once (semaphores control actual concurrency per store)
                 tasks = [fetch_one(store, gid) for store, gid in self._pending_games]
                 results = await asyncio.gather(*tasks, return_exceptions=True)
-            
+
             success = sum(1 for r in results if isinstance(r, tuple) and r[2] is not None)
             logger.info(f"[SizeService] Complete: {success}/{len(self._pending_games)} sizes cached")
-            
+
         except asyncio.CancelledError:
             logger.info("[SizeService] Cancelled")
         except Exception as e:
@@ -1605,6 +1669,14 @@ if BACKEND_AVAILABLE:
     GOGAPIClient = BackendGOGAPIClient
 else:
     raise ImportError("backend.stores.gog module is required but not available")
+
+# ============================================================================
+# UbisoftConnector - Now imported from py_modules.unifideck.stores.ubisoft module
+# ============================================================================
+if BACKEND_AVAILABLE:
+    UbisoftConnector = BackendUbisoftConnector
+else:
+    raise ImportError("backend.stores.ubisoft module is required but not available")
 
 class InstallHandler:
     """Handles game installations across stores"""
@@ -1981,10 +2053,21 @@ class Plugin:
         logger.info("[INIT] Initializing AmazonConnector")
         self.amazon = AmazonConnector(plugin_dir=DECKY_PLUGIN_DIR, plugin_instance=self)
 
+        logger.info("[INIT] Initializing UbisoftConnector")
+        self.ubisoft = UbisoftConnector(plugin_dir=DECKY_PLUGIN_DIR, plugin_instance=self)
+        self.ubisoft.start_token_refresh()
+
+        # Ensure the "Ubisoft Connect" auth shortcut is in VDF with artwork.
+        # This is quick now because the shortcut no longer depends on a pre-existing
+        # Ubisoft prefix/template. The launcher can bootstrap `.upc-auth` on first run.
+        await self.ubisoft._ensure_ubisoft_auth_shortcut()
+        self.ubisoft.queue_auth_assets_ensure("plugin-init")
+
         # Repair games.map for Unifideck shortcuts missing entries (fixes "Game location not mapped" errors)
         logger.info("[INIT] Reconciling games.map from installed games")
         map_reconcile = await self.shortcuts_manager.reconcile_games_map_from_installed(
-            epic_client=self.epic, gog_client=self.gog, amazon_client=self.amazon
+            epic_client=self.epic, gog_client=self.gog, amazon_client=self.amazon,
+            ubisoft_client=self.ubisoft
         )
         if map_reconcile.get('added', 0) > 0:
             logger.info(f"[INIT] Added {map_reconcile['added']} missing entries to games.map")
@@ -2156,6 +2239,25 @@ class Plugin:
                     else:
                         error_message = "Could not find Amazon install info"
                         logger.error(f"[DownloadComplete] {error_message} for {item.game_title}")
+                elif item.store == 'ubisoft':
+                    # Ubisoft installs - use prefix-based installed game detection
+                    game_info = self.ubisoft.get_installed_game_info(item.game_id)
+                    if game_info:
+                        game_install_path = game_info.get('install_path', '')
+                        exe_path = game_info.get('executable')
+
+                        if game_install_path and exe_path:
+                            await self.shortcuts_manager.mark_installed(
+                                item.game_id, item.store, game_install_path, exe_path
+                            )
+                            logger.info(f"[DownloadComplete] Marked {item.game_title} as installed")
+                            registration_success = True
+                        else:
+                            error_message = "Could not find Ubisoft game executable"
+                            logger.error(f"[DownloadComplete] {error_message} for {item.game_title}")
+                    else:
+                        error_message = "Could not find Ubisoft install info"
+                        logger.error(f"[DownloadComplete] {error_message} for {item.game_title}")
             except Exception as e:
                 error_message = str(e)
                 logger.error(f"[DownloadComplete] Exception marking game installed: {e}")
@@ -2182,6 +2284,13 @@ class Plugin:
             return await self.gog.install_game(game_id, install_path, progress_callback, language=language)
 
         self.download_queue.set_gog_install_callback(gog_install_callback)
+
+        # Set Ubisoft install callback to use UbisoftConnector
+        async def ubisoft_install_callback(game_id: str, install_path: str = None, progress_callback=None):
+            """Delegate Ubisoft downloads to UbisoftConnector.install_game"""
+            return await self.ubisoft.install_game(game_id, progress_callback, install_path=install_path)
+
+        self.download_queue.set_ubisoft_install_callback(ubisoft_install_callback)
         
         # Set size cache callback to update Install button sizes when accurate size is received
         self.download_queue.set_size_cache_callback(cache_game_size)
@@ -2279,9 +2388,10 @@ class Plugin:
                         self.steamgriddb.fetch_game_art(
                             game.title,
                             game.app_id,
-                            store=game.store,      # 'epic', 'gog', or 'amazon'
+                            store=game.store,      # 'epic', 'gog', 'amazon', or 'ubisoft'
                             store_id=game.id,      # Store-specific game ID
-                            only_types=only_types  # Only fetch specified types (if any)
+                            only_types=only_types, # Only fetch specified types (if any)
+                            extra=getattr(game, 'extra', None)  # Ubisoft: coverUrl, backgroundUrl, bannerUrl
                         ),
                         timeout=ARTWORK_FETCH_TIMEOUT
                     )
@@ -2348,6 +2458,7 @@ class Plugin:
                 epic_games = await self.epic.get_library()
                 gog_games = await self.gog.get_library()
                 amazon_games = await self.amazon.get_library()
+                ubisoft_games = await self.ubisoft.get_library()
 
                 # Robustly handle API failures (None returns)
                 valid_stores = []
@@ -2371,6 +2482,12 @@ class Plugin:
                 else:
                      amazon_games = []
 
+                if ubisoft_games is not None:
+                    valid_stores.append('ubisoft')
+                    all_games.extend(ubisoft_games)
+                else:
+                    ubisoft_games = []
+
                 # Check for cancellation
                 if self._cancel_sync:
                     logger.warning("Sync cancelled by user after fetching libraries")
@@ -2386,6 +2503,7 @@ class Plugin:
                         'epic_count': 0,
                         'gog_count': 0,
                         'amazon_count': 0,
+                        'ubisoft_count': 0,
                         'added_count': 0,
                         'updated_count': 0,
                         'artwork_count': 0
@@ -2394,7 +2512,7 @@ class Plugin:
                 self.sync_progress.synced_games = 0
 
                 # Log library composition for debugging game count discrepancies
-                logger.info(f"Sync: Library composition - Epic: {len(epic_games)}, GOG: {len(gog_games)}, Amazon: {len(amazon_games)}, Total: {len(all_games)}")
+                logger.info(f"Sync: Library composition - Epic: {len(epic_games)}, GOG: {len(gog_games)}, Amazon: {len(amazon_games)}, Ubisoft: {len(ubisoft_games)}, Total: {len(all_games)}")
                 logger.debug(f"  Total Unifideck games in all libraries: {len(all_games)} (these are from store APIs)")
                 logger.debug(f"  Note: Displayed game count may differ if some games fail shortcut registration or have invalid launch options")
 
@@ -2418,6 +2536,7 @@ class Plugin:
                 epic_installed = await self.epic.get_installed()
                 gog_installed = await self.gog.get_installed()
                 amazon_installed = await self.amazon.get_installed()
+                ubisoft_installed = await self.ubisoft.get_installed()
 
                 # Mark installed status
                 for game in epic_games:
@@ -2471,6 +2590,16 @@ class Plugin:
                             work_dir = game_info.get('path') or os.path.dirname(exe_path)
                             await self.shortcuts_manager._update_game_map('amazon', game.id, exe_path, work_dir)
                             logger.debug(f"Updated games.map for Amazon game {game.id}")
+
+                for game in ubisoft_games:
+                    if game.id in ubisoft_installed:
+                        game.is_installed = True
+                        game_info = self.ubisoft.get_installed_game_info(game.id)
+                        if game_info and game_info.get('executable'):
+                            exe_path = game_info['executable']
+                            work_dir = game_info.get('install_path') or os.path.dirname(exe_path)
+                            await self.shortcuts_manager._update_game_map('ubisoft', game.id, exe_path, work_dir)
+                            logger.debug(f"Updated games.map for Ubisoft game {game.id}")
 
                 # Get launcher script path (relative to plugin directory)
                 launcher_script = os.path.join(os.path.dirname(__file__), 'bin', 'unifideck-launcher')
@@ -2710,6 +2839,14 @@ class Plugin:
                     # NOTE: Cleanup moved to AFTER shortcuts are written (line ~4480)
                     # This prevents deleting newly downloaded artwork for games not yet in old shortcuts.vdf
 
+                    # Ensure grid_path is valid (may have been None at plugin init during early boot)
+                    if self.steamgriddb and not self.steamgriddb.grid_path:
+                        self.steamgriddb.grid_path = self.steamgriddb._find_grid_path()
+                        if self.steamgriddb.grid_path:
+                            logger.info(f"[SYNC PHASE] Refreshed grid_path: {self.steamgriddb.grid_path}")
+                        else:
+                            logger.warning("[SYNC PHASE] grid_path still None - artwork download will be limited")
+
                     # STEP 3: Check which games need artwork (quick local file check)
                     logger.info(f"[SYNC PHASE] Checking artwork for {len(all_games)} games")
                     self.sync_progress.status = "checking_artwork"
@@ -2719,18 +2856,25 @@ class Plugin:
                     }
                     artwork_attempts = load_artwork_attempts_cache()
                     skipped_artwork_attempts = 0
+                    games_missing_types = {}
                     for game in all_games:
                         if game.app_id in seen_app_ids:
                             str_id = str(game.app_id)
-                            # Skip games we already tried and confirmed have no artwork available
-                            if str_id in artwork_attempts and not artwork_attempts[str_id]:
+                            # Check what's actually missing on disk right now
+                            missing = await self.get_missing_artwork_types(game.app_id)
+                            if not missing:
+                                pass  # Complete artwork, skip
+                            elif str_id in artwork_attempts and artwork_attempts[str_id] == sorted(missing):
+                                # Same types were missing last time — sources still won't have them
                                 skipped_artwork_attempts += 1
-                            elif not await self.has_artwork(game.app_id):
+                            else:
+                                # New game, or missing types changed (partial progress) — retry
                                 games_needing_art.append(game)
+                                games_missing_types[str_id] = missing
                             seen_app_ids.discard(game.app_id)  # Only check once per app_id
 
                     if skipped_artwork_attempts > 0:
-                        logger.info(f"[SYNC PHASE] Skipping {skipped_artwork_attempts} games with no available artwork (incremental)")
+                        logger.info(f"[SYNC PHASE] Skipping {skipped_artwork_attempts} games with unchanged missing artwork (incremental)")
                     logger.info(f"[SYNC PHASE] Artwork check complete: {len(games_needing_art)}/{len(all_games)} games need artwork")
 
                     if games_needing_art:
@@ -2752,7 +2896,10 @@ class Plugin:
                         # === PASS 1: Initial artwork fetch ===
                         logger.info(f"  [Pass 1] Starting parallel download (concurrency: 30)")
                         semaphore = asyncio.Semaphore(30)
-                        tasks = [self.fetch_artwork_with_progress(game, semaphore) for game in games_needing_art]
+                        tasks = []
+                        for game in games_needing_art:
+                            only_types = games_missing_types.get(str(game.app_id))
+                            tasks.append(self.fetch_artwork_with_progress(game, semaphore, only_types=only_types))
                         results = await asyncio.gather(*tasks, return_exceptions=True)
 
                         # Count successes (results are now dicts)
@@ -2776,7 +2923,10 @@ class Plugin:
                             self.sync_progress.artwork_total = len(games_to_retry)
                             self.sync_progress.artwork_synced = 0
 
-                            retry_tasks = [self.fetch_artwork_with_progress(game, semaphore) for game in games_to_retry]
+                            retry_tasks = []
+                            for game in games_to_retry:
+                                only_types = games_missing_types.get(str(game.app_id))
+                                retry_tasks.append(self.fetch_artwork_with_progress(game, semaphore, only_types=only_types))
                             await asyncio.gather(*retry_tasks, return_exceptions=True)
 
                             # Count recovered games (can't use await in generator expression)
@@ -2801,9 +2951,10 @@ class Plugin:
                         logger.info(f"Artwork download complete: {artwork_count}/{len(games_needing_art)} games fully successful")
 
                         # Save artwork attempt results for incremental sync
+                        # Store the specific missing types so we can skip only when unchanged
                         for game in games_needing_art:
-                            has_art = await self.has_artwork(game.app_id)
-                            artwork_attempts[str(game.app_id)] = has_art
+                            missing = await self.get_missing_artwork_types(game.app_id)
+                            artwork_attempts[str(game.app_id)] = sorted(missing) if missing else True
                         save_artwork_attempts_cache(artwork_attempts)
                     else:
                         logger.info(f"[SYNC PHASE] All games have complete artwork, skipping download")
@@ -2861,6 +3012,7 @@ class Plugin:
                     'epic_count': len(epic_games),
                     'gog_count': len(gog_games),
                     'amazon_count': len(amazon_games),
+                    'ubisoft_count': len(ubisoft_games),
                     'added_count': added_count,
                     'artwork_count': artwork_count
                 }
@@ -2968,6 +3120,7 @@ class Plugin:
                 epic_games = await self.epic.get_library()
                 gog_games = await self.gog.get_library()
                 amazon_games = await self.amazon.get_library()
+                ubisoft_games = await self.ubisoft.get_library()
 
                 # Robustly handle API failures (None returns)
                 valid_stores = []
@@ -2990,6 +3143,12 @@ class Plugin:
                     all_games.extend(amazon_games)
                 else:
                     amazon_games = []
+
+                if ubisoft_games is not None:
+                    valid_stores.append('ubisoft')
+                    all_games.extend(ubisoft_games)
+                else:
+                    ubisoft_games = []
                 self.sync_progress.total_games = len(all_games)
                 self.sync_progress.synced_games = 0
 
@@ -3009,6 +3168,7 @@ class Plugin:
                 epic_installed = await self.epic.get_installed()
                 gog_installed = await self.gog.get_installed()
                 amazon_installed = await self.amazon.get_installed()
+                ubisoft_installed = await self.ubisoft.get_installed()
 
                 # Mark installed status and update games.map
                 for game in epic_games:
@@ -3053,6 +3213,16 @@ class Plugin:
                             work_dir = game_info.get('path') or os.path.dirname(exe_path)
                             await self.shortcuts_manager._update_game_map('amazon', game.id, exe_path, work_dir)
                             logger.debug(f"Updated games.map for Amazon game {game.id}")
+
+                for game in ubisoft_games:
+                    if game.id in ubisoft_installed:
+                        game.is_installed = True
+                        game_info = self.ubisoft.get_installed_game_info(game.id)
+                        if game_info and game_info.get('executable'):
+                            exe_path = game_info['executable']
+                            work_dir = game_info.get('install_path') or os.path.dirname(exe_path)
+                            await self.shortcuts_manager._update_game_map('ubisoft', game.id, exe_path, work_dir)
+                            logger.debug(f"Updated games.map for Ubisoft game {game.id}")
 
                 # Get launcher script path
                 launcher_script = os.path.join(os.path.dirname(__file__), 'bin', 'unifideck-launcher')
@@ -3099,6 +3269,7 @@ class Plugin:
                         'epic_count': len(epic_games),
                         'gog_count': len(gog_games),
                         'amazon_count': len(amazon_games),
+                        'ubisoft_count': len(ubisoft_games),
                         'added_count': added_count,
                         'updated_count': updated_count,
                         'artwork_count': 0
@@ -3311,6 +3482,14 @@ class Plugin:
                         if cleanup_result.get('removed_count', 0) > 0:
                             logger.info(f"Cleaned up {cleanup_result['removed_count']} orphaned artwork files")
 
+                    # Ensure grid_path is valid (may have been None at plugin init during early boot)
+                    if self.steamgriddb and not self.steamgriddb.grid_path:
+                        self.steamgriddb.grid_path = self.steamgriddb._find_grid_path()
+                        if self.steamgriddb.grid_path:
+                            logger.info(f"[FORCE SYNC PHASE] Refreshed grid_path: {self.steamgriddb.grid_path}")
+                        else:
+                            logger.warning("[FORCE SYNC PHASE] grid_path still None - artwork download will be limited")
+
                     # ARTWORK: Download based on user preference
                     # If resync_artwork=True, re-download ALL artwork (overwrites everything)
                     # If resync_artwork=False, fill gaps only (download missing types per game)
@@ -3435,12 +3614,22 @@ class Plugin:
                              # If we have a local icon, use it!
                              game.cover_image = str(icon_path)
 
+                # --- UBISOFT AUTH SHORTCUT ---
+                # Re-ensure the auth shortcut VDF + artwork (handles user deletion
+                # and force artwork resync).  Not part of all_games so must run separately.
+                try:
+                    auth_uid = await self.ubisoft._ensure_ubisoft_auth_shortcut()
+                    if auth_uid and resync_artwork:
+                        await self.ubisoft._fetch_auth_shortcut_artwork(auth_uid, force=True)
+                except Exception as e:
+                    logger.warning(f"[FORCE SYNC] Auth shortcut re-ensure failed: {e}")
+
                 # --- STEP 3: WRITE SHORTCUTS ---
                 self.sync_progress.current_game = {
                     "label": "force_sync.writingShortcuts",
                     "values": {}
                 }
-                
+
                 # Force update all games - rewrites existing shortcuts with fresh data (and local icons)
                 force_result = await self.shortcuts_manager.force_update_games_batch(all_games, launcher_script, epic_client=self.epic, gog_client=self.gog, amazon_client=self.amazon)
                 
@@ -3488,12 +3677,13 @@ class Plugin:
                     logger.warning("Please EXIT Steam completely and restart to see changes")
                     logger.warning("=" * 60)
 
-                logger.info(f"Force synced {len(epic_games)} Epic + {len(gog_games)} GOG + {len(amazon_games)} Amazon games ({added_count} added, {updated_count} updated, {artwork_count} artwork)")
+                logger.info(f"Force synced {len(epic_games)} Epic + {len(gog_games)} GOG + {len(amazon_games)} Amazon + {len(ubisoft_games)} Ubisoft games ({added_count} added, {updated_count} updated, {artwork_count} artwork)")
                 return {
                     'success': True,
                     'epic_count': len(epic_games),
                     'gog_count': len(gog_games),
                     'amazon_count': len(amazon_games),
+                    'ubisoft_count': len(ubisoft_games),
                     'added_count': added_count,
                     'updated_count': updated_count,
                     'artwork_count': artwork_count
@@ -3800,6 +3990,19 @@ class Plugin:
 
                     store, game_id = result
 
+                    # Auth shortcut is a launcher, not an installable game — always "installed"
+                    if game_id == "upc-auth":
+                        return {
+                            'is_installed': True,
+                            'has_update': None,
+                            'store': store,
+                            'game_id': game_id,
+                            'title': shortcut.get('AppName', ''),
+                            'size_bytes': None,
+                            'size_formatted': None,
+                            'app_id': app_id
+                        }
+
                     # Check installation status
                     # Check if there's ANY entry in games.map before checking validity
                     # This distinguishes "never installed" from "was installed, files deleted"
@@ -3846,7 +4049,30 @@ class Plugin:
                                     logger.info(f"[GameInfo] Amazon game {game_id} found via nile (path verified)")
                                 else:
                                     logger.warning(f"[GameInfo] Amazon game {game_id} in config but path missing")
-                        elif store not in ('epic', 'gog', 'amazon'):
+                        elif store == 'ubisoft':
+                            installed_ids = await self.ubisoft.get_installed()
+                            if game_id in installed_ids:
+                                ubisoft_info = installed_ids.get(game_id, {})
+                                install_path = ubisoft_info.get('install_path', '') if isinstance(ubisoft_info, dict) else ''
+                                if install_path and os.path.exists(install_path):
+                                    is_installed = True
+                                    logger.info(f"[GameInfo] Ubisoft game {game_id} found via prefix scan (path verified)")
+                                    # Keep games.map in sync so Installed tabs and cache-based
+                                    # filters reflect Ubisoft installs immediately.
+                                    try:
+                                        executable = ubisoft_info.get('executable', '') if isinstance(ubisoft_info, dict) else ''
+                                        work_dir = ubisoft_info.get('work_dir', '') if isinstance(ubisoft_info, dict) else ''
+                                        await self.shortcuts_manager._update_game_map(
+                                            'ubisoft',
+                                            game_id,
+                                            executable or '',
+                                            work_dir or install_path,
+                                        )
+                                    except Exception as map_err:
+                                        logger.warning(f"[GameInfo] Failed to update games.map for Ubisoft {game_id}: {map_err}")
+                                else:
+                                    logger.warning(f"[GameInfo] Ubisoft game {game_id} in prefix but path missing")
+                        elif store not in ('epic', 'gog', 'amazon', 'ubisoft'):
                             return {'error': f'Unknown store: {store}'}
 
                     # Get game size - try cache first (instant), fallback to API (slow)
@@ -3865,6 +4091,8 @@ class Plugin:
                                 size_bytes = await self.gog.get_game_size(game_id)
                             elif store == 'amazon':
                                 size_bytes = await self.amazon.get_game_size(game_id)
+                            elif store == 'ubisoft':
+                                size_bytes = await self.ubisoft.get_game_size(game_id)
 
                             # Cache the result for next time
                             if size_bytes and size_bytes > 0:
@@ -3920,7 +4148,7 @@ class Plugin:
         try:
             client = await get_cdp_client()
             css_id = await client.inject_hide_css(appId, css_rules)
-            logger.info(f"[CDP] Successfully injected hide CSS for app {appId}")
+            logger.debug(f"[CDP] Successfully injected hide CSS for app {appId}")
             return {"success": True, "css_id": css_id}
         except Exception as e:
             # Try reconnecting once on any connection-related error
@@ -3931,7 +4159,7 @@ class Plugin:
                     await shutdown_cdp_client()
                     client = await get_cdp_client()
                     css_id = await client.inject_hide_css(appId, css_rules)
-                    logger.info(f"[CDP] Successfully injected hide CSS for app {appId} (after reconnect)")
+                    logger.debug(f"[CDP] Successfully injected hide CSS for app {appId} (after reconnect)")
                     return {"success": True, "css_id": css_id}
                 except Exception as retry_e:
                     logger.error(f"[CDP] Reconnection failed for app {appId}: {retry_e}")
@@ -3951,7 +4179,7 @@ class Plugin:
         try:
             client = await get_cdp_client()
             await client.remove_hide_css(appId)
-            logger.info(f"[CDP] Successfully removed hide CSS for app {appId}")
+            logger.debug(f"[CDP] Successfully removed hide CSS for app {appId}")
             return {"success": True}
         except Exception as e:
             # Try reconnecting once on any connection-related error
@@ -3962,7 +4190,7 @@ class Plugin:
                     await shutdown_cdp_client()
                     client = await get_cdp_client()
                     await client.remove_hide_css(appId)
-                    logger.info(f"[CDP] Successfully removed hide CSS for app {appId} (after reconnect)")
+                    logger.debug(f"[CDP] Successfully removed hide CSS for app {appId} (after reconnect)")
                     return {"success": True}
                 except Exception as retry_e:
                     logger.error(f"[CDP] Reconnection failed for app {appId}: {retry_e}")
@@ -3982,7 +4210,7 @@ class Plugin:
         try:
             client = await get_cdp_client()
             hidden_msg = await client.hide_native_play_section(appId)
-            logger.info(f"[CDP] hide_native_play_section({appId}) => {hidden_msg}")
+            logger.debug(f"[CDP] hide_native_play_section({appId}) => {hidden_msg}")
             if hidden_msg == "hidden":
                 return {"success": True}
             else:
@@ -3995,7 +4223,7 @@ class Plugin:
                     await shutdown_cdp_client()
                     client = await get_cdp_client()
                     hidden_msg = await client.hide_native_play_section(appId)
-                    logger.info(f"[CDP] hide_native_play_section({appId}) => {hidden_msg} (after reconnect)")
+                    logger.debug(f"[CDP] hide_native_play_section({appId}) => {hidden_msg} (after reconnect)")
                     if hidden_msg == "hidden":
                         return {"success": True}
                     else:
@@ -4018,7 +4246,7 @@ class Plugin:
         try:
             client = await get_cdp_client()
             unhidden = await client.unhide_native_play_section(appId)
-            logger.info(f"[CDP] unhide_native_play_section({appId}) => {unhidden}")
+            logger.debug(f"[CDP] unhide_native_play_section({appId}) => {unhidden}")
             return {"success": True}
         except Exception as e:
             err_lower = str(e).lower()
@@ -4028,7 +4256,7 @@ class Plugin:
                     await shutdown_cdp_client()
                     client = await get_cdp_client()
                     unhidden = await client.unhide_native_play_section(appId)
-                    logger.info(f"[CDP] unhide_native_play_section({appId}) => {unhidden} (after reconnect)")
+                    logger.debug(f"[CDP] unhide_native_play_section({appId}) => {unhidden} (after reconnect)")
                     return {"success": True}
                 except Exception as retry_e:
                     logger.error(f"[CDP] Reconnection failed for app {appId}: {retry_e}")
@@ -4265,15 +4493,48 @@ class Plugin:
         # Steam API first
         results = await self.fetch_steam_store_search(game_title)
         if results:
-            target_norm = normalize_title_for_matching(game_title)
             top = None
+
+            # Pass 1: Exact full-title match (cleaned, no subtitle stripping)
+            search_clean = _clean_title_for_comparison(game_title)
             for item in results:
                 item_name = item.get('name', '') if isinstance(item, dict) else ''
-                if item_name and normalize_title_for_matching(item_name) == target_norm:
+                if item_name and _clean_title_for_comparison(item_name) == search_clean:
                     top = item
                     break
+
+            # Pass 2: Normalized match (with subtitle stripping)
             if top is None:
-                top = results[0]
+                target_norm = normalize_title_for_matching(game_title)
+                for item in results:
+                    item_name = item.get('name', '') if isinstance(item, dict) else ''
+                    if item_name and normalize_title_for_matching(item_name) == target_norm:
+                        top = item
+                        break
+
+            # Pass 3: Best scored match (replaces blind results[0] fallback)
+            if top is None:
+                best_score = 0.0
+                best_item = None
+                for item in results:
+                    item_name = item.get('name', '') if isinstance(item, dict) else ''
+                    if item_name:
+                        score = _score_steam_match(game_title, item_name)
+                        if score > best_score:
+                            best_score = score
+                            best_item = item
+                if best_score >= 0.6:
+                    top = best_item
+                    logger.debug(f"[Steam Presence] Scored match for '{game_title}': "
+                                f"'{best_item.get('name', '')}' (score={best_score:.2f})")
+                else:
+                    logger.debug(f"[Steam Presence] No confident match for '{game_title}' "
+                                f"(best score={best_score:.2f})")
+
+            if top is None:
+                logger.debug(f"[Steam Presence] No Steam match found for '{game_title}'")
+                return {'steam_appid': 0, 'metadata': {}}
+
             steam_app_id = top.get('id') or top.get('appid')
             if steam_app_id:
                 try:
@@ -4523,6 +4784,8 @@ class Plugin:
                 # Amazon: Use official website from metadata if available, otherwise gaming portal
                 official_url = self._get_amazon_official_url(game_id)
                 store_url = official_url or "https://gaming.amazon.com/intro"
+            elif store == 'ubisoft':
+                store_url = f"https://store.ubisoft.com/us/search?q={encoded_title}"
             else:
                 store_url = ''
 
@@ -4777,6 +5040,7 @@ class Plugin:
             logger.info(f"[Uninstall] Starting uninstallation: {title} ({store}:{game_id}), delete_prefix={delete_prefix}")
 
             # Perform store-specific uninstall
+            prefix_deleted = False
             if store == 'epic':
                 # legendary uninstall <id> --yes
                 if not self.epic.legendary_bin:
@@ -4847,13 +5111,21 @@ class Plugin:
                     await self.shortcuts_manager._remove_from_game_map(store, game_id)
                     logger.info(f"[Uninstall] Removed {store}:{game_id} from games.map despite uninstall failure")
                     return result
+
+            elif store == 'ubisoft':
+                result = await self.ubisoft.uninstall_game(game_id, delete_prefix=delete_prefix)
+                if not result.get('success'):
+                    # Keep UI consistent even if uninstall fails
+                    await self.shortcuts_manager._remove_from_game_map(store, game_id)
+                    logger.info(f"[Uninstall] Removed {store}:{game_id} from games.map despite uninstall failure")
+                    return result
+                prefix_deleted = bool(result.get('prefix_deleted', False))
             
             else:
                 return {'success': False, 'error': f"Unsupported store for uninstall: {store}"}
 
-            # Delete prefix if requested
-            prefix_deleted = False
-            if delete_prefix:
+            # Delete prefix if requested (handled internally for Ubisoft)
+            if delete_prefix and store != 'ubisoft':
                 prefix_path = os.path.expanduser(f"~/.local/share/unifideck/prefixes/{game_id}")
                 if os.path.exists(prefix_path):
                     try:
@@ -4927,6 +5199,97 @@ class Plugin:
         except Exception as e:
             logger.error(f"[DownloadQueue] Error adding to queue: {e}")
             return {'success': False, 'error': str(e)}
+
+    async def open_ubisoft_launcher_for_install(
+        self, game_id: str, game_title: str = "", install_path: str = None
+    ) -> Dict[str, Any]:
+        """Open Ubisoft Connect in a game's prefix for manual install (no download queue)."""
+        try:
+            logger.info(f"[UbisoftInstall] RPC called: game_id={game_id} title={game_title}")
+            result = await self.ubisoft.open_launcher_for_install(game_id)
+            if not result.get("success"):
+                logger.error(f"[UbisoftInstall] Launch failed: {result}")
+                return result
+
+            logger.info(
+                f"[UbisoftInstall] Launcher opened for install: {game_title or game_id} ({game_id}) "
+                f"PID={result.get('pid')} URL={result.get('launch_url')}"
+            )
+            return {
+                "success": True,
+                "message": "Ubisoft Connect launcher opening for install",
+                "launch_url": result.get("launch_url", ""),
+            }
+        except Exception as e:
+            logger.error(f"[UbisoftInstall] Failed to start install session for {game_id}: {e}")
+            return {"success": False, "error": str(e)}
+
+    async def cancel_ubisoft_install(self, game_id: str) -> Dict[str, Any]:
+        """Cancel a running Ubisoft Connect install session."""
+        try:
+            return await self.ubisoft.cancel_install_session(game_id)
+        except Exception as e:
+            logger.error(f"[UbisoftInstall] Cancel failed for {game_id}: {e}")
+            return {"success": False, "error": str(e)}
+
+    async def capture_ubisoft_session(self, game_id: str) -> Dict[str, Any]:
+        """Capture UPC session from a game prefix after the game stops.
+
+        Called by the frontend when a Ubisoft game is stopped via the UI,
+        since Steam's TerminateApp kills the bash launcher before its
+        capture_session.py can run.
+        """
+        try:
+            prefix_path = self.ubisoft.get_prefix_path(game_id)
+            if not prefix_path or not os.path.isdir(prefix_path):
+                return {"success": False, "error": "Prefix not found"}
+
+            await asyncio.sleep(2)  # Give UPC a moment to flush state
+            captured = self.ubisoft._capture_upc_session(prefix_path)
+            if captured:
+                self.ubisoft._propagate_upc_session_to_all_prefixes(captured)
+                logger.info(f"[Ubisoft] Post-stop capture: propagated session from {game_id}")
+            else:
+                logger.info(f"[Ubisoft] Post-stop capture: credentials synced for {game_id}")
+            return {"success": True}
+        except Exception as e:
+            logger.error(f"[Ubisoft] Post-stop capture failed for {game_id}: {e}")
+            return {"success": False, "error": str(e)}
+
+    async def capture_ubisoft_session_by_appid(self, app_id: int) -> Dict[str, Any]:
+        """Capture UPC session after a Ubisoft game stops, looked up by Steam appId.
+
+        Called by the global lifetime notification listener (works in gaming mode
+        where the per-component listener and handleStop are not mounted).
+        """
+        try:
+            # Resolve appId → game_id via shortcuts VDF
+            if app_id > 2**31:
+                app_id_signed = app_id - 2**32
+            else:
+                app_id_signed = app_id
+
+            shortcuts = await self.shortcuts_manager.read_shortcuts()
+            for _idx, shortcut in shortcuts.get("shortcuts", {}).items():
+                if shortcut.get("appid") == app_id_signed:
+                    result = extract_store_id(shortcut.get("LaunchOptions", ""))
+                    if result:
+                        store, game_id = result
+                        if store == "ubisoft" and game_id != "upc-auth":
+                            return await self.capture_ubisoft_session(game_id)
+                    break
+
+            return {"success": False, "error": "Not a Ubisoft game shortcut"}
+        except Exception as e:
+            logger.error(f"[Ubisoft] Post-stop capture by appId failed for {app_id}: {e}")
+            return {"success": False, "error": str(e)}
+
+    async def is_ubisoft_install_active(self, game_id: str) -> bool:
+        """Check if UPC is running for a game install."""
+        try:
+            return self.ubisoft.is_install_session_active(game_id)
+        except Exception:
+            return False
 
     async def add_to_download_queue_by_appid(self, app_id: int) -> Dict[str, Any]:
         """Add a game to download queue by its Steam shortcut app ID"""
@@ -5169,6 +5532,56 @@ class Plugin:
             logger.error(f"[DownloadQueue] Error setting storage location: {e}")
             return {'success': False, 'error': str(e)}
 
+    async def set_custom_install_path(self, path: str) -> Dict[str, Any]:
+        """Validate and set a custom install path for game downloads"""
+        try:
+            return self.download_queue.set_custom_path(path)
+        except Exception as e:
+            logger.error(f"[DownloadQueue] Error setting custom install path: {e}")
+            return {'success': False, 'error': str(e)}
+
+    async def validate_install_path(self, path: str) -> Dict[str, Any]:
+        """Validate a path for game installation without saving it"""
+        try:
+            return self.download_queue.validate_install_path(path)
+        except Exception as e:
+            logger.error(f"[DownloadQueue] Error validating install path: {e}")
+            return {'valid': False, 'error': str(e)}
+
+    async def clear_custom_install_path(self) -> Dict[str, Any]:
+        """Clear the custom install path and revert to internal storage"""
+        try:
+            success = self.download_queue.clear_custom_path()
+            return {'success': success}
+        except Exception as e:
+            logger.error(f"[DownloadQueue] Error clearing custom install path: {e}")
+            return {'success': False, 'error': str(e)}
+
+    async def get_browseable_devices(self) -> Dict[str, Any]:
+        """Get available device roots for quick-access file picker navigation"""
+        try:
+            devices = self.download_queue.get_browseable_devices()
+            return {'success': True, 'devices': devices}
+        except Exception as e:
+            logger.error(f"[DownloadQueue] Error getting browseable devices: {e}")
+            return {'success': False, 'error': str(e)}
+
+    async def list_directory(self, path: str, include_hidden: bool = False, sort_by: str = 'name') -> Dict[str, Any]:
+        """List subdirectories in a path for the custom file browser"""
+        try:
+            return self.download_queue.list_directory(path, include_hidden, sort_by)
+        except Exception as e:
+            logger.error(f"[DownloadQueue] Error listing directory: {e}")
+            return {'success': False, 'error': str(e)}
+
+    async def create_directory(self, path: str) -> Dict[str, Any]:
+        """Create a directory at the given path for game installation"""
+        try:
+            return self.download_queue.create_directory(path)
+        except Exception as e:
+            logger.error(f"[DownloadQueue] Error creating directory: {e}")
+            return {'success': False, 'error': str(e)}
+
     # ============== END DOWNLOAD QUEUE API ==============
 
     # ============== LANGUAGE SETTINGS API ==============
@@ -5273,6 +5686,8 @@ class Plugin:
         # Re-init store connectors so they reflect the cleared state
         self.gog = GOGAPIClient(plugin_dir=DECKY_PLUGIN_DIR, plugin_instance=self)
         self.amazon = AmazonConnector(plugin_dir=DECKY_PLUGIN_DIR, plugin_instance=self)
+        if hasattr(self, 'ubisoft') and self.ubisoft:
+            self.ubisoft.api._clear_tokens()
 
         self.account_manager.account_switch_detected = False
         return result
@@ -5280,6 +5695,28 @@ class Plugin:
     # ============== END ACCOUNT SWITCH API ==============
 
     # ============== PROTON COMPAT TOOL API ==============
+
+    async def _build_shortcut_launch_context(self, store_game_id: str) -> Dict[str, Any]:
+        """Build frontend launch context for a Unifideck shortcut."""
+        from py_modules.unifideck.compat.proton_tools import get_compat_tool_for_game as _get
+        from py_modules.unifideck.compat.proton_tools import get_saved_proton_tool as _get_saved
+        result = _get(store_game_id)
+        result["store_game_id"] = store_game_id
+        result["launcher_path"] = os.path.join(os.path.dirname(__file__), 'bin', 'unifideck-launcher')
+        result["saved_proton_tool"] = _get_saved(store_game_id)
+
+        # Include current launch options so frontend can preserve user params
+        try:
+            shortcuts = await self.shortcuts_manager.read_shortcuts()
+            for idx, shortcut in shortcuts.get("shortcuts", {}).items():
+                from py_modules.unifideck.shortcuts.launch_options import get_full_id
+                if get_full_id(shortcut.get('LaunchOptions', '')) == store_game_id:
+                    result["current_launch_options"] = shortcut.get('LaunchOptions', '')
+                    break
+        except Exception as e:
+            logger.warning(f"Could not read current launch options: {e}")
+
+        return result
 
     async def get_compat_tool_for_game(self, store_game_id: str) -> Dict[str, Any]:
         """Get the Steam compatibility tool set for a Unifideck shortcut.
@@ -5291,24 +5728,30 @@ class Plugin:
         Args:
             store_game_id: e.g., "gog:1234567890"
         """
-        from py_modules.unifideck.compat.proton_tools import get_compat_tool_for_game as _get
-        from py_modules.unifideck.compat.proton_tools import get_saved_proton_tool as _get_saved
-        result = _get(store_game_id)
-        result["launcher_path"] = os.path.join(os.path.dirname(__file__), 'bin', 'unifideck-launcher')
-        result["saved_proton_tool"] = _get_saved(store_game_id)
-        
-        # Include current launch options so frontend can preserve user params
-        try:
-            shortcuts = await self.shortcuts_manager.read_shortcuts()
-            for idx, shortcut in shortcuts.get("shortcuts", {}).items():
-                from py_modules.unifideck.shortcuts.launch_options import get_full_id
-                if get_full_id(shortcut.get('LaunchOptions', '')) == store_game_id:
-                    result["current_launch_options"] = shortcut.get('LaunchOptions', '')
-                    break
-        except Exception as e:
-            logger.warning(f"Could not read current launch options: {e}")
-        
-        return result
+        return await self._build_shortcut_launch_context(store_game_id)
+
+    async def get_ubisoft_auth_shortcut_context(self) -> Dict[str, Any]:
+        """Get the dedicated UPC auth shortcut context for frontend RunGame() launch.
+
+        Creates auth prefix + shortcut if needed, returns appid_unsigned for
+        direct RunGame() call (no compat tool clearing needed).
+        """
+        logger.info("[RPC] get_ubisoft_auth_shortcut_context")
+        return await self.ubisoft.get_ubisoft_auth_shortcut_context()
+
+    async def start_ubisoft_auth_session_monitor(self) -> Dict[str, Any]:
+        """Start background polling for UPC session capture in the auth prefix."""
+        logger.info("[RPC] start_ubisoft_auth_session_monitor")
+        return await self.ubisoft.start_ubisoft_auth_session_monitor()
+
+    async def check_ubisoft_auth_session_status(self) -> Dict[str, Any]:
+        """Check whether the auth session monitor has captured a token."""
+        return self.ubisoft.check_ubisoft_auth_session_status()
+
+    async def sync_ubisoft_credentials(self) -> Dict[str, Any]:
+        """Retroactively sync UPC credentials and session token to all prefixes."""
+        logger.info("[RPC] sync_ubisoft_credentials")
+        return self.ubisoft.sync_ubisoft_credentials()
 
     async def temporarily_clear_compat_tool(self, appid_unsigned: int) -> Dict[str, Any]:
         """Temporarily remove a compat tool entry from config.vdf.
@@ -5402,11 +5845,18 @@ class Plugin:
                 amazon_status = 'nile_not_installed'
                 logger.warning("[STATUS] Amazon Games: Nile CLI not installed")
 
+            # Check Ubisoft availability (no CLI binary needed - uses REST API)
+            logger.info("[STATUS] Checking Ubisoft Connect availability")
+            ubisoft_available = await self.ubisoft.is_available()
+            ubisoft_status = 'connected' if ubisoft_available else 'not_connected'
+            logger.info(f"[STATUS] Ubisoft Connect: {ubisoft_status}")
+
             result = {
                 'success': True,
                 'epic': epic_status,
                 'gog': gog_status,
                 'amazon': amazon_status,
+                'ubisoft': ubisoft_status,
                 'legendary_installed': legendary_installed,
                 'nile_installed': nile_installed
             }
@@ -5420,7 +5870,8 @@ class Plugin:
                 'error': str(e),
                 'epic': 'error',
                 'gog': 'error',
-                'amazon': 'error'
+                'amazon': 'error',
+                'ubisoft': 'error'
             }
 
     async def get_real_steam_appid_mappings(self) -> Dict[str, Any]:
@@ -5570,6 +6021,43 @@ class Plugin:
         """Logout from Amazon Games"""
         return await self.amazon.logout()
 
+    async def connect_ubisoft_account(self) -> Dict[str, Any]:
+        """Launch UPC in the template prefix for one-time Ubisoft account connection.
+
+        Replaces the REST API login flow for auth persistence. The user logs in
+        directly via UPC, which writes a long-lived restore_session token that
+        is propagated to all existing game prefixes automatically.
+        """
+        logger.info("[RPC] connect_ubisoft_account")
+        return await self.ubisoft.connect_ubisoft_account()
+
+    # REST API auth for library queries. After successful login, UPC is
+    # auto-opened in the template prefix to capture the native session token.
+
+    async def start_ubisoft_auth(self, email: str, password: str) -> Dict[str, Any]:
+        """Start Ubisoft Connect authentication with credentials."""
+        logger.info("[RPC] start_ubisoft_auth")
+        auth_data = json.dumps({"email": email, "password": password})
+        return await self.ubisoft.complete_auth(auth_data)
+
+    async def complete_ubisoft_2fa(self, code: str) -> Dict[str, Any]:
+        """Complete Ubisoft Connect 2FA verification"""
+        return await self.ubisoft.complete_auth_2fa(code)
+
+    async def logout_ubisoft(self) -> Dict[str, Any]:
+        """Logout from Ubisoft Connect"""
+        return await self.ubisoft.logout()
+
+    async def repair_ubisoft_prefix(self, space_id: str) -> Dict[str, Any]:
+        """Repair a Ubisoft game's Wine prefix (re-clone from template)"""
+        logger.info(f"[RPC] repair_ubisoft_prefix: {space_id}")
+        return await self.ubisoft.repair_prefix(space_id)
+
+    async def get_ubisoft_library(self) -> List[Dict[str, Any]]:
+        """Get Ubisoft Connect library"""
+        games = await self.ubisoft.get_library()
+        return [asdict(game) for game in games]
+
     async def get_amazon_library(self) -> List[Dict[str, Any]]:
         """Get Amazon Games library"""
         games = await self.amazon.get_library()
@@ -5643,6 +6131,7 @@ class Plugin:
         try:
             # Load steam_app_id cache for ProtonDB lookups
             steam_appid_cache = load_steam_appid_cache()
+            ubisoft_installed_cache: Optional[Dict[str, Any]] = None
             
             shortcuts = await self.shortcuts_manager.read_shortcuts()
             games = []
@@ -5663,6 +6152,33 @@ class Plugin:
                 # Check installation status using games.map (authoritative source)
                 # This works for any install location and auto-cleans stale entries
                 is_installed = self.shortcuts_manager._is_in_game_map(store, game_id)
+
+                # Ubisoft installs can complete outside download queue updates.
+                # If games.map is stale/missing, fall back to direct prefix scan and
+                # immediately rehydrate games.map so Installed tab stays accurate.
+                if store == 'ubisoft' and not is_installed:
+                    if ubisoft_installed_cache is None:
+                        try:
+                            ubisoft_installed_cache = await self.ubisoft.get_installed()
+                        except Exception as e:
+                            logger.warning(f"[GamesList] Ubisoft installed scan failed: {e}")
+                            ubisoft_installed_cache = {}
+
+                    ubisoft_info = ubisoft_installed_cache.get(game_id, {}) if isinstance(ubisoft_installed_cache, dict) else {}
+                    install_path = ubisoft_info.get('install_path', '') if isinstance(ubisoft_info, dict) else ''
+                    if install_path and os.path.exists(install_path):
+                        is_installed = True
+                        try:
+                            executable = ubisoft_info.get('executable', '') if isinstance(ubisoft_info, dict) else ''
+                            work_dir = ubisoft_info.get('work_dir', '') if isinstance(ubisoft_info, dict) else ''
+                            await self.shortcuts_manager._update_game_map(
+                                'ubisoft',
+                                game_id,
+                                executable or '',
+                                work_dir or install_path,
+                            )
+                        except Exception as map_err:
+                            logger.warning(f"[GamesList] Failed to update games.map for Ubisoft {game_id}: {map_err}")
                 
                 # Get appId
                 app_id = shortcut.get('appid')
@@ -5953,9 +6469,12 @@ class Plugin:
                                         install_dir = parts[2]
                                         
                                         # Safety check: ensure we're deleting from expected locations
-                                        # Only delete if path contains "Games", "Epic", "GOG", or "unifideck"
-                                        # and is NOT root or home root
+                                        # Only delete if path contains "Games", "Epic", "GOG", "unifideck",
+                                        # or is under the user's custom install path
                                         safe_keywords = ['/Games/', '/Epic', '/GOG', 'unifideck']
+                                        custom_path = self.download_queue._get_custom_path()
+                                        if custom_path:
+                                            safe_keywords.append(os.path.realpath(custom_path))
                                         is_safe = any(k in install_dir for k in safe_keywords)
                                         home_dir = os.path.expanduser("~")
                                         games_dir = os.path.join(home_dir, "Games")
@@ -5989,10 +6508,18 @@ class Plugin:
                     new_shortcuts["shortcuts"][str(next_idx)] = shortcut
                     next_idx += 1
 
+                # Collect appIds of shortcuts to remove (for frontend Steam API calls)
+                deleted_app_ids = []
+                for idx, shortcut in unifideck_shortcuts.items():
+                    app_id = shortcut.get('appid')
+                    if app_id:
+                        deleted_app_ids.append(app_id)
+
                 # Write shortcuts
                 await self.shortcuts_manager.write_shortcuts(new_shortcuts)
                 stats['deleted_games'] = len(unifideck_shortcuts)
                 stats['preserved_shortcuts'] = len(original_shortcuts)
+                stats['deleted_app_ids'] = deleted_app_ids
 
                 # Delete artwork
                 if self.steamgriddb:
@@ -6004,31 +6531,30 @@ class Plugin:
                                 stats['deleted_artwork'] += 1
                         await asyncio.sleep(0.01)
 
-                # 3. DELETE AUTH TOKENS
-                # Epic - ~/.config/legendary/user.json
-                # GOG - ~/.config/unifideck/gog_token.json
-                # Amazon - ~/.config/nile/user.json
+                # 3. DELETE AUTH TOKENS (ALL stores)
                 try:
-                    epic_auth = os.path.expanduser("~/.config/legendary/user.json")
-                    if os.path.exists(epic_auth):
-                        os.remove(epic_auth)
-                        logger.info("[Cleanup] Deleted Epic auth token")
-                    
-                    gog_auth = os.path.expanduser("~/.config/unifideck/gog_token.json")
-                    if os.path.exists(gog_auth):
-                        os.remove(gog_auth)
-                        logger.info("[Cleanup] Deleted GOG auth token")
-                    
-                    amazon_auth = os.path.expanduser("~/.config/nile/user.json")
-                    if os.path.exists(amazon_auth):
-                        os.remove(amazon_auth)
-                        logger.info("[Cleanup] Deleted Amazon auth token")
-                        
+                    auth_files = [
+                        "~/.config/legendary/user.json",                    # Epic
+                        "~/.config/unifideck/gog_token.json",               # GOG
+                        "~/.config/unifideck/gogdl/auth.json",              # GOG DL
+                        "~/.config/nile/user.json",                         # Amazon auth
+                        "~/.config/nile/library.json",                      # Amazon cached library
+                        "~/.config/nile/installed.json",                    # Amazon installed tracking
+                        "~/.local/share/unifideck/ubisoft_token.json",      # Ubisoft API
+                        "~/.local/share/unifideck/ubisoft_upc_session.txt", # Ubisoft UPC session
+                    ]
+                    for auth_path in auth_files:
+                        full = os.path.expanduser(auth_path)
+                        if os.path.exists(full):
+                            os.remove(full)
+                            logger.info(f"[Cleanup] Deleted auth: {full}")
+
                     # Reset in-memory states
-                    self.gog = GOGAPIClient(plugin_dir=DECKY_PLUGIN_DIR, plugin_instance=self) # Re-init to clear tokens
-                    self.amazon = AmazonConnector(plugin_dir=DECKY_PLUGIN_DIR, plugin_instance=self) # Re-init Amazon too
-                    # Epic relies on legendary CLI existence, which checks file, so it's auto-cleared
-                    
+                    self.gog = GOGAPIClient(plugin_dir=DECKY_PLUGIN_DIR, plugin_instance=self)
+                    self.amazon = AmazonConnector(plugin_dir=DECKY_PLUGIN_DIR, plugin_instance=self)
+                    if hasattr(self, 'ubisoft') and self.ubisoft:
+                        self.ubisoft.api._clear_tokens()
+
                     stats['auth_deleted'] = True
                 except Exception as e:
                     logger.error(f"[Cleanup] Error deleting auth tokens: {e}")
@@ -6047,13 +6573,28 @@ class Plugin:
                     os.path.join(get_rawg_metadata_cache_path()), # RAWG metadata cache
                     os.path.join(get_unifidb_metadata_cache_path()), # unifiDB metadata cache
                     os.path.join(get_metacritic_metadata_cache_path()), # Metacritic metadata cache
-                    os.path.join(get_artwork_attempts_cache_path()) # Artwork attempts cache
+                    os.path.join(get_artwork_attempts_cache_path()), # Artwork attempts cache
+                    "~/.local/share/unifideck/compat_cache.json",
+                    "~/.local/share/unifideck/ubisoft_id_map.json",
+                    "~/.local/share/unifideck/ubisoft_visible_games.json",
+                    "~/.local/share/unifideck/ubisoft_game_db.txt",
+                    "~/.config/unifideck/cloud_sync_state.json",
                 ]
-                
+
                 # Only delete games.map and registry if we're also deleting game files (destructive mode)
                 if delete_files:
                     files_to_delete.append("~/.local/share/unifideck/games.map")
                     files_to_delete.append("~/.local/share/unifideck/games_registry.json")
+                    files_to_delete.append("~/.local/share/unifideck/settings.json")
+                    # Delete Ubisoft Wine prefixes (contain DPAPI-encrypted credentials)
+                    for dir_path in [
+                        "~/.local/share/unifideck/prefixes/ubisoft",
+                        "~/.local/share/unifideck/ubisoft_installer_cache",
+                    ]:
+                        full_dir = os.path.expanduser(dir_path)
+                        if os.path.isdir(full_dir):
+                            shutil.rmtree(full_dir, ignore_errors=True)
+                            logger.info(f"[Cleanup] Deleted directory: {full_dir}")
 
                 for file_path in files_to_delete:
                     try:

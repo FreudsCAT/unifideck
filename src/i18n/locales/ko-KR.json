@@ -13,7 +13,30 @@
     "toastUpdatedBody": "새 게임은 {{location}}에 설치됩니다",
     "toastFailedTitle": "업데이트 실패",
     "toastFailedBody": "{{error}}",
-    "unknown": "알 수 없음"
+    "unknown": "알 수 없음",
+    "browseButton": "찾아보기...",
+    "clearCustom": "사용자 지정 설치 위치 지우기",
+    "customPathSet": "사용자 지정 설치 위치가 설정되었습니다",
+    "newFolder": "새 폴더",
+    "newFolderCreate": "만들기",
+    "selectFolder": "이 폴더 사용",
+    "emptyDirectory": "빈 폴더",
+    "showHidden": "숨김 항목 표시",
+    "selectDevice": "장치 선택",
+    "sortAZ": "A-Z",
+    "sortZA": "Z-A",
+    "sortModifiedNewest": "수정일 (최신순)",
+    "sortModifiedOldest": "수정일 (오래된 순)",
+    "sortCreatedNewest": "생성일 (최신순)",
+    "sortCreatedOldest": "생성일 (오래된 순)",
+    "sortSizeLargest": "크기 (큰 순)",
+    "sortSizeSmallest": "크기 (작은 순)",
+    "validationErrors.notAbsolute": "경로는 절대 경로여야 합니다",
+    "validationErrors.systemDir": "시스템 디렉터리는 사용할 수 없습니다",
+    "validationErrors.notWritable": "이 위치에는 쓸 수 없습니다",
+    "validationErrors.notFound": "디렉터리가 존재하지 않습니다",
+    "validationErrors.homeRoot": "홈 디렉터리 루트는 사용할 수 없습니다",
+    "freeSpaceLabel": "{{label}} (여유 공간 {{freeSpace}} GB)"
   },
   "gameGrid": {
     "loading": "게임 불러오는 중...",
@@ -52,7 +75,17 @@
     "phaseExtracting": "{{game}} 압축 해제 중...",
     "phaseVerifying": "{{game}} 검증 중...",
     "internalStorage": "내부 저장소 (여유 {{freeSpace}}GB)",
-    "sdCard": "SD 카드 (여유 {{freeSpace}}GB)"
+    "sdCard": "SD 카드 (여유 {{freeSpace}}GB)",
+    "customLocation": "사용자 지정: {{path}} (여유 {{freeSpace}}GB)",
+    "extractingLabel": "압축 해제 중...",
+    "verifyingLabel": "검증 중...",
+    "updateQueuedLabel": "업데이트 대기 중",
+    "downloadQueuedLabel": "다운로드 대기 중",
+    "downloadingUpdateLabel": "업데이트 다운로드 중",
+    "downloadingLabel": "다운로드 중...",
+    "finalizingInstallation": "설치를 마무리하는 중...",
+    "speedMbps": "{{speed}} MB/s",
+    "etaLabel": "남은 시간: {{eta}}"
   },
   "cloudSave": {
     "title": "클라우드 저장 충돌",
@@ -75,6 +108,7 @@
     "epicGames": "Epic Games",
     "gog": "GOG",
     "amazonGames": "Amazon Games",
+    "ubisoftConnect": "Ubisoft Connect",
     "connected": "연결됨",
     "checking": "확인 중...",
     "authenticate": "로그인",
@@ -114,7 +148,10 @@
     "cancel": "✖ 취소",
     "processing": "처리 중...",
     "checking": "확인 중...",
-    "size": "{{size}} GB"
+    "size": "{{size}} GB",
+    "update": "업데이트",
+    "updateAvailable": "업데이트 가능",
+    "updateAvailableDescription": "새 버전을 설치할 수 있습니다."
   },
   "confirmModals": {
     "installTitle": "설치 확인",
@@ -132,12 +169,23 @@
     "steamRestartDescriptionStore": "새로운 {{store}} 게임과 아트워크를 적용하려면 Steam을 다시 시작하세요",
     "restartNow": "지금 다시 시작",
     "later": "나중에",
+    "ubisoftInstallTitle": "Ubisoft Connect 필요",
+    "ubisoftInstallDescription": "이 작업은 Ubisoft Connect 런처를 실행하며, 그곳에서 {{title}}를 설치해야 합니다.",
+    "ubisoftInstallConfirm": "Ubisoft Connect 열기",
     "yes": "예",
-    "no": "아니요"
+    "no": "아니요",
+    "amazonUpdateTitle": "전체 재다운로드 필요",
+    "amazonUpdateDescription": "Amazon 업데이트에는 {{title}} 전체를 다시 다운로드해야 합니다. 시간이 조금 걸릴 수 있습니다. 계속하시겠습니까?",
+    "updateConfirm": "업데이트"
   },
   "toasts": {
     "downloadStarted": "다운로드가 시작되었습니다. UNIFIDECK > 다운로드를 확인하세요",
     "downloadQueued": "{{title}}이(가) 대기열에 추가되었습니다.",
+    "ubisoftLauncherOpening": "Ubisoft Connect를 여는 중",
+    "ubisoftLauncherOpeningMessage": "{{title}}용 Ubisoft Connect를 여는 중입니다. 그곳에서 게임을 설치한 뒤 돌아와 플레이하세요.",
+    "ubisoftLauncherAlreadyOpenMessage": "이번 설치용 Ubisoft Connect는 이미 열려 있습니다.",
+    "ubisoftLauncherOpenFailed": "Ubisoft Connect를 열 수 없음",
+    "ubisoftLauncherOpenFailedMessage": "설치를 위해 Ubisoft Connect를 열지 못했습니다.",
     "multipartDetected": "멀티파트 다운로드 감지됨",
     "multipartMessage": "완료될 때까지 기다려 주세요",
     "downloadFailed": "다운로드 실패",
@@ -169,6 +217,10 @@
     "cleanupSuccessful": "정리 성공",
     "cleanupSuccessfulMessage": "{{games}}개 게임, {{artwork}}개 아트워크 세트, {{files}}개 파일 디렉토리가 제거되었습니다. 인증 및 캐시가 지워졌습니다.",
     "deleteFailed": "삭제 실패",
+    "repairPrefixSuccess": "접두사(Prefix) 복구됨",
+    "repairPrefixSuccessMessage": "Ubisoft Connect 접두사(Prefix)가 다시 빌드되었습니다",
+    "repairPrefixFailed": "복구 실패",
+    "repairPrefixFailedMessage": "접두사(Prefix)를 복구할 수 없습니다: {{error}}",
     "unifideck": "Unifideck:",
     "launcher": {
       "networkError": "네트워크 오류",
@@ -185,6 +237,7 @@
       "startingEpicGame": "Epic 게임 시작 중...",
       "startingAmazonGame": "Amazon 게임 시작 중...",
       "startingGogGame": "GOG 게임 시작 중...",
+      "startingUbisoftGame": "Ubisoft 게임 시작 중...",
       "dependenciesTitle": "종속성 설치 중",
       "installingRedistributables": "게임 재배포 가능 패키지 설치 중...",
       "dependenciesReady": "종속성 준비 완료",
@@ -206,8 +259,12 @@
       "prerequisitesFailed": "사전 요구 사항 경고",
       "prerequisitesFailedMessage": "사전 요구 사항이 올바르게 설치되지 않았을 수 있습니다"
     },
-    "updateComplete": "Update Complete!",
-    "updateCompleteMessage": "{{title}} has been updated."
+    "updateComplete": "업데이트 완료!",
+    "updateCompleteMessage": "{{title}} 업데이트가 완료되었습니다.",
+    "updateCancelled": "업데이트 취소됨",
+    "updateCancelledMessage": "{{title}} 업데이트가 취소되었습니다.",
+    "updateFailed": "업데이트 실패",
+    "updateFailedMessage": "업데이트를 시작하지 못했습니다."
   },
   "uninstallModal": {
     "title": "제거 확인",
@@ -254,8 +311,14 @@
       "processFailed": "다운로드 실패 — 다시 시도하세요",
       "directoryNotFound": "설치된 파일을 찾을 수 없습니다",
       "lockConflict": "다른 작업이 진행 중입니다 — 다시 시도하세요",
+      "ubisoftClient": "Ubisoft Connect 클라이언트 오류 — 접두사(Prefix) 복구를 시도해 보세요",
+      "ubisoftClientNotRunning": "Ubisoft Connect 클라이언트가 응답하지 않습니다",
+      "ubisoftBootstrap": "Ubisoft Connect 접두사(Prefix)를 설정하지 못했습니다",
+      "ubisoftUmuMissing": "umu-run을 찾을 수 없음 — Ubisoft 게임에 필요합니다",
       "generic": "설치 실패 — 로그를 확인하세요"
-    }
+    },
+    "unknown": "알 수 없는 오류",
+    "steamAppsUnavailable": "SteamClient.Apps API를 사용할 수 없습니다"
   },
   "sync": {
     "downloadingArtwork": "{{game}} 아트워크 다운로드 중...",
@@ -292,7 +355,12 @@
     "greatOnDeck": "Steam Deck에 최적화됨",
     "allGames": "모든 게임",
     "installed": "설치됨",
-    "nonSteam": "비Steam"
+    "nonSteam": "비Steam",
+    "steam": "Steam",
+    "epic": "Epic",
+    "gog": "GOG",
+    "amazon": "Amazon",
+    "ubisoft": "Ubisoft"
   },
   "unifiedLibrary": {
     "error": "Unifideck 오류",
@@ -344,7 +412,8 @@
       "playable": "플레이가능",
       "unsupported": "비지원",
       "unknown": "미알려짐"
-    }
+    },
+    "failedToLoadMetadata": "메타데이터를 불러오지 못했습니다"
   },
   "gameDetailsSettings": {
     "title": "게임 상세 정보 보기",
@@ -370,5 +439,35 @@
     "toastMigrateBody": "{{shortcuts}}개의 바로가기와 {{artwork}}개의 아트워크 파일이 마이그레이션되었습니다",
     "toastClearTitle": "인증 토큰 초기화됨",
     "toastClearBody": "스토어 로그인이 초기화되었습니다. 이제 다른 계정으로 로그인할 수 있습니다."
+  },
+  "ubisoftAuth": {
+    "title": "Ubisoft Connect 로그인",
+    "description": "라이브러리를 연결하려면 Ubisoft 계정 자격 증명을 입력하세요.",
+    "emailLabel": "이메일",
+    "passwordLabel": "비밀번호",
+    "signIn": "로그인",
+    "signingIn": "로그인 중...",
+    "cancel": "취소",
+    "twoFactorTitle": "2단계 인증",
+    "twoFactorDescription": "인증 앱의 확인 코드를 입력하세요.",
+    "twoFactorLabel": "확인 코드",
+    "verify": "확인",
+    "verifying": "확인 중...",
+    "errorEmptyFields": "이메일과 비밀번호를 입력하세요",
+    "errorEmpty2FA": "확인 코드를 입력하세요",
+    "errorLoginFailed": "로그인에 실패했습니다. 자격 증명을 확인하세요.",
+    "errorInvalid2FA": "확인 코드가 올바르지 않습니다. 다시 시도하세요.",
+    "showPassword": "비밀번호 표시",
+    "hidePassword": "비밀번호 숨기기",
+    "doubleLoginWarning": "Ubisoft에서는 두 번 로그인해야 합니다."
+  },
+  "relativeDate": {
+    "today": "오늘",
+    "yesterday": "어제"
+  },
+  "common": {
+    "thisGame": "이 게임",
+    "game": "게임",
+    "unknown": "알 수 없음"
   }
 }

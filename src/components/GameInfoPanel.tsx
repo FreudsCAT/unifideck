@@ -7,6 +7,11 @@ import StoreIcon from "./StoreIcon";
 import { UninstallConfirmModal } from "./UninstallConfirmModal";
 import { GOGLanguageSelectModal } from "./GOGLanguageSelectModal";
 import { updateSingleGameStatus } from "../tabs";
+import {
+  isShortcutAppRunning,
+  launchUbisoftInstallViaShortcut,
+  terminateShortcutApp,
+} from "../utils/ubisoftShortcutLaunch";
 
 // Steam Deck compatibility categories
 enum ESteamDeckCompatibilityCategory {
@@ -119,12 +124,14 @@ const GameInfoPanelInner: React.FC<GameInfoPanelProps> = ({ appId }) => {
   // Install button state
   const [gameInfo, setGameInfo] = useState<any>(null);
   const [processing, setProcessing] = useState(false);
+  const [ubisoftInstalling, setUbisoftInstalling] = useState(false);
   const [downloadState, setDownloadState] = useState<{
     isDownloading: boolean;
     progress?: number;
     downloadId?: string;
   }>({ isDownloading: false });
   const pollIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const ubisoftInstallPollTicksRef = useRef(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -151,7 +158,7 @@ const GameInfoPanelInner: React.FC<GameInfoPanelProps> = ({ appId }) => {
               `[Unifideck GameInfoPanel] Metadata set for ${result.title}`,
             );
           } else {
-            setError("No metadata available");
+            setError("gameInfoPanel.noMetadata");
             console.log(`[Unifideck GameInfoPanel] No metadata returned`);
           }
           setLoading(false);
@@ -162,7 +169,7 @@ const GameInfoPanelInner: React.FC<GameInfoPanelProps> = ({ appId }) => {
           err,
         );
         if (!cancelled) {
-          setError("Failed to load metadata");
+          setError("gameInfoPanel.failedToLoadMetadata");
           setLoading(false);
         }
       }
@@ -179,7 +186,15 @@ const GameInfoPanelInner: React.FC<GameInfoPanelProps> = ({ appId }) => {
   useEffect(() => {
     call<[number], any>("get_game_info", appId)
       .then((info) => {
-        setGameInfo(info?.error ? null : info);
+        const processedInfo = info?.error ? null : info;
+        setGameInfo(processedInfo);
+        if (processedInfo?.is_installed) {
+          updateSingleGameStatus({
+            appId,
+            store: processedInfo.store,
+            isInstalled: true,
+          });
+        }
       })
       .catch(() => setGameInfo(null));
   }, [appId]);
@@ -219,19 +234,10 @@ const GameInfoPanelInner: React.FC<GameInfoPanelProps> = ({ appId }) => {
             }
           }
 
-          // Detect completion
+          // Detect completion (toast handled by PlaySectionWrapper)
           if (prevState.isDownloading && !newState.isDownloading) {
             const finalStatus = result.download_info?.status;
             if (finalStatus === "completed") {
-              toaster.toast({
-                title: t("toasts.installComplete"),
-                body: t("toasts.installCompleteMessage", {
-                  title: gameInfo?.title || "Game",
-                }),
-                duration: 10000,
-                critical: true,
-              });
-
               // Refresh game info
               call<[number], any>("get_game_info", appId).then((info) => {
                 const processedInfo = info?.error ? null : info;
@@ -249,6 +255,40 @@ const GameInfoPanelInner: React.FC<GameInfoPanelProps> = ({ appId }) => {
 
           return newState;
         });
+
+        // Ubisoft launcher-driven installs bypass download queue status updates.
+        // Poll get_game_info periodically so Install -> Play updates automatically.
+        if (
+          gameInfo.store === "ubisoft" &&
+          !gameInfo.is_installed &&
+          !(result.success && result.is_downloading)
+        ) {
+          ubisoftInstallPollTicksRef.current += 1;
+          if (ubisoftInstallPollTicksRef.current % 10 === 0) {
+            // Check if install session is still active
+            const active = await call<[string], boolean>(
+              "is_ubisoft_install_active",
+              gameInfo.game_id,
+            );
+            if (!active && !isShortcutAppRunning(appId)) {
+              setUbisoftInstalling(false);
+            }
+
+            const refreshed = await call<[number], any>("get_game_info", appId);
+            const refreshedInfo = refreshed?.error ? null : refreshed;
+            if (refreshedInfo?.is_installed) {
+              setUbisoftInstalling(false);
+              setGameInfo(refreshedInfo);
+              updateSingleGameStatus({
+                appId,
+                store: refreshedInfo.store,
+                isInstalled: true,
+              });
+            }
+          }
+        } else {
+          ubisoftInstallPollTicksRef.current = 0;
+        }
       } catch (error) {
         console.error("[GameInfoPanel] Error checking download state:", error);
       }
@@ -307,9 +347,79 @@ const GameInfoPanelInner: React.FC<GameInfoPanelProps> = ({ appId }) => {
     setProcessing(false);
   };
 
+  const startUbisoftInstall = async () => {
+    if (!gameInfo) return;
+    setProcessing(true);
+    setUbisoftInstalling(true);
+    let result = await launchUbisoftInstallViaShortcut(
+      `${gameInfo.store}:${gameInfo.game_id}`,
+    );
+
+    if (!result.success) {
+      result = await call<
+        [string, string],
+        { success: boolean; already_running?: boolean; error?: string }
+      >("open_ubisoft_launcher_for_install", gameInfo.game_id, gameInfo.title);
+    }
+
+    if (result.success) {
+      toaster.toast({
+        title: t("toasts.ubisoftLauncherOpening"),
+        body: t(
+          result.already_running
+            ? "toasts.ubisoftLauncherAlreadyOpenMessage"
+            : "toasts.ubisoftLauncherOpeningMessage",
+          { title: gameInfo.title },
+        ),
+        duration: 7000,
+      });
+    } else {
+      setUbisoftInstalling(false);
+      toaster.toast({
+        title: t("toasts.ubisoftLauncherOpenFailed"),
+        body: result.error
+          ? t(result.error)
+          : t("toasts.ubisoftLauncherOpenFailedMessage"),
+        duration: 10000,
+        critical: true,
+      });
+    }
+    setProcessing(false);
+  };
+
+  const cancelUbisoftInstall = async () => {
+    if (!gameInfo) return;
+    const terminated = terminateShortcutApp(appId);
+    const result = await call<[string], { success: boolean; error?: string }>(
+      "cancel_ubisoft_install",
+      gameInfo.game_id,
+    );
+    setUbisoftInstalling(false);
+    if (terminated || result.success) {
+      toaster.toast({
+        title: t("toasts.downloadCancelled"),
+        body: t("toasts.downloadCancelledMessage", { title: gameInfo.title }),
+        duration: 5000,
+      });
+      return;
+    }
+
+    toaster.toast({
+      title: t("toasts.cancelFailed"),
+      body: result.error ? t(result.error) : t("toasts.cancelFailedMessage"),
+      duration: 5000,
+      critical: true,
+    });
+  };
+
   // Install handler - checks for GOG language selection
   const handleInstall = async () => {
     if (!gameInfo) return;
+
+    if (gameInfo.store === "ubisoft") {
+      await startUbisoftInstall();
+      return;
+    }
 
     // For GOG games, check if multiple languages are available
     if (gameInfo.store === "gog") {
@@ -421,18 +531,37 @@ const GameInfoPanelInner: React.FC<GameInfoPanelProps> = ({ appId }) => {
           : t("toasts.uninstallCompleteMessage", { title: gameInfo.title }),
         duration: 10000,
       });
+    } else {
+      toaster.toast({
+        title: t("errors.uninstallFailed"),
+        body: result?.error ? t(result.error) : t("errors.uninstallFailed"),
+        duration: 10000,
+        critical: true,
+      });
     }
     setProcessing(false);
   };
 
   const showInstallConfirmation = () => {
+    const isUbisoft = gameInfo?.store === "ubisoft";
     showModal(
       <ConfirmModal
-        strTitle={t("confirmModals.installTitle")}
-        strDescription={t("confirmModals.installDescription", {
-          title: gameInfo?.title,
-        })}
-        strOKButtonText={t("confirmModals.yes")}
+        strTitle={t(
+          isUbisoft
+            ? "confirmModals.ubisoftInstallTitle"
+            : "confirmModals.installTitle",
+        )}
+        strDescription={t(
+          isUbisoft
+            ? "confirmModals.ubisoftInstallDescription"
+            : "confirmModals.installDescription",
+          { title: gameInfo?.title },
+        )}
+        strOKButtonText={t(
+          isUbisoft
+            ? "confirmModals.ubisoftInstallConfirm"
+            : "confirmModals.yes",
+        )}
         strCancelButtonText={t("confirmModals.no")}
         onOK={() => {
           handleInstall();
@@ -445,7 +574,7 @@ const GameInfoPanelInner: React.FC<GameInfoPanelProps> = ({ appId }) => {
   const showUninstallConfirmation = () => {
     showModal(
       <UninstallConfirmModal
-        gameTitle={gameInfo?.title || "this game"}
+        gameTitle={gameInfo?.title || t("common.thisGame")}
         onConfirm={(deletePrefix) => handleUninstall(deletePrefix)}
       />,
     );
@@ -718,7 +847,7 @@ const GameInfoPanelInner: React.FC<GameInfoPanelProps> = ({ appId }) => {
     return (
       <div style={containerStyle}>
         <div style={{ color: "#8f98a0", fontSize: "14px" }}>
-          {error || t("gameInfoPanel.noMetadata")}
+          {error ? t(error) : t("gameInfoPanel.noMetadata")}
         </div>
       </div>
     );
@@ -791,12 +920,14 @@ const GameInfoPanelInner: React.FC<GameInfoPanelProps> = ({ appId }) => {
         {/* Install/Uninstall/Cancel Button */}
         {gameInfo &&
           !gameInfo.error &&
-          gameInfo.is_installed &&
+          (gameInfo.is_installed || ubisoftInstalling) &&
           !downloadState.isDownloading && (
             <DialogButton
               onClick={
                 processing
                   ? undefined
+                  : ubisoftInstalling
+                  ? cancelUbisoftInstall
                   : downloadState.isDownloading
                   ? showCancelConfirmation
                   : gameInfo.is_installed
@@ -814,7 +945,7 @@ const GameInfoPanelInner: React.FC<GameInfoPanelProps> = ({ appId }) => {
                 opacity: processing ? 0.5 : 1,
               }}
               className={`unifideck-nav-button unifideck-install-button ${
-                downloadState.isDownloading
+                ubisoftInstalling || downloadState.isDownloading
                   ? "cancel-state"
                   : gameInfo.is_installed
                   ? "uninstall-state"
@@ -824,6 +955,8 @@ const GameInfoPanelInner: React.FC<GameInfoPanelProps> = ({ appId }) => {
               <span>
                 {processing
                   ? "..."
+                  : ubisoftInstalling
+                  ? t("gameInfoPanel.buttons.cancel")
                   : downloadState.isDownloading
                   ? `${t("gameInfoPanel.buttons.cancel")} (${
                       downloadState.progress || 0

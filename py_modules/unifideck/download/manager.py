@@ -5,7 +5,7 @@ Manages download queue for Epic and GOG games with:
 - Queue persistence across plugin restarts
 - Real-time progress tracking via CLI output parsing
 - Cancel functionality
-- Storage location selection (Internal/SD Card)
+- Storage location selection (Internal/SD Card/Custom)
 """
 
 import os
@@ -35,6 +35,7 @@ class DownloadStatus(str, Enum):
 class StorageLocation(str, Enum):
     INTERNAL = "internal"
     SDCARD = "sdcard"
+    CUSTOM = "custom"
 
 
 # Storage paths
@@ -77,6 +78,16 @@ def classify_download_error(raw_error: str) -> str:
     if any(p in lower for p in ['binary not found', 'not found', 'cli not found',
                                   'command not found', 'no such file']):
         return "errors.download.toolMissing"
+
+    # Ubisoft-specific errors
+    if 'bootstrap' in lower and ('ubisoft' in lower or 'prefix' in lower):
+        return "errors.download.ubisoftBootstrap"
+    if any(p in lower for p in ['upc', 'uplay', 'ubisoft connect']):
+        return "errors.download.ubisoftClient"
+    if 'connection refused' in lower and ('ubisoft' in lower or 'upc' in lower):
+        return "errors.download.ubisoftClientNotRunning"
+    if 'umu-run' in lower or 'umu_run' in lower:
+        return "errors.download.ubisoftUmuMissing"
     
     # Could not find installed files after download
     if any(p in lower for p in ['could not locate', 'directory not found',
@@ -156,6 +167,7 @@ class DownloadQueue:
         self._progress_callback: Optional[Callable] = None
         self._on_complete_callback: Optional[Callable] = None
         self._gog_install_callback: Optional[Callable] = None  # For GOG API-based downloads
+        self._ubisoft_install_callback: Optional[Callable] = None  # For Ubisoft UPC-based downloads
         self._size_cache_callback: Optional[Callable] = None  # For updating game size cache
         self._size_cached_items: set = set()  # Track which items have had size cached (store:game_id)
         
@@ -174,13 +186,14 @@ class DownloadQueue:
         logger.info(f"[DownloadQueue] Initialized with {len(self.queue)} queued items, plugin_dir={plugin_dir}")
 
     def cleanup_processes(self):
-        """Kill any lingering gogdl/legendary/nile processes from previous session"""
+        """Kill any lingering gogdl/legendary/nile/upc.exe processes from previous session"""
         try:
             # Simple kill by name - safer than PID which might be reused
             # We want to kill these specific binaries that might be hung
             subprocess.run(['pkill', '-f', 'gogdl'], capture_output=True)
             subprocess.run(['pkill', '-f', 'legendary'], capture_output=True)
             subprocess.run(['pkill', '-f', 'nile'], capture_output=True)
+            subprocess.run(['pkill', '-f', 'upc.exe'], capture_output=True)
             logger.info("[DownloadQueue] Cleaned up orphaned download processes")
         except Exception as e:
             logger.warning(f"[DownloadQueue] Error cleaning orphaned processes: {e}")
@@ -288,11 +301,11 @@ class DownloadQueue:
     def get_storage_locations(self) -> List[Dict[str, Any]]:
         """Get available storage locations with free space info"""
         locations = []
-        
+
         for loc, path in STORAGE_PATHS.items():
             available = False
             free_space_gb = 0
-            
+
             # Check if path exists or can be created
             if loc == StorageLocation.INTERNAL:
                 available = True
@@ -313,7 +326,7 @@ class DownloadQueue:
                         free_space_gb = (statvfs.f_frsize * statvfs.f_bavail) / (1024**3)
                     except:
                         pass
-            
+
             locations.append({
                 'id': loc,
                 'label': 'downloadsTab.internalStorage' if loc == StorageLocation.INTERNAL else 'downloadsTab.sdCard',
@@ -321,12 +334,38 @@ class DownloadQueue:
                 'available': available,
                 'free_space_gb': round(free_space_gb, 1) if available else 0
             })
-        
+
+        # Add custom location if configured
+        custom_path = self._get_custom_path()
+        if custom_path:
+            available = os.path.isdir(custom_path)
+            free_space_gb = 0
+            if available:
+                try:
+                    statvfs = os.statvfs(custom_path)
+                    free_space_gb = round((statvfs.f_frsize * statvfs.f_bavail) / (1024**3), 1)
+                except:
+                    pass
+
+            locations.append({
+                'id': StorageLocation.CUSTOM,
+                'label': 'downloadsTab.customLocation',
+                'path': custom_path,
+                'available': available,
+                'free_space_gb': free_space_gb
+            })
+
         return locations
 
     def get_install_path(self, storage_location: str) -> str:
         """Get the install path for a storage location"""
-        if storage_location == StorageLocation.SDCARD:
+        if storage_location == StorageLocation.CUSTOM:
+            custom_path = self._get_custom_path()
+            if custom_path and os.path.isdir(custom_path):
+                return custom_path
+            logger.warning("[DownloadQueue] Custom path unavailable, falling back to internal")
+            return os.path.expanduser("~/Games")
+        elif storage_location == StorageLocation.SDCARD:
             sd_root = self._resolve_sd_path()
             if sd_root:
                 return os.path.join(sd_root, "Games")
@@ -366,6 +405,268 @@ class DownloadQueue:
             if os.path.exists(path) and os.path.isdir(path):
                 return path
         return None
+
+    def _get_custom_path(self) -> Optional[str]:
+        """Get the saved custom install path from settings"""
+        try:
+            if os.path.exists(self.SETTINGS_FILE):
+                with open(self.SETTINGS_FILE, 'r') as f:
+                    settings = json.load(f)
+                return settings.get('custom_path')
+        except Exception:
+            pass
+        return None
+
+    def set_custom_path(self, path: str) -> Dict[str, Any]:
+        """Validate and save a custom install path.
+
+        Returns:
+            Dict with success, error (i18n key), and free_space_gb
+        """
+        validation = self.validate_install_path(path)
+        if not validation.get('valid'):
+            return {'success': False, 'error': validation.get('error', 'Unknown error')}
+
+        try:
+            os.makedirs(os.path.dirname(self.SETTINGS_FILE), exist_ok=True)
+            settings = {}
+            if os.path.exists(self.SETTINGS_FILE):
+                with open(self.SETTINGS_FILE, 'r') as f:
+                    settings = json.load(f)
+            settings['custom_path'] = path
+            settings['default_storage'] = StorageLocation.CUSTOM
+            with open(self.SETTINGS_FILE, 'w') as f:
+                json.dump(settings, f)
+            logger.info(f"[DownloadQueue] Set custom install path: {path}")
+            return {
+                'success': True,
+                'free_space_gb': validation.get('free_space_gb', 0)
+            }
+        except Exception as e:
+            logger.error(f"[DownloadQueue] Error saving custom path: {e}")
+            return {'success': False, 'error': str(e)}
+
+    def clear_custom_path(self) -> bool:
+        """Remove the custom install path and revert to internal storage."""
+        try:
+            if os.path.exists(self.SETTINGS_FILE):
+                with open(self.SETTINGS_FILE, 'r') as f:
+                    settings = json.load(f)
+                settings.pop('custom_path', None)
+                if settings.get('default_storage') == StorageLocation.CUSTOM:
+                    settings['default_storage'] = StorageLocation.INTERNAL
+                with open(self.SETTINGS_FILE, 'w') as f:
+                    json.dump(settings, f)
+            logger.info("[DownloadQueue] Cleared custom install path")
+            return True
+        except Exception as e:
+            logger.error(f"[DownloadQueue] Error clearing custom path: {e}")
+            return False
+
+    def validate_install_path(self, path: str) -> Dict[str, Any]:
+        """Validate a path is suitable for game installation.
+
+        Returns:
+            Dict with 'valid' bool, optional 'error' i18n key, and 'free_space_gb'
+        """
+        # 1. Must be absolute
+        if not os.path.isabs(path):
+            return {'valid': False, 'error': 'storageSettings.validationErrors.notAbsolute'}
+
+        # 2. Resolve symlinks for safety
+        real_path = os.path.realpath(path)
+
+        # 3. Not a system directory
+        BLOCKED = {'/', '/usr', '/etc', '/bin', '/sbin', '/boot',
+                   '/dev', '/proc', '/sys', '/tmp', '/var', '/lib'}
+        if real_path in BLOCKED:
+            return {'valid': False, 'error': 'storageSettings.validationErrors.systemDir'}
+
+        # Also block paths directly under system dirs (e.g. /usr/games)
+        top_level = '/' + real_path.strip('/').split('/')[0] if real_path != '/' else '/'
+        if top_level in BLOCKED and top_level != '/':
+            return {'valid': False, 'error': 'storageSettings.validationErrors.systemDir'}
+
+        # 4. Not home root
+        home = os.path.realpath(os.path.expanduser("~"))
+        if real_path == home:
+            return {'valid': False, 'error': 'storageSettings.validationErrors.homeRoot'}
+
+        # 5. Directory exists or parent is writable
+        if os.path.exists(real_path):
+            if not os.path.isdir(real_path):
+                return {'valid': False, 'error': 'storageSettings.validationErrors.notWritable'}
+        else:
+            parent = os.path.dirname(real_path)
+            if not os.path.isdir(parent) or not os.access(parent, os.W_OK):
+                return {'valid': False, 'error': 'storageSettings.validationErrors.notFound'}
+
+        # 6. Writable check via temp file
+        test_dir = real_path if os.path.isdir(real_path) else os.path.dirname(real_path)
+        try:
+            test_file = os.path.join(test_dir, '.unifideck_write_test')
+            with open(test_file, 'w') as f:
+                f.write('test')
+            os.remove(test_file)
+        except (OSError, PermissionError):
+            return {'valid': False, 'error': 'storageSettings.validationErrors.notWritable'}
+
+        # 7. Free space
+        free_space_gb = 0
+        try:
+            statvfs = os.statvfs(test_dir)
+            free_space_gb = round((statvfs.f_frsize * statvfs.f_bavail) / (1024**3), 1)
+        except Exception:
+            pass
+
+        return {'valid': True, 'free_space_gb': free_space_gb}
+
+    def get_browseable_devices(self) -> List[Dict[str, Any]]:
+        """Get available device roots for quick navigation in the file picker.
+
+        Uses /proc/mounts to identify real mount points instead of listing
+        directory contents (which would show SD card subdirectories as USB).
+        """
+        devices = []
+
+        def _get_free_gb(path: str) -> float:
+            try:
+                st = os.statvfs(path)
+                return round((st.f_frsize * st.f_bavail) / (1024**3), 1)
+            except OSError:
+                return 0.0
+
+        # Internal storage (home directory)
+        home = os.path.expanduser("~")
+        devices.append({
+            'id': 'internal',
+            'label': 'Internal Storage',
+            'path': home,
+            'free_space_gb': _get_free_gb(home),
+        })
+
+        # SD card
+        sd_root = self._resolve_sd_path()
+        sd_real = os.path.realpath(sd_root) if sd_root else None
+        if sd_root:
+            sd_name = os.path.basename(sd_root)
+            devices.append({
+                'id': 'sdcard',
+                'label': f'SD Card ({sd_name})',
+                'path': sd_root,
+                'free_space_gb': _get_free_gb(sd_root),
+            })
+
+        # Other mounted devices: parse /proc/mounts for real mount points
+        # under /run/media/ that are NOT the SD card
+        try:
+            with open('/proc/mounts', 'r') as f:
+                for line in f:
+                    parts = line.split()
+                    if len(parts) < 2:
+                        continue
+                    mount_point = parts[1]
+                    # Only consider mounts under /run/media/
+                    if not mount_point.startswith('/run/media/'):
+                        continue
+                    if not os.path.isdir(mount_point):
+                        continue
+                    mount_real = os.path.realpath(mount_point)
+                    # Skip if this is the SD card we already added
+                    if sd_real and mount_real == sd_real:
+                        continue
+                    mount_name = os.path.basename(mount_point)
+                    devices.append({
+                        'id': f'usb:{mount_name}',
+                        'label': f'USB: {mount_name}',
+                        'path': mount_point,
+                        'free_space_gb': _get_free_gb(mount_point),
+                    })
+        except Exception as e:
+            logger.debug(f"[DownloadQueue] Error reading /proc/mounts: {e}")
+
+        return devices
+
+    def list_directory(self, path: str, include_hidden: bool = False, sort_by: str = 'name') -> Dict[str, Any]:
+        """List subdirectories in the given path for the custom file browser."""
+        if not os.path.isabs(path):
+            return {'success': False, 'error': 'Path must be absolute'}
+
+        real_path = os.path.realpath(path)
+        if not os.path.isdir(real_path):
+            return {'success': False, 'error': 'Not a directory'}
+
+        try:
+            entries = []
+            for item in os.listdir(real_path):
+                if not include_hidden and item.startswith('.'):
+                    continue
+                item_path = os.path.join(real_path, item)
+                if os.path.isdir(item_path):
+                    entries.append(item)
+
+            # Apply sorting
+            if sort_by == 'name_desc':
+                entries.sort(key=str.lower, reverse=True)
+            elif sort_by == 'modified_newest':
+                entries.sort(key=lambda x: self._safe_stat(os.path.join(real_path, x), 'mtime'), reverse=True)
+            elif sort_by == 'modified_oldest':
+                entries.sort(key=lambda x: self._safe_stat(os.path.join(real_path, x), 'mtime'))
+            elif sort_by == 'created_newest':
+                entries.sort(key=lambda x: self._safe_stat(os.path.join(real_path, x), 'ctime'), reverse=True)
+            elif sort_by == 'created_oldest':
+                entries.sort(key=lambda x: self._safe_stat(os.path.join(real_path, x), 'ctime'))
+            elif sort_by == 'size_largest':
+                entries.sort(key=lambda x: self._safe_stat(os.path.join(real_path, x), 'size'), reverse=True)
+            elif sort_by == 'size_smallest':
+                entries.sort(key=lambda x: self._safe_stat(os.path.join(real_path, x), 'size'))
+            else:  # 'name' (A-Z)
+                entries.sort(key=str.lower)
+
+            return {'success': True, 'path': real_path, 'directories': entries}
+        except PermissionError:
+            return {'success': False, 'error': 'Permission denied'}
+        except Exception as e:
+            return {'success': False, 'error': str(e)}
+
+    @staticmethod
+    def _safe_stat(path: str, attr: str) -> float:
+        """Get file stat safely, returning 0 on error."""
+        try:
+            if attr == 'mtime':
+                return os.path.getmtime(path)
+            elif attr == 'ctime':
+                return os.path.getctime(path)
+            elif attr == 'size':
+                return float(os.path.getsize(path))
+        except OSError:
+            pass
+        return 0.0
+
+    def create_directory(self, path: str) -> Dict[str, Any]:
+        """Create a directory at the given path (with safety validation)."""
+        if not os.path.isabs(path):
+            return {'success': False, 'error': 'storageSettings.validationErrors.notAbsolute'}
+
+        real_path = os.path.realpath(path)
+        BLOCKED = {'/', '/usr', '/etc', '/bin', '/sbin', '/boot',
+                   '/dev', '/proc', '/sys', '/tmp', '/var', '/lib'}
+        if real_path in BLOCKED:
+            return {'success': False, 'error': 'storageSettings.validationErrors.systemDir'}
+
+        home = os.path.realpath(os.path.expanduser("~"))
+        if real_path == home:
+            return {'success': False, 'error': 'storageSettings.validationErrors.homeRoot'}
+
+        try:
+            os.makedirs(path, exist_ok=True)
+            logger.info(f"[DownloadQueue] Created directory: {path}")
+            return {'success': True, 'path': path}
+        except PermissionError:
+            return {'success': False, 'error': 'storageSettings.validationErrors.notWritable'}
+        except Exception as e:
+            logger.error(f"[DownloadQueue] Error creating directory: {e}")
+            return {'success': False, 'error': str(e)}
 
     async def add_to_queue(
         self,
@@ -615,10 +916,15 @@ class DownloadQueue:
 
     def get_queue_info(self) -> Dict[str, Any]:
         """Get full queue information"""
+        finished_items = sorted(
+            self.finished,
+            key=lambda item: item.end_time or item.start_time or item.added_time or 0,
+            reverse=True,
+        )
         return {
             'current': self.get_current(),
             'queued': [item.to_dict() for item in self.queue[1:] if item.status == DownloadStatus.QUEUED],
-            'finished': [item.to_dict() for item in reversed(self.finished[-10:])],
+            'finished': [item.to_dict() for item in finished_items],
             'state': self.state
         }
 
@@ -669,7 +975,7 @@ class DownloadQueue:
             item.start_time = time.time()
             self._save()
             
-            logger.info(f"[DownloadQueue] Starting download: {item.game_title}")
+            logger.info(f"[DownloadQueue] Starting download: {item.game_title} (store={item.store}, game_id={item.game_id})")
             
             try:
                 success = await self._execute_download(item)
@@ -726,6 +1032,8 @@ class DownloadQueue:
             return await self._download_gog(item, install_path)
         elif item.store == 'amazon':
             return await self._download_amazon(item, install_path)
+        elif item.store == 'ubisoft':
+            return await self._download_ubisoft(item, install_path)
         else:
             logger.error(f"[DownloadQueue] Unknown store: {item.store}")
             return False
@@ -763,33 +1071,93 @@ class DownloadQueue:
             "install",
             item.game_id,
             "--base-path", install_path,
+            "--with-dlcs",  # Automatically install all owned DLCs
             "-y"  # Non-interactive
         ]
-        
+
         logger.info(f"[DownloadQueue] Running: {' '.join(cmd)}")
-        
+        logger.info(f"[DownloadQueue] DLC download enabled for {item.game_title}")
+
+        # Initialize phase tracking flags (set by _parse_legendary_output)
+        item._main_game_finished = False
+        item._dlc_phase_entered = False
+
         try:
             self.current_process = await asyncio.create_subprocess_exec(
                 *cmd,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT
             )
-            
+
             # Parse progress from output
             await self._parse_legendary_output(item)
-            
+
             return_code = await self.current_process.wait()
             self.current_process = None
-            
+
             if return_code == 0:
                 return True
-            else:
-                # Classify error from captured output
-                last_output = getattr(item, '_last_output_lines', '')
-                item.error_message = classify_download_error(last_output)
-                logger.error(f"[DownloadQueue] Epic download failed (code {return_code}), classified as: {item.error_message}")
-                return False
-            
+
+            # Non-zero exit — check if the base game installed OK but DLC failed
+            main_done = getattr(item, '_main_game_finished', False)
+            dlc_phase = getattr(item, '_dlc_phase_entered', False)
+            # Fallback: progress reaching 100% also indicates main game finished
+            progress_done = item.progress_percent >= 99.5
+
+            if (main_done or progress_done) and dlc_phase:
+                # Base game installed successfully, DLC download failed.
+                # Retry the same command — legendary will skip the installed
+                # base game and only attempt the DLC downloads.
+                logger.warning(
+                    f"[DownloadQueue] Base game installed OK but DLC phase failed "
+                    f"(code {return_code}). Retrying DLC downloads..."
+                )
+
+                max_dlc_retries = 2
+                for attempt in range(1, max_dlc_retries + 1):
+                    # Brief pause before retry (network may need a moment)
+                    await asyncio.sleep(3)
+
+                    # Clean lock files before retry
+                    for lock_file in ['installed.json.lock', 'user.json.lock']:
+                        lock_path = os.path.join(lock_dir, lock_file)
+                        if os.path.exists(lock_path):
+                            try:
+                                os.remove(lock_path)
+                            except Exception:
+                                pass
+
+                    logger.info(f"[DownloadQueue] DLC retry {attempt}/{max_dlc_retries}: {' '.join(cmd)}")
+
+                    self.current_process = await asyncio.create_subprocess_exec(
+                        *cmd,
+                        stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.STDOUT
+                    )
+
+                    await self._parse_legendary_output(item)
+                    retry_code = await self.current_process.wait()
+                    self.current_process = None
+
+                    if retry_code == 0:
+                        logger.info(f"[DownloadQueue] DLC retry {attempt} succeeded for {item.game_title}")
+                        return True
+
+                    logger.warning(f"[DownloadQueue] DLC retry {attempt} failed (code {retry_code})")
+
+                # All DLC retries exhausted — base game is still installed and playable
+                logger.warning(
+                    f"[DownloadQueue] DLC retries exhausted for {item.game_title}. "
+                    f"Base game is installed and playable. DLCs can be synced later via Repair/Verify."
+                )
+                return True
+
+            # Base game itself failed (not a DLC-only failure)
+            last_output = getattr(item, '_last_output_lines', '')
+            item.error_message = classify_download_error(last_output)
+            logger.error(f"[DownloadQueue] Epic download failed (code {return_code}), classified as: {item.error_message}")
+            return False
+
         except Exception as e:
             logger.error(f"[DownloadQueue] Epic download error: {e}")
             item.error_message = classify_download_error(str(e))
@@ -806,19 +1174,20 @@ class DownloadQueue:
             logger.error("[DownloadQueue] GOG install callback not configured")
             return False
         
-        logger.info(f"[DownloadQueue] Delegating GOG download to API client: {item.game_id}")
-        
+        logger.info(f"[DownloadQueue] Delegating GOG download to API client: {item.game_id} (DLC support enabled)")
+
         try:
             # Progress callback to update download item
             # Can receive float (percentage) or dict (full stats)
             outer_self = self  # For nested function to access DownloadQueue methods
+            last_logged_milestone = [-1]  # Mutable container for nested function access
             async def progress_callback(progress: Any):
                 # Check if cancelled before processing more progress
                 # This allows early exit from long-running downloads
                 if item.status == DownloadStatus.CANCELLED:
                     logger.info(f"[DownloadQueue] GOG download cancelled, raising CancelledError")
                     raise asyncio.CancelledError("Download cancelled by user")
-                
+
                 if isinstance(progress, dict):
                     # Handle phase updates (for extraction/verification phases)
                     if 'phase' in progress:
@@ -827,14 +1196,14 @@ class DownloadQueue:
                         logger.info(f"[DownloadQueue] Phase update: {item.download_phase} - {item.phase_message}")
                         self._save()
                         return  # Phase-only update, no need to process other fields
-                    
+
                     item.progress_percent = progress.get('progress_percent', 0)
                     item.downloaded_bytes = int(progress.get('downloaded_bytes', 0))
                     new_total = int(progress.get('total_bytes', 0))
                     item.total_bytes = new_total
                     # Update size cache for Install button accuracy (use self from outer scope)
                     outer_self._update_size_cache_if_needed(item, new_total)
-                    
+
                     # Update phase message during download if provided
                     if 'phase_message' in progress:
                         item.phase_message = progress['phase_message']
@@ -843,16 +1212,16 @@ class DownloadQueue:
                         mb_down = item.downloaded_bytes / (1024 * 1024)
                         mb_total = item.total_bytes / (1024 * 1024)
                         item.phase_message = f"Downloading: {mb_down:.0f} MB / {mb_total:.0f} MB"
-                    
+
                     # Convert speed from bytes/sec to MB/s
                     speed_bps = progress.get('speed_bps', 0)
                     item.speed_mbps = speed_bps / (1024 * 1024)
-                    
+
                     # Apply ETA smoothing (same logic as Epic for uniformity)
                     raw_eta = int(progress.get('eta_seconds', 0))
                     item.raw_eta_seconds = raw_eta
                     item.eta_samples += 1
-                    
+
                     if item.eta_samples == 1:
                         # First sample: cap at reasonable max
                         item.eta_seconds = min(raw_eta, 7200)  # Cap at 2 hours initially
@@ -861,11 +1230,19 @@ class DownloadQueue:
                         alpha = 0.3 if item.eta_samples > 15 else 0.1
                         smoothed = alpha * raw_eta + (1 - alpha) * item.eta_seconds
                         item.eta_seconds = int(smoothed)
-                    
+
                     # Mark as no longer preparing once we have real progress
                     if item.progress_percent > 0 or item.downloaded_bytes > 0:
                         item.is_preparing = False
-                    
+
+                    # Log at every 10% milestone
+                    current_milestone = int(item.progress_percent // 10) * 10
+                    if current_milestone > last_logged_milestone[0] and current_milestone > 0:
+                        last_logged_milestone[0] = current_milestone
+                        eta_h, eta_rem = divmod(item.eta_seconds, 3600)
+                        eta_m, eta_s = divmod(eta_rem, 60)
+                        logger.info(f"[DownloadQueue] GOG progress: {item.game_title} - {current_milestone}% ({item.speed_mbps:.1f} MB/s, ETA: {eta_h}:{eta_m:02d}:{eta_s:02d})")
+
                     # Save periodically (every 5% or if finished)
                     if int(item.progress_percent) % 5 == 0 or item.progress_percent >= 100:
                         self._save()
@@ -953,6 +1330,128 @@ class DownloadQueue:
             item.error_message = classify_download_error(str(e))
             return False
 
+    async def _download_ubisoft(self, item: DownloadItem, install_path: str) -> bool:
+        """Download/install Ubisoft game via upc.exe uplay://install protocol.
+
+        Unlike other stores that use CLI tools, Ubisoft delegates to upc.exe
+        running inside a per-game Wine prefix. Progress is monitored via
+        file system size polling since upc.exe is a GUI app.
+
+        Download tracking strategy:
+        Since upc.exe is a GUI app with no stdout/stderr progress output,
+        we cannot get precise download speeds or ETA from the process itself.
+        Instead we use file-system-based speed estimation:
+        - Poll install directory size every 3 seconds (done by connector)
+        - Calculate speed from size deltas between polls
+        - Apply EMA smoothing to ETA (same alpha as Epic/GOG)
+        - Size cache updated once accurate total_bytes is known
+
+        Reference: docs/ubisoft-store-spec.md §6 & §11
+        """
+        if not self._ubisoft_install_callback:
+            item.error_message = "Ubisoft install callback not set"
+            logger.error("[DownloadQueue] Ubisoft install callback not configured")
+            return False
+
+        logger.info(f"[DownloadQueue] Delegating Ubisoft download to connector: {item.game_id}")
+
+        # Track last known size for speed calculation
+        _last_bytes = [0]
+        _last_time = [time.time()]
+
+        try:
+            # Progress callback to update download item with speed/ETA tracking
+            async def progress_callback(progress):
+                # Check cancellation
+                if item.status == DownloadStatus.CANCELLED:
+                    logger.info("[DownloadQueue] Ubisoft download cancelled")
+                    raise asyncio.CancelledError("Download cancelled by user")
+
+                if isinstance(progress, dict):
+                    if 'phase' in progress:
+                        item.download_phase = progress['phase']
+                        if 'phase_message' in progress:
+                            item.phase_message = progress['phase_message']
+                        self._save()
+                        return
+
+                    if 'progress_percent' in progress:
+                        item.progress_percent = progress['progress_percent']
+                    if 'downloaded_bytes' in progress:
+                        current_bytes = int(progress['downloaded_bytes'])
+
+                        # Calculate speed from size delta
+                        now = time.time()
+                        elapsed = now - _last_time[0]
+                        if elapsed > 0 and current_bytes > _last_bytes[0]:
+                            delta_bytes = current_bytes - _last_bytes[0]
+                            speed_mbps = (delta_bytes / elapsed) / (1024 * 1024)
+                            item.speed_mbps = round(speed_mbps, 2)
+
+                            # ETA from speed (with EMA smoothing)
+                            if item.total_bytes > 0 and speed_mbps > 0:
+                                remaining_bytes = item.total_bytes - current_bytes
+                                raw_eta = int(remaining_bytes / (speed_mbps * 1024 * 1024))
+                                item.raw_eta_seconds = raw_eta
+                                item.eta_samples += 1
+                                # EMA: alpha=0.1 for first 15 samples, 0.3 after
+                                alpha = 0.1 if item.eta_samples < 15 else 0.3
+                                if item.eta_seconds == 0:
+                                    item.eta_seconds = raw_eta
+                                else:
+                                    item.eta_seconds = int(alpha * raw_eta + (1 - alpha) * item.eta_seconds)
+
+                        _last_bytes[0] = current_bytes
+                        _last_time[0] = now
+                        item.downloaded_bytes = current_bytes
+
+                        new_total = int(progress.get('total_bytes', 0))
+                        if new_total > 0:
+                            item.total_bytes = new_total
+                            # Update size cache once we know actual total
+                            self._update_size_cache_if_needed(item, new_total)
+                    if 'phase_message' in progress:
+                        item.phase_message = progress['phase_message']
+
+                    if item.progress_percent > 0 or item.downloaded_bytes > 0:
+                        item.is_preparing = False
+
+                    if int(item.progress_percent) % 5 == 0 or item.progress_percent >= 100:
+                        self._save()
+
+            result = await self._ubisoft_install_callback(
+                item.game_id, install_path, progress_callback
+            )
+
+            if result.get('success'):
+                # Update size cache from final install size if not already cached
+                final_size = result.get('install_size', 0)
+                if final_size > 0:
+                    self._update_size_cache_if_needed(item, final_size)
+                elif item.downloaded_bytes > 0:
+                    self._update_size_cache_if_needed(item, item.downloaded_bytes)
+                logger.info(f"[DownloadQueue] Ubisoft download completed: {item.game_title}")
+                return True
+            else:
+                raw_error = result.get('error', 'Unknown Ubisoft download error')
+                item.error_message = classify_download_error(raw_error)
+                logger.error(f"[DownloadQueue] Ubisoft download failed: {raw_error}")
+                return False
+
+        except asyncio.CancelledError:
+            logger.info(f"[DownloadQueue] Ubisoft download cancelled cleanly: {item.game_title}")
+            # Kill upc.exe process
+            try:
+                subprocess.run(['pkill', '-f', 'upc.exe'], capture_output=True)
+            except Exception:
+                pass
+            return False
+
+        except Exception as e:
+            logger.error(f"[DownloadQueue] Ubisoft download error: {e}")
+            item.error_message = classify_download_error(str(e))
+            return False
+
     async def _parse_nile_output(self, item: DownloadItem) -> None:
         """Parse nile output for progress updates"""
         # Nile download progress format (from ProgressBar):
@@ -971,7 +1470,8 @@ class DownloadQueue:
         
         buffer = ""
         recent_lines = []  # Capture last lines for error classification
-        
+        last_logged_milestone = -1  # Track last logged 10% milestone
+
         while self.current_process and self.current_process.returncode is None:
             try:
                 chunk = await asyncio.wait_for(
@@ -980,11 +1480,11 @@ class DownloadQueue:
                 )
                 if not chunk:
                     break
-                    
+
                 buffer += chunk.decode('utf-8', errors='ignore')
                 lines = buffer.split('\n')
                 buffer = lines[-1]  # Keep incomplete line
-                
+
                 for line in lines[:-1]:
                     # Keep last 20 lines for error classification
                     recent_lines.append(line)
@@ -992,39 +1492,45 @@ class DownloadQueue:
                         recent_lines.pop(0)
                     item._last_output_lines = '\n'.join(recent_lines)
                     logger.debug(f"[Nile] {line}")
-                    
+
                     # Parse rich download progress (from PROGRESS logger)
                     if match := progress_re.search(line):
                         item.progress_percent = float(match.group(1))
                         item.downloaded_bytes = int(match.group(2))
                         item.total_bytes = int(match.group(3))
-                        
+
                         # Parse ETA (HH:MM:SS format)
                         hours = int(match.group(4))
                         minutes = int(match.group(5))
                         seconds = int(match.group(6))
                         item.eta_seconds = hours * 3600 + minutes * 60 + seconds
                         item.is_preparing = False
-                    
+
+                        # Log at every 10% milestone
+                        current_milestone = int(item.progress_percent // 10) * 10
+                        if current_milestone > last_logged_milestone and current_milestone > 0:
+                            last_logged_milestone = current_milestone
+                            logger.info(f"[DownloadQueue] Amazon progress: {item.game_title} - {current_milestone}% ({item.speed_mbps:.1f} MB/s, ETA: {hours}:{minutes:02d}:{seconds:02d})")
+
                     # Parse download speed
                     elif match := speed_re.search(line):
                         item.speed_mbps = float(match.group(1))
-                    
+
                     # Parse installation phase (simpler format - after download)
                     elif match := install_re.search(line):
                         item.progress_percent = float(match.group(1))
                         item.is_preparing = False
                         logger.info(f"[DownloadQueue] Amazon game {item.game_id} installation at {item.progress_percent}%")
-                    
+
                     # Check for verification
                     elif '[Verification]' in line:
                         item.is_preparing = False
                         logger.info(f"[DownloadQueue] Amazon game {item.game_id} verification in progress")
-                    
+
                     # Save progress periodically
                     if int(item.progress_percent) % 5 == 0:
                         self._save()
-                            
+
             except asyncio.TimeoutError:
                 continue
             except Exception as e:
@@ -1034,6 +1540,13 @@ class DownloadQueue:
     def set_gog_install_callback(self, callback: Callable) -> None:
         """Set callback for GOG game installation (uses GOGAPIClient)"""
         self._gog_install_callback = callback
+
+    def set_ubisoft_install_callback(self, callback: Callable) -> None:
+        """Set callback for Ubisoft game installation (uses UbisoftConnector)
+
+        Callback signature: callback(game_id: str, install_path: str, progress_callback) -> dict
+        """
+        self._ubisoft_install_callback = callback
 
     def set_size_cache_callback(self, callback: Callable) -> None:
         """Set callback for updating game size cache when accurate size is determined
@@ -1076,10 +1589,17 @@ class DownloadQueue:
         total_size_re = re.compile(
             r"Download size: (\d+\.?\d*) (MiB|GiB)"
         )
-        
+        # DLC/download phase detection patterns
+        dlc_available_re = re.compile(r'The following DLCs? (?:are|is) available')
+        preparing_re = re.compile(r'Preparing download for "(.+?)"')
+        finished_re = re.compile(r'Finished installation process in (\d+\.?\d*)')
+
         buffer = ""
         recent_lines = []  # Capture last lines for error classification
-        
+        last_logged_milestone = -1  # Track last logged 10% milestone
+        current_download_name = None  # Track which component is downloading (main game or DLC name)
+        download_count = 0  # How many downloads started (1 = main game, 2+ = DLCs)
+
         while self.current_process and self.current_process.returncode is None:
             try:
                 chunk = await asyncio.wait_for(
@@ -1088,24 +1608,50 @@ class DownloadQueue:
                 )
                 if not chunk:
                     break
-                    
+
                 buffer += chunk.decode('utf-8', errors='ignore')
                 lines = buffer.split('\n')
                 buffer = lines[-1]  # Keep incomplete line
-                
+
                 for line in lines[:-1]:
                     # Keep last 20 lines for error classification
                     recent_lines.append(line)
                     if len(recent_lines) > 20:
                         recent_lines.pop(0)
                     item._last_output_lines = '\n'.join(recent_lines)
+
+                    # Detect DLC availability
+                    if dlc_available_re.search(line):
+                        logger.info(f"[DownloadQueue] DLCs available for {item.game_title}")
+                        item._dlc_phase_entered = True
+
+                    # Detect download phase transitions (main game + each DLC)
+                    if match := preparing_re.search(line):
+                        download_count += 1
+                        current_download_name = match.group(1)
+                        last_logged_milestone = -1  # Reset milestones for new download
+                        if download_count == 1:
+                            logger.info(f"[DownloadQueue] Preparing download: {current_download_name}")
+                        else:
+                            logger.info(f"[DownloadQueue] Downloading DLC/extra for {item.game_title}: {current_download_name}")
+
+                    # Detect individual download completion
+                    if match := finished_re.search(line):
+                        elapsed = float(match.group(1))
+                        label = current_download_name or item.game_title
+                        if download_count > 1:
+                            logger.info(f"[DownloadQueue] DLC/extra download finished: {label} ({elapsed:.0f}s)")
+                        else:
+                            logger.info(f"[DownloadQueue] Main download finished: {label} ({elapsed:.0f}s)")
+                            item._main_game_finished = True
+
                     # Parse progress
                     if match := progress_re.search(line):
                         item.progress_percent = float(match.group(1))
                         eta_parts = match.group(2).split(':')
                         raw_eta = int(eta_parts[0]) * 3600 + int(eta_parts[1]) * 60 + int(eta_parts[2])
                         item.raw_eta_seconds = raw_eta
-                        
+
                         # Apply Exponential Moving Average (EMA) smoothing
                         # Use lower alpha (more smoothing) in early samples to dampen wild initial ETAs
                         # Gradually increase alpha (faster response) as we get more samples
@@ -1119,22 +1665,34 @@ class DownloadQueue:
                             alpha = 0.3 if item.eta_samples > 15 else 0.1
                             smoothed = alpha * raw_eta + (1 - alpha) * item.eta_seconds
                             item.eta_seconds = int(smoothed)
-                        
+
                         # Mark as no longer preparing once we have real progress
                         if item.progress_percent > 0:
                             item.is_preparing = False
-                    
+
+                        # Log at every 10% milestone
+                        current_milestone = int(item.progress_percent // 10) * 10
+                        if current_milestone > last_logged_milestone and current_milestone > 0:
+                            last_logged_milestone = current_milestone
+                            eta_h, eta_rem = divmod(item.eta_seconds, 3600)
+                            eta_m, eta_s = divmod(eta_rem, 60)
+                            dl_label = current_download_name or item.game_title
+                            if download_count > 1:
+                                logger.info(f"[DownloadQueue] DLC progress: {dl_label} - {current_milestone}% ({item.speed_mbps:.1f} MB/s, ETA: {eta_h}:{eta_m:02d}:{eta_s:02d})")
+                            else:
+                                logger.info(f"[DownloadQueue] Epic progress: {item.game_title} - {current_milestone}% ({item.speed_mbps:.1f} MB/s, ETA: {eta_h}:{eta_m:02d}:{eta_s:02d})")
+
                     # Parse downloaded bytes
                     if match := downloaded_re.search(line):
                         item.downloaded_bytes = int(float(match.group(1)) * 1024 * 1024)
                         # Also mark as no longer preparing
                         if item.downloaded_bytes > 0:
                             item.is_preparing = False
-                    
+
                     # Parse speed
                     if match := speed_re.search(line):
                         item.speed_mbps = float(match.group(1))
-                    
+
                     # Parse total size
                     if match := total_size_re.search(line):
                         size = float(match.group(1))
@@ -1144,10 +1702,10 @@ class DownloadQueue:
                         item.total_bytes = new_total
                         # Update size cache for Install button accuracy
                         self._update_size_cache_if_needed(item, new_total)
-                    
+
                     # Save progress periodically
                     self._save()
-                    
+
             except asyncio.TimeoutError:
                 continue
 

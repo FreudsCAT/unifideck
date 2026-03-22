@@ -213,13 +213,27 @@ const DownloadItemRow: FC<{
                       color: "#888",
                     }}
                   >
-                    <span>{displayProgress.toFixed(1)}%</span>
+                    <span>
+                      {item.total_bytes > 0
+                        ? `${displayProgress.toFixed(1)}%`
+                        : "--"}
+                    </span>
                     <span>
                       {formatBytes(item.downloaded_bytes)} /{" "}
-                      {formatBytes(item.total_bytes)}
+                      {item.total_bytes > 0
+                        ? formatBytes(item.total_bytes)
+                        : "--"}
                     </span>
-                    <span>{item.speed_mbps.toFixed(1)} MB/s</span>
-                    <span>ETA: {formatETA(item.eta_seconds)}</span>
+                    <span>
+                      {t("downloadsTab.speedMbps", {
+                        speed: item.speed_mbps.toFixed(1),
+                      })}
+                    </span>
+                    <span>
+                      {t("downloadsTab.etaLabel", {
+                        eta: formatETA(item.eta_seconds),
+                      })}
+                    </span>
                   </div>
                 </>
               );

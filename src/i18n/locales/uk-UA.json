@@ -13,7 +13,30 @@
     "toastUpdatedBody": "Нові ігри будуть встановлені в {{location}}",
     "toastFailedTitle": "Не вдалося оновити",
     "toastFailedBody": "{{error}}",
-    "unknown": "Невідомо"
+    "unknown": "Невідомо",
+    "browseButton": "Огляд...",
+    "clearCustom": "Очистити користувацьке місце встановлення",
+    "customPathSet": "Користувацьке місце встановлення задано",
+    "newFolder": "Нова папка",
+    "newFolderCreate": "Створити",
+    "selectFolder": "Використати цю папку",
+    "emptyDirectory": "Порожня папка",
+    "showHidden": "Показати приховані",
+    "selectDevice": "Виберіть пристрій",
+    "sortAZ": "A-Z",
+    "sortZA": "Z-A",
+    "sortModifiedNewest": "Дата зміни (спочатку новіші)",
+    "sortModifiedOldest": "Дата зміни (спочатку старіші)",
+    "sortCreatedNewest": "Дата створення (спочатку новіші)",
+    "sortCreatedOldest": "Дата створення (спочатку старіші)",
+    "sortSizeLargest": "Розмір (від більшого до меншого)",
+    "sortSizeSmallest": "Розмір (від меншого до більшого)",
+    "validationErrors.notAbsolute": "Шлях має бути абсолютним",
+    "validationErrors.systemDir": "Не можна використовувати системний каталог",
+    "validationErrors.notWritable": "Це місце недоступне для запису",
+    "validationErrors.notFound": "Каталог не існує",
+    "validationErrors.homeRoot": "Не можна використовувати корінь домашнього каталогу",
+    "freeSpaceLabel": "{{label}} ({{freeSpace}} GB вільно)"
   },
   "gameGrid": {
     "loading": "Завантаження ігор...",
@@ -52,7 +75,17 @@
     "phaseExtracting": "Розпакування {{game}}...",
     "phaseVerifying": "Перевірка {{game}}...",
     "internalStorage": "Внутрішня памʼять ({{freeSpace}} ГБ вільно)",
-    "sdCard": "SD-карта ({{freeSpace}} ГБ вільно)"
+    "sdCard": "SD-карта ({{freeSpace}} ГБ вільно)",
+    "customLocation": "Користувацький шлях: {{path}} ({{freeSpace}} ГБ вільно)",
+    "extractingLabel": "Розпакування...",
+    "verifyingLabel": "Перевірка...",
+    "updateQueuedLabel": "Оновлення в черзі",
+    "downloadQueuedLabel": "Завантаження в черзі",
+    "downloadingUpdateLabel": "Завантаження оновлення",
+    "downloadingLabel": "Завантаження...",
+    "finalizingInstallation": "Завершення встановлення...",
+    "speedMbps": "{{speed}} MB/s",
+    "etaLabel": "Залишилось: {{eta}}"
   },
   "cloudSave": {
     "title": "Конфлікт хмарних збережень",
@@ -75,6 +108,7 @@
     "epicGames": "Epic Games",
     "gog": "GOG",
     "amazonGames": "Amazon Games",
+    "ubisoftConnect": "Ubisoft Connect",
     "connected": "Підключено",
     "checking": "Перевірка...",
     "authenticate": "Увійти",
@@ -114,7 +148,10 @@
     "cancel": "✖ Скасувати",
     "processing": "Обробка...",
     "checking": "Перевірка...",
-    "size": "{{size}} ГБ"
+    "size": "{{size}} ГБ",
+    "update": "ОНОВИТИ",
+    "updateAvailable": "ДОСТУПНЕ ОНОВЛЕННЯ",
+    "updateAvailableDescription": "Нова версія готова до встановлення."
   },
   "confirmModals": {
     "installTitle": "Підтвердження встановлення",
@@ -132,12 +169,23 @@
     "steamRestartDescriptionStore": "Будь ласка, перезапустіть Steam, щоб застосувати нові ігри та обкладинки {{store}}",
     "restartNow": "Перезапустити зараз",
     "later": "Пізніше",
+    "ubisoftInstallTitle": "Потрібен Ubisoft Connect",
+    "ubisoftInstallDescription": "Це запустить лаунчер Ubisoft Connect, у якому вам потрібно буде встановити {{title}}.",
+    "ubisoftInstallConfirm": "Відкрити Ubisoft Connect",
     "yes": "Так",
-    "no": "Ні"
+    "no": "Ні",
+    "amazonUpdateTitle": "Потрібне повне повторне завантаження",
+    "amazonUpdateDescription": "Для оновлення Amazon потрібно повністю повторно завантажити {{title}}. Це може зайняти деякий час. Продовжити?",
+    "updateConfirm": "Оновити"
   },
   "toasts": {
     "downloadStarted": "Завантаження розпочато. Перевірте UNIFIDECK > Завантаження",
     "downloadQueued": "{{title}} додано до черги.",
+    "ubisoftLauncherOpening": "Відкриття Ubisoft Connect",
+    "ubisoftLauncherOpeningMessage": "Для {{title}} відкривається Ubisoft Connect. Установіть гру там, а потім поверніться сюди, щоб грати.",
+    "ubisoftLauncherAlreadyOpenMessage": "Ubisoft Connect уже відкритий для цього встановлення.",
+    "ubisoftLauncherOpenFailed": "Не вдалося відкрити Ubisoft Connect",
+    "ubisoftLauncherOpenFailedMessage": "Не вдалося відкрити Ubisoft Connect для встановлення.",
     "multipartDetected": "Виявлено багаточастинне завантаження",
     "multipartMessage": "Будь ласка, будьте терплячі та дочекайтеся завершення",
     "downloadFailed": "Завантаження не вдалося",
@@ -169,6 +217,10 @@
     "cleanupSuccessful": "Очищення успішне",
     "cleanupSuccessfulMessage": "Видалено {{games}} ігор, {{artwork}} наборів обкладинок та {{files}} каталогів файлів. Авторизацію та кеш очищено.",
     "deleteFailed": "Видалення не вдалося",
+    "repairPrefixSuccess": "Префікс відновлено",
+    "repairPrefixSuccessMessage": "Префікс Ubisoft Connect було створено заново",
+    "repairPrefixFailed": "Відновлення не вдалося",
+    "repairPrefixFailedMessage": "Не вдалося відновити префікс: {{error}}",
     "unifideck": "Unifideck:",
     "launcher": {
       "networkError": "Помилка мережі",
@@ -185,6 +237,7 @@
       "startingEpicGame": "Запуск гри Epic...",
       "startingAmazonGame": "Запуск гри Amazon...",
       "startingGogGame": "Запуск гри GOG...",
+      "startingUbisoftGame": "Запуск гри Ubisoft...",
       "dependenciesTitle": "Встановлення залежностей",
       "installingRedistributables": "Встановлення розповсюджуваних компонентів гри...",
       "dependenciesReady": "Залежності готові",
@@ -206,8 +259,12 @@
       "prerequisitesFailed": "Попередження про передумови",
       "prerequisitesFailedMessage": "Передумови можуть бути встановлені некоректно"
     },
-    "updateComplete": "Update Complete!",
-    "updateCompleteMessage": "{{title}} has been updated."
+    "updateComplete": "Оновлення завершено!",
+    "updateCompleteMessage": "Оновлення {{title}} завершено.",
+    "updateCancelled": "Оновлення скасовано",
+    "updateCancelledMessage": "Оновлення {{title}} скасовано.",
+    "updateFailed": "Оновлення не вдалося",
+    "updateFailedMessage": "Не вдалося почати оновлення."
   },
   "uninstallModal": {
     "title": "Підтвердження видалення",
@@ -254,8 +311,14 @@
       "processFailed": "Завантаження не вдалося — спробуйте ще раз",
       "directoryNotFound": "Не вдалося знайти встановлені файли",
       "lockConflict": "Інша операція виконується — спробуйте пізніше",
+      "ubisoftClient": "Помилка клієнта Ubisoft Connect — спробуйте відновити префікс",
+      "ubisoftClientNotRunning": "Клієнт Ubisoft Connect не відповідає",
+      "ubisoftBootstrap": "Не вдалося налаштувати префікс Ubisoft Connect",
+      "ubisoftUmuMissing": "umu-run не знайдено — він потрібен для ігор Ubisoft",
       "generic": "Встановлення не вдалося — перевірте логи"
-    }
+    },
+    "unknown": "Невідома помилка",
+    "steamAppsUnavailable": "API SteamClient.Apps недоступний"
   },
   "sync": {
     "downloadingArtwork": "Завантаження арту для {{game}}...",
@@ -292,7 +355,12 @@
     "greatOnDeck": "Ідеально для Steam Deck",
     "allGames": "Усі ігри",
     "installed": "Встановлені",
-    "nonSteam": "Не Steam"
+    "nonSteam": "Не Steam",
+    "steam": "Steam",
+    "epic": "Epic",
+    "gog": "GOG",
+    "amazon": "Amazon",
+    "ubisoft": "Ubisoft"
   },
   "unifiedLibrary": {
     "error": "Помилка Unifideck",
@@ -343,8 +411,9 @@
       "verified": "СУМІСНА",
       "playable": "МОЖНА ГРАТИ",
       "unsupported": "НЕ ПІДТРИМУЄТЬСЯ",
-      "unknown": "НЕВІДОМО"
-    }
+      "unknown": "НЕВІДОМА"
+    },
+    "failedToLoadMetadata": "Не вдалося завантажити метадані"
   },
   "gameDetailsSettings": {
     "title": "ПЕРЕГЛЯД ДЕТАЛЕЙ ГРИ",
@@ -370,5 +439,35 @@
     "toastMigrateBody": "Перенесено {{shortcuts}} ярликів та {{artwork}} файлів обкладинок",
     "toastClearTitle": "Токени авторизації очищено",
     "toastClearBody": "Авторизації магазинів були очищені. Тепер ви можете увійти з іншими обліковими записами."
+  },
+  "ubisoftAuth": {
+    "title": "Вхід до Ubisoft Connect",
+    "description": "Введіть дані свого облікового запису Ubisoft, щоб підключити бібліотеку.",
+    "emailLabel": "Е-пошта",
+    "passwordLabel": "Пароль",
+    "signIn": "Увійти",
+    "signingIn": "Вхід...",
+    "cancel": "Скасувати",
+    "twoFactorTitle": "Двофакторна автентифікація",
+    "twoFactorDescription": "Введіть код підтвердження з вашого застосунку-автентифікатора.",
+    "twoFactorLabel": "Код підтвердження",
+    "verify": "Підтвердити",
+    "verifying": "Перевірка...",
+    "errorEmptyFields": "Введіть е-пошту та пароль",
+    "errorEmpty2FA": "Введіть код підтвердження",
+    "errorLoginFailed": "Не вдалося увійти. Перевірте свої дані.",
+    "errorInvalid2FA": "Неправильний код підтвердження. Спробуйте ще раз.",
+    "showPassword": "Показати пароль",
+    "hidePassword": "Приховати пароль",
+    "doubleLoginWarning": "Для Ubisoft потрібно буде увійти двічі."
+  },
+  "relativeDate": {
+    "today": "Сьогодні",
+    "yesterday": "Вчора"
+  },
+  "common": {
+    "thisGame": "ця гра",
+    "game": "Гра",
+    "unknown": "Невідомо"
   }
 }

@@ -30,12 +30,10 @@ loadTranslations();
 // Import tab system
 import { patchLibrary, loadCompatCacheFromBackend } from "./tabs";
 
-import { syncUnifideckCollections } from "./spoofing/CollectionManager";
 import {
-  loadSteamAppIdMappings,
-  patchSteamStores,
-  injectGameToAppinfo,
-} from "./spoofing/SteamStorePatcher";
+  syncUnifideckCollections,
+  deleteAllUnifideckCollections,
+} from "./spoofing/CollectionManager";
 
 // Import Downloads feature components
 import { DownloadsTab } from "./components/DownloadsTab";
@@ -43,6 +41,7 @@ import { StorageSettings } from "./components/StorageSettings";
 
 import { SteamRestartModal } from "./components/SteamRestartModal";
 import { AccountSwitchModal } from "./components/AccountSwitchModal";
+import { UbisoftAuthModal } from "./components/UbisoftAuthModal";
 import { LanguageSelector } from "./components/LanguageSelector";
 import StoreConnections from "./components/settings/StoreConnections";
 import { Store } from "./types/store";
@@ -63,6 +62,7 @@ import {
   setGameInfoCacheRef,
 } from "./hooks/gameActionInterceptor";
 import { SyncProgress } from "./types/syncProgress";
+import type { DownloadItem, DownloadQueueInfo } from "./types/downloads";
 
 // ========== INSTALL BUTTON FEATURE ==========
 //
@@ -110,6 +110,23 @@ import { SyncProgress } from "./types/syncProgress";
 
 // Global cache for game info (5-second TTL for faster updates after installation)
 const gameInfoCache = new Map<number, { info: any; timestamp: number }>();
+
+const getDownloadFinishedAt = (item: DownloadItem): number =>
+  item.end_time ?? item.start_time ?? item.added_time ?? 0;
+
+const getDownloadFailureKey = (item: DownloadItem): string =>
+  `${item.id}:${getDownloadFinishedAt(item)}`;
+
+const getTranslatedDownloadError = (item: DownloadItem): string => {
+  if (!item.error_message) {
+    return t("errors.download.generic");
+  }
+
+  const translatedError = t(item.error_message);
+  return translatedError !== item.error_message
+    ? translatedError
+    : t("errors.download.generic");
+};
 
 // ========== END INSTALL BUTTON FEATURE ==========
 
@@ -659,6 +676,7 @@ const Content: FC = () => {
     epic: "checking",
     gog: "checking",
     amazon: "checking",
+    ubisoft: "checking",
   });
 
   // Game Details View Mode - persisted via localStorage
@@ -846,6 +864,7 @@ const Content: FC = () => {
           epic: string;
           gog: string;
           amazon: string;
+          ubisoft: string;
           error?: string;
           legendary_installed?: boolean;
           nile_installed?: boolean;
@@ -862,6 +881,7 @@ const Content: FC = () => {
           epic: result.epic,
           gog: result.gog,
           amazon: result.amazon,
+          ubisoft: result.ubisoft,
         });
 
         // Show warning if legendary not installed
@@ -882,6 +902,7 @@ const Content: FC = () => {
           epic: "error",
           gog: "error",
           amazon: "error",
+          ubisoft: "error",
         });
       }
     } catch (error) {
@@ -890,6 +911,7 @@ const Content: FC = () => {
         epic: "error",
         gog: "error",
         amazon: "error",
+        ubisoft: "error",
       });
     }
   };
@@ -1111,6 +1133,7 @@ const Content: FC = () => {
             epic: string;
             gog: string;
             amazon: string;
+            ubisoft: string;
           }
         >("check_store_status");
 
@@ -1120,6 +1143,8 @@ const Content: FC = () => {
             status = result.epic;
           } else if (store === "gog") {
             status = result.gog;
+          } else if (store === "ubisoft") {
+            status = result.ubisoft;
           } else {
             status = result.amazon;
           }
@@ -1169,7 +1194,29 @@ const Content: FC = () => {
         ? t("storeConnections.epicGames")
         : store === "amazon"
         ? t("storeConnections.amazonGames")
+        : store === "ubisoft"
+        ? t("storeConnections.ubisoftConnect")
         : t("storeConnections.gog");
+
+    // Ubisoft uses credentials-based auth (modal form), not browser popup
+    if (store === "ubisoft") {
+      showModal(
+        <UbisoftAuthModal
+          onAuthComplete={async () => {
+            console.log(`[Unifideck] Ubisoft authentication successful!`);
+            // Show toast only after entire auth flow (credentials + 2FA if needed) completes
+            toaster.toast({
+              title: t("toasts.authConnected", { store: storeName }),
+              body: t("toasts.authConnectedMessage", { store: storeName }),
+              duration: 8000,
+              critical: true,
+            });
+            await checkStoreStatus();
+          }}
+        />,
+      );
+      return;
+    }
 
     try {
       let methodName: string;
@@ -1262,6 +1309,8 @@ const Content: FC = () => {
         methodName = "logout_epic";
       } else if (store === "gog") {
         methodName = "logout_gog";
+      } else if (store === "ubisoft") {
+        methodName = "logout_ubisoft";
       } else {
         methodName = "logout_amazon";
       }
@@ -1296,6 +1345,7 @@ const Content: FC = () => {
           deleted_artwork: number;
           deleted_files_count: number;
           preserved_shortcuts: number;
+          deleted_app_ids?: number[];
           error?: string;
         }
       >("perform_full_cleanup", { delete_files: deleteFiles });
@@ -1309,6 +1359,29 @@ const Content: FC = () => {
             `${result.deleted_artwork} artwork sets, ${result.deleted_files_count} files deleted`,
         );
 
+        // Remove shortcuts via Steam API so Steam's in-memory state is updated
+        // (writing shortcuts.vdf alone is not enough — Steam overwrites it)
+        if (result.deleted_app_ids?.length) {
+          console.log(
+            `[Unifideck] Removing ${result.deleted_app_ids.length} shortcuts via Steam API...`,
+          );
+          for (const appId of result.deleted_app_ids) {
+            try {
+              window.SteamClient.Apps.RemoveShortcut(appId);
+            } catch (err) {
+              console.warn(
+                `[Unifideck] Failed to remove shortcut ${appId}:`,
+                err,
+              );
+            }
+          }
+        }
+
+        // Delete all Unifideck Steam collections
+        await deleteAllUnifideckCollections().catch((err) =>
+          console.error("[Unifideck] Failed to delete collections:", err),
+        );
+
         toaster.toast({
           title: t("toasts.cleanupSuccessful"),
           body: t("toasts.cleanupSuccessfulMessage", {
@@ -1318,11 +1391,14 @@ const Content: FC = () => {
           }),
           duration: 8000,
         });
+
+        // Prompt user to restart Steam so changes take effect
+        showModal(<SteamRestartModal reason="cleanup" closeModal={() => {}} />);
       } else {
         console.error(`[Unifideck] Delete failed: ${result.error}`);
         toaster.toast({
           title: t("toasts.deleteFailed"),
-          body: result.error ? t(result.error) : "Unknown error",
+          body: result.error ? t(result.error) : t("errors.unknown"),
           duration: 5000,
         });
       }
@@ -1590,6 +1666,44 @@ export default definePlugin(() => {
   const unregisterInterceptor = registerGameActionInterceptor();
   console.log("[Unifideck] ✓ Game action interceptor registered");
 
+  // Global listener: capture Ubisoft session when ANY game stops.
+  // This fires in gaming mode, desktop mode, overlay abort — everywhere.
+  // The per-component listener in PlaySectionWrapper only works when
+  // the library page is open; this covers all other scenarios.
+  let unregLifetimeGlobal: { unregister(): void } | null = null;
+  try {
+    unregLifetimeGlobal =
+      window.SteamClient?.GameSessions?.RegisterForAppLifetimeNotifications?.(
+        (data: { unAppID: number; bRunning: boolean }) => {
+          if (data.bRunning) return; // Only interested in stop events
+
+          // Quick check: is this a Ubisoft game? (unifideckGameCache is always populated)
+          const cached = unifideckGameCache.get(data.unAppID);
+          if (!cached || cached.store !== "ubisoft") return;
+
+          console.log(
+            `[Unifideck] Global: Ubisoft game stopped (appId=${data.unAppID}), capturing session`,
+          );
+          call<[number], { success: boolean }>(
+            "capture_ubisoft_session_by_appid",
+            data.unAppID,
+          ).catch((err) =>
+            console.error(
+              "[Unifideck] Global: capture_ubisoft_session_by_appid failed:",
+              err,
+            ),
+          );
+        },
+      ) ?? null;
+    if (unregLifetimeGlobal) {
+      console.log(
+        "[Unifideck] ✓ Global Ubisoft session capture listener registered",
+      );
+    }
+  } catch {
+    // GameSessions may not be available
+  }
+
   // Patch the library to add Unifideck tabs (All, Installed, Great on Deck, Steam, Epic, GOG, Amazon)
   // This uses TabMaster's approach: intercept useMemo hook to inject custom tabs
   const libraryPatch = patchLibrary();
@@ -1774,6 +1888,52 @@ export default definePlugin(() => {
   // Store interval ID for cleanup
   (window as any).__unifideck_toast_interval = launcherToastInterval;
 
+  let downloadErrorToastInterval: NodeJS.Timeout | null = null;
+  const seenDownloadFailures = new Set<string>();
+  let seededDownloadFailures = false;
+  downloadErrorToastInterval = setInterval(async () => {
+    try {
+      const queueInfo = await call<[], DownloadQueueInfo>(
+        "get_download_queue_info",
+      );
+      if (!queueInfo.success) {
+        return;
+      }
+
+      const failedItems = (queueInfo.finished || []).filter(
+        (item) => item.status === "error",
+      );
+
+      if (!seededDownloadFailures) {
+        failedItems.forEach((item) =>
+          seenDownloadFailures.add(getDownloadFailureKey(item)),
+        );
+        seededDownloadFailures = true;
+        return;
+      }
+
+      for (const item of failedItems) {
+        const failureKey = getDownloadFailureKey(item);
+        if (seenDownloadFailures.has(failureKey)) {
+          continue;
+        }
+
+        seenDownloadFailures.add(failureKey);
+        toaster.toast({
+          title: `${t("downloadsTab.status.error")}: ${item.game_title}`,
+          body: getTranslatedDownloadError(item),
+          duration: 10000,
+          critical: true,
+        });
+      }
+    } catch (error) {
+      console.error("[Unifideck] Error polling download failures:", error);
+    }
+  }, 1500);
+
+  (window as any).__unifideck_download_error_interval =
+    downloadErrorToastInterval;
+
   // Background sync disabled - users manually sync via UI when needed
   console.log("[Unifideck] Background sync disabled (use manual sync button)");
 
@@ -1791,6 +1951,9 @@ export default definePlugin(() => {
       // Unregister game action interceptor
       unregisterInterceptor();
 
+      // Unregister global Ubisoft session capture listener
+      unregLifetimeGlobal?.unregister?.();
+
       // Unpatch Steam stores
       if (unpatchSteamStores) {
         unpatchSteamStores();
@@ -1802,6 +1965,13 @@ export default definePlugin(() => {
       if (toastInterval) {
         clearInterval(toastInterval);
         (window as any).__unifideck_toast_interval = null;
+      }
+
+      const downloadErrorInterval = (window as any)
+        .__unifideck_download_error_interval;
+      if (downloadErrorInterval) {
+        clearInterval(downloadErrorInterval);
+        (window as any).__unifideck_download_error_interval = null;
       }
 
       // Remove CSS injections

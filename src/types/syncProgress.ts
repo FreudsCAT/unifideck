@@ -19,4 +19,8 @@ export type SyncProgress = {
   steam_synced?: number;
   rawg_total?: number;
   rawg_synced?: number;
+  unifidb_total?: number;
+  unifidb_synced?: number;
+  metacritic_total?: number;
+  metacritic_synced?: number;
 };

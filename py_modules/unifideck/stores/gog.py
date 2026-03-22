@@ -384,7 +384,7 @@ class GOGAPIClient:
                     # Auto-sync library after successful auth
                     if self.plugin_instance:
                         logger.info("[GOG] Starting automatic library sync...")
-                        await self.plugin_instance.sync_libraries(fetch_artwork=False)
+                        await self.plugin_instance.sync_libraries()
                         logger.info("[GOG] ✓ Library sync completed!")
                 else:
                     logger.error(f"[GOG] Auto-auth failed: {result.get('error')}")
@@ -1873,6 +1873,40 @@ class GOGAPIClient:
         if result:
             return result[0]
         return None
+
+    def _find_gog_wrapper_launch_target(
+        self,
+        install_path: str,
+        root_dir: str,
+        primary_task: Dict[str, Any],
+    ) -> Optional[Tuple[str, str]]:
+        """Prefer GOG's wrapper batch file when the manifest points at an internal launcher."""
+        task_path = primary_task.get('path', '')
+        if not task_path:
+            return None
+
+        task_basename = os.path.basename(task_path).lower()
+        candidate_roots = [root_dir]
+        if install_path not in candidate_roots:
+            candidate_roots.append(install_path)
+
+        for candidate_root in candidate_roots:
+            wrapper_path = os.path.join(candidate_root, 'run-game.bat')
+            if not os.path.exists(wrapper_path):
+                continue
+
+            try:
+                wrapper_content = ''
+                with open(wrapper_path, 'r', encoding='utf-8', errors='ignore') as f:
+                    wrapper_content = f.read().lower()
+            except OSError:
+                wrapper_content = ''
+
+            if task_basename in wrapper_content or task_basename in {'dosbox.exe', 'scummvm.exe'}:
+                logger.info(f"[GOG] Using wrapper launch target: {wrapper_path}")
+                return (wrapper_path, candidate_root)
+
+        return None
     
     def _find_game_executable_with_workdir(self, install_path: str) -> Optional[Tuple[str, str]]:
         """Find game executable and working directory from install path."""
@@ -1912,6 +1946,12 @@ class GOGAPIClient:
                                 break
                         
                         if primary:
+                            wrapper_launch = self._find_gog_wrapper_launch_target(
+                                install_path, root_dir, primary
+                            )
+                            if wrapper_launch:
+                                return wrapper_launch
+
                             exe_rel = primary.get('path')
                             work_rel = primary.get('workingDir', '')
                             
@@ -2417,5 +2457,4 @@ class GOGAPIClient:
         except Exception as e:
             logger.error(f"[GOG] Error updating {game_id}: {e}")
             return {'success': False, 'error': str(e)}
-
 
