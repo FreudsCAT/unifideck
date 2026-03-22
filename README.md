@@ -1,9 +1,10 @@
 # Unifideck - Unified Game Library for Steam Deck
 
-A Decky Loader plugin that brings together games from Steam, Epic Games Store, GOG, Microsoft Store, Ubisoft store and Amazon into a single, unified library experience on your Steam Deck.
+A Decky Loader plugin that brings together games from Steam, Epic Games Store, GOG, Microsoft Store, Ubisoft Connect, and Amazon into a single, unified library experience on your Steam Deck.
 
 ![License](https://img.shields.io/badge/license-GPL--3.0--or--later-blue.svg)
-![Platform](https://img.shields.io/badge/platform-Steam%20Deck-orange.svg)
+![Platform](https://img.shields.io/badge/platform-Steam%20OS-orange.svg)
+![Downloads](https://img.shields.io/github/downloads/mubaraknumann/unifideck/total.svg?label=downloads&color=brightgreen)
 [![Sponsor](https://img.shields.io/badge/Sponsor-GitHub-ea4aaa?logo=github&logoColor=white)](https://github.com/sponsors/mubaraknumann) [![Ko-fi](https://img.shields.io/badge/Ko--fi-F16061?logo=ko-fi&logoColor=white)](https://ko-fi.com/mubaraknumann)
 
 ## Table of Contents
@@ -24,7 +25,7 @@ A Decky Loader plugin that brings together games from Steam, Epic Games Store, G
 
 ## Features
 
-- **Unified Game Library** - Epic Games, GOG and Amazon games appear directly in your Steam library\*
+- **Unified Game Library** - Epic Games, GOG, Ubisoft Connect, and Amazon games appear directly in your Steam library\*
 - **Great On Deck for All** - Great on Deck tab will show all games in your connected libraries that are platinum rated or verified by Steam.
 - **One-Click Installation** - Install Third Party games directly from Steam's interface
 - **Cloud Saves** - Currenly available for Epic and GOG. Not all games supported.
@@ -83,7 +84,7 @@ For the expected plugin zip layout (dist, package.json, plugin.json, main.py, LI
 ## Getting Started
 
 1. Open the **Quick Access Menu** and find **Unifideck**
-2. Connect your **Epic Games**, **GOG**, **Amazon** accounts using the authenticate buttons
+2. Connect your **Epic Games**, **GOG**, **Ubisoft Connect**, and **Amazon** accounts using the authenticate buttons
 3. Click **Sync Libraries** and wait for completion. Restart Steam.
 
 Your games will now appear in your Steam library!
