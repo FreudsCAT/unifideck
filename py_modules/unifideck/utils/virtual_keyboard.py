@@ -146,7 +146,9 @@ _KEYBOARD_JS = r"""
 
   /* -- Locale detection --------------------------------------------------- */
 
-  var locale = '__UNIFIDECK_LOCALE__';
+  /* Read locale from window variable (set by CDP before this script)
+     or fall back to the placeholder replaced by Python at injection time. */
+  var locale = window.__unifideck_locale || '__UNIFIDECK_LOCALE__';
   var lang = (locale || '').split('-')[0].toLowerCase();
   var layoutName = (lang === 'fr') ? 'azerty' : 'qwerty';
   var layout = LAYOUTS[layoutName];

@@ -208,6 +208,7 @@ class ChromiumBrowser:
             "--start-fullscreen",
             "--enable-touch-events",
             "--window-size=1280,800",
+            f"--lang={self.locale_fn().split('-')[0]}",
         ]
 
         logger.info(f"[MS] Launching Chromium: {' '.join(args[:6])}...")
@@ -340,19 +341,44 @@ class ChromiumBrowser:
             return
 
         from ..utils.virtual_keyboard import get_keyboard_js
-        kb_js = get_keyboard_js(self.locale_fn())
+        locale = self.locale_fn()
+        kb_js = get_keyboard_js(locale)
+
+        # Inject locale as a window variable FIRST, then the keyboard.
+        # This ensures the locale is available even if the string
+        # replacement in get_keyboard_js() is somehow not picked up.
+        locale_script = f"window.__unifideck_locale = '{locale}';"
+        logger.info(f"[MS] Injecting keyboard with locale={locale}")
 
         try:
             async with websockets.connect(ws_url, close_timeout=3) as ws:
+                # 1. Set locale variable for all future documents
+                await ws.send(json.dumps({
+                    "id": 9000,
+                    "method": "Page.addScriptToEvaluateOnNewDocument",
+                    "params": {"source": locale_script},
+                }))
+                await asyncio.wait_for(ws.recv(), timeout=3)
+
+                # 2. Set locale variable on the current page NOW
                 await ws.send(json.dumps({
                     "id": 9001,
+                    "method": "Runtime.evaluate",
+                    "params": {"expression": locale_script},
+                }))
+                await asyncio.wait_for(ws.recv(), timeout=3)
+
+                # 3. Register keyboard for future page loads
+                await ws.send(json.dumps({
+                    "id": 9002,
                     "method": "Page.addScriptToEvaluateOnNewDocument",
                     "params": {"source": kb_js},
                 }))
                 await asyncio.wait_for(ws.recv(), timeout=3)
 
+                # 4. Inject keyboard on the current page NOW
                 await ws.send(json.dumps({
-                    "id": 9002,
+                    "id": 9003,
                     "method": "Runtime.evaluate",
                     "params": {"expression": kb_js},
                 }))
