@@ -1,0 +1,71 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="500" viewBox="0 0 720 500">
+  <style>
+    text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; }
+    .h { font-size: 13px; font-weight: 500; }
+    .s { font-size: 11px; fill: #555; }
+    .arr { stroke-width: 1.2; fill: none; marker-end: url(#ah); }
+  </style>
+  <defs>
+    <marker id="ah" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M2 1L8 5L2 9" fill="none" stroke="context-stroke" stroke-width="1.5" stroke-linecap="round"/>
+    </marker>
+  </defs>
+
+  <rect x="260" y="16" width="200" height="48" rx="10" fill="#F1EFE8" stroke="#5F5E5A" stroke-width="0.8"/>
+  <text class="h" x="360" y="36" text-anchor="middle" fill="#2C2C2A">Not connected</text>
+  <text class="s" x="360" y="52" text-anchor="middle">"Connect" button</text>
+
+  <line x1="360" y1="64" x2="360" y2="94" class="arr" stroke="#5F5E5A"/>
+  <text class="s" x="374" y="84">Click</text>
+
+  <polygon points="360,96 424,130 360,164 296,130" fill="#FAEEDA" stroke="#854F0B" stroke-width="0.6"/>
+  <text class="s" x="360" y="128" text-anchor="middle" fill="#633806">Chromium</text>
+  <text class="s" x="360" y="142" text-anchor="middle" fill="#633806">installed?</text>
+
+  <line x1="296" y1="130" x2="140" y2="130" class="arr" stroke="#993C1D"/>
+  <text class="s" x="218" y="122" text-anchor="middle" fill="#993C1D">No</text>
+
+  <rect x="30" y="108" width="110" height="44" rx="8" fill="#FAECE7" stroke="#993C1D" stroke-width="0.6"/>
+  <text class="h" x="85" y="128" text-anchor="middle" fill="#712B13">Install Modal</text>
+  <text class="s" x="85" y="142" text-anchor="middle">flatpak install</text>
+
+  <path d="M85 152 L85 178 L294 130" fill="none" stroke="#27500A" stroke-width="0.8" stroke-dasharray="4 3" marker-end="url(#ah)"/>
+  <text class="s" x="155" y="170" fill="#27500A">Retry</text>
+
+  <line x1="360" y1="164" x2="360" y2="200" class="arr" stroke="#0F6E56"/>
+  <text class="s" x="374" y="186" fill="#0F6E56">Yes</text>
+
+  <rect x="260" y="202" width="200" height="48" rx="10" fill="#E6F1FB" stroke="#185FA5" stroke-width="0.8"/>
+  <text class="h" x="360" y="222" text-anchor="middle" fill="#0C447C">Auth in progress</text>
+  <text class="s" x="360" y="238" text-anchor="middle">Chromium fullscreen + keyboard</text>
+
+  <line x1="260" y1="226" x2="140" y2="226" class="arr" stroke="#A32D2D"/>
+  <text class="s" x="200" y="218" text-anchor="middle" fill="#A32D2D">Timeout / Failure</text>
+  <rect x="36" y="210" width="104" height="32" rx="6" fill="#FCEBEB" stroke="#A32D2D" stroke-width="0.5"/>
+  <text class="s" x="88" y="230" text-anchor="middle" fill="#791F1F">Error displayed</text>
+  <path d="M88 210 L88 66 L258 40" fill="none" stroke="#A32D2D" stroke-width="0.6" stroke-dasharray="4 3" marker-end="url(#ah)"/>
+
+  <line x1="360" y1="250" x2="360" y2="288" class="arr" stroke="#0F6E56"/>
+  <text class="s" x="374" y="274" fill="#0F6E56">OAuth code received</text>
+
+  <rect x="260" y="290" width="200" height="48" rx="10" fill="#E1F5EE" stroke="#0F6E56" stroke-width="0.8"/>
+  <text class="h" x="360" y="310" text-anchor="middle" fill="#085041">Connected</text>
+  <text class="s" x="360" y="326" text-anchor="middle">Sync catalog ~500 games</text>
+
+  <line x1="360" y1="338" x2="360" y2="374" class="arr" stroke="#3B6D11"/>
+  <text class="s" x="374" y="360" fill="#3B6D11">Play on Cloud</text>
+
+  <rect x="260" y="376" width="200" height="48" rx="10" fill="#EAF3DE" stroke="#3B6D11" stroke-width="0.8"/>
+  <text class="h" x="360" y="396" text-anchor="middle" fill="#27500A">xCloud Streaming</text>
+  <text class="s" x="360" y="412" text-anchor="middle">Chromium fullscreen</text>
+
+  <path d="M460 314 L550 314 L550 40 L462 40" fill="none" class="arr" stroke="#993C1D"/>
+  <text class="s" x="562" y="180" fill="#993C1D" transform="rotate(90 562 180)">Disconnect</text>
+
+  <path d="M460 400 L610 400 L610 40 L462 40" fill="none" stroke="#5F5E5A" stroke-width="0.8" stroke-dasharray="4 3" marker-end="url(#ah)"/>
+  <text class="s" x="536" y="392" fill="#5F5E5A">Close game</text>
+
+  <rect x="120" y="448" width="480" height="32" rx="6" fill="#FCEBEB" stroke="#A32D2D" stroke-width="0.4"/>
+  <text class="s" x="360" y="468" text-anchor="middle" fill="#791F1F">Xbox session lost (cookies missing) → auto-logout → back to "Not connected"</text>
+  <path d="M260 400 L180 400 L180 446" fill="none" stroke="#A32D2D" stroke-width="0.6" stroke-dasharray="4 3" marker-end="url(#ah)"/>
+</svg>

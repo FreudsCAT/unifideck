@@ -1,0 +1,96 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="440" viewBox="0 0 720 440">
+  <style>
+    text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; }
+    .h { font-size: 12px; font-weight: 500; }
+    .s { font-size: 10.5px; fill: #555; }
+    .arr { stroke-width: 1; fill: none; marker-end: url(#ah); }
+  </style>
+  <defs>
+    <marker id="ah" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M2 1L8 5L2 9" fill="none" stroke="context-stroke" stroke-width="1.5" stroke-linecap="round"/>
+    </marker>
+  </defs>
+
+  <!-- Row 1: Chromium missing -->
+  <rect x="30" y="20" width="140" height="44" rx="8" fill="#FCEBEB" stroke="#A32D2D" stroke-width="0.5"/>
+  <text class="h" x="100" y="38" text-anchor="middle" fill="#791F1F">Chromium missing</text>
+  <text class="s" x="100" y="52" text-anchor="middle">is_installed = false</text>
+  <line x1="170" y1="42" x2="216" y2="42" class="arr" stroke="#A32D2D"/>
+  <rect x="218" y="20" width="140" height="44" rx="8" fill="#FAEEDA" stroke="#854F0B" stroke-width="0.5"/>
+  <text class="h" x="288" y="38" text-anchor="middle" fill="#633806">Install Modal</text>
+  <text class="s" x="288" y="52" text-anchor="middle">Offers flatpak install</text>
+  <line x1="358" y1="42" x2="404" y2="42" class="arr" stroke="#854F0B"/>
+  <rect x="406" y="20" width="140" height="44" rx="8" fill="#E1F5EE" stroke="#0F6E56" stroke-width="0.5"/>
+  <text class="h" x="476" y="38" text-anchor="middle" fill="#085041">Installed</text>
+  <text class="s" x="476" y="52" text-anchor="middle">Relaunches auth</text>
+
+  <!-- Row 2: Chromium crash -->
+  <rect x="30" y="90" width="140" height="44" rx="8" fill="#FCEBEB" stroke="#A32D2D" stroke-width="0.5"/>
+  <text class="h" x="100" y="108" text-anchor="middle" fill="#791F1F">Chromium crash</text>
+  <text class="s" x="100" y="122" text-anchor="middle">poll() != None</text>
+  <line x1="170" y1="112" x2="216" y2="112" class="arr" stroke="#A32D2D"/>
+  <rect x="218" y="90" width="140" height="44" rx="8" fill="#FAEEDA" stroke="#854F0B" stroke-width="0.5"/>
+  <text class="h" x="288" y="108" text-anchor="middle" fill="#633806">wait_and_check</text>
+  <text class="s" x="288" y="122" text-anchor="middle">Log stderr (300 chars)</text>
+  <line x1="358" y1="112" x2="404" y2="112" class="arr" stroke="#854F0B"/>
+  <rect x="406" y="90" width="140" height="44" rx="8" fill="#F1EFE8" stroke="#5F5E5A" stroke-width="0.5"/>
+  <text class="h" x="476" y="108" text-anchor="middle" fill="#444">Auth abandoned</text>
+  <text class="s" x="476" y="122" text-anchor="middle">Chromium closed</text>
+
+  <!-- Row 3: Token refresh fail -->
+  <rect x="30" y="160" width="140" height="44" rx="8" fill="#FCEBEB" stroke="#A32D2D" stroke-width="0.5"/>
+  <text class="h" x="100" y="178" text-anchor="middle" fill="#791F1F">Refresh failed</text>
+  <text class="s" x="100" y="192" text-anchor="middle">MS rejects token</text>
+  <line x1="170" y1="182" x2="216" y2="182" class="arr" stroke="#A32D2D"/>
+  <rect x="218" y="160" width="140" height="44" rx="8" fill="#FAEEDA" stroke="#854F0B" stroke-width="0.5"/>
+  <text class="h" x="288" y="178" text-anchor="middle" fill="#633806">auto-logout()</text>
+  <text class="s" x="288" y="192" text-anchor="middle">Tokens deleted</text>
+  <line x1="358" y1="182" x2="404" y2="182" class="arr" stroke="#854F0B"/>
+  <rect x="406" y="160" width="140" height="44" rx="8" fill="#E6F1FB" stroke="#185FA5" stroke-width="0.5"/>
+  <text class="h" x="476" y="178" text-anchor="middle" fill="#0C447C">Re-auth required</text>
+  <text class="s" x="476" y="192" text-anchor="middle">Frontend: "Connect"</text>
+
+  <!-- Row 4: OAuth timeout -->
+  <rect x="30" y="230" width="140" height="44" rx="8" fill="#FCEBEB" stroke="#A32D2D" stroke-width="0.5"/>
+  <text class="h" x="100" y="248" text-anchor="middle" fill="#791F1F">OAuth timeout</text>
+  <text class="s" x="100" y="262" text-anchor="middle">300s without code</text>
+  <line x1="170" y1="252" x2="216" y2="252" class="arr" stroke="#A32D2D"/>
+  <rect x="218" y="230" width="140" height="44" rx="8" fill="#FAEEDA" stroke="#854F0B" stroke-width="0.5"/>
+  <text class="h" x="288" y="248" text-anchor="middle" fill="#633806">kill() Chromium</text>
+  <text class="s" x="288" y="262" text-anchor="middle">Warning logged</text>
+  <line x1="358" y1="252" x2="404" y2="252" class="arr" stroke="#854F0B"/>
+  <rect x="406" y="230" width="140" height="44" rx="8" fill="#F1EFE8" stroke="#5F5E5A" stroke-width="0.5"/>
+  <text class="h" x="476" y="248" text-anchor="middle" fill="#444">Back to QAM</text>
+  <text class="s" x="476" y="262" text-anchor="middle">Can retry</text>
+
+  <!-- Row 5: XAUTHORITY missing -->
+  <rect x="30" y="300" width="140" height="44" rx="8" fill="#FCEBEB" stroke="#A32D2D" stroke-width="0.5"/>
+  <text class="h" x="100" y="318" text-anchor="middle" fill="#791F1F">XAUTHORITY missing</text>
+  <text class="s" x="100" y="332" text-anchor="middle">glob returns []</text>
+  <line x1="170" y1="322" x2="216" y2="322" class="arr" stroke="#A32D2D"/>
+  <rect x="218" y="300" width="140" height="44" rx="8" fill="#FAEEDA" stroke="#854F0B" stroke-width="0.5"/>
+  <text class="h" x="288" y="318" text-anchor="middle" fill="#633806">Fallback</text>
+  <text class="s" x="288" y="332" text-anchor="middle">~/.Xauthority</text>
+  <line x1="358" y1="322" x2="404" y2="322" class="arr" stroke="#854F0B"/>
+  <rect x="406" y="300" width="140" height="44" rx="8" fill="#E1F5EE" stroke="#0F6E56" stroke-width="0.5"/>
+  <text class="h" x="476" y="318" text-anchor="middle" fill="#085041">Continue</text>
+  <text class="s" x="476" y="332" text-anchor="middle">If file exists</text>
+
+  <!-- Row 6: Xbox session lost -->
+  <rect x="30" y="370" width="140" height="44" rx="8" fill="#FCEBEB" stroke="#A32D2D" stroke-width="0.5"/>
+  <text class="h" x="100" y="388" text-anchor="middle" fill="#791F1F">Xbox session lost</text>
+  <text class="s" x="100" y="402" text-anchor="middle">Cookies missing</text>
+  <line x1="170" y1="392" x2="216" y2="392" class="arr" stroke="#A32D2D"/>
+  <rect x="218" y="370" width="140" height="44" rx="8" fill="#FAEEDA" stroke="#854F0B" stroke-width="0.5"/>
+  <text class="h" x="288" y="388" text-anchor="middle" fill="#633806">has_xbox_session</text>
+  <text class="s" x="288" y="402" text-anchor="middle">→ false</text>
+  <line x1="358" y1="392" x2="404" y2="392" class="arr" stroke="#854F0B"/>
+  <rect x="406" y="370" width="140" height="44" rx="8" fill="#E6F1FB" stroke="#185FA5" stroke-width="0.5"/>
+  <text class="h" x="476" y="388" text-anchor="middle" fill="#0C447C">auto-logout()</text>
+  <text class="s" x="476" y="402" text-anchor="middle">Re-auth required</text>
+
+  <!-- Column headers -->
+  <text class="h" x="100" y="12" text-anchor="middle" fill="#A32D2D">Error</text>
+  <text class="h" x="288" y="12" text-anchor="middle" fill="#854F0B">Detection</text>
+  <text class="h" x="476" y="12" text-anchor="middle" fill="#085041">Resolution</text>
+</svg>

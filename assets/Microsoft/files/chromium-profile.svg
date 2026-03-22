@@ -1,0 +1,79 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="420" viewBox="0 0 720 420">
+  <style>
+    text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; }
+    .h { font-size: 13px; font-weight: 500; }
+    .s { font-size: 11px; fill: #555; }
+    .code { font-size: 10.5px; font-family: "SF Mono", "Menlo", monospace; fill: #444; }
+    .arr { stroke-width: 1.2; fill: none; marker-end: url(#ah); }
+    .dash { stroke-dasharray: 5 4; stroke-width: 0.8; fill: none; }
+  </style>
+  <defs>
+    <marker id="ah" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M2 1L8 5L2 9" fill="none" stroke="context-stroke" stroke-width="1.5" stroke-linecap="round"/>
+    </marker>
+  </defs>
+
+  <!-- Central profile box -->
+  <rect x="200" y="130" width="320" height="160" rx="14" fill="#F8F8F6" stroke="#B4B2A9" stroke-width="0.8"/>
+  <text class="h" x="360" y="155" text-anchor="middle" fill="#444">~/.local/share/unifideck/chromium-auth/</text>
+
+  <!-- Cookies row -->
+  <rect x="224" y="170" width="272" height="32" rx="6" fill="#FAEEDA" stroke="#854F0B" stroke-width="0.5"/>
+  <text class="code" x="240" y="190">Default/Cookies</text>
+  <text class="s" x="480" y="190" fill="#854F0B">SQLite</text>
+
+  <!-- Cookie contents -->
+  <rect x="224" y="210" width="272" height="24" rx="4" fill="#FFF8ED" stroke="#FAEEDA" stroke-width="0.4"/>
+  <text class="code" x="240" y="226" fill="#633806">xbox.com  microsoft.com  live.com</text>
+
+  <!-- Preferences row -->
+  <rect x="224" y="244" width="272" height="28" rx="6" fill="#E6F1FB" stroke="#185FA5" stroke-width="0.5"/>
+  <text class="code" x="240" y="262">Default/Preferences</text>
+  <text class="s" x="480" y="262" fill="#0C447C">JSON</text>
+
+  <!-- Left: Auth writes -->
+  <rect x="20" y="40" width="150" height="52" rx="8" fill="#EEEDFE" stroke="#534AB7" stroke-width="0.6"/>
+  <text class="h" x="95" y="60" text-anchor="middle" fill="#3C3489">Auth Chromium</text>
+  <text class="s" x="95" y="76" text-anchor="middle">Microsoft login</text>
+
+  <path d="M95 92 L95 186 L198 186" class="arr" stroke="#534AB7"/>
+  <text class="s" x="108" y="150" fill="#534AB7">Écrit cookies</text>
+  <text class="s" x="108" y="164" fill="#534AB7">login.live.com</text>
+
+  <!-- Right: Launcher reads -->
+  <rect x="550" y="40" width="150" height="52" rx="8" fill="#EAF3DE" stroke="#3B6D11" stroke-width="0.6"/>
+  <text class="h" x="625" y="60" text-anchor="middle" fill="#27500A">xCloud Launcher</text>
+  <text class="s" x="625" y="76" text-anchor="middle">Game streaming</text>
+
+  <path d="M625 92 L625 186 L522 186" class="arr" stroke="#3B6D11"/>
+  <text class="s" x="548" y="150" text-anchor="end" fill="#27500A">Reads cookies</text>
+  <text class="s" x="548" y="164" text-anchor="end" fill="#27500A">SSO xbox.com</text>
+
+  <!-- Bottom left: Plugin reads (bidirectional logout) -->
+  <rect x="20" y="340" width="150" height="52" rx="8" fill="#FAECE7" stroke="#993C1D" stroke-width="0.6"/>
+  <text class="h" x="95" y="360" text-anchor="middle" fill="#712B13">is_available()</text>
+  <text class="s" x="95" y="376" text-anchor="middle">Détection logout</text>
+
+  <path d="M170 366 L210 366 L210 240 L222 240" class="dash" stroke="#993C1D" marker-end="url(#ah)"/>
+  <text class="s" x="172" y="310" fill="#993C1D">Temp copy</text>
+  <text class="s" x="172" y="324" fill="#993C1D">+ SELECT COUNT</text>
+
+  <!-- Bottom right: logout clears -->
+  <rect x="550" y="340" width="150" height="52" rx="8" fill="#E6F1FB" stroke="#185FA5" stroke-width="0.6"/>
+  <text class="h" x="625" y="360" text-anchor="middle" fill="#0C447C">logout()</text>
+  <text class="s" x="625" y="376" text-anchor="middle">Plugin disconnect</text>
+
+  <path d="M550 366 L510 366 L510 240 L498 240" class="dash" stroke="#185FA5" marker-end="url(#ah)"/>
+  <text class="s" x="530" y="310" text-anchor="end" fill="#0C447C">DELETE FROM</text>
+  <text class="s" x="530" y="324" text-anchor="end" fill="#0C447C">cookies WHERE</text>
+
+  <!-- Legend -->
+  <line x1="40" y1="410" x2="70" y2="410" stroke="#534AB7" stroke-width="1.2"/>
+  <text class="s" x="76" y="414">Écriture</text>
+  <line x1="140" y1="410" x2="170" y2="410" stroke="#3B6D11" stroke-width="1.2"/>
+  <text class="s" x="176" y="414">SSO read</text>
+  <line x1="260" y1="410" x2="290" y2="410" stroke="#993C1D" stroke-width="0.8" stroke-dasharray="5 4"/>
+  <text class="s" x="296" y="414">Vérification</text>
+  <line x1="400" y1="410" x2="430" y2="410" stroke="#185FA5" stroke-width="0.8" stroke-dasharray="5 4"/>
+  <text class="s" x="436" y="414">Cleanup</text>
+</svg>
