@@ -81,19 +81,19 @@ The Microsoft integration is split into single-responsibility specialized module
 
 ### Module diagram
 
-<img src="../assets/Microsoft/architecture.svg" alt="Module architecture" width="100%" />
+<img src="../assets/Microsoft/architecture.jpg" alt="Module architecture" width="100%" />
 
 ### User journey (state machine)
 
 The following diagram represents all possible interface states from the user's perspective. Each transition corresponds to a user action or system event (success, failure, timeout). Error paths systematically return to the initial state.
 
-<img src="../assets/Microsoft/frontend-states.svg" alt="Frontend state machine" width="100%" />
+<img src="../assets/Microsoft/frontend-states.jpg" alt="Frontend state machine" width="100%" />
 
 ### Use cases
 
 The following diagram identifies all available actions for a user of the Microsoft integration. Primary use cases (in blue) are directly triggered by the user. Included and extended cases (in gray) are automatic or conditional steps. `<<include>>` relations indicate mandatory steps, while `<<extend>>` signals behaviors triggered only under certain conditions (Chromium missing, session expired).
 
-<img src="../assets/Microsoft/use-cases.svg" alt="Use case diagram" width="100%" />
+<img src="../assets/Microsoft/use-cases.jpg" alt="Use case diagram" width="100%" />
 
 ---
 
@@ -103,13 +103,13 @@ Authentication uses **Microsoft OAuth 2.0** with authorization code interception
 
 ### Full sequence
 
-<img src="../assets/Microsoft/auth-sequence.svg" alt="Authentication sequence" width="100%" />
+<img src="../assets/Microsoft/auth-sequence.jpg" alt="Authentication sequence" width="100%" />
 
 ### Token chain
 
 After obtaining the OAuth code, the backend builds a token chain to access Xbox APIs:
 
-<img src="../assets/Microsoft/token-chain.svg" alt="XBL/XSTS token chain" width="100%" />
+<img src="../assets/Microsoft/token-chain.jpg" alt="XBL/XSTS token chain" width="100%" />
 
 ### Token chain technical details
 
@@ -123,13 +123,13 @@ The `RpsTicket` prefix (`d=` vs `t=`) depends on the token format:
 
 Microsoft tokens have a limited lifespan (~1 hour for the access token). The plugin automatically manages their renewal transparently for the user. On every API call (sync, status check), `_ensure_fresh_ms_token()` checks the token's age: if it is nearing expiration, a refresh is triggered using the `refresh_token` persisted on disk. If the refresh fails (token revoked, account modified), the plugin performs an automatic logout and requests a new authentication.
 
-<img src="../assets/Microsoft/token-lifecycle.svg" alt="Token lifecycle" width="100%" />
+<img src="../assets/Microsoft/token-lifecycle.jpg" alt="Token lifecycle" width="100%" />
 
 ### Chromium installation
 
 When Chromium is not detected on the system, the backend returns `needs_chromium: true` to the frontend. The `ChromiumInstallModal` then offers the user to install Chromium automatically via flatpak. Once installation is complete, auth is relaunched without further user intervention.
 
-<img src="../assets/Microsoft/chromium-install.svg" alt="Chromium install flow" width="100%" />
+<img src="../assets/Microsoft/chromium-install.jpg" alt="Chromium install flow" width="100%" />
 
 ---
 
@@ -139,7 +139,7 @@ Synchronization retrieves the full list of available xCloud games and adds them 
 
 ### Sync flow
 
-<img src="../assets/Microsoft/sync-flow.svg" alt="Sync flow" width="100%" />
+<img src="../assets/Microsoft/sync-flow.jpg" alt="Sync flow" width="100%" />
 
 ### games.map format
 
@@ -160,7 +160,7 @@ The launcher reads this entry to determine that it is an xCloud game and open Ch
 
 ### Launch flow
 
-<img src="../assets/Microsoft/game-launch.svg" alt="Game launch flow" width="100%" />
+<img src="../assets/Microsoft/game-launch.jpg" alt="Game launch flow" width="100%" />
 
 ### Chromium flags for xCloud
 
@@ -192,7 +192,7 @@ The Steam Deck has no physical keyboard. Steam's overlay keyboard is not availab
 
 ### Injection and locale detection
 
-<img src="../assets/Microsoft/keyboard-injection.svg" alt="Virtual keyboard injection" width="100%" />
+<img src="../assets/Microsoft/keyboard-injection.jpg" alt="Virtual keyboard injection" width="100%" />
 
 ### Available layouts
 
@@ -247,13 +247,13 @@ Connecting and disconnecting from the Microsoft account is done **once**, from t
 
 The plugin maintains consistency between its own authentication state (OAuth tokens stored on disk) and the session state in the Chromium browser (xbox.com cookies). If the user logs out from either side, both are synchronized automatically: a logout from the plugin clears Chromium cookies, and an expired session in the browser triggers an auto-logout on the plugin side.
 
-<img src="../assets/Microsoft/logout-sync.svg" alt="Logout sync" width="100%" />
+<img src="../assets/Microsoft/logout-sync.jpg" alt="Logout sync" width="100%" />
 
 ### Shared Chromium profile
 
 The directory `~/.local/share/unifideck/chromium-auth/` is the central point for session persistence. It stores the Microsoft cookies created during authentication and makes them available to the launcher for xbox.com SSO at streaming time. This profile is also checked by the plugin to detect if the user logged out from the Game Pass page, and cleaned up during an explicit logout.
 
-<img src="../assets/Microsoft/chromium-profile.svg" alt="Shared Chromium profile" width="100%" />
+<img src="../assets/Microsoft/chromium-profile.jpg" alt="Shared Chromium profile" width="100%" />
 
 ### Reading cookies (without blocking Chromium)
 
@@ -292,7 +292,7 @@ The `StoreConnections` panel in Steam's Quick Access Menu presents three distinc
 
 Every failure point is covered by a detection and recovery mechanism. The plugin never stays in a stuck state: errors bring the user back to a stable state (QAM with "Connect" button) from which they can retry the operation.
 
-<img src="../assets/Microsoft/error-handling.svg" alt="Error handling" width="100%" />
+<img src="../assets/Microsoft/error-handling.jpg" alt="Error handling" width="100%" />
 
 ---
 
