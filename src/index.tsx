@@ -885,13 +885,15 @@ const Content: FC = () => {
       ])) as any;
 
       if (result.success) {
-        setStoreStatus({
+        const nextStoreStatus = {
           epic: result.epic,
           gog: result.gog,
           amazon: result.amazon,
           ubisoft: result.ubisoft,
           microsoft: result.microsoft ?? "not_connected",
-        });
+        };
+        setStoreStatus(nextStoreStatus);
+        tabManager.setConnectedStores(nextStoreStatus);
 
         // Show warning if legendary not installed
         if (result.legendary_installed === false) {
@@ -907,23 +909,118 @@ const Content: FC = () => {
         }
       } else {
         console.error("[Unifideck] Status check failed:", result.error);
-        setStoreStatus({
+        const failedStoreStatus = {
           epic: "error",
           gog: "error",
           amazon: "error",
           ubisoft: "error",
           microsoft: "error",
-        });
+        };
+        setStoreStatus(failedStoreStatus);
+        tabManager.setConnectedStores(failedStoreStatus);
       }
     } catch (error) {
       console.error("[Unifideck] Error checking store status:", error);
-      setStoreStatus({
+      const erroredStoreStatus = {
         epic: "error",
         gog: "error",
         amazon: "error",
         ubisoft: "error",
         microsoft: "error",
-      });
+      };
+      setStoreStatus(erroredStoreStatus);
+      tabManager.setConnectedStores(erroredStoreStatus);
+    }
+  };
+
+  const sleep = (ms: number) =>
+    new Promise<void>((resolve) => window.setTimeout(resolve, ms));
+
+  const refreshLibraryData = async () => {
+    await syncUnifideckCollections().catch((err) =>
+      console.error("[Unifideck] Failed to sync collections:", err),
+    );
+
+    await tabManager.forceReloadGameCache().catch((err) =>
+      console.error("[Unifideck] Failed to reload tab cache:", err),
+    );
+
+    console.log("[Unifideck] Refreshing compat cache...");
+    await loadCompatCacheFromBackend().catch((err) =>
+      console.error("[Unifideck] Failed to refresh compat cache:", err),
+    );
+
+    await checkStoreStatus();
+  };
+
+  const waitForAuthTriggeredSync = async () => {
+    const syncStartDeadline = Date.now() + 10000;
+
+    while (Date.now() < syncStartDeadline) {
+      try {
+        const status = await call<
+          [],
+          {
+            is_syncing: boolean;
+            sync_progress: SyncProgress | null;
+          }
+        >("get_sync_status");
+
+        if (!status.is_syncing) {
+          await sleep(500);
+          continue;
+        }
+
+        while (true) {
+          const progress = await call<[], { success?: boolean } & SyncProgress>(
+            "get_sync_progress",
+          );
+
+          if (
+            progress.status === "complete" ||
+            progress.status === "error" ||
+            progress.status === "cancelled"
+          ) {
+            return progress;
+          }
+
+          await sleep(500);
+        }
+      } catch (error) {
+        console.error(
+          "[Unifideck] Error waiting for auth-triggered sync:",
+          error,
+        );
+        return null;
+      }
+    }
+
+    return null;
+  };
+
+  const refreshLibraryAfterAuth = async (store: Store) => {
+    try {
+      const autoSyncStores = new Set<Store>([
+        "epic",
+        "gog",
+        "amazon",
+        "ubisoft",
+      ]);
+
+      if (autoSyncStores.has(store)) {
+        const syncResult = await waitForAuthTriggeredSync();
+        if (syncResult?.status === "complete") {
+          const addedGames = Number(syncResult.current_game?.values?.added) || 0;
+          if (addedGames > 0) {
+            showModal(<SteamRestartModal closeModal={() => {}} />);
+          }
+        }
+      }
+
+      await refreshLibraryData();
+    } catch (error) {
+      console.error("[Unifideck] Error refreshing library after auth:", error);
+      await checkStoreStatus();
     }
   };
 
@@ -1086,24 +1183,7 @@ const Content: FC = () => {
       console.log(`[Unifideck] Artwork Fetched: ${syncResult.artwork_count}`);
       console.log("[Unifideck] =====================================");
 
-      // Phase 3: Sync Steam Collections
-      // Update collections ([Unifideck] Epic Games, etc.) with new games
-      await syncUnifideckCollections().catch((err) =>
-        console.error("[Unifideck] Failed to sync collections:", err),
-      );
-
-      // Phase 4: Reload tab game counts (so Microsoft tab appears if games were added)
-      await tabManager.forceReloadGameCache().catch((err) =>
-        console.error("[Unifideck] Failed to reload tab cache:", err),
-      );
-
-      // Reload compat cache from backend (so Great on Deck tab updates immediately)
-      console.log("[Unifideck] Refreshing compat cache...");
-      await loadCompatCacheFromBackend().catch((err) =>
-        console.error("[Unifideck] Failed to refresh compat cache:", err),
-      );
-
-      await checkStoreStatus();
+      await refreshLibraryData();
     } catch (error) {
       console.error("[Unifideck] Manual sync failed:", error);
       if (pollIntervalRef.current) {
@@ -1240,7 +1320,7 @@ const Content: FC = () => {
               duration: 8000,
               critical: true,
             });
-            await checkStoreStatus();
+            void refreshLibraryAfterAuth("ubisoft");
           }}
         />,
       );
@@ -1320,7 +1400,7 @@ const Content: FC = () => {
               showModal(
                 <AuthSuccessModal store={storeName} closeModal={() => {}} />,
               );
-              await checkStoreStatus(); // Refresh status
+              void refreshLibraryAfterAuth(store);
             } else {
               console.log(`[Unifideck] ${storeName} authentication timed out`);
               toaster.toast({
@@ -1484,7 +1564,7 @@ const Content: FC = () => {
                   body: t("toasts.authConnectedMessage", { store: storeName }),
                   duration: 5000,
                 });
-                await checkStoreStatus();
+                await refreshLibraryAfterAuth(store);
               } else {
                 console.log(`[Unifideck] ${storeName} authentication timed out`);
                 toaster.toast({

@@ -259,6 +259,9 @@ class TabManager {
   private tabs: UnifideckTabContainer[] = [];
   private initialized = false;
   private cacheLoaded = false;
+  private connectedStores = new Set<
+    "epic" | "gog" | "amazon" | "ubisoft" | "microsoft"
+  >();
   private epicGameCount = 0;
   private gogGameCount = 0;
   private amazonGameCount = 0;
@@ -364,23 +367,64 @@ class TabManager {
     return this.tabs.filter((tab) => this.shouldShowTab(tab.id));
   }
 
+  setConnectedStores(
+    statuses: Partial<
+      Record<"epic" | "gog" | "amazon" | "ubisoft" | "microsoft", string>
+    >,
+  ) {
+    const nextConnectedStores = new Set<
+      "epic" | "gog" | "amazon" | "ubisoft" | "microsoft"
+    >();
+    (
+      ["epic", "gog", "amazon", "ubisoft", "microsoft"] as const
+    ).forEach((store) => {
+      if (statuses[store] === "connected") {
+        nextConnectedStores.add(store);
+      }
+    });
+    this.connectedStores = nextConnectedStores;
+    if (this.initialized) {
+      this.tabs = UNIFIDECK_TABS.map((tab) => new UnifideckTabContainer(tab));
+    }
+  }
+
   /**
    * Determines if a tab should be visible based on game availability
    */
   private shouldShowTab(tabId: string): boolean {
-    if (tabId === "unifideck-epic" && this.epicGameCount === 0) {
+    if (
+      tabId === "unifideck-epic" &&
+      this.epicGameCount === 0 &&
+      !this.connectedStores.has("epic")
+    ) {
       return false;
     }
-    if (tabId === "unifideck-gog" && this.gogGameCount === 0) {
+    if (
+      tabId === "unifideck-gog" &&
+      this.gogGameCount === 0 &&
+      !this.connectedStores.has("gog")
+    ) {
       return false;
     }
-    if (tabId === "unifideck-amazon" && this.amazonGameCount === 0) {
+    if (
+      tabId === "unifideck-amazon" &&
+      this.amazonGameCount === 0 &&
+      !this.connectedStores.has("amazon")
+    ) {
       return false;
     }
-    if (tabId === "unifideck-ubisoft" && this.ubisoftGameCount === 0) {
+    if (
+      tabId === "unifideck-ubisoft" &&
+      this.ubisoftGameCount === 0 &&
+      !this.connectedStores.has("ubisoft")
+    ) {
       return false;
     }
-    if (tabId === "unifideck-microsoft" && this.microsoftGameCount === 0) {
+    if (
+      tabId === "unifideck-microsoft" &&
+      this.microsoftGameCount === 0 &&
+      !this.connectedStores.has("microsoft")
+    ) {
       return false;
     }
     return true;
