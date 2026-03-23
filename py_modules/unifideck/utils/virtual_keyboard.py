@@ -326,4 +326,7 @@ def get_keyboard_js(locale: str = "en-US") -> str:
     Returns:
         Ready-to-inject JavaScript string.
     """
+    import re
+    if not re.match(r'^[a-zA-Z]{2}(-[a-zA-Z]{2,4})?$', locale):
+        locale = "en-US"
     return _KEYBOARD_JS.replace("__UNIFIDECK_LOCALE__", locale)

@@ -10,6 +10,7 @@ These are the lowest-level building blocks — imported by both the connector
 
 import json
 import logging
+import os
 import ssl
 import urllib.error
 import urllib.parse
@@ -33,8 +34,8 @@ def ssl_ctx_strict() -> ssl.SSLContext:
     """SSL context for authentication and API endpoints.
 
     SteamOS ships an incomplete CA bundle that cannot verify login.live.com.
-    We try certifi first (bundled with many Python installs); if unavailable
-    we fall back to disabling certificate verification.
+    We try certifi first; then system CA bundles; only as a last resort
+    do we disable certificate verification (with a prominent warning).
     """
     try:
         import certifi
@@ -42,8 +43,19 @@ def ssl_ctx_strict() -> ssl.SSLContext:
     except ImportError:
         pass
 
+    # Try system CA bundles before disabling verification
+    for ca_path in (
+        "/etc/ssl/certs/ca-certificates.crt",  # Debian/SteamOS
+        "/etc/pki/tls/certs/ca-bundle.crt",     # RedHat/Fedora
+        "/etc/ssl/ca-bundle.pem",                # OpenSUSE
+    ):
+        if os.path.exists(ca_path):
+            logger.info(f"[MS] Using system CA bundle: {ca_path}")
+            return ssl.create_default_context(cafile=ca_path)
+
     logger.warning(
-        "[MS] certifi not found — disabling SSL verification for MS auth endpoints. "
+        "[MS] SECURITY: No CA bundle found (certifi not installed, "
+        "system CA bundles missing). SSL verification disabled for MS auth. "
         "Install certifi for proper certificate validation."
     )
     ctx = ssl.create_default_context()

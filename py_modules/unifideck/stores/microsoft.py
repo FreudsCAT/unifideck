@@ -80,6 +80,7 @@ class MicrosoftConnector(Store):
         self._xuid:       Optional[str] = None
 
         self._settings_cache: Optional[Dict[str, Any]] = None
+        self._auth_monitor_task: Optional[asyncio.Task] = None
         self._load_tokens()
 
         # Browser manager for Chromium auth and xCloud (composition)
@@ -595,33 +596,48 @@ class MicrosoftConnector(Store):
 
 
     async def _monitor_and_complete_auth(self) -> None:
-        """Background task: intercept the OAuth redirect via CDP Network events."""
-        cdp_port = self._browser.cdp_port if self._browser.process else 8080
+        """Background task: intercept the OAuth redirect via CDP Network events.
 
-        # Wait for Chromium to start
+        Starts the CDP interception immediately in a sub-task so Network
+        events are captured even while we wait for the crash check and
+        keyboard injection to finish.  This eliminates the race where a
+        fast OAuth redirect completes before CDP is listening.
+        """
+        cdp_port = self._browser.cdp_port if self._browser.process else 9222
+
+        # Start CDP interception immediately -- it polls /json until
+        # the login page target appears, so it's safe to start before
+        # Chromium is fully ready.
+        intercept_task = asyncio.create_task(
+            intercept_oauth_code(
+                pending_auth_url=getattr(self, "_pending_auth_url", ""),
+                timeout=300,
+                cdp_port=cdp_port,
+            )
+        )
+
+        # While CDP is already listening, wait for Chromium startup
+        # and inject virtual keyboard concurrently.
         if self._browser.process:
             ok = await self._browser.wait_and_check_crash()
             if not ok:
+                intercept_task.cancel()
                 return
 
         # Inject virtual keyboard (Steam overlay not available outside Steam)
         await self._browser.inject_virtual_keyboard()
 
         try:
-            code = await intercept_oauth_code(
-                pending_auth_url=getattr(self, "_pending_auth_url", ""),
-                timeout=300,
-                cdp_port=cdp_port,
-            )
+            code = await intercept_task
             if code:
-                logger.info("[MS] ✓ Received OAuth code via Network interception")
+                logger.info("[MS] Received OAuth code via Network interception")
                 result = await self.complete_auth(code)
                 if result["success"]:
-                    logger.info("[MS] ✓ Authentication completed — closing Chromium")
+                    logger.info("[MS] Authentication completed -- closing Chromium")
                 else:
                     logger.error(f"[MS] complete_auth failed: {result.get('error')}")
             else:
-                logger.warning("[MS] Network interception timed out — no code received")
+                logger.warning("[MS] Network interception timed out -- no code received")
         except Exception as e:
             logger.error(f"[MS] Auth monitor error: {e}", exc_info=True)
         finally:

@@ -22,6 +22,7 @@ import glob
 import json
 import logging
 import os
+import pathlib
 import shutil
 import sqlite3
 import subprocess
@@ -66,18 +67,27 @@ def clean_env() -> dict:
 
     - Strips ``LD_LIBRARY_PATH`` / ``LD_PRELOAD`` (PluginLoader bundles
       its own OpenSSL which conflicts with system libraries).
-    - Injects ``DISPLAY``, ``XDG_RUNTIME_DIR``, ``DBUS_SESSION_BUS_ADDRESS``
+    - Detects the correct ``DISPLAY`` for gaming mode (gamescope) vs desktop.
+    - Injects ``XDG_RUNTIME_DIR``, ``DBUS_SESSION_BUS_ADDRESS``
       (PluginLoader is a systemd service without a display session).
     - Finds the real ``XAUTHORITY`` file (SteamOS uses a randomly-named
       file in ``/run/user/<uid>/``).
     - Clears ``GTK_MODULES`` to suppress canberra-gtk-module warnings.
     """
-    uid = os.stat("/home/deck").st_uid
+    home = str(pathlib.Path.home())
+    uid = os.stat(home).st_uid
     env = {
         k: v for k, v in os.environ.items()
         if k not in ("LD_LIBRARY_PATH", "LD_PRELOAD")
     }
-    env.setdefault("DISPLAY", ":0")
+    # Gaming mode: gamescope uses a different DISPLAY than :0
+    if "DISPLAY" not in env:
+        # Check for gamescope nested display
+        gamescope_display = os.environ.get("GAMESCOPE_WAYLAND_DISPLAY")
+        if gamescope_display:
+            env["DISPLAY"] = ":1"  # gamescope typically exposes :1
+        else:
+            env["DISPLAY"] = ":0"
     env.setdefault("XDG_RUNTIME_DIR", f"/run/user/{uid}")
     env.setdefault("DBUS_SESSION_BUS_ADDRESS", f"unix:path=/run/user/{uid}/bus")
     # XAUTHORITY: SteamOS uses a randomly-named file in /run/user/<uid>/
@@ -85,8 +95,8 @@ def clean_env() -> dict:
         xauth_files = glob.glob(f"/run/user/{uid}/xauth_*")
         if xauth_files:
             env["XAUTHORITY"] = xauth_files[0]
-        elif os.path.exists("/home/deck/.Xauthority"):
-            env["XAUTHORITY"] = "/home/deck/.Xauthority"
+        elif os.path.exists(os.path.join(home, ".Xauthority")):
+            env["XAUTHORITY"] = os.path.join(home, ".Xauthority")
     env["GTK_MODULES"] = ""
     return env
 
@@ -214,16 +224,17 @@ class ChromiumBrowser:
         logger.info(f"[MS] Launching Chromium: {' '.join(args[:6])}...")
         logger.info(f"[MS] Chromium env DISPLAY={clean_env().get('DISPLAY')}")
 
+        stderr_fh = None
         try:
             stderr_fh = open(LOG_FILE, "w")
         except Exception:
-            stderr_fh = subprocess.DEVNULL
+            pass
 
         try:
             self.process = subprocess.Popen(
                 args,
                 stdout=subprocess.DEVNULL,
-                stderr=stderr_fh,
+                stderr=stderr_fh if stderr_fh else subprocess.DEVNULL,
                 env=clean_env(),
             )
             logger.info(f"[MS] Chromium PID: {self.process.pid}")
@@ -231,6 +242,9 @@ class ChromiumBrowser:
         except Exception as e:
             logger.error(f"[MS] Failed to launch Chromium: {e}", exc_info=True)
             return False
+        finally:
+            if stderr_fh is not None:
+                stderr_fh.close()
 
     def kill(self) -> None:
         """Gracefully terminate the Chromium auth process.
@@ -270,24 +284,27 @@ class ChromiumBrowser:
         cookie_db = os.path.join(PROFILE_DIR, "Default", "Cookies")
         if not os.path.exists(cookie_db):
             return True
+        tmp_path = None
         try:
             with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
                 tmp_path = tmp.name
             shutil.copy2(cookie_db, tmp_path)
+            conn = sqlite3.connect(tmp_path, timeout=5)
             try:
-                conn = sqlite3.connect(tmp_path)
                 cursor = conn.execute(
                     "SELECT COUNT(*) FROM cookies "
                     "WHERE host_key LIKE '%xbox.com%'"
                 )
                 count = cursor.fetchone()[0]
-                conn.close()
                 return count > 0
             finally:
-                os.unlink(tmp_path)
+                conn.close()
         except Exception as e:
             logger.debug(f"[MS] Could not read cookie DB: {e}")
             return True
+        finally:
+            if tmp_path and os.path.exists(tmp_path):
+                os.unlink(tmp_path)
 
     @staticmethod
     def clear_cookies() -> None:
@@ -296,14 +313,19 @@ class ChromiumBrowser:
         if not os.path.exists(cookie_db):
             return
         try:
-            conn = sqlite3.connect(cookie_db)
-            for pattern in _MS_COOKIE_DOMAINS:
-                conn.execute(
-                    "DELETE FROM cookies WHERE host_key LIKE ?", (pattern,)
-                )
-            conn.commit()
-            conn.close()
-            logger.info("[MS] Cleared Xbox/MS cookies from Chromium profile")
+            conn = sqlite3.connect(cookie_db, timeout=5)
+            try:
+                for pattern in _MS_COOKIE_DOMAINS:
+                    conn.execute(
+                        "DELETE FROM cookies WHERE host_key LIKE ?", (pattern,)
+                    )
+                conn.commit()
+                logger.info("[MS] Cleared Xbox/MS cookies from Chromium profile")
+            except Exception:
+                conn.rollback()
+                raise
+            finally:
+                conn.close()
         except Exception as e:
             logger.debug(f"[MS] Could not clear Chromium cookies: {e}")
 
@@ -342,6 +364,10 @@ class ChromiumBrowser:
 
         from ..utils.virtual_keyboard import get_keyboard_js
         locale = self.locale_fn()
+        # Sanitize locale to prevent JS injection
+        import re as _re
+        if not _re.match(r'^[a-zA-Z]{2}(-[a-zA-Z]{2,4})?$', locale):
+            locale = "en-US"
         kb_js = get_keyboard_js(locale)
 
         # Inject locale as a window variable FIRST, then the keyboard.
@@ -391,20 +417,31 @@ class ChromiumBrowser:
     async def wait_and_check_crash(self) -> bool:
         """Wait for Chromium to start, return False if it crashed.
 
-        Called at the start of the auth monitor task.  Gives Chromium
-        2 s to open its CDP port.
+        Called at the start of the auth monitor task.  Polls every 0.5 s
+        for up to 10 s to allow Chromium time to start on loaded systems.
         """
         if not self.process:
             return False
-        await asyncio.sleep(2)
-        if self.process.poll() is not None:
-            err = ""
+        for _ in range(20):  # 20 * 0.5 s = 10 s max
+            await asyncio.sleep(0.5)
+            if self.process.poll() is not None:
+                err = ""
+                try:
+                    with open(LOG_FILE) as f:
+                        err = f.read()[:300]
+                except Exception:
+                    pass
+                logger.error(f"[MS] Chromium crashed before CDP. stderr: {err}")
+                self.process = None
+                return False
+            # Check if CDP port is responsive
             try:
-                with open(LOG_FILE) as f:
-                    err = f.read()[:300]
+                import urllib.request
+                with urllib.request.urlopen(
+                    f"http://127.0.0.1:{self.cdp_port}/json/version", timeout=1
+                ):
+                    return True
             except Exception:
-                pass
-            logger.error(f"[MS] Chromium crashed before CDP. stderr: {err}")
-            self.process = None
-            return False
-        return True
+                continue
+        logger.warning("[MS] Chromium started but CDP port not responding after 10 s")
+        return True  # process is alive, let caller retry CDP

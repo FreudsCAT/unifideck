@@ -69,7 +69,7 @@ try:
         EpicConnector as BackendEpicConnector,
         AmazonConnector as BackendAmazonConnector,
         GOGAPIClient as BackendGOGAPIClient,
-        UbisoftConnector as BackendUbisoftConnector
+        UbisoftConnector as BackendUbisoftConnector,
         MicrosoftConnector as BackendMicrosoftConnector,
     )
     from py_modules.unifideck.auth import CDPOAuthMonitor as BackendCDPOAuthMonitor
@@ -2734,7 +2734,7 @@ microsoft_client=self.microsoft,
                         logger.info(f"Sync: Pre-fetching Steam metadata for {len(games_needing_steam)} games")
                         logger.debug(f"  Sample games: {', '.join([g.title for g in games_needing_steam[:5]])}")
                         semaphore = asyncio.Semaphore(self.STEAM_STORE_MAX_CONCURRENCY)
-                        await asyncio.gather(*[resolve_steam_for_game(g, semaphore) for g in games_needing_steam])
+                        await asyncio.gather(*[resolve_steam_for_game(g, semaphore) for g in games_needing_steam], return_exceptions=True)
 
                     if real_steam_cache:
                         save_steam_real_appid_cache(real_steam_cache)
@@ -2869,15 +2869,17 @@ microsoft_client=self.microsoft,
                             async with semaphore:
                                 return await lookup_sgdb(game)
 
-                        results = await asyncio.gather(*[limited_lookup(g) for g in games_needing_sgdb_lookup])
+                        results = await asyncio.gather(*[limited_lookup(g) for g in games_needing_sgdb_lookup], return_exceptions=True)
 
-                        # Update cache with results
-                        for result in results:
-                            if result:
+                        # Update cache with results, log any exceptions
+                        for i, result in enumerate(results):
+                            if isinstance(result, Exception):
+                                logger.warning(f"SteamGridDB lookup failed for game {i}: {result}")
+                            elif result:
                                 app_id, sgdb_id = result
                                 steam_appid_cache[app_id] = sgdb_id
                         
-                        logger.info(f"SteamGridDB lookup complete: {sum(1 for r in results if r)} found")
+                        logger.info(f"SteamGridDB lookup complete: {sum(1 for r in results if r and not isinstance(r, Exception))} found")
                     
                     # Save updated cache
                     if steam_appid_cache:
@@ -3412,7 +3414,7 @@ microsoft_client=self.microsoft,
 
                     if games_needing_steam:
                         semaphore = asyncio.Semaphore(self.STEAM_STORE_MAX_CONCURRENCY)
-                        await asyncio.gather(*[resolve_steam_for_game(g, semaphore) for g in games_needing_steam])
+                        await asyncio.gather(*[resolve_steam_for_game(g, semaphore) for g in games_needing_steam], return_exceptions=True)
 
                     if real_steam_cache:
                         save_steam_real_appid_cache(real_steam_cache)
@@ -3539,15 +3541,17 @@ microsoft_client=self.microsoft,
                             async with semaphore:
                                 return await lookup_sgdb(game)
                         
-                        results = await asyncio.gather(*[limited_lookup(g) for g in games_needing_sgdb_lookup])
+                        results = await asyncio.gather(*[limited_lookup(g) for g in games_needing_sgdb_lookup], return_exceptions=True)
                         
-                        # Update cache with results
-                        for result in results:
-                            if result:
+                        # Update cache with results, log any exceptions
+                        for i, result in enumerate(results):
+                            if isinstance(result, Exception):
+                                logger.warning(f"SteamGridDB lookup failed for game {i}: {result}")
+                            elif result:
                                 app_id, sgdb_id = result
                                 steam_appid_cache[app_id] = sgdb_id
                         
-                        logger.info(f"SteamGridDB lookup complete: {sum(1 for r in results if r)} found")
+                        logger.info(f"SteamGridDB lookup complete: {sum(1 for r in results if r and not isinstance(r, Exception))} found")
                     
                     # Save updated cache
                     if steam_appid_cache:
@@ -4165,7 +4169,6 @@ microsoft_client=self.microsoft,
                                         logger.warning(f"[GameInfo] Failed to update games.map for Ubisoft {game_id}: {map_err}")
                                 else:
                                     logger.warning(f"[GameInfo] Ubisoft game {game_id} in prefix but path missing")
-                        elif store not in ('epic', 'gog', 'amazon', 'ubisoft'):
                         elif store not in ('epic', 'gog', 'amazon', 'ubisoft', 'microsoft'):
                             return {'error': f'Unknown store: {store}'}
 
@@ -5989,7 +5992,7 @@ microsoft_client=self.microsoft,
                 'epic': 'error',
                 'gog': 'error',
                 'amazon': 'error',
-                'ubisoft': 'error'
+                'ubisoft': 'error',
                 'microsoft': 'error'
             }
 
@@ -6689,8 +6692,7 @@ microsoft_client=self.microsoft,
                         full = os.path.expanduser(auth_path)
                         if os.path.exists(full):
                             os.remove(full)
-                            logger.info(f"[Cleanup    "~/.config/unifideck/microsoft_token.json",              # Microsoft
-                    ] Deleted auth: {full}")
+                            logger.info(f"[Cleanup] Deleted auth: {full}")
 
                     # Reset in-memory states
                     self.gog = GOGAPIClient(plugin_dir=DECKY_PLUGIN_DIR, plugin_instance=self)

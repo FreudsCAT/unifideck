@@ -5,7 +5,7 @@ Captures the OAuth authorization code by attaching to Chromium's
 Network events via WebSocket.  Handles target switching when Chromium
 creates new pages during the login flow (email → password → 2FA → redirect).
 
-This is a standalone async function with no class state — all inputs
+This is a standalone async function with no class state -- all inputs
 are explicit parameters.
 """
 
@@ -22,15 +22,15 @@ __all__ = ["intercept_oauth_code"]
 async def intercept_oauth_code(
     pending_auth_url: str,
     timeout: float = 300,
-    cdp_port: int = 8080,
+    cdp_port: int = 9222,
 ) -> Optional[str]:
     """
-    Capture the OAuth code via Network.requestWillBeSent on the MS login popup.
+    Capture the OAuth code via CDP Network/Page events on the MS login popup.
 
-    When the login page navigates (email → password → 2FA → …), Chromium
-    creates a NEW /json target with a new webSocketDebuggerUrl but keeps
-    the OLD WebSocket connection open.  This function detects newer targets
-    and switches to them automatically.
+    When the login page navigates (email -> password -> 2FA -> ...),
+    Chromium creates a NEW /json target with a new webSocketDebuggerUrl
+    but keeps the OLD WebSocket connection open.  This function detects
+    newer targets and switches to them automatically.
 
     Args:
         pending_auth_url: The full OAuth URL to re-navigate to if removed=true.
@@ -48,6 +48,7 @@ async def intercept_oauth_code(
         return None
 
     import urllib.request as _req
+    from urllib.parse import urlparse, parse_qs as _pqs
 
     MS_LOGIN_PATTERNS = (
         "login.live.com",
@@ -59,21 +60,35 @@ async def intercept_oauth_code(
     seen_ws: set = set()
     removed_count = 0
 
+    def _extract_code(url: str) -> Optional[str]:
+        """Extract OAuth code from a redirect URL, if present."""
+        if "oauth20_desktop.srf" not in url or "code=" not in url:
+            return None
+        params = _pqs(urlparse(url).query)
+        return params.get("code", [None])[0]
+
     def scan_pages():
         """Return list of (url, ws_url) for unseen MS login pages."""
         try:
             with _req.urlopen(f"http://127.0.0.1:{cdp_port}/json", timeout=2) as r:
-                pages = json.loads(r.read().decode())
+                targets = json.loads(r.read().decode())
             result = []
-            for page in pages:
-                url    = page.get("url", "")
-                ws_url = page.get("webSocketDebuggerUrl", "")
+            for target in targets:
+                # Only attach to page targets (skip browser, service-worker, etc.)
+                if target.get("type", "page") not in ("page", "webview"):
+                    continue
+                url    = target.get("url", "")
+                ws_url = target.get("webSocketDebuggerUrl", "")
                 if not ws_url or ws_url in seen_ws:
                     continue
-                if "removed=true" in url:
+
+                # Check if this target already has the code in its URL
+                code = _extract_code(url)
+                if code:
                     seen_ws.add(ws_url)
-                    continue
-                if "oauth20_desktop.srf" in url and "code=" in url:
+                    return [("__CODE__", code)]
+
+                if "removed=true" in url:
                     seen_ws.add(ws_url)
                     continue
                 if any(p in url for p in MS_LOGIN_PATTERNS):
@@ -89,6 +104,10 @@ async def intercept_oauth_code(
     while _time.time() < deadline:
         pages = scan_pages()
         if pages:
+            # Check if scan already found the code in a target URL
+            if pages[0][0] == "__CODE__":
+                logger.info("[MS-net] OAuth code found in target URL during scan")
+                return pages[0][1]
             break
         await asyncio.sleep(0.3)
 
@@ -97,6 +116,11 @@ async def intercept_oauth_code(
         if not pages:
             await asyncio.sleep(0.3)
             continue
+
+        # Check if scan already found the code in a target URL
+        if pages[0][0] == "__CODE__":
+            logger.info("[MS-net] OAuth code found in target URL during scan")
+            return pages[0][1]
 
         page_url, ws_url = pages[-1]
         seen_ws.add(ws_url)
@@ -111,14 +135,16 @@ async def intercept_oauth_code(
 
                 async def send_cmd(method, params=None):
                     nonlocal msg_id
-                    await ws.send(json.dumps(
-                        {"id": msg_id, "method": method, "params": params or {}}
-                    ))
+                    cmd = {"id": msg_id, "method": method, "params": params or {}}
+                    await ws.send(json.dumps(cmd))
                     msg_id += 1
 
+                # Enable both Network and Page domains for comprehensive
+                # event coverage. Don't block on responses -- they arrive
+                # asynchronously and the event loop below handles them.
                 await send_cmd("Network.enable", {})
-                await asyncio.wait_for(ws.recv(), timeout=10)
-                logger.info("[MS-net] Network.enable OK")
+                await send_cmd("Page.enable", {})
+                logger.info("[MS-net] Network.enable + Page.enable sent")
 
                 last_scan = _time.time()
 
@@ -130,7 +156,10 @@ async def intercept_oauth_code(
                             last_scan = _time.time()
                             newer = scan_pages()
                             if newer:
-                                logger.info(f"[MS-net] Newer target: {newer[-1][0][:60]} — switching")
+                                if newer[0][0] == "__CODE__":
+                                    logger.info("[MS-net] OAuth code found in target URL during rescan")
+                                    return newer[0][1]
+                                logger.info(f"[MS-net] Newer target: {newer[-1][0][:60]} -- switching")
                                 break
                         continue
 
@@ -139,50 +168,67 @@ async def intercept_oauth_code(
                     except json.JSONDecodeError:
                         continue
 
-                    if msg.get("method") != "Network.requestWillBeSent":
+                    # Skip CDP command responses (have "id" but no "method")
+                    method = msg.get("method", "")
+                    if not method:
                         continue
 
-                    req_url = msg.get("params", {}).get("request", {}).get("url", "")
+                    # Extract URL from the event based on its type
+                    req_url = ""
+                    if method == "Network.requestWillBeSent":
+                        req_url = msg.get("params", {}).get("request", {}).get("url", "")
+                    elif method == "Network.responseReceived":
+                        req_url = msg.get("params", {}).get("response", {}).get("url", "")
+                    elif method == "Page.frameNavigated":
+                        req_url = msg.get("params", {}).get("frame", {}).get("url", "")
+                    else:
+                        continue
+
                     if "oauth20_desktop.srf" not in req_url:
                         continue
 
-                    logger.info(f"[MS-net] requestWillBeSent → {req_url[:120]}")
+                    logger.info(f"[MS-net] {method} -> {req_url[:120]}")
 
                     if "code=" in req_url:
-                        from urllib.parse import urlparse, parse_qs as _pqs
-                        params = _pqs(urlparse(req_url).query)
-                        code = params.get("code", [None])[0]
+                        code = _extract_code(req_url)
                         if code:
-                            logger.info("[MS-net] ✓ OAuth code captured")
+                            logger.info("[MS-net] OAuth code captured")
                             return code
 
                     elif "removed=true" in req_url:
                         removed_count += 1
                         logger.warning(
-                            f"[MS-net] removed=true (attempt {removed_count}) — "
-                            "clearing cookies and re-navigating"
+                            f"[MS-net] removed=true (attempt {removed_count}/3) -- "
+                            "possible cookie or account issue, clearing and retrying"
                         )
                         if removed_count > 3:
-                            logger.error("[MS-net] removed=true persists after 3 attempts — giving up")
+                            logger.error(
+                                "[MS-net] removed=true persists after 3 attempts. "
+                                "Possible causes: account rejected, device blocked, "
+                                "or session timeout. Try clearing browser cache."
+                            )
                             return None
                         if pending_auth_url:
                             try:
-                                await send_cmd("Network.enable", {})
+                                backoff = min(2 ** (removed_count - 1), 8)
+                                await asyncio.sleep(backoff)
                                 await send_cmd("Network.clearBrowserCookies", {})
                                 logger.info("[MS-net] Cookies cleared")
-                                await asyncio.sleep(0.3)
+                                await asyncio.sleep(0.5)
                                 await send_cmd("Page.navigate", {"url": pending_auth_url})
                                 logger.info("[MS-net] Re-navigated to auth URL")
                             except Exception as _nav_err:
-                                logger.debug(f"[MS-net] Re-navigation failed: {_nav_err}")
-                                break
+                                logger.error(f"[MS-net] Re-navigation failed: {_nav_err}")
+                                return None
                         else:
-                            break
+                            logger.error("[MS-net] removed=true but no pending auth URL")
+                            return None
 
-        except websockets.exceptions.ConnectionClosed:
-            logger.info("[MS-net] WS closed — rescanning")
         except Exception as e:
-            logger.debug(f"[MS-net] Listener error: {e}")
+            if "ConnectionClosed" in type(e).__name__:
+                logger.info("[MS-net] WS closed -- rescanning")
+            else:
+                logger.debug(f"[MS-net] Listener error: {e}")
 
         await asyncio.sleep(0.3)
 
