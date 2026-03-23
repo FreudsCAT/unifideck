@@ -114,7 +114,8 @@
     "authenticate": "Se connecter",
     "legendaryNotInstalled": "⚠️ Installation de l'interface Epic Games...",
     "nileNotInstalled": "⚠️ Interface Amazon Games introuvable",
-    "error": "Erreur - Vérifier les logs"
+    "error": "Erreur - Vérifier les logs",
+    "microsoftStore": "Microsoft Store"
   },
   "librarySync": {
     "title": "SYNCHRONISATION DE LA BIBLIOTHÈQUE",
@@ -334,7 +335,8 @@
     "cleaningOrphanedArtwork": "Nettoyage des illustrations orphelines...",
     "retryingMissingArtwork": "Nouvelle tentative pour {{synced}}/{{total}} jeux avec illustrations manquantes...",
     "savingShortcuts": "Enregistrement des raccourcis…",
-    "completed": "Synchronisation terminée ! {{added}} ajoutés, {{artwork}} illustrations."
+    "completed": "Synchronisation terminée ! {{added}} ajoutés, {{artwork}} illustrations.",
+    "fetchingStore": "Récupération de {{store}}…"
   },
   "force_sync": {
     "migratingOldInstallations": "Synchronisation forcée : migration des anciennes installations…",
@@ -469,5 +471,29 @@
     "thisGame": "ce jeu",
     "game": "Jeu",
     "unknown": "Inconnu"
+  },
+  "microsoft": {
+    "notCompatible": "Le format de ce jeu n'est pas compatible avec SteamOS",
+    "playOnCloud": "Jouer dans le Cloud",
+    "xcloudStreaming": "Xbox Cloud Gaming",
+    "signInMessage": "Connectez-vous avec votre compte Microsoft / Xbox",
+    "accountConnected": "Compte Microsoft connecté",
+    "loggedOut": "Déconnecté du Microsoft Store",
+    "xcloudNotInstalled": "Les jeux xCloud ne sont pas installés localement",
+    "chromiumRequired": "Chromium requis",
+    "chromiumRequiredMessage": "Xbox Cloud Gaming nécessite le navigateur Chromium. Voulez-vous l'installer automatiquement ? (Cette opération n'est nécessaire qu'une seule fois.)",
+    "chromiumInstallButton": "Installer Chromium",
+    "chromiumInstalling": "Installation de Chromium...",
+    "chromiumInstalled": "Chromium installé !",
+    "chromiumAlreadyInstalled": "Chromium est déjà installé",
+    "chromiumInstallFailed": "L'installation de Chromium a échoué. Installez manuellement : flatpak install org.chromium.Chromium",
+    "chromiumInstallTimeout": "L'installation de Chromium a expiré. Vérifiez votre connexion internet.",
+    "flatpakNotFound": "Flatpak n'est pas disponible sur ce système",
+    "signInRequired": "Connectez-vous pour jouer"
+  },
+  "authSuccess": {
+    "title": "Authentification",
+    "titleStore": "{{store}} — Authentification ✓",
+    "subtitle": "Appuyez sur le bouton B pour fermer cette fenêtre"
   }
 }

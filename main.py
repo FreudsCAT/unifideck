@@ -54,6 +54,7 @@ from py_modules.unifideck.shortcuts.launch_options import extract_store_id, is_u
 # Import CDP modules for native PlaySection hiding
 from py_modules.unifideck.cdp.cdp_utils import create_cef_debugging_flag, ensure_dummy_network_interface
 from py_modules.unifideck.cdp.cdp_inject import get_cdp_client, shutdown_cdp_client
+from py_modules.unifideck.utils.game_tags import get_game_tags
 
 # Import Account Manager for multi-account support
 from py_modules.unifideck.accounts.account_manager import AccountManager
@@ -69,6 +70,7 @@ try:
         AmazonConnector as BackendAmazonConnector,
         GOGAPIClient as BackendGOGAPIClient,
         UbisoftConnector as BackendUbisoftConnector
+        MicrosoftConnector as BackendMicrosoftConnector,
     )
     from py_modules.unifideck.auth import CDPOAuthMonitor as BackendCDPOAuthMonitor
     from py_modules.unifideck.compat import (
@@ -1507,6 +1509,7 @@ class SyncProgress:
         'sgdb_lookup': (50, 60),
         'checking_artwork': (60, 65),
         'artwork': (65, 95),
+        'artwork_retry': (65, 95),
         'proton_setup': (95, 98),
         'complete': (100, 100),
         'error': (100, 100),
@@ -1615,8 +1618,12 @@ class SyncProgress:
             sub_progress = self.unifidb_synced / self.unifidb_total
             return int(start_pct + (end_pct - start_pct) * sub_progress)
         
-        if self.status == 'syncing' and self.steam_total > 0:
-            sub_progress = self.steam_synced / self.steam_total
+        if self.status == 'sgdb_lookup' and self.total_games > 0:
+            sub_progress = self.synced_games / self.total_games
+            return int(start_pct + (end_pct - start_pct) * sub_progress)
+        
+        if self.status == 'syncing' and self.total_games > 0:
+            sub_progress = self.synced_games / self.total_games
             return int(start_pct + (end_pct - start_pct) * sub_progress)
         
         # For phases without counters, return the start of the phase range
@@ -1639,7 +1646,7 @@ class SyncProgress:
             'steam_total': self.steam_total,
             'steam_synced': self.steam_synced,
             'unifidb_total': self.unifidb_total,
-            'unifidb_synced': self.unifidb_synced
+            'unifidb_synced': self.unifidb_synced,
         }
 
 
@@ -1677,6 +1684,12 @@ if BACKEND_AVAILABLE:
     UbisoftConnector = BackendUbisoftConnector
 else:
     raise ImportError("backend.stores.ubisoft module is required but not available")
+# MicrosoftConnector - Read-only Microsoft Store / Xbox Live connector
+# ============================================================================
+if BACKEND_AVAILABLE:
+    MicrosoftConnector = BackendMicrosoftConnector
+else:
+    raise ImportError("backend.stores.microsoft module is required but not available")
 
 class InstallHandler:
     """Handles game installations across stores"""
@@ -2062,12 +2075,15 @@ class Plugin:
         # Ubisoft prefix/template. The launcher can bootstrap `.upc-auth` on first run.
         await self.ubisoft._ensure_ubisoft_auth_shortcut()
         self.ubisoft.queue_auth_assets_ensure("plugin-init")
+        logger.info("[INIT] Initializing MicrosoftConnector")
+        self.microsoft = MicrosoftConnector(plugin_dir=DECKY_PLUGIN_DIR, plugin_instance=self)
 
         # Repair games.map for Unifideck shortcuts missing entries (fixes "Game location not mapped" errors)
         logger.info("[INIT] Reconciling games.map from installed games")
         map_reconcile = await self.shortcuts_manager.reconcile_games_map_from_installed(
             epic_client=self.epic, gog_client=self.gog, amazon_client=self.amazon,
-            ubisoft_client=self.ubisoft
+            ubisoft_client=self.ubisoft,
+microsoft_client=self.microsoft,
         )
         if map_reconcile.get('added', 0) > 0:
             logger.info(f"[INIT] Added {map_reconcile['added']} missing entries to games.map")
@@ -2258,6 +2274,9 @@ class Plugin:
                     else:
                         error_message = "Could not find Ubisoft install info"
                         logger.error(f"[DownloadComplete] {error_message} for {item.game_title}")
+                elif item.store == 'microsoft':
+                    # xCloud games are streamed, not downloaded — this should not be reached
+                    logger.warning(f"[DownloadComplete] Microsoft xCloud game download complete handler called for {item.game_title} — unexpected")
             except Exception as e:
                 error_message = str(e)
                 logger.error(f"[DownloadComplete] Exception marking game installed: {e}")
@@ -2433,6 +2452,8 @@ class Plugin:
                 'error': 'errors.syncInProgress',
                 'epic_count': 0,
                 'gog_count': 0,
+                'amazon_count': 0,
+                'microsoft_count': 0,
                 'added_count': 0,
                 'artwork_count': 0
             }
@@ -2454,11 +2475,19 @@ class Plugin:
                     "values": {}
                 }
 
-                # Get games from all stores
+                # Get games from all stores (update progress per store)
+                self.sync_progress.current_game = {"label": "sync.fetchingStore", "values": {"store": "Epic Games"}}
                 epic_games = await self.epic.get_library()
+
+                self.sync_progress.current_game = {"label": "sync.fetchingStore", "values": {"store": "GOG"}}
                 gog_games = await self.gog.get_library()
+
+                self.sync_progress.current_game = {"label": "sync.fetchingStore", "values": {"store": "Amazon Games"}}
                 amazon_games = await self.amazon.get_library()
                 ubisoft_games = await self.ubisoft.get_library()
+
+                self.sync_progress.current_game = {"label": "sync.fetchingStore", "values": {"store": "Microsoft Store"}}
+                microsoft_games = await self.microsoft.get_library()
 
                 # Robustly handle API failures (None returns)
                 valid_stores = []
@@ -2508,11 +2537,17 @@ class Plugin:
                         'updated_count': 0,
                         'artwork_count': 0
                     }
+                if microsoft_games is not None:
+                    valid_stores.append('microsoft')
+                    all_games.extend(microsoft_games)
+                else:
+                    microsoft_games = []
+                    logger.warning("[MS] Microsoft library fetch returned None, continuing sync with other stores")
                 self.sync_progress.total_games = len(all_games)
                 self.sync_progress.synced_games = 0
 
                 # Log library composition for debugging game count discrepancies
-                logger.info(f"Sync: Library composition - Epic: {len(epic_games)}, GOG: {len(gog_games)}, Amazon: {len(amazon_games)}, Ubisoft: {len(ubisoft_games)}, Total: {len(all_games)}")
+                logger.info(f"Sync: Library composition - Epic: {len(epic_games)}, GOG: {len(gog_games)}, Amazon: {len(amazon_games)}, Ubisoft: {len(ubisoft_games)}, Microsoft: {len(microsoft_games)}, Total: {len(all_games)}")
                 logger.debug(f"  Total Unifideck games in all libraries: {len(all_games)} (these are from store APIs)")
                 logger.debug(f"  Note: Displayed game count may differ if some games fail shortcut registration or have invalid launch options")
 
@@ -2600,6 +2635,18 @@ class Plugin:
                             work_dir = game_info.get('install_path') or os.path.dirname(exe_path)
                             await self.shortcuts_manager._update_game_map('ubisoft', game.id, exe_path, work_dir)
                             logger.debug(f"Updated games.map for Ubisoft game {game.id}")
+                for game in microsoft_games:
+                    if game.store_tags and "xcloud" in game.store_tags:
+                        # xCloud games: map entry with special marker for the launcher
+                        xcloud_url = f"https://www.xbox.com/play/launch/{game.id}"
+                        await self.shortcuts_manager._update_game_map(
+                            'microsoft', game.id, 'xcloud', xcloud_url
+                        )
+                    elif game.is_installed and game.executable:
+                        exe_path = game.executable
+                        work_dir = game.install_path or os.path.dirname(exe_path)
+                        await self.shortcuts_manager._update_game_map('microsoft', game.id, exe_path, work_dir)
+                        logger.debug(f"Updated games.map for Microsoft game {game.id}")
 
                 # Get launcher script path (relative to plugin directory)
                 launcher_script = os.path.join(os.path.dirname(__file__), 'bin', 'unifideck-launcher')
@@ -3013,6 +3060,7 @@ class Plugin:
                     'gog_count': len(gog_games),
                     'amazon_count': len(amazon_games),
                     'ubisoft_count': len(ubisoft_games),
+                    'microsoft_count': len(microsoft_games),
                     'added_count': added_count,
                     'artwork_count': artwork_count
                 }
@@ -3045,6 +3093,8 @@ class Plugin:
                 'error': 'errors.syncInProgress',
                 'epic_count': 0,
                 'gog_count': 0,
+                'amazon_count': 0,
+                'microsoft_count': 0,
                 'added_count': 0,
                 'updated_count': 0,
                 'artwork_count': 0
@@ -3116,11 +3166,19 @@ class Plugin:
                     "values": {}
                 }
 
-                # Get games from all stores
+                # Get games from all stores (update progress per store)
+                self.sync_progress.current_game = {"label": "sync.fetchingStore", "values": {"store": "Epic Games"}}
                 epic_games = await self.epic.get_library()
+
+                self.sync_progress.current_game = {"label": "sync.fetchingStore", "values": {"store": "GOG"}}
                 gog_games = await self.gog.get_library()
+
+                self.sync_progress.current_game = {"label": "sync.fetchingStore", "values": {"store": "Amazon Games"}}
                 amazon_games = await self.amazon.get_library()
                 ubisoft_games = await self.ubisoft.get_library()
+
+                self.sync_progress.current_game = {"label": "sync.fetchingStore", "values": {"store": "Microsoft Store"}}
+                microsoft_games = await self.microsoft.get_library()
 
                 # Robustly handle API failures (None returns)
                 valid_stores = []
@@ -3152,8 +3210,19 @@ class Plugin:
                 self.sync_progress.total_games = len(all_games)
                 self.sync_progress.synced_games = 0
 
-                # Queue games for background compat fetching (ProtonDB/Deck Verified)
-                logger.info("Force sync: Queueing games for compatibility lookup...")
+                if microsoft_games is not None:
+                    valid_stores.append('microsoft')
+                    all_games.extend(microsoft_games)
+                else:
+                    microsoft_games = []
+                self.sync_progress.total_games = len(all_games)
+                self.sync_progress.synced_games = 0
+
+                if microsoft_games is not None:
+                    valid_stores.append('microsoft')
+                    all_games.extend(microsoft_games)
+                else:
+                    microsoft_games = []
                 self.compat_fetcher.queue_games(all_games)
                 self.compat_fetcher.start()  # Non-blocking background fetch
 
@@ -3223,6 +3292,18 @@ class Plugin:
                             work_dir = game_info.get('install_path') or os.path.dirname(exe_path)
                             await self.shortcuts_manager._update_game_map('ubisoft', game.id, exe_path, work_dir)
                             logger.debug(f"Updated games.map for Ubisoft game {game.id}")
+                for game in microsoft_games:
+                    if game.store_tags and "xcloud" in game.store_tags:
+                        # xCloud games: map entry with special marker for the launcher
+                        xcloud_url = f"https://www.xbox.com/play/launch/{game.id}"
+                        await self.shortcuts_manager._update_game_map(
+                            'microsoft', game.id, 'xcloud', xcloud_url
+                        )
+                    elif game.is_installed and game.executable:
+                        exe_path = game.executable
+                        work_dir = game.install_path or os.path.dirname(exe_path)
+                        await self.shortcuts_manager._update_game_map('microsoft', game.id, exe_path, work_dir)
+                        logger.debug(f"Updated games.map for Microsoft game {game.id}")
 
                 # Get launcher script path
                 launcher_script = os.path.join(os.path.dirname(__file__), 'bin', 'unifideck-launcher')
@@ -3270,6 +3351,7 @@ class Plugin:
                         'gog_count': len(gog_games),
                         'amazon_count': len(amazon_games),
                         'ubisoft_count': len(ubisoft_games),
+                        'microsoft_count': len(microsoft_games),
                         'added_count': added_count,
                         'updated_count': updated_count,
                         'artwork_count': 0
@@ -3684,6 +3766,7 @@ class Plugin:
                     'gog_count': len(gog_games),
                     'amazon_count': len(amazon_games),
                     'ubisoft_count': len(ubisoft_games),
+                    'microsoft_count': len(microsoft_games),
                     'added_count': added_count,
                     'updated_count': updated_count,
                     'artwork_count': artwork_count
@@ -3791,6 +3874,16 @@ class Plugin:
                 return await self.install_handler.install_epic_game(game_id)
             elif store == 'gog':
                 return await self.install_handler.install_gog_game(game_id)
+            elif store == 'microsoft':
+                # Route through the download queue so progress is tracked
+                # and cancellation is supported (same pattern as Epic/GOG).
+                games = await self.microsoft.get_library()
+                title = next((g.title for g in games if g.id == game_id), game_id)
+                return await self.add_to_download_queue(
+                    game_id=game_id,
+                    game_title=title,
+                    store='microsoft',
+                )
             else:
                 return {'success': False, 'error': f'Unknown store: {store}'}
 
@@ -4073,6 +4166,7 @@ class Plugin:
                                 else:
                                     logger.warning(f"[GameInfo] Ubisoft game {game_id} in prefix but path missing")
                         elif store not in ('epic', 'gog', 'amazon', 'ubisoft'):
+                        elif store not in ('epic', 'gog', 'amazon', 'ubisoft', 'microsoft'):
                             return {'error': f'Unknown store: {store}'}
 
                     # Get game size - try cache first (instant), fallback to API (slow)
@@ -4113,7 +4207,14 @@ class Plugin:
                     if is_installed and hasattr(self, 'update_checker'):
                         has_update = self.update_checker.get_cached_update_status(store, game_id)
 
+                    store_tags = get_game_tags(store, game_id) or None
+
                     logger.info(f"[GameInfo] App {app_id}: {shortcut.get('AppName')} - Installed: {is_installed}, Size: {size_formatted}, Update: {has_update}")
+
+                    # Check if the store is connected (for xCloud "Play on Cloud" button)
+                    store_connected = True
+                    if store == "microsoft":
+                        store_connected = await self.microsoft.is_available()
 
                     return {
                         'is_installed': is_installed,
@@ -4123,7 +4224,9 @@ class Plugin:
                         'title': shortcut.get('AppName', ''),
                         'size_bytes': size_bytes,
                         'size_formatted': size_formatted,
-                        'app_id': app_id
+                        'app_id': app_id,
+                        'store_tags': store_tags,
+                        'store_connected': store_connected,
                     }
 
             logger.warning(f"[GameInfo] App ID {app_id} not found in shortcuts")
@@ -5121,6 +5224,14 @@ class Plugin:
                     return result
                 prefix_deleted = bool(result.get('prefix_deleted', False))
             
+            elif store == 'microsoft':
+                result = await self.microsoft.uninstall_game(game_id)
+                if not result['success']:
+                    # Still remove from games.map so UI shows Install button
+                    await self.shortcuts_manager._remove_from_game_map(store, game_id)
+                    logger.info(f"[Uninstall] Removed {store}:{game_id} from games.map despite uninstall failure")
+                    return result
+
             else:
                 return {'success': False, 'error': f"Unsupported store for uninstall: {store}"}
 
@@ -5688,6 +5799,7 @@ class Plugin:
         self.amazon = AmazonConnector(plugin_dir=DECKY_PLUGIN_DIR, plugin_instance=self)
         if hasattr(self, 'ubisoft') and self.ubisoft:
             self.ubisoft.api._clear_tokens()
+        self.microsoft = MicrosoftConnector(plugin_dir=DECKY_PLUGIN_DIR, plugin_instance=self)
 
         self.account_manager.account_switch_detected = False
         return result
@@ -5850,6 +5962,11 @@ class Plugin:
             ubisoft_available = await self.ubisoft.is_available()
             ubisoft_status = 'connected' if ubisoft_available else 'not_connected'
             logger.info(f"[STATUS] Ubisoft Connect: {ubisoft_status}")
+            # Check Microsoft Store availability
+            logger.info("[STATUS] Checking Microsoft Store availability")
+            microsoft_available = await self.microsoft.is_available()
+            microsoft_status = 'connected' if microsoft_available else 'not_connected'
+            logger.info(f"[STATUS] Microsoft Store: {microsoft_status}")
 
             result = {
                 'success': True,
@@ -5857,6 +5974,7 @@ class Plugin:
                 'gog': gog_status,
                 'amazon': amazon_status,
                 'ubisoft': ubisoft_status,
+                'microsoft': microsoft_status,
                 'legendary_installed': legendary_installed,
                 'nile_installed': nile_installed
             }
@@ -5872,6 +5990,7 @@ class Plugin:
                 'gog': 'error',
                 'amazon': 'error',
                 'ubisoft': 'error'
+                'microsoft': 'error'
             }
 
     async def get_real_steam_appid_mappings(self) -> Dict[str, Any]:
@@ -6057,6 +6176,27 @@ class Plugin:
         """Get Ubisoft Connect library"""
         games = await self.ubisoft.get_library()
         return [asdict(game) for game in games]
+    # ── Microsoft Store ──────────────────────────────────────────────────
+
+    async def start_microsoft_auth(self) -> Dict[str, Any]:
+        """Start Microsoft / Xbox Live OAuth authentication"""
+        return await self.microsoft.start_auth()
+
+    async def install_chromium(self) -> Dict[str, Any]:
+        """Install Chromium browser via flatpak for xCloud support"""
+        return await self.microsoft.install_chromium()
+
+    async def check_chromium_installed(self) -> Dict[str, Any]:
+        """Check if Chromium is installed for xCloud support"""
+        return {"installed": self.microsoft.is_chromium_installed()}
+
+    async def complete_microsoft_auth(self, auth_code: str) -> Dict[str, Any]:
+        """Complete Microsoft OAuth with authorization code"""
+        return await self.microsoft.complete_auth(auth_code)
+
+    async def logout_microsoft(self) -> Dict[str, Any]:
+        """Logout from Microsoft Store"""
+        return await self.microsoft.logout()
 
     async def get_amazon_library(self) -> List[Dict[str, Any]]:
         """Get Amazon Games library"""
@@ -6533,6 +6673,7 @@ class Plugin:
 
                 # 3. DELETE AUTH TOKENS (ALL stores)
                 try:
+# Kept list-based auth cleanup pattern for extensibility across all stores
                     auth_files = [
                         "~/.config/legendary/user.json",                    # Epic
                         "~/.config/unifideck/gog_token.json",               # GOG
@@ -6542,12 +6683,14 @@ class Plugin:
                         "~/.config/nile/installed.json",                    # Amazon installed tracking
                         "~/.local/share/unifideck/ubisoft_token.json",      # Ubisoft API
                         "~/.local/share/unifideck/ubisoft_upc_session.txt", # Ubisoft UPC session
+                        "~/.config/unifideck/microsoft_token.json",              # Microsoft
                     ]
                     for auth_path in auth_files:
                         full = os.path.expanduser(auth_path)
                         if os.path.exists(full):
                             os.remove(full)
-                            logger.info(f"[Cleanup] Deleted auth: {full}")
+                            logger.info(f"[Cleanup    "~/.config/unifideck/microsoft_token.json",              # Microsoft
+                    ] Deleted auth: {full}")
 
                     # Reset in-memory states
                     self.gog = GOGAPIClient(plugin_dir=DECKY_PLUGIN_DIR, plugin_instance=self)

@@ -114,7 +114,8 @@
     "authenticate": "Anmelden",
     "legendaryNotInstalled": "⚠️ Epic Games CLI wird installiert...",
     "nileNotInstalled": "⚠️ Amazon Games CLI nicht gefunden",
-    "error": "Fehler - Protokolle prüfen"
+    "error": "Fehler - Protokolle prüfen",
+    "microsoftStore": "Microsoft Store"
   },
   "librarySync": {
     "title": "BIBLIOTHEKS-SYNCHRONISIERUNG",
@@ -334,7 +335,8 @@
     "cleaningOrphanedArtwork": "Verwaiste Grafiken werden bereinigt...",
     "retryingMissingArtwork": "{{synced}}/{{total}} Spiele werden mit fehlenden Grafiken erneut versucht...",
     "savingShortcuts": "Verknüpfungen speichern...",
-    "completed": "Sync fertig! {{added}} hinzugefügt, {{artwork}} Artwork."
+    "completed": "Sync fertig! {{added}} hinzugefügt, {{artwork}} Artwork.",
+    "fetchingStore": "{{store}} wird abgerufen…"
   },
   "force_sync": {
     "migratingOldInstallations": "Force-Sync: Alte Installationen migrieren...",
@@ -469,5 +471,29 @@
     "thisGame": "dieses Spiel",
     "game": "Spiel",
     "unknown": "Unbekannt"
+  },
+  "microsoft": {
+    "notCompatible": "Das Format dieses Spiels ist nicht kompatibel mit SteamOS",
+    "playOnCloud": "In der Cloud spielen",
+    "xcloudStreaming": "Xbox Cloud Gaming",
+    "signInMessage": "Melden Sie sich mit Ihrem Microsoft / Xbox Konto an",
+    "accountConnected": "Microsoft-Konto verbunden",
+    "loggedOut": "Vom Microsoft Store abgemeldet",
+    "xcloudNotInstalled": "xCloud-Spiele sind nicht lokal installiert",
+    "chromiumRequired": "Chromium erforderlich",
+    "chromiumRequiredMessage": "Xbox Cloud Gaming benötigt den Chromium-Browser. Möchten Sie ihn automatisch installieren? (Dies muss nur einmal durchgeführt werden.)",
+    "chromiumInstallButton": "Chromium installieren",
+    "chromiumInstalling": "Chromium wird installiert...",
+    "chromiumInstalled": "Chromium installiert!",
+    "chromiumAlreadyInstalled": "Chromium ist bereits installiert",
+    "chromiumInstallFailed": "Die Chromium-Installation ist fehlgeschlagen. Bitte manuell installieren: flatpak install org.chromium.Chromium",
+    "chromiumInstallTimeout": "Zeitüberschreitung bei der Chromium-Installation.",
+    "flatpakNotFound": "Flatpak ist auf diesem System nicht verfügbar",
+    "signInRequired": "Anmelden zum Spielen"
+  },
+  "authSuccess": {
+    "title": "Authentifizierung",
+    "titleStore": "{{store}} — Authentifizierung ✓",
+    "subtitle": "Drücke die B-Taste, um dieses Fenster zu schließen"
   }
 }

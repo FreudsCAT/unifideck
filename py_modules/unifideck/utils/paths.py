@@ -16,6 +16,7 @@ DEFAULT_PATHS = {
     'epic': os.path.expanduser("~/Games/Epic"),
     'gog': os.path.expanduser("~/GOG Games"),
     'amazon': os.path.expanduser("~/Games/Amazon"),
+    'microsoft': os.path.expanduser("~/Games/Microsoft"),
 }
 
 # games.map location (user data, survives plugin reinstall)

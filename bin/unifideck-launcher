@@ -663,7 +663,7 @@ EXTRA_ARGS=()
 for arg in "$@"; do
     case "$arg" in
         # Store:id pattern - this is the game key (checked first — no = in it)
-        epic:*|gog:*|amazon:*|ubisoft:*)
+        epic:*|gog:*|amazon:*|ubisoft:*|microsoft:*)
             KEY="$arg"
             ;;
         # Other arguments — check if it looks like a VAR=value env var
@@ -873,6 +873,71 @@ fi
 log "Executable: $EXE_PATH"
 log "Work Dir: $WORK_DIR"
 
+# 4a. Xbox Cloud Gaming — stream via Chromium in fullscreen app mode
+if [ "$EXE_PATH" = "xcloud" ]; then
+    log "xCloud game detected — launching via Chromium: $WORK_DIR"
+    notify_stage "toasts.launcher.launchingGame" "Xbox Cloud Gaming" "low"
+
+    # WORK_DIR contains the full URL (https://www.xbox.com/play/launch/{productId}).
+    # Launch Chromium in app + fullscreen mode:
+    #   --app=URL     → no address bar, no tabs (clean game-like window)
+    #   --start-fullscreen → fullscreen but does NOT capture all input
+    # Unlike --kiosk, this allows Steam overlay (virtual keyboard, Steam+B to quit).
+    XCLOUD_URL="$WORK_DIR"
+
+    # Common Chromium flags for xCloud streaming
+    # Use the same Chromium profile as auth so cookies are shared
+    AUTH_PROFILE="$HOME/.local/share/unifideck/chromium-auth"
+    mkdir -p "$AUTH_PROFILE"
+
+    CHROME_FLAGS=(
+        "--app=$XCLOUD_URL"
+        "--start-fullscreen"
+        "--user-data-dir=$AUTH_PROFILE"
+        "--no-first-run"
+        "--disable-translate"
+        "--disable-infobars"
+        "--disable-session-crashed-bubble"
+        "--disable-features=TranslateUI"
+        "--password-store=basic"
+        "--disable-dev-shm-usage"
+        "--disable-background-networking"
+        "--autoplay-policy=no-user-gesture-required"
+        "--window-size=1280,800"
+        # Gamepad support — ensures Steam Deck controls work in xCloud
+        "--enable-gamepad-button-axis-events"
+        "--enable-features=WebGamepad"
+    )
+
+    # Clear PluginLoader's bundled library paths to avoid OpenSSL conflicts
+    unset LD_LIBRARY_PATH
+    unset LD_PRELOAD
+
+    # Ensure XAUTHORITY is set (SteamOS uses a random name in /run/user/)
+    if [ -z "$XAUTHORITY" ]; then
+        for f in /run/user/$(id -u)/xauth_*; do
+            [ -f "$f" ] && export XAUTHORITY="$f" && break
+        done
+    fi
+    log "XAUTHORITY=$XAUTHORITY DISPLAY=$DISPLAY"
+
+    if command -v flatpak &>/dev/null && (flatpak info --user org.chromium.Chromium &>/dev/null 2>&1 || flatpak info org.chromium.Chromium &>/dev/null 2>&1); then
+        log "Using Chromium flatpak in fullscreen app mode"
+        flatpak run org.chromium.Chromium "${CHROME_FLAGS[@]}" 2>>"$LOG_FILE"
+    elif command -v flatpak &>/dev/null && (flatpak info --user com.google.Chrome &>/dev/null 2>&1 || flatpak info com.google.Chrome &>/dev/null 2>&1); then
+        log "Using Google Chrome flatpak in fullscreen app mode"
+        flatpak run com.google.Chrome "${CHROME_FLAGS[@]}" 2>>"$LOG_FILE"
+    else
+        # Fallback: Steam built-in browser (B closes the window)
+        log "WARNING: No Chromium/Chrome found — falling back to Steam browser"
+        steam "steam://openurl/$XCLOUD_URL" 2>>"$LOG_FILE" &
+        sleep 3
+    fi
+
+    log "xCloud session ended, exiting launcher"
+    exit 0
+fi
+
 # 4. Check if executable exists
 if [ "$STORE" != "ubisoft" ] && [ ! -f "$EXE_PATH" ]; then
     log "ERROR: Executable not found: $EXE_PATH"
@@ -889,12 +954,14 @@ if [ "$STORE" = "ubisoft" ] || \
    [[ "$EXE_PATH" == *.bat ]] || [[ "$EXE_PATH" == *.BAT ]]; then
     log "Windows game detected, using umu-launcher with Proton"
     
+# Kept our store case structure for Ubisoft prefix isolation compatibility; added Microsoft
     # Map store names to umu store codes
     case "$STORE" in
         epic)    UMU_STORE="egs" ;;
         gog)     UMU_STORE="gog" ;;
         amazon)  UMU_STORE="amazon" ;;
         ubisoft) UMU_STORE="ubisoft" ;;
+        microsoft) UMU_STORE="microsoft" ;;
         *)       UMU_STORE="none" ;;
     esac
     

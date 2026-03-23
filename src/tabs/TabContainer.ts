@@ -79,9 +79,15 @@ export const UNIFIDECK_TABS: UnifideckTab[] = [
     filters: [{ type: "store", params: { store: "ubisoft" } }],
   },
   {
+    id: "unifideck-microsoft",
+    title: t("deckTabs.microsoft"),
+    position: 8,
+    filters: [{ type: "store", params: { store: "microsoft" } }],
+  },
+  {
     id: "unifideck-nonsteam",
     title: t("deckTabs.nonSteam"),
-    position: 8,
+    position: 9,
     filters: [{ type: "nonSteam", params: {} }], // All non-Steam shortcuts except non-installed Unifideck
   },
 ];
@@ -257,6 +263,7 @@ class TabManager {
   private gogGameCount = 0;
   private amazonGameCount = 0;
   private ubisoftGameCount = 0;
+  private microsoftGameCount = 0;
 
   async initialize() {
     if (this.initialized) return;
@@ -286,7 +293,7 @@ class TabManager {
       if (Array.isArray(games) && games.length > 0) {
         const cacheData = games.map((g) => ({
           appId: g.appId,
-          store: g.store as "epic" | "gog" | "amazon" | "ubisoft",
+          store: g.store as "epic" | "gog" | "amazon" | "ubisoft" | "microsoft",
           isInstalled: g.isInstalled,
           steamAppId: g.steamAppId, // SteamGridDB ID for ProtonDB
           realSteamAppId: g.realSteamAppId, // Real Steam Store App ID for spoofing
@@ -304,8 +311,11 @@ class TabManager {
         this.ubisoftGameCount = games.filter(
           (g: any) => g.store === "ubisoft",
         ).length;
+        this.microsoftGameCount = games.filter(
+          (g: any) => g.store === "microsoft",
+        ).length;
         console.log(
-          `[Unifideck] Loaded ${games.length} games into cache (Epic: ${this.epicGameCount}, GOG: ${this.gogGameCount}, Amazon: ${this.amazonGameCount}, Ubisoft: ${this.ubisoftGameCount})`,
+          `[Unifideck] Loaded ${games.length} games into cache (Epic: ${this.epicGameCount}, GOG: ${this.gogGameCount}, Amazon: ${this.amazonGameCount}, Ubisoft: ${this.ubisoftGameCount}, Microsoft: ${this.microsoftGameCount})`,
         );
 
         // Load compatibility cache from backend (ProtonDB + Deck Verified)
@@ -338,6 +348,18 @@ class TabManager {
     }
   }
 
+  /**
+   * Force reload the game cache from backend.
+   * Called after sync completes to update game counts and tab visibility.
+   */
+  async forceReloadGameCache(): Promise<void> {
+    this.cacheLoaded = false;
+    await this.loadGameCache();
+    // Rebuild tabs with fresh data
+    this.tabs = UNIFIDECK_TABS.map((tab) => new UnifideckTabContainer(tab));
+    console.log("[Unifideck] TabManager force-reloaded after sync");
+  }
+
   getTabs(): UnifideckTabContainer[] {
     return this.tabs.filter((tab) => this.shouldShowTab(tab.id));
   }
@@ -358,6 +380,9 @@ class TabManager {
     if (tabId === "unifideck-ubisoft" && this.ubisoftGameCount === 0) {
       return false;
     }
+    if (tabId === "unifideck-microsoft" && this.microsoftGameCount === 0) {
+      return false;
+    }
     return true;
   }
 
@@ -375,7 +400,7 @@ class TabManager {
   updateGameCache(
     games: Array<{
       appId: number;
-      store: "epic" | "gog" | "amazon" | "ubisoft";
+      store: "epic" | "gog" | "amazon" | "ubisoft" | "microsoft";
       isInstalled: boolean;
     }>,
   ) {

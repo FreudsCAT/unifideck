@@ -114,7 +114,8 @@
     "authenticate": "登录",
     "legendaryNotInstalled": "⚠️ 正在安装 Epic Games CLI...",
     "nileNotInstalled": "⚠️ 未找到 Amazon Games CLI",
-    "error": "错误 - 检查日志"
+    "error": "错误 - 检查日志",
+    "microsoftStore": "Microsoft Store"
   },
   "librarySync": {
     "title": "库同步",
@@ -334,7 +335,8 @@
     "cleaningOrphanedArtwork": "正在清理孤立的封面...",
     "retryingMissingArtwork": "正在重试 {{count}} 个缺少封面的游戏...",
     "savingShortcuts": "保存快捷方式...",
-    "completed": "同步完成！新增 {{added}}，封面 {{artwork}}。"
+    "completed": "同步完成！新增 {{added}}，封面 {{artwork}}。",
+    "fetchingStore": "正在获取 {{store}}…"
   },
   "force_sync": {
     "migratingOldInstallations": "强制同步：迁移安装...",
@@ -469,5 +471,29 @@
     "thisGame": "这款游戏",
     "game": "游戏",
     "unknown": "未知"
+  },
+  "microsoft": {
+    "notCompatible": "该游戏的格式不兼容 SteamOS",
+    "playOnCloud": "云端游玩",
+    "xcloudStreaming": "Xbox Cloud Gaming",
+    "signInMessage": "使用 Microsoft / Xbox 账户登录",
+    "accountConnected": "Microsoft 账户已连接",
+    "loggedOut": "已从 Microsoft Store 登出",
+    "xcloudNotInstalled": "xCloud 游戏未在本地安装",
+    "chromiumRequired": "需要 Chromium",
+    "chromiumRequiredMessage": "Xbox Cloud Gaming 需要 Chromium 浏览器。是否自动安装？（只需执行一次。）",
+    "chromiumInstallButton": "安装 Chromium",
+    "chromiumInstalling": "正在安装 Chromium...",
+    "chromiumInstalled": "Chromium 已安装！",
+    "chromiumAlreadyInstalled": "Chromium 已安装",
+    "chromiumInstallFailed": "Chromium 安装失败。请手动安装: flatpak install org.chromium.Chromium",
+    "chromiumInstallTimeout": "Chromium 安装超时。",
+    "flatpakNotFound": "此系统上没有 Flatpak",
+    "signInRequired": "登录以游玩"
+  },
+  "authSuccess": {
+    "title": "认证",
+    "titleStore": "{{store}} — 认证 ✓",
+    "subtitle": "按 B 按钮关闭此窗口"
   }
 }

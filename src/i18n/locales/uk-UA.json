@@ -114,7 +114,8 @@
     "authenticate": "Увійти",
     "legendaryNotInstalled": "⚠️ Встановлення Epic Games CLI...",
     "nileNotInstalled": "⚠️ Amazon Games CLI не знайдено",
-    "error": "Помилка - Перевірте логи"
+    "error": "Помилка - Перевірте логи",
+    "microsoftStore": "Microsoft Store"
   },
   "librarySync": {
     "title": "СИНХРОНІЗАЦІЯ БІБЛІОТЕКИ",
@@ -334,7 +335,8 @@
     "cleaningOrphanedArtwork": "Очищення осиротілих обкладинок...",
     "retryingMissingArtwork": "Повторна спроба для {{synced}}/{{total}} ігор з відсутніми обкладинками...",
     "savingShortcuts": "Збереження ярликів...",
-    "completed": "Синхронізацію завершено! {{added}} додано, арт {{artwork}}."
+    "completed": "Синхронізацію завершено! {{added}} додано, арт {{artwork}}.",
+    "fetchingStore": "Завантаження {{store}}…"
   },
   "force_sync": {
     "migratingOldInstallations": "Примус. синхр.: Міграція інсталяцій...",
@@ -469,5 +471,29 @@
     "thisGame": "ця гра",
     "game": "Гра",
     "unknown": "Невідомо"
+  },
+  "microsoft": {
+    "notCompatible": "Формат цієї гри не сумісний зі SteamOS",
+    "playOnCloud": "Грати в хмарі",
+    "xcloudStreaming": "Xbox Cloud Gaming",
+    "signInMessage": "Увійдіть за допомогою облікового запису Microsoft / Xbox",
+    "accountConnected": "Обліковий запис Microsoft підключено",
+    "loggedOut": "Вихід з Microsoft Store",
+    "xcloudNotInstalled": "Ігри xCloud не встановлені локально",
+    "chromiumRequired": "Потрібен Chromium",
+    "chromiumRequiredMessage": "Xbox Cloud Gaming потребує браузер Chromium. Бажаєте встановити автоматично? (Це потрібно зробити лише один раз.)",
+    "chromiumInstallButton": "Встановити Chromium",
+    "chromiumInstalling": "Встановлення Chromium...",
+    "chromiumInstalled": "Chromium встановлено!",
+    "chromiumAlreadyInstalled": "Chromium вже встановлено",
+    "chromiumInstallFailed": "Встановлення Chromium не вдалось. Встановіть вручну: flatpak install org.chromium.Chromium",
+    "chromiumInstallTimeout": "Час встановлення Chromium вичерпано.",
+    "flatpakNotFound": "Flatpak недоступний у цій системі",
+    "signInRequired": "Увійдіть, щоб грати"
+  },
+  "authSuccess": {
+    "title": "Автентифікація",
+    "titleStore": "{{store}} — Автентифікація ✓",
+    "subtitle": "Натисніть кнопку B, щоб закрити це вікно"
   }
 }

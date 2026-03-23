@@ -114,7 +114,8 @@
     "authenticate": "Entrar",
     "legendaryNotInstalled": "⚠️ Instalando Epic Games CLI...",
     "nileNotInstalled": "⚠️ CLI da Amazon Games não encontrado",
-    "error": "Erro - Verifique os logs"
+    "error": "Erro - Verifique os logs",
+    "microsoftStore": "Microsoft Store"
   },
   "librarySync": {
     "title": "SINCRONIZAÇÃO DE BIBLIOTECA",
@@ -334,7 +335,8 @@
     "cleaningOrphanedArtwork": "Limpando arte órfã...",
     "retryingMissingArtwork": "Tentando novamente {{synced}}/{{total}} jogos com arte ausente...",
     "savingShortcuts": "Salvando atalhos...",
-    "completed": "Sync concluída! {{added}} adicionados, arte {{artwork}}."
+    "completed": "Sync concluída! {{added}} adicionados, arte {{artwork}}.",
+    "fetchingStore": "Buscando {{store}}…"
   },
   "force_sync": {
     "migratingOldInstallations": "Sync forçada: Migrando instalações...",
@@ -469,5 +471,29 @@
     "thisGame": "este jogo",
     "game": "Jogo",
     "unknown": "Desconhecido"
+  },
+  "microsoft": {
+    "notCompatible": "O formato deste jogo não é compatível com SteamOS",
+    "playOnCloud": "Jogar na Nuvem",
+    "xcloudStreaming": "Xbox Cloud Gaming",
+    "signInMessage": "Entre com sua conta Microsoft / Xbox",
+    "accountConnected": "Conta Microsoft conectada",
+    "loggedOut": "Desconectado da Microsoft Store",
+    "xcloudNotInstalled": "Os jogos xCloud não estão instalados localmente",
+    "chromiumRequired": "Chromium necessário",
+    "chromiumRequiredMessage": "Xbox Cloud Gaming requer o navegador Chromium. Deseja instalá-lo automaticamente? (Isso só precisa ser feito uma vez.)",
+    "chromiumInstallButton": "Instalar Chromium",
+    "chromiumInstalling": "Instalando Chromium...",
+    "chromiumInstalled": "Chromium instalado!",
+    "chromiumAlreadyInstalled": "Chromium já está instalado",
+    "chromiumInstallFailed": "A instalação do Chromium falhou. Instale manualmente: flatpak install org.chromium.Chromium",
+    "chromiumInstallTimeout": "A instalação do Chromium expirou.",
+    "flatpakNotFound": "Flatpak não está disponível neste sistema",
+    "signInRequired": "Faça login para jogar"
+  },
+  "authSuccess": {
+    "title": "Autenticação",
+    "titleStore": "{{store}} — Autenticação ✓",
+    "subtitle": "Pressione o botão B para fechar esta janela"
   }
 }

@@ -38,6 +38,7 @@ AUTH_TOKEN_PATHS = {
     'amazon_installed': os.path.expanduser("~/.config/nile/installed.json"),
     'ubisoft': os.path.expanduser("~/.local/share/unifideck/ubisoft_token.json"),
     'ubisoft_session': os.path.expanduser("~/.local/share/unifideck/ubisoft_upc_session.txt"),
+    'microsoft': os.path.expanduser("~/.config/unifideck/microsoft_token.json"),
 }
 
 # Shared Unifideck data files

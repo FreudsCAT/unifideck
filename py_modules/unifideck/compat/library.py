@@ -283,8 +283,8 @@ class BackgroundCompatFetcher:
         cache = load_compat_cache()
         
         for game in games:
-            # Only queue non-Steam games (Epic, GOG, Amazon, Ubisoft) that aren't cached
-            if hasattr(game, 'store') and game.store in ('epic', 'gog', 'amazon', 'ubisoft'):
+            # Only queue non-Steam games (Epic, GOG, Amazon, Ubisoft, Microsoft) that aren't cached
+            if hasattr(game, 'store') and game.store in ('epic', 'gog', 'amazon', 'ubisoft', 'microsoft'):
                 if hasattr(game, 'title') and game.title:
                     normalized = game.title.lower().strip()
                     if normalized not in cache:

@@ -114,7 +114,8 @@
     "authenticate": "Giriş yap",
     "legendaryNotInstalled": "⚠️ Epic Games CLI kuruluyor...",
     "nileNotInstalled": "⚠️ Amazon Games CLI bulunamadı",
-    "error": "Hata - Günlükleri kontrol edin"
+    "error": "Hata - Günlükleri kontrol edin",
+    "microsoftStore": "Microsoft Store"
   },
   "librarySync": {
     "title": "KÜTÜPHANESENKRONİZASYONU",
@@ -334,7 +335,8 @@
     "cleaningOrphanedArtwork": "Sahipsiz görseller temizleniyor...",
     "retryingMissingArtwork": "Eksik görselleri olan {{count}} oyun tekrar deneniyor...",
     "savingShortcuts": "Kısayollar kaydediliyor...",
-    "completed": "Sync tamamlandı! {{added}} eklendi, görsel {{artwork}}."
+    "completed": "Sync tamamlandı! {{added}} eklendi, görsel {{artwork}}.",
+    "fetchingStore": "{{store}} alınıyor…"
   },
   "force_sync": {
     "migratingOldInstallations": "Zorla sync: Kurulumlar taşınıyor...",
@@ -469,5 +471,29 @@
     "thisGame": "bu oyun",
     "game": "Oyun",
     "unknown": "Bilinmiyor"
+  },
+  "microsoft": {
+    "notCompatible": "Bu oyunun formatı SteamOS ile uyumlu değil",
+    "playOnCloud": "Bulutta oyna",
+    "xcloudStreaming": "Xbox Cloud Gaming",
+    "signInMessage": "Microsoft / Xbox hesabınızla giriş yapın",
+    "accountConnected": "Microsoft hesabı bağlandı",
+    "loggedOut": "Microsoft Store oturumu kapatıldı",
+    "xcloudNotInstalled": "xCloud oyunları yerel olarak yüklü değil",
+    "chromiumRequired": "Chromium gerekli",
+    "chromiumRequiredMessage": "Xbox Cloud Gaming, Chromium tarayıcısını gerektirir. Otomatik olarak yüklemek ister misiniz? (Bu işlem yalnızca bir kez yapılmalıdır.)",
+    "chromiumInstallButton": "Chromium'u yükle",
+    "chromiumInstalling": "Chromium yükleniyor...",
+    "chromiumInstalled": "Chromium yüklendi!",
+    "chromiumAlreadyInstalled": "Chromium zaten yüklü",
+    "chromiumInstallFailed": "Chromium kurulumu başarısız oldu. Manuel olarak kurun: flatpak install org.chromium.Chromium",
+    "chromiumInstallTimeout": "Chromium kurulumu zaman aşımına uğradı.",
+    "flatpakNotFound": "Bu sistemde Flatpak mevcut değil",
+    "signInRequired": "Oynamak için giriş yapın"
+  },
+  "authSuccess": {
+    "title": "Kimlik doğrulama",
+    "titleStore": "{{store}} — Kimlik doğrulama ✓",
+    "subtitle": "Bu pencereyi kapatmak için B düğmesine basın"
   }
 }

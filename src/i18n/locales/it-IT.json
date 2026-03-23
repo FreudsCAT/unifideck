@@ -114,7 +114,8 @@
     "authenticate": "Accedi",
     "legendaryNotInstalled": "⚠️ Installazione Epic Games CLI...",
     "nileNotInstalled": "⚠️ Amazon Games CLI non trovato",
-    "error": "Errore - Controlla i log"
+    "error": "Errore - Controlla i log",
+    "microsoftStore": "Microsoft Store"
   },
   "librarySync": {
     "title": "SINCRONIZZAZIONE LIBRERIA",
@@ -334,7 +335,8 @@
     "cleaningOrphanedArtwork": "Pulizia delle immagini orfane...",
     "retryingMissingArtwork": "Riprovo {{synced}}/{{total}} giochi con immagini mancanti...",
     "savingShortcuts": "Salvataggio collegamenti...",
-    "completed": "Sync completata! {{added}} aggiunti, {{artwork}} artwork."
+    "completed": "Sync completata! {{added}} aggiunti, {{artwork}} artwork.",
+    "fetchingStore": "Recupero di {{store}}…"
   },
   "force_sync": {
     "migratingOldInstallations": "Sync forzata: Migrazione installazioni...",
@@ -469,5 +471,29 @@
     "thisGame": "questo gioco",
     "game": "Gioco",
     "unknown": "Sconosciuto"
+  },
+  "microsoft": {
+    "notCompatible": "Il formato di questo gioco non è compatibile con SteamOS",
+    "playOnCloud": "Gioca nel Cloud",
+    "xcloudStreaming": "Xbox Cloud Gaming",
+    "signInMessage": "Accedi con il tuo account Microsoft / Xbox",
+    "accountConnected": "Account Microsoft connesso",
+    "loggedOut": "Disconnesso dal Microsoft Store",
+    "xcloudNotInstalled": "I giochi xCloud non sono installati localmente",
+    "chromiumRequired": "Chromium richiesto",
+    "chromiumRequiredMessage": "Xbox Cloud Gaming richiede il browser Chromium. Vuoi installarlo automaticamente? (Questa operazione va fatta una sola volta.)",
+    "chromiumInstallButton": "Installa Chromium",
+    "chromiumInstalling": "Installazione di Chromium...",
+    "chromiumInstalled": "Chromium installato!",
+    "chromiumAlreadyInstalled": "Chromium è già installato",
+    "chromiumInstallFailed": "Installazione di Chromium fallita. Installa manualmente: flatpak install org.chromium.Chromium",
+    "chromiumInstallTimeout": "Installazione di Chromium scaduta.",
+    "flatpakNotFound": "Flatpak non è disponibile su questo sistema",
+    "signInRequired": "Accedi per giocare"
+  },
+  "authSuccess": {
+    "title": "Autenticazione",
+    "titleStore": "{{store}} — Autenticazione ✓",
+    "subtitle": "Premi il pulsante B per chiudere questa finestra"
   }
 }

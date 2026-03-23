@@ -109,6 +109,7 @@
     "gog": "GOG",
     "amazonGames": "Amazon Games",
     "ubisoftConnect": "Ubisoft Connect",
+    "microsoftStore": "Microsoft Store",
     "connected": "Connected",
     "checking": "Checking...",
     "authenticate": "Sign in",
@@ -336,7 +337,8 @@
     "cleaningOrphanedArtwork": "Cleaning up orphaned artwork...",
     "retryingMissingArtwork": "Retrying {{synced}} / {{total}} games with missing artwork...",
     "savingShortcuts": "Saving shortcuts...",
-    "completed": "Sync completed! Added {{added}}, Art {{artwork}}."
+    "completed": "Sync completed! Added {{added}}, Art {{artwork}}.",
+    "fetchingStore": "Fetching {{store}}..."
   },
   "force_sync": {
     "migratingOldInstallations": "Force sync: Migrating old installations...",
@@ -471,5 +473,29 @@
     "thisGame": "this game",
     "game": "Game",
     "unknown": "Unknown"
+  },
+  "microsoft": {
+    "notCompatible": "This game format is not compatible with SteamOS",
+    "playOnCloud": "Play on Cloud",
+    "xcloudStreaming": "Xbox Cloud Gaming",
+    "signInMessage": "Sign in with your Microsoft / Xbox account",
+    "accountConnected": "Microsoft account connected",
+    "loggedOut": "Logged out from Microsoft Store",
+    "xcloudNotInstalled": "xCloud games are not installed locally",
+    "chromiumRequired": "Chromium Required",
+    "chromiumRequiredMessage": "Xbox Cloud Gaming requires the Chromium browser. Would you like to install it automatically? (This only needs to be done once.)",
+    "chromiumInstallButton": "Install Chromium",
+    "chromiumInstalling": "Installing Chromium...",
+    "chromiumInstalled": "Chromium installed!",
+    "chromiumAlreadyInstalled": "Chromium is already installed",
+    "chromiumInstallFailed": "Chromium installation failed. Please install manually: flatpak install org.chromium.Chromium",
+    "chromiumInstallTimeout": "Chromium installation timed out. Please check your internet connection.",
+    "flatpakNotFound": "Flatpak is not available on this system",
+    "signInRequired": "Sign in to play"
+  },
+  "authSuccess": {
+    "title": "Authentication",
+    "titleStore": "{{store}} — Authentication ✓",
+    "subtitle": "Press the B button to close this window"
   }
 }

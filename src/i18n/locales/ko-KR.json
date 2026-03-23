@@ -114,7 +114,8 @@
     "authenticate": "로그인",
     "legendaryNotInstalled": "⚠️ Epic Games CLI 설치 중...",
     "nileNotInstalled": "⚠️ Amazon Games CLI를 찾을 수 없습니다",
-    "error": "오류 - 로그 확인"
+    "error": "오류 - 로그 확인",
+    "microsoftStore": "Microsoft Store"
   },
   "librarySync": {
     "title": "라이브러리 동기화",
@@ -334,7 +335,8 @@
     "cleaningOrphanedArtwork": "고아 아트워크 정리 중...",
     "retryingMissingArtwork": "아트웍이 누락된 {{synced}}/{{total}}개 게임을 다시 시도하는 중...",
     "savingShortcuts": "바로가기 저장 중...",
-    "completed": "동기화 완료! {{added}} 추가, 아트워크 {{artwork}}."
+    "completed": "동기화 완료! {{added}} 추가, 아트워크 {{artwork}}.",
+    "fetchingStore": "{{store}} 가져오는 중…"
   },
   "force_sync": {
     "migratingOldInstallations": "강제 동기화: 설치 이전 중...",
@@ -469,5 +471,29 @@
     "thisGame": "이 게임",
     "game": "게임",
     "unknown": "알 수 없음"
+  },
+  "microsoft": {
+    "notCompatible": "이 게임의 포맷은 SteamOS와 호환되지 않습니다",
+    "playOnCloud": "클라우드에서 플레이",
+    "xcloudStreaming": "Xbox Cloud Gaming",
+    "signInMessage": "Microsoft / Xbox 계정으로 로그인",
+    "accountConnected": "Microsoft 계정이 연결되었습니다",
+    "loggedOut": "Microsoft Store에서 로그아웃되었습니다",
+    "xcloudNotInstalled": "xCloud 게임이 로컬에 설치되어 있지 않습니다",
+    "chromiumRequired": "Chromium 필요",
+    "chromiumRequiredMessage": "Xbox Cloud Gaming에는 Chromium 브라우저가 필요합니다. 자동으로 설치하시겠습니까? (한 번만 수행하면 됩니다.)",
+    "chromiumInstallButton": "Chromium 설치",
+    "chromiumInstalling": "Chromium 설치 중...",
+    "chromiumInstalled": "Chromium이 설치되었습니다!",
+    "chromiumAlreadyInstalled": "Chromium이 이미 설치되어 있습니다",
+    "chromiumInstallFailed": "Chromium 설치에 실패했습니다. 수동으로 설치하세요: flatpak install org.chromium.Chromium",
+    "chromiumInstallTimeout": "Chromium 설치 시간이 초과되었습니다.",
+    "flatpakNotFound": "이 시스템에서는 Flatpak을 사용할 수 없습니다",
+    "signInRequired": "플레이하려면 로그인하세요"
+  },
+  "authSuccess": {
+    "title": "인증",
+    "titleStore": "{{store}} — 인증 ✓",
+    "subtitle": "B 버튼을 눌러 이 창을 닫으세요"
   }
 }

@@ -203,6 +203,8 @@ const UnifiedLibraryViewInner: FC<UnifiedLibraryViewProps> = ({ filter }) => {
               <option value="epic">{t("storeConnections.epicGames")}</option>
               <option value="gog">{t("deckTabs.gog")}</option>
               <option value="amazon">{t("storeConnections.amazonGames")}</option>
+              <option value="ubisoft">{t("storeConnections.ubisoftConnect")}</option>
+              <option value="microsoft">{t("storeConnections.microsoftStore")}</option>
             </select>
           </div>
 

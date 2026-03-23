@@ -114,7 +114,8 @@
     "authenticate": "Inloggen",
     "legendaryNotInstalled": "⚠️ Epic Games CLI installeren...",
     "nileNotInstalled": "⚠️ Amazon Games CLI niet gevonden",
-    "error": "Fout - Controleer logs"
+    "error": "Fout - Controleer logs",
+    "microsoftStore": "Microsoft Store"
   },
   "librarySync": {
     "title": "BIBLIOTHEEKSYNCHRONISATIE",
@@ -334,7 +335,8 @@
     "cleaningOrphanedArtwork": "Wees-artwork opruimen...",
     "retryingMissingArtwork": "{{synced}}/{{total}} spellen met ontbrekend artwork opnieuw proberen...",
     "savingShortcuts": "Snelkoppelingen opslaan...",
-    "completed": "Sync klaar! {{added}} toegevoegd, artwork {{artwork}}."
+    "completed": "Sync klaar! {{added}} toegevoegd, artwork {{artwork}}.",
+    "fetchingStore": "{{store}} ophalen…"
   },
   "force_sync": {
     "migratingOldInstallations": "Geforceerde sync: Migreren...",
@@ -469,5 +471,29 @@
     "thisGame": "deze game",
     "game": "Spel",
     "unknown": "Onbekend"
+  },
+  "microsoft": {
+    "notCompatible": "Het formaat van dit spel is niet compatibel met SteamOS",
+    "playOnCloud": "Speel in de cloud",
+    "xcloudStreaming": "Xbox Cloud Gaming",
+    "signInMessage": "Log in met uw Microsoft / Xbox account",
+    "accountConnected": "Microsoft-account verbonden",
+    "loggedOut": "Afgemeld bij Microsoft Store",
+    "xcloudNotInstalled": "xCloud-games zijn niet lokaal geïnstalleerd",
+    "chromiumRequired": "Chromium vereist",
+    "chromiumRequiredMessage": "Xbox Cloud Gaming vereist de Chromium-browser. Wilt u deze automatisch installeren? (Dit hoeft maar één keer te worden gedaan.)",
+    "chromiumInstallButton": "Chromium installeren",
+    "chromiumInstalling": "Chromium wordt geïnstalleerd...",
+    "chromiumInstalled": "Chromium geïnstalleerd!",
+    "chromiumAlreadyInstalled": "Chromium is al geïnstalleerd",
+    "chromiumInstallFailed": "Chromium-installatie mislukt. Installeer handmatig: flatpak install org.chromium.Chromium",
+    "chromiumInstallTimeout": "Chromium-installatie verlopen.",
+    "flatpakNotFound": "Flatpak is niet beschikbaar op dit systeem",
+    "signInRequired": "Log in om te spelen"
+  },
+  "authSuccess": {
+    "title": "Authenticatie",
+    "titleStore": "{{store}} — Authenticatie ✓",
+    "subtitle": "Druk op de B-knop om dit venster te sluiten"
   }
 }

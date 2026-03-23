@@ -11,6 +11,7 @@ let appDetailsCache: Record<number, any> = {};
 const patchedOverviews = new Set<number>();
 
 // Reference to unpatch function for m_mapApps patching
+// Kept exported for potential external use by other modules or future patches
 export let unpatchMapApps: (() => void) | null = null;
 
 /**

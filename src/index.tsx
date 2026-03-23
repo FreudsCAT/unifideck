@@ -30,16 +30,20 @@ loadTranslations();
 // Import tab system
 import { patchLibrary, loadCompatCacheFromBackend } from "./tabs";
 
+// Kept our deleteAllUnifideckCollections import; added PR tabManager import
 import {
   syncUnifideckCollections,
   deleteAllUnifideckCollections,
 } from "./spoofing/CollectionManager";
+import { tabManager } from "./tabs";
 
 // Import Downloads feature components
 import { DownloadsTab } from "./components/DownloadsTab";
 import { StorageSettings } from "./components/StorageSettings";
 
 import { SteamRestartModal } from "./components/SteamRestartModal";
+import { AuthSuccessModal } from "./components/AuthSuccessModal";
+import { ChromiumInstallModal } from "./components/ChromiumInstallModal";
 import { AccountSwitchModal } from "./components/AccountSwitchModal";
 import { UbisoftAuthModal } from "./components/UbisoftAuthModal";
 import { LanguageSelector } from "./components/LanguageSelector";
@@ -677,6 +681,7 @@ const Content: FC = () => {
     gog: "checking",
     amazon: "checking",
     ubisoft: "checking",
+    microsoft: "checking",
   });
 
   // Game Details View Mode - persisted via localStorage
@@ -793,12 +798,11 @@ const Content: FC = () => {
                       console.log(`[Unifideck] ⚠ Sync cancelled by user`);
                     }
 
-                    // Show restart notification when sync completes (if library has games)
+                    // Show restart notification only when NEW games were added to shortcuts.vdf
                     if (result.status === "complete") {
-                      const totalGames = result.synced_games || 0;
+                      const addedGames = Number(result.current_game?.values?.added) || 0;
 
-                      // Show modal if there are any games in the library
-                      if (totalGames > 0) {
+                      if (addedGames > 0) {
                         showModal(<SteamRestartModal closeModal={() => {}} />);
                       }
                     } else if (result.status === "cancelled") {
@@ -865,6 +869,7 @@ const Content: FC = () => {
           gog: string;
           amazon: string;
           ubisoft: string;
+          microsoft: string;
           error?: string;
           legendary_installed?: boolean;
           nile_installed?: boolean;
@@ -882,6 +887,7 @@ const Content: FC = () => {
           gog: result.gog,
           amazon: result.amazon,
           ubisoft: result.ubisoft,
+          microsoft: result.microsoft ?? "not_connected",
         });
 
         // Show warning if legendary not installed
@@ -903,6 +909,7 @@ const Content: FC = () => {
           gog: "error",
           amazon: "error",
           ubisoft: "error",
+          microsoft: "error",
         });
       }
     } catch (error) {
@@ -912,6 +919,7 @@ const Content: FC = () => {
         gog: "error",
         amazon: "error",
         ubisoft: "error",
+        microsoft: "error",
       });
     }
   };
@@ -988,15 +996,14 @@ const Content: FC = () => {
               console.log(`[Unifideck] ⚠ Sync cancelled by user`);
             }
 
-            // Show restart notification when sync completes (if library has games)
+            // Show restart notification only when NEW games were added to shortcuts.vdf
             if (result.status === "complete") {
-              const totalGames = result.synced_games || 0;
+              const addedGames = Number(result.current_game?.values?.added) || 0;
 
-              // Show modal if there are any games in the library
-              // (user explicitly triggered sync, so remind them to restart)
-              if (totalGames > 0) {
+              if (addedGames > 0) {
                 showModal(<SteamRestartModal closeModal={() => {}} />);
               }
+
             } else if (result.status === "cancelled") {
               toaster.toast({
                 title: t("toasts.syncCancelled"),
@@ -1036,6 +1043,7 @@ const Content: FC = () => {
             epic_count: number;
             gog_count: number;
             amazon_count: number;
+            microsoft_count: number;
             added_count: number;
             artwork_count: number;
             updated_count?: number;
@@ -1050,6 +1058,7 @@ const Content: FC = () => {
             epic_count: number;
             gog_count: number;
             amazon_count: number;
+            microsoft_count: number;
             added_count: number;
             artwork_count: number;
             updated_count?: number;
@@ -1061,11 +1070,13 @@ const Content: FC = () => {
       console.log(`[Unifideck] Epic Games: ${syncResult.epic_count}`);
       console.log(`[Unifideck] GOG Games: ${syncResult.gog_count}`);
       console.log(`[Unifideck] Amazon Games: ${syncResult.amazon_count || 0}`);
+      console.log(`[Unifideck] Microsoft Games: ${syncResult.microsoft_count || 0}`);
       console.log(
         `[Unifideck] Total Games: ${
           syncResult.epic_count +
           syncResult.gog_count +
-          (syncResult.amazon_count || 0)
+          (syncResult.amazon_count || 0) +
+          (syncResult.microsoft_count || 0)
         }`,
       );
       console.log(`[Unifideck] Games Added: ${syncResult.added_count}`);
@@ -1076,6 +1087,11 @@ const Content: FC = () => {
       // Update collections ([Unifideck] Epic Games, etc.) with new games
       await syncUnifideckCollections().catch((err) =>
         console.error("[Unifideck] Failed to sync collections:", err),
+      );
+
+      // Phase 4: Reload tab game counts (so Microsoft tab appears if games were added)
+      await tabManager.forceReloadGameCache().catch((err) =>
+        console.error("[Unifideck] Failed to reload tab cache:", err),
       );
 
       // Reload compat cache from backend (so Great on Deck tab updates immediately)
@@ -1134,6 +1150,7 @@ const Content: FC = () => {
             gog: string;
             amazon: string;
             ubisoft: string;
+            microsoft: string;
           }
         >("check_store_status");
 
@@ -1145,6 +1162,8 @@ const Content: FC = () => {
             status = result.gog;
           } else if (store === "ubisoft") {
             status = result.ubisoft;
+          } else if (store === "microsoft") {
+            status = result.microsoft;
           } else {
             status = result.amazon;
           }
@@ -1196,6 +1215,8 @@ const Content: FC = () => {
         ? t("storeConnections.amazonGames")
         : store === "ubisoft"
         ? t("storeConnections.ubisoftConnect")
+        : store === "microsoft"
+        ? t("storeConnections.microsoftStore")
         : t("storeConnections.gog");
 
     // Ubisoft uses credentials-based auth (modal form), not browser popup
@@ -1224,14 +1245,27 @@ const Content: FC = () => {
         methodName = "start_epic_auth";
       } else if (store === "gog") {
         methodName = "start_gog_auth_auto";
+      } else if (store === "microsoft") {
+        methodName = "start_microsoft_auth";
       } else {
         methodName = "start_amazon_auth";
       }
 
       const result = await call<
         [],
-        { success: boolean; url?: string; message?: string; error?: string }
+        { success: boolean; url?: string; chromium_auth?: boolean; needs_chromium?: boolean; message?: string; error?: string }
       >(methodName);
+
+      // Chromium not installed — show install modal
+      if (result.success && result.needs_chromium) {
+        showModal(
+          <ChromiumInstallModal
+            closeModal={() => {}}
+            onInstalled={() => startAuth(store)}
+          />,
+        );
+        return;
+      }
 
       if (result.success && result.url) {
         const authUrl = result.url;
@@ -1261,12 +1295,11 @@ const Content: FC = () => {
               console.log(
                 `[Unifideck] ✓ ${storeName} authentication successful!`,
               );
-              toaster.toast({
-                title: t("toasts.authConnected", { store: storeName }),
-                body: t("toasts.authConnectedMessage", { store: storeName }),
-                duration: 8000,
-                critical: true,
-              });
+              // Show full-screen success modal — covers the CEF popup
+              // which cannot be closed programmatically in Steam's CEF.
+              showModal(
+                <AuthSuccessModal store={storeName} closeModal={() => {}} />,
+              );
               await checkStoreStatus(); // Refresh status
             } else {
               console.log(`[Unifideck] ${storeName} authentication timed out`);
@@ -1283,6 +1316,38 @@ const Content: FC = () => {
           });
 
         // Return immediately - don't block waiting for auth to complete
+      } else if (result.success && result.chromium_auth) {
+        // Chromium handles the browser window — no popup needed.
+        // Backend kills Chromium when auth completes.
+        console.log(
+          `[Unifideck] ${store} auth opened in Chromium. Backend monitoring via CDP...`,
+        );
+
+        pollForAuthCompletion(store)
+          .then(async (completed) => {
+            if (completed) {
+              console.log(
+                `[Unifideck] ✓ ${storeName} authentication successful!`,
+              );
+              toaster.toast({
+                title: t("toasts.authConnected"),
+                body: t("toasts.authConnectedMessage", { store: storeName }),
+                duration: 5000,
+              });
+              await checkStoreStatus();
+            } else {
+              console.log(`[Unifideck] ${storeName} authentication timed out`);
+              toaster.toast({
+                title: t("toasts.authTimeout"),
+                body: t("toasts.authTimeoutMessage", { store: storeName }),
+                critical: true,
+                duration: 5000,
+              });
+            }
+          })
+          .catch((error) => {
+            console.error(`[Unifideck] Error polling ${store} auth:`, error);
+          });
       } else {
         toaster.toast({
           title: t("toasts.authFailed"),
@@ -1311,6 +1376,8 @@ const Content: FC = () => {
         methodName = "logout_gog";
       } else if (store === "ubisoft") {
         methodName = "logout_ubisoft";
+      } else if (store === "microsoft") {
+        methodName = "logout_microsoft";
       } else {
         methodName = "logout_amazon";
       }

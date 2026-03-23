@@ -5,3 +5,4 @@ from .epic import EpicConnector
 from .amazon import AmazonConnector
 from .gog import GOGAPIClient
 from .ubisoft import UbisoftConnector
+from .microsoft import MicrosoftConnector
