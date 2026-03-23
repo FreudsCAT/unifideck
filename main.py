@@ -2078,6 +2078,16 @@ class Plugin:
         logger.info("[INIT] Initializing MicrosoftConnector")
         self.microsoft = MicrosoftConnector(plugin_dir=DECKY_PLUGIN_DIR, plugin_instance=self)
 
+        # Ensure the Microsoft auth shortcut is in VDF on every startup.
+        # This mirrors the Ubisoft pattern above — the shortcut must exist
+        # before the user clicks "Sign In" so Steam's in-memory app store
+        # has time to pick it up from shortcuts.vdf.
+        try:
+            await self.microsoft._ensure_microsoft_auth_shortcut()
+            logger.info("[INIT] Microsoft auth shortcut ensured in VDF")
+        except Exception as e:
+            logger.warning(f"[INIT] Microsoft auth shortcut init failed (non-fatal): {e}")
+
         # Repair games.map for Unifideck shortcuts missing entries (fixes "Game location not mapped" errors)
         logger.info("[INIT] Reconciling games.map from installed games")
         map_reconcile = await self.shortcuts_manager.reconcile_games_map_from_installed(
@@ -6190,6 +6200,11 @@ microsoft_client=self.microsoft,
         logger.info("[RPC] get_microsoft_auth_shortcut_context")
         return await self.microsoft.get_microsoft_auth_shortcut_context()
 
+    async def cleanup_microsoft_auth_shortcut(self) -> Dict[str, Any]:
+        """Delete the temporary Microsoft auth shortcut after auth ends."""
+        logger.info("[RPC] cleanup_microsoft_auth_shortcut")
+        return await self.microsoft.cleanup_microsoft_auth_shortcut()
+
     async def install_chromium(self) -> Dict[str, Any]:
         """Install Chromium browser via flatpak for xCloud support"""
         return await self.microsoft.install_chromium()
@@ -6296,6 +6311,10 @@ microsoft_client=self.microsoft,
                 if not parsed:
                     continue
                 store, game_id = parsed
+
+                # Skip auth shortcuts — they are launcher utilities, not games
+                if game_id in ("upc-auth", "ms-auth"):
+                    continue
 
                 # Check installation status using games.map (authoritative source)
                 # This works for any install location and auto-cleans stale entries

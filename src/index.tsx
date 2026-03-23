@@ -48,6 +48,7 @@ import { AccountSwitchModal } from "./components/AccountSwitchModal";
 import { UbisoftAuthModal } from "./components/UbisoftAuthModal";
 import { LanguageSelector } from "./components/LanguageSelector";
 import { launchMicrosoftAuthViaShortcut } from "./utils/microsoftShortcutLaunch";
+import { isShortcutAppRunning } from "./utils/ubisoftShortcutLaunch";
 import StoreConnections from "./components/settings/StoreConnections";
 import { Store } from "./types/store";
 import LibrarySync from "./components/settings/LibrarySync";
@@ -1137,53 +1138,53 @@ const Content: FC = () => {
   /**
    * Poll store status to detect when authentication completes
    */
+  const isStoreAuthConnected = async (store: Store): Promise<boolean> => {
+    try {
+      const result = await call<
+        [],
+        {
+          success: boolean;
+          epic: string;
+          gog: string;
+          amazon: string;
+          ubisoft: string;
+          microsoft: string;
+        }
+      >("check_store_status");
+
+      if (result.success) {
+        let status: string;
+        if (store === "epic") {
+          status = result.epic;
+        } else if (store === "gog") {
+          status = result.gog;
+        } else if (store === "ubisoft") {
+          status = result.ubisoft;
+        } else if (store === "microsoft") {
+          status = result.microsoft;
+        } else {
+          status = result.amazon;
+        }
+
+        if (status === "connected") {
+          console.log(
+            `[Unifideck] ${store} authentication completed automatically!`,
+          );
+          return true;
+        }
+      }
+    } catch (error) {
+      console.error(`[Unifideck] Error polling status:`, error);
+    }
+    return false;
+  };
+
   const pollForAuthCompletion = async (store: Store): Promise<boolean> => {
     const maxAttempts = 60; // 5 minutes (60 * 5s)
     let attempts = 0;
 
-    // Helper function to check status
-    const checkStatus = async (): Promise<boolean> => {
-      try {
-        const result = await call<
-          [],
-          {
-            success: boolean;
-            epic: string;
-            gog: string;
-            amazon: string;
-            ubisoft: string;
-            microsoft: string;
-          }
-        >("check_store_status");
-
-        if (result.success) {
-          let status: string;
-          if (store === "epic") {
-            status = result.epic;
-          } else if (store === "gog") {
-            status = result.gog;
-          } else if (store === "ubisoft") {
-            status = result.ubisoft;
-          } else if (store === "microsoft") {
-            status = result.microsoft;
-          } else {
-            status = result.amazon;
-          }
-          if (status === "connected") {
-            console.log(
-              `[Unifideck] ${store} authentication completed automatically!`,
-            );
-            return true;
-          }
-        }
-      } catch (error) {
-        console.error(`[Unifideck] Error polling status:`, error);
-      }
-      return false;
-    };
-
     // Check immediately first (in case auth completed very fast)
-    if (await checkStatus()) {
+    if (await isStoreAuthConnected(store)) {
       return true;
     }
 
@@ -1191,7 +1192,7 @@ const Content: FC = () => {
       const pollInterval = setInterval(async () => {
         attempts++;
 
-        if (await checkStatus()) {
+        if (await isStoreAuthConnected(store)) {
           clearInterval(pollInterval);
           resolve(true);
           return;
@@ -1249,6 +1250,11 @@ const Content: FC = () => {
     try {
       if (store === "microsoft") {
         microsoftAuthInProgressRef.current = true;
+        toaster.toast({
+          title: t("ubisoftAuth.signingIn"),
+          body: t("microsoft.signInMessage"),
+          duration: 4000,
+        });
       }
 
       let methodName: string;
@@ -1348,43 +1354,156 @@ const Content: FC = () => {
               `[Unifideck] ${store} RunGame launch failed:`,
               launchResult.error,
             );
+            // Auth shortcut is persistent — do NOT delete it on failure
+            microsoftAuthInProgressRef.current = false;
+            toaster.toast({
+              title: t("toasts.authFailed"),
+              body:
+                launchResult.error || t("toasts.authFailedMessage"),
+              critical: true,
+              duration: 5000,
+            });
+            return;
           }
+          console.log(
+            `[Unifideck] ${store} auth shortcut launched: appId=${launchResult.appId}, alreadyRunning=${launchResult.already_running}`,
+          );
+          const pollMicrosoftShortcutOutcome = async (): Promise<boolean> => {
+            const maxAttempts = 60;
+            const appId = launchResult.appId;
+            const startedAt = Date.now();
+            let seenRunning =
+              typeof appId === "number" && isShortcutAppRunning(appId);
+            let sawStopAfterLaunch = false;
+            let lifetimeRegistration: { unregister(): void } | null = null;
+
+            try {
+              if (typeof appId === "number") {
+                lifetimeRegistration =
+                  window.SteamClient?.GameSessions?.RegisterForAppLifetimeNotifications?.(
+                    (data: { unAppID: number; bRunning: boolean }) => {
+                      if (data.unAppID !== 0 && data.unAppID !== appId) {
+                        return;
+                      }
+
+                      if (data.bRunning) {
+                        seenRunning = true;
+                        return;
+                      }
+
+                      if (seenRunning) {
+                        sawStopAfterLaunch = true;
+                      }
+                    },
+                  ) ?? null;
+              }
+
+              for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+                if (await isStoreAuthConnected(store)) {
+                  return true;
+                }
+
+                if (
+                  typeof appId === "number" &&
+                  isShortcutAppRunning(appId)
+                ) {
+                  seenRunning = true;
+                }
+
+                if (
+                  sawStopAfterLaunch ||
+                  (seenRunning &&
+                    typeof appId === "number" &&
+                    !isShortcutAppRunning(appId))
+                ) {
+                  await new Promise<void>((resolve) =>
+                    window.setTimeout(resolve, 1000),
+                  );
+                  return await isStoreAuthConnected(store);
+                }
+
+                const startupGraceActive =
+                  typeof appId === "number" &&
+                  !seenRunning &&
+                  Date.now() - startedAt < 30000;
+
+                await new Promise<void>((resolve) =>
+                  window.setTimeout(resolve, startupGraceActive ? 1000 : 5000),
+                );
+              }
+
+              return false;
+            } finally {
+              lifetimeRegistration?.unregister?.();
+            }
+          };
+
+          pollMicrosoftShortcutOutcome()
+            .then(async (completed) => {
+              // Auth shortcut is persistent — do NOT clean it up after auth
+              if (completed) {
+                console.log(
+                  `[Unifideck] ✓ ${storeName} authentication successful!`,
+                );
+                toaster.toast({
+                  title: t("toasts.authConnected"),
+                  body: t("toasts.authConnectedMessage", { store: storeName }),
+                  duration: 5000,
+                });
+                await checkStoreStatus();
+              } else {
+                console.log(`[Unifideck] ${storeName} authentication timed out`);
+                toaster.toast({
+                  title: t("toasts.authTimeout"),
+                  body: t("toasts.authTimeoutMessage", { store: storeName }),
+                  critical: true,
+                  duration: 5000,
+                });
+              }
+            })
+            .catch((error) => {
+              console.error(`[Unifideck] Error polling ${store} auth:`, error);
+            })
+            .finally(() => {
+              if (store === "microsoft") {
+                microsoftAuthInProgressRef.current = false;
+              }
+            });
         } else {
           console.log(
             `[Unifideck] ${store} auth opened in Chromium. Backend monitoring via CDP...`,
           );
+          pollForAuthCompletion(store)
+            .then(async (completed) => {
+              if (completed) {
+                console.log(
+                  `[Unifideck] ✓ ${storeName} authentication successful!`,
+                );
+                toaster.toast({
+                  title: t("toasts.authConnected"),
+                  body: t("toasts.authConnectedMessage", { store: storeName }),
+                  duration: 5000,
+                });
+                await checkStoreStatus();
+              } else {
+                console.log(`[Unifideck] ${storeName} authentication timed out`);
+                toaster.toast({
+                  title: t("toasts.authTimeout"),
+                  body: t("toasts.authTimeoutMessage", { store: storeName }),
+                  critical: true,
+                  duration: 5000,
+                });
+              }
+            })
+            .catch((error) => {
+              console.error(`[Unifideck] Error polling ${store} auth:`, error);
+            })
+            .finally(() => {
+              if (store === "microsoft") {
+                microsoftAuthInProgressRef.current = false;
+              }
+            });
         }
-
-        pollForAuthCompletion(store)
-          .then(async (completed) => {
-            if (completed) {
-              console.log(
-                `[Unifideck] ✓ ${storeName} authentication successful!`,
-              );
-              toaster.toast({
-                title: t("toasts.authConnected"),
-                body: t("toasts.authConnectedMessage", { store: storeName }),
-                duration: 5000,
-              });
-              await checkStoreStatus();
-            } else {
-              console.log(`[Unifideck] ${storeName} authentication timed out`);
-              toaster.toast({
-                title: t("toasts.authTimeout"),
-                body: t("toasts.authTimeoutMessage", { store: storeName }),
-                critical: true,
-                duration: 5000,
-              });
-            }
-          })
-          .catch((error) => {
-            console.error(`[Unifideck] Error polling ${store} auth:`, error);
-          })
-          .finally(() => {
-            if (store === "microsoft") {
-              microsoftAuthInProgressRef.current = false;
-            }
-          });
       } else {
         if (store === "microsoft") {
           microsoftAuthInProgressRef.current = false;

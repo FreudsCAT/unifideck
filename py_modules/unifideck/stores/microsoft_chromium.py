@@ -3,8 +3,8 @@ Chromium browser management for the Microsoft xCloud connector.
 
 Handles launching, finding, killing, and installing Chromium on Steam Deck.
 Manages the shared browser profile (``~/.local/share/unifideck/chromium-auth``),
-environment variables needed for GUI apps under PluginLoader, and the virtual
-keyboard injected via CDP on the auth page.
+environment variables needed for GUI apps under PluginLoader, and browser
+lifecycle for the auth page.
 
 This module has no knowledge of OAuth, tokens, or the xCloud catalog — it
 only manages the browser lifecycle.  The connector (``microsoft.py``) owns
@@ -29,6 +29,8 @@ import sqlite3
 import subprocess
 import tempfile
 from typing import Any, Callable, Dict, List, Optional
+
+from ..cdp.page_inject import inject_scripts  # noqa: F401 – kept for future CDP use
 
 logger = logging.getLogger(__name__)
 
@@ -68,8 +70,12 @@ _SESSION_ENV_KEYS = (
     "WAYLAND_DISPLAY",
     "GAMESCOPE_WAYLAND_DISPLAY",
     "DBUS_SESSION_BUS_ADDRESS",
+    "DESKTOP_SESSION",
+    "GTK_IM_MODULE",
+    "QT_IM_MODULE",
     "XAUTHORITY",
     "XDG_RUNTIME_DIR",
+    "XMODIFIERS",
     "XDG_SESSION_TYPE",
     "XDG_CURRENT_DESKTOP",
 )
@@ -88,6 +94,21 @@ def _detect_session_env(uid: int, home: str) -> Dict[str, str]:
         value = os.environ.get(key)
         if value:
             result[key] = value
+
+    runtime_dir = f"/run/user/{uid}"
+    gamescope_env = os.path.join(runtime_dir, "gamescope-environment")
+    if os.path.exists(gamescope_env):
+        try:
+            with open(gamescope_env, "r", encoding="utf-8", errors="replace") as f:
+                for raw_line in f:
+                    line = raw_line.strip()
+                    if not line or "=" not in line:
+                        continue
+                    key, value = line.split("=", 1)
+                    if key in _SESSION_ENV_KEYS and key not in result and value:
+                        result[key] = value
+        except OSError:
+            pass
 
     try:
         for proc_name in ("steam", "gamescope-session", "gamescope"):
@@ -126,18 +147,32 @@ def _detect_session_env(uid: int, home: str) -> Dict[str, str]:
     if not result.get("DISPLAY") and not result.get("WAYLAND_DISPLAY"):
         result["DISPLAY"] = ":0"
     if not result.get("XDG_RUNTIME_DIR"):
-        result["XDG_RUNTIME_DIR"] = f"/run/user/{uid}"
+        result["XDG_RUNTIME_DIR"] = runtime_dir
     if (
         "DBUS_SESSION_BUS_ADDRESS" not in result
-        and os.path.exists(f"/run/user/{uid}/bus")
+        and os.path.exists(f"{runtime_dir}/bus")
     ):
-        result["DBUS_SESSION_BUS_ADDRESS"] = f"unix:path=/run/user/{uid}/bus"
+        result["DBUS_SESSION_BUS_ADDRESS"] = f"unix:path={runtime_dir}/bus"
     if "XAUTHORITY" not in result:
-        xauth_files = glob.glob(f"/run/user/{uid}/xauth_*")
+        xauth_files = glob.glob(f"{runtime_dir}/xauth_*")
         if xauth_files:
             result["XAUTHORITY"] = xauth_files[0]
         elif os.path.exists(os.path.join(home, ".Xauthority")):
             result["XAUTHORITY"] = os.path.join(home, ".Xauthority")
+
+    if (
+        not result.get("WAYLAND_DISPLAY")
+        and result.get("GAMESCOPE_WAYLAND_DISPLAY")
+        and result.get("XDG_RUNTIME_DIR")
+    ):
+        gamescope_socket = os.path.join(
+            result["XDG_RUNTIME_DIR"], result["GAMESCOPE_WAYLAND_DISPLAY"]
+        )
+        if os.path.exists(gamescope_socket):
+            result["WAYLAND_DISPLAY"] = result["GAMESCOPE_WAYLAND_DISPLAY"]
+
+    if result.get("GTK_IM_MODULE") == "Steam" and not result.get("XMODIFIERS"):
+        result["XMODIFIERS"] = "@im=Steam"
 
     return result
 
@@ -539,89 +574,6 @@ class ChromiumBrowser:
             logger.debug(f"[MS] Could not clear Chromium cookies: {e}")
 
     # ── CDP helpers ──────────────────────────────────────────────────────
-
-    async def inject_virtual_keyboard(self) -> None:
-        """Inject the Unifideck virtual keyboard into the auth page via CDP.
-
-        Uses ``Page.addScriptToEvaluateOnNewDocument`` so the keyboard
-        persists across page navigations (email → password → 2FA).
-        """
-        try:
-            import websockets
-        except ImportError:
-            logger.warning("[MS] websockets not available — no virtual keyboard")
-            return
-
-        import urllib.request as _req
-
-        try:
-            with _req.urlopen(
-                f"http://127.0.0.1:{self.cdp_port}/json", timeout=3
-            ) as r:
-                pages = json.loads(r.read().decode())
-            ws_url = None
-            for page in pages:
-                ws_url = page.get("webSocketDebuggerUrl")
-                if ws_url:
-                    break
-            if not ws_url:
-                logger.warning("[MS] No CDP page found for keyboard injection")
-                return
-        except Exception as e:
-            logger.warning(f"[MS] CDP keyboard: cannot list pages: {e}")
-            return
-
-        from ..utils.virtual_keyboard import get_keyboard_js
-        locale = self.locale_fn()
-        # Sanitize locale to prevent JS injection
-        import re as _re
-        if not _re.match(r'^[a-zA-Z]{2}(-[a-zA-Z]{2,4})?$', locale):
-            locale = "en-US"
-        kb_js = get_keyboard_js(locale)
-
-        # Inject locale as a window variable FIRST, then the keyboard.
-        # This ensures the locale is available even if the string
-        # replacement in get_keyboard_js() is somehow not picked up.
-        locale_script = f"window.__unifideck_locale = '{locale}';"
-        logger.info(f"[MS] Injecting keyboard with locale={locale}")
-
-        try:
-            async with websockets.connect(ws_url, close_timeout=3) as ws:
-                # 1. Set locale variable for all future documents
-                await ws.send(json.dumps({
-                    "id": 9000,
-                    "method": "Page.addScriptToEvaluateOnNewDocument",
-                    "params": {"source": locale_script},
-                }))
-                await asyncio.wait_for(ws.recv(), timeout=3)
-
-                # 2. Set locale variable on the current page NOW
-                await ws.send(json.dumps({
-                    "id": 9001,
-                    "method": "Runtime.evaluate",
-                    "params": {"expression": locale_script},
-                }))
-                await asyncio.wait_for(ws.recv(), timeout=3)
-
-                # 3. Register keyboard for future page loads
-                await ws.send(json.dumps({
-                    "id": 9002,
-                    "method": "Page.addScriptToEvaluateOnNewDocument",
-                    "params": {"source": kb_js},
-                }))
-                await asyncio.wait_for(ws.recv(), timeout=3)
-
-                # 4. Inject keyboard on the current page NOW
-                await ws.send(json.dumps({
-                    "id": 9003,
-                    "method": "Runtime.evaluate",
-                    "params": {"expression": kb_js},
-                }))
-                await asyncio.wait_for(ws.recv(), timeout=3)
-
-            logger.info("[MS] Virtual keyboard injected via CDP")
-        except Exception as e:
-            logger.warning(f"[MS] CDP keyboard injection failed: {e}")
 
     async def wait_and_check_crash(self) -> bool:
         """Wait for Chromium to start, return False if it crashed.

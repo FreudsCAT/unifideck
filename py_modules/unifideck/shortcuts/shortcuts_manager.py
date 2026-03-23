@@ -94,6 +94,15 @@ def register_shortcut(launch_options: str, appid: int, title: str) -> bool:
     return save_shortcuts_registry(registry)
 
 
+def unregister_shortcut(launch_options: str) -> bool:
+    """Remove a shortcut entry from the registry if it exists."""
+    registry = load_shortcuts_registry()
+    if launch_options in registry:
+        del registry[launch_options]
+        logger.debug(f"Unregistered shortcut: {launch_options}")
+    return save_shortcuts_registry(registry)
+
+
 def get_registered_appid(launch_options: str) -> Optional[int]:
     """Get the registered appid for a game, or None if not registered"""
     registry = load_shortcuts_registry()
@@ -1324,10 +1333,23 @@ class ShortcutsManager:
             def score(idx):
                 s = shortcuts[idx]
                 pts = 0
+                exe_value = s.get('exe')
+                exe_path = exe_value.strip().strip('"') if isinstance(exe_value, str) else ""
+                start_dir = s.get('StartDir')
+                start_dir_value = start_dir.strip().strip('"') if isinstance(start_dir, str) else ""
+                app_name = s.get('AppName')
+                app_name_value = app_name.strip() if isinstance(app_name, str) else ""
+                exe_basename = os.path.splitext(os.path.basename(exe_path))[0] if exe_path else ""
+
                 if s.get('LastPlayTime', 0) > 0:        pts += 2  # Has play history (most important)
                 if s.get('icon', ''):                    pts += 1  # Has artwork
                 if s.get('Playtime_Forever', 0) > 0:     pts += 1  # Has playtime
                 if len(s.get('tags', {})) > 1:           pts += 1  # Has richer tags
+                if exe_path:                             pts += 2  # Real shortcut retains its executable path
+                if start_dir_value:                      pts += 1  # Steam AddShortcut duplicates often lose this
+                if app_name_value:                       pts += 1  # Blank / missing names are lower quality
+                if exe_basename and app_name_value and app_name_value != exe_basename:
+                    pts += 1  # Prefer the real display title over a launcher basename
                 return pts
             
             best = max(indices, key=score)

@@ -60,6 +60,65 @@ log() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" >> "$LOG_FILE"
 }
 
+import_steam_session_env() {
+    local uid runtime_dir session_env key value socket_path
+    uid="$(id -u)"
+    runtime_dir="${XDG_RUNTIME_DIR:-/run/user/$uid}"
+    session_env="$runtime_dir/gamescope-environment"
+
+    [ -f "$session_env" ] || return 0
+
+    while IFS='=' read -r key value; do
+        [ -n "$key" ] || continue
+        case "$key" in
+            DISPLAY|WAYLAND_DISPLAY|GAMESCOPE_WAYLAND_DISPLAY|DBUS_SESSION_BUS_ADDRESS|XAUTHORITY|XDG_RUNTIME_DIR|XDG_SESSION_TYPE|XDG_CURRENT_DESKTOP|DESKTOP_SESSION|GTK_IM_MODULE|QT_IM_MODULE|XMODIFIERS)
+                [ -n "$value" ] && export "$key=$value"
+                ;;
+        esac
+    done < "$session_env"
+
+    if [ -z "${WAYLAND_DISPLAY:-}" ] && [ -n "${GAMESCOPE_WAYLAND_DISPLAY:-}" ]; then
+        socket_path="${XDG_RUNTIME_DIR:-$runtime_dir}/${GAMESCOPE_WAYLAND_DISPLAY}"
+        [ -S "$socket_path" ] && export WAYLAND_DISPLAY="$GAMESCOPE_WAYLAND_DISPLAY"
+    fi
+
+    if [ "${GTK_IM_MODULE:-}" = "Steam" ] && [ -z "${XMODIFIERS:-}" ]; then
+        export XMODIFIERS='@im=Steam'
+    fi
+}
+
+auth_window_mode_flag() {
+    local uid
+    uid="$(id -u)"
+
+    if pgrep -u "$uid" -x gamescope >/dev/null 2>&1 || pgrep -u "$uid" -x gamescope-session >/dev/null 2>&1; then
+        echo "--start-fullscreen"
+    else
+        echo "--start-maximized"
+    fi
+}
+
+focus_auth_window_if_needed() {
+    local window_mode="$1"
+
+    [ "$window_mode" = "--start-maximized" ] || return 0
+    command -v xdotool >/dev/null 2>&1 || return 0
+
+    (
+        local wid
+        for _ in $(seq 1 60); do
+            sleep 0.25
+            wid="$(xdotool search --onlyvisible --class unifideck-auth 2>/dev/null | tail -n 1 || true)"
+            [ -n "$wid" ] || continue
+            xdotool windowactivate --sync "$wid" >/dev/null 2>&1 || true
+            xdotool windowraise "$wid" >/dev/null 2>&1 || true
+            xdotool windowfocus "$wid" >/dev/null 2>&1 || true
+            log "Focused auth window: $wid"
+            break
+        done
+    ) &
+}
+
 # Toast notification for setup stages (visible in Game Mode)
 # Usage: notify_stage "Stage Name" "Details..."
 # 
@@ -881,6 +940,8 @@ if [ "${UNIFIDECK_MICROSOFT_ACTION:-}" = "auth" ]; then
     log "Microsoft auth detected — launching Chromium for OAuth"
     notify_stage "toasts.launcher.signingIn" "Microsoft" "low"
 
+    import_steam_session_env
+
     AUTH_URL_FILE="$HOME/.local/share/unifideck/ms_auth_url.txt"
     if [ ! -f "$AUTH_URL_FILE" ]; then
         log "ERROR: Auth URL file not found at $AUTH_URL_FILE"
@@ -898,9 +959,12 @@ if [ "${UNIFIDECK_MICROSOFT_ACTION:-}" = "auth" ]; then
     # Remove stale Singleton lock files that prevent Chromium from starting
     rm -f "$AUTH_PROFILE/SingletonLock" "$AUTH_PROFILE/SingletonSocket" "$AUTH_PROFILE/SingletonCookie" 2>/dev/null
 
+    AUTH_WINDOW_MODE="$(auth_window_mode_flag)"
+
     CHROME_FLAGS=(
         "--app=$MS_AUTH_URL"
-        "--start-fullscreen"
+        "--class=unifideck-auth"
+        "$AUTH_WINDOW_MODE"
         "--user-data-dir=$AUTH_PROFILE"
         "--no-first-run"
         "--disable-translate"
@@ -910,6 +974,9 @@ if [ "${UNIFIDECK_MICROSOFT_ACTION:-}" = "auth" ]; then
         "--password-store=basic"
         "--disable-dev-shm-usage"
         "--disable-background-networking"
+        "--enable-touch-events"
+        "--enable-wayland-ime"
+        "--ozone-platform-hint=auto"
         "--window-size=1280,800"
         "--remote-debugging-port=9222"
     )
@@ -923,7 +990,16 @@ if [ "${UNIFIDECK_MICROSOFT_ACTION:-}" = "auth" ]; then
             [ -f "$f" ] && export XAUTHORITY="$f" && break
         done
     fi
-    log "XAUTHORITY=$XAUTHORITY DISPLAY=$DISPLAY"
+    log "Auth window mode: $AUTH_WINDOW_MODE"
+    log "XAUTHORITY=$XAUTHORITY DISPLAY=$DISPLAY WAYLAND_DISPLAY=${WAYLAND_DISPLAY:-} GAMESCOPE_WAYLAND_DISPLAY=${GAMESCOPE_WAYLAND_DISPLAY:-}"
+    log "GTK_IM_MODULE=${GTK_IM_MODULE:-} QT_IM_MODULE=${QT_IM_MODULE:-} XMODIFIERS=${XMODIFIERS:-}"
+    focus_auth_window_if_needed "$AUTH_WINDOW_MODE"
+
+    # Steam's native overlay keyboard is used for text input in auth pages.
+    # In gaming mode, import Steam/gamescope's IM env before launch so
+    # Chromium can bind to the same keyboard/session hooks. In desktop mode,
+    # avoid forcing fullscreen so the Steam keyboard can stack over the auth
+    # window instead of appearing behind/outside it.
 
     if command -v flatpak &>/dev/null && (flatpak info --user org.chromium.Chromium &>/dev/null 2>&1 || flatpak info org.chromium.Chromium &>/dev/null 2>&1); then
         log "Using Chromium flatpak for Microsoft auth"
@@ -945,16 +1021,16 @@ if [ "$EXE_PATH" = "xcloud" ]; then
     log "xCloud game detected — launching via Chromium: $WORK_DIR"
     notify_stage "toasts.launcher.launchingGame" "Xbox Cloud Gaming" "low"
 
-    # WORK_DIR contains the full URL (https://www.xbox.com/play/launch/{productId}).
-    # Launch Chromium in app + fullscreen mode:
-    #   --app=URL     → no address bar, no tabs (clean game-like window)
-    #   --start-fullscreen → fullscreen but does NOT capture all input
-    # Unlike --kiosk, this allows Steam overlay (virtual keyboard, Steam+B to quit).
-    XCLOUD_URL="$WORK_DIR"
+    # WORK_DIR contains the game-specific URL (https://www.xbox.com/play/launch/{productId}).
+    # Launch the root xCloud shell first so our CDP helper can inject before the
+    # streaming page boots, then redirect to the requested game URL.
+    XCLOUD_URL="https://www.xbox.com/play"
+    XCLOUD_LAUNCH_URL="$WORK_DIR"
 
     # Common Chromium flags for xCloud streaming
     # Use the same Chromium profile as auth so cookies are shared
     AUTH_PROFILE="$HOME/.local/share/unifideck/chromium-auth"
+    XCLOUD_CDP_PORT=9223
     mkdir -p "$AUTH_PROFILE"
 
     CHROME_FLAGS=(
@@ -970,14 +1046,16 @@ if [ "$EXE_PATH" = "xcloud" ]; then
         "--disable-dev-shm-usage"
         "--disable-background-networking"
         "--autoplay-policy=no-user-gesture-required"
-        "--window-size=1280,800"
+        "--window-size=1024,720"
+        "--force-device-scale-factor=1.25"
+        "--device-scale-factor=1.25"
+        "--remote-debugging-port=$XCLOUD_CDP_PORT"
         # Gamepad support — Steam Deck virtual Xbox controller at /dev/input/js0.
         # Steam Input creates the device; Chromium reads it via the Web Gamepad API.
         "--enable-gamepad-button-axis-events"
         "--enable-features=WebGamepad,GamepadExtensions"
         # Force Chromium to poll gamepad devices even if no user gesture yet
         "--disable-features-block-on-user-gesture=GamepadAccess"
-        "--enable-blink-features=GamepadButtonAxisEvents"
     )
 
     # Clear PluginLoader's bundled library paths to avoid OpenSSL conflicts.
@@ -994,6 +1072,19 @@ if [ "$EXE_PATH" = "xcloud" ]; then
     fi
     log "XAUTHORITY=$XAUTHORITY DISPLAY=$DISPLAY"
 
+    XCLOUD_INJECT_SCRIPT="$PLUGIN_DIR/bin/xcloud_cdp_inject.py"
+    if [ -f "$XCLOUD_INJECT_SCRIPT" ]; then
+        log "Starting xCloud CDP compatibility injector on port $XCLOUD_CDP_PORT (target: $XCLOUD_LAUNCH_URL)"
+        _xcloud_inject_args=(--port "$XCLOUD_CDP_PORT" --timeout 45)
+        if [ -n "$XCLOUD_LAUNCH_URL" ] && [ "$XCLOUD_LAUNCH_URL" != "$XCLOUD_URL" ]; then
+            _xcloud_inject_args+=(--launch-url "$XCLOUD_LAUNCH_URL")
+        fi
+        "$PYTHON_BIN" "$XCLOUD_INJECT_SCRIPT" "${_xcloud_inject_args[@]}" >>"$LOG_FILE" 2>&1 &
+        _xcloud_inject_pid=$!
+    else
+        _xcloud_inject_pid=""
+    fi
+
     if command -v flatpak &>/dev/null && (flatpak info --user org.chromium.Chromium &>/dev/null 2>&1 || flatpak info org.chromium.Chromium &>/dev/null 2>&1); then
         log "Using Chromium flatpak in fullscreen app mode"
         flatpak run --device=all org.chromium.Chromium "${CHROME_FLAGS[@]}" 2>>"$LOG_FILE"
@@ -1005,6 +1096,10 @@ if [ "$EXE_PATH" = "xcloud" ]; then
         log "WARNING: No Chromium/Chrome found — falling back to Steam browser"
         steam "steam://openurl/$XCLOUD_URL" 2>>"$LOG_FILE" &
         sleep 3
+    fi
+
+    if [ -n "${_xcloud_inject_pid:-}" ]; then
+        wait "$_xcloud_inject_pid" 2>/dev/null || true
     fi
 
     log "xCloud session ended, exiting launcher"

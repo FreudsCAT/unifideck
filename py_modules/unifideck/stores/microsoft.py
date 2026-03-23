@@ -51,7 +51,7 @@ logger = logging.getLogger(__name__)
 MS_MARKER_FILE  = ".unifideck-ms-id"
 DATA_DIR = os.path.expanduser("~/.local/share/unifideck")
 AUTH_SHORTCUT_STORE_ID = "microsoft:ms-auth"
-AUTH_SHORTCUT_LAUNCH_WAIT_MS = 1500
+AUTH_SHORTCUT_LAUNCH_WAIT_MS = 2000
 
 
 # ──────────────────────────── connector ────────────────────────────────────
@@ -242,6 +242,8 @@ class MicrosoftConnector(Store):
             Dict with ``chromium_auth=True`` and ``shortcut_launch=True``
             so the frontend knows to call RunGame instead of opening a popup.
         """
+        logger.info("[MS] start_auth called — preparing OAuth flow")
+
         auth_url = (
             f"{self._get_auth_url()}"
             f"?client_id={self._get_client_id()}"
@@ -254,14 +256,25 @@ class MicrosoftConnector(Store):
 
         # Check if Chromium is available
         if not self._browser.is_installed:
-            logger.info("[MS] Chromium not installed -- prompting user to install")
+            logger.info("[MS] Chromium not installed — prompting user to install")
             return {
                 "success": True,
                 "needs_chromium": True,
                 "message": "microsoft.chromiumRequired",
             }
 
+        logger.info("[MS] Chromium detected — preparing auth launch")
         await self._browser.prepare_auth_launch()
+
+        # Cancel any stale auth monitor before writing the fresh auth URL.
+        # The monitor cleanup removes ms_auth_url.txt in its finally block; if
+        # we cancel it after rewriting the file, it can delete the new URL and
+        # make the just-launched shortcut fail immediately.
+        if hasattr(self, "_auth_monitor_task") and self._auth_monitor_task and not self._auth_monitor_task.done():
+            logger.info("[MS] Cancelling stale auth monitor task")
+            self._auth_monitor_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._auth_monitor_task
 
         # Write the auth URL for the launcher script to read
         url_file = os.path.join(DATA_DIR, "ms_auth_url.txt")
@@ -270,13 +283,19 @@ class MicrosoftConnector(Store):
             f.write(auth_url)
         logger.info(f"[MS] Auth URL written to {url_file}")
 
+        # Ensure the auth shortcut exists in VDF — if it was already created
+        # on plugin init this is a fast no-op; if the registry was cleared
+        # or first-time, this creates it now.
+        shortcut_appid = await self._ensure_microsoft_auth_shortcut()
+        if shortcut_appid:
+            logger.info(f"[MS] Auth shortcut verified: appid={shortcut_appid}")
+        else:
+            logger.warning("[MS] Auth shortcut could not be ensured — frontend will attempt AddShortcut fallback")
+
         # Start CDP monitor -- it will poll port 9222 until Chromium
         # appears (launched by the unifideck-launcher via RunGame).
-        if hasattr(self, "_auth_monitor_task") and self._auth_monitor_task and not self._auth_monitor_task.done():
-            self._auth_monitor_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await self._auth_monitor_task
         self._auth_monitor_task = asyncio.create_task(self._monitor_and_complete_auth())
+        logger.info("[MS] CDP auth monitor task started — waiting for Chromium on port 9222")
 
         return {
             "success":        True,
@@ -605,41 +624,41 @@ class MicrosoftConnector(Store):
     async def get_microsoft_auth_shortcut_context(self) -> Dict[str, Any]:
         """Return the auth shortcut appid so the frontend can call RunGame().
 
-        Creates the shortcut in Steam's VDF if it doesn't exist yet.
-        Follows the same pattern as Ubisoft's auth shortcut flow.
+        Always validates the VDF entry is correct before returning.
+        Creates or repairs the shortcut if needed.
         """
-        from py_modules.unifideck.shortcuts.shortcuts_manager import (
-            load_shortcuts_registry,
+        # Always ensure shortcut is valid (validates VDF + registry)
+        unsigned_id = await self._ensure_microsoft_auth_shortcut()
+
+        launcher_path = os.path.join(
+            self.plugin_dir or "", "bin", "unifideck-launcher"
+        )
+        launch_options = (
+            f"{AUTH_SHORTCUT_STORE_ID} "
+            "UNIFIDECK_MICROSOFT_ACTION=auth"
         )
 
-        registry = load_shortcuts_registry()
-        entry = registry.get(AUTH_SHORTCUT_STORE_ID)
-        if entry and entry.get("appid_unsigned"):
-            logger.info(
-                f"[MS] Auth shortcut context: appid={entry['appid_unsigned']}"
-            )
-            return {
-                "success": True,
-                "appid_unsigned": entry["appid_unsigned"],
-                "launch_wait_ms": 0,
-            }
-
-        # Not in registry -- create the shortcut
-        unsigned_id = await self._ensure_microsoft_auth_shortcut()
         if not unsigned_id:
+            logger.error("[MS] Auth shortcut creation/validation failed")
             return {"success": False, "error": "Auth shortcut not ready"}
+
+        logger.info(f"[MS] Auth shortcut context: appid={unsigned_id}")
         return {
             "success": True,
             "appid_unsigned": unsigned_id,
             "launch_wait_ms": AUTH_SHORTCUT_LAUNCH_WAIT_MS,
+            "launcher_path": launcher_path,
+            "launch_options": launch_options,
         }
 
     async def _ensure_microsoft_auth_shortcut(self) -> Optional[int]:
-        """Create a persistent VDF shortcut for Microsoft OAuth auth flow.
+        """Create or repair the persistent VDF shortcut for Microsoft OAuth.
 
-        Uses unifideck-launcher as the exe. The launcher detects
-        UNIFIDECK_MICROSOFT_ACTION=auth and launches Chromium with the
-        OAuth URL read from ~/.local/share/unifideck/ms_auth_url.txt.
+        Validates that the VDF entry has the correct appid, AppName, and
+        LaunchOptions.  Removes any malformed entries (e.g. from a previous
+        AddShortcut fallback) and recreates with correct fields.
+
+        Returns the unsigned appid on success, None on failure.
         """
         if not self.plugin_instance or not hasattr(self.plugin_instance, 'shortcuts_manager'):
             logger.error("[MS] No shortcuts_manager available")
@@ -652,14 +671,6 @@ class MicrosoftConnector(Store):
             from py_modules.unifideck.shortcuts.launch_options import get_full_id
 
             sm = self.plugin_instance.shortcuts_manager
-            registry = load_shortcuts_registry()
-
-            # Already registered -- return existing
-            if AUTH_SHORTCUT_STORE_ID in registry:
-                entry = registry[AUTH_SHORTCUT_STORE_ID]
-                uid = entry.get("appid_unsigned")
-                if uid:
-                    return uid
 
             # Build launcher path
             launcher_path = os.path.join(
@@ -669,52 +680,132 @@ class MicrosoftConnector(Store):
                 logger.error(f"[MS] Launcher not found at {launcher_path}")
                 return None
 
-            # Compute appId using same CRC32 algorithm as Steam
-            appid = sm.generate_app_id("Microsoft Sign-In", launcher_path)
-            unsigned_id = appid if appid >= 0 else appid + 2**32
+            # Compute expected appId using same CRC32 algorithm as Steam
+            expected_appid = sm.generate_app_id("Microsoft Sign-In", launcher_path)
+            unsigned_id = expected_appid if expected_appid >= 0 else expected_appid + 2**32
 
-            launch_options = (
+            expected_launch_options = (
                 f"{AUTH_SHORTCUT_STORE_ID} "
                 "UNIFIDECK_MICROSOFT_ACTION=auth"
             )
 
-            # Read VDF, add shortcut, write VDF
+            # ── VDF validation ──────────────────────────────────────────
             shortcuts_data = await sm.read_shortcuts()
             shortcuts = shortcuts_data.get('shortcuts', {})
 
-            # Check it doesn't already exist in VDF
-            already_in_vdf = any(
-                get_full_id(s.get('LaunchOptions', '')) == AUTH_SHORTCUT_STORE_ID
-                for s in shortcuts.values()
-            )
-            if not already_in_vdf:
+            # Find ALL entries whose LaunchOptions contain the auth store_id
+            matching_indices = [
+                idx for idx, s in shortcuts.items()
+                if get_full_id(s.get('LaunchOptions', '')) == AUTH_SHORTCUT_STORE_ID
+            ]
+
+            # Identify which entries are correct vs malformed
+            correct_idx = None
+            for idx in matching_indices:
+                sc = shortcuts[idx]
+                if (sc.get('appid') == expected_appid
+                        and sc.get('AppName') == 'Microsoft Sign-In'
+                        and 'UNIFIDECK_MICROSOFT_ACTION=auth' in sc.get('LaunchOptions', '')):
+                    correct_idx = idx
+                    break
+
+            # Remove all malformed entries
+            vdf_dirty = False
+            for idx in matching_indices:
+                if idx != correct_idx:
+                    logger.warning(
+                        f"[MS] Removing malformed auth VDF entry idx={idx}: "
+                        f"appid={shortcuts[idx].get('appid')} "
+                        f"name={shortcuts[idx].get('AppName')!r}"
+                    )
+                    del shortcuts[idx]
+                    vdf_dirty = True
+
+            # Create correct entry if none exists
+            if correct_idx is None:
                 existing_indices = [int(k) for k in shortcuts.keys() if k.isdigit()]
                 next_idx = max(existing_indices, default=-1) + 1
                 shortcuts[str(next_idx)] = {
-                    'appid': appid,
+                    'appid': expected_appid,
                     'AppName': 'Microsoft Sign-In',
                     'exe': f'"{launcher_path}"',
                     'StartDir': f'"{os.path.dirname(launcher_path)}"',
-                    'LaunchOptions': launch_options,
+                    'LaunchOptions': expected_launch_options,
                     'IsHidden': 1,
                     'AllowDesktopConfig': 1,
                     'OpenVR': 0,
                     'tags': {'0': 'Microsoft'},
                 }
-                await sm.write_shortcuts(shortcuts_data)
-                logger.info(f"[MS] Auth shortcut created in VDF (appid={unsigned_id})")
+                vdf_dirty = True
+                logger.info(
+                    f"[MS] Created auth shortcut in VDF: appid={expected_appid} "
+                    f"unsigned={unsigned_id}"
+                )
+            else:
+                logger.info(
+                    f"[MS] Auth shortcut VDF entry valid (idx={correct_idx}, "
+                    f"appid={unsigned_id})"
+                )
 
-            # Register in shortcuts registry for fast lookup
-            register_shortcut(AUTH_SHORTCUT_STORE_ID, appid, "Microsoft Sign-In")
+            if vdf_dirty:
+                await sm.write_shortcuts(shortcuts_data)
+
+            # ── Registry ────────────────────────────────────────────────
+            register_shortcut(AUTH_SHORTCUT_STORE_ID, expected_appid, "Microsoft Sign-In")
 
             # Keep native (no Proton -- launcher handles Chromium directly)
-            await sm._clear_proton_compatibility(appid)
+            await sm._clear_proton_compatibility(expected_appid)
 
             return unsigned_id
 
         except Exception as e:
             logger.error(f"[MS] Failed to create auth shortcut: {e}", exc_info=True)
             return None
+
+    async def _delete_microsoft_auth_shortcut(self) -> bool:
+        """Delete the temporary Microsoft auth shortcut from VDF + registry."""
+        if not self.plugin_instance or not hasattr(self.plugin_instance, "shortcuts_manager"):
+            logger.error("[MS] No shortcuts_manager available for auth shortcut cleanup")
+            return False
+
+        try:
+            from py_modules.unifideck.shortcuts.shortcuts_manager import (
+                unregister_shortcut,
+            )
+            from py_modules.unifideck.shortcuts.launch_options import get_full_id
+
+            sm = self.plugin_instance.shortcuts_manager
+            shortcuts_data = await sm.read_shortcuts()
+            shortcuts = shortcuts_data.get("shortcuts", {})
+
+            removed_indices = [
+                idx
+                for idx, shortcut in list(shortcuts.items())
+                if get_full_id(shortcut.get("LaunchOptions", "")) == AUTH_SHORTCUT_STORE_ID
+            ]
+
+            for idx in removed_indices:
+                del shortcuts[idx]
+
+            if removed_indices:
+                await sm.write_shortcuts(shortcuts_data)
+                logger.info(
+                    f"[MS] Removed auth shortcut from VDF ({len(removed_indices)} entr"
+                    f"{'y' if len(removed_indices) == 1 else 'ies'})"
+                )
+            else:
+                logger.info("[MS] No auth shortcut present in VDF during cleanup")
+
+            unregister_shortcut(AUTH_SHORTCUT_STORE_ID)
+            return True
+        except Exception as e:
+            logger.error(f"[MS] Failed to delete auth shortcut: {e}", exc_info=True)
+            return False
+
+    async def cleanup_microsoft_auth_shortcut(self) -> Dict[str, Any]:
+        """Public cleanup entry point for frontend/launcher-triggered teardown."""
+        success = await self._delete_microsoft_auth_shortcut()
+        return {"success": success}
 
     # ── Browser delegates (called by main.py API routes) ─────────────────
 
@@ -735,6 +826,7 @@ class MicrosoftConnector(Store):
         connect.  ``intercept_oauth_code`` handles retry/backoff internally.
         """
         cdp_port = 9222
+        logger.info(f"[MS] Auth monitor started — polling CDP port {cdp_port}")
 
         # Start CDP interception immediately -- it polls /json until
         # the login page target appears, so it's safe to start before
@@ -750,20 +842,26 @@ class MicrosoftConnector(Store):
         try:
             code = await intercept_task
             if code:
-                logger.info("[MS] Received OAuth code via CDP interception")
+                logger.info("[MS] ✓ Received OAuth code via CDP interception")
                 result = await self.complete_auth(code)
                 if result["success"]:
-                    logger.info("[MS] Authentication completed successfully")
+                    logger.info("[MS] ✓ Authentication completed successfully — tokens saved")
                 else:
-                    logger.error(f"[MS] complete_auth failed: {result.get('error')}")
+                    logger.error(f"[MS] ✗ complete_auth failed: {result.get('error')}")
             else:
-                logger.warning("[MS] CDP interception timed out -- no code received")
+                logger.warning("[MS] ✗ CDP interception timed out — no code received (300s)")
         except Exception as e:
-            logger.error(f"[MS] Auth monitor error: {e}", exc_info=True)
+            logger.error(f"[MS] ✗ Auth monitor error: {e}", exc_info=True)
         finally:
             # Clean up the auth URL file
             url_file = os.path.join(DATA_DIR, "ms_auth_url.txt")
             try:
                 os.remove(url_file)
+                logger.info("[MS] Cleaned up ms_auth_url.txt")
             except OSError:
                 pass
+            # NOTE: Do NOT delete the auth shortcut here — it must persist
+            # across auth attempts (like Ubisoft's). Deleting it breaks
+            # subsequent sign-in clicks because Steam won't have it in
+            # memory until next reboot.
+            logger.info("[MS] Auth monitor task finished")
