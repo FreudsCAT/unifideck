@@ -25,6 +25,7 @@ see ``utils/locale.py``.
 """
 
 import asyncio
+import contextlib
 import json
 import logging
 import os
@@ -199,7 +200,13 @@ class MicrosoftConnector(Store):
         return "microsoft"
 
     async def is_available(self) -> bool:
-        """Return True if we have a saved token AND the browser session is active."""
+        """Return True when Microsoft OAuth tokens are present.
+
+        The browser cookie jar is still useful for xCloud launches, but the
+        connector's authenticated state should be driven by the saved refresh
+        token.  A missing ``xbox.com`` cookie should not silently log the user
+        out or make the store appear disconnected after a successful sign-in.
+        """
         if not os.path.exists(self._get_token_file()):
             return False
         try:
@@ -211,9 +218,10 @@ class MicrosoftConnector(Store):
             return False
 
         if not self._browser.has_xbox_session():
-            logger.info("[MS] Xbox browser session lost — user logged out from Game Pass")
-            await self.logout()
-            return False
+            logger.info(
+                "[MS] OAuth token present but Xbox browser session is missing; "
+                "keeping connector authenticated"
+            )
 
         return True
 
@@ -249,6 +257,8 @@ class MicrosoftConnector(Store):
                 "message": "microsoft.chromiumRequired",
             }
 
+        await self._browser.prepare_auth_launch()
+
         # Launch Chromium with remote debugging for CDP interception
         launched = self._browser.launch_auth(auth_url)
         if not launched:
@@ -261,6 +271,8 @@ class MicrosoftConnector(Store):
         # Start CDP monitor targeting Chromium's debugging port
         if hasattr(self, "_auth_monitor_task") and self._auth_monitor_task and not self._auth_monitor_task.done():
             self._auth_monitor_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._auth_monitor_task
         self._auth_monitor_task = asyncio.create_task(self._monitor_and_complete_auth())
 
         return {

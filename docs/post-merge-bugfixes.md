@@ -192,3 +192,43 @@
   6. Added target type filtering (only attach to "page"/"webview" targets)
   7. Added code extraction from target URL during `/json` scanning (catches code even if CDP events miss it)
 - **Status:** FIXED
+
+---
+
+### BUG-15: Microsoft Auth Only Launches Once Unless Chromium Profile Is Deleted
+- **Severity:** CRITICAL
+- **Symptom:** Microsoft sign-in opens once, but subsequent attempts do not reopen unless the user deletes Chromium files under `~/.local/share/unifideck/`
+- **Root Cause:** Auth and xCloud share the same Chromium profile (`~/.local/share/unifideck/chromium-auth`). A previous auth browser can linger on the CDP port, and broken `SingletonLock` / `SingletonCookie` / `SingletonSocket` artifacts can keep the shared profile in a bad state. The previous `kill()` only terminated the tracked wrapper process, not the full Chromium process group.
+- **Files:**
+  - `py_modules/unifideck/stores/microsoft_chromium.py`
+- **Fix:**
+  1. Added `prepare_auth_launch()` to close any lingering auth browser via DevTools HTTP before relaunch
+  2. Added stale `Singleton*` cleanup when the profile socket target is broken
+  3. Launch Chromium in a new session (`start_new_session=True`)
+  4. Terminate the full Chromium process group instead of only the wrapper process handle
+- **Verification:** Real driver `test_real_ms_auth_relaunch.py` confirmed auth launches on the Microsoft authorize URL, closes cleanly, and relaunches immediately with the same shared profile.
+- **Status:** FIXED
+
+---
+
+### BUG-16: Microsoft Auth Capture Fails When `websockets` Is Missing at Runtime
+- **Severity:** HIGH
+- **Symptom:** Auth monitor times out immediately with `websockets not available`, even though Chromium opens and the redirect eventually contains the OAuth code
+- **Root Cause:** `intercept_oauth_code()` returned early if Python `websockets` was unavailable, so the plugin never attempted any fallback code capture path in runtimes where the dependency was missing.
+- **Files:**
+  - `py_modules/unifideck/stores/microsoft_cdp.py`
+- **Fix:** Added a dependency-free fallback that polls DevTools `/json` targets and extracts the auth code directly from `oauth20_desktop.srf?code=...` target URLs. Also reordered scan logic so code URLs are still detected even after a target has been seen before.
+- **Verification:** Local self-test with a fake DevTools server confirmed the polling fallback captures `test-code-123` without `websockets` installed.
+- **Status:** FIXED
+
+---
+
+### BUG-17: Microsoft Appears Disconnected Even After Successful OAuth
+- **Severity:** HIGH
+- **Symptom:** Microsoft token file is written, but `check_store_status()` still reports `not_connected`
+- **Root Cause:** `is_available()` required an `xbox.com` browser cookie and would call `logout()` when the browser session was missing, deleting valid Microsoft OAuth state even though the connector had a refresh token.
+- **Files:**
+  - `py_modules/unifideck/stores/microsoft.py`
+- **Fix:** `is_available()` now treats the saved refresh token as the source of truth for connector auth state. Missing browser cookies are logged but no longer force a logout.
+- **Verification:** Self-test confirmed `is_available()` returns `True` with a valid refresh token even when no Xbox cookie is present.
+- **Status:** FIXED

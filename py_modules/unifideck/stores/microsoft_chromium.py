@@ -23,6 +23,7 @@ import json
 import logging
 import os
 import pathlib
+import signal
 import shutil
 import sqlite3
 import subprocess
@@ -121,6 +122,117 @@ class ChromiumBrowser:
         self.locale_fn = locale_fn or (lambda: "en-US")
         self.process: Optional[subprocess.Popen] = None
 
+    def _singleton_paths(self) -> List[str]:
+        """Return Chromium singleton artifacts for the shared profile."""
+        return [
+            os.path.join(PROFILE_DIR, "SingletonLock"),
+            os.path.join(PROFILE_DIR, "SingletonCookie"),
+            os.path.join(PROFILE_DIR, "SingletonSocket"),
+        ]
+
+    def _has_stale_singleton_socket(self) -> bool:
+        """Return True when the profile points at a missing singleton socket."""
+        socket_path = os.path.join(PROFILE_DIR, "SingletonSocket")
+        if not os.path.islink(socket_path):
+            return False
+        try:
+            target = os.readlink(socket_path)
+        except OSError:
+            return False
+        return not os.path.exists(target)
+
+    def cleanup_stale_profile_state(self) -> None:
+        """Remove stale profile lock artifacts after an unclean Chromium exit.
+
+        Chromium leaves ``Singleton*`` symlinks in the shared profile.  If the
+        socket target is already gone, relaunching with the same profile becomes
+        unreliable and users end up deleting ``~/.local/share/unifideck``.
+        Only remove these files when the singleton socket is clearly broken.
+        """
+        if not self._has_stale_singleton_socket():
+            return
+
+        removed: List[str] = []
+        for path in self._singleton_paths():
+            try:
+                os.unlink(path)
+                removed.append(os.path.basename(path))
+            except FileNotFoundError:
+                continue
+            except OSError as e:
+                logger.warning(f"[MS] Failed to remove stale profile artifact {path}: {e}")
+
+        if removed:
+            logger.info(
+                "[MS] Removed stale Chromium profile artifacts: "
+                + ", ".join(sorted(removed))
+            )
+
+    def _get_browser_ws_url(self) -> Optional[str]:
+        """Return the live CDP browser websocket URL, if Chromium is up."""
+        import urllib.request as _req
+
+        try:
+            with _req.urlopen(
+                f"http://127.0.0.1:{self.cdp_port}/json/version", timeout=1
+            ) as r:
+                data = json.loads(r.read().decode())
+            ws_url = data.get("webSocketDebuggerUrl")
+            return ws_url if ws_url else None
+        except Exception:
+            return None
+
+    def _list_cdp_targets(self) -> List[Dict[str, Any]]:
+        """Return the current CDP targets exposed by Chromium."""
+        import urllib.request as _req
+
+        try:
+            with _req.urlopen(
+                f"http://127.0.0.1:{self.cdp_port}/json/list", timeout=1
+            ) as r:
+                data = json.loads(r.read().decode())
+            return data if isinstance(data, list) else []
+        except Exception:
+            return []
+
+    async def prepare_auth_launch(self) -> None:
+        """Close any lingering CDP auth browser and clear broken lock files."""
+        targets = self._list_cdp_targets()
+        if targets:
+            import urllib.error as _err
+            import urllib.request as _req
+
+            closed_any = False
+            for target in targets:
+                target_id = target.get("id")
+                if not target_id:
+                    continue
+                try:
+                    with _req.urlopen(
+                        f"http://127.0.0.1:{self.cdp_port}/json/close/{target_id}",
+                        timeout=2,
+                    ) as r:
+                        r.read()
+                    closed_any = True
+                except _err.HTTPError as e:
+                    if e.code != 404:
+                        logger.warning(
+                            f"[MS] Could not close lingering auth target {target_id}: {e}"
+                        )
+                except Exception as e:
+                    logger.warning(
+                        f"[MS] Could not close lingering auth target {target_id}: {e}"
+                    )
+
+            if closed_any:
+                for _ in range(20):
+                    await asyncio.sleep(0.25)
+                    if not self._get_browser_ws_url():
+                        break
+                logger.info("[MS] Closed lingering Chromium auth browser via DevTools HTTP")
+
+        self.cleanup_stale_profile_state()
+
     # ── Detection & install ──────────────────────────────────────────────
 
     def find_cmd(self) -> Optional[List[str]]:
@@ -195,13 +307,14 @@ class ChromiumBrowser:
         """Launch Chromium for OAuth with remote debugging.
 
         Opens Chromium in fullscreen app mode with our CDP port.
-        Uses a dedicated profile so a new instance is always created
-        (even if another Chromium window is already open).
+        Reuses the shared Unifideck profile so xCloud sessions can keep
+        their cookies, while cleaning up stale auth-browser state first.
 
         Returns:
             True if Chromium was launched successfully.
         """
         self.kill()
+        self.cleanup_stale_profile_state()
 
         cmd = self.find_cmd()
         if not cmd:
@@ -236,6 +349,7 @@ class ChromiumBrowser:
                 stdout=subprocess.DEVNULL,
                 stderr=stderr_fh if stderr_fh else subprocess.DEVNULL,
                 env=clean_env(),
+                start_new_session=True,
             )
             logger.info(f"[MS] Chromium PID: {self.process.pid}")
             return True
@@ -254,23 +368,43 @@ class ChromiumBrowser:
         launched by the launcher sharing the same profile.
         """
         if self.process is None:
+            self.cleanup_stale_profile_state()
             return
         try:
             import time
             time.sleep(1)
-            self.process.terminate()
+            pgid = None
+            try:
+                pgid = os.getpgid(self.process.pid)
+            except Exception:
+                pgid = None
+
+            if pgid is not None and pgid != os.getpgrp():
+                os.killpg(pgid, signal.SIGTERM)
+            else:
+                self.process.terminate()
+
             self.process.wait(timeout=10)
             logger.info("[MS] Chromium auth closed (cookies flushed)")
         except subprocess.TimeoutExpired:
-            logger.debug("[MS] Chromium didn't exit — sending SIGKILL")
+            logger.debug("[MS] Chromium didn't exit -- sending SIGKILL")
             try:
-                self.process.kill()
+                pgid = None
+                try:
+                    pgid = os.getpgid(self.process.pid)
+                except Exception:
+                    pgid = None
+                if pgid is not None and pgid != os.getpgrp():
+                    os.killpg(pgid, signal.SIGKILL)
+                else:
+                    self.process.kill()
                 self.process.wait(timeout=3)
             except Exception:
                 pass
         except Exception as e:
             logger.debug(f"[MS] Chromium kill error (non-fatal): {e}")
         self.process = None
+        self.cleanup_stale_profile_state()
 
     # ── Cookie management ────────────────────────────────────────────────
 

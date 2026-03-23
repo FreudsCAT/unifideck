@@ -44,8 +44,8 @@ async def intercept_oauth_code(
     try:
         import websockets
     except ImportError:
-        logger.warning("[MS-net] websockets not available")
-        return None
+        websockets = None
+        logger.warning("[MS-net] websockets not available -- falling back to target polling")
 
     import urllib.request as _req
     from urllib.parse import urlparse, parse_qs as _pqs
@@ -79,15 +79,18 @@ async def intercept_oauth_code(
                     continue
                 url    = target.get("url", "")
                 ws_url = target.get("webSocketDebuggerUrl", "")
-                if not ws_url or ws_url in seen_ws:
-                    continue
 
                 # Check if this target already has the code in its URL
                 code = _extract_code(url)
                 if code:
-                    seen_ws.add(ws_url)
+                    if ws_url:
+                        seen_ws.add(ws_url)
                     return [("__CODE__", code)]
 
+                if not ws_url:
+                    continue
+                if ws_url in seen_ws:
+                    continue
                 if "removed=true" in url:
                     seen_ws.add(ws_url)
                     continue
@@ -126,6 +129,10 @@ async def intercept_oauth_code(
         seen_ws.add(ws_url)
         remaining = deadline - _time.time()
         logger.info(f"[MS-net] Attaching to: {page_url[:80]} ({remaining:.0f}s left)")
+
+        if websockets is None:
+            await asyncio.sleep(0.3)
+            continue
 
         try:
             async with websockets.connect(
