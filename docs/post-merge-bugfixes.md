@@ -204,7 +204,7 @@
 - **Fix:**
   1. Added `prepare_auth_launch()` to close any lingering auth browser via DevTools HTTP before relaunch
   2. Added stale `Singleton*` cleanup when the profile socket target is broken
-  3. Launch Chromium in a new session (`start_new_session=True`)
+  3. Launch Chromium in the same login session but its own process group (`os.setpgrp`)
   4. Terminate the full Chromium process group instead of only the wrapper process handle
 - **Verification:** Real driver `test_real_ms_auth_relaunch.py` confirmed auth launches on the Microsoft authorize URL, closes cleanly, and relaunches immediately with the same shared profile.
 - **Status:** FIXED
@@ -232,3 +232,60 @@
 - **Fix:** `is_available()` now treats the saved refresh token as the source of truth for connector auth state. Missing browser cookies are logged but no longer force a logout.
 - **Verification:** Self-test confirmed `is_available()` returns `True` with a valid refresh token even when no Xbox cookie is present.
 - **Status:** FIXED
+
+---
+
+### BUG-18: Microsoft Auth Chromium Does Not Appear in Steam Deck Gaming Mode
+- **Severity:** CRITICAL
+- **Symptom:** Microsoft sign-in may launch a Chromium process, but the auth window does not visibly appear in gaming mode / Steam frontend
+- **Root Cause:** Microsoft auth launch was still using a Decky-service-centric environment and `start_new_session=True`. That combination can put Chromium outside the active Steam/gamescope session even though the process starts successfully. Unlike Ubisoft's launcher/auth flows, Microsoft was not discovering the real graphical session env from running Steam/gamescope processes, and it was not seeding Steam window env defaults to help gamescope surface the window.
+- **Files:**
+  - `py_modules/unifideck/stores/microsoft_chromium.py`
+- **Fix:**
+  1. Ported Ubisoft-style session env detection into `clean_env()` so Microsoft auth can recover `DISPLAY`, `WAYLAND_DISPLAY`, `GAMESCOPE_WAYLAND_DISPLAY`, `DBUS_SESSION_BUS_ADDRESS`, `XAUTHORITY`, `XDG_RUNTIME_DIR`, `XDG_SESSION_TYPE`, and `XDG_CURRENT_DESKTOP` from live `steam` / `gamescope-session` / `gamescope` processes when Decky's own env lacks them
+  2. Seeded `SteamGameId`, `SteamAppId`, and `STEAM_COMPAT_APP_ID` defaults so the auth window has Steam-visible window env in gaming mode
+  3. Replaced `start_new_session=True` with `preexec_fn=os.setpgrp` so Chromium gets its own process group for reliable cleanup while staying in the same login session as Steam/gamescope
+  4. Added a dedicated window class (`--class=unifideck-auth`) and expanded launch logging for display/wayland visibility debugging
+- **Verification:** Local tests confirmed:
+  - `clean_env()` recovers the active session env even after removing display/session vars from the current process env
+  - launched Chromium now stays in the same session as the caller while getting its own process group
+  - the real relaunch driver still opens Chromium on the Microsoft sign-in URL, closes it cleanly, and reopens it immediately with the shared profile
+  - a temporary Chromium probe launched with the same Steam-session env and a dedicated app-window class was visible on `DISPLAY=:0`, with `WM_CLASS` showing `unifideck-auth-probe`
+- **Status:** FIXED IN CODE -- X-visible probe passed; still requires on-device Steam frontend QA
+
+---
+
+### BUG-19: Repeated Microsoft Sign-In Requests and Stale Auth Cleanup Tear Down the Auth Window
+- **Severity:** HIGH
+- **Symptom:** Repeated Microsoft sign-in attempts close and relaunch Chromium every 1-2 seconds, making the auth window appear to never load or instantly disappear
+- **Root Cause:** `start_auth()` always called `prepare_auth_launch()` + `launch_auth()` even if an auth session was already active. In practice, repeated frontend or user-triggered sign-in requests kept killing the existing Chromium auth window and replacing it before it could stabilize. There was also a backend race where an older `_auth_monitor_task` could still unwind and call `self._browser.kill()` after a newer launch had already replaced `self._browser.process`, making the fresh Chromium window vanish immediately. The frontend also had no debounce for in-progress Microsoft auth.
+- **Files:**
+  - `py_modules/unifideck/stores/microsoft.py`
+  - `src/index.tsx`
+- **Fix:**
+  1. Backend guard: if the Microsoft auth monitor task is still running and the auth Chromium browser is alive, `start_auth()` now reuses the existing session instead of relaunching
+  2. Added `ChromiumBrowser.is_running()` to detect an active auth browser
+  3. `start_auth()` now cancels and awaits any stale auth monitor before preparing or launching a fresh Chromium session
+  4. Auth monitor cleanup is session-scoped so stale monitor teardown cannot kill a newer Chromium auth process
+  5. Frontend guard: Microsoft sign-in requests are now debounced in `src/index.tsx` so duplicate button presses are ignored until the current auth poll completes or errors out
+- **Verification:** Temp stress test calling `start_auth()` five times in quick succession now keeps a single Chromium PID alive instead of spawning a relaunch storm. Additional targeted backend verification confirmed a canceled stale auth monitor no longer kills a newer Chromium launch during handoff.
+- **Status:** FIXED
+
+---
+
+### BUG-20: Microsoft Auth Window Invisible in Gaming Mode
+- **Severity:** CRITICAL
+- **Symptom:** Microsoft sign-in launches Chromium via subprocess, but gamescope (Steam Deck's compositor in gaming mode) does not surface directly-launched windows. The auth window is completely invisible in gaming mode despite being detectable on X11.
+- **Root Cause:** Epic, GOG, and Amazon all open auth URLs in Steam's built-in CEF browser via `window.open()` from the frontend. Steam's CEF popup is always visible in gaming mode because it is Steam's own window. Microsoft, however, launched an external Chromium process from the Python backend and returned `chromium_auth: true` to the frontend (skipping the `window.open()` popup path). Gamescope only surfaces windows from Steam's own processes or those launched through `SteamClient.Apps.RunGame()` -- a raw subprocess is invisible.
+- **Files:**
+  - `py_modules/unifideck/stores/microsoft.py`
+- **Fix:**
+  1. `start_auth()` now returns `url` (the OAuth URL) instead of `chromium_auth: true`
+  2. Frontend uses the existing `window.open(authUrl, "_blank", ...)` popup path (same as Epic/GOG/Amazon)
+  3. `_monitor_and_complete_auth()` now uses `CDPOAuthMonitor` on port 8080 (Steam's CEF) instead of `intercept_oauth_code` on port 9222 (Chromium)
+  4. CDPOAuthMonitor already supports Microsoft OAuth code capture (URL polling + Fetch interception for `oauth20_desktop.srf`)
+  5. After auth completes, CEF auth popup pages are closed via CDP
+  6. Chromium is no longer launched for auth -- only for xCloud game streaming
+  7. Removed now-unused `microsoft_cdp.intercept_oauth_code` import
+- **Verification:** Python compile check passes. Frontend build passes. CDPOAuthMonitor's `_extract_code()` already handles Microsoft's `oauth20_desktop.srf?code=` redirect pattern. Frontend `window.open()` path at index.tsx:1287 is proven to work in gaming mode (used by Epic/GOG/Amazon).
+- **Status:** FIXED IN CODE -- requires on-device gaming-mode QA

@@ -6185,6 +6185,11 @@ microsoft_client=self.microsoft,
         """Start Microsoft / Xbox Live OAuth authentication"""
         return await self.microsoft.start_auth()
 
+    async def get_microsoft_auth_shortcut_context(self) -> Dict[str, Any]:
+        """Get the Microsoft auth shortcut context for frontend RunGame() launch."""
+        logger.info("[RPC] get_microsoft_auth_shortcut_context")
+        return await self.microsoft.get_microsoft_auth_shortcut_context()
+
     async def install_chromium(self) -> Dict[str, Any]:
         """Install Chromium browser via flatpak for xCloud support"""
         return await self.microsoft.install_chromium()

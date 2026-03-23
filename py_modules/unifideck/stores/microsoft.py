@@ -49,6 +49,9 @@ logger = logging.getLogger(__name__)
 # Only internal logic constants remain here.
 
 MS_MARKER_FILE  = ".unifideck-ms-id"
+DATA_DIR = os.path.expanduser("~/.local/share/unifideck")
+AUTH_SHORTCUT_STORE_ID = "microsoft:ms-auth"
+AUTH_SHORTCUT_LAUNCH_WAIT_MS = 1500
 
 
 # ──────────────────────────── connector ────────────────────────────────────
@@ -228,15 +231,16 @@ class MicrosoftConnector(Store):
 
 
     async def start_auth(self) -> Dict[str, Any]:
-        """Launch Chromium with the OAuth URL and start CDP monitoring.
+        """Prepare Microsoft OAuth and signal the frontend to launch via RunGame.
 
-        Chromium opens in fullscreen app mode; CDP intercepts the OAuth
-        redirect on the debugging port.  Cookies persist in the shared
-        profile so xbox.com/play reuses the session for xCloud.
+        The backend writes the auth URL to a well-known file and starts the
+        CDP monitor.  The frontend then launches the auth shortcut through
+        Steam's RunGame API so gamescope surfaces the Chromium window in
+        gaming mode (same mechanism as xCloud game launches).
 
         Returns:
-            Dict with ``success=True``.  No ``url`` is returned because
-            Chromium handles the browser window directly.
+            Dict with ``chromium_auth=True`` and ``shortcut_launch=True``
+            so the frontend knows to call RunGame instead of opening a popup.
         """
         auth_url = (
             f"{self._get_auth_url()}"
@@ -250,7 +254,7 @@ class MicrosoftConnector(Store):
 
         # Check if Chromium is available
         if not self._browser.is_installed:
-            logger.info("[MS] Chromium not installed — prompting user to install")
+            logger.info("[MS] Chromium not installed -- prompting user to install")
             return {
                 "success": True,
                 "needs_chromium": True,
@@ -259,16 +263,15 @@ class MicrosoftConnector(Store):
 
         await self._browser.prepare_auth_launch()
 
-        # Launch Chromium with remote debugging for CDP interception
-        launched = self._browser.launch_auth(auth_url)
-        if not launched:
-            logger.error("[MS] Failed to launch Chromium for auth")
-            return {
-                "success": False,
-                "error": "microsoft.chromiumInstallFailed",
-            }
+        # Write the auth URL for the launcher script to read
+        url_file = os.path.join(DATA_DIR, "ms_auth_url.txt")
+        os.makedirs(DATA_DIR, exist_ok=True)
+        with open(url_file, "w") as f:
+            f.write(auth_url)
+        logger.info(f"[MS] Auth URL written to {url_file}")
 
-        # Start CDP monitor targeting Chromium's debugging port
+        # Start CDP monitor -- it will poll port 9222 until Chromium
+        # appears (launched by the unifideck-launcher via RunGame).
         if hasattr(self, "_auth_monitor_task") and self._auth_monitor_task and not self._auth_monitor_task.done():
             self._auth_monitor_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
@@ -278,6 +281,7 @@ class MicrosoftConnector(Store):
         return {
             "success":        True,
             "chromium_auth":  True,
+            "shortcut_launch": True,
             "message":        "microsoft.signInMessage",
         }
 
@@ -596,6 +600,122 @@ class MicrosoftConnector(Store):
         """No-op — xCloud games are streamed, not installed locally."""
         return {"success": True, "message": "microsoft.xcloudNotInstalled"}
 
+    # ── Auth shortcut (RunGame launch) ───────────────────────────────────
+
+    async def get_microsoft_auth_shortcut_context(self) -> Dict[str, Any]:
+        """Return the auth shortcut appid so the frontend can call RunGame().
+
+        Creates the shortcut in Steam's VDF if it doesn't exist yet.
+        Follows the same pattern as Ubisoft's auth shortcut flow.
+        """
+        from py_modules.unifideck.shortcuts.shortcuts_manager import (
+            load_shortcuts_registry,
+        )
+
+        registry = load_shortcuts_registry()
+        entry = registry.get(AUTH_SHORTCUT_STORE_ID)
+        if entry and entry.get("appid_unsigned"):
+            logger.info(
+                f"[MS] Auth shortcut context: appid={entry['appid_unsigned']}"
+            )
+            return {
+                "success": True,
+                "appid_unsigned": entry["appid_unsigned"],
+                "launch_wait_ms": 0,
+            }
+
+        # Not in registry -- create the shortcut
+        unsigned_id = await self._ensure_microsoft_auth_shortcut()
+        if not unsigned_id:
+            return {"success": False, "error": "Auth shortcut not ready"}
+        return {
+            "success": True,
+            "appid_unsigned": unsigned_id,
+            "launch_wait_ms": AUTH_SHORTCUT_LAUNCH_WAIT_MS,
+        }
+
+    async def _ensure_microsoft_auth_shortcut(self) -> Optional[int]:
+        """Create a persistent VDF shortcut for Microsoft OAuth auth flow.
+
+        Uses unifideck-launcher as the exe. The launcher detects
+        UNIFIDECK_MICROSOFT_ACTION=auth and launches Chromium with the
+        OAuth URL read from ~/.local/share/unifideck/ms_auth_url.txt.
+        """
+        if not self.plugin_instance or not hasattr(self.plugin_instance, 'shortcuts_manager'):
+            logger.error("[MS] No shortcuts_manager available")
+            return None
+
+        try:
+            from py_modules.unifideck.shortcuts.shortcuts_manager import (
+                load_shortcuts_registry, register_shortcut
+            )
+            from py_modules.unifideck.shortcuts.launch_options import get_full_id
+
+            sm = self.plugin_instance.shortcuts_manager
+            registry = load_shortcuts_registry()
+
+            # Already registered -- return existing
+            if AUTH_SHORTCUT_STORE_ID in registry:
+                entry = registry[AUTH_SHORTCUT_STORE_ID]
+                uid = entry.get("appid_unsigned")
+                if uid:
+                    return uid
+
+            # Build launcher path
+            launcher_path = os.path.join(
+                self.plugin_dir or "", "bin", "unifideck-launcher"
+            )
+            if not os.path.isfile(launcher_path):
+                logger.error(f"[MS] Launcher not found at {launcher_path}")
+                return None
+
+            # Compute appId using same CRC32 algorithm as Steam
+            appid = sm.generate_app_id("Microsoft Sign-In", launcher_path)
+            unsigned_id = appid if appid >= 0 else appid + 2**32
+
+            launch_options = (
+                f"{AUTH_SHORTCUT_STORE_ID} "
+                "UNIFIDECK_MICROSOFT_ACTION=auth"
+            )
+
+            # Read VDF, add shortcut, write VDF
+            shortcuts_data = await sm.read_shortcuts()
+            shortcuts = shortcuts_data.get('shortcuts', {})
+
+            # Check it doesn't already exist in VDF
+            already_in_vdf = any(
+                get_full_id(s.get('LaunchOptions', '')) == AUTH_SHORTCUT_STORE_ID
+                for s in shortcuts.values()
+            )
+            if not already_in_vdf:
+                existing_indices = [int(k) for k in shortcuts.keys() if k.isdigit()]
+                next_idx = max(existing_indices, default=-1) + 1
+                shortcuts[str(next_idx)] = {
+                    'appid': appid,
+                    'AppName': 'Microsoft Sign-In',
+                    'exe': f'"{launcher_path}"',
+                    'StartDir': f'"{os.path.dirname(launcher_path)}"',
+                    'LaunchOptions': launch_options,
+                    'IsHidden': 1,
+                    'AllowDesktopConfig': 1,
+                    'OpenVR': 0,
+                    'tags': {'0': 'Microsoft'},
+                }
+                await sm.write_shortcuts(shortcuts_data)
+                logger.info(f"[MS] Auth shortcut created in VDF (appid={unsigned_id})")
+
+            # Register in shortcuts registry for fast lookup
+            register_shortcut(AUTH_SHORTCUT_STORE_ID, appid, "Microsoft Sign-In")
+
+            # Keep native (no Proton -- launcher handles Chromium directly)
+            await sm._clear_proton_compatibility(appid)
+
+            return unsigned_id
+
+        except Exception as e:
+            logger.error(f"[MS] Failed to create auth shortcut: {e}", exc_info=True)
+            return None
+
     # ── Browser delegates (called by main.py API routes) ─────────────────
 
     def is_chromium_installed(self) -> bool:
@@ -608,18 +728,17 @@ class MicrosoftConnector(Store):
 
 
     async def _monitor_and_complete_auth(self) -> None:
-        """Background task: intercept the OAuth redirect via CDP Network events.
+        """Background task: intercept the OAuth redirect via CDP on port 9222.
 
-        Starts the CDP interception immediately in a sub-task so Network
-        events are captured even while we wait for the crash check and
-        keyboard injection to finish.  This eliminates the race where a
-        fast OAuth redirect completes before CDP is listening.
+        Chromium is launched externally by the unifideck-launcher (via
+        Steam RunGame), so this monitor just polls CDP until it can
+        connect.  ``intercept_oauth_code`` handles retry/backoff internally.
         """
-        cdp_port = self._browser.cdp_port if self._browser.process else 9222
+        cdp_port = 9222
 
         # Start CDP interception immediately -- it polls /json until
         # the login page target appears, so it's safe to start before
-        # Chromium is fully ready.
+        # Chromium is fully ready (launched via RunGame).
         intercept_task = asyncio.create_task(
             intercept_oauth_code(
                 pending_auth_url=getattr(self, "_pending_auth_url", ""),
@@ -628,29 +747,23 @@ class MicrosoftConnector(Store):
             )
         )
 
-        # While CDP is already listening, wait for Chromium startup
-        # and inject virtual keyboard concurrently.
-        if self._browser.process:
-            ok = await self._browser.wait_and_check_crash()
-            if not ok:
-                intercept_task.cancel()
-                return
-
-        # Inject virtual keyboard (Steam overlay not available outside Steam)
-        await self._browser.inject_virtual_keyboard()
-
         try:
             code = await intercept_task
             if code:
-                logger.info("[MS] Received OAuth code via Network interception")
+                logger.info("[MS] Received OAuth code via CDP interception")
                 result = await self.complete_auth(code)
                 if result["success"]:
-                    logger.info("[MS] Authentication completed -- closing Chromium")
+                    logger.info("[MS] Authentication completed successfully")
                 else:
                     logger.error(f"[MS] complete_auth failed: {result.get('error')}")
             else:
-                logger.warning("[MS] Network interception timed out -- no code received")
+                logger.warning("[MS] CDP interception timed out -- no code received")
         except Exception as e:
             logger.error(f"[MS] Auth monitor error: {e}", exc_info=True)
         finally:
-            self._browser.kill()
+            # Clean up the auth URL file
+            url_file = os.path.join(DATA_DIR, "ms_auth_url.txt")
+            try:
+                os.remove(url_file)
+            except OSError:
+                pass

@@ -362,7 +362,8 @@
     "epic": "Epic",
     "gog": "GOG",
     "amazon": "Amazon",
-    "ubisoft": "Ubisoft"
+    "ubisoft": "Ubisoft",
+    "microsoft": "Microsoft"
   },
   "unifiedLibrary": {
     "error": "Unifideckエラー",

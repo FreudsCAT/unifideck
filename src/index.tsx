@@ -47,6 +47,7 @@ import { ChromiumInstallModal } from "./components/ChromiumInstallModal";
 import { AccountSwitchModal } from "./components/AccountSwitchModal";
 import { UbisoftAuthModal } from "./components/UbisoftAuthModal";
 import { LanguageSelector } from "./components/LanguageSelector";
+import { launchMicrosoftAuthViaShortcut } from "./utils/microsoftShortcutLaunch";
 import StoreConnections from "./components/settings/StoreConnections";
 import { Store } from "./types/store";
 import LibrarySync from "./components/settings/LibrarySync";
@@ -655,6 +656,7 @@ const Content: FC = () => {
   const [deleting, setDeleting] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [deleteFiles, setDeleteFiles] = useState(false);
+  const microsoftAuthInProgressRef = useRef(false);
 
   // Auto-focus ref
   const mountRef = useRef<HTMLDivElement>(null);
@@ -1208,6 +1210,11 @@ const Content: FC = () => {
   };
 
   const startAuth = async (store: Store) => {
+    if (store === "microsoft" && microsoftAuthInProgressRef.current) {
+      console.log("[Unifideck] Microsoft auth already in progress; ignoring duplicate request");
+      return;
+    }
+
     const storeName =
       store === "epic"
         ? t("storeConnections.epicGames")
@@ -1240,6 +1247,10 @@ const Content: FC = () => {
     }
 
     try {
+      if (store === "microsoft") {
+        microsoftAuthInProgressRef.current = true;
+      }
+
       let methodName: string;
       if (store === "epic") {
         methodName = "start_epic_auth";
@@ -1253,11 +1264,14 @@ const Content: FC = () => {
 
       const result = await call<
         [],
-        { success: boolean; url?: string; chromium_auth?: boolean; needs_chromium?: boolean; message?: string; error?: string }
+        { success: boolean; url?: string; chromium_auth?: boolean; shortcut_launch?: boolean; needs_chromium?: boolean; message?: string; error?: string }
       >(methodName);
 
       // Chromium not installed — show install modal
       if (result.success && result.needs_chromium) {
+        if (store === "microsoft") {
+          microsoftAuthInProgressRef.current = false;
+        }
         showModal(
           <ChromiumInstallModal
             closeModal={() => {}}
@@ -1313,15 +1327,33 @@ const Content: FC = () => {
           })
           .catch((error) => {
             console.error(`[Unifideck] Error polling ${store} auth:`, error);
+          })
+          .finally(() => {
+            if (store === "microsoft") {
+              microsoftAuthInProgressRef.current = false;
+            }
           });
 
         // Return immediately - don't block waiting for auth to complete
       } else if (result.success && result.chromium_auth) {
-        // Chromium handles the browser window — no popup needed.
-        // Backend kills Chromium when auth completes.
-        console.log(
-          `[Unifideck] ${store} auth opened in Chromium. Backend monitoring via CDP...`,
-        );
+        // Chromium-based auth: launch via RunGame shortcut (gaming-mode
+        // visible) or fall back to direct backend launch.
+        if (result.shortcut_launch) {
+          console.log(
+            `[Unifideck] ${store} auth: launching Chromium via RunGame shortcut...`,
+          );
+          const launchResult = await launchMicrosoftAuthViaShortcut();
+          if (!launchResult.success) {
+            console.error(
+              `[Unifideck] ${store} RunGame launch failed:`,
+              launchResult.error,
+            );
+          }
+        } else {
+          console.log(
+            `[Unifideck] ${store} auth opened in Chromium. Backend monitoring via CDP...`,
+          );
+        }
 
         pollForAuthCompletion(store)
           .then(async (completed) => {
@@ -1347,8 +1379,16 @@ const Content: FC = () => {
           })
           .catch((error) => {
             console.error(`[Unifideck] Error polling ${store} auth:`, error);
+          })
+          .finally(() => {
+            if (store === "microsoft") {
+              microsoftAuthInProgressRef.current = false;
+            }
           });
       } else {
+        if (store === "microsoft") {
+          microsoftAuthInProgressRef.current = false;
+        }
         toaster.toast({
           title: t("toasts.authFailed"),
           body: result.error ? t(result.error) : t("toasts.authFailedMessage"),
@@ -1357,6 +1397,9 @@ const Content: FC = () => {
         });
       }
     } catch (error: any) {
+      if (store === "microsoft") {
+        microsoftAuthInProgressRef.current = false;
+      }
       console.error(`[Unifideck] Error starting ${store} auth:`, error);
       toaster.toast({
         title: t("toasts.authError"),

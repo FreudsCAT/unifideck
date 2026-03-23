@@ -821,13 +821,14 @@ GAME_ID="${KEY#*:}"
 # Ubisoft native launches use launcher URIs (uplay://) and don't need games.map
 # at all — they bypass the map both when the file is missing AND when the entry
 # is absent. Check the store early so Ubisoft never blocks on the map file.
+# Microsoft auth also bypasses the map — auth URL comes from ms_auth_url.txt.
 GAME_ENTRY=""
-if [ "$STORE" = "ubisoft" ]; then
+if [ "$STORE" = "ubisoft" ] || [ "${UNIFIDECK_MICROSOFT_ACTION:-}" = "auth" ]; then
     if [ -f "$MAP_FILE" ]; then
         GAME_ENTRY=$(grep "^$KEY|" "$MAP_FILE" | head -n 1)
     fi
     if [ -z "$GAME_ENTRY" ]; then
-        log "[Ubisoft] No games.map entry for $KEY, proceeding with URI launch fallback"
+        log "[$STORE] No games.map entry for $KEY, proceeding with fallback"
     fi
 else
     if [ ! -f "$MAP_FILE" ]; then
@@ -865,13 +866,79 @@ else
     WORK_DIR=""
 fi
 
-if [ -z "$EXE_PATH" ] && [ "$STORE" != "ubisoft" ]; then
+if [ -z "$EXE_PATH" ] && [ "$STORE" != "ubisoft" ] && [ "${UNIFIDECK_MICROSOFT_ACTION:-}" != "auth" ]; then
     log "ERROR: No executable path in map entry"
     exit 1
 fi
 
 log "Executable: $EXE_PATH"
 log "Work Dir: $WORK_DIR"
+
+# 4a-0. Microsoft OAuth auth — launch Chromium with auth URL via RunGame
+# The backend writes the OAuth URL to ms_auth_url.txt and starts a CDP
+# monitor on port 9222.  We launch Chromium so gamescope surfaces it.
+if [ "${UNIFIDECK_MICROSOFT_ACTION:-}" = "auth" ]; then
+    log "Microsoft auth detected — launching Chromium for OAuth"
+    notify_stage "toasts.launcher.signingIn" "Microsoft" "low"
+
+    AUTH_URL_FILE="$HOME/.local/share/unifideck/ms_auth_url.txt"
+    if [ ! -f "$AUTH_URL_FILE" ]; then
+        log "ERROR: Auth URL file not found at $AUTH_URL_FILE"
+        exit 1
+    fi
+    MS_AUTH_URL=$(cat "$AUTH_URL_FILE")
+    if [ -z "$MS_AUTH_URL" ]; then
+        log "ERROR: Auth URL file is empty"
+        exit 1
+    fi
+
+    AUTH_PROFILE="$HOME/.local/share/unifideck/chromium-auth"
+    mkdir -p "$AUTH_PROFILE"
+
+    # Remove stale Singleton lock files that prevent Chromium from starting
+    rm -f "$AUTH_PROFILE/SingletonLock" "$AUTH_PROFILE/SingletonSocket" "$AUTH_PROFILE/SingletonCookie" 2>/dev/null
+
+    CHROME_FLAGS=(
+        "--app=$MS_AUTH_URL"
+        "--start-fullscreen"
+        "--user-data-dir=$AUTH_PROFILE"
+        "--no-first-run"
+        "--disable-translate"
+        "--disable-infobars"
+        "--disable-session-crashed-bubble"
+        "--disable-features=TranslateUI"
+        "--password-store=basic"
+        "--disable-dev-shm-usage"
+        "--disable-background-networking"
+        "--window-size=1280,800"
+        "--remote-debugging-port=9222"
+    )
+
+    # Clear library paths to avoid OpenSSL / overlay conflicts
+    unset LD_LIBRARY_PATH
+
+    # Ensure XAUTHORITY is set (SteamOS uses a random name in /run/user/)
+    if [ -z "$XAUTHORITY" ]; then
+        for f in /run/user/$(id -u)/xauth_*; do
+            [ -f "$f" ] && export XAUTHORITY="$f" && break
+        done
+    fi
+    log "XAUTHORITY=$XAUTHORITY DISPLAY=$DISPLAY"
+
+    if command -v flatpak &>/dev/null && (flatpak info --user org.chromium.Chromium &>/dev/null 2>&1 || flatpak info org.chromium.Chromium &>/dev/null 2>&1); then
+        log "Using Chromium flatpak for Microsoft auth"
+        flatpak run org.chromium.Chromium "${CHROME_FLAGS[@]}" 2>>"$LOG_FILE"
+    elif command -v flatpak &>/dev/null && (flatpak info --user com.google.Chrome &>/dev/null 2>&1 || flatpak info com.google.Chrome &>/dev/null 2>&1); then
+        log "Using Google Chrome flatpak for Microsoft auth"
+        flatpak run com.google.Chrome "${CHROME_FLAGS[@]}" 2>>"$LOG_FILE"
+    else
+        log "ERROR: No Chromium/Chrome found for Microsoft auth"
+        exit 1
+    fi
+
+    log "Microsoft auth Chromium closed, exiting launcher"
+    exit 0
+fi
 
 # 4a. Xbox Cloud Gaming — stream via Chromium in fullscreen app mode
 if [ "$EXE_PATH" = "xcloud" ]; then
@@ -904,14 +971,20 @@ if [ "$EXE_PATH" = "xcloud" ]; then
         "--disable-background-networking"
         "--autoplay-policy=no-user-gesture-required"
         "--window-size=1280,800"
-        # Gamepad support — ensures Steam Deck controls work in xCloud
+        # Gamepad support — Steam Deck virtual Xbox controller at /dev/input/js0.
+        # Steam Input creates the device; Chromium reads it via the Web Gamepad API.
         "--enable-gamepad-button-axis-events"
-        "--enable-features=WebGamepad"
+        "--enable-features=WebGamepad,GamepadExtensions"
+        # Force Chromium to poll gamepad devices even if no user gesture yet
+        "--disable-features-block-on-user-gesture=GamepadAccess"
+        "--enable-blink-features=GamepadButtonAxisEvents"
     )
 
-    # Clear PluginLoader's bundled library paths to avoid OpenSSL conflicts
+    # Clear PluginLoader's bundled library paths to avoid OpenSSL conflicts.
+    # Note: LD_PRELOAD is already unset at script startup (line ~161).
+    # We keep it unset for Chromium to avoid gameoverlayrenderer.so conflicts.
+    # Steam Input works independently via uinput — no LD_PRELOAD needed.
     unset LD_LIBRARY_PATH
-    unset LD_PRELOAD
 
     # Ensure XAUTHORITY is set (SteamOS uses a random name in /run/user/)
     if [ -z "$XAUTHORITY" ]; then
@@ -923,10 +996,10 @@ if [ "$EXE_PATH" = "xcloud" ]; then
 
     if command -v flatpak &>/dev/null && (flatpak info --user org.chromium.Chromium &>/dev/null 2>&1 || flatpak info org.chromium.Chromium &>/dev/null 2>&1); then
         log "Using Chromium flatpak in fullscreen app mode"
-        flatpak run org.chromium.Chromium "${CHROME_FLAGS[@]}" 2>>"$LOG_FILE"
+        flatpak run --device=all org.chromium.Chromium "${CHROME_FLAGS[@]}" 2>>"$LOG_FILE"
     elif command -v flatpak &>/dev/null && (flatpak info --user com.google.Chrome &>/dev/null 2>&1 || flatpak info com.google.Chrome &>/dev/null 2>&1); then
         log "Using Google Chrome flatpak in fullscreen app mode"
-        flatpak run com.google.Chrome "${CHROME_FLAGS[@]}" 2>>"$LOG_FILE"
+        flatpak run --device=all com.google.Chrome "${CHROME_FLAGS[@]}" 2>>"$LOG_FILE"
     else
         # Fallback: Steam built-in browser (B closes the window)
         log "WARNING: No Chromium/Chrome found — falling back to Steam browser"

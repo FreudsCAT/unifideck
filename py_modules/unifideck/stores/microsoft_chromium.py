@@ -63,16 +63,91 @@ _BASE_FLAGS = [
 
 # ── Environment helpers ───────────────────────────────────────────────────────
 
+_SESSION_ENV_KEYS = (
+    "DISPLAY",
+    "WAYLAND_DISPLAY",
+    "GAMESCOPE_WAYLAND_DISPLAY",
+    "DBUS_SESSION_BUS_ADDRESS",
+    "XAUTHORITY",
+    "XDG_RUNTIME_DIR",
+    "XDG_SESSION_TYPE",
+    "XDG_CURRENT_DESKTOP",
+)
+
+
+def _detect_session_env(uid: int, home: str) -> Dict[str, str]:
+    """Detect the active graphical session env for Steam / gamescope.
+
+    Decky's backend often runs as a service without the real gaming-mode
+    display variables.  Mirror Ubisoft's proven strategy: seed from our own
+    env, then fill missing values from a live Steam/gamescope process.
+    """
+    result: Dict[str, str] = {}
+
+    for key in _SESSION_ENV_KEYS:
+        value = os.environ.get(key)
+        if value:
+            result[key] = value
+
+    try:
+        for proc_name in ("steam", "gamescope-session", "gamescope"):
+            pids = subprocess.run(
+                ["pgrep", "-u", str(uid), "-x", proc_name],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            ).stdout.strip().split("\n")
+            for pid in pids:
+                pid = pid.strip()
+                if not pid:
+                    continue
+                try:
+                    with open(f"/proc/{pid}/environ", "rb") as f:
+                        env_bytes = f.read()
+                    for entry in env_bytes.split(b"\x00"):
+                        decoded = entry.decode("utf-8", errors="replace")
+                        if "=" not in decoded:
+                            continue
+                        key, value = decoded.split("=", 1)
+                        if key in _SESSION_ENV_KEYS and key not in result and value:
+                            result[key] = value
+                    if result.get("DISPLAY") or result.get("WAYLAND_DISPLAY"):
+                        logger.info(
+                            f"[MS] Session env detected from PID {pid} ({proc_name}): "
+                            f"DISPLAY={result.get('DISPLAY')} "
+                            f"WAYLAND_DISPLAY={result.get('WAYLAND_DISPLAY')}"
+                        )
+                        return result
+                except (PermissionError, FileNotFoundError, OSError):
+                    continue
+    except Exception as e:
+        logger.debug(f"[MS] Session env detection error: {e}")
+
+    if not result.get("DISPLAY") and not result.get("WAYLAND_DISPLAY"):
+        result["DISPLAY"] = ":0"
+    if not result.get("XDG_RUNTIME_DIR"):
+        result["XDG_RUNTIME_DIR"] = f"/run/user/{uid}"
+    if (
+        "DBUS_SESSION_BUS_ADDRESS" not in result
+        and os.path.exists(f"/run/user/{uid}/bus")
+    ):
+        result["DBUS_SESSION_BUS_ADDRESS"] = f"unix:path=/run/user/{uid}/bus"
+    if "XAUTHORITY" not in result:
+        xauth_files = glob.glob(f"/run/user/{uid}/xauth_*")
+        if xauth_files:
+            result["XAUTHORITY"] = xauth_files[0]
+        elif os.path.exists(os.path.join(home, ".Xauthority")):
+            result["XAUTHORITY"] = os.path.join(home, ".Xauthority")
+
+    return result
+
+
 def clean_env() -> dict:
     """Return a clean environment for launching Chromium/flatpak.
 
-    - Strips ``LD_LIBRARY_PATH`` / ``LD_PRELOAD`` (PluginLoader bundles
-      its own OpenSSL which conflicts with system libraries).
-    - Detects the correct ``DISPLAY`` for gaming mode (gamescope) vs desktop.
-    - Injects ``XDG_RUNTIME_DIR``, ``DBUS_SESSION_BUS_ADDRESS``
-      (PluginLoader is a systemd service without a display session).
-    - Finds the real ``XAUTHORITY`` file (SteamOS uses a randomly-named
-      file in ``/run/user/<uid>/``).
+    - Strips ``LD_LIBRARY_PATH`` / ``LD_PRELOAD``.
+    - Detects the real Steam/gamescope session env when Decky lacks it.
+    - Seeds Steam window env defaults so gaming mode can surface the window.
     - Clears ``GTK_MODULES`` to suppress canberra-gtk-module warnings.
     """
     home = str(pathlib.Path.home())
@@ -81,23 +156,11 @@ def clean_env() -> dict:
         k: v for k, v in os.environ.items()
         if k not in ("LD_LIBRARY_PATH", "LD_PRELOAD")
     }
-    # Gaming mode: gamescope uses a different DISPLAY than :0
-    if "DISPLAY" not in env:
-        # Check for gamescope nested display
-        gamescope_display = os.environ.get("GAMESCOPE_WAYLAND_DISPLAY")
-        if gamescope_display:
-            env["DISPLAY"] = ":1"  # gamescope typically exposes :1
-        else:
-            env["DISPLAY"] = ":0"
+    env.update(_detect_session_env(uid, home))
     env.setdefault("XDG_RUNTIME_DIR", f"/run/user/{uid}")
-    env.setdefault("DBUS_SESSION_BUS_ADDRESS", f"unix:path=/run/user/{uid}/bus")
-    # XAUTHORITY: SteamOS uses a randomly-named file in /run/user/<uid>/
-    if "XAUTHORITY" not in env:
-        xauth_files = glob.glob(f"/run/user/{uid}/xauth_*")
-        if xauth_files:
-            env["XAUTHORITY"] = xauth_files[0]
-        elif os.path.exists(os.path.join(home, ".Xauthority")):
-            env["XAUTHORITY"] = os.path.join(home, ".Xauthority")
+    env.setdefault("SteamGameId", "0")
+    env.setdefault("STEAM_COMPAT_APP_ID", "0")
+    env.setdefault("SteamAppId", "0")
     env["GTK_MODULES"] = ""
     return env
 
@@ -121,6 +184,12 @@ class ChromiumBrowser:
         self.cdp_port  = cdp_port
         self.locale_fn = locale_fn or (lambda: "en-US")
         self.process: Optional[subprocess.Popen] = None
+
+    def is_running(self) -> bool:
+        """Return True when the auth Chromium instance is still alive."""
+        if self.process is not None and self.process.poll() is None:
+            return True
+        return self._get_browser_ws_url() is not None
 
     def _singleton_paths(self) -> List[str]:
         """Return Chromium singleton artifacts for the shared profile."""
@@ -325,6 +394,7 @@ class ChromiumBrowser:
 
         args = cmd + [
             f"--app={auth_url}",
+            "--class=unifideck-auth",
             f"--remote-debugging-port={self.cdp_port}",
             f"--user-data-dir={PROFILE_DIR}",
         ] + _BASE_FLAGS + [
@@ -334,8 +404,13 @@ class ChromiumBrowser:
             f"--lang={self.locale_fn().split('-')[0]}",
         ]
 
-        logger.info(f"[MS] Launching Chromium: {' '.join(args[:6])}...")
-        logger.info(f"[MS] Chromium env DISPLAY={clean_env().get('DISPLAY')}")
+        env = clean_env()
+        logger.info(f"[MS] Launching Chromium: {' '.join(args[:7])}...")
+        logger.info(
+            f"[MS] Chromium env DISPLAY={env.get('DISPLAY')} "
+            f"WAYLAND_DISPLAY={env.get('WAYLAND_DISPLAY')} "
+            f"SteamAppId={env.get('SteamAppId')}"
+        )
 
         stderr_fh = None
         try:
@@ -348,8 +423,8 @@ class ChromiumBrowser:
                 args,
                 stdout=subprocess.DEVNULL,
                 stderr=stderr_fh if stderr_fh else subprocess.DEVNULL,
-                env=clean_env(),
-                start_new_session=True,
+                env=env,
+                preexec_fn=os.setpgrp,
             )
             logger.info(f"[MS] Chromium PID: {self.process.pid}")
             return True
