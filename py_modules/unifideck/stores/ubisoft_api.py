@@ -26,9 +26,9 @@ logger = logging.getLogger(__name__)
 CLUB_APPID = "82b650c0-6cb3-40c0-9f41-25a53b62b206"
 CLUB_GENOME_ID = "42d07c95-9914-4450-8b38-267c4e462b21"
 CHROME_USERAGENT = (
-    "Mozilla/5.0 (X11; Linux x86_64) "
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "
-    "Chrome/120.0.0.0 Safari/537.36"
+    "Chrome/131.0.0.0 Safari/537.36"
 )
 UBI_REQUESTED_PLATFORM_TYPE = "uplay"
 UBI_CONNECT_ORIGIN = "https://connect.ubisoft.com"
@@ -73,9 +73,39 @@ class UbisoftAPIClient:
     and GraphQL library queries. No CLI tool or browser popup needed.
     """
 
+    # Default backoff when Ubisoft returns 429 and no Retry-After header
+    _DEFAULT_RATE_LIMIT_SECS = 900  # 15 minutes
+
     def __init__(self):
         self.tokens: Optional[Dict[str, Any]] = None
+        self._rate_limited_until: float = 0.0  # Unix timestamp
         self._load_tokens()
+
+    def _is_rate_limited(self) -> bool:
+        """Return True if we are currently in a rate-limit backoff window."""
+        if time.time() < self._rate_limited_until:
+            remaining = int(self._rate_limited_until - time.time())
+            logger.warning(
+                f"[Ubisoft API] Rate-limited — {remaining}s remaining before retry"
+            )
+            return True
+        return False
+
+    def _set_rate_limit(self, resp_headers: dict = None) -> None:
+        """Set the rate-limit backoff window from a 429 response."""
+        retry_after = None
+        if resp_headers:
+            raw = resp_headers.get("Retry-After") or resp_headers.get("retry-after")
+            if raw:
+                try:
+                    retry_after = int(raw)
+                except (ValueError, TypeError):
+                    pass
+        wait = retry_after if retry_after and retry_after > 0 else self._DEFAULT_RATE_LIMIT_SECS
+        self._rate_limited_until = time.time() + wait
+        logger.warning(
+            f"[Ubisoft API] 429 received — backing off for {wait}s"
+        )
 
     # ========================================================================
     # Token Persistence
@@ -150,6 +180,8 @@ class UbisoftAPIClient:
             "Referer": UBI_CONNECT_REFERER,
             "Ubi-RequestedPlatformType": UBI_REQUESTED_PLATFORM_TYPE,
             "Accept-Language": "en-US,en;q=0.5",
+            "Accept-Encoding": "gzip, deflate, br",
+            "Host": "public-ubiservices.ubi.com",
         })
         return headers
 
@@ -200,6 +232,14 @@ class UbisoftAPIClient:
             On 2FA required: {"success": True, "requires_2fa": True, "2fa_ticket": "...", "2fa_method": "..."}
             On failure: {"success": False, "error": "..."}
         """
+        if self._is_rate_limited():
+            remaining = int(self._rate_limited_until - time.time())
+            mins = max(1, remaining // 60)
+            return {
+                "success": False,
+                "error": f"Ubisoft rate limit active. Please wait ~{mins} minutes and try again.",
+            }
+
         try:
             credentials = base64.b64encode(f"{email}:{password}".encode()).decode()
             headers = self._session_headers()
@@ -216,9 +256,18 @@ class UbisoftAPIClient:
                 ) as resp:
                     status = resp.status
                     ubi_challenge = resp.headers.get("Ubi-Challenge")
+                    resp_headers = dict(resp.headers)
                     body, parse_error = await self._read_json_response(
                         resp, "Login step 1"
                     )
+                if status == 429:
+                    self._set_rate_limit(resp_headers)
+                    remaining = int(self._rate_limited_until - time.time())
+                    mins = max(1, remaining // 60)
+                    return {
+                        "success": False,
+                        "error": f"Ubisoft rate limit active. Please wait ~{mins} minutes and try again.",
+                    }
                 if parse_error:
                     return {"success": False, "error": parse_error}
 
@@ -400,6 +449,10 @@ class UbisoftAPIClient:
         ticket = self.tokens.get("ticket", "")
         session_id = self.tokens.get("sessionId", "")
 
+        if self._is_rate_limited():
+            logger.info("[Ubisoft API] Skipping refresh — rate-limited")
+            return False
+
         if ticket:
             try:
                 headers = self._session_headers()
@@ -414,6 +467,9 @@ class UbisoftAPIClient:
                         headers=headers,
                         timeout=aiohttp.ClientTimeout(total=15),
                     ) as resp:
+                        if resp.status == 429:
+                            self._set_rate_limit(dict(resp.headers))
+                            return False
                         if resp.status == 200:
                             body, parse_error = await self._read_json_response(
                                 resp, "Refresh ticket"
@@ -511,6 +567,10 @@ class UbisoftAPIClient:
         if not self.has_tokens():
             return False
 
+        if self._is_rate_limited():
+            # Don't hit the API when rate-limited; assume token is still valid
+            return True
+
         try:
             # Use PUT /v3/profiles/sessions as a lightweight validation
             headers = self._session_headers()
@@ -526,6 +586,9 @@ class UbisoftAPIClient:
                     headers=headers,
                     timeout=aiohttp.ClientTimeout(total=5),
                 ) as resp:
+                    if resp.status == 429:
+                        self._set_rate_limit(dict(resp.headers))
+                        return True  # Assume valid rather than clearing tokens
                     if resp.status == 200:
                         body, parse_error = await self._read_json_response(
                             resp, "Validate ticket"
