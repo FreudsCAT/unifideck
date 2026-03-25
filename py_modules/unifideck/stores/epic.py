@@ -178,9 +178,8 @@ class EpicConnector(Store):
 
                     # Auto-sync library after successful auth
                     if self.plugin_instance:
-                        logger.info("[EPIC] Starting automatic library sync...")
-                        await self.plugin_instance.sync_libraries()
-                        logger.info("[EPIC] ✓ Library sync completed!")
+                        logger.info("[EPIC] Queueing automatic library sync...")
+                        asyncio.create_task(self.plugin_instance.request_auth_sync())
                 else:
                     logger.error(f"[EPIC] Auto-auth failed: {result.get('error')}")
             else:

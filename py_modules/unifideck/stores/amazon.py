@@ -174,7 +174,7 @@ class AmazonConnector(Store):
                 # Trigger auto-sync if plugin instance available
                 if self.plugin_instance:
                     logger.info("[Amazon] Triggering library sync after auth")
-                    asyncio.create_task(self.plugin_instance.force_sync_libraries())
+                    asyncio.create_task(self.plugin_instance.request_auth_sync(force=True))
                     
                 return {'success': True, 'message': 'Authenticated successfully'}
             else:

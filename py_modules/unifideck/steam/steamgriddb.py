@@ -20,6 +20,9 @@ from py_modules.unifideck.steam.steam_utils import get_logged_in_steam_user
 
 logger = logging.getLogger(__name__)
 
+STEAMGRIDDB_METADATA_TIMEOUT = 15
+STEAMGRIDDB_SEARCH_TIMEOUT = 20
+
 try:
     from steamgrid import SteamGridDB
     STEAMGRIDDB_AVAILABLE = True
@@ -102,8 +105,12 @@ class SteamGridDBClient:
 
         try:
             loop = asyncio.get_running_loop()
-            # Run blocking synchronous call in thread pool
-            results = await loop.run_in_executor(None, self.client.search_game, title)
+            # Run blocking synchronous call in thread pool with a timeout so one hung SGDB lookup
+            # cannot stall an entire artwork batch.
+            results = await asyncio.wait_for(
+                loop.run_in_executor(None, self.client.search_game, title),
+                timeout=STEAMGRIDDB_SEARCH_TIMEOUT,
+            )
             
             if not results or len(results) == 0:
                 return None
@@ -142,6 +149,10 @@ class SteamGridDBClient:
             logger.debug(f"Found SteamGridDB ID {game_id} for '{title}' (first result fallback)")
             return game_id
             
+        except asyncio.TimeoutError:
+            logger.warning(f"SteamGridDB search timed out for '{title}'")
+        except asyncio.CancelledError:
+            raise
         except Exception as e:
             logger.error(f"Error searching for game '{title}': {e}")
             
@@ -204,6 +215,7 @@ class SteamGridDBClient:
             save_path: Local path to save the image
             timeout: Timeout in seconds for the download (default 30s)
         """
+        tmp_path = f"{save_path}.tmp"
         try:
             # Temporarily disable SSL verification to work around certificate validation issues
             # TODO: Fix properly by updating system CA certificates or certifi package
@@ -213,8 +225,10 @@ class SteamGridDBClient:
                 async with session.get(url) as response:
                     if response.status == 200:
                         content = await response.read()
-                        with open(save_path, 'wb') as f:
+                        Path(save_path).parent.mkdir(parents=True, exist_ok=True)
+                        with open(tmp_path, 'wb') as f:
                             f.write(content)
+                        os.replace(tmp_path, save_path)
                         logger.info(f"Downloaded image to {save_path}")
                         return True
                     else:
@@ -222,8 +236,16 @@ class SteamGridDBClient:
         except asyncio.TimeoutError:
             logger.warning(f"Timeout downloading image from {url}")
             return False
+        except asyncio.CancelledError:
+            raise
         except Exception as e:
             logger.error(f"Error downloading image: {e}")
+        finally:
+            try:
+                if os.path.exists(tmp_path):
+                    os.unlink(tmp_path)
+            except OSError:
+                pass
 
         return False
 
@@ -277,7 +299,10 @@ class SteamGridDBClient:
             api_tasks.append(loop.run_in_executor(None, self.client.get_icons_by_gameid, [sgdb_game_id]))
             task_labels.append('icons')
 
-            api_results = await asyncio.gather(*api_tasks, return_exceptions=True)
+            api_results = await asyncio.wait_for(
+                asyncio.gather(*api_tasks, return_exceptions=True),
+                timeout=STEAMGRIDDB_SEARCH_TIMEOUT,
+            )
 
             # Map results back to named variables
             fetched = dict(zip(task_labels, api_results))
@@ -339,6 +364,10 @@ class SteamGridDBClient:
                     if result is True and task_types[i] in results:
                         results[task_types[i]] = True
 
+        except asyncio.TimeoutError:
+            logger.warning(f"Timed out fetching SGDB image metadata for game {sgdb_game_id}")
+        except asyncio.CancelledError:
+            raise
         except Exception as e:
             logger.error(f"Error fetching grid images: {e}")
 
@@ -379,7 +408,8 @@ class SteamGridDBClient:
         
         try:
             connector = aiohttp.TCPConnector(ssl=False)
-            async with aiohttp.ClientSession(connector=connector) as session:
+            client_timeout = aiohttp.ClientTimeout(total=STEAMGRIDDB_METADATA_TIMEOUT)
+            async with aiohttp.ClientSession(connector=connector, timeout=client_timeout) as session:
                 # Use Galaxy GamesDB API which provides vertical_cover (box art)
                 gamesdb_url = f"https://gamesdb.gog.com/platforms/gog/external_releases/{gog_product_id}"
                 
@@ -537,7 +567,8 @@ class SteamGridDBClient:
         
         try:
             connector = aiohttp.TCPConnector(ssl=False)
-            async with aiohttp.ClientSession(connector=connector) as session:
+            client_timeout = aiohttp.ClientTimeout(total=STEAMGRIDDB_METADATA_TIMEOUT)
+            async with aiohttp.ClientSession(connector=connector, timeout=client_timeout) as session:
                 # Use GOG GamesDB API for Amazon games (same as Heroic!)
                 # This provides vertical_cover with proper dimensions
                 gamesdb_url = f"https://gamesdb.gog.com/platforms/amazon/external_releases/{amazon_game_id}"
@@ -622,7 +653,8 @@ class SteamGridDBClient:
             url = f"https://store.steampowered.com/api/storesearch/?term={encoded}&cc=US"
             
             connector = aiohttp.TCPConnector(ssl=False)
-            async with aiohttp.ClientSession(connector=connector) as session:
+            client_timeout = aiohttp.ClientTimeout(total=STEAMGRIDDB_METADATA_TIMEOUT)
+            async with aiohttp.ClientSession(connector=connector, timeout=client_timeout) as session:
                 async with session.get(url) as response:
                     if response.status != 200:
                         return None
@@ -737,8 +769,11 @@ class SteamGridDBClient:
             else:
                 tasks.append(asyncio.sleep(0, result={'urls': {}})) # Dummy to keep parallel structure simple
                 
-            # Wait for both
-            steam_res, store_res = await asyncio.gather(*tasks)
+            # Wait for both metadata sources without letting one hung request block the whole game.
+            steam_res, store_res = await asyncio.wait_for(
+                asyncio.gather(*tasks),
+                timeout=STEAMGRIDDB_METADATA_TIMEOUT,
+            )
             
             # Save Steam ID if found (for reference, but don't prioritize Steam artwork)
             if steam_res.get('steam_id'):
@@ -815,6 +850,8 @@ class SteamGridDBClient:
                     if res is True:
                         art_type = download_tasks[i][1]
                         downloaded.add(art_type)
+                    elif isinstance(res, Exception):
+                        logger.debug(f"Download failed for {download_tasks[i][1]} artwork on {title}: {res}")
             
             # Build Source Log
             # e.g. "STEAM:grid+logo GOG:hero+icon"
@@ -904,6 +941,10 @@ class SteamGridDBClient:
             if downloaded:
                 final_result['success'] = True
 
+        except asyncio.TimeoutError:
+            logger.warning(f"Artwork pipeline timed out for {title}")
+        except asyncio.CancelledError:
+            raise
         except Exception as e:
             logger.error(f"Error in artwork pipeline for {title}: {e}")
 

@@ -653,6 +653,7 @@ const Content: FC = () => {
   };
 
   const [syncing, setSyncing] = useState(false);
+  const [syncCancelling, setSyncCancelling] = useState(false);
   const [syncCooldown, setSyncCooldown] = useState(false);
   const [cooldownSeconds, setCooldownSeconds] = useState(0);
   const [deleting, setDeleting] = useState(false);
@@ -701,6 +702,40 @@ const Content: FC = () => {
 
   // Store polling interval ref to allow cleanup on unmount
   const pollIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const cancelRequestedRef = useRef(false);
+
+  const clearSyncPolling = () => {
+    if (pollIntervalRef.current) {
+      clearInterval(pollIntervalRef.current);
+      pollIntervalRef.current = null;
+    }
+  };
+
+  const isRestartPending = (progress?: Partial<SyncProgress> | null) =>
+    Boolean(progress?.restart_pending);
+
+  const isTerminalSyncState = (progress?: Partial<SyncProgress> | null) =>
+    progress?.status === "complete" ||
+    progress?.status === "error" ||
+    (progress?.status === "cancelled" && !isRestartPending(progress));
+
+  const startSyncCooldown = () => {
+    setSyncCooldown(true);
+    setCooldownSeconds(5);
+
+    const cooldownInterval = setInterval(() => {
+      setCooldownSeconds((prev) => {
+        if (prev <= 1) {
+          clearInterval(cooldownInterval);
+          setSyncCooldown(false);
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+
+    setTimeout(() => setSyncProgress(null), 5000);
+  };
 
   // Cleanup polling interval on unmount
   useEffect(() => {
@@ -736,22 +771,15 @@ const Content: FC = () => {
             status.sync_progress,
           );
 
-          // Restore syncing state
+          cancelRequestedRef.current = false;
           setSyncing(true);
+          setSyncCancelling(Boolean(status.sync_progress.is_cancelling));
           setSyncProgress(status.sync_progress);
 
-          // Deduplication flag (scoped to this restore)
           let completionHandled = false;
 
-          // Clear any existing polling interval before creating a new one
-          if (pollIntervalRef.current) {
-            clearInterval(pollIntervalRef.current);
-            console.log(
-              "[Unifideck] Cleared existing polling interval before restore",
-            );
-          }
+          clearSyncPolling();
 
-          // Resume polling for progress
           pollIntervalRef.current = setInterval(async () => {
             try {
               const result = await call<
@@ -761,8 +789,8 @@ const Content: FC = () => {
 
               if (result.success) {
                 setSyncProgress(result);
+                setSyncCancelling(Boolean(result.is_cancelling));
 
-                // Log progress updates
                 if (result.current_game.label) {
                   const progress =
                     result.current_phase === "artwork"
@@ -778,66 +806,43 @@ const Content: FC = () => {
                   );
                 }
 
-                // Stop polling when complete, error, or cancelled
-                if (
-                  result.status === "complete" ||
-                  result.status === "error" ||
-                  result.status === "cancelled"
-                ) {
-                  if (pollIntervalRef.current) {
-                    clearInterval(pollIntervalRef.current);
-                    pollIntervalRef.current = null;
-                  }
+                if (isTerminalSyncState(result)) {
+                  clearSyncPolling();
                   setSyncing(false);
+                  setSyncCancelling(false);
 
-                  // Only run completion logic once
                   if (!completionHandled) {
                     completionHandled = true;
+                    const wasUserCancel = cancelRequestedRef.current;
+                    cancelRequestedRef.current = false;
 
                     if (result.status === "complete") {
                       console.log(
                         `[Unifideck] ✓ Sync completed: ${result.synced_games} games processed`,
                       );
-                    } else if (result.status === "cancelled") {
-                      console.log(`[Unifideck] ⚠ Sync cancelled by user`);
-                    }
-
-                    // Show restart notification only when NEW games were added to shortcuts.vdf
-                    if (result.status === "complete") {
                       const addedGames = Number(result.current_game?.values?.added) || 0;
-
                       if (addedGames > 0) {
                         showModal(<SteamRestartModal closeModal={() => {}} />);
                       }
+                      startSyncCooldown();
                     } else if (result.status === "cancelled") {
-                      toaster.toast({
-                        title: t("toasts.syncCancelled"),
-                        body: result.current_game.label
-                          ? t(
-                              result.current_game.label,
-                              result.current_game.values,
-                            )
-                          : t("toasts.syncCancelled"),
-                        duration: 5000,
-                      });
+                      console.log(`[Unifideck] ⚠ Sync cancelled by user`);
+                      if (!wasUserCancel) {
+                        toaster.toast({
+                          title: t("toasts.syncCancelled"),
+                          body: result.current_game.label
+                            ? t(
+                                result.current_game.label,
+                                result.current_game.values,
+                              )
+                            : t("toasts.syncCancelled"),
+                          duration: 5000,
+                        });
+                      }
+                      setSyncProgress(null);
+                    } else {
+                      startSyncCooldown();
                     }
-
-                    // Start cooldown
-                    setSyncCooldown(true);
-                    setCooldownSeconds(5);
-
-                    const cooldownInterval = setInterval(() => {
-                      setCooldownSeconds((prev) => {
-                        if (prev <= 1) {
-                          clearInterval(cooldownInterval);
-                          setSyncCooldown(false);
-                          return 0;
-                        }
-                        return prev - 1;
-                      });
-                    }, 1000);
-
-                    setTimeout(() => setSyncProgress(null), 5000);
                   }
                 }
               }
@@ -860,7 +865,6 @@ const Content: FC = () => {
 
   const checkStoreStatus = async () => {
     try {
-      // Add timeout wrapper
       const timeoutPromise = new Promise((_, reject) =>
         setTimeout(() => reject(new Error("Status check timed out")), 10000),
       );
@@ -883,7 +887,17 @@ const Content: FC = () => {
       const result = (await Promise.race([
         checkPromise,
         timeoutPromise,
-      ])) as any;
+      ])) as {
+        success: boolean;
+        epic: string;
+        gog: string;
+        amazon: string;
+        ubisoft: string;
+        microsoft: string;
+        error?: string;
+        legendary_installed?: boolean;
+        nile_installed?: boolean;
+      };
 
       if (result.success) {
         const nextStoreStatus = {
@@ -896,13 +910,12 @@ const Content: FC = () => {
         setStoreStatus(nextStoreStatus);
         tabManager.setConnectedStores(nextStoreStatus);
 
-        // Show warning if legendary not installed
         if (result.legendary_installed === false) {
           console.warn(
             "[Unifideck] Legendary CLI not installed - Epic Games won't work",
           );
         }
-        // Show warning if nile not installed
+
         if (result.nile_installed === false) {
           console.warn(
             "[Unifideck] Nile CLI not installed - Amazon Games won't work",
@@ -977,11 +990,7 @@ const Content: FC = () => {
             "get_sync_progress",
           );
 
-          if (
-            progress.status === "complete" ||
-            progress.status === "error" ||
-            progress.status === "cancelled"
-          ) {
+          if (isTerminalSyncState(progress)) {
             return progress;
           }
 
@@ -1029,27 +1038,22 @@ const Content: FC = () => {
     force: boolean = false,
     resyncArtwork: boolean = false,
   ) => {
-    // Prevent concurrent syncs
-    if (syncing || syncCooldown) {
+    if (syncing || syncCancelling || syncCooldown) {
       console.log("[Unifideck] Sync already in progress or on cooldown");
       return;
     }
 
+    cancelRequestedRef.current = false;
     setSyncing(true);
+    setSyncCancelling(false);
     setSyncProgress(null);
 
-    // Deduplication flag to prevent multiple polls handling completion
     let completionHandled = false;
+    let startCooldownAfterSync = true;
 
-    // Clear any existing polling interval before creating a new one
-    if (pollIntervalRef.current) {
-      clearInterval(pollIntervalRef.current);
-      console.log(
-        "[Unifideck] Cleared existing polling interval before manual sync",
-      );
-    }
+    clearSyncPolling();
+    console.log("[Unifideck] Cleared existing polling interval before manual sync");
 
-    // Start polling for progress
     pollIntervalRef.current = setInterval(async () => {
       try {
         const result = await call<[], { success?: boolean } & SyncProgress>(
@@ -1058,8 +1062,8 @@ const Content: FC = () => {
 
         if (result.success) {
           setSyncProgress(result);
+          setSyncCancelling(Boolean(result.is_cancelling));
 
-          // Log progress updates
           if (result.current_game.label) {
             const progress =
               result.current_phase === "artwork"
@@ -1073,21 +1077,13 @@ const Content: FC = () => {
           }
         }
 
-        // Stop polling when complete, error, or cancelled
-        if (
-          result.status === "complete" ||
-          result.status === "error" ||
-          result.status === "cancelled"
-        ) {
-          if (pollIntervalRef.current) {
-            clearInterval(pollIntervalRef.current);
-            pollIntervalRef.current = null;
-          }
+        if (isTerminalSyncState(result)) {
+          clearSyncPolling();
           setSyncing(false);
+          setSyncCancelling(false);
 
-          // CRITICAL FIX: Only run completion logic ONCE
           if (!completionHandled) {
-            completionHandled = true; // Set flag IMMEDIATELY
+            completionHandled = true;
 
             if (result.status === "complete") {
               console.log(
@@ -1095,27 +1091,25 @@ const Content: FC = () => {
               );
             } else if (result.status === "cancelled") {
               console.log(`[Unifideck] ⚠ Sync cancelled by user`);
+              startCooldownAfterSync = false;
+              if (!cancelRequestedRef.current) {
+                toaster.toast({
+                  title: t("toasts.syncCancelled"),
+                  body: result.current_game.label
+                    ? t(result.current_game.label, result.current_game.values)
+                    : t("toasts.syncCancelled"),
+                  duration: 5000,
+                });
+              }
             }
 
-            // Show restart notification only when NEW games were added to shortcuts.vdf
             if (result.status === "complete") {
               const addedGames = Number(result.current_game?.values?.added) || 0;
-
               if (addedGames > 0) {
                 showModal(<SteamRestartModal closeModal={() => {}} />);
               }
-
-            } else if (result.status === "cancelled") {
-              toaster.toast({
-                title: t("toasts.syncCancelled"),
-                body: result.current_game.label
-                  ? t(result.current_game.label, result.current_game.values)
-                  : t("toasts.syncCancelled"),
-                duration: 5000,
-              });
             }
           } else {
-            // Completion already handled by another poll - do nothing
             console.log(
               `[Unifideck] (duplicate poll detected, skipping completion logic)`,
             );
@@ -1124,10 +1118,9 @@ const Content: FC = () => {
       } catch (error) {
         console.error("[Unifideck] Error getting sync progress:", error);
       }
-    }, 500); // Poll every 500ms
+    }, 500);
 
     try {
-      // Use force_sync_libraries for force sync (rewrites shortcuts and compatibility data)
       console.log(
         `[Unifideck] Starting ${force ? "force " : ""}sync...${
           force ? ` (resync artwork: ${resyncArtwork})` : ""
@@ -1136,7 +1129,6 @@ const Content: FC = () => {
 
       let syncResult;
       if (force) {
-        // Force sync with resyncArtwork parameter
         syncResult = await call<
           [boolean],
           {
@@ -1148,10 +1140,11 @@ const Content: FC = () => {
             added_count: number;
             artwork_count: number;
             updated_count?: number;
+            cancelled?: boolean;
+            restart_pending?: boolean;
           }
         >("force_sync_libraries", resyncArtwork);
       } else {
-        // Regular sync
         syncResult = await call<
           [],
           {
@@ -1163,8 +1156,15 @@ const Content: FC = () => {
             added_count: number;
             artwork_count: number;
             updated_count?: number;
+            cancelled?: boolean;
+            restart_pending?: boolean;
           }
         >("sync_libraries");
+      }
+
+      if (syncResult.cancelled && !syncResult.restart_pending) {
+        startCooldownAfterSync = false;
+        return;
       }
 
       console.log("[Unifideck] ========== SYNC COMPLETED ==========");
@@ -1187,32 +1187,20 @@ const Content: FC = () => {
       await refreshLibraryData();
     } catch (error) {
       console.error("[Unifideck] Manual sync failed:", error);
-      if (pollIntervalRef.current) {
-        clearInterval(pollIntervalRef.current);
-        pollIntervalRef.current = null;
-      }
+      clearSyncPolling();
       setSyncing(false);
+      setSyncCancelling(false);
     } finally {
       setSyncing(false);
+      setSyncCancelling(false);
 
-      // START COOLDOWN
-      setSyncCooldown(true);
-      setCooldownSeconds(5);
-
-      // Countdown timer
-      const cooldownInterval = setInterval(() => {
-        setCooldownSeconds((prev) => {
-          if (prev <= 1) {
-            clearInterval(cooldownInterval);
-            setSyncCooldown(false);
-            return 0;
-          }
-          return prev - 1;
-        });
-      }, 1000);
-
-      // Clear progress after cooldown
-      setTimeout(() => setSyncProgress(null), 5000);
+      if (startCooldownAfterSync) {
+        startSyncCooldown();
+      } else {
+        setSyncCooldown(false);
+        setCooldownSeconds(0);
+        setSyncProgress(null);
+      }
     }
   };
 
@@ -1720,27 +1708,32 @@ const Content: FC = () => {
   };
 
   const handleCancelSync = async () => {
+    if (syncCancelling) {
+      return;
+    }
+
+    cancelRequestedRef.current = true;
+    setSyncCancelling(true);
+
     try {
-      // Clear polling interval immediately when user cancels
-      if (pollIntervalRef.current) {
-        clearInterval(pollIntervalRef.current);
-        pollIntervalRef.current = null;
-        console.log("[Unifideck] Cleared polling interval on user cancel");
-      }
-
-      // Clear progress bar immediately
-      setSyncProgress(null);
-      setSyncing(false);
-
       const result = await call<
         [],
         {
           success: boolean;
           message: string;
+          restart_pending?: boolean;
         }
       >("cancel_sync");
 
       if (result.success) {
+        clearSyncPolling();
+        setSyncProgress(null);
+        setSyncing(false);
+        setSyncCancelling(false);
+        setSyncCooldown(false);
+        setCooldownSeconds(0);
+        cancelRequestedRef.current = false;
+
         console.log("[Unifideck] Sync cancelled");
         toaster.toast({
           title: t("toasts.syncCancelled").toUpperCase(),
@@ -1748,9 +1741,13 @@ const Content: FC = () => {
           duration: 3000,
         });
       } else {
+        cancelRequestedRef.current = false;
+        setSyncCancelling(false);
         console.log("[Unifideck] Cancel failed:", result.message);
       }
     } catch (error) {
+      cancelRequestedRef.current = false;
+      setSyncCancelling(false);
       console.error("[Unifideck] Error cancelling sync:", error);
     }
   };
@@ -1799,7 +1796,8 @@ const Content: FC = () => {
 
           {/* Library Sync Section */}
           <LibrarySync
-            syncing={syncing}
+            syncing={syncing || syncCancelling}
+            syncCancelling={syncCancelling}
             syncCooldown={syncCooldown}
             cooldownSeconds={cooldownSeconds}
             syncProgress={syncProgress}
@@ -1837,7 +1835,7 @@ const Content: FC = () => {
                 <ButtonItem
                   layout="below"
                   onClick={handleDeleteAll}
-                  disabled={syncing || deleting || syncCooldown}
+                  disabled={syncing || syncCancelling || deleting || syncCooldown}
                 >
                   <div
                     style={{

@@ -105,7 +105,8 @@ _legendary_installed_cache = {
 _legendary_info_cache = {}  # Per-game info cache
 
 # Artwork sync timeout (seconds per game)
-ARTWORK_FETCH_TIMEOUT = 90
+ARTWORK_FETCH_TIMEOUT = 45
+ARTWORK_FETCH_MAX_CONCURRENCY = 10
 
 # Offline mode detection cache
 _offline_cache: Dict[str, Any] = {'is_offline': None, 'checked_at': 0.0}
@@ -1653,6 +1654,17 @@ class SyncProgress:
 
 
 
+
+@dataclass(frozen=True)
+class SyncRequest:
+    """Describe a sync request so lifecycle orchestration can restart it safely."""
+
+    kind: str
+    source: str = "manual"
+    fetch_artwork: bool = True
+    resync_artwork: bool = False
+
+
 # ============================================================================
 # EpicConnector - Now imported from py_modules.unifideck.stores.epic module
 # ============================================================================
@@ -2135,10 +2147,16 @@ microsoft_client=self.microsoft,
             logger.warning("[INIT] SteamGridDB not available - skipping")
             self.steamgriddb = None
 
-        # Global lock to prevent concurrent syncs
+        # Global locks/state for sync orchestration
         self._sync_lock = asyncio.Lock()
+        self._sync_request_lock = asyncio.Lock()
         self._is_syncing = False  # Flag for checking without blocking
         self._cancel_sync = False  # Flag for cancelling in-progress sync
+        self._sync_task: Optional[asyncio.Task] = None
+        self._active_sync_request: Optional[SyncRequest] = None
+        self._pending_auth_sync_request: Optional[SyncRequest] = None
+        self._sync_cancel_reason: Optional[str] = None
+        self._sync_cache_snapshot: Dict[str, Tuple[bool, bytes]] = {}
 
         # Initialize download queue with plugin directory for finding binaries
         logger.info(f"[INIT] Initializing DownloadQueue with plugin_dir={DECKY_PLUGIN_DIR}")
@@ -2445,32 +2463,284 @@ microsoft_client=self.microsoft,
                 logger.info(f"  [{count}/{self.sync_progress.artwork_total}] {game.store.upper()}: {game.title} [{source_str}{sgdb}] ({art_count}/5)")
 
                 return {'success': result.get('success', False), 'game': game, 'artwork_count': art_count}
+            except asyncio.CancelledError:
+                raise
             except Exception as e:
                 logger.error(f"Error fetching artwork for {game.title}: {e}")
-                await self.sync_progress.increment_artwork(game.title)
+                try:
+                    await self.sync_progress.increment_artwork(game.title)
+                except Exception as increment_error:
+                    logger.error(f"Failed to update artwork progress for {game.title}: {increment_error}")
                 return {'success': False, 'error': str(e), 'game': game}
 
-    async def sync_libraries(self, fetch_artwork: bool = True) -> Dict[str, Any]:
-        """Sync all game libraries to shortcuts.vdf and optionally fetch artwork - with global lock protection"""
+    async def _run_artwork_download_batch(
+        self,
+        games: List[Any],
+        games_missing_types: Dict[int, Optional[set]],
+        *,
+        resync_artwork: bool = False,
+    ) -> List[Any]:
+        """Run one artwork download pass with bounded concurrency and cancellable tasks."""
+        semaphore = asyncio.Semaphore(ARTWORK_FETCH_MAX_CONCURRENCY)
+        tasks = [
+            asyncio.create_task(
+                self.fetch_artwork_with_progress(
+                    game,
+                    semaphore,
+                    only_types=None if resync_artwork else games_missing_types.get(game.app_id),
+                )
+            )
+            for game in games
+        ]
 
-        # Check if sync already running (non-blocking check)
-        if self._is_syncing:
-            logger.warning("Sync already in progress, ignoring request")
+        try:
+            return await asyncio.gather(*tasks, return_exceptions=True)
+        finally:
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            if tasks:
+                await asyncio.gather(*tasks, return_exceptions=True)
+
+    def _sync_cache_paths(self) -> Dict[str, Path]:
+        return {
+            'steam_appid': get_steam_appid_cache_path(),
+            'steam_real_appid': get_steam_real_appid_cache_path(),
+            'steam_metadata': get_steam_metadata_cache_path(),
+            'unifidb_metadata': get_unifidb_metadata_cache_path(),
+            'metacritic_metadata': get_metacritic_metadata_cache_path(),
+            'artwork_attempts': get_artwork_attempts_cache_path(),
+        }
+
+    def _capture_sync_cache_snapshot(self) -> None:
+        snapshot: Dict[str, Tuple[bool, bytes]] = {}
+        for name, cache_path in self._sync_cache_paths().items():
+            try:
+                if cache_path.exists():
+                    snapshot[name] = (True, cache_path.read_bytes())
+                else:
+                    snapshot[name] = (False, b'')
+            except Exception as e:
+                logger.warning(f"Failed to snapshot {cache_path.name}: {e}")
+                snapshot[name] = (False, b'')
+        self._sync_cache_snapshot = snapshot
+
+    def _restore_sync_cache_snapshot(self) -> None:
+        for name, cache_path in self._sync_cache_paths().items():
+            existed, data = self._sync_cache_snapshot.get(name, (False, b''))
+            try:
+                if existed:
+                    cache_path.parent.mkdir(parents=True, exist_ok=True)
+                    cache_path.write_bytes(data)
+                elif cache_path.exists():
+                    cache_path.unlink()
+            except Exception as e:
+                logger.warning(f"Failed to restore {cache_path.name}: {e}")
+        self._sync_cache_snapshot = {}
+
+    def _clear_sync_cache_snapshot(self) -> None:
+        self._sync_cache_snapshot = {}
+
+    def _sync_in_progress_response(self, force: bool = False) -> Dict[str, Any]:
+        payload = {
+            'success': False,
+            'error': 'errors.syncInProgress',
+            'epic_count': 0,
+            'gog_count': 0,
+            'amazon_count': 0,
+            'ubisoft_count': 0,
+            'microsoft_count': 0,
+            'added_count': 0,
+            'artwork_count': 0,
+            'restart_pending': self._pending_auth_sync_request is not None,
+        }
+        if force:
+            payload['updated_count'] = 0
+        return payload
+
+    def _sync_progress_payload(self) -> Dict[str, Any]:
+        payload = self.sync_progress.to_dict()
+        payload['restart_pending'] = self._pending_auth_sync_request is not None
+        payload['is_cancelling'] = self._sync_cancel_reason is not None and self._is_syncing
+        return payload
+
+    def _set_cancelled_progress(self, restart_pending: bool = False) -> None:
+        self.sync_progress.reset()
+        self.sync_progress.status = 'cancelled'
+        self.sync_progress.current_game = {
+            'label': 'sync.cancelledByUser',
+            'values': {},
+        }
+        self.sync_progress.error = None
+        self.sync_progress.current_phase = 'sync'
+
+    def _merge_sync_requests(
+        self,
+        existing: Optional[SyncRequest],
+        incoming: SyncRequest,
+    ) -> SyncRequest:
+        if existing is None:
+            return incoming
+        if existing.kind == 'force' or incoming.kind == 'force':
+            return SyncRequest(
+                kind='force',
+                source=incoming.source,
+                resync_artwork=existing.resync_artwork or incoming.resync_artwork,
+            )
+        return SyncRequest(
+            kind='sync',
+            source=incoming.source,
+            fetch_artwork=existing.fetch_artwork or incoming.fetch_artwork,
+        )
+
+    def _start_sync_task_locked(self, request: SyncRequest) -> asyncio.Task:
+        task = asyncio.create_task(self._run_sync_request(request))
+        self._sync_task = task
+        self._active_sync_request = request
+        self._is_syncing = True
+        self._cancel_sync = False
+        self._sync_cancel_reason = None
+        return task
+
+    async def _run_sync_request(self, request: SyncRequest) -> Dict[str, Any]:
+        result: Dict[str, Any]
+        self._capture_sync_cache_snapshot()
+
+        try:
+            if request.kind == 'force':
+                result = await self._force_sync_libraries_impl(
+                    resync_artwork=request.resync_artwork
+                )
+            else:
+                result = await self._sync_libraries_impl(fetch_artwork=request.fetch_artwork)
+
+            if result.get('cancelled'):
+                restart_pending = self._pending_auth_sync_request is not None
+                self._restore_sync_cache_snapshot()
+                self._set_cancelled_progress(restart_pending=restart_pending)
+                result['success'] = False
+                result['error'] = 'errors.syncCancelled'
+                result['restart_pending'] = restart_pending
+                return result
+
+            self._clear_sync_cache_snapshot()
+            result['restart_pending'] = self._pending_auth_sync_request is not None
+            return result
+        except asyncio.CancelledError:
+            restart_pending = self._pending_auth_sync_request is not None
+            self._restore_sync_cache_snapshot()
+            self._set_cancelled_progress(restart_pending=restart_pending)
             return {
                 'success': False,
-                'error': 'errors.syncInProgress',
-                'epic_count': 0,
-                'gog_count': 0,
-                'amazon_count': 0,
-                'microsoft_count': 0,
-                'added_count': 0,
-                'artwork_count': 0
+                'cancelled': True,
+                'error': 'errors.syncCancelled',
+                'restart_pending': restart_pending,
             }
+        except Exception as e:
+            self._clear_sync_cache_snapshot()
+            logger.error(f"Sync request failed: {e}", exc_info=True)
+            self.sync_progress.status = 'error'
+            self.sync_progress.error = str(e)
+            return {'success': False, 'error': str(e), 'restart_pending': False}
+        finally:
+            async with self._sync_request_lock:
+                if self._sync_task is asyncio.current_task():
+                    next_request = self._pending_auth_sync_request
+                    self._pending_auth_sync_request = None
+                    self._sync_task = None
+                    self._active_sync_request = None
+                    self._is_syncing = False
+                    self._cancel_sync = False
+                    self._sync_cancel_reason = None
+                    if next_request is not None:
+                        self._start_sync_task_locked(next_request)
 
-        # Acquire lock (prevents concurrent syncs)
+    async def _await_sync_chain(self, task: asyncio.Task) -> Dict[str, Any]:
+        result = await task
+        while result.get('restart_pending'):
+            async with self._sync_request_lock:
+                next_task = self._sync_task
+            if next_task is None or next_task is task:
+                break
+            task = next_task
+            result = await task
+        return result
+
+    async def request_auth_sync(
+        self,
+        *,
+        force: bool = False,
+        resync_artwork: bool = False,
+        fetch_artwork: bool = True,
+    ) -> Dict[str, Any]:
+        request = SyncRequest(
+            kind='force' if force else 'sync',
+            source='auth',
+            fetch_artwork=fetch_artwork,
+            resync_artwork=resync_artwork,
+        )
+
+        task_to_cancel: Optional[asyncio.Task] = None
+        async with self._sync_request_lock:
+            active_task = self._sync_task
+            if active_task is None or active_task.done():
+                self._start_sync_task_locked(request)
+                return {'success': True, 'queued': False, 'restart_pending': False}
+
+            if self._sync_cancel_reason == 'user':
+                logger.info('Ignoring auth-triggered sync while user cancellation is in progress')
+                return {
+                    'success': True,
+                    'queued': False,
+                    'restart_pending': False,
+                    'suppressed': True,
+                }
+
+            merge_base = self._pending_auth_sync_request or self._active_sync_request
+            self._pending_auth_sync_request = self._merge_sync_requests(merge_base, request)
+            self._cancel_sync = True
+            self._sync_cancel_reason = 'auth_restart'
+            task_to_cancel = active_task
+
+        if task_to_cancel is not None:
+            task_to_cancel.cancel()
+        return {'success': True, 'queued': True, 'restart_pending': True}
+
+    async def sync_libraries(self, fetch_artwork: bool = True, *, source: str = 'manual') -> Dict[str, Any]:
+        """Queue or run a regular sync request."""
+        if source == 'auth':
+            return await self.request_auth_sync(fetch_artwork=fetch_artwork)
+
+        request = SyncRequest(kind='sync', source=source, fetch_artwork=fetch_artwork)
+        async with self._sync_request_lock:
+            active_task = self._sync_task
+            if active_task is not None and not active_task.done():
+                logger.warning('Sync already in progress, ignoring request')
+                return self._sync_in_progress_response()
+            task = self._start_sync_task_locked(request)
+
+        return await self._await_sync_chain(task)
+
+    async def force_sync_libraries(self, resync_artwork: bool = False, *, source: str = 'manual') -> Dict[str, Any]:
+        """Queue or run a force sync request."""
+        if source == 'auth':
+            return await self.request_auth_sync(force=True, resync_artwork=resync_artwork)
+
+        request = SyncRequest(kind='force', source=source, resync_artwork=resync_artwork)
+        async with self._sync_request_lock:
+            active_task = self._sync_task
+            if active_task is not None and not active_task.done():
+                logger.warning('Sync already in progress, ignoring force sync request')
+                return self._sync_in_progress_response(force=True)
+            task = self._start_sync_task_locked(request)
+
+        return await self._await_sync_chain(task)
+
+    async def _sync_libraries_impl(self, fetch_artwork: bool = True) -> Dict[str, Any]:
+        """Sync all game libraries to shortcuts.vdf and optionally fetch artwork."""
+
         async with self._sync_lock:
-            self._is_syncing = True
-            self._cancel_sync = False  # Reset cancel flag
+            self._cancel_sync = False
             try:
                 logger.info("Syncing libraries...")
 
@@ -2917,18 +3187,17 @@ microsoft_client=self.microsoft,
                     games_missing_types = {}
                     for game in all_games:
                         if game.app_id in seen_app_ids:
-                            str_id = str(game.app_id)
                             # Check what's actually missing on disk right now
                             missing = await self.get_missing_artwork_types(game.app_id)
                             if not missing:
                                 pass  # Complete artwork, skip
-                            elif str_id in artwork_attempts and artwork_attempts[str_id] == sorted(missing):
+                            elif str(game.app_id) in artwork_attempts and artwork_attempts[str(game.app_id)] == sorted(missing):
                                 # Same types were missing last time — sources still won't have them
                                 skipped_artwork_attempts += 1
                             else:
                                 # New game, or missing types changed (partial progress) — retry
                                 games_needing_art.append(game)
-                                games_missing_types[str_id] = missing
+                                games_missing_types[game.app_id] = missing
                             seen_app_ids.discard(game.app_id)  # Only check once per app_id
 
                     if skipped_artwork_attempts > 0:
@@ -2939,6 +3208,10 @@ microsoft_client=self.microsoft,
                         logger.info(f"Fetching artwork for {len(games_needing_art)} games...")
                         self.sync_progress.current_phase = "artwork"
                         self.sync_progress.status = "artwork"
+                        self.sync_progress.current_game = {
+                            "label": "sync.downloadingArtwork",
+                            "values": {"game": games_needing_art[0].title}
+                        }
                         self.sync_progress.artwork_total = len(games_needing_art)
                         self.sync_progress.artwork_synced = 0
 
@@ -2952,13 +3225,8 @@ microsoft_client=self.microsoft,
                              return {'success': False, 'cancelled': True}
 
                         # === PASS 1: Initial artwork fetch ===
-                        logger.info(f"  [Pass 1] Starting parallel download (concurrency: 30)")
-                        semaphore = asyncio.Semaphore(30)
-                        tasks = []
-                        for game in games_needing_art:
-                            only_types = games_missing_types.get(str(game.app_id))
-                            tasks.append(self.fetch_artwork_with_progress(game, semaphore, only_types=only_types))
-                        results = await asyncio.gather(*tasks, return_exceptions=True)
+                        logger.info(f"  [Pass 1] Starting parallel download (concurrency: {ARTWORK_FETCH_MAX_CONCURRENCY})")
+                        results = await self._run_artwork_download_batch(games_needing_art, games_missing_types)
 
                         # Count successes (results are now dicts)
                         pass1_success = sum(1 for r in results if isinstance(r, dict) and r.get('success'))
@@ -2981,11 +3249,7 @@ microsoft_client=self.microsoft,
                             self.sync_progress.artwork_total = len(games_to_retry)
                             self.sync_progress.artwork_synced = 0
 
-                            retry_tasks = []
-                            for game in games_to_retry:
-                                only_types = games_missing_types.get(str(game.app_id))
-                                retry_tasks.append(self.fetch_artwork_with_progress(game, semaphore, only_types=only_types))
-                            await asyncio.gather(*retry_tasks, return_exceptions=True)
+                            await self._run_artwork_download_batch(games_to_retry, games_missing_types)
 
                             # Count recovered games (can't use await in generator expression)
                             pass2_recovered = 0
@@ -3591,7 +3855,7 @@ microsoft_client=self.microsoft,
                     logger.info(f"[FORCE SYNC PHASE] Checking artwork for {len(all_games)} games (resync_artwork={resync_artwork})")
                     self.sync_progress.status = "checking_artwork"
                     self.sync_progress.current_game = {
-                        "label": "sync.queueRefresh" if resync_artwork else "sync.checking_artwork",
+                        "label": "sync.queueRefresh" if resync_artwork else "sync.checkingExistingArtwork",
                         "values": {}
                     }
                     
@@ -3622,6 +3886,10 @@ microsoft_client=self.microsoft,
                             logger.info(f"Force Sync: Fetching artwork for {len(games_needing_art)} games...")
                             self.sync_progress.current_phase = "artwork"
                             self.sync_progress.status = "artwork"
+                            self.sync_progress.current_game = {
+                                "label": "sync.downloadingArtwork",
+                                "values": {"game": games_needing_art[0].title}
+                            }
                             self.sync_progress.artwork_total = len(games_needing_art)
                             self.sync_progress.artwork_synced = 0
 
@@ -3635,14 +3903,12 @@ microsoft_client=self.microsoft,
                                  return {'success': False, 'cancelled': True}
 
                             # === PASS 1: Initial artwork fetch ===
-                            logger.info(f"  [Pass 1] Starting parallel download (concurrency: 30)")
-                            semaphore = asyncio.Semaphore(30)
-                            tasks = []
-                            for game in games_needing_art:
-                                # Pass only_types if in gap-fill mode (resync_artwork=False)
-                                only_types = games_missing_types.get(game.app_id) if not resync_artwork else None
-                                tasks.append(self.fetch_artwork_with_progress(game, semaphore, only_types=only_types))
-                            results = await asyncio.gather(*tasks, return_exceptions=True)
+                            logger.info(f"  [Pass 1] Starting parallel download (concurrency: {ARTWORK_FETCH_MAX_CONCURRENCY})")
+                            results = await self._run_artwork_download_batch(
+                                games_needing_art,
+                                games_missing_types,
+                                resync_artwork=resync_artwork,
+                            )
 
                             # Count successes (results are now dicts)
                             pass1_success = sum(1 for r in results if isinstance(r, dict) and r.get('success'))
@@ -3665,12 +3931,11 @@ microsoft_client=self.microsoft,
                                 self.sync_progress.artwork_total = len(games_to_retry)
                                 self.sync_progress.artwork_synced = 0
 
-                                retry_tasks = []
-                                for game in games_to_retry:
-                                    # Pass only_types if in gap-fill mode (resync_artwork=False)
-                                    only_types = games_missing_types.get(game.app_id) if not resync_artwork else None
-                                    retry_tasks.append(self.fetch_artwork_with_progress(game, semaphore, only_types=only_types))
-                                await asyncio.gather(*retry_tasks, return_exceptions=True)
+                                await self._run_artwork_download_batch(
+                                    games_to_retry,
+                                    games_missing_types,
+                                    resync_artwork=resync_artwork,
+                                )
 
                                 # Count recovered games (can't use await in generator expression)
                                 pass2_recovered = 0
@@ -3791,9 +4056,6 @@ microsoft_client=self.microsoft,
                 self.sync_progress.error = str(e)
                 return {'success': False, 'error': str(e)}
 
-            finally:
-                self._is_syncing = False
-                self._cancel_sync = False
 
     async def start_background_sync(self) -> Dict[str, Any]:
         """Start background sync service"""
@@ -3812,29 +4074,38 @@ microsoft_client=self.microsoft,
             return {'success': False, 'error': 'errors.backgroundSyncDisabled'}
 
     async def get_sync_progress(self) -> Dict[str, Any]:
-        """Get current sync progress for frontend polling"""
-        return self.sync_progress.to_dict()
+        """Get current sync progress for frontend polling."""
+        return self._sync_progress_payload()
 
     async def get_sync_status(self) -> Dict[str, Any]:
-        """Check if a sync operation is currently running"""
+        """Check if a sync operation is currently running."""
+        is_syncing = self._sync_task is not None and not self._sync_task.done()
         return {
-            'is_syncing': self._is_syncing,
-            'sync_progress': self.sync_progress.to_dict() if self._is_syncing else None
+            'is_syncing': is_syncing,
+            'sync_progress': self._sync_progress_payload() if is_syncing else None,
         }
 
     async def cancel_sync(self) -> Dict[str, Any]:
-        """Request cancellation of current sync operation"""
-        if not self._is_syncing:
-            return {
-                'success': False,
-                'message': 'No sync operation in progress'
-            }
+        """Cancel the current sync and wait for backend cleanup to finish."""
+        async with self._sync_request_lock:
+            task = self._sync_task
+            if task is None or task.done():
+                return {
+                    'success': False,
+                    'message': 'No sync operation in progress',
+                }
 
-        logger.warning("Sync cancellation requested by user")
-        self._cancel_sync = True
+            logger.warning('Sync cancellation requested by user')
+            self._pending_auth_sync_request = None
+            self._cancel_sync = True
+            self._sync_cancel_reason = 'user'
+
+        task.cancel()
+        result = await task
         return {
             'success': True,
-            'message': 'Sync cancellation requested - will stop after current operation'
+            'message': 'Sync cancelled',
+            'restart_pending': bool(result.get('restart_pending')) if isinstance(result, dict) else False,
         }
 
     async def _get_epic_executable(self, game_id: str) -> Optional[str]:
