@@ -114,7 +114,8 @@
     "authenticate": "Войти",
     "legendaryNotInstalled": "⚠️ Установка Epic Games CLI...",
     "nileNotInstalled": "⚠️ CLI Amazon Games не найден",
-    "error": "Ошибка - Проверьте логи"
+    "error": "Ошибка - Проверьте логи",
+    "microsoftStore": "Microsoft Store"
   },
   "librarySync": {
     "title": "СИНХРОНИЗАЦИЯ БИБЛИОТЕКИ",
@@ -176,7 +177,9 @@
     "no": "Нет",
     "amazonUpdateTitle": "Требуется полная повторная загрузка",
     "amazonUpdateDescription": "Для обновления Amazon требуется полностью заново загрузить {{title}}. Это может занять некоторое время. Продолжить?",
-    "updateConfirm": "Обновить"
+    "updateConfirm": "Обновить",
+    "steamRestartCleanupTitle": "Очистка завершена!",
+    "steamRestartCleanupDescription": "Перезапустите Steam, чтобы полностью удалить удалённые игры и иллюстрации"
   },
   "toasts": {
     "downloadStarted": "Загрузка начата. Проверьте UNIFIDECK > Загрузки",
@@ -257,7 +260,8 @@
       "prerequisitesReady": "Компоненты готовы",
       "prerequisitesInstalled": "Необходимые компоненты игры установлены",
       "prerequisitesFailed": "Предупреждение о компонентах",
-      "prerequisitesFailedMessage": "Необходимые компоненты могли быть установлены некорректно"
+      "prerequisitesFailedMessage": "Необходимые компоненты могли быть установлены некорректно",
+      "browserRequired": "Требуется Microsoft Edge"
     },
     "updateComplete": "Обновление завершено!",
     "updateCompleteMessage": "Обновление {{title}} завершено.",
@@ -334,7 +338,8 @@
     "cleaningOrphanedArtwork": "Очистка оставшихся без привязки обложек...",
     "retryingMissingArtwork": "Повторная попытка для {{synced}}/{{total}} игр с отсутствующими обложками...",
     "savingShortcuts": "Сохранение ярлыков...",
-    "completed": "Синхронизация завершена! {{added}} добавлено, арт {{artwork}}."
+    "completed": "Синхронизация завершена! {{added}} добавлено, арт {{artwork}}.",
+    "fetchingStore": "Загрузка {{store}}…"
   },
   "force_sync": {
     "migratingOldInstallations": "Принудит. синхр.: Миграция установок...",
@@ -360,7 +365,8 @@
     "epic": "Epic",
     "gog": "GOG",
     "amazon": "Amazon",
-    "ubisoft": "Ubisoft"
+    "ubisoft": "Ubisoft",
+    "microsoft": "Microsoft"
   },
   "unifiedLibrary": {
     "error": "Ошибка Unifideck",
@@ -469,5 +475,32 @@
     "thisGame": "эта игра",
     "game": "Игра",
     "unknown": "Неизвестно"
+  },
+  "microsoft": {
+    "notCompatible": "Формат этой игры несовместим со SteamOS",
+    "playOnCloud": "Играть в облаке",
+    "xcloudStreaming": "Xbox Cloud Gaming",
+    "signInMessage": "Войдите в свою учётную запись Microsoft / Xbox",
+    "accountConnected": "Учётная запись Microsoft подключена",
+    "loggedOut": "Выход из Microsoft Store",
+    "xcloudNotInstalled": "Игры xCloud не установлены локально",
+    "chromiumRequired": "Требуется Microsoft Edge",
+    "chromiumRequiredMessage": "Xbox Cloud Gaming требует Microsoft Edge. Установить автоматически? (Это нужно сделать только один раз.)",
+    "chromiumInstallButton": "Установить Microsoft Edge",
+    "chromiumInstalling": "Установка Microsoft Edge...",
+    "chromiumInstalled": "Microsoft Edge установлен!",
+    "chromiumAlreadyInstalled": "Совместимый браузер уже установлен",
+    "chromiumInstallFailed": "Не удалось установить Microsoft Edge. Установите вручную: flatpak install com.microsoft.Edge",
+    "chromiumInstallTimeout": "Время установки Microsoft Edge истекло. Проверьте подключение к интернету.",
+    "flatpakNotFound": "Flatpak недоступен в этой системе",
+    "signInRequired": "Войдите, чтобы играть",
+    "browserAlreadyInstalled": "Совместимый браузер уже установлен",
+    "browserInstalled": "Microsoft Edge успешно установлен!",
+    "browserInstallFailed": "Не удалось установить Microsoft Edge. Установите вручную: flatpak install com.microsoft.Edge"
+  },
+  "authSuccess": {
+    "title": "Аутентификация",
+    "titleStore": "{{store}} — Аутентификация ✓",
+    "subtitle": "Нажмите кнопку B, чтобы закрыть это окно"
   }
 }

@@ -157,8 +157,19 @@ class UbisoftConnector(Store):
 
         try:
             valid = await self.api.validate_ticket()
-            logger.info(f"[Ubisoft] Ticket valid: {valid}")
-            return valid
+            if valid:
+                logger.info("[Ubisoft] Ticket valid")
+                return True
+
+            # Ticket expired — attempt refresh before reporting unavailable
+            logger.info("[Ubisoft] Ticket invalid, attempting refresh")
+            refreshed = await self.api.refresh_token()
+            if refreshed:
+                logger.info("[Ubisoft] Token refreshed successfully")
+                return True
+
+            logger.info("[Ubisoft] Token refresh failed — not available")
+            return False
         except Exception as e:
             logger.warning(f"[Ubisoft] Availability check error: {e}")
             return False
@@ -1490,14 +1501,35 @@ class UbisoftConnector(Store):
         ]
         free_entries = await self._fetch_free_to_play_manifest_entries()
 
+        # When there is no local UPC configuration cache at all (no
+        # template prefix run yet, no auth prefix), we have nothing to
+        # corroborate against.  In that case, trust the GraphQL API as
+        # the authoritative source -- treat ALL graphql_entries as valid
+        # rather than filtering them down to an empty corroborated set.
+        # Free entries are still appended to surface any F2P titles the
+        # API might miss.
+        has_local_corroboration = bool(
+            raw_config_entries or parsed_entries or corroborated_graphql
+        )
+        if has_local_corroboration:
+            effective_graphql = corroborated_graphql
+        else:
+            effective_graphql = graphql_entries
+            logger.info(
+                "[Ubisoft] No local config cache -- trusting all "
+                f"{len(graphql_entries)} GraphQL entries as visible"
+            )
+
         manifest: List[Dict[str, Any]] = []
-        for group in (free_entries, corroborated_graphql, raw_config_entries, parsed_entries):
+        for group in (free_entries, effective_graphql, raw_config_entries, parsed_entries):
             for entry in group:
                 self._merge_visible_manifest_entry(manifest, entry)
 
         logger.info(
             f"[Ubisoft] Auto visible manifest built {len(manifest)} entries "
-            f"({len(corroborated_graphql)} GraphQL, {len(raw_config_entries)} config, "
+            f"({len(effective_graphql)} GraphQL"
+            f"{' (all, no local cache)' if not has_local_corroboration else ''}"
+            f", {len(raw_config_entries)} config, "
             f"{len(parsed_entries)} parsed, {len(free_entries)} free)"
         )
         return manifest
@@ -2857,7 +2889,7 @@ class UbisoftConnector(Store):
                             'exe': f'"{launcher_path}"',
                             'StartDir': f'"{os.path.dirname(launcher_path)}"',
                             'LaunchOptions': launch_options,
-                            'IsHidden': 0,
+                            'IsHidden': 1,
                             'AllowDesktopConfig': 1,
                             'OpenVR': 0,
                             'tags': {'0': 'Ubisoft'},
@@ -2931,7 +2963,7 @@ class UbisoftConnector(Store):
                     'exe': f'"{launcher_path}"',
                     'StartDir': f'"{os.path.dirname(launcher_path)}"',
                     'LaunchOptions': launch_options,
-                    'IsHidden': 0,
+                    'IsHidden': 1,
                     'AllowDesktopConfig': 1,
                     'OpenVR': 0,
                     'tags': {'0': 'Ubisoft'},

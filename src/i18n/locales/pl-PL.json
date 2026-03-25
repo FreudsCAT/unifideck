@@ -114,7 +114,8 @@
     "authenticate": "Zaloguj się",
     "legendaryNotInstalled": "⚠️ Instalowanie Epic Games CLI...",
     "nileNotInstalled": "⚠️ Nie znaleziono Amazon Games CLI",
-    "error": "Błąd - Sprawdź logi"
+    "error": "Błąd - Sprawdź logi",
+    "microsoftStore": "Microsoft Store"
   },
   "librarySync": {
     "title": "SYNCHRONIZACJA BIBLIOTEKI",
@@ -176,7 +177,9 @@
     "no": "Nie",
     "amazonUpdateTitle": "Wymagane pełne ponowne pobranie",
     "amazonUpdateDescription": "Aktualizacje Amazon wymagają pełnego ponownego pobrania {{title}}. Może to chwilę potrwać. Kontynuować?",
-    "updateConfirm": "Aktualizuj"
+    "updateConfirm": "Aktualizuj",
+    "steamRestartCleanupTitle": "Porządkowanie zakończone!",
+    "steamRestartCleanupDescription": "Uruchom ponownie Steam, aby całkowicie usunąć usunięte gry i grafiki"
   },
   "toasts": {
     "downloadStarted": "Pobieranie Rozpoczęte. Sprawdź UNIFIDECK > Pobieranie",
@@ -257,7 +260,8 @@
       "prerequisitesReady": "Wymagania wstępne gotowe",
       "prerequisitesInstalled": "Wymagania wstępne gry zainstalowane",
       "prerequisitesFailed": "Ostrzeżenie o wymaganiach",
-      "prerequisitesFailedMessage": "Wymagania wstępne mogły nie zostać poprawnie zainstalowane"
+      "prerequisitesFailedMessage": "Wymagania wstępne mogły nie zostać poprawnie zainstalowane",
+      "browserRequired": "Wymagany Microsoft Edge"
     },
     "updateComplete": "Aktualizacja zakończona!",
     "updateCompleteMessage": "Zaktualizowano {{title}}.",
@@ -334,7 +338,8 @@
     "cleaningOrphanedArtwork": "Czyszczenie osieroconych grafik...",
     "retryingMissingArtwork": "Ponawianie {{synced}}/{{total}} gier z brakującymi grafikami...",
     "savingShortcuts": "Zapisywanie skrótów...",
-    "completed": "Sync zakończony! {{added}} dodano, grafika {{artwork}}."
+    "completed": "Sync zakończony! {{added}} dodano, grafika {{artwork}}.",
+    "fetchingStore": "Pobieranie {{store}}…"
   },
   "force_sync": {
     "migratingOldInstallations": "Wymuszony sync: Migracja instalacji...",
@@ -360,7 +365,8 @@
     "epic": "Epic",
     "gog": "GOG",
     "amazon": "Amazon",
-    "ubisoft": "Ubisoft"
+    "ubisoft": "Ubisoft",
+    "microsoft": "Microsoft"
   },
   "unifiedLibrary": {
     "error": "Błąd Unifideck",
@@ -469,5 +475,32 @@
     "thisGame": "ta gra",
     "game": "Gra",
     "unknown": "Nieznane"
+  },
+  "microsoft": {
+    "notCompatible": "Format tej gry nie jest zgodny ze SteamOS",
+    "playOnCloud": "Graj w chmurze",
+    "xcloudStreaming": "Xbox Cloud Gaming",
+    "signInMessage": "Zaloguj się kontem Microsoft / Xbox",
+    "accountConnected": "Konto Microsoft połączone",
+    "loggedOut": "Wylogowano z Microsoft Store",
+    "xcloudNotInstalled": "Gry xCloud nie są zainstalowane lokalnie",
+    "chromiumRequired": "Wymagany Microsoft Edge",
+    "chromiumRequiredMessage": "Xbox Cloud Gaming wymaga Microsoft Edge. Czy chcesz zainstalować go automatycznie? (Wystarczy zrobić to tylko raz.)",
+    "chromiumInstallButton": "Zainstaluj Microsoft Edge",
+    "chromiumInstalling": "Instalowanie Microsoft Edge...",
+    "chromiumInstalled": "Microsoft Edge został zainstalowany!",
+    "chromiumAlreadyInstalled": "Zgodna przeglądarka jest już zainstalowana",
+    "chromiumInstallFailed": "Instalacja Microsoft Edge nie powiodła się. Zainstaluj ręcznie: flatpak install com.microsoft.Edge",
+    "chromiumInstallTimeout": "Przekroczono limit czasu instalacji Microsoft Edge. Sprawdź połączenie z internetem.",
+    "flatpakNotFound": "Flatpak nie jest dostępny w tym systemie",
+    "signInRequired": "Zaloguj się, aby grać",
+    "browserAlreadyInstalled": "Zgodna przeglądarka jest już zainstalowana",
+    "browserInstalled": "Microsoft Edge został zainstalowany pomyślnie!",
+    "browserInstallFailed": "Instalacja Microsoft Edge nie powiodła się. Zainstaluj ręcznie: flatpak install com.microsoft.Edge"
+  },
+  "authSuccess": {
+    "title": "Uwierzytelnianie",
+    "titleStore": "{{store}} — Uwierzytelnianie ✓",
+    "subtitle": "Naciśnij przycisk B, aby zamknąć to okno"
   }
 }

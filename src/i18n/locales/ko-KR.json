@@ -114,7 +114,8 @@
     "authenticate": "로그인",
     "legendaryNotInstalled": "⚠️ Epic Games CLI 설치 중...",
     "nileNotInstalled": "⚠️ Amazon Games CLI를 찾을 수 없습니다",
-    "error": "오류 - 로그 확인"
+    "error": "오류 - 로그 확인",
+    "microsoftStore": "Microsoft Store"
   },
   "librarySync": {
     "title": "라이브러리 동기화",
@@ -176,7 +177,9 @@
     "no": "아니요",
     "amazonUpdateTitle": "전체 재다운로드 필요",
     "amazonUpdateDescription": "Amazon 업데이트에는 {{title}} 전체를 다시 다운로드해야 합니다. 시간이 조금 걸릴 수 있습니다. 계속하시겠습니까?",
-    "updateConfirm": "업데이트"
+    "updateConfirm": "업데이트",
+    "steamRestartCleanupTitle": "정리 완료!",
+    "steamRestartCleanupDescription": "삭제된 게임과 아트워크를 완전히 제거하려면 Steam을 다시 시작하세요"
   },
   "toasts": {
     "downloadStarted": "다운로드가 시작되었습니다. UNIFIDECK > 다운로드를 확인하세요",
@@ -257,7 +260,8 @@
       "prerequisitesReady": "사전 요구 사항 준비 완료",
       "prerequisitesInstalled": "게임 사전 요구 사항이 설치되었습니다",
       "prerequisitesFailed": "사전 요구 사항 경고",
-      "prerequisitesFailedMessage": "사전 요구 사항이 올바르게 설치되지 않았을 수 있습니다"
+      "prerequisitesFailedMessage": "사전 요구 사항이 올바르게 설치되지 않았을 수 있습니다",
+      "browserRequired": "Microsoft Edge 필요"
     },
     "updateComplete": "업데이트 완료!",
     "updateCompleteMessage": "{{title}} 업데이트가 완료되었습니다.",
@@ -334,7 +338,8 @@
     "cleaningOrphanedArtwork": "고아 아트워크 정리 중...",
     "retryingMissingArtwork": "아트웍이 누락된 {{synced}}/{{total}}개 게임을 다시 시도하는 중...",
     "savingShortcuts": "바로가기 저장 중...",
-    "completed": "동기화 완료! {{added}} 추가, 아트워크 {{artwork}}."
+    "completed": "동기화 완료! {{added}} 추가, 아트워크 {{artwork}}.",
+    "fetchingStore": "{{store}} 가져오는 중…"
   },
   "force_sync": {
     "migratingOldInstallations": "강제 동기화: 설치 이전 중...",
@@ -360,7 +365,8 @@
     "epic": "Epic",
     "gog": "GOG",
     "amazon": "Amazon",
-    "ubisoft": "Ubisoft"
+    "ubisoft": "Ubisoft",
+    "microsoft": "Microsoft"
   },
   "unifiedLibrary": {
     "error": "Unifideck 오류",
@@ -469,5 +475,32 @@
     "thisGame": "이 게임",
     "game": "게임",
     "unknown": "알 수 없음"
+  },
+  "microsoft": {
+    "notCompatible": "이 게임의 포맷은 SteamOS와 호환되지 않습니다",
+    "playOnCloud": "클라우드에서 플레이",
+    "xcloudStreaming": "Xbox Cloud Gaming",
+    "signInMessage": "Microsoft / Xbox 계정으로 로그인",
+    "accountConnected": "Microsoft 계정이 연결되었습니다",
+    "loggedOut": "Microsoft Store에서 로그아웃되었습니다",
+    "xcloudNotInstalled": "xCloud 게임이 로컬에 설치되어 있지 않습니다",
+    "chromiumRequired": "Microsoft Edge 필요",
+    "chromiumRequiredMessage": "Xbox Cloud Gaming에는 Microsoft Edge가 필요합니다. 자동으로 설치하시겠습니까? (한 번만 수행하면 됩니다.)",
+    "chromiumInstallButton": "Microsoft Edge 설치",
+    "chromiumInstalling": "Microsoft Edge 설치 중...",
+    "chromiumInstalled": "Microsoft Edge가 설치되었습니다!",
+    "chromiumAlreadyInstalled": "호환되는 브라우저가 이미 설치되어 있습니다",
+    "chromiumInstallFailed": "Microsoft Edge 설치에 실패했습니다. 수동으로 설치하세요: flatpak install com.microsoft.Edge",
+    "chromiumInstallTimeout": "Microsoft Edge 설치 시간이 초과되었습니다. 인터넷 연결을 확인하세요.",
+    "flatpakNotFound": "이 시스템에서는 Flatpak을 사용할 수 없습니다",
+    "signInRequired": "플레이하려면 로그인하세요",
+    "browserAlreadyInstalled": "호환되는 브라우저가 이미 설치되어 있습니다",
+    "browserInstalled": "Microsoft Edge가 성공적으로 설치되었습니다!",
+    "browserInstallFailed": "Microsoft Edge 설치에 실패했습니다. 수동으로 설치하세요: flatpak install com.microsoft.Edge"
+  },
+  "authSuccess": {
+    "title": "인증",
+    "titleStore": "{{store}} — 인증 ✓",
+    "subtitle": "B 버튼을 눌러 이 창을 닫으세요"
   }
 }

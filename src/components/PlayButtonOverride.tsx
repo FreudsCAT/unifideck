@@ -23,6 +23,7 @@ import { useTranslation } from "react-i18next";
 import { updateSingleGameStatus } from "../tabs";
 import { setDownloadStateRef as setInterceptorDownloadState } from "../hooks/gameActionInterceptor";
 import { GOGLanguageSelectModal } from "./GOGLanguageSelectModal";
+import { launchAppWithConfiguredGamepad } from "../utils/controllerConfig";
 import {
   getShortcutRunGameId,
   isShortcutAppRunning,
@@ -570,10 +571,7 @@ const PlaySectionWrapperInner: FC<PlaySectionWrapperProps> = ({
         const extractUserParams = (opts: string): string => {
           return opts
             .replace(/\s*#%command%\s*$/g, "") // Strip Unifideck's #%command% suffix only (not user's bare %command%)
-            .replace(
-              new RegExp('"' + escapedStoreGameId + '"', "g"),
-              "",
-            ) // Remove quoted storeGameId only (preserves other quoted values)
+            .replace(new RegExp('"' + escapedStoreGameId + '"', "g"), "") // Remove quoted storeGameId only (preserves other quoted values)
             .replace(new RegExp(escapedStoreGameId, "g"), "") // bare id
             .replace(/\/\S+unifideck-launcher/g, "") // launcher path (unquoted)
             .replace(/\s{2,}/g, " ") // Collapse multiple spaces from removals
@@ -795,7 +793,11 @@ const PlaySectionWrapperInner: FC<PlaySectionWrapperProps> = ({
         // Ubisoft launcher-driven installs bypass the download queue.
         // Poll get_game_info periodically so Install -> Play updates without requiring navigation.
         // Also check if UPC is still running so we can clear the "Cancel" state.
-        if (gameInfo.store === "ubisoft" && !gameInfo.is_installed && !result.is_downloading) {
+        if (
+          gameInfo.store === "ubisoft" &&
+          !gameInfo.is_installed &&
+          !result.is_downloading
+        ) {
           ubisoftInstallPollTicksRef.current += 1;
           if (ubisoftInstallPollTicksRef.current % 10 === 0) {
             // Check if install session is still active
@@ -1050,12 +1052,22 @@ const PlaySectionWrapperInner: FC<PlaySectionWrapperProps> = ({
     const isUbisoft = gameInfo?.store === "ubisoft";
     showModal(
       <ConfirmModal
-        strTitle={t(isUbisoft ? "confirmModals.ubisoftInstallTitle" : "confirmModals.installTitle")}
+        strTitle={t(
+          isUbisoft
+            ? "confirmModals.ubisoftInstallTitle"
+            : "confirmModals.installTitle",
+        )}
         strDescription={t(
-          isUbisoft ? "confirmModals.ubisoftInstallDescription" : "confirmModals.installDescription",
+          isUbisoft
+            ? "confirmModals.ubisoftInstallDescription"
+            : "confirmModals.installDescription",
           { title: gameInfo?.title },
         )}
-        strOKButtonText={t(isUbisoft ? "confirmModals.ubisoftInstallConfirm" : "confirmModals.yes")}
+        strOKButtonText={t(
+          isUbisoft
+            ? "confirmModals.ubisoftInstallConfirm"
+            : "confirmModals.yes",
+        )}
         strCancelButtonText={t("confirmModals.no")}
         onOK={() => {
           handleInstall();
@@ -1118,10 +1130,7 @@ const PlaySectionWrapperInner: FC<PlaySectionWrapperProps> = ({
     // Kill actual game processes via backend
     call<[number], { success: boolean }>("stop_game_processes", appId).catch(
       (err) =>
-        console.error(
-          "[PlaySectionWrapper] stop_game_processes failed:",
-          err,
-        ),
+        console.error("[PlaySectionWrapper] stop_game_processes failed:", err),
     );
 
     // Tell Steam to terminate
@@ -1136,7 +1145,10 @@ const PlaySectionWrapperInner: FC<PlaySectionWrapperProps> = ({
         "capture_ubisoft_session",
         gameInfo.game_id,
       ).catch((err) =>
-        console.error("[PlaySectionWrapper] capture_ubisoft_session failed:", err),
+        console.error(
+          "[PlaySectionWrapper] capture_ubisoft_session failed:",
+          err,
+        ),
       );
     }
   };
@@ -1471,6 +1483,311 @@ const PlaySectionWrapperInner: FC<PlaySectionWrapperProps> = ({
     }
   };
 
+  // ========== XCLOUD STATE (Xbox Cloud Gaming — stream via browser) ==========
+  // Games tagged "xcloud" are playable via Xbox Cloud Gaming in the browser.
+  // The Play button opens xbox.com/play/launch/{productId} which starts streaming.
+  if (gameInfo.store_tags?.includes("xcloud")) {
+    const xcloudUrl = `https://www.xbox.com/play/launch/${gameInfo.game_id}`;
+    const msConnected = gameInfo.store_connected !== false;
+    return (
+      <Focusable
+        ref={wrapperRef}
+        data-unifideck-play-wrapper="true"
+        className={playSectionClassName || undefined}
+        flow-children="row"
+        style={{
+          display: "flex",
+          alignItems: "center",
+          width: "100%",
+          padding: "16px",
+          boxSizing: "border-box",
+          background: "rgba(14, 20, 27, 0.33)",
+          position: "relative" as const,
+          zIndex: 2,
+        }}
+      >
+        <style>{buttonStyles}</style>
+
+        {/* Play button — launches xCloud via Steam's RunGame (→ launcher → Chromium kiosk) */}
+        <DialogButton
+          className="unifideck-install-btn"
+          disabled={!msConnected}
+          onClick={async () => {
+            if (!msConnected) return;
+            try {
+              const launched = await launchAppWithConfiguredGamepad(appId);
+              if (launched) {
+                return;
+              }
+            } catch (e) {
+              console.error(
+                "[PlaySection] Microsoft launch preparation failed:",
+                e,
+              );
+            }
+
+            window.open(`steam://openurl/${xcloudUrl}`, "_blank");
+          }}
+          style={{
+            ...actionBtnStyle,
+            opacity: msConnected ? 1 : 0.4,
+          }}
+        >
+          <svg viewBox="0 0 24 24" fill="currentColor" width="1em" height="1em">
+            <path d="M8 5v14l11-7z" />
+          </svg>
+          {msConnected
+            ? t("microsoft.playOnCloud", "Play on Cloud")
+            : t("microsoft.signInRequired", "Sign in to play")}
+        </DialogButton>
+
+        {/* Restore the metadata slot so Last Played stays visible for xCloud */}
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: "32px",
+            marginLeft: "20px",
+            flex: "0 1 auto",
+          }}
+        >
+          <div>
+            <div
+              style={{
+                fontSize: "11px",
+                fontWeight: 600,
+                textTransform: "uppercase",
+                color: "#8f98a0",
+                letterSpacing: "0.08em",
+                lineHeight: "1",
+                marginBottom: "5px",
+              }}
+            >
+              {t("gameInfoPanel.labels.lastPlayed")}
+            </div>
+            <div style={{ fontSize: "14px", color: "#dcdedf" }}>
+              {formatLastPlayed(lastPlayedTimestamp)}
+            </div>
+          </div>
+        </div>
+
+        {/* Right icon buttons — always present for settings access */}
+        <div
+          style={{
+            display: "flex",
+            gap: "8px",
+            marginLeft: "auto",
+            flex: "0 0 auto",
+          }}
+        >
+          <DialogButton
+            onClick={() =>
+              window.SteamClient?.Apps?.ShowControllerConfigurator?.(appId)
+            }
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              width: "48px",
+              height: "48px",
+              minWidth: "48px",
+              padding: "0",
+              background: "rgba(255, 255, 255, 0.1)",
+              borderRadius: "4px",
+            }}
+          >
+            <svg
+              viewBox="35 31 31 24"
+              fill="currentColor"
+              width="28"
+              height="28"
+            >
+              <path
+                fillRule="evenodd"
+                d="M38.562 35.88C37.724 37.501 36.752 41.257 36.403 44.227C35.895 48.548 36.106 49.963 37.456 51.313C39.925 53.783 41.749 53.387 43.5 50C44.938 47.219 45.452 47 50.547 47C55.406 47 56.172 47.283 57.157 49.445C58.551 52.504 60.548 53.312 63.202 51.892C65.02 50.919 65.198 50.118 64.734 44.999C64.445 41.814 63.594 37.923 62.843 36.354C61.481 33.508 61.446 33.499 50.782 33.217L40.086 32.933 38.562 35.88zM40.037 36.931C39.254 38.395 39.394 39.251 40.618 40.475C41.506 41.363 42.71 41.93 43.295 41.735C45.057 41.148 46.359 38.377 45.691 36.636C44.829 34.391 41.298 34.575 40.037 36.931zM55.445 37.174C54.533 40.048 57.439 42.371 60.138 40.926C61.162 40.378 62 39.532 62 39.047C62 34.795 56.682 33.276 55.445 37.174z"
+              />
+            </svg>
+          </DialogButton>
+          <DialogButton
+            onClick={() =>
+              window.SteamClient?.Apps?.OpenAppSettingsDialog?.(
+                appId,
+                "general",
+              )
+            }
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              width: "48px",
+              height: "48px",
+              minWidth: "48px",
+              padding: "0",
+              background: "rgba(255, 255, 255, 0.1)",
+              borderRadius: "4px",
+            }}
+          >
+            <svg
+              viewBox="-32 -32 64 64"
+              fill="currentColor"
+              width="24"
+              height="24"
+            >
+              <path
+                fillRule="evenodd"
+                d="M-5.96-19.09L-5.79-26.37 5.79-26.37 5.96-19.09 9.29-17.71 14.56-22.74 22.74-14.56 17.71-9.29 19.09-5.96 26.37-5.79 26.37 5.79 19.09 5.96 17.71 9.29 22.74 14.56 14.56 22.74 9.29 17.71 5.96 19.09 5.79 26.37-5.79 26.37-5.96 19.09-9.29 17.71-14.56 22.74-22.74 14.56-17.71 9.29-19.09 5.96-26.37 5.79-26.37-5.79-19.09-5.96-17.71-9.29-22.74-14.56-14.56-22.74-9.29-17.71Z M9 0A9 9 0 1 0-9 0A9 9 0 1 0 9 0Z"
+              />
+            </svg>
+          </DialogButton>
+        </div>
+      </Focusable>
+    );
+  }
+
+  // ========== NOT COMPATIBLE STATE (UWP / MSIX-only MS Store games) ==========
+  // These games are synced to Steam for library completeness but cannot be
+  // downloaded or run on Linux.  Show a disabled Install button so the layout
+  // stays consistent, paired with an informational notice.
+  if (gameInfo.store_tags?.includes("not_compatible")) {
+    return (
+      <Focusable
+        ref={wrapperRef}
+        data-unifideck-play-wrapper="true"
+        className={playSectionClassName || undefined}
+        flow-children="row"
+        style={{
+          display: "flex",
+          alignItems: "center",
+          width: "100%",
+          padding: "16px",
+          boxSizing: "border-box",
+          background: "rgba(14, 20, 27, 0.33)",
+          position: "relative" as const,
+          zIndex: 2,
+        }}
+      >
+        <style>{buttonStyles}</style>
+
+        {/* Disabled Install button — same layout as the normal install state */}
+        <DialogButton
+          className="unifideck-install-btn"
+          disabled={true}
+          style={{
+            ...actionBtnStyle,
+            opacity: 0.35,
+            cursor: "not-allowed",
+          }}
+        >
+          <svg viewBox="0 0 24 24" fill="currentColor" width="1em" height="1em">
+            <path d="M5 20h14v-2H5v2zM19 9h-4V3H9v6H5l7 7 7-7z" />
+          </svg>
+          {t("installButton.installNative", "Install")}
+        </DialogButton>
+
+        {/* Incompatibility notice */}
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: "8px",
+            marginLeft: "20px",
+            flex: "1 1 auto",
+            minWidth: 0,
+          }}
+        >
+          <svg
+            viewBox="0 0 24 24"
+            fill="#ffc82c"
+            width="18"
+            height="18"
+            style={{ flexShrink: 0 }}
+          >
+            <path d="M1 21h22L12 2 1 21zm12-3h-2v-2h2v2zm0-4h-2v-4h2v4z" />
+          </svg>
+          <span
+            style={{
+              color: "#ffc82c",
+              fontSize: "13px",
+              fontWeight: 500,
+            }}
+          >
+            {t("microsoft.notCompatible")}
+          </span>
+        </div>
+
+        {/* Right icon buttons — always present for settings access */}
+        <div
+          style={{
+            display: "flex",
+            gap: "8px",
+            marginLeft: "auto",
+            flex: "0 0 auto",
+          }}
+        >
+          <DialogButton
+            onClick={() =>
+              window.SteamClient?.Apps?.ShowControllerConfigurator?.(appId)
+            }
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              width: "48px",
+              height: "48px",
+              minWidth: "48px",
+              padding: "0",
+              background: "rgba(255, 255, 255, 0.1)",
+              borderRadius: "4px",
+            }}
+          >
+            <svg
+              viewBox="35 31 31 24"
+              fill="currentColor"
+              width="28"
+              height="28"
+            >
+              <path
+                fillRule="evenodd"
+                d="M38.562 35.88C37.724 37.501 36.752 41.257 36.403 44.227C35.895 48.548 36.106 49.963 37.456 51.313C39.925 53.783 41.749 53.387 43.5 50C44.938 47.219 45.452 47 50.547 47C55.406 47 56.172 47.283 57.157 49.445C58.551 52.504 60.548 53.312 63.202 51.892C65.02 50.919 65.198 50.118 64.734 44.999C64.445 41.814 63.594 37.923 62.843 36.354C61.481 33.508 61.446 33.499 50.782 33.217L40.086 32.933 38.562 35.88zM40.037 36.931C39.254 38.395 39.394 39.251 40.618 40.475C41.506 41.363 42.71 41.93 43.295 41.735C45.057 41.148 46.359 38.377 45.691 36.636C44.829 34.391 41.298 34.575 40.037 36.931zM55.445 37.174C54.533 40.048 57.439 42.371 60.138 40.926C61.162 40.378 62 39.532 62 39.047C62 34.795 56.682 33.276 55.445 37.174z"
+              />
+            </svg>
+          </DialogButton>
+          <DialogButton
+            onClick={() =>
+              window.SteamClient?.Apps?.OpenAppSettingsDialog?.(
+                appId,
+                "general",
+              )
+            }
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              width: "48px",
+              height: "48px",
+              minWidth: "48px",
+              padding: "0",
+              background: "rgba(255, 255, 255, 0.1)",
+              borderRadius: "4px",
+            }}
+          >
+            <svg
+              viewBox="-32 -32 64 64"
+              fill="currentColor"
+              width="24"
+              height="24"
+            >
+              <path
+                fillRule="evenodd"
+                d="M-5.96-19.09L-5.79-26.37 5.79-26.37 5.96-19.09 9.29-17.71 14.56-22.74 22.74-14.56 17.71-9.29 19.09-5.96 26.37-5.79 26.37 5.79 19.09 5.96 17.71 9.29 22.74 14.56 14.56 22.74 9.29 17.71 5.96 19.09 5.79 26.37-5.79 26.37-5.96 19.09-9.29 17.71-14.56 22.74-22.74 14.56-17.71 9.29-19.09 5.96-26.37 5.79-26.37-5.79-19.09-5.96-17.71-9.29-22.74-14.56-14.56-22.74-9.29-17.71Z M9 0A9 9 0 1 0-9 0A9 9 0 1 0 9 0Z"
+              />
+            </svg>
+          </DialogButton>
+        </div>
+      </Focusable>
+    );
+  }
+
   // ========== UPDATE AVAILABLE / UPDATING STATE ==========
   if (
     gameInfo.is_installed &&
@@ -1514,7 +1831,9 @@ const PlaySectionWrapperInner: FC<PlaySectionWrapperProps> = ({
               <path d="M12 4V1L8 5l4 4V6c3.31 0 6 2.69 6 6 0 1.01-.25 1.97-.7 2.8l1.46 1.46C19.54 15.03 20 13.57 20 12c0-4.42-3.58-8-8-8zm0 14c-3.31 0-6-2.69-6-6 0-1.01.25-1.97.7-2.8L5.24 7.74C4.46 8.97 4 10.43 4 12c0 4.42 3.58 8 8 8v3l4-4-4-4v3z" />
             )}
           </svg>
-          {isDownloading ? t("installButton.cancel") : t("installButton.update")}
+          {isDownloading
+            ? t("installButton.cancel")
+            : t("installButton.update")}
         </DialogButton>
 
         {/* Progress area — shows during update download or "Update Available" when idle */}
@@ -1817,8 +2136,8 @@ const PlaySectionWrapperInner: FC<PlaySectionWrapperProps> = ({
   const displayText = ubisoftInstalling
     ? t("installButton.cancel")
     : isDownloading
-      ? t("installButton.cancel")
-      : t("installButton.installNative");
+    ? t("installButton.cancel")
+    : t("installButton.installNative");
 
   return (
     <Focusable
@@ -1845,7 +2164,9 @@ const PlaySectionWrapperInner: FC<PlaySectionWrapperProps> = ({
       {/* Install/Cancel button — explicit styling matching native Steam button */}
       <DialogButton
         className={
-          isDownloading || ubisoftInstalling ? "unifideck-cancel-btn" : "unifideck-install-btn"
+          isDownloading || ubisoftInstalling
+            ? "unifideck-cancel-btn"
+            : "unifideck-install-btn"
         }
         onClick={handleClick}
         style={actionBtnStyle}

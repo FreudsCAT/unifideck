@@ -114,7 +114,8 @@
     "authenticate": "Entrar",
     "legendaryNotInstalled": "⚠️ Instalando Epic Games CLI...",
     "nileNotInstalled": "⚠️ CLI da Amazon Games não encontrado",
-    "error": "Erro - Verifique os logs"
+    "error": "Erro - Verifique os logs",
+    "microsoftStore": "Microsoft Store"
   },
   "librarySync": {
     "title": "SINCRONIZAÇÃO DE BIBLIOTECA",
@@ -176,7 +177,9 @@
     "no": "Não",
     "amazonUpdateTitle": "É necessário baixar tudo novamente",
     "amazonUpdateDescription": "As atualizações da Amazon exigem um novo download completo de {{title}}. Isso pode levar algum tempo. Continuar?",
-    "updateConfirm": "Atualizar"
+    "updateConfirm": "Atualizar",
+    "steamRestartCleanupTitle": "Limpeza concluída!",
+    "steamRestartCleanupDescription": "Reinicie o Steam para remover completamente os jogos e artes excluídos"
   },
   "toasts": {
     "downloadStarted": "Download Iniciado. Verifique UNIFIDECK > Downloads",
@@ -257,7 +260,8 @@
       "prerequisitesReady": "Pré-requisitos Prontos",
       "prerequisitesInstalled": "Pré-requisitos do jogo instalados",
       "prerequisitesFailed": "Aviso de Pré-requisitos",
-      "prerequisitesFailedMessage": "Os pré-requisitos podem não ter sido instalados corretamente"
+      "prerequisitesFailedMessage": "Os pré-requisitos podem não ter sido instalados corretamente",
+      "browserRequired": "Microsoft Edge necessário"
     },
     "updateComplete": "Atualização concluída!",
     "updateCompleteMessage": "{{title}} foi atualizado.",
@@ -334,7 +338,8 @@
     "cleaningOrphanedArtwork": "Limpando arte órfã...",
     "retryingMissingArtwork": "Tentando novamente {{synced}}/{{total}} jogos com arte ausente...",
     "savingShortcuts": "Salvando atalhos...",
-    "completed": "Sync concluída! {{added}} adicionados, arte {{artwork}}."
+    "completed": "Sync concluída! {{added}} adicionados, arte {{artwork}}.",
+    "fetchingStore": "Buscando {{store}}…"
   },
   "force_sync": {
     "migratingOldInstallations": "Sync forçada: Migrando instalações...",
@@ -360,7 +365,8 @@
     "epic": "Epic",
     "gog": "GOG",
     "amazon": "Amazon",
-    "ubisoft": "Ubisoft"
+    "ubisoft": "Ubisoft",
+    "microsoft": "Microsoft"
   },
   "unifiedLibrary": {
     "error": "Erro do Unifideck",
@@ -469,5 +475,32 @@
     "thisGame": "este jogo",
     "game": "Jogo",
     "unknown": "Desconhecido"
+  },
+  "microsoft": {
+    "notCompatible": "O formato deste jogo não é compatível com SteamOS",
+    "playOnCloud": "Jogar na Nuvem",
+    "xcloudStreaming": "Xbox Cloud Gaming",
+    "signInMessage": "Entre com sua conta Microsoft / Xbox",
+    "accountConnected": "Conta Microsoft conectada",
+    "loggedOut": "Desconectado da Microsoft Store",
+    "xcloudNotInstalled": "Os jogos xCloud não estão instalados localmente",
+    "chromiumRequired": "Microsoft Edge necessário",
+    "chromiumRequiredMessage": "O Xbox Cloud Gaming requer o Microsoft Edge. Deseja instalá-lo automaticamente? (Isso só precisa ser feito uma vez.)",
+    "chromiumInstallButton": "Instalar Microsoft Edge",
+    "chromiumInstalling": "Instalando Microsoft Edge...",
+    "chromiumInstalled": "Microsoft Edge instalado!",
+    "chromiumAlreadyInstalled": "Um navegador compatível já está instalado",
+    "chromiumInstallFailed": "A instalação do Microsoft Edge falhou. Instale manualmente: flatpak install com.microsoft.Edge",
+    "chromiumInstallTimeout": "A instalação do Microsoft Edge expirou. Verifique sua conexão com a internet.",
+    "flatpakNotFound": "Flatpak não está disponível neste sistema",
+    "signInRequired": "Faça login para jogar",
+    "browserAlreadyInstalled": "Um navegador compatível já está instalado",
+    "browserInstalled": "Microsoft Edge instalado com sucesso!",
+    "browserInstallFailed": "A instalação do Microsoft Edge falhou. Instale manualmente: flatpak install com.microsoft.Edge"
+  },
+  "authSuccess": {
+    "title": "Autenticação",
+    "titleStore": "{{store}} — Autenticação ✓",
+    "subtitle": "Pressione o botão B para fechar esta janela"
   }
 }

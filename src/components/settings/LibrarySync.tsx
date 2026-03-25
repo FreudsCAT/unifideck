@@ -14,6 +14,7 @@ interface LibrarySyncProps {
     epic: string;
     gog: string;
     amazon: string;
+    microsoft: string;
   };
   handleManualSync: (force?: boolean, resyncArtwork?: boolean) => void;
   handleCancelSync: () => void;
@@ -208,7 +209,8 @@ const LibrarySync: React.FC<LibrarySyncProps> = ({
       )}
 
       {(storeStatus.epic.includes("Error") ||
-        storeStatus.gog.includes("Error")) && (
+        storeStatus.gog.includes("Error") ||
+        storeStatus.microsoft?.includes("Error")) && (
         <PanelSectionRow>
           <ButtonItem layout="below" onClick={checkStoreStatus}>
             {t("librarySync.retryStatusCheck")}

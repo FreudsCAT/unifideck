@@ -114,7 +114,8 @@
     "authenticate": "Anmelden",
     "legendaryNotInstalled": "⚠️ Epic Games CLI wird installiert...",
     "nileNotInstalled": "⚠️ Amazon Games CLI nicht gefunden",
-    "error": "Fehler - Protokolle prüfen"
+    "error": "Fehler - Protokolle prüfen",
+    "microsoftStore": "Microsoft Store"
   },
   "librarySync": {
     "title": "BIBLIOTHEKS-SYNCHRONISIERUNG",
@@ -176,7 +177,9 @@
     "no": "Nein",
     "amazonUpdateTitle": "Vollständiger Neu-Download erforderlich",
     "amazonUpdateDescription": "Amazon-Updates erfordern einen vollständigen Neu-Download von {{title}}. Dies kann eine Weile dauern. Fortfahren?",
-    "updateConfirm": "Aktualisieren"
+    "updateConfirm": "Aktualisieren",
+    "steamRestartCleanupTitle": "Bereinigung abgeschlossen!",
+    "steamRestartCleanupDescription": "Bitte starten Sie Steam neu, um gelöschte Spiele und Artwork vollständig zu entfernen"
   },
   "toasts": {
     "downloadStarted": "Download gestartet. Siehe UNIFIDECK > Downloads",
@@ -257,7 +260,8 @@
       "prerequisitesReady": "Voraussetzungen bereit",
       "prerequisitesInstalled": "Spielvoraussetzungen installiert",
       "prerequisitesFailed": "Voraussetzungen Warnung",
-      "prerequisitesFailedMessage": "Voraussetzungen wurden möglicherweise nicht korrekt installiert"
+      "prerequisitesFailedMessage": "Voraussetzungen wurden möglicherweise nicht korrekt installiert",
+      "browserRequired": "Microsoft Edge erforderlich"
     },
     "updateComplete": "Update abgeschlossen!",
     "updateCompleteMessage": "{{title}} wurde aktualisiert.",
@@ -334,7 +338,8 @@
     "cleaningOrphanedArtwork": "Verwaiste Grafiken werden bereinigt...",
     "retryingMissingArtwork": "{{synced}}/{{total}} Spiele werden mit fehlenden Grafiken erneut versucht...",
     "savingShortcuts": "Verknüpfungen speichern...",
-    "completed": "Sync fertig! {{added}} hinzugefügt, {{artwork}} Artwork."
+    "completed": "Sync fertig! {{added}} hinzugefügt, {{artwork}} Artwork.",
+    "fetchingStore": "{{store}} wird abgerufen…"
   },
   "force_sync": {
     "migratingOldInstallations": "Force-Sync: Alte Installationen migrieren...",
@@ -360,7 +365,8 @@
     "epic": "Epic",
     "gog": "GOG",
     "amazon": "Amazon",
-    "ubisoft": "Ubisoft"
+    "ubisoft": "Ubisoft",
+    "microsoft": "Microsoft"
   },
   "unifiedLibrary": {
     "error": "Unifideck-Fehler",
@@ -469,5 +475,32 @@
     "thisGame": "dieses Spiel",
     "game": "Spiel",
     "unknown": "Unbekannt"
+  },
+  "microsoft": {
+    "notCompatible": "Das Format dieses Spiels ist nicht kompatibel mit SteamOS",
+    "playOnCloud": "In der Cloud spielen",
+    "xcloudStreaming": "Xbox Cloud Gaming",
+    "signInMessage": "Melden Sie sich mit Ihrem Microsoft / Xbox Konto an",
+    "accountConnected": "Microsoft-Konto verbunden",
+    "loggedOut": "Vom Microsoft Store abgemeldet",
+    "xcloudNotInstalled": "xCloud-Spiele sind nicht lokal installiert",
+    "chromiumRequired": "Microsoft Edge erforderlich",
+    "chromiumRequiredMessage": "Xbox Cloud Gaming benötigt Microsoft Edge. Möchten Sie es automatisch installieren? (Dies muss nur einmal durchgeführt werden.)",
+    "chromiumInstallButton": "Microsoft Edge installieren",
+    "chromiumInstalling": "Microsoft Edge wird installiert...",
+    "chromiumInstalled": "Microsoft Edge installiert!",
+    "chromiumAlreadyInstalled": "Ein kompatibler Browser ist bereits installiert",
+    "chromiumInstallFailed": "Die Installation von Microsoft Edge ist fehlgeschlagen. Bitte manuell installieren: flatpak install com.microsoft.Edge",
+    "chromiumInstallTimeout": "Die Installation von Microsoft Edge hat zu lange gedauert. Bitte überprüfen Sie Ihre Internetverbindung.",
+    "flatpakNotFound": "Flatpak ist auf diesem System nicht verfügbar",
+    "signInRequired": "Anmelden zum Spielen",
+    "browserAlreadyInstalled": "Ein kompatibler Browser ist bereits installiert",
+    "browserInstalled": "Microsoft Edge erfolgreich installiert!",
+    "browserInstallFailed": "Die Installation von Microsoft Edge ist fehlgeschlagen. Bitte manuell installieren: flatpak install com.microsoft.Edge"
+  },
+  "authSuccess": {
+    "title": "Authentifizierung",
+    "titleStore": "{{store}} — Authentifizierung ✓",
+    "subtitle": "Drücke die B-Taste, um dieses Fenster zu schließen"
   }
 }

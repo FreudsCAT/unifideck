@@ -114,7 +114,8 @@
     "authenticate": "Inloggen",
     "legendaryNotInstalled": "⚠️ Epic Games CLI installeren...",
     "nileNotInstalled": "⚠️ Amazon Games CLI niet gevonden",
-    "error": "Fout - Controleer logs"
+    "error": "Fout - Controleer logs",
+    "microsoftStore": "Microsoft Store"
   },
   "librarySync": {
     "title": "BIBLIOTHEEKSYNCHRONISATIE",
@@ -176,7 +177,9 @@
     "no": "Nee",
     "amazonUpdateTitle": "Volledig opnieuw downloaden vereist",
     "amazonUpdateDescription": "Amazon-updates vereisen een volledige herdownload van {{title}}. Dit kan even duren. Doorgaan?",
-    "updateConfirm": "Bijwerken"
+    "updateConfirm": "Bijwerken",
+    "steamRestartCleanupTitle": "Opschonen voltooid!",
+    "steamRestartCleanupDescription": "Start Steam opnieuw om verwijderde games en artwork volledig te verwijderen"
   },
   "toasts": {
     "downloadStarted": "Download Gestart. Controleer UNIFIDECK > Downloads",
@@ -257,7 +260,8 @@
       "prerequisitesReady": "Vereisten gereed",
       "prerequisitesInstalled": "Spelvereisten geïnstalleerd",
       "prerequisitesFailed": "Vereisten waarschuwing",
-      "prerequisitesFailedMessage": "Vereisten zijn mogelijk niet correct geïnstalleerd"
+      "prerequisitesFailedMessage": "Vereisten zijn mogelijk niet correct geïnstalleerd",
+      "browserRequired": "Microsoft Edge vereist"
     },
     "updateComplete": "Update voltooid!",
     "updateCompleteMessage": "{{title}} is bijgewerkt.",
@@ -334,7 +338,8 @@
     "cleaningOrphanedArtwork": "Wees-artwork opruimen...",
     "retryingMissingArtwork": "{{synced}}/{{total}} spellen met ontbrekend artwork opnieuw proberen...",
     "savingShortcuts": "Snelkoppelingen opslaan...",
-    "completed": "Sync klaar! {{added}} toegevoegd, artwork {{artwork}}."
+    "completed": "Sync klaar! {{added}} toegevoegd, artwork {{artwork}}.",
+    "fetchingStore": "{{store}} ophalen…"
   },
   "force_sync": {
     "migratingOldInstallations": "Geforceerde sync: Migreren...",
@@ -360,7 +365,8 @@
     "epic": "Epic",
     "gog": "GOG",
     "amazon": "Amazon",
-    "ubisoft": "Ubisoft"
+    "ubisoft": "Ubisoft",
+    "microsoft": "Microsoft"
   },
   "unifiedLibrary": {
     "error": "Unifideck Fout",
@@ -469,5 +475,32 @@
     "thisGame": "deze game",
     "game": "Spel",
     "unknown": "Onbekend"
+  },
+  "microsoft": {
+    "notCompatible": "Het formaat van dit spel is niet compatibel met SteamOS",
+    "playOnCloud": "Speel in de cloud",
+    "xcloudStreaming": "Xbox Cloud Gaming",
+    "signInMessage": "Log in met uw Microsoft / Xbox account",
+    "accountConnected": "Microsoft-account verbonden",
+    "loggedOut": "Afgemeld bij Microsoft Store",
+    "xcloudNotInstalled": "xCloud-games zijn niet lokaal geïnstalleerd",
+    "chromiumRequired": "Microsoft Edge vereist",
+    "chromiumRequiredMessage": "Xbox Cloud Gaming vereist Microsoft Edge. Wil je deze automatisch installeren? (Dit hoeft maar één keer te gebeuren.)",
+    "chromiumInstallButton": "Microsoft Edge installeren",
+    "chromiumInstalling": "Microsoft Edge wordt geïnstalleerd...",
+    "chromiumInstalled": "Microsoft Edge geïnstalleerd!",
+    "chromiumAlreadyInstalled": "Er is al een compatibele browser geïnstalleerd",
+    "chromiumInstallFailed": "Installatie van Microsoft Edge mislukt. Installeer handmatig: flatpak install com.microsoft.Edge",
+    "chromiumInstallTimeout": "De installatie van Microsoft Edge is verlopen. Controleer je internetverbinding.",
+    "flatpakNotFound": "Flatpak is niet beschikbaar op dit systeem",
+    "signInRequired": "Log in om te spelen",
+    "browserAlreadyInstalled": "Er is al een compatibele browser geïnstalleerd",
+    "browserInstalled": "Microsoft Edge is succesvol geïnstalleerd!",
+    "browserInstallFailed": "Installatie van Microsoft Edge mislukt. Installeer handmatig: flatpak install com.microsoft.Edge"
+  },
+  "authSuccess": {
+    "title": "Authenticatie",
+    "titleStore": "{{store}} — Authenticatie ✓",
+    "subtitle": "Druk op de B-knop om dit venster te sluiten"
   }
 }

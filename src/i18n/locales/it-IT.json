@@ -114,7 +114,8 @@
     "authenticate": "Accedi",
     "legendaryNotInstalled": "⚠️ Installazione Epic Games CLI...",
     "nileNotInstalled": "⚠️ Amazon Games CLI non trovato",
-    "error": "Errore - Controlla i log"
+    "error": "Errore - Controlla i log",
+    "microsoftStore": "Microsoft Store"
   },
   "librarySync": {
     "title": "SINCRONIZZAZIONE LIBRERIA",
@@ -176,7 +177,9 @@
     "no": "No",
     "amazonUpdateTitle": "È richiesto un nuovo download completo",
     "amazonUpdateDescription": "Gli aggiornamenti Amazon richiedono un nuovo download completo di {{title}}. Potrebbe volerci un po'. Continuare?",
-    "updateConfirm": "Aggiorna"
+    "updateConfirm": "Aggiorna",
+    "steamRestartCleanupTitle": "Pulizia completata!",
+    "steamRestartCleanupDescription": "Riavvia Steam per rimuovere completamente i giochi e le copertine eliminati"
   },
   "toasts": {
     "downloadStarted": "Download Avviato. Controlla UNIFIDECK > Download",
@@ -257,7 +260,8 @@
       "prerequisitesReady": "Prerequisiti pronti",
       "prerequisitesInstalled": "Prerequisiti del gioco installati",
       "prerequisitesFailed": "Avviso prerequisiti",
-      "prerequisitesFailedMessage": "I prerequisiti potrebbero non essere stati installati correttamente"
+      "prerequisitesFailedMessage": "I prerequisiti potrebbero non essere stati installati correttamente",
+      "browserRequired": "Microsoft Edge richiesto"
     },
     "updateComplete": "Aggiornamento completato!",
     "updateCompleteMessage": "{{title}} è stato aggiornato.",
@@ -334,7 +338,8 @@
     "cleaningOrphanedArtwork": "Pulizia delle immagini orfane...",
     "retryingMissingArtwork": "Riprovo {{synced}}/{{total}} giochi con immagini mancanti...",
     "savingShortcuts": "Salvataggio collegamenti...",
-    "completed": "Sync completata! {{added}} aggiunti, {{artwork}} artwork."
+    "completed": "Sync completata! {{added}} aggiunti, {{artwork}} artwork.",
+    "fetchingStore": "Recupero di {{store}}…"
   },
   "force_sync": {
     "migratingOldInstallations": "Sync forzata: Migrazione installazioni...",
@@ -360,7 +365,8 @@
     "epic": "Epic",
     "gog": "GOG",
     "amazon": "Amazon",
-    "ubisoft": "Ubisoft"
+    "ubisoft": "Ubisoft",
+    "microsoft": "Microsoft"
   },
   "unifiedLibrary": {
     "error": "Errore Unifideck",
@@ -469,5 +475,32 @@
     "thisGame": "questo gioco",
     "game": "Gioco",
     "unknown": "Sconosciuto"
+  },
+  "microsoft": {
+    "notCompatible": "Il formato di questo gioco non è compatibile con SteamOS",
+    "playOnCloud": "Gioca nel Cloud",
+    "xcloudStreaming": "Xbox Cloud Gaming",
+    "signInMessage": "Accedi con il tuo account Microsoft / Xbox",
+    "accountConnected": "Account Microsoft connesso",
+    "loggedOut": "Disconnesso dal Microsoft Store",
+    "xcloudNotInstalled": "I giochi xCloud non sono installati localmente",
+    "chromiumRequired": "Microsoft Edge richiesto",
+    "chromiumRequiredMessage": "Xbox Cloud Gaming richiede Microsoft Edge. Vuoi installarlo automaticamente? (Questa operazione va fatta una sola volta.)",
+    "chromiumInstallButton": "Installa Microsoft Edge",
+    "chromiumInstalling": "Installazione di Microsoft Edge...",
+    "chromiumInstalled": "Microsoft Edge installato!",
+    "chromiumAlreadyInstalled": "È già installato un browser compatibile",
+    "chromiumInstallFailed": "L'installazione di Microsoft Edge non è riuscita. Installalo manualmente: flatpak install com.microsoft.Edge",
+    "chromiumInstallTimeout": "L'installazione di Microsoft Edge è scaduta. Controlla la tua connessione a internet.",
+    "flatpakNotFound": "Flatpak non è disponibile su questo sistema",
+    "signInRequired": "Accedi per giocare",
+    "browserAlreadyInstalled": "È già installato un browser compatibile",
+    "browserInstalled": "Microsoft Edge installato con successo!",
+    "browserInstallFailed": "L'installazione di Microsoft Edge non è riuscita. Installalo manualmente: flatpak install com.microsoft.Edge"
+  },
+  "authSuccess": {
+    "title": "Autenticazione",
+    "titleStore": "{{store}} — Autenticazione ✓",
+    "subtitle": "Premi il pulsante B per chiudere questa finestra"
   }
 }

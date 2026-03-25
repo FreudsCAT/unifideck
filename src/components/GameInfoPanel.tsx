@@ -45,12 +45,12 @@ const COMPAT_COLORS: Record<
 const SUPPORT_URLS: Record<StoreFinal | "steam" | "other", string> = {
   epic: "https://www.epicgames.com/help/assistant",
   gog: "https://support.gog.com/hc/en-us?product=gog",
-  amazon:
-    "https://www.amazon.in/gp/help/customer/display.html?nodeId=GA5ZHN5T2JX8UGF7",
+  amazon: "https://www.amazon.in/gp/help/customer/display.html?nodeId=GA5ZHN5T2JX8UGF7",
   ubisoft: "https://www.ubisoft.com/en-us/help",
   ea: "https://help.ea.com/en/",
   battlenet: "https://us.battle.net/support/en/",
   itch: "https://itch.io/support",
+  microsoft: "https://support.xbox.com/en-US/help/games-apps/game-setup-and-play/troubleshoot-pc-games",
   steam: "", // Will be filled with appId
   other: "", // Fallback
 };
@@ -917,9 +917,11 @@ const GameInfoPanelInner: React.FC<GameInfoPanelProps> = ({ appId }) => {
           </DialogButton>
         )}
 
-        {/* Install/Uninstall/Cancel Button */}
+        {/* Install/Uninstall/Cancel Button — only shown for compatible installed games */}
         {gameInfo &&
           !gameInfo.error &&
+// Kept Ubisoft install UX; merged Microsoft store_tags compatibility check
+          !gameInfo.store_tags?.includes("not_compatible") &&
           (gameInfo.is_installed || ubisoftInstalling) &&
           !downloadState.isDownloading && (
             <DialogButton

@@ -1034,6 +1034,10 @@ class DownloadQueue:
             return await self._download_amazon(item, install_path)
         elif item.store == 'ubisoft':
             return await self._download_ubisoft(item, install_path)
+        elif item.store == 'microsoft':
+            # xCloud games are streamed, not downloaded
+            item.error_message = "Microsoft games are streamed via Xbox Cloud Gaming"
+            return False
         else:
             logger.error(f"[DownloadQueue] Unknown store: {item.store}")
             return False
@@ -1549,11 +1553,9 @@ class DownloadQueue:
         self._ubisoft_install_callback = callback
 
     def set_size_cache_callback(self, callback: Callable) -> None:
-        """Set callback for updating game size cache when accurate size is determined
-        
-        Callback signature: callback(store: str, game_id: str, size_bytes: int)
-        """
+        """Set callback for updating the game size cache on first accurate size."""
         self._size_cache_callback = callback
+
 
     def _update_size_cache_if_needed(self, item: DownloadItem, new_total_bytes: int) -> None:
         """Update game size cache if this is the first accurate size for this download

@@ -30,6 +30,7 @@ IGDB_STORE_CATEGORIES = {
     5: 'gog',
     26: 'epic',
     20: 'amazon',
+    11: 'microsoft',  # Xbox / Microsoft Store
     30: 'itch'
 }
 

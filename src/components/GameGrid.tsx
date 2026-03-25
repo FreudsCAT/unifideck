@@ -189,6 +189,8 @@ function getStoreColor(store: string): string {
       return "rgba(0, 120, 215, 0.4)"; // Epic blue
     case "gog":
       return "rgba(156, 39, 176, 0.4)"; // GOG purple
+    case "microsoft":
+        return "rgba(0, 188, 242, 0.4)"; // Microsoft blue
     default:
       return "rgba(255, 255, 255, 0.2)";
   }

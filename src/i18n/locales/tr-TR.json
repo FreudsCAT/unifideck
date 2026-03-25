@@ -114,7 +114,8 @@
     "authenticate": "Giriş yap",
     "legendaryNotInstalled": "⚠️ Epic Games CLI kuruluyor...",
     "nileNotInstalled": "⚠️ Amazon Games CLI bulunamadı",
-    "error": "Hata - Günlükleri kontrol edin"
+    "error": "Hata - Günlükleri kontrol edin",
+    "microsoftStore": "Microsoft Store"
   },
   "librarySync": {
     "title": "KÜTÜPHANESENKRONİZASYONU",
@@ -176,7 +177,9 @@
     "no": "Hayır",
     "amazonUpdateTitle": "Tam Yeniden İndirme Gerekli",
     "amazonUpdateDescription": "Amazon güncellemeleri {{title}} için oyunun tamamının yeniden indirilmesini gerektirir. Bu biraz zaman alabilir. Devam edilsin mi?",
-    "updateConfirm": "Güncelle"
+    "updateConfirm": "Güncelle",
+    "steamRestartCleanupTitle": "Temizlik tamamlandı!",
+    "steamRestartCleanupDescription": "Silinen oyunları ve görselleri tamamen kaldırmak için lütfen Steam'i yeniden başlatın"
   },
   "toasts": {
     "downloadStarted": "İndirme Başladı. UNIFIDECK > İndirmeler'i kontrol edin",
@@ -257,7 +260,8 @@
       "prerequisitesReady": "Ön Koşullar Hazır",
       "prerequisitesInstalled": "Oyun ön koşulları yüklendi",
       "prerequisitesFailed": "Ön Koşullar Uyarısı",
-      "prerequisitesFailedMessage": "Ön koşullar doğru şekilde yüklenmemiş olabilir"
+      "prerequisitesFailedMessage": "Ön koşullar doğru şekilde yüklenmemiş olabilir",
+      "browserRequired": "Microsoft Edge gerekli"
     },
     "updateComplete": "Güncelleme Tamamlandı!",
     "updateCompleteMessage": "{{title}} güncellendi.",
@@ -334,7 +338,8 @@
     "cleaningOrphanedArtwork": "Sahipsiz görseller temizleniyor...",
     "retryingMissingArtwork": "Eksik görselleri olan {{count}} oyun tekrar deneniyor...",
     "savingShortcuts": "Kısayollar kaydediliyor...",
-    "completed": "Sync tamamlandı! {{added}} eklendi, görsel {{artwork}}."
+    "completed": "Sync tamamlandı! {{added}} eklendi, görsel {{artwork}}.",
+    "fetchingStore": "{{store}} alınıyor…"
   },
   "force_sync": {
     "migratingOldInstallations": "Zorla sync: Kurulumlar taşınıyor...",
@@ -360,7 +365,8 @@
     "epic": "Epic",
     "gog": "GOG",
     "amazon": "Amazon",
-    "ubisoft": "Ubisoft"
+    "ubisoft": "Ubisoft",
+    "microsoft": "Microsoft"
   },
   "unifiedLibrary": {
     "error": "Unifideck Hatası",
@@ -469,5 +475,32 @@
     "thisGame": "bu oyun",
     "game": "Oyun",
     "unknown": "Bilinmiyor"
+  },
+  "microsoft": {
+    "notCompatible": "Bu oyunun formatı SteamOS ile uyumlu değil",
+    "playOnCloud": "Bulutta oyna",
+    "xcloudStreaming": "Xbox Cloud Gaming",
+    "signInMessage": "Microsoft / Xbox hesabınızla giriş yapın",
+    "accountConnected": "Microsoft hesabı bağlandı",
+    "loggedOut": "Microsoft Store oturumu kapatıldı",
+    "xcloudNotInstalled": "xCloud oyunları yerel olarak yüklü değil",
+    "chromiumRequired": "Microsoft Edge gerekli",
+    "chromiumRequiredMessage": "Xbox Cloud Gaming, Microsoft Edge gerektirir. Otomatik olarak yüklemek ister misiniz? (Bu işlem yalnızca bir kez yapılmalıdır.)",
+    "chromiumInstallButton": "Microsoft Edge'i yükle",
+    "chromiumInstalling": "Microsoft Edge yükleniyor...",
+    "chromiumInstalled": "Microsoft Edge yüklendi!",
+    "chromiumAlreadyInstalled": "Uyumlu bir tarayıcı zaten yüklü",
+    "chromiumInstallFailed": "Microsoft Edge kurulumu başarısız oldu. Lütfen manuel olarak kurun: flatpak install com.microsoft.Edge",
+    "chromiumInstallTimeout": "Microsoft Edge kurulumu zaman aşımına uğradı. Lütfen internet bağlantınızı kontrol edin.",
+    "flatpakNotFound": "Bu sistemde Flatpak mevcut değil",
+    "signInRequired": "Oynamak için giriş yapın",
+    "browserAlreadyInstalled": "Uyumlu bir tarayıcı zaten yüklü",
+    "browserInstalled": "Microsoft Edge başarıyla yüklendi!",
+    "browserInstallFailed": "Microsoft Edge kurulumu başarısız oldu. Lütfen manuel olarak kurun: flatpak install com.microsoft.Edge"
+  },
+  "authSuccess": {
+    "title": "Kimlik doğrulama",
+    "titleStore": "{{store}} — Kimlik doğrulama ✓",
+    "subtitle": "Bu pencereyi kapatmak için B düğmesine basın"
   }
 }

@@ -28,8 +28,11 @@ CLUB_GENOME_ID = "42d07c95-9914-4450-8b38-267c4e462b21"
 CHROME_USERAGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "
-    "Chrome/72.0.3626.121 Safari/537.36"
+    "Chrome/131.0.0.0 Safari/537.36"
 )
+UBI_REQUESTED_PLATFORM_TYPE = "uplay"
+UBI_CONNECT_ORIGIN = "https://connect.ubisoft.com"
+UBI_CONNECT_REFERER = "https://connect.ubisoft.com/"
 
 AUTH_URL = "https://public-ubiservices.ubi.com/v3/profiles/sessions"
 GRAPHQL_URL = "https://public-ubiservices.ubi.com/v1/profiles/me/uplay/graphql"
@@ -70,9 +73,39 @@ class UbisoftAPIClient:
     and GraphQL library queries. No CLI tool or browser popup needed.
     """
 
+    # Default backoff when Ubisoft returns 429 and no Retry-After header
+    _DEFAULT_RATE_LIMIT_SECS = 900  # 15 minutes
+
     def __init__(self):
         self.tokens: Optional[Dict[str, Any]] = None
+        self._rate_limited_until: float = 0.0  # Unix timestamp
         self._load_tokens()
+
+    def _is_rate_limited(self) -> bool:
+        """Return True if we are currently in a rate-limit backoff window."""
+        if time.time() < self._rate_limited_until:
+            remaining = int(self._rate_limited_until - time.time())
+            logger.warning(
+                f"[Ubisoft API] Rate-limited — {remaining}s remaining before retry"
+            )
+            return True
+        return False
+
+    def _set_rate_limit(self, resp_headers: dict = None) -> None:
+        """Set the rate-limit backoff window from a 429 response."""
+        retry_after = None
+        if resp_headers:
+            raw = resp_headers.get("Retry-After") or resp_headers.get("retry-after")
+            if raw:
+                try:
+                    retry_after = int(raw)
+                except (ValueError, TypeError):
+                    pass
+        wait = retry_after if retry_after and retry_after > 0 else self._DEFAULT_RATE_LIMIT_SECS
+        self._rate_limited_until = time.time() + wait
+        logger.warning(
+            f"[Ubisoft API] 429 received — backing off for {wait}s"
+        )
 
     # ========================================================================
     # Token Persistence
@@ -126,18 +159,59 @@ class UbisoftAPIClient:
     # HTTP Helpers
     # ========================================================================
 
-    def _base_headers(self) -> Dict[str, str]:
+    def _base_headers(self, *, accept: str = "application/json") -> Dict[str, str]:
         """Common headers for all Ubisoft API calls."""
         return {
             "Ubi-AppId": CLUB_APPID,
+            "Accept": accept,
             "Content-Type": "application/json",
             "User-Agent": CHROME_USERAGENT,
         }
+
+    def _session_headers(self) -> Dict[str, str]:
+        """Headers for /profiles/sessions requests.
+
+        Ubisoft's auth/session endpoints are more tolerant when they look like a
+        real Ubisoft Connect web client instead of a bare JSON POST.
+        """
+        headers = self._base_headers(accept="*/*")
+        headers.update({
+            "Origin": UBI_CONNECT_ORIGIN,
+            "Referer": UBI_CONNECT_REFERER,
+            "Ubi-RequestedPlatformType": UBI_REQUESTED_PLATFORM_TYPE,
+            "Accept-Language": "en-US,en;q=0.5",
+            "Accept-Encoding": "gzip, deflate, br",
+            "Host": "public-ubiservices.ubi.com",
+        })
+        return headers
 
     async def _create_session(self) -> aiohttp.ClientSession:
         """Create an aiohttp session with SSL verification disabled (Steam Deck compat)."""
         connector = aiohttp.TCPConnector(ssl=False)
         return aiohttp.ClientSession(connector=connector)
+
+    async def _read_json_response(
+        self, resp: aiohttp.ClientResponse, context: str
+    ) -> tuple[Optional[Dict[str, Any]], Optional[str]]:
+        """Read a JSON response, surfacing non-JSON API failures cleanly."""
+        try:
+            return await resp.json(), None
+        except (aiohttp.ContentTypeError, json.JSONDecodeError, UnicodeDecodeError) as e:
+            content_type = resp.headers.get("Content-Type", "unknown")
+            try:
+                body_text = await resp.text()
+            except Exception as text_error:
+                body_text = f"<failed to read body: {text_error}>"
+
+            snippet = body_text.replace("\n", " ").strip()[:200]
+            logger.warning(
+                f"[Ubisoft API] {context}: expected JSON, got {content_type} "
+                f"(HTTP {resp.status})"
+            )
+            logger.debug(f"[Ubisoft API] {context}: JSON parse error: {e}")
+            if snippet:
+                logger.debug(f"[Ubisoft API] {context}: response snippet: {snippet}")
+            return None, f"Server error (HTTP {resp.status})"
 
     # ========================================================================
     # Authentication -- Email/Password Login
@@ -158,9 +232,17 @@ class UbisoftAPIClient:
             On 2FA required: {"success": True, "requires_2fa": True, "2fa_ticket": "...", "2fa_method": "..."}
             On failure: {"success": False, "error": "..."}
         """
+        if self._is_rate_limited():
+            remaining = int(self._rate_limited_until - time.time())
+            mins = max(1, remaining // 60)
+            return {
+                "success": False,
+                "error": f"Ubisoft rate limit active. Please wait ~{mins} minutes and try again.",
+            }
+
         try:
             credentials = base64.b64encode(f"{email}:{password}".encode()).decode()
-            headers = self._base_headers()
+            headers = self._session_headers()
             headers["Authorization"] = f"Basic {credentials}"
 
             session = await self._create_session()
@@ -173,8 +255,21 @@ class UbisoftAPIClient:
                     timeout=aiohttp.ClientTimeout(total=30),
                 ) as resp:
                     status = resp.status
-                    body = await resp.json()
                     ubi_challenge = resp.headers.get("Ubi-Challenge")
+                    resp_headers = dict(resp.headers)
+                    body, parse_error = await self._read_json_response(
+                        resp, "Login step 1"
+                    )
+                if status == 429:
+                    self._set_rate_limit(resp_headers)
+                    remaining = int(self._rate_limited_until - time.time())
+                    mins = max(1, remaining // 60)
+                    return {
+                        "success": False,
+                        "error": f"Ubisoft rate limit active. Please wait ~{mins} minutes and try again.",
+                    }
+                if parse_error:
+                    return {"success": False, "error": parse_error}
 
                 logger.info(
                     f"[Ubisoft API] Step 1 response: HTTP {status}, "
@@ -216,7 +311,11 @@ class UbisoftAPIClient:
                         timeout=aiohttp.ClientTimeout(total=30),
                     ) as resp2:
                         status = resp2.status
-                        body = await resp2.json()
+                        body, parse_error = await self._read_json_response(
+                            resp2, "Login step 2"
+                        )
+                    if parse_error:
+                        return {"success": False, "error": parse_error}
 
                     logger.info(
                         f"[Ubisoft API] Step 2 (post-challenge) response: HTTP {status}, "
@@ -288,7 +387,7 @@ class UbisoftAPIClient:
             On failure: {"success": False, "error": "..."}
         """
         try:
-            headers = self._base_headers()
+            headers = self._session_headers()
             headers["Authorization"] = f"ubi_2fa_v1 t={two_fa_ticket}"
             headers["Ubi-2FACode"] = code
 
@@ -301,7 +400,11 @@ class UbisoftAPIClient:
                     timeout=aiohttp.ClientTimeout(total=30),
                 ) as resp:
                     status = resp.status
-                    body = await resp.json()
+                    body, parse_error = await self._read_json_response(
+                        resp, "Complete 2FA"
+                    )
+                    if parse_error:
+                        return {"success": False, "error": parse_error}
 
                     if status != 200 or "ticket" not in body:
                         error_msg = body.get("message", f"2FA verification failed (HTTP {status})")
@@ -346,9 +449,13 @@ class UbisoftAPIClient:
         ticket = self.tokens.get("ticket", "")
         session_id = self.tokens.get("sessionId", "")
 
+        if self._is_rate_limited():
+            logger.info("[Ubisoft API] Skipping refresh — rate-limited")
+            return False
+
         if ticket:
             try:
-                headers = self._base_headers()
+                headers = self._session_headers()
                 headers["Authorization"] = f"Ubi_v1 t={ticket}"
                 if session_id:
                     headers["Ubi-SessionId"] = session_id
@@ -360,9 +467,18 @@ class UbisoftAPIClient:
                         headers=headers,
                         timeout=aiohttp.ClientTimeout(total=15),
                     ) as resp:
+                        if resp.status == 429:
+                            self._set_rate_limit(dict(resp.headers))
+                            return False
                         if resp.status == 200:
-                            body = await resp.json()
-                            if "ticket" in body:
+                            body, parse_error = await self._read_json_response(
+                                resp, "Refresh ticket"
+                            )
+                            if parse_error:
+                                logger.warning(
+                                    f"[Ubisoft API] PUT refresh response invalid: {parse_error}"
+                                )
+                            elif "ticket" in body:
                                 tokens = self._extract_tokens(body)
                                 # Preserve userId/username from original tokens
                                 tokens["userId"] = tokens.get("userId") or self.tokens.get("userId", "")
@@ -383,7 +499,7 @@ class UbisoftAPIClient:
         remember_ticket = self.tokens.get("rememberMeTicket", "")
         if remember_ticket:
             try:
-                headers = self._base_headers()
+                headers = self._session_headers()
                 headers["Authorization"] = f"rm_v1 t={remember_ticket}"
 
                 session = await self._create_session()
@@ -395,8 +511,15 @@ class UbisoftAPIClient:
                         timeout=aiohttp.ClientTimeout(total=15),
                     ) as resp:
                         if resp.status == 200:
-                            body = await resp.json()
-                            if "ticket" in body:
+                            body, parse_error = await self._read_json_response(
+                                resp, "Refresh rememberMe"
+                            )
+                            if parse_error:
+                                logger.warning(
+                                    "[Ubisoft API] rememberMe refresh response invalid: "
+                                    f"{parse_error}"
+                                )
+                            elif "ticket" in body:
                                 tokens = self._extract_tokens(body)
                                 tokens["userId"] = tokens.get("userId") or self.tokens.get("userId", "")
                                 tokens["username"] = tokens.get("username") or self.tokens.get("username", "")
@@ -444,9 +567,13 @@ class UbisoftAPIClient:
         if not self.has_tokens():
             return False
 
+        if self._is_rate_limited():
+            # Don't hit the API when rate-limited; assume token is still valid
+            return True
+
         try:
             # Use PUT /v3/profiles/sessions as a lightweight validation
-            headers = self._base_headers()
+            headers = self._session_headers()
             headers["Authorization"] = f"Ubi_v1 t={self.tokens['ticket']}"
             session_id = self.tokens.get("sessionId", "")
             if session_id:
@@ -459,8 +586,18 @@ class UbisoftAPIClient:
                     headers=headers,
                     timeout=aiohttp.ClientTimeout(total=5),
                 ) as resp:
+                    if resp.status == 429:
+                        self._set_rate_limit(dict(resp.headers))
+                        return True  # Assume valid rather than clearing tokens
                     if resp.status == 200:
-                        body = await resp.json()
+                        body, parse_error = await self._read_json_response(
+                            resp, "Validate ticket"
+                        )
+                        if parse_error:
+                            logger.warning(
+                                f"[Ubisoft API] Ticket validation response invalid: {parse_error}"
+                            )
+                            return False
                         if "ticket" in body:
                             # Update tokens with refreshed data
                             tokens = self._extract_tokens(body)
@@ -573,7 +710,14 @@ class UbisoftAPIClient:
                         )
                         return []
 
-                    body = await resp.json()
+                    body, parse_error = await self._read_json_response(
+                        resp, "Library query"
+                    )
+                    if parse_error:
+                        logger.error(
+                            f"[Ubisoft API] Library query response invalid: {parse_error}"
+                        )
+                        return []
 
                 if body.get("errors"):
                     logger.error(
@@ -714,7 +858,14 @@ class UbisoftAPIClient:
                     timeout=aiohttp.ClientTimeout(total=10),
                 ) as resp:
                     if resp.status == 200:
-                        body = await resp.json()
+                        body, parse_error = await self._read_json_response(
+                            resp, "Subscription query"
+                        )
+                        if parse_error:
+                            logger.debug(
+                                f"[Ubisoft API] Subscription response invalid: {parse_error}"
+                            )
+                            return []
                         games = body if isinstance(body, list) else body.get("games", [])
                         logger.info(
                             f"[Ubisoft API] Subscription: {len(games)} games"
