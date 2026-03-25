@@ -2068,7 +2068,6 @@ class Plugin:
 
         logger.info("[INIT] Initializing UbisoftConnector")
         self.ubisoft = UbisoftConnector(plugin_dir=DECKY_PLUGIN_DIR, plugin_instance=self)
-        self.ubisoft.start_token_refresh()
 
         # Ensure the "Ubisoft Connect" auth shortcut is in VDF with artwork.
         # This is quick now because the shortcut no longer depends on a pre-existing

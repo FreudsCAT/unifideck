@@ -73,12 +73,13 @@ class UbisoftAPIClient:
     and GraphQL library queries. No CLI tool or browser popup needed.
     """
 
-    # Default backoff when Ubisoft returns 429 and no Retry-After header
-    _DEFAULT_RATE_LIMIT_SECS = 900  # 15 minutes
+    # Exponential backoff schedule (seconds) for 429 responses
+    _BACKOFF_SCHEDULE = [900, 1800, 3600, 7200]  # 15m, 30m, 1h, 2h
 
     def __init__(self):
         self.tokens: Optional[Dict[str, Any]] = None
         self._rate_limited_until: float = 0.0  # Unix timestamp
+        self._backoff_index: int = 0  # Tracks position in escalating backoff
         self._load_tokens()
 
     def _is_rate_limited(self) -> bool:
@@ -89,10 +90,13 @@ class UbisoftAPIClient:
                 f"[Ubisoft API] Rate-limited — {remaining}s remaining before retry"
             )
             return True
+        # Reset backoff index once the window expires
+        if self._backoff_index > 0:
+            self._backoff_index = 0
         return False
 
     def _set_rate_limit(self, resp_headers: dict = None) -> None:
-        """Set the rate-limit backoff window from a 429 response."""
+        """Set the rate-limit backoff window with exponential escalation."""
         retry_after = None
         if resp_headers:
             raw = resp_headers.get("Retry-After") or resp_headers.get("retry-after")
@@ -101,10 +105,17 @@ class UbisoftAPIClient:
                     retry_after = int(raw)
                 except (ValueError, TypeError):
                     pass
-        wait = retry_after if retry_after and retry_after > 0 else self._DEFAULT_RATE_LIMIT_SECS
+        if retry_after and retry_after > 0:
+            wait = retry_after
+        else:
+            wait = self._BACKOFF_SCHEDULE[
+                min(self._backoff_index, len(self._BACKOFF_SCHEDULE) - 1)
+            ]
+            self._backoff_index += 1
         self._rate_limited_until = time.time() + wait
         logger.warning(
-            f"[Ubisoft API] 429 received — backing off for {wait}s"
+            f"[Ubisoft API] 429 received — backing off for {wait}s "
+            f"(level {self._backoff_index}/{len(self._BACKOFF_SCHEDULE)})"
         )
 
     # ========================================================================
@@ -557,70 +568,32 @@ class UbisoftAPIClient:
     # Token Validation
     # ========================================================================
 
-    async def validate_ticket(self) -> bool:
-        """
-        Validate the current ticket by making a lightweight API call.
+    def is_token_valid(self) -> bool:
+        """Check if the current token is valid based on local expiry time.
+
+        No API call — purely checks token presence and cached expiry.
+        After login and sync, the UPC app handles session management;
+        we only need the token for library queries and initial auth.
 
         Returns:
-            True if ticket is valid, False otherwise.
+            True if token exists and hasn't expired yet, False otherwise.
         """
         if not self.has_tokens():
             return False
 
-        if self._is_rate_limited():
-            # Don't hit the API when rate-limited; assume token is still valid
-            return True
+        refresh_time = self.tokens.get("refreshTime", 0)
+        if time.time() > refresh_time:
+            logger.info("[Ubisoft API] Token expired (local check)")
+            return False
 
-        try:
-            # Use PUT /v3/profiles/sessions as a lightweight validation
-            headers = self._session_headers()
-            headers["Authorization"] = f"Ubi_v1 t={self.tokens['ticket']}"
-            session_id = self.tokens.get("sessionId", "")
-            if session_id:
-                headers["Ubi-SessionId"] = session_id
+        return True
 
-            session = await self._create_session()
-            try:
-                async with session.put(
-                    AUTH_URL,
-                    headers=headers,
-                    timeout=aiohttp.ClientTimeout(total=5),
-                ) as resp:
-                    if resp.status == 429:
-                        self._set_rate_limit(dict(resp.headers))
-                        return True  # Assume valid rather than clearing tokens
-                    if resp.status == 200:
-                        body, parse_error = await self._read_json_response(
-                            resp, "Validate ticket"
-                        )
-                        if parse_error:
-                            logger.warning(
-                                f"[Ubisoft API] Ticket validation response invalid: {parse_error}"
-                            )
-                            return False
-                        if "ticket" in body:
-                            # Update tokens with refreshed data
-                            tokens = self._extract_tokens(body)
-                            tokens["userId"] = tokens.get("userId") or self.tokens.get("userId", "")
-                            tokens["username"] = tokens.get("username") or self.tokens.get("username", "")
-                            self._save_tokens(tokens)
-                            return True
-                    elif resp.status == 401:
-                        logger.info("[Ubisoft API] Ticket invalid (401)")
-                        return False
-                    else:
-                        logger.warning(f"[Ubisoft API] Ticket validation: HTTP {resp.status}")
-                        return False
-            finally:
-                await session.close()
+    async def validate_ticket(self) -> bool:
+        """Validate ticket — local-only, no API call.
 
-        except asyncio.TimeoutError:
-            logger.warning("[Ubisoft API] Ticket validation timed out")
-            # Assume valid if timeout (network issue, not auth issue)
-            return True
-        except Exception as e:
-            logger.warning(f"[Ubisoft API] Ticket validation error: {e}")
-            return True  # Assume valid on network errors
+        Kept for backward compatibility. Delegates to is_token_valid().
+        """
+        return self.is_token_valid()
 
     # ========================================================================
     # GraphQL Library Query
@@ -635,6 +608,10 @@ class UbisoftAPIClient:
             None on auth failure (caller should trigger re-auth).
             Empty list on API errors (graceful degradation).
         """
+        if self._is_rate_limited():
+            logger.warning("[Ubisoft API] Skipping library query — rate-limited")
+            return []
+
         if not await self.ensure_valid_token():
             logger.warning("[Ubisoft API] No valid token for library query")
             return None
@@ -703,6 +680,11 @@ class UbisoftAPIClient:
                 ) as resp:
                     if resp.status == 401:
                         return None
+
+                    if resp.status == 429:
+                        self._set_rate_limit(dict(resp.headers))
+                        logger.error("[Ubisoft API] Library query: rate-limited (429)")
+                        return nodes if nodes else []
 
                     if resp.status != 200:
                         logger.error(
@@ -842,6 +824,9 @@ class UbisoftAPIClient:
         discoverable or Ubisoft exposes subscription data through GraphQL.
         """
         VAULT_URL = "https://api-uplayplusvault.ubi.com/v1/games"
+
+        if self._is_rate_limited():
+            return []
 
         if not await self.ensure_valid_token():
             return []

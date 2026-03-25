@@ -149,30 +149,22 @@ class UbisoftConnector(Store):
         return "ubisoft"
 
     async def is_available(self) -> bool:
-        """Check if authenticated and tokens are valid."""
-        logger.info("[Ubisoft] Checking availability")
+        """Check if authenticated based on local token state.
+
+        No API call — purely checks token presence and cached expiry time.
+        After login and sync, the UPC app handles session management.
+        """
+        logger.info("[Ubisoft] Checking availability (local)")
         if not self.api.has_tokens():
             logger.info("[Ubisoft] No tokens found -- not authenticated")
             return False
 
-        try:
-            valid = await self.api.validate_ticket()
-            if valid:
-                logger.info("[Ubisoft] Ticket valid")
-                return True
+        if self.api.is_token_valid():
+            logger.info("[Ubisoft] Token valid (local check)")
+            return True
 
-            # Ticket expired — attempt refresh before reporting unavailable
-            logger.info("[Ubisoft] Ticket invalid, attempting refresh")
-            refreshed = await self.api.refresh_token()
-            if refreshed:
-                logger.info("[Ubisoft] Token refreshed successfully")
-                return True
-
-            logger.info("[Ubisoft] Token refresh failed — not available")
-            return False
-        except Exception as e:
-            logger.warning(f"[Ubisoft] Availability check error: {e}")
-            return False
+        logger.info("[Ubisoft] Token expired -- user needs to re-authenticate")
+        return False
 
     async def start_auth(self) -> Dict[str, Any]:
         """
@@ -5127,40 +5119,6 @@ class UbisoftConnector(Store):
 
     # ========================================================================
     # Background API Token Refresh
-    # ========================================================================
-
-    async def _token_refresh_loop(self) -> None:
-        """
-        Background task: proactively refresh the Ubisoft API token every 30
-        minutes so it never expires while the plugin is running.
-
-        The REST API ticket lasts ~3-4 hours. Without proactive refresh,
-        tickets expire silently between user interactions.
-        """
-        while True:
-            try:
-                await asyncio.sleep(30 * 60)  # 30 minutes
-                if self.api.has_tokens():
-                    ok = await self.api.refresh_token()
-                    if ok:
-                        logger.info("[Ubisoft] Background token refresh succeeded")
-                    else:
-                        logger.error(
-                            "[Ubisoft] Background token refresh failed — "
-                            "user may need to re-authenticate via the plugin"
-                        )
-            except asyncio.CancelledError:
-                break
-            except Exception as e:
-                logger.warning(f"[Ubisoft] Token refresh loop error: {e}")
-
-    def start_token_refresh(self) -> None:
-        """Start the background token refresh loop."""
-        self._refresh_task = asyncio.create_task(self._token_refresh_loop())
-        logger.info("[Ubisoft] Background token refresh started (every 30 min)")
-
-    def stop_token_refresh(self) -> None:
-        """Stop the background token refresh loop."""
-        task = getattr(self, "_refresh_task", None)
-        if task and not task.done():
-            task.cancel()
+    # Background token refresh removed — API calls are now event-driven only.
+    # Tokens refresh on-demand during explicit sync/login operations.
+    # After login and sync, the UPC app handles session management.
