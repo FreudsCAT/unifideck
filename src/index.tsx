@@ -48,6 +48,7 @@ import { AccountSwitchModal } from "./components/AccountSwitchModal";
 import { UbisoftAuthModal } from "./components/UbisoftAuthModal";
 import { LanguageSelector } from "./components/LanguageSelector";
 import { launchMicrosoftAuthViaShortcut } from "./utils/microsoftShortcutLaunch";
+import { resetControllerConfigCache } from "./utils/controllerConfig";
 import { isShortcutAppRunning } from "./utils/ubisoftShortcutLaunch";
 import StoreConnections from "./components/settings/StoreConnections";
 import { Store } from "./types/store";
@@ -1526,7 +1527,7 @@ const Content: FC = () => {
                   `[Unifideck] ✓ ${storeName} authentication successful!`,
                 );
                 toaster.toast({
-                  title: t("toasts.authConnected"),
+                  title: t("toasts.authConnected", { store: storeName }),
                   body: t("toasts.authConnectedMessage", { store: storeName }),
                   duration: 5000,
                 });
@@ -1560,7 +1561,7 @@ const Content: FC = () => {
                   `[Unifideck] ✓ ${storeName} authentication successful!`,
                 );
                 toaster.toast({
-                  title: t("toasts.authConnected"),
+                  title: t("toasts.authConnected", { store: storeName }),
                   body: t("toasts.authConnectedMessage", { store: storeName }),
                   duration: 5000,
                 });
@@ -2259,6 +2260,9 @@ export default definePlugin(() => {
 
       // Unregister game action interceptor
       unregisterInterceptor();
+
+      // Clear controller config session cache
+      resetControllerConfigCache();
 
       // Unregister global Ubisoft session capture listener
       unregLifetimeGlobal?.unregister?.();

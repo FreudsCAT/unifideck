@@ -177,7 +177,9 @@
     "no": "Ні",
     "amazonUpdateTitle": "Потрібне повне повторне завантаження",
     "amazonUpdateDescription": "Для оновлення Amazon потрібно повністю повторно завантажити {{title}}. Це може зайняти деякий час. Продовжити?",
-    "updateConfirm": "Оновити"
+    "updateConfirm": "Оновити",
+    "steamRestartCleanupTitle": "Очищення завершено!",
+    "steamRestartCleanupDescription": "Перезапустіть Steam, щоб повністю видалити видалені ігри та ілюстрації"
   },
   "toasts": {
     "downloadStarted": "Завантаження розпочато. Перевірте UNIFIDECK > Завантаження",
@@ -258,7 +260,8 @@
       "prerequisitesReady": "Передумови готові",
       "prerequisitesInstalled": "Передумови гри встановлені",
       "prerequisitesFailed": "Попередження про передумови",
-      "prerequisitesFailedMessage": "Передумови можуть бути встановлені некоректно"
+      "prerequisitesFailedMessage": "Передумови можуть бути встановлені некоректно",
+      "browserRequired": "Потрібен Microsoft Edge"
     },
     "updateComplete": "Оновлення завершено!",
     "updateCompleteMessage": "Оновлення {{title}} завершено.",
@@ -481,16 +484,19 @@
     "accountConnected": "Обліковий запис Microsoft підключено",
     "loggedOut": "Вихід з Microsoft Store",
     "xcloudNotInstalled": "Ігри xCloud не встановлені локально",
-    "chromiumRequired": "Потрібен Chromium",
-    "chromiumRequiredMessage": "Xbox Cloud Gaming потребує браузер Chromium. Бажаєте встановити автоматично? (Це потрібно зробити лише один раз.)",
-    "chromiumInstallButton": "Встановити Chromium",
-    "chromiumInstalling": "Встановлення Chromium...",
-    "chromiumInstalled": "Chromium встановлено!",
-    "chromiumAlreadyInstalled": "Chromium вже встановлено",
-    "chromiumInstallFailed": "Встановлення Chromium не вдалось. Встановіть вручну: flatpak install org.chromium.Chromium",
-    "chromiumInstallTimeout": "Час встановлення Chromium вичерпано.",
+    "chromiumRequired": "Потрібен Microsoft Edge",
+    "chromiumRequiredMessage": "Xbox Cloud Gaming потребує Microsoft Edge. Бажаєте встановити його автоматично? (Це потрібно зробити лише один раз.)",
+    "chromiumInstallButton": "Встановити Microsoft Edge",
+    "chromiumInstalling": "Встановлення Microsoft Edge...",
+    "chromiumInstalled": "Microsoft Edge встановлено!",
+    "chromiumAlreadyInstalled": "Сумісний браузер уже встановлено",
+    "chromiumInstallFailed": "Не вдалося встановити Microsoft Edge. Встановіть вручну: flatpak install com.microsoft.Edge",
+    "chromiumInstallTimeout": "Час встановлення Microsoft Edge вичерпано. Перевірте підключення до інтернету.",
     "flatpakNotFound": "Flatpak недоступний у цій системі",
-    "signInRequired": "Увійдіть, щоб грати"
+    "signInRequired": "Увійдіть, щоб грати",
+    "browserAlreadyInstalled": "Сумісний браузер уже встановлено",
+    "browserInstalled": "Microsoft Edge успішно встановлено!",
+    "browserInstallFailed": "Не вдалося встановити Microsoft Edge. Встановіть вручну: flatpak install com.microsoft.Edge"
   },
   "authSuccess": {
     "title": "Автентифікація",

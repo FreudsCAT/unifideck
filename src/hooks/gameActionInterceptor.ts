@@ -19,10 +19,13 @@ import i18n from "i18next";
 import { launchUbisoftInstallViaShortcut } from "../utils/ubisoftShortcutLaunch";
 
 // Reference to the shared game info cache from index.tsx
-let gameInfoCacheRef: Map<number, { info: any; timestamp: number }> | null = null;
+let gameInfoCacheRef: Map<number, { info: any; timestamp: number }> | null =
+  null;
 const CACHE_TTL = 5000;
 
-export function setGameInfoCacheRef(cache: Map<number, { info: any; timestamp: number }>) {
+export function setGameInfoCacheRef(
+  cache: Map<number, { info: any; timestamp: number }>,
+) {
   gameInfoCacheRef = cache;
 }
 
@@ -128,7 +131,9 @@ async function startUbisoftInstall(gameInfo: any) {
 
   toaster.toast({
     title: t("toasts.ubisoftLauncherOpenFailed"),
-    body: result.error ? t(result.error) : t("toasts.ubisoftLauncherOpenFailedMessage"),
+    body: result.error
+      ? t(result.error)
+      : t("toasts.ubisoftLauncherOpenFailedMessage"),
     duration: 10000,
     critical: true,
   });
@@ -153,7 +158,9 @@ async function handleInstallFlow(gameInfo: any) {
 
       const languages = langResult?.languages;
       if (!langResult?.success || !Array.isArray(languages)) {
-        console.warn("[GameActionInterceptor] Invalid language response, falling back to default");
+        console.warn(
+          "[GameActionInterceptor] Invalid language response, falling back to default",
+        );
         startDownload(gameInfo);
         return;
       }
@@ -163,7 +170,8 @@ async function handleInstallFlow(gameInfo: any) {
           React.createElement(GOGLanguageSelectModal, {
             gameTitle: gameInfo.title,
             languages: languages,
-            onConfirm: (selectedLang: string) => startDownload(gameInfo, selectedLang),
+            onConfirm: (selectedLang: string) =>
+              startDownload(gameInfo, selectedLang),
           }),
         );
         return;
@@ -172,7 +180,10 @@ async function handleInstallFlow(gameInfo: any) {
       startDownload(gameInfo, languages[0] || undefined);
       return;
     } catch (error) {
-      console.error("[GameActionInterceptor] Error fetching GOG languages:", error);
+      console.error(
+        "[GameActionInterceptor] Error fetching GOG languages:",
+        error,
+      );
     }
   }
 
@@ -190,12 +201,20 @@ function showInstallConfirmation(gameInfo: any) {
 
   showModal(
     React.createElement(ConfirmModal, {
-      strTitle: t(isUbisoft ? "confirmModals.ubisoftInstallTitle" : "confirmModals.installTitle"),
+      strTitle: t(
+        isUbisoft
+          ? "confirmModals.ubisoftInstallTitle"
+          : "confirmModals.installTitle",
+      ),
       strDescription: t(
-        isUbisoft ? "confirmModals.ubisoftInstallDescription" : "confirmModals.installDescription",
+        isUbisoft
+          ? "confirmModals.ubisoftInstallDescription"
+          : "confirmModals.installDescription",
         { title: gameInfo.title },
       ),
-      strOKButtonText: t(isUbisoft ? "confirmModals.ubisoftInstallConfirm" : "confirmModals.yes"),
+      strOKButtonText: t(
+        isUbisoft ? "confirmModals.ubisoftInstallConfirm" : "confirmModals.yes",
+      ),
       strCancelButtonText: t("confirmModals.no"),
       onOK: () => {
         handleInstallFlow(gameInfo);
@@ -215,26 +234,32 @@ function showCancelConfirmation(gameInfo: any, downloadId?: string) {
   showModal(
     React.createElement(ConfirmModal, {
       strTitle: t("confirmModals.cancelTitle"),
-      strDescription: t("confirmModals.cancelDescription", { title: gameInfo.title }),
+      strDescription: t("confirmModals.cancelDescription", {
+        title: gameInfo.title,
+      }),
       strOKButtonText: t("confirmModals.yes"),
       strCancelButtonText: t("confirmModals.no"),
       bDestructiveWarning: true,
       onOK: async () => {
-        const result = await call<[string], { success: boolean; error?: string }>(
-          "cancel_download_by_id",
-          dlId,
-        );
+        const result = await call<
+          [string],
+          { success: boolean; error?: string }
+        >("cancel_download_by_id", dlId);
 
         if (result.success) {
           toaster.toast({
             title: t("toasts.downloadCancelled"),
-            body: t("toasts.downloadCancelledMessage", { title: gameInfo.title }),
+            body: t("toasts.downloadCancelledMessage", {
+              title: gameInfo.title,
+            }),
             duration: 5000,
           });
         } else {
           toaster.toast({
             title: t("toasts.cancelFailed"),
-            body: result.error ? t(result.error) : t("toasts.cancelFailedMessage"),
+            body: result.error
+              ? t(result.error)
+              : t("toasts.cancelFailedMessage"),
             duration: 5000,
             critical: true,
           });
@@ -275,9 +300,9 @@ export function registerGameActionInterceptor(): () => void {
 
         // Auth shortcut: start session monitor then let Steam launch normally
         if (cachedInfo.game_id === "upc-auth") {
-          call<[], { success: boolean }>("start_ubisoft_auth_session_monitor").catch(
-            () => {},
-          );
+          call<[], { success: boolean }>(
+            "start_ubisoft_auth_session_monitor",
+          ).catch(() => {});
           return;
         }
 
@@ -312,7 +337,9 @@ export function registerGameActionInterceptor(): () => void {
       console.log("[GameActionInterceptor] Registered game action interceptor");
       return () => {
         unregisterable.unregister();
-        console.log("[GameActionInterceptor] Unregistered game action interceptor");
+        console.log(
+          "[GameActionInterceptor] Unregistered game action interceptor",
+        );
       };
     }
   } catch (error) {

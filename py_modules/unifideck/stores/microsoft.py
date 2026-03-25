@@ -234,8 +234,8 @@ class MicrosoftConnector(Store):
         """Prepare Microsoft OAuth and signal the frontend to launch via RunGame.
 
         The backend writes the auth URL to a well-known file and starts the
-        CDP monitor.  The frontend then launches the auth shortcut through
-        Steam's RunGame API so gamescope surfaces the Chromium window in
+        CDP monitor. The frontend then launches the auth shortcut through
+        Steam's RunGame API so gamescope surfaces the browser window in
         gaming mode (same mechanism as xCloud game launches).
 
         Returns:
@@ -254,16 +254,16 @@ class MicrosoftConnector(Store):
         )
         self._pending_auth_url = auth_url
 
-        # Check if Chromium is available
+        # Check if a compatible browser is available
         if not self._browser.is_installed:
-            logger.info("[MS] Chromium not installed — prompting user to install")
+            logger.info("[MS] No compatible browser installed — prompting user to install Edge")
             return {
                 "success": True,
                 "needs_chromium": True,
                 "message": "microsoft.chromiumRequired",
             }
 
-        logger.info("[MS] Chromium detected — preparing auth launch")
+        logger.info("[MS] Compatible browser detected — preparing auth launch")
         await self._browser.prepare_auth_launch()
 
         # Cancel any stale auth monitor before writing the fresh auth URL.
@@ -292,10 +292,10 @@ class MicrosoftConnector(Store):
         else:
             logger.warning("[MS] Auth shortcut could not be ensured — frontend will attempt AddShortcut fallback")
 
-        # Start CDP monitor -- it will poll port 9222 until Chromium
+        # Start CDP monitor -- it will poll port 9222 until the auth browser
         # appears (launched by the unifideck-launcher via RunGame).
         self._auth_monitor_task = asyncio.create_task(self._monitor_and_complete_auth())
-        logger.info("[MS] CDP auth monitor task started — waiting for Chromium on port 9222")
+        logger.info("[MS] CDP auth monitor task started — waiting for browser on port 9222")
 
         return {
             "success":        True,
@@ -810,18 +810,18 @@ class MicrosoftConnector(Store):
     # ── Browser delegates (called by main.py API routes) ─────────────────
 
     def is_chromium_installed(self) -> bool:
-        """Check if Chromium or Chrome is available."""
+        """Check if a compatible Chromium-based browser is available."""
         return self._browser.is_installed
 
     async def install_chromium(self) -> Dict[str, Any]:
-        """Install Chromium via flatpak."""
+        """Install Microsoft Edge via Flatpak for the auth/xCloud flow."""
         return await self._browser.install()
 
 
     async def _monitor_and_complete_auth(self) -> None:
         """Background task: intercept the OAuth redirect via CDP on port 9222.
 
-        Chromium is launched externally by the unifideck-launcher (via
+        The browser is launched externally by the unifideck-launcher (via
         Steam RunGame), so this monitor just polls CDP until it can
         connect.  ``intercept_oauth_code`` handles retry/backoff internally.
         """
@@ -830,7 +830,7 @@ class MicrosoftConnector(Store):
 
         # Start CDP interception immediately -- it polls /json until
         # the login page target appears, so it's safe to start before
-        # Chromium is fully ready (launched via RunGame).
+        # the browser is fully ready (launched via RunGame).
         intercept_task = asyncio.create_task(
             intercept_oauth_code(
                 pending_auth_url=getattr(self, "_pending_auth_url", ""),
@@ -846,6 +846,14 @@ class MicrosoftConnector(Store):
                 result = await self.complete_auth(code)
                 if result["success"]:
                     logger.info("[MS] ✓ Authentication completed successfully — tokens saved")
+                    try:
+                        closed = await self._browser.close_auth_browser()
+                        if closed:
+                            logger.info("[MS] ✓ Closed Microsoft auth browser after successful sign-in")
+                        else:
+                            logger.warning("[MS] Auth succeeded but no auth browser targets were available to close")
+                    except Exception as close_err:
+                        logger.warning(f"[MS] Could not close auth browser after sign-in: {close_err}")
                 else:
                     logger.error(f"[MS] ✗ complete_auth failed: {result.get('error')}")
             else:

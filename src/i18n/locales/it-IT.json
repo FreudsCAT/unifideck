@@ -177,7 +177,9 @@
     "no": "No",
     "amazonUpdateTitle": "È richiesto un nuovo download completo",
     "amazonUpdateDescription": "Gli aggiornamenti Amazon richiedono un nuovo download completo di {{title}}. Potrebbe volerci un po'. Continuare?",
-    "updateConfirm": "Aggiorna"
+    "updateConfirm": "Aggiorna",
+    "steamRestartCleanupTitle": "Pulizia completata!",
+    "steamRestartCleanupDescription": "Riavvia Steam per rimuovere completamente i giochi e le copertine eliminati"
   },
   "toasts": {
     "downloadStarted": "Download Avviato. Controlla UNIFIDECK > Download",
@@ -258,7 +260,8 @@
       "prerequisitesReady": "Prerequisiti pronti",
       "prerequisitesInstalled": "Prerequisiti del gioco installati",
       "prerequisitesFailed": "Avviso prerequisiti",
-      "prerequisitesFailedMessage": "I prerequisiti potrebbero non essere stati installati correttamente"
+      "prerequisitesFailedMessage": "I prerequisiti potrebbero non essere stati installati correttamente",
+      "browserRequired": "Microsoft Edge richiesto"
     },
     "updateComplete": "Aggiornamento completato!",
     "updateCompleteMessage": "{{title}} è stato aggiornato.",
@@ -481,16 +484,19 @@
     "accountConnected": "Account Microsoft connesso",
     "loggedOut": "Disconnesso dal Microsoft Store",
     "xcloudNotInstalled": "I giochi xCloud non sono installati localmente",
-    "chromiumRequired": "Chromium richiesto",
-    "chromiumRequiredMessage": "Xbox Cloud Gaming richiede il browser Chromium. Vuoi installarlo automaticamente? (Questa operazione va fatta una sola volta.)",
-    "chromiumInstallButton": "Installa Chromium",
-    "chromiumInstalling": "Installazione di Chromium...",
-    "chromiumInstalled": "Chromium installato!",
-    "chromiumAlreadyInstalled": "Chromium è già installato",
-    "chromiumInstallFailed": "Installazione di Chromium fallita. Installa manualmente: flatpak install org.chromium.Chromium",
-    "chromiumInstallTimeout": "Installazione di Chromium scaduta.",
+    "chromiumRequired": "Microsoft Edge richiesto",
+    "chromiumRequiredMessage": "Xbox Cloud Gaming richiede Microsoft Edge. Vuoi installarlo automaticamente? (Questa operazione va fatta una sola volta.)",
+    "chromiumInstallButton": "Installa Microsoft Edge",
+    "chromiumInstalling": "Installazione di Microsoft Edge...",
+    "chromiumInstalled": "Microsoft Edge installato!",
+    "chromiumAlreadyInstalled": "È già installato un browser compatibile",
+    "chromiumInstallFailed": "L'installazione di Microsoft Edge non è riuscita. Installalo manualmente: flatpak install com.microsoft.Edge",
+    "chromiumInstallTimeout": "L'installazione di Microsoft Edge è scaduta. Controlla la tua connessione a internet.",
     "flatpakNotFound": "Flatpak non è disponibile su questo sistema",
-    "signInRequired": "Accedi per giocare"
+    "signInRequired": "Accedi per giocare",
+    "browserAlreadyInstalled": "È già installato un browser compatibile",
+    "browserInstalled": "Microsoft Edge installato con successo!",
+    "browserInstallFailed": "L'installazione di Microsoft Edge non è riuscita. Installalo manualmente: flatpak install com.microsoft.Edge"
   },
   "authSuccess": {
     "title": "Autenticazione",

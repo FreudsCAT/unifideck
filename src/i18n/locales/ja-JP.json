@@ -177,7 +177,9 @@
     "no": "いいえ",
     "amazonUpdateTitle": "完全な再ダウンロードが必要です",
     "amazonUpdateDescription": "Amazon のアップデートでは {{title}} を完全に再ダウンロードする必要があります。しばらく時間がかかる場合があります。続行しますか？",
-    "updateConfirm": "更新"
+    "updateConfirm": "更新",
+    "steamRestartCleanupTitle": "クリーンアップが完了しました！",
+    "steamRestartCleanupDescription": "削除されたゲームとアートワークを完全に反映するには Steam を再起動してください"
   },
   "toasts": {
     "downloadStarted": "ダウンロード開始。UNIFIDECK > ダウンロードを確認してください",
@@ -258,7 +260,8 @@
       "prerequisitesReady": "前提条件の準備完了",
       "prerequisitesInstalled": "ゲームの前提条件がインストールされました",
       "prerequisitesFailed": "前提条件の警告",
-      "prerequisitesFailedMessage": "前提条件が正しくインストールされなかった可能性があります"
+      "prerequisitesFailedMessage": "前提条件が正しくインストールされなかった可能性があります",
+      "browserRequired": "Microsoft Edge が必要です"
     },
     "updateComplete": "更新完了！",
     "updateCompleteMessage": "{{title}} の更新が完了しました。",
@@ -481,16 +484,19 @@
     "accountConnected": "Microsoft アカウントが接続されました",
     "loggedOut": "Microsoft Store からログアウトしました",
     "xcloudNotInstalled": "xCloud ゲームはローカルにインストールされていません",
-    "chromiumRequired": "Chromium が必要です",
-    "chromiumRequiredMessage": "Xbox Cloud Gaming には Chromium ブラウザが必要です。自動でインストールしますか？（この操作は一度だけ必要です。）",
-    "chromiumInstallButton": "Chromium をインストール",
-    "chromiumInstalling": "Chromium をインストール中...",
-    "chromiumInstalled": "Chromium がインストールされました！",
-    "chromiumAlreadyInstalled": "Chromium はすでにインストールされています",
-    "chromiumInstallFailed": "Chromium のインストールに失敗しました。手動でインストールしてください: flatpak install org.chromium.Chromium",
-    "chromiumInstallTimeout": "Chromium のインストールがタイムアウトしました。",
+    "chromiumRequired": "Microsoft Edge が必要です",
+    "chromiumRequiredMessage": "Xbox Cloud Gaming には Microsoft Edge が必要です。自動でインストールしますか？（この操作は一度だけ必要です。）",
+    "chromiumInstallButton": "Microsoft Edge をインストール",
+    "chromiumInstalling": "Microsoft Edge をインストール中...",
+    "chromiumInstalled": "Microsoft Edge がインストールされました！",
+    "chromiumAlreadyInstalled": "互換性のあるブラウザはすでにインストールされています",
+    "chromiumInstallFailed": "Microsoft Edge のインストールに失敗しました。手動でインストールしてください: flatpak install com.microsoft.Edge",
+    "chromiumInstallTimeout": "Microsoft Edge のインストールがタイムアウトしました。インターネット接続を確認してください。",
     "flatpakNotFound": "このシステムでは Flatpak が利用できません",
-    "signInRequired": "プレイするにはサインインしてください"
+    "signInRequired": "プレイするにはサインインしてください",
+    "browserAlreadyInstalled": "互換性のあるブラウザはすでにインストールされています",
+    "browserInstalled": "Microsoft Edge のインストールが完了しました！",
+    "browserInstallFailed": "Microsoft Edge のインストールに失敗しました。手動でインストールしてください: flatpak install com.microsoft.Edge"
   },
   "authSuccess": {
     "title": "認証",

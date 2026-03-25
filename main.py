@@ -6320,6 +6320,16 @@ microsoft_client=self.microsoft,
                 # This works for any install location and auto-cleans stale entries
                 is_installed = self.shortcuts_manager._is_in_game_map(store, game_id)
 
+                # xCloud games are streamed, not locally installed — they have
+                # exe_path="xcloud" in games.map which _is_in_game_map treats
+                # as "present", but they should NOT appear in the Installed tab.
+                if store == 'microsoft' and is_installed:
+                    entry = self.shortcuts_manager._get_game_map_entry(store, game_id)
+                    if entry:
+                        parts = entry.split('|')
+                        if len(parts) >= 2 and parts[1] == 'xcloud':
+                            is_installed = False
+
                 # Ubisoft installs can complete outside download queue updates.
                 # If games.map is stale/missing, fall back to direct prefix scan and
                 # immediately rehydrate games.map so Installed tab stays accurate.

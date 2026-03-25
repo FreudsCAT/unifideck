@@ -119,6 +119,30 @@ focus_auth_window_if_needed() {
     ) &
 }
 
+focus_xcloud_window_if_needed() {
+    command -v xdotool >/dev/null 2>&1 || return 0
+
+    (
+        local wid
+        for _ in $(seq 1 120); do
+            sleep 0.25
+            wid="$(xdotool search --onlyvisible --classname 'unifideck-xcloud' 2>/dev/null | tail -n 1 || true)"
+            if [ -z "$wid" ]; then
+                wid="$(xdotool search --onlyvisible --classname 'www.xbox.com__play' 2>/dev/null | tail -n 1 || true)"
+            fi
+            if [ -z "$wid" ]; then
+                wid="$(xdotool search --onlyvisible --name 'Xbox Cloud Gaming|xbox.com' 2>/dev/null | tail -n 1 || true)"
+            fi
+            [ -n "$wid" ] || continue
+            xdotool windowactivate --sync "$wid" >/dev/null 2>&1 || true
+            xdotool windowraise "$wid" >/dev/null 2>&1 || true
+            xdotool windowfocus "$wid" >/dev/null 2>&1 || true
+            log "Focused xCloud window: $wid"
+            break
+        done
+    ) &
+}
+
 # Toast notification for setup stages (visible in Game Mode)
 # Usage: notify_stage "Stage Name" "Details..."
 # 
@@ -933,11 +957,11 @@ fi
 log "Executable: $EXE_PATH"
 log "Work Dir: $WORK_DIR"
 
-# 4a-0. Microsoft OAuth auth — launch Chromium with auth URL via RunGame
+# 4a-0. Microsoft OAuth auth — launch a compatible browser with auth URL via RunGame
 # The backend writes the OAuth URL to ms_auth_url.txt and starts a CDP
-# monitor on port 9222.  We launch Chromium so gamescope surfaces it.
+# monitor on port 9222. We launch the browser so gamescope surfaces it.
 if [ "${UNIFIDECK_MICROSOFT_ACTION:-}" = "auth" ]; then
-    log "Microsoft auth detected — launching Chromium for OAuth"
+    log "Microsoft auth detected — launching browser for OAuth"
     notify_stage "toasts.launcher.signingIn" "Microsoft" "low"
 
     import_steam_session_env
@@ -956,7 +980,7 @@ if [ "${UNIFIDECK_MICROSOFT_ACTION:-}" = "auth" ]; then
     AUTH_PROFILE="$HOME/.local/share/unifideck/chromium-auth"
     mkdir -p "$AUTH_PROFILE"
 
-    # Remove stale Singleton lock files that prevent Chromium from starting
+    # Remove stale Singleton lock files that prevent the shared auth profile from starting
     rm -f "$AUTH_PROFILE/SingletonLock" "$AUTH_PROFILE/SingletonSocket" "$AUTH_PROFILE/SingletonCookie" 2>/dev/null
 
     AUTH_WINDOW_MODE="$(auth_window_mode_flag)"
@@ -996,29 +1020,32 @@ if [ "${UNIFIDECK_MICROSOFT_ACTION:-}" = "auth" ]; then
     focus_auth_window_if_needed "$AUTH_WINDOW_MODE"
 
     # Steam's native overlay keyboard is used for text input in auth pages.
-    # In gaming mode, import Steam/gamescope's IM env before launch so
-    # Chromium can bind to the same keyboard/session hooks. In desktop mode,
+    # In gaming mode, import Steam/gamescope's IM env before launch so the
+    # browser can bind to the same keyboard/session hooks. In desktop mode,
     # avoid forcing fullscreen so the Steam keyboard can stack over the auth
     # window instead of appearing behind/outside it.
 
-    if command -v flatpak &>/dev/null && (flatpak info --user org.chromium.Chromium &>/dev/null 2>&1 || flatpak info org.chromium.Chromium &>/dev/null 2>&1); then
+    if command -v flatpak &>/dev/null && (flatpak info --user com.microsoft.Edge &>/dev/null 2>&1 || flatpak info com.microsoft.Edge &>/dev/null 2>&1); then
+        log "Using Microsoft Edge flatpak for Microsoft auth"
+        flatpak run com.microsoft.Edge "${CHROME_FLAGS[@]}" 2>>"$LOG_FILE"
+    elif command -v flatpak &>/dev/null && (flatpak info --user org.chromium.Chromium &>/dev/null 2>&1 || flatpak info org.chromium.Chromium &>/dev/null 2>&1); then
         log "Using Chromium flatpak for Microsoft auth"
         flatpak run org.chromium.Chromium "${CHROME_FLAGS[@]}" 2>>"$LOG_FILE"
     elif command -v flatpak &>/dev/null && (flatpak info --user com.google.Chrome &>/dev/null 2>&1 || flatpak info com.google.Chrome &>/dev/null 2>&1); then
         log "Using Google Chrome flatpak for Microsoft auth"
         flatpak run com.google.Chrome "${CHROME_FLAGS[@]}" 2>>"$LOG_FILE"
     else
-        log "ERROR: No Chromium/Chrome found for Microsoft auth"
+        log "ERROR: No compatible Chromium-based browser found for Microsoft auth"
         exit 1
     fi
 
-    log "Microsoft auth Chromium closed, exiting launcher"
+    log "Microsoft auth browser closed, exiting launcher"
     exit 0
 fi
 
 # 4a. Xbox Cloud Gaming — stream via Chromium in fullscreen app mode
 if [ "$EXE_PATH" = "xcloud" ]; then
-    log "xCloud game detected — launching via Chromium: $WORK_DIR"
+    log "xCloud game detected — launching: $WORK_DIR"
     notify_stage "toasts.launcher.launchingGame" "Xbox Cloud Gaming" "low"
 
     # WORK_DIR contains the game-specific URL (https://www.xbox.com/play/launch/{productId}).
@@ -1026,41 +1053,13 @@ if [ "$EXE_PATH" = "xcloud" ]; then
     # streaming page boots, then redirect to the requested game URL.
     XCLOUD_URL="https://www.xbox.com/play"
     XCLOUD_LAUNCH_URL="$WORK_DIR"
-
-    # Common Chromium flags for xCloud streaming
-    # Use the same Chromium profile as auth so cookies are shared
-    AUTH_PROFILE="$HOME/.local/share/unifideck/chromium-auth"
     XCLOUD_CDP_PORT=9223
+
+    # Auth profile for Chromium-based browsers (shared between auth and xCloud)
+    AUTH_PROFILE="$HOME/.local/share/unifideck/chromium-auth"
     mkdir -p "$AUTH_PROFILE"
 
-    CHROME_FLAGS=(
-        "--app=$XCLOUD_URL"
-        "--start-fullscreen"
-        "--user-data-dir=$AUTH_PROFILE"
-        "--no-first-run"
-        "--disable-translate"
-        "--disable-infobars"
-        "--disable-session-crashed-bubble"
-        "--disable-features=TranslateUI"
-        "--password-store=basic"
-        "--disable-dev-shm-usage"
-        "--disable-background-networking"
-        "--autoplay-policy=no-user-gesture-required"
-        "--window-size=1024,720"
-        "--force-device-scale-factor=1.25"
-        "--device-scale-factor=1.25"
-        "--remote-debugging-port=$XCLOUD_CDP_PORT"
-        # Gamepad support — Steam Deck virtual Xbox controller at /dev/input/js0.
-        # Steam Input creates the device; Chromium reads it via the Web Gamepad API.
-        "--enable-gamepad-button-axis-events"
-        "--enable-features=WebGamepad,GamepadExtensions"
-        # Force Chromium to poll gamepad devices even if no user gesture yet
-        "--disable-features-block-on-user-gesture=GamepadAccess"
-    )
-
     # Clear PluginLoader's bundled library paths to avoid OpenSSL conflicts.
-    # Note: LD_PRELOAD is already unset at script startup (line ~161).
-    # We keep it unset for Chromium to avoid gameoverlayrenderer.so conflicts.
     # Steam Input works independently via uinput — no LD_PRELOAD needed.
     unset LD_LIBRARY_PATH
 
@@ -1072,35 +1071,124 @@ if [ "$EXE_PATH" = "xcloud" ]; then
     fi
     log "XAUTHORITY=$XAUTHORITY DISPLAY=$DISPLAY"
 
-    XCLOUD_INJECT_SCRIPT="$PLUGIN_DIR/bin/xcloud_cdp_inject.py"
-    if [ -f "$XCLOUD_INJECT_SCRIPT" ]; then
-        log "Starting xCloud CDP compatibility injector on port $XCLOUD_CDP_PORT (target: $XCLOUD_LAUNCH_URL)"
-        _xcloud_inject_args=(--port "$XCLOUD_CDP_PORT" --timeout 45)
-        if [ -n "$XCLOUD_LAUNCH_URL" ] && [ "$XCLOUD_LAUNCH_URL" != "$XCLOUD_URL" ]; then
-            _xcloud_inject_args+=(--launch-url "$XCLOUD_LAUNCH_URL")
+    # Detect available browser — prefer Edge (native xCloud/Xbox gamepad support)
+    _xcloud_browser=""
+    _xcloud_browser_name=""
+    _xcloud_needs_gamepad_trigger=false
+
+    if command -v flatpak &>/dev/null; then
+        if flatpak info --user com.microsoft.Edge &>/dev/null 2>&1 || flatpak info com.microsoft.Edge &>/dev/null 2>&1; then
+            _xcloud_browser="com.microsoft.Edge"
+            _xcloud_browser_name="Microsoft Edge"
+        elif flatpak info --user org.chromium.Chromium &>/dev/null 2>&1 || flatpak info org.chromium.Chromium &>/dev/null 2>&1; then
+            _xcloud_browser="org.chromium.Chromium"
+            _xcloud_browser_name="Chromium"
+            _xcloud_needs_gamepad_trigger=true
+        elif flatpak info --user com.google.Chrome &>/dev/null 2>&1 || flatpak info com.google.Chrome &>/dev/null 2>&1; then
+            _xcloud_browser="com.google.Chrome"
+            _xcloud_browser_name="Google Chrome"
+            _xcloud_needs_gamepad_trigger=true
         fi
-        "$PYTHON_BIN" "$XCLOUD_INJECT_SCRIPT" "${_xcloud_inject_args[@]}" >>"$LOG_FILE" 2>&1 &
-        _xcloud_inject_pid=$!
-    else
-        _xcloud_inject_pid=""
     fi
 
-    if command -v flatpak &>/dev/null && (flatpak info --user org.chromium.Chromium &>/dev/null 2>&1 || flatpak info org.chromium.Chromium &>/dev/null 2>&1); then
-        log "Using Chromium flatpak in fullscreen app mode"
-        flatpak run --device=all org.chromium.Chromium "${CHROME_FLAGS[@]}" 2>>"$LOG_FILE"
-    elif command -v flatpak &>/dev/null && (flatpak info --user com.google.Chrome &>/dev/null 2>&1 || flatpak info com.google.Chrome &>/dev/null 2>&1); then
-        log "Using Google Chrome flatpak in fullscreen app mode"
-        flatpak run --device=all com.google.Chrome "${CHROME_FLAGS[@]}" 2>>"$LOG_FILE"
-    else
-        # Fallback: Steam built-in browser (B closes the window)
-        log "WARNING: No Chromium/Chrome found — falling back to Steam browser"
-        steam "steam://openurl/$XCLOUD_URL" 2>>"$LOG_FILE" &
-        sleep 3
+    if [ -z "$_xcloud_browser" ]; then
+        log "ERROR: No compatible Chromium-based browser found for xCloud."
+        log "Please install Microsoft Edge via Discover or flatpak."
+        notify_stage "toasts.launcher.browserRequired" "Install Microsoft Edge" "critical"
+        exit 1
     fi
 
-    if [ -n "${_xcloud_inject_pid:-}" ]; then
-        wait "$_xcloud_inject_pid" 2>/dev/null || true
+    log "Selected xCloud browser: $_xcloud_browser_name ($_xcloud_browser)"
+
+    # Build browser flags.
+    # Use --kiosk mode (matching the proven Edge xCloud shortcut approach) for
+    # proper fullscreen and gamepad focus handling.
+    if [ "$_xcloud_browser" = "com.microsoft.Edge" ]; then
+        # Edge: native Xbox gamepad support, no CDP injection needed.
+        # Share auth profile so OAuth cookies from Chromium sign-in persist.
+        # Navigate directly to the game URL (no CDP redirect needed).
+        _edge_target_url="${XCLOUD_LAUNCH_URL:-$XCLOUD_URL}"
+        CHROME_FLAGS=(
+            "--kiosk"
+            "--class=unifideck-xcloud"
+            "--user-data-dir=$AUTH_PROFILE"
+            "--no-first-run"
+            "--disable-translate"
+            "--disable-infobars"
+            "--disable-session-crashed-bubble"
+            "--disable-features=TranslateUI"
+            "--autoplay-policy=no-user-gesture-required"
+            "--window-size=1024,720"
+            "--force-device-scale-factor=1.25"
+            "--device-scale-factor=1.25"
+            "$_edge_target_url"
+        )
+    else
+        # Chromium/Chrome: use kiosk mode + CDP port for compat JS injection.
+        CHROME_FLAGS=(
+            "--kiosk"
+            "--class=unifideck-xcloud"
+            "--user-data-dir=$AUTH_PROFILE"
+            "--no-first-run"
+            "--disable-translate"
+            "--disable-infobars"
+            "--disable-session-crashed-bubble"
+            "--disable-features=TranslateUI"
+            "--password-store=basic"
+            "--disable-dev-shm-usage"
+            "--disable-background-networking"
+            "--autoplay-policy=no-user-gesture-required"
+            "--window-size=1024,720"
+            "--force-device-scale-factor=1.25"
+            "--device-scale-factor=1.25"
+            "--remote-debugging-port=$XCLOUD_CDP_PORT"
+            "--enable-gamepad-button-axis-events"
+            "$XCLOUD_URL"
+        )
     fi
+
+    # CDP compat JS injection (Chromium/Chrome only — spoofs Edge UA, re-dispatches
+    # gamepad events, provides fullscreen shims for xCloud).
+    # NOTE: We no longer pass --steam-controller-appid; the CDP controller-layout
+    # bounce was counterproductive (temporarily put Steam Input in keyboard mode).
+    _xcloud_inject_pid=""
+    if [ "$_xcloud_browser" != "com.microsoft.Edge" ]; then
+        XCLOUD_INJECT_SCRIPT="$PLUGIN_DIR/bin/xcloud_cdp_inject.py"
+        if [ -f "$XCLOUD_INJECT_SCRIPT" ]; then
+            log "Starting xCloud CDP compatibility injector on port $XCLOUD_CDP_PORT (target: $XCLOUD_LAUNCH_URL)"
+            _xcloud_inject_args=(--port "$XCLOUD_CDP_PORT" --timeout 45)
+            if [ -n "$XCLOUD_LAUNCH_URL" ] && [ "$XCLOUD_LAUNCH_URL" != "$XCLOUD_URL" ]; then
+                _xcloud_inject_args+=(--launch-url "$XCLOUD_LAUNCH_URL")
+            fi
+            "$PYTHON_BIN" "$XCLOUD_INJECT_SCRIPT" "${_xcloud_inject_args[@]}" >>"$LOG_FILE" 2>&1 &
+            _xcloud_inject_pid=$!
+        fi
+    fi
+
+    # Gamepad trigger: inject synthetic button events into the SteamOS virtual
+    # Xbox pad so Chromium's Gamepad API detects the controller without manual
+    # interaction.  Edge has native gamepad support so this is only needed for
+    # Chromium/Chrome.
+    _gamepad_trigger_pid=""
+    if [ "$_xcloud_needs_gamepad_trigger" = true ]; then
+        GAMEPAD_TRIGGER_SCRIPT="$PLUGIN_DIR/bin/xcloud_gamepad_trigger.py"
+        if [ -f "$GAMEPAD_TRIGGER_SCRIPT" ]; then
+            log "Starting gamepad trigger (synthetic event injection for Chromium)"
+            "$PYTHON_BIN" "$GAMEPAD_TRIGGER_SCRIPT" \
+                --delay 5 --duration 20 --interval 3 >>"$LOG_FILE" 2>&1 &
+            _gamepad_trigger_pid=$!
+        fi
+    fi
+
+    focus_xcloud_window_if_needed
+
+    log "Launching $_xcloud_browser_name flatpak in kiosk mode"
+    flatpak run --device=all "$_xcloud_browser" "${CHROME_FLAGS[@]}" 2>>"$LOG_FILE"
+
+    # Clean up background helpers
+    for _pid in "${_xcloud_inject_pid:-}" "${_gamepad_trigger_pid:-}"; do
+        [ -n "$_pid" ] && kill "$_pid" 2>/dev/null && wait "$_pid" 2>/dev/null || true
+    done
 
     log "xCloud session ended, exiting launcher"
     exit 0

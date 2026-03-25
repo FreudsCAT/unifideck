@@ -1,8 +1,8 @@
 /**
- * ChromiumInstallModal — prompts the user to install Chromium for xCloud.
+ * ChromiumInstallModal — prompts the user to install Microsoft Edge for xCloud.
  *
- * Shown when the user tries to connect Microsoft and Chromium is not found.
- * Offers a one-click install via flatpak, with progress feedback.
+ * Shown when the user tries to connect Microsoft and no compatible browser is
+ * found. Offers a one-click Flatpak install with progress feedback.
  */
 
 import { ConfirmModal, Spinner } from "@decky/ui";

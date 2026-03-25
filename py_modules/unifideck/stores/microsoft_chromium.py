@@ -1,13 +1,13 @@
 """
-Chromium browser management for the Microsoft xCloud connector.
+Chromium-based browser management for the Microsoft xCloud connector.
 
-Handles launching, finding, killing, and installing Chromium on Steam Deck.
-Manages the shared browser profile (``~/.local/share/unifideck/chromium-auth``),
-environment variables needed for GUI apps under PluginLoader, and browser
-lifecycle for the auth page.
+Handles launching, finding, killing, and installing Microsoft Edge or another
+compatible Chromium-based browser. Manages the shared browser profile
+(``~/.local/share/unifideck/chromium-auth``), environment variables needed for
+GUI apps under PluginLoader, and browser lifecycle for the auth page.
 
 This module has no knowledge of OAuth, tokens, or the xCloud catalog — it
-only manages the browser lifecycle.  The connector (``microsoft.py``) owns
+only manages the browser lifecycle. The connector (``microsoft.py``) owns
 the auth flow and delegates browser operations here.
 
 Usage in ``microsoft.py``::
@@ -39,11 +39,14 @@ logger = logging.getLogger(__name__)
 PROFILE_DIR = os.path.expanduser("~/.local/share/unifideck/chromium-auth")
 LOG_FILE    = os.path.expanduser("~/.local/share/unifideck/chromium-auth.log")
 
-# Flatpak app IDs to search, in priority order
-_FLATPAK_APPS = ("org.chromium.Chromium", "com.google.Chrome")
+# Flatpak app IDs to search, in priority order (Edge preferred for native xCloud gamepad)
+_FLATPAK_APPS = ("com.microsoft.Edge", "org.chromium.Chromium", "com.google.Chrome")
+_EDGE_FLATPAK_APP = "com.microsoft.Edge"
+_FLATHUB_REMOTE = "flathub"
+_FLATHUB_REMOTE_URL = "https://dl.flathub.org/repo/flathub.flatpakrepo"
 
 # Native binary names to search if no flatpak found
-_NATIVE_BINS = ("chromium", "chromium-browser", "google-chrome")
+_NATIVE_BINS = ("microsoft-edge", "microsoft-edge-stable", "chromium", "chromium-browser", "google-chrome")
 
 # Domains whose cookies are cleared on logout
 _MS_COOKIE_DOMAINS = (
@@ -178,7 +181,7 @@ def _detect_session_env(uid: int, home: str) -> Dict[str, str]:
 
 
 def clean_env() -> dict:
-    """Return a clean environment for launching Chromium/flatpak.
+    """Return a clean environment for launching the auth browser/flatpak.
 
     - Strips ``LD_LIBRARY_PATH`` / ``LD_PRELOAD``.
     - Detects the real Steam/gamescope session env when Decky lacks it.
@@ -203,7 +206,7 @@ def clean_env() -> dict:
 # ── ChromiumBrowser ───────────────────────────────────────────────────────────
 
 class ChromiumBrowser:
-    """Manages Chromium for Microsoft auth and xCloud on Steam Deck.
+    """Manages a Chromium-based browser for Microsoft auth and xCloud.
 
     Attributes:
         cdp_port:  CDP remote debugging port (default 9222).
@@ -221,13 +224,13 @@ class ChromiumBrowser:
         self.process: Optional[subprocess.Popen] = None
 
     def is_running(self) -> bool:
-        """Return True when the auth Chromium instance is still alive."""
+        """Return True when the auth browser instance is still alive."""
         if self.process is not None and self.process.poll() is None:
             return True
         return self._get_browser_ws_url() is not None
 
     def _singleton_paths(self) -> List[str]:
-        """Return Chromium singleton artifacts for the shared profile."""
+        """Return singleton artifacts for the shared auth profile."""
         return [
             os.path.join(PROFILE_DIR, "SingletonLock"),
             os.path.join(PROFILE_DIR, "SingletonCookie"),
@@ -246,9 +249,9 @@ class ChromiumBrowser:
         return not os.path.exists(target)
 
     def cleanup_stale_profile_state(self) -> None:
-        """Remove stale profile lock artifacts after an unclean Chromium exit.
+        """Remove stale profile lock artifacts after an unclean browser exit.
 
-        Chromium leaves ``Singleton*`` symlinks in the shared profile.  If the
+        Chromium-based browsers leave ``Singleton*`` symlinks in the shared profile. If the
         socket target is already gone, relaunching with the same profile becomes
         unreliable and users end up deleting ``~/.local/share/unifideck``.
         Only remove these files when the singleton socket is clearly broken.
@@ -268,12 +271,12 @@ class ChromiumBrowser:
 
         if removed:
             logger.info(
-                "[MS] Removed stale Chromium profile artifacts: "
+                "[MS] Removed stale browser profile artifacts: "
                 + ", ".join(sorted(removed))
             )
 
     def _get_browser_ws_url(self) -> Optional[str]:
-        """Return the live CDP browser websocket URL, if Chromium is up."""
+        """Return the live CDP browser websocket URL, if the auth browser is up."""
         import urllib.request as _req
 
         try:
@@ -287,7 +290,7 @@ class ChromiumBrowser:
             return None
 
     def _list_cdp_targets(self) -> List[Dict[str, Any]]:
-        """Return the current CDP targets exposed by Chromium."""
+        """Return the current CDP targets exposed by the auth browser."""
         import urllib.request as _req
 
         try:
@@ -299,48 +302,122 @@ class ChromiumBrowser:
         except Exception:
             return []
 
+    async def _close_all_cdp_targets(self, *, log_prefix: str) -> bool:
+        """Close all live targets exposed on this browser's CDP port."""
+        targets = self._list_cdp_targets()
+        if not targets:
+            return False
+
+        import urllib.error as _err
+        import urllib.request as _req
+
+        closed_any = False
+        for target in targets:
+            target_id = target.get("id")
+            if not target_id:
+                continue
+            try:
+                with _req.urlopen(
+                    f"http://127.0.0.1:{self.cdp_port}/json/close/{target_id}",
+                    timeout=2,
+                ) as r:
+                    r.read()
+                closed_any = True
+            except _err.HTTPError as e:
+                if e.code != 404:
+                    logger.warning(
+                        f"[MS] Could not close {log_prefix} target {target_id}: {e}"
+                    )
+            except Exception as e:
+                logger.warning(
+                    f"[MS] Could not close {log_prefix} target {target_id}: {e}"
+                )
+
+        if closed_any:
+            for _ in range(20):
+                await asyncio.sleep(0.25)
+                if not self._get_browser_ws_url():
+                    break
+            logger.info(
+                f"[MS] Closed {log_prefix} browser targets via DevTools HTTP"
+            )
+        return closed_any
+
     async def prepare_auth_launch(self) -> None:
         """Close any lingering CDP auth browser and clear broken lock files."""
-        targets = self._list_cdp_targets()
-        if targets:
-            import urllib.error as _err
-            import urllib.request as _req
-
-            closed_any = False
-            for target in targets:
-                target_id = target.get("id")
-                if not target_id:
-                    continue
-                try:
-                    with _req.urlopen(
-                        f"http://127.0.0.1:{self.cdp_port}/json/close/{target_id}",
-                        timeout=2,
-                    ) as r:
-                        r.read()
-                    closed_any = True
-                except _err.HTTPError as e:
-                    if e.code != 404:
-                        logger.warning(
-                            f"[MS] Could not close lingering auth target {target_id}: {e}"
-                        )
-                except Exception as e:
-                    logger.warning(
-                        f"[MS] Could not close lingering auth target {target_id}: {e}"
-                    )
-
-            if closed_any:
-                for _ in range(20):
-                    await asyncio.sleep(0.25)
-                    if not self._get_browser_ws_url():
-                        break
-                logger.info("[MS] Closed lingering Chromium auth browser via DevTools HTTP")
-
+        await self._close_all_cdp_targets(log_prefix="lingering auth")
         self.cleanup_stale_profile_state()
+
+    async def close_auth_browser(self) -> bool:
+        """Close the live Microsoft auth browser after OAuth succeeds."""
+        closed = await self._close_all_cdp_targets(log_prefix="auth")
+        if closed:
+            self.cleanup_stale_profile_state()
+        return closed
 
     # ── Detection & install ──────────────────────────────────────────────
 
+    def _flatpak_remote_names(self, scope: str) -> set[str]:
+        """Return configured flatpak remote names for the given scope."""
+        if scope not in ("--user", "--system"):
+            return set()
+        try:
+            result = subprocess.run(
+                ["flatpak", "remotes", scope, "--columns=name"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+                env=clean_env(),
+            )
+        except Exception:
+            return set()
+        if result.returncode != 0:
+            return set()
+
+        remotes: set[str] = set()
+        for raw_line in result.stdout.splitlines():
+            line = raw_line.strip()
+            if not line or line.lower() == "name":
+                continue
+            remotes.add(line)
+        return remotes
+
+    async def _ensure_user_flathub_remote(self) -> bool:
+        """Ensure the user Flatpak installation can see the Flathub remote."""
+        if _FLATHUB_REMOTE in self._flatpak_remote_names("--user"):
+            return True
+
+        logger.info("[MS] Adding user flathub remote for browser installation")
+        try:
+            proc = await asyncio.get_event_loop().run_in_executor(
+                None,
+                lambda: subprocess.run(
+                    [
+                        "flatpak",
+                        "remote-add",
+                        "--if-not-exists",
+                        "--user",
+                        _FLATHUB_REMOTE,
+                        _FLATHUB_REMOTE_URL,
+                    ],
+                    capture_output=True,
+                    timeout=60,
+                    env=clean_env(),
+                ),
+            )
+        except Exception as e:
+            logger.warning(f"[MS] Could not add user flathub remote: {e}")
+            return False
+
+        if proc.returncode != 0:
+            stderr = proc.stderr.decode("utf-8", errors="replace")[:200]
+            logger.warning(f"[MS] Adding user flathub remote failed: {stderr}")
+            return False
+
+        return _FLATHUB_REMOTE in self._flatpak_remote_names("--user")
+
     def find_cmd(self) -> Optional[List[str]]:
-        """Find an available Chromium/Chrome command.
+        """Find an available Edge/Chromium-based browser command.
 
         Checks both ``--user`` and ``--system`` flatpak installations,
         then falls back to native binaries.
@@ -368,11 +445,15 @@ class ChromiumBrowser:
 
     @property
     def is_installed(self) -> bool:
-        """Return True if Chromium or Chrome is available."""
+        """Return True if a compatible Chromium-based browser is available."""
         return self.find_cmd() is not None
 
     async def install(self) -> Dict[str, Any]:
-        """Install Chromium via flatpak (``--user``).
+        """Install Microsoft Edge via Flatpak in the user installation.
+
+        Ensures the user Flathub remote exists first so this works on SteamOS
+        variants, Bazzite, CachyOS, and other immutable Linux distros where
+        Flatpak is present but only system remotes were preconfigured.
 
         Returns:
             Dict with ``success`` and ``message`` or ``error`` keys.
@@ -380,49 +461,62 @@ class ChromiumBrowser:
         if not shutil.which("flatpak"):
             return {"success": False, "error": "microsoft.flatpakNotFound"}
         if self.is_installed:
-            return {"success": True, "message": "microsoft.chromiumAlreadyInstalled"}
+            return {"success": True, "message": "microsoft.browserAlreadyInstalled"}
 
-        logger.info("[MS] Installing Chromium via flatpak...")
+        if not await self._ensure_user_flathub_remote():
+            return {"success": False, "error": "microsoft.browserInstallFailed"}
+
+        logger.info("[MS] Attempting to install Microsoft Edge via flatpak...")
         try:
             proc = await asyncio.get_event_loop().run_in_executor(
                 None,
                 lambda: subprocess.run(
-                    ["flatpak", "install", "--user", "-y",
-                     "flathub", "org.chromium.Chromium"],
-                    capture_output=True, timeout=300,
+                    [
+                        "flatpak",
+                        "install",
+                        "--user",
+                        "--noninteractive",
+                        "-y",
+                        _FLATHUB_REMOTE,
+                        _EDGE_FLATPAK_APP,
+                    ],
+                    capture_output=True,
+                    timeout=300,
                     env=clean_env(),
                 ),
             )
             if proc.returncode == 0:
-                logger.info("[MS] Chromium installed successfully")
-                return {"success": True, "message": "microsoft.chromiumInstalled"}
+                logger.info("[MS] Microsoft Edge installed successfully")
+                return {"success": True, "message": "microsoft.browserInstalled"}
+
             stderr = proc.stderr.decode("utf-8", errors="replace")[:200]
-            logger.error(f"[MS] Chromium install failed: {stderr}")
-            return {"success": False, "error": "microsoft.chromiumInstallFailed"}
+            logger.warning(f"[MS] Microsoft Edge install failed: {stderr}")
+            return {"success": False, "error": "microsoft.browserInstallFailed"}
         except subprocess.TimeoutExpired:
+            logger.warning("[MS] Microsoft Edge install timed out")
             return {"success": False, "error": "microsoft.chromiumInstallTimeout"}
         except Exception as e:
-            logger.error(f"[MS] Chromium install error: {e}")
-            return {"success": False, "error": "microsoft.chromiumInstallFailed"}
+            logger.warning(f"[MS] Microsoft Edge install error: {e}")
+            return {"success": False, "error": "microsoft.browserInstallFailed"}
 
     # ── Launch / kill ────────────────────────────────────────────────────
 
     def launch_auth(self, auth_url: str) -> bool:
-        """Launch Chromium for OAuth with remote debugging.
+        """Launch the auth browser for OAuth with remote debugging.
 
-        Opens Chromium in fullscreen app mode with our CDP port.
+        Opens the browser in fullscreen app mode with our CDP port.
         Reuses the shared Unifideck profile so xCloud sessions can keep
         their cookies, while cleaning up stale auth-browser state first.
 
         Returns:
-            True if Chromium was launched successfully.
+            True if the browser was launched successfully.
         """
         self.kill()
         self.cleanup_stale_profile_state()
 
         cmd = self.find_cmd()
         if not cmd:
-            logger.warning("[MS] No Chromium/Chrome found for auth")
+            logger.warning("[MS] No compatible browser found for auth")
             return False
 
         os.makedirs(PROFILE_DIR, exist_ok=True)
@@ -440,9 +534,9 @@ class ChromiumBrowser:
         ]
 
         env = clean_env()
-        logger.info(f"[MS] Launching Chromium: {' '.join(args[:7])}...")
+        logger.info(f"[MS] Launching auth browser: {' '.join(args[:7])}...")
         logger.info(
-            f"[MS] Chromium env DISPLAY={env.get('DISPLAY')} "
+            f"[MS] Auth browser env DISPLAY={env.get('DISPLAY')} "
             f"WAYLAND_DISPLAY={env.get('WAYLAND_DISPLAY')} "
             f"SteamAppId={env.get('SteamAppId')}"
         )
@@ -461,17 +555,17 @@ class ChromiumBrowser:
                 env=env,
                 preexec_fn=os.setpgrp,
             )
-            logger.info(f"[MS] Chromium PID: {self.process.pid}")
+            logger.info(f"[MS] Auth browser PID: {self.process.pid}")
             return True
         except Exception as e:
-            logger.error(f"[MS] Failed to launch Chromium: {e}", exc_info=True)
+            logger.error(f"[MS] Failed to launch auth browser: {e}", exc_info=True)
             return False
         finally:
             if stderr_fh is not None:
                 stderr_fh.close()
 
     def kill(self) -> None:
-        """Gracefully terminate the Chromium auth process.
+        """Gracefully terminate the auth browser process.
 
         Waits 1 s before SIGTERM so cookies can flush to disk.
         Does NOT pkill by profile name — that would kill game sessions
@@ -495,9 +589,9 @@ class ChromiumBrowser:
                 self.process.terminate()
 
             self.process.wait(timeout=10)
-            logger.info("[MS] Chromium auth closed (cookies flushed)")
+            logger.info("[MS] Auth browser closed (cookies flushed)")
         except subprocess.TimeoutExpired:
-            logger.debug("[MS] Chromium didn't exit -- sending SIGKILL")
+            logger.debug("[MS] Auth browser didn't exit -- sending SIGKILL")
             try:
                 pgid = None
                 try:
@@ -512,7 +606,7 @@ class ChromiumBrowser:
             except Exception:
                 pass
         except Exception as e:
-            logger.debug(f"[MS] Chromium kill error (non-fatal): {e}")
+            logger.debug(f"[MS] Auth browser kill error (non-fatal): {e}")
         self.process = None
         self.cleanup_stale_profile_state()
 
@@ -520,7 +614,7 @@ class ChromiumBrowser:
 
     @staticmethod
     def has_xbox_session() -> bool:
-        """Return True if xbox.com cookies exist in the Chromium profile.
+        """Return True if xbox.com cookies exist in the shared browser profile.
 
         Returns True on error (assume logged in).
         Returns True if profile does not exist yet (no logout detected).
@@ -552,7 +646,7 @@ class ChromiumBrowser:
 
     @staticmethod
     def clear_cookies() -> None:
-        """Delete Xbox / Microsoft cookies from the Chromium profile."""
+        """Delete Xbox / Microsoft cookies from the shared browser profile."""
         cookie_db = os.path.join(PROFILE_DIR, "Default", "Cookies")
         if not os.path.exists(cookie_db):
             return
@@ -564,22 +658,22 @@ class ChromiumBrowser:
                         "DELETE FROM cookies WHERE host_key LIKE ?", (pattern,)
                     )
                 conn.commit()
-                logger.info("[MS] Cleared Xbox/MS cookies from Chromium profile")
+                logger.info("[MS] Cleared Xbox/MS cookies from shared browser profile")
             except Exception:
                 conn.rollback()
                 raise
             finally:
                 conn.close()
         except Exception as e:
-            logger.debug(f"[MS] Could not clear Chromium cookies: {e}")
+            logger.debug(f"[MS] Could not clear shared browser cookies: {e}")
 
     # ── CDP helpers ──────────────────────────────────────────────────────
 
     async def wait_and_check_crash(self) -> bool:
-        """Wait for Chromium to start, return False if it crashed.
+        """Wait for the auth browser to start, return False if it crashed.
 
         Called at the start of the auth monitor task.  Polls every 0.5 s
-        for up to 10 s to allow Chromium time to start on loaded systems.
+        for up to 10 s to allow the browser time to start on loaded systems.
         """
         if not self.process:
             return False
@@ -592,7 +686,7 @@ class ChromiumBrowser:
                         err = f.read()[:300]
                 except Exception:
                     pass
-                logger.error(f"[MS] Chromium crashed before CDP. stderr: {err}")
+                logger.error(f"[MS] Auth browser crashed before CDP. stderr: {err}")
                 self.process = None
                 return False
             # Check if CDP port is responsive
@@ -604,5 +698,5 @@ class ChromiumBrowser:
                     return True
             except Exception:
                 continue
-        logger.warning("[MS] Chromium started but CDP port not responding after 10 s")
+        logger.warning("[MS] Auth browser started but CDP port not responding after 10 s")
         return True  # process is alive, let caller retry CDP

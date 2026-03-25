@@ -177,7 +177,9 @@
     "no": "Нет",
     "amazonUpdateTitle": "Требуется полная повторная загрузка",
     "amazonUpdateDescription": "Для обновления Amazon требуется полностью заново загрузить {{title}}. Это может занять некоторое время. Продолжить?",
-    "updateConfirm": "Обновить"
+    "updateConfirm": "Обновить",
+    "steamRestartCleanupTitle": "Очистка завершена!",
+    "steamRestartCleanupDescription": "Перезапустите Steam, чтобы полностью удалить удалённые игры и иллюстрации"
   },
   "toasts": {
     "downloadStarted": "Загрузка начата. Проверьте UNIFIDECK > Загрузки",
@@ -258,7 +260,8 @@
       "prerequisitesReady": "Компоненты готовы",
       "prerequisitesInstalled": "Необходимые компоненты игры установлены",
       "prerequisitesFailed": "Предупреждение о компонентах",
-      "prerequisitesFailedMessage": "Необходимые компоненты могли быть установлены некорректно"
+      "prerequisitesFailedMessage": "Необходимые компоненты могли быть установлены некорректно",
+      "browserRequired": "Требуется Microsoft Edge"
     },
     "updateComplete": "Обновление завершено!",
     "updateCompleteMessage": "Обновление {{title}} завершено.",
@@ -481,16 +484,19 @@
     "accountConnected": "Учётная запись Microsoft подключена",
     "loggedOut": "Выход из Microsoft Store",
     "xcloudNotInstalled": "Игры xCloud не установлены локально",
-    "chromiumRequired": "Требуется Chromium",
-    "chromiumRequiredMessage": "Xbox Cloud Gaming требует браузер Chromium. Установить автоматически? (Это нужно сделать только один раз.)",
-    "chromiumInstallButton": "Установить Chromium",
-    "chromiumInstalling": "Установка Chromium...",
-    "chromiumInstalled": "Chromium установлен!",
-    "chromiumAlreadyInstalled": "Chromium уже установлен",
-    "chromiumInstallFailed": "Не удалось установить Chromium. Установите вручную: flatpak install org.chromium.Chromium",
-    "chromiumInstallTimeout": "Истекло время установки Chromium.",
+    "chromiumRequired": "Требуется Microsoft Edge",
+    "chromiumRequiredMessage": "Xbox Cloud Gaming требует Microsoft Edge. Установить автоматически? (Это нужно сделать только один раз.)",
+    "chromiumInstallButton": "Установить Microsoft Edge",
+    "chromiumInstalling": "Установка Microsoft Edge...",
+    "chromiumInstalled": "Microsoft Edge установлен!",
+    "chromiumAlreadyInstalled": "Совместимый браузер уже установлен",
+    "chromiumInstallFailed": "Не удалось установить Microsoft Edge. Установите вручную: flatpak install com.microsoft.Edge",
+    "chromiumInstallTimeout": "Время установки Microsoft Edge истекло. Проверьте подключение к интернету.",
     "flatpakNotFound": "Flatpak недоступен в этой системе",
-    "signInRequired": "Войдите, чтобы играть"
+    "signInRequired": "Войдите, чтобы играть",
+    "browserAlreadyInstalled": "Совместимый браузер уже установлен",
+    "browserInstalled": "Microsoft Edge успешно установлен!",
+    "browserInstallFailed": "Не удалось установить Microsoft Edge. Установите вручную: flatpak install com.microsoft.Edge"
   },
   "authSuccess": {
     "title": "Аутентификация",

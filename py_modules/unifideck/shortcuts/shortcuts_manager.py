@@ -369,6 +369,12 @@ class ShortcutsManager:
         games_map = _load_games_map_cached()
         return key in games_map
 
+    def _get_game_map_entry(self, store: str, game_id: str) -> Optional[str]:
+        """Return the raw games.map line for a game, or None."""
+        key = f"{store}:{game_id}"
+        games_map = _load_games_map_cached()
+        return games_map.get(key)
+
     def _get_install_dir_from_game_map(self, store: str, game_id: str) -> Optional[str]:
         """Get install directory from games.map.
         

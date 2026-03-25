@@ -177,7 +177,9 @@
     "no": "Nee",
     "amazonUpdateTitle": "Volledig opnieuw downloaden vereist",
     "amazonUpdateDescription": "Amazon-updates vereisen een volledige herdownload van {{title}}. Dit kan even duren. Doorgaan?",
-    "updateConfirm": "Bijwerken"
+    "updateConfirm": "Bijwerken",
+    "steamRestartCleanupTitle": "Opschonen voltooid!",
+    "steamRestartCleanupDescription": "Start Steam opnieuw om verwijderde games en artwork volledig te verwijderen"
   },
   "toasts": {
     "downloadStarted": "Download Gestart. Controleer UNIFIDECK > Downloads",
@@ -258,7 +260,8 @@
       "prerequisitesReady": "Vereisten gereed",
       "prerequisitesInstalled": "Spelvereisten geïnstalleerd",
       "prerequisitesFailed": "Vereisten waarschuwing",
-      "prerequisitesFailedMessage": "Vereisten zijn mogelijk niet correct geïnstalleerd"
+      "prerequisitesFailedMessage": "Vereisten zijn mogelijk niet correct geïnstalleerd",
+      "browserRequired": "Microsoft Edge vereist"
     },
     "updateComplete": "Update voltooid!",
     "updateCompleteMessage": "{{title}} is bijgewerkt.",
@@ -481,16 +484,19 @@
     "accountConnected": "Microsoft-account verbonden",
     "loggedOut": "Afgemeld bij Microsoft Store",
     "xcloudNotInstalled": "xCloud-games zijn niet lokaal geïnstalleerd",
-    "chromiumRequired": "Chromium vereist",
-    "chromiumRequiredMessage": "Xbox Cloud Gaming vereist de Chromium-browser. Wilt u deze automatisch installeren? (Dit hoeft maar één keer te worden gedaan.)",
-    "chromiumInstallButton": "Chromium installeren",
-    "chromiumInstalling": "Chromium wordt geïnstalleerd...",
-    "chromiumInstalled": "Chromium geïnstalleerd!",
-    "chromiumAlreadyInstalled": "Chromium is al geïnstalleerd",
-    "chromiumInstallFailed": "Chromium-installatie mislukt. Installeer handmatig: flatpak install org.chromium.Chromium",
-    "chromiumInstallTimeout": "Chromium-installatie verlopen.",
+    "chromiumRequired": "Microsoft Edge vereist",
+    "chromiumRequiredMessage": "Xbox Cloud Gaming vereist Microsoft Edge. Wil je deze automatisch installeren? (Dit hoeft maar één keer te gebeuren.)",
+    "chromiumInstallButton": "Microsoft Edge installeren",
+    "chromiumInstalling": "Microsoft Edge wordt geïnstalleerd...",
+    "chromiumInstalled": "Microsoft Edge geïnstalleerd!",
+    "chromiumAlreadyInstalled": "Er is al een compatibele browser geïnstalleerd",
+    "chromiumInstallFailed": "Installatie van Microsoft Edge mislukt. Installeer handmatig: flatpak install com.microsoft.Edge",
+    "chromiumInstallTimeout": "De installatie van Microsoft Edge is verlopen. Controleer je internetverbinding.",
     "flatpakNotFound": "Flatpak is niet beschikbaar op dit systeem",
-    "signInRequired": "Log in om te spelen"
+    "signInRequired": "Log in om te spelen",
+    "browserAlreadyInstalled": "Er is al een compatibele browser geïnstalleerd",
+    "browserInstalled": "Microsoft Edge is succesvol geïnstalleerd!",
+    "browserInstallFailed": "Installatie van Microsoft Edge mislukt. Installeer handmatig: flatpak install com.microsoft.Edge"
   },
   "authSuccess": {
     "title": "Authenticatie",

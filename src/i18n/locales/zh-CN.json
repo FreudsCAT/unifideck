@@ -177,7 +177,9 @@
     "no": "否",
     "amazonUpdateTitle": "需要完整重新下载",
     "amazonUpdateDescription": "Amazon 更新需要完整重新下载 {{title}}。这可能需要一些时间。是否继续？",
-    "updateConfirm": "更新"
+    "updateConfirm": "更新",
+    "steamRestartCleanupTitle": "清理完成！",
+    "steamRestartCleanupDescription": "请重启 Steam 以彻底移除已删除的游戏和艺术资源"
   },
   "toasts": {
     "downloadStarted": "下载已开始。检查 UNIFIDECK > 下载",
@@ -258,7 +260,8 @@
       "prerequisitesReady": "前置条件就绪",
       "prerequisitesInstalled": "游戏前置条件已安装",
       "prerequisitesFailed": "前置条件警告",
-      "prerequisitesFailedMessage": "前置条件可能未正确安装"
+      "prerequisitesFailedMessage": "前置条件可能未正确安装",
+      "browserRequired": "需要 Microsoft Edge"
     },
     "updateComplete": "更新完成！",
     "updateCompleteMessage": "{{title}} 已更新。",
@@ -481,16 +484,19 @@
     "accountConnected": "Microsoft 账户已连接",
     "loggedOut": "已从 Microsoft Store 登出",
     "xcloudNotInstalled": "xCloud 游戏未在本地安装",
-    "chromiumRequired": "需要 Chromium",
-    "chromiumRequiredMessage": "Xbox Cloud Gaming 需要 Chromium 浏览器。是否自动安装？（只需执行一次。）",
-    "chromiumInstallButton": "安装 Chromium",
-    "chromiumInstalling": "正在安装 Chromium...",
-    "chromiumInstalled": "Chromium 已安装！",
-    "chromiumAlreadyInstalled": "Chromium 已安装",
-    "chromiumInstallFailed": "Chromium 安装失败。请手动安装: flatpak install org.chromium.Chromium",
-    "chromiumInstallTimeout": "Chromium 安装超时。",
+    "chromiumRequired": "需要 Microsoft Edge",
+    "chromiumRequiredMessage": "Xbox Cloud Gaming 需要 Microsoft Edge。是否自动安装？（只需执行一次。）",
+    "chromiumInstallButton": "安装 Microsoft Edge",
+    "chromiumInstalling": "正在安装 Microsoft Edge...",
+    "chromiumInstalled": "Microsoft Edge 已安装！",
+    "chromiumAlreadyInstalled": "已安装兼容的浏览器",
+    "chromiumInstallFailed": "Microsoft Edge 安装失败。请手动安装：flatpak install com.microsoft.Edge",
+    "chromiumInstallTimeout": "Microsoft Edge 安装超时。请检查您的网络连接。",
     "flatpakNotFound": "此系统上没有 Flatpak",
-    "signInRequired": "登录以游玩"
+    "signInRequired": "登录以游玩",
+    "browserAlreadyInstalled": "已安装兼容的浏览器",
+    "browserInstalled": "Microsoft Edge 安装成功！",
+    "browserInstallFailed": "Microsoft Edge 安装失败。请手动安装：flatpak install com.microsoft.Edge"
   },
   "authSuccess": {
     "title": "认证",
