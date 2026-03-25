@@ -26,7 +26,7 @@ if DECKY_PLUGIN_DIR:
 from py_modules.unifideck.shortcuts.vdf import load_shortcuts_vdf, save_shortcuts_vdf
 from py_modules.unifideck.shortcuts.shortcuts_manager import (
     ShortcutsManager, load_shortcuts_registry, save_shortcuts_registry,
-    register_shortcut, get_registered_appid,
+    register_shortcut, get_registered_appid, is_managed_shortcut,
     _invalidate_games_map_mem_cache, _load_games_map_cached, GAMES_MAP_PATH,
     SHORTCUTS_REGISTRY_FILE, get_shortcuts_registry_path
 )
@@ -54,7 +54,7 @@ from py_modules.unifideck.shortcuts.launch_options import extract_store_id, is_u
 # Import CDP modules for native PlaySection hiding
 from py_modules.unifideck.cdp.cdp_utils import create_cef_debugging_flag, ensure_dummy_network_interface
 from py_modules.unifideck.cdp.cdp_inject import get_cdp_client, shutdown_cdp_client
-from py_modules.unifideck.utils.game_tags import get_game_tags
+from py_modules.unifideck.utils.game_tags import get_game_tags, invalidate_cache as invalidate_game_tags_cache
 
 # Import Account Manager for multi-account support
 from py_modules.unifideck.accounts.account_manager import AccountManager
@@ -2503,31 +2503,49 @@ microsoft_client=self.microsoft,
                 await asyncio.gather(*tasks, return_exceptions=True)
 
     def _sync_cache_paths(self) -> Dict[str, Path]:
-        return {
+        paths = {
             'steam_appid': get_steam_appid_cache_path(),
             'steam_real_appid': get_steam_real_appid_cache_path(),
             'steam_metadata': get_steam_metadata_cache_path(),
             'unifidb_metadata': get_unifidb_metadata_cache_path(),
             'metacritic_metadata': get_metacritic_metadata_cache_path(),
             'artwork_attempts': get_artwork_attempts_cache_path(),
+            'shortcuts_registry': get_shortcuts_registry_path(),
+            'games_map': Path(GAMES_MAP_PATH),
+            'game_tags': Path(os.path.expanduser("~/.local/share/unifideck/game_tags.json")),
         }
 
+        shortcuts_path = getattr(self.shortcuts_manager, 'shortcuts_path', None)
+        if shortcuts_path:
+            paths['shortcuts_vdf'] = Path(shortcuts_path)
+
+        return paths
+
     def _capture_sync_cache_snapshot(self) -> None:
-        snapshot: Dict[str, Tuple[bool, bytes]] = {}
+        snapshot: Dict[str, Tuple[str, bool, bytes]] = {}
         for name, cache_path in self._sync_cache_paths().items():
             try:
                 if cache_path.exists():
-                    snapshot[name] = (True, cache_path.read_bytes())
+                    snapshot[name] = (str(cache_path), True, cache_path.read_bytes())
                 else:
-                    snapshot[name] = (False, b'')
+                    snapshot[name] = (str(cache_path), False, b'')
             except Exception as e:
                 logger.warning(f"Failed to snapshot {cache_path.name}: {e}")
-                snapshot[name] = (False, b'')
+                snapshot[name] = (str(cache_path), False, b'')
         self._sync_cache_snapshot = snapshot
 
     def _restore_sync_cache_snapshot(self) -> None:
-        for name, cache_path in self._sync_cache_paths().items():
-            existed, data = self._sync_cache_snapshot.get(name, (False, b''))
+        current_paths = self._sync_cache_paths()
+        for name, snapshot_entry in self._sync_cache_snapshot.items():
+            if len(snapshot_entry) == 3:
+                path_str, existed, data = snapshot_entry
+                cache_path = Path(path_str)
+            else:
+                existed, data = snapshot_entry
+                cache_path = current_paths.get(name)
+                if cache_path is None:
+                    logger.warning(f"Failed to restore {name}: path no longer available")
+                    continue
             try:
                 if existed:
                     cache_path.parent.mkdir(parents=True, exist_ok=True)
@@ -2537,9 +2555,30 @@ microsoft_client=self.microsoft,
             except Exception as e:
                 logger.warning(f"Failed to restore {cache_path.name}: {e}")
         self._sync_cache_snapshot = {}
+        self._invalidate_sync_state_views()
 
     def _clear_sync_cache_snapshot(self) -> None:
         self._sync_cache_snapshot = {}
+
+    def _invalidate_sync_state_views(self) -> None:
+        _invalidate_games_map_mem_cache()
+        invalidate_game_tags_cache()
+        if getattr(self, 'shortcuts_manager', None):
+            self.shortcuts_manager._shortcuts_cache = None
+            self.shortcuts_manager._shortcuts_cache_time = 0
+
+    async def _cleanup_cancelled_sync_state(self) -> None:
+        self._restore_sync_cache_snapshot()
+        if self.steamgriddb:
+            try:
+                cleanup_result = await self.cleanup_orphaned_artwork()
+                removed_count = cleanup_result.get('removed_count', 0)
+                if removed_count:
+                    logger.info(
+                        f"Cleaned up {removed_count} orphaned artwork files after cancelled sync"
+                    )
+            except Exception as e:
+                logger.warning(f"Failed to clean orphaned artwork after cancelled sync: {e}")
 
     def _sync_in_progress_response(self, force: bool = False) -> Dict[str, Any]:
         payload = {
@@ -2616,7 +2655,7 @@ microsoft_client=self.microsoft,
 
             if result.get('cancelled'):
                 restart_pending = self._pending_auth_sync_request is not None
-                self._restore_sync_cache_snapshot()
+                await self._cleanup_cancelled_sync_state()
                 self._set_cancelled_progress(restart_pending=restart_pending)
                 result['success'] = False
                 result['error'] = 'errors.syncCancelled'
@@ -2628,7 +2667,7 @@ microsoft_client=self.microsoft,
             return result
         except asyncio.CancelledError:
             restart_pending = self._pending_auth_sync_request is not None
-            self._restore_sync_cache_snapshot()
+            await self._cleanup_cancelled_sync_state()
             self._set_cancelled_progress(restart_pending=restart_pending)
             return {
                 'success': False,
@@ -6069,20 +6108,48 @@ microsoft_client=self.microsoft,
             'errors': shortcuts.get('errors', []) + artwork.get('errors', []),
         }
 
+    async def _clear_all_store_auth_state(self) -> Dict[str, Any]:
+        """Clear connector-specific auth state and shared auth files."""
+        result = {'deleted_tokens': [], 'cleared_files': [], 'errors': []}
+
+        logout_actions = [
+            ('epic', self.epic.logout),
+            ('gog', self.gog.logout),
+            ('amazon', self.amazon.logout),
+            ('ubisoft', self.ubisoft.logout),
+            ('microsoft', self.microsoft.logout),
+        ]
+
+        for store_name, logout in logout_actions:
+            try:
+                logout_result = await logout()
+                if not logout_result.get('success', False):
+                    error = logout_result.get('error')
+                    if error:
+                        result['errors'].append(f"{store_name} logout: {error}")
+            except Exception as e:
+                result['errors'].append(f"{store_name} logout: {e}")
+
+        cleanup_result = self.account_manager.clear_all_auth_tokens()
+        result['deleted_tokens'].extend(cleanup_result.get('deleted_tokens', []))
+        result['cleared_files'].extend(cleanup_result.get('cleared_files', []))
+        result['errors'].extend(cleanup_result.get('errors', []))
+
+        self.epic = EpicConnector(plugin_dir=DECKY_PLUGIN_DIR, plugin_instance=self)
+        self.gog = GOGAPIClient(plugin_dir=DECKY_PLUGIN_DIR, plugin_instance=self)
+        self.amazon = AmazonConnector(plugin_dir=DECKY_PLUGIN_DIR, plugin_instance=self)
+        self.ubisoft = UbisoftConnector(plugin_dir=DECKY_PLUGIN_DIR, plugin_instance=self)
+        self.microsoft = MicrosoftConnector(plugin_dir=DECKY_PLUGIN_DIR, plugin_instance=self)
+
+        return result
+
     async def clear_store_auths(self) -> Dict[str, Any]:
         """Clear all store auth tokens for a fresh start.
 
         Called when the user selects 'Fresh Start' in the account switch modal.
         Re-initializes store connectors to pick up the cleared state.
         """
-        result = self.account_manager.clear_all_auth_tokens()
-
-        # Re-init store connectors so they reflect the cleared state
-        self.gog = GOGAPIClient(plugin_dir=DECKY_PLUGIN_DIR, plugin_instance=self)
-        self.amazon = AmazonConnector(plugin_dir=DECKY_PLUGIN_DIR, plugin_instance=self)
-        if hasattr(self, 'ubisoft') and self.ubisoft:
-            self.ubisoft.api._clear_tokens()
-        self.microsoft = MicrosoftConnector(plugin_dir=DECKY_PLUGIN_DIR, plugin_instance=self)
+        result = await self._clear_all_store_auth_state()
 
         self.account_manager.account_switch_detected = False
         return result
@@ -6894,6 +6961,7 @@ microsoft_client=self.microsoft,
                 stats = {
                     'deleted_games': 0,
                     'deleted_artwork': 0,
+                    'deleted_orphaned_artwork_files': 0,
                     'preserved_shortcuts': 0,
                     'deleted_files_count': 0,
                     'auth_deleted': False,
@@ -6940,10 +7008,15 @@ microsoft_client=self.microsoft,
                 shortcuts = await self.shortcuts_manager.read_shortcuts()
                 unifideck_shortcuts = {}
                 original_shortcuts = {}
+                shortcuts_registry = load_shortcuts_registry()
+                managed_appids = {
+                    entry.get('appid')
+                    for entry in shortcuts_registry.values()
+                    if isinstance(entry, dict) and entry.get('appid') is not None
+                }
                 
                 for idx, shortcut in shortcuts.get('shortcuts', {}).items():
-                    launch_opts = shortcut.get('LaunchOptions', '')
-                    if is_unifideck_shortcut(launch_opts):
+                    if is_managed_shortcut(shortcut, managed_appids):
                         unifideck_shortcuts[idx] = shortcut
                     else:
                         original_shortcuts[idx] = shortcut
@@ -6978,42 +7051,25 @@ microsoft_client=self.microsoft,
                                 stats['deleted_artwork'] += 1
                         await asyncio.sleep(0.01)
 
+                    orphan_cleanup = await self.cleanup_orphaned_artwork()
+                    if orphan_cleanup.get('removed_count', 0):
+                        stats['deleted_orphaned_artwork_files'] = orphan_cleanup['removed_count']
+
                 # 3. DELETE AUTH TOKENS (ALL stores)
                 try:
-# Kept list-based auth cleanup pattern for extensibility across all stores
-                    auth_files = [
-                        "~/.config/legendary/user.json",                    # Epic
-                        "~/.config/unifideck/gog_token.json",               # GOG
-                        "~/.config/unifideck/gogdl/auth.json",              # GOG DL
-                        "~/.config/nile/user.json",                         # Amazon auth
-                        "~/.config/nile/library.json",                      # Amazon cached library
-                        "~/.config/nile/installed.json",                    # Amazon installed tracking
-                        "~/.local/share/unifideck/ubisoft_token.json",      # Ubisoft API
-                        "~/.local/share/unifideck/ubisoft_upc_session.txt", # Ubisoft UPC session
-                        "~/.config/unifideck/microsoft_token.json",              # Microsoft
-                    ]
-                    for auth_path in auth_files:
-                        full = os.path.expanduser(auth_path)
-                        if os.path.exists(full):
-                            os.remove(full)
-                            logger.info(f"[Cleanup] Deleted auth: {full}")
-
-                    # Reset in-memory states
-                    self.gog = GOGAPIClient(plugin_dir=DECKY_PLUGIN_DIR, plugin_instance=self)
-                    self.amazon = AmazonConnector(plugin_dir=DECKY_PLUGIN_DIR, plugin_instance=self)
-                    if hasattr(self, 'ubisoft') and self.ubisoft:
-                        self.ubisoft.api._clear_tokens()
-
+                    auth_cleanup = await self._clear_all_store_auth_state()
                     stats['auth_deleted'] = True
+                    if auth_cleanup.get('errors'):
+                        stats['auth_cleanup_errors'] = auth_cleanup['errors']
                 except Exception as e:
                     logger.error(f"[Cleanup] Error deleting auth tokens: {e}")
 
                 # 4. DELETE CACHES & INTERNAL DATA
-                # games.map should only be deleted when delete_files=True
-                # It maps installed games to their executables
                 files_to_delete = [
                     "~/.local/share/unifideck/game_sizes.json",
                     "~/.local/share/unifideck/shortcuts_registry.json",
+                    "~/.local/share/unifideck/games.map",
+                    "~/.local/share/unifideck/games_registry.json",
                     "~/.local/share/unifideck/download_queue.json",
                     "~/.local/share/unifideck/download_settings.json",
                     os.path.join(get_steam_appid_cache_path()), # SteamGridDB AppID Cache
@@ -7030,10 +7086,7 @@ microsoft_client=self.microsoft,
                     "~/.config/unifideck/cloud_sync_state.json",
                 ]
 
-                # Only delete games.map and registry if we're also deleting game files (destructive mode)
                 if delete_files:
-                    files_to_delete.append("~/.local/share/unifideck/games.map")
-                    files_to_delete.append("~/.local/share/unifideck/games_registry.json")
                     files_to_delete.append("~/.local/share/unifideck/settings.json")
                     # Delete Ubisoft Wine prefixes (contain DPAPI-encrypted credentials)
                     for dir_path in [

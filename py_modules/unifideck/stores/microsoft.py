@@ -337,19 +337,37 @@ class MicrosoftConnector(Store):
             return {"success": False, "error": str(e)}
 
     async def logout(self) -> Dict[str, Any]:
-        """Clear stored tokens and browser cookies."""
+        """Clear stored tokens and the shared Chromium auth state."""
+        if self._auth_monitor_task and not self._auth_monitor_task.done():
+            self._auth_monitor_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._auth_monitor_task
+        self._auth_monitor_task = None
+        self._pending_auth_url = None
+
         self._ms_access_token  = None
         self._ms_refresh_token = None
         self._xsts_token       = None
         self._user_hash        = None
         self._xuid             = None
+
+        self._browser.kill()
+
         try:
             if os.path.exists(self._get_token_file()):
                 os.remove(self._get_token_file())
         except Exception as e:
             logger.warning(f"[MS] Could not remove token file: {e}")
 
+        url_file = os.path.join(DATA_DIR, "ms_auth_url.txt")
+        try:
+            if os.path.exists(url_file):
+                os.remove(url_file)
+        except Exception as e:
+            logger.warning(f"[MS] Could not remove auth URL file: {e}")
+
         self._browser.clear_cookies()
+        ChromiumBrowser.clear_profile_data()
 
         return {"success": True, "message": "microsoft.loggedOut"}
 

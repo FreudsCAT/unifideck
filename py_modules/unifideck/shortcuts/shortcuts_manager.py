@@ -16,7 +16,7 @@ import logging
 import tempfile
 from collections import defaultdict
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set
 
 from py_modules.unifideck.shortcuts.vdf import load_shortcuts_vdf, save_shortcuts_vdf
 from py_modules.unifideck.shortcuts.launch_options import (
@@ -108,6 +108,26 @@ def get_registered_appid(launch_options: str) -> Optional[int]:
     registry = load_shortcuts_registry()
     entry = registry.get(launch_options)
     return entry.get('appid') if entry else None
+
+
+def is_managed_shortcut(shortcut: Dict[str, Any], managed_appids: Optional[Set[int]] = None) -> bool:
+    """Return True if a shortcut is managed by Unifideck.
+
+    Cleanup and recovery need to detect more than just intact ``store:id`` launch
+    options because interrupted syncs or Steam-side edits can leave shortcuts with
+    missing launch options but the original appid or launcher path still intact.
+    """
+    launch_options = shortcut.get('LaunchOptions', '')
+    if is_unifideck_shortcut(launch_options):
+        return True
+
+    app_id = shortcut.get('appid')
+    if app_id is not None and managed_appids and app_id in managed_appids:
+        return True
+
+    exe_value = shortcut.get('exe', '')
+    exe_path = exe_value.strip().strip('"') if isinstance(exe_value, str) else ''
+    return os.path.basename(exe_path) == 'unifideck-launcher'
 
 
 # ============================================================================

@@ -667,6 +667,27 @@ class ChromiumBrowser:
         except Exception as e:
             logger.debug(f"[MS] Could not clear shared browser cookies: {e}")
 
+    @staticmethod
+    def clear_profile_data() -> None:
+        """Delete the shared Chromium auth profile and log files."""
+        removed: List[str] = []
+        for path in (PROFILE_DIR, LOG_FILE):
+            if not os.path.exists(path):
+                continue
+            try:
+                if os.path.isdir(path) and not os.path.islink(path):
+                    shutil.rmtree(path)
+                else:
+                    os.remove(path)
+                removed.append(os.path.basename(path))
+            except Exception as e:
+                logger.warning(f"[MS] Could not clear auth profile path {path}: {e}")
+
+        if removed:
+            logger.info(
+                "[MS] Cleared Chromium auth state: " + ", ".join(sorted(removed))
+            )
+
     # ── CDP helpers ──────────────────────────────────────────────────────
 
     async def wait_and_check_crash(self) -> bool:
