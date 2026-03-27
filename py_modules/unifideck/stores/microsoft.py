@@ -330,6 +330,14 @@ class MicrosoftConnector(Store):
             self._save_tokens()
 
             logger.info("[MS] ✓ Authentication complete")
+            if self.plugin_instance:
+                logger.info("[MS] Triggering library sync after auth")
+                asyncio.create_task(
+                    self.plugin_instance.request_auth_sync(
+                        force=True,
+                        source='auth:microsoft',
+                    )
+                )
             return {"success": True, "message": "microsoft.accountConnected"}
 
         except Exception as e:

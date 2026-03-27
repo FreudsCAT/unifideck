@@ -967,35 +967,67 @@ const Content: FC = () => {
     await checkStoreStatus();
   };
 
-  const waitForAuthTriggeredSync = async () => {
-    const syncStartDeadline = Date.now() + 10000;
+  const waitForAuthTriggeredSync = async (store: Store) => {
+    const syncWaitStartedAt = Date.now();
+    const earliestRelevantTimestamp = syncWaitStartedAt - 10000;
+    const syncStartDeadline = syncWaitStartedAt + 10000;
+
+    const matchesAuthSync = (progress?: Partial<SyncProgress> | null) => {
+      const requestSource = progress?.request_source;
+      if (
+        requestSource !== `auth:${store}` &&
+        requestSource !== "auth"
+      ) {
+        return false;
+      }
+
+      const startedAt =
+        typeof progress?.started_at === "number"
+          ? progress.started_at
+          : undefined;
+      const finishedAt =
+        typeof progress?.finished_at === "number"
+          ? progress.finished_at
+          : undefined;
+
+      return (
+        (startedAt !== undefined && startedAt >= earliestRelevantTimestamp) ||
+        (finishedAt !== undefined && finishedAt >= earliestRelevantTimestamp)
+      );
+    };
 
     while (Date.now() < syncStartDeadline) {
       try {
-        const status = await call<
-          [],
-          {
-            is_syncing: boolean;
-            sync_progress: SyncProgress | null;
-          }
-        >("get_sync_status");
+        const [status, progress] = await Promise.all([
+          call<
+            [],
+            {
+              is_syncing: boolean;
+              sync_progress: SyncProgress | null;
+            }
+          >("get_sync_status"),
+          call<[], { success?: boolean } & SyncProgress>("get_sync_progress"),
+        ]);
 
-        if (!status.is_syncing) {
-          await sleep(500);
-          continue;
+        if (status.is_syncing && matchesAuthSync(progress)) {
+          while (true) {
+            const currentProgress = await call<[], { success?: boolean } & SyncProgress>(
+              "get_sync_progress",
+            );
+
+            if (isTerminalSyncState(currentProgress)) {
+              return currentProgress;
+            }
+
+            await sleep(500);
+          }
         }
 
-        while (true) {
-          const progress = await call<[], { success?: boolean } & SyncProgress>(
-            "get_sync_progress",
-          );
-
-          if (isTerminalSyncState(progress)) {
-            return progress;
-          }
-
-          await sleep(500);
+        if (!status.is_syncing && matchesAuthSync(progress) && isTerminalSyncState(progress)) {
+          return progress;
         }
+
+        await sleep(500);
       } catch (error) {
         console.error(
           "[Unifideck] Error waiting for auth-triggered sync:",
@@ -1014,11 +1046,12 @@ const Content: FC = () => {
         "epic",
         "gog",
         "amazon",
+        "microsoft",
         "ubisoft",
       ]);
 
       if (autoSyncStores.has(store)) {
-        const syncResult = await waitForAuthTriggeredSync();
+        const syncResult = await waitForAuthTriggeredSync(store);
         if (syncResult?.status === "complete") {
           const addedGames = Number(syncResult.current_game?.values?.added) || 0;
           if (addedGames > 0) {
@@ -1136,12 +1169,14 @@ const Content: FC = () => {
             epic_count: number;
             gog_count: number;
             amazon_count: number;
+            ubisoft_count: number;
             microsoft_count: number;
             added_count: number;
             artwork_count: number;
             updated_count?: number;
             cancelled?: boolean;
             restart_pending?: boolean;
+            error?: string;
           }
         >("force_sync_libraries", resyncArtwork);
       } else {
@@ -1152,31 +1187,53 @@ const Content: FC = () => {
             epic_count: number;
             gog_count: number;
             amazon_count: number;
+            ubisoft_count: number;
             microsoft_count: number;
             added_count: number;
             artwork_count: number;
             updated_count?: number;
             cancelled?: boolean;
             restart_pending?: boolean;
+            error?: string;
           }
         >("sync_libraries");
       }
 
-      if (syncResult.cancelled && !syncResult.restart_pending) {
-        startCooldownAfterSync = false;
-        return;
-      }
+        if (syncResult.cancelled && !syncResult.restart_pending) {
+          startCooldownAfterSync = false;
+          return;
+        }
 
-      console.log("[Unifideck] ========== SYNC COMPLETED ==========");
+        if (!syncResult.success) {
+          startCooldownAfterSync = false;
+          try {
+            const latestProgress = await call<[], { success?: boolean } & SyncProgress>(
+              "get_sync_progress",
+            );
+            if (latestProgress.success) {
+              setSyncProgress(latestProgress);
+            }
+          } catch (progressError) {
+            console.error(
+              "[Unifideck] Error fetching failed sync progress:",
+              progressError,
+            );
+          }
+          throw new Error(syncResult.error || "Sync failed");
+        }
+
+        console.log("[Unifideck] ========== SYNC COMPLETED ==========");
       console.log(`[Unifideck] Epic Games: ${syncResult.epic_count}`);
       console.log(`[Unifideck] GOG Games: ${syncResult.gog_count}`);
       console.log(`[Unifideck] Amazon Games: ${syncResult.amazon_count || 0}`);
+      console.log(`[Unifideck] Ubisoft Games: ${syncResult.ubisoft_count || 0}`);
       console.log(`[Unifideck] Microsoft Games: ${syncResult.microsoft_count || 0}`);
       console.log(
         `[Unifideck] Total Games: ${
           syncResult.epic_count +
           syncResult.gog_count +
           (syncResult.amazon_count || 0) +
+          (syncResult.ubisoft_count || 0) +
           (syncResult.microsoft_count || 0)
         }`,
       );
@@ -1519,7 +1576,7 @@ const Content: FC = () => {
                   body: t("toasts.authConnectedMessage", { store: storeName }),
                   duration: 5000,
                 });
-                await checkStoreStatus();
+                await refreshLibraryAfterAuth(store);
               } else {
                 console.log(`[Unifideck] ${storeName} authentication timed out`);
                 toaster.toast({
@@ -1897,8 +1954,8 @@ const Content: FC = () => {
         </>
       )}
     </>
-  );
-};
+    );
+  };
 
 // Store unpatch function for Steam stores
 let unpatchSteamStores: (() => void) | null = null;

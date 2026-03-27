@@ -210,7 +210,12 @@ class UbisoftConnector(Store):
             # race the upcoming RunGame launch.
             if self.plugin_instance:
                 logger.info("[Ubisoft] Triggering library sync after auth")
-                asyncio.create_task(self.plugin_instance.request_auth_sync(force=True))
+                asyncio.create_task(
+                    self.plugin_instance.request_auth_sync(
+                        force=True,
+                        source='auth:ubisoft',
+                    )
+                )
             result["launch_upc_auth"] = True
 
         return result
@@ -235,7 +240,12 @@ class UbisoftConnector(Store):
             # Same hot-path rule as complete_auth(): launch first, repair later.
             if self.plugin_instance:
                 logger.info("[Ubisoft] Triggering library sync after 2FA auth")
-                asyncio.create_task(self.plugin_instance.request_auth_sync(force=True))
+                asyncio.create_task(
+                    self.plugin_instance.request_auth_sync(
+                        force=True,
+                        source='auth:ubisoft',
+                    )
+                )
             result["launch_upc_auth"] = True
 
         return result

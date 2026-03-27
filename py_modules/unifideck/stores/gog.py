@@ -337,7 +337,9 @@ class GOGAPIClient:
                     # Auto-sync library after successful auth
                     if self.plugin_instance:
                         logger.info("[GOG] Queueing automatic library sync...")
-                        asyncio.create_task(self.plugin_instance.request_auth_sync())
+                        asyncio.create_task(
+                            self.plugin_instance.request_auth_sync(source='auth:gog')
+                        )
                 else:
                     logger.error(f"[GOG] Auto-auth failed: {result.get('error')}")
             else:
@@ -2412,4 +2414,3 @@ class GOGAPIClient:
         except Exception as e:
             logger.error(f"[GOG] Error updating {game_id}: {e}")
             return {'success': False, 'error': str(e)}
-

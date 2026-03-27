@@ -19,7 +19,13 @@ interface LibrarySyncProps {
   };
   handleManualSync: (force?: boolean, resyncArtwork?: boolean) => void;
   handleCancelSync: () => void;
-  showModal: (content: React.ReactNode) => void;
+  showModal: (
+    content: React.ReactNode,
+  ) =>
+    | {
+        Close?: () => void;
+      }
+    | void;
   checkStoreStatus: () => void;
 }
 
@@ -69,10 +75,19 @@ const LibrarySync: React.FC<LibrarySyncProps> = ({
         <ButtonItem
           layout="below"
           onClick={() => {
-            showModal(
+            let modalResult:
+              | {
+                  Close?: () => void;
+                }
+              | void;
+
+            const closeModal = () => modalResult?.Close?.();
+
+            modalResult = showModal(
               <ForceSyncModal
                 onResyncArtwork={() => handleManualSync(true, true)}
                 onKeepArtwork={() => handleManualSync(true, false)}
+                closeModal={closeModal}
               />,
             );
           }}
@@ -93,7 +108,7 @@ const LibrarySync: React.FC<LibrarySyncProps> = ({
               }}
             />
             {syncing
-              ? "..."
+              ? t("librarySync.syncing")
               : syncCooldown
               ? `${cooldownSeconds}s`
               : t("librarySync.forceSync")}

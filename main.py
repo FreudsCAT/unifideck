@@ -1537,16 +1537,29 @@ class SyncProgress:
         self.steam_synced = 0
         self.unifidb_total = 0
         self.unifidb_synced = 0
+        self.request_source: Optional[str] = None
+        self.run_id: int = 0
+        self.started_at: Optional[int] = None
+        self.finished_at: Optional[int] = None
 
         # Lock for thread-safe updates during parallel downloads
         self._lock = asyncio.Lock()
 
-    def reset(self):
+    def reset(
+        self,
+        *,
+        request_source: Optional[str] = None,
+        run_id: Optional[int] = None,
+        preserve_run: bool = False,
+    ):
         """Reset all progress state for a new sync operation.
         
         Must be called at the start of sync_libraries / force_sync_libraries
         to prevent stale data from the previous sync leaking into the UI.
         """
+        previous_request_source = self.request_source
+        previous_run_id = self.run_id
+        previous_started_at = self.started_at
         self.total_games = 0
         self.synced_games = 0
         self.current_game = {"label": None, "values": {}}
@@ -1559,6 +1572,19 @@ class SyncProgress:
         self.steam_synced = 0
         self.unifidb_total = 0
         self.unifidb_synced = 0
+        if preserve_run:
+            self.request_source = previous_request_source
+            self.run_id = previous_run_id
+            self.started_at = previous_started_at
+        else:
+            self.request_source = request_source
+            self.run_id = run_id or 0
+            self.started_at = int(time.time() * 1000) if request_source else None
+        self.finished_at = None
+
+    def mark_finished(self) -> None:
+        """Timestamp the current sync run once it reaches a terminal state."""
+        self.finished_at = int(time.time() * 1000)
 
     async def increment_artwork(self, game_title: str) -> int:
         """Thread-safe artwork counter increment"""
@@ -1648,6 +1674,10 @@ class SyncProgress:
             'steam_synced': self.steam_synced,
             'unifidb_total': self.unifidb_total,
             'unifidb_synced': self.unifidb_synced,
+            'request_source': self.request_source,
+            'run_id': self.run_id,
+            'started_at': self.started_at,
+            'finished_at': self.finished_at,
         }
 
 
@@ -2147,6 +2177,29 @@ microsoft_client=self.microsoft,
             logger.warning("[INIT] SteamGridDB not available - skipping")
             self.steamgriddb = None
 
+        launcher_script = os.path.join(os.path.dirname(__file__), 'bin', 'unifideck-launcher')
+        logger.info("[INIT] Migrating managed shortcut appids")
+        appid_migration = await self.shortcuts_manager.migrate_managed_shortcut_appids(
+            launcher_script,
+            grid_path=self.steamgriddb.grid_path if self.steamgriddb else None,
+        )
+        if appid_migration.get('success'):
+            migrated_shortcuts = appid_migration.get('migrated_shortcuts', 0)
+            updated_registry_entries = appid_migration.get('updated_registry_entries', 0)
+            copied_artwork = appid_migration.get('copied_artwork', 0)
+            if migrated_shortcuts or updated_registry_entries or copied_artwork:
+                logger.info(
+                    "[INIT] Shortcut appid migration complete: "
+                    f"{migrated_shortcuts} shortcuts, "
+                    f"{updated_registry_entries} registry entries, "
+                    f"{copied_artwork} artwork files copied"
+                )
+        else:
+            logger.warning(
+                "[INIT] Shortcut appid migration failed: "
+                f"{appid_migration.get('error', 'unknown error')}"
+            )
+
         # Global locks/state for sync orchestration
         self._sync_lock = asyncio.Lock()
         self._sync_request_lock = asyncio.Lock()
@@ -2157,6 +2210,7 @@ microsoft_client=self.microsoft,
         self._pending_auth_sync_request: Optional[SyncRequest] = None
         self._sync_cancel_reason: Optional[str] = None
         self._sync_cache_snapshot: Dict[str, Tuple[bool, bytes]] = {}
+        self._sync_run_id = 0
 
         # Initialize download queue with plugin directory for finding binaries
         logger.info(f"[INIT] Initializing DownloadQueue with plugin_dir={DECKY_PLUGIN_DIR}")
@@ -2604,7 +2658,7 @@ microsoft_client=self.microsoft,
         return payload
 
     def _set_cancelled_progress(self, restart_pending: bool = False) -> None:
-        self.sync_progress.reset()
+        self.sync_progress.reset(preserve_run=True)
         self.sync_progress.status = 'cancelled'
         self.sync_progress.current_game = {
             'label': 'sync.cancelledByUser',
@@ -2634,6 +2688,7 @@ microsoft_client=self.microsoft,
 
     def _start_sync_task_locked(self, request: SyncRequest) -> asyncio.Task:
         task = asyncio.create_task(self._run_sync_request(request))
+        self._sync_run_id += 1
         self._sync_task = task
         self._active_sync_request = request
         self._is_syncing = True
@@ -2657,18 +2712,21 @@ microsoft_client=self.microsoft,
                 restart_pending = self._pending_auth_sync_request is not None
                 await self._cleanup_cancelled_sync_state()
                 self._set_cancelled_progress(restart_pending=restart_pending)
+                self.sync_progress.mark_finished()
                 result['success'] = False
                 result['error'] = 'errors.syncCancelled'
                 result['restart_pending'] = restart_pending
                 return result
 
             self._clear_sync_cache_snapshot()
+            self.sync_progress.mark_finished()
             result['restart_pending'] = self._pending_auth_sync_request is not None
             return result
         except asyncio.CancelledError:
             restart_pending = self._pending_auth_sync_request is not None
             await self._cleanup_cancelled_sync_state()
             self._set_cancelled_progress(restart_pending=restart_pending)
+            self.sync_progress.mark_finished()
             return {
                 'success': False,
                 'cancelled': True,
@@ -2680,6 +2738,7 @@ microsoft_client=self.microsoft,
             logger.error(f"Sync request failed: {e}", exc_info=True)
             self.sync_progress.status = 'error'
             self.sync_progress.error = str(e)
+            self.sync_progress.mark_finished()
             return {'success': False, 'error': str(e), 'restart_pending': False}
         finally:
             async with self._sync_request_lock:
@@ -2711,10 +2770,11 @@ microsoft_client=self.microsoft,
         force: bool = False,
         resync_artwork: bool = False,
         fetch_artwork: bool = True,
+        source: str = 'auth',
     ) -> Dict[str, Any]:
         request = SyncRequest(
             kind='force' if force else 'sync',
-            source='auth',
+            source=source,
             fetch_artwork=fetch_artwork,
             resync_artwork=resync_artwork,
         )
@@ -2747,8 +2807,8 @@ microsoft_client=self.microsoft,
 
     async def sync_libraries(self, fetch_artwork: bool = True, *, source: str = 'manual') -> Dict[str, Any]:
         """Queue or run a regular sync request."""
-        if source == 'auth':
-            return await self.request_auth_sync(fetch_artwork=fetch_artwork)
+        if source.startswith('auth'):
+            return await self.request_auth_sync(fetch_artwork=fetch_artwork, source=source)
 
         request = SyncRequest(kind='sync', source=source, fetch_artwork=fetch_artwork)
         async with self._sync_request_lock:
@@ -2762,8 +2822,12 @@ microsoft_client=self.microsoft,
 
     async def force_sync_libraries(self, resync_artwork: bool = False, *, source: str = 'manual') -> Dict[str, Any]:
         """Queue or run a force sync request."""
-        if source == 'auth':
-            return await self.request_auth_sync(force=True, resync_artwork=resync_artwork)
+        if source.startswith('auth'):
+            return await self.request_auth_sync(
+                force=True,
+                resync_artwork=resync_artwork,
+                source=source,
+            )
 
         request = SyncRequest(kind='force', source=source, resync_artwork=resync_artwork)
         async with self._sync_request_lock:
@@ -2784,7 +2848,10 @@ microsoft_client=self.microsoft,
                 logger.info("Syncing libraries...")
 
                 # Reset all progress state from previous sync
-                self.sync_progress.reset()
+                self.sync_progress.reset(
+                    request_source=self._active_sync_request.source if self._active_sync_request else 'manual',
+                    run_id=self._sync_run_id,
+                )
 
                 # Update progress: Fetching games
                 self.sync_progress.status = "fetching"
@@ -2802,6 +2869,8 @@ microsoft_client=self.microsoft,
 
                 self.sync_progress.current_game = {"label": "sync.fetchingStore", "values": {"store": "Amazon Games"}}
                 amazon_games = await self.amazon.get_library()
+
+                self.sync_progress.current_game = {"label": "sync.fetchingStore", "values": {"store": "Ubisoft Connect"}}
                 ubisoft_games = await self.ubisoft.get_library()
 
                 self.sync_progress.current_game = {"label": "sync.fetchingStore", "values": {"store": "Microsoft Store"}}
@@ -2983,7 +3052,11 @@ microsoft_client=self.microsoft,
                 
                 # Pre-calculate app_ids for all games (fast, no I/O)
                 for game in all_games:
-                     game.app_id = self.shortcuts_manager.generate_app_id(game.title, launcher_script)
+                     game.app_id = self.shortcuts_manager.generate_app_id(
+                         game.title,
+                         launcher_script,
+                         f'{game.store}:{game.id}',
+                     )
 
                 # Resolve Steam presence via Steam Store API
                 # Only fetch for games missing from cache or with incomplete metadata
@@ -3389,7 +3462,7 @@ microsoft_client=self.microsoft,
                 self._is_syncing = False
                 self._cancel_sync = False
 
-    async def force_sync_libraries(self, resync_artwork: bool = False) -> Dict[str, Any]:
+    async def _force_sync_libraries_impl(self, resync_artwork: bool = False) -> Dict[str, Any]:
         """
         Force sync all libraries - rewrites ALL existing Unifideck shortcuts and compatibility data.
         Optionally re-downloads artwork if resync_artwork=True (overwrites manual changes).
@@ -3399,21 +3472,6 @@ microsoft_client=self.microsoft,
         - Compatibility/Proton settings need to be refreshed
         - Games were installed externally and need proper configuration
         """
-        # Check if sync already running (non-blocking check)
-        if self._is_syncing:
-            logger.warning("Sync already in progress, ignoring force sync request")
-            return {
-                'success': False,
-                'error': 'errors.syncInProgress',
-                'epic_count': 0,
-                'gog_count': 0,
-                'amazon_count': 0,
-                'microsoft_count': 0,
-                'added_count': 0,
-                'updated_count': 0,
-                'artwork_count': 0
-            }
-
         # Acquire lock (prevents concurrent syncs)
         async with self._sync_lock:
             self._is_syncing = True
@@ -3422,7 +3480,10 @@ microsoft_client=self.microsoft,
                 logger.info("Force syncing libraries (rewriting all shortcuts and compatibility data)...")
 
                 # Reset all progress state from previous sync
-                self.sync_progress.reset()
+                self.sync_progress.reset(
+                    request_source=self._active_sync_request.source if self._active_sync_request else 'manual',
+                    run_id=self._sync_run_id,
+                )
 
                 # Backup existing caches before force sync (safety measure)
                 # Caches will only be overwritten after successful fetch
@@ -3521,8 +3582,6 @@ microsoft_client=self.microsoft,
                     all_games.extend(ubisoft_games)
                 else:
                     ubisoft_games = []
-                self.sync_progress.total_games = len(all_games)
-                self.sync_progress.synced_games = 0
 
                 if microsoft_games is not None:
                     valid_stores.append('microsoft')
@@ -3531,12 +3590,6 @@ microsoft_client=self.microsoft,
                     microsoft_games = []
                 self.sync_progress.total_games = len(all_games)
                 self.sync_progress.synced_games = 0
-
-                if microsoft_games is not None:
-                    valid_stores.append('microsoft')
-                    all_games.extend(microsoft_games)
-                else:
-                    microsoft_games = []
                 self.compat_fetcher.queue_games(all_games)
                 self.compat_fetcher.start()  # Non-blocking background fetch
 
@@ -3638,7 +3691,16 @@ microsoft_client=self.microsoft,
                 await self.shortcuts_manager.deduplicate_shortcuts()
                 
                 # Force update all games - rewrite existing shortcuts
-                batch_result = await self.shortcuts_manager.force_update_games_batch(all_games, launcher_script, valid_stores=valid_stores, epic_client=self.epic, gog_client=self.gog, amazon_client=self.amazon)
+                batch_result = await self.shortcuts_manager.force_update_games_batch(
+                    all_games,
+                    launcher_script,
+                    valid_stores=valid_stores,
+                    epic_client=self.epic,
+                    gog_client=self.gog,
+                    amazon_client=self.amazon,
+                    ubisoft_client=self.ubisoft,
+                    microsoft_client=self.microsoft,
+                )
                 added_count = batch_result.get('added', 0)
                 updated_count = batch_result.get('updated', 0)
 
@@ -3683,7 +3745,11 @@ microsoft_client=self.microsoft,
                 
                 # Pre-calculate app_ids for all games
                 for game in all_games:
-                     game.app_id = self.shortcuts_manager.generate_app_id(game.title, launcher_script)
+                     game.app_id = self.shortcuts_manager.generate_app_id(
+                         game.title,
+                         launcher_script,
+                         f'{game.store}:{game.id}',
+                     )
 
                 # Resolve Steam presence via Steam Store API
                 if all_games:
@@ -4030,7 +4096,15 @@ microsoft_client=self.microsoft,
                 }
 
                 # Force update all games - rewrites existing shortcuts with fresh data (and local icons)
-                force_result = await self.shortcuts_manager.force_update_games_batch(all_games, launcher_script, epic_client=self.epic, gog_client=self.gog, amazon_client=self.amazon)
+                force_result = await self.shortcuts_manager.force_update_games_batch(
+                    all_games,
+                    launcher_script,
+                    epic_client=self.epic,
+                    gog_client=self.gog,
+                    amazon_client=self.amazon,
+                    ubisoft_client=self.ubisoft,
+                    microsoft_client=self.microsoft,
+                )
                 
                 added_count = force_result.get('added', 0)
                 updated_count = force_result.get('updated', 0)
@@ -6603,9 +6677,11 @@ microsoft_client=self.microsoft,
                     logger.debug(f"Mapped appid {steam_appid} to store '{store}' for {shortcut.get('AppName', 'Unknown')}")
                 else:
                     # If Steam hasn't assigned an appid yet, use our generated one
+                    launcher_script = os.path.join(os.path.dirname(__file__), 'bin', 'unifideck-launcher')
                     generated_appid = self.shortcuts_manager.generate_app_id(
                         shortcut.get('AppName', ''),
-                        launch_options  # Use full launch options as exe_path
+                        launcher_script,
+                        launch_options,
                     )
                     metadata[generated_appid] = store
                     logger.debug(f"Using generated appid {generated_appid} for {shortcut.get('AppName', 'Unknown')} (store: {store})")

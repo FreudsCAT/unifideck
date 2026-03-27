@@ -13,6 +13,7 @@ import binascii
 import struct
 import re
 import logging
+import shutil
 import tempfile
 from collections import defaultdict
 from pathlib import Path
@@ -43,6 +44,37 @@ except ImportError:
 # Shortcuts Registry - maps game launch options to appid for reconciliation after plugin reinstall
 # Stored in user data directory (survives plugin uninstall/reinstall)
 SHORTCUTS_REGISTRY_FILE = "shortcuts_registry.json"
+PROTECTED_SHORTCUT_IDS = {
+    "microsoft:ms-auth",
+    "ubisoft:upc-auth",
+}
+APPID_ARTWORK_PATTERNS = (
+    "{id}p.jpg",
+    "{id}.jpg",
+    "{id}_hero.jpg",
+    "{id}_logo.png",
+    "{id}_icon.jpg",
+)
+
+
+def _unsigned_appid(appid: int) -> int:
+    """Convert a signed shortcut appid to Steam's unsigned filename form."""
+    return appid if appid >= 0 else appid + 2**32
+
+
+def _build_registry_entry(appid: int, title: str, created: Optional[str] = None) -> Dict[str, Any]:
+    """Build a persisted shortcuts registry entry."""
+    return {
+        'appid': appid,
+        'appid_unsigned': _unsigned_appid(appid),
+        'title': title,
+        'created': created or time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
+    }
+
+
+def is_protected_shortcut_id(full_id: Optional[str]) -> bool:
+    """Return True when a managed shortcut ID is an auth/utility shortcut."""
+    return bool(full_id and full_id in PROTECTED_SHORTCUT_IDS)
 
 
 def get_shortcuts_registry_path() -> Path:
@@ -79,18 +111,13 @@ def save_shortcuts_registry(registry: Dict[str, Dict]) -> bool:
 def register_shortcut(launch_options: str, appid: int, title: str) -> bool:
     """Register a shortcut's appid for future reconciliation"""
     registry = load_shortcuts_registry()
-    
-    # Calculate unsigned appid for logging/debugging
-    appid_unsigned = appid if appid >= 0 else appid + 2**32
-    
-    registry[launch_options] = {
-        'appid': appid,
-        'appid_unsigned': appid_unsigned,
-        'title': title,
-        'created': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
-    }
-    
-    logger.debug(f"Registered shortcut: {launch_options} -> appid={appid} (unsigned={appid_unsigned})")
+
+    registry[launch_options] = _build_registry_entry(appid, title, registry.get(launch_options, {}).get('created'))
+
+    logger.debug(
+        f"Registered shortcut: {launch_options} -> appid={appid} "
+        f"(unsigned={registry[launch_options]['appid_unsigned']})"
+    )
     return save_shortcuts_registry(registry)
 
 
@@ -1017,7 +1044,7 @@ class ShortcutsManager:
                 
                 if not appid:
                     # Generate new appid if not registered
-                    appid = self.generate_app_id(title, current_launcher)
+                    appid = self.generate_app_id(title, current_launcher, key)
                     logger.warning(f"[ReconcileShortcuts] No registered appid for {key}, generated new: {appid}")
                 
                 # Create new shortcut
@@ -1039,6 +1066,8 @@ class ShortcutsManager:
                         '1': 'Installed'  # It's in games.map, so it's installed
                     }
                 }
+
+                register_shortcut(key, appid, title)
                 
                 next_index += 1
                 created += 1
@@ -1176,14 +1205,171 @@ class ShortcutsManager:
             logger.error(f"Error clearing Proton compatibility: {e}", exc_info=True)
             return False
 
-    def generate_app_id(self, game_title: str, exe_path: str) -> int:
-        """Generate AppID for non-Steam game using CRC32"""
-        # ... existing implementation ...
-        key = f"{exe_path}{game_title}"
+    def generate_app_id(
+        self,
+        game_title: str,
+        exe_path: str,
+        launch_options: Optional[str] = None,
+    ) -> int:
+        """Generate AppID for a managed shortcut using a stable identity hash."""
+        full_id = get_full_id(launch_options) if launch_options else None
+        if full_id and not is_protected_shortcut_id(full_id):
+            key = f"{exe_path}|{full_id}"
+        else:
+            key = f"{exe_path}|{game_title}"
         crc = binascii.crc32(key.encode('utf-8')) & 0xFFFFFFFF
         app_id = crc | 0x80000000
         app_id = struct.unpack('i', struct.pack('I', app_id))[0]
         return app_id
+
+    def _copy_migrated_artwork(self, grid_path: Path, old_appid: int, new_appid: int) -> Dict[str, str]:
+        """Copy existing artwork from a legacy appid to its migrated replacement."""
+        if old_appid == new_appid:
+            return {}
+
+        old_unsigned = _unsigned_appid(old_appid)
+        new_unsigned = _unsigned_appid(new_appid)
+        copied_paths: Dict[str, str] = {}
+
+        for pattern in APPID_ARTWORK_PATTERNS:
+            src = grid_path / pattern.format(id=old_unsigned)
+            dst = grid_path / pattern.format(id=new_unsigned)
+            if not src.exists():
+                continue
+            if not dst.exists():
+                shutil.copy2(src, dst)
+            copied_paths[str(src)] = str(dst)
+
+        return copied_paths
+
+    async def migrate_managed_shortcut_appids(
+        self,
+        launcher_script: str,
+        grid_path: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Migrate managed game shortcuts to store-aware appids.
+
+        Older builds hashed only ``launcher_path + title``, so same-title games from
+        different stores collided into one Steam/artwork identity.  This migrates
+        both the registry and any current shortcuts to ``store:id``-aware appids,
+        and copies old artwork forward so existing libraries keep their artwork.
+        """
+        registry = load_shortcuts_registry()
+        registry_modified = False
+        shortcuts_modified = False
+        migrated_shortcuts = 0
+        copied_artwork: Set[str] = set()
+        appid_migrations: Dict[str, Dict[str, int]] = {}
+
+        for launch_options, entry in list(registry.items()):
+            full_id = get_full_id(launch_options)
+            if not full_id or is_protected_shortcut_id(full_id):
+                continue
+
+            if launch_options != full_id and launch_options in registry:
+                del registry[launch_options]
+                registry_modified = True
+
+            title = str(entry.get('title') or full_id)
+            expected_appid = self.generate_app_id(title, launcher_script, full_id)
+            current_appid = entry.get('appid')
+            if current_appid != expected_appid or entry.get('title') != title:
+                registry[full_id] = _build_registry_entry(
+                    expected_appid,
+                    title,
+                    entry.get('created'),
+                )
+                registry_modified = True
+
+            if current_appid is not None and current_appid != expected_appid:
+                appid_migrations[full_id] = {
+                    'old_appid': current_appid,
+                    'new_appid': expected_appid,
+                }
+
+        shortcuts_data = await self.read_shortcuts()
+        shortcuts = shortcuts_data.get('shortcuts', {})
+
+        copied_path_map: Dict[str, Dict[str, str]] = {}
+        grid_dir = Path(grid_path) if grid_path else None
+
+        for shortcut in shortcuts.values():
+            full_id = get_full_id(shortcut.get('LaunchOptions', ''))
+            if not full_id or is_protected_shortcut_id(full_id):
+                continue
+
+            title = str(shortcut.get('AppName') or registry.get(full_id, {}).get('title') or full_id)
+            current_appid = shortcut.get('appid')
+            expected_appid = self.generate_app_id(title, launcher_script, full_id)
+
+            if current_appid != expected_appid:
+                shortcut['appid'] = expected_appid
+                shortcuts_modified = True
+                migrated_shortcuts += 1
+                if current_appid is not None:
+                    appid_migrations[full_id] = {
+                        'old_appid': current_appid,
+                        'new_appid': expected_appid,
+                    }
+
+            registry_entry = registry.get(full_id, {})
+            new_registry_entry = _build_registry_entry(
+                expected_appid,
+                title,
+                registry_entry.get('created'),
+            )
+            if registry_entry != new_registry_entry:
+                registry[full_id] = new_registry_entry
+                registry_modified = True
+
+            if not grid_dir:
+                continue
+
+            migration = appid_migrations.get(full_id)
+            if not migration:
+                continue
+
+            copied_paths = copied_path_map.get(full_id)
+            if copied_paths is None:
+                copied_paths = self._copy_migrated_artwork(
+                    grid_dir,
+                    migration['old_appid'],
+                    migration['new_appid'],
+                )
+                copied_path_map[full_id] = copied_paths
+                copied_artwork.update(os.path.basename(path) for path in copied_paths.values())
+
+            icon_path = shortcut.get('icon')
+            if isinstance(icon_path, str) and icon_path in copied_paths:
+                shortcut['icon'] = copied_paths[icon_path]
+                shortcuts_modified = True
+
+        if shortcuts_modified:
+            success = await self.write_shortcuts(shortcuts_data)
+            if not success:
+                return {
+                    'success': False,
+                    'migrated_shortcuts': 0,
+                    'updated_registry_entries': 0,
+                    'copied_artwork': 0,
+                    'error': 'errors.shortcutWriteFailed',
+                }
+
+        if registry_modified and not save_shortcuts_registry(registry):
+            return {
+                'success': False,
+                'migrated_shortcuts': migrated_shortcuts if shortcuts_modified else 0,
+                'updated_registry_entries': 0,
+                'copied_artwork': len(copied_artwork),
+                'error': 'errors.shortcutWriteFailed',
+            }
+
+        return {
+            'success': True,
+            'migrated_shortcuts': migrated_shortcuts,
+            'updated_registry_entries': len(appid_migrations) if registry_modified else 0,
+            'copied_artwork': len(copied_artwork),
+        }
 
     # ... existing read/write methods ...
 
@@ -1437,7 +1623,7 @@ class ShortcutsManager:
             # CRITICAL: For "No Restart" support, the exe path must NOT change after creation.
             # We always use unifideck-launcher as the executable.
             runner_script = os.path.join(self.plugin_dir, 'bin', 'unifideck-launcher')
-            app_id = self.generate_app_id(game.title, runner_script)
+            app_id = self.generate_app_id(game.title, runner_script, target_launch_options)
 
             # Find next available index
             existing_indices = [int(k) for k in shortcuts.get("shortcuts", {}).items() if k.isdigit()] # .keys(), fixed logic below
@@ -1506,7 +1692,7 @@ class ShortcutsManager:
 
                     # If this game no longer exists in current library, it's orphaned
                     full_id = get_full_id(launch)
-                    if full_id == "ubisoft:upc-auth":
+                    if is_protected_shortcut_id(full_id):
                         continue  # Protected auth shortcut
                     if full_id not in current_launch_options:
                         logger.debug(f"Removing orphaned shortcut: {shortcut.get('AppName')} ({launch})")
@@ -1586,7 +1772,7 @@ class ShortcutsManager:
                     continue
 
                 # Generate AppID (using launcher_script for consistent ID generation)
-                app_id = self.generate_app_id(game.title, launcher_script)
+                app_id = self.generate_app_id(game.title, launcher_script, target_launch_options)
 
                 # Add shortcut
                 shortcuts["shortcuts"][str(next_index)] = {
@@ -1642,7 +1828,17 @@ class ShortcutsManager:
             traceback.print_exc()
             return {'added': 0, 'skipped': 0, 'removed': 0, 'reclaimed': 0, 'error': str(e)}
 
-    async def force_update_games_batch(self, games: List[Game], launcher_script: str, valid_stores: List[str] = None, epic_client=None, gog_client=None, amazon_client=None, microsoft_client=None) -> Dict[str, Any]:
+    async def force_update_games_batch(
+        self,
+        games: List[Game],
+        launcher_script: str,
+        valid_stores: List[str] = None,
+        epic_client=None,
+        gog_client=None,
+        amazon_client=None,
+        ubisoft_client=None,
+        microsoft_client=None,
+    ) -> Dict[str, Any]:
         """
         Force update all games - rewrites existing shortcuts with fresh data.
         
@@ -1694,7 +1890,7 @@ class ShortcutsManager:
                         continue
 
                     full_id = get_full_id(launch)
-                    if full_id == "ubisoft:upc-auth":
+                    if is_protected_shortcut_id(full_id):
                         continue  # Protected auth shortcut
                     if full_id not in current_launch_options:
                         # Game ID in LaunchOptions doesn't match library
@@ -1807,7 +2003,11 @@ class ShortcutsManager:
                     # This might be an installed Unifideck game - check by appid match
                     app_id = shortcut.get('appid')
                     for game in games:
-                        expected_app_id = self.generate_app_id(game.title, launcher_script)
+                        expected_app_id = self.generate_app_id(
+                            game.title,
+                            launcher_script,
+                            f'{game.store}:{game.id}',
+                        )
                         if app_id == expected_app_id:
                             # This is a Unifideck game - update it
                             # Keep the current exe/StartDir since it's installed
@@ -1927,7 +2127,7 @@ class ShortcutsManager:
                 if target_launch_options in existing_launch_options:
                     continue
                 
-                app_id = self.generate_app_id(game.title, launcher_script)
+                app_id = self.generate_app_id(game.title, launcher_script, target_launch_options)
                 
                 # Skip if already exists by app_id
                 if app_id in existing_app_ids:
