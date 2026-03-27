@@ -2,15 +2,16 @@
 Ubisoft Binary File Parser
 
 Parses UPC's binary configuration and ownership cache files to extract
-game metadata (install_id, launch_id, executable paths, etc.).
+game metadata (install_id, launch_id, space_id, executable paths, etc.).
+
+Algorithm adapted from Lutris's proven parser (lutris/util/ubisoft/parser.py)
+which uses sequential record reading with a sync correction fallback.
 
 File locations within a Wine prefix:
-  - configurations: {prefix}/drive_c/Program Files (x86)/Ubisoft/
+  - configurations: {prefix}/drive_c/users/steamuser/AppData/Local/
                      Ubisoft Game Launcher/cache/configuration/configurations
-  - ownership:      {prefix}/drive_c/Program Files (x86)/Ubisoft/
+  - ownership:      {prefix}/drive_c/users/steamuser/AppData/Local/
                      Ubisoft Game Launcher/cache/ownership/{userId}
-
-Reference: docs/ubisoft-store-spec.md Appendix B
 """
 import logging
 import math
@@ -18,21 +19,23 @@ import os
 import re
 from typing import Any, Dict, List, Optional
 
+import yaml
+
 logger = logging.getLogger(__name__)
+
+# Names that are placeholders in the YAML, not real game names
+BLACKLISTED_NAMES = ["gamename", "l1", "l2", "thumbimage", "", "ubisoft game", "name"]
 
 
 # ============================================================================
 # Konrad's variable-length integer decoder
 # ============================================================================
 
-def _decode_varint(data: int) -> int:
-    """
-    Decode a variable-length integer from UPC's binary format.
+def _convert_data(data: int) -> int:
+    """Decode a variable-length integer using Konrad's formula.
 
-    UPC uses a compact varint encoding where high bits in each byte
-    indicate continuation. This formula reverses that encoding.
-
-    Reference: docs/ubisoft-store-spec.md Appendix B.1, "Konrad's formula"
+    UPC encodes multi-byte integers with continuation bits in the high
+    position of each byte. This reverses that encoding.
     """
     if data > 256 * 256:
         data -= 128 * 256 * math.ceil(data / (256 * 256))
@@ -42,23 +45,110 @@ def _decode_varint(data: int) -> int:
     return data
 
 
-def _read_varint_at(buf: bytes, offset: int) -> tuple:
-    """
-    Read a variable-length integer starting at *offset* in *buf*.
+# ============================================================================
+# Configuration header parser
+# ============================================================================
 
-    Returns (decoded_value, bytes_consumed).
+def _parse_config_header(header: bytes, second_eight: bool = False) -> tuple:
+    """Parse a configuration record header, extracting size and IDs.
+
+    Args:
+        header: Raw bytes starting at a 0x0A record marker.
+        second_eight: If True, use alternate parsing for sync correction
+                      (looks for second 0x08 delimiter instead of first).
+
+    Returns:
+        (record_size, install_id, launch_id, header_size)
     """
-    raw = 0
-    consumed = 0
-    shift = 0
-    while offset + consumed < len(buf):
-        byte = buf[offset + consumed]
-        raw |= (byte & 0x7F) << shift
-        consumed += 1
-        shift += 7
-        if not (byte & 0x80):
-            break
-    return (raw, consumed)
+    try:
+        offset = 1
+        multiplier = 1
+        record_size = 0
+        tmp_size = 0
+
+        # Read record size (bytes until 0x08 delimiter)
+        if second_eight:
+            while (header[offset] != 0x08
+                   or (header[offset] == 0x08 and header[offset + 1] == 0x08)):
+                record_size += header[offset] * multiplier
+                multiplier *= 256
+                offset += 1
+                tmp_size += 1
+        else:
+            while header[offset] != 0x08 or record_size == 0:
+                record_size += header[offset] * multiplier
+                multiplier *= 256
+                offset += 1
+                tmp_size += 1
+
+        record_size = _convert_data(record_size)
+        offset += 1  # skip 0x08
+
+        # Read install_id (bytes until 0x10 delimiter)
+        multiplier = 1
+        install_id = 0
+        while header[offset] != 0x10 or header[offset + 1] == 0x10:
+            install_id += header[offset] * multiplier
+            multiplier *= 256
+            offset += 1
+        install_id = _convert_data(install_id)
+        offset += 1  # skip 0x10
+
+        # Read launch_id (bytes until 0x1A delimiter)
+        multiplier = 1
+        launch_id = 0
+        while (header[offset] != 0x1A
+               or (header[offset] == 0x1A and header[offset + 1] == 0x1A)):
+            launch_id += header[offset] * multiplier
+            multiplier *= 256
+            offset += 1
+        launch_id = _convert_data(launch_id)
+
+        # Size correction for records near a 128-byte boundary
+        if record_size - offset < 128 <= record_size:
+            tmp_size -= 1
+            record_size += 1
+
+        return record_size - offset, install_id, launch_id, offset + tmp_size + 1
+    except Exception:
+        return 0, 0, 0, 10
+
+
+# ============================================================================
+# YAML field extraction
+# ============================================================================
+
+def _get_yaml_field(game_yaml: dict, field: str = "name") -> str:
+    """Extract a field from parsed game YAML with fallback chain.
+
+    Fallback order for 'name' field:
+      1. root.<field>
+      2. root.installer.game_identifier  (if name is blacklisted)
+      3. localizations.default[<field>]   (if still blacklisted)
+    """
+    value = ""
+    root = game_yaml.get("root", {})
+    if not isinstance(root, dict):
+        return ""
+
+    if field in root:
+        value = str(root[field])
+
+    # Fallback 1: installer.game_identifier
+    if field == "name" and value.lower() in BLACKLISTED_NAMES:
+        installer = root.get("installer", {})
+        if isinstance(installer, dict) and "game_identifier" in installer:
+            value = str(installer["game_identifier"])
+
+    # Fallback 2: localizations.default
+    if value.lower() in BLACKLISTED_NAMES:
+        locs = game_yaml.get("localizations", {})
+        if isinstance(locs, dict):
+            default_loc = locs.get("default", {})
+            if isinstance(default_loc, dict) and value in default_loc:
+                value = str(default_loc[value])
+
+    return value
 
 
 # ============================================================================
@@ -86,11 +176,10 @@ class GameConfig:
 
 
 def parse_configurations(filepath: str) -> List[GameConfig]:
-    """
-    Parse the UPC ``configurations`` binary file.
+    """Parse the UPC configurations binary file.
 
-    Returns a list of :class:`GameConfig` objects — one per playable game
-    entry (records that contain ``start_game`` in the YAML portion).
+    Uses sequential record reading with a sync correction fallback
+    (second_eight=True) when the next byte isn't 0x0A.
 
     Args:
         filepath: Absolute path to the configurations binary.
@@ -110,160 +199,79 @@ def parse_configurations(filepath: str) -> List[GameConfig]:
         return []
 
     results: List[GameConfig] = []
-    offset = 0
+    global_offset = 0
 
-    while offset < len(data):
-        # Look for 0x0A record header
-        if data[offset] != 0x0A:
-            offset += 1
-            continue
+    while global_offset < len(data):
+        chunk = data[global_offset:]
+        obj_size, install_id, launch_id, header_size = _parse_config_header(chunk)
+        launch_id = (install_id
+                     if launch_id == 0 or launch_id == install_id
+                     else launch_id)
 
-        try:
-            record_start = offset
-            offset += 1  # skip 0x0A
+        if obj_size > 500:
+            yaml_start = global_offset + header_size
+            yaml_end = yaml_start + obj_size
+            if yaml_end <= len(data):
+                stream = data[yaml_start:yaml_end].decode("utf8", errors="ignore")
+                if stream and "start_game" in stream:
+                    try:
+                        parsed = yaml.load(
+                            stream.replace("\t", " "),
+                            Loader=yaml.FullLoader,
+                        )
+                        if parsed:
+                            config = _build_game_config(
+                                parsed, stream, install_id, launch_id
+                            )
+                            if config and config.name:
+                                results.append(config)
+                    except Exception as e:
+                        logger.debug(
+                            f"[UbiParser] YAML parse error at offset "
+                            f"{global_offset}: {e}"
+                        )
 
-            # Read object size varint
-            obj_size, consumed = _read_varint_at(data, offset)
-            obj_size = _decode_varint(obj_size)
-            offset += consumed
+        global_offset_tmp = global_offset
+        global_offset += obj_size + header_size
 
-            # Only process records with meaningful size (games have > 500 bytes)
-            if obj_size < 500:
-                continue
-
-            record_end = record_start + obj_size + 1 + consumed
-            if record_end > len(data):
-                break
-
-            record_data = data[record_start + 1 + consumed: record_end]
-
-            config = _parse_single_record(record_data)
-            if config and config.name:
-                results.append(config)
-
-        except Exception as e:
-            logger.debug(f"[UbiParser] Skipping malformed record at offset {record_start}: {e}")
-            offset += 1
-            continue
+        # Sync correction: if next byte isn't 0x0A, re-parse with second_eight
+        if (global_offset < len(data) and data[global_offset] != 0x0A):
+            obj_size, _, _, header_size = _parse_config_header(chunk, True)
+            global_offset = global_offset_tmp + obj_size + header_size
 
     logger.info(f"[UbiParser] Parsed {len(results)} game configs from {filepath}")
     return results
 
 
-def _parse_single_record(record_data: bytes) -> Optional[GameConfig]:
-    """
-    Parse a single record from the configurations binary.
-
-    Extracts install_id, launch_id from the binary header, and then
-    looks for embedded YAML containing game metadata.
-    """
+def _build_game_config(
+    parsed: dict, yaml_text: str, install_id: int, launch_id: int
+) -> Optional[GameConfig]:
+    """Build a GameConfig from parsed YAML and header IDs."""
     config = GameConfig()
-    pos = 0
+    config.install_id = install_id
+    config.launch_id = launch_id
+    config.yaml_raw = yaml_text
 
-    try:
-        # Read install_id (after 0x08 marker)
-        if pos < len(record_data) and record_data[pos] == 0x08:
-            pos += 1
-            install_id, consumed = _read_varint_at(record_data, pos)
-            config.install_id = _decode_varint(install_id)
-            pos += consumed
+    config.name = _get_yaml_field(parsed, "name")
+    config.thumb_image = _get_yaml_field(parsed, "thumb_image")
 
-        # Read launch_id (after 0x10 marker)
-        if pos < len(record_data) and record_data[pos] == 0x10:
-            pos += 1
-            launch_id, consumed = _read_varint_at(record_data, pos)
-            config.launch_id = _decode_varint(launch_id)
-            pos += consumed
+    root = parsed.get("root", {})
+    if isinstance(root, dict):
+        config.space_id = str(root.get("space_id", ""))
+        installer = root.get("installer", {})
+        if isinstance(installer, dict):
+            config.game_identifier = str(installer.get("game_identifier", ""))
 
-        # The rest contains YAML data (after 0x1A marker + size)
-        yaml_text = _extract_yaml_from_record(record_data, pos)
-        if not yaml_text:
-            return None
-
-        config.yaml_raw = yaml_text
-
-        # Only include records with start_game (actual playable games)
-        if "start_game" not in yaml_text:
-            return None
-
-        # Parse YAML fields using regex (avoid PyYAML dependency)
-        config.name = _yaml_extract(yaml_text, r"(?:^|\n)\s*name:\s*(.+?)(?:\n|$)")
-        config.space_id = _yaml_extract(yaml_text, r"space_id:\s*([a-f0-9\-]+)")
-        config.thumb_image = _yaml_extract(yaml_text, r"thumb_image:\s*(.+?)(?:\n|$)")
-        config.game_identifier = _yaml_extract(
-            yaml_text, r"game_identifier:\s*(.+?)(?:\n|$)"
-        )
-
-        # Extract executable path from start_game.online.executables[].path.relative
-        exe_match = re.search(
-            r"relative:\s*(.+?\.exe)",
-            yaml_text,
-            re.IGNORECASE,
-        )
-        if exe_match:
-            config.executable = exe_match.group(1).strip().strip("'\"")
-
-        # Try localized name
-        localized_name = _yaml_extract(
-            yaml_text, r"GAMENAME:\s*(.+?)(?:\n|$)"
-        )
-        if localized_name:
-            config.name = localized_name
-
-    except Exception as e:
-        logger.debug(f"[UbiParser] Error parsing record: {e}")
-        return None
+    # Extract executable path from start_game.online.executables[].path.relative
+    exe_match = re.search(
+        r"relative:\s*(.+?\.exe)",
+        yaml_text,
+        re.IGNORECASE,
+    )
+    if exe_match:
+        config.executable = exe_match.group(1).strip().strip("'\"")
 
     return config
-
-
-def _extract_yaml_from_record(record_data: bytes, start_pos: int) -> Optional[str]:
-    """
-    Extract the YAML text portion from a binary record.
-
-    Looks for 0x1A markers followed by length-prefixed string data
-    and decodes any ASCII/UTF-8 content.
-    """
-    try:
-        # Find the first 0x1A byte (marks start of string/YAML data)
-        yaml_start = -1
-        for i in range(start_pos, len(record_data)):
-            if record_data[i] == 0x1A:
-                yaml_start = i + 1
-                break
-
-        if yaml_start < 0:
-            return None
-
-        # Read the length varint
-        length, consumed = _read_varint_at(record_data, yaml_start)
-        length = _decode_varint(length)
-        yaml_start += consumed
-
-        if yaml_start + length > len(record_data):
-            # Try to decode what we have
-            raw = record_data[yaml_start:]
-        else:
-            raw = record_data[yaml_start: yaml_start + length]
-
-        # Decode, filtering non-printable characters
-        text = raw.decode("utf-8", errors="replace")
-
-        # Remove null bytes and control characters (except newline/tab)
-        text = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", "", text)
-
-        return text if text.strip() else None
-
-    except Exception:
-        return None
-
-
-def _yaml_extract(text: str, pattern: str) -> str:
-    """Extract a single value from YAML-like text using regex."""
-    match = re.search(pattern, text)
-    if match:
-        return match.group(1).strip().strip("'\"")
-    return ""
 
 
 # ============================================================================
@@ -271,17 +279,16 @@ def _yaml_extract(text: str, pattern: str) -> str:
 # ============================================================================
 
 def parse_ownership(filepath: str) -> List[int]:
-    """
-    Parse the UPC ``ownership`` binary file.
+    """Parse the UPC ownership binary file.
 
-    Returns a list of owned launch_ids.
+    Returns a list of owned install_ids (may contain duplicates).
 
     Args:
         filepath: Absolute path to the ownership binary
                   (e.g., ``{prefix}/.../cache/ownership/{userId}``).
 
     Returns:
-        List of integer launch_ids.
+        List of integer install_ids.
     """
     if not os.path.isfile(filepath):
         logger.warning(f"[UbiParser] Ownership file not found: {filepath}")
@@ -294,47 +301,58 @@ def parse_ownership(filepath: str) -> List[int]:
         logger.error(f"[UbiParser] Failed to read ownership: {e}")
         return []
 
-    # Ownership records start at offset 0x108
-    owned_ids: List[int] = []
-    offset = 0x108
+    owned: List[int] = []
+    offset = 0x108  # Ownership records start after a 264-byte header
 
     while offset < len(data):
-        if data[offset] != 0x0A:
-            offset += 1
-            continue
+        chunk = data[offset:]
+        if chunk[0] != 0x0A:
+            break
 
         try:
-            offset += 1  # skip 0x0A
+            pos = 1
+            multiplier = 1
+            rec_size = 0
+            tmp_size = 0
 
-            # Record size
-            rec_size, consumed = _read_varint_at(data, offset)
-            rec_size = _decode_varint(rec_size)
-            offset += consumed
+            # Read record size (bytes until 0x08)
+            while chunk[pos] != 0x08 or rec_size == 0:
+                rec_size += chunk[pos] * multiplier
+                multiplier *= 256
+                pos += 1
+                tmp_size += 1
+            rec_size = _convert_data(rec_size)
+            pos += 1  # skip 0x08
 
-            # Read launch_id (after 0x08 marker)
-            if offset < len(data) and data[offset] == 0x08:
-                offset += 1
-                launch_id, consumed = _read_varint_at(data, offset)
-                launch_id = _decode_varint(launch_id)
-                offset += consumed
-                owned_ids.append(launch_id)
+            # Read first ID (bytes until 0x10)
+            multiplier = 1
+            lid1 = 0
+            while chunk[pos] != 0x10 or chunk[pos + 1] == 0x10:
+                lid1 += chunk[pos] * multiplier
+                multiplier *= 256
+                pos += 1
+            lid1 = _convert_data(lid1)
+            pos += 1  # skip 0x10
 
-            # Skip launch_id_2 (after 0x10 marker)
-            if offset < len(data) and data[offset] == 0x10:
-                offset += 1
-                _, consumed = _read_varint_at(data, offset)
-                offset += consumed
+            # Read second ID (bytes until 0x22)
+            multiplier = 1
+            lid2 = 0
+            while chunk[pos] != 0x22:
+                lid2 += chunk[pos] * multiplier
+                multiplier *= 256
+                pos += 1
+            lid2 = _convert_data(lid2)
 
-            # Skip to end marker 0x22
-            while offset < len(data) and data[offset] != 0x0A:
-                offset += 1
+            owned.append(lid1)
+            if lid2 != lid1:
+                owned.append(lid2)
 
-        except Exception as e:
-            logger.debug(f"[UbiParser] Skipping ownership record: {e}")
-            offset += 1
+            offset += rec_size + tmp_size + 1
+        except Exception:
+            break
 
-    logger.info(f"[UbiParser] Found {len(owned_ids)} owned IDs in {filepath}")
-    return owned_ids
+    logger.info(f"[UbiParser] Found {len(owned)} owned IDs in {filepath}")
+    return owned
 
 
 # ============================================================================
@@ -342,16 +360,9 @@ def parse_ownership(filepath: str) -> List[int]:
 # ============================================================================
 
 def check_install_state(state_file: str) -> bool:
-    """
-    Check if a game's ``uplay_install.state`` indicates completion.
+    """Check if a game's ``uplay_install.state`` indicates completion.
 
     A first byte of ``0x0A`` means the game is fully installed.
-
-    Args:
-        state_file: Path to the ``uplay_install.state`` file.
-
-    Returns:
-        True if installed, False otherwise.
     """
     if not os.path.isfile(state_file):
         return False
@@ -369,17 +380,10 @@ def check_install_state(state_file: str) -> bool:
 # ============================================================================
 
 def build_id_map_from_configurations(filepath: str) -> Dict[str, Dict[str, Any]]:
-    """
-    Parse configurations and build a space_id → {install_id, launch_id, name, exe} map.
+    """Parse configurations and build a space_id -> {install_id, launch_id, name, exe} map.
 
-    This is used to populate ``ubisoft_id_map.json`` with resolved IDs
+    Used to populate ``ubisoft_id_map.json`` with resolved IDs
     so the launcher script can look them up without re-parsing the binary.
-
-    Args:
-        filepath: Path to the configurations binary.
-
-    Returns:
-        Dict mapping space_id to {install_id, launch_id, name, executable}.
     """
     configs = parse_configurations(filepath)
     id_map: Dict[str, Dict[str, Any]] = {}

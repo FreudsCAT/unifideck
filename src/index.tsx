@@ -45,11 +45,10 @@ import { SteamRestartModal } from "./components/SteamRestartModal";
 import { AuthSuccessModal } from "./components/AuthSuccessModal";
 import { ChromiumInstallModal } from "./components/ChromiumInstallModal";
 import { AccountSwitchModal } from "./components/AccountSwitchModal";
-import { UbisoftAuthModal } from "./components/UbisoftAuthModal";
 import { LanguageSelector } from "./components/LanguageSelector";
 import { launchMicrosoftAuthViaShortcut } from "./utils/microsoftShortcutLaunch";
 import { resetControllerConfigCache } from "./utils/controllerConfig";
-import { isShortcutAppRunning } from "./utils/ubisoftShortcutLaunch";
+import { isShortcutAppRunning, launchUbisoftAuthViaShortcut } from "./utils/ubisoftShortcutLaunch";
 import StoreConnections from "./components/settings/StoreConnections";
 import { Store } from "./types/store";
 import LibrarySync from "./components/settings/LibrarySync";
@@ -1353,23 +1352,60 @@ const Content: FC = () => {
         ? t("storeConnections.microsoftStore")
         : t("storeConnections.gog");
 
-    // Ubisoft uses credentials-based auth (modal form), not browser popup
+    // Ubisoft: launch UPC directly via shortcut and poll for session capture
     if (store === "ubisoft") {
-      showModal(
-        <UbisoftAuthModal
-          onAuthComplete={async () => {
-            console.log(`[Unifideck] Ubisoft authentication successful!`);
-            // Show toast only after entire auth flow (credentials + 2FA if needed) completes
-            toaster.toast({
-              title: t("toasts.authConnected", { store: storeName }),
-              body: t("toasts.authConnectedMessage", { store: storeName }),
-              duration: 8000,
-              critical: true,
-            });
-            void refreshLibraryAfterAuth("ubisoft");
-          }}
-        />,
-      );
+      try {
+        let launchResult = await launchUbisoftAuthViaShortcut();
+        if (!launchResult.success) {
+          launchResult = await call<[], { success: boolean; error?: string }>(
+            "connect_ubisoft_account",
+          );
+        }
+
+        if (!launchResult.success) {
+          toaster.toast({
+            title: t("toasts.authFailed"),
+            body: launchResult.error || t("toasts.authFailedMessage"),
+            critical: true,
+            duration: 5000,
+          });
+          return;
+        }
+
+        // Poll for auth completion using the generic store status check
+        // (is_available() now checks UPC session file)
+        pollForAuthCompletion("ubisoft")
+          .then(async (completed) => {
+            if (completed) {
+              console.log(`[Unifideck] Ubisoft authentication successful!`);
+              toaster.toast({
+                title: t("toasts.authConnected", { store: storeName }),
+                body: t("toasts.authConnectedMessage", { store: storeName }),
+                duration: 5000,
+              });
+              await refreshLibraryAfterAuth("ubisoft");
+            } else {
+              console.log(`[Unifideck] Ubisoft authentication timed out`);
+              toaster.toast({
+                title: t("toasts.authTimeout"),
+                body: t("toasts.authTimeoutMessage", { store: storeName }),
+                critical: true,
+                duration: 5000,
+              });
+            }
+          })
+          .catch((error) => {
+            console.error(`[Unifideck] Error polling ubisoft auth:`, error);
+          });
+      } catch (error: any) {
+        console.error(`[Unifideck] Error starting ubisoft auth:`, error);
+        toaster.toast({
+          title: t("toasts.authError"),
+          body: error.message || String(error),
+          critical: true,
+          duration: 5000,
+        });
+      }
       return;
     }
 

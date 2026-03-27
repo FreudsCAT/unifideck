@@ -304,14 +304,22 @@ def sync_auth_artifacts(prefix_path: str) -> bool:
 
 
 def inject_session(prefix_path: str) -> bool:
-    """Inject session token and credential files into prefix."""
+    """Inject session token and credential files into prefix.
+
+    Returns True if credential files were synced (sufficient for auto-login)
+    OR if a session token was written.
+    """
     # Sync binary credential files first (ConnectSecureStorage.dat, user.dat)
-    sync_credentials(prefix_path)
-    sync_auth_artifacts(prefix_path)
+    creds_synced = sync_credentials(prefix_path)
+    artifacts_synced = sync_auth_artifacts(prefix_path)
+    credentials_synced = creds_synced or artifacts_synced
 
     token, user_id = read_token()
     if not token:
-        print("[inject] No session token available, skipping")
+        if credentials_synced:
+            print("[inject] No session token but credentials synced (sufficient for auto-login)")
+            return True
+        print("[inject] No session token or credentials available, skipping")
         return False
 
     config = (
