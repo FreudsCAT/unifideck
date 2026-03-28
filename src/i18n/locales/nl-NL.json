@@ -13,7 +13,30 @@
     "toastUpdatedBody": "Nieuwe games worden geïnstalleerd op {{location}}",
     "toastFailedTitle": "Bijwerken Mislukt",
     "toastFailedBody": "{{error}}",
-    "unknown": "Onbekend"
+    "unknown": "Onbekend",
+    "browseButton": "Bladeren...",
+    "clearCustom": "Aangepaste locatie wissen",
+    "customPathSet": "Aangepaste installatielocatie ingesteld",
+    "newFolder": "Nieuwe map",
+    "newFolderCreate": "Maken",
+    "selectFolder": "Deze map gebruiken",
+    "emptyDirectory": "Lege map",
+    "showHidden": "Verborgen items tonen",
+    "selectDevice": "Apparaat selecteren",
+    "sortAZ": "A-Z",
+    "sortZA": "Z-A",
+    "sortModifiedNewest": "Gewijzigd (nieuwste)",
+    "sortModifiedOldest": "Gewijzigd (oudste)",
+    "sortCreatedNewest": "Aangemaakt (nieuwste)",
+    "sortCreatedOldest": "Aangemaakt (oudste)",
+    "sortSizeLargest": "Grootte (grootste)",
+    "sortSizeSmallest": "Grootte (kleinste)",
+    "validationErrors.notAbsolute": "Pad moet absoluut zijn",
+    "validationErrors.systemDir": "Kan geen systeemmap gebruiken",
+    "validationErrors.notWritable": "Locatie is niet schrijfbaar",
+    "validationErrors.notFound": "Map bestaat niet",
+    "validationErrors.homeRoot": "Kan de hoofdmap van de homedirectory niet gebruiken",
+    "freeSpaceLabel": "{{label}} ({{freeSpace}} GB vrij)"
   },
   "gameGrid": {
     "loading": "Games laden...",
@@ -52,13 +75,23 @@
     "phaseExtracting": "{{game}} uitpakken...",
     "phaseVerifying": "{{game}} verifiëren...",
     "internalStorage": "Interne opslag ({{freeSpace}} GB vrij)",
-    "sdCard": "SD-kaart ({{freeSpace}} GB vrij)"
+    "sdCard": "SD-kaart ({{freeSpace}} GB vrij)",
+    "customLocation": "Aangepast: {{path}} ({{freeSpace}} GB vrij)",
+    "extractingLabel": "Uitpakken...",
+    "verifyingLabel": "Verifiëren...",
+    "updateQueuedLabel": "Update in wachtrij",
+    "downloadQueuedLabel": "Download in wachtrij",
+    "downloadingUpdateLabel": "Update downloaden",
+    "downloadingLabel": "Downloaden...",
+    "finalizingInstallation": "Installatie afronden...",
+    "speedMbps": "{{speed}} MB/s",
+    "etaLabel": "Resterende tijd: {{eta}}"
   },
   "cloudSave": {
-    "title": "Cloud Save Conflict",
+    "title": "Conflict met cloudopslag",
     "description": "Je lokale opgeslagen bestanden verschillen van cloud saves voor {{game}}",
     "local": "Lokaal:",
-    "cloud": "Cloud:",
+    "cloud": "In de cloud:",
     "newer": "(nieuwer)",
     "useCloud": "Gebruik Cloud",
     "useLocal": "Gebruik Lokaal",
@@ -75,12 +108,14 @@
     "epicGames": "Epic Games",
     "gog": "GOG",
     "amazonGames": "Amazon Games",
+    "ubisoftConnect": "Ubisoft Connect",
     "connected": "Verbonden",
     "checking": "Controleren...",
     "authenticate": "Inloggen",
     "legendaryNotInstalled": "⚠️ Epic Games CLI installeren...",
     "nileNotInstalled": "⚠️ Amazon Games CLI niet gevonden",
-    "error": "Fout - Controleer logs"
+    "error": "Fout - Controleer logs",
+    "microsoftStore": "Microsoft Store"
   },
   "librarySync": {
     "title": "BIBLIOTHEEKSYNCHRONISATIE",
@@ -114,7 +149,10 @@
     "cancel": "✖ Annuleren",
     "processing": "Verwerken...",
     "checking": "Controleren...",
-    "size": "{{size}} GB"
+    "size": "{{size}} GB",
+    "update": "BIJWERKEN",
+    "updateAvailable": "UPDATE BESCHIKBAAR",
+    "updateAvailableDescription": "Er staat een nieuwe versie klaar om te installeren."
   },
   "confirmModals": {
     "installTitle": "Installatie Bevestigen",
@@ -132,12 +170,25 @@
     "steamRestartDescriptionStore": "Herstart Steam om je nieuwe {{store}}-games en artwork toe te passen",
     "restartNow": "Nu herstarten",
     "later": "Later",
+    "ubisoftInstallTitle": "Ubisoft Connect vereist",
+    "ubisoftInstallDescription": "Hiermee wordt de Ubisoft Connect Launcher geopend, die je nodig hebt om {{title}} te installeren.",
+    "ubisoftInstallConfirm": "Ubisoft Connect openen",
     "yes": "Ja",
-    "no": "Nee"
+    "no": "Nee",
+    "amazonUpdateTitle": "Volledig opnieuw downloaden vereist",
+    "amazonUpdateDescription": "Amazon-updates vereisen een volledige herdownload van {{title}}. Dit kan even duren. Doorgaan?",
+    "updateConfirm": "Bijwerken",
+    "steamRestartCleanupTitle": "Opschonen voltooid!",
+    "steamRestartCleanupDescription": "Start Steam opnieuw om verwijderde games en artwork volledig te verwijderen"
   },
   "toasts": {
     "downloadStarted": "Download Gestart. Controleer UNIFIDECK > Downloads",
     "downloadQueued": "{{title}} is aan de wachtrij toegevoegd.",
+    "ubisoftLauncherOpening": "Ubisoft Connect wordt geopend",
+    "ubisoftLauncherOpeningMessage": "Ubisoft Connect wordt geopend voor {{title}}. Installeer de game daar en keer daarna terug om te spelen.",
+    "ubisoftLauncherAlreadyOpenMessage": "Ubisoft Connect is al geopend voor deze installatie.",
+    "ubisoftLauncherOpenFailed": "Ubisoft Connect kon niet worden geopend",
+    "ubisoftLauncherOpenFailedMessage": "Ubisoft Connect kon niet worden geopend voor de installatie.",
     "multipartDetected": "Multi-Part Download Gedetecteerd",
     "multipartMessage": "Wees geduldig en wacht op voltooiing",
     "downloadFailed": "Download Mislukt",
@@ -169,11 +220,15 @@
     "cleanupSuccessful": "Opruimen Geslaagd",
     "cleanupSuccessfulMessage": "{{games}} games, {{artwork}} artwork-sets en {{files}} bestandsmappen verwijderd. Auth & cache gewist.",
     "deleteFailed": "Verwijderen Mislukt",
+    "repairPrefixSuccess": "Prefix gerepareerd",
+    "repairPrefixSuccessMessage": "De Ubisoft Connect-prefix is opnieuw opgebouwd",
+    "repairPrefixFailed": "Reparatie mislukt",
+    "repairPrefixFailedMessage": "Kon prefix niet repareren: {{error}}",
     "unifideck": "Unifideck:",
     "launcher": {
       "networkError": "Netwerkfout",
       "retryingUmu": "UMU opnieuw proberen over {{seconds}}s (poging {{attempt}}/{{max}})...",
-      "protonUpgrade": "Proton Upgrade",
+      "protonUpgrade": "Proton-upgrade",
       "resettingPrefix": "Prefix resetten voor {{version}}...",
       "firstTimeSetup": "Eerste keer instellen",
       "initializingPrefix": "Wine-prefix initialiseren...",
@@ -185,6 +240,7 @@
       "startingEpicGame": "Epic-spel starten...",
       "startingAmazonGame": "Amazon-spel starten...",
       "startingGogGame": "GOG-spel starten...",
+      "startingUbisoftGame": "Ubisoft-game starten...",
       "dependenciesTitle": "Afhankelijkheden installeren",
       "installingRedistributables": "Spel-redistributables installeren...",
       "dependenciesReady": "Afhankelijkheden gereed",
@@ -204,10 +260,15 @@
       "prerequisitesReady": "Vereisten gereed",
       "prerequisitesInstalled": "Spelvereisten geïnstalleerd",
       "prerequisitesFailed": "Vereisten waarschuwing",
-      "prerequisitesFailedMessage": "Vereisten zijn mogelijk niet correct geïnstalleerd"
+      "prerequisitesFailedMessage": "Vereisten zijn mogelijk niet correct geïnstalleerd",
+      "browserRequired": "Microsoft Edge vereist"
     },
-    "updateComplete": "Update Complete!",
-    "updateCompleteMessage": "{{title}} has been updated."
+    "updateComplete": "Update voltooid!",
+    "updateCompleteMessage": "{{title}} is bijgewerkt.",
+    "updateCancelled": "Update geannuleerd",
+    "updateCancelledMessage": "De update voor {{title}} is geannuleerd.",
+    "updateFailed": "Update mislukt",
+    "updateFailedMessage": "Kon update niet starten."
   },
   "uninstallModal": {
     "title": "Verwijdering bevestigen",
@@ -254,8 +315,14 @@
       "processFailed": "Download mislukt — probeer het opnieuw",
       "directoryNotFound": "Geïnstalleerde bestanden niet gevonden",
       "lockConflict": "Een andere bewerking is bezig — probeer het opnieuw",
+      "ubisoftClient": "Ubisoft Connect-clientfout — probeer de prefix te repareren",
+      "ubisoftClientNotRunning": "Ubisoft Connect-client reageert niet",
+      "ubisoftBootstrap": "Ubisoft Connect-prefix kon niet worden ingesteld",
+      "ubisoftUmuMissing": "umu-run niet gevonden — vereist voor Ubisoft-games",
       "generic": "Installatie mislukt — controleer de logbestanden"
-    }
+    },
+    "unknown": "Onbekende fout",
+    "steamAppsUnavailable": "SteamClient.Apps-API is niet beschikbaar"
   },
   "sync": {
     "downloadingArtwork": "Artwork downloaden voor {{game}}...",
@@ -271,7 +338,8 @@
     "cleaningOrphanedArtwork": "Wees-artwork opruimen...",
     "retryingMissingArtwork": "{{synced}}/{{total}} spellen met ontbrekend artwork opnieuw proberen...",
     "savingShortcuts": "Snelkoppelingen opslaan...",
-    "completed": "Sync klaar! {{added}} toegevoegd, artwork {{artwork}}."
+    "completed": "Sync klaar! {{added}} toegevoegd, artwork {{artwork}}.",
+    "fetchingStore": "{{store}} ophalen…"
   },
   "force_sync": {
     "migratingOldInstallations": "Geforceerde sync: Migreren...",
@@ -292,7 +360,13 @@
     "greatOnDeck": "Perfect voor Steam Deck",
     "allGames": "Alle games",
     "installed": "Geïnstalleerd",
-    "nonSteam": "Niet-Steam"
+    "nonSteam": "Niet-Steam",
+    "steam": "Steam",
+    "epic": "Epic",
+    "gog": "GOG",
+    "amazon": "Amazon",
+    "ubisoft": "Ubisoft",
+    "microsoft": "Microsoft"
   },
   "unifiedLibrary": {
     "error": "Unifideck Fout",
@@ -314,7 +388,7 @@
       "synopsis": "Samenvatting",
       "storePage": "Winkelpagina",
       "dlc": "DLC",
-      "communityHub": "Community Hub",
+      "communityHub": "Communityhub",
       "pointsShop": "Puntwinkel",
       "discussions": "Discussies",
       "guides": "Gidsen",
@@ -344,7 +418,8 @@
       "playable": "SPEELBAAR",
       "unsupported": "NIET ONDERSTEUND",
       "unknown": "ONBEKEND"
-    }
+    },
+    "failedToLoadMetadata": "Metagegevens konden niet worden geladen"
   },
   "gameDetailsSettings": {
     "title": "WEERGAVE SPELDETAILS",
@@ -370,5 +445,62 @@
     "toastMigrateBody": "{{shortcuts}} snelkoppelingen en {{artwork}} artwork-bestanden gemigreerd",
     "toastClearTitle": "Authenticatietokens gewist",
     "toastClearBody": "Winkelaanmeldingen zijn gewist. Je kunt nu inloggen met andere accounts."
+  },
+  "ubisoftAuth": {
+    "title": "Aanmelden bij Ubisoft Connect",
+    "description": "Voer je Ubisoft-accountgegevens in om je bibliotheek te koppelen.",
+    "emailLabel": "E-mail",
+    "passwordLabel": "Wachtwoord",
+    "signIn": "Aanmelden",
+    "signingIn": "Aanmelden...",
+    "cancel": "Annuleren",
+    "twoFactorTitle": "Twee-factor-authenticatie",
+    "twoFactorDescription": "Voer de verificatiecode uit je authenticatie-app in.",
+    "twoFactorLabel": "Verificatiecode",
+    "verify": "Verifiëren",
+    "verifying": "Verifiëren...",
+    "errorEmptyFields": "Voer je e-mailadres en wachtwoord in",
+    "errorEmpty2FA": "Voer de verificatiecode in",
+    "errorLoginFailed": "Aanmelden mislukt. Controleer je gegevens.",
+    "errorInvalid2FA": "Ongeldige verificatiecode. Probeer het opnieuw.",
+    "showPassword": "Wachtwoord tonen",
+    "hidePassword": "Wachtwoord verbergen",
+    "doubleLoginWarning": "Je moet je twee keer aanmelden voor Ubisoft."
+  },
+  "relativeDate": {
+    "today": "Vandaag",
+    "yesterday": "Gisteren"
+  },
+  "common": {
+    "thisGame": "deze game",
+    "game": "Spel",
+    "unknown": "Onbekend"
+  },
+  "microsoft": {
+    "notCompatible": "Het formaat van dit spel is niet compatibel met SteamOS",
+    "playOnCloud": "Speel in de cloud",
+    "xcloudStreaming": "Xbox Cloud Gaming",
+    "signInMessage": "Log in met uw Microsoft / Xbox account",
+    "accountConnected": "Microsoft-account verbonden",
+    "loggedOut": "Afgemeld bij Microsoft Store",
+    "xcloudNotInstalled": "xCloud-games zijn niet lokaal geïnstalleerd",
+    "chromiumRequired": "Microsoft Edge vereist",
+    "chromiumRequiredMessage": "Xbox Cloud Gaming vereist Microsoft Edge. Wil je deze automatisch installeren? (Dit hoeft maar één keer te gebeuren.)",
+    "chromiumInstallButton": "Microsoft Edge installeren",
+    "chromiumInstalling": "Microsoft Edge wordt geïnstalleerd...",
+    "chromiumInstalled": "Microsoft Edge geïnstalleerd!",
+    "chromiumAlreadyInstalled": "Er is al een compatibele browser geïnstalleerd",
+    "chromiumInstallFailed": "Installatie van Microsoft Edge mislukt. Installeer handmatig: flatpak install com.microsoft.Edge",
+    "chromiumInstallTimeout": "De installatie van Microsoft Edge is verlopen. Controleer je internetverbinding.",
+    "flatpakNotFound": "Flatpak is niet beschikbaar op dit systeem",
+    "signInRequired": "Log in om te spelen",
+    "browserAlreadyInstalled": "Er is al een compatibele browser geïnstalleerd",
+    "browserInstalled": "Microsoft Edge is succesvol geïnstalleerd!",
+    "browserInstallFailed": "Installatie van Microsoft Edge mislukt. Installeer handmatig: flatpak install com.microsoft.Edge"
+  },
+  "authSuccess": {
+    "title": "Authenticatie",
+    "titleStore": "{{store}} — Authenticatie ✓",
+    "subtitle": "Druk op de B-knop om dit venster te sluiten"
   }
 }

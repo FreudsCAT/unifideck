@@ -11,7 +11,8 @@ let appDetailsCache: Record<number, any> = {};
 const patchedOverviews = new Set<number>();
 
 // Reference to unpatch function for m_mapApps patching
-let unpatchMapApps: (() => void) | null = null;
+// Kept exported for potential external use by other modules or future patches
+export let unpatchMapApps: (() => void) | null = null;
 
 /**
  * Load the Steam App ID mappings from backend.
@@ -305,7 +306,7 @@ function injectMetadataIntoOverview(appOverview: any): boolean {
 /**
  * Scan all shortcuts in m_mapApps and inject metadata.
  */
-function injectMetadataToAllShortcuts(): void {
+export function injectMetadataToAllShortcuts(): void {
   const appStore = (window as any).appStore;
   if (!appStore?.m_mapApps) return;
 
@@ -335,7 +336,7 @@ function injectMetadataToAllShortcuts(): void {
  * Patch appStore.m_mapApps to intercept when apps are added/updated.
  * Similar to NSL's approach for playtime tracking.
  */
-function patchMapApps(): () => void {
+export function patchMapApps(): () => void {
   const appStore = (window as any).appStore;
   const appInfoStore = (window as any).appInfoStore;
 
@@ -759,4 +760,3 @@ export function patchSteamStores(): () => void {
     console.log("[Unifideck Store Patch] Steam stores unpatched");
   };
 }
-

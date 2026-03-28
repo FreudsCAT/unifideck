@@ -19,4 +19,17 @@ export type SyncProgress = {
   steam_synced?: number;
   rawg_total?: number;
   rawg_synced?: number;
+  // UnifiDB metadata tracking fields
+  unifidb_total?: number;
+  unifidb_synced?: number;
+  // Metacritic tracking fields
+  metacritic_total?: number;
+  metacritic_synced?: number;
+  // Sync lifecycle flags
+  restart_pending?: boolean;
+  is_cancelling?: boolean;
+  request_source?: string;
+  run_id?: number;
+  started_at?: number;
+  finished_at?: number;
 };

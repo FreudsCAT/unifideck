@@ -53,20 +53,81 @@ declare global {
         GetNonSteamApps(): SteamApp[];
         GetAppOverview(appId: number): SteamAppOverview | null;
         RegisterForGameActionStart(
-          callback: (gameActionId: number, appId: string, action: string, launchSource: number) => void,
+          callback: (
+            gameActionId: number,
+            appId: string,
+            action: string,
+            launchSource: number,
+          ) => void,
         ): Unregisterable;
         CancelGameAction(gameActionId: number): void;
-        RunGame(appId: string, launchOptions: string, param3: number, param4: number): void;
+        RunGame(
+          appId: string,
+          launchOptions: string,
+          param3: number,
+          param4: number,
+        ): void;
         TerminateApp(appId: string, force: boolean): void;
         ShowControllerConfigurator(appId: number): void;
         OpenAppSettingsDialog(appId: number, section: string): void;
+        AddShortcut(
+          appName: string,
+          exePath: string,
+          startDir: string,
+          launchOptions: string,
+        ): Promise<number>;
+        RemoveShortcut(appId: number): void;
+        SetShortcutName?(appId: number, name: string): void;
         SpecifyCompatTool(appId: number, strToolName: string): void;
         SetShortcutLaunchOptions(appId: number, options: string): void;
-        GetPlaytime(appId: number): Promise<{ nPlaytimeForever: number; rtLastTimePlayed: number }>;
+        GetPlaytime(
+          appId: number,
+        ): Promise<{ nPlaytimeForever: number; rtLastTimePlayed: number }>;
+        SetThirdPartyControllerConfiguration?(
+          appId: number,
+          value: number,
+        ): void;
+      };
+      Input?: {
+        QueryControllerConfigsForApp(
+          appId: number,
+          controllerIndex: number,
+          compatibleOnly: boolean,
+        ): void;
+        StartEditingControllerConfigurationForAppIDAndControllerIndex?(
+          appId: number,
+          controllerIndex: number,
+        ): Promise<void> | void;
+        SetSelectedConfigForApp(
+          appId: number,
+          controllerIndex: number,
+          url: string,
+          preview: boolean,
+          applyToSameControllerType?: boolean,
+        ): void;
+        SaveEditingControllerConfiguration?(
+          controllerIndex: number,
+          sharedConfig: boolean,
+        ): void;
+        StopEditingControllerConfiguration?(controllerIndex: number): void;
+        ClearSelectedConfigForApp?(
+          appId: number,
+          controllerIndex: number,
+        ): void;
+        RegisterForControllerConfigInfoMessages(
+          callback: (msgs: ControllerConfigInfoMessage[]) => void,
+        ): Unregisterable;
+        RegisterForControllerListChanges(
+          callback: (controllers: ControllerInfo[]) => void,
+        ): Unregisterable;
       };
       GameSessions?: {
         RegisterForAppLifetimeNotifications(
-          callback: (notification: { unAppID: number; bRunning: boolean; nInstanceID: number }) => void,
+          callback: (notification: {
+            unAppID: number;
+            bRunning: boolean;
+            nInstanceID: number;
+          }) => void,
         ): Unregisterable;
       };
       library?: {
@@ -78,11 +139,20 @@ declare global {
       deckDesktopApps?: SteamCollection;
       localGamesCollection?: SteamCollection;
     };
+    controllerConfiguratorStore?: {
+      m_controllerList?: ControllerInfo[];
+    };
     // Note: appStore is defined by @decky/ui globals
   }
 }
 
-export type StoreType = "steam" | "epic" | "gog" | "amazon" | "unknown";
+export type StoreType =
+  | "steam"
+  | "epic"
+  | "gog"
+  | "amazon"
+  | "microsoft"
+  | "unknown";
 
 export interface UnifideckGame {
   appId: number;
@@ -94,4 +164,37 @@ export interface UnifideckGame {
   deckVerified?: "verified" | "playable" | "unsupported" | "unknown";
   lastPlayed?: number;
   playtimeMinutes?: number;
+}
+
+// Controller configuration types (from SteamClient.Input)
+export interface ControllerConfigInfoMessageList {
+  appID: number;
+  nControllerType: number;
+  Title: string;
+  URL: string;
+  eExportType: number; // 0=Unknown, 3=Community, 4=Template, 5=Official, 6=OfficialDefault
+  bUsesGamepad: boolean;
+  bSelected: boolean;
+  bOfficial: boolean;
+  bUsesMouse: boolean;
+  bUsesKeyboard: boolean;
+  publishedFileID: string;
+}
+
+export interface ControllerConfigInfoMessageDone {
+  appID: number;
+  bGameQueryDone?: boolean;
+  bPersonalQueryDone?: boolean;
+  bCloudQueryDone?: boolean;
+}
+
+export type ControllerConfigInfoMessage =
+  | ControllerConfigInfoMessageList
+  | ControllerConfigInfoMessageDone;
+
+export interface ControllerInfo {
+  strName: string;
+  eControllerType: number;
+  nControllerIndex: number;
+  bWireless: boolean;
 }

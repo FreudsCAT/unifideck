@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { call } from "@decky/api";
 import { SteamApp, UnifideckGame, StoreType } from "../types/steam";
+import { t } from "../i18n";
 
 /**
  * Hook to access Steam's game library including non-Steam games
@@ -22,7 +23,7 @@ export function useSteamLibrary() {
 
       // Check if Steam Client APIs are available
       if (!window.SteamClient?.Apps) {
-        throw new Error("SteamClient.Apps API not available");
+        throw new Error(t("errors.steamAppsUnavailable"));
       }
 
       // Get all games (Steam + non-Steam)
@@ -40,7 +41,7 @@ export function useSteamLibrary() {
 
       setGames(unifideckGames);
     } catch (err) {
-      const errorMsg = err instanceof Error ? err.message : "Unknown error";
+      const errorMsg = err instanceof Error ? err.message : t("errors.unknown");
       console.error("[Unifideck] Error loading games:", errorMsg);
       setError(errorMsg);
     } finally {
@@ -54,7 +55,7 @@ export function useSteamLibrary() {
 
     return {
       appId: app.appid,
-      title: app.display_name || app.sort_as || "Unknown",
+      title: app.display_name || app.sort_as || t("common.unknown"),
       store,
       isInstalled: app.installed || false,
       isShortcut,

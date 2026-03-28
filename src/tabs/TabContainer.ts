@@ -28,7 +28,7 @@ export interface UnifideckTab {
   icon?: string;
 }
 
-// Default Unifideck tabs - ORDERED: Great on Deck, All Games, Installed, Steam, Epic, GOG, Amazon, Non-Steam
+// Default Unifideck tabs - ORDERED: Great on Deck, All Games, Installed, Steam, Epic, GOG, Amazon, Ubisoft, Non-Steam
 export const UNIFIDECK_TABS: UnifideckTab[] = [
   {
     id: "unifideck-deck",
@@ -50,32 +50,44 @@ export const UNIFIDECK_TABS: UnifideckTab[] = [
   },
   {
     id: "unifideck-steam",
-    title: "Steam",
+    title: t("deckTabs.steam"),
     position: 3,
     filters: [{ type: "store", params: { store: "steam" } }],
   },
   {
     id: "unifideck-epic",
-    title: "Epic",
+    title: t("deckTabs.epic"),
     position: 4,
     filters: [{ type: "store", params: { store: "epic" } }],
   },
   {
     id: "unifideck-gog",
-    title: "GOG",
+    title: t("deckTabs.gog"),
     position: 5,
     filters: [{ type: "store", params: { store: "gog" } }],
   },
   {
     id: "unifideck-amazon",
-    title: "Amazon",
+    title: t("deckTabs.amazon"),
     position: 6,
     filters: [{ type: "store", params: { store: "amazon" } }],
   },
   {
+    id: "unifideck-ubisoft",
+    title: t("deckTabs.ubisoft"),
+    position: 7,
+    filters: [{ type: "store", params: { store: "ubisoft" } }],
+  },
+  {
+    id: "unifideck-microsoft",
+    title: t("deckTabs.microsoft"),
+    position: 8,
+    filters: [{ type: "store", params: { store: "microsoft" } }],
+  },
+  {
     id: "unifideck-nonsteam",
     title: t("deckTabs.nonSteam"),
-    position: 7,
+    position: 9,
     filters: [{ type: "nonSteam", params: {} }], // All non-Steam shortcuts except non-installed Unifideck
   },
 ];
@@ -247,9 +259,14 @@ class TabManager {
   private tabs: UnifideckTabContainer[] = [];
   private initialized = false;
   private cacheLoaded = false;
+  private connectedStores = new Set<
+    "epic" | "gog" | "amazon" | "ubisoft" | "microsoft"
+  >();
   private epicGameCount = 0;
   private gogGameCount = 0;
   private amazonGameCount = 0;
+  private ubisoftGameCount = 0;
+  private microsoftGameCount = 0;
 
   async initialize() {
     if (this.initialized) return;
@@ -279,10 +296,10 @@ class TabManager {
       if (Array.isArray(games) && games.length > 0) {
         const cacheData = games.map((g) => ({
           appId: g.appId,
-          store: g.store as "epic" | "gog" | "amazon",
+          store: g.store as "epic" | "gog" | "amazon" | "ubisoft" | "microsoft",
           isInstalled: g.isInstalled,
-          steamAppId: g.steamAppId,  // SteamGridDB ID for ProtonDB
-          realSteamAppId: g.realSteamAppId,  // Real Steam Store App ID for spoofing
+          steamAppId: g.steamAppId, // SteamGridDB ID for ProtonDB
+          realSteamAppId: g.realSteamAppId, // Real Steam Store App ID for spoofing
         }));
         updateUnifideckCache(cacheData);
 
@@ -294,8 +311,14 @@ class TabManager {
         this.amazonGameCount = games.filter(
           (g: any) => g.store === "amazon",
         ).length;
+        this.ubisoftGameCount = games.filter(
+          (g: any) => g.store === "ubisoft",
+        ).length;
+        this.microsoftGameCount = games.filter(
+          (g: any) => g.store === "microsoft",
+        ).length;
         console.log(
-          `[Unifideck] Loaded ${games.length} games into cache (Epic: ${this.epicGameCount}, GOG: ${this.gogGameCount}, Amazon: ${this.amazonGameCount})`,
+          `[Unifideck] Loaded ${games.length} games into cache (Epic: ${this.epicGameCount}, GOG: ${this.gogGameCount}, Amazon: ${this.amazonGameCount}, Ubisoft: ${this.ubisoftGameCount}, Microsoft: ${this.microsoftGameCount})`,
         );
 
         // Load compatibility cache from backend (ProtonDB + Deck Verified)
@@ -328,21 +351,80 @@ class TabManager {
     }
   }
 
+  /**
+   * Force reload the game cache from backend.
+   * Called after sync completes to update game counts and tab visibility.
+   */
+  async forceReloadGameCache(): Promise<void> {
+    this.cacheLoaded = false;
+    await this.loadGameCache();
+    // Rebuild tabs with fresh data
+    this.tabs = UNIFIDECK_TABS.map((tab) => new UnifideckTabContainer(tab));
+    console.log("[Unifideck] TabManager force-reloaded after sync");
+  }
+
   getTabs(): UnifideckTabContainer[] {
     return this.tabs.filter((tab) => this.shouldShowTab(tab.id));
+  }
+
+  setConnectedStores(
+    statuses: Partial<
+      Record<"epic" | "gog" | "amazon" | "ubisoft" | "microsoft", string>
+    >,
+  ) {
+    const nextConnectedStores = new Set<
+      "epic" | "gog" | "amazon" | "ubisoft" | "microsoft"
+    >();
+    (
+      ["epic", "gog", "amazon", "ubisoft", "microsoft"] as const
+    ).forEach((store) => {
+      if (statuses[store] === "connected") {
+        nextConnectedStores.add(store);
+      }
+    });
+    this.connectedStores = nextConnectedStores;
+    if (this.initialized) {
+      this.tabs = UNIFIDECK_TABS.map((tab) => new UnifideckTabContainer(tab));
+    }
   }
 
   /**
    * Determines if a tab should be visible based on game availability
    */
   private shouldShowTab(tabId: string): boolean {
-    if (tabId === "unifideck-epic" && this.epicGameCount === 0) {
+    if (
+      tabId === "unifideck-epic" &&
+      this.epicGameCount === 0 &&
+      !this.connectedStores.has("epic")
+    ) {
       return false;
     }
-    if (tabId === "unifideck-gog" && this.gogGameCount === 0) {
+    if (
+      tabId === "unifideck-gog" &&
+      this.gogGameCount === 0 &&
+      !this.connectedStores.has("gog")
+    ) {
       return false;
     }
-    if (tabId === "unifideck-amazon" && this.amazonGameCount === 0) {
+    if (
+      tabId === "unifideck-amazon" &&
+      this.amazonGameCount === 0 &&
+      !this.connectedStores.has("amazon")
+    ) {
+      return false;
+    }
+    if (
+      tabId === "unifideck-ubisoft" &&
+      this.ubisoftGameCount === 0 &&
+      !this.connectedStores.has("ubisoft")
+    ) {
+      return false;
+    }
+    if (
+      tabId === "unifideck-microsoft" &&
+      this.microsoftGameCount === 0 &&
+      !this.connectedStores.has("microsoft")
+    ) {
       return false;
     }
     return true;
@@ -362,7 +444,7 @@ class TabManager {
   updateGameCache(
     games: Array<{
       appId: number;
-      store: "epic" | "gog" | "amazon";
+      store: "epic" | "gog" | "amazon" | "ubisoft" | "microsoft";
       isInstalled: boolean;
     }>,
   ) {

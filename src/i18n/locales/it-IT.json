@@ -13,7 +13,30 @@
     "toastUpdatedBody": "I nuovi giochi verranno installati in {{location}}",
     "toastFailedTitle": "Aggiornamento Fallito",
     "toastFailedBody": "{{error}}",
-    "unknown": "Sconosciuto"
+    "unknown": "Sconosciuto",
+    "browseButton": "Sfoglia...",
+    "clearCustom": "Rimuovi posizione personalizzata",
+    "customPathSet": "Posizione di installazione personalizzata impostata",
+    "newFolder": "Nuova cartella",
+    "newFolderCreate": "Crea",
+    "selectFolder": "Usa questa cartella",
+    "emptyDirectory": "Cartella vuota",
+    "showHidden": "Mostra elementi nascosti",
+    "selectDevice": "Seleziona dispositivo",
+    "sortAZ": "A-Z",
+    "sortZA": "Z-A",
+    "sortModifiedNewest": "Modificato (più recente)",
+    "sortModifiedOldest": "Modificato (meno recente)",
+    "sortCreatedNewest": "Creato (più recente)",
+    "sortCreatedOldest": "Creato (meno recente)",
+    "sortSizeLargest": "Dimensione (più grande)",
+    "sortSizeSmallest": "Dimensione (più piccola)",
+    "validationErrors.notAbsolute": "Il percorso deve essere assoluto",
+    "validationErrors.systemDir": "Impossibile utilizzare una directory di sistema",
+    "validationErrors.notWritable": "La posizione non è scrivibile",
+    "validationErrors.notFound": "La directory non esiste",
+    "validationErrors.homeRoot": "Impossibile utilizzare la radice della directory home",
+    "freeSpaceLabel": "{{label}} ({{freeSpace}} GB liberi)"
   },
   "gameGrid": {
     "loading": "Caricamento giochi...",
@@ -52,13 +75,23 @@
     "phaseExtracting": "Estrazione di {{game}}...",
     "phaseVerifying": "Verifica di {{game}}...",
     "internalStorage": "Memoria interna ({{freeSpace}} GB liberi)",
-    "sdCard": "Scheda SD ({{freeSpace}} GB liberi)"
+    "sdCard": "Scheda SD ({{freeSpace}} GB liberi)",
+    "customLocation": "Personalizzato: {{path}} ({{freeSpace}} GB liberi)",
+    "extractingLabel": "Estrazione...",
+    "verifyingLabel": "Verifica...",
+    "updateQueuedLabel": "Aggiornamento in coda",
+    "downloadQueuedLabel": "Download in coda",
+    "downloadingUpdateLabel": "Download aggiornamento",
+    "downloadingLabel": "Download in corso...",
+    "finalizingInstallation": "Finalizzazione installazione...",
+    "speedMbps": "{{speed}} MB/s",
+    "etaLabel": "Tempo rimanente: {{eta}}"
   },
   "cloudSave": {
     "title": "Conflitto Salvataggio Cloud",
     "description": "I tuoi salvataggi locali differiscono dai salvataggi cloud per {{game}}",
     "local": "Locale:",
-    "cloud": "Cloud:",
+    "cloud": "Nel cloud:",
     "newer": "(più recente)",
     "useCloud": "Usa Cloud",
     "useLocal": "Usa Locale",
@@ -75,12 +108,14 @@
     "epicGames": "Epic Games",
     "gog": "GOG",
     "amazonGames": "Amazon Games",
+    "ubisoftConnect": "Ubisoft Connect",
     "connected": "Connesso",
     "checking": "Verifica...",
     "authenticate": "Accedi",
     "legendaryNotInstalled": "⚠️ Installazione Epic Games CLI...",
     "nileNotInstalled": "⚠️ Amazon Games CLI non trovato",
-    "error": "Errore - Controlla i log"
+    "error": "Errore - Controlla i log",
+    "microsoftStore": "Microsoft Store"
   },
   "librarySync": {
     "title": "SINCRONIZZAZIONE LIBRERIA",
@@ -114,7 +149,10 @@
     "cancel": "✖ Annulla",
     "processing": "Elaborazione...",
     "checking": "Verifica...",
-    "size": "{{size}} GB"
+    "size": "{{size}} GB",
+    "update": "AGGIORNA",
+    "updateAvailable": "AGGIORNAMENTO DISPONIBILE",
+    "updateAvailableDescription": "È pronta una nuova versione da installare."
   },
   "confirmModals": {
     "installTitle": "Conferma Installazione",
@@ -132,12 +170,25 @@
     "steamRestartDescriptionStore": "Riavvia Steam per applicare i nuovi giochi e le nuove copertine di {{store}}",
     "restartNow": "Riavvia ora",
     "later": "Più tardi",
+    "ubisoftInstallTitle": "Ubisoft Connect richiesto",
+    "ubisoftInstallDescription": "Questo aprirà il launcher di Ubisoft Connect, necessario per installare {{title}}.",
+    "ubisoftInstallConfirm": "Apri Ubisoft Connect",
     "yes": "Sì",
-    "no": "No"
+    "no": "No",
+    "amazonUpdateTitle": "È richiesto un nuovo download completo",
+    "amazonUpdateDescription": "Gli aggiornamenti Amazon richiedono un nuovo download completo di {{title}}. Potrebbe volerci un po'. Continuare?",
+    "updateConfirm": "Aggiorna",
+    "steamRestartCleanupTitle": "Pulizia completata!",
+    "steamRestartCleanupDescription": "Riavvia Steam per rimuovere completamente i giochi e le copertine eliminati"
   },
   "toasts": {
     "downloadStarted": "Download Avviato. Controlla UNIFIDECK > Download",
     "downloadQueued": "{{title}} è stato aggiunto alla coda.",
+    "ubisoftLauncherOpening": "Apertura di Ubisoft Connect",
+    "ubisoftLauncherOpeningMessage": "Ubisoft Connect si sta aprendo per {{title}}. Installa il gioco lì, poi torna per giocare.",
+    "ubisoftLauncherAlreadyOpenMessage": "Ubisoft Connect è già aperto per questa installazione.",
+    "ubisoftLauncherOpenFailed": "Impossibile aprire Ubisoft Connect",
+    "ubisoftLauncherOpenFailedMessage": "Impossibile aprire Ubisoft Connect per l'installazione.",
     "multipartDetected": "Download Multi-Parte Rilevato",
     "multipartMessage": "Attendi pazientemente il completamento",
     "downloadFailed": "Download Fallito",
@@ -169,6 +220,10 @@
     "cleanupSuccessful": "Pulizia Riuscita",
     "cleanupSuccessfulMessage": "Rimossi {{games}} giochi, {{artwork}} set di copertine e {{files}} directory di file. Auth e cache cancellati.",
     "deleteFailed": "Eliminazione Fallita",
+    "repairPrefixSuccess": "Prefisso riparato",
+    "repairPrefixSuccessMessage": "Il prefisso di Ubisoft Connect è stato ricostruito",
+    "repairPrefixFailed": "Riparazione non riuscita",
+    "repairPrefixFailedMessage": "Impossibile riparare il prefisso: {{error}}",
     "unifideck": "Unifideck:",
     "launcher": {
       "networkError": "Errore di rete",
@@ -185,6 +240,7 @@
       "startingEpicGame": "Avvio gioco Epic...",
       "startingAmazonGame": "Avvio gioco Amazon...",
       "startingGogGame": "Avvio gioco GOG...",
+      "startingUbisoftGame": "Avvio gioco Ubisoft...",
       "dependenciesTitle": "Installazione dipendenze",
       "installingRedistributables": "Installazione ridistribuibili gioco...",
       "dependenciesReady": "Dipendenze pronte",
@@ -204,10 +260,15 @@
       "prerequisitesReady": "Prerequisiti pronti",
       "prerequisitesInstalled": "Prerequisiti del gioco installati",
       "prerequisitesFailed": "Avviso prerequisiti",
-      "prerequisitesFailedMessage": "I prerequisiti potrebbero non essere stati installati correttamente"
+      "prerequisitesFailedMessage": "I prerequisiti potrebbero non essere stati installati correttamente",
+      "browserRequired": "Microsoft Edge richiesto"
     },
-    "updateComplete": "Update Complete!",
-    "updateCompleteMessage": "{{title}} has been updated."
+    "updateComplete": "Aggiornamento completato!",
+    "updateCompleteMessage": "{{title}} è stato aggiornato.",
+    "updateCancelled": "Aggiornamento annullato",
+    "updateCancelledMessage": "L'aggiornamento di {{title}} è stato annullato.",
+    "updateFailed": "Aggiornamento non riuscito",
+    "updateFailedMessage": "Impossibile avviare l'aggiornamento."
   },
   "uninstallModal": {
     "title": "Conferma disinstallazione",
@@ -254,8 +315,14 @@
       "processFailed": "Download fallito — riprova",
       "directoryNotFound": "Impossibile individuare i file installati",
       "lockConflict": "Un'altra operazione è in corso — riprova",
+      "ubisoftClient": "Errore del client Ubisoft Connect — prova a riparare il prefisso",
+      "ubisoftClientNotRunning": "Il client Ubisoft Connect non risponde",
+      "ubisoftBootstrap": "Impossibile configurare il prefisso di Ubisoft Connect",
+      "ubisoftUmuMissing": "umu-run non trovato — richiesto per i giochi Ubisoft",
       "generic": "Installazione fallita — controlla i registri"
-    }
+    },
+    "unknown": "Errore sconosciuto",
+    "steamAppsUnavailable": "L'API SteamClient.Apps non è disponibile"
   },
   "sync": {
     "downloadingArtwork": "Scaricando artwork di {{game}}...",
@@ -271,7 +338,8 @@
     "cleaningOrphanedArtwork": "Pulizia delle immagini orfane...",
     "retryingMissingArtwork": "Riprovo {{synced}}/{{total}} giochi con immagini mancanti...",
     "savingShortcuts": "Salvataggio collegamenti...",
-    "completed": "Sync completata! {{added}} aggiunti, {{artwork}} artwork."
+    "completed": "Sync completata! {{added}} aggiunti, {{artwork}} artwork.",
+    "fetchingStore": "Recupero di {{store}}…"
   },
   "force_sync": {
     "migratingOldInstallations": "Sync forzata: Migrazione installazioni...",
@@ -292,7 +360,13 @@
     "greatOnDeck": "Perfetti per Steam Deck",
     "allGames": "Tutti i giochi",
     "installed": "Installati",
-    "nonSteam": "Non-Steam"
+    "nonSteam": "Non Steam",
+    "steam": "Steam",
+    "epic": "Epic",
+    "gog": "GOG",
+    "amazon": "Amazon",
+    "ubisoft": "Ubisoft",
+    "microsoft": "Microsoft"
   },
   "unifiedLibrary": {
     "error": "Errore Unifideck",
@@ -344,7 +418,8 @@
       "playable": "GIOCABILE",
       "unsupported": "NON SUPPORTATO",
       "unknown": "SCONOSCIUTO"
-    }
+    },
+    "failedToLoadMetadata": "Impossibile caricare i metadati"
   },
   "gameDetailsSettings": {
     "title": "VISTA DETTAGLI GIOCO",
@@ -370,5 +445,62 @@
     "toastMigrateBody": "Migrati {{shortcuts}} collegamenti e {{artwork}} file di copertine",
     "toastClearTitle": "Token di autenticazione cancellati",
     "toastClearBody": "Gli accessi ai negozi sono stati cancellati. Ora puoi accedere con account diversi."
+  },
+  "ubisoftAuth": {
+    "title": "Accesso a Ubisoft Connect",
+    "description": "Inserisci le credenziali del tuo account Ubisoft per connettere la tua libreria.",
+    "emailLabel": "E-mail",
+    "passwordLabel": "Password",
+    "signIn": "Accedi",
+    "signingIn": "Accesso...",
+    "cancel": "Annulla",
+    "twoFactorTitle": "Autenticazione a due fattori",
+    "twoFactorDescription": "Inserisci il codice di verifica dalla tua app di autenticazione.",
+    "twoFactorLabel": "Codice di verifica",
+    "verify": "Verifica",
+    "verifying": "Verifica in corso...",
+    "errorEmptyFields": "Inserisci email e password",
+    "errorEmpty2FA": "Inserisci il codice di verifica",
+    "errorLoginFailed": "Accesso non riuscito. Controlla le tue credenziali.",
+    "errorInvalid2FA": "Codice di verifica non valido. Riprova.",
+    "showPassword": "Mostra password",
+    "hidePassword": "Nascondi password",
+    "doubleLoginWarning": "Dovrai accedere due volte per Ubisoft."
+  },
+  "relativeDate": {
+    "today": "Oggi",
+    "yesterday": "Ieri"
+  },
+  "common": {
+    "thisGame": "questo gioco",
+    "game": "Gioco",
+    "unknown": "Sconosciuto"
+  },
+  "microsoft": {
+    "notCompatible": "Il formato di questo gioco non è compatibile con SteamOS",
+    "playOnCloud": "Gioca nel Cloud",
+    "xcloudStreaming": "Xbox Cloud Gaming",
+    "signInMessage": "Accedi con il tuo account Microsoft / Xbox",
+    "accountConnected": "Account Microsoft connesso",
+    "loggedOut": "Disconnesso dal Microsoft Store",
+    "xcloudNotInstalled": "I giochi xCloud non sono installati localmente",
+    "chromiumRequired": "Microsoft Edge richiesto",
+    "chromiumRequiredMessage": "Xbox Cloud Gaming richiede Microsoft Edge. Vuoi installarlo automaticamente? (Questa operazione va fatta una sola volta.)",
+    "chromiumInstallButton": "Installa Microsoft Edge",
+    "chromiumInstalling": "Installazione di Microsoft Edge...",
+    "chromiumInstalled": "Microsoft Edge installato!",
+    "chromiumAlreadyInstalled": "È già installato un browser compatibile",
+    "chromiumInstallFailed": "L'installazione di Microsoft Edge non è riuscita. Installalo manualmente: flatpak install com.microsoft.Edge",
+    "chromiumInstallTimeout": "L'installazione di Microsoft Edge è scaduta. Controlla la tua connessione a internet.",
+    "flatpakNotFound": "Flatpak non è disponibile su questo sistema",
+    "signInRequired": "Accedi per giocare",
+    "browserAlreadyInstalled": "È già installato un browser compatibile",
+    "browserInstalled": "Microsoft Edge installato con successo!",
+    "browserInstallFailed": "L'installazione di Microsoft Edge non è riuscita. Installalo manualmente: flatpak install com.microsoft.Edge"
+  },
+  "authSuccess": {
+    "title": "Autenticazione",
+    "titleStore": "{{store}} — Autenticazione ✓",
+    "subtitle": "Premi il pulsante B per chiudere questa finestra"
   }
 }

@@ -30,20 +30,25 @@ loadTranslations();
 // Import tab system
 import { patchLibrary, loadCompatCacheFromBackend } from "./tabs";
 
-import { syncUnifideckCollections } from "./spoofing/CollectionManager";
+// Kept our deleteAllUnifideckCollections import; added PR tabManager import
 import {
-  loadSteamAppIdMappings,
-  patchSteamStores,
-  injectGameToAppinfo,
-} from "./spoofing/SteamStorePatcher";
+  syncUnifideckCollections,
+  deleteAllUnifideckCollections,
+} from "./spoofing/CollectionManager";
+import { tabManager } from "./tabs";
 
 // Import Downloads feature components
 import { DownloadsTab } from "./components/DownloadsTab";
 import { StorageSettings } from "./components/StorageSettings";
 
 import { SteamRestartModal } from "./components/SteamRestartModal";
+import { AuthSuccessModal } from "./components/AuthSuccessModal";
+import { ChromiumInstallModal } from "./components/ChromiumInstallModal";
 import { AccountSwitchModal } from "./components/AccountSwitchModal";
 import { LanguageSelector } from "./components/LanguageSelector";
+import { launchMicrosoftAuthViaShortcut } from "./utils/microsoftShortcutLaunch";
+import { resetControllerConfigCache } from "./utils/controllerConfig";
+import { isShortcutAppRunning, launchUbisoftAuthViaShortcut } from "./utils/ubisoftShortcutLaunch";
 import StoreConnections from "./components/settings/StoreConnections";
 import { Store } from "./types/store";
 import LibrarySync from "./components/settings/LibrarySync";
@@ -63,6 +68,7 @@ import {
   setGameInfoCacheRef,
 } from "./hooks/gameActionInterceptor";
 import { SyncProgress } from "./types/syncProgress";
+import type { DownloadItem, DownloadQueueInfo } from "./types/downloads";
 
 // ========== INSTALL BUTTON FEATURE ==========
 //
@@ -110,6 +116,23 @@ import { SyncProgress } from "./types/syncProgress";
 
 // Global cache for game info (5-second TTL for faster updates after installation)
 const gameInfoCache = new Map<number, { info: any; timestamp: number }>();
+
+const getDownloadFinishedAt = (item: DownloadItem): number =>
+  item.end_time ?? item.start_time ?? item.added_time ?? 0;
+
+const getDownloadFailureKey = (item: DownloadItem): string =>
+  `${item.id}:${getDownloadFinishedAt(item)}`;
+
+const getTranslatedDownloadError = (item: DownloadItem): string => {
+  if (!item.error_message) {
+    return t("errors.download.generic");
+  }
+
+  const translatedError = t(item.error_message);
+  return translatedError !== item.error_message
+    ? translatedError
+    : t("errors.download.generic");
+};
 
 // ========== END INSTALL BUTTON FEATURE ==========
 
@@ -629,11 +652,13 @@ const Content: FC = () => {
   };
 
   const [syncing, setSyncing] = useState(false);
+  const [syncCancelling, setSyncCancelling] = useState(false);
   const [syncCooldown, setSyncCooldown] = useState(false);
   const [cooldownSeconds, setCooldownSeconds] = useState(0);
   const [deleting, setDeleting] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [deleteFiles, setDeleteFiles] = useState(false);
+  const microsoftAuthInProgressRef = useRef(false);
 
   // Auto-focus ref
   const mountRef = useRef<HTMLDivElement>(null);
@@ -659,6 +684,8 @@ const Content: FC = () => {
     epic: "checking",
     gog: "checking",
     amazon: "checking",
+    ubisoft: "checking",
+    microsoft: "checking",
   });
 
   // Game Details View Mode - persisted via localStorage
@@ -674,6 +701,40 @@ const Content: FC = () => {
 
   // Store polling interval ref to allow cleanup on unmount
   const pollIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const cancelRequestedRef = useRef(false);
+
+  const clearSyncPolling = () => {
+    if (pollIntervalRef.current) {
+      clearInterval(pollIntervalRef.current);
+      pollIntervalRef.current = null;
+    }
+  };
+
+  const isRestartPending = (progress?: Partial<SyncProgress> | null) =>
+    Boolean(progress?.restart_pending);
+
+  const isTerminalSyncState = (progress?: Partial<SyncProgress> | null) =>
+    progress?.status === "complete" ||
+    progress?.status === "error" ||
+    (progress?.status === "cancelled" && !isRestartPending(progress));
+
+  const startSyncCooldown = () => {
+    setSyncCooldown(true);
+    setCooldownSeconds(5);
+
+    const cooldownInterval = setInterval(() => {
+      setCooldownSeconds((prev) => {
+        if (prev <= 1) {
+          clearInterval(cooldownInterval);
+          setSyncCooldown(false);
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+
+    setTimeout(() => setSyncProgress(null), 5000);
+  };
 
   // Cleanup polling interval on unmount
   useEffect(() => {
@@ -709,22 +770,15 @@ const Content: FC = () => {
             status.sync_progress,
           );
 
-          // Restore syncing state
+          cancelRequestedRef.current = false;
           setSyncing(true);
+          setSyncCancelling(Boolean(status.sync_progress.is_cancelling));
           setSyncProgress(status.sync_progress);
 
-          // Deduplication flag (scoped to this restore)
           let completionHandled = false;
 
-          // Clear any existing polling interval before creating a new one
-          if (pollIntervalRef.current) {
-            clearInterval(pollIntervalRef.current);
-            console.log(
-              "[Unifideck] Cleared existing polling interval before restore",
-            );
-          }
+          clearSyncPolling();
 
-          // Resume polling for progress
           pollIntervalRef.current = setInterval(async () => {
             try {
               const result = await call<
@@ -734,8 +788,8 @@ const Content: FC = () => {
 
               if (result.success) {
                 setSyncProgress(result);
+                setSyncCancelling(Boolean(result.is_cancelling));
 
-                // Log progress updates
                 if (result.current_game.label) {
                   const progress =
                     result.current_phase === "artwork"
@@ -751,67 +805,43 @@ const Content: FC = () => {
                   );
                 }
 
-                // Stop polling when complete, error, or cancelled
-                if (
-                  result.status === "complete" ||
-                  result.status === "error" ||
-                  result.status === "cancelled"
-                ) {
-                  if (pollIntervalRef.current) {
-                    clearInterval(pollIntervalRef.current);
-                    pollIntervalRef.current = null;
-                  }
+                if (isTerminalSyncState(result)) {
+                  clearSyncPolling();
                   setSyncing(false);
+                  setSyncCancelling(false);
 
-                  // Only run completion logic once
                   if (!completionHandled) {
                     completionHandled = true;
+                    const wasUserCancel = cancelRequestedRef.current;
+                    cancelRequestedRef.current = false;
 
                     if (result.status === "complete") {
                       console.log(
                         `[Unifideck] ✓ Sync completed: ${result.synced_games} games processed`,
                       );
-                    } else if (result.status === "cancelled") {
-                      console.log(`[Unifideck] ⚠ Sync cancelled by user`);
-                    }
-
-                    // Show restart notification when sync completes (if library has games)
-                    if (result.status === "complete") {
-                      const totalGames = result.synced_games || 0;
-
-                      // Show modal if there are any games in the library
-                      if (totalGames > 0) {
+                      const addedGames = Number(result.current_game?.values?.added) || 0;
+                      if (addedGames > 0) {
                         showModal(<SteamRestartModal closeModal={() => {}} />);
                       }
+                      startSyncCooldown();
                     } else if (result.status === "cancelled") {
-                      toaster.toast({
-                        title: t("toasts.syncCancelled"),
-                        body: result.current_game.label
-                          ? t(
-                              result.current_game.label,
-                              result.current_game.values,
-                            )
-                          : t("toasts.syncCancelled"),
-                        duration: 5000,
-                      });
+                      console.log(`[Unifideck] ⚠ Sync cancelled by user`);
+                      if (!wasUserCancel) {
+                        toaster.toast({
+                          title: t("toasts.syncCancelled"),
+                          body: result.current_game.label
+                            ? t(
+                                result.current_game.label,
+                                result.current_game.values,
+                              )
+                            : t("toasts.syncCancelled"),
+                          duration: 5000,
+                        });
+                      }
+                      setSyncProgress(null);
+                    } else {
+                      startSyncCooldown();
                     }
-
-                    // Start cooldown
-                    setSyncCooldown(true);
-                    setCooldownSeconds(5);
-
-                    const cooldownInterval = setInterval(() => {
-                      setCooldownSeconds((prev) => {
-                        if (prev <= 1) {
-                          clearInterval(cooldownInterval);
-                          setSyncCooldown(false);
-                          return 0;
-                        }
-                        return prev - 1;
-                      });
-                    }, 1000);
-
-                    setTimeout(() => setSyncProgress(null), 5000);
                   }
                 }
               }
@@ -834,7 +864,6 @@ const Content: FC = () => {
 
   const checkStoreStatus = async () => {
     try {
-      // Add timeout wrapper
       const timeoutPromise = new Promise((_, reject) =>
         setTimeout(() => reject(new Error("Status check timed out")), 10000),
       );
@@ -846,6 +875,8 @@ const Content: FC = () => {
           epic: string;
           gog: string;
           amazon: string;
+          ubisoft: string;
+          microsoft: string;
           error?: string;
           legendary_installed?: boolean;
           nile_installed?: boolean;
@@ -855,22 +886,35 @@ const Content: FC = () => {
       const result = (await Promise.race([
         checkPromise,
         timeoutPromise,
-      ])) as any;
+      ])) as {
+        success: boolean;
+        epic: string;
+        gog: string;
+        amazon: string;
+        ubisoft: string;
+        microsoft: string;
+        error?: string;
+        legendary_installed?: boolean;
+        nile_installed?: boolean;
+      };
 
       if (result.success) {
-        setStoreStatus({
+        const nextStoreStatus = {
           epic: result.epic,
           gog: result.gog,
           amazon: result.amazon,
-        });
+          ubisoft: result.ubisoft,
+          microsoft: result.microsoft ?? "not_connected",
+        };
+        setStoreStatus(nextStoreStatus);
+        tabManager.setConnectedStores(nextStoreStatus);
 
-        // Show warning if legendary not installed
         if (result.legendary_installed === false) {
           console.warn(
             "[Unifideck] Legendary CLI not installed - Epic Games won't work",
           );
         }
-        // Show warning if nile not installed
+
         if (result.nile_installed === false) {
           console.warn(
             "[Unifideck] Nile CLI not installed - Amazon Games won't work",
@@ -878,19 +922,147 @@ const Content: FC = () => {
         }
       } else {
         console.error("[Unifideck] Status check failed:", result.error);
-        setStoreStatus({
+        const failedStoreStatus = {
           epic: "error",
           gog: "error",
           amazon: "error",
-        });
+          ubisoft: "error",
+          microsoft: "error",
+        };
+        setStoreStatus(failedStoreStatus);
+        tabManager.setConnectedStores(failedStoreStatus);
       }
     } catch (error) {
       console.error("[Unifideck] Error checking store status:", error);
-      setStoreStatus({
+      const erroredStoreStatus = {
         epic: "error",
         gog: "error",
         amazon: "error",
-      });
+        ubisoft: "error",
+        microsoft: "error",
+      };
+      setStoreStatus(erroredStoreStatus);
+      tabManager.setConnectedStores(erroredStoreStatus);
+    }
+  };
+
+  const sleep = (ms: number) =>
+    new Promise<void>((resolve) => window.setTimeout(resolve, ms));
+
+  const refreshLibraryData = async () => {
+    await syncUnifideckCollections().catch((err) =>
+      console.error("[Unifideck] Failed to sync collections:", err),
+    );
+
+    await tabManager.forceReloadGameCache().catch((err) =>
+      console.error("[Unifideck] Failed to reload tab cache:", err),
+    );
+
+    console.log("[Unifideck] Refreshing compat cache...");
+    await loadCompatCacheFromBackend().catch((err) =>
+      console.error("[Unifideck] Failed to refresh compat cache:", err),
+    );
+
+    await checkStoreStatus();
+  };
+
+  const waitForAuthTriggeredSync = async (store: Store) => {
+    const syncWaitStartedAt = Date.now();
+    const earliestRelevantTimestamp = syncWaitStartedAt - 10000;
+    const syncStartDeadline = syncWaitStartedAt + 10000;
+
+    const matchesAuthSync = (progress?: Partial<SyncProgress> | null) => {
+      const requestSource = progress?.request_source;
+      if (
+        requestSource !== `auth:${store}` &&
+        requestSource !== "auth"
+      ) {
+        return false;
+      }
+
+      const startedAt =
+        typeof progress?.started_at === "number"
+          ? progress.started_at
+          : undefined;
+      const finishedAt =
+        typeof progress?.finished_at === "number"
+          ? progress.finished_at
+          : undefined;
+
+      return (
+        (startedAt !== undefined && startedAt >= earliestRelevantTimestamp) ||
+        (finishedAt !== undefined && finishedAt >= earliestRelevantTimestamp)
+      );
+    };
+
+    while (Date.now() < syncStartDeadline) {
+      try {
+        const [status, progress] = await Promise.all([
+          call<
+            [],
+            {
+              is_syncing: boolean;
+              sync_progress: SyncProgress | null;
+            }
+          >("get_sync_status"),
+          call<[], { success?: boolean } & SyncProgress>("get_sync_progress"),
+        ]);
+
+        if (status.is_syncing && matchesAuthSync(progress)) {
+          while (true) {
+            const currentProgress = await call<[], { success?: boolean } & SyncProgress>(
+              "get_sync_progress",
+            );
+
+            if (isTerminalSyncState(currentProgress)) {
+              return currentProgress;
+            }
+
+            await sleep(500);
+          }
+        }
+
+        if (!status.is_syncing && matchesAuthSync(progress) && isTerminalSyncState(progress)) {
+          return progress;
+        }
+
+        await sleep(500);
+      } catch (error) {
+        console.error(
+          "[Unifideck] Error waiting for auth-triggered sync:",
+          error,
+        );
+        return null;
+      }
+    }
+
+    return null;
+  };
+
+  const refreshLibraryAfterAuth = async (store: Store) => {
+    try {
+      const autoSyncStores = new Set<Store>([
+        "epic",
+        "gog",
+        "amazon",
+        "microsoft",
+        "ubisoft",
+      ]);
+
+      if (autoSyncStores.has(store)) {
+        const syncResult = await waitForAuthTriggeredSync(store);
+        if (syncResult?.status === "complete") {
+          const addedGames = Number(syncResult.current_game?.values?.added) || 0;
+          if (addedGames > 0) {
+            showModal(<SteamRestartModal closeModal={() => {}} />);
+          }
+        }
+      }
+
+      await refreshLibraryData();
+    } catch (error) {
+      console.error("[Unifideck] Error refreshing library after auth:", error);
+      await checkStoreStatus();
     }
   };
 
@@ -898,27 +1070,22 @@ const Content: FC = () => {
     force: boolean = false,
     resyncArtwork: boolean = false,
   ) => {
-    // Prevent concurrent syncs
-    if (syncing || syncCooldown) {
+    if (syncing || syncCancelling || syncCooldown) {
       console.log("[Unifideck] Sync already in progress or on cooldown");
       return;
     }
 
+    cancelRequestedRef.current = false;
     setSyncing(true);
+    setSyncCancelling(false);
     setSyncProgress(null);
 
-    // Deduplication flag to prevent multiple polls handling completion
     let completionHandled = false;
+    let startCooldownAfterSync = true;
 
-    // Clear any existing polling interval before creating a new one
-    if (pollIntervalRef.current) {
-      clearInterval(pollIntervalRef.current);
-      console.log(
-        "[Unifideck] Cleared existing polling interval before manual sync",
-      );
-    }
+    clearSyncPolling();
+    console.log("[Unifideck] Cleared existing polling interval before manual sync");
 
-    // Start polling for progress
     pollIntervalRef.current = setInterval(async () => {
       try {
         const result = await call<[], { success?: boolean } & SyncProgress>(
@@ -927,8 +1094,8 @@ const Content: FC = () => {
 
         if (result.success) {
           setSyncProgress(result);
+          setSyncCancelling(Boolean(result.is_cancelling));
 
-          // Log progress updates
           if (result.current_game.label) {
             const progress =
               result.current_phase === "artwork"
@@ -942,21 +1109,13 @@ const Content: FC = () => {
           }
         }
 
-        // Stop polling when complete, error, or cancelled
-        if (
-          result.status === "complete" ||
-          result.status === "error" ||
-          result.status === "cancelled"
-        ) {
-          if (pollIntervalRef.current) {
-            clearInterval(pollIntervalRef.current);
-            pollIntervalRef.current = null;
-          }
+        if (isTerminalSyncState(result)) {
+          clearSyncPolling();
           setSyncing(false);
+          setSyncCancelling(false);
 
-          // CRITICAL FIX: Only run completion logic ONCE
           if (!completionHandled) {
-            completionHandled = true; // Set flag IMMEDIATELY
+            completionHandled = true;
 
             if (result.status === "complete") {
               console.log(
@@ -964,28 +1123,25 @@ const Content: FC = () => {
               );
             } else if (result.status === "cancelled") {
               console.log(`[Unifideck] ⚠ Sync cancelled by user`);
+              startCooldownAfterSync = false;
+              if (!cancelRequestedRef.current) {
+                toaster.toast({
+                  title: t("toasts.syncCancelled"),
+                  body: result.current_game.label
+                    ? t(result.current_game.label, result.current_game.values)
+                    : t("toasts.syncCancelled"),
+                  duration: 5000,
+                });
+              }
             }
 
-            // Show restart notification when sync completes (if library has games)
             if (result.status === "complete") {
-              const totalGames = result.synced_games || 0;
-
-              // Show modal if there are any games in the library
-              // (user explicitly triggered sync, so remind them to restart)
-              if (totalGames > 0) {
+              const addedGames = Number(result.current_game?.values?.added) || 0;
+              if (addedGames > 0) {
                 showModal(<SteamRestartModal closeModal={() => {}} />);
               }
-            } else if (result.status === "cancelled") {
-              toaster.toast({
-                title: t("toasts.syncCancelled"),
-                body: result.current_game.label
-                  ? t(result.current_game.label, result.current_game.values)
-                  : t("toasts.syncCancelled"),
-                duration: 5000,
-              });
             }
           } else {
-            // Completion already handled by another poll - do nothing
             console.log(
               `[Unifideck] (duplicate poll detected, skipping completion logic)`,
             );
@@ -994,10 +1150,9 @@ const Content: FC = () => {
       } catch (error) {
         console.error("[Unifideck] Error getting sync progress:", error);
       }
-    }, 500); // Poll every 500ms
+    }, 500);
 
     try {
-      // Use force_sync_libraries for force sync (rewrites shortcuts and compatibility data)
       console.log(
         `[Unifideck] Starting ${force ? "force " : ""}sync...${
           force ? ` (resync artwork: ${resyncArtwork})` : ""
@@ -1006,7 +1161,6 @@ const Content: FC = () => {
 
       let syncResult;
       if (force) {
-        // Force sync with resyncArtwork parameter
         syncResult = await call<
           [boolean],
           {
@@ -1014,13 +1168,17 @@ const Content: FC = () => {
             epic_count: number;
             gog_count: number;
             amazon_count: number;
+            ubisoft_count: number;
+            microsoft_count: number;
             added_count: number;
             artwork_count: number;
             updated_count?: number;
+            cancelled?: boolean;
+            restart_pending?: boolean;
+            error?: string;
           }
         >("force_sync_libraries", resyncArtwork);
       } else {
-        // Regular sync
         syncResult = await call<
           [],
           {
@@ -1028,116 +1186,130 @@ const Content: FC = () => {
             epic_count: number;
             gog_count: number;
             amazon_count: number;
+            ubisoft_count: number;
+            microsoft_count: number;
             added_count: number;
             artwork_count: number;
             updated_count?: number;
+            cancelled?: boolean;
+            restart_pending?: boolean;
+            error?: string;
           }
         >("sync_libraries");
       }
 
-      console.log("[Unifideck] ========== SYNC COMPLETED ==========");
+        if (syncResult.cancelled && !syncResult.restart_pending) {
+          startCooldownAfterSync = false;
+          return;
+        }
+
+        if (!syncResult.success) {
+          startCooldownAfterSync = false;
+          try {
+            const latestProgress = await call<[], { success?: boolean } & SyncProgress>(
+              "get_sync_progress",
+            );
+            if (latestProgress.success) {
+              setSyncProgress(latestProgress);
+            }
+          } catch (progressError) {
+            console.error(
+              "[Unifideck] Error fetching failed sync progress:",
+              progressError,
+            );
+          }
+          throw new Error(syncResult.error || "Sync failed");
+        }
+
+        console.log("[Unifideck] ========== SYNC COMPLETED ==========");
       console.log(`[Unifideck] Epic Games: ${syncResult.epic_count}`);
       console.log(`[Unifideck] GOG Games: ${syncResult.gog_count}`);
       console.log(`[Unifideck] Amazon Games: ${syncResult.amazon_count || 0}`);
+      console.log(`[Unifideck] Ubisoft Games: ${syncResult.ubisoft_count || 0}`);
+      console.log(`[Unifideck] Microsoft Games: ${syncResult.microsoft_count || 0}`);
       console.log(
         `[Unifideck] Total Games: ${
           syncResult.epic_count +
           syncResult.gog_count +
-          (syncResult.amazon_count || 0)
+          (syncResult.amazon_count || 0) +
+          (syncResult.ubisoft_count || 0) +
+          (syncResult.microsoft_count || 0)
         }`,
       );
       console.log(`[Unifideck] Games Added: ${syncResult.added_count}`);
       console.log(`[Unifideck] Artwork Fetched: ${syncResult.artwork_count}`);
       console.log("[Unifideck] =====================================");
 
-      // Phase 3: Sync Steam Collections
-      // Update collections ([Unifideck] Epic Games, etc.) with new games
-      await syncUnifideckCollections().catch((err) =>
-        console.error("[Unifideck] Failed to sync collections:", err),
-      );
-
-      // Reload compat cache from backend (so Great on Deck tab updates immediately)
-      console.log("[Unifideck] Refreshing compat cache...");
-      await loadCompatCacheFromBackend().catch((err) =>
-        console.error("[Unifideck] Failed to refresh compat cache:", err),
-      );
-
-      await checkStoreStatus();
+      await refreshLibraryData();
     } catch (error) {
       console.error("[Unifideck] Manual sync failed:", error);
-      if (pollIntervalRef.current) {
-        clearInterval(pollIntervalRef.current);
-        pollIntervalRef.current = null;
-      }
+      clearSyncPolling();
       setSyncing(false);
+      setSyncCancelling(false);
     } finally {
       setSyncing(false);
+      setSyncCancelling(false);
 
-      // START COOLDOWN
-      setSyncCooldown(true);
-      setCooldownSeconds(5);
-
-      // Countdown timer
-      const cooldownInterval = setInterval(() => {
-        setCooldownSeconds((prev) => {
-          if (prev <= 1) {
-            clearInterval(cooldownInterval);
-            setSyncCooldown(false);
-            return 0;
-          }
-          return prev - 1;
-        });
-      }, 1000);
-
-      // Clear progress after cooldown
-      setTimeout(() => setSyncProgress(null), 5000);
+      if (startCooldownAfterSync) {
+        startSyncCooldown();
+      } else {
+        setSyncCooldown(false);
+        setCooldownSeconds(0);
+        setSyncProgress(null);
+      }
     }
   };
 
   /**
    * Poll store status to detect when authentication completes
    */
+  const isStoreAuthConnected = async (store: Store): Promise<boolean> => {
+    try {
+      const result = await call<
+        [],
+        {
+          success: boolean;
+          epic: string;
+          gog: string;
+          amazon: string;
+          ubisoft: string;
+          microsoft: string;
+        }
+      >("check_store_status");
+
+      if (result.success) {
+        let status: string;
+        if (store === "epic") {
+          status = result.epic;
+        } else if (store === "gog") {
+          status = result.gog;
+        } else if (store === "ubisoft") {
+          status = result.ubisoft;
+        } else if (store === "microsoft") {
+          status = result.microsoft;
+        } else {
+          status = result.amazon;
+        }
+
+        if (status === "connected") {
+          console.log(
+            `[Unifideck] ${store} authentication completed automatically!`,
+          );
+          return true;
+        }
+      }
+    } catch (error) {
+      console.error(`[Unifideck] Error polling status:`, error);
+    }
+    return false;
+  };
+
   const pollForAuthCompletion = async (store: Store): Promise<boolean> => {
     const maxAttempts = 60; // 5 minutes (60 * 5s)
     let attempts = 0;
 
-    // Helper function to check status
-    const checkStatus = async (): Promise<boolean> => {
-      try {
-        const result = await call<
-          [],
-          {
-            success: boolean;
-            epic: string;
-            gog: string;
-            amazon: string;
-          }
-        >("check_store_status");
-
-        if (result.success) {
-          let status: string;
-          if (store === "epic") {
-            status = result.epic;
-          } else if (store === "gog") {
-            status = result.gog;
-          } else {
-            status = result.amazon;
-          }
-          if (status === "connected") {
-            console.log(
-              `[Unifideck] ${store} authentication completed automatically!`,
-            );
-            return true;
-          }
-        }
-      } catch (error) {
-        console.error(`[Unifideck] Error polling status:`, error);
-      }
-      return false;
-    };
-
     // Check immediately first (in case auth completed very fast)
-    if (await checkStatus()) {
+    if (await isStoreAuthConnected(store)) {
       return true;
     }
 
@@ -1145,7 +1317,7 @@ const Content: FC = () => {
       const pollInterval = setInterval(async () => {
         attempts++;
 
-        if (await checkStatus()) {
+        if (await isStoreAuthConnected(store)) {
           clearInterval(pollInterval);
           resolve(true);
           return;
@@ -1164,27 +1336,118 @@ const Content: FC = () => {
   };
 
   const startAuth = async (store: Store) => {
+    if (store === "microsoft" && microsoftAuthInProgressRef.current) {
+      console.log("[Unifideck] Microsoft auth already in progress; ignoring duplicate request");
+      return;
+    }
+
     const storeName =
       store === "epic"
         ? t("storeConnections.epicGames")
         : store === "amazon"
         ? t("storeConnections.amazonGames")
+        : store === "ubisoft"
+        ? t("storeConnections.ubisoftConnect")
+        : store === "microsoft"
+        ? t("storeConnections.microsoftStore")
         : t("storeConnections.gog");
 
+    // Ubisoft: launch UPC directly via shortcut and poll for session capture
+    if (store === "ubisoft") {
+      try {
+        let launchResult = await launchUbisoftAuthViaShortcut();
+        if (!launchResult.success) {
+          launchResult = await call<[], { success: boolean; error?: string }>(
+            "connect_ubisoft_account",
+          );
+        }
+
+        if (!launchResult.success) {
+          toaster.toast({
+            title: t("toasts.authFailed"),
+            body: launchResult.error || t("toasts.authFailedMessage"),
+            critical: true,
+            duration: 5000,
+          });
+          return;
+        }
+
+        // Poll for auth completion using the generic store status check
+        // (is_available() now checks UPC session file)
+        pollForAuthCompletion("ubisoft")
+          .then(async (completed) => {
+            if (completed) {
+              console.log(`[Unifideck] Ubisoft authentication successful!`);
+              toaster.toast({
+                title: t("toasts.authConnected", { store: storeName }),
+                body: t("toasts.authConnectedMessage", { store: storeName }),
+                duration: 5000,
+              });
+              await refreshLibraryAfterAuth("ubisoft");
+            } else {
+              console.log(`[Unifideck] Ubisoft authentication timed out`);
+              toaster.toast({
+                title: t("toasts.authTimeout"),
+                body: t("toasts.authTimeoutMessage", { store: storeName }),
+                critical: true,
+                duration: 5000,
+              });
+            }
+          })
+          .catch((error) => {
+            console.error(`[Unifideck] Error polling ubisoft auth:`, error);
+          });
+      } catch (error: any) {
+        console.error(`[Unifideck] Error starting ubisoft auth:`, error);
+        toaster.toast({
+          title: t("toasts.authError"),
+          body: error.message || String(error),
+          critical: true,
+          duration: 5000,
+        });
+      }
+      return;
+    }
+
     try {
+      if (store === "microsoft") {
+        microsoftAuthInProgressRef.current = true;
+        toaster.toast({
+          title: t("ubisoftAuth.signingIn"),
+          body: t("microsoft.signInMessage"),
+          duration: 4000,
+        });
+      }
+
       let methodName: string;
       if (store === "epic") {
         methodName = "start_epic_auth";
       } else if (store === "gog") {
         methodName = "start_gog_auth_auto";
+      } else if (store === "microsoft") {
+        methodName = "start_microsoft_auth";
       } else {
         methodName = "start_amazon_auth";
       }
 
       const result = await call<
         [],
-        { success: boolean; url?: string; message?: string; error?: string }
+        { success: boolean; url?: string; chromium_auth?: boolean; shortcut_launch?: boolean; needs_chromium?: boolean; message?: string; error?: string }
       >(methodName);
+
+      // Chromium not installed — show install modal
+      if (result.success && result.needs_chromium) {
+        if (store === "microsoft") {
+          microsoftAuthInProgressRef.current = false;
+        }
+        showModal(
+          <ChromiumInstallModal
+            closeModal={() => {}}
+            onInstalled={() => startAuth(store)}
+          />,
+        );
+        return;
+      }
 
       if (result.success && result.url) {
         const authUrl = result.url;
@@ -1214,13 +1477,12 @@ const Content: FC = () => {
               console.log(
                 `[Unifideck] ✓ ${storeName} authentication successful!`,
               );
-              toaster.toast({
-                title: t("toasts.authConnected", { store: storeName }),
-                body: t("toasts.authConnectedMessage", { store: storeName }),
-                duration: 8000,
-                critical: true,
-              });
-              await checkStoreStatus(); // Refresh status
+              // Show full-screen success modal — covers the CEF popup
+              // which cannot be closed programmatically in Steam's CEF.
+              showModal(
+                <AuthSuccessModal store={storeName} closeModal={() => {}} />,
+              );
+              void refreshLibraryAfterAuth(store);
             } else {
               console.log(`[Unifideck] ${storeName} authentication timed out`);
               toaster.toast({
@@ -1233,10 +1495,181 @@ const Content: FC = () => {
           })
           .catch((error) => {
             console.error(`[Unifideck] Error polling ${store} auth:`, error);
+          })
+          .finally(() => {
+            if (store === "microsoft") {
+              microsoftAuthInProgressRef.current = false;
+            }
           });
 
         // Return immediately - don't block waiting for auth to complete
+      } else if (result.success && result.chromium_auth) {
+        // Chromium-based auth: launch via RunGame shortcut (gaming-mode
+        // visible) or fall back to direct backend launch.
+        if (result.shortcut_launch) {
+          console.log(
+            `[Unifideck] ${store} auth: launching Chromium via RunGame shortcut...`,
+          );
+          const launchResult = await launchMicrosoftAuthViaShortcut();
+          if (!launchResult.success) {
+            console.error(
+              `[Unifideck] ${store} RunGame launch failed:`,
+              launchResult.error,
+            );
+            // Auth shortcut is persistent — do NOT delete it on failure
+            microsoftAuthInProgressRef.current = false;
+            toaster.toast({
+              title: t("toasts.authFailed"),
+              body:
+                launchResult.error || t("toasts.authFailedMessage"),
+              critical: true,
+              duration: 5000,
+            });
+            return;
+          }
+          console.log(
+            `[Unifideck] ${store} auth shortcut launched: appId=${launchResult.appId}, alreadyRunning=${launchResult.already_running}`,
+          );
+          const pollMicrosoftShortcutOutcome = async (): Promise<boolean> => {
+            const maxAttempts = 60;
+            const appId = launchResult.appId;
+            const startedAt = Date.now();
+            let seenRunning =
+              typeof appId === "number" && isShortcutAppRunning(appId);
+            let sawStopAfterLaunch = false;
+            let lifetimeRegistration: { unregister(): void } | null = null;
+
+            try {
+              if (typeof appId === "number") {
+                lifetimeRegistration =
+                  window.SteamClient?.GameSessions?.RegisterForAppLifetimeNotifications?.(
+                    (data: { unAppID: number; bRunning: boolean }) => {
+                      if (data.unAppID !== 0 && data.unAppID !== appId) {
+                        return;
+                      }
+
+                      if (data.bRunning) {
+                        seenRunning = true;
+                        return;
+                      }
+
+                      if (seenRunning) {
+                        sawStopAfterLaunch = true;
+                      }
+                    },
+                  ) ?? null;
+              }
+
+              for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+                if (await isStoreAuthConnected(store)) {
+                  return true;
+                }
+
+                if (
+                  typeof appId === "number" &&
+                  isShortcutAppRunning(appId)
+                ) {
+                  seenRunning = true;
+                }
+
+                if (
+                  sawStopAfterLaunch ||
+                  (seenRunning &&
+                    typeof appId === "number" &&
+                    !isShortcutAppRunning(appId))
+                ) {
+                  await new Promise<void>((resolve) =>
+                    window.setTimeout(resolve, 1000),
+                  );
+                  return await isStoreAuthConnected(store);
+                }
+
+                const startupGraceActive =
+                  typeof appId === "number" &&
+                  !seenRunning &&
+                  Date.now() - startedAt < 30000;
+
+                await new Promise<void>((resolve) =>
+                  window.setTimeout(resolve, startupGraceActive ? 1000 : 5000),
+                );
+              }
+
+              return false;
+            } finally {
+              lifetimeRegistration?.unregister?.();
+            }
+          };
+
+          pollMicrosoftShortcutOutcome()
+            .then(async (completed) => {
+              // Auth shortcut is persistent — do NOT clean it up after auth
+              if (completed) {
+                console.log(
+                  `[Unifideck] ✓ ${storeName} authentication successful!`,
+                );
+                toaster.toast({
+                  title: t("toasts.authConnected", { store: storeName }),
+                  body: t("toasts.authConnectedMessage", { store: storeName }),
+                  duration: 5000,
+                });
+                await refreshLibraryAfterAuth(store);
+              } else {
+                console.log(`[Unifideck] ${storeName} authentication timed out`);
+                toaster.toast({
+                  title: t("toasts.authTimeout"),
+                  body: t("toasts.authTimeoutMessage", { store: storeName }),
+                  critical: true,
+                  duration: 5000,
+                });
+              }
+            })
+            .catch((error) => {
+              console.error(`[Unifideck] Error polling ${store} auth:`, error);
+            })
+            .finally(() => {
+              if (store === "microsoft") {
+                microsoftAuthInProgressRef.current = false;
+              }
+            });
+        } else {
+          console.log(
+            `[Unifideck] ${store} auth opened in Chromium. Backend monitoring via CDP...`,
+          );
+          pollForAuthCompletion(store)
+            .then(async (completed) => {
+              if (completed) {
+                console.log(
+                  `[Unifideck] ✓ ${storeName} authentication successful!`,
+                );
+                toaster.toast({
+                  title: t("toasts.authConnected", { store: storeName }),
+                  body: t("toasts.authConnectedMessage", { store: storeName }),
+                  duration: 5000,
+                });
+                await refreshLibraryAfterAuth(store);
+              } else {
+                console.log(`[Unifideck] ${storeName} authentication timed out`);
+                toaster.toast({
+                  title: t("toasts.authTimeout"),
+                  body: t("toasts.authTimeoutMessage", { store: storeName }),
+                  critical: true,
+                  duration: 5000,
+                });
+              }
+            })
+            .catch((error) => {
+              console.error(`[Unifideck] Error polling ${store} auth:`, error);
+            })
+            .finally(() => {
+              if (store === "microsoft") {
+                microsoftAuthInProgressRef.current = false;
+              }
+            });
+        }
       } else {
+        if (store === "microsoft") {
+          microsoftAuthInProgressRef.current = false;
+        }
         toaster.toast({
           title: t("toasts.authFailed"),
           body: result.error ? t(result.error) : t("toasts.authFailedMessage"),
@@ -1245,6 +1678,9 @@ const Content: FC = () => {
         });
       }
     } catch (error: any) {
+      if (store === "microsoft") {
+        microsoftAuthInProgressRef.current = false;
+      }
       console.error(`[Unifideck] Error starting ${store} auth:`, error);
       toaster.toast({
         title: t("toasts.authError"),
@@ -1262,6 +1698,10 @@ const Content: FC = () => {
         methodName = "logout_epic";
       } else if (store === "gog") {
         methodName = "logout_gog";
+      } else if (store === "ubisoft") {
+        methodName = "logout_ubisoft";
+      } else if (store === "microsoft") {
+        methodName = "logout_microsoft";
       } else {
         methodName = "logout_amazon";
       }
@@ -1296,6 +1736,7 @@ const Content: FC = () => {
           deleted_artwork: number;
           deleted_files_count: number;
           preserved_shortcuts: number;
+          deleted_app_ids?: number[];
           error?: string;
         }
       >("perform_full_cleanup", { delete_files: deleteFiles });
@@ -1309,6 +1750,29 @@ const Content: FC = () => {
             `${result.deleted_artwork} artwork sets, ${result.deleted_files_count} files deleted`,
         );
 
+        // Remove shortcuts via Steam API so Steam's in-memory state is updated
+        // (writing shortcuts.vdf alone is not enough — Steam overwrites it)
+        if (result.deleted_app_ids?.length) {
+          console.log(
+            `[Unifideck] Removing ${result.deleted_app_ids.length} shortcuts via Steam API...`,
+          );
+          for (const appId of result.deleted_app_ids) {
+            try {
+              window.SteamClient.Apps.RemoveShortcut(appId);
+            } catch (err) {
+              console.warn(
+                `[Unifideck] Failed to remove shortcut ${appId}:`,
+                err,
+              );
+            }
+          }
+        }
+
+        // Delete all Unifideck Steam collections
+        await deleteAllUnifideckCollections().catch((err) =>
+          console.error("[Unifideck] Failed to delete collections:", err),
+        );
+
         toaster.toast({
           title: t("toasts.cleanupSuccessful"),
           body: t("toasts.cleanupSuccessfulMessage", {
@@ -1318,11 +1782,14 @@ const Content: FC = () => {
           }),
           duration: 8000,
         });
+
+        // Prompt user to restart Steam so changes take effect
+        showModal(<SteamRestartModal reason="cleanup" closeModal={() => {}} />);
       } else {
         console.error(`[Unifideck] Delete failed: ${result.error}`);
         toaster.toast({
           title: t("toasts.deleteFailed"),
-          body: result.error ? t(result.error) : "Unknown error",
+          body: result.error ? t(result.error) : t("errors.unknown"),
           duration: 5000,
         });
       }
@@ -1334,27 +1801,32 @@ const Content: FC = () => {
   };
 
   const handleCancelSync = async () => {
+    if (syncCancelling) {
+      return;
+    }
+
+    cancelRequestedRef.current = true;
+    setSyncCancelling(true);
+
     try {
-      // Clear polling interval immediately when user cancels
-      if (pollIntervalRef.current) {
-        clearInterval(pollIntervalRef.current);
-        pollIntervalRef.current = null;
-        console.log("[Unifideck] Cleared polling interval on user cancel");
-      }
-
-      // Clear progress bar immediately
-      setSyncProgress(null);
-      setSyncing(false);
-
       const result = await call<
         [],
         {
           success: boolean;
           message: string;
+          restart_pending?: boolean;
         }
       >("cancel_sync");
 
       if (result.success) {
+        clearSyncPolling();
+        setSyncProgress(null);
+        setSyncing(false);
+        setSyncCancelling(false);
+        setSyncCooldown(false);
+        setCooldownSeconds(0);
+        cancelRequestedRef.current = false;
+
         console.log("[Unifideck] Sync cancelled");
         toaster.toast({
           title: t("toasts.syncCancelled").toUpperCase(),
@@ -1362,9 +1834,13 @@ const Content: FC = () => {
           duration: 3000,
         });
       } else {
+        cancelRequestedRef.current = false;
+        setSyncCancelling(false);
         console.log("[Unifideck] Cancel failed:", result.message);
       }
     } catch (error) {
+      cancelRequestedRef.current = false;
+      setSyncCancelling(false);
       console.error("[Unifideck] Error cancelling sync:", error);
     }
   };
@@ -1413,7 +1889,8 @@ const Content: FC = () => {
 
           {/* Library Sync Section */}
           <LibrarySync
-            syncing={syncing}
+            syncing={syncing || syncCancelling}
+            syncCancelling={syncCancelling}
             syncCooldown={syncCooldown}
             cooldownSeconds={cooldownSeconds}
             syncProgress={syncProgress}
@@ -1451,7 +1928,7 @@ const Content: FC = () => {
                 <ButtonItem
                   layout="below"
                   onClick={handleDeleteAll}
-                  disabled={syncing || deleting || syncCooldown}
+                  disabled={syncing || syncCancelling || deleting || syncCooldown}
                 >
                   <div
                     style={{
@@ -1513,8 +1990,8 @@ const Content: FC = () => {
         </>
       )}
     </>
-  );
-};
+    );
+  };
 
 // Store unpatch function for Steam stores
 let unpatchSteamStores: (() => void) | null = null;
@@ -1589,6 +2066,44 @@ export default definePlugin(() => {
   // Register game action interceptor (safety net for play button presses on uninstalled games)
   const unregisterInterceptor = registerGameActionInterceptor();
   console.log("[Unifideck] ✓ Game action interceptor registered");
+
+  // Global listener: capture Ubisoft session when ANY game stops.
+  // This fires in gaming mode, desktop mode, overlay abort — everywhere.
+  // The per-component listener in PlaySectionWrapper only works when
+  // the library page is open; this covers all other scenarios.
+  let unregLifetimeGlobal: { unregister(): void } | null = null;
+  try {
+    unregLifetimeGlobal =
+      window.SteamClient?.GameSessions?.RegisterForAppLifetimeNotifications?.(
+        (data: { unAppID: number; bRunning: boolean }) => {
+          if (data.bRunning) return; // Only interested in stop events
+
+          // Quick check: is this a Ubisoft game? (unifideckGameCache is always populated)
+          const cached = unifideckGameCache.get(data.unAppID);
+          if (!cached || cached.store !== "ubisoft") return;
+
+          console.log(
+            `[Unifideck] Global: Ubisoft game stopped (appId=${data.unAppID}), capturing session`,
+          );
+          call<[number], { success: boolean }>(
+            "capture_ubisoft_session_by_appid",
+            data.unAppID,
+          ).catch((err) =>
+            console.error(
+              "[Unifideck] Global: capture_ubisoft_session_by_appid failed:",
+              err,
+            ),
+          );
+        },
+      ) ?? null;
+    if (unregLifetimeGlobal) {
+      console.log(
+        "[Unifideck] ✓ Global Ubisoft session capture listener registered",
+      );
+    }
+  } catch {
+    // GameSessions may not be available
+  }
 
   // Patch the library to add Unifideck tabs (All, Installed, Great on Deck, Steam, Epic, GOG, Amazon)
   // This uses TabMaster's approach: intercept useMemo hook to inject custom tabs
@@ -1774,6 +2289,52 @@ export default definePlugin(() => {
   // Store interval ID for cleanup
   (window as any).__unifideck_toast_interval = launcherToastInterval;
 
+  let downloadErrorToastInterval: NodeJS.Timeout | null = null;
+  const seenDownloadFailures = new Set<string>();
+  let seededDownloadFailures = false;
+  downloadErrorToastInterval = setInterval(async () => {
+    try {
+      const queueInfo = await call<[], DownloadQueueInfo>(
+        "get_download_queue_info",
+      );
+      if (!queueInfo.success) {
+        return;
+      }
+
+      const failedItems = (queueInfo.finished || []).filter(
+        (item) => item.status === "error",
+      );
+
+      if (!seededDownloadFailures) {
+        failedItems.forEach((item) =>
+          seenDownloadFailures.add(getDownloadFailureKey(item)),
+        );
+        seededDownloadFailures = true;
+        return;
+      }
+
+      for (const item of failedItems) {
+        const failureKey = getDownloadFailureKey(item);
+        if (seenDownloadFailures.has(failureKey)) {
+          continue;
+        }
+
+        seenDownloadFailures.add(failureKey);
+        toaster.toast({
+          title: `${t("downloadsTab.status.error")}: ${item.game_title}`,
+          body: getTranslatedDownloadError(item),
+          duration: 10000,
+          critical: true,
+        });
+      }
+    } catch (error) {
+      console.error("[Unifideck] Error polling download failures:", error);
+    }
+  }, 1500);
+
+  (window as any).__unifideck_download_error_interval =
+    downloadErrorToastInterval;
+
   // Background sync disabled - users manually sync via UI when needed
   console.log("[Unifideck] Background sync disabled (use manual sync button)");
 
@@ -1791,6 +2352,12 @@ export default definePlugin(() => {
       // Unregister game action interceptor
       unregisterInterceptor();
 
+      // Clear controller config session cache
+      resetControllerConfigCache();
+
+      // Unregister global Ubisoft session capture listener
+      unregLifetimeGlobal?.unregister?.();
+
       // Unpatch Steam stores
       if (unpatchSteamStores) {
         unpatchSteamStores();
@@ -1802,6 +2369,13 @@ export default definePlugin(() => {
       if (toastInterval) {
         clearInterval(toastInterval);
         (window as any).__unifideck_toast_interval = null;
+      }
+
+      const downloadErrorInterval = (window as any)
+        .__unifideck_download_error_interval;
+      if (downloadErrorInterval) {
+        clearInterval(downloadErrorInterval);
+        (window as any).__unifideck_download_error_interval = null;
       }
 
       // Remove CSS injections

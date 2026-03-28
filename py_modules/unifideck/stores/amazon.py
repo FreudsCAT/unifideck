@@ -174,7 +174,12 @@ class AmazonConnector(Store):
                 # Trigger auto-sync if plugin instance available
                 if self.plugin_instance:
                     logger.info("[Amazon] Triggering library sync after auth")
-                    asyncio.create_task(self.plugin_instance.force_sync_libraries())
+                    asyncio.create_task(
+                        self.plugin_instance.request_auth_sync(
+                            force=True,
+                            source='auth:amazon',
+                        )
+                    )
                     
                 return {'success': True, 'message': 'Authenticated successfully'}
             else:
@@ -515,13 +520,14 @@ class AmazonConnector(Store):
 
         return None
 
-    async def install_game(self, game_id: str, progress_callback=None) -> Dict[str, Any]:
+    async def install_game(self, game_id: str, base_path: str = None, progress_callback=None) -> Dict[str, Any]:
         """Install Amazon game using nile CLI"""
         if not self.nile_bin:
             return {'success': False, 'error': 'Nile CLI not found'}
 
         try:
-            base_path = os.path.expanduser("~/Games/Amazon")
+            if not base_path:
+                base_path = os.path.expanduser("~/Games/Amazon")
             os.makedirs(base_path, exist_ok=True)
 
             logger.info(f"[Amazon] Starting installation of {game_id} to {base_path}")
@@ -755,4 +761,3 @@ class AmazonConnector(Store):
         except Exception as e:
             logger.error(f"[Amazon] Error updating {game_id}: {e}")
             return {'success': False, 'error': str(e)}
-

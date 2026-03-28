@@ -20,7 +20,12 @@ PREFIXES_DIR="$HOME/.local/share/unifideck/prefixes"
 # Handle termination signals (SIGTERM from Steam's TerminateApp, SIGINT from Ctrl+C).
 # Legendary orphans umu-run (spawns via Popen without wait), so killing the launcher
 # alone leaves the game running. We must explicitly kill the container processes.
+# We set a flag instead of exiting so post-game cleanup (session capture, cloud saves)
+# still runs before the script exits.
+_TERMINATED=0
+
 on_terminate() {
+    _TERMINATED=1
     echo "[$(date '+%H:%M:%S')] [Signal] Received termination signal, stopping game..." >> "$LOG_FILE"
     pkill -TERM -f "steam-runtime-launch-client" 2>/dev/null || true
     pkill -TERM -f "umu-run" 2>/dev/null || true
@@ -29,7 +34,7 @@ on_terminate() {
     pkill -KILL -f "steam-runtime-launch-client" 2>/dev/null || true
     pkill -KILL -f "umu-run" 2>/dev/null || true
     echo "[$(date '+%H:%M:%S')] [Signal] Cleanup complete" >> "$LOG_FILE"
-    exit 143
+    # Do NOT exit — let the main flow continue to post-game cleanup
 }
 trap on_terminate SIGTERM SIGINT
 
@@ -53,6 +58,89 @@ mkdir -p "$(dirname "$LOG_FILE")" "$PREFIXES_DIR"
 
 log() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" >> "$LOG_FILE"
+}
+
+import_steam_session_env() {
+    local uid runtime_dir session_env key value socket_path
+    uid="$(id -u)"
+    runtime_dir="${XDG_RUNTIME_DIR:-/run/user/$uid}"
+    session_env="$runtime_dir/gamescope-environment"
+
+    [ -f "$session_env" ] || return 0
+
+    while IFS='=' read -r key value; do
+        [ -n "$key" ] || continue
+        case "$key" in
+            DISPLAY|WAYLAND_DISPLAY|GAMESCOPE_WAYLAND_DISPLAY|DBUS_SESSION_BUS_ADDRESS|XAUTHORITY|XDG_RUNTIME_DIR|XDG_SESSION_TYPE|XDG_CURRENT_DESKTOP|DESKTOP_SESSION|GTK_IM_MODULE|QT_IM_MODULE|XMODIFIERS)
+                [ -n "$value" ] && export "$key=$value"
+                ;;
+        esac
+    done < "$session_env"
+
+    if [ -z "${WAYLAND_DISPLAY:-}" ] && [ -n "${GAMESCOPE_WAYLAND_DISPLAY:-}" ]; then
+        socket_path="${XDG_RUNTIME_DIR:-$runtime_dir}/${GAMESCOPE_WAYLAND_DISPLAY}"
+        [ -S "$socket_path" ] && export WAYLAND_DISPLAY="$GAMESCOPE_WAYLAND_DISPLAY"
+    fi
+
+    if [ "${GTK_IM_MODULE:-}" = "Steam" ] && [ -z "${XMODIFIERS:-}" ]; then
+        export XMODIFIERS='@im=Steam'
+    fi
+}
+
+auth_window_mode_flag() {
+    local uid
+    uid="$(id -u)"
+
+    if pgrep -u "$uid" -x gamescope >/dev/null 2>&1 || pgrep -u "$uid" -x gamescope-session >/dev/null 2>&1; then
+        echo "--start-fullscreen"
+    else
+        echo "--start-maximized"
+    fi
+}
+
+focus_auth_window_if_needed() {
+    local window_mode="$1"
+
+    [ "$window_mode" = "--start-maximized" ] || return 0
+    command -v xdotool >/dev/null 2>&1 || return 0
+
+    (
+        local wid
+        for _ in $(seq 1 60); do
+            sleep 0.25
+            wid="$(xdotool search --onlyvisible --class unifideck-auth 2>/dev/null | tail -n 1 || true)"
+            [ -n "$wid" ] || continue
+            xdotool windowactivate --sync "$wid" >/dev/null 2>&1 || true
+            xdotool windowraise "$wid" >/dev/null 2>&1 || true
+            xdotool windowfocus "$wid" >/dev/null 2>&1 || true
+            log "Focused auth window: $wid"
+            break
+        done
+    ) &
+}
+
+focus_xcloud_window_if_needed() {
+    command -v xdotool >/dev/null 2>&1 || return 0
+
+    (
+        local wid
+        for _ in $(seq 1 120); do
+            sleep 0.25
+            wid="$(xdotool search --onlyvisible --classname 'unifideck-xcloud' 2>/dev/null | tail -n 1 || true)"
+            if [ -z "$wid" ]; then
+                wid="$(xdotool search --onlyvisible --classname 'www.xbox.com__play' 2>/dev/null | tail -n 1 || true)"
+            fi
+            if [ -z "$wid" ]; then
+                wid="$(xdotool search --onlyvisible --name 'Xbox Cloud Gaming|xbox.com' 2>/dev/null | tail -n 1 || true)"
+            fi
+            [ -n "$wid" ] || continue
+            xdotool windowactivate --sync "$wid" >/dev/null 2>&1 || true
+            xdotool windowraise "$wid" >/dev/null 2>&1 || true
+            xdotool windowfocus "$wid" >/dev/null 2>&1 || true
+            log "Focused xCloud window: $wid"
+            break
+        done
+    ) &
 }
 
 # Toast notification for setup stages (visible in Game Mode)
@@ -205,6 +293,42 @@ find_python310_plus() {
 }
 
 # ==============================================================================
+# UMU RUNTIME CACHE SELF-HEAL
+# umu-run can report steamrt3 as "up to date" even when the cached runtime is
+# incomplete and missing _v2-entry-point. Clear incomplete cache state so the
+# next launch can re-download a clean runtime instead of tripping fallback paths.
+# ==============================================================================
+cleanup_umu_runtime_cache() {
+    local umu_cache_dir="$HOME/.local/share/umu"
+    [ -d "$umu_cache_dir" ] || return 0
+
+    rm -rf "$umu_cache_dir/steamrt3" 2>/dev/null || true
+    rm -rf "$umu_cache_dir/umu_steam3" 2>/dev/null || true
+    rm -f "$umu_cache_dir/"*.parts 2>/dev/null || true
+}
+
+ensure_umu_runtime_ready() {
+    local reason="${1:-launch preflight}"
+    local umu_cache_dir="$HOME/.local/share/umu"
+    local steamrt_dir="$umu_cache_dir/steamrt3"
+    local entrypoint="$steamrt_dir/_v2-entry-point"
+    local has_partial=false
+
+    [ -d "$umu_cache_dir" ] || return 0
+
+    if [ -d "$steamrt_dir" ] || [ -d "$umu_cache_dir/umu_steam3" ]; then
+        has_partial=true
+    elif compgen -G "$umu_cache_dir/*.parts" >/dev/null; then
+        has_partial=true
+    fi
+
+    if [ "$has_partial" = true ] && [ ! -f "$entrypoint" ]; then
+        log "[UMU] steamrt3 cache is incomplete during $reason (missing _v2-entry-point); clearing cached runtime"
+        cleanup_umu_runtime_cache
+    fi
+}
+
+# ==============================================================================
 # UMU RETRY WRAPPER
 # Wraps UMU invocations with retry logic for network failures
 # (e.g., Steam Runtime download failures)
@@ -232,18 +356,29 @@ run_umu_with_retry() {
         if [ $exit_code -eq 0 ]; then
             return 0
         fi
-        
+
+        # If terminated by signal, don't retry — proceed to post-game cleanup
+        if [ "$_TERMINATED" -eq 1 ]; then
+            log "[UMU] Terminated by signal, skipping retries"
+            return $exit_code
+        fi
+
         # If we still have retries left
         if [ $attempt -lt $max_attempts ]; then
             log "[UMU] Failed with exit code $exit_code, retrying in ${wait_time}s..."
             notify_stage "toasts.launcher.networkError" "toasts.launcher.retryingUmu|seconds=${wait_time}|attempt=$((attempt+1))|max=$max_attempts" "normal"
             
-            # Clean up partial Steam Runtime downloads to avoid corruption
+            # Only clean up Steam Runtime if it's actually broken (incomplete download).
+            # If _v2-entry-point exists, steamrt3 is functional and the non-zero exit
+            # code came from the game itself — retrying won't help, and deleting
+            # steamrt3 would break all subsequent launches.
             if [ -d "$HOME/.local/share/umu" ]; then
-                log "[UMU] Cleaning up partial downloads..."
-                rm -rf "$HOME/.local/share/umu/steamrt3" 2>/dev/null || true
-                rm -rf "$HOME/.local/share/umu/umu_steam3" 2>/dev/null || true
-                rm -f "$HOME/.local/share/umu/"*.parts 2>/dev/null || true
+                if [ ! -f "$HOME/.local/share/umu/steamrt3/_v2-entry-point" ]; then
+                    log "[UMU] steamrt3 incomplete (missing _v2-entry-point), cleaning up..."
+                    cleanup_umu_runtime_cache
+                else
+                    rm -f "$HOME/.local/share/umu/"*.parts 2>/dev/null || true
+                fi
             fi
             
             sleep $wait_time
@@ -279,14 +414,26 @@ restore_steam_env() {
 # We wait for steam-runtime-launch-client (the long-lived container manager)
 # because it stays alive for the entire game session and has a unique name.
 wait_for_game_exit() {
-    # Give umu-run / pressure-vessel a moment to fully start
-    sleep 1
+    # Give umu-run / pressure-vessel a moment to fully start.
+    # The container can take several seconds to register, especially on first
+    # launch when Steam Runtime is being extracted.  Retry the detection check
+    # multiple times before concluding there is nothing to wait for.
+    local _detect_attempt=0
+    local _detect_max=5
+    local _found=false
 
-    # Check for the container manager process (steam-runtime-launch-client)
-    # or fall back to checking for umu-run itself
-    if ! pgrep -f "steam-runtime-launch-client" >/dev/null 2>&1 && \
-       ! pgrep -f "umu-run" >/dev/null 2>&1; then
-        log "[GameWait] No container processes found after launch, skipping wait"
+    while [ $_detect_attempt -lt $_detect_max ]; do
+        sleep 1
+        if pgrep -f "steam-runtime-launch-client" >/dev/null 2>&1 || \
+           pgrep -f "umu-run" >/dev/null 2>&1; then
+            _found=true
+            break
+        fi
+        _detect_attempt=$((_detect_attempt + 1))
+    done
+
+    if ! $_found; then
+        log "[GameWait] No container processes found after ${_detect_max}s, skipping wait"
         return
     fi
 
@@ -599,7 +746,7 @@ EXTRA_ARGS=()
 for arg in "$@"; do
     case "$arg" in
         # Store:id pattern - this is the game key (checked first — no = in it)
-        epic:*|gog:*|amazon:*)
+        epic:*|gog:*|amazon:*|ubisoft:*|microsoft:*)
             KEY="$arg"
             ;;
         # Other arguments — check if it looks like a VAR=value env var
@@ -627,6 +774,72 @@ done
 
 if [ ${#EXTRA_ARGS[@]} -gt 0 ]; then
     log "[LaunchOptions] Extra game arguments: ${EXTRA_ARGS[*]}"
+fi
+
+# ==============================================================================
+# LSFG (Lossless Scaling Frame Generation) PRE-SPLIT DETECTION
+#
+# ~/lsfg must be stripped from EXTRA_ARGS *before* the WRAPPERS/GAME_ARGS split
+# below. Without %command% in the launch options the splitter routes everything
+# to GAME_ARGS (WRAPPERS stays empty), so ~/lsfg would end up appended to the
+# game's argument list and the game exe receives it as an unknown flag.
+#
+# We detect and strip it here, before the split, so it never reaches either array.
+# ==============================================================================
+_lsfg_requested=false
+_lsfg_filtered_extra=()
+for _arg in "${EXTRA_ARGS[@]}"; do
+    # Expand ~ so path matching works regardless of how the user wrote it
+    _arg_expanded="${_arg/#\~/$HOME}"
+    case "$_arg_expanded" in
+        */lsfg)
+            _lsfg_requested=true
+            ;;
+        *)
+            _lsfg_filtered_extra+=("$_arg")
+            ;;
+    esac
+done
+EXTRA_ARGS=("${_lsfg_filtered_extra[@]}")
+
+# Also honour explicit LSFG=1 or ENABLE_LSFG=1 set via launch options env vars
+if [ "${LSFG:-0}" = "1" ] || [ "${ENABLE_LSFG:-0}" = "1" ]; then
+    _lsfg_requested=true
+fi
+
+if [ "$_lsfg_requested" = true ]; then
+    log "[LSFG] Enabling frame generation"
+    export ENABLE_LSFG=1
+
+    # Source environment variables from the ~/lsfg script generated by
+    # the LSFG-VK Decky plugin.  The script contains 'export KEY=VALUE'
+    # lines (LSFG_PROCESS, ENABLE_GAMESCOPE_WSI, DXVK_HDR, etc.) that
+    # the Vulkan layer needs to find its configuration profile.
+    _lsfg_script="$HOME/lsfg"
+    if [ -f "$_lsfg_script" ] && [ -r "$_lsfg_script" ]; then
+        while IFS= read -r _line || [ -n "$_line" ]; do
+            _line="${_line#"${_line%%[![:space:]]*}"}"
+            _line="${_line%"${_line##*[![:space:]]}"}"
+            case "$_line" in
+                ''|'#'*|'#!'*|exec\ *) continue ;;
+                export\ *)
+                    _kv="${_line#export }"
+                    _key="${_kv%%=*}"
+                    _val="${_kv#*=}"
+                    case "$_val" in
+                        \"*\") _val="${_val#\"}"; _val="${_val%\"}" ;;
+                        \'*\') _val="${_val#\'}"; _val="${_val%\'}" ;;
+                    esac
+                    if [[ "$_key" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
+                        export "$_key=$_val"
+                        log "[LSFG]   $_key=$_val"
+                    fi
+                    ;;
+            esac
+        done < "$_lsfg_script"
+    else
+        log "[LSFG] WARNING: ~/lsfg script not found"
+    fi
 fi
 
 # Split EXTRA_ARGS into WRAPPERS (before %command%) and GAME_ARGS (after %command%).
@@ -683,41 +896,60 @@ fi
 
 log "=== Launching: $KEY ==="
 
+# Parse store and game ID from key once (used by map and launch paths)
+STORE="${KEY%%:*}"
+GAME_ID="${KEY#*:}"
+
 # 2. Look up in map file (with recovery for race conditions)
-if [ ! -f "$MAP_FILE" ]; then
-    log "WARNING: Map file not found at $MAP_FILE, waiting for backend to create it..."
-    # Signal the plugin backend to rebuild the map
-    touch "$HOME/.local/share/unifideck/.rebuild_map_requested" 2>/dev/null || true
-    # Brief wait for the backend or a concurrent sync to create it
-    sleep 2
+# Ubisoft native launches use launcher URIs (uplay://) and don't need games.map
+# at all — they bypass the map both when the file is missing AND when the entry
+# is absent. Check the store early so Ubisoft never blocks on the map file.
+# Microsoft auth also bypasses the map — auth URL comes from ms_auth_url.txt.
+GAME_ENTRY=""
+if [ "$STORE" = "ubisoft" ] || [ "${UNIFIDECK_MICROSOFT_ACTION:-}" = "auth" ]; then
+    if [ -f "$MAP_FILE" ]; then
+        GAME_ENTRY=$(grep "^$KEY|" "$MAP_FILE" | head -n 1)
+    fi
+    if [ -z "$GAME_ENTRY" ]; then
+        log "[$STORE] No games.map entry for $KEY, proceeding with fallback"
+    fi
+else
     if [ ! -f "$MAP_FILE" ]; then
-        log "ERROR: Map file still not found after recovery attempt"
-        notify_stage "toasts.launcher.mapMissing" "toasts.launcher.syncRequired" "critical"
+        log "WARNING: Map file not found at $MAP_FILE, waiting for backend to create it..."
+        touch "$HOME/.local/share/unifideck/.rebuild_map_requested" 2>/dev/null || true
+        sleep 2
+        if [ ! -f "$MAP_FILE" ]; then
+            log "ERROR: Map file still not found after recovery attempt"
+            notify_stage "toasts.launcher.mapMissing" "toasts.launcher.syncRequired" "critical"
+            if command -v zenity &>/dev/null; then
+                zenity --error --title="Unifideck" --text="Game library not synced.\n\nPlease open the Unifideck plugin and run Sync Libraries, then try again." --width=350 2>/dev/null &
+            fi
+            exit 1
+        fi
+        log "Map file recovered at $MAP_FILE"
+    fi
+
+    GAME_ENTRY=$(grep "^$KEY|" "$MAP_FILE" | head -n 1)
+
+    if [ -z "$GAME_ENTRY" ]; then
+        log "ERROR: Game not found in map for key: $KEY"
         if command -v zenity &>/dev/null; then
-            zenity --error --title="Unifideck" --text="Game library not synced.\n\nPlease open the Unifideck plugin and run Sync Libraries, then try again." --width=350 2>/dev/null &
+            zenity --error --title="Unifideck" --text="Game location not mapped.\n\nPlease run Force Sync from the Unifideck plugin and try again." --width=350 2>/dev/null &
         fi
         exit 1
     fi
-    log "Map file recovered at $MAP_FILE"
-fi
-
-# Find line starting with KEY|
-GAME_ENTRY=$(grep "^$KEY|" "$MAP_FILE" | head -n 1)
-
-if [ -z "$GAME_ENTRY" ]; then
-    log "ERROR: Game not found in map for key: $KEY"
-    # Show user-friendly error using zenity if available
-    if command -v zenity &>/dev/null; then
-        zenity --error --title="Unifideck" --text="Game location not mapped.\n\nPlease run Force Sync from the Unifideck plugin and try again." --width=350 2>/dev/null &
-    fi
-    exit 1
 fi
 
 # 3. Parse entry
 # Format: key|exe|workdir
-IFS='|' read -r _ EXE_PATH WORK_DIR <<< "$GAME_ENTRY"
+if [ -n "$GAME_ENTRY" ]; then
+    IFS='|' read -r _ EXE_PATH WORK_DIR <<< "$GAME_ENTRY"
+else
+    EXE_PATH=""
+    WORK_DIR=""
+fi
 
-if [ -z "$EXE_PATH" ]; then
+if [ -z "$EXE_PATH" ] && [ "$STORE" != "ubisoft" ] && [ "${UNIFIDECK_MICROSOFT_ACTION:-}" != "auth" ]; then
     log "ERROR: No executable path in map entry"
     exit 1
 fi
@@ -725,8 +957,245 @@ fi
 log "Executable: $EXE_PATH"
 log "Work Dir: $WORK_DIR"
 
+# 4a-0. Microsoft OAuth auth — launch a compatible browser with auth URL via RunGame
+# The backend writes the OAuth URL to ms_auth_url.txt and starts a CDP
+# monitor on port 9222. We launch the browser so gamescope surfaces it.
+if [ "${UNIFIDECK_MICROSOFT_ACTION:-}" = "auth" ]; then
+    log "Microsoft auth detected — launching browser for OAuth"
+    notify_stage "toasts.launcher.signingIn" "Microsoft" "low"
+
+    import_steam_session_env
+
+    AUTH_URL_FILE="$HOME/.local/share/unifideck/ms_auth_url.txt"
+    if [ ! -f "$AUTH_URL_FILE" ]; then
+        log "ERROR: Auth URL file not found at $AUTH_URL_FILE"
+        exit 1
+    fi
+    MS_AUTH_URL=$(cat "$AUTH_URL_FILE")
+    if [ -z "$MS_AUTH_URL" ]; then
+        log "ERROR: Auth URL file is empty"
+        exit 1
+    fi
+
+    AUTH_PROFILE="$HOME/.local/share/unifideck/chromium-auth"
+    mkdir -p "$AUTH_PROFILE"
+
+    # Remove stale Singleton lock files that prevent the shared auth profile from starting
+    rm -f "$AUTH_PROFILE/SingletonLock" "$AUTH_PROFILE/SingletonSocket" "$AUTH_PROFILE/SingletonCookie" 2>/dev/null
+
+    AUTH_WINDOW_MODE="$(auth_window_mode_flag)"
+
+    CHROME_FLAGS=(
+        "--app=$MS_AUTH_URL"
+        "--class=unifideck-auth"
+        "$AUTH_WINDOW_MODE"
+        "--user-data-dir=$AUTH_PROFILE"
+        "--no-first-run"
+        "--disable-translate"
+        "--disable-infobars"
+        "--disable-session-crashed-bubble"
+        "--disable-features=TranslateUI"
+        "--password-store=basic"
+        "--disable-dev-shm-usage"
+        "--disable-background-networking"
+        "--enable-touch-events"
+        "--enable-wayland-ime"
+        "--ozone-platform-hint=auto"
+        "--window-size=1280,800"
+        "--remote-debugging-port=9222"
+    )
+
+    # Clear library paths to avoid OpenSSL / overlay conflicts
+    unset LD_LIBRARY_PATH
+
+    # Ensure XAUTHORITY is set (SteamOS uses a random name in /run/user/)
+    if [ -z "$XAUTHORITY" ]; then
+        for f in /run/user/$(id -u)/xauth_*; do
+            [ -f "$f" ] && export XAUTHORITY="$f" && break
+        done
+    fi
+    log "Auth window mode: $AUTH_WINDOW_MODE"
+    log "XAUTHORITY=$XAUTHORITY DISPLAY=$DISPLAY WAYLAND_DISPLAY=${WAYLAND_DISPLAY:-} GAMESCOPE_WAYLAND_DISPLAY=${GAMESCOPE_WAYLAND_DISPLAY:-}"
+    log "GTK_IM_MODULE=${GTK_IM_MODULE:-} QT_IM_MODULE=${QT_IM_MODULE:-} XMODIFIERS=${XMODIFIERS:-}"
+    focus_auth_window_if_needed "$AUTH_WINDOW_MODE"
+
+    # Steam's native overlay keyboard is used for text input in auth pages.
+    # In gaming mode, import Steam/gamescope's IM env before launch so the
+    # browser can bind to the same keyboard/session hooks. In desktop mode,
+    # avoid forcing fullscreen so the Steam keyboard can stack over the auth
+    # window instead of appearing behind/outside it.
+
+    if command -v flatpak &>/dev/null && (flatpak info --user com.microsoft.Edge &>/dev/null 2>&1 || flatpak info com.microsoft.Edge &>/dev/null 2>&1); then
+        log "Using Microsoft Edge flatpak for Microsoft auth"
+        flatpak run com.microsoft.Edge "${CHROME_FLAGS[@]}" 2>>"$LOG_FILE"
+    elif command -v flatpak &>/dev/null && (flatpak info --user org.chromium.Chromium &>/dev/null 2>&1 || flatpak info org.chromium.Chromium &>/dev/null 2>&1); then
+        log "Using Chromium flatpak for Microsoft auth"
+        flatpak run org.chromium.Chromium "${CHROME_FLAGS[@]}" 2>>"$LOG_FILE"
+    elif command -v flatpak &>/dev/null && (flatpak info --user com.google.Chrome &>/dev/null 2>&1 || flatpak info com.google.Chrome &>/dev/null 2>&1); then
+        log "Using Google Chrome flatpak for Microsoft auth"
+        flatpak run com.google.Chrome "${CHROME_FLAGS[@]}" 2>>"$LOG_FILE"
+    else
+        log "ERROR: No compatible Chromium-based browser found for Microsoft auth"
+        exit 1
+    fi
+
+    log "Microsoft auth browser closed, exiting launcher"
+    exit 0
+fi
+
+# 4a. Xbox Cloud Gaming — stream via Chromium in fullscreen app mode
+if [ "$EXE_PATH" = "xcloud" ]; then
+    log "xCloud game detected — launching: $WORK_DIR"
+    notify_stage "toasts.launcher.launchingGame" "Xbox Cloud Gaming" "low"
+
+    # WORK_DIR contains the game-specific URL (https://www.xbox.com/play/launch/{productId}).
+    # Launch the root xCloud shell first so our CDP helper can inject before the
+    # streaming page boots, then redirect to the requested game URL.
+    XCLOUD_URL="https://www.xbox.com/play"
+    XCLOUD_LAUNCH_URL="$WORK_DIR"
+    XCLOUD_CDP_PORT=9223
+
+    # Auth profile for Chromium-based browsers (shared between auth and xCloud)
+    AUTH_PROFILE="$HOME/.local/share/unifideck/chromium-auth"
+    mkdir -p "$AUTH_PROFILE"
+
+    # Clear PluginLoader's bundled library paths to avoid OpenSSL conflicts.
+    # Steam Input works independently via uinput — no LD_PRELOAD needed.
+    unset LD_LIBRARY_PATH
+
+    # Ensure XAUTHORITY is set (SteamOS uses a random name in /run/user/)
+    if [ -z "$XAUTHORITY" ]; then
+        for f in /run/user/$(id -u)/xauth_*; do
+            [ -f "$f" ] && export XAUTHORITY="$f" && break
+        done
+    fi
+    log "XAUTHORITY=$XAUTHORITY DISPLAY=$DISPLAY"
+
+    # Detect available browser — prefer Edge (native xCloud/Xbox gamepad support)
+    _xcloud_browser=""
+    _xcloud_browser_name=""
+    _xcloud_needs_gamepad_trigger=false
+
+    if command -v flatpak &>/dev/null; then
+        if flatpak info --user com.microsoft.Edge &>/dev/null 2>&1 || flatpak info com.microsoft.Edge &>/dev/null 2>&1; then
+            _xcloud_browser="com.microsoft.Edge"
+            _xcloud_browser_name="Microsoft Edge"
+        elif flatpak info --user org.chromium.Chromium &>/dev/null 2>&1 || flatpak info org.chromium.Chromium &>/dev/null 2>&1; then
+            _xcloud_browser="org.chromium.Chromium"
+            _xcloud_browser_name="Chromium"
+            _xcloud_needs_gamepad_trigger=true
+        elif flatpak info --user com.google.Chrome &>/dev/null 2>&1 || flatpak info com.google.Chrome &>/dev/null 2>&1; then
+            _xcloud_browser="com.google.Chrome"
+            _xcloud_browser_name="Google Chrome"
+            _xcloud_needs_gamepad_trigger=true
+        fi
+    fi
+
+    if [ -z "$_xcloud_browser" ]; then
+        log "ERROR: No compatible Chromium-based browser found for xCloud."
+        log "Please install Microsoft Edge via Discover or flatpak."
+        notify_stage "toasts.launcher.browserRequired" "Install Microsoft Edge" "critical"
+        exit 1
+    fi
+
+    log "Selected xCloud browser: $_xcloud_browser_name ($_xcloud_browser)"
+
+    # Build browser flags.
+    # Use --kiosk mode (matching the proven Edge xCloud shortcut approach) for
+    # proper fullscreen and gamepad focus handling.
+    if [ "$_xcloud_browser" = "com.microsoft.Edge" ]; then
+        # Edge: native Xbox gamepad support, no CDP injection needed.
+        # Share auth profile so OAuth cookies from Chromium sign-in persist.
+        # Navigate directly to the game URL (no CDP redirect needed).
+        _edge_target_url="${XCLOUD_LAUNCH_URL:-$XCLOUD_URL}"
+        CHROME_FLAGS=(
+            "--kiosk"
+            "--class=unifideck-xcloud"
+            "--user-data-dir=$AUTH_PROFILE"
+            "--no-first-run"
+            "--disable-translate"
+            "--disable-infobars"
+            "--disable-session-crashed-bubble"
+            "--disable-features=TranslateUI"
+            "--autoplay-policy=no-user-gesture-required"
+            "--window-size=1024,720"
+            "--force-device-scale-factor=1.25"
+            "--device-scale-factor=1.25"
+            "$_edge_target_url"
+        )
+    else
+        # Chromium/Chrome: use kiosk mode + CDP port for compat JS injection.
+        CHROME_FLAGS=(
+            "--kiosk"
+            "--class=unifideck-xcloud"
+            "--user-data-dir=$AUTH_PROFILE"
+            "--no-first-run"
+            "--disable-translate"
+            "--disable-infobars"
+            "--disable-session-crashed-bubble"
+            "--disable-features=TranslateUI"
+            "--password-store=basic"
+            "--disable-dev-shm-usage"
+            "--disable-background-networking"
+            "--autoplay-policy=no-user-gesture-required"
+            "--window-size=1024,720"
+            "--force-device-scale-factor=1.25"
+            "--device-scale-factor=1.25"
+            "--remote-debugging-port=$XCLOUD_CDP_PORT"
+            "--enable-gamepad-button-axis-events"
+            "$XCLOUD_URL"
+        )
+    fi
+
+    # CDP compat JS injection (Chromium/Chrome only — spoofs Edge UA, re-dispatches
+    # gamepad events, provides fullscreen shims for xCloud).
+    # NOTE: We no longer pass --steam-controller-appid; the CDP controller-layout
+    # bounce was counterproductive (temporarily put Steam Input in keyboard mode).
+    _xcloud_inject_pid=""
+    if [ "$_xcloud_browser" != "com.microsoft.Edge" ]; then
+        XCLOUD_INJECT_SCRIPT="$PLUGIN_DIR/bin/xcloud_cdp_inject.py"
+        if [ -f "$XCLOUD_INJECT_SCRIPT" ]; then
+            log "Starting xCloud CDP compatibility injector on port $XCLOUD_CDP_PORT (target: $XCLOUD_LAUNCH_URL)"
+            _xcloud_inject_args=(--port "$XCLOUD_CDP_PORT" --timeout 45)
+            if [ -n "$XCLOUD_LAUNCH_URL" ] && [ "$XCLOUD_LAUNCH_URL" != "$XCLOUD_URL" ]; then
+                _xcloud_inject_args+=(--launch-url "$XCLOUD_LAUNCH_URL")
+            fi
+            "$PYTHON_BIN" "$XCLOUD_INJECT_SCRIPT" "${_xcloud_inject_args[@]}" >>"$LOG_FILE" 2>&1 &
+            _xcloud_inject_pid=$!
+        fi
+    fi
+
+    # Gamepad trigger: inject synthetic button events into the SteamOS virtual
+    # Xbox pad so Chromium's Gamepad API detects the controller without manual
+    # interaction.  Edge has native gamepad support so this is only needed for
+    # Chromium/Chrome.
+    _gamepad_trigger_pid=""
+    if [ "$_xcloud_needs_gamepad_trigger" = true ]; then
+        GAMEPAD_TRIGGER_SCRIPT="$PLUGIN_DIR/bin/xcloud_gamepad_trigger.py"
+        if [ -f "$GAMEPAD_TRIGGER_SCRIPT" ]; then
+            log "Starting gamepad trigger (synthetic event injection for Chromium)"
+            "$PYTHON_BIN" "$GAMEPAD_TRIGGER_SCRIPT" \
+                --delay 5 --duration 20 --interval 3 >>"$LOG_FILE" 2>&1 &
+            _gamepad_trigger_pid=$!
+        fi
+    fi
+
+    focus_xcloud_window_if_needed
+
+    log "Launching $_xcloud_browser_name flatpak in kiosk mode"
+    flatpak run --device=all "$_xcloud_browser" "${CHROME_FLAGS[@]}" 2>>"$LOG_FILE"
+
+    # Clean up background helpers
+    for _pid in "${_xcloud_inject_pid:-}" "${_gamepad_trigger_pid:-}"; do
+        [ -n "$_pid" ] && kill "$_pid" 2>/dev/null && wait "$_pid" 2>/dev/null || true
+    done
+
+    log "xCloud session ended, exiting launcher"
+    exit 0
+fi
+
 # 4. Check if executable exists
-if [ ! -f "$EXE_PATH" ]; then
+if [ "$STORE" != "ubisoft" ] && [ ! -f "$EXE_PATH" ]; then
     log "ERROR: Executable not found: $EXE_PATH"
     if command -v zenity &>/dev/null; then
         zenity --error --title="Unifideck" --text="Game executable not found.\n\nThe game may have been uninstalled. Please reinstall." --width=350 2>/dev/null &
@@ -735,26 +1204,34 @@ if [ ! -f "$EXE_PATH" ]; then
 fi
 
 # 5. Check if this is a Windows game (.exe, .cmd, .bat)
-if [[ "$EXE_PATH" == *.exe ]] || [[ "$EXE_PATH" == *.EXE ]] || \
+if [ "$STORE" = "ubisoft" ] || \
+   [[ "$EXE_PATH" == *.exe ]] || [[ "$EXE_PATH" == *.EXE ]] || \
    [[ "$EXE_PATH" == *.cmd ]] || [[ "$EXE_PATH" == *.CMD ]] || \
    [[ "$EXE_PATH" == *.bat ]] || [[ "$EXE_PATH" == *.BAT ]]; then
     log "Windows game detected, using umu-launcher with Proton"
     
-    # Parse store and game ID from key
-    STORE="${KEY%%:*}"      # 'epic', 'gog', or 'amazon'
-    GAME_ID="${KEY#*:}"     # Game ID after colon
-    
+# Kept our store case structure for Ubisoft prefix isolation compatibility; added Microsoft
     # Map store names to umu store codes
     case "$STORE" in
-        epic)   UMU_STORE="egs" ;;
-        gog)    UMU_STORE="gog" ;;
-        amazon) UMU_STORE="amazon" ;;
-        *)      UMU_STORE="none" ;;
+        epic)    UMU_STORE="egs" ;;
+        gog)     UMU_STORE="gog" ;;
+        amazon)  UMU_STORE="amazon" ;;
+        ubisoft) UMU_STORE="ubisoft" ;;
+        microsoft) UMU_STORE="microsoft" ;;
+        *)       UMU_STORE="none" ;;
     esac
     
     # ALWAYS use Unifideck's own prefix directory (complete isolation from Heroic)
-    # This ensures we don't accidentally modify or depend on Heroic's data
-    PREFIX_PATH="$PREFIXES_DIR/$GAME_ID"
+    # This ensures we don't accidentally modify or depend on Heroic's data.
+    # Ubisoft uses a dedicated subfolder to keep Connect-specific state isolated.
+    if [ "$STORE" = "ubisoft" ]; then
+        # For Ubisoft, use UNIFIDECK_UBISOFT_PREFIX_NAME if available (includes leading dot
+        # for special prefixes like .upc-auth), otherwise fall back to GAME_ID.
+        _ubi_pfx_name="${UNIFIDECK_UBISOFT_PREFIX_NAME:-$GAME_ID}"
+        PREFIX_PATH="$HOME/.local/share/unifideck/prefixes/ubisoft/$_ubi_pfx_name"
+    else
+        PREFIX_PATH="$PREFIXES_DIR/$GAME_ID"
+    fi
     # Normalize accidental /pfx suffixes to keep a stable compat data root
     while [[ "$PREFIX_PATH" == */pfx ]]; do
         PREFIX_PATH="${PREFIX_PATH%/pfx}"
@@ -842,9 +1319,24 @@ if [[ "$EXE_PATH" == *.exe ]] || [[ "$EXE_PATH" == *.EXE ]] || \
         CURRENT_PROTON="default"
     fi
     
-    # Check if prefix exists and has a different Proton version
-    if [ -f "$PROTON_MARKER" ] && [ -d "$PREFIX_PFX" ]; then
+    # Check if prefix exists and has a different Proton version.
+    # Priority: read our marker first, fall back to Proton's own "version" file
+    # (cloned prefixes from template may have Proton's version but no marker).
+    _have_marker=false
+    PREVIOUS_PROTON=""
+    if [ -f "$PROTON_MARKER" ]; then
+        _have_marker=true
         PREVIOUS_PROTON=$(cat "$PROTON_MARKER" 2>/dev/null || echo "unknown")
+    elif [ -f "$PREFIX_PATH/version" ]; then
+        # Proton writes its version string (e.g. "UMU-Proton-9.0-4e") into
+        # the prefix's version file. Use it as fallback for cloned prefixes.
+        PREVIOUS_PROTON=$(cat "$PREFIX_PATH/version" 2>/dev/null || echo "")
+        if [ -n "$PREVIOUS_PROTON" ]; then
+            log "[Proton] No marker, using prefix version file: $PREVIOUS_PROTON"
+        fi
+    fi
+
+    if [ -n "$PREVIOUS_PROTON" ] && { $_have_marker || [ -d "$PREFIX_PFX" ] || [ -f "$PREFIX_PATH/system.reg" ]; }; then
         
         if [ "$PREVIOUS_PROTON" != "$CURRENT_PROTON" ]; then
             log "[Proton] Version change detected: $PREVIOUS_PROTON -> $CURRENT_PROTON"
@@ -852,32 +1344,19 @@ if [[ "$EXE_PATH" == *.exe ]] || [[ "$EXE_PATH" == *.EXE ]] || \
             # Check if this is a major version change (experimental <-> GE, or major version number change)
             NEED_RESET=false
             
-            # Detect major family change (experimental vs GE-Proton vs Proton 9/10)
-            case "$PREVIOUS_PROTON" in
-                *Experimental*|*experimental*)
-                    PREV_FAMILY="experimental" ;;
-                GE-Proton*)
-                    PREV_FAMILY="ge-proton" ;;
-                *Proton\ 9*|*proton_9*|*proton9*)
-                    PREV_FAMILY="proton9" ;;
-                *Proton\ 10*|*proton_10*|*proton10*)
-                    PREV_FAMILY="proton10" ;;
-                *)
-                    PREV_FAMILY="other" ;;
-            esac
-            
-            case "$CURRENT_PROTON" in
-                *Experimental*|*experimental*)
-                    CURR_FAMILY="experimental" ;;
-                GE-Proton*)
-                    CURR_FAMILY="ge-proton" ;;
-                *Proton\ 9*|*proton_9*|*proton9*)
-                    CURR_FAMILY="proton9" ;;
-                *Proton\ 10*|*proton_10*|*proton10*)
-                    CURR_FAMILY="proton10" ;;
-                *)
-                    CURR_FAMILY="other" ;;
-            esac
+            # Detect major family change (experimental vs GE-Proton vs UMU-Proton vs Proton 9/10)
+            _proton_family() {
+                case "$1" in
+                    *Experimental*|*experimental*) echo "experimental" ;;
+                    GE-Proton*)                    echo "ge-proton" ;;
+                    UMU-Proton*)                   echo "umu-proton" ;;
+                    *Proton\ 9*|*proton_9*|*proton9*|*9.0*) echo "proton9" ;;
+                    *Proton\ 10*|*proton_10*|*proton10*|10.*) echo "proton10" ;;
+                    *)                             echo "other" ;;
+                esac
+            }
+            PREV_FAMILY=$(_proton_family "$PREVIOUS_PROTON")
+            CURR_FAMILY=$(_proton_family "$CURRENT_PROTON")
             
             if [ "$PREV_FAMILY" != "$CURR_FAMILY" ]; then
                 NEED_RESET=true
@@ -890,21 +1369,20 @@ if [[ "$EXE_PATH" == *.exe ]] || [[ "$EXE_PATH" == *.EXE ]] || \
                 
                 # Backup save data if it exists
                 SAVE_BACKUP=""
+                rm -rf "$PREFIX_PATH"/.save_backup_* 2>/dev/null || true
                 if [ -d "$PREFIX_PFX/drive_c/users" ]; then
-                    SAVE_BACKUP="$PREFIX_PATH/.save_backup_$$"
+                    SAVE_BACKUP="$PREFIX_PATH/.save_backup"
                     log "[Proton] Backing up user data..."
                     cp -r "$PREFIX_PFX/drive_c/users" "$SAVE_BACKUP" 2>/dev/null || true
                 fi
-                
+
                 # Remove the prefix and all installation markers
                 rm -rf "$PREFIX_PFX" 2>/dev/null || true
                 rm -f "$PREFIX_PATH/unifideck_winetricks_complete.marker" 2>/dev/null || true
                 rm -f "$PREFIX_PATH/.unifideck_prereqs_"*.done 2>/dev/null || true
+                rm -f "$PREFIX_PATH/.unifideck-gog-setup-done" 2>/dev/null || true
 
                 log "[Proton] Prefix cleared, will be recreated on launch"
-                
-                # Note: save backup is kept at $SAVE_BACKUP if needed
-                # A more sophisticated solution would restore specific save folders
             else
                 log "[Proton] Minor version change, keeping prefix (Proton will upgrade it)"
             fi
@@ -944,6 +1422,7 @@ if [[ "$EXE_PATH" == *.exe ]] || [[ "$EXE_PATH" == *.EXE ]] || \
         fi
         
         log "[FirstLaunch] Running createprefix with umu-run (this may take 1-2 minutes)..."
+        ensure_umu_runtime_ready "prefix setup preflight"
         
         # Run createprefix with retry logic for network resilience (Steam Runtime download).
         # NOTE: Proton returns non-zero for createprefix even on success because it
@@ -968,9 +1447,7 @@ if [[ "$EXE_PATH" == *.exe ]] || [[ "$EXE_PATH" == *.EXE ]] || \
                 log "[FirstLaunch] system.reg not found after attempt $_cp_attempt, retrying in ${_cp_wait}s..."
                 notify_stage "toasts.launcher.networkError" "toasts.launcher.retryingUmu|seconds=${_cp_wait}|attempt=$((_cp_attempt+1))|max=$_cp_max" "normal"
                 # Clean up partial Steam Runtime downloads
-                rm -rf "$HOME/.local/share/umu/steamrt3" 2>/dev/null || true
-                rm -rf "$HOME/.local/share/umu/umu_steam3" 2>/dev/null || true
-                rm -f "$HOME/.local/share/umu/"*.parts 2>/dev/null || true
+                cleanup_umu_runtime_cache
                 sleep $_cp_wait
                 _cp_wait=$((_cp_wait * 2))
             fi
@@ -995,12 +1472,24 @@ if [[ "$EXE_PATH" == *.exe ]] || [[ "$EXE_PATH" == *.EXE ]] || \
     else
         log "[FirstLaunch] Prefix already initialized (system.reg exists)"
     fi
-    
+
+    # Restore backed-up user data after prefix (re)creation
+    if [ -n "$SAVE_BACKUP" ] && [ -d "$SAVE_BACKUP" ]; then
+        if [ -d "$PREFIX_PFX/drive_c/users" ]; then
+            log "[Proton] Restoring user data from backup..."
+            cp -a "$SAVE_BACKUP"/. "$PREFIX_PFX/drive_c/users/" 2>/dev/null || true
+            log "[Proton] User data restored"
+        fi
+        rm -rf "$SAVE_BACKUP"
+    fi
+
     # Check for umu-run
     if [ ! -f "$UMU_RUN" ]; then
         log "ERROR: umu-run not found at $UMU_RUN"
         exit 1
     fi
+
+    ensure_umu_runtime_ready "windows launch preflight for $STORE:$GAME_ID"
 
     
     # Change to work directory
@@ -1180,6 +1669,46 @@ if [[ "$EXE_PATH" == *.exe ]] || [[ "$EXE_PATH" == *.EXE ]] || \
         # Python path is already set at startup with version verification (PYTHON_BIN)
         log "Using Python (verified 3.10+): $PYTHON_BIN"
 
+        # === VCRUNTIME REGISTRY FIX ===
+        # Condition: marker absent or stale (Proton version changed).
+        # UE4 games call MsiQueryProductState to verify VC++ is installed.
+        # Winetricks copies DLLs but doesn't populate the MSI product database.
+        # Proton rewrites system.reg on prefix upgrades, erasing text-injected keys.
+        # Fix: import a .reg file via umu-run regedit AFTER Proton initializes.
+        # The marker is tied to the Proton directory name so this re-runs on switch.
+        VCREG_FILE="$PLUGIN_DIR/bin/vcruntime_fix.reg"
+        _PROTON_NAME="$(basename "$PROTONPATH" 2>/dev/null)"
+        VCREG_MARKER="$PREFIX_PATH/.unifideck_vcreg_${_PROTON_NAME}.done"
+        if [ -f "$VCREG_FILE" ] && [ ! -f "$VCREG_MARKER" ]; then
+            log "[VCRuntime] Importing VC++ registry keys for $_PROTON_NAME..."
+            # Place the .reg file where Wine can see it
+            _DRIVE_C=""
+            for _dc in "$ACTIVE_WINEPREFIX/drive_c" "$PREFIX_PATH/drive_c" "$PREFIX_PATH/pfx/drive_c"; do
+                [ -d "$_dc" ] && _DRIVE_C="$_dc" && break
+            done
+            if [ -n "$_DRIVE_C" ]; then
+                cp "$VCREG_FILE" "$_DRIVE_C/vcruntime_fix.reg"
+                # Run regedit inside Proton — same PROTONPATH/WINEPREFIX as game launch
+                # If using system umu-run, it doesn't need $PYTHON_BIN prefix
+                if [ "$UMU_WRAPPER" = "umu-run" ]; then
+                    _UMU_CMD="umu-run"
+                else
+                    _UMU_CMD="\"$PYTHON_BIN\" \"$UMU_WRAPPER\""
+                fi
+                if eval "$_UMU_CMD regedit \"C:\\vcruntime_fix.reg\"" >> "$LOG_FILE" 2>&1; then
+                    # Clean up stale markers from other Proton versions, write new one
+                    rm -f "$PREFIX_PATH"/.unifideck_vcreg_*.done 2>/dev/null
+                    touch "$VCREG_MARKER"
+                    log "[VCRuntime] ✓ Registry keys imported for $_PROTON_NAME"
+                else
+                    log "[VCRuntime] WARNING: regedit import failed (game may still work)"
+                fi
+                rm -f "$_DRIVE_C/vcruntime_fix.reg" 2>/dev/null
+            else
+                log "[VCRuntime] WARNING: drive_c not found, skipping registry import"
+            fi
+        fi
+
         # (LEGENDARY_CONFIG_PATH already set above, before EOS overlay block)
 
         # === LANGUAGE: Read Unifideck language preference for Epic launch ===
@@ -1333,7 +1862,35 @@ print(result)
                     log "[Cleanup] Removed com.epicgames.launcher from $(basename "$_reg")"
                 fi
             done
-            CMD_STR="${WRAPPERS[@]:+${WRAPPERS[*]} }$LEGENDARY_BIN launch $GAME_ID --no-wine --skip-version-check $OFFLINE_FLAG --wrapper \"$PYTHON_BIN $UMU_WRAPPER\" --language $EPIC_LANG${GAME_ARGS[@]:+ -- ${GAME_ARGS[*]}}"
+            # === EXE OVERRIDE: Bypass UE4 prerequisite launcher stubs ===
+            # Some UE4 games ship a tiny stub (e.g., Ghostrunner.exe, 540KB)
+            # that checks Windows registry for VC++ runtime versions before
+            # launching the real binary. Proton rewrites system.reg at startup,
+            # making registry injection impossible. We bypass the stub entirely.
+            EXE_OVERRIDE=""
+            EXE_OVERRIDE_FLAG=""
+            _EXE_OVERRIDE=$(python3 -c "
+import sys; sys.path.insert(0, '$PLUGIN_DIR/bin')
+from game_fixes import get_exe_override
+r = get_exe_override('$GAME_ID')
+print(r or '')
+" 2>/dev/null)
+            if [ -n "$_EXE_OVERRIDE" ]; then
+                # Resolve to absolute path and verify it exists
+                _INSTALL_PATH=$(python3 -c "
+import json
+with open('$HOME/.config/legendary/installed.json') as f:
+    d = json.load(f)
+print(d.get('$GAME_ID', {}).get('install_path', ''))
+" 2>/dev/null)
+                if [ -n "$_INSTALL_PATH" ] && [ -f "$_INSTALL_PATH/$_EXE_OVERRIDE" ]; then
+                    EXE_OVERRIDE_FLAG="--override-exe \"$_EXE_OVERRIDE\""
+                    log "[ExeOverride] Bypassing launcher stub: $_EXE_OVERRIDE"
+                else
+                    log "[ExeOverride] Override target not found: $_INSTALL_PATH/$_EXE_OVERRIDE"
+                fi
+            fi
+            CMD_STR="${WRAPPERS[@]:+${WRAPPERS[*]} }$LEGENDARY_BIN launch $GAME_ID --no-wine --skip-version-check $OFFLINE_FLAG $EXE_OVERRIDE_FLAG --wrapper \"$PYTHON_BIN $UMU_WRAPPER\" --language $EPIC_LANG${GAME_ARGS[@]:+ -- ${GAME_ARGS[*]}}"
         fi
 
         log "Executing: $CMD_STR"
@@ -1376,12 +1933,19 @@ print(result)
         # legendary's Popen passes FDs to umu-run/pressure-vessel — if stdout points
         # to a file instead of a TTY, container process management may change.
         if [ "$IS_UBISOFT" = "true" ]; then
-             eval "$CMD_STR" 2>>"$LOG_FILE" && GAME_EXIT_CODE=$? || GAME_EXIT_CODE=$?
+             if eval "$CMD_STR" 2>>"$LOG_FILE"; then
+                 GAME_EXIT_CODE=0
+             else
+                 GAME_EXIT_CODE=$?
+             fi
         else
-             "${WRAPPERS[@]}" "$LEGENDARY_BIN" launch "$GAME_ID" --no-wine --skip-version-check $OFFLINE_FLAG \
+             if "${WRAPPERS[@]}" "$LEGENDARY_BIN" launch "$GAME_ID" --no-wine --skip-version-check $OFFLINE_FLAG \
                  --wrapper "$PYTHON_BIN $UMU_WRAPPER" --language $EPIC_LANG \
-                 ${GAME_ARGS[@]:+-- "${GAME_ARGS[@]}"} 2>>"$LOG_FILE" \
-                 && GAME_EXIT_CODE=$? || GAME_EXIT_CODE=$?
+                 ${GAME_ARGS[@]:+-- "${GAME_ARGS[@]}"} 2>>"$LOG_FILE"; then
+                 GAME_EXIT_CODE=0
+             else
+                 GAME_EXIT_CODE=$?
+             fi
         fi
 
         # Legendary returns before the game/container fully exits.
@@ -1400,6 +1964,7 @@ print(result)
             sync_cloud_saves "epic" "$GAME_ID" "upload" "$PREFIX_PATH"
         fi
 
+        [ "$_TERMINATED" -eq 1 ] && GAME_EXIT_CODE=143
         exit $GAME_EXIT_CODE
     elif [ "$STORE" == "amazon" ]; then
         # Amazon games may need fuel.json parsing for additional launch parameters
@@ -1414,7 +1979,7 @@ print(result)
             # Parse launch args from fuel.json if present
             AMAZON_ARGS=$(python3 -c "import json, re, sys
 try:
-    with open('$FUEL_JSON', 'r') as f:
+    with open(sys.argv[1], 'r') as f:
         content = f.read()
         # Remove single-line comments (fuel.json may have them)
         content = re.sub(r'//.*$', '', content, flags=re.MULTILINE)
@@ -1425,7 +1990,7 @@ try:
             print(' '.join(f'\"{arg}\"' for arg in args))
 except Exception as e:
     print('', file=sys.stderr)
-" 2>> "$LOG_FILE" || true)
+" "$FUEL_JSON" 2>> "$LOG_FILE" || true)
             log "Obtained Amazon args: $AMAZON_ARGS"
         else
             log "No fuel.json found, launching without additional args"
@@ -1484,16 +2049,251 @@ except Exception as e:
         # Execute umu-run for Amazon game (with retry for network failures)
         # WRAPPERS prepend the command, GAME_ARGS passed as game arguments.
         if [ -n "$AMAZON_ARGS" ]; then
-            eval "${WRAPPERS[@]}" run_umu_with_retry "$PYTHON_BIN" "$UMU_WRAPPER" "\"$EXE_PATH\"" $AMAZON_ARGS "${GAME_ARGS[@]}" \
-                && GAME_EXIT_CODE=$? || GAME_EXIT_CODE=$?
+            if eval "${WRAPPERS[@]}" run_umu_with_retry "$PYTHON_BIN" "$UMU_WRAPPER" "\"$EXE_PATH\"" $AMAZON_ARGS "${GAME_ARGS[@]}"; then
+                GAME_EXIT_CODE=0
+            else
+                GAME_EXIT_CODE=$?
+            fi
         else
-            "${WRAPPERS[@]}" run_umu_with_retry "$PYTHON_BIN" "$UMU_WRAPPER" "$EXE_PATH" "${GAME_ARGS[@]}" \
-                && GAME_EXIT_CODE=$? || GAME_EXIT_CODE=$?
+            if "${WRAPPERS[@]}" run_umu_with_retry "$PYTHON_BIN" "$UMU_WRAPPER" "$EXE_PATH" "${GAME_ARGS[@]}"; then
+                GAME_EXIT_CODE=0
+            else
+                GAME_EXIT_CODE=$?
+            fi
         fi
 
         wait_for_game_exit
 
         log "Amazon game exited with code: $GAME_EXIT_CODE"
+        [ "$_TERMINATED" -eq 1 ] && GAME_EXIT_CODE=143
+        exit $GAME_EXIT_CODE
+    elif [ "$STORE" == "ubisoft" ]; then
+        # ==================================================================
+        # UBISOFT NATIVE STORE LAUNCH
+        # Play/install/auth now all go through the Steam-owned shortcut path.
+        # The action is selected via UNIFIDECK_UBISOFT_ACTION.
+        # ==================================================================
+        log "Launching Ubisoft native store game..."
+
+        UBISOFT_ACTION="${UNIFIDECK_UBISOFT_ACTION:-play}"
+        UBISOFT_PREFIX_NAME="${UNIFIDECK_UBISOFT_PREFIX_NAME:-$GAME_ID}"
+        GAME_PREFIX="$HOME/.local/share/unifideck/prefixes/ubisoft/$UBISOFT_PREFIX_NAME"
+        log "[Ubisoft] Action: $UBISOFT_ACTION"
+        log "[Ubisoft] Prefix: $UBISOFT_PREFIX_NAME"
+
+        LAUNCH_ID=""
+        if [ "$UBISOFT_ACTION" = "play" ]; then
+            # ---- Resolve launch_id: registry → ID map → error ----
+            for _reg in "$GAME_PREFIX/system.reg" "$GAME_PREFIX/pfx/system.reg"; do
+                [ -f "$_reg" ] || continue
+                LAUNCH_ID=$(grep -oP '(?<=Installs\\\\)\d+(?=\])' "$_reg" | while read _cid; do
+                    if grep -F -A3 "Installs\\\\${_cid}]" "$_reg" | grep -q "Ubisoft Game Launcher"; then
+                        echo "$_cid"
+                        break
+                    fi
+                done)
+                [ -n "$LAUNCH_ID" ] && break
+                [ -z "$LAUNCH_ID" ] && \
+                LAUNCH_ID=$(grep -oP '(?<=Installs\\\\)\d+(?=\])' "$_reg" | head -1)
+                [ -n "$LAUNCH_ID" ] && break
+            done
+
+            if [ -z "$LAUNCH_ID" ]; then
+                for _reg in "$GAME_PREFIX/user.reg" "$GAME_PREFIX/pfx/user.reg"; do
+                    [ -f "$_reg" ] || continue
+                    LAUNCH_ID=$(grep -oP '(?<=Installs\\\\)\d+(?=\])' "$_reg" | head -1)
+                    [ -n "$LAUNCH_ID" ] && break
+                done
+            fi
+
+            if [ -z "$LAUNCH_ID" ]; then
+                _MAP="$HOME/.local/share/unifideck/ubisoft_id_map.json"
+                if [ -f "$_MAP" ]; then
+                    LAUNCH_ID=$(grep -A5 "\"$GAME_ID\"" "$_MAP" | grep -oP '"ubisoftconnect_game_id"\s*:\s*"\K[^"]+' | head -1)
+                    [ -z "$LAUNCH_ID" ] && \
+                    LAUNCH_ID=$(grep -A5 "\"$GAME_ID\"" "$_MAP" | grep -oP '"launch_id"\s*:\s*"\K[^"]+' | head -1)
+                fi
+            fi
+
+            if [ -z "$LAUNCH_ID" ]; then
+                log "ERROR: Could not resolve launch_id for space_id=$GAME_ID"
+                if command -v zenity &>/dev/null; then
+                    zenity --error --title="Unifideck" --text="Cannot find Ubisoft launch ID.\n\nTry re-syncing your library." --width=350 2>/dev/null &
+                fi
+                exit 1
+            fi
+            log "[Ubisoft] Resolved launch_id: $LAUNCH_ID"
+        fi
+
+        # ---- Find launcher executable ----
+        CONNECT_EXE=""
+        UPC_EXE=""
+        for _base in "$GAME_PREFIX" "$GAME_PREFIX/pfx"; do
+            _ubi="$_base/drive_c/Program Files (x86)/Ubisoft/Ubisoft Game Launcher"
+            if [ -f "$_ubi/UbisoftConnect.exe" ]; then
+                CONNECT_EXE="$_ubi/UbisoftConnect.exe"
+            fi
+            if [ -f "$_ubi/upc.exe" ]; then
+                UPC_EXE="$_ubi/upc.exe"
+            fi
+            if [ -n "$CONNECT_EXE" ] || [ -n "$UPC_EXE" ]; then
+                break
+            fi
+        done
+
+        LAUNCHER_EXE="${CONNECT_EXE:-$UPC_EXE}"
+        if [ -z "$LAUNCHER_EXE" ]; then
+            log "[Ubisoft] Launcher exe not found, running bootstrap..."
+            SETUP_SCRIPT="$PLUGIN_DIR/bin/ubisoft_setup.py"
+            if [ -f "$SETUP_SCRIPT" ]; then
+                "$PYTHON_BIN" "$SETUP_SCRIPT" "$GAME_ID" "$GAME_PREFIX" >> "$LOG_FILE" 2>&1 || true
+            fi
+            for _base in "$GAME_PREFIX" "$GAME_PREFIX/pfx"; do
+                _ubi="$_base/drive_c/Program Files (x86)/Ubisoft/Ubisoft Game Launcher"
+                if [ -f "$_ubi/UbisoftConnect.exe" ]; then
+                    CONNECT_EXE="$_ubi/UbisoftConnect.exe"
+                fi
+                if [ -f "$_ubi/upc.exe" ]; then
+                    UPC_EXE="$_ubi/upc.exe"
+                fi
+                if [ -n "$CONNECT_EXE" ] || [ -n "$UPC_EXE" ]; then
+                    break
+                fi
+            done
+            LAUNCHER_EXE="${CONNECT_EXE:-$UPC_EXE}"
+            if [ -z "$LAUNCHER_EXE" ]; then
+                log "ERROR: UbisoftConnect.exe / upc.exe not found after bootstrap"
+                exit 1
+            fi
+        fi
+        log "[Ubisoft] Using: $LAUNCHER_EXE"
+
+        # ---- Pre-launch helpers (language + session token) in parallel ----
+        UBISOFT_LANG_SCRIPT="$PLUGIN_DIR/bin/ubisoft_set_language.py"
+        INJECT_SCRIPT="$PLUGIN_DIR/bin/ubisoft_inject_session.py"
+        _lang_pid=""
+        _inject_pid=""
+        if [ "$UBISOFT_ACTION" != "auth" ] && [ -f "$UBISOFT_LANG_SCRIPT" ]; then
+            "$PYTHON_BIN" "$UBISOFT_LANG_SCRIPT" "$GAME_PREFIX" "$GAME_ID" >> "$LOG_FILE" 2>&1 &
+            _lang_pid=$!
+        fi
+        if [ "$UBISOFT_ACTION" != "auth" ] && [ -f "$INJECT_SCRIPT" ]; then
+            "$PYTHON_BIN" "$INJECT_SCRIPT" "$GAME_PREFIX" >> "$LOG_FILE" 2>&1 &
+            _inject_pid=$!
+        fi
+        [ -n "$_lang_pid" ] && wait "$_lang_pid" 2>/dev/null
+        [ -n "$_inject_pid" ] && wait "$_inject_pid" 2>/dev/null
+
+        # ---- UMU wrapper (reuse already-resolved PYTHON_BIN + UMU_RUN) ----
+        if [ -f "$UMU_RUN" ]; then
+            UMU_WRAPPER="$UMU_RUN"
+        elif command -v umu-run &>/dev/null; then
+            UMU_WRAPPER="umu-run"
+        else
+            log "ERROR: umu-run not found"
+            exit 1
+        fi
+
+        # ---- Environment for Ubisoft per-game prefix ----
+        export WINEPREFIX="$GAME_PREFIX"
+        export STEAM_COMPAT_DATA_PATH="$GAME_PREFIX"
+        export GAMEID="${GAMEID:-umu-ubisoft-$GAME_ID}"
+        export STORE="ubisoft"
+        export PROTON_VERB="waitforexitandrun"
+        export PROTON_ENABLE_NVAPI=1
+        export DXVK_NVAPI_ALLOW_OTHER_DRIVERS=1
+
+        # ---- Ensure dosdevices symlinks (fixes 0 MB disk space in UPC) ----
+        # Wine needs c: → ../drive_c and z: → / as symlinks.
+        # Broken/missing links cause GetDiskFreeSpaceEx() to return 0.
+        _dosdevices="$GAME_PREFIX/dosdevices"
+        [ -d "$GAME_PREFIX/pfx/drive_c" ] && _dosdevices="$GAME_PREFIX/pfx/dosdevices"
+        mkdir -p "$_dosdevices"
+        if [ ! -L "$_dosdevices/c:" ]; then
+            rm -rf "$_dosdevices/c:" 2>/dev/null
+            ln -sf ../drive_c "$_dosdevices/c:"
+            log "[Ubisoft] Fixed dosdevices/c: symlink"
+        fi
+        if [ ! -L "$_dosdevices/z:" ]; then
+            rm -rf "$_dosdevices/z:" 2>/dev/null
+            ln -sf / "$_dosdevices/z:"
+            log "[Ubisoft] Fixed dosdevices/z: symlink"
+        fi
+
+        if [ -n "$WORK_DIR" ] && [ -d "$WORK_DIR" ]; then
+            export STEAM_COMPAT_INSTALL_PATH="$WORK_DIR"
+        else
+            export STEAM_COMPAT_INSTALL_PATH="$HOME/Games/Ubisoft/$GAME_ID"
+        fi
+
+        log "WINEPREFIX: $WINEPREFIX"
+        log "GAMEID: $GAMEID"
+        log "STORE: $STORE"
+        log "STEAM_COMPAT_INSTALL_PATH: $STEAM_COMPAT_INSTALL_PATH"
+
+        if [ "$UBISOFT_ACTION" = "install" ] || [ "$UBISOFT_ACTION" = "auth" ]; then
+            notify_stage "toasts.launcher.launchingGame" "Launching Ubisoft Connect..." "low"
+        else
+            notify_stage "toasts.launcher.launchingGame" "toasts.launcher.startingUbisoftGame" "low"
+        fi
+
+        # ---- Launch ----
+        LAUNCH_TARGET_EXE="$LAUNCHER_EXE"
+        LAUNCH_TARGET_ARG=""
+        if [ "$UBISOFT_ACTION" = "install" ]; then
+            log "[Ubisoft] Opening launcher for game install"
+        elif [ "$UBISOFT_ACTION" = "auth" ]; then
+            # Keep LAUNCH_TARGET_EXE as UbisoftConnect.exe for auth —
+            # upc.exe is the background service that exits immediately,
+            # but UbisoftConnect.exe shows the full UI for interactive login.
+            log "[Ubisoft] Opening launcher for native auth capture"
+
+            # Clear any pre-injected restore_session from settings.yml so
+            # UbisoftConnect is forced to show the login UI instead of
+            # silently authenticating and exiting to system tray (which
+            # doesn't exist under Gamescope, causing the window to close).
+            for _settings_yml in "$GAME_PREFIX"/drive_c/users/*/AppData/Roaming/Ubisoft/"Ubisoft Connect"/settings.yml \
+                                 "$GAME_PREFIX"/pfx/drive_c/users/*/AppData/Roaming/Ubisoft/"Ubisoft Connect"/settings.yml; do
+                if [ -f "$_settings_yml" ]; then
+                    log "[Ubisoft] Clearing restore_session from $(basename "$(dirname "$_settings_yml")")/settings.yml"
+                    rm -f "$_settings_yml"
+                fi
+            done
+
+            log "[Ubisoft] Launching auth with default renderer (DXVK)"
+        else
+            LAUNCH_TARGET_ARG="uplay://launch/$LAUNCH_ID/0"
+            log "[Ubisoft] Launching game for launch_id=$LAUNCH_ID"
+        fi
+
+        if [ -n "$LAUNCH_TARGET_ARG" ]; then
+            CMD_STR="$PYTHON_BIN $UMU_WRAPPER \"$LAUNCH_TARGET_EXE\" \"$LAUNCH_TARGET_ARG\""
+            log "Executing: $CMD_STR"
+            if "${WRAPPERS[@]}" run_umu_with_retry "$PYTHON_BIN" "$UMU_WRAPPER" "$LAUNCH_TARGET_EXE" "$LAUNCH_TARGET_ARG"; then
+                GAME_EXIT_CODE=0
+            else
+                GAME_EXIT_CODE=$?
+            fi
+        else
+            CMD_STR="$PYTHON_BIN $UMU_WRAPPER \"$LAUNCH_TARGET_EXE\""
+            log "Executing: $CMD_STR"
+            if "${WRAPPERS[@]}" run_umu_with_retry "$PYTHON_BIN" "$UMU_WRAPPER" "$LAUNCH_TARGET_EXE"; then
+                GAME_EXIT_CODE=0
+            else
+                GAME_EXIT_CODE=$?
+            fi
+        fi
+
+        wait_for_game_exit
+
+        CAPTURE_SCRIPT="$PLUGIN_DIR/bin/ubisoft_capture_session.py"
+        if [ -f "$CAPTURE_SCRIPT" ]; then
+            log "[Ubisoft] Capturing session token..."
+            "$PYTHON_BIN" "$CAPTURE_SCRIPT" "$GAME_PREFIX" >> "$LOG_FILE" 2>&1 || true
+        fi
+
+        log "Ubisoft action '$UBISOFT_ACTION' exited with code: $GAME_EXIT_CODE"
+        [ "$_TERMINATED" -eq 1 ] && GAME_EXIT_CODE=143
         exit $GAME_EXIT_CODE
     else
         # GOG games: use direct umu-run (no legendary needed)
@@ -1544,7 +2344,15 @@ except Exception as e:
         
         # Verify if goggame-*.info exists, if not, force setup
         # This handles cases where the marker exists but setup failed to generate the info file
-        GOG_INFO_FILE=$(find "$WORK_DIR" -maxdepth 2 -iname "goggame-*.info" | head -n 1)
+        # Search WORK_DIR and its parents for goggame-*.info
+        # (handles games where exe is in a subdirectory like Build/Final/)
+        GOG_INFO_FILE=""
+        _search_dir="$WORK_DIR"
+        while [ -n "$_search_dir" ] && [ "$_search_dir" != "/" ]; do
+            GOG_INFO_FILE=$(find "$_search_dir" -maxdepth 1 -iname "goggame-*.info" 2>/dev/null | head -n 1)
+            [ -n "$GOG_INFO_FILE" ] && break
+            _search_dir=$(dirname "$_search_dir")
+        done
         if [ -z "$GOG_INFO_FILE" ]; then
             log "[Setup] goggame-*.info file is missing. Forcing setup to generate it."
             rm -f "$SETUP_MARKER"
@@ -1607,6 +2415,10 @@ except Exception as e:
         # Enable NVAPI for modern Proton (matches Epic path)
         export PROTON_ENABLE_NVAPI="1"
         export DXVK_NVAPI_ALLOW_OTHER_DRIVERS="1"
+
+        # Explicitly set STEAM_COMPAT_INSTALL_PATH so umu-run uses the actual work dir
+        # (Needed for games where the executable is in a subdirectory like Launcher/)
+        export STEAM_COMPAT_INSTALL_PATH="$WORK_DIR"
 
         # === LANGUAGE FIX: Set game language based on Unifideck preference ===
         # GOG games read language from goggame-*.info in the install directory.
@@ -1671,8 +2483,60 @@ except Exception as e:
         # Execute umu-run with retry for network failures
         # WRAPPERS (from %command% split) prepend the game command.
         # GAME_ARGS (post-%command% tokens) are passed as game arguments.
-        "${WRAPPERS[@]}" run_umu_with_retry "$PYTHON_BIN" "$UMU_WRAPPER" "$EXE_PATH" "${GAME_ARGS[@]}" \
-            && GAME_EXIT_CODE=$? || GAME_EXIT_CODE=$?
+        LAUNCH_START=$(date +%s)
+        if "${WRAPPERS[@]}" run_umu_with_retry "$PYTHON_BIN" "$UMU_WRAPPER" "$EXE_PATH" "${GAME_ARGS[@]}"; then
+            GAME_EXIT_CODE=0
+        else
+            GAME_EXIT_CODE=$?
+        fi
+
+        # === GOG LAUNCHER FALLBACK ===
+        # If the primary executable exited quickly (< 15s), it may be a broken
+        # launcher stub (e.g., Uplay's Launcher.exe for Prince of Persia).
+        # These stubs exit fast — sometimes with code 0, sometimes non-zero —
+        # because the backing service (Uplay/UConnect) isn't installed.
+        # We don't check the exit code: a real game session lasts minutes/hours,
+        # so any exit under 15s from a 'launcher'-category task is suspicious.
+        # 15s is tight enough to avoid false positives from a user manually
+        # closing a working launcher (Wine startup + window render + user
+        # interaction takes at least 15s). Only 'launcher'/'tool' category
+        # primary tasks can trigger this — game-category tasks are never bypassed.
+        LAUNCH_ELAPSED=$(( $(date +%s) - LAUNCH_START ))
+        if [ "$LAUNCH_ELAPSED" -lt 15 ]; then
+            FALLBACK_EXE=$("$PYTHON_BIN" -c "
+import json, glob, os, sys
+for f in glob.glob(os.path.join(sys.argv[1], 'goggame-*.info')):
+    try:
+        data = json.load(open(f))
+    except Exception:
+        continue
+    tasks = data.get('playTasks', [])
+    # Only fall back if the primary task is a launcher stub, not a real game exe.
+    # Real launchers (e.g. The Witcher's launcher) run for the full session so
+    # LAUNCH_ELAPSED will be >> 15s. If they DO crash fast, we still want to
+    # avoid silently bypassing them unless the task is explicitly a launcher type.
+    primary = next((t for t in tasks if t.get('isPrimary')), None)
+    if not primary or primary.get('category', '').lower() not in ('launcher', 'tool'):
+        break
+    for t in tasks:
+        if t.get('category') == 'game' and t.get('type') == 'FileTask' and t.get('path'):
+            p = os.path.join(sys.argv[1], t['path'].replace(chr(92), '/'))
+            if os.path.isfile(p):
+                print(p)
+                sys.exit(0)
+    break
+" "$WORK_DIR" 2>/dev/null)
+
+            if [ -n "$FALLBACK_EXE" ] && [ "$FALLBACK_EXE" != "$EXE_PATH" ]; then
+                log "[GOG] Launcher stub exited early (code $GAME_EXIT_CODE in ${LAUNCH_ELAPSED}s), falling back to game exe: $FALLBACK_EXE"
+                notify_stage "toasts.launcher.launcherFallback" "toasts.launcher.retryingWithGameExe" "normal"
+                if "${WRAPPERS[@]}" run_umu_with_retry "$PYTHON_BIN" "$UMU_WRAPPER" "$FALLBACK_EXE" "${GAME_ARGS[@]}"; then
+                    GAME_EXIT_CODE=0
+                else
+                    GAME_EXIT_CODE=$?
+                fi
+            fi
+        fi
 
         wait_for_game_exit
 
@@ -1688,6 +2552,7 @@ except Exception as e:
         log "GOG game exited with code: $GAME_EXIT_CODE"
         sync_cloud_saves "gog" "$GAME_ID" "upload" "$PREFIX_PATH" ""
 
+        [ "$_TERMINATED" -eq 1 ] && GAME_EXIT_CODE=143
         exit $GAME_EXIT_CODE
     fi
     
@@ -1711,19 +2576,29 @@ else
     # Restore Steam Overlay/Input for native Linux games (critical for controller support)
     restore_steam_env
 
+    # Classic GOG Linux releases wrap DOSBox in start.sh, but that wrapper overwrites
+    # LD_LIBRARY_PATH and drops Steam Runtime's legacy libraries (e.g. libFLAC.so.8).
+    # Route those wrappers through a helper that preserves the bundled DOSBox libs
+    # while also layering in Steam Runtime's old compatibility libraries.
+    GOG_LINUX_DOSBOX_HELPER="$PLUGIN_DIR/bin/gog_linux_dosbox.py"
+    if [ "$STORE" = "gog" ] && [ "$(basename "$EXE_PATH")" = "start.sh" ] && [ -f "$GOG_LINUX_DOSBOX_HELPER" ]; then
+        log "[GOG] Using native DOSBox start.sh helper"
+        exec "$PYTHON_BIN" "$GOG_LINUX_DOSBOX_HELPER" "$EXE_PATH" "${GAME_ARGS[@]}" 2>>"$LOG_FILE"
+    fi
+
     if [ -f "$STEAM_RUNTIME_RUN" ]; then
         log "Using Steam Runtime: $STEAM_RUNTIME_RUN"
-        log "Executing: $STEAM_RUNTIME_RUN $EXE_PATH $*"
-        exec "$STEAM_RUNTIME_RUN" "$EXE_PATH" "$@" 2>>"$LOG_FILE"
+        log "Executing: $STEAM_RUNTIME_RUN $EXE_PATH ${GAME_ARGS[*]}"
+        exec "$STEAM_RUNTIME_RUN" "$EXE_PATH" "${GAME_ARGS[@]}" 2>>"$LOG_FILE"
     elif [ -f "$STEAM_RUNTIME_ALT" ]; then
         log "Using Steam Runtime (alt): $STEAM_RUNTIME_ALT"
-        log "Executing: $STEAM_RUNTIME_ALT $EXE_PATH $*"
-        exec "$STEAM_RUNTIME_ALT" "$EXE_PATH" "$@" 2>>"$LOG_FILE"
+        log "Executing: $STEAM_RUNTIME_ALT $EXE_PATH ${GAME_ARGS[*]}"
+        exec "$STEAM_RUNTIME_ALT" "$EXE_PATH" "${GAME_ARGS[@]}" 2>>"$LOG_FILE"
     else
         # Fallback: direct execution (may fail for old games needing legacy libs)
         log "No Steam Runtime found, executing directly"
-        log "Executing: $EXE_PATH $*"
-        exec "$EXE_PATH" "$@" 2>>"$LOG_FILE"
+        log "Executing: $EXE_PATH ${GAME_ARGS[*]}"
+        exec "$EXE_PATH" "${GAME_ARGS[@]}" 2>>"$LOG_FILE"
     fi
 fi
 

@@ -16,5 +16,6 @@ from .proton_tools import (
     restore_compat_tool,
     save_proton_setting,
     get_saved_proton_tool,
+    resolve_proton_path,
     is_linux_runtime,
 )

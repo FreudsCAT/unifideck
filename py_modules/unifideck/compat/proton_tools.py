@@ -94,11 +94,13 @@ def _load_proton_settings() -> Dict[str, Any]:
 
 
 def _save_proton_settings(data: Dict[str, Any]) -> bool:
-    """Save proton_settings.json. Returns True on success."""
+    """Save proton_settings.json atomically. Returns True on success."""
     try:
         PROTON_SETTINGS_FILE.parent.mkdir(parents=True, exist_ok=True)
-        with open(PROTON_SETTINGS_FILE, "w") as f:
+        tmp = PROTON_SETTINGS_FILE.with_suffix(".tmp")
+        with open(tmp, "w") as f:
             json.dump(data, f, indent=2)
+        tmp.rename(PROTON_SETTINGS_FILE)
         return True
     except Exception as e:
         logger.error(f"Error saving proton_settings.json: {e}")
@@ -321,3 +323,58 @@ def get_saved_proton_tool(store_game_id: str) -> str:
     settings = _load_proton_settings()
     game_entry = settings.get("games", {}).get(store_game_id, {})
     return game_entry.get("proton_tool", "")
+
+
+def resolve_proton_path(tool_name: str) -> str:
+    """Resolve a Proton tool name to an installed Proton directory."""
+    normalized = (tool_name or "").strip()
+    if not normalized:
+        return ""
+
+    direct = Path(normalized).expanduser()
+    if direct.is_dir():
+        return str(direct)
+
+    lower = normalized.lower()
+    steam_common_paths = [
+        Path.home() / ".steam" / "steam" / "steamapps" / "common",
+        Path.home() / ".local" / "share" / "Steam" / "steamapps" / "common",
+        Path.home() / ".steam" / "root" / "steamapps" / "common",
+    ]
+
+    for base in steam_common_paths:
+        if not base.is_dir():
+            continue
+        if lower in {"proton_experimental", "proton - experimental", "proton-experimental"}:
+            candidate = base / "Proton - Experimental"
+            if candidate.is_dir():
+                return str(candidate)
+        elif lower in {"proton_10", "proton10"} or lower.startswith("proton 10") or lower.startswith("proton-10"):
+            candidate = base / "Proton 10.0"
+            if candidate.is_dir():
+                return str(candidate)
+        elif lower in {"proton_9", "proton_90", "proton9"} or lower.startswith("proton 9") or lower.startswith("proton-9"):
+            candidate = base / "Proton 9.0 (Beta)"
+            if candidate.is_dir():
+                return str(candidate)
+
+    compat_dirs = [
+        Path.home() / ".steam" / "root" / "compatibilitytools.d",
+        Path.home() / ".steam" / "steam" / "compatibilitytools.d",
+        Path.home() / ".local" / "share" / "Steam" / "compatibilitytools.d",
+    ]
+
+    for compat_dir in compat_dirs:
+        if not compat_dir.is_dir():
+            continue
+        candidate = compat_dir / normalized
+        if candidate.is_dir():
+            return str(candidate)
+        try:
+            for entry in compat_dir.iterdir():
+                if entry.is_dir() and entry.name.lower() == lower:
+                    return str(entry)
+        except OSError:
+            continue
+
+    return ""

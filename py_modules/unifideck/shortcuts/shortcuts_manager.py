@@ -13,16 +13,18 @@ import binascii
 import struct
 import re
 import logging
+import shutil
 import tempfile
 from collections import defaultdict
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set
 
 from py_modules.unifideck.shortcuts.vdf import load_shortcuts_vdf, save_shortcuts_vdf
 from py_modules.unifideck.shortcuts.launch_options import (
     extract_store_id, is_unifideck_shortcut, get_full_id, get_store_prefix, preserve_user_params
 )
 from py_modules.unifideck.steam.steam_utils import get_logged_in_steam_user
+from py_modules.unifideck.utils.game_tags import save_game_tags
 
 # Use standard logging (decky.logger is only available in main.py)
 logger = logging.getLogger("unifideck")
@@ -42,6 +44,37 @@ except ImportError:
 # Shortcuts Registry - maps game launch options to appid for reconciliation after plugin reinstall
 # Stored in user data directory (survives plugin uninstall/reinstall)
 SHORTCUTS_REGISTRY_FILE = "shortcuts_registry.json"
+PROTECTED_SHORTCUT_IDS = {
+    "microsoft:ms-auth",
+    "ubisoft:upc-auth",
+}
+APPID_ARTWORK_PATTERNS = (
+    "{id}p.jpg",
+    "{id}.jpg",
+    "{id}_hero.jpg",
+    "{id}_logo.png",
+    "{id}_icon.jpg",
+)
+
+
+def _unsigned_appid(appid: int) -> int:
+    """Convert a signed shortcut appid to Steam's unsigned filename form."""
+    return appid if appid >= 0 else appid + 2**32
+
+
+def _build_registry_entry(appid: int, title: str, created: Optional[str] = None) -> Dict[str, Any]:
+    """Build a persisted shortcuts registry entry."""
+    return {
+        'appid': appid,
+        'appid_unsigned': _unsigned_appid(appid),
+        'title': title,
+        'created': created or time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
+    }
+
+
+def is_protected_shortcut_id(full_id: Optional[str]) -> bool:
+    """Return True when a managed shortcut ID is an auth/utility shortcut."""
+    return bool(full_id and full_id in PROTECTED_SHORTCUT_IDS)
 
 
 def get_shortcuts_registry_path() -> Path:
@@ -78,18 +111,22 @@ def save_shortcuts_registry(registry: Dict[str, Dict]) -> bool:
 def register_shortcut(launch_options: str, appid: int, title: str) -> bool:
     """Register a shortcut's appid for future reconciliation"""
     registry = load_shortcuts_registry()
-    
-    # Calculate unsigned appid for logging/debugging
-    appid_unsigned = appid if appid >= 0 else appid + 2**32
-    
-    registry[launch_options] = {
-        'appid': appid,
-        'appid_unsigned': appid_unsigned,
-        'title': title,
-        'created': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
-    }
-    
-    logger.debug(f"Registered shortcut: {launch_options} -> appid={appid} (unsigned={appid_unsigned})")
+
+    registry[launch_options] = _build_registry_entry(appid, title, registry.get(launch_options, {}).get('created'))
+
+    logger.debug(
+        f"Registered shortcut: {launch_options} -> appid={appid} "
+        f"(unsigned={registry[launch_options]['appid_unsigned']})"
+    )
+    return save_shortcuts_registry(registry)
+
+
+def unregister_shortcut(launch_options: str) -> bool:
+    """Remove a shortcut entry from the registry if it exists."""
+    registry = load_shortcuts_registry()
+    if launch_options in registry:
+        del registry[launch_options]
+        logger.debug(f"Unregistered shortcut: {launch_options}")
     return save_shortcuts_registry(registry)
 
 
@@ -98,6 +135,26 @@ def get_registered_appid(launch_options: str) -> Optional[int]:
     registry = load_shortcuts_registry()
     entry = registry.get(launch_options)
     return entry.get('appid') if entry else None
+
+
+def is_managed_shortcut(shortcut: Dict[str, Any], managed_appids: Optional[Set[int]] = None) -> bool:
+    """Return True if a shortcut is managed by Unifideck.
+
+    Cleanup and recovery need to detect more than just intact ``store:id`` launch
+    options because interrupted syncs or Steam-side edits can leave shortcuts with
+    missing launch options but the original appid or launcher path still intact.
+    """
+    launch_options = shortcut.get('LaunchOptions', '')
+    if is_unifideck_shortcut(launch_options):
+        return True
+
+    app_id = shortcut.get('appid')
+    if app_id is not None and managed_appids and app_id in managed_appids:
+        return True
+
+    exe_value = shortcut.get('exe', '')
+    exe_path = exe_value.strip().strip('"') if isinstance(exe_value, str) else ''
+    return os.path.basename(exe_path) == 'unifideck-launcher'
 
 
 # ============================================================================
@@ -298,6 +355,15 @@ class ShortcutsManager:
         if len(parts) >= 3:
             exe_path = parts[1]
             work_dir = parts[2]
+            # Ubisoft launches via uplay:// URI, not direct game exe. Prefer work_dir
+            # so installed status does not flap if executable filenames change.
+            if store == "ubisoft":
+                path_to_check = work_dir if work_dir else exe_path
+            else:
+                path_to_check = exe_path if exe_path else work_dir
+            # xCloud entries use 'xcloud' as exe_path — not a real file
+            if exe_path == "xcloud":
+                return True
             path_to_check = exe_path if exe_path else work_dir
             if path_to_check and os.path.exists(path_to_check):
                 return True
@@ -349,6 +415,12 @@ class ShortcutsManager:
         key = f"{store}:{game_id}"
         games_map = _load_games_map_cached()
         return key in games_map
+
+    def _get_game_map_entry(self, store: str, game_id: str) -> Optional[str]:
+        """Return the raw games.map line for a game, or None."""
+        key = f"{store}:{game_id}"
+        games_map = _load_games_map_cached()
+        return games_map.get(key)
 
     def _get_install_dir_from_game_map(self, store: str, game_id: str) -> Optional[str]:
         """Get install directory from games.map.
@@ -435,6 +507,12 @@ class ShortcutsManager:
                 exe_path = parts[1]
                 work_dir = parts[2]
                 
+                # xCloud entries use 'xcloud' as exe_path — always valid
+                if exe_path == "xcloud":
+                    valid_lines.append(line)
+                    kept += 1
+                    continue
+
                 # Check if executable exists (primary check)
                 # If exe_path is empty, check work_dir instead
                 path_to_check = exe_path if exe_path else work_dir
@@ -463,7 +541,7 @@ class ShortcutsManager:
         
         return {'removed': removed, 'kept': kept, 'entries_removed': entries_removed}
 
-    async def reconcile_games_map_from_installed(self, epic_client=None, gog_client=None, amazon_client=None) -> Dict[str, Any]:
+    async def reconcile_games_map_from_installed(self, epic_client=None, gog_client=None, amazon_client=None, ubisoft_client=None, microsoft_client=None) -> Dict[str, Any]:
         """
         Repair games.map for Unifideck shortcuts that are missing entries.
         
@@ -480,6 +558,7 @@ class ShortcutsManager:
             epic_client: EpicConnector instance for getting Epic install info
             gog_client: GOGAPIClient instance for getting GOG install info
             amazon_client: AmazonGamesClient instance for getting Amazon install info
+            ubisoft_client: UbisoftConnector instance for getting Ubisoft install info
             
         Returns:
             dict: {'added': int, 'already_mapped': int, 'skipped': int, 'errors': list}
@@ -511,6 +590,7 @@ class ShortcutsManager:
             epic_installed = {}
             gog_installed = {}
             amazon_installed = {}
+            microsoft_installed = {}
             
             if epic_client and epic_client.legendary_bin:
                 try:
@@ -534,6 +614,19 @@ class ShortcutsManager:
                     amazon_installed = await amazon_client.get_installed()
                 except Exception as e:
                     errors.append(f"Amazon fetch: {e}")
+
+            if microsoft_client:
+                try:
+                    microsoft_installed = microsoft_client.get_installed()
+                except Exception as e:
+                    errors.append(f"Microsoft fetch: {e}")
+            
+            ubisoft_installed = {}
+            if ubisoft_client:
+                try:
+                    ubisoft_installed = await ubisoft_client.get_installed()
+                except Exception as e:
+                    errors.append(f"Ubisoft fetch: {e}")
             
             # Iterate over shortcuts and find Unifideck ones missing from games.map
             for idx, shortcut in shortcuts.items():
@@ -549,7 +642,7 @@ class ShortcutsManager:
                 game_id = parts[1] if len(parts) > 1 else ''
                 
                 # Only process known stores
-                if store not in ('epic', 'gog', 'amazon'):
+                if store not in ('epic', 'gog', 'amazon', 'ubisoft', 'microsoft'):
                     continue
                 
                 key = f"{store}:{game_id}"
@@ -603,6 +696,45 @@ class ShortcutsManager:
                         else:
                             skipped += 1
                             logger.debug(f"[ReconcileMap] Amazon '{game_title}' not installed or path missing")
+                    
+                    elif store == 'ubisoft' and game_id in ubisoft_installed:
+                        game_data = ubisoft_installed[game_id]
+                        install_path = game_data.get('install_path', '')
+                        executable = game_data.get('executable', '')
+                        
+                        if install_path and os.path.exists(install_path):
+                            await self._update_game_map('ubisoft', game_id, executable or '', install_path)
+                            added += 1
+                            logger.info(f"[ReconcileMap] Added Ubisoft '{game_title}' to games.map")
+                        else:
+                            skipped += 1
+                            logger.debug(f"[ReconcileMap] Ubisoft '{game_title}' not installed or path missing")
+
+                    elif store == 'microsoft' and game_id in microsoft_installed:
+                        ms_info     = microsoft_installed[game_id]
+                        install_path = ms_info.get('install_path', '')
+                        executable   = ms_info.get('executable', '')
+
+                        if install_path and os.path.exists(install_path):
+                            await self._update_game_map('microsoft', game_id, executable or '', install_path)
+                            added += 1
+                            logger.info(f"[ReconcileMap] Added Microsoft '{game_title}' to games.map")
+                        else:
+                            skipped += 1
+                            logger.debug(f"[ReconcileMap] Microsoft '{game_title}' not installed or path missing")
+
+                    elif store == 'microsoft' and game_id not in microsoft_installed:
+                        # xCloud games are not locally installed — add with xcloud marker
+                        from ..utils.game_tags import load_game_tags
+                        tags = load_game_tags('microsoft', game_id)
+                        if tags and 'xcloud' in tags:
+                            xcloud_url = f"https://www.xbox.com/play/launch/{game_id}"
+                            await self._update_game_map('microsoft', game_id, 'xcloud', xcloud_url)
+                            added += 1
+                            logger.info(f"[ReconcileMap] Added xCloud '{game_title}' to games.map")
+                        else:
+                            skipped += 1
+                            logger.debug(f"[ReconcileMap] Microsoft '{game_title}' not installed or path missing")
                     else:
                         skipped += 1
                         
@@ -623,9 +755,10 @@ class ShortcutsManager:
 
     def validate_gog_exe_paths(self, gog_client=None) -> Dict[str, Any]:
         """
-        Validate and auto-correct GOG executable paths that point to installers.
+        Validate and auto-correct GOG executable paths that point to installers or wrapper internals.
         
-        If a GOG game's exe_path looks like an installer file (large .sh, contains colon, etc.),
+        If a GOG game's exe_path looks like an installer file or an internal wrapper target
+        (for example a raw DOSBox.exe instead of the GOG-provided run-game.bat),
         this function re-runs the game executable detection and updates games.map.
         
         Args:
@@ -643,6 +776,25 @@ class ShortcutsManager:
         checked = 0
         corrections = []
         modified_lines = []
+
+        def get_candidate_install_dirs(exe_path: str, work_dir: str) -> List[str]:
+            candidates: List[str] = []
+            for candidate in (
+                work_dir,
+                os.path.dirname(exe_path) if exe_path else '',
+                os.path.dirname(work_dir) if work_dir else '',
+                os.path.dirname(os.path.dirname(exe_path)) if exe_path else '',
+            ):
+                if not candidate:
+                    continue
+                normalized = os.path.normpath(candidate)
+                if os.path.exists(normalized) and normalized not in candidates:
+                    candidates.append(normalized)
+            return candidates
+
+        def is_likely_suboptimal_wrapper_target(exe_path: str) -> bool:
+            basename = os.path.basename(exe_path).lower()
+            return basename in {'dosbox.exe', 'scummvm.exe', 'dosbox_x86_64', 'dosbox_i686'}
         
         try:
             with open(map_file, 'r') as f:
@@ -671,13 +823,13 @@ class ShortcutsManager:
                 checked += 1
                 
                 # Check if exe_path looks like an installer
-                is_likely_installer = False
+                needs_redetect = False
                 if exe_path and exe_path.endswith('.sh'):
                     try:
                         if os.path.exists(exe_path):
                             file_size = os.path.getsize(exe_path)
                             filename = os.path.basename(exe_path)
-                            is_likely_installer = (
+                            needs_redetect = (
                                 file_size > 50 * 1024 * 1024 or  # Over 50MB
                                 filename.startswith('gog_') or
                                 filename.startswith('setup_') or
@@ -685,34 +837,41 @@ class ShortcutsManager:
                             )
                     except Exception:
                         pass
+
+                if not needs_redetect and exe_path:
+                    needs_redetect = is_likely_suboptimal_wrapper_target(exe_path)
                 
-                if is_likely_installer and gog_client:
-                    logger.info(f"[ValidateGOG] Detected installer path for {key}: {exe_path}")
-                    
-                    # Get the install directory (parent of exe or work_dir)
-                    install_dir = work_dir if work_dir else os.path.dirname(exe_path)
-                    
-                    if install_dir and os.path.exists(install_dir):
-                        # Re-run executable detection
-                        new_exe = gog_client._find_game_executable(install_dir)
-                        
-                        if new_exe and new_exe != exe_path:
-                            logger.info(f"[ValidateGOG] Correcting path: {exe_path} -> {new_exe}")
-                            
-                            # Update the line
-                            new_work_dir = os.path.dirname(new_exe)
-                            parts[1] = new_exe
-                            parts[2] = new_work_dir
-                            corrected_line = '|'.join(parts) + '\n'
-                            modified_lines.append(corrected_line)
-                            
-                            corrections.append({
-                                'game_id': key,
-                                'old_path': exe_path,
-                                'new_path': new_exe
-                            })
-                            corrected += 1
+                if needs_redetect and gog_client:
+                    logger.info(f"[ValidateGOG] Re-detecting launch target for {key}: {exe_path}")
+
+                    for install_dir in get_candidate_install_dirs(exe_path, work_dir):
+                        new_target = gog_client._find_game_executable_with_workdir(install_dir)
+                        if not new_target:
                             continue
+
+                        new_exe, new_work_dir = new_target
+                        if new_exe == exe_path and new_work_dir == work_dir:
+                            break
+
+                        logger.info(f"[ValidateGOG] Correcting path: {exe_path} -> {new_exe}")
+
+                        parts[1] = new_exe
+                        parts[2] = new_work_dir
+                        corrected_line = '|'.join(parts) + '\n'
+                        modified_lines.append(corrected_line)
+
+                        corrections.append({
+                            'game_id': key,
+                            'old_path': exe_path,
+                            'new_path': new_exe
+                        })
+                        corrected += 1
+                        break
+                    else:
+                        modified_lines.append(line)
+                        continue
+
+                    continue
                 
                 # Keep original line if no correction needed
                 modified_lines.append(line)
@@ -721,7 +880,7 @@ class ShortcutsManager:
             if corrected > 0:
                 with open(map_file, 'w') as f:
                     f.writelines(modified_lines)
-                logger.info(f"[ValidateGOG] Corrected {corrected} installer paths in games.map")
+                logger.info(f"[ValidateGOG] Corrected {corrected} GOG launch targets in games.map")
             
         except Exception as e:
             logger.error(f"[ValidateGOG] Error: {e}")
@@ -885,7 +1044,7 @@ class ShortcutsManager:
                 
                 if not appid:
                     # Generate new appid if not registered
-                    appid = self.generate_app_id(title, current_launcher)
+                    appid = self.generate_app_id(title, current_launcher, key)
                     logger.warning(f"[ReconcileShortcuts] No registered appid for {key}, generated new: {appid}")
                 
                 # Create new shortcut
@@ -907,6 +1066,8 @@ class ShortcutsManager:
                         '1': 'Installed'  # It's in games.map, so it's installed
                     }
                 }
+
+                register_shortcut(key, appid, title)
                 
                 next_index += 1
                 created += 1
@@ -946,11 +1107,32 @@ class ShortcutsManager:
             unsigned_app_id = app_id & 0xFFFFFFFF
             app_id_str = str(unsigned_app_id)
             
-            # Check if this app already has a mapping
-            if f'"{app_id_str}"' in content:
-                logger.info(f"App {app_id_str} already has a compat mapping")
-                return True
-            
+            # Check if CompatToolMapping section exists
+            insert_marker = '"CompatToolMapping"'
+            marker_pos = content.find(insert_marker)
+            if marker_pos < 0:
+                logger.warning("CompatToolMapping section not found in config.vdf")
+                return False
+
+            # Check if this app already has a mapping WITHIN CompatToolMapping
+            # (not elsewhere in config.vdf, e.g. SizeOnDisk sections)
+            compat_brace = content.find('{', marker_pos)
+            if compat_brace >= 0:
+                depth = 0
+                compat_end = compat_brace
+                for i in range(compat_brace, len(content)):
+                    if content[i] == '{':
+                        depth += 1
+                    elif content[i] == '}':
+                        depth -= 1
+                    if depth == 0:
+                        compat_end = i
+                        break
+                compat_section = content[compat_brace:compat_end]
+                if f'"{app_id_str}"' in compat_section:
+                    logger.info(f"App {app_id_str} already has a compat mapping")
+                    return True
+
             # Create compat entry with proper indentation (tabs as in config.vdf)
             compat_entry = f'''
 					"{app_id_str}"
@@ -959,15 +1141,8 @@ class ShortcutsManager:
 						"config"		""
 						"priority"		"250"
 					}}'''
-            
-            # Check if CompatToolMapping section exists
-            if '"CompatToolMapping"' not in content:
-                logger.warning("CompatToolMapping section not found in config.vdf")
-                return False
-            
+
             # Find CompatToolMapping and insert our entry
-            insert_marker = '"CompatToolMapping"'
-            marker_pos = content.find(insert_marker)
             if marker_pos >= 0:
                 # Find the opening brace after CompatToolMapping
                 brace_pos = content.find('{', marker_pos)
@@ -1030,14 +1205,171 @@ class ShortcutsManager:
             logger.error(f"Error clearing Proton compatibility: {e}", exc_info=True)
             return False
 
-    def generate_app_id(self, game_title: str, exe_path: str) -> int:
-        """Generate AppID for non-Steam game using CRC32"""
-        # ... existing implementation ...
-        key = f"{exe_path}{game_title}"
+    def generate_app_id(
+        self,
+        game_title: str,
+        exe_path: str,
+        launch_options: Optional[str] = None,
+    ) -> int:
+        """Generate AppID for a managed shortcut using a stable identity hash."""
+        full_id = get_full_id(launch_options) if launch_options else None
+        if full_id and not is_protected_shortcut_id(full_id):
+            key = f"{exe_path}|{full_id}"
+        else:
+            key = f"{exe_path}|{game_title}"
         crc = binascii.crc32(key.encode('utf-8')) & 0xFFFFFFFF
         app_id = crc | 0x80000000
         app_id = struct.unpack('i', struct.pack('I', app_id))[0]
         return app_id
+
+    def _copy_migrated_artwork(self, grid_path: Path, old_appid: int, new_appid: int) -> Dict[str, str]:
+        """Copy existing artwork from a legacy appid to its migrated replacement."""
+        if old_appid == new_appid:
+            return {}
+
+        old_unsigned = _unsigned_appid(old_appid)
+        new_unsigned = _unsigned_appid(new_appid)
+        copied_paths: Dict[str, str] = {}
+
+        for pattern in APPID_ARTWORK_PATTERNS:
+            src = grid_path / pattern.format(id=old_unsigned)
+            dst = grid_path / pattern.format(id=new_unsigned)
+            if not src.exists():
+                continue
+            if not dst.exists():
+                shutil.copy2(src, dst)
+            copied_paths[str(src)] = str(dst)
+
+        return copied_paths
+
+    async def migrate_managed_shortcut_appids(
+        self,
+        launcher_script: str,
+        grid_path: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Migrate managed game shortcuts to store-aware appids.
+
+        Older builds hashed only ``launcher_path + title``, so same-title games from
+        different stores collided into one Steam/artwork identity.  This migrates
+        both the registry and any current shortcuts to ``store:id``-aware appids,
+        and copies old artwork forward so existing libraries keep their artwork.
+        """
+        registry = load_shortcuts_registry()
+        registry_modified = False
+        shortcuts_modified = False
+        migrated_shortcuts = 0
+        copied_artwork: Set[str] = set()
+        appid_migrations: Dict[str, Dict[str, int]] = {}
+
+        for launch_options, entry in list(registry.items()):
+            full_id = get_full_id(launch_options)
+            if not full_id or is_protected_shortcut_id(full_id):
+                continue
+
+            if launch_options != full_id and launch_options in registry:
+                del registry[launch_options]
+                registry_modified = True
+
+            title = str(entry.get('title') or full_id)
+            expected_appid = self.generate_app_id(title, launcher_script, full_id)
+            current_appid = entry.get('appid')
+            if current_appid != expected_appid or entry.get('title') != title:
+                registry[full_id] = _build_registry_entry(
+                    expected_appid,
+                    title,
+                    entry.get('created'),
+                )
+                registry_modified = True
+
+            if current_appid is not None and current_appid != expected_appid:
+                appid_migrations[full_id] = {
+                    'old_appid': current_appid,
+                    'new_appid': expected_appid,
+                }
+
+        shortcuts_data = await self.read_shortcuts()
+        shortcuts = shortcuts_data.get('shortcuts', {})
+
+        copied_path_map: Dict[str, Dict[str, str]] = {}
+        grid_dir = Path(grid_path) if grid_path else None
+
+        for shortcut in shortcuts.values():
+            full_id = get_full_id(shortcut.get('LaunchOptions', ''))
+            if not full_id or is_protected_shortcut_id(full_id):
+                continue
+
+            title = str(shortcut.get('AppName') or registry.get(full_id, {}).get('title') or full_id)
+            current_appid = shortcut.get('appid')
+            expected_appid = self.generate_app_id(title, launcher_script, full_id)
+
+            if current_appid != expected_appid:
+                shortcut['appid'] = expected_appid
+                shortcuts_modified = True
+                migrated_shortcuts += 1
+                if current_appid is not None:
+                    appid_migrations[full_id] = {
+                        'old_appid': current_appid,
+                        'new_appid': expected_appid,
+                    }
+
+            registry_entry = registry.get(full_id, {})
+            new_registry_entry = _build_registry_entry(
+                expected_appid,
+                title,
+                registry_entry.get('created'),
+            )
+            if registry_entry != new_registry_entry:
+                registry[full_id] = new_registry_entry
+                registry_modified = True
+
+            if not grid_dir:
+                continue
+
+            migration = appid_migrations.get(full_id)
+            if not migration:
+                continue
+
+            copied_paths = copied_path_map.get(full_id)
+            if copied_paths is None:
+                copied_paths = self._copy_migrated_artwork(
+                    grid_dir,
+                    migration['old_appid'],
+                    migration['new_appid'],
+                )
+                copied_path_map[full_id] = copied_paths
+                copied_artwork.update(os.path.basename(path) for path in copied_paths.values())
+
+            icon_path = shortcut.get('icon')
+            if isinstance(icon_path, str) and icon_path in copied_paths:
+                shortcut['icon'] = copied_paths[icon_path]
+                shortcuts_modified = True
+
+        if shortcuts_modified:
+            success = await self.write_shortcuts(shortcuts_data)
+            if not success:
+                return {
+                    'success': False,
+                    'migrated_shortcuts': 0,
+                    'updated_registry_entries': 0,
+                    'copied_artwork': 0,
+                    'error': 'errors.shortcutWriteFailed',
+                }
+
+        if registry_modified and not save_shortcuts_registry(registry):
+            return {
+                'success': False,
+                'migrated_shortcuts': migrated_shortcuts if shortcuts_modified else 0,
+                'updated_registry_entries': 0,
+                'copied_artwork': len(copied_artwork),
+                'error': 'errors.shortcutWriteFailed',
+            }
+
+        return {
+            'success': True,
+            'migrated_shortcuts': migrated_shortcuts,
+            'updated_registry_entries': len(appid_migrations) if registry_modified else 0,
+            'copied_artwork': len(copied_artwork),
+        }
 
     # ... existing read/write methods ...
 
@@ -1213,10 +1545,23 @@ class ShortcutsManager:
             def score(idx):
                 s = shortcuts[idx]
                 pts = 0
+                exe_value = s.get('exe')
+                exe_path = exe_value.strip().strip('"') if isinstance(exe_value, str) else ""
+                start_dir = s.get('StartDir')
+                start_dir_value = start_dir.strip().strip('"') if isinstance(start_dir, str) else ""
+                app_name = s.get('AppName')
+                app_name_value = app_name.strip() if isinstance(app_name, str) else ""
+                exe_basename = os.path.splitext(os.path.basename(exe_path))[0] if exe_path else ""
+
                 if s.get('LastPlayTime', 0) > 0:        pts += 2  # Has play history (most important)
                 if s.get('icon', ''):                    pts += 1  # Has artwork
                 if s.get('Playtime_Forever', 0) > 0:     pts += 1  # Has playtime
                 if len(s.get('tags', {})) > 1:           pts += 1  # Has richer tags
+                if exe_path:                             pts += 2  # Real shortcut retains its executable path
+                if start_dir_value:                      pts += 1  # Steam AddShortcut duplicates often lose this
+                if app_name_value:                       pts += 1  # Blank / missing names are lower quality
+                if exe_basename and app_name_value and app_name_value != exe_basename:
+                    pts += 1  # Prefer the real display title over a launcher basename
                 return pts
             
             best = max(indices, key=score)
@@ -1278,7 +1623,7 @@ class ShortcutsManager:
             # CRITICAL: For "No Restart" support, the exe path must NOT change after creation.
             # We always use unifideck-launcher as the executable.
             runner_script = os.path.join(self.plugin_dir, 'bin', 'unifideck-launcher')
-            app_id = self.generate_app_id(game.title, runner_script)
+            app_id = self.generate_app_id(game.title, runner_script, target_launch_options)
 
             # Find next available index
             existing_indices = [int(k) for k in shortcuts.get("shortcuts", {}).items() if k.isdigit()] # .keys(), fixed logic below
@@ -1347,6 +1692,8 @@ class ShortcutsManager:
 
                     # If this game no longer exists in current library, it's orphaned
                     full_id = get_full_id(launch)
+                    if is_protected_shortcut_id(full_id):
+                        continue  # Protected auth shortcut
                     if full_id not in current_launch_options:
                         logger.debug(f"Removing orphaned shortcut: {shortcut.get('AppName')} ({launch})")
                         del shortcuts["shortcuts"][idx]
@@ -1419,10 +1766,13 @@ class ShortcutsManager:
                     
                     existing_launch_options.add(target_launch_options)
                     reclaimed += 1
+                    # Persist store_tags (e.g. "not_compatible" for UWP MS games)
+                    # Always call save_game_tags — passing None/[] clears stale tags
+                    save_game_tags(game.store, game.id, game.store_tags)
                     continue
 
                 # Generate AppID (using launcher_script for consistent ID generation)
-                app_id = self.generate_app_id(game.title, launcher_script)
+                app_id = self.generate_app_id(game.title, launcher_script, target_launch_options)
 
                 # Add shortcut
                 shortcuts["shortcuts"][str(next_index)] = {
@@ -1444,6 +1794,10 @@ class ShortcutsManager:
                 
                 # Register this shortcut for future reconciliation
                 register_shortcut(target_launch_options, app_id, game.title)
+
+                # Persist store_tags (e.g. "not_compatible" for UWP MS games)
+                # Always call save_game_tags — passing None/[] clears stale tags
+                save_game_tags(game.store, game.id, game.store_tags)
 
                 existing_launch_options.add(target_launch_options)
                 next_index += 1
@@ -1474,7 +1828,17 @@ class ShortcutsManager:
             traceback.print_exc()
             return {'added': 0, 'skipped': 0, 'removed': 0, 'reclaimed': 0, 'error': str(e)}
 
-    async def force_update_games_batch(self, games: List[Game], launcher_script: str, valid_stores: List[str] = None, epic_client=None, gog_client=None, amazon_client=None) -> Dict[str, Any]:
+    async def force_update_games_batch(
+        self,
+        games: List[Game],
+        launcher_script: str,
+        valid_stores: List[str] = None,
+        epic_client=None,
+        gog_client=None,
+        amazon_client=None,
+        ubisoft_client=None,
+        microsoft_client=None,
+    ) -> Dict[str, Any]:
         """
         Force update all games - rewrites existing shortcuts with fresh data.
         
@@ -1526,6 +1890,8 @@ class ShortcutsManager:
                         continue
 
                     full_id = get_full_id(launch)
+                    if is_protected_shortcut_id(full_id):
+                        continue  # Protected auth shortcut
                     if full_id not in current_launch_options:
                         # Game ID in LaunchOptions doesn't match library
                         # BUT check if we can recover by appid BEFORE marking as orphan
@@ -1583,7 +1949,20 @@ class ShortcutsManager:
                                             exe_path = game_info['executable']
                                             work_dir = os.path.dirname(exe_path)
                                             await self._update_game_map(game.store, game.id, exe_path, work_dir)
+                                    elif game.store == 'ubisoft':
+                                        game_info = ubisoft_client.get_installed_game_info(game.id) if ubisoft_client else None
+                                        if game_info and game_info.get('install_path'):
+                                            install_path = game_info.get('install_path', '')
+                                            exe_path = game_info.get('executable', '') or ''
+                                            work_dir = install_path or (os.path.dirname(exe_path) if exe_path else '')
+                                            await self._update_game_map(game.store, game.id, exe_path, work_dir)
                                 
+                                    elif game.store == 'microsoft':
+                                        game_info = microsoft_client.get_installed_game_info(game.id) if microsoft_client else None
+                                        if game_info and game_info.get('executable'):
+                                            exe_path = game_info['executable']
+                                            work_dir = game_info.get('install_path') or os.path.dirname(exe_path)
+                                            await self._update_game_map(game.store, game.id, exe_path, work_dir)
                                 # Track repaired LaunchOptions to prevent duplicate additions in STEP 5
                                 current_launch_options.add(original_launch_opts)
                                 repaired_count += 1
@@ -1624,7 +2003,11 @@ class ShortcutsManager:
                     # This might be an installed Unifideck game - check by appid match
                     app_id = shortcut.get('appid')
                     for game in games:
-                        expected_app_id = self.generate_app_id(game.title, launcher_script)
+                        expected_app_id = self.generate_app_id(
+                            game.title,
+                            launcher_script,
+                            f'{game.store}:{game.id}',
+                        )
                         if app_id == expected_app_id:
                             # This is a Unifideck game - update it
                             # Keep the current exe/StartDir since it's installed
@@ -1688,6 +2071,13 @@ class ShortcutsManager:
                                         exe_path = game_info['executable']
                                         work_dir = os.path.dirname(exe_path)
                                         await self._update_game_map(game.store, game.id, exe_path, work_dir)
+                                elif game.store == 'ubisoft':
+                                    game_info = ubisoft_client.get_installed_game_info(game.id) if ubisoft_client else None
+                                    if game_info and game_info.get('install_path'):
+                                        install_path = game_info.get('install_path', '')
+                                        exe_path = game_info.get('executable', '') or ''
+                                        work_dir = install_path or (os.path.dirname(exe_path) if exe_path else '')
+                                        await self._update_game_map(game.store, game.id, exe_path, work_dir)
                             
                             repaired_count += 1
             
@@ -1737,7 +2127,7 @@ class ShortcutsManager:
                 if target_launch_options in existing_launch_options:
                     continue
                 
-                app_id = self.generate_app_id(game.title, launcher_script)
+                app_id = self.generate_app_id(game.title, launcher_script, target_launch_options)
                 
                 # Skip if already exists by app_id
                 if app_id in existing_app_ids:
@@ -1769,6 +2159,9 @@ class ShortcutsManager:
                     
                     existing_app_ids.add(registered_appid)
                     reclaimed += 1
+                    # Persist store_tags (e.g. "not_compatible" for UWP MS games)
+                    # Always call save_game_tags — passing None/[] clears stale tags
+                    save_game_tags(game.store, game.id, game.store_tags)
                     continue
 
                 # Add new shortcut
@@ -1791,6 +2184,10 @@ class ShortcutsManager:
                 
                 # Register this shortcut for future reconciliation
                 register_shortcut(target_launch_options, app_id, game.title)
+
+                # Persist store_tags (e.g. "not_compatible" for UWP MS games)
+                # Always call save_game_tags — passing None/[] clears stale tags
+                save_game_tags(game.store, game.id, game.store_tags)
 
                 existing_app_ids.add(app_id)
                 next_index += 1
@@ -1942,4 +2339,3 @@ class ShortcutsManager:
         except Exception as e:
             logger.error(f"Error removing game: {e}")
             return False
-

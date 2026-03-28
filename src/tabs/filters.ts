@@ -24,10 +24,10 @@ export type FilterType =
 export interface FilterParams {
   installed: { installed: boolean };
   platform: { platform: "steam" | "nonSteam" | "all" };
-  store: { store: "steam" | "epic" | "gog" | "amazon" | "all" };
+  store: { store: "steam" | "epic" | "gog" | "amazon" | "ubisoft" | "microsoft" | "all" };
   deckCompat: {}; // No params needed - uses Native/Platinum/Verified only
   all: {};
-  nonSteam: {}; // All non-Steam shortcuts except non-installed Unifideck
+  nonSteam: {}; // Non-Steam shortcuts excluding all Unifideck-managed games
 }
 
 // A filter setting combines type with its params
@@ -47,7 +47,7 @@ const DECK_VERIFIED = 3; // steam_deck_compat_category
 export const unifideckGameCache: Map<
   number,
   {
-    store: "epic" | "gog" | "amazon";
+    store: "epic" | "gog" | "amazon" | "ubisoft" | "microsoft";
     isInstalled: boolean;
     steamAppId?: number; // Real Steam appId for ProtonDB lookups
   }
@@ -79,7 +79,7 @@ export const validThirdPartyCache: Set<number> = new Set();
 export function updateUnifideckCache(
   games: Array<{
     appId: number;
-    store: "epic" | "gog" | "amazon";
+    store: "epic" | "gog" | "amazon" | "ubisoft" | "microsoft";
     isInstalled: boolean;
     steamAppId?: number;
   }>,
@@ -117,7 +117,7 @@ export function updateUnifideckCache(
  */
 export function updateSingleGameStatus(game: {
   appId: number;
-  store: "epic" | "gog" | "amazon";
+  store: "epic" | "gog" | "amazon" | "ubisoft" | "microsoft";
   isInstalled: boolean;
 }) {
   const signedId = game.appId;
@@ -137,6 +137,18 @@ export function updateSingleGameStatus(game: {
   unifideckGameCache.set(unsignedId, entry);
   if (altSignedId !== signedId) {
     unifideckGameCache.set(altSignedId, entry);
+  }
+
+  // If state hasn't actually changed, skip event dispatch + version increment.
+  // This prevents a re-fetch cascade: component mounts → get_game_info →
+  // updateSingleGameStatus → event → handleGameStateChange → clears cache →
+  // re-fetches with loading=true → brief native PlaySection flash (flicker).
+  if (
+    existingEntry &&
+    existingEntry.isInstalled === game.isInstalled &&
+    existingEntry.store === game.store
+  ) {
+    return;
   }
 
   // Increment version counter to force patcher re-run
@@ -164,7 +176,11 @@ export function updateSingleGameStatus(game: {
   // Same pattern as VIEW_MODE_CHANGE_EVENT (confirmed working for cross-component updates)
   window.dispatchEvent(
     new CustomEvent("unifideck-game-state-changed", {
-      detail: { appId: game.appId, isInstalled: game.isInstalled, store: game.store },
+      detail: {
+        appId: game.appId,
+        isInstalled: game.isInstalled,
+        store: game.store,
+      },
     }),
   );
 }
@@ -212,7 +228,7 @@ export function isUnifideckGame(appId: number): boolean {
 export function getStoreForApp(
   appId: number,
   appType: number,
-): "steam" | "epic" | "gog" | "amazon" | null {
+): "steam" | "epic" | "gog" | "amazon" | "ubisoft" | "microsoft" | null {
   // Check cache first (works for both signed and unsigned appId)
   const cached = unifideckGameCache.get(appId);
   if (cached) {
@@ -350,18 +366,18 @@ export const filterFunctions: {
     return false;
   },
 
-  // Non-Steam tab: All non-Steam shortcuts EXCEPT non-installed Unifideck games
+  // Non-Steam tab: All non-Steam shortcuts EXCEPT Unifideck-managed games.
+  // Unifideck games (Epic, GOG, Amazon, Microsoft) have their own dedicated
+  // tabs and collections — they should not appear in Non-Steam.
   nonSteam: (_params, app) => {
     // Only include non-Steam shortcuts
     if (app.app_type !== NON_STEAM_APP_TYPE) {
       return false;
     }
 
-    // Check if it's a Unifideck game
-    const cached = unifideckGameCache.get(app.appid);
-    if (cached) {
-      // It's a Unifideck game - only show if installed
-      return cached.isInstalled;
+    // Exclude all Unifideck-managed games — they have dedicated store tabs
+    if (unifideckGameCache.has(app.appid)) {
+      return false;
     }
 
     // Not a Unifideck game - show all other non-Steam shortcuts

@@ -34,6 +34,8 @@ class UpdateChecker:
             return self.plugin.gog
         elif store_id == 'amazon':
             return getattr(self.plugin, 'amazon', None)
+        elif store_id == 'microsoft':
+            return getattr(self.plugin, 'microsoft', None)
         return None
 
     async def check_for_game_update(self, store: str, game_id: str) -> bool:
@@ -109,6 +111,10 @@ class UpdateChecker:
                 self._store_timestamps['amazon'] = time.time()
 
             has_update = self._update_cache.get(f'amazon:{game_id}', False)
+
+        elif store == 'microsoft':
+            # Microsoft Store has no update-check API — always return False
+            has_update = False
 
         return has_update
 

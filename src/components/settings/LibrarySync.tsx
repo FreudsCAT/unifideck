@@ -7,6 +7,7 @@ import { SyncProgress } from "../../types/syncProgress";
 
 interface LibrarySyncProps {
   syncing: boolean;
+  syncCancelling: boolean;
   syncCooldown: boolean;
   cooldownSeconds: number;
   syncProgress: SyncProgress | null;
@@ -14,15 +15,23 @@ interface LibrarySyncProps {
     epic: string;
     gog: string;
     amazon: string;
+    microsoft: string;
   };
   handleManualSync: (force?: boolean, resyncArtwork?: boolean) => void;
   handleCancelSync: () => void;
-  showModal: (content: React.ReactNode) => void;
+  showModal: (
+    content: React.ReactNode,
+  ) =>
+    | {
+        Close?: () => void;
+      }
+    | void;
   checkStoreStatus: () => void;
 }
 
 const LibrarySync: React.FC<LibrarySyncProps> = ({
   syncing,
+  syncCancelling,
   syncCooldown,
   cooldownSeconds,
   syncProgress,
@@ -38,7 +47,7 @@ const LibrarySync: React.FC<LibrarySyncProps> = ({
         <ButtonItem
           layout="below"
           onClick={() => handleManualSync(false)}
-          disabled={syncing || syncCooldown}
+          disabled={syncing || syncCancelling || syncCooldown}
         >
           <div
             style={{
@@ -66,14 +75,23 @@ const LibrarySync: React.FC<LibrarySyncProps> = ({
         <ButtonItem
           layout="below"
           onClick={() => {
-            showModal(
+            let modalResult:
+              | {
+                  Close?: () => void;
+                }
+              | void;
+
+            const closeModal = () => modalResult?.Close?.();
+
+            modalResult = showModal(
               <ForceSyncModal
                 onResyncArtwork={() => handleManualSync(true, true)}
                 onKeepArtwork={() => handleManualSync(true, false)}
+                closeModal={closeModal}
               />,
             );
           }}
-          disabled={syncing || syncCooldown}
+          disabled={syncing || syncCancelling || syncCooldown}
         >
           <div
             style={{
@@ -90,7 +108,7 @@ const LibrarySync: React.FC<LibrarySyncProps> = ({
               }}
             />
             {syncing
-              ? "..."
+              ? t("librarySync.syncing")
               : syncCooldown
               ? `${cooldownSeconds}s`
               : t("librarySync.forceSync")}
@@ -101,7 +119,11 @@ const LibrarySync: React.FC<LibrarySyncProps> = ({
       {/* Cancel button - only visible during sync */}
       {syncing && (
         <PanelSectionRow>
-          <ButtonItem layout="below" onClick={handleCancelSync}>
+          <ButtonItem
+            layout="below"
+            onClick={handleCancelSync}
+            disabled={syncCancelling}
+          >
             {t("librarySync.cancelSync")}
           </ButtonItem>
         </PanelSectionRow>
@@ -208,7 +230,8 @@ const LibrarySync: React.FC<LibrarySyncProps> = ({
       )}
 
       {(storeStatus.epic.includes("Error") ||
-        storeStatus.gog.includes("Error")) && (
+        storeStatus.gog.includes("Error") ||
+        storeStatus.microsoft?.includes("Error")) && (
         <PanelSectionRow>
           <ButtonItem layout="below" onClick={checkStoreStatus}>
             {t("librarySync.retryStatusCheck")}

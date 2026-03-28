@@ -12,7 +12,7 @@ import { FC, useState, useEffect, useRef } from "react";
 import { call, toaster } from "@decky/api";
 import { PanelSection, PanelSectionRow, Field } from "@decky/ui";
 
-import type { DownloadQueueInfo } from "../types/downloads";
+import type { DownloadItem, DownloadQueueInfo } from "../types/downloads";
 
 import { t } from "../i18n";
 import DownloadItemRow from "./downloads/DownloadItemRow";
@@ -32,6 +32,9 @@ const EmptyState: FC<{ message: string }> = ({ message }) => (
     {message}
   </div>
 );
+
+const getDownloadCompletionTime = (item: DownloadItem): number =>
+  item.end_time ?? item.start_time ?? item.added_time ?? 0;
 
 /**
  * Main Downloads Tab Component
@@ -89,7 +92,7 @@ export const DownloadsTab: FC = () => {
         toaster.toast({
           title: t("downloadsTab.toastCancelFailedTitle"),
           body: t("downloadsTab.toastCancelFailedBody", {
-            error: t(result.error || "Unknown error"),
+            error: t(result.error || "errors.unknown"),
           }),
           duration: 5000,
           critical: true,
@@ -133,6 +136,13 @@ export const DownloadsTab: FC = () => {
   const current = queueInfo?.current;
   const queued = queueInfo?.queued || [];
   const finished = queueInfo?.finished || [];
+  const recentlyCompleted = [...finished]
+    .filter((item) => item.status === "completed")
+    .sort(
+      (left, right) =>
+        getDownloadCompletionTime(right) - getDownloadCompletionTime(left),
+    )
+    .slice(0, 5);
   const hasActiveDownloads = current || queued.length > 0;
 
   return (
@@ -162,9 +172,9 @@ export const DownloadsTab: FC = () => {
       )}
 
       {/* Recently Completed Section */}
-      {finished.length > 0 && (
+      {recentlyCompleted.length > 0 && (
         <PanelSection title={t("downloadsTab.recentlyCompleted")}>
-          {finished.slice(0, 5).map((item) => (
+          {recentlyCompleted.map((item) => (
             <DownloadItemRow
               key={item.id}
               item={item}
@@ -176,7 +186,7 @@ export const DownloadsTab: FC = () => {
       )}
 
       {/* Empty state when nothing anywhere */}
-      {!hasActiveDownloads && finished.length === 0 && (
+      {!hasActiveDownloads && recentlyCompleted.length === 0 && (
         <PanelSection>
           <EmptyState message={t("downloadsTab.noDownloads")} />
         </PanelSection>

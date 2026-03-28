@@ -178,9 +178,10 @@ class EpicConnector(Store):
 
                     # Auto-sync library after successful auth
                     if self.plugin_instance:
-                        logger.info("[EPIC] Starting automatic library sync...")
-                        await self.plugin_instance.sync_libraries(fetch_artwork=False)
-                        logger.info("[EPIC] ✓ Library sync completed!")
+                        logger.info("[EPIC] Queueing automatic library sync...")
+                        asyncio.create_task(
+                            self.plugin_instance.request_auth_sync(source='auth:epic')
+                        )
                 else:
                     logger.error(f"[EPIC] Auto-auth failed: {result.get('error')}")
             else:
@@ -217,19 +218,33 @@ class EpicConnector(Store):
 
     async def logout(self) -> Dict[str, Any]:
         """Logout from Epic Games"""
-        if not self.legendary_bin:
-            return {'success': False, 'error': 'legendary not found'}
-
         try:
             from ..auth.browser import CDPOAuthMonitor
-            
-            # Run legendary auth --delete to remove stored credentials
-            proc = await asyncio.create_subprocess_exec(
-                self.legendary_bin, 'auth', '--delete',
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE
-            )
-            await proc.communicate()
+
+            if self.legendary_bin:
+                proc = await asyncio.create_subprocess_exec(
+                    self.legendary_bin, 'auth', '--delete',
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE
+                )
+                await proc.communicate()
+            else:
+                logger.warning("[EPIC] Legendary not found during logout - clearing local state only")
+
+            for path in (
+                os.path.expanduser("~/.config/legendary"),
+                os.path.expanduser("~/.cache/legendary"),
+            ):
+                if not os.path.exists(path):
+                    continue
+                try:
+                    if os.path.isdir(path):
+                        shutil.rmtree(path)
+                    else:
+                        os.remove(path)
+                    logger.info(f"[EPIC] Cleared auth state: {path}")
+                except Exception as e:
+                    logger.warning(f"[EPIC] Could not clear {path}: {e}")
 
             logger.info("Logged out from Epic Games")
 
@@ -410,7 +425,12 @@ class EpicConnector(Store):
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE
             )
-            stdout, stderr = await proc.communicate()
+            try:
+                stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=30)
+            except asyncio.TimeoutError:
+                proc.kill()
+                logger.warning(f"legendary info timed out for {game_id}")
+                return None
 
             if proc.returncode == 0:
                 info = json.loads(stdout.decode())
@@ -509,11 +529,12 @@ class EpicConnector(Store):
         logger.info(f"[Epic] Found {len(candidates)} executable candidates, selecting: {candidates[0][0]}")
         return candidates[0][0]
 
-    async def install_game(self, game_id: str, progress_callback=None) -> Dict[str, Any]:
+    async def install_game(self, game_id: str, base_path: str = None, progress_callback=None) -> Dict[str, Any]:
         """Install Epic game using legendary CLI
 
         Args:
             game_id: Epic game app_name (ID)
+            base_path: Optional install directory (defaults to ~/Games/Epic)
             progress_callback: Optional async function to call with progress updates
 
         Returns:
@@ -527,7 +548,8 @@ class EpicConnector(Store):
 
         try:
             # legendary install GAME_ID --base-path ~/Games/Epic
-            base_path = os.path.expanduser("~/Games/Epic")
+            if not base_path:
+                base_path = os.path.expanduser("~/Games/Epic")
             os.makedirs(base_path, exist_ok=True)
 
             logger.info(f"[Epic] Starting installation of {game_id} to {base_path}")
@@ -535,6 +557,7 @@ class EpicConnector(Store):
             proc = await asyncio.create_subprocess_exec(
                 self.legendary_bin, 'install', game_id,
                 '--base-path', base_path,
+                '--with-dlcs',  # Automatically install all owned DLCs
                 '--yes',  # Accept prompts automatically
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT
@@ -754,7 +777,7 @@ class EpicConnector(Store):
             logger.info(f"[EPIC] Starting update for {game_id}")
 
             proc = await asyncio.create_subprocess_exec(
-                self.legendary_bin, 'update', game_id, '--yes',
+                self.legendary_bin, 'update', game_id, '--with-dlcs', '--yes',
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT
             )
@@ -784,4 +807,3 @@ class EpicConnector(Store):
         except Exception as e:
             logger.error(f"[EPIC] Error updating {game_id}: {e}")
             return {'success': False, 'error': str(e)}
-

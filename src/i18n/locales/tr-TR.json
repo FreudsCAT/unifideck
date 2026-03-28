@@ -13,7 +13,30 @@
     "toastUpdatedBody": "Yeni oyunlar {{location}} konumuna kurulacak",
     "toastFailedTitle": "Güncelleme Başarısız",
     "toastFailedBody": "{{error}}",
-    "unknown": "Bilinmiyor"
+    "unknown": "Bilinmiyor",
+    "browseButton": "Gözat...",
+    "clearCustom": "Özel konumu temizle",
+    "customPathSet": "Özel kurulum konumu ayarlandı",
+    "newFolder": "Yeni Klasör",
+    "newFolderCreate": "Oluştur",
+    "selectFolder": "Bu Klasörü Kullan",
+    "emptyDirectory": "Boş klasör",
+    "showHidden": "Gizli dosyaları göster",
+    "selectDevice": "Cihaz Seç",
+    "sortAZ": "A-Z",
+    "sortZA": "Z-A",
+    "sortModifiedNewest": "Değiştirilme (En Yeni)",
+    "sortModifiedOldest": "Değiştirilme (En Eski)",
+    "sortCreatedNewest": "Oluşturulma (En Yeni)",
+    "sortCreatedOldest": "Oluşturulma (En Eski)",
+    "sortSizeLargest": "Boyut (En Büyük)",
+    "sortSizeSmallest": "Boyut (En Küçük)",
+    "validationErrors.notAbsolute": "Yol mutlak olmalıdır",
+    "validationErrors.systemDir": "Sistem dizini kullanılamaz",
+    "validationErrors.notWritable": "Bu konuma yazılamıyor",
+    "validationErrors.notFound": "Dizin mevcut değil",
+    "validationErrors.homeRoot": "Ev dizininin kökü kullanılamaz",
+    "freeSpaceLabel": "{{label}} ({{freeSpace}} GB boş)"
   },
   "gameGrid": {
     "loading": "Oyunlar yükleniyor...",
@@ -52,7 +75,17 @@
     "phaseExtracting": "{{game}} çıkarılıyor...",
     "phaseVerifying": "{{game}} doğrulanıyor...",
     "internalStorage": "Dahili depolama ({{freeSpace}} GB boş)",
-    "sdCard": "SD Kart ({{freeSpace}} GB boş)"
+    "sdCard": "SD Kart ({{freeSpace}} GB boş)",
+    "customLocation": "Özel: {{path}} ({{freeSpace}} GB boş)",
+    "extractingLabel": "Çıkartılıyor...",
+    "verifyingLabel": "Doğrulanıyor...",
+    "updateQueuedLabel": "Güncelleme sırada",
+    "downloadQueuedLabel": "İndirme sırada",
+    "downloadingUpdateLabel": "Güncelleme indiriliyor",
+    "downloadingLabel": "İndiriliyor...",
+    "finalizingInstallation": "Kurulum tamamlanıyor...",
+    "speedMbps": "{{speed}} MB/s",
+    "etaLabel": "Kalan süre: {{eta}}"
   },
   "cloudSave": {
     "title": "Bulut Kayıt Çakışması",
@@ -75,18 +108,17 @@
     "epicGames": "Epic Games",
     "gog": "GOG",
     "amazonGames": "Amazon Games",
+    "ubisoftConnect": "Ubisoft Connect",
     "connected": "Bağlı",
     "checking": "Kontrol ediliyor...",
     "authenticate": "Giriş yap",
     "legendaryNotInstalled": "⚠️ Epic Games CLI kuruluyor...",
     "nileNotInstalled": "⚠️ Amazon Games CLI bulunamadı",
-    "error": "Hata - Günlükleri kontrol edin"
+    "error": "Hata - Günlükleri kontrol edin",
+    "microsoftStore": "Microsoft Store"
   },
   "librarySync": {
     "title": "KÜTÜPHANESENKRONİZASYONU",
-    "steamGridDbUnavailable": "SteamGridDB kütüphanesi mevcut değil",
-    "deleteSyncInProgress": "Senkronizasyon devam ederken silinemez",
-    "alreadyInQueue": "Zaten kuyrukta",
     "syncLibraries": "Kütüphaneleri Senkronize Et",
     "forceSync": "Senkronizasyonu Zorla",
     "syncing": "Senkronize ediliyor...",
@@ -117,7 +149,10 @@
     "cancel": "✖ İptal",
     "processing": "İşleniyor...",
     "checking": "Kontrol ediliyor...",
-    "size": "{{size}} GB"
+    "size": "{{size}} GB",
+    "update": "GÜNCELLE",
+    "updateAvailable": "GÜNCELLEME MEVCUT",
+    "updateAvailableDescription": "Yüklemeye hazır yeni bir sürüm var."
   },
   "confirmModals": {
     "installTitle": "Kurulumu Onayla",
@@ -135,12 +170,25 @@
     "steamRestartDescriptionStore": "Yeni {{store}} oyunlarınızı ve kapaklarınızı uygulamak için lütfen Steam'i yeniden başlatın",
     "restartNow": "Şimdi yeniden başlat",
     "later": "Daha sonra",
+    "ubisoftInstallTitle": "Ubisoft Connect Gerekli",
+    "ubisoftInstallDescription": "Bu işlem Ubisoft Connect Başlatıcısını açacak; {{title}} oyununu oradan kurmanız gerekecek.",
+    "ubisoftInstallConfirm": "Ubisoft Connect'i Aç",
     "yes": "Evet",
-    "no": "Hayır"
+    "no": "Hayır",
+    "amazonUpdateTitle": "Tam Yeniden İndirme Gerekli",
+    "amazonUpdateDescription": "Amazon güncellemeleri {{title}} için oyunun tamamının yeniden indirilmesini gerektirir. Bu biraz zaman alabilir. Devam edilsin mi?",
+    "updateConfirm": "Güncelle",
+    "steamRestartCleanupTitle": "Temizlik tamamlandı!",
+    "steamRestartCleanupDescription": "Silinen oyunları ve görselleri tamamen kaldırmak için lütfen Steam'i yeniden başlatın"
   },
   "toasts": {
     "downloadStarted": "İndirme Başladı. UNIFIDECK > İndirmeler'i kontrol edin",
     "downloadQueued": "{{title}} kuyruğa eklendi.",
+    "ubisoftLauncherOpening": "Ubisoft Connect Açılıyor",
+    "ubisoftLauncherOpeningMessage": "{{title}} için Ubisoft Connect açılıyor. Oyunu oradan kurun, ardından oynamak için geri dönün.",
+    "ubisoftLauncherAlreadyOpenMessage": "Bu kurulum için Ubisoft Connect zaten açık.",
+    "ubisoftLauncherOpenFailed": "Ubisoft Connect Açılamadı",
+    "ubisoftLauncherOpenFailedMessage": "Kurulum için Ubisoft Connect açılamadı.",
     "multipartDetected": "Çok Parçalı İndirme Algılandı",
     "multipartMessage": "Lütfen sabırlı olun ve tamamlanmasını bekleyin",
     "downloadFailed": "İndirme Başarısız",
@@ -172,6 +220,10 @@
     "cleanupSuccessful": "Temizlik Başarılı",
     "cleanupSuccessfulMessage": "{{games}} oyun, {{artwork}} kapak seti ve {{files}} dosya dizini kaldırıldı. Kimlik doğrulama ve önbellek temizlendi.",
     "deleteFailed": "Silme Başarısız",
+    "repairPrefixSuccess": "Önek Onarıldı",
+    "repairPrefixSuccessMessage": "Ubisoft Connect öneki yeniden oluşturuldu",
+    "repairPrefixFailed": "Onarım Başarısız",
+    "repairPrefixFailedMessage": "Önek onarılamadı: {{error}}",
     "unifideck": "Unifideck:",
     "launcher": {
       "networkError": "Ağ Hatası",
@@ -188,6 +240,7 @@
       "startingEpicGame": "Epic oyunu başlatılıyor...",
       "startingAmazonGame": "Amazon oyunu başlatılıyor...",
       "startingGogGame": "GOG oyunu başlatılıyor...",
+      "startingUbisoftGame": "Ubisoft oyunu başlatılıyor...",
       "dependenciesTitle": "Bağımlılıklar Yükleniyor",
       "installingRedistributables": "Oyun kütüphaneleri yükleniyor...",
       "dependenciesReady": "Bağımlılıklar Hazır",
@@ -207,10 +260,15 @@
       "prerequisitesReady": "Ön Koşullar Hazır",
       "prerequisitesInstalled": "Oyun ön koşulları yüklendi",
       "prerequisitesFailed": "Ön Koşullar Uyarısı",
-      "prerequisitesFailedMessage": "Ön koşullar doğru şekilde yüklenmemiş olabilir"
+      "prerequisitesFailedMessage": "Ön koşullar doğru şekilde yüklenmemiş olabilir",
+      "browserRequired": "Microsoft Edge gerekli"
     },
-    "updateComplete": "Update Complete!",
-    "updateCompleteMessage": "{{title}} has been updated."
+    "updateComplete": "Güncelleme Tamamlandı!",
+    "updateCompleteMessage": "{{title}} güncellendi.",
+    "updateCancelled": "Güncelleme İptal Edildi",
+    "updateCancelledMessage": "{{title}} güncellemesi iptal edildi.",
+    "updateFailed": "Güncelleme Başarısız",
+    "updateFailedMessage": "Güncelleme başlatılamadı."
   },
   "uninstallModal": {
     "title": "Kaldırmayı Onayla",
@@ -257,8 +315,14 @@
       "processFailed": "İndirme başarısız — tekrar deneyin",
       "directoryNotFound": "Yüklenen dosyalar bulunamadı",
       "lockConflict": "Başka bir işlem devam ediyor — tekrar deneyin",
+      "ubisoftClient": "Ubisoft Connect istemcisi hatası — öneki onarmayı deneyin",
+      "ubisoftClientNotRunning": "Ubisoft Connect istemcisi yanıt vermiyor",
+      "ubisoftBootstrap": "Ubisoft Connect öneki kurulamadı",
+      "ubisoftUmuMissing": "umu-run bulunamadı — Ubisoft oyunları için gerekli",
       "generic": "Kurulum başarısız — günlükleri kontrol edin"
-    }
+    },
+    "unknown": "Bilinmeyen hata",
+    "steamAppsUnavailable": "SteamClient.Apps API kullanılamıyor"
   },
   "sync": {
     "downloadingArtwork": "{{game}} için görsel indiriliyor...",
@@ -274,7 +338,8 @@
     "cleaningOrphanedArtwork": "Sahipsiz görseller temizleniyor...",
     "retryingMissingArtwork": "Eksik görselleri olan {{count}} oyun tekrar deneniyor...",
     "savingShortcuts": "Kısayollar kaydediliyor...",
-    "completed": "Sync tamamlandı! {{added}} eklendi, görsel {{artwork}}."
+    "completed": "Sync tamamlandı! {{added}} eklendi, görsel {{artwork}}.",
+    "fetchingStore": "{{store}} alınıyor…"
   },
   "force_sync": {
     "migratingOldInstallations": "Zorla sync: Kurulumlar taşınıyor...",
@@ -295,7 +360,13 @@
     "greatOnDeck": "Steam Deck için Mükemmel",
     "allGames": "Tüm Oyunlar",
     "installed": "Yüklendi",
-    "nonSteam": "Steam Dışı"
+    "nonSteam": "Steam Dışı",
+    "steam": "Steam",
+    "epic": "Epic",
+    "gog": "GOG",
+    "amazon": "Amazon",
+    "ubisoft": "Ubisoft",
+    "microsoft": "Microsoft"
   },
   "unifiedLibrary": {
     "error": "Unifideck Hatası",
@@ -347,7 +418,8 @@
       "playable": "OYNANABILIDIR",
       "unsupported": "DESTEKLENMİYOR",
       "unknown": "BİLİNMİYOR"
-    }
+    },
+    "failedToLoadMetadata": "Meta veriler yüklenemedi"
   },
   "gameDetailsSettings": {
     "title": "OYUN DETAYLARI GÖRÜNÜMÜ",
@@ -373,5 +445,62 @@
     "toastMigrateBody": "{{shortcuts}} kısayol ve {{artwork}} görsel dosyası taşındı",
     "toastClearTitle": "Kimlik Doğrulama Jetonları Temizlendi",
     "toastClearBody": "Mağaza girişleri temizlendi. Artık farklı hesaplarla giriş yapabilirsiniz."
+  },
+  "ubisoftAuth": {
+    "title": "Ubisoft Connect Girişi",
+    "description": "Kütüphanenizi bağlamak için Ubisoft hesap bilgilerinizi girin.",
+    "emailLabel": "E-posta",
+    "passwordLabel": "Şifre",
+    "signIn": "Giriş Yap",
+    "signingIn": "Giriş Yapılıyor...",
+    "cancel": "İptal",
+    "twoFactorTitle": "İki Aşamalı Doğrulama",
+    "twoFactorDescription": "Kimlik doğrulama uygulamanızdaki doğrulama kodunu girin.",
+    "twoFactorLabel": "Doğrulama Kodu",
+    "verify": "Doğrula",
+    "verifying": "Doğrulanıyor...",
+    "errorEmptyFields": "Lütfen e-posta adresinizi ve şifrenizi girin",
+    "errorEmpty2FA": "Lütfen doğrulama kodunu girin",
+    "errorLoginFailed": "Giriş başarısız. Lütfen bilgilerinizi kontrol edin.",
+    "errorInvalid2FA": "Geçersiz doğrulama kodu. Lütfen tekrar deneyin.",
+    "showPassword": "Şifreyi göster",
+    "hidePassword": "Şifreyi gizle",
+    "doubleLoginWarning": "Ubisoft için iki kez giriş yapmanız gerekecek."
+  },
+  "relativeDate": {
+    "today": "Bugün",
+    "yesterday": "Dün"
+  },
+  "common": {
+    "thisGame": "bu oyun",
+    "game": "Oyun",
+    "unknown": "Bilinmiyor"
+  },
+  "microsoft": {
+    "notCompatible": "Bu oyunun formatı SteamOS ile uyumlu değil",
+    "playOnCloud": "Bulutta oyna",
+    "xcloudStreaming": "Xbox Cloud Gaming",
+    "signInMessage": "Microsoft / Xbox hesabınızla giriş yapın",
+    "accountConnected": "Microsoft hesabı bağlandı",
+    "loggedOut": "Microsoft Store oturumu kapatıldı",
+    "xcloudNotInstalled": "xCloud oyunları yerel olarak yüklü değil",
+    "chromiumRequired": "Microsoft Edge gerekli",
+    "chromiumRequiredMessage": "Xbox Cloud Gaming, Microsoft Edge gerektirir. Otomatik olarak yüklemek ister misiniz? (Bu işlem yalnızca bir kez yapılmalıdır.)",
+    "chromiumInstallButton": "Microsoft Edge'i yükle",
+    "chromiumInstalling": "Microsoft Edge yükleniyor...",
+    "chromiumInstalled": "Microsoft Edge yüklendi!",
+    "chromiumAlreadyInstalled": "Uyumlu bir tarayıcı zaten yüklü",
+    "chromiumInstallFailed": "Microsoft Edge kurulumu başarısız oldu. Lütfen manuel olarak kurun: flatpak install com.microsoft.Edge",
+    "chromiumInstallTimeout": "Microsoft Edge kurulumu zaman aşımına uğradı. Lütfen internet bağlantınızı kontrol edin.",
+    "flatpakNotFound": "Bu sistemde Flatpak mevcut değil",
+    "signInRequired": "Oynamak için giriş yapın",
+    "browserAlreadyInstalled": "Uyumlu bir tarayıcı zaten yüklü",
+    "browserInstalled": "Microsoft Edge başarıyla yüklendi!",
+    "browserInstallFailed": "Microsoft Edge kurulumu başarısız oldu. Lütfen manuel olarak kurun: flatpak install com.microsoft.Edge"
+  },
+  "authSuccess": {
+    "title": "Kimlik doğrulama",
+    "titleStore": "{{store}} — Kimlik doğrulama ✓",
+    "subtitle": "Bu pencereyi kapatmak için B düğmesine basın"
   }
 }

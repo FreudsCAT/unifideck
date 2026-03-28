@@ -23,6 +23,13 @@ import { useTranslation } from "react-i18next";
 import { updateSingleGameStatus } from "../tabs";
 import { setDownloadStateRef as setInterceptorDownloadState } from "../hooks/gameActionInterceptor";
 import { GOGLanguageSelectModal } from "./GOGLanguageSelectModal";
+import { launchAppWithConfiguredGamepad } from "../utils/controllerConfig";
+import {
+  getShortcutRunGameId,
+  isShortcutAppRunning,
+  launchUbisoftInstallViaShortcut,
+  terminateShortcutApp,
+} from "../utils/ubisoftShortcutLaunch";
 
 // ============================================================
 // CDP-based style management (CSSLoader pattern)
@@ -167,19 +174,6 @@ export function setPlayButtonCacheRef(
   gameInfoCacheRef = cache;
 }
 
-// Helper functions for formatting stats
-function formatLastPlayed(timestamp: number): string {
-  if (!timestamp) return "Never";
-  const date = new Date(timestamp * 1000);
-  const now = new Date();
-  const diffDays = Math.floor(
-    (now.getTime() - date.getTime()) / (1000 * 60 * 60 * 24),
-  );
-  if (diffDays === 0) return "Today";
-  if (diffDays === 1) return "Yesterday";
-  return date.toLocaleDateString();
-}
-
 interface PlaySectionWrapperProps {
   appId: number;
   playSectionClassName?: string;
@@ -215,9 +209,22 @@ const PlaySectionWrapperInner: FC<PlaySectionWrapperProps> = ({
   const [lastPlayedTimestamp, setLastPlayedTimestamp] = useState(0);
   const [updateAvailable, setUpdateAvailable] = useState<boolean | null>(null);
   const [isUpdating, setIsUpdating] = useState(false);
+  const [ubisoftInstalling, setUbisoftInstalling] = useState(false);
   const debugLoggedRef = useRef(false);
+  const ubisoftInstallPollTicksRef = useRef(0);
   const wrapperRef = useRef<HTMLDivElement>(null);
   const { t } = useTranslation();
+  const formatLastPlayed = (timestamp: number): string => {
+    if (!timestamp) return t("gameInfoPanel.labels.never");
+    const date = new Date(timestamp * 1000);
+    const now = new Date();
+    const diffDays = Math.floor(
+      (now.getTime() - date.getTime()) / (1000 * 60 * 60 * 24),
+    );
+    if (diffDays === 0) return t("relativeDate.today");
+    if (diffDays === 1) return t("relativeDate.yesterday");
+    return date.toLocaleDateString();
+  };
 
   const isDownloading =
     downloadInfo !== null &&
@@ -333,6 +340,13 @@ const PlaySectionWrapperInner: FC<PlaySectionWrapperProps> = ({
         );
         const processedInfo = info?.error ? null : info;
         setGameInfo(processedInfo);
+        if (processedInfo?.is_installed) {
+          updateSingleGameStatus({
+            appId,
+            store: processedInfo.store,
+            isInstalled: true,
+          });
+        }
         if (
           processedInfo?.has_update !== undefined &&
           processedInfo?.has_update !== null
@@ -429,6 +443,8 @@ const PlaySectionWrapperInner: FC<PlaySectionWrapperProps> = ({
             // Use bRunning directly — proven reliable for non-Steam shortcuts
             // (MoonDeck pattern). display_status is NOT reliably populated for shortcuts.
             setIsRunning(data.bRunning);
+            // Ubisoft session capture on stop is handled by the global listener
+            // in index.tsx (works in gaming mode where this component isn't mounted).
           },
         ) ?? null;
     } catch {
@@ -555,10 +571,7 @@ const PlaySectionWrapperInner: FC<PlaySectionWrapperProps> = ({
         const extractUserParams = (opts: string): string => {
           return opts
             .replace(/\s*#%command%\s*$/g, "") // Strip Unifideck's #%command% suffix only (not user's bare %command%)
-            .replace(
-              new RegExp('"' + escapedStoreGameId + '"', "g"),
-              "",
-            ) // Remove quoted storeGameId only (preserves other quoted values)
+            .replace(new RegExp('"' + escapedStoreGameId + '"', "g"), "") // Remove quoted storeGameId only (preserves other quoted values)
             .replace(new RegExp(escapedStoreGameId, "g"), "") // bare id
             .replace(/\/\S+unifideck-launcher/g, "") // launcher path (unquoted)
             .replace(/\s{2,}/g, " ") // Collapse multiple spaces from removals
@@ -625,10 +638,8 @@ const PlaySectionWrapperInner: FC<PlaySectionWrapperProps> = ({
             );
           }
 
-          // Clear saved proton setting only if the user genuinely has no FC.
-          // Skip if we're the ones who cleared FC (clearedFCRef is set) —
-          // otherwise we'd undo our own save on effect re-runs.
-          if (result.saved_proton_tool && !clearedFCRef.current) {
+          // No FC set — clear saved proton setting so launcher uses default
+          if (result.saved_proton_tool) {
             await call<[string, string], { success: boolean }>(
               "save_proton_setting",
               storeGameId,
@@ -736,14 +747,14 @@ const PlaySectionWrapperInner: FC<PlaySectionWrapperProps> = ({
 
           toaster.toast({
             title: info.was_previously_installed
-              ? t("toasts.updateComplete", "Update Complete!")
+              ? t("toasts.updateComplete")
               : t("toasts.installComplete"),
             body: info.was_previously_installed
               ? t("toasts.updateCompleteMessage", {
-                  title: gameInfo?.title || "Game",
+                  title: gameInfo?.title || t("common.game"),
                 })
               : t("toasts.installCompleteMessage", {
-                  title: gameInfo?.title || "Game",
+                  title: gameInfo?.title || t("common.game"),
                 }),
             duration: 10000,
             critical: true,
@@ -777,6 +788,55 @@ const PlaySectionWrapperInner: FC<PlaySectionWrapperProps> = ({
         // Handle error/cancel
         if (newStatus === "error" || newStatus === "cancelled") {
           setIsUpdating(false);
+        }
+
+        // Ubisoft launcher-driven installs bypass the download queue.
+        // Poll get_game_info periodically so Install -> Play updates without requiring navigation.
+        // Also check if UPC is still running so we can clear the "Cancel" state.
+        if (
+          gameInfo.store === "ubisoft" &&
+          !gameInfo.is_installed &&
+          !result.is_downloading
+        ) {
+          ubisoftInstallPollTicksRef.current += 1;
+          if (ubisoftInstallPollTicksRef.current % 10 === 0) {
+            // Check if install session is still active
+            const active = await call<[string], boolean>(
+              "is_ubisoft_install_active",
+              gameInfo.game_id,
+            );
+            if (!active && !isShortcutAppRunning(appId)) {
+              setUbisoftInstalling(false);
+            }
+
+            const refreshed = await call<[number], any>("get_game_info", appId);
+            const refreshedInfo = refreshed?.error ? null : refreshed;
+            if (refreshedInfo?.is_installed) {
+              setUbisoftInstalling(false);
+              setGameInfo(refreshedInfo);
+              if (gameInfoCacheRef) {
+                gameInfoCacheRef.set(appId, {
+                  info: refreshedInfo,
+                  timestamp: Date.now(),
+                });
+              }
+              updateSingleGameStatus({
+                appId,
+                store: refreshedInfo.store,
+                isInstalled: true,
+              });
+              toaster.toast({
+                title: t("toasts.installComplete"),
+                body: t("toasts.installCompleteMessage", {
+                  title:
+                    refreshedInfo.title || gameInfo?.title || t("common.game"),
+                }),
+                duration: 10000,
+              });
+            }
+          }
+        } else {
+          ubisoftInstallPollTicksRef.current = 0;
         }
       } catch (error) {
         console.error(
@@ -843,9 +903,78 @@ const PlaySectionWrapperInner: FC<PlaySectionWrapperProps> = ({
     }
   };
 
+  const startUbisoftInstall = async () => {
+    if (!gameInfo) return;
+    setUbisoftInstalling(true);
+    let result = await launchUbisoftInstallViaShortcut(
+      `${gameInfo.store}:${gameInfo.game_id}`,
+    );
+
+    if (!result.success) {
+      result = await call<
+        [string, string],
+        { success: boolean; already_running?: boolean; error?: string }
+      >("open_ubisoft_launcher_for_install", gameInfo.game_id, gameInfo.title);
+    }
+
+    if (result.success) {
+      toaster.toast({
+        title: t("toasts.ubisoftLauncherOpening"),
+        body: t(
+          result.already_running
+            ? "toasts.ubisoftLauncherAlreadyOpenMessage"
+            : "toasts.ubisoftLauncherOpeningMessage",
+          { title: gameInfo.title },
+        ),
+        duration: 7000,
+      });
+      return;
+    }
+
+    setUbisoftInstalling(false);
+    toaster.toast({
+      title: t("toasts.ubisoftLauncherOpenFailed"),
+      body: result.error
+        ? t(result.error)
+        : t("toasts.ubisoftLauncherOpenFailedMessage"),
+      duration: 10000,
+      critical: true,
+    });
+  };
+
+  const cancelUbisoftInstall = async () => {
+    if (!gameInfo) return;
+    const terminated = terminateShortcutApp(appId);
+    const result = await call<[string], { success: boolean; error?: string }>(
+      "cancel_ubisoft_install",
+      gameInfo.game_id,
+    );
+    setUbisoftInstalling(false);
+    if (terminated || result.success) {
+      toaster.toast({
+        title: t("toasts.downloadCancelled"),
+        body: t("toasts.downloadCancelledMessage", { title: gameInfo.title }),
+        duration: 5000,
+      });
+      return;
+    }
+
+    toaster.toast({
+      title: t("toasts.cancelFailed"),
+      body: result.error ? t(result.error) : t("toasts.cancelFailedMessage"),
+      duration: 5000,
+      critical: true,
+    });
+  };
+
   // Install handler - checks for GOG language selection
   const handleInstall = async () => {
     if (!gameInfo) return;
+
+    if (gameInfo.store === "ubisoft") {
+      await startUbisoftInstall();
+      return;
+    }
 
     // For GOG games, check if multiple languages are available
     if (gameInfo.store === "gog") {
@@ -918,15 +1047,27 @@ const PlaySectionWrapperInner: FC<PlaySectionWrapperProps> = ({
     }
   };
 
-  // Show install confirmation modal
+  // Show install confirmation modal (Ubisoft gets a store-specific modal)
   const showInstallConfirmation = () => {
+    const isUbisoft = gameInfo?.store === "ubisoft";
     showModal(
       <ConfirmModal
-        strTitle={t("confirmModals.installTitle")}
-        strDescription={t("confirmModals.installDescription", {
-          title: gameInfo?.title,
-        })}
-        strOKButtonText={t("confirmModals.yes")}
+        strTitle={t(
+          isUbisoft
+            ? "confirmModals.ubisoftInstallTitle"
+            : "confirmModals.installTitle",
+        )}
+        strDescription={t(
+          isUbisoft
+            ? "confirmModals.ubisoftInstallDescription"
+            : "confirmModals.installDescription",
+          { title: gameInfo?.title },
+        )}
+        strOKButtonText={t(
+          isUbisoft
+            ? "confirmModals.ubisoftInstallConfirm"
+            : "confirmModals.yes",
+        )}
         strCancelButtonText={t("confirmModals.no")}
         onOK={() => {
           handleInstall();
@@ -954,7 +1095,9 @@ const PlaySectionWrapperInner: FC<PlaySectionWrapperProps> = ({
 
   // Handle install/cancel button click
   const handleClick = () => {
-    if (isDownloading) {
+    if (ubisoftInstalling) {
+      cancelUbisoftInstall();
+    } else if (isDownloading) {
       showCancelConfirmation();
     } else if (!gameInfo?.is_installed) {
       showInstallConfirmation();
@@ -965,9 +1108,7 @@ const PlaySectionWrapperInner: FC<PlaySectionWrapperProps> = ({
   // FC is cleared at page-load time, so RunGame works without a loading screen.
   const handlePlay = () => {
     try {
-      const appStore = (window as any).appStore;
-      const overview = appStore?.m_mapApps?.get?.(appId);
-      const gameId = overview?.gameid ?? String(appId);
+      const gameId = getShortcutRunGameId(appId);
       console.log(
         `[PlaySectionWrapper] Launching game ${appId} via RunGame (gameId=${gameId})`,
       );
@@ -979,6 +1120,9 @@ const PlaySectionWrapperInner: FC<PlaySectionWrapperProps> = ({
 
   // Handle stop/close button — terminates the running game.
   // Kills processes via backend + tells Steam to terminate.
+  // For Ubisoft games, also captures the session from the Python backend
+  // since Steam's TerminateApp kills the bash launcher before its
+  // capture_session.py can run.
   const handleStop = () => {
     setIsRunning(false);
     console.log(`[PlaySectionWrapper] Stopping game ${appId}`);
@@ -986,10 +1130,7 @@ const PlaySectionWrapperInner: FC<PlaySectionWrapperProps> = ({
     // Kill actual game processes via backend
     call<[number], { success: boolean }>("stop_game_processes", appId).catch(
       (err) =>
-        console.error(
-          "[PlaySectionWrapper] stop_game_processes failed:",
-          err,
-        ),
+        console.error("[PlaySectionWrapper] stop_game_processes failed:", err),
     );
 
     // Tell Steam to terminate
@@ -997,6 +1138,19 @@ const PlaySectionWrapperInner: FC<PlaySectionWrapperProps> = ({
     const overview = appStore?.m_mapApps?.get?.(appId);
     const gameId = overview?.gameid ?? String(appId);
     window.SteamClient?.Apps?.TerminateApp?.(gameId, false);
+
+    // Ubisoft: capture session from Python backend (bash launcher is killed by Steam)
+    if (gameInfo?.store === "ubisoft" && gameInfo?.game_id) {
+      call<[string], { success: boolean }>(
+        "capture_ubisoft_session",
+        gameInfo.game_id,
+      ).catch((err) =>
+        console.error(
+          "[PlaySectionWrapper] capture_ubisoft_session failed:",
+          err,
+        ),
+      );
+    }
   };
 
   // DIAG: Track component lifecycle (temporary)
@@ -1176,16 +1330,16 @@ const PlaySectionWrapperInner: FC<PlaySectionWrapperProps> = ({
           }}
         >
           {info.download_phase === "extracting"
-            ? "Extracting..."
+            ? t("downloadsTab.extractingLabel")
             : info.download_phase === "verifying"
-            ? "Verifying..."
+            ? t("downloadsTab.verifyingLabel")
             : info.status === "queued"
             ? info.was_previously_installed
-              ? "Update Queued"
-              : "Download Queued"
+              ? t("downloadsTab.updateQueuedLabel")
+              : t("downloadsTab.downloadQueuedLabel")
             : info.was_previously_installed
-            ? "Downloading Update"
-            : "Downloading..."}
+            ? t("downloadsTab.downloadingUpdateLabel")
+            : t("downloadsTab.downloadingLabel")}
         </div>
 
         {/* Progress bar */}
@@ -1227,7 +1381,9 @@ const PlaySectionWrapperInner: FC<PlaySectionWrapperProps> = ({
           }}
         >
           {isIndeterminate ? (
-            <span>{info.phase_message || "Finalizing installation..."}</span>
+            <span>
+              {info.phase_message || t("downloadsTab.finalizingInstallation")}
+            </span>
           ) : (
             <>
               {info.total_bytes && info.total_bytes > 0 ? (
@@ -1241,8 +1397,13 @@ const PlaySectionWrapperInner: FC<PlaySectionWrapperProps> = ({
               {info.status === "downloading" &&
                 info.speed_mbps !== undefined && (
                   <span style={{ marginLeft: "auto" }}>
-                    {info.speed_mbps.toFixed(1)} MB/s · ETA:{" "}
-                    {formatETA(info.eta_seconds || 0)}
+                    {t("downloadsTab.speedMbps", {
+                      speed: info.speed_mbps.toFixed(1),
+                    })}{" "}
+                    ·{" "}
+                    {t("downloadsTab.etaLabel", {
+                      eta: formatETA(info.eta_seconds || 0),
+                    })}
                   </span>
                 )}
             </>
@@ -1264,8 +1425,8 @@ const PlaySectionWrapperInner: FC<PlaySectionWrapperProps> = ({
       if (result.success) {
         setIsUpdating(false);
         toaster.toast({
-          title: "Update Cancelled",
-          body: `Update for ${gameInfo.title} was cancelled.`,
+          title: t("toasts.updateCancelled"),
+          body: t("toasts.updateCancelledMessage", { title: gameInfo.title }),
           duration: 5000,
         });
       }
@@ -1276,10 +1437,12 @@ const PlaySectionWrapperInner: FC<PlaySectionWrapperProps> = ({
     if (gameInfo.store === "amazon") {
       showModal(
         <ConfirmModal
-          strTitle="Full Re-download Required"
-          strDescription={`Amazon updates require a full re-download of ${gameInfo.title}. This may take a while. Continue?`}
-          strOKButtonText="Update"
-          strCancelButtonText="Cancel"
+          strTitle={t("confirmModals.amazonUpdateTitle")}
+          strDescription={t("confirmModals.amazonUpdateDescription", {
+            title: gameInfo.title,
+          })}
+          strOKButtonText={t("confirmModals.updateConfirm")}
+          strCancelButtonText={t("confirmModals.no")}
           onOK={async () => {
             setIsUpdating(true);
             const result = await call<
@@ -1289,8 +1452,10 @@ const PlaySectionWrapperInner: FC<PlaySectionWrapperProps> = ({
             if (!result.success) {
               setIsUpdating(false);
               toaster.toast({
-                title: "Update Failed",
-                body: result.error || "Failed to start update.",
+                title: t("toasts.updateFailed"),
+                body: result.error
+                  ? t(result.error)
+                  : t("toasts.updateFailedMessage"),
                 duration: 10000,
                 critical: true,
               });
@@ -1310,13 +1475,318 @@ const PlaySectionWrapperInner: FC<PlaySectionWrapperProps> = ({
     if (!result.success) {
       setIsUpdating(false);
       toaster.toast({
-        title: "Update Failed",
-        body: result.error || "Failed to start update.",
+        title: t("toasts.updateFailed"),
+        body: result.error ? t(result.error) : t("toasts.updateFailedMessage"),
         duration: 10000,
         critical: true,
       });
     }
   };
+
+  // ========== XCLOUD STATE (Xbox Cloud Gaming — stream via browser) ==========
+  // Games tagged "xcloud" are playable via Xbox Cloud Gaming in the browser.
+  // The Play button opens xbox.com/play/launch/{productId} which starts streaming.
+  if (gameInfo.store_tags?.includes("xcloud")) {
+    const xcloudUrl = `https://www.xbox.com/play/launch/${gameInfo.game_id}`;
+    const msConnected = gameInfo.store_connected !== false;
+    return (
+      <Focusable
+        ref={wrapperRef}
+        data-unifideck-play-wrapper="true"
+        className={playSectionClassName || undefined}
+        flow-children="row"
+        style={{
+          display: "flex",
+          alignItems: "center",
+          width: "100%",
+          padding: "16px",
+          boxSizing: "border-box",
+          background: "rgba(14, 20, 27, 0.33)",
+          position: "relative" as const,
+          zIndex: 2,
+        }}
+      >
+        <style>{buttonStyles}</style>
+
+        {/* Play button — launches xCloud via Steam's RunGame (→ launcher → Chromium kiosk) */}
+        <DialogButton
+          className="unifideck-install-btn"
+          disabled={!msConnected}
+          onClick={async () => {
+            if (!msConnected) return;
+            try {
+              const launched = await launchAppWithConfiguredGamepad(appId);
+              if (launched) {
+                return;
+              }
+            } catch (e) {
+              console.error(
+                "[PlaySection] Microsoft launch preparation failed:",
+                e,
+              );
+            }
+
+            window.open(`steam://openurl/${xcloudUrl}`, "_blank");
+          }}
+          style={{
+            ...actionBtnStyle,
+            opacity: msConnected ? 1 : 0.4,
+          }}
+        >
+          <svg viewBox="0 0 24 24" fill="currentColor" width="1em" height="1em">
+            <path d="M8 5v14l11-7z" />
+          </svg>
+          {msConnected
+            ? t("microsoft.playOnCloud", "Play on Cloud")
+            : t("microsoft.signInRequired", "Sign in to play")}
+        </DialogButton>
+
+        {/* Restore the metadata slot so Last Played stays visible for xCloud */}
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: "32px",
+            marginLeft: "20px",
+            flex: "0 1 auto",
+          }}
+        >
+          <div>
+            <div
+              style={{
+                fontSize: "11px",
+                fontWeight: 600,
+                textTransform: "uppercase",
+                color: "#8f98a0",
+                letterSpacing: "0.08em",
+                lineHeight: "1",
+                marginBottom: "5px",
+              }}
+            >
+              {t("gameInfoPanel.labels.lastPlayed")}
+            </div>
+            <div style={{ fontSize: "14px", color: "#dcdedf" }}>
+              {formatLastPlayed(lastPlayedTimestamp)}
+            </div>
+          </div>
+        </div>
+
+        {/* Right icon buttons — always present for settings access */}
+        <div
+          style={{
+            display: "flex",
+            gap: "8px",
+            marginLeft: "auto",
+            flex: "0 0 auto",
+          }}
+        >
+          <DialogButton
+            onClick={() =>
+              window.SteamClient?.Apps?.ShowControllerConfigurator?.(appId)
+            }
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              width: "48px",
+              height: "48px",
+              minWidth: "48px",
+              padding: "0",
+              background: "rgba(255, 255, 255, 0.1)",
+              borderRadius: "4px",
+            }}
+          >
+            <svg
+              viewBox="35 31 31 24"
+              fill="currentColor"
+              width="28"
+              height="28"
+            >
+              <path
+                fillRule="evenodd"
+                d="M38.562 35.88C37.724 37.501 36.752 41.257 36.403 44.227C35.895 48.548 36.106 49.963 37.456 51.313C39.925 53.783 41.749 53.387 43.5 50C44.938 47.219 45.452 47 50.547 47C55.406 47 56.172 47.283 57.157 49.445C58.551 52.504 60.548 53.312 63.202 51.892C65.02 50.919 65.198 50.118 64.734 44.999C64.445 41.814 63.594 37.923 62.843 36.354C61.481 33.508 61.446 33.499 50.782 33.217L40.086 32.933 38.562 35.88zM40.037 36.931C39.254 38.395 39.394 39.251 40.618 40.475C41.506 41.363 42.71 41.93 43.295 41.735C45.057 41.148 46.359 38.377 45.691 36.636C44.829 34.391 41.298 34.575 40.037 36.931zM55.445 37.174C54.533 40.048 57.439 42.371 60.138 40.926C61.162 40.378 62 39.532 62 39.047C62 34.795 56.682 33.276 55.445 37.174z"
+              />
+            </svg>
+          </DialogButton>
+          <DialogButton
+            onClick={() =>
+              window.SteamClient?.Apps?.OpenAppSettingsDialog?.(
+                appId,
+                "general",
+              )
+            }
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              width: "48px",
+              height: "48px",
+              minWidth: "48px",
+              padding: "0",
+              background: "rgba(255, 255, 255, 0.1)",
+              borderRadius: "4px",
+            }}
+          >
+            <svg
+              viewBox="-32 -32 64 64"
+              fill="currentColor"
+              width="24"
+              height="24"
+            >
+              <path
+                fillRule="evenodd"
+                d="M-5.96-19.09L-5.79-26.37 5.79-26.37 5.96-19.09 9.29-17.71 14.56-22.74 22.74-14.56 17.71-9.29 19.09-5.96 26.37-5.79 26.37 5.79 19.09 5.96 17.71 9.29 22.74 14.56 14.56 22.74 9.29 17.71 5.96 19.09 5.79 26.37-5.79 26.37-5.96 19.09-9.29 17.71-14.56 22.74-22.74 14.56-17.71 9.29-19.09 5.96-26.37 5.79-26.37-5.79-19.09-5.96-17.71-9.29-22.74-14.56-14.56-22.74-9.29-17.71Z M9 0A9 9 0 1 0-9 0A9 9 0 1 0 9 0Z"
+              />
+            </svg>
+          </DialogButton>
+        </div>
+      </Focusable>
+    );
+  }
+
+  // ========== NOT COMPATIBLE STATE (UWP / MSIX-only MS Store games) ==========
+  // These games are synced to Steam for library completeness but cannot be
+  // downloaded or run on Linux.  Show a disabled Install button so the layout
+  // stays consistent, paired with an informational notice.
+  if (gameInfo.store_tags?.includes("not_compatible")) {
+    return (
+      <Focusable
+        ref={wrapperRef}
+        data-unifideck-play-wrapper="true"
+        className={playSectionClassName || undefined}
+        flow-children="row"
+        style={{
+          display: "flex",
+          alignItems: "center",
+          width: "100%",
+          padding: "16px",
+          boxSizing: "border-box",
+          background: "rgba(14, 20, 27, 0.33)",
+          position: "relative" as const,
+          zIndex: 2,
+        }}
+      >
+        <style>{buttonStyles}</style>
+
+        {/* Disabled Install button — same layout as the normal install state */}
+        <DialogButton
+          className="unifideck-install-btn"
+          disabled={true}
+          style={{
+            ...actionBtnStyle,
+            opacity: 0.35,
+            cursor: "not-allowed",
+          }}
+        >
+          <svg viewBox="0 0 24 24" fill="currentColor" width="1em" height="1em">
+            <path d="M5 20h14v-2H5v2zM19 9h-4V3H9v6H5l7 7 7-7z" />
+          </svg>
+          {t("installButton.installNative", "Install")}
+        </DialogButton>
+
+        {/* Incompatibility notice */}
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: "8px",
+            marginLeft: "20px",
+            flex: "1 1 auto",
+            minWidth: 0,
+          }}
+        >
+          <svg
+            viewBox="0 0 24 24"
+            fill="#ffc82c"
+            width="18"
+            height="18"
+            style={{ flexShrink: 0 }}
+          >
+            <path d="M1 21h22L12 2 1 21zm12-3h-2v-2h2v2zm0-4h-2v-4h2v4z" />
+          </svg>
+          <span
+            style={{
+              color: "#ffc82c",
+              fontSize: "13px",
+              fontWeight: 500,
+            }}
+          >
+            {t("microsoft.notCompatible")}
+          </span>
+        </div>
+
+        {/* Right icon buttons — always present for settings access */}
+        <div
+          style={{
+            display: "flex",
+            gap: "8px",
+            marginLeft: "auto",
+            flex: "0 0 auto",
+          }}
+        >
+          <DialogButton
+            onClick={() =>
+              window.SteamClient?.Apps?.ShowControllerConfigurator?.(appId)
+            }
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              width: "48px",
+              height: "48px",
+              minWidth: "48px",
+              padding: "0",
+              background: "rgba(255, 255, 255, 0.1)",
+              borderRadius: "4px",
+            }}
+          >
+            <svg
+              viewBox="35 31 31 24"
+              fill="currentColor"
+              width="28"
+              height="28"
+            >
+              <path
+                fillRule="evenodd"
+                d="M38.562 35.88C37.724 37.501 36.752 41.257 36.403 44.227C35.895 48.548 36.106 49.963 37.456 51.313C39.925 53.783 41.749 53.387 43.5 50C44.938 47.219 45.452 47 50.547 47C55.406 47 56.172 47.283 57.157 49.445C58.551 52.504 60.548 53.312 63.202 51.892C65.02 50.919 65.198 50.118 64.734 44.999C64.445 41.814 63.594 37.923 62.843 36.354C61.481 33.508 61.446 33.499 50.782 33.217L40.086 32.933 38.562 35.88zM40.037 36.931C39.254 38.395 39.394 39.251 40.618 40.475C41.506 41.363 42.71 41.93 43.295 41.735C45.057 41.148 46.359 38.377 45.691 36.636C44.829 34.391 41.298 34.575 40.037 36.931zM55.445 37.174C54.533 40.048 57.439 42.371 60.138 40.926C61.162 40.378 62 39.532 62 39.047C62 34.795 56.682 33.276 55.445 37.174z"
+              />
+            </svg>
+          </DialogButton>
+          <DialogButton
+            onClick={() =>
+              window.SteamClient?.Apps?.OpenAppSettingsDialog?.(
+                appId,
+                "general",
+              )
+            }
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              width: "48px",
+              height: "48px",
+              minWidth: "48px",
+              padding: "0",
+              background: "rgba(255, 255, 255, 0.1)",
+              borderRadius: "4px",
+            }}
+          >
+            <svg
+              viewBox="-32 -32 64 64"
+              fill="currentColor"
+              width="24"
+              height="24"
+            >
+              <path
+                fillRule="evenodd"
+                d="M-5.96-19.09L-5.79-26.37 5.79-26.37 5.96-19.09 9.29-17.71 14.56-22.74 22.74-14.56 17.71-9.29 19.09-5.96 26.37-5.79 26.37 5.79 19.09 5.96 17.71 9.29 22.74 14.56 14.56 22.74 9.29 17.71 5.96 19.09 5.79 26.37-5.79 26.37-5.96 19.09-9.29 17.71-14.56 22.74-22.74 14.56-17.71 9.29-19.09 5.96-26.37 5.79-26.37-5.79-19.09-5.96-17.71-9.29-22.74-14.56-14.56-22.74-9.29-17.71Z M9 0A9 9 0 1 0-9 0A9 9 0 1 0 9 0Z"
+              />
+            </svg>
+          </DialogButton>
+        </div>
+      </Focusable>
+    );
+  }
 
   // ========== UPDATE AVAILABLE / UPDATING STATE ==========
   if (
@@ -1361,7 +1831,9 @@ const PlaySectionWrapperInner: FC<PlaySectionWrapperProps> = ({
               <path d="M12 4V1L8 5l4 4V6c3.31 0 6 2.69 6 6 0 1.01-.25 1.97-.7 2.8l1.46 1.46C19.54 15.03 20 13.57 20 12c0-4.42-3.58-8-8-8zm0 14c-3.31 0-6-2.69-6-6 0-1.01.25-1.97.7-2.8L5.24 7.74C4.46 8.97 4 10.43 4 12c0 4.42 3.58 8 8 8v3l4-4-4-4v3z" />
             )}
           </svg>
-          {isDownloading ? t("installButton.cancel", "Cancel") : "UPDATE"}
+          {isDownloading
+            ? t("installButton.cancel")
+            : t("installButton.update")}
         </DialogButton>
 
         {/* Progress area — shows during update download or "Update Available" when idle */}
@@ -1387,10 +1859,10 @@ const PlaySectionWrapperInner: FC<PlaySectionWrapperProps> = ({
                 letterSpacing: "0.08em",
               }}
             >
-              UPDATE AVAILABLE
+              {t("installButton.updateAvailable")}
             </div>
             <div style={{ fontSize: "14px", color: "#dcdedf" }}>
-              A new version is ready to install.
+              {t("installButton.updateAvailableDescription")}
             </div>
           </div>
         )}
@@ -1508,7 +1980,7 @@ const PlaySectionWrapperInner: FC<PlaySectionWrapperProps> = ({
               >
                 <path d="M8 5v14l11-7z" />
               </svg>
-              {t("installButton.resume", "Resume")}
+              {t("installButton.resume")}
             </DialogButton>
             {/* X close button — terminates the running game */}
             <DialogButton
@@ -1552,7 +2024,7 @@ const PlaySectionWrapperInner: FC<PlaySectionWrapperProps> = ({
             >
               <path d="M8 5v14l11-7z" />
             </svg>
-            {t("installButton.play", "Play")}
+            {t("installButton.play")}
           </DialogButton>
         )}
 
@@ -1576,7 +2048,7 @@ const PlaySectionWrapperInner: FC<PlaySectionWrapperProps> = ({
                 marginBottom: "5px",
               }}
             >
-              LAST PLAYED
+              {t("gameInfoPanel.labels.lastPlayed")}
             </div>
             <div style={{ fontSize: "14px", color: "#dcdedf" }}>
               {formatLastPlayed(lastPlayedTimestamp)}
@@ -1661,9 +2133,11 @@ const PlaySectionWrapperInner: FC<PlaySectionWrapperProps> = ({
   }
 
   // ========== UNINSTALLED / DOWNLOADING STATE: Install/Cancel button ==========
-  const displayText = isDownloading
+  const displayText = ubisoftInstalling
     ? t("installButton.cancel")
-    : t("installButton.installNative", "Install");
+    : isDownloading
+    ? t("installButton.cancel")
+    : t("installButton.installNative");
 
   return (
     <Focusable
@@ -1690,12 +2164,14 @@ const PlaySectionWrapperInner: FC<PlaySectionWrapperProps> = ({
       {/* Install/Cancel button — explicit styling matching native Steam button */}
       <DialogButton
         className={
-          isDownloading ? "unifideck-cancel-btn" : "unifideck-install-btn"
+          isDownloading || ubisoftInstalling
+            ? "unifideck-cancel-btn"
+            : "unifideck-install-btn"
         }
         onClick={handleClick}
         style={actionBtnStyle}
       >
-        {!isDownloading && (
+        {!isDownloading && !ubisoftInstalling && (
           <svg viewBox="0 0 24 24" fill="currentColor" width="1em" height="1em">
             <path d="M5 20h14v-2H5v2zM19 9h-4V3H9v6H5l7 7 7-7z" />
           </svg>
@@ -1728,7 +2204,7 @@ const PlaySectionWrapperInner: FC<PlaySectionWrapperProps> = ({
                 marginBottom: "5px",
               }}
             >
-              SPACE REQUIRED
+              {t("gameInfoPanel.labels.spaceRequired")}
             </div>
             <div style={{ fontSize: "14px", color: "#dcdedf" }}>
               {gameInfo?.size_formatted || "\u2014"}
@@ -1746,7 +2222,7 @@ const PlaySectionWrapperInner: FC<PlaySectionWrapperProps> = ({
                 marginBottom: "5px",
               }}
             >
-              LAST PLAYED
+              {t("gameInfoPanel.labels.lastPlayed")}
             </div>
             <div style={{ fontSize: "14px", color: "#dcdedf" }}>
               {formatLastPlayed(lastPlayedTimestamp)}

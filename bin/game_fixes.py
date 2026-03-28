@@ -19,14 +19,37 @@ MANUAL_FIXES = {
         "notes": "Works with Proton + EOS only"
     },
     "ea8df71f923649a193ab1c1fded7e1b3": {  # Ghostrunner
-        "winetricks": ["vcrun2013", "vcrun2015"],
-        "notes": "Requires VC++ 2013/2015 for game engine"
+        "winetricks": ["vcrun2005", "vcrun2008", "vcrun2010", "vcrun2012", "vcrun2013", "vcrun2022"],
+        # Bypass the UE4 prerequisite launcher stub (Ghostrunner.exe, 540KB).
+        # The stub checks Windows registry for VC++ 14.x version and shows a
+        # "Microsoft Visual C++ Runtime" error even though the DLLs are present.
+        # Proton rewrites system.reg at launch time, making registry injection
+        # impossible. Launching the shipping binary directly skips the check.
+        "exe_override": "Ghostrunner/Binaries/Win64/Ghostrunner-Win64-Shipping.exe",
+        "notes": "UE4 stub bypassed — launches shipping binary directly"
     },
     "fa5aa7e6c28c4c94aeac239eee700d5f": {  # Football Manager 2024
         "winetricks": [],
         "notes": "EOS overlay only, no redistributables needed"
     }
 }
+
+
+def get_exe_override(game_id: str) -> str | None:
+    """
+    Get executable override for a game, if any.
+
+    Some games ship with a launcher stub that checks Windows registry entries
+    before running the actual game binary. Under Wine/Proton these checks often
+    fail even when the required DLLs are present. This function returns the
+    relative path (from install root) to the real game binary.
+
+    Returns:
+        Relative path to override exe, or None
+    """
+    if game_id in MANUAL_FIXES:
+        return MANUAL_FIXES[game_id].get("exe_override")
+    return None
 
 def fetch_umu_protonfixes(game_id: str) -> Optional[Dict]:
     """
@@ -93,16 +116,22 @@ def get_required_winetricks(game_id: str) -> List[str]:
     # Global defaults: Essential dependencies that most Epic games need
     # Mirrors the critical subset of what GOG/Heroic installs
     global_defaults = [
-        "vcrun2022",        # Latest VC++ runtime (msvcp140 series)
-        "vcrun2019",        # VC++ 2015-2019 runtime (most games need this)
+        "vcrun2005",        # VC++ 2005 runtime
+        "vcrun2008",        # VC++ 2008 runtime
+        "vcrun2010",        # VC++ 2010 runtime (msvcr100)
+        "vcrun2012",        # VC++ 2012 runtime
+        "vcrun2013",        # VC++ 2013 runtime
+        "vcrun2022",        # Latest VC++ runtime (msvcp140 series, covers 2015-2022)
         "d3dcompiler_47",   # DirectX shader compiler (modern games)
         "d3dcompiler_43",   # Older shader compiler
-        "vcrun2013",        # VC++ 2013 runtime
-        "vcrun2010",        # VC++ 2010 runtime (msvcr100)
         "mfc140",           # Microsoft Foundation Classes runtime
     ]
     logger.info(f"Using global defaults for {game_id}: {global_defaults}")
     return global_defaults
+
+
+
+
 
 def get_game_fixes(game_id: str) -> Dict:
     """

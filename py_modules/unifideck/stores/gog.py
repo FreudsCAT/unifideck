@@ -71,61 +71,14 @@ class GOGAPIClient:
     
     def _get_unifideck_language(self) -> str:
         """Get language code for GOG API from Unifideck settings.
-        
-        Unifideck centralizes language preference in ~/.local/share/unifideck/settings.json.
-        If set to 'auto' or not configured, falls back to system locale detection.
+
+        Delegates to the shared locale utility so GOG and all other store connectors
+        use a single source of truth (settings.json -> system locale -> 'en-US').
         """
-        import json
-        
-        # Try to read from Unifideck settings first
-        settings_path = os.path.expanduser("~/.local/share/unifideck/settings.json")
-        try:
-            if os.path.exists(settings_path):
-                with open(settings_path, 'r') as f:
-                    settings = json.load(f)
-                    saved_lang = settings.get('language', 'auto')
-                    
-                    # If not 'auto', use the saved language directly
-                    if saved_lang and saved_lang != 'auto':
-                        logger.info(f"[GOG] Using Unifideck language preference: {saved_lang}")
-                        return saved_lang
-        except Exception as e:
-            logger.debug(f"[GOG] Could not read Unifideck settings: {e}")
-        
-        # Fallback: detect from system locale
-        try:
-            lang_tuple = locale.getlocale()
-            if lang_tuple and lang_tuple[0]:
-                # Extract 2-letter code: 'en_US' -> 'en', 'de_DE' -> 'de'
-                lang_code = lang_tuple[0].split('_')[0].lower()
-                
-                # Map 2-letter codes to GOG depot full codes (important for depot matching!)
-                lang_map = {
-                    'en': 'en-US',
-                    'fr': 'fr-FR',
-                    'de': 'de-DE',
-                    'es': 'es-ES',
-                    'it': 'it-IT',
-                    'pt': 'pt-BR',  # Common for GOG
-                    'ru': 'ru-RU',
-                    'pl': 'pl-PL',
-                    'zh': 'zh-CN',
-                    'ja': 'ja-JP',
-                    'ko': 'ko-KR',
-                    'nl': 'nl-NL',
-                    'tr': 'tr-TR'
-                }
-                
-                # Use mapped code if available, otherwise fall back to 2-letter tag
-                final_lang = lang_map.get(lang_code, lang_code)
-                logger.debug(f"[GOG] Detected system language: {lang_code} -> {final_lang}")
-                return final_lang
-        except Exception as e:
-            logger.debug(f"[GOG] Could not detect system locale: {e}")
-        
-        # Default fallback
-        return 'en-US'
-    
+        from ..utils.locale import get_unifideck_locale
+        lang = get_unifideck_locale()
+        logger.debug(f"[GOG] Language preference: {lang}")
+        return lang    
     def _get_token_age(self) -> float:
         """Return age of token in seconds based on file modification time.
         
@@ -383,9 +336,10 @@ class GOGAPIClient:
                     logger.info("[GOG] ✓ Authentication completed automatically!")
                     # Auto-sync library after successful auth
                     if self.plugin_instance:
-                        logger.info("[GOG] Starting automatic library sync...")
-                        await self.plugin_instance.sync_libraries(fetch_artwork=False)
-                        logger.info("[GOG] ✓ Library sync completed!")
+                        logger.info("[GOG] Queueing automatic library sync...")
+                        asyncio.create_task(
+                            self.plugin_instance.request_auth_sync(source='auth:gog')
+                        )
                 else:
                     logger.error(f"[GOG] Auto-auth failed: {result.get('error')}")
             else:
@@ -480,7 +434,8 @@ class GOGAPIClient:
 
             connector = aiohttp.TCPConnector(ssl=ssl_context)
             async with aiohttp.ClientSession(connector=connector) as session:
-                url = f'https://api.gog.com/products/{game_id}?locale=en-US'
+                from ..utils.locale import get_unifideck_locale
+                url = f'https://api.gog.com/products/{game_id}?locale={get_unifideck_locale()}'
                 headers = {'Authorization': f'Bearer {self.access_token}'}
 
                 async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=10)) as response:
@@ -773,7 +728,8 @@ class GOGAPIClient:
             
             try:
                 # Query GOG API for product details with downloads expanded
-                url = f'https://api.gog.com/products/{game_id}?expand=downloads&locale=en-US'
+                from ..utils.locale import get_unifideck_locale
+                url = f'https://api.gog.com/products/{game_id}?expand=downloads&locale={get_unifideck_locale()}'
                 headers = {'Authorization': f'Bearer {self.access_token}'}
                 
                 async with session.get(url, headers=headers) as response:
@@ -1206,7 +1162,7 @@ class GOGAPIClient:
         # IMPORTANT: We use 'repair' instead of 'download' because gogdl V2 has a bug
         # where 'download' sees an empty manifest and reports "Nothing to do" even when
         # no files exist. The 'repair' command always verifies and downloads missing files.
-        # Command: gogdl ... repair [id] --platform [plat] --path [path] --skip-dlcs
+        # Command: gogdl ... download/repair [id] --platform [plat] --path [path] --with-dlcs
         
         # IMPORTANT: Snapshot existing directories BEFORE gogdl runs
         # This prevents detecting games installed by Heroic or other launchers
@@ -1275,6 +1231,7 @@ class GOGAPIClient:
             '--platform', platform,
             '--path', gogdl_path,
             '--support', support_dir,
+            '--with-dlcs',  # Automatically install all owned DLCs
         ]
         
         # STRATEGY:
@@ -1519,6 +1476,7 @@ class GOGAPIClient:
             '--platform', platform,
             '--path', repair_path,  # Use game folder path so any downloaded files go there
             '--lang', preferred_lang,
+            '--with-dlcs',  # Automatically install all owned DLCs
         ]
         
         repair_proc = await asyncio.create_subprocess_exec(
@@ -1871,6 +1829,40 @@ class GOGAPIClient:
         if result:
             return result[0]
         return None
+
+    def _find_gog_wrapper_launch_target(
+        self,
+        install_path: str,
+        root_dir: str,
+        primary_task: Dict[str, Any],
+    ) -> Optional[Tuple[str, str]]:
+        """Prefer GOG's wrapper batch file when the manifest points at an internal launcher."""
+        task_path = primary_task.get('path', '')
+        if not task_path:
+            return None
+
+        task_basename = os.path.basename(task_path).lower()
+        candidate_roots = [root_dir]
+        if install_path not in candidate_roots:
+            candidate_roots.append(install_path)
+
+        for candidate_root in candidate_roots:
+            wrapper_path = os.path.join(candidate_root, 'run-game.bat')
+            if not os.path.exists(wrapper_path):
+                continue
+
+            try:
+                wrapper_content = ''
+                with open(wrapper_path, 'r', encoding='utf-8', errors='ignore') as f:
+                    wrapper_content = f.read().lower()
+            except OSError:
+                wrapper_content = ''
+
+            if task_basename in wrapper_content or task_basename in {'dosbox.exe', 'scummvm.exe'}:
+                logger.info(f"[GOG] Using wrapper launch target: {wrapper_path}")
+                return (wrapper_path, candidate_root)
+
+        return None
     
     def _find_game_executable_with_workdir(self, install_path: str) -> Optional[Tuple[str, str]]:
         """Find game executable and working directory from install path."""
@@ -1910,6 +1902,12 @@ class GOGAPIClient:
                                 break
                         
                         if primary:
+                            wrapper_launch = self._find_gog_wrapper_launch_target(
+                                install_path, root_dir, primary
+                            )
+                            if wrapper_launch:
+                                return wrapper_launch
+
                             exe_rel = primary.get('path')
                             work_rel = primary.get('workingDir', '')
                             
@@ -1920,12 +1918,17 @@ class GOGAPIClient:
                             full_exe = full_exe.replace('\\', '/')
                             full_work = full_work.replace('\\', '/')
                             
-                            # FIX: Some games (like Shadow of Mordor) have exe in x64/ subdir but data files
-                            # (.arch05) in the install root. If data files exist in root, use root as work_dir
+                            # FIX: Some games have exe in a subdir but data files in the install root.
+                            # Examples: Shadow of Mordor (.arch05), Prince of Persia (.forge)
+                            # If data files exist in root, use root as work_dir
                             if full_work != install_path:
-                                data_files_in_root = any(f.endswith('.arch05') for f in os.listdir(install_path) if os.path.isfile(os.path.join(install_path, f)))
+                                data_extensions = ('.arch05', '.forge')
+                                data_files_in_root = any(
+                                    any(f.endswith(ext) for ext in data_extensions)
+                                    for f in os.listdir(install_path) if os.path.isfile(os.path.join(install_path, f))
+                                )
                                 if data_files_in_root:
-                                    logger.info(f"[GOG] Data files (.arch05) found in install root, using install_path as work_dir")
+                                    logger.info(f"[GOG] Data files found in install root, using install_path as work_dir")
                                     full_work = install_path
                             
                             if os.path.exists(full_exe):
@@ -2002,7 +2005,8 @@ class GOGAPIClient:
             connector = aiohttp.TCPConnector(ssl=ssl_context)
             async with aiohttp.ClientSession(connector=connector) as session:
                 # Get game details to find DLC expand URL
-                url = f'https://api.gog.com/products/{game_id}?expand=downloads&locale=en-US'
+                from ..utils.locale import get_unifideck_locale
+                url = f'https://api.gog.com/products/{game_id}?expand=downloads&locale={get_unifideck_locale()}'
                 async with session.get(url, headers={'Authorization': f'Bearer {self.access_token}'}) as response:
                     if response.status != 200:
                         logger.error(f"[GOG] Failed to get game details for DLCs: {response.status}")
@@ -2410,5 +2414,3 @@ class GOGAPIClient:
         except Exception as e:
             logger.error(f"[GOG] Error updating {game_id}: {e}")
             return {'success': False, 'error': str(e)}
-
-

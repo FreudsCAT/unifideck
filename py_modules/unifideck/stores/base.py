@@ -18,13 +18,15 @@ class Game:
     """Represents a game from any store"""
     id: str
     title: str
-    store: str  # 'steam', 'epic', 'gog', 'amazon'
+    store: str  # 'steam', 'epic', 'gog', 'amazon', 'ubisoft', 'microsoft'
     is_installed: bool = False
     cover_image: Optional[str] = None
     install_path: Optional[str] = None
     executable: Optional[str] = None
     app_id: Optional[int] = None  # For shortcuts.vdf (our generated ID)
     steam_app_id: Optional[int] = None  # Real Steam appId for ProtonDB lookups
+    ownership_type: Optional[str] = None  # "owned", "free", "subscription", or None
+    store_tags: Optional[List[str]] = None  # e.g. ['not_compatible', 'play_anywhere']
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -34,7 +36,7 @@ class Store(ABC):
     """
     Abstract base class for game store connectors.
     
-    Each store (Epic, GOG, Amazon) implements this interface to provide
+    Each store (Epic, GOG, Amazon, Ubisoft) implements this interface to provide
     a consistent API for authentication, library management, and game operations.
     """
     

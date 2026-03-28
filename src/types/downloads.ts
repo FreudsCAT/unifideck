@@ -11,7 +11,7 @@ export type DownloadStatus =
   | "error";
 
 // Storage location enum
-export type StorageLocation = "internal" | "sdcard";
+export type StorageLocation = "internal" | "sdcard" | "custom";
 
 /**
  * Single download item from the queue
@@ -20,7 +20,7 @@ export interface DownloadItem {
   id: string; // Unique ID, e.g., "epic:game123"
   game_id: string; // Store-specific game identifier
   game_title: string;
-  store: "epic" | "gog" | "amazon";
+  store: "epic" | "gog" | "amazon" | "microsoft";
   status: DownloadStatus;
   progress_percent: number; // 0-100
   downloaded_bytes: number;
@@ -55,7 +55,7 @@ export interface DownloadQueueInfo {
  */
 export interface StorageLocationInfo {
   id: StorageLocation;
-  label: string; // "Internal Storage" or "SD Card"
+  label: string; // "Internal Storage", "SD Card", or custom location label
   path: string; // Actual filesystem path
   available: boolean; // Whether this location is usable
   free_space_gb: number; // Free space in GB

@@ -5,20 +5,25 @@ Requires: pip install python-steamgriddb aiohttp aiofiles
 """
 
 import os
+import re
 import json
 import logging
 import asyncio
+import unicodedata
 import aiohttp
 from typing import Optional, List, Dict, Any
 from pathlib import Path
 
-# Import Grid asset class for constructing objects from raw API responses
-from steamgrid.asset import Grid as SGDBGrid
+# Import asset classes for constructing objects from raw API responses
+from steamgrid.asset import Grid as SGDBGrid, Hero as SGDBHero, Logo as SGDBLogo, Icon as SGDBIcon
 
 # Import Steam user detection utility
 from py_modules.unifideck.steam.steam_utils import get_logged_in_steam_user
 
 logger = logging.getLogger(__name__)
+
+STEAMGRIDDB_METADATA_TIMEOUT = 15
+STEAMGRIDDB_SEARCH_TIMEOUT = 20
 
 try:
     from steamgrid import SteamGridDB
@@ -91,70 +96,335 @@ class SteamGridDBClient:
 
         return grid_path
 
+    @staticmethod
+    def _normalize_for_sgdb_match(title: str) -> str:
+        """Normalize title for SGDB comparison: lowercase, strip symbols, & -> and."""
+        if not title:
+            return ''
+        t = title.lower().strip()
+        # Handle dual-language SGDB titles: "Game / Jeu" → take first part
+        if ' / ' in t:
+            t = t.split(' / ')[0].strip()
+        t = re.sub(r'[\u00ae\u2122\u00a9]', ' ', t)          # ®™© → space (preserve word boundaries: Watch Dogs®2 → Watch Dogs 2)
+        # Decompose diacritics: ü→u, ñ→n, é→e, etc.
+        t = unicodedata.normalize('NFKD', t)
+        t = ''.join(c for c in t if not unicodedata.combining(c))
+        t = re.sub(r'\((?:tm|r|c)\)', '', t, flags=re.IGNORECASE)  # Strip (TM)(R)(C)
+        t = t.replace('&', ' and ')                            # & -> and
+        t = t.replace('\u2018', "'").replace('\u2019', "'")   # Smart quotes -> ASCII
+        t = t.replace('\u201c', '"').replace('\u201d', '"')
+        t = t.replace('_', ' ')                                # Underscores -> spaces
+        t = t.replace('-', ' ')                                # Hyphens -> spaces (preserve word boundaries)
+        t = t.replace('|', '')                                 # Strip pipe (X|S -> XS, not X S)
+        t = re.sub(r'[^\w\s]', ' ', t)                         # Replace remaining punctuation with spaces (preserve word boundaries)
+        t = re.sub(r'\s+', ' ', t).strip()                     # Collapse whitespace
+        return t
+
+    @staticmethod
+    def _strip_edition_suffix(normalized_title: str) -> str:
+        """Strip edition/variant/platform suffixes from a normalized title.
+
+        Iteratively strips suffixes so compound cases work:
+        'call of duty black ops 6 standard edition windows'
+         → strip 'windows' → 'call of duty black ops 6 standard edition'
+         → strip 'standard edition' → 'call of duty black ops 6'
+        """
+        edition_suffixes = [
+            # Platform/console suffixes (longer first for most-specific match)
+            'xbox series xs edition', 'xbox one edition', 'xbox edition',
+            'xbox series xs', 'xbox one version', 'xbox one',
+            'pc edition', 'windows 10 edition', 'windows edition',
+            'console edition',
+            'for pc', 'for windows', 'for xbox',
+            # Distribution/bundle suffixes
+            'cross gen bundle', 'cross gen edition', 'game preview',
+            'the complete season', 'the complete first season',
+            # Full edition names
+            'deluxe edition', 'gold edition', 'ultimate edition', 'complete edition',
+            'goty edition', 'game of the year edition', 'definitive edition',
+            'enhanced edition', 'special edition', 'anniversary edition',
+            'premium edition', 'standard edition', 'legacy edition',
+            'collectors edition', 'limited edition', 'digital edition',
+            'classic edition', 'royal edition', 'legendary edition',
+            'elite edition', 'ea play edition',
+            'remastered', 'remake', 'directors cut', 'the final cut',
+            'unofficial patch',
+            # EA/publisher edition variants
+            'revolution',
+            # Version variants
+            'digital version',
+            # Short/standalone (word boundary ensured by space-prefix check)
+            'goty', 'hd', 'ce', 'dlc', 'windows', 'console', 'xs',
+        ]
+        # Iterative: strip one suffix per pass, repeat until stable
+        changed = True
+        while changed:
+            changed = False
+            for suffix in edition_suffixes:
+                if normalized_title.endswith(' ' + suffix):
+                    stripped = normalized_title[:-(len(suffix) + 1)].strip()
+                    if stripped:
+                        normalized_title = stripped
+                        changed = True
+                        break  # Restart suffix scan from the top
+
+            if changed:
+                continue
+
+            # Generic: strip any "<1-3 words> edition" at the end
+            # Catches unlisted variants like "marching fire edition", "ultimate survivor edition"
+            m = re.match(r'^(.+?)\s+(?:\w+\s+){0,2}edition$', normalized_title)
+            if m:
+                stripped = m.group(1).strip()
+                if stripped:
+                    normalized_title = stripped
+                    changed = True
+                    continue
+
+            # Strip chapter/episode ranges: "chapters 1 3", "episodes 1 5"
+            m = re.match(r'^(.+?)\s+(?:chapters?|episodes?)\s+[\d\s]+$', normalized_title)
+            if m:
+                stripped = m.group(1).strip()
+                if stripped:
+                    normalized_title = stripped
+                    changed = True
+                    continue
+
+            # Strip parenthesized years that survived normalization: "skate 2007"
+            # Only strip trailing 4-digit years when preceded by a non-numeric word
+            m = re.match(r'^(.+?\D)\s+(\d{4})$', normalized_title)
+            if m and 1980 <= int(m.group(2)) <= 2030:
+                stripped = m.group(1).strip()
+                if stripped:
+                    normalized_title = stripped
+                    changed = True
+                    continue
+
+        return normalized_title
+
+    @staticmethod
+    def _score_sgdb_match(search_norm: str, result_norm: str) -> float:
+        """Score match quality between normalized titles (0.0-1.0).
+
+        Uses word-set overlap (Jaccard-like) to detect franchise confusion:
+        - 'assassins creed' vs 'assassins creed odyssey' = 0.67 (rejected at 0.85)
+        - 'far cry 3' vs 'far cry 3 blood dragon' = 0.60 (rejected)
+        """
+        if not search_norm or not result_norm:
+            return 0.0
+        if search_norm == result_norm:
+            return 1.0
+        search_words = set(search_norm.split())
+        result_words = set(result_norm.split())
+        if search_words == result_words:
+            return 0.95  # Same words, different order
+        intersection = search_words & result_words
+        union = search_words | result_words
+        jaccard = len(intersection) / len(union) if union else 0.0
+        # Prefix match bonus: if all search words appear in order at start of result,
+        # boost score. Handles truncated shortcut names (e.g. "Kameo" → "Kameo: Elements of Power")
+        result_words_list = result_norm.split()
+        search_words_list = search_norm.split()
+        if (len(search_words_list) <= len(result_words_list) and
+                search_words_list == result_words_list[:len(search_words_list)]):
+            prefix_score = max(0.50, len(search_words_list) / len(result_words_list))
+            jaccard = max(jaccard, prefix_score)
+        return jaccard
+
     async def search_game(self, title: str) -> Optional[int]:
-        """Search for game by title and return game ID.
-        
-        Validates results to prefer exact title matches, avoiding issues
-        where series games get wrong artwork.
+        """Search for game by title and return SGDB game ID.
+
+        Uses normalized comparison to handle symbol/punctuation differences
+        and strict matching to prevent franchise confusion (e.g. 'Assassin's
+        Creed' matching 'Assassin's Creed Odyssey').
         """
         if not self.client:
             return None
 
         try:
             loop = asyncio.get_running_loop()
-            # Run blocking synchronous call in thread pool
-            results = await loop.run_in_executor(None, self.client.search_game, title)
-            
+            # Normalize query sent to SGDB API — strip ®™ and platform/edition tags
+            # that may hurt search quality (e.g. "- CE", "(Xbox One)", ": Xbox One Edition")
+            clean_query = re.sub(r'[\u00ae\u2122\u00a9]', '', title).strip()
+            clean_query = re.sub(r'\s*[-\u2013:]\s*(?:CE|SE|DE|GE)\s*$', '', clean_query, flags=re.IGNORECASE).strip()
+            clean_query = re.sub(r'\s*\((?:Xbox (?:One|Series X\|?S)|PC|Windows|PS[45]|Nintendo Switch|Game Preview)\)\s*$', '', clean_query, flags=re.IGNORECASE).strip()
+            clean_query = re.sub(r'\s*[-\u2013:]\s*Xbox (?:One|Series X\|?S)(?:\s+Edition)?\s*$', '', clean_query, flags=re.IGNORECASE).strip()
+            clean_query = re.sub(r'\s+for\s+Xbox\s*$', '', clean_query, flags=re.IGNORECASE).strip()
+            clean_query = re.sub(r'\s+Xbox\s+(?:One|Series\s+X\|?S)(?:\s+Edition)?\s*$', '', clean_query, flags=re.IGNORECASE).strip()
+            clean_query = re.sub(r'\s*[-\u2013:]\s*(?:Cross[- ]Gen\s+(?:Bundle|Edition)|The\s+Complete(?:\s+First)?\s+Season)\s*$', '', clean_query, flags=re.IGNORECASE).strip()
+            clean_query = re.sub(r'\s*[-\u2013:]\s*(?:Standard|Console)\s+Edition(?:\s*\(Windows\))?\s*$', '', clean_query, flags=re.IGNORECASE).strip()
+            # Strip parenthesized metadata: (2020), (X|S), (Episodes 1-5), (Game Preview)
+            clean_query = re.sub(r'\s*\(\d{4}\)', '', clean_query).strip()
+            clean_query = re.sub(r'\s*\(X\|?S\)', '', clean_query, flags=re.IGNORECASE).strip()
+            clean_query = re.sub(r'\s*\((?:Episodes?|Chapters?)\s+[\d\-\s]+\)', '', clean_query, flags=re.IGNORECASE).strip()
+            # Strip DLC additions: " + Something DLC", " + Something"
+            clean_query = re.sub(r'\s*\+\s+.+$', '', clean_query).strip()
+            # Strip trailing "Xbox One Version", "Digital Version", etc.
+            clean_query = re.sub(r'\s+Xbox\s+One\s+Version\s*$', '', clean_query, flags=re.IGNORECASE).strip()
+            results = await asyncio.wait_for(
+                loop.run_in_executor(None, self.client.search_game, clean_query),
+                timeout=STEAMGRIDDB_SEARCH_TIMEOUT,
+            )
+
             if not results or len(results) == 0:
                 return None
-            
-            # Normalize search title for comparison
-            search_lower = title.lower().strip()
-            
-            # First pass: look for exact match
+
+            # Strip DLC additions from title for matching: "Besiege + The Splintered Sea DLC" → "Besiege"
+            match_title = re.sub(r'\s*\+\s+.+$', '', title).strip() or title
+            search_norm = self._normalize_for_sgdb_match(match_title)
+
+            # Pass 1: Normalized exact match (handles ®™©, &/and, punctuation)
             for result in results:
-                result_name = getattr(result, 'name', '').lower().strip()
-                if result_name == search_lower:
-                    logger.debug(f"Found SteamGridDB ID {result.id} for '{title}' (exact match)")
+                result_norm = self._normalize_for_sgdb_match(getattr(result, 'name', ''))
+                if result_norm == search_norm:
+                    logger.debug(f"Found SGDB ID {result.id} for '{title}' (exact match)")
                     return result.id
-            
-            # Second pass: look for close match (search title is prefix or vice versa)
+
+            # Pass 2: Edition-variant match (strips edition suffixes, then compares)
+            search_base = self._strip_edition_suffix(search_norm)
             for result in results:
-                result_name = getattr(result, 'name', '').lower().strip()
-                # Check if one is a prefix of the other, but avoid series confusion
-                # "Dawn of War" should NOT match "Dawn of War II"
-                if search_lower in result_name or result_name in search_lower:
-                    # Check for series indicators (Roman numerals, numbers)
-                    import re
-                    series_pattern = r'\b(I{1,3}|IV|V|VI{0,3}|[2-9]|10)\b'
-                    search_has_series = bool(re.search(series_pattern, title))
-                    result_has_series = bool(re.search(series_pattern, getattr(result, 'name', '')))
-                    
-                    # If one has series indicator and other doesn't, skip
-                    if search_has_series != result_has_series:
-                        continue
-                    
-                    logger.debug(f"Found SteamGridDB ID {result.id} for '{title}' (partial match)")
+                result_norm = self._normalize_for_sgdb_match(getattr(result, 'name', ''))
+                result_base = self._strip_edition_suffix(result_norm)
+                if result_base == search_base:
+                    logger.debug(f"Found SGDB ID {result.id} for '{title}' (edition-variant match)")
                     return result.id
-            
-            # Fallback to first result if no validated match
-            game_id = results[0].id
-            logger.debug(f"Found SteamGridDB ID {game_id} for '{title}' (first result fallback)")
-            return game_id
-            
+
+            # Pass 3: Scored match — pick best candidate above confidence threshold.
+            # Threshold 0.85 prevents franchise confusion:
+            #   "assassins creed" vs "assassins creed odyssey" = 0.67 -> rejected
+            #   "splinter cell" vs "splinter cell blacklist" = 0.80 -> rejected
+            best_score = 0.0
+            best_result = None
+            for result in results:
+                result_norm = self._normalize_for_sgdb_match(getattr(result, 'name', ''))
+                result_base = self._strip_edition_suffix(result_norm)
+                # Score both full and stripped versions — prevents platform/edition
+                # suffixes from tanking Jaccard (e.g. "gta v xbox one" vs "gta v")
+                score = max(
+                    self._score_sgdb_match(search_norm, result_norm),
+                    self._score_sgdb_match(search_base, result_base),
+                )
+                if score > best_score:
+                    best_score = score
+                    best_result = result
+
+            if best_score >= 0.85 and best_result:
+                logger.debug(f"Found SGDB ID {best_result.id} for '{title}' (scored match: {best_score:.2f})")
+                return best_result.id
+
+            # Pass 4: Retry with stripped base title as search query
+            # Handles cases where suffixes in the query pollute SGDB search results
+            # (e.g., "EA SPORTS FC 25 Xbox Series X|S" → search "ea sports fc 25" instead)
+            if search_base != search_norm:
+                logger.debug(f"Retrying SGDB search with base title: '{search_base}'")
+                retry_results = await asyncio.wait_for(
+                    loop.run_in_executor(None, self.client.search_game, search_base),
+                    timeout=STEAMGRIDDB_SEARCH_TIMEOUT,
+                )
+                if retry_results:
+                    for result in retry_results:
+                        result_norm = self._normalize_for_sgdb_match(getattr(result, 'name', ''))
+                        result_base = self._strip_edition_suffix(result_norm)
+                        if result_base == search_base:
+                            logger.debug(f"Found SGDB ID {result.id} for '{title}' (retry base match)")
+                            return result.id
+                    # Scored match on retry results
+                    for result in retry_results:
+                        result_norm = self._normalize_for_sgdb_match(getattr(result, 'name', ''))
+                        result_base = self._strip_edition_suffix(result_norm)
+                        score = max(
+                            self._score_sgdb_match(search_norm, result_norm),
+                            self._score_sgdb_match(search_base, result_base),
+                        )
+                        if score >= 0.85:
+                            logger.debug(f"Found SGDB ID {result.id} for '{title}' (retry scored: {score:.2f})")
+                            return result.id
+
+            # Pass 5: Try without known publisher prefixes
+            # SGDB may index games without publisher branding (e.g., "College Football 25" not "EA SPORTS College Football 25")
+            publisher_prefixes = ['ea sports', 'tom clancys', 'sid meiers', 'disney pixar', 'dreamworks', 'microsoft']
+            for prefix in publisher_prefixes:
+                if search_base.startswith(prefix + ' '):
+                    short_title = search_base[len(prefix):].strip()
+                    logger.debug(f"Retrying SGDB search without publisher prefix: '{short_title}'")
+                    prefix_results = await asyncio.wait_for(
+                        loop.run_in_executor(None, self.client.search_game, short_title),
+                        timeout=STEAMGRIDDB_SEARCH_TIMEOUT,
+                    )
+                    if prefix_results:
+                        for result in prefix_results:
+                            result_norm = self._normalize_for_sgdb_match(getattr(result, 'name', ''))
+                            result_base = self._strip_edition_suffix(result_norm)
+                            if result_base == short_title or result_base == search_base:
+                                logger.debug(f"Found SGDB ID {result.id} for '{title}' (prefix-stripped match)")
+                                return result.id
+                    break  # Only try one prefix
+
+            # Pass 6: Fuzzy fallback — accept best result above a lower threshold
+            # Catches cases where publisher prefixes, abbreviations, or branding
+            # differences prevent strict matching but the top result is clearly correct.
+            # Collect best candidate across all search attempts.
+            all_candidates = []
+            for candidate_list in [results]:
+                if candidate_list and not isinstance(candidate_list, Exception):
+                    for result in candidate_list:
+                        result_norm = self._normalize_for_sgdb_match(getattr(result, 'name', ''))
+                        result_base = self._strip_edition_suffix(result_norm)
+                        score = max(
+                            self._score_sgdb_match(search_norm, result_norm),
+                            self._score_sgdb_match(search_base, result_base),
+                        )
+                        all_candidates.append((score, result))
+
+            if all_candidates:
+                all_candidates.sort(key=lambda x: x[0], reverse=True)
+                fuzzy_score, fuzzy_result = all_candidates[0]
+                if fuzzy_score >= 0.50:
+                    logger.info(f"SGDB fuzzy match for '{title}': '{getattr(fuzzy_result, 'name', '?')}' (id={fuzzy_result.id}, score={fuzzy_score:.2f})")
+                    return fuzzy_result.id
+
+            # No match at all — return None so pipeline falls through to Steam CDN
+            best_score = f"{all_candidates[0][0]:.2f}" if all_candidates else "0"
+            logger.debug(f"No SGDB match for '{title}' (best score: {best_score})")
+            return None
+
+        except asyncio.TimeoutError:
+            logger.warning(f"SteamGridDB search timed out for '{title}'")
+        except asyncio.CancelledError:
+            raise
         except Exception as e:
             logger.error(f"Error searching for game '{title}': {e}")
-            
+
         return None
+
+    # Style preference order for artwork selection.
+    # Alternate is preferred (high-quality game-specific covers), white_logo last.
+    # NOTE: SGDB API v2 returns 0 for score/upvotes/downvotes, so the API's
+    # default ordering (which reflects server-side popularity) is our primary
+    # quality signal.  Python's sort is stable, so within each style group the
+    # original API order is preserved.
+    _STYLE_PRIORITY = {
+        'alternate': 0,   # Preferred: game-specific cover art
+        'blurred': 1,
+        'material': 1,
+        'no_logo': 1,
+        'white_logo': 2,  # Least preferred
+    }
 
     def select_best_artwork(self, assets: List) -> Optional[Any]:
         """
         Select the best artwork from a list of assets.
+
+        The SGDB API v2 returns 0 for score/upvotes/downvotes, so the API's
+        default ordering (server-side popularity) is our best quality signal
+        after style and resolution.
+
         Priority:
         1. Official/locked images (asset._lock == True)
-        2. Highest score
-        3. Best upvote/downvote ratio
-        4. First result as fallback
+        2. Style preference (alternate > blurred/material/no_logo > white_logo)
+        3. Highest score (when/if API returns non-zero values)
+        4. Highest resolution (important for heroes/logos quality)
+        5. API position (popularity tiebreaker for same-resolution results)
         """
         if not assets:
             return None
@@ -164,36 +434,89 @@ class SteamGridDBClient:
         if not filtered:
             filtered = assets  # Fall back to all if filtering removed everything
 
-        # Sort by priority
-        sorted_assets = sorted(
-            filtered,
-            key=lambda a: (
-                not getattr(a, '_lock', False),     # Official first (False sorts before True)
-                -(getattr(a, 'score', 0) or 0),     # Then highest score
-                -((getattr(a, 'width', 0) or 0) * (getattr(a, 'height', 0) or 0)),  # Then highest resolution
-                -(getattr(a, 'upvotes', 0) or 0) + (getattr(a, 'downvotes', 0) or 0)  # Then best ratio
+        # Sort by priority — enumerate captures API position as tiebreaker
+        sorted_pairs = sorted(
+            enumerate(filtered),
+            key=lambda pair: (
+                not getattr(pair[1], '_lock', False),     # Official/locked first
+                self._STYLE_PRIORITY.get(getattr(pair[1], 'style', ''), 1),  # Style preference
+                -(getattr(pair[1], 'score', 0) or 0),     # Highest score (future-proof)
+                -((getattr(pair[1], 'width', 0) or 0) * (getattr(pair[1], 'height', 0) or 0)),  # Higher res preferred
+                pair[0],  # API position: popularity tiebreaker
             )
         )
 
-        return sorted_assets[0]
+        return sorted_pairs[0][1]
 
-    def _fetch_grids_by_dimensions(self, sgdb_game_id: int, dimensions: str) -> Optional[List]:
-        """Fetch grids from SGDB filtered by dimensions.
+    def _fetch_grids_by_dimensions(self, sgdb_game_id: int, dimensions: str = None, styles: str = 'alternate,white_logo,no_logo,blurred,material') -> Optional[List]:
+        """Fetch grids from SGDB, optionally filtered by dimensions and styles.
 
-        Uses the HTTP client directly to pass the 'dimensions' query parameter
+        Uses the HTTP client directly to pass query parameters
         which the vendored steamgrid library doesn't expose.
+        When dimensions/styles are None (fallback mode), those filters are omitted.
         """
         queries = {
-            'dimensions': dimensions,
             'nsfw': 'false',
             'humor': 'false',
         }
+        if dimensions:
+            queries['dimensions'] = dimensions
+        if styles:
+            queries['styles'] = styles
         try:
             payloads = self.client._http.get_grid([sgdb_game_id], 'game', queries=queries)
             if payloads:
                 return [SGDBGrid(p, self.client._http) for p in payloads]
         except Exception as e:
             logger.debug(f"SGDB grid fetch (dims={dimensions}) failed: {e}")
+        return None
+
+    def _fetch_heroes(self, sgdb_game_id: int, dimensions: str = '1920x620,3840x1240', styles: str = 'alternate,blurred,material') -> Optional[List]:
+        """Fetch heroes from SGDB with optional dimension and style filtering."""
+        queries = {
+            'nsfw': 'false',
+            'humor': 'false',
+        }
+        if dimensions:
+            queries['dimensions'] = dimensions
+        if styles:
+            queries['styles'] = styles
+        try:
+            payloads = self.client._http.get_hero([sgdb_game_id], 'game', queries=queries)
+            if payloads:
+                return [SGDBHero(p, self.client._http) for p in payloads]
+        except Exception as e:
+            logger.debug(f"SGDB hero fetch failed: {e}")
+        return None
+
+    def _fetch_logos(self, sgdb_game_id: int, styles: str = 'official,white,black,custom') -> Optional[List]:
+        """Fetch logos from SGDB with optional style filtering."""
+        queries = {
+            'nsfw': 'false',
+            'humor': 'false',
+        }
+        if styles:
+            queries['styles'] = styles
+        try:
+            payloads = self.client._http.get_logo([sgdb_game_id], 'game', queries=queries)
+            if payloads:
+                return [SGDBLogo(p, self.client._http) for p in payloads]
+        except Exception as e:
+            logger.debug(f"SGDB logo fetch failed: {e}")
+        return None
+
+    def _fetch_icons(self, sgdb_game_id: int) -> Optional[List]:
+        """Fetch icons from SGDB with filtering."""
+        queries = {
+            'nsfw': 'false',
+            'humor': 'false',
+        }
+        try:
+            payloads = self.client._http.get_icon([sgdb_game_id], 'game', queries=queries)
+            if payloads:
+                return [SGDBIcon(p, self.client._http) for p in payloads]
+        except Exception as e:
+            logger.debug(f"SGDB icon fetch failed: {e}")
         return None
 
     async def download_image(self, url: str, save_path: str, timeout: int = 30) -> bool:
@@ -204,6 +527,7 @@ class SteamGridDBClient:
             save_path: Local path to save the image
             timeout: Timeout in seconds for the download (default 30s)
         """
+        tmp_path = f"{save_path}.tmp"
         try:
             # Temporarily disable SSL verification to work around certificate validation issues
             # TODO: Fix properly by updating system CA certificates or certifi package
@@ -213,8 +537,10 @@ class SteamGridDBClient:
                 async with session.get(url) as response:
                     if response.status == 200:
                         content = await response.read()
-                        with open(save_path, 'wb') as f:
+                        Path(save_path).parent.mkdir(parents=True, exist_ok=True)
+                        with open(tmp_path, 'wb') as f:
                             f.write(content)
+                        os.replace(tmp_path, save_path)
                         logger.info(f"Downloaded image to {save_path}")
                         return True
                     else:
@@ -222,8 +548,16 @@ class SteamGridDBClient:
         except asyncio.TimeoutError:
             logger.warning(f"Timeout downloading image from {url}")
             return False
+        except asyncio.CancelledError:
+            raise
         except Exception as e:
             logger.error(f"Error downloading image: {e}")
+        finally:
+            try:
+                if os.path.exists(tmp_path):
+                    os.unlink(tmp_path)
+            except OSError:
+                pass
 
         return False
 
@@ -263,21 +597,24 @@ class SteamGridDBClient:
 
             if need_portrait:
                 api_tasks.append(loop.run_in_executor(
-                    None, self._fetch_grids_by_dimensions, sgdb_game_id, '600x900,660x930'))
+                    None, self._fetch_grids_by_dimensions, sgdb_game_id, '600x900'))
                 task_labels.append('portrait_grids')
             if need_landscape:
                 api_tasks.append(loop.run_in_executor(
                     None, self._fetch_grids_by_dimensions, sgdb_game_id, '920x430,460x215'))
                 task_labels.append('landscape_grids')
 
-            api_tasks.append(loop.run_in_executor(None, self.client.get_heroes_by_gameid, [sgdb_game_id]))
+            api_tasks.append(loop.run_in_executor(None, self._fetch_heroes, sgdb_game_id))
             task_labels.append('heroes')
-            api_tasks.append(loop.run_in_executor(None, self.client.get_logos_by_gameid, [sgdb_game_id]))
+            api_tasks.append(loop.run_in_executor(None, self._fetch_logos, sgdb_game_id))
             task_labels.append('logos')
-            api_tasks.append(loop.run_in_executor(None, self.client.get_icons_by_gameid, [sgdb_game_id]))
+            api_tasks.append(loop.run_in_executor(None, self._fetch_icons, sgdb_game_id))
             task_labels.append('icons')
 
-            api_results = await asyncio.gather(*api_tasks, return_exceptions=True)
+            api_results = await asyncio.wait_for(
+                asyncio.gather(*api_tasks, return_exceptions=True),
+                timeout=STEAMGRIDDB_SEARCH_TIMEOUT,
+            )
 
             # Map results back to named variables
             fetched = dict(zip(task_labels, api_results))
@@ -286,6 +623,39 @@ class SteamGridDBClient:
             heroes = fetched.get('heroes')
             logos = fetched.get('logos')
             icons = fetched.get('icons')
+
+            # PHASE 1.5: Fallback with relaxed filters for types that got no results
+            # If primary filters (Steam dimensions, preferred styles) returned nothing,
+            # retry with broader dimensions (incl. Galaxy 2.0) and no style restrictions
+            fallback_tasks = []
+            fallback_labels = []
+
+            if need_portrait and (not portrait_grids or isinstance(portrait_grids, Exception)):
+                fallback_tasks.append(loop.run_in_executor(
+                    None, self._fetch_grids_by_dimensions, sgdb_game_id, '600x900,660x930,342x482', None))
+                fallback_labels.append('portrait_grids')
+            if 'hero' in only_types and (not heroes or isinstance(heroes, Exception)):
+                fallback_tasks.append(loop.run_in_executor(
+                    None, self._fetch_heroes, sgdb_game_id, None, None))
+                fallback_labels.append('heroes')
+            if 'logo' in only_types and (not logos or isinstance(logos, Exception)):
+                fallback_tasks.append(loop.run_in_executor(
+                    None, self._fetch_logos, sgdb_game_id, None))
+                fallback_labels.append('logos')
+
+            if fallback_tasks:
+                logger.debug(f"SGDB fallback fetch (relaxed filters) for: {fallback_labels}")
+                fallback_results = await asyncio.wait_for(
+                    asyncio.gather(*fallback_tasks, return_exceptions=True),
+                    timeout=STEAMGRIDDB_SEARCH_TIMEOUT,
+                )
+                fallback_fetched = dict(zip(fallback_labels, fallback_results))
+                if 'portrait_grids' in fallback_fetched and not isinstance(fallback_fetched['portrait_grids'], Exception):
+                    portrait_grids = fallback_fetched['portrait_grids']
+                if 'heroes' in fallback_fetched and not isinstance(fallback_fetched['heroes'], Exception):
+                    heroes = fallback_fetched['heroes']
+                if 'logos' in fallback_fetched and not isinstance(fallback_fetched['logos'], Exception):
+                    logos = fallback_fetched['logos']
 
             # PHASE 2: Select best artwork and prepare downloads (only for requested types)
             download_tasks = []
@@ -339,6 +709,10 @@ class SteamGridDBClient:
                     if result is True and task_types[i] in results:
                         results[task_types[i]] = True
 
+        except asyncio.TimeoutError:
+            logger.warning(f"Timed out fetching SGDB image metadata for game {sgdb_game_id}")
+        except asyncio.CancelledError:
+            raise
         except Exception as e:
             logger.error(f"Error fetching grid images: {e}")
 
@@ -379,7 +753,8 @@ class SteamGridDBClient:
         
         try:
             connector = aiohttp.TCPConnector(ssl=False)
-            async with aiohttp.ClientSession(connector=connector) as session:
+            client_timeout = aiohttp.ClientTimeout(total=STEAMGRIDDB_METADATA_TIMEOUT)
+            async with aiohttp.ClientSession(connector=connector, timeout=client_timeout) as session:
                 # Use Galaxy GamesDB API which provides vertical_cover (box art)
                 gamesdb_url = f"https://gamesdb.gog.com/platforms/gog/external_releases/{gog_product_id}"
                 
@@ -537,7 +912,8 @@ class SteamGridDBClient:
         
         try:
             connector = aiohttp.TCPConnector(ssl=False)
-            async with aiohttp.ClientSession(connector=connector) as session:
+            client_timeout = aiohttp.ClientTimeout(total=STEAMGRIDDB_METADATA_TIMEOUT)
+            async with aiohttp.ClientSession(connector=connector, timeout=client_timeout) as session:
                 # Use GOG GamesDB API for Amazon games (same as Heroic!)
                 # This provides vertical_cover with proper dimensions
                 gamesdb_url = f"https://gamesdb.gog.com/platforms/amazon/external_releases/{amazon_game_id}"
@@ -622,7 +998,8 @@ class SteamGridDBClient:
             url = f"https://store.steampowered.com/api/storesearch/?term={encoded}&cc=US"
             
             connector = aiohttp.TCPConnector(ssl=False)
-            async with aiohttp.ClientSession(connector=connector) as session:
+            client_timeout = aiohttp.ClientTimeout(total=STEAMGRIDDB_METADATA_TIMEOUT)
+            async with aiohttp.ClientSession(connector=connector, timeout=client_timeout) as session:
                 async with session.get(url) as response:
                     if response.status != 200:
                         return None
@@ -682,7 +1059,7 @@ class SteamGridDBClient:
         
         return None
 
-    async def fetch_game_art(self, title: str, app_id: int, store: str = None, store_id: str = None, only_types: set = None) -> Dict[str, Any]:
+    async def fetch_game_art(self, title: str, app_id: int, store: str = None, store_id: str = None, only_types: set = None, extra: dict = None, sgdb_game_id: int = None) -> Dict[str, Any]:
         """
         Orchestrated Artwork Pipeline:
         1. Metadata Phase: Fetch URLs from all sources CONCURRENTLY
@@ -725,11 +1102,23 @@ class SteamGridDBClient:
                 tasks.append(self.get_epic_metadata(store_id))
             elif store == 'amazon' and store_id:
                 tasks.append(self.get_amazon_metadata(store_id))
+            elif store == 'ubisoft' and extra:
+                # Ubisoft provides artwork URLs directly from GraphQL API (stored in game.extra)
+                ubisoft_urls = {}
+                if extra.get('coverUrl'):
+                    ubisoft_urls['grid'] = extra['coverUrl']
+                if extra.get('backgroundUrl'):
+                    ubisoft_urls['hero'] = extra['backgroundUrl']
+                tasks.append(asyncio.sleep(0, result={'urls': ubisoft_urls}))
+                logger.info(f"[Artwork] Using Ubisoft API artwork: {list(ubisoft_urls.keys())}")
             else:
                 tasks.append(asyncio.sleep(0, result={'urls': {}})) # Dummy to keep parallel structure simple
                 
-            # Wait for both
-            steam_res, store_res = await asyncio.gather(*tasks)
+            # Wait for both metadata sources without letting one hung request block the whole game.
+            steam_res, store_res = await asyncio.wait_for(
+                asyncio.gather(*tasks),
+                timeout=STEAMGRIDDB_METADATA_TIMEOUT,
+            )
             
             # Save Steam ID if found (for reference, but don't prioritize Steam artwork)
             if steam_res.get('steam_id'):
@@ -806,6 +1195,8 @@ class SteamGridDBClient:
                     if res is True:
                         art_type = download_tasks[i][1]
                         downloaded.add(art_type)
+                    elif isinstance(res, Exception):
+                        logger.debug(f"Download failed for {download_tasks[i][1]} artwork on {title}: {res}")
             
             # Build Source Log
             # e.g. "STEAM:grid+logo GOG:hero+icon"
@@ -832,7 +1223,7 @@ class SteamGridDBClient:
             
             if missing and self.client:
                 try:
-                    gid = await self.search_game(title)
+                    gid = sgdb_game_id or await self.search_game(title)
                     if gid:
                         sgdb_results = await self.get_grid_images(gid, app_id, only_types=missing)
                         # Track SGDB downloads that succeeded
@@ -895,6 +1286,10 @@ class SteamGridDBClient:
             if downloaded:
                 final_result['success'] = True
 
+        except asyncio.TimeoutError:
+            logger.warning(f"Artwork pipeline timed out for {title}")
+        except asyncio.CancelledError:
+            raise
         except Exception as e:
             logger.error(f"Error in artwork pipeline for {title}: {e}")
 
