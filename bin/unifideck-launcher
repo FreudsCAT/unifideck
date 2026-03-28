@@ -2243,11 +2243,7 @@ except Exception as e:
                 fi
             done
 
-            # Use wined3d instead of DXVK for auth — UplayWebCore.exe (CEF
-            # renderer) can fail to initialize its swapchain under DXVK,
-            # resulting in a black window that immediately closes.
-            export PROTON_USE_WINED3D=1
-            log "[Ubisoft] Using wined3d for auth (CEF compatibility)"
+            log "[Ubisoft] Launching auth with default renderer (DXVK)"
         else
             LAUNCH_TARGET_ARG="uplay://launch/$LAUNCH_ID/0"
             log "[Ubisoft] Launching game for launch_id=$LAUNCH_ID"
