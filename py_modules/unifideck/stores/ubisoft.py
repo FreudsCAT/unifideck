@@ -1621,6 +1621,7 @@ class UbisoftConnector(Store):
 
             # Pattern: [Software\\Wow6432Node\\Ubisoft\\Launcher\\Installs\\<ID>]
             # followed by "InstallDir"="<path>"
+            fallback_id = None
             for m in re.finditer(
                 r'\[Software\\\\Wow6432Node\\\\Ubisoft\\\\Launcher\\\\Installs\\\\(\d+)\]'
                 r'[^\[]*?"InstallDir"\s*=\s*"([^"]*)"',
@@ -1631,13 +1632,25 @@ class UbisoftConnector(Store):
                 install_dir = m.group(2).replace("\\\\", "/")
                 # Prefer the entry whose InstallDir is inside the prefix
                 # (the per-prefix local install, not an external/stale one)
-                if "Ubisoft Game Launcher/games/" in install_dir or \
-                   "Ubisoft Game Launcher\\games\\" in install_dir:
+                standard_path = (
+                    "Ubisoft Game Launcher/games/" in install_dir
+                    or "Ubisoft Game Launcher\\games\\" in install_dir
+                )
+                if standard_path:
                     logger.info(
                         f"[Ubisoft] Extracted game ID {game_id} from registry "
                         f"(InstallDir={install_dir[:60]})"
                     )
                     return game_id
+                # Track non-standard path as fallback (custom install location)
+                if not fallback_id:
+                    fallback_id = game_id
+            if fallback_id:
+                logger.info(
+                    f"[Ubisoft] Extracted game ID {fallback_id} from registry "
+                    f"(non-standard InstallDir, custom location)"
+                )
+                return fallback_id
 
             # Fallback: also check user.reg for HKCU Installs entries
             user_reg = os.path.join(prefix_path, reg_name.replace("system.reg", "user.reg"))
@@ -3319,7 +3332,7 @@ class UbisoftConnector(Store):
                 "games",
             ),
         ]
-        external_game_roots = [DEFAULT_INSTALL_BASE, SDCARD_INSTALL_BASE]
+        external_game_roots = self._get_external_game_roots()
 
         def _build_result(game_dir: str, title_hint: str = "") -> Dict[str, Any]:
             exe = self.find_game_executable(game_dir) or ""
@@ -3415,6 +3428,76 @@ class UbisoftConnector(Store):
                     ):
                         continue
                     return _build_result(game_dir, known_name or folder)
+
+        # Method 4: Registry InstallDir for specific install_id
+        # Handles custom install locations chosen by the user in UPC.
+        # Scoped to the exact install_id for this space_id to prevent
+        # false positives — we never blind-scan all registry entries.
+        install_id = self.resolve_install_id(space_id)
+        if install_id:
+            install_id_section = (
+                f"Installs\\\\{install_id}]"
+            )
+            for reg_name in ("pfx/system.reg", "system.reg"):
+                reg_path = os.path.join(prefix_path, reg_name)
+                if not os.path.isfile(reg_path):
+                    continue
+                try:
+                    with open(reg_path, "r", encoding="utf-8", errors="replace") as f:
+                        reg_content = f.read()
+                    # Find only the section for our specific install_id
+                    for m in re.finditer(
+                        r'\[Software\\\\(?:Wow6432Node\\\\)?Ubisoft\\\\Launcher\\\\Installs\\\\'
+                        + re.escape(install_id)
+                        + r'\]'
+                        r'[^\[]*?"InstallDir"\s*=\s*"([^"]*)"',
+                        reg_content,
+                        re.DOTALL,
+                    ):
+                        install_dir_raw = m.group(1).replace("\\\\", "/")
+                        linux_path = self._wine_path_to_linux(
+                            install_dir_raw, prefix_path
+                        )
+                        if not linux_path or not os.path.isdir(linux_path):
+                            continue
+                        # Validate: must have install state or look like a game
+                        state_file = os.path.join(
+                            linux_path, "uplay_install.state"
+                        )
+                        if not (
+                            check_install_state(state_file)
+                            or self._looks_like_game_install(linux_path)
+                        ):
+                            continue
+                        logger.info(
+                            f"[Ubisoft] Method 4: detected install via registry "
+                            f"InstallDir for {install_id}: {linux_path[:80]}"
+                        )
+                        result = _build_result(
+                            linux_path,
+                            known_name or os.path.basename(linux_path),
+                        )
+                        # Write marker for fast future lookups (Method 1)
+                        marker_path = os.path.join(
+                            linux_path, ".unifideck_ubisoft"
+                        )
+                        if not os.path.exists(marker_path):
+                            try:
+                                marker_data = {
+                                    "space_id": space_id,
+                                    "install_path": linux_path,
+                                    "game_title": (
+                                        known_name
+                                        or os.path.basename(linux_path)
+                                    ),
+                                }
+                                with open(marker_path, "w") as mf:
+                                    json.dump(marker_data, mf)
+                            except Exception:
+                                pass
+                        return result
+                except Exception:
+                    continue
 
         return None
 
@@ -4089,6 +4172,123 @@ class UbisoftConnector(Store):
         except Exception:
             pass
         return False
+
+    @staticmethod
+    def _wine_path_to_linux(
+        wine_path: str, prefix_path: str
+    ) -> Optional[str]:
+        """Convert a Wine drive-letter path to a Linux filesystem path.
+
+        Handles:
+          Z:\\home\\deck\\Games\\...  →  /home/deck/Games/...
+          C:\\Program Files\\...    →  {prefix}/drive_c/Program Files/...
+          D:\\Mods\\Brawlhalla\\... →  (resolved via dosdevices/d: symlink)
+
+        For drive letters other than Z: and C:, reads the prefix's
+        dosdevices/ directory to resolve the symlink target.
+        """
+        # Normalize separators
+        path = wine_path.replace("\\", "/")
+
+        # Must look like a drive-letter path (e.g. "X:/...")
+        if len(path) < 2 or path[1] != ":":
+            return None
+
+        drive_letter = path[0].upper()
+        relative = path[2:].lstrip("/")
+
+        # Z: maps to /
+        if drive_letter == "Z":
+            return "/" + relative if relative else "/"
+
+        # C: maps to drive_c within the prefix
+        if drive_letter == "C":
+            for base in [os.path.join(prefix_path, "pfx"), prefix_path]:
+                candidate = os.path.join(base, "drive_c", relative)
+                if os.path.exists(candidate):
+                    return candidate
+            # Return pfx layout even if doesn't exist yet
+            return os.path.join(prefix_path, "pfx", "drive_c", relative)
+
+        # Any other drive letter: resolve via dosdevices/ symlinks
+        # Wine maps drive letters like d: → /run/media/deck/SD_CARD
+        drive_name = f"{drive_letter.lower()}:"
+        for base in [os.path.join(prefix_path, "pfx"), prefix_path]:
+            link_path = os.path.join(base, "dosdevices", drive_name)
+            if os.path.islink(link_path):
+                target = os.path.realpath(link_path)
+                result = os.path.join(target, relative) if relative else target
+                return result
+
+        return None
+
+    def _get_external_game_roots(self) -> List[str]:
+        """Get all possible external Ubisoft game install directories.
+
+        Dynamically discovers:
+        - Default install base (~/Games/Ubisoft)
+        - SD card install base (/run/media/mmcblk0p1/Games/Ubisoft)
+        - User's custom install path from download_settings.json (+ /Ubisoft)
+        - All mounted media under /run/media/ (USB drives, etc.)
+
+        Returns a deduplicated list of existing or potential Ubisoft game roots.
+        """
+        roots = [DEFAULT_INSTALL_BASE, SDCARD_INSTALL_BASE]
+
+        # Custom path from download settings
+        settings_file = os.path.expanduser(
+            "~/.local/share/unifideck/download_settings.json"
+        )
+        try:
+            if os.path.isfile(settings_file):
+                with open(settings_file, "r") as f:
+                    settings = json.load(f)
+                custom_path = settings.get("custom_path")
+                if custom_path:
+                    # Check both the custom path directly and with /Ubisoft suffix
+                    roots.append(os.path.join(custom_path, "Ubisoft"))
+                    roots.append(custom_path)
+        except Exception:
+            pass
+
+        # Mounted media: /run/media/**/Games/Ubisoft
+        media_base = "/run/media"
+        if os.path.isdir(media_base):
+            try:
+                for entry in os.listdir(media_base):
+                    entry_path = os.path.join(media_base, entry)
+                    if not os.path.isdir(entry_path):
+                        continue
+                    # Direct mount: /run/media/mmcblk0p1/Games/Ubisoft
+                    candidate = os.path.join(entry_path, "Games", "Ubisoft")
+                    roots.append(candidate)
+                    # Nested mount: /run/media/deck/SDCARD/Games/Ubisoft
+                    try:
+                        for sub in os.listdir(entry_path):
+                            sub_path = os.path.join(entry_path, sub)
+                            if os.path.isdir(sub_path):
+                                candidate = os.path.join(
+                                    sub_path, "Games", "Ubisoft"
+                                )
+                                roots.append(candidate)
+                    except OSError:
+                        pass
+            except OSError:
+                pass
+
+        # Deduplicate via realpath, keep only existing dirs
+        seen: set = set()
+        unique: List[str] = []
+        for r in roots:
+            try:
+                real = os.path.realpath(r)
+            except Exception:
+                real = r
+            if real not in seen:
+                seen.add(real)
+                unique.append(r)
+
+        return unique
 
     async def _wait_for_install_completion(
         self, install_dir: str, progress_callback=None

@@ -427,6 +427,9 @@ def save_metacritic_metadata_cache(cache: Dict[str, Dict]) -> bool:
 # Artwork Attempts Cache - tracks which games have had artwork fetch attempted
 # Maps str(app_id) -> bool (True=has artwork, False=no artwork available)
 ARTWORK_ATTEMPTS_CACHE_FILE = "artwork_attempts_cache.json"
+# Bump this version whenever SGDB search/matching logic changes to
+# invalidate stale "skip" entries that were cached under old logic.
+ARTWORK_ATTEMPTS_CACHE_VERSION = 2
 
 
 def get_artwork_attempts_cache_path() -> Path:
@@ -435,15 +438,24 @@ def get_artwork_attempts_cache_path() -> Path:
 
 
 def load_artwork_attempts_cache() -> Dict[str, Any]:
-    """Load artwork attempts cache. Returns {str(app_id): True | sorted list of missing types}"""
+    """Load artwork attempts cache. Returns {str(app_id): True | sorted list of missing types}
+
+    Includes a version check — if the stored version doesn't match
+    ARTWORK_ATTEMPTS_CACHE_VERSION, the cache is discarded so games
+    are re-tried with the updated search/matching logic.
+    """
     cache_path = get_artwork_attempts_cache_path()
     try:
         if cache_path.exists():
             with open(cache_path, 'r') as f:
-                return json.load(f)
+                data = json.load(f)
+            if data.get('_version') != ARTWORK_ATTEMPTS_CACHE_VERSION:
+                logger.info(f"Artwork attempts cache version mismatch (have {data.get('_version')}, need {ARTWORK_ATTEMPTS_CACHE_VERSION}), re-evaluating all games")
+                return {'_version': ARTWORK_ATTEMPTS_CACHE_VERSION}
+            return data
     except Exception as e:
         logger.error(f"Error loading artwork attempts cache: {e}")
-    return {}
+    return {'_version': ARTWORK_ATTEMPTS_CACHE_VERSION}
 
 
 def save_artwork_attempts_cache(cache: Dict[str, Any]) -> bool:

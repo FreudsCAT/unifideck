@@ -2203,6 +2203,23 @@ except Exception as e:
         export PROTON_ENABLE_NVAPI=1
         export DXVK_NVAPI_ALLOW_OTHER_DRIVERS=1
 
+        # ---- Ensure dosdevices symlinks (fixes 0 MB disk space in UPC) ----
+        # Wine needs c: → ../drive_c and z: → / as symlinks.
+        # Broken/missing links cause GetDiskFreeSpaceEx() to return 0.
+        _dosdevices="$GAME_PREFIX/dosdevices"
+        [ -d "$GAME_PREFIX/pfx/drive_c" ] && _dosdevices="$GAME_PREFIX/pfx/dosdevices"
+        mkdir -p "$_dosdevices"
+        if [ ! -L "$_dosdevices/c:" ]; then
+            rm -rf "$_dosdevices/c:" 2>/dev/null
+            ln -sf ../drive_c "$_dosdevices/c:"
+            log "[Ubisoft] Fixed dosdevices/c: symlink"
+        fi
+        if [ ! -L "$_dosdevices/z:" ]; then
+            rm -rf "$_dosdevices/z:" 2>/dev/null
+            ln -sf / "$_dosdevices/z:"
+            log "[Ubisoft] Fixed dosdevices/z: symlink"
+        fi
+
         if [ -n "$WORK_DIR" ] && [ -d "$WORK_DIR" ]; then
             export STEAM_COMPAT_INSTALL_PATH="$WORK_DIR"
         else

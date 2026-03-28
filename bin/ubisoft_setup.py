@@ -158,6 +158,50 @@ def align_machine_guid(prefix_path: str) -> bool:
     return patched
 
 
+def ensure_dosdevices(prefix_path: str) -> None:
+    """Ensure dosdevices/ symlinks are correct in the Wine prefix.
+
+    Wine needs:
+      dosdevices/c: → ../drive_c
+      dosdevices/z: → /
+
+    If these are missing or are directories instead of symlinks (which can
+    happen after rsync cloning or interrupted prefix creation), Wine's
+    GetDiskFreeSpaceEx() returns 0 — causing UPC to show "0 MB available".
+    """
+    active = get_active_prefix(prefix_path)
+    dosdevices = os.path.join(active, "dosdevices")
+    os.makedirs(dosdevices, exist_ok=True)
+
+    expected = {
+        "c:": "../drive_c",
+        "z:": "/",
+    }
+
+    for name, target in expected.items():
+        link_path = os.path.join(dosdevices, name)
+        # Already a correct symlink?
+        if os.path.islink(link_path):
+            existing_target = os.readlink(link_path)
+            if existing_target == target:
+                continue
+            # Wrong target — remove and recreate
+            os.remove(link_path)
+            log(f"dosdevices/{name}: fixed symlink target ({existing_target} → {target})")
+        elif os.path.exists(link_path):
+            # Exists as a regular file or directory — remove it
+            import shutil as _shutil
+            if os.path.isdir(link_path):
+                _shutil.rmtree(link_path)
+            else:
+                os.remove(link_path)
+            log(f"dosdevices/{name}: removed non-symlink entry, recreating")
+
+        os.symlink(target, link_path)
+
+    log(f"dosdevices/ validated in {os.path.basename(active)}")
+
+
 # ============================================================================
 # Template cloning (Path B — fast)
 # ============================================================================
@@ -538,6 +582,9 @@ def bootstrap(space_id: str, prefix_path: str, install_path: str | None = None) 
 
     # Align MachineGuid with auth prefix so DPAPI credentials can be shared
     align_machine_guid(prefix_path)
+
+    # Ensure dosdevices symlinks are correct (fixes 0 MB disk space in UPC)
+    ensure_dosdevices(prefix_path)
 
     # Inject auth session
     inject_upc_session(prefix_path)
