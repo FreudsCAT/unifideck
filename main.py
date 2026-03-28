@@ -2491,7 +2491,8 @@ microsoft_client=self.microsoft,
                             store=game.store,      # 'epic', 'gog', 'amazon', or 'ubisoft'
                             store_id=game.id,      # Store-specific game ID
                             only_types=only_types, # Only fetch specified types (if any)
-                            extra=getattr(game, 'extra', None)  # Ubisoft: coverUrl, backgroundUrl, bannerUrl
+                            extra=getattr(game, 'extra', None),  # Ubisoft: coverUrl, backgroundUrl, bannerUrl
+                            sgdb_game_id=getattr(game, 'steam_app_id', None),  # Pre-cached SGDB game ID from lookup phase
                         ),
                         timeout=ARTWORK_FETCH_TIMEOUT
                     )
@@ -3511,11 +3512,11 @@ microsoft_client=self.microsoft,
                     logger.info(f"Force Sync: Cleared {_neg_unifidb} negative unifiDB entries")
 
                 _sgdb = load_steam_appid_cache()
-                _neg_sgdb = sum(1 for v in _sgdb.values() if v == -1)
-                if _neg_sgdb > 0:
-                    _sgdb = {k: v for k, v in _sgdb.items() if v != -1}
+                if _sgdb:
+                    _sgdb_count = len(_sgdb)
+                    _sgdb.clear()
                     save_steam_appid_cache(_sgdb)
-                    logger.info(f"Force Sync: Cleared {_neg_sgdb} negative SGDB entries")
+                    logger.info(f"Force Sync: Cleared all {_sgdb_count} SGDB cache entries for re-evaluation")
 
                 _art_path = get_artwork_attempts_cache_path()
                 if _art_path.exists():
