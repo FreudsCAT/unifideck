@@ -41,10 +41,14 @@ _WINE_SYSTEM_USERS = {"Public", "All Users", "Default", "Default User"}
 
 
 def read_machine_guid(prefix_path: str) -> str:
-    """Read Wine MachineGuid from a prefix's system.reg."""
+    """Read Wine MachineGuid from a prefix's system.reg.
+
+    Checks pfx/system.reg first because Proton uses that for DPAPI
+    encryption; the root-level system.reg may be a stale template copy.
+    """
     for reg in [
-        os.path.join(prefix_path, "system.reg"),
         os.path.join(prefix_path, "pfx", "system.reg"),
+        os.path.join(prefix_path, "system.reg"),
     ]:
         if not os.path.isfile(reg):
             continue
@@ -81,6 +85,63 @@ def iter_prefix_user_homes(prefix_path: str, pfx_first: bool = False):
             user_home = os.path.join(users_dir, entry)
             if os.path.isdir(user_home):
                 yield user_home
+
+
+def _get_canonical_machine_guid() -> str:
+    """Return the MachineGuid that all Ubisoft prefixes should share.
+
+    Prefers the auth prefix's pfx/system.reg GUID (credentials are encrypted
+    with it). Falls back to template.
+    """
+    for src in [AUTH_PREFIX_DIR, os.path.join(PREFIXES_DIR, ".template")]:
+        if os.path.isdir(src):
+            guid = read_machine_guid(src)
+            if guid:
+                return guid
+    return ""
+
+
+def _align_prefix_machine_guid(prefix_path: str) -> bool:
+    """Patch the prefix's pfx/system.reg MachineGuid to match the auth prefix.
+
+    Proton generates a unique MachineGuid per prefix, but DPAPI-encrypted
+    credential files can only be shared when the MachineGuid matches.
+    Aligning the GUID before credential injection ensures UPC can decrypt
+    ConnectSecureStorage.dat from the auth prefix.
+
+    Also patches root-level system.reg for consistency.
+    """
+    canonical = _get_canonical_machine_guid()
+    if not canonical:
+        return False
+
+    current = read_machine_guid(prefix_path)
+    if current == canonical:
+        return True  # Already aligned
+
+    patched = False
+    for reg_rel in ["pfx/system.reg", "system.reg"]:
+        reg_path = os.path.join(prefix_path, reg_rel)
+        if not os.path.isfile(reg_path):
+            continue
+        try:
+            with open(reg_path, "r", encoding="utf-8", errors="replace") as f:
+                content = f.read()
+            m = re.search(r'"MachineGuid"="([^"]+)"', content)
+            if m and m.group(1) != canonical:
+                new_content = re.sub(
+                    r'"MachineGuid"="[^"]+"',
+                    f'"MachineGuid"="{canonical}"',
+                    content,
+                )
+                with open(reg_path, "w", encoding="utf-8") as f:
+                    f.write(new_content)
+                print(f"[inject] Aligned MachineGuid in {reg_rel}: {m.group(1)[:8]}... → {canonical[:8]}...")
+                patched = True
+        except Exception as e:
+            print(f"[inject] Failed to align MachineGuid in {reg_rel}: {e}")
+
+    return patched
 
 
 def _find_best_credential_source():
@@ -167,6 +228,11 @@ def sync_credentials(prefix_path: str) -> bool:
     if os.path.realpath(source_prefix) == os.path.realpath(prefix_path):
         return True  # Target is the source
 
+    # Align MachineGuid so DPAPI-encrypted credentials can be shared.
+    # Proton generates unique GUIDs per prefix; alignment ensures UPC in
+    # this prefix can decrypt ConnectSecureStorage.dat from the auth prefix.
+    _align_prefix_machine_guid(prefix_path)
+
     # DPAPI-encrypted files require matching MachineGuid
     source_guid = read_machine_guid(source_prefix)
     target_guid = read_machine_guid(prefix_path)
@@ -212,7 +278,7 @@ def sync_credentials(prefix_path: str) -> bool:
 
     if synced:
         print(f"[inject] Synced {synced} credential file(s) from {os.path.basename(source_prefix)}")
-    return synced > 0
+    return bool(source_files)  # True if source had credentials, even if already in sync
 
 
 def sync_auth_artifacts(prefix_path: str) -> bool:

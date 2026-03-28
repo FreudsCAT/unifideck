@@ -1871,10 +1871,14 @@ class UbisoftConnector(Store):
 
     @staticmethod
     def _read_prefix_machine_guid(prefix_path: str) -> str:
-        """Read the Wine MachineGuid from a prefix's system.reg."""
+        """Read the Wine MachineGuid from a prefix's system.reg.
+
+        Checks pfx/system.reg first because Proton uses that for DPAPI
+        encryption; the root-level system.reg may be a stale template copy.
+        """
         for reg_path in [
-            os.path.join(prefix_path, "system.reg"),
             os.path.join(prefix_path, "pfx", "system.reg"),
+            os.path.join(prefix_path, "system.reg"),
         ]:
             if not os.path.isfile(reg_path):
                 continue

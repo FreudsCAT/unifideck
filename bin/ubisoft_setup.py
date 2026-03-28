@@ -43,6 +43,7 @@ TOKEN_FILE = DATA_DIR / "ubisoft_token.json"
 UPC_SESSION_FILE = DATA_DIR / "ubisoft_upc_session.txt"
 SETTINGS_FILE = DATA_DIR / "settings.json"
 BOOTSTRAP_MARKER = "unifideck_ubisoft_bootstrap.marker"
+AUTH_PREFIX_DIR = PREFIXES_DIR / ".upc-auth"
 
 # UPC paths within a Wine prefix (may be under pfx/ for Proton)
 UPC_RELATIVE = "drive_c/Program Files (x86)/Ubisoft/Ubisoft Game Launcher/upc.exe"
@@ -101,6 +102,60 @@ def is_bootstrapped(prefix_path: str) -> bool:
     """Check if the prefix has already been bootstrapped."""
     marker = os.path.join(prefix_path, BOOTSTRAP_MARKER)
     return os.path.isfile(marker) and find_upc_exe(prefix_path) is not None
+
+
+def align_machine_guid(prefix_path: str) -> bool:
+    """Align this prefix's pfx/system.reg MachineGuid with the auth prefix.
+
+    Proton generates a unique MachineGuid per prefix, but DPAPI-encrypted
+    credential files can only be shared when the MachineGuid matches.
+    """
+    # Find canonical GUID: prefer auth prefix, fall back to template
+    canonical = ""
+    for src in [str(AUTH_PREFIX_DIR), str(TEMPLATE_DIR)]:
+        if not os.path.isdir(src):
+            continue
+        for reg_rel in ["pfx/system.reg", "system.reg"]:
+            reg_path = os.path.join(src, reg_rel)
+            if not os.path.isfile(reg_path):
+                continue
+            try:
+                with open(reg_path, "r", errors="ignore") as f:
+                    m = re.search(r'"MachineGuid"="([^"]+)"', f.read())
+                    if m:
+                        canonical = m.group(1)
+                        break
+            except Exception:
+                pass
+        if canonical:
+            break
+
+    if not canonical:
+        return False
+
+    patched = False
+    for reg_rel in ["pfx/system.reg", "system.reg"]:
+        reg_path = os.path.join(prefix_path, reg_rel)
+        if not os.path.isfile(reg_path):
+            continue
+        try:
+            with open(reg_path, "r", encoding="utf-8", errors="replace") as f:
+                content = f.read()
+            m = re.search(r'"MachineGuid"="([^"]+)"', content)
+            if m and m.group(1) != canonical:
+                new_content = re.sub(
+                    r'"MachineGuid"="[^"]+"',
+                    f'"MachineGuid"="{canonical}"',
+                    content,
+                )
+                with open(reg_path, "w", encoding="utf-8") as f:
+                    f.write(new_content)
+                log(f"Aligned MachineGuid in {reg_rel}: {m.group(1)[:8]}... → {canonical[:8]}...")
+                patched = True
+        except Exception as e:
+            log(f"Failed to align MachineGuid in {reg_rel}: {e}")
+
+    return patched
 
 
 # ============================================================================
@@ -470,6 +525,19 @@ def bootstrap(space_id: str, prefix_path: str, install_path: str | None = None) 
             log("Template prefix created")
         except Exception as e:
             log(f"WARNING: Template creation failed: {e}")
+
+    # Wait for Wine to fully shut down before modifying registry files.
+    # fresh_install/clone may leave wineserver running in the background.
+    try:
+        env = os.environ.copy()
+        env["WINEPREFIX"] = prefix_path
+        subprocess.run(["wineserver", "-w"], env=env, timeout=30,
+                       capture_output=True)
+    except Exception:
+        pass  # wineserver may not exist or already exited
+
+    # Align MachineGuid with auth prefix so DPAPI credentials can be shared
+    align_machine_guid(prefix_path)
 
     # Inject auth session
     inject_upc_session(prefix_path)
