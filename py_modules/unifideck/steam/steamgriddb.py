@@ -102,7 +102,10 @@ class SteamGridDBClient:
         if not title:
             return ''
         t = title.lower().strip()
-        t = re.sub(r'[\u00ae\u2122\u00a9]', '', t)           # Strip ®™© BEFORE NFKD (NFKD expands ™→TM)
+        # Handle dual-language SGDB titles: "Game / Jeu" → take first part
+        if ' / ' in t:
+            t = t.split(' / ')[0].strip()
+        t = re.sub(r'[\u00ae\u2122\u00a9]', ' ', t)          # ®™© → space (preserve word boundaries: Watch Dogs®2 → Watch Dogs 2)
         # Decompose diacritics: ü→u, ñ→n, é→e, etc.
         t = unicodedata.normalize('NFKD', t)
         t = ''.join(c for c in t if not unicodedata.combining(c))
@@ -129,12 +132,12 @@ class SteamGridDBClient:
         edition_suffixes = [
             # Platform/console suffixes (longer first for most-specific match)
             'xbox series xs edition', 'xbox one edition', 'xbox edition',
-            'xbox series xs', 'xbox one',
+            'xbox series xs', 'xbox one version', 'xbox one',
             'pc edition', 'windows 10 edition', 'windows edition',
             'console edition',
             'for pc', 'for windows', 'for xbox',
             # Distribution/bundle suffixes
-            'cross gen bundle', 'game preview',
+            'cross gen bundle', 'cross gen edition', 'game preview',
             'the complete season', 'the complete first season',
             # Full edition names
             'deluxe edition', 'gold edition', 'ultimate edition', 'complete edition',
@@ -143,11 +146,15 @@ class SteamGridDBClient:
             'premium edition', 'standard edition', 'legacy edition',
             'collectors edition', 'limited edition', 'digital edition',
             'classic edition', 'royal edition', 'legendary edition',
+            'elite edition', 'ea play edition',
             'remastered', 'remake', 'directors cut', 'the final cut',
+            'unofficial patch',
             # EA/publisher edition variants
             'revolution',
+            # Version variants
+            'digital version',
             # Short/standalone (word boundary ensured by space-prefix check)
-            'goty', 'hd', 'ce', 'windows',
+            'goty', 'hd', 'ce', 'dlc', 'windows', 'console', 'xs',
         ]
         # Iterative: strip one suffix per pass, repeat until stable
         changed = True
@@ -160,6 +167,39 @@ class SteamGridDBClient:
                         normalized_title = stripped
                         changed = True
                         break  # Restart suffix scan from the top
+
+            if changed:
+                continue
+
+            # Generic: strip any "<1-3 words> edition" at the end
+            # Catches unlisted variants like "marching fire edition", "ultimate survivor edition"
+            m = re.match(r'^(.+?)\s+(?:\w+\s+){0,2}edition$', normalized_title)
+            if m:
+                stripped = m.group(1).strip()
+                if stripped:
+                    normalized_title = stripped
+                    changed = True
+                    continue
+
+            # Strip chapter/episode ranges: "chapters 1 3", "episodes 1 5"
+            m = re.match(r'^(.+?)\s+(?:chapters?|episodes?)\s+[\d\s]+$', normalized_title)
+            if m:
+                stripped = m.group(1).strip()
+                if stripped:
+                    normalized_title = stripped
+                    changed = True
+                    continue
+
+            # Strip parenthesized years that survived normalization: "skate 2007"
+            # Only strip trailing 4-digit years when preceded by a non-numeric word
+            m = re.match(r'^(.+?\D)\s+(\d{4})$', normalized_title)
+            if m and 1980 <= int(m.group(2)) <= 2030:
+                stripped = m.group(1).strip()
+                if stripped:
+                    normalized_title = stripped
+                    changed = True
+                    continue
+
         return normalized_title
 
     @staticmethod
@@ -181,6 +221,14 @@ class SteamGridDBClient:
         intersection = search_words & result_words
         union = search_words | result_words
         jaccard = len(intersection) / len(union) if union else 0.0
+        # Prefix match bonus: if all search words appear in order at start of result,
+        # boost score. Handles truncated shortcut names (e.g. "Kameo" → "Kameo: Elements of Power")
+        result_words_list = result_norm.split()
+        search_words_list = search_norm.split()
+        if (len(search_words_list) <= len(result_words_list) and
+                search_words_list == result_words_list[:len(search_words_list)]):
+            prefix_score = max(0.50, len(search_words_list) / len(result_words_list))
+            jaccard = max(jaccard, prefix_score)
         return jaccard
 
     async def search_game(self, title: str) -> Optional[int]:
@@ -203,8 +251,16 @@ class SteamGridDBClient:
             clean_query = re.sub(r'\s*[-\u2013:]\s*Xbox (?:One|Series X\|?S)(?:\s+Edition)?\s*$', '', clean_query, flags=re.IGNORECASE).strip()
             clean_query = re.sub(r'\s+for\s+Xbox\s*$', '', clean_query, flags=re.IGNORECASE).strip()
             clean_query = re.sub(r'\s+Xbox\s+(?:One|Series\s+X\|?S)(?:\s+Edition)?\s*$', '', clean_query, flags=re.IGNORECASE).strip()
-            clean_query = re.sub(r'\s*[-\u2013:]\s*(?:Cross[- ]Gen\s+Bundle|The\s+Complete(?:\s+First)?\s+Season)\s*$', '', clean_query, flags=re.IGNORECASE).strip()
+            clean_query = re.sub(r'\s*[-\u2013:]\s*(?:Cross[- ]Gen\s+(?:Bundle|Edition)|The\s+Complete(?:\s+First)?\s+Season)\s*$', '', clean_query, flags=re.IGNORECASE).strip()
             clean_query = re.sub(r'\s*[-\u2013:]\s*(?:Standard|Console)\s+Edition(?:\s*\(Windows\))?\s*$', '', clean_query, flags=re.IGNORECASE).strip()
+            # Strip parenthesized metadata: (2020), (X|S), (Episodes 1-5), (Game Preview)
+            clean_query = re.sub(r'\s*\(\d{4}\)', '', clean_query).strip()
+            clean_query = re.sub(r'\s*\(X\|?S\)', '', clean_query, flags=re.IGNORECASE).strip()
+            clean_query = re.sub(r'\s*\((?:Episodes?|Chapters?)\s+[\d\-\s]+\)', '', clean_query, flags=re.IGNORECASE).strip()
+            # Strip DLC additions: " + Something DLC", " + Something"
+            clean_query = re.sub(r'\s*\+\s+.+$', '', clean_query).strip()
+            # Strip trailing "Xbox One Version", "Digital Version", etc.
+            clean_query = re.sub(r'\s+Xbox\s+One\s+Version\s*$', '', clean_query, flags=re.IGNORECASE).strip()
             results = await asyncio.wait_for(
                 loop.run_in_executor(None, self.client.search_game, clean_query),
                 timeout=STEAMGRIDDB_SEARCH_TIMEOUT,
@@ -213,7 +269,9 @@ class SteamGridDBClient:
             if not results or len(results) == 0:
                 return None
 
-            search_norm = self._normalize_for_sgdb_match(title)
+            # Strip DLC additions from title for matching: "Besiege + The Splintered Sea DLC" → "Besiege"
+            match_title = re.sub(r'\s*\+\s+.+$', '', title).strip() or title
+            search_norm = self._normalize_for_sgdb_match(match_title)
 
             # Pass 1: Normalized exact match (handles ®™©, &/and, punctuation)
             for result in results:
@@ -284,7 +342,7 @@ class SteamGridDBClient:
 
             # Pass 5: Try without known publisher prefixes
             # SGDB may index games without publisher branding (e.g., "College Football 25" not "EA SPORTS College Football 25")
-            publisher_prefixes = ['ea sports', 'tom clancys', 'sid meiers']
+            publisher_prefixes = ['ea sports', 'tom clancys', 'sid meiers', 'disney pixar', 'dreamworks', 'microsoft']
             for prefix in publisher_prefixes:
                 if search_base.startswith(prefix + ' '):
                     short_title = search_base[len(prefix):].strip()
@@ -302,8 +360,32 @@ class SteamGridDBClient:
                                 return result.id
                     break  # Only try one prefix
 
-            # No confident match — return None so pipeline falls through to Steam CDN
-            logger.debug(f"No confident SGDB match for '{title}' (best score: {best_score:.2f})")
+            # Pass 6: Fuzzy fallback — accept best result above a lower threshold
+            # Catches cases where publisher prefixes, abbreviations, or branding
+            # differences prevent strict matching but the top result is clearly correct.
+            # Collect best candidate across all search attempts.
+            all_candidates = []
+            for candidate_list in [results]:
+                if candidate_list and not isinstance(candidate_list, Exception):
+                    for result in candidate_list:
+                        result_norm = self._normalize_for_sgdb_match(getattr(result, 'name', ''))
+                        result_base = self._strip_edition_suffix(result_norm)
+                        score = max(
+                            self._score_sgdb_match(search_norm, result_norm),
+                            self._score_sgdb_match(search_base, result_base),
+                        )
+                        all_candidates.append((score, result))
+
+            if all_candidates:
+                all_candidates.sort(key=lambda x: x[0], reverse=True)
+                fuzzy_score, fuzzy_result = all_candidates[0]
+                if fuzzy_score >= 0.50:
+                    logger.info(f"SGDB fuzzy match for '{title}': '{getattr(fuzzy_result, 'name', '?')}' (id={fuzzy_result.id}, score={fuzzy_score:.2f})")
+                    return fuzzy_result.id
+
+            # No match at all — return None so pipeline falls through to Steam CDN
+            best_score = f"{all_candidates[0][0]:.2f}" if all_candidates else "0"
+            logger.debug(f"No SGDB match for '{title}' (best score: {best_score})")
             return None
 
         except asyncio.TimeoutError:

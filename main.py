@@ -429,7 +429,7 @@ def save_metacritic_metadata_cache(cache: Dict[str, Dict]) -> bool:
 ARTWORK_ATTEMPTS_CACHE_FILE = "artwork_attempts_cache.json"
 # Bump this version whenever SGDB search/matching logic changes to
 # invalidate stale "skip" entries that were cached under old logic.
-ARTWORK_ATTEMPTS_CACHE_VERSION = 2
+ARTWORK_ATTEMPTS_CACHE_VERSION = 3
 
 
 def get_artwork_attempts_cache_path() -> Path:
