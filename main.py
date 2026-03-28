@@ -6574,19 +6574,6 @@ microsoft_client=self.microsoft,
         logger.info("[RPC] connect_ubisoft_account")
         return await self.ubisoft.connect_ubisoft_account()
 
-    # REST API auth for library queries. After successful login, UPC is
-    # auto-opened in the template prefix to capture the native session token.
-
-    async def start_ubisoft_auth(self, email: str, password: str) -> Dict[str, Any]:
-        """Start Ubisoft Connect authentication with credentials."""
-        logger.info("[RPC] start_ubisoft_auth")
-        auth_data = json.dumps({"email": email, "password": password})
-        return await self.ubisoft.complete_auth(auth_data)
-
-    async def complete_ubisoft_2fa(self, code: str) -> Dict[str, Any]:
-        """Complete Ubisoft Connect 2FA verification"""
-        return await self.ubisoft.complete_auth_2fa(code)
-
     async def logout_ubisoft(self) -> Dict[str, Any]:
         """Logout from Ubisoft Connect"""
         return await self.ubisoft.logout()
