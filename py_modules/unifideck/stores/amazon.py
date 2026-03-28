@@ -174,7 +174,12 @@ class AmazonConnector(Store):
                 # Trigger auto-sync if plugin instance available
                 if self.plugin_instance:
                     logger.info("[Amazon] Triggering library sync after auth")
-                    asyncio.create_task(self.plugin_instance.force_sync_libraries())
+                    asyncio.create_task(
+                        self.plugin_instance.request_auth_sync(
+                            force=True,
+                            source='auth:amazon',
+                        )
+                    )
                     
                 return {'success': True, 'message': 'Authenticated successfully'}
             else:
@@ -756,4 +761,3 @@ class AmazonConnector(Store):
         except Exception as e:
             logger.error(f"[Amazon] Error updating {game_id}: {e}")
             return {'success': False, 'error': str(e)}
-

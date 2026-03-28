@@ -2,8 +2,8 @@
 Ubisoft Connect Store Connector
 
 Main store adapter implementing the Store ABC for Ubisoft Connect.
-Uses direct REST/GraphQL API for auth and library (via UbisoftAPIClient),
-and delegates downloads/installs/launches to upc.exe via uplay:// protocol.
+Uses UPC-native auth and local binary cache parsing for library discovery.
+Delegates downloads/installs/launches to upc.exe via uplay:// protocol.
 """
 import asyncio
 import glob
@@ -122,8 +122,9 @@ class UbisoftConnector(Store):
     """
     Ubisoft Connect store connector.
 
-    Uses direct REST/GraphQL API for auth and library,
-    delegates downloads/installs/launches to upc.exe via uplay:// protocol.
+    Uses UPC-native auth (user logs in through Ubisoft Connect directly)
+    and local binary cache parsing for library discovery.
+    Delegates downloads/installs/launches to upc.exe via uplay:// protocol.
     """
 
     def __init__(self, plugin_dir: Optional[str] = None, plugin_instance=None):
@@ -137,7 +138,6 @@ class UbisoftConnector(Store):
         self._auth_assets_lock = asyncio.Lock()
         self._auth_monitor_task: Optional[asyncio.Task] = None
         self._auth_session_captured = False
-        self._pending_2fa_ticket: Optional[str] = None  # Stored between login → 2FA
         self._active_install_pids: Dict[str, int] = {}  # game_id → PID for cancel support
 
     # ========================================================================
@@ -149,286 +149,257 @@ class UbisoftConnector(Store):
         return "ubisoft"
 
     async def is_available(self) -> bool:
-        """Check if authenticated and tokens are valid."""
-        logger.info("[Ubisoft] Checking availability")
-        if not self.api.has_tokens():
-            logger.info("[Ubisoft] No tokens found -- not authenticated")
-            return False
+        """Check if authenticated by looking for UPC credentials in the auth prefix."""
+        if self._has_valid_credentials(AUTH_PREFIX_DIR):
+            return True
+        return False
 
-        try:
-            valid = await self.api.validate_ticket()
-            if valid:
-                logger.info("[Ubisoft] Ticket valid")
+    def _has_valid_credentials(self, prefix_path: str) -> bool:
+        """Check if a prefix has valid ConnectSecureStorage.dat (>100 bytes)."""
+        if not os.path.isdir(prefix_path):
+            return False
+        for _, user_home in _iter_prefix_user_homes(prefix_path, pfx_first=True):
+            css = os.path.join(user_home, _UPC_LOCAL_SUBDIR, "ConnectSecureStorage.dat")
+            if os.path.isfile(css) and os.path.getsize(css) > 100:
                 return True
+        return False
 
-            # Ticket expired — attempt refresh before reporting unavailable
-            logger.info("[Ubisoft] Ticket invalid, attempting refresh")
-            refreshed = await self.api.refresh_token()
-            if refreshed:
-                logger.info("[Ubisoft] Token refreshed successfully")
-                return True
-
-            logger.info("[Ubisoft] Token refresh failed — not available")
-            return False
-        except Exception as e:
-            logger.warning(f"[Ubisoft] Availability check error: {e}")
-            return False
+    def _get_credential_mtime(self, prefix_path: str) -> float:
+        """Get most recent mtime of ConnectSecureStorage.dat in a prefix."""
+        best = 0.0
+        for _, user_home in _iter_prefix_user_homes(prefix_path, pfx_first=True):
+            css = os.path.join(user_home, _UPC_LOCAL_SUBDIR, "ConnectSecureStorage.dat")
+            if os.path.isfile(css) and os.path.getsize(css) > 100:
+                mtime = os.path.getmtime(css)
+                if mtime > best:
+                    best = mtime
+        return best
 
     async def start_auth(self) -> Dict[str, Any]:
-        """
-        Return auth prompt config for native Decky form (email + password).
+        """Return auth prompt config for UPC-native login.
 
-        Unlike Epic/GOG/Amazon, Ubisoft uses direct REST API login,
-        so no URL is returned -- the frontend renders a form instead.
+        Signals the frontend to launch Ubisoft Connect directly for
+        the user to log in, rather than using API-based credentials.
         """
         return {
             "success": True,
-            "auth_type": "credentials",
-            "message": "Enter your Ubisoft Connect email and password",
+            "auth_type": "upc_launch",
+            "message": "Sign in through Ubisoft Connect",
         }
 
     async def complete_auth(self, auth_data: str) -> Dict[str, Any]:
-        """
-        Complete auth with email/password credentials.
-
-        Args:
-            auth_data: JSON string with {email, password} or {code, two_fa_ticket}
-        """
-        try:
-            data = json.loads(auth_data) if isinstance(auth_data, str) else auth_data
-        except (json.JSONDecodeError, TypeError):
-            return {"success": False, "error": "Invalid auth data format"}
-
-        email = data.get("email", "")
-        password = data.get("password", "")
-
-        if not email or not password:
-            return {"success": False, "error": "Email and password are required"}
-
-        result = await self.api.login(email, password)
-
-        if result.get("requires_2fa"):
-            # Store 2FA ticket for subsequent complete_auth_2fa call
-            self._pending_2fa_ticket = result.get("2fa_ticket", "")
-            logger.info("[Ubisoft] Login requires 2FA, ticket stored")
-        elif result.get("success"):
-            # Auth succeeded -- trigger auto-sync. Launcher-based UPC auth is
-            # initiated immediately by the frontend, so avoid background
-            # auth-asset repair here; VDF/prefix writes in the hot path can
-            # race the upcoming RunGame launch.
-            if self.plugin_instance:
-                logger.info("[Ubisoft] Triggering library sync after auth")
-                asyncio.create_task(self.plugin_instance.force_sync_libraries())
-            result["launch_upc_auth"] = True
-
-        return result
-
-    async def complete_auth_2fa(self, code: str, two_fa_ticket: str = None) -> Dict[str, Any]:
-        """
-        Complete 2FA verification.
-
-        Args:
-            code: 6-digit verification code
-            two_fa_ticket: The 2FA ticket from initial login (optional,
-                          uses stored ticket from previous login call if omitted)
-        """
-        ticket = two_fa_ticket or self._pending_2fa_ticket
-        if not ticket:
-            return {"success": False, "error": "No 2FA ticket available — please sign in again"}
-
-        result = await self.api.complete_2fa(code, ticket)
-        self._pending_2fa_ticket = None  # Clear after use
-
-        if result.get("success"):
-            # Same hot-path rule as complete_auth(): launch first, repair later.
-            if self.plugin_instance:
-                logger.info("[Ubisoft] Triggering library sync after 2FA auth")
-                asyncio.create_task(self.plugin_instance.force_sync_libraries())
-            result["launch_upc_auth"] = True
-
-        return result
+        """No-op — Ubisoft uses UPC-native auth, not API credentials."""
+        return {"success": False, "error": "Use UPC-native login instead"}
 
     async def logout(self) -> Dict[str, Any]:
-        """Logout from Ubisoft Connect, clearing all state."""
-        return self.api.logout()
+        """Logout from Ubisoft Connect, clearing all auth state."""
+        # Clear legacy API token file if it exists
+        self.api.logout()
 
-    async def _auto_capture_upc_token(self) -> None:
-        """
-        Auto-open UPC in the template prefix after REST auth to capture the
-        native session token. Runs as a background task so auth returns immediately.
-        """
-        try:
-            # Wait for template prefix to exist (may still be creating)
-            for _ in range(60):  # Up to 5 minutes
-                if self._template_exists():
-                    break
-                await asyncio.sleep(5)
-            else:
-                logger.warning("[Ubisoft] Template prefix not ready, skipping auto UPC token capture")
-                return
+        # Clear UPC session file
+        if os.path.isfile(UPC_SESSION_FILE):
+            try:
+                os.remove(UPC_SESSION_FILE)
+                logger.info("[Ubisoft] Deleted UPC session file")
+            except Exception as e:
+                logger.error(f"[Ubisoft] Failed to delete UPC session file: {e}")
 
-            logger.info("[Ubisoft] Auto-opening UPC in template prefix for token capture")
-            result = await self.connect_ubisoft_account()
-            if result.get("success"):
-                logger.info("[Ubisoft] Auto UPC token capture succeeded")
-            else:
-                logger.warning(f"[Ubisoft] Auto UPC token capture: {result.get('error', 'unknown')}")
-        except Exception as e:
-            logger.warning(f"[Ubisoft] Auto UPC token capture failed: {e}")
+        # Delete auth prefix so user can re-login fresh
+        if os.path.isdir(AUTH_PREFIX_DIR):
+            try:
+                import shutil
+                shutil.rmtree(AUTH_PREFIX_DIR)
+                logger.info("[Ubisoft] Deleted auth prefix directory")
+            except Exception as e:
+                logger.error(f"[Ubisoft] Failed to delete auth prefix: {e}")
+
+        return {"success": True}
 
     async def get_library(self) -> Optional[List[Game]]:
-        """
-        Get the user's Ubisoft game library.
+        """Get the user's Ubisoft game library from local UPC binary cache.
 
-        Combines two data sources:
-        1. GraphQL API (purchased/owned games with full metadata)
-        2. Ownership binary (free claimed games that the API misses)
+        Parses configurations + ownership binaries that UPC writes to disk
+        after the user logs in via Ubisoft Connect.
 
         Returns:
-            List of Game objects, None on auth failure.
+            List of Game objects, or empty list on error.
         """
         try:
-            nodes = await self.api.get_owned_games()
+            local_games = await self._get_library_from_local_binaries()
+            if local_games is None:
+                logger.info("[Ubisoft] No local binary data available yet")
+                return []
 
-            if nodes is None:
-                # Auth failure -- return None so sync skips this store
-                logger.warning("[Ubisoft] Library query returned None (auth failure)")
-                return None
-
-            # Get installed games for status
-            installed = await self.get_installed()
-
-            games = []
-            seen_space_ids = set()
-            seen_names: set = set()
-
-            for node in nodes:
-                space_id = node.get("spaceId", "")
-                if not space_id or space_id in seen_space_ids:
-                    continue
-
-                name = node.get("name", "Unknown")
-                norm_name = self._normalize_for_matching(name)
-
-                # Deduplicate by name (e.g. Far Cry 5 appears twice
-                # with different spaceIds in the current API)
-                if norm_name in seen_names:
-                    logger.debug(
-                        f"[Ubisoft] Skipping duplicate name: {name} "
-                        f"[spaceId={space_id[:8]}]"
-                    )
-                    continue
-
-                seen_space_ids.add(space_id)
-                seen_names.add(norm_name)
-
-                cover_url = node.get("coverUrl", "")
-                background_url = node.get("backgroundUrl", "")
-                banner_url = node.get("bannerUrl", "")
-
-                is_installed = space_id in installed
-
-                game = Game(
-                    id=space_id,
-                    title=name,
-                    store="ubisoft",
-                    is_installed=is_installed,
-                    cover_image=cover_url,
-                    ownership_type="owned",
-                    install_path=installed.get(space_id, {}).get("install_path"),
-                    executable=installed.get(space_id, {}).get("executable"),
-                )
-
-                # Store extra GraphQL data for artwork fetcher
-                if not hasattr(game, "extra"):
-                    game.extra = {}
-                game.extra = {
-                    "coverUrl": cover_url,
-                    "backgroundUrl": background_url,
-                    "bannerUrl": banner_url,
-                }
-
-                games.append(game)
-
-            logger.info(f"[Ubisoft] Library: {len(games)} games from GraphQL")
-
-            # Resolve install_ids from static database for all games
-            if games:
-                game_list = [{"space_id": g.id, "name": g.title} for g in games]
-                try:
-                    await self._resolve_install_ids_from_database(game_list)
-                except Exception as e:
-                    logger.warning(f"[Ubisoft] Static ID resolution failed: {e}")
-
-            # Purge stale binary-sourced entries from the id_map cache
-            # so that previous runs' junk doesn't persist across syncs.
-            stale_keys = [
-                k for k, v in self._id_map_cache.items()
-                if v.get("source") == "ownership_binary"
-            ]
-            for k in stale_keys:
-                del self._id_map_cache[k]
-            if stale_keys:
-                logger.debug(
-                    f"[Ubisoft] Cleared {len(stale_keys)} stale binary "
-                    f"id_map entries"
-                )
-
-            # Supplement with ownership binary (free/claimed games)
-            try:
-                # Collect install_ids already known from GraphQL games
-                graphql_install_ids: set = set()
-                for g in games:
-                    entry = self._id_map_cache.get(g.id, {})
-                    iid = entry.get("install_id")
-                    if iid:
-                        graphql_install_ids.add(str(iid))
-                        graphql_install_ids.add(int(iid) if str(iid).isdigit() else iid)
-
-                # Collect normalized names for dedup
-                graphql_names = {
-                    self._normalize_for_matching(g.title) for g in games
-                }
-
-                ownership_games = await self._get_ownership_binary_games(
-                    graphql_install_ids, graphql_names
-                )
-                if ownership_games:
-                    games.extend(ownership_games)
-                    logger.info(
-                        f"[Ubisoft] Library total: {len(games)} games "
-                        f"({len(games) - len(ownership_games)} from API + "
-                        f"{len(ownership_games)} from ownership binary)"
-                    )
-            except Exception as e:
-                logger.warning(f"[Ubisoft] Ownership binary scan failed: {e}")
-
-            auto_manifest = await self._build_auto_visible_manifest(nodes)
-            games = self._apply_visible_manifest_filter(
-                games,
-                installed,
-                auto_manifest,
-                source_label="auto",
+            logger.info(
+                f"[Ubisoft] Library: {len(local_games)} games from local binaries"
             )
+
+            installed = await self.get_installed()
 
             override_manifest = self._load_visible_manifest()
             if override_manifest:
-                games = self._apply_visible_manifest_filter(
-                    games,
+                local_games = self._apply_visible_manifest_filter(
+                    local_games,
                     installed,
                     override_manifest,
                     source_label="override",
                 )
 
             # Trigger template prefix creation as background task if needed
-            if games and not self._template_exists():
+            if local_games and not self._template_exists():
                 self._queue_template_creation()
 
-            return games
-
+            return local_games
         except Exception as e:
             logger.exception(f"[Ubisoft] Error fetching library: {e}")
             return []
+
+    async def _get_library_from_local_binaries(self) -> Optional[List[Game]]:
+        """Build game library from UPC's local binary cache files.
+
+        Parses the configurations binary (game metadata) and ownership binary
+        (owned IDs), cross-references them, and applies DLC/junk filtering.
+
+        Returns:
+            List of Game objects, or None if binary files not found.
+        """
+        from .ubisoft_parser import parse_configurations, parse_ownership
+
+        # Find configurations binary
+        cfg_path = None
+        for prefix_dir in (AUTH_PREFIX_DIR, TEMPLATE_DIR):
+            cfg_path = self._find_configurations(prefix_dir)
+            if cfg_path:
+                break
+
+        if not cfg_path:
+            logger.info("[Ubisoft] No configurations binary found")
+            return None
+
+        # Parse configurations
+        configs = parse_configurations(cfg_path)
+        if not configs:
+            logger.warning("[Ubisoft] Configurations binary parsed but empty")
+            return None
+
+        # Find and parse ownership binary
+        ownership_path, user_id = self._discover_ownership_file()
+        owned_set: Optional[set] = None
+        if ownership_path:
+            owned_ids = parse_ownership(ownership_path)
+            owned_set = set(owned_ids)
+            logger.info(
+                f"[Ubisoft] Ownership: {len(owned_set)} unique IDs "
+                f"(userId={user_id[:8]}...)"
+            )
+
+        # Build install_id/launch_id -> config lookup
+        config_by_id: Dict[int, Any] = {}
+        for cfg in configs:
+            config_by_id[cfg.install_id] = cfg
+            if cfg.launch_id and cfg.launch_id != cfg.install_id:
+                config_by_id[cfg.launch_id] = cfg
+
+        # Cross-reference: keep only owned games
+        if owned_set is not None:
+            matched_configs = []
+            for oid in owned_set:
+                cfg = config_by_id.get(oid)
+                if cfg and cfg.name:
+                    matched_configs.append(cfg)
+        else:
+            # No ownership binary — show all config games (conservative)
+            matched_configs = [c for c in configs if c.name]
+            logger.info(
+                "[Ubisoft] No ownership binary — using all "
+                f"{len(matched_configs)} config entries"
+            )
+
+        # Get installed games for status
+        installed = await self.get_installed()
+
+        # Filter and deduplicate
+        games: List[Game] = []
+        seen_names: Set[str] = set()
+
+        for cfg in sorted(matched_configs, key=lambda c: c.name.lower()):
+            title = self._clean_launcher_title(cfg.name)
+            if self._should_skip_launcher_title(title):
+                continue
+
+            norm_name = self._normalize_for_matching(title)
+            if norm_name in seen_names:
+                continue
+            seen_names.add(norm_name)
+
+            # Use space_id as game ID (preferred for SteamGridDB), fall back
+            # to install_id
+            game_id = cfg.space_id if cfg.space_id else str(cfg.install_id)
+
+            is_installed = (
+                game_id in installed
+                or cfg.space_id in installed
+            )
+            install_meta = (
+                installed.get(game_id, {})
+                or installed.get(cfg.space_id, {})
+            )
+
+            game = Game(
+                id=game_id,
+                title=title,
+                store="ubisoft",
+                is_installed=is_installed,
+                ownership_type="owned",
+                install_path=install_meta.get("install_path") if install_meta else None,
+                executable=install_meta.get("executable") if install_meta else None,
+            )
+            games.append(game)
+
+            # Update id_map cache with accurate IDs from parser
+            self._id_map_cache[game_id] = {
+                "install_id": str(cfg.install_id),
+                "launch_id": str(cfg.launch_id),
+                "name": title,
+                "executable": cfg.executable,
+                "game_identifier": cfg.game_identifier,
+                "source": "local_binary",
+            }
+
+        if self._id_map_cache:
+            self._save_id_map()
+
+        logger.info(
+            f"[Ubisoft] Local binary library: {len(games)} games "
+            f"(from {len(matched_configs)} matched configs)"
+        )
+        return games
+
+    def _discover_ownership_file(self) -> tuple:
+        """Find ownership binary and discover userId from filename.
+
+        Returns:
+            (filepath, userId) or ("", "") if not found.
+        """
+        for prefix_dir in (AUTH_PREFIX_DIR, TEMPLATE_DIR):
+            for sub in ("pfx", ""):
+                if sub:
+                    ownership_dir = os.path.join(
+                        prefix_dir, sub, OWNERSHIP_RELATIVE_PATH
+                    )
+                else:
+                    ownership_dir = os.path.join(
+                        prefix_dir, OWNERSHIP_RELATIVE_PATH
+                    )
+                if os.path.isdir(ownership_dir):
+                    entries = [
+                        e for e in os.listdir(ownership_dir)
+                        if os.path.isfile(os.path.join(ownership_dir, e))
+                    ]
+                    if entries:
+                        user_id = entries[0]
+                        return os.path.join(ownership_dir, user_id), user_id
+        return "", ""
 
     async def get_installed(self) -> Dict[str, Any]:
         """
@@ -1300,240 +1271,6 @@ class UbisoftConnector(Store):
         raw_entries = list(raw_by_norm.values())
         return raw_entries, parsed_entries
 
-    async def _fetch_free_to_play_manifest_entries(self) -> List[Dict[str, Any]]:
-        """Fetch Ubisoft's current free-to-play catalog and resolve clean titles."""
-        entries: List[Dict[str, Any]] = []
-
-        session = await self.api._create_session()
-        try:
-            async with session.get(
-                "https://static3.cdn.ubi.com/orbit/uplay_launcher_14_0/free_games/latest.txt",
-                timeout=30,
-            ) as resp:
-                version = (await resp.text()).strip()
-
-            async with session.get(
-                "https://static3.cdn.ubi.com/orbit/uplay_launcher_14_0/"
-                f"free_games/{version}/free_game_configs.json",
-                timeout=30,
-            ) as resp:
-                payload = json.loads(await resp.text())
-        except Exception as e:
-            logger.warning(f"[Ubisoft] Free-to-play feed failed: {e}")
-            await session.close()
-            return []
-
-        for item in payload.get("root", []):
-            if (item.get("type") or "").lower() != "freetoplay":
-                continue
-
-            entries.append({
-                "title": self._clean_launcher_title(item.get("name", "")),
-                "space_id": str(item.get("space_id") or "").strip(),
-                "install_id": str(
-                    item.get("after_activation_product_id")
-                    or item.get("product_id")
-                    or ""
-                ).strip(),
-                "launch_id": str(
-                    item.get("after_activation_product_id")
-                    or item.get("product_id")
-                    or ""
-                ).strip(),
-                "ubisoftconnect_game_id": str(item.get("product_id") or "").strip(),
-                "cover_image": str(item.get("thumb_url") or "").strip(),
-                "source": "free_feed",
-                "ownership_type": "free",
-            })
-
-        if not entries or not await self.api.ensure_valid_token():
-            await session.close()
-            return entries
-
-        headers = self.api._base_headers()
-        headers["Authorization"] = f"Ubi_v1 t={self.api.tokens['ticket']}"
-        session_id = self.api.tokens.get("sessionId", "")
-        if session_id:
-            headers["Ubi-SessionId"] = session_id
-
-        async def fetch_space_metadata(space_id: str) -> Tuple[str, Dict[str, Any]]:
-            url = (
-                "https://public-ubiservices.ubi.com/v1/spaces/"
-                f"{space_id}/global/ubiconnect/games/api"
-            )
-            try:
-                async with session.get(url, headers=headers, timeout=30) as resp:
-                    if resp.status != 200:
-                        return space_id, {}
-                    body = await resp.json(content_type=None)
-                    images = body.get("imageUrls") or {}
-                    return space_id, {
-                        "title": self._clean_launcher_title(
-                            body.get("displayName", "")
-                        ),
-                        "cover_image": (
-                            images.get("lowBoxArt")
-                            or images.get("highBoxArt")
-                            or images.get("lowThumbnail")
-                            or ""
-                        ),
-                    }
-            except Exception:
-                return space_id, {}
-
-        metadata_results = await asyncio.gather(*[
-            fetch_space_metadata(entry["space_id"])
-            for entry in entries
-            if entry.get("space_id")
-        ])
-        await session.close()
-
-        metadata_by_space = {
-            space_id: metadata
-            for space_id, metadata in metadata_results
-            if metadata
-        }
-        for entry in entries:
-            metadata = metadata_by_space.get(entry.get("space_id", ""))
-            if not metadata:
-                continue
-            if metadata.get("title") and not self._is_launcher_placeholder_title(
-                metadata["title"]
-            ):
-                entry["title"] = metadata["title"]
-            if metadata.get("cover_image"):
-                entry["cover_image"] = metadata["cover_image"]
-
-        return entries
-
-    def _merge_visible_manifest_entry(
-        self,
-        manifest: List[Dict[str, Any]],
-        entry: Dict[str, Any],
-    ) -> None:
-        """Merge a visible-library candidate into a manifest entry list."""
-        norm_title = self._normalize_for_matching(entry.get("title", ""))
-        if not norm_title:
-            return
-
-        existing = None
-        space_id = str(entry.get("space_id") or "").strip()
-        if space_id:
-            existing = next(
-                (
-                    item for item in manifest
-                    if str(item.get("space_id") or "").strip() == space_id
-                ),
-                None,
-            )
-        if existing is None:
-            existing = next(
-                (
-                    item for item in manifest
-                    if self._normalize_for_matching(item.get("title", "")) == norm_title
-                ),
-                None,
-            )
-
-        if existing is None:
-            manifest.append(dict(entry))
-            return
-
-        if (
-            self._is_launcher_placeholder_title(existing.get("title", ""))
-            and not self._is_launcher_placeholder_title(entry.get("title", ""))
-        ):
-            existing["title"] = entry["title"]
-
-        for field in (
-            "space_id",
-            "install_id",
-            "launch_id",
-            "ubisoftconnect_game_id",
-            "cover_image",
-        ):
-            value = str(entry.get(field) or "").strip()
-            if value and not existing.get(field):
-                existing[field] = value
-
-        if entry.get("ownership_type") == "owned":
-            existing["ownership_type"] = "owned"
-        elif not existing.get("ownership_type"):
-            existing["ownership_type"] = entry.get("ownership_type")
-
-    async def _build_auto_visible_manifest(
-        self,
-        graphql_nodes: List[Dict[str, Any]],
-    ) -> List[Dict[str, Any]]:
-        """Build a generalized launcher-visible Ubisoft manifest for any user."""
-        graphql_entries: List[Dict[str, Any]] = []
-        graphql_names_normalized: Set[str] = set()
-        for node in graphql_nodes or []:
-            title = self._clean_launcher_title(node.get("name", ""))
-            if not title:
-                continue
-            graphql_entries.append({
-                "title": title,
-                "space_id": str(node.get("spaceId") or "").strip(),
-                "cover_image": str(node.get("coverUrl") or "").strip(),
-                "source": "graphql",
-                "ownership_type": "owned",
-            })
-            graphql_names_normalized.add(self._normalize_for_matching(title))
-
-        raw_config_entries, parsed_entries = self._extract_launcher_config_entries(
-            graphql_names_normalized
-        )
-        raw_names = {
-            self._normalize_for_matching(entry["title"])
-            for entry in raw_config_entries
-        }
-        raw_space_ids = {
-            str(entry.get("space_id") or "").strip()
-            for entry in raw_config_entries
-            if entry.get("space_id")
-        }
-
-        corroborated_graphql = [
-            entry for entry in graphql_entries
-            if entry.get("space_id") in raw_space_ids
-            or self._normalize_for_matching(entry["title"]) in raw_names
-        ]
-        free_entries = await self._fetch_free_to_play_manifest_entries()
-
-        # When there is no local UPC configuration cache at all (no
-        # template prefix run yet, no auth prefix), we have nothing to
-        # corroborate against.  In that case, trust the GraphQL API as
-        # the authoritative source -- treat ALL graphql_entries as valid
-        # rather than filtering them down to an empty corroborated set.
-        # Free entries are still appended to surface any F2P titles the
-        # API might miss.
-        has_local_corroboration = bool(
-            raw_config_entries or parsed_entries or corroborated_graphql
-        )
-        if has_local_corroboration:
-            effective_graphql = corroborated_graphql
-        else:
-            effective_graphql = graphql_entries
-            logger.info(
-                "[Ubisoft] No local config cache -- trusting all "
-                f"{len(graphql_entries)} GraphQL entries as visible"
-            )
-
-        manifest: List[Dict[str, Any]] = []
-        for group in (free_entries, effective_graphql, raw_config_entries, parsed_entries):
-            for entry in group:
-                self._merge_visible_manifest_entry(manifest, entry)
-
-        logger.info(
-            f"[Ubisoft] Auto visible manifest built {len(manifest)} entries "
-            f"({len(effective_graphql)} GraphQL"
-            f"{' (all, no local cache)' if not has_local_corroboration else ''}"
-            f", {len(raw_config_entries)} config, "
-            f"{len(parsed_entries)} parsed, {len(free_entries)} free)"
-        )
-        return manifest
-
     @staticmethod
     def _visible_manifest_game_id(entry: Dict[str, Any]) -> str:
         """Return the runtime game id for a visible-manifest entry."""
@@ -1884,6 +1621,7 @@ class UbisoftConnector(Store):
 
             # Pattern: [Software\\Wow6432Node\\Ubisoft\\Launcher\\Installs\\<ID>]
             # followed by "InstallDir"="<path>"
+            fallback_id = None
             for m in re.finditer(
                 r'\[Software\\\\Wow6432Node\\\\Ubisoft\\\\Launcher\\\\Installs\\\\(\d+)\]'
                 r'[^\[]*?"InstallDir"\s*=\s*"([^"]*)"',
@@ -1894,13 +1632,25 @@ class UbisoftConnector(Store):
                 install_dir = m.group(2).replace("\\\\", "/")
                 # Prefer the entry whose InstallDir is inside the prefix
                 # (the per-prefix local install, not an external/stale one)
-                if "Ubisoft Game Launcher/games/" in install_dir or \
-                   "Ubisoft Game Launcher\\games\\" in install_dir:
+                standard_path = (
+                    "Ubisoft Game Launcher/games/" in install_dir
+                    or "Ubisoft Game Launcher\\games\\" in install_dir
+                )
+                if standard_path:
                     logger.info(
                         f"[Ubisoft] Extracted game ID {game_id} from registry "
                         f"(InstallDir={install_dir[:60]})"
                     )
                     return game_id
+                # Track non-standard path as fallback (custom install location)
+                if not fallback_id:
+                    fallback_id = game_id
+            if fallback_id:
+                logger.info(
+                    f"[Ubisoft] Extracted game ID {fallback_id} from registry "
+                    f"(non-standard InstallDir, custom location)"
+                )
+                return fallback_id
 
             # Fallback: also check user.reg for HKCU Installs entries
             user_reg = os.path.join(prefix_path, reg_name.replace("system.reg", "user.reg"))
@@ -1945,448 +1695,6 @@ class UbisoftConnector(Store):
                 return install_id
 
         return None
-
-    async def _resolve_install_ids_from_database(
-        self, games: List[Dict[str, str]]
-    ) -> int:
-        """
-        Match owned games against the static game ID database by name.
-
-        Args:
-            games: List of dicts with 'space_id' and 'name' keys.
-
-        Returns:
-            Number of new mappings added.
-        """
-        db_entries = await self._fetch_game_id_database()
-        if not db_entries:
-            return 0
-
-        # Build normalized lookup: {normalized_name: (install_id, original_name)}
-        db_lookup: Dict[str, tuple] = {}
-        for install_id, db_name in db_entries:
-            norm = self._normalize_for_matching(db_name)
-            db_lookup[norm] = (install_id, db_name)
-
-        added = 0
-        for game in games:
-            space_id = game["space_id"]
-            # Skip if already mapped
-            if space_id in self._id_map_cache and self._id_map_cache[space_id].get("install_id"):
-                continue
-
-            game_name = game["name"]
-            norm_name = self._normalize_for_matching(game_name)
-
-            # Try exact normalized match first
-            match = db_lookup.get(norm_name)
-
-            # Try without common suffixes/prefixes
-            if not match:
-                # Try stripping "edition" variants (e.g., "Gold Edition", "Deluxe Edition")
-                import re as _re
-                stripped = _re.sub(r"\s*(standard|gold|deluxe|ultimate|complete|definitive|goty)\s*edition\s*$", "", norm_name).strip()
-                if stripped != norm_name:
-                    match = db_lookup.get(stripped)
-
-            # Try word-set matching for close matches
-            if not match:
-                game_words = set(norm_name.split())
-                best_score = 0.0
-                best_match = None
-                for db_norm, (db_id, db_orig) in db_lookup.items():
-                    db_words = set(db_norm.split())
-                    if not game_words or not db_words:
-                        continue
-                    # Jaccard similarity
-                    intersection = len(game_words & db_words)
-                    union = len(game_words | db_words)
-                    score = intersection / union if union else 0
-                    # Require high similarity to avoid false matches
-                    if score > best_score and score >= 0.8:
-                        best_score = score
-                        best_match = (db_id, db_orig)
-                match = best_match
-
-            if match:
-                install_id, db_name = match
-                self._id_map_cache[space_id] = {
-                    "install_id": install_id,
-                    "launch_id": install_id,  # Usually same for Ubisoft
-                    "name": game_name,
-                }
-                added += 1
-                logger.info(f"[Ubisoft] Matched '{game_name}' → install_id={install_id} (db: '{db_name}')")
-            else:
-                logger.debug(f"[Ubisoft] No database match for '{game_name}'")
-
-        if added:
-            self._save_id_map()
-            logger.info(f"[Ubisoft] Resolved {added} install_ids from static database")
-        
-        # Try to extract ubisoftConnectGameId from Ubisoft Connect's local cache
-        # This is more reliable for native games than static database matching
-        cache_ids = self._extract_cache_game_ids(TEMPLATE_DIR)
-        for space_id, ubisoft_id in cache_ids.items():
-            if space_id in self._id_map_cache:
-                self._id_map_cache[space_id]["ubisoftconnect_game_id"] = ubisoft_id
-                logger.info(f"[Ubisoft] Added cache ubisoftConnectGameId {ubisoft_id} for spaceId {space_id}")
-        
-        if cache_ids:
-            self._save_id_map()
-
-        return added
-
-    async def _get_ownership_all_names(self) -> Set[str]:
-        """Get ALL normalized names from the ownership binary (unfiltered).
-
-        Used to cross-reference ownership data for supplementary game discovery.
-        """
-        from .ubisoft_parser import parse_ownership
-
-        user_id = self.api.get_user_id()
-        if not user_id:
-            return set()
-
-        ownership_file = None
-        for prefix_dir in (TEMPLATE_DIR, AUTH_PREFIX_DIR):
-            for sub in ("pfx", ""):
-                candidate = os.path.join(
-                    prefix_dir, sub, OWNERSHIP_RELATIVE_PATH, user_id
-                ) if sub else os.path.join(
-                    prefix_dir, OWNERSHIP_RELATIVE_PATH, user_id
-                )
-                if os.path.isfile(candidate):
-                    ownership_file = candidate
-                    break
-            if ownership_file:
-                break
-
-        if not ownership_file:
-            return set()
-
-        try:
-            owned_ids = set(parse_ownership(ownership_file))
-            db_entries = await self._fetch_game_id_database()
-
-            # Build id → name map from community DB
-            id_to_name: Dict[str, str] = {}
-            if db_entries:
-                for install_id_str, name in db_entries:
-                    if install_id_str not in id_to_name:
-                        id_to_name[install_id_str] = name
-
-            # Supplement with configurations binary (same old-style ID namespace)
-            try:
-                from .ubisoft_parser import parse_configurations
-                for prefix_dir in (TEMPLATE_DIR, AUTH_PREFIX_DIR):
-                    cfg_path = self._find_configurations(prefix_dir)
-                    if cfg_path:
-                        for cfg in parse_configurations(cfg_path):
-                            iid_str = str(cfg.install_id)
-                            if iid_str not in id_to_name and cfg.name:
-                                id_to_name[iid_str] = cfg.name
-                        break
-            except Exception:
-                pass
-
-            names: Set[str] = set()
-            for oid in owned_ids:
-                name = id_to_name.get(str(oid))
-                if name:
-                    names.add(self._normalize_for_matching(name))
-            return names
-        except Exception as e:
-            logger.debug(f"[Ubisoft] Ownership name resolution failed: {e}")
-            return set()
-
-    async def _get_ownership_binary_games(
-        self, graphql_install_ids: set, graphql_names_normalized: set
-    ) -> List[Game]:
-        """
-        Discover games from the UPC ownership binary that are missing from GraphQL.
-
-        The GraphQL API only returns purchased games (isOwned: true). Free claimed
-        games (e.g., Rayman Origins, Splinter Cell) and F2P games (e.g., Brawlhalla)
-        are only present in the ownership binary that UPC writes to disk.
-
-        Args:
-            graphql_install_ids: Set of install_ids already found via GraphQL + ID map.
-            graphql_names_normalized: Set of normalized names from GraphQL results.
-
-        Returns:
-            List of Game objects for games found in ownership binary but not in GraphQL.
-        """
-        from .ubisoft_parser import parse_ownership
-
-        # Find the ownership binary in template or auth prefix
-        user_id = self.api.get_user_id()
-        if not user_id:
-            logger.debug("[Ubisoft] No user_id for ownership binary lookup")
-            return []
-
-        ownership_file = None
-        for prefix_dir in (TEMPLATE_DIR, AUTH_PREFIX_DIR):
-            for sub in ("pfx", ""):
-                candidate = os.path.join(
-                    prefix_dir, sub, OWNERSHIP_RELATIVE_PATH, user_id
-                ) if sub else os.path.join(
-                    prefix_dir, OWNERSHIP_RELATIVE_PATH, user_id
-                )
-                if os.path.isfile(candidate):
-                    ownership_file = candidate
-                    break
-            if ownership_file:
-                break
-
-        if not ownership_file:
-            logger.debug("[Ubisoft] No ownership binary found")
-            return []
-
-        owned_ids = parse_ownership(ownership_file)
-        unique_ids = set(owned_ids)
-        logger.info(
-            f"[Ubisoft] Ownership binary: {len(unique_ids)} unique IDs "
-            f"(GraphQL already has {len(graphql_install_ids)} install_ids)"
-        )
-
-        # Load the community game ID database for name lookups
-        db_entries = await self._fetch_game_id_database()
-        if not db_entries:
-            logger.debug("[Ubisoft] No game ID database for ownership resolution")
-            return []
-
-        # Build install_id -> name lookup from database
-        # The database may have multiple entries per ID; take the first
-        db_by_id: Dict[str, str] = {}
-        for install_id_str, name in db_entries:
-            if install_id_str not in db_by_id:
-                db_by_id[install_id_str] = name
-
-        # Supplement with configurations binary (maps old-style IDs to names)
-        # The ownership binary uses old-style install_ids that often don't
-        # exist in the community DB (different ID namespace).  The
-        # configurations binary uses the SAME old-style IDs and has names.
-        try:
-            from .ubisoft_parser import parse_configurations
-            for prefix_dir in (TEMPLATE_DIR, AUTH_PREFIX_DIR):
-                cfg_path = self._find_configurations(prefix_dir)
-                if cfg_path:
-                    configs = parse_configurations(cfg_path)
-                    for cfg in configs:
-                        iid_str = str(cfg.install_id)
-                        if iid_str not in db_by_id and cfg.name:
-                            db_by_id[iid_str] = cfg.name
-                            logger.debug(
-                                f"[Ubisoft] Configurations resolved ID "
-                                f"{iid_str} → {cfg.name}"
-                            )
-                    break
-        except Exception as e:
-            logger.debug(f"[Ubisoft] Configurations supplement failed: {e}")
-
-        # ── Collect all known game names (GraphQL + API-sourced id_map) ──
-        # Only include API-sourced entries, not previous ownership_binary results
-        known_base_names: Set[str] = set(graphql_names_normalized)
-        for entry in self._id_map_cache.values():
-            if entry.get("source") == "ownership_binary":
-                continue
-            n = entry.get("name")
-            if n:
-                known_base_names.add(self._normalize_for_matching(n))
-
-        # Build a set of ALL known game names from the community DB
-        # Used for DLC detection: if "Parent" in "Parent - DLC" is a known game
-        all_db_names: Set[str] = set()
-        for _, db_name in db_entries:
-            all_db_names.add(self._normalize_for_matching(db_name))
-
-        # ── First pass: resolve names, apply hard filters ──
-        candidates: list = []  # (oid, name, norm_name)
-        for oid in sorted(unique_ids):
-            oid_str = str(oid)
-
-            # Skip if already matched to a GraphQL game
-            if oid in graphql_install_ids or oid_str in graphql_install_ids:
-                continue
-
-            # Look up name in community database
-            name = db_by_id.get(oid_str)
-            if not name:
-                continue  # Unknown ID (likely DLC/addon, skip)
-
-            # Skip if the name matches a GraphQL game (dedup by name)
-            norm_name = self._normalize_for_matching(name)
-            if norm_name in graphql_names_normalized:
-                continue
-
-            # ── Hard filters (obvious junk) ──
-
-            # Very short names are test/placeholder entries
-            if len(name.strip()) <= 2:
-                logger.debug(f"[Ubisoft] Ownership skip (too short): {name}")
-                continue
-
-            # [STEAM] or [Uplay PC] tagged entries are test/region packages
-            if re.search(r'\[STEAM\]|\[Uplay', name, re.IGNORECASE):
-                logger.debug(f"[Ubisoft] Ownership skip (tagged): {name}")
-                continue
-
-            # Test, beta, alpha, closed, preorder, promotion, internal entries
-            if re.search(
-                r'\b(test\b|beta|alpha|closed|preorder|pre-order|'
-                r'promotion|internal|dev/qc)\b',
-                name, re.IGNORECASE
-            ):
-                logger.debug(f"[Ubisoft] Ownership skip (test/beta): {name}")
-                continue
-
-            # Names with Cyrillic characters are localized duplicates
-            if re.search(r'[\u0400-\u04FF]', name):
-                logger.debug(f"[Ubisoft] Ownership skip (localized): {name}")
-                continue
-
-            # Free-to-play games appear in the binary because the user
-            # launched them, but they are not "owned" purchases.
-            if re.search(
-                r'^(Brawlhalla|Hyper Scape|Roller Champions|'
-                r'Tom Clancy.s XDefiant|XDefiant|UNO)$',
-                name, re.IGNORECASE
-            ):
-                logger.debug(f"[Ubisoft] Ownership skip (F2P): {name}")
-                continue
-
-            # DLC keyword filter (expanded)
-            if re.search(
-                r'\b(dlc|season pass|expansion|pack|bonus|soundtrack|'
-                r'art ?book|skins?|outfit|costume|weapon|map|mission|episode|'
-                r'revolver|kukri|sword|cane-sword|hammer|knife|dagger|'
-                r'conspiracy|runaway train|texture|language|'
-                r'of the dead|starter edition)\b',
-                name, re.IGNORECASE
-            ):
-                logger.debug(f"[Ubisoft] Ownership skip (DLC keyword): {name}")
-                continue
-
-            # "Parent Game - DLC Name" pattern: if text before " - " matches
-            # a known game (owned, in DB, or substring), this is DLC
-            if " - " in name:
-                parent_part = name.split(" - ", 1)[0].strip()
-                parent_norm = self._normalize_for_matching(parent_part)
-                is_dlc = (
-                    parent_norm in known_base_names
-                    or parent_norm in all_db_names
-                )
-                if not is_dlc and len(parent_norm) > 5:
-                    # Substring: "rainbow six siege" in "tom clancys rainbow six siege"
-                    is_dlc = any(
-                        parent_norm in kn or kn in parent_norm
-                        for kn in known_base_names
-                    )
-                if is_dlc:
-                    logger.debug(
-                        f"[Ubisoft] Ownership skip (DLC of {parent_part}): {name}"
-                    )
-                    continue
-
-            # Same pattern for ": " separator (e.g. "Game: Preorder").
-            # NOTE: Only check against known_base_names (currently owned
-            # games), NOT all_db_names.  The ": " separator is widely used
-            # for franchise titles (Prince of Persia: The Sands of Time,
-            # Tom Clancy's Splinter Cell: Chaos Theory) where the prefix
-            # is also a standalone game in the DB.  Checking all_db_names
-            # would false-positive those as "DLC of Prince of Persia".
-            if ": " in name:
-                parent_part = name.split(": ", 1)[0].strip()
-                parent_norm = self._normalize_for_matching(parent_part)
-                is_dlc = parent_norm in known_base_names
-                if not is_dlc and len(parent_norm) > 5:
-                    is_dlc = any(
-                        parent_norm in kn or kn in parent_norm
-                        for kn in known_base_names
-                    )
-                if is_dlc:
-                    logger.debug(
-                        f"[Ubisoft] Ownership skip (DLC/sub of "
-                        f"{parent_part}): {name}"
-                    )
-                    continue
-
-            # Edition variants where the base game already exists
-            edition_match = re.search(
-                r'\s+(Gold|Complete|Ultimate|Deluxe|Premium|Special|'
-                r'Collector.s?|Limited|Digital|Standard)\s*(Edition)?$',
-                name, re.IGNORECASE
-            )
-            if edition_match:
-                base_name = name[:edition_match.start()].strip()
-                base_norm = self._normalize_for_matching(base_name)
-                is_edition_dup = (
-                    base_norm in known_base_names
-                    or base_norm in graphql_names_normalized
-                )
-                # Also check substring match for games with prefix
-                # e.g. "Rainbow Six Siege" in "Tom Clancy's Rainbow Six Siege"
-                if not is_edition_dup:
-                    is_edition_dup = any(
-                        base_norm in kn or kn in base_norm
-                        for kn in known_base_names if len(base_norm) > 5
-                    )
-                if is_edition_dup:
-                    logger.debug(
-                        f"[Ubisoft] Ownership skip (edition variant): {name}"
-                    )
-                    continue
-
-            # Preorder entries (e.g., "The Crew (Russian): Preorder")
-            if re.search(r':\s*Preorder\b', name, re.IGNORECASE):
-                logger.debug(f"[Ubisoft] Ownership skip (preorder): {name}")
-                continue
-
-            candidates.append((oid, name, norm_name))
-
-        # ── Second pass: deduplicate by normalized name ──
-        seen_norm: Set[str] = set()
-        new_games = []
-        for oid, name, norm_name in candidates:
-            if norm_name in seen_norm:
-                logger.debug(f"[Ubisoft] Ownership skip (dup): {name}")
-                continue
-            seen_norm.add(norm_name)
-
-            game = Game(
-                id=f"ubi-{oid}",
-                title=name,
-                store="ubisoft",
-                is_installed=False,
-                ownership_type="free",
-            )
-
-            oid_str = str(oid)
-            synthetic_id = f"ubi-{oid}"
-            if synthetic_id not in self._id_map_cache:
-                self._id_map_cache[synthetic_id] = {
-                    "install_id": oid_str,
-                    "launch_id": oid_str,
-                    "name": name,
-                    "source": "ownership_binary",
-                }
-
-            new_games.append(game)
-            logger.info(
-                f"[Ubisoft] Ownership-only game: {name} (install_id={oid})"
-            )
-
-        if new_games:
-            self._save_id_map()
-            logger.info(
-                f"[Ubisoft] Found {len(new_games)} additional games from "
-                f"ownership binary (free/claimed/F2P)"
-            )
-
-        return new_games
-
-    # ========================================================================
     # Steam-Linked Game Filtering
     # ========================================================================
 
@@ -2512,7 +1820,7 @@ class UbisoftConnector(Store):
 
             if os.path.isdir(AUTH_PREFIX_DIR):
                 self._backfill_hidden_prefix_session(AUTH_PREFIX_DIR)
-            elif self.api.has_tokens():
+            elif os.path.isfile(UPC_SESSION_FILE):
                 logger.info("[Ubisoft] Auth prefix missing but user is authenticated; recreating")
                 await self._ensure_auth_prefix()
 
@@ -2576,10 +1884,14 @@ class UbisoftConnector(Store):
 
     @staticmethod
     def _read_prefix_machine_guid(prefix_path: str) -> str:
-        """Read the Wine MachineGuid from a prefix's system.reg."""
+        """Read the Wine MachineGuid from a prefix's system.reg.
+
+        Checks pfx/system.reg first because Proton uses that for DPAPI
+        encryption; the root-level system.reg may be a stale template copy.
+        """
         for reg_path in [
-            os.path.join(prefix_path, "system.reg"),
             os.path.join(prefix_path, "pfx", "system.reg"),
+            os.path.join(prefix_path, "system.reg"),
         ]:
             if not os.path.isfile(reg_path):
                 continue
@@ -3176,7 +2488,7 @@ class UbisoftConnector(Store):
         try:
             import aiohttp
 
-            session = await self.api._create_session()
+            session = aiohttp.ClientSession()
             try:
                 async with session.get(
                     INSTALLER_URL,
@@ -3324,57 +2636,36 @@ class UbisoftConnector(Store):
 
     def inject_upc_session(self, prefix_path: str) -> bool:
         """
-        Pre-inject auth session and credential files into UPC config so no login
+        Pre-inject UPC credential files into a game prefix so no login
         prompt appears.
 
-        Syncs ConnectSecureStorage.dat and user.dat from the auth prefix, then
-        writes restore_session token. Prefers UPC-native token over API ticket.
+        Syncs ConnectSecureStorage.dat, user.dat, and auth cache artifacts
+        from the best available auth source (auth prefix preferred).
+        Returns True if any credential files were synced.
         """
-        # Sync binary credential files and auth-adjacent cache state from the
-        # best authenticated prefix so newly created/stale prefixes can reuse
-        # an existing Ubisoft login without waiting for a fresh manual sign-in.
         source = self._find_best_credential_source()
-        if source:
-            try:
-                synced = self._sync_upc_credentials_to_prefix(source, prefix_path)
-                artifact_synced = self._sync_upc_auth_artifacts_to_prefix(source, prefix_path)
-                if synced:
-                    logger.info(f"[Ubisoft] inject_upc_session: synced {synced} credential file(s)")
-                if artifact_synced:
-                    logger.info(
-                        f"[Ubisoft] inject_upc_session: synced {artifact_synced} auth cache artifact(s)"
-                    )
-            except Exception as e:
-                logger.warning(f"[Ubisoft] inject_upc_session: auth sync failed: {e}")
-
-        # Prefer UPC-native token from session file
-        upc_session: Optional[str] = None
-        if os.path.isfile(UPC_SESSION_FILE):
-            try:
-                with open(UPC_SESSION_FILE) as f:
-                    upc_session = f.read().strip() or None
-            except Exception:
-                pass
-
-        if upc_session:
-            # Skip if prefix already has the correct token
-            existing = self._read_prefix_restore_session(prefix_path)
-            if existing == upc_session:
-                logger.info("[Ubisoft] inject_upc_session: prefix already has correct UPC token, skipping")
-                return True
-            logger.info("[Ubisoft] inject_upc_session: writing UPC session token")
-            return self._write_upc_session_to_prefix(prefix_path, upc_session)
-
-        # Fall back to API ticket
-        if not self.api.has_tokens():
-            logger.warning("[Ubisoft] No tokens available for session injection")
+        if not source:
+            logger.warning("[Ubisoft] inject_upc_session: no credential source found")
             return False
-        ticket = self.api.get_ticket() or ""
-        if not ticket:
-            logger.warning("[Ubisoft] No ticket available for session injection")
-            return False
-        logger.info("[Ubisoft] inject_upc_session: using API ticket (no UPC session captured yet)")
-        return self._write_upc_session_to_prefix(prefix_path, ticket)
+
+        credentials_synced = False
+        try:
+            synced = self._sync_upc_credentials_to_prefix(source, prefix_path)
+            artifact_synced = self._sync_upc_auth_artifacts_to_prefix(source, prefix_path)
+            if synced:
+                logger.info(f"[Ubisoft] inject_upc_session: synced {synced} credential file(s)")
+                credentials_synced = True
+            if artifact_synced:
+                logger.info(
+                    f"[Ubisoft] inject_upc_session: synced {artifact_synced} auth cache artifact(s)"
+                )
+                credentials_synced = True
+        except Exception as e:
+            logger.warning(f"[Ubisoft] inject_upc_session: auth sync failed: {e}")
+
+        if not credentials_synced:
+            logger.warning("[Ubisoft] inject_upc_session: no credentials synced")
+        return credentials_synced
 
     def _iter_game_prefix_paths(self):
         """Yield all non-hidden Ubisoft game prefixes."""
@@ -3388,7 +2679,7 @@ class UbisoftConnector(Store):
                 yield prefix_path
 
     def _get_current_upc_session_token(self) -> Optional[str]:
-        """Return the best currently available Ubisoft session token."""
+        """Return the UPC session token from the session file, or None."""
         if os.path.isfile(UPC_SESSION_FILE):
             try:
                 with open(UPC_SESSION_FILE) as f:
@@ -3397,17 +2688,15 @@ class UbisoftConnector(Store):
                     return token
             except Exception:
                 pass
-
-        ticket = self.api.get_ticket() or ""
-        return ticket or None
+        return None
 
     def _ensure_upc_auth_state_in_prefixes(self, prefix_paths: List[str]) -> int:
-        """Ensure the current Ubisoft auth state is present in the target prefixes."""
-        token = self._get_current_upc_session_token()
-        if not token:
-            logger.debug("[Ubisoft] No current session token available for prefix propagation")
-            return 0
+        """Ensure the current Ubisoft auth state is present in the target prefixes.
 
+        Always calls inject_upc_session() even without a standalone session token,
+        because it independently syncs credential files (ConnectSecureStorage.dat etc.)
+        from the auth prefix — which is sufficient for UPC auto-login.
+        """
         ensured = 0
 
         for prefix_path in prefix_paths:
@@ -3674,70 +2963,66 @@ class UbisoftConnector(Store):
                 continue
         return None
 
-    def _propagate_upc_session_to_all_prefixes(self, token: str) -> None:
-        """Update restore_session and credential files in all existing per-game prefixes."""
-        count = 0
-        for prefix_path in self._iter_game_prefix_paths() or []:
-            try:
-                self._write_upc_session_to_prefix(prefix_path, token)
-                count += 1
-            except Exception as e:
-                logger.warning(
-                    f"[Ubisoft] Failed to update prefix {os.path.basename(prefix_path)}: {e}"
-                )
-        logger.info(f"[Ubisoft] Propagated session token to {count} existing prefixes")
+    def _propagate_upc_session_to_all_prefixes(self, _token: Optional[str] = None) -> None:
+        """Propagate credential files and auth artifacts to all game prefixes.
 
-        # Also propagate binary credential files and auth cache artifacts
+        UPC stores auth in ConnectSecureStorage.dat (DPAPI-encrypted), not in
+        settings.yml tokens. This method copies credential files and auth cache
+        artifacts from the auth prefix to every game prefix.
+        """
         self._propagate_upc_credentials_to_all_prefixes()
         self._propagate_upc_auth_artifacts_to_all_prefixes()
 
     def _capture_upc_session(self, prefix_path: str) -> Optional[str]:
         """
-        Read back the restore_session token that UPC wrote to settings.yml
-        after a successful login and save it for future use.
+        Detect fresh UPC credentials (ConnectSecureStorage.dat) in a prefix
+        after a successful login and propagate them.
 
-        UPC writes its own token (valid for rm_v1 auth) which differs from
-        the REST API ticket we have. Capturing it enables future auto-login.
+        UPC stores auth entirely in DPAPI-encrypted credential files
+        (ConnectSecureStorage.dat, user.dat) — not in settings.yml tokens.
+        Detecting a new/changed ConnectSecureStorage.dat is the auth signal.
 
-        Always syncs credentials and auth artifacts from the source prefix
-        to both .template and .upc-auth so they stay fresh for future
-        injections. Returns a new token when one was captured, or None if
-        the token was unchanged — but credential sync happens regardless.
+        Returns a non-None sentinel string when new credentials are detected
+        (callers check truthiness), or None if no change. Credential sync
+        to .template and .upc-auth happens whenever valid credentials exist.
         """
-        token = self._read_prefix_restore_session(prefix_path)
-        if not token:
+        if not self._has_valid_credentials(prefix_path):
             return None
 
-        current_api_ticket = self.api.get_ticket() or ""
-        if token == current_api_ticket:
+        new_mtime = self._get_credential_mtime(prefix_path)
+        if not new_mtime:
             return None
 
-        token_changed = False
-        try:
-            previous_token = ""
-            if os.path.isfile(UPC_SESSION_FILE):
+        # Compare with stored mtime to detect changes
+        stored_mtime = 0.0
+        if os.path.isfile(UPC_SESSION_FILE):
+            try:
                 with open(UPC_SESSION_FILE, "r") as f:
-                    previous_token = f.read().strip()
+                    content = f.read().strip()
+                if content.startswith("credential_mtime:"):
+                    stored_mtime = float(content.split(":", 1)[1])
+            except Exception:
+                pass
 
-            if token != previous_token:
+        credentials_changed = new_mtime > stored_mtime
+
+        if credentials_changed:
+            try:
                 os.makedirs(DATA_DIR, exist_ok=True)
                 with open(UPC_SESSION_FILE, "w") as f:
-                    f.write(token)
-                token_changed = True
-                logger.info("[Ubisoft] Captured new UPC restore_session token")
-        except Exception as e:
-            logger.warning(f"[Ubisoft] Failed to save UPC session token: {e}")
+                    f.write(f"credential_mtime:{new_mtime}\n")
+                logger.info("[Ubisoft] Detected new UPC credentials (ConnectSecureStorage.dat)")
+            except Exception as e:
+                logger.warning(f"[Ubisoft] Failed to write credential marker: {e}")
 
         # Always sync credentials + artifacts to template and auth prefix,
-        # even when the token hasn't changed — UPC may have refreshed the
-        # DPAPI credential files during the session.
+        # even when nothing changed — UPC may have refreshed files.
         for target in [TEMPLATE_DIR, AUTH_PREFIX_DIR]:
             if not os.path.isdir(target):
                 continue
             if os.path.realpath(target) == os.path.realpath(prefix_path):
                 continue
             try:
-                self._write_upc_session_to_prefix(target, token)
                 self._sync_upc_credentials_to_prefix(prefix_path, target)
                 self._sync_upc_auth_artifacts_to_prefix(prefix_path, target)
             except Exception as e:
@@ -3745,10 +3030,10 @@ class UbisoftConnector(Store):
                     f"[Ubisoft] Failed to sync capture to {os.path.basename(target)}: {e}"
                 )
 
-        if token_changed:
-            logger.info("[Ubisoft] Captured UPC session → template + auth prefix updated")
+        if credentials_changed:
+            logger.info("[Ubisoft] Captured UPC credentials → template + auth prefix updated")
 
-        return token if token_changed else None
+        return "credentials_captured" if credentials_changed else None
 
     async def connect_ubisoft_account(self) -> Dict[str, Any]:
         """
@@ -3837,6 +3122,27 @@ class UbisoftConnector(Store):
     # Auth Shortcut Context & Session Monitor
     # ========================================================================
 
+    async def _auth_shortcut_exists_in_vdf(self) -> bool:
+        """Read-only check whether the auth shortcut exists in VDF.
+
+        Used by get_ubisoft_auth_shortcut_context() to detect if the user
+        deleted the shortcut since plugin startup, without writing to VDF
+        (which would cause a RunGame race condition).
+        """
+        if not self.plugin_instance or not hasattr(self.plugin_instance, 'shortcuts_manager'):
+            return True  # Can't check — assume present
+        try:
+            from py_modules.unifideck.shortcuts.launch_options import get_full_id
+            sm = self.plugin_instance.shortcuts_manager
+            shortcuts_data = await sm.read_shortcuts()
+            shortcuts = shortcuts_data.get('shortcuts', {})
+            return any(
+                get_full_id(s.get('LaunchOptions', '')) == AUTH_SHORTCUT_STORE_ID
+                for s in shortcuts.values()
+            )
+        except Exception:
+            return True  # Can't check — assume present
+
     async def get_ubisoft_auth_shortcut_context(self) -> Dict[str, Any]:
         """Return the auth shortcut's appid so the frontend can call RunGame().
 
@@ -3855,14 +3161,27 @@ class UbisoftConnector(Store):
         registry = load_shortcuts_registry()
         entry = registry.get(AUTH_SHORTCUT_STORE_ID)
         if entry and entry.get("appid_unsigned"):
-            logger.info(
-                f"[Ubisoft] Auth shortcut context: appid={entry['appid_unsigned']}"
-            )
-            return {
-                "success": True,
-                "appid_unsigned": entry["appid_unsigned"],
-                "launch_wait_ms": 0,
-            }
+            # Verify the shortcut still exists in VDF (read-only check).
+            # User may have deleted the shortcut since plugin startup.
+            if await self._auth_shortcut_exists_in_vdf():
+                logger.info(
+                    f"[Ubisoft] Auth shortcut context: appid={entry['appid_unsigned']}"
+                )
+                return {
+                    "success": True,
+                    "appid_unsigned": entry["appid_unsigned"],
+                    "launch_wait_ms": 0,
+                }
+
+            # Shortcut was deleted — recreate it
+            logger.info("[Ubisoft] Auth shortcut in registry but missing from VDF, recreating")
+            unsigned_id = await self._ensure_ubisoft_auth_shortcut()
+            if unsigned_id:
+                return {
+                    "success": True,
+                    "appid_unsigned": unsigned_id,
+                    "launch_wait_ms": AUTH_SHORTCUT_LAUNCH_WAIT_MS,
+                }
 
         # Registry miss — the shortcut may still exist in VDF (e.g. registry
         # was cleared but user never deleted the Steam shortcut).  Validate
@@ -3926,6 +3245,16 @@ class UbisoftConnector(Store):
                 self._propagate_upc_session_to_all_prefixes(captured_token)
                 self.queue_auth_assets_ensure("post-auth-session-capture")
                 self._auth_session_captured = True
+
+                # Trigger library sync now that auth is complete
+                if self.plugin_instance:
+                    logger.info("[Ubisoft] Triggering library sync after UPC auth")
+                    asyncio.create_task(
+                        self.plugin_instance.request_auth_sync(
+                            force=True,
+                            source='auth:ubisoft',
+                        )
+                    )
                 return
 
         logger.warning("[Ubisoft] Auth session monitor timed out after 1800s")
@@ -4003,7 +3332,7 @@ class UbisoftConnector(Store):
                 "games",
             ),
         ]
-        external_game_roots = [DEFAULT_INSTALL_BASE, SDCARD_INSTALL_BASE]
+        external_game_roots = self._get_external_game_roots()
 
         def _build_result(game_dir: str, title_hint: str = "") -> Dict[str, Any]:
             exe = self.find_game_executable(game_dir) or ""
@@ -4099,6 +3428,76 @@ class UbisoftConnector(Store):
                     ):
                         continue
                     return _build_result(game_dir, known_name or folder)
+
+        # Method 4: Registry InstallDir for specific install_id
+        # Handles custom install locations chosen by the user in UPC.
+        # Scoped to the exact install_id for this space_id to prevent
+        # false positives — we never blind-scan all registry entries.
+        install_id = self.resolve_install_id(space_id)
+        if install_id:
+            install_id_section = (
+                f"Installs\\\\{install_id}]"
+            )
+            for reg_name in ("pfx/system.reg", "system.reg"):
+                reg_path = os.path.join(prefix_path, reg_name)
+                if not os.path.isfile(reg_path):
+                    continue
+                try:
+                    with open(reg_path, "r", encoding="utf-8", errors="replace") as f:
+                        reg_content = f.read()
+                    # Find only the section for our specific install_id
+                    for m in re.finditer(
+                        r'\[Software\\\\(?:Wow6432Node\\\\)?Ubisoft\\\\Launcher\\\\Installs\\\\'
+                        + re.escape(install_id)
+                        + r'\]'
+                        r'[^\[]*?"InstallDir"\s*=\s*"([^"]*)"',
+                        reg_content,
+                        re.DOTALL,
+                    ):
+                        install_dir_raw = m.group(1).replace("\\\\", "/")
+                        linux_path = self._wine_path_to_linux(
+                            install_dir_raw, prefix_path
+                        )
+                        if not linux_path or not os.path.isdir(linux_path):
+                            continue
+                        # Validate: must have install state or look like a game
+                        state_file = os.path.join(
+                            linux_path, "uplay_install.state"
+                        )
+                        if not (
+                            check_install_state(state_file)
+                            or self._looks_like_game_install(linux_path)
+                        ):
+                            continue
+                        logger.info(
+                            f"[Ubisoft] Method 4: detected install via registry "
+                            f"InstallDir for {install_id}: {linux_path[:80]}"
+                        )
+                        result = _build_result(
+                            linux_path,
+                            known_name or os.path.basename(linux_path),
+                        )
+                        # Write marker for fast future lookups (Method 1)
+                        marker_path = os.path.join(
+                            linux_path, ".unifideck_ubisoft"
+                        )
+                        if not os.path.exists(marker_path):
+                            try:
+                                marker_data = {
+                                    "space_id": space_id,
+                                    "install_path": linux_path,
+                                    "game_title": (
+                                        known_name
+                                        or os.path.basename(linux_path)
+                                    ),
+                                }
+                                with open(marker_path, "w") as mf:
+                                    json.dump(marker_data, mf)
+                            except Exception:
+                                pass
+                        return result
+                except Exception:
+                    continue
 
         return None
 
@@ -4774,6 +4173,123 @@ class UbisoftConnector(Store):
             pass
         return False
 
+    @staticmethod
+    def _wine_path_to_linux(
+        wine_path: str, prefix_path: str
+    ) -> Optional[str]:
+        """Convert a Wine drive-letter path to a Linux filesystem path.
+
+        Handles:
+          Z:\\home\\deck\\Games\\...  →  /home/deck/Games/...
+          C:\\Program Files\\...    →  {prefix}/drive_c/Program Files/...
+          D:\\Mods\\Brawlhalla\\... →  (resolved via dosdevices/d: symlink)
+
+        For drive letters other than Z: and C:, reads the prefix's
+        dosdevices/ directory to resolve the symlink target.
+        """
+        # Normalize separators
+        path = wine_path.replace("\\", "/")
+
+        # Must look like a drive-letter path (e.g. "X:/...")
+        if len(path) < 2 or path[1] != ":":
+            return None
+
+        drive_letter = path[0].upper()
+        relative = path[2:].lstrip("/")
+
+        # Z: maps to /
+        if drive_letter == "Z":
+            return "/" + relative if relative else "/"
+
+        # C: maps to drive_c within the prefix
+        if drive_letter == "C":
+            for base in [os.path.join(prefix_path, "pfx"), prefix_path]:
+                candidate = os.path.join(base, "drive_c", relative)
+                if os.path.exists(candidate):
+                    return candidate
+            # Return pfx layout even if doesn't exist yet
+            return os.path.join(prefix_path, "pfx", "drive_c", relative)
+
+        # Any other drive letter: resolve via dosdevices/ symlinks
+        # Wine maps drive letters like d: → /run/media/deck/SD_CARD
+        drive_name = f"{drive_letter.lower()}:"
+        for base in [os.path.join(prefix_path, "pfx"), prefix_path]:
+            link_path = os.path.join(base, "dosdevices", drive_name)
+            if os.path.islink(link_path):
+                target = os.path.realpath(link_path)
+                result = os.path.join(target, relative) if relative else target
+                return result
+
+        return None
+
+    def _get_external_game_roots(self) -> List[str]:
+        """Get all possible external Ubisoft game install directories.
+
+        Dynamically discovers:
+        - Default install base (~/Games/Ubisoft)
+        - SD card install base (/run/media/mmcblk0p1/Games/Ubisoft)
+        - User's custom install path from download_settings.json (+ /Ubisoft)
+        - All mounted media under /run/media/ (USB drives, etc.)
+
+        Returns a deduplicated list of existing or potential Ubisoft game roots.
+        """
+        roots = [DEFAULT_INSTALL_BASE, SDCARD_INSTALL_BASE]
+
+        # Custom path from download settings
+        settings_file = os.path.expanduser(
+            "~/.local/share/unifideck/download_settings.json"
+        )
+        try:
+            if os.path.isfile(settings_file):
+                with open(settings_file, "r") as f:
+                    settings = json.load(f)
+                custom_path = settings.get("custom_path")
+                if custom_path:
+                    # Check both the custom path directly and with /Ubisoft suffix
+                    roots.append(os.path.join(custom_path, "Ubisoft"))
+                    roots.append(custom_path)
+        except Exception:
+            pass
+
+        # Mounted media: /run/media/**/Games/Ubisoft
+        media_base = "/run/media"
+        if os.path.isdir(media_base):
+            try:
+                for entry in os.listdir(media_base):
+                    entry_path = os.path.join(media_base, entry)
+                    if not os.path.isdir(entry_path):
+                        continue
+                    # Direct mount: /run/media/mmcblk0p1/Games/Ubisoft
+                    candidate = os.path.join(entry_path, "Games", "Ubisoft")
+                    roots.append(candidate)
+                    # Nested mount: /run/media/deck/SDCARD/Games/Ubisoft
+                    try:
+                        for sub in os.listdir(entry_path):
+                            sub_path = os.path.join(entry_path, sub)
+                            if os.path.isdir(sub_path):
+                                candidate = os.path.join(
+                                    sub_path, "Games", "Ubisoft"
+                                )
+                                roots.append(candidate)
+                    except OSError:
+                        pass
+            except OSError:
+                pass
+
+        # Deduplicate via realpath, keep only existing dirs
+        seen: set = set()
+        unique: List[str] = []
+        for r in roots:
+            try:
+                real = os.path.realpath(r)
+            except Exception:
+                real = r
+            if real not in seen:
+                seen.add(real)
+                unique.append(r)
+
+        return unique
+
     async def _wait_for_install_completion(
         self, install_dir: str, progress_callback=None
     ) -> None:
@@ -5127,40 +4643,6 @@ class UbisoftConnector(Store):
 
     # ========================================================================
     # Background API Token Refresh
-    # ========================================================================
-
-    async def _token_refresh_loop(self) -> None:
-        """
-        Background task: proactively refresh the Ubisoft API token every 30
-        minutes so it never expires while the plugin is running.
-
-        The REST API ticket lasts ~3-4 hours. Without proactive refresh,
-        tickets expire silently between user interactions.
-        """
-        while True:
-            try:
-                await asyncio.sleep(30 * 60)  # 30 minutes
-                if self.api.has_tokens():
-                    ok = await self.api.refresh_token()
-                    if ok:
-                        logger.info("[Ubisoft] Background token refresh succeeded")
-                    else:
-                        logger.error(
-                            "[Ubisoft] Background token refresh failed — "
-                            "user may need to re-authenticate via the plugin"
-                        )
-            except asyncio.CancelledError:
-                break
-            except Exception as e:
-                logger.warning(f"[Ubisoft] Token refresh loop error: {e}")
-
-    def start_token_refresh(self) -> None:
-        """Start the background token refresh loop."""
-        self._refresh_task = asyncio.create_task(self._token_refresh_loop())
-        logger.info("[Ubisoft] Background token refresh started (every 30 min)")
-
-    def stop_token_refresh(self) -> None:
-        """Stop the background token refresh loop."""
-        task = getattr(self, "_refresh_task", None)
-        if task and not task.done():
-            task.cancel()
+    # Background token refresh removed — API calls are now event-driven only.
+    # Tokens refresh on-demand during explicit sync/login operations.
+    # After login and sync, the UPC app handles session management.

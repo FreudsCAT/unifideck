@@ -41,9 +41,26 @@ AUTH_TOKEN_PATHS = {
     'microsoft': os.path.expanduser("~/.config/unifideck/microsoft_token.json"),
 }
 
+AUTH_STATE_CLEANUP_PATHS = {
+    'epic_config': os.path.expanduser("~/.config/legendary"),
+    'epic_cache': os.path.expanduser("~/.cache/legendary"),
+    'microsoft_profile': os.path.expanduser("~/.local/share/unifideck/chromium-auth"),
+    'microsoft_profile_log': os.path.expanduser("~/.local/share/unifideck/chromium-auth.log"),
+    'microsoft_auth_url': os.path.expanduser("~/.local/share/unifideck/ms_auth_url.txt"),
+}
+
 # Shared Unifideck data files
 REGISTRY_PATH = os.path.expanduser("~/.local/share/unifideck/shortcuts_registry.json")
 GAMES_MAP_PATH = os.path.expanduser("~/.local/share/unifideck/games.map")
+GAMES_DISCOVERY_REGISTRY_PATH = os.path.expanduser("~/.local/share/unifideck/games_registry.json")
+
+
+def _delete_path(path: str) -> None:
+    """Delete a file or directory path if it exists."""
+    if os.path.isdir(path) and not os.path.islink(path):
+        shutil.rmtree(path)
+        return
+    os.remove(path)
 
 
 class AccountManager:
@@ -236,16 +253,25 @@ class AccountManager:
         for store, path in AUTH_TOKEN_PATHS.items():
             if os.path.exists(path):
                 try:
-                    os.remove(path)
+                    _delete_path(path)
                     result['deleted_tokens'].append(store)
                     logger.info(f"[AccountSwitch] Deleted {store} auth token: {path}")
                 except Exception as e:
                     result['errors'].append(f"Failed to delete {store} token: {e}")
 
+        for name, path in AUTH_STATE_CLEANUP_PATHS.items():
+            if os.path.exists(path):
+                try:
+                    _delete_path(path)
+                    result['cleared_files'].append(name)
+                    logger.info(f"[AccountSwitch] Cleared auth state: {path}")
+                except Exception as e:
+                    result['errors'].append(f"Failed to clear {name}: {e}")
+
         # Clear shortcuts registry (shared)
         if os.path.exists(REGISTRY_PATH):
             try:
-                os.remove(REGISTRY_PATH)
+                _delete_path(REGISTRY_PATH)
                 result['cleared_files'].append('shortcuts_registry.json')
                 logger.info("[AccountSwitch] Cleared shortcuts registry")
             except Exception as e:
@@ -254,11 +280,19 @@ class AccountManager:
         # Clear games.map (shared)
         if os.path.exists(GAMES_MAP_PATH):
             try:
-                os.remove(GAMES_MAP_PATH)
+                _delete_path(GAMES_MAP_PATH)
                 result['cleared_files'].append('games.map')
                 logger.info("[AccountSwitch] Cleared games.map")
             except Exception as e:
                 result['errors'].append(f"Failed to clear games.map: {e}")
+
+        if os.path.exists(GAMES_DISCOVERY_REGISTRY_PATH):
+            try:
+                _delete_path(GAMES_DISCOVERY_REGISTRY_PATH)
+                result['cleared_files'].append('games_registry.json')
+                logger.info("[AccountSwitch] Cleared games_registry.json")
+            except Exception as e:
+                result['errors'].append(f"Failed to clear games_registry.json: {e}")
 
         logger.info(
             f"[AccountSwitch] Auth cleanup: {len(result['deleted_tokens'])} tokens deleted, "

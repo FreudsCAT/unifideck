@@ -1,17 +1,13 @@
 #!/usr/bin/env python3
 """
-Inject UPC session token into a game prefix before launch.
+Inject UPC credential files into a game prefix before launch.
 
-Writes restore_session, remember_me, and userId into UPC's settings.yml
-so no login prompt appears when launching a game.
-
-Prefers the UPC-native session token (captured after a real UPC login)
-over the REST API ticket.
+Syncs ConnectSecureStorage.dat, user.dat, and auth cache artifacts
+from the auth prefix so UPC auto-logs in without a manual login prompt.
 
 Usage:
     python3 ubisoft_inject_session.py <prefix_path>
 """
-import json
 import hashlib
 import os
 import re
@@ -19,8 +15,6 @@ import shutil
 import sys
 
 DATA_DIR = os.path.expanduser("~/.local/share/unifideck")
-UPC_SESSION_FILE = os.path.join(DATA_DIR, "ubisoft_upc_session.txt")
-TOKEN_FILE = os.path.join(DATA_DIR, "ubisoft_token.json")
 PREFIXES_DIR = os.path.join(DATA_DIR, "prefixes", "ubisoft")
 AUTH_PREFIX_DIR = os.path.join(PREFIXES_DIR, ".upc-auth")
 
@@ -47,10 +41,14 @@ _WINE_SYSTEM_USERS = {"Public", "All Users", "Default", "Default User"}
 
 
 def read_machine_guid(prefix_path: str) -> str:
-    """Read Wine MachineGuid from a prefix's system.reg."""
+    """Read Wine MachineGuid from a prefix's system.reg.
+
+    Checks pfx/system.reg first because Proton uses that for DPAPI
+    encryption; the root-level system.reg may be a stale template copy.
+    """
     for reg in [
-        os.path.join(prefix_path, "system.reg"),
         os.path.join(prefix_path, "pfx", "system.reg"),
+        os.path.join(prefix_path, "system.reg"),
     ]:
         if not os.path.isfile(reg):
             continue
@@ -89,40 +87,61 @@ def iter_prefix_user_homes(prefix_path: str, pfx_first: bool = False):
                 yield user_home
 
 
-def read_token() -> tuple:
-    """Read session token and userId. Returns (token, user_id) or (None, None)."""
-    # Prefer UPC-native session token
-    if os.path.isfile(UPC_SESSION_FILE):
-        try:
-            with open(UPC_SESSION_FILE) as f:
-                token = f.read().strip()
-            if token:
-                # Get userId from API token file
-                user_id = ""
-                if os.path.isfile(TOKEN_FILE):
-                    try:
-                        with open(TOKEN_FILE) as f:
-                            data = json.load(f)
-                        user_id = data.get("userId", "")
-                    except Exception:
-                        pass
-                return token, user_id
-        except Exception:
-            pass
+def _get_canonical_machine_guid() -> str:
+    """Return the MachineGuid that all Ubisoft prefixes should share.
 
-    # Fall back to API ticket
-    if os.path.isfile(TOKEN_FILE):
-        try:
-            with open(TOKEN_FILE) as f:
-                data = json.load(f)
-            ticket = data.get("ticket", "")
-            user_id = data.get("userId", "")
-            if ticket:
-                return ticket, user_id
-        except Exception:
-            pass
+    Prefers the auth prefix's pfx/system.reg GUID (credentials are encrypted
+    with it). Falls back to template.
+    """
+    for src in [AUTH_PREFIX_DIR, os.path.join(PREFIXES_DIR, ".template")]:
+        if os.path.isdir(src):
+            guid = read_machine_guid(src)
+            if guid:
+                return guid
+    return ""
 
-    return None, None
+
+def _align_prefix_machine_guid(prefix_path: str) -> bool:
+    """Patch the prefix's pfx/system.reg MachineGuid to match the auth prefix.
+
+    Proton generates a unique MachineGuid per prefix, but DPAPI-encrypted
+    credential files can only be shared when the MachineGuid matches.
+    Aligning the GUID before credential injection ensures UPC can decrypt
+    ConnectSecureStorage.dat from the auth prefix.
+
+    Also patches root-level system.reg for consistency.
+    """
+    canonical = _get_canonical_machine_guid()
+    if not canonical:
+        return False
+
+    current = read_machine_guid(prefix_path)
+    if current == canonical:
+        return True  # Already aligned
+
+    patched = False
+    for reg_rel in ["pfx/system.reg", "system.reg"]:
+        reg_path = os.path.join(prefix_path, reg_rel)
+        if not os.path.isfile(reg_path):
+            continue
+        try:
+            with open(reg_path, "r", encoding="utf-8", errors="replace") as f:
+                content = f.read()
+            m = re.search(r'"MachineGuid"="([^"]+)"', content)
+            if m and m.group(1) != canonical:
+                new_content = re.sub(
+                    r'"MachineGuid"="[^"]+"',
+                    f'"MachineGuid"="{canonical}"',
+                    content,
+                )
+                with open(reg_path, "w", encoding="utf-8") as f:
+                    f.write(new_content)
+                print(f"[inject] Aligned MachineGuid in {reg_rel}: {m.group(1)[:8]}... → {canonical[:8]}...")
+                patched = True
+        except Exception as e:
+            print(f"[inject] Failed to align MachineGuid in {reg_rel}: {e}")
+
+    return patched
 
 
 def _find_best_credential_source():
@@ -209,6 +228,11 @@ def sync_credentials(prefix_path: str) -> bool:
     if os.path.realpath(source_prefix) == os.path.realpath(prefix_path):
         return True  # Target is the source
 
+    # Align MachineGuid so DPAPI-encrypted credentials can be shared.
+    # Proton generates unique GUIDs per prefix; alignment ensures UPC in
+    # this prefix can decrypt ConnectSecureStorage.dat from the auth prefix.
+    _align_prefix_machine_guid(prefix_path)
+
     # DPAPI-encrypted files require matching MachineGuid
     source_guid = read_machine_guid(source_prefix)
     target_guid = read_machine_guid(prefix_path)
@@ -254,7 +278,7 @@ def sync_credentials(prefix_path: str) -> bool:
 
     if synced:
         print(f"[inject] Synced {synced} credential file(s) from {os.path.basename(source_prefix)}")
-    return synced > 0
+    return bool(source_files)  # True if source had credentials, even if already in sync
 
 
 def sync_auth_artifacts(prefix_path: str) -> bool:
@@ -304,51 +328,23 @@ def sync_auth_artifacts(prefix_path: str) -> bool:
 
 
 def inject_session(prefix_path: str) -> bool:
-    """Inject session token and credential files into prefix."""
-    # Sync binary credential files first (ConnectSecureStorage.dat, user.dat)
-    sync_credentials(prefix_path)
-    sync_auth_artifacts(prefix_path)
+    """Inject UPC credential files into a game prefix.
 
-    token, user_id = read_token()
-    if not token:
-        print("[inject] No session token available, skipping")
-        return False
+    UPC stores auth in DPAPI-encrypted files (ConnectSecureStorage.dat,
+    user.dat), not in settings.yml tokens. This syncs credential files
+    and auth cache artifacts from the best available source prefix.
 
-    config = (
-        "user:\n"
-        "  remember_me: true\n"
-        f'  restore_session: "{token}"\n'
-        f'  userId: "{user_id}"\n'
-    )
+    Returns True if any credential files were synced.
+    """
+    creds_synced = sync_credentials(prefix_path)
+    artifacts_synced = sync_auth_artifacts(prefix_path)
 
-    for user_home in iter_prefix_user_homes(prefix_path, pfx_first=True):
-        settings_dir = os.path.join(
-            user_home, "AppData", "Roaming", "Ubisoft", "Ubisoft Connect",
-        )
-        settings_file = os.path.join(settings_dir, "settings.yml")
+    if creds_synced or artifacts_synced:
+        print("[inject] Credentials synced successfully")
+        return True
 
-        # Skip if token already matches
-        if os.path.isfile(settings_file):
-            try:
-                with open(settings_file) as f:
-                    content = f.read()
-                m = re.search(r'restore_session:\s+"([^"]+)"', content)
-                if m and m.group(1) == token:
-                    continue
-            except Exception:
-                pass
-
-        os.makedirs(settings_dir, exist_ok=True)
-        try:
-            with open(settings_file, "w") as f:
-                f.write(config)
-            # Show relative path for readability
-            rel = os.path.relpath(user_home, prefix_path)
-            print(f"[inject] Session injected into {rel}")
-        except Exception as e:
-            print(f"[inject] Failed to write {user_home}: {e}")
-
-    return True
+    print("[inject] No credentials available to inject")
+    return False
 
 
 if __name__ == "__main__":

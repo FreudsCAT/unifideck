@@ -178,9 +178,10 @@ class EpicConnector(Store):
 
                     # Auto-sync library after successful auth
                     if self.plugin_instance:
-                        logger.info("[EPIC] Starting automatic library sync...")
-                        await self.plugin_instance.sync_libraries()
-                        logger.info("[EPIC] ✓ Library sync completed!")
+                        logger.info("[EPIC] Queueing automatic library sync...")
+                        asyncio.create_task(
+                            self.plugin_instance.request_auth_sync(source='auth:epic')
+                        )
                 else:
                     logger.error(f"[EPIC] Auto-auth failed: {result.get('error')}")
             else:
@@ -217,19 +218,33 @@ class EpicConnector(Store):
 
     async def logout(self) -> Dict[str, Any]:
         """Logout from Epic Games"""
-        if not self.legendary_bin:
-            return {'success': False, 'error': 'legendary not found'}
-
         try:
             from ..auth.browser import CDPOAuthMonitor
-            
-            # Run legendary auth --delete to remove stored credentials
-            proc = await asyncio.create_subprocess_exec(
-                self.legendary_bin, 'auth', '--delete',
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE
-            )
-            await proc.communicate()
+
+            if self.legendary_bin:
+                proc = await asyncio.create_subprocess_exec(
+                    self.legendary_bin, 'auth', '--delete',
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE
+                )
+                await proc.communicate()
+            else:
+                logger.warning("[EPIC] Legendary not found during logout - clearing local state only")
+
+            for path in (
+                os.path.expanduser("~/.config/legendary"),
+                os.path.expanduser("~/.cache/legendary"),
+            ):
+                if not os.path.exists(path):
+                    continue
+                try:
+                    if os.path.isdir(path):
+                        shutil.rmtree(path)
+                    else:
+                        os.remove(path)
+                    logger.info(f"[EPIC] Cleared auth state: {path}")
+                except Exception as e:
+                    logger.warning(f"[EPIC] Could not clear {path}: {e}")
 
             logger.info("Logged out from Epic Games")
 
@@ -792,4 +807,3 @@ class EpicConnector(Store):
         except Exception as e:
             logger.error(f"[EPIC] Error updating {game_id}: {e}")
             return {'success': False, 'error': str(e)}
-

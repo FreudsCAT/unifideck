@@ -1,15 +1,13 @@
 #!/usr/bin/env python3
 """
-Capture UPC session token from a game prefix after game exit.
+Capture UPC credentials from a game prefix after game exit.
 
-Reads restore_session from the prefix's settings.yml and saves it
-for reuse across all prefixes. Only saves if UPC wrote a different
-token than what we injected (i.e. UPC refreshed its own token).
+Detects ConnectSecureStorage.dat (DPAPI-encrypted credential store)
+and propagates it to all other Ubisoft prefixes.
 
 Usage:
     python3 ubisoft_capture_session.py <prefix_path>
 """
-import json
 import hashlib
 import os
 import re
@@ -18,7 +16,6 @@ import sys
 
 DATA_DIR = os.path.expanduser("~/.local/share/unifideck")
 UPC_SESSION_FILE = os.path.join(DATA_DIR, "ubisoft_upc_session.txt")
-TOKEN_FILE = os.path.join(DATA_DIR, "ubisoft_token.json")
 PREFIXES_DIR = os.path.join(DATA_DIR, "prefixes", "ubisoft")
 TEMPLATE_DIR = os.path.join(PREFIXES_DIR, ".template")
 AUTH_PREFIX_DIR = os.path.join(PREFIXES_DIR, ".upc-auth")
@@ -46,10 +43,14 @@ _WINE_SYSTEM_USERS = {"Public", "All Users", "Default", "Default User"}
 
 
 def read_machine_guid(prefix_path: str) -> str:
-    """Read Wine MachineGuid from a prefix's system.reg."""
+    """Read Wine MachineGuid from a prefix's system.reg.
+
+    Checks pfx/system.reg first because Proton uses that for DPAPI
+    encryption; the root-level system.reg may be a stale template copy.
+    """
     for reg in [
-        os.path.join(prefix_path, "system.reg"),
         os.path.join(prefix_path, "pfx", "system.reg"),
+        os.path.join(prefix_path, "system.reg"),
     ]:
         if not os.path.isfile(reg):
             continue
@@ -88,36 +89,25 @@ def iter_prefix_user_homes(prefix_path: str, pfx_first: bool = False):
                 yield user_home
 
 
-def read_restore_session(prefix_path: str) -> str | None:
-    """Read restore_session from a prefix's settings.yml."""
+def has_valid_credentials(prefix_path: str) -> bool:
+    """Check if a prefix has valid ConnectSecureStorage.dat (>100 bytes)."""
     for user_home in iter_prefix_user_homes(prefix_path, pfx_first=True):
-        settings_file = os.path.join(
-            user_home, "AppData", "Roaming", "Ubisoft",
-            "Ubisoft Connect", "settings.yml",
-        )
-        if not os.path.isfile(settings_file):
-            continue
-        try:
-            with open(settings_file) as f:
-                content = f.read()
-            m = re.search(r'restore_session:\s+"([^"]+)"', content)
-            if m:
-                return m.group(1)
-        except Exception:
-            continue
-    return None
+        css = os.path.join(user_home, _UPC_LOCAL_SUBDIR, "ConnectSecureStorage.dat")
+        if os.path.isfile(css) and os.path.getsize(css) > 100:
+            return True
+    return False
 
 
-def get_api_ticket() -> str:
-    """Read the REST API ticket for comparison."""
-    if not os.path.isfile(TOKEN_FILE):
-        return ""
-    try:
-        with open(TOKEN_FILE) as f:
-            data = json.load(f)
-        return data.get("ticket", "")
-    except Exception:
-        return ""
+def get_credential_mtime(prefix_path: str) -> float:
+    """Get most recent mtime of ConnectSecureStorage.dat in a prefix."""
+    best = 0.0
+    for user_home in iter_prefix_user_homes(prefix_path, pfx_first=True):
+        css = os.path.join(user_home, _UPC_LOCAL_SUBDIR, "ConnectSecureStorage.dat")
+        if os.path.isfile(css) and os.path.getsize(css) > 100:
+            mtime = os.path.getmtime(css)
+            if mtime > best:
+                best = mtime
+    return best
 
 
 def iter_ubisoft_prefixes():
@@ -128,34 +118,6 @@ def iter_ubisoft_prefixes():
         prefix_path = os.path.join(PREFIXES_DIR, entry)
         if os.path.isdir(prefix_path):
             yield prefix_path
-
-
-def write_session_to_prefix(prefix_path: str, token: str) -> None:
-    """Write restore_session into a prefix's settings.yml (both layouts, both users)."""
-    user_id = ""
-    if os.path.isfile(TOKEN_FILE):
-        try:
-            with open(TOKEN_FILE) as f:
-                data = json.load(f)
-            user_id = data.get("userId", "")
-        except Exception:
-            pass
-
-    config = (
-        "user:\n"
-        "  remember_me: true\n"
-        f'  restore_session: "{token}"\n'
-        f'  userId: "{user_id}"\n'
-    )
-
-    for user_home in iter_prefix_user_homes(prefix_path):
-        settings_dir = os.path.join(
-            user_home, "AppData", "Roaming", "Ubisoft", "Ubisoft Connect",
-        )
-        os.makedirs(settings_dir, exist_ok=True)
-        settings_file = os.path.join(settings_dir, "settings.yml")
-        with open(settings_file, "w") as f:
-            f.write(config)
 
 
 def _hash_upc_artifact(path: str) -> str:
@@ -287,85 +249,58 @@ def propagate_auth_artifacts(source_prefix: str) -> int:
     return total_synced
 
 
-def _check_prefix_health(prefix_path: str) -> bool:
-    """Check if a prefix has a healthy, logged-in session.
-
-    A prefix is healthy if it has a non-empty restore_session in settings.yml
-    AND a non-empty ConnectSecureStorage.dat.
-    """
-    token = read_restore_session(prefix_path)
-    if not token or len(token) < 50:
-        return False
-
-    has_credentials = False
-    for user_home in iter_prefix_user_homes(prefix_path, pfx_first=True):
-        css = os.path.join(user_home, _UPC_LOCAL_SUBDIR, "ConnectSecureStorage.dat")
-        if os.path.isfile(css) and os.path.getsize(css) > 100:
-            has_credentials = True
-            break
-    
-    return has_credentials
-
-
 def capture_session(prefix_path: str) -> bool:
-    """Capture UPC session token and credentials from a prefix.
+    """Capture UPC credentials from a prefix and propagate to all others.
 
-    Token capture is always attempted (tokens are portable, not DPAPI-gated).
-    Credential propagation is only performed from "healthy" prefixes (those
-    with both a valid token and ConnectSecureStorage.dat) or from .upc-auth.
+    UPC stores auth in DPAPI-encrypted files (ConnectSecureStorage.dat,
+    user.dat), not in settings.yml tokens. Detecting valid credential
+    files is the auth signal.
     """
-    is_auth_prefix = os.path.realpath(prefix_path) == os.path.realpath(AUTH_PREFIX_DIR)
-
-    # Always try to capture the token (it's portable, no DPAPI)
-    token = read_restore_session(prefix_path)
-    if not token:
-        print("[capture] No restore_session found in prefix")
+    if not has_valid_credentials(prefix_path):
+        print("[capture] No valid ConnectSecureStorage.dat in prefix")
         return False
 
-    # Save to session file if it's a new UPC-native token OR if the global file is missing
-    api_ticket = get_api_ticket()
-    if token != api_ticket or not os.path.isfile(UPC_SESSION_FILE):
+    new_mtime = get_credential_mtime(prefix_path)
+    if not new_mtime:
+        print("[capture] Could not read credential mtime")
+        return False
+
+    # Check if credentials changed since last capture
+    stored_mtime = 0.0
+    if os.path.isfile(UPC_SESSION_FILE):
+        try:
+            with open(UPC_SESSION_FILE) as f:
+                content = f.read().strip()
+            if content.startswith("credential_mtime:"):
+                stored_mtime = float(content.split(":", 1)[1])
+        except Exception:
+            pass
+
+    credentials_changed = new_mtime > stored_mtime
+
+    if credentials_changed:
         try:
             os.makedirs(DATA_DIR, exist_ok=True)
             with open(UPC_SESSION_FILE, "w") as f:
-                f.write(token)
-            print(f"[capture] Saved UPC session token ({len(token)} chars)")
-
-            # Propagate the new token to all other prefixes
-            updated_prefixes = 0
-            for target_prefix in iter_ubisoft_prefixes() or []:
-                try:
-                    write_session_to_prefix(target_prefix, token)
-                    updated_prefixes += 1
-                except Exception as e:
-                    print(f"[capture] Failed to update prefix {target_prefix}: {e}")
-            if updated_prefixes:
-                print(f"[capture] Updated {updated_prefixes} Ubisoft prefixes with new token")
+                f.write(f"credential_mtime:{new_mtime}\n")
+            print(f"[capture] Wrote credential marker (mtime={new_mtime})")
         except Exception as e:
-            print(f"[capture] Failed to save session token: {e}")
-            return False
-    else:
-        print("[capture] Token matches API ticket, skipping token file write")
+            print(f"[capture] Failed to write credential marker: {e}")
 
-    # Credential propagation: only from healthy prefixes (or auth prefix)
-    should_propagate_creds = is_auth_prefix or _check_prefix_health(prefix_path)
+    # Propagate credentials and auth artifacts to all other prefixes
+    try:
+        cred_count = propagate_credentials(prefix_path)
+        if cred_count:
+            print(f"[capture] Propagated {cred_count} credential file(s) to other prefixes")
+    except Exception as e:
+        print(f"[capture] Credential propagation failed: {e}")
 
-    if should_propagate_creds:
-        try:
-            cred_count = propagate_credentials(prefix_path)
-            if cred_count:
-                print(f"[capture] Propagated {cred_count} credential file(s) to other prefixes")
-        except Exception as e:
-            print(f"[capture] Credential propagation failed: {e}")
-
-        try:
-            artifact_count = propagate_auth_artifacts(prefix_path)
-            if artifact_count:
-                print(f"[capture] Propagated {artifact_count} auth cache artifact(s) to other prefixes")
-        except Exception as e:
-            print(f"[capture] Auth artifact propagation failed: {e}")
-    else:
-        print(f"[capture] Prefix not healthy for credential propagation, token-only capture done")
+    try:
+        artifact_count = propagate_auth_artifacts(prefix_path)
+        if artifact_count:
+            print(f"[capture] Propagated {artifact_count} auth cache artifact(s) to other prefixes")
+    except Exception as e:
+        print(f"[capture] Auth artifact propagation failed: {e}")
 
     return True
 

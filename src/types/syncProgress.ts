@@ -25,4 +25,11 @@ export type SyncProgress = {
   // Metacritic tracking fields
   metacritic_total?: number;
   metacritic_synced?: number;
+  // Sync lifecycle flags
+  restart_pending?: boolean;
+  is_cancelling?: boolean;
+  request_source?: string;
+  run_id?: number;
+  started_at?: number;
+  finished_at?: number;
 };
