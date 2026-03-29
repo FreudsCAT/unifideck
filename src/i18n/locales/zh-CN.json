@@ -128,7 +128,8 @@
     "artworkDownloaded": "{{synced}} / {{total}} 个封面已下载",
     "steamMetadataDownloaded": "Steam 元数据：{{synced}} / {{total}}",
     "unifidbMetadataDownloaded": "unifiDB 元数据：{{synced}} / {{total}}",
-    "metacriticMetadataDownloaded": "Metacritic 数据：{{synced}} / {{total}}"
+    "metacriticMetadataDownloaded": "Metacritic 数据：{{synced}} / {{total}}",
+    "rawgMetadataDownloaded": "RAWG 元数据：{{synced}} / {{total}}"
   },
   "cleanup": {
     "title": "清理",
@@ -465,7 +466,13 @@
     "errorInvalid2FA": "验证码无效。请重试。",
     "showPassword": "显示密码",
     "hidePassword": "隐藏密码",
-    "doubleLoginWarning": "Ubisoft 需要您登录两次。"
+    "doubleLoginWarning": "Ubisoft 需要您登录两次。",
+    "signInViaUpc": "通过 Ubisoft Connect 登录",
+    "upcDescription": "Ubisoft Connect 将会打开以供您登录。登录后，您的会话将被自动捕获。",
+    "launchingUpc": "正在启动 Ubisoft Connect...",
+    "waitingForLogin": "等待登录...",
+    "retryLaunch": "重试",
+    "launchFailed": "无法启动 Ubisoft Connect。请重试。"
   },
   "relativeDate": {
     "today": "今天",
@@ -474,7 +481,8 @@
   "common": {
     "thisGame": "这款游戏",
     "game": "游戏",
-    "unknown": "未知"
+    "unknown": "未知",
+    "cancel": "取消"
   },
   "microsoft": {
     "notCompatible": "该游戏的格式不兼容 SteamOS",

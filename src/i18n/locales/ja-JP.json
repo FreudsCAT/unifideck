@@ -128,7 +128,8 @@
     "artworkDownloaded": "{{synced}} / {{total}} 件のアートをダウンロード済み",
     "steamMetadataDownloaded": "Steamメタデータ: {{synced}} / {{total}}",
     "unifidbMetadataDownloaded": "unifiDBメタデータ: {{synced}} / {{total}}",
-    "metacriticMetadataDownloaded": "Metacriticデータ: {{synced}} / {{total}}"
+    "metacriticMetadataDownloaded": "Metacriticデータ: {{synced}} / {{total}}",
+    "rawgMetadataDownloaded": "RAWGメタデータ: {{synced}} / {{total}}"
   },
   "cleanup": {
     "title": "クリーンアップ",
@@ -465,7 +466,13 @@
     "errorInvalid2FA": "確認コードが無効です。もう一度お試しください。",
     "showPassword": "パスワードを表示",
     "hidePassword": "パスワードを非表示",
-    "doubleLoginWarning": "Ubisoft では 2 回サインインする必要があります。"
+    "doubleLoginWarning": "Ubisoft では 2 回サインインする必要があります。",
+    "signInViaUpc": "Ubisoft Connectでサインイン",
+    "upcDescription": "Ubisoft Connectが開きます。サインインすると、セッションが自動的にキャプチャされます。",
+    "launchingUpc": "Ubisoft Connectを起動中...",
+    "waitingForLogin": "ログイン待機中...",
+    "retryLaunch": "再試行",
+    "launchFailed": "Ubisoft Connectの起動に失敗しました。もう一度お試しください。"
   },
   "relativeDate": {
     "today": "今日",
@@ -474,7 +481,8 @@
   "common": {
     "thisGame": "このゲーム",
     "game": "ゲーム",
-    "unknown": "不明"
+    "unknown": "不明",
+    "cancel": "キャンセル"
   },
   "microsoft": {
     "notCompatible": "このゲームのフォーマットはSteamOSに対応していません",

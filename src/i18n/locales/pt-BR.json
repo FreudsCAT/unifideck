@@ -128,7 +128,8 @@
     "artworkDownloaded": "{{synced}} / {{total}} artes baixadas",
     "steamMetadataDownloaded": "Metadados Steam: {{synced}} / {{total}}",
     "unifidbMetadataDownloaded": "Metadados unifiDB: {{synced}} / {{total}}",
-    "metacriticMetadataDownloaded": "Dados do Metacritic: {{synced}} / {{total}}"
+    "metacriticMetadataDownloaded": "Dados do Metacritic: {{synced}} / {{total}}",
+    "rawgMetadataDownloaded": "Metadados RAWG: {{synced}} / {{total}}"
   },
   "cleanup": {
     "title": "Limpeza",
@@ -465,7 +466,13 @@
     "errorInvalid2FA": "Código de verificação inválido. Tente novamente.",
     "showPassword": "Mostrar senha",
     "hidePassword": "Ocultar senha",
-    "doubleLoginWarning": "Você precisará entrar duas vezes para a Ubisoft."
+    "doubleLoginWarning": "Você precisará entrar duas vezes para a Ubisoft.",
+    "signInViaUpc": "Entrar via Ubisoft Connect",
+    "upcDescription": "O Ubisoft Connect será aberto para você fazer login. Após o login, sua sessão será capturada automaticamente.",
+    "launchingUpc": "Iniciando Ubisoft Connect...",
+    "waitingForLogin": "Aguardando login...",
+    "retryLaunch": "Tentar novamente",
+    "launchFailed": "Falha ao iniciar o Ubisoft Connect. Tente novamente."
   },
   "relativeDate": {
     "today": "Hoje",
@@ -474,7 +481,8 @@
   "common": {
     "thisGame": "este jogo",
     "game": "Jogo",
-    "unknown": "Desconhecido"
+    "unknown": "Desconhecido",
+    "cancel": "Cancelar"
   },
   "microsoft": {
     "notCompatible": "O formato deste jogo não é compatível com SteamOS",

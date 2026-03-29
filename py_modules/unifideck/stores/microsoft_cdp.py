@@ -21,7 +21,7 @@ __all__ = ["intercept_oauth_code"]
 
 async def intercept_oauth_code(
     pending_auth_url: str,
-    timeout: float = 300,
+    timeout: float = 430,
     cdp_port: int = 9222,
 ) -> Optional[str]:
     """

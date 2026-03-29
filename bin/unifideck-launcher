@@ -1028,14 +1028,9 @@ if [ "${UNIFIDECK_MICROSOFT_ACTION:-}" = "auth" ]; then
     if command -v flatpak &>/dev/null && (flatpak info --user com.microsoft.Edge &>/dev/null 2>&1 || flatpak info com.microsoft.Edge &>/dev/null 2>&1); then
         log "Using Microsoft Edge flatpak for Microsoft auth"
         flatpak run com.microsoft.Edge "${CHROME_FLAGS[@]}" 2>>"$LOG_FILE"
-    elif command -v flatpak &>/dev/null && (flatpak info --user org.chromium.Chromium &>/dev/null 2>&1 || flatpak info org.chromium.Chromium &>/dev/null 2>&1); then
-        log "Using Chromium flatpak for Microsoft auth"
-        flatpak run org.chromium.Chromium "${CHROME_FLAGS[@]}" 2>>"$LOG_FILE"
-    elif command -v flatpak &>/dev/null && (flatpak info --user com.google.Chrome &>/dev/null 2>&1 || flatpak info com.google.Chrome &>/dev/null 2>&1); then
-        log "Using Google Chrome flatpak for Microsoft auth"
-        flatpak run com.google.Chrome "${CHROME_FLAGS[@]}" 2>>"$LOG_FILE"
     else
-        log "ERROR: No compatible Chromium-based browser found for Microsoft auth"
+        log "ERROR: Microsoft Edge is required for Microsoft auth but was not found"
+        log "Please install Microsoft Edge: flatpak install --user flathub com.microsoft.Edge"
         exit 1
     fi
 
@@ -1080,14 +1075,6 @@ if [ "$EXE_PATH" = "xcloud" ]; then
         if flatpak info --user com.microsoft.Edge &>/dev/null 2>&1 || flatpak info com.microsoft.Edge &>/dev/null 2>&1; then
             _xcloud_browser="com.microsoft.Edge"
             _xcloud_browser_name="Microsoft Edge"
-        elif flatpak info --user org.chromium.Chromium &>/dev/null 2>&1 || flatpak info org.chromium.Chromium &>/dev/null 2>&1; then
-            _xcloud_browser="org.chromium.Chromium"
-            _xcloud_browser_name="Chromium"
-            _xcloud_needs_gamepad_trigger=true
-        elif flatpak info --user com.google.Chrome &>/dev/null 2>&1 || flatpak info com.google.Chrome &>/dev/null 2>&1; then
-            _xcloud_browser="com.google.Chrome"
-            _xcloud_browser_name="Google Chrome"
-            _xcloud_needs_gamepad_trigger=true
         fi
     fi
 

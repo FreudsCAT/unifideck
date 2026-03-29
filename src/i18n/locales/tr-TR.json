@@ -128,7 +128,8 @@
     "artworkDownloaded": "{{synced}} / {{total}} kapak indirildi",
     "steamMetadataDownloaded": "Steam meta verisi: {{synced}} / {{total}}",
     "unifidbMetadataDownloaded": "unifiDB meta verisi: {{synced}} / {{total}}",
-    "metacriticMetadataDownloaded": "Metacritic verisi: {{synced}} / {{total}}"
+    "metacriticMetadataDownloaded": "Metacritic verisi: {{synced}} / {{total}}",
+    "rawgMetadataDownloaded": "RAWG meta verileri: {{synced}} / {{total}}"
   },
   "cleanup": {
     "title": "Temizlik",
@@ -465,7 +466,13 @@
     "errorInvalid2FA": "Geçersiz doğrulama kodu. Lütfen tekrar deneyin.",
     "showPassword": "Şifreyi göster",
     "hidePassword": "Şifreyi gizle",
-    "doubleLoginWarning": "Ubisoft için iki kez giriş yapmanız gerekecek."
+    "doubleLoginWarning": "Ubisoft için iki kez giriş yapmanız gerekecek.",
+    "signInViaUpc": "Ubisoft Connect ile Giriş Yap",
+    "upcDescription": "Ubisoft Connect açılacaktır. Giriş yaptığınızda oturumunuz otomatik olarak yakalanacaktır.",
+    "launchingUpc": "Ubisoft Connect başlatılıyor...",
+    "waitingForLogin": "Giriş bekleniyor...",
+    "retryLaunch": "Tekrar Dene",
+    "launchFailed": "Ubisoft Connect başlatılamadı. Lütfen tekrar deneyin."
   },
   "relativeDate": {
     "today": "Bugün",
@@ -474,7 +481,8 @@
   "common": {
     "thisGame": "bu oyun",
     "game": "Oyun",
-    "unknown": "Bilinmiyor"
+    "unknown": "Bilinmiyor",
+    "cancel": "İptal"
   },
   "microsoft": {
     "notCompatible": "Bu oyunun formatı SteamOS ile uyumlu değil",

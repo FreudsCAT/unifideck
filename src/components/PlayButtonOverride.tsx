@@ -23,6 +23,7 @@ import { useTranslation } from "react-i18next";
 import { updateSingleGameStatus } from "../tabs";
 import { setDownloadStateRef as setInterceptorDownloadState } from "../hooks/gameActionInterceptor";
 import { GOGLanguageSelectModal } from "./GOGLanguageSelectModal";
+import { ChromiumInstallModal } from "./ChromiumInstallModal";
 import { launchAppWithConfiguredGamepad } from "../utils/controllerConfig";
 import {
   getShortcutRunGameId,
@@ -1508,12 +1509,43 @@ const PlaySectionWrapperInner: FC<PlaySectionWrapperProps> = ({
       >
         <style>{buttonStyles}</style>
 
-        {/* Play button — launches xCloud via Steam's RunGame (→ launcher → Chromium kiosk) */}
+        {/* Play button — launches xCloud via Steam's RunGame (→ launcher → Edge kiosk) */}
         <DialogButton
           className="unifideck-install-btn"
           disabled={!msConnected}
           onClick={async () => {
             if (!msConnected) return;
+
+            // Check if Microsoft Edge is installed before launching xCloud
+            try {
+              const browserCheck = await call<
+                [],
+                { installed: boolean }
+              >("check_chromium_installed");
+              if (!browserCheck.installed) {
+                showModal(
+                  <ChromiumInstallModal
+                    closeModal={() => {}}
+                    onInstalled={async () => {
+                      // After Edge install, launch the game
+                      try {
+                        const launched = await launchAppWithConfiguredGamepad(appId);
+                        if (!launched) {
+                          window.open(`steam://openurl/${xcloudUrl}`, "_blank");
+                        }
+                      } catch (e) {
+                        console.error("[PlaySection] Post-install xCloud launch failed:", e);
+                        window.open(`steam://openurl/${xcloudUrl}`, "_blank");
+                      }
+                    }}
+                  />,
+                );
+                return;
+              }
+            } catch (e) {
+              console.error("[PlaySection] Edge install check failed:", e);
+            }
+
             try {
               const launched = await launchAppWithConfiguredGamepad(appId);
               if (launched) {

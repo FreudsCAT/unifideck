@@ -39,14 +39,14 @@ logger = logging.getLogger(__name__)
 PROFILE_DIR = os.path.expanduser("~/.local/share/unifideck/chromium-auth")
 LOG_FILE    = os.path.expanduser("~/.local/share/unifideck/chromium-auth.log")
 
-# Flatpak app IDs to search, in priority order (Edge preferred for native xCloud gamepad)
-_FLATPAK_APPS = ("com.microsoft.Edge", "org.chromium.Chromium", "com.google.Chrome")
+# Only Microsoft Edge is supported (native xCloud gamepad + Steam Deck controller support)
+_FLATPAK_APPS = ("com.microsoft.Edge",)
 _EDGE_FLATPAK_APP = "com.microsoft.Edge"
 _FLATHUB_REMOTE = "flathub"
 _FLATHUB_REMOTE_URL = "https://dl.flathub.org/repo/flathub.flatpakrepo"
 
-# Native binary names to search if no flatpak found
-_NATIVE_BINS = ("microsoft-edge", "microsoft-edge-stable", "chromium", "chromium-browser", "google-chrome")
+# Native binary names to search if no flatpak found (Edge only)
+_NATIVE_BINS = ("microsoft-edge", "microsoft-edge-stable")
 
 # Domains whose cookies are cleared on logout
 _MS_COOKIE_DOMAINS = (
@@ -417,10 +417,10 @@ class ChromiumBrowser:
         return _FLATHUB_REMOTE in self._flatpak_remote_names("--user")
 
     def find_cmd(self) -> Optional[List[str]]:
-        """Find an available Edge/Chromium-based browser command.
+        """Find an available Microsoft Edge browser command.
 
         Checks both ``--user`` and ``--system`` flatpak installations,
-        then falls back to native binaries.
+        then falls back to native Edge binaries.
 
         Returns:
             Command as a list (for subprocess), or ``None``.

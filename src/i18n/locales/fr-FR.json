@@ -128,7 +128,8 @@
     "artworkDownloaded": "{{synced}} / {{total}} visuels téléchargés",
     "steamMetadataDownloaded": "Métadonnées Steam : {{synced}} / {{total}}",
     "unifidbMetadataDownloaded": "Métadonnées unifiDB : {{synced}} / {{total}}",
-    "metacriticMetadataDownloaded": "Données Metacritic : {{synced}} / {{total}}"
+    "metacriticMetadataDownloaded": "Données Metacritic : {{synced}} / {{total}}",
+    "rawgMetadataDownloaded": "Métadonnées RAWG : {{synced}} / {{total}}"
   },
   "cleanup": {
     "title": "Nettoyage",
@@ -465,7 +466,13 @@
     "errorInvalid2FA": "Code de vérification invalide. Veuillez réessayer.",
     "showPassword": "Afficher le mot de passe",
     "hidePassword": "Masquer le mot de passe",
-    "doubleLoginWarning": "Vous devrez vous connecter deux fois pour Ubisoft."
+    "doubleLoginWarning": "Vous devrez vous connecter deux fois pour Ubisoft.",
+    "signInViaUpc": "Se connecter via Ubisoft Connect",
+    "upcDescription": "Ubisoft Connect s'ouvrira pour vous permettre de vous connecter. Une fois connecté, votre session sera capturée automatiquement.",
+    "launchingUpc": "Lancement d'Ubisoft Connect...",
+    "waitingForLogin": "En attente de connexion...",
+    "retryLaunch": "Réessayer",
+    "launchFailed": "Impossible de lancer Ubisoft Connect. Veuillez réessayer."
   },
   "relativeDate": {
     "today": "Aujourd'hui",
@@ -474,7 +481,8 @@
   "common": {
     "thisGame": "ce jeu",
     "game": "Jeu",
-    "unknown": "Inconnu"
+    "unknown": "Inconnu",
+    "cancel": "Annuler"
   },
   "microsoft": {
     "notCompatible": "Le format de ce jeu n'est pas compatible avec SteamOS",

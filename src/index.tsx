@@ -1901,9 +1901,6 @@ const Content: FC = () => {
             checkStoreStatus={checkStoreStatus}
           />
 
-          {/* Language Settings - centralized language control */}
-          <LanguageSelector />
-
           {/* Game Details View Mode */}
           <PanelSection title={t("gameDetailsSettings.title")}>
             <PanelSectionRow>
@@ -1920,6 +1917,9 @@ const Content: FC = () => {
               />
             </PanelSectionRow>
           </PanelSection>
+
+          {/* Language Settings - centralized language control */}
+          <LanguageSelector />
 
           {/* Cleanup Section */}
           <PanelSection title={t("cleanup.title")}>

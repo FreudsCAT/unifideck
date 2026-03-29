@@ -128,7 +128,8 @@
     "artworkDownloaded": "{{synced}} / {{total}} обкладинок завантажено",
     "steamMetadataDownloaded": "Метадані Steam: {{synced}} / {{total}}",
     "unifidbMetadataDownloaded": "Метадані unifiDB: {{synced}} / {{total}}",
-    "metacriticMetadataDownloaded": "Дані Metacritic: {{synced}} / {{total}}"
+    "metacriticMetadataDownloaded": "Дані Metacritic: {{synced}} / {{total}}",
+    "rawgMetadataDownloaded": "Метадані RAWG: {{synced}} / {{total}}"
   },
   "cleanup": {
     "title": "Очищення",
@@ -465,7 +466,13 @@
     "errorInvalid2FA": "Неправильний код підтвердження. Спробуйте ще раз.",
     "showPassword": "Показати пароль",
     "hidePassword": "Приховати пароль",
-    "doubleLoginWarning": "Для Ubisoft потрібно буде увійти двічі."
+    "doubleLoginWarning": "Для Ubisoft потрібно буде увійти двічі.",
+    "signInViaUpc": "Увійти через Ubisoft Connect",
+    "upcDescription": "Ubisoft Connect відкриється для входу. Після входу ваша сесія буде автоматично збережена.",
+    "launchingUpc": "Запуск Ubisoft Connect...",
+    "waitingForLogin": "Очікування входу...",
+    "retryLaunch": "Повторити",
+    "launchFailed": "Не вдалося запустити Ubisoft Connect. Спробуйте ще раз."
   },
   "relativeDate": {
     "today": "Сьогодні",
@@ -474,7 +481,8 @@
   "common": {
     "thisGame": "ця гра",
     "game": "Гра",
-    "unknown": "Невідомо"
+    "unknown": "Невідомо",
+    "cancel": "Скасувати"
   },
   "microsoft": {
     "notCompatible": "Формат цієї гри не сумісний зі SteamOS",

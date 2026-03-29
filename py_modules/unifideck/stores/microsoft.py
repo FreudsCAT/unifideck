@@ -860,7 +860,7 @@ class MicrosoftConnector(Store):
         intercept_task = asyncio.create_task(
             intercept_oauth_code(
                 pending_auth_url=getattr(self, "_pending_auth_url", ""),
-                timeout=300,
+                timeout=430,
                 cdp_port=cdp_port,
             )
         )
@@ -883,7 +883,7 @@ class MicrosoftConnector(Store):
                 else:
                     logger.error(f"[MS] ✗ complete_auth failed: {result.get('error')}")
             else:
-                logger.warning("[MS] ✗ CDP interception timed out — no code received (300s)")
+                logger.warning("[MS] ✗ CDP interception timed out — no code received (330s)")
         except Exception as e:
             logger.error(f"[MS] ✗ Auth monitor error: {e}", exc_info=True)
         finally:

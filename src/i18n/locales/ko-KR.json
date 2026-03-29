@@ -128,7 +128,8 @@
     "artworkDownloaded": "{{synced}} / {{total}}개 아트워크 다운로드됨",
     "steamMetadataDownloaded": "Steam 메타데이터: {{synced}} / {{total}}",
     "unifidbMetadataDownloaded": "unifiDB 메타데이터: {{synced}} / {{total}}",
-    "metacriticMetadataDownloaded": "Metacritic 데이터: {{synced}} / {{total}}"
+    "metacriticMetadataDownloaded": "Metacritic 데이터: {{synced}} / {{total}}",
+    "rawgMetadataDownloaded": "RAWG 메타데이터: {{synced}} / {{total}}"
   },
   "cleanup": {
     "title": "정리",
@@ -465,7 +466,13 @@
     "errorInvalid2FA": "확인 코드가 올바르지 않습니다. 다시 시도하세요.",
     "showPassword": "비밀번호 표시",
     "hidePassword": "비밀번호 숨기기",
-    "doubleLoginWarning": "Ubisoft에서는 두 번 로그인해야 합니다."
+    "doubleLoginWarning": "Ubisoft에서는 두 번 로그인해야 합니다.",
+    "signInViaUpc": "Ubisoft Connect로 로그인",
+    "upcDescription": "Ubisoft Connect가 열리면 로그인하세요. 로그인하면 세션이 자동으로 캡처됩니다.",
+    "launchingUpc": "Ubisoft Connect 실행 중...",
+    "waitingForLogin": "로그인 대기 중...",
+    "retryLaunch": "재시도",
+    "launchFailed": "Ubisoft Connect를 실행하지 못했습니다. 다시 시도해 주세요."
   },
   "relativeDate": {
     "today": "오늘",
@@ -474,7 +481,8 @@
   "common": {
     "thisGame": "이 게임",
     "game": "게임",
-    "unknown": "알 수 없음"
+    "unknown": "알 수 없음",
+    "cancel": "취소"
   },
   "microsoft": {
     "notCompatible": "이 게임의 포맷은 SteamOS와 호환되지 않습니다",
