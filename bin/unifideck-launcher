@@ -351,7 +351,16 @@ run_umu_with_retry() {
         # command's status), so we must capture the exit code directly.
         # Only redirect stderr — stdout must stay inherited so umu-run/pressure-vessel
         # see a real TTY (redirecting stdout changes container process behavior).
-        "$python_bin" "$umu_path" "$@" 2>>"$LOG_FILE" && exit_code=0 || exit_code=$?
+        # Filter out noisy but harmless stderr from Gamescope WSI, Fossilize,
+        # GStreamer, DXVK, and capsule-capture-libs before writing to log.
+        "$python_bin" "$umu_path" "$@" 2> >(grep -v \
+            -e '^\[Gamescope WSI\]' \
+            -e '^Fossilize ' \
+            -e '^It has either not been recorded' \
+            -e '^ATTENTION: default value' \
+            -e 'GStreamer-WARNING' \
+            -e 'capsule-capture-libs: warning' \
+            >> "$LOG_FILE") && exit_code=0 || exit_code=$?
         
         if [ $exit_code -eq 0 ]; then
             return 0
