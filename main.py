@@ -59,6 +59,16 @@ from py_modules.unifideck.utils.game_tags import get_game_tags, invalidate_cache
 # Import Account Manager for multi-account support
 from py_modules.unifideck.accounts.account_manager import AccountManager
 
+# Import Activity Tracking (play time, events, statistics)
+from py_modules.unifideck.playtime.database import ActivityDatabase
+from py_modules.unifideck.playtime.session_tracker import SessionTracker
+from py_modules.unifideck.playtime.event_recorder import EventRecorder
+from py_modules.unifideck.playtime.statistics import StatisticsService
+from py_modules.unifideck.playtime.steam_import import SteamDataImporter
+from py_modules.unifideck.playtime.models import (
+    EndReason, GameEventType, DeviceEventType
+)
+
 # ============================================================================
 # NEW MODULAR BACKEND IMPORTS (Phase 1: Available for use alongside old code)
 # These will eventually replace the inline class definitions below.
@@ -2069,6 +2079,48 @@ class Plugin:
         # Initialize sync progress tracker
         self.sync_progress = SyncProgress()
 
+        # === ACTIVITY TRACKING DATABASE ===
+        logger.info("[INIT] Initializing activity tracking database")
+        try:
+            self.activity_db = ActivityDatabase()
+            schema_ver = self.activity_db.open()
+            self.event_recorder = EventRecorder(self.activity_db)
+            self.session_tracker = SessionTracker(self.activity_db, self.event_recorder)
+            self.statistics_service = StatisticsService(self.activity_db)
+
+            # Recover any orphaned sessions from crashes/power loss
+            recovered = self.session_tracker.recover_orphaned_sessions()
+            if recovered > 0:
+                logger.info(f"[PLAYTIME] Recovered {recovered} orphaned session(s)")
+
+            # Record plugin_loaded event
+            self.event_recorder.record_device_event(
+                DeviceEventType.PLUGIN_LOADED,
+                details={"plugin_version": loaded_version, "schema_version": schema_ver},
+            )
+            # Create persistent Steam importer for auto-sync on session start
+            self.steam_importer = None
+            self._steam_import_checked: set = set()  # game_ids already checked this session
+            try:
+                steam_user = get_logged_in_steam_user()
+                if steam_user:
+                    _user_id = str(steam_user.get('account_id', ''))
+                    _steam_path = os.path.expanduser("~/.steam/steam")
+                    self.steam_importer = SteamDataImporter(self.activity_db, _steam_path, _user_id)
+                    logger.info("[PLAYTIME] Steam importer ready for auto-sync")
+            except Exception as e:
+                logger.warning(f"[PLAYTIME] Steam importer init failed (non-fatal): {e}")
+
+            logger.info("[INIT] Activity tracking database initialized")
+        except Exception as e:
+            logger.error(f"[INIT] Activity tracking init failed (non-fatal): {e}", exc_info=True)
+            self.activity_db = None
+            self.event_recorder = None
+            self.session_tracker = None
+            self.statistics_service = None
+            self.steam_importer = None
+            self._steam_import_checked = set()
+
         logger.info("[INIT] Initializing ShortcutsManager")
         self.shortcuts_manager = ShortcutsManager(plugin_dir=os.path.dirname(os.path.abspath(__file__)))
         
@@ -2713,6 +2765,17 @@ microsoft_client=self.microsoft,
         result: Dict[str, Any]
         self._capture_sync_cache_snapshot()
 
+        # Record sync start event
+        if self.event_recorder:
+            try:
+                self.event_recorder.record_device_event(
+                    DeviceEventType.LIBRARY_SYNC_STARTED,
+                    details={"source": request.source, "kind": request.kind},
+                )
+            except Exception:
+                pass
+        _sync_start_time = datetime.now()
+
         try:
             if request.kind == 'force':
                 result = await self._force_sync_libraries_impl(
@@ -2734,6 +2797,23 @@ microsoft_client=self.microsoft,
             self._clear_sync_cache_snapshot()
             self.sync_progress.mark_finished()
             result['restart_pending'] = self._pending_auth_sync_request is not None
+
+            # Record sync completion event
+            if self.event_recorder:
+                try:
+                    duration = (datetime.now() - _sync_start_time).total_seconds()
+                    self.event_recorder.record_device_event(
+                        DeviceEventType.LIBRARY_SYNC_COMPLETED,
+                        details={
+                            "source": request.source,
+                            "duration_secs": int(duration),
+                            "games_synced": result.get("synced_games", 0),
+                            "artwork_fetched": result.get("artwork_count", 0),
+                        },
+                    )
+                except Exception:
+                    pass
+
             return result
         except asyncio.CancelledError:
             restart_pending = self._pending_auth_sync_request is not None
@@ -2752,6 +2832,16 @@ microsoft_client=self.microsoft,
             self.sync_progress.status = 'error'
             self.sync_progress.error = str(e)
             self.sync_progress.mark_finished()
+
+            if self.event_recorder:
+                try:
+                    self.event_recorder.record_device_event(
+                        DeviceEventType.LIBRARY_SYNC_FAILED,
+                        details={"error": str(e), "source": request.source},
+                    )
+                except Exception:
+                    pass
+
             return {'success': False, 'error': str(e), 'restart_pending': False}
         finally:
             async with self._sync_request_lock:
@@ -5715,6 +5805,19 @@ microsoft_client=self.microsoft,
                 language=language
             )
             logger.info(f"[DownloadQueue] Added {game_title} to queue (was_installed={was_previously_installed}, lang={language}): {result}")
+
+            # Record download_started event
+            if self.event_recorder and self.activity_db and result.get('success'):
+                try:
+                    db_game_id = self.activity_db.get_or_create_game(store, game_id, game_title)
+                    self.event_recorder.record_game_event(
+                        db_game_id,
+                        GameEventType.DOWNLOAD_STARTED,
+                        details={"store": store, "game_id": game_id, "title": game_title},
+                    )
+                except Exception:
+                    pass
+
             return result
         except Exception as e:
             logger.error(f"[DownloadQueue] Error adding to queue: {e}")
@@ -6319,6 +6422,26 @@ microsoft_client=self.microsoft,
     async def save_proton_setting(self, store_game_id: str, tool_name: str) -> Dict[str, Any]:
         """Save proton tool preference for the launcher to read at Priority 2.5."""
         from py_modules.unifideck.compat.proton_tools import save_proton_setting as _save
+
+        # Record proton_changed event
+        if self.event_recorder and self.activity_db:
+            try:
+                # store_game_id format: "store:game_id"
+                parts = store_game_id.split(":", 1)
+                if len(parts) == 2:
+                    game = self.activity_db.query_one(
+                        "SELECT id FROM games WHERE store = ? AND store_game_id = ?",
+                        (parts[0], parts[1]),
+                    )
+                    if game:
+                        self.event_recorder.record_game_event(
+                            game["id"],
+                            GameEventType.PROTON_CHANGED,
+                            details={"new_tool": tool_name, "store_game_id": store_game_id},
+                        )
+            except Exception:
+                pass
+
         return _save(store_game_id, tool_name)
 
     async def stop_game_processes(self, app_id: int) -> Dict[str, Any]:
@@ -7203,11 +7326,417 @@ microsoft_client=self.microsoft,
                     'error': str(e)
                 }
 
+    # ════════════════════════════════════════════════════════════════
+    # PLAY TIME & ACTIVITY TRACKING RPC ENDPOINTS
+    # ════════════════════════════════════════════════════════════════
+
+    def _resolve_game_from_app_id(self, steam_app_id: int) -> Optional[Dict[str, Any]]:
+        """Resolve a steam shortcut appId to store, game_id, and title.
+
+        Uses shortcuts_registry.json (fast, in-memory cacheable) for reverse lookup.
+        Falls back to games.map if registry doesn't have the entry.
+        """
+        # Normalize to signed if needed
+        if steam_app_id > 2**31:
+            steam_app_id_signed = steam_app_id - 2**32
+        else:
+            steam_app_id_signed = steam_app_id
+
+        # Try shortcuts_registry.json (launch_options → {appid, title})
+        try:
+            registry = load_shortcuts_registry()
+            for launch_opts, entry in registry.items():
+                if entry.get('appid') == steam_app_id_signed:
+                    result = extract_store_id(launch_opts)
+                    if result:
+                        store, game_id = result
+                        return {
+                            'store': store,
+                            'game_id': game_id,
+                            'title': entry.get('title', 'Unknown'),
+                            'steam_app_id': steam_app_id_signed,
+                        }
+        except Exception as e:
+            logger.warning(f"[PLAYTIME] Registry lookup failed for appId {steam_app_id}: {e}")
+
+        # Fallback: scan games.map
+        try:
+            games_map = _load_games_map_cached()
+            for key, line in games_map.items():
+                # Key is "store:game_id", we need to check if this maps to our appid
+                result = extract_store_id(key)
+                if result:
+                    store, game_id = result
+                    registered_appid = get_registered_appid(key)
+                    if registered_appid == steam_app_id_signed:
+                        return {
+                            'store': store,
+                            'game_id': game_id,
+                            'title': key,  # Best we have without registry title
+                            'steam_app_id': steam_app_id_signed,
+                        }
+        except Exception as e:
+            logger.warning(f"[PLAYTIME] games.map fallback failed for appId {steam_app_id}: {e}")
+
+        return None
+
+    async def playtime_start_session(self, steam_app_id: int) -> Dict[str, Any]:
+        """Start tracking a play session for a game.
+
+        Called from frontend when RegisterForAppLifetimeNotifications fires bRunning=true.
+        Backend resolves the steam_app_id to store/game_id/title.
+        """
+        if not self.session_tracker:
+            return {'success': False, 'error': 'Activity tracking not initialized'}
+
+        game_info = self._resolve_game_from_app_id(steam_app_id)
+        if not game_info:
+            logger.warning(f"[PLAYTIME] Cannot resolve appId {steam_app_id} to a game")
+            return {'success': False, 'error': f'Unknown appId {steam_app_id}'}
+
+        # Get current Steam user
+        steam_user_id = None
+        try:
+            user_info = get_logged_in_steam_user()
+            if user_info:
+                steam_user_id = str(user_info.get('account_id', ''))
+        except Exception:
+            pass
+
+        session_id = self.session_tracker.start_session(
+            steam_app_id=game_info['steam_app_id'],
+            store=game_info['store'],
+            store_game_id=game_info['game_id'],
+            title=game_info['title'],
+            steam_user_id=steam_user_id,
+        )
+
+        # One-time additive sync from Steam's local playtime data.
+        # Runs once per game per plugin session — imports any time gap
+        # between Steam's total and our tracked total.
+        if self.steam_importer and self.activity_db and session_id is not None:
+            try:
+                game_row = self.activity_db.find_game_by_steam_app_id(game_info['steam_app_id'])
+                if game_row and game_row['id'] not in self._steam_import_checked:
+                    self._steam_import_checked.add(game_row['id'])
+                    imported = self.steam_importer.import_game_playtime(
+                        game_info['steam_app_id'], game_row['id'], game_info['title']
+                    )
+                    if imported:
+                        self.session_tracker._refresh_game_stats(game_row['id'])
+            except Exception as e:
+                logger.warning(f"[PLAYTIME] Auto-import failed for {game_info.get('title')}: {e}")
+
+        return {
+            'success': session_id is not None,
+            'session_id': session_id,
+            'title': game_info['title'],
+            'store': game_info['store'],
+        }
+
+    async def playtime_end_session(self, steam_app_id: int, end_reason: str = "normal") -> Dict[str, Any]:
+        """End a play session.
+
+        Called from frontend when RegisterForAppLifetimeNotifications fires bRunning=false.
+        """
+        if not self.session_tracker:
+            return {'success': False, 'error': 'Activity tracking not initialized'}
+
+        # Normalize signed/unsigned
+        if steam_app_id > 2**31:
+            steam_app_id = steam_app_id - 2**32
+
+        try:
+            reason = EndReason(end_reason)
+        except ValueError:
+            reason = EndReason.UNKNOWN
+
+        duration = self.session_tracker.end_session(steam_app_id, reason)
+
+        return {
+            'success': True,
+            'duration_secs': duration,
+            'end_reason': reason.value,
+        }
+
+    async def playtime_on_suspend(self) -> Dict[str, Any]:
+        """Pause play time tracking for all active sessions (device entering sleep)."""
+        if not self.session_tracker:
+            return {'success': False}
+
+        count = self.session_tracker.suspend_all_sessions()
+
+        if self.event_recorder:
+            self.event_recorder.record_device_event(
+                DeviceEventType.DEVICE_SUSPEND,
+                details={'active_session_count': count},
+            )
+
+        return {'success': True, 'suspended_count': count}
+
+    async def playtime_on_resume(self) -> Dict[str, Any]:
+        """Resume play time tracking for all suspended sessions (device waking up)."""
+        if not self.session_tracker:
+            return {'success': False}
+
+        count = self.session_tracker.resume_all_sessions()
+
+        if self.event_recorder:
+            self.event_recorder.record_device_event(
+                DeviceEventType.DEVICE_RESUME,
+                details={'resumed_session_count': count},
+            )
+
+        return {'success': True, 'resumed_count': count}
+
+    async def playtime_get_game_stats(self, steam_app_id: int) -> Dict[str, Any]:
+        """Get lifetime play statistics for a specific game."""
+        if not self.statistics_service:
+            return {'success': False, 'error': 'Activity tracking not initialized'}
+
+        # Normalize
+        if steam_app_id > 2**31:
+            steam_app_id = steam_app_id - 2**32
+
+        stats = self.statistics_service.get_game_stats_by_app_id(steam_app_id)
+        if stats:
+            return {'success': True, **stats}
+        return {'success': False, 'error': 'No stats found'}
+
+    async def playtime_get_recent_sessions(self, limit: int = 20) -> Dict[str, Any]:
+        """Get the most recent play sessions across all games."""
+        if not self.statistics_service:
+            return {'success': False, 'error': 'Activity tracking not initialized'}
+
+        sessions = self.statistics_service.get_recent_sessions(limit)
+        return {'success': True, 'sessions': sessions}
+
+    async def playtime_get_daily_totals(self, days: int = 30) -> Dict[str, Any]:
+        """Get daily play time totals."""
+        if not self.statistics_service:
+            return {'success': False, 'error': 'Activity tracking not initialized'}
+
+        totals = self.statistics_service.get_daily_totals(days)
+        return {'success': True, 'totals': totals}
+
+    async def playtime_get_store_summary(self) -> Dict[str, Any]:
+        """Get per-store play time summaries."""
+        if not self.statistics_service:
+            return {'success': False, 'error': 'Activity tracking not initialized'}
+
+        summaries = self.statistics_service.get_store_summary()
+        return {'success': True, 'stores': summaries}
+
+    async def playtime_get_overall_stats(self) -> Dict[str, Any]:
+        """Get overall dashboard-level statistics."""
+        if not self.statistics_service:
+            return {'success': False, 'error': 'Activity tracking not initialized'}
+
+        stats = self.statistics_service.get_overall_stats()
+        return {'success': True, **stats}
+
+    async def playtime_get_most_played(self, limit: int = 10) -> Dict[str, Any]:
+        """Get most played games by total time."""
+        if not self.statistics_service:
+            return {'success': False, 'error': 'Activity tracking not initialized'}
+
+        games = self.statistics_service.get_most_played(limit)
+        return {'success': True, 'games': games}
+
+    async def playtime_get_hour_distribution(self) -> Dict[str, Any]:
+        """Get hour-of-day activity distribution."""
+        if not self.statistics_service:
+            return {'success': False, 'error': 'Activity tracking not initialized'}
+
+        distribution = self.statistics_service.get_hour_distribution()
+        return {'success': True, 'hours': distribution}
+
+    async def playtime_get_weekly_comparison(self) -> Dict[str, Any]:
+        """Get this week vs last week play time comparison."""
+        if not self.statistics_service:
+            return {'success': False, 'error': 'Activity tracking not initialized'}
+
+        comparison = self.statistics_service.get_weekly_comparison()
+        return {'success': True, **comparison}
+
+    async def playtime_import_from_steam(self) -> Dict[str, Any]:
+        """Import play time data from Steam's localconfig.vdf."""
+        if not self.activity_db:
+            return {'success': False, 'error': 'Activity tracking not initialized'}
+
+        try:
+            steam_user = get_logged_in_steam_user()
+            if not steam_user:
+                return {'success': False, 'error': 'No Steam user detected'}
+
+            user_id = str(steam_user.get('account_id', ''))
+            steam_path = os.path.expanduser("~/.steam/steam")
+
+            importer = SteamDataImporter(self.activity_db, steam_path, user_id)
+            result = importer.import_localconfig_playtime()
+            return {'success': True, **result}
+        except Exception as e:
+            logger.error(f"[PLAYTIME] Steam import failed: {e}", exc_info=True)
+            return {'success': False, 'error': str(e)}
+
+    async def playtime_manual_correction(
+        self, session_id: int, new_duration_secs: int, note: str = ""
+    ) -> Dict[str, Any]:
+        """Manually correct a session's duration with audit trail."""
+        if not self.activity_db:
+            return {'success': False, 'error': 'Activity tracking not initialized'}
+
+        try:
+            # Get current session
+            session = self.activity_db.query_one(
+                "SELECT id, game_id, duration_secs FROM play_sessions WHERE id = ?",
+                (session_id,),
+            )
+            if not session:
+                return {'success': False, 'error': f'Session {session_id} not found'}
+
+            old_duration = session['duration_secs']
+
+            # Update session
+            self.activity_db.execute(
+                """UPDATE play_sessions
+                   SET duration_secs = ?, is_manual = 1, session_note = ?,
+                       updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+                   WHERE id = ?""",
+                (new_duration_secs, note or f"Corrected from {old_duration}s", session_id),
+            )
+
+            # Log the correction
+            if self.event_recorder:
+                self.event_recorder.record_activity(
+                    category="correction",
+                    action="manual_time_correction",
+                    details={
+                        'session_id': session_id,
+                        'game_id': session['game_id'],
+                        'old_duration': old_duration,
+                        'new_duration': new_duration_secs,
+                        'note': note,
+                    },
+                )
+
+            # Refresh game_stats
+            if self.session_tracker:
+                self.session_tracker._refresh_game_stats(session['game_id'])
+
+            return {
+                'success': True,
+                'old_duration': old_duration,
+                'new_duration': new_duration_secs,
+            }
+
+        except Exception as e:
+            logger.error(f"[PLAYTIME] Manual correction failed: {e}")
+            return {'success': False, 'error': str(e)}
+
+    async def playtime_get_library_stats(self) -> Dict[str, Any]:
+        """Get overall library statistics: game counts per store, total owned, total played."""
+        if not self.activity_db:
+            return {'success': False, 'error': 'Activity tracking not initialized'}
+
+        try:
+            # Games tracked in our DB (games that have been launched at least once)
+            per_store = self.activity_db.query(
+                """SELECT store,
+                          COUNT(*) as total_games,
+                          SUM(CASE WHEN gs.total_sessions > 0 THEN 1 ELSE 0 END) as played_games,
+                          COALESCE(SUM(gs.total_secs), 0) as total_secs
+                   FROM games g
+                   LEFT JOIN game_stats gs ON g.id = gs.game_id
+                   GROUP BY store
+                   ORDER BY total_games DESC"""
+            )
+
+            totals = self.activity_db.query_one(
+                """SELECT COUNT(*) as total_games,
+                          SUM(CASE WHEN gs.total_sessions > 0 THEN 1 ELSE 0 END) as total_played,
+                          COALESCE(SUM(gs.total_secs), 0) as total_secs,
+                          COALESCE(SUM(gs.total_sessions), 0) as total_sessions
+                   FROM games g
+                   LEFT JOIN game_stats gs ON g.id = gs.game_id"""
+            )
+
+            # Also count games from shortcuts_registry (all known games, even unplayed)
+            try:
+                registry = load_shortcuts_registry()
+                registry_stores: Dict[str, int] = {}
+                for launch_opts in registry:
+                    result = extract_store_id(launch_opts)
+                    if result:
+                        store = result[0]
+                        registry_stores[store] = registry_stores.get(store, 0) + 1
+            except Exception:
+                registry_stores = {}
+
+            stores = []
+            for row in per_store:
+                store = row["store"]
+                stores.append({
+                    "store": store,
+                    "tracked_games": row["total_games"],
+                    "played_games": row["played_games"] or 0,
+                    "owned_games": registry_stores.get(store, row["total_games"]),
+                    "total_secs": row["total_secs"],
+                })
+
+            # Add stores that have registry entries but no tracked play data yet
+            for store, count in registry_stores.items():
+                if not any(s["store"] == store for s in stores):
+                    stores.append({
+                        "store": store,
+                        "tracked_games": 0,
+                        "played_games": 0,
+                        "owned_games": count,
+                        "total_secs": 0,
+                    })
+
+            return {
+                'success': True,
+                'total_owned': sum(s["owned_games"] for s in stores),
+                'total_tracked': totals["total_games"] if totals else 0,
+                'total_played': totals["total_played"] if totals else 0,
+                'total_secs': totals["total_secs"] if totals else 0,
+                'total_sessions': totals["total_sessions"] if totals else 0,
+                'stores': stores,
+            }
+
+        except Exception as e:
+            logger.error(f"[PLAYTIME] Library stats failed: {e}", exc_info=True)
+            return {'success': False, 'error': str(e)}
+
     async def _unload(self):
         """Cleanup on plugin unload"""
         logger.info("[UNLOAD] Stopping background sync service")
         if self.background_sync:
             await self.background_sync.stop()
+
+        # Close all active play sessions and shut down activity tracking
+        if self.session_tracker:
+            try:
+                closed = self.session_tracker.end_all_sessions(EndReason.PLUGIN_UNLOAD)
+                logger.info(f"[UNLOAD] Closed {closed} active play session(s)")
+            except Exception as e:
+                logger.warning(f"[UNLOAD] Failed to close play sessions: {e}")
+
+        if self.event_recorder:
+            try:
+                self.event_recorder.record_device_event(
+                    DeviceEventType.PLUGIN_UNLOADED,
+                    details={"sessions_closed": closed if self.session_tracker else 0},
+                )
+            except Exception as e:
+                logger.warning(f"[UNLOAD] Failed to record unload event: {e}")
+
+        if self.activity_db:
+            try:
+                self.activity_db.close()
+            except Exception as e:
+                logger.warning(f"[UNLOAD] Failed to close activity DB: {e}")
 
         # Disconnect CDP client
         try:

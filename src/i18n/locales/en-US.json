@@ -409,6 +409,7 @@
       "status": "Status:",
       "spaceRequired": "Space Required",
       "lastPlayed": "Last Played",
+      "playTime": "Play Time",
       "never": "Never"
     },
     "compatibility": {

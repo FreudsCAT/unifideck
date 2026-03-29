@@ -208,6 +208,7 @@ const PlaySectionWrapperInner: FC<PlaySectionWrapperProps> = ({
   } | null>(null);
   const [isRunning, setIsRunning] = useState(false);
   const [lastPlayedTimestamp, setLastPlayedTimestamp] = useState(0);
+  const [playtimeSecs, setPlaytimeSecs] = useState(0);
   const [updateAvailable, setUpdateAvailable] = useState<boolean | null>(null);
   const [isUpdating, setIsUpdating] = useState(false);
   const [ubisoftInstalling, setUbisoftInstalling] = useState(false);
@@ -225,6 +226,13 @@ const PlaySectionWrapperInner: FC<PlaySectionWrapperProps> = ({
     if (diffDays === 0) return t("relativeDate.today");
     if (diffDays === 1) return t("relativeDate.yesterday");
     return date.toLocaleDateString();
+  };
+  const formatPlaytime = (secs: number): string => {
+    if (secs <= 0) return "\u2014";
+    const hours = Math.floor(secs / 3600);
+    const mins = Math.floor((secs % 3600) / 60);
+    if (hours > 0) return `${hours}h ${mins}m`;
+    return `${mins}m`;
   };
 
   const isDownloading =
@@ -375,6 +383,18 @@ const PlaySectionWrapperInner: FC<PlaySectionWrapperProps> = ({
       ?.then((result: any) => {
         if (result?.rtLastTimePlayed) {
           setLastPlayedTimestamp(result.rtLastTimePlayed);
+        }
+      })
+      .catch(() => {});
+
+    // Fetch Unifideck-tracked play time
+    call<[number], { success: boolean; total_secs?: number }>(
+      "playtime_get_game_stats",
+      appId,
+    )
+      .then((result) => {
+        if (result?.success && result.total_secs) {
+          setPlaytimeSecs(result.total_secs);
         }
       })
       .catch(() => {});
@@ -1573,7 +1593,7 @@ const PlaySectionWrapperInner: FC<PlaySectionWrapperProps> = ({
             : t("microsoft.signInRequired", "Sign in to play")}
         </DialogButton>
 
-        {/* Restore the metadata slot so Last Played stays visible for xCloud */}
+        {/* Restore the metadata slot so Last Played + Play Time stay visible for xCloud */}
         <div
           style={{
             display: "flex",
@@ -1601,6 +1621,26 @@ const PlaySectionWrapperInner: FC<PlaySectionWrapperProps> = ({
               {formatLastPlayed(lastPlayedTimestamp)}
             </div>
           </div>
+          {playtimeSecs > 0 && (
+            <div>
+              <div
+                style={{
+                  fontSize: "11px",
+                  fontWeight: 600,
+                  textTransform: "uppercase",
+                  color: "#8f98a0",
+                  letterSpacing: "0.08em",
+                  lineHeight: "1",
+                  marginBottom: "5px",
+                }}
+              >
+                {t("gameInfoPanel.labels.playTime")}
+              </div>
+              <div style={{ fontSize: "14px", color: "#dcdedf" }}>
+                {formatPlaytime(playtimeSecs)}
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Right icon buttons — always present for settings access */}
@@ -2065,26 +2105,48 @@ const PlaySectionWrapperInner: FC<PlaySectionWrapperProps> = ({
           <div
             style={{
               display: "flex",
-              flexDirection: "column",
+              gap: "32px",
               marginLeft: "24px",
             }}
           >
-            <div
-              style={{
-                fontSize: "11px",
-                fontWeight: 600,
-                textTransform: "uppercase",
-                color: "#8f98a0",
-                letterSpacing: "0.08em",
-                lineHeight: "1",
-                marginBottom: "5px",
-              }}
-            >
-              {t("gameInfoPanel.labels.lastPlayed")}
+            <div>
+              <div
+                style={{
+                  fontSize: "11px",
+                  fontWeight: 600,
+                  textTransform: "uppercase",
+                  color: "#8f98a0",
+                  letterSpacing: "0.08em",
+                  lineHeight: "1",
+                  marginBottom: "5px",
+                }}
+              >
+                {t("gameInfoPanel.labels.lastPlayed")}
+              </div>
+              <div style={{ fontSize: "14px", color: "#dcdedf" }}>
+                {formatLastPlayed(lastPlayedTimestamp)}
+              </div>
             </div>
-            <div style={{ fontSize: "14px", color: "#dcdedf" }}>
-              {formatLastPlayed(lastPlayedTimestamp)}
-            </div>
+            {playtimeSecs > 0 && (
+              <div>
+                <div
+                  style={{
+                    fontSize: "11px",
+                    fontWeight: 600,
+                    textTransform: "uppercase",
+                    color: "#8f98a0",
+                    letterSpacing: "0.08em",
+                    lineHeight: "1",
+                    marginBottom: "5px",
+                  }}
+                >
+                  {t("gameInfoPanel.labels.playTime")}
+                </div>
+                <div style={{ fontSize: "14px", color: "#dcdedf" }}>
+                  {formatPlaytime(playtimeSecs)}
+                </div>
+              </div>
+            )}
           </div>
         )}
 
@@ -2260,6 +2322,26 @@ const PlaySectionWrapperInner: FC<PlaySectionWrapperProps> = ({
               {formatLastPlayed(lastPlayedTimestamp)}
             </div>
           </div>
+          {playtimeSecs > 0 && (
+            <div>
+              <div
+                style={{
+                  fontSize: "11px",
+                  fontWeight: 600,
+                  textTransform: "uppercase",
+                  color: "#8f98a0",
+                  letterSpacing: "0.08em",
+                  lineHeight: "1",
+                  marginBottom: "5px",
+                }}
+              >
+                {t("gameInfoPanel.labels.playTime")}
+              </div>
+              <div style={{ fontSize: "14px", color: "#dcdedf" }}>
+                {formatPlaytime(playtimeSecs)}
+              </div>
+            </div>
+          )}
         </div>
       )}
 

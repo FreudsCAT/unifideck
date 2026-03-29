@@ -2067,7 +2067,7 @@ export default definePlugin(() => {
   const unregisterInterceptor = registerGameActionInterceptor();
   console.log("[Unifideck] ✓ Game action interceptor registered");
 
-  // Global listener: capture Ubisoft session when ANY game stops.
+  // Global listener: track play time + capture Ubisoft session when ANY game starts/stops.
   // This fires in gaming mode, desktop mode, overlay abort — everywhere.
   // The per-component listener in PlaySectionWrapper only works when
   // the library page is open; this covers all other scenarios.
@@ -2076,29 +2076,59 @@ export default definePlugin(() => {
     unregLifetimeGlobal =
       window.SteamClient?.GameSessions?.RegisterForAppLifetimeNotifications?.(
         (data: { unAppID: number; bRunning: boolean }) => {
-          if (data.bRunning) return; // Only interested in stop events
-
-          // Quick check: is this a Ubisoft game? (unifideckGameCache is always populated)
+          // Check if this is a Unifideck-managed game
           const cached = unifideckGameCache.get(data.unAppID);
-          if (!cached || cached.store !== "ubisoft") return;
 
-          console.log(
-            `[Unifideck] Global: Ubisoft game stopped (appId=${data.unAppID}), capturing session`,
-          );
-          call<[number], { success: boolean }>(
-            "capture_ubisoft_session_by_appid",
-            data.unAppID,
-          ).catch((err) =>
-            console.error(
-              "[Unifideck] Global: capture_ubisoft_session_by_appid failed:",
-              err,
-            ),
-          );
+          if (data.bRunning) {
+            // === PLAY TIME: Session Start ===
+            if (cached) {
+              call<[number], { success: boolean }>(
+                "playtime_start_session",
+                data.unAppID,
+              ).catch((err) =>
+                console.error(
+                  "[Unifideck] playtime_start_session failed:",
+                  err,
+                ),
+              );
+            }
+            return;
+          }
+
+          // === PLAY TIME: Session End ===
+          if (cached) {
+            call<[number, string], { success: boolean }>(
+              "playtime_end_session",
+              data.unAppID,
+              "normal",
+            ).catch((err) =>
+              console.error(
+                "[Unifideck] playtime_end_session failed:",
+                err,
+              ),
+            );
+          }
+
+          // Ubisoft-specific: capture UPC session data on stop
+          if (cached?.store === "ubisoft") {
+            console.log(
+              `[Unifideck] Global: Ubisoft game stopped (appId=${data.unAppID}), capturing session`,
+            );
+            call<[number], { success: boolean }>(
+              "capture_ubisoft_session_by_appid",
+              data.unAppID,
+            ).catch((err) =>
+              console.error(
+                "[Unifideck] Global: capture_ubisoft_session_by_appid failed:",
+                err,
+              ),
+            );
+          }
         },
       ) ?? null;
     if (unregLifetimeGlobal) {
       console.log(
-        "[Unifideck] ✓ Global Ubisoft session capture listener registered",
+        "[Unifideck] ✓ Global play time + Ubisoft session capture listener registered",
       );
     }
   } catch {
@@ -2338,6 +2368,30 @@ export default definePlugin(() => {
   // Background sync disabled - users manually sync via UI when needed
   console.log("[Unifideck] Background sync disabled (use manual sync button)");
 
+  // === PLAY TIME: Suspend/Resume detection ===
+  // Pause play time clock when device sleeps, resume when it wakes
+  let unregSuspend: { unregister(): void } | null = null;
+  let unregResume: { unregister(): void } | null = null;
+  try {
+    unregSuspend =
+      (window.SteamClient as any)?.System?.RegisterForOnSuspendRequest?.(
+        () => {
+          call("playtime_on_suspend").catch(() => {});
+        },
+      ) ?? null;
+    unregResume =
+      (window.SteamClient as any)?.System?.RegisterForOnResumeFromSuspend?.(
+        () => {
+          call("playtime_on_resume").catch(() => {});
+        },
+      ) ?? null;
+    if (unregSuspend || unregResume) {
+      console.log("[Unifideck] ✓ Play time suspend/resume hooks registered");
+    }
+  } catch {
+    // SteamClient.System may not be available
+  }
+
   return {
     name: "UNIFIDECK",
     icon: <FaGamepad />,
@@ -2355,8 +2409,12 @@ export default definePlugin(() => {
       // Clear controller config session cache
       resetControllerConfigCache();
 
-      // Unregister global Ubisoft session capture listener
+      // Unregister global play time + Ubisoft session capture listener
       unregLifetimeGlobal?.unregister?.();
+
+      // Unregister suspend/resume play time hooks
+      unregSuspend?.unregister?.();
+      unregResume?.unregister?.();
 
       // Unpatch Steam stores
       if (unpatchSteamStores) {
