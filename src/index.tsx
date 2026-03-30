@@ -1603,16 +1603,18 @@ const Content: FC = () => {
                 toaster.toast({
                   title: t("toasts.authConnected", { store: storeName }),
                   body: t("toasts.authConnectedMessage", { store: storeName }),
-                  duration: 5000,
+                  duration: 7500,
                 });
                 await refreshLibraryAfterAuth(store);
+                // Navigate away from the Microsoft Sign-In shortcut page
+                setTimeout(() => Navigation.NavigateBack(), 500);
               } else {
                 console.log(`[Unifideck] ${storeName} authentication timed out`);
                 toaster.toast({
                   title: t("toasts.authTimeout"),
                   body: t("toasts.authTimeoutMessage", { store: storeName }),
                   critical: true,
-                  duration: 5000,
+                  duration: 7500,
                 });
               }
             })

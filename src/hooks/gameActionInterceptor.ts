@@ -306,6 +306,13 @@ export function registerGameActionInterceptor(): () => void {
           return;
         }
 
+        // Microsoft auth shortcut: start auth flow (writes URL + CDP monitor)
+        // then let Steam launch the shortcut which opens Edge
+        if (cachedInfo.game_id === "ms-auth") {
+          call("start_microsoft_auth").catch(() => {});
+          return;
+        }
+
         // Game is installed and not downloading - let Steam handle it normally
         if (cachedInfo.is_installed && !downloadStateRef.isDownloading) {
           return;

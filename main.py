@@ -4589,7 +4589,7 @@ microsoft_client=self.microsoft,
                     store, game_id = result
 
                     # Auth shortcut is a launcher, not an installable game — always "installed"
-                    if game_id == "upc-auth":
+                    if game_id in ("upc-auth", "ms-auth"):
                         return {
                             'is_installed': True,
                             'has_update': None,
