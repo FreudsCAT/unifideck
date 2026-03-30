@@ -1053,15 +1053,15 @@ if [ "$EXE_PATH" = "xcloud" ]; then
     notify_stage "toasts.launcher.launchingGame" "Xbox Cloud Gaming" "low"
 
     # WORK_DIR contains the game-specific URL (https://www.xbox.com/play/launch/{productId}).
-    # Launch the root xCloud shell first so our CDP helper can inject before the
-    # streaming page boots, then redirect to the requested game URL.
     XCLOUD_URL="https://www.xbox.com/play"
     XCLOUD_LAUNCH_URL="$WORK_DIR"
-    XCLOUD_CDP_PORT=9223
 
     # Auth profile for Chromium-based browsers (shared between auth and xCloud)
     AUTH_PROFILE="$HOME/.local/share/unifideck/chromium-auth"
     mkdir -p "$AUTH_PROFILE"
+
+    # Remove stale Singleton lock files that prevent the shared auth profile from starting
+    rm -f "$AUTH_PROFILE/SingletonLock" "$AUTH_PROFILE/SingletonSocket" "$AUTH_PROFILE/SingletonCookie" 2>/dev/null
 
     # Clear PluginLoader's bundled library paths to avoid OpenSSL conflicts.
     # Steam Input works independently via uinput — no LD_PRELOAD needed.
@@ -1075,116 +1075,41 @@ if [ "$EXE_PATH" = "xcloud" ]; then
     fi
     log "XAUTHORITY=$XAUTHORITY DISPLAY=$DISPLAY"
 
-    # Detect available browser — prefer Edge (native xCloud/Xbox gamepad support)
-    _xcloud_browser=""
-    _xcloud_browser_name=""
-    _xcloud_needs_gamepad_trigger=false
-
-    if command -v flatpak &>/dev/null; then
-        if flatpak info --user com.microsoft.Edge &>/dev/null 2>&1 || flatpak info com.microsoft.Edge &>/dev/null 2>&1; then
-            _xcloud_browser="com.microsoft.Edge"
-            _xcloud_browser_name="Microsoft Edge"
-        fi
-    fi
-
-    if [ -z "$_xcloud_browser" ]; then
-        log "ERROR: No compatible Chromium-based browser found for xCloud."
-        log "Please install Microsoft Edge via Discover or flatpak."
+    # Verify Microsoft Edge is installed (required for xCloud)
+    if ! command -v flatpak &>/dev/null || ! (flatpak info --user com.microsoft.Edge &>/dev/null 2>&1 || flatpak info com.microsoft.Edge &>/dev/null 2>&1); then
+        log "ERROR: Microsoft Edge is required for xCloud but was not found."
+        log "Please install Microsoft Edge via Unifideck settings or: flatpak install --user flathub com.microsoft.Edge"
         notify_stage "toasts.launcher.browserRequired" "Install Microsoft Edge" "critical"
         exit 1
     fi
 
-    log "Selected xCloud browser: $_xcloud_browser_name ($_xcloud_browser)"
+    log "Selected xCloud browser: Microsoft Edge (com.microsoft.Edge)"
 
-    # Build browser flags.
-    # Use --kiosk mode (matching the proven Edge xCloud shortcut approach) for
-    # proper fullscreen and gamepad focus handling.
-    if [ "$_xcloud_browser" = "com.microsoft.Edge" ]; then
-        # Edge: native Xbox gamepad support, no CDP injection needed.
-        # Share auth profile so OAuth cookies from Chromium sign-in persist.
-        # Navigate directly to the game URL (no CDP redirect needed).
-        _edge_target_url="${XCLOUD_LAUNCH_URL:-$XCLOUD_URL}"
-        CHROME_FLAGS=(
-            "--kiosk"
-            "--class=unifideck-xcloud"
-            "--user-data-dir=$AUTH_PROFILE"
-            "--no-first-run"
-            "--disable-translate"
-            "--disable-infobars"
-            "--disable-session-crashed-bubble"
-            "--disable-features=TranslateUI"
-            "--autoplay-policy=no-user-gesture-required"
-            "--window-size=1024,720"
-            "--force-device-scale-factor=1.25"
-            "--device-scale-factor=1.25"
-            "$_edge_target_url"
-        )
-    else
-        # Chromium/Chrome: use kiosk mode + CDP port for compat JS injection.
-        CHROME_FLAGS=(
-            "--kiosk"
-            "--class=unifideck-xcloud"
-            "--user-data-dir=$AUTH_PROFILE"
-            "--no-first-run"
-            "--disable-translate"
-            "--disable-infobars"
-            "--disable-session-crashed-bubble"
-            "--disable-features=TranslateUI"
-            "--password-store=basic"
-            "--disable-dev-shm-usage"
-            "--disable-background-networking"
-            "--autoplay-policy=no-user-gesture-required"
-            "--window-size=1024,720"
-            "--force-device-scale-factor=1.25"
-            "--device-scale-factor=1.25"
-            "--remote-debugging-port=$XCLOUD_CDP_PORT"
-            "--enable-gamepad-button-axis-events"
-            "$XCLOUD_URL"
-        )
-    fi
-
-    # CDP compat JS injection (Chromium/Chrome only — spoofs Edge UA, re-dispatches
-    # gamepad events, provides fullscreen shims for xCloud).
-    # NOTE: We no longer pass --steam-controller-appid; the CDP controller-layout
-    # bounce was counterproductive (temporarily put Steam Input in keyboard mode).
-    _xcloud_inject_pid=""
-    if [ "$_xcloud_browser" != "com.microsoft.Edge" ]; then
-        XCLOUD_INJECT_SCRIPT="$PLUGIN_DIR/bin/xcloud_cdp_inject.py"
-        if [ -f "$XCLOUD_INJECT_SCRIPT" ]; then
-            log "Starting xCloud CDP compatibility injector on port $XCLOUD_CDP_PORT (target: $XCLOUD_LAUNCH_URL)"
-            _xcloud_inject_args=(--port "$XCLOUD_CDP_PORT" --timeout 45)
-            if [ -n "$XCLOUD_LAUNCH_URL" ] && [ "$XCLOUD_LAUNCH_URL" != "$XCLOUD_URL" ]; then
-                _xcloud_inject_args+=(--launch-url "$XCLOUD_LAUNCH_URL")
-            fi
-            "$PYTHON_BIN" "$XCLOUD_INJECT_SCRIPT" "${_xcloud_inject_args[@]}" >>"$LOG_FILE" 2>&1 &
-            _xcloud_inject_pid=$!
-        fi
-    fi
-
-    # Gamepad trigger: inject synthetic button events into the SteamOS virtual
-    # Xbox pad so Chromium's Gamepad API detects the controller without manual
-    # interaction.  Edge has native gamepad support so this is only needed for
-    # Chromium/Chrome.
-    _gamepad_trigger_pid=""
-    if [ "$_xcloud_needs_gamepad_trigger" = true ]; then
-        GAMEPAD_TRIGGER_SCRIPT="$PLUGIN_DIR/bin/xcloud_gamepad_trigger.py"
-        if [ -f "$GAMEPAD_TRIGGER_SCRIPT" ]; then
-            log "Starting gamepad trigger (synthetic event injection for Chromium)"
-            "$PYTHON_BIN" "$GAMEPAD_TRIGGER_SCRIPT" \
-                --delay 5 --duration 20 --interval 3 >>"$LOG_FILE" 2>&1 &
-            _gamepad_trigger_pid=$!
-        fi
-    fi
+    # Build Edge browser flags.
+    # Edge has native Xbox gamepad support — no CDP injection or gamepad
+    # triggers needed. Share auth profile so OAuth cookies persist.
+    _edge_target_url="${XCLOUD_LAUNCH_URL:-$XCLOUD_URL}"
+    CHROME_FLAGS=(
+        "--kiosk"
+        "--class=unifideck-xcloud"
+        "--user-data-dir=$AUTH_PROFILE"
+        "--no-first-run"
+        "--disable-translate"
+        "--disable-infobars"
+        "--disable-session-crashed-bubble"
+        "--disable-features=TranslateUI"
+        "--password-store=basic"
+        "--autoplay-policy=no-user-gesture-required"
+        "--window-size=1024,720"
+        "--force-device-scale-factor=1.25"
+        "--device-scale-factor=1.25"
+        "$_edge_target_url"
+    )
 
     focus_xcloud_window_if_needed
 
-    log "Launching $_xcloud_browser_name flatpak in kiosk mode"
-    flatpak run --device=all "$_xcloud_browser" "${CHROME_FLAGS[@]}" 2>>"$LOG_FILE"
-
-    # Clean up background helpers
-    for _pid in "${_xcloud_inject_pid:-}" "${_gamepad_trigger_pid:-}"; do
-        [ -n "$_pid" ] && kill "$_pid" 2>/dev/null && wait "$_pid" 2>/dev/null || true
-    done
+    log "Launching Microsoft Edge flatpak in kiosk mode"
+    flatpak run --device=all com.microsoft.Edge "${CHROME_FLAGS[@]}" 2>>"$LOG_FILE"
 
     log "xCloud session ended, exiting launcher"
     exit 0

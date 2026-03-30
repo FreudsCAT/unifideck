@@ -617,7 +617,7 @@ class ShortcutsManager:
 
             if microsoft_client:
                 try:
-                    microsoft_installed = microsoft_client.get_installed()
+                    microsoft_installed = await microsoft_client.get_installed()
                 except Exception as e:
                     errors.append(f"Microsoft fetch: {e}")
             

@@ -448,12 +448,51 @@ class ChromiumBrowser:
         """Return True if a compatible Chromium-based browser is available."""
         return self.find_cmd() is not None
 
+    @staticmethod
+    def _get_default_browser() -> Optional[str]:
+        """Snapshot the current default web browser before Edge install."""
+        try:
+            result = subprocess.run(
+                ["xdg-settings", "get", "default-web-browser"],
+                capture_output=True, text=True, timeout=5,
+                env=clean_env(),
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                return result.stdout.strip()
+        except Exception:
+            pass
+        return None
+
+    @staticmethod
+    def _restore_default_browser(original: Optional[str]) -> None:
+        """Restore the default browser if Edge install changed it."""
+        if not original:
+            return
+        try:
+            current = subprocess.run(
+                ["xdg-settings", "get", "default-web-browser"],
+                capture_output=True, text=True, timeout=5,
+                env=clean_env(),
+            ).stdout.strip()
+            if current != original:
+                subprocess.run(
+                    ["xdg-settings", "set", "default-web-browser", original],
+                    capture_output=True, timeout=5,
+                    env=clean_env(),
+                )
+                logger.info(f"[MS] Restored default browser to {original}")
+        except Exception as e:
+            logger.debug(f"[MS] Could not restore default browser: {e}")
+
     async def install(self) -> Dict[str, Any]:
         """Install Microsoft Edge via Flatpak in the user installation.
 
         Ensures the user Flathub remote exists first so this works on SteamOS
         variants, Bazzite, CachyOS, and other immutable Linux distros where
         Flatpak is present but only system remotes were preconfigured.
+
+        Saves and restores the user's default browser setting so that Edge
+        installation does not hijack URL handlers from Firefox or other browsers.
 
         Returns:
             Dict with ``success`` and ``message`` or ``error`` keys.
@@ -465,6 +504,9 @@ class ChromiumBrowser:
 
         if not await self._ensure_user_flathub_remote():
             return {"success": False, "error": "microsoft.browserInstallFailed"}
+
+        # Snapshot current default browser before installing Edge
+        original_browser = self._get_default_browser()
 
         logger.info("[MS] Attempting to install Microsoft Edge via flatpak...")
         try:
@@ -487,6 +529,7 @@ class ChromiumBrowser:
             )
             if proc.returncode == 0:
                 logger.info("[MS] Microsoft Edge installed successfully")
+                self._restore_default_browser(original_browser)
                 return {"success": True, "message": "microsoft.browserInstalled"}
 
             stderr = proc.stderr.decode("utf-8", errors="replace")[:200]
