@@ -782,11 +782,53 @@ class MicrosoftConnector(Store):
             # Keep native (no Proton -- launcher handles Chromium directly)
             await sm._clear_proton_compatibility(expected_appid)
 
+            # Download SteamGridDB artwork (Xbox Game Pass branding)
+            # Force re-download when shortcut was just (re)created; gap-fill otherwise
+            await self._fetch_auth_shortcut_artwork(
+                unsigned_id, force=(vdf_dirty and correct_idx is None)
+            )
+
             return unsigned_id
 
         except Exception as e:
             logger.error(f"[MS] Failed to create auth shortcut: {e}", exc_info=True)
             return None
+
+    async def _fetch_auth_shortcut_artwork(self, unsigned_id: int, force: bool = False) -> None:
+        """Download SteamGridDB artwork for the auth shortcut (Xbox Game Pass branding).
+
+        Args:
+            force: If True, skip the has_artwork check and always attempt download.
+                   Used when recreating a deleted shortcut whose artwork may also
+                   have been removed.
+        """
+        try:
+            plugin = self.plugin_instance
+            if not plugin or not hasattr(plugin, 'steamgriddb') or not plugin.steamgriddb:
+                logger.debug("[MS] SteamGridDB client not available, skipping artwork")
+                return
+
+            if not force:
+                if hasattr(plugin, 'has_artwork') and await plugin.has_artwork(unsigned_id):
+                    logger.debug("[MS] Auth shortcut artwork already exists")
+                    return
+
+            # Determine which types are missing so we only download gaps
+            only_types = None
+            if not force and hasattr(plugin, 'get_missing_artwork_types'):
+                missing = await plugin.get_missing_artwork_types(unsigned_id)
+                if missing:
+                    only_types = missing
+                    logger.info(f"[MS] Auth shortcut artwork gap-fill: {missing}")
+
+            logger.info(f"[MS] Fetching SteamGridDB artwork for Xbox Game Pass (force={force})")
+            await plugin.steamgriddb.fetch_game_art(
+                title="Xbox Game Pass",
+                app_id=unsigned_id,
+                only_types=only_types,
+            )
+        except Exception as e:
+            logger.warning(f"[MS] Auth shortcut artwork fetch failed: {e}")
 
     async def _delete_microsoft_auth_shortcut(self) -> bool:
         """Delete the temporary Microsoft auth shortcut from VDF + registry."""
