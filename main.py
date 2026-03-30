@@ -2908,6 +2908,11 @@ microsoft_client=self.microsoft,
             task_to_cancel.cancel()
         return {'success': True, 'queued': True, 'restart_pending': True}
 
+    async def trigger_post_auth_sync(self, store: str) -> Dict[str, Any]:
+        """Frontend-callable: trigger an auth sync for a store that doesn't have
+        a browser-based auth callback (e.g. Ubisoft)."""
+        return await self.request_auth_sync(source=f'auth:{store}')
+
     async def sync_libraries(self, fetch_artwork: bool = True, *, source: str = 'manual') -> Dict[str, Any]:
         """Queue or run a regular sync request."""
         if source.startswith('auth'):

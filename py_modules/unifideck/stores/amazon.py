@@ -176,7 +176,6 @@ class AmazonConnector(Store):
                     logger.info("[Amazon] Triggering library sync after auth")
                     asyncio.create_task(
                         self.plugin_instance.request_auth_sync(
-                            force=True,
                             source='auth:amazon',
                         )
                     )

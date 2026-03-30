@@ -819,10 +819,7 @@ const Content: FC = () => {
                       console.log(
                         `[Unifideck] ✓ Sync completed: ${result.synced_games} games processed`,
                       );
-                      const addedGames = Number(result.current_game?.values?.added) || 0;
-                      if (addedGames > 0) {
-                        showModal(<SteamRestartModal closeModal={() => {}} />);
-                      }
+                      showModal(<SteamRestartModal closeModal={() => {}} />);
                       startSyncCooldown();
                     } else if (result.status === "cancelled") {
                       console.log(`[Unifideck] ⚠ Sync cancelled by user`);
@@ -1052,10 +1049,7 @@ const Content: FC = () => {
       if (autoSyncStores.has(store)) {
         const syncResult = await waitForAuthTriggeredSync(store);
         if (syncResult?.status === "complete") {
-          const addedGames = Number(syncResult.current_game?.values?.added) || 0;
-          if (addedGames > 0) {
-            showModal(<SteamRestartModal closeModal={() => {}} />);
-          }
+          showModal(<SteamRestartModal closeModal={() => {}} />);
         }
       }
 
@@ -1136,10 +1130,7 @@ const Content: FC = () => {
             }
 
             if (result.status === "complete") {
-              const addedGames = Number(result.current_game?.values?.added) || 0;
-              if (addedGames > 0) {
-                showModal(<SteamRestartModal closeModal={() => {}} />);
-              }
+              showModal(<SteamRestartModal closeModal={() => {}} />);
             }
           } else {
             console.log(
@@ -1383,6 +1374,8 @@ const Content: FC = () => {
                 body: t("toasts.authConnectedMessage", { store: storeName }),
                 duration: 5000,
               });
+              // Trigger auth sync from frontend (Ubisoft has no browser callback)
+              call<[string], { success: boolean }>("trigger_post_auth_sync", "ubisoft").catch(() => {});
               await refreshLibraryAfterAuth("ubisoft");
             } else {
               console.log(`[Unifideck] Ubisoft authentication timed out`);

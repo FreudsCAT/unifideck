@@ -3245,16 +3245,6 @@ class UbisoftConnector(Store):
                 self._propagate_upc_session_to_all_prefixes(captured_token)
                 self.queue_auth_assets_ensure("post-auth-session-capture")
                 self._auth_session_captured = True
-
-                # Trigger library sync now that auth is complete
-                if self.plugin_instance:
-                    logger.info("[Ubisoft] Triggering library sync after UPC auth")
-                    asyncio.create_task(
-                        self.plugin_instance.request_auth_sync(
-                            force=True,
-                            source='auth:ubisoft',
-                        )
-                    )
                 return
 
         logger.warning("[Ubisoft] Auth session monitor timed out after 1800s")
