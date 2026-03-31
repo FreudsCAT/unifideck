@@ -349,7 +349,7 @@ const PlaySectionWrapperInner: FC<PlaySectionWrapperProps> = ({
         );
         const processedInfo = info?.error ? null : info;
         setGameInfo(processedInfo);
-        if (processedInfo?.is_installed) {
+        if (processedInfo?.is_installed && !processedInfo?.is_auth_shortcut) {
           updateSingleGameStatus({
             appId,
             store: processedInfo.store,

@@ -185,7 +185,7 @@ class EpicConnector(Store):
     async def _monitor_and_complete_auth(self):
         """Background task: intercept OAuth redirect via CDP on port 9222."""
         try:
-            from ..auth.cdp_interceptor import intercept_oauth_code
+            from ..auth.cdp_interceptor import intercept_oauth_code, close_cdp_auth_browser
 
             logger.info("[EPIC] Auth monitor started — polling CDP port 9222")
             code = await intercept_oauth_code(store='epic', timeout=300, cdp_port=9222)
@@ -195,6 +195,14 @@ class EpicConnector(Store):
                 result = await self.complete_auth(code)
                 if result['success']:
                     logger.info("[EPIC] ✓ Authentication completed successfully!")
+                    try:
+                        closed = await close_cdp_auth_browser(cdp_port=9222, store="epic")
+                        if closed:
+                            logger.info("[EPIC] ✓ Closed auth browser after successful sign-in")
+                        else:
+                            logger.debug("[EPIC] No auth browser targets to close")
+                    except Exception as close_err:
+                        logger.warning(f"[EPIC] Could not close auth browser: {close_err}")
                     if self.plugin_instance:
                         logger.info("[EPIC] Queueing automatic library sync...")
                         asyncio.create_task(

@@ -357,7 +357,7 @@ class GOGAPIClient:
     async def _monitor_and_complete_auth(self):
         """Background task: intercept OAuth redirect via CDP on port 9222."""
         try:
-            from ..auth.cdp_interceptor import intercept_oauth_code
+            from ..auth.cdp_interceptor import intercept_oauth_code, close_cdp_auth_browser
 
             logger.info("[GOG] Auth monitor started — polling CDP port 9222")
             code = await intercept_oauth_code(store='gog', timeout=300, cdp_port=9222)
@@ -367,6 +367,14 @@ class GOGAPIClient:
                 result = await self.complete_auth(code)
                 if result['success']:
                     logger.info("[GOG] ✓ Authentication completed successfully — tokens saved")
+                    try:
+                        closed = await close_cdp_auth_browser(cdp_port=9222, store="gog")
+                        if closed:
+                            logger.info("[GOG] ✓ Closed auth browser after successful sign-in")
+                        else:
+                            logger.debug("[GOG] No auth browser targets to close")
+                    except Exception as close_err:
+                        logger.warning(f"[GOG] Could not close auth browser: {close_err}")
                     if self.plugin_instance:
                         logger.info("[GOG] Queueing automatic library sync...")
                         asyncio.create_task(

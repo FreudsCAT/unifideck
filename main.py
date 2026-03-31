@@ -4620,6 +4620,7 @@ microsoft_client=self.microsoft,
                     if game_id in ("upc-auth", "ms-auth", "epic-auth", "gog-auth", "amazon-auth"):
                         return {
                             'is_installed': True,
+                            'is_auth_shortcut': True,
                             'has_update': None,
                             'store': store,
                             'game_id': game_id,
@@ -6935,6 +6936,22 @@ microsoft_client=self.microsoft,
             
         except Exception as e:
             logger.error(f"Error getting Unifideck games: {e}")
+            return []
+
+    async def get_auth_shortcut_appids(self) -> List[int]:
+        """Return appIds of auth-only shortcuts so the frontend can exclude them from store tabs."""
+        auth_ids = ("upc-auth", "ms-auth", "epic-auth", "gog-auth", "amazon-auth")
+        try:
+            shortcuts = await self.shortcuts_manager.read_shortcuts()
+            result = []
+            for _idx, shortcut in shortcuts.get("shortcuts", {}).items():
+                launch_options = shortcut.get('LaunchOptions', '')
+                parsed = extract_store_id(launch_options)
+                if parsed and parsed[1] in auth_ids:
+                    result.append(shortcut.get('appid', 0))
+            return result
+        except Exception as e:
+            logger.error(f"Error getting auth shortcut appids: {e}")
             return []
 
     async def get_valid_third_party_shortcuts(self) -> List[int]:

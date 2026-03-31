@@ -220,7 +220,7 @@ class AmazonConnector(Store):
     async def _monitor_and_complete_auth(self):
         """Background task: intercept OAuth redirect via CDP on port 9222."""
         try:
-            from ..auth.cdp_interceptor import intercept_oauth_code
+            from ..auth.cdp_interceptor import intercept_oauth_code, close_cdp_auth_browser
 
             logger.info("[Amazon] Auth monitor started — polling CDP port 9222")
             code = await intercept_oauth_code(store='amazon', timeout=300, cdp_port=9222)
@@ -230,6 +230,14 @@ class AmazonConnector(Store):
                 result = await self.complete_auth(code)
                 if result.get('success'):
                     logger.info("[Amazon] ✓ Authentication completed successfully!")
+                    try:
+                        closed = await close_cdp_auth_browser(cdp_port=9222, store="amazon")
+                        if closed:
+                            logger.info("[Amazon] ✓ Closed auth browser after successful sign-in")
+                        else:
+                            logger.debug("[Amazon] No auth browser targets to close")
+                    except Exception as close_err:
+                        logger.warning(f"[Amazon] Could not close auth browser: {close_err}")
                 else:
                     logger.error(f"[Amazon] ✗ complete_auth failed: {result.get('error')}")
             else:

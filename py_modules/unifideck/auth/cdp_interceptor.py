@@ -21,7 +21,7 @@ from urllib.parse import parse_qs, urlparse
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["intercept_oauth_code"]
+__all__ = ["intercept_oauth_code", "close_cdp_auth_browser"]
 
 
 # ── Store-specific code extraction ──────────────────────────────────────
@@ -90,7 +90,7 @@ async def _extract_epic_code_from_page(
 
     try:
         async with websockets.connect(
-            ws_url, ping_interval=None, open_timeout=5
+            ws_url, ping_interval=None, open_timeout=2
         ) as ws:
             await ws.send(
                 json.dumps(
@@ -104,7 +104,7 @@ async def _extract_epic_code_from_page(
                     }
                 )
             )
-            raw = await asyncio.wait_for(ws.recv(), timeout=5)
+            raw = await asyncio.wait_for(ws.recv(), timeout=2)
             data = json.loads(raw)
             if "result" in data and "result" in data["result"]:
                 body = data["result"]["result"].get("value", "")
@@ -336,3 +336,62 @@ async def intercept_oauth_code(
 
     logger.warning(f"{tag} Timed out waiting for OAuth code")
     return None
+
+
+# ── Shared browser close helper ─────────────────────────────────────────
+
+
+async def close_cdp_auth_browser(cdp_port: int = 9222, store: str = "unknown") -> bool:
+    """Close all live CDP targets on the given port after auth completes.
+
+    Shared helper so every store connector can close the auth browser
+    without depending on ChromiumBrowser. Returns True if any targets
+    were closed.
+    """
+    import urllib.error as _err
+    import urllib.request as _req
+
+    tag = f"[{store.upper()}]"
+
+    # List targets
+    try:
+        with _req.urlopen(f"http://127.0.0.1:{cdp_port}/json/list", timeout=2) as r:
+            targets = json.loads(r.read())
+    except Exception:
+        logger.debug(f"{tag} No CDP targets to close (port {cdp_port} unreachable)")
+        return False
+
+    if not targets:
+        return False
+
+    closed_any = False
+    for target in targets:
+        target_id = target.get("id")
+        if not target_id:
+            continue
+        try:
+            with _req.urlopen(
+                f"http://127.0.0.1:{cdp_port}/json/close/{target_id}", timeout=2
+            ) as r:
+                r.read()
+            closed_any = True
+        except _err.HTTPError as e:
+            if e.code != 404:
+                logger.warning(f"{tag} Could not close CDP target {target_id}: {e}")
+        except Exception as e:
+            logger.warning(f"{tag} Could not close CDP target {target_id}: {e}")
+
+    if closed_any:
+        # Wait briefly for the browser to exit
+        for _ in range(20):
+            await asyncio.sleep(0.25)
+            try:
+                with _req.urlopen(
+                    f"http://127.0.0.1:{cdp_port}/json/version", timeout=1
+                ) as r:
+                    r.read()
+            except Exception:
+                break  # Browser is gone
+        logger.info(f"{tag} Closed auth browser via CDP on port {cdp_port}")
+
+    return closed_any

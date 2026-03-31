@@ -10,6 +10,7 @@ import {
   runFilters,
   updateUnifideckCache,
   updateValidThirdPartyCache,
+  updateAuthShortcutIds,
 } from "./filters";
 import { loadCompatCacheFromBackend } from "./protondb";
 import { gamepadTabbedPageClasses } from "@decky/ui";
@@ -345,6 +346,16 @@ class TabManager {
         }
       } catch (err) {
         console.error("[Unifideck] Error loading third-party shortcuts:", err);
+      }
+
+      // Load auth shortcut appIds so store tab filters exclude them
+      try {
+        const authIds = await call<[], number[]>("get_auth_shortcut_appids");
+        if (Array.isArray(authIds)) {
+          updateAuthShortcutIds(authIds);
+        }
+      } catch (err) {
+        console.error("[Unifideck] Error loading auth shortcut IDs:", err);
       }
     } catch (error) {
       console.error("[Unifideck] Error loading game cache:", error);
