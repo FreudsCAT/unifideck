@@ -262,7 +262,8 @@
       "prerequisitesInstalled": "Requisitos previos del juego instalados",
       "prerequisitesFailed": "Advertencia de requisitos",
       "prerequisitesFailedMessage": "Es posible que los requisitos previos no se hayan instalado correctamente",
-      "browserRequired": "Microsoft Edge requerido"
+      "browserRequired": "Microsoft Edge requerido",
+      "signingIn": "Iniciando sesión..."
     },
     "updateComplete": "¡Actualización completada!",
     "updateCompleteMessage": "Se ha actualizado {{title}}.",

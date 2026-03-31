@@ -262,7 +262,8 @@
       "prerequisitesInstalled": "游戏前置条件已安装",
       "prerequisitesFailed": "前置条件警告",
       "prerequisitesFailedMessage": "前置条件可能未正确安装",
-      "browserRequired": "需要 Microsoft Edge"
+      "browserRequired": "需要 Microsoft Edge",
+      "signingIn": "登录中..."
     },
     "updateComplete": "更新完成！",
     "updateCompleteMessage": "{{title}} 已更新。",

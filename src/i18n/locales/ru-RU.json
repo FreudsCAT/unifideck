@@ -262,7 +262,8 @@
       "prerequisitesInstalled": "Необходимые компоненты игры установлены",
       "prerequisitesFailed": "Предупреждение о компонентах",
       "prerequisitesFailedMessage": "Необходимые компоненты могли быть установлены некорректно",
-      "browserRequired": "Требуется Microsoft Edge"
+      "browserRequired": "Требуется Microsoft Edge",
+      "signingIn": "Вход..."
     },
     "updateComplete": "Обновление завершено!",
     "updateCompleteMessage": "Обновление {{title}} завершено.",

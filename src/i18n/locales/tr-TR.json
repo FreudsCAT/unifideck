@@ -262,7 +262,8 @@
       "prerequisitesInstalled": "Oyun ön koşulları yüklendi",
       "prerequisitesFailed": "Ön Koşullar Uyarısı",
       "prerequisitesFailedMessage": "Ön koşullar doğru şekilde yüklenmemiş olabilir",
-      "browserRequired": "Microsoft Edge gerekli"
+      "browserRequired": "Microsoft Edge gerekli",
+      "signingIn": "Giriş Yapılıyor..."
     },
     "updateComplete": "Güncelleme Tamamlandı!",
     "updateCompleteMessage": "{{title}} güncellendi.",

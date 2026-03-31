@@ -262,7 +262,8 @@
       "prerequisitesInstalled": "Передумови гри встановлені",
       "prerequisitesFailed": "Попередження про передумови",
       "prerequisitesFailedMessage": "Передумови можуть бути встановлені некоректно",
-      "browserRequired": "Потрібен Microsoft Edge"
+      "browserRequired": "Потрібен Microsoft Edge",
+      "signingIn": "Вхід..."
     },
     "updateComplete": "Оновлення завершено!",
     "updateCompleteMessage": "Оновлення {{title}} завершено.",

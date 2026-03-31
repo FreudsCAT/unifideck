@@ -262,7 +262,8 @@
       "prerequisitesInstalled": "Game prerequisites installed",
       "prerequisitesFailed": "Prerequisites Warning",
       "prerequisitesFailedMessage": "Prerequisites may not have installed correctly",
-      "browserRequired": "Microsoft Edge Required"
+      "browserRequired": "Microsoft Edge Required",
+      "signingIn": "Signing In..."
     },
     "updateComplete": "Update Complete!",
     "updateCompleteMessage": "{{title}} has been updated.",

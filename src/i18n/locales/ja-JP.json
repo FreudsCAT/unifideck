@@ -262,7 +262,8 @@
       "prerequisitesInstalled": "ゲームの前提条件がインストールされました",
       "prerequisitesFailed": "前提条件の警告",
       "prerequisitesFailedMessage": "前提条件が正しくインストールされなかった可能性があります",
-      "browserRequired": "Microsoft Edge が必要です"
+      "browserRequired": "Microsoft Edge が必要です",
+      "signingIn": "サインイン中..."
     },
     "updateComplete": "更新完了！",
     "updateCompleteMessage": "{{title}} の更新が完了しました。",

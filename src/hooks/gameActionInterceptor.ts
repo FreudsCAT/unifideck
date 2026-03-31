@@ -44,6 +44,12 @@ export function setDownloadStateRef(state: {
   downloadStateRef = state;
 }
 
+// Microsoft auth callback — set by Content component to handle Play-button-initiated auth
+let onMicrosoftAuthFromPlayRef: ((appId: number) => void) | null = null;
+export function setOnMicrosoftAuthFromPlay(cb: ((appId: number) => void) | null) {
+  onMicrosoftAuthFromPlayRef = cb;
+}
+
 /**
  * Check cache synchronously (no async). Returns cached info or null.
  */
@@ -306,10 +312,10 @@ export function registerGameActionInterceptor(): () => void {
           return;
         }
 
-        // Microsoft auth shortcut: start auth flow (writes URL + CDP monitor)
-        // then let Steam launch the shortcut which opens Edge
+        // Microsoft auth shortcut: delegate to Content component callback
+        // which starts CDP monitor + polls for completion + shows QAM
         if (cachedInfo.game_id === "ms-auth") {
-          call("start_microsoft_auth").catch(() => {});
+          onMicrosoftAuthFromPlayRef?.(appId);
           return;
         }
 

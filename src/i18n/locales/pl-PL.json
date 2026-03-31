@@ -262,7 +262,8 @@
       "prerequisitesInstalled": "Wymagania wstępne gry zainstalowane",
       "prerequisitesFailed": "Ostrzeżenie o wymaganiach",
       "prerequisitesFailedMessage": "Wymagania wstępne mogły nie zostać poprawnie zainstalowane",
-      "browserRequired": "Wymagany Microsoft Edge"
+      "browserRequired": "Wymagany Microsoft Edge",
+      "signingIn": "Logowanie..."
     },
     "updateComplete": "Aktualizacja zakończona!",
     "updateCompleteMessage": "Zaktualizowano {{title}}.",

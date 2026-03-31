@@ -262,7 +262,8 @@
       "prerequisitesInstalled": "게임 사전 요구 사항이 설치되었습니다",
       "prerequisitesFailed": "사전 요구 사항 경고",
       "prerequisitesFailedMessage": "사전 요구 사항이 올바르게 설치되지 않았을 수 있습니다",
-      "browserRequired": "Microsoft Edge 필요"
+      "browserRequired": "Microsoft Edge 필요",
+      "signingIn": "로그인 중..."
     },
     "updateComplete": "업데이트 완료!",
     "updateCompleteMessage": "{{title}} 업데이트가 완료되었습니다.",

@@ -262,7 +262,8 @@
       "prerequisitesInstalled": "Spelvereisten geïnstalleerd",
       "prerequisitesFailed": "Vereisten waarschuwing",
       "prerequisitesFailedMessage": "Vereisten zijn mogelijk niet correct geïnstalleerd",
-      "browserRequired": "Microsoft Edge vereist"
+      "browserRequired": "Microsoft Edge vereist",
+      "signingIn": "Aanmelden..."
     },
     "updateComplete": "Update voltooid!",
     "updateCompleteMessage": "{{title}} is bijgewerkt.",

@@ -262,7 +262,8 @@
       "prerequisitesInstalled": "Prérequis du jeu installés",
       "prerequisitesFailed": "Avertissement prérequis",
       "prerequisitesFailedMessage": "Les prérequis n'ont peut-être pas été installés correctement",
-      "browserRequired": "Microsoft Edge requis"
+      "browserRequired": "Microsoft Edge requis",
+      "signingIn": "Connexion..."
     },
     "updateComplete": "Mise à jour terminée !",
     "updateCompleteMessage": "{{title}} a été mis à jour.",

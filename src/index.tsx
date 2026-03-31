@@ -15,6 +15,7 @@ import {
   ToggleField,
   showModal,
   Navigation,
+  QuickAccessTab,
 } from "@decky/ui";
 import React, { FC, useState, useEffect, useRef } from "react";
 import { FaGamepad } from "react-icons/fa";
@@ -48,7 +49,7 @@ import { AccountSwitchModal } from "./components/AccountSwitchModal";
 import { LanguageSelector } from "./components/LanguageSelector";
 import { launchMicrosoftAuthViaShortcut } from "./utils/microsoftShortcutLaunch";
 import { resetControllerConfigCache } from "./utils/controllerConfig";
-import { isShortcutAppRunning, launchUbisoftAuthViaShortcut } from "./utils/ubisoftShortcutLaunch";
+import { launchUbisoftAuthViaShortcut } from "./utils/ubisoftShortcutLaunch";
 import StoreConnections from "./components/settings/StoreConnections";
 import { Store } from "./types/store";
 import LibrarySync from "./components/settings/LibrarySync";
@@ -66,6 +67,7 @@ import {
 import {
   registerGameActionInterceptor,
   setGameInfoCacheRef,
+  setOnMicrosoftAuthFromPlay,
 } from "./hooks/gameActionInterceptor";
 import { SyncProgress } from "./types/syncProgress";
 import type { DownloadItem, DownloadQueueInfo } from "./types/downloads";
@@ -678,6 +680,66 @@ const Content: FC = () => {
       }
     }, 100);
     return () => clearTimeout(timer);
+  }, []);
+
+  // Microsoft auth interceptor callback: handles Play-button-initiated auth
+  // from the ms-auth shortcut (game action interceptor)
+  useEffect(() => {
+    setOnMicrosoftAuthFromPlay((_appId) => {
+      if (microsoftAuthInProgressRef.current) return;
+      microsoftAuthInProgressRef.current = true;
+
+      call("start_microsoft_auth").catch(() => {});
+
+      const msStoreName = t("storeConnections.microsoftStore");
+
+      // Simple time-based polling — don't rely on shortcut app running state
+      // (the launcher may exit before Edge, or spurious lifetime events can
+      // trigger false "stopped" detection and cause immediate timeouts).
+      const pollCompletion = async (): Promise<boolean> => {
+        const maxMs = 7 * 60 * 1000; // 7 minutes
+        const startedAt = Date.now();
+
+        while (Date.now() - startedAt < maxMs) {
+          try {
+            const r = await call<[], { success: boolean; microsoft: string }>("check_store_status");
+            if (r.success && r.microsoft === "connected") return true;
+          } catch { /* ignore */ }
+
+          await new Promise<void>((resolve) => window.setTimeout(resolve, 5000));
+        }
+        return false;
+      };
+
+      pollCompletion()
+        .then(async (completed) => {
+          if (completed) {
+            toaster.toast({
+              title: t("toasts.authConnected", { store: msStoreName }),
+              body: t("toasts.authConnectedMessage", { store: msStoreName }),
+              duration: 7500,
+            });
+            Navigation.NavigateBack();
+            setTimeout(() => Navigation.OpenQuickAccessMenu(QuickAccessTab.Decky), 500);
+            call<[string], { success: boolean }>("trigger_post_auth_sync", "microsoft").catch(() => {});
+          } else {
+            toaster.toast({
+              title: t("toasts.authTimeout"),
+              body: t("toasts.authTimeoutMessage", { store: msStoreName }),
+              critical: true,
+              duration: 7500,
+            });
+          }
+        })
+        .catch((err) => {
+          console.error("[Unifideck] Error polling Microsoft auth from shortcut:", err);
+        })
+        .finally(() => {
+          microsoftAuthInProgressRef.current = false;
+        });
+    });
+
+    return () => setOnMicrosoftAuthFromPlay(null);
   }, []);
 
   const [storeStatus, setStoreStatus] = useState<Record<Store, string>>({
@@ -1374,6 +1436,7 @@ const Content: FC = () => {
                 body: t("toasts.authConnectedMessage", { store: storeName }),
                 duration: 5000,
               });
+              setTimeout(() => Navigation.OpenQuickAccessMenu(QuickAccessTab.Decky), 500);
               // Trigger auth sync from frontend (Ubisoft has no browser callback)
               call<[string], { success: boolean }>("trigger_post_auth_sync", "ubisoft").catch(() => {});
               await refreshLibraryAfterAuth("ubisoft");
@@ -1475,6 +1538,7 @@ const Content: FC = () => {
               showModal(
                 <AuthSuccessModal store={storeName} closeModal={() => {}} />,
               );
+              setTimeout(() => Navigation.OpenQuickAccessMenu(QuickAccessTab.Decky), 500);
               void refreshLibraryAfterAuth(store);
             } else {
               console.log(`[Unifideck] ${storeName} authentication timed out`);
@@ -1523,74 +1587,21 @@ const Content: FC = () => {
           console.log(
             `[Unifideck] ${store} auth shortcut launched: appId=${launchResult.appId}, alreadyRunning=${launchResult.already_running}`,
           );
+          // Simple time-based polling — don't rely on shortcut app running
+          // state (spurious lifetime events cause immediate false timeouts).
           const pollMicrosoftShortcutOutcome = async (): Promise<boolean> => {
-            const maxAttempts = 60;
-            const appId = launchResult.appId;
+            const maxMs = 7 * 60 * 1000; // 7 minutes
             const startedAt = Date.now();
-            let seenRunning =
-              typeof appId === "number" && isShortcutAppRunning(appId);
-            let sawStopAfterLaunch = false;
-            let lifetimeRegistration: { unregister(): void } | null = null;
 
-            try {
-              if (typeof appId === "number") {
-                lifetimeRegistration =
-                  window.SteamClient?.GameSessions?.RegisterForAppLifetimeNotifications?.(
-                    (data: { unAppID: number; bRunning: boolean }) => {
-                      if (data.unAppID !== 0 && data.unAppID !== appId) {
-                        return;
-                      }
-
-                      if (data.bRunning) {
-                        seenRunning = true;
-                        return;
-                      }
-
-                      if (seenRunning) {
-                        sawStopAfterLaunch = true;
-                      }
-                    },
-                  ) ?? null;
+            while (Date.now() - startedAt < maxMs) {
+              if (await isStoreAuthConnected(store)) {
+                return true;
               }
-
-              for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
-                if (await isStoreAuthConnected(store)) {
-                  return true;
-                }
-
-                if (
-                  typeof appId === "number" &&
-                  isShortcutAppRunning(appId)
-                ) {
-                  seenRunning = true;
-                }
-
-                if (
-                  sawStopAfterLaunch ||
-                  (seenRunning &&
-                    typeof appId === "number" &&
-                    !isShortcutAppRunning(appId))
-                ) {
-                  await new Promise<void>((resolve) =>
-                    window.setTimeout(resolve, 1000),
-                  );
-                  return await isStoreAuthConnected(store);
-                }
-
-                const startupGraceActive =
-                  typeof appId === "number" &&
-                  !seenRunning &&
-                  Date.now() - startedAt < 30000;
-
-                await new Promise<void>((resolve) =>
-                  window.setTimeout(resolve, startupGraceActive ? 1000 : 5000),
-                );
-              }
-
-              return false;
-            } finally {
-              lifetimeRegistration?.unregister?.();
+              await new Promise<void>((resolve) =>
+                window.setTimeout(resolve, 5000),
+              );
             }
+            return false;
           };
 
           pollMicrosoftShortcutOutcome()
@@ -1605,9 +1616,10 @@ const Content: FC = () => {
                   body: t("toasts.authConnectedMessage", { store: storeName }),
                   duration: 7500,
                 });
+                // Navigate away from the Sign-In shortcut page, then open QAM
+                Navigation.NavigateBack();
+                setTimeout(() => Navigation.OpenQuickAccessMenu(QuickAccessTab.Decky), 500);
                 await refreshLibraryAfterAuth(store);
-                // Navigate away from the Microsoft Sign-In shortcut page
-                setTimeout(() => Navigation.NavigateBack(), 500);
               } else {
                 console.log(`[Unifideck] ${storeName} authentication timed out`);
                 toaster.toast({
@@ -1641,6 +1653,7 @@ const Content: FC = () => {
                   body: t("toasts.authConnectedMessage", { store: storeName }),
                   duration: 5000,
                 });
+                setTimeout(() => Navigation.OpenQuickAccessMenu(QuickAccessTab.Decky), 500);
                 await refreshLibraryAfterAuth(store);
               } else {
                 console.log(`[Unifideck] ${storeName} authentication timed out`);
