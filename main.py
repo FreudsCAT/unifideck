@@ -2187,11 +2187,24 @@ class Plugin:
         # This mirrors the Ubisoft pattern above — the shortcut must exist
         # before the user clicks "Sign In" so Steam's in-memory app store
         # has time to pick it up from shortcuts.vdf.
+        _auth_shortcut_uids = {}
         try:
-            await self.microsoft._ensure_microsoft_auth_shortcut()
+            uid = await self.microsoft._ensure_microsoft_auth_shortcut()
+            _auth_shortcut_uids['microsoft'] = uid
             logger.info("[INIT] Microsoft auth shortcut ensured in VDF")
         except Exception as e:
             logger.warning(f"[INIT] Microsoft auth shortcut init failed (non-fatal): {e}")
+
+        # Ensure Epic/GOG/Amazon auth shortcuts exist in VDF on startup
+        for store_name, connector in [("Epic", self.epic), ("GOG", self.gog), ("Amazon", self.amazon)]:
+            try:
+                ensure_fn = getattr(connector, f'_ensure_{store_name.lower()}_auth_shortcut', None)
+                if ensure_fn:
+                    uid = await ensure_fn()
+                    _auth_shortcut_uids[store_name.lower()] = uid
+                    logger.info(f"[INIT] {store_name} auth shortcut ensured in VDF")
+            except Exception as e:
+                logger.warning(f"[INIT] {store_name} auth shortcut init failed (non-fatal): {e}")
 
         # Repair games.map for Unifideck shortcuts missing entries (fixes "Game location not mapped" errors)
         logger.info("[INIT] Reconciling games.map from installed games")
@@ -2240,6 +2253,21 @@ microsoft_client=self.microsoft,
         else:
             logger.warning("[INIT] SteamGridDB not available - skipping")
             self.steamgriddb = None
+
+        # Deferred auth shortcut artwork fetch — SteamGridDB was not available when
+        # _ensure_*_auth_shortcut() ran earlier, so artwork was silently skipped.
+        if self.steamgriddb and _auth_shortcut_uids:
+            for store_name, store_client in [
+                ("epic", self.epic), ("gog", self.gog),
+                ("amazon", self.amazon), ("microsoft", self.microsoft),
+            ]:
+                uid = _auth_shortcut_uids.get(store_name)
+                if uid and hasattr(store_client, '_fetch_auth_shortcut_artwork'):
+                    try:
+                        await store_client._fetch_auth_shortcut_artwork(uid, force=False)
+                        logger.debug(f"[INIT] Deferred artwork fetch for {store_name} auth shortcut")
+                    except Exception as e:
+                        logger.debug(f"[INIT] Deferred artwork fetch for {store_name} skipped: {e}")
 
         launcher_script = os.path.join(os.path.dirname(__file__), 'bin', 'unifideck-launcher')
         logger.info("[INIT] Migrating managed shortcut appids")
@@ -4589,7 +4617,7 @@ microsoft_client=self.microsoft,
                     store, game_id = result
 
                     # Auth shortcut is a launcher, not an installable game — always "installed"
-                    if game_id in ("upc-auth", "ms-auth"):
+                    if game_id in ("upc-auth", "ms-auth", "epic-auth", "gog-auth", "amazon-auth"):
                         return {
                             'is_installed': True,
                             'has_update': None,
@@ -6624,6 +6652,11 @@ microsoft_client=self.microsoft,
         """Start Epic Games OAuth authentication"""
         return await self.epic.start_auth()
 
+    async def get_epic_auth_shortcut_context(self) -> Dict[str, Any]:
+        """Get the Epic auth shortcut context for frontend RunGame() launch."""
+        logger.info("[RPC] get_epic_auth_shortcut_context")
+        return await self.epic.get_epic_auth_shortcut_context()
+
     async def complete_epic_auth(self, auth_code: str) -> Dict[str, Any]:
         """Complete Epic Games OAuth with authorization code"""
         return await self.epic.complete_auth(auth_code)
@@ -6632,45 +6665,22 @@ microsoft_client=self.microsoft,
         """Start GOG OAuth authentication"""
         return await self.gog.start_auth()
 
+    async def get_gog_auth_shortcut_context(self) -> Dict[str, Any]:
+        """Get the GOG auth shortcut context for frontend RunGame() launch."""
+        logger.info("[RPC] get_gog_auth_shortcut_context")
+        return await self.gog.get_gog_auth_shortcut_context()
+
     async def complete_gog_auth(self, auth_code: str) -> Dict[str, Any]:
         """Complete GOG OAuth with authorization code"""
         return await self.gog.complete_auth(auth_code)
 
     async def start_gog_auth_auto(self) -> Dict[str, Any]:
-        """Start GOG OAuth with automatic code detection via CDP"""
-        logger.info("[GOG] Starting OAuth authentication")
+        """Start GOG OAuth with automatic code detection via CDP.
 
-        try:
-            # Generate OAuth URL
-            import secrets
-            state = secrets.token_urlsafe(32)
-
-            auth_url = (
-                f"{self.gog.AUTH_URL}/auth"
-                f"?client_id={self.gog.CLIENT_ID}"
-                f"&redirect_uri={self.gog.REDIRECT_URI}"
-                f"&response_type=code"
-                f"&state={state}"
-                f"&layout=client2"
-            )
-
-            logger.info(f"[GOG] Generated OAuth URL (state={state[:10]}...)")
-
-            # Start CDP monitoring in background to auto-capture code
-            asyncio.create_task(self.gog._monitor_and_complete_auth())
-
-            return {
-                'success': True,
-                'url': auth_url,
-                'message': 'Authenticating via browser - code will be captured automatically'
-            }
-
-        except Exception as e:
-            logger.error(f"[GOG] Error starting auth: {e}", exc_info=True)
-            return {
-                'success': False,
-                'error': str(e)
-            }
+        DEPRECATED: Kept for backward compatibility. New flow uses
+        start_gog_auth() which launches via shortcut + CDP port 9222.
+        """
+        return await self.gog.start_auth()
 
     async def logout_epic(self) -> Dict[str, Any]:
         """Logout from Epic Games"""
@@ -6696,6 +6706,11 @@ microsoft_client=self.microsoft,
     async def start_amazon_auth(self) -> Dict[str, Any]:
         """Start Amazon Games OAuth authentication via nile"""
         return await self.amazon.start_auth()
+
+    async def get_amazon_auth_shortcut_context(self) -> Dict[str, Any]:
+        """Get the Amazon auth shortcut context for frontend RunGame() launch."""
+        logger.info("[RPC] get_amazon_auth_shortcut_context")
+        return await self.amazon.get_amazon_auth_shortcut_context()
 
     async def complete_amazon_auth(self, auth_code: str) -> Dict[str, Any]:
         """Complete Amazon Games OAuth with authorization code"""
@@ -6854,7 +6869,7 @@ microsoft_client=self.microsoft,
                 store, game_id = parsed
 
                 # Skip auth shortcuts — they are launcher utilities, not games
-                if game_id in ("upc-auth", "ms-auth"):
+                if game_id in ("upc-auth", "ms-auth", "epic-auth", "gog-auth", "amazon-auth"):
                     continue
 
                 # Check installation status using games.map (authoritative source)

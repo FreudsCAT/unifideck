@@ -47,6 +47,9 @@ SHORTCUTS_REGISTRY_FILE = "shortcuts_registry.json"
 PROTECTED_SHORTCUT_IDS = {
     "microsoft:ms-auth",
     "ubisoft:upc-auth",
+    "epic:epic-auth",
+    "gog:gog-auth",
+    "amazon:amazon-auth",
 }
 APPID_ARTWORK_PATTERNS = (
     "{id}p.jpg",

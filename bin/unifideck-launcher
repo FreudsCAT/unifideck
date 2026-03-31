@@ -143,6 +143,41 @@ focus_xcloud_window_if_needed() {
     ) &
 }
 
+# Wait for a browser window to close (handles Flatpak single-instance exit).
+# When Edge is already running, `flatpak run` exits immediately — this function
+# polls for the window and blocks until it's gone, keeping the launcher alive
+# so Steam tracks the correct session duration.
+wait_for_browser_window_close() {
+    local class_pattern="$1"
+    local max_wait="${2:-7200}"  # default 2 hours
+    command -v xdotool >/dev/null 2>&1 || return 0
+
+    # Give the window a moment to appear (single-instance handoff)
+    local wid=""
+    for _ in $(seq 1 40); do
+        sleep 0.25
+        wid="$(xdotool search --onlyvisible --classname "$class_pattern" 2>/dev/null | head -1 || true)"
+        [ -n "$wid" ] && break
+    done
+
+    if [ -z "$wid" ]; then
+        log "[SessionWait] No window found for pattern '$class_pattern', not waiting"
+        return 0
+    fi
+
+    log "[SessionWait] Found window $wid ($class_pattern), waiting for close..."
+    local elapsed=0
+    while [ $elapsed -lt "$max_wait" ]; do
+        sleep 5
+        elapsed=$((elapsed + 5))
+        if ! xdotool search --onlyvisible --classname "$class_pattern" >/dev/null 2>&1; then
+            log "[SessionWait] Window closed after ${elapsed}s"
+            return 0
+        fi
+    done
+    log "[SessionWait] Max wait (${max_wait}s) reached for $class_pattern"
+}
+
 # Toast notification for setup stages (visible in Game Mode)
 # Usage: notify_stage "Stage Name" "Details..."
 # 
@@ -913,9 +948,14 @@ GAME_ID="${KEY#*:}"
 # Ubisoft native launches use launcher URIs (uplay://) and don't need games.map
 # at all — they bypass the map both when the file is missing AND when the entry
 # is absent. Check the store early so Ubisoft never blocks on the map file.
-# Microsoft auth also bypasses the map — auth URL comes from ms_auth_url.txt.
+# Auth shortcuts (Microsoft, Epic, GOG, Amazon) also bypass the map — auth URLs
+# come from per-store *_auth_url.txt files written by the backend.
 GAME_ENTRY=""
-if [ "$STORE" = "ubisoft" ] || [ "${UNIFIDECK_MICROSOFT_ACTION:-}" = "auth" ]; then
+if [ "$STORE" = "ubisoft" ] \
+   || [ "${UNIFIDECK_MICROSOFT_ACTION:-}" = "auth" ] \
+   || [ "${UNIFIDECK_EPIC_ACTION:-}" = "auth" ] \
+   || [ "${UNIFIDECK_GOG_ACTION:-}" = "auth" ] \
+   || [ "${UNIFIDECK_AMAZON_ACTION:-}" = "auth" ]; then
     if [ -f "$MAP_FILE" ]; then
         GAME_ENTRY=$(grep "^$KEY|" "$MAP_FILE" | head -n 1)
     fi
@@ -958,7 +998,11 @@ else
     WORK_DIR=""
 fi
 
-if [ -z "$EXE_PATH" ] && [ "$STORE" != "ubisoft" ] && [ "${UNIFIDECK_MICROSOFT_ACTION:-}" != "auth" ]; then
+if [ -z "$EXE_PATH" ] && [ "$STORE" != "ubisoft" ] \
+   && [ "${UNIFIDECK_MICROSOFT_ACTION:-}" != "auth" ] \
+   && [ "${UNIFIDECK_EPIC_ACTION:-}" != "auth" ] \
+   && [ "${UNIFIDECK_GOG_ACTION:-}" != "auth" ] \
+   && [ "${UNIFIDECK_AMAZON_ACTION:-}" != "auth" ]; then
     log "ERROR: No executable path in map entry"
     exit 1
 fi
@@ -1043,8 +1087,101 @@ if [ "${UNIFIDECK_MICROSOFT_ACTION:-}" = "auth" ]; then
         exit 1
     fi
 
+    # Flatpak may exit immediately if Edge was already running (single-instance).
+    # Wait for the auth window to actually close.
+    wait_for_browser_window_close "unifideck-auth"
+
     log "Microsoft auth browser closed, exiting launcher"
     exit 0
+fi
+
+# ── Generic store auth handlers (Epic, GOG, Amazon) ───────────────────
+# Each store writes its OAuth URL to a well-known file.  The backend
+# starts a CDP monitor on port 9222 *before* the frontend launches the
+# shortcut via RunGame, so the monitor is already waiting when the
+# browser opens.
+_generic_auth_handler() {
+    local store_label="$1" url_file="$2" action_var="$3"
+
+    log "$store_label auth detected — launching browser for OAuth"
+    notify_stage "toasts.launcher.signingIn" "$store_label" "low"
+
+    import_steam_session_env
+
+    if [ ! -f "$url_file" ]; then
+        log "ERROR: Auth URL file not found at $url_file"
+        exit 1
+    fi
+    local auth_url
+    auth_url="$(cat "$url_file")"
+    if [ -z "$auth_url" ]; then
+        log "ERROR: Auth URL file is empty"
+        exit 1
+    fi
+
+    local auth_profile="$HOME/.local/share/unifideck/chromium-auth"
+    mkdir -p "$auth_profile"
+    rm -f "$auth_profile/SingletonLock" "$auth_profile/SingletonSocket" "$auth_profile/SingletonCookie" 2>/dev/null
+
+    local win_mode
+    win_mode="$(auth_window_mode_flag)"
+
+    local -a chrome_flags=(
+        "--app=$auth_url"
+        "--class=unifideck-auth"
+        "$win_mode"
+        "--user-data-dir=$auth_profile"
+        "--no-first-run"
+        "--disable-translate"
+        "--disable-infobars"
+        "--disable-session-crashed-bubble"
+        "--disable-features=TranslateUI"
+        "--password-store=basic"
+        "--disable-dev-shm-usage"
+        "--disable-background-networking"
+        "--enable-touch-events"
+        "--enable-wayland-ime"
+        "--ozone-platform-hint=auto"
+        "--window-size=1280,800"
+        "--remote-debugging-port=9222"
+    )
+
+    unset LD_LIBRARY_PATH
+
+    if [ -z "$XAUTHORITY" ]; then
+        for f in /run/user/$(id -u)/xauth_*; do
+            [ -f "$f" ] && export XAUTHORITY="$f" && break
+        done
+    fi
+    log "Auth window mode: $win_mode"
+    log "XAUTHORITY=$XAUTHORITY DISPLAY=$DISPLAY"
+    focus_auth_window_if_needed "$win_mode"
+
+    if command -v flatpak &>/dev/null && (flatpak info --user com.microsoft.Edge &>/dev/null 2>&1 || flatpak info com.microsoft.Edge &>/dev/null 2>&1); then
+        log "Using Microsoft Edge flatpak for $store_label auth"
+        flatpak run com.microsoft.Edge "${chrome_flags[@]}" 2>>"$LOG_FILE"
+    else
+        log "ERROR: Microsoft Edge is required for $store_label auth but was not found"
+        exit 1
+    fi
+
+    # Flatpak may exit immediately if Edge was already running (single-instance).
+    wait_for_browser_window_close "unifideck-auth"
+
+    log "$store_label auth browser closed, exiting launcher"
+    exit 0
+}
+
+if [ "${UNIFIDECK_EPIC_ACTION:-}" = "auth" ]; then
+    _generic_auth_handler "Epic Games" "$HOME/.local/share/unifideck/epic_auth_url.txt" "UNIFIDECK_EPIC_ACTION"
+fi
+
+if [ "${UNIFIDECK_GOG_ACTION:-}" = "auth" ]; then
+    _generic_auth_handler "GOG" "$HOME/.local/share/unifideck/gog_auth_url.txt" "UNIFIDECK_GOG_ACTION"
+fi
+
+if [ "${UNIFIDECK_AMAZON_ACTION:-}" = "auth" ]; then
+    _generic_auth_handler "Amazon Games" "$HOME/.local/share/unifideck/amazon_auth_url.txt" "UNIFIDECK_AMAZON_ACTION"
 fi
 
 # 4a. Xbox Cloud Gaming — stream via Chromium in fullscreen app mode
@@ -1086,8 +1223,7 @@ if [ "$EXE_PATH" = "xcloud" ]; then
     log "Selected xCloud browser: Microsoft Edge (com.microsoft.Edge)"
 
     # Build Edge browser flags.
-    # Edge has native Xbox gamepad support — no CDP injection or gamepad
-    # triggers needed. Share auth profile so OAuth cookies persist.
+    # Share auth profile so OAuth cookies persist.
     _edge_target_url="${XCLOUD_LAUNCH_URL:-$XCLOUD_URL}"
     CHROME_FLAGS=(
         "--kiosk"
@@ -1108,8 +1244,28 @@ if [ "$EXE_PATH" = "xcloud" ]; then
 
     focus_xcloud_window_if_needed
 
+    # Chromium's Gamepad API on Linux only fires 'gamepadconnected' after a
+    # real button event arrives on the input device. Inject synthetic A-button
+    # presses in the background so xCloud detects the controller immediately.
+    GAMEPAD_TRIGGER="$PLUGIN_DIR/bin/xcloud_gamepad_trigger.py"
+    if [ -f "$GAMEPAD_TRIGGER" ]; then
+        log "Starting gamepad trigger helper in background"
+        python3 "$GAMEPAD_TRIGGER" --delay 3.0 --duration 30.0 --interval 3.0 >>"$LOG_FILE" 2>&1 &
+        GAMEPAD_TRIGGER_PID=$!
+    fi
+
     log "Launching Microsoft Edge flatpak in kiosk mode"
     flatpak run --device=all com.microsoft.Edge "${CHROME_FLAGS[@]}" 2>>"$LOG_FILE"
+
+    # Flatpak may exit immediately if Edge was already running (single-instance).
+    # Poll for the xCloud window to close so Steam tracks the correct session duration.
+    wait_for_browser_window_close "unifideck-xcloud" 14400  # 4 hour max for gaming
+
+    # Clean up gamepad trigger if still running
+    if [ -n "${GAMEPAD_TRIGGER_PID:-}" ]; then
+        kill "$GAMEPAD_TRIGGER_PID" 2>/dev/null || true
+        wait "$GAMEPAD_TRIGGER_PID" 2>/dev/null || true
+    fi
 
     log "xCloud session ended, exiting launcher"
     exit 0

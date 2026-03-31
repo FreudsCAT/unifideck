@@ -494,7 +494,7 @@
     "loggedOut": "已从 Microsoft Store 登出",
     "xcloudNotInstalled": "xCloud 游戏未在本地安装",
     "chromiumRequired": "需要 Microsoft Edge",
-    "chromiumRequiredMessage": "Xbox Cloud Gaming 需要 Microsoft Edge。是否自动安装？（只需执行一次。）",
+    "chromiumRequiredMessage": "登录需要 Microsoft Edge。是否自动安装？（只需执行一次。）",
     "chromiumInstallButton": "安装 Microsoft Edge",
     "chromiumInstalling": "正在安装 Microsoft Edge...",
     "chromiumInstalled": "Microsoft Edge 已安装！",

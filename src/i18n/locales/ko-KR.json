@@ -494,7 +494,7 @@
     "loggedOut": "Microsoft Store에서 로그아웃되었습니다",
     "xcloudNotInstalled": "xCloud 게임이 로컬에 설치되어 있지 않습니다",
     "chromiumRequired": "Microsoft Edge 필요",
-    "chromiumRequiredMessage": "Xbox Cloud Gaming에는 Microsoft Edge가 필요합니다. 자동으로 설치하시겠습니까? (한 번만 수행하면 됩니다.)",
+    "chromiumRequiredMessage": "로그인에는 Microsoft Edge가 필요합니다. 자동으로 설치하시겠습니까? (한 번만 수행하면 됩니다.)",
     "chromiumInstallButton": "Microsoft Edge 설치",
     "chromiumInstalling": "Microsoft Edge 설치 중...",
     "chromiumInstalled": "Microsoft Edge가 설치되었습니다!",

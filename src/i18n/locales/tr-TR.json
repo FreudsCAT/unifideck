@@ -494,7 +494,7 @@
     "loggedOut": "Microsoft Store oturumu kapatıldı",
     "xcloudNotInstalled": "xCloud oyunları yerel olarak yüklü değil",
     "chromiumRequired": "Microsoft Edge gerekli",
-    "chromiumRequiredMessage": "Xbox Cloud Gaming, Microsoft Edge gerektirir. Otomatik olarak yüklemek ister misiniz? (Bu işlem yalnızca bir kez yapılmalıdır.)",
+    "chromiumRequiredMessage": "Giriş için Microsoft Edge gereklidir. Otomatik olarak yüklemek ister misiniz? (Bu işlem yalnızca bir kez yapılmalıdır.)",
     "chromiumInstallButton": "Microsoft Edge'i yükle",
     "chromiumInstalling": "Microsoft Edge yükleniyor...",
     "chromiumInstalled": "Microsoft Edge yüklendi!",

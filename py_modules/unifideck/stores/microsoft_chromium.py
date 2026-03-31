@@ -530,6 +530,13 @@ class ChromiumBrowser:
             if proc.returncode == 0:
                 logger.info("[MS] Microsoft Edge installed successfully")
                 self._restore_default_browser(original_browser)
+                # Poll until flatpak metadata is indexed so callers
+                # see is_installed == True immediately after this returns.
+                import time
+                for _ in range(10):
+                    if self.find_cmd() is not None:
+                        break
+                    time.sleep(1)
                 return {"success": True, "message": "microsoft.browserInstalled"}
 
             stderr = proc.stderr.decode("utf-8", errors="replace")[:200]

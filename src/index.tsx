@@ -48,6 +48,7 @@ import { ChromiumInstallModal } from "./components/ChromiumInstallModal";
 import { AccountSwitchModal } from "./components/AccountSwitchModal";
 import { LanguageSelector } from "./components/LanguageSelector";
 import { launchMicrosoftAuthViaShortcut } from "./utils/microsoftShortcutLaunch";
+import { launchEpicAuthViaShortcut, launchGogAuthViaShortcut, launchAmazonAuthViaShortcut } from "./utils/authShortcutLaunch";
 import { resetControllerConfigCache } from "./utils/controllerConfig";
 import { launchUbisoftAuthViaShortcut } from "./utils/ubisoftShortcutLaunch";
 import StoreConnections from "./components/settings/StoreConnections";
@@ -1388,7 +1389,7 @@ const Content: FC = () => {
     });
   };
 
-  const startAuth = async (store: Store) => {
+  const startAuth = async (store: Store, _postInstall = false) => {
     if (store === "microsoft" && microsoftAuthInProgressRef.current) {
       console.log("[Unifideck] Microsoft auth already in progress; ignoring duplicate request");
       return;
@@ -1479,7 +1480,7 @@ const Content: FC = () => {
       if (store === "epic") {
         methodName = "start_epic_auth";
       } else if (store === "gog") {
-        methodName = "start_gog_auth_auto";
+        methodName = "start_gog_auth";
       } else if (store === "microsoft") {
         methodName = "start_microsoft_auth";
       } else {
@@ -1491,15 +1492,25 @@ const Content: FC = () => {
         { success: boolean; url?: string; chromium_auth?: boolean; shortcut_launch?: boolean; needs_chromium?: boolean; message?: string; error?: string }
       >(methodName);
 
-      // Chromium not installed — show install modal
+      // Chromium not installed — show install modal (but not after a fresh install)
       if (result.success && result.needs_chromium) {
         if (store === "microsoft") {
           microsoftAuthInProgressRef.current = false;
         }
+        if (_postInstall) {
+          // Install just completed but detection still fails — don't loop
+          toaster.toast({
+            title: t("microsoft.chromiumRequired"),
+            body: t("microsoft.chromiumInstallFailed"),
+            critical: true,
+            duration: 7000,
+          });
+          return;
+        }
         showModal(
           <ChromiumInstallModal
             closeModal={() => {}}
-            onInstalled={() => startAuth(store)}
+            onInstalled={() => startAuth(store, true)}
           />,
         );
         return;
@@ -1567,7 +1578,19 @@ const Content: FC = () => {
           console.log(
             `[Unifideck] ${store} auth: launching Chromium via RunGame shortcut...`,
           );
-          const launchResult = await launchMicrosoftAuthViaShortcut();
+          // Dispatch to the correct store-specific shortcut launcher
+          let launchResult: { success: boolean; error?: string; appId?: number; already_running?: boolean };
+          if (store === "microsoft") {
+            launchResult = await launchMicrosoftAuthViaShortcut();
+          } else if (store === "epic") {
+            launchResult = await launchEpicAuthViaShortcut();
+          } else if (store === "gog") {
+            launchResult = await launchGogAuthViaShortcut();
+          } else if (store === "amazon") {
+            launchResult = await launchAmazonAuthViaShortcut();
+          } else {
+            launchResult = { success: false, error: `Unknown store: ${store}` };
+          }
           if (!launchResult.success) {
             console.error(
               `[Unifideck] ${store} RunGame launch failed:`,

@@ -494,7 +494,7 @@
     "loggedOut": "Вихід з Microsoft Store",
     "xcloudNotInstalled": "Ігри xCloud не встановлені локально",
     "chromiumRequired": "Потрібен Microsoft Edge",
-    "chromiumRequiredMessage": "Xbox Cloud Gaming потребує Microsoft Edge. Бажаєте встановити його автоматично? (Це потрібно зробити лише один раз.)",
+    "chromiumRequiredMessage": "Вхід потребує Microsoft Edge. Бажаєте встановити його автоматично? (Це потрібно зробити лише один раз.)",
     "chromiumInstallButton": "Встановити Microsoft Edge",
     "chromiumInstalling": "Встановлення Microsoft Edge...",
     "chromiumInstalled": "Microsoft Edge встановлено!",

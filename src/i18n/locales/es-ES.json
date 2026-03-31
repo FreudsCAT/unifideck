@@ -494,7 +494,7 @@
     "loggedOut": "Sesión cerrada en Microsoft Store",
     "xcloudNotInstalled": "Los juegos xCloud no están instalados localmente",
     "chromiumRequired": "Microsoft Edge requerido",
-    "chromiumRequiredMessage": "Xbox Cloud Gaming requiere Microsoft Edge. ¿Desea instalarlo automáticamente? (Solo es necesario hacerlo una vez.)",
+    "chromiumRequiredMessage": "El inicio de sesión requiere Microsoft Edge. ¿Desea instalarlo automáticamente? (Solo es necesario hacerlo una vez.)",
     "chromiumInstallButton": "Instalar Microsoft Edge",
     "chromiumInstalling": "Instalando Microsoft Edge...",
     "chromiumInstalled": "¡Microsoft Edge instalado!",

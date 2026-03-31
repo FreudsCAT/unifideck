@@ -793,8 +793,15 @@ class MicrosoftConnector(Store):
             logger.error(f"[MS] Failed to create auth shortcut: {e}", exc_info=True)
             return None
 
+    # SteamGridDB game ID for "Xbox Game Pass" — avoids title-search ambiguity
+    _XBOX_GP_SGDB_ID = 5297303
+
     async def _fetch_auth_shortcut_artwork(self, unsigned_id: int, force: bool = False) -> None:
-        """Download SteamGridDB artwork for the auth shortcut (Xbox Game Pass branding).
+        """Download artwork for the auth shortcut (Xbox Game Pass branding).
+
+        Uses a bundled curated portrait grid (the SGDB community uploads for
+        Xbox Game Pass often contain overlay banners) and SGDB for the remaining
+        artwork types with a pinned game ID for reliability.
 
         Args:
             force: If True, skip the has_artwork check and always attempt download.
@@ -820,12 +827,36 @@ class MicrosoftConnector(Store):
                     only_types = missing
                     logger.info(f"[MS] Auth shortcut artwork gap-fill: {missing}")
 
-            logger.info(f"[MS] Fetching SteamGridDB artwork for Xbox Game Pass (force={force})")
-            await plugin.steamgriddb.fetch_game_art(
-                title="Xbox Game Pass",
-                app_id=unsigned_id,
-                only_types=only_types,
-            )
+            grid_path = plugin.steamgriddb.grid_path
+            if not grid_path:
+                logger.warning("[MS] Steam grid path not available")
+                return
+
+            need_types = only_types or {'grid', 'grid_l', 'hero', 'logo', 'icon'}
+
+            # Portrait grid: use bundled curated image (SGDB results have overlay banners)
+            if 'grid' in need_types:
+                bundled_grid = os.path.join(
+                    self.plugin_dir or "", "assets", "xbox_gamepass", "grid_p.png"
+                )
+                dest_grid = os.path.join(grid_path, f"{unsigned_id}p.jpg")
+                if os.path.isfile(bundled_grid):
+                    import shutil
+                    shutil.copy2(bundled_grid, dest_grid)
+                    logger.info("[MS] Copied bundled Xbox Game Pass portrait grid")
+                else:
+                    logger.debug(f"[MS] Bundled portrait grid not found at {bundled_grid}")
+
+            # Remaining types: fetch from SGDB with pinned game ID
+            sgdb_types = need_types - {'grid'}
+            if sgdb_types:
+                logger.info(f"[MS] Fetching SGDB artwork for Xbox Game Pass: {sgdb_types}")
+                await plugin.steamgriddb.fetch_game_art(
+                    title="Xbox Game Pass",
+                    app_id=unsigned_id,
+                    only_types=sgdb_types,
+                    sgdb_game_id=self._XBOX_GP_SGDB_ID,
+                )
         except Exception as e:
             logger.warning(f"[MS] Auth shortcut artwork fetch failed: {e}")
 
