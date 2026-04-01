@@ -6748,6 +6748,9 @@ microsoft_client=self.microsoft,
 
     async def start_microsoft_auth(self) -> Dict[str, Any]:
         """Start Microsoft / Xbox Live OAuth authentication"""
+        # Ensure Edge has controller permissions before auth (idempotent)
+        from py_modules.unifideck.stores.microsoft_chromium import ChromiumBrowser
+        ChromiumBrowser.ensure_controller_permissions()
         return await self.microsoft.start_auth()
 
     async def get_microsoft_auth_shortcut_context(self) -> Dict[str, Any]:
@@ -6767,6 +6770,12 @@ microsoft_client=self.microsoft,
     async def check_chromium_installed(self) -> Dict[str, Any]:
         """Check if Chromium is installed for xCloud support"""
         return {"installed": self.microsoft.is_chromium_installed()}
+
+    async def ensure_edge_controller_permissions(self) -> Dict[str, Any]:
+        """Apply the flatpak /run/udev:ro override so Edge can detect controllers."""
+        from py_modules.unifideck.stores.microsoft_chromium import ChromiumBrowser
+        ok = ChromiumBrowser.ensure_controller_permissions()
+        return {"success": ok}
 
     async def complete_microsoft_auth(self, auth_code: str) -> Dict[str, Any]:
         """Complete Microsoft OAuth with authorization code"""

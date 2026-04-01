@@ -1209,7 +1209,38 @@ const PlaySectionWrapperInner: FC<PlaySectionWrapperProps> = ({
             zIndex: 2,
             minHeight: "80px",
           }}
-        />
+        >
+          <style>{`
+            .unifideck-play-btn { background: rgba(255,255,255,0.1) !important; }
+          `}</style>
+          <button
+            className="unifideck-play-btn"
+            disabled
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "flex-start",
+              gap: "8px",
+              minWidth: "200px",
+              height: "48px",
+              padding: "0 24px",
+              color: "#fff",
+              fontSize: "16px",
+              fontWeight: 500,
+              borderRadius: "4px",
+              border: "none",
+              textTransform: "uppercase" as const,
+              letterSpacing: "0.05em",
+              opacity: 0.6,
+              cursor: "default",
+            }}
+          >
+            <svg viewBox="0 0 24 24" fill="currentColor" width="1em" height="1em">
+              <path d="M8 5v14l11-7z" />
+            </svg>
+            {t("installButton.play")}
+          </button>
+        </div>
       );
     }
     // Error state: gameInfo is null/error — return null so native PlaySection shows

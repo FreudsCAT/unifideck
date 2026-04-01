@@ -528,10 +528,7 @@ class GOGAPIClient:
         }
 
     async def _fetch_auth_shortcut_artwork(self, unsigned_id: int, force: bool = False) -> None:
-        """Download artwork for the GOG auth shortcut.
-
-        Uses a bundled curated portrait grid and SGDB for remaining types.
-        """
+        """Download SteamGridDB artwork for the GOG auth shortcut."""
         try:
             plugin = self.plugin_instance
             if not plugin or not hasattr(plugin, 'steamgriddb') or not plugin.steamgriddb:
@@ -550,35 +547,12 @@ class GOGAPIClient:
                     only_types = missing
                     logger.info(f"[GOG] Auth shortcut artwork gap-fill: {missing}")
 
-            grid_path = plugin.steamgriddb.grid_path
-            if not grid_path:
-                logger.warning("[GOG] Steam grid path not available")
-                return
-
-            need_types = only_types or {'grid', 'grid_l', 'hero', 'logo', 'icon'}
-
-            # Portrait grid: use bundled curated image
-            if 'grid' in need_types:
-                bundled_grid = os.path.join(
-                    self.plugin_dir or "", "assets", "gog_galaxy", "grid_p.png"
-                )
-                dest_grid = os.path.join(grid_path, f"{unsigned_id}p.jpg")
-                if os.path.isfile(bundled_grid):
-                    import shutil
-                    shutil.copy2(bundled_grid, dest_grid)
-                    logger.info("[GOG] Copied bundled GOG Galaxy portrait grid")
-                else:
-                    logger.debug(f"[GOG] Bundled portrait grid not found at {bundled_grid}")
-
-            # Remaining types: fetch from SGDB
-            sgdb_types = need_types - {'grid'}
-            if sgdb_types:
-                logger.info(f"[GOG] Fetching SteamGridDB artwork for GOG Galaxy: {sgdb_types}")
-                await plugin.steamgriddb.fetch_game_art(
-                    title="GOG Galaxy",
-                    app_id=unsigned_id,
-                    only_types=sgdb_types,
-                )
+            logger.info(f"[GOG] Fetching SteamGridDB artwork for GOG Galaxy (force={force})")
+            await plugin.steamgriddb.fetch_game_art(
+                title="GOG Galaxy",
+                app_id=unsigned_id,
+                only_types=only_types,
+            )
         except Exception as e:
             logger.warning(f"[GOG] Auth shortcut artwork fetch failed: {e}")
 

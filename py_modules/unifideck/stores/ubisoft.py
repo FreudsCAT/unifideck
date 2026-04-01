@@ -2428,6 +2428,7 @@ class UbisoftConnector(Store):
                 title="Ubisoft Connect",
                 app_id=unsigned_id,
                 only_types=only_types,
+                sgdb_game_id=5270094,
             )
         except Exception as e:
             logger.warning(f"[Ubisoft] Auth shortcut artwork fetch failed: {e}")

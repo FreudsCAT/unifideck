@@ -108,7 +108,7 @@ focus_auth_window_if_needed() {
         local wid
         for _ in $(seq 1 60); do
             sleep 0.25
-            wid="$(xdotool search --onlyvisible --class unifideck-auth 2>/dev/null | tail -n 1 || true)"
+            wid="$(xdotool search --class unifideck-auth 2>/dev/null | tail -n 1 || true)"
             [ -n "$wid" ] || continue
             xdotool windowactivate --sync "$wid" >/dev/null 2>&1 || true
             xdotool windowraise "$wid" >/dev/null 2>&1 || true
@@ -126,12 +126,12 @@ focus_xcloud_window_if_needed() {
         local wid
         for _ in $(seq 1 120); do
             sleep 0.25
-            wid="$(xdotool search --onlyvisible --classname 'unifideck-xcloud' 2>/dev/null | tail -n 1 || true)"
+            wid="$(xdotool search --classname 'unifideck-xcloud' 2>/dev/null | tail -n 1 || true)"
             if [ -z "$wid" ]; then
-                wid="$(xdotool search --onlyvisible --classname 'www.xbox.com__play' 2>/dev/null | tail -n 1 || true)"
+                wid="$(xdotool search --classname 'www.xbox.com__play' 2>/dev/null | tail -n 1 || true)"
             fi
             if [ -z "$wid" ]; then
-                wid="$(xdotool search --onlyvisible --name 'Xbox Cloud Gaming|xbox.com' 2>/dev/null | tail -n 1 || true)"
+                wid="$(xdotool search --name 'Xbox Cloud Gaming|xbox.com' 2>/dev/null | tail -n 1 || true)"
             fi
             [ -n "$wid" ] || continue
             xdotool windowactivate --sync "$wid" >/dev/null 2>&1 || true
@@ -143,6 +143,27 @@ focus_xcloud_window_if_needed() {
     ) &
 }
 
+# Check if CDP debug port is responding (browser alive)
+_is_cdp_alive() {
+    local port="$1"
+    curl -sf --max-time 2 "http://127.0.0.1:${port}/json/version" >/dev/null 2>&1
+}
+
+# Block until the CDP debug port stops responding (browser closed)
+_wait_for_cdp_close() {
+    local port="$1" max_wait="${2:-7200}"
+    local elapsed=0
+    while [ $elapsed -lt "$max_wait" ]; do
+        sleep 5
+        elapsed=$((elapsed + 5))
+        if ! _is_cdp_alive "$port"; then
+            log "[SessionWait] CDP port $port closed after ${elapsed}s"
+            return 0
+        fi
+    done
+    log "[SessionWait] CDP max wait (${max_wait}s) reached for port $port"
+}
+
 # Wait for a browser window to close (handles Flatpak single-instance exit).
 # When Edge is already running, `flatpak run` exits immediately — this function
 # polls for the window and blocks until it's gone, keeping the launcher alive
@@ -150,18 +171,34 @@ focus_xcloud_window_if_needed() {
 wait_for_browser_window_close() {
     local class_pattern="$1"
     local max_wait="${2:-7200}"  # default 2 hours
-    command -v xdotool >/dev/null 2>&1 || return 0
+    local cdp_port="${3:-9222}"  # CDP debug port for fallback detection
+    command -v xdotool >/dev/null 2>&1 || {
+        # No xdotool — fall back to CDP port polling
+        log "[SessionWait] xdotool not found, using CDP port $cdp_port for browser detection"
+        _wait_for_cdp_close "$cdp_port" "$max_wait"
+        return 0
+    }
 
     # Give the window a moment to appear (single-instance handoff)
+    # NOTE: do NOT use --onlyvisible — gamescope (gaming mode) does not
+    # expose X11 visibility the same way, causing the search to miss
+    # fullscreen windows and the launcher to exit prematurely.
     local wid=""
     for _ in $(seq 1 40); do
         sleep 0.25
-        wid="$(xdotool search --onlyvisible --classname "$class_pattern" 2>/dev/null | head -1 || true)"
+        wid="$(xdotool search --classname "$class_pattern" 2>/dev/null | head -1 || true)"
         [ -n "$wid" ] && break
     done
 
     if [ -z "$wid" ]; then
-        log "[SessionWait] No window found for pattern '$class_pattern', not waiting"
+        # xdotool couldn't find the window — fall back to CDP port polling.
+        # The browser may still be alive (gamescope class name quirks, etc.).
+        if _is_cdp_alive "$cdp_port"; then
+            log "[SessionWait] No xdotool window for '$class_pattern', but CDP port $cdp_port is alive — switching to CDP polling"
+            _wait_for_cdp_close "$cdp_port" "$max_wait"
+            return 0
+        fi
+        log "[SessionWait] No window found for pattern '$class_pattern' and CDP port $cdp_port is dead, not waiting"
         return 0
     fi
 
@@ -170,7 +207,7 @@ wait_for_browser_window_close() {
     while [ $elapsed -lt "$max_wait" ]; do
         sleep 5
         elapsed=$((elapsed + 5))
-        if ! xdotool search --onlyvisible --classname "$class_pattern" >/dev/null 2>&1; then
+        if ! xdotool search --classname "$class_pattern" >/dev/null 2>&1; then
             log "[SessionWait] Window closed after ${elapsed}s"
             return 0
         fi
@@ -1224,11 +1261,14 @@ if [ "$EXE_PATH" = "xcloud" ]; then
 
     # Build Edge browser flags.
     # Share auth profile so OAuth cookies persist.
+    # Enable CDP remote debugging so the inject script can navigate/inject gamepad compat.
     _edge_target_url="${XCLOUD_LAUNCH_URL:-$XCLOUD_URL}"
+    XCLOUD_CDP_PORT=9223
     CHROME_FLAGS=(
         "--kiosk"
         "--class=unifideck-xcloud"
         "--user-data-dir=$AUTH_PROFILE"
+        "--remote-debugging-port=$XCLOUD_CDP_PORT"
         "--no-first-run"
         "--disable-translate"
         "--disable-infobars"
@@ -1244,27 +1284,36 @@ if [ "$EXE_PATH" = "xcloud" ]; then
 
     focus_xcloud_window_if_needed
 
-    # Chromium's Gamepad API on Linux only fires 'gamepadconnected' after a
-    # real button event arrives on the input device. Inject synthetic A-button
-    # presses in the background so xCloud detects the controller immediately.
-    GAMEPAD_TRIGGER="$PLUGIN_DIR/bin/xcloud_gamepad_trigger.py"
-    if [ -f "$GAMEPAD_TRIGGER" ]; then
-        log "Starting gamepad trigger helper in background"
-        python3 "$GAMEPAD_TRIGGER" --delay 3.0 --duration 30.0 --interval 3.0 >>"$LOG_FILE" 2>&1 &
-        GAMEPAD_TRIGGER_PID=$!
+    log "Launching Microsoft Edge flatpak in kiosk mode"
+    flatpak run --device=all --filesystem=/run/udev:ro com.microsoft.Edge "${CHROME_FLAGS[@]}" 2>>"$LOG_FILE" &
+    EDGE_PID=$!
+
+    # Launch CDP inject helper to ensure the game URL loads even if Xbox redirects
+    # to the homepage on first launch (missing session cookies). Also injects
+    # gamepad compatibility helpers so xCloud detects the controller.
+    CDP_INJECT="$PLUGIN_DIR/bin/xcloud_cdp_inject.py"
+    if [ -f "$CDP_INJECT" ]; then
+        log "Starting xCloud CDP inject (port=$XCLOUD_CDP_PORT, url=$_edge_target_url)"
+        python3 "$CDP_INJECT" \
+            --port "$XCLOUD_CDP_PORT" \
+            --timeout 60 \
+            --match "xbox.com" \
+            --launch-url "$_edge_target_url" \
+            >>"$LOG_FILE" 2>&1 &
+        CDP_INJECT_PID=$!
     fi
 
-    log "Launching Microsoft Edge flatpak in kiosk mode"
-    flatpak run --device=all com.microsoft.Edge "${CHROME_FLAGS[@]}" 2>>"$LOG_FILE"
+    # Wait for Edge to exit (or for single-instance handoff)
+    wait "$EDGE_PID" 2>/dev/null || true
 
     # Flatpak may exit immediately if Edge was already running (single-instance).
     # Poll for the xCloud window to close so Steam tracks the correct session duration.
-    wait_for_browser_window_close "unifideck-xcloud" 14400  # 4 hour max for gaming
+    wait_for_browser_window_close "unifideck-xcloud" 14400 "$XCLOUD_CDP_PORT"  # 4 hour max for gaming
 
-    # Clean up gamepad trigger if still running
-    if [ -n "${GAMEPAD_TRIGGER_PID:-}" ]; then
-        kill "$GAMEPAD_TRIGGER_PID" 2>/dev/null || true
-        wait "$GAMEPAD_TRIGGER_PID" 2>/dev/null || true
+    # Clean up CDP inject if still running
+    if [ -n "${CDP_INJECT_PID:-}" ]; then
+        kill "$CDP_INJECT_PID" 2>/dev/null || true
+        wait "$CDP_INJECT_PID" 2>/dev/null || true
     fi
 
     log "xCloud session ended, exiting launcher"

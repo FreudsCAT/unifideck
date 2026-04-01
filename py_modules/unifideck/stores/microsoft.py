@@ -797,16 +797,10 @@ class MicrosoftConnector(Store):
     _XBOX_GP_SGDB_ID = 5297303
 
     async def _fetch_auth_shortcut_artwork(self, unsigned_id: int, force: bool = False) -> None:
-        """Download artwork for the auth shortcut (Xbox Game Pass branding).
-
-        Uses a bundled curated portrait grid (the SGDB community uploads for
-        Xbox Game Pass often contain overlay banners) and SGDB for the remaining
-        artwork types with a pinned game ID for reliability.
+        """Download SteamGridDB artwork for the Microsoft auth shortcut.
 
         Args:
             force: If True, skip the has_artwork check and always attempt download.
-                   Used when recreating a deleted shortcut whose artwork may also
-                   have been removed.
         """
         try:
             plugin = self.plugin_instance
@@ -819,7 +813,6 @@ class MicrosoftConnector(Store):
                     logger.debug("[MS] Auth shortcut artwork already exists")
                     return
 
-            # Determine which types are missing so we only download gaps
             only_types = None
             if not force and hasattr(plugin, 'get_missing_artwork_types'):
                 missing = await plugin.get_missing_artwork_types(unsigned_id)
@@ -827,36 +820,14 @@ class MicrosoftConnector(Store):
                     only_types = missing
                     logger.info(f"[MS] Auth shortcut artwork gap-fill: {missing}")
 
-            grid_path = plugin.steamgriddb.grid_path
-            if not grid_path:
-                logger.warning("[MS] Steam grid path not available")
-                return
-
-            need_types = only_types or {'grid', 'grid_l', 'hero', 'logo', 'icon'}
-
-            # Portrait grid: use bundled curated image (SGDB results have overlay banners)
-            if 'grid' in need_types:
-                bundled_grid = os.path.join(
-                    self.plugin_dir or "", "assets", "xbox_gamepass", "grid_p.png"
-                )
-                dest_grid = os.path.join(grid_path, f"{unsigned_id}p.jpg")
-                if os.path.isfile(bundled_grid):
-                    import shutil
-                    shutil.copy2(bundled_grid, dest_grid)
-                    logger.info("[MS] Copied bundled Xbox Game Pass portrait grid")
-                else:
-                    logger.debug(f"[MS] Bundled portrait grid not found at {bundled_grid}")
-
-            # Remaining types: fetch from SGDB with pinned game ID
-            sgdb_types = need_types - {'grid'}
-            if sgdb_types:
-                logger.info(f"[MS] Fetching SGDB artwork for Xbox Game Pass: {sgdb_types}")
-                await plugin.steamgriddb.fetch_game_art(
-                    title="Xbox Game Pass",
-                    app_id=unsigned_id,
-                    only_types=sgdb_types,
-                    sgdb_game_id=self._XBOX_GP_SGDB_ID,
-                )
+            logger.info(f"[MS] Fetching SteamGridDB artwork for Xbox Game Pass (force={force})")
+            await plugin.steamgriddb.fetch_game_art(
+                title="Xbox Game Pass",
+                app_id=unsigned_id,
+                only_types=only_types,
+                sgdb_game_id=self._XBOX_GP_SGDB_ID,
+                artwork_ranks={'grid_l': 1},
+            )
         except Exception as e:
             logger.warning(f"[MS] Auth shortcut artwork fetch failed: {e}")
 
@@ -944,6 +915,19 @@ class MicrosoftConnector(Store):
                 result = await self.complete_auth(code)
                 if result["success"]:
                     logger.info("[MS] ✓ Authentication completed successfully — tokens saved")
+                    # Navigate to xbox.com to establish session cookies in the
+                    # shared profile so xCloud launches don't re-prompt sign-in.
+                    try:
+                        nav_ok = await self._browser.navigate_tab(
+                            "https://www.xbox.com/play", timeout=15.0
+                        )
+                        if nav_ok:
+                            logger.info("[MS] ✓ Visited xbox.com/play — session cookies established")
+                            await asyncio.sleep(3)
+                        else:
+                            logger.warning("[MS] Could not navigate to xbox.com — xCloud may ask for sign-in on first launch")
+                    except Exception as nav_err:
+                        logger.warning(f"[MS] xbox.com navigation error: {nav_err}")
                     try:
                         closed = await self._browser.close_auth_browser()
                         if closed:
