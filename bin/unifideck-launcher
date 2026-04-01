@@ -183,9 +183,17 @@ wait_for_browser_window_close() {
     # NOTE: do NOT use --onlyvisible — gamescope (gaming mode) does not
     # expose X11 visibility the same way, causing the search to miss
     # fullscreen windows and the launcher to exit prematurely.
+    #
+    # Search with both --class (WM_CLASS class name, second field) and
+    # --classname (WM_CLASS instance name, first field).  Chrome's
+    # --class=unifideck-auth sets the class (second field), so --class
+    # is the primary match.  --classname is kept as a fallback in case
+    # a browser sets the instance name instead.
     local wid=""
     for _ in $(seq 1 40); do
         sleep 0.25
+        wid="$(xdotool search --class "$class_pattern" 2>/dev/null | head -1 || true)"
+        [ -n "$wid" ] && break
         wid="$(xdotool search --classname "$class_pattern" 2>/dev/null | head -1 || true)"
         [ -n "$wid" ] && break
     done
@@ -207,7 +215,9 @@ wait_for_browser_window_close() {
     while [ $elapsed -lt "$max_wait" ]; do
         sleep 5
         elapsed=$((elapsed + 5))
-        if ! xdotool search --classname "$class_pattern" >/dev/null 2>&1; then
+        # Check both class and classname — window must be gone from both
+        if ! xdotool search --class "$class_pattern" >/dev/null 2>&1 \
+        && ! xdotool search --classname "$class_pattern" >/dev/null 2>&1; then
             log "[SessionWait] Window closed after ${elapsed}s"
             return 0
         fi
