@@ -53,6 +53,9 @@ export const unifideckGameCache: Map<
   }
 > = new Map();
 
+// Auth shortcut appIds (excluded from store tabs, included in Non-Steam)
+const authShortcutIds: Set<number> = new Set();
+
 // Version counter to force patcher re-runs when install status changes
 // Incremented by updateSingleGameStatus() to trigger React remount
 export const gameStateVersion: Map<number, number> = new Map();
@@ -222,6 +225,23 @@ export function isUnifideckGame(appId: number): boolean {
 }
 
 /**
+ * Registers auth shortcut appIds so tab filters can exclude them from store tabs.
+ */
+export function updateAuthShortcutIds(appIds: number[]) {
+  authShortcutIds.clear();
+  appIds.forEach((id) => {
+    const unsigned = id < 0 ? id + 0x100000000 : id;
+    const altSigned = id >= 0 && id > 0x7fffffff ? id - 0x100000000 : id;
+    authShortcutIds.add(id);
+    authShortcutIds.add(unsigned);
+    if (altSigned !== id) authShortcutIds.add(altSigned);
+  });
+  if (appIds.length > 0) {
+    console.log(`[Unifideck] Registered ${appIds.length} auth shortcut appIds for tab exclusion`);
+  }
+}
+
+/**
  * Gets the store for a given app
  * Returns null if unknown non-Steam shortcut (not in our cache)
  */
@@ -271,8 +291,10 @@ export const filterFunctions: {
     app: SteamAppOverview,
   ) => boolean;
 } = {
-  // Show all Steam games AND Unifideck games (but not unrelated non-Steam shortcuts)
+  // Show all Steam games AND Unifideck games (but not unrelated non-Steam shortcuts or auth shortcuts)
   all: (_params, app) => {
+    // Auth shortcuts are utilities, not games
+    if (authShortcutIds.has(app.appid)) return false;
     // Native Steam games - always include
     if (app.app_type !== NON_STEAM_APP_TYPE) {
       return true;
@@ -285,6 +307,9 @@ export const filterFunctions: {
   // Shows ALL installed games/shortcuts (Steam, Unifideck, and other non-Steam)
   // Excludes broken third-party shortcuts (no valid Exe path)
   installed: (params, app) => {
+    // Auth shortcuts are utilities, not installable games
+    if (authShortcutIds.has(app.appid)) return false;
+
     const isInstalled = getInstalledStatus(
       app.appid,
       app.app_type,
@@ -324,6 +349,9 @@ export const filterFunctions: {
   store: (params, app) => {
     if (params.store === "all") return true;
 
+    // Auth shortcuts must never appear in store tabs
+    if (authShortcutIds.has(app.appid)) return false;
+
     const store = getStoreForApp(app.appid, app.app_type);
 
     // If store is null (unknown non-Steam shortcut), don't include in any store tab
@@ -337,6 +365,8 @@ export const filterFunctions: {
   // Filter by Steam Deck compatibility
   // Includes: Native, Platinum, or Steam Deck Verified
   deckCompat: (_params, app) => {
+    if (authShortcutIds.has(app.appid)) return false;
+
     // Steam Deck Verified - always pass (Steam games only)
     if (app.steam_deck_compat_category === DECK_VERIFIED) {
       return true;

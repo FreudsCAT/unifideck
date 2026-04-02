@@ -128,7 +128,8 @@
     "artworkDownloaded": "{{synced}} / {{total}} ilustraciones descargadas",
     "steamMetadataDownloaded": "Metadatos de Steam: {{synced}} / {{total}}",
     "unifidbMetadataDownloaded": "Metadatos de unifiDB: {{synced}} / {{total}}",
-    "metacriticMetadataDownloaded": "Datos de Metacritic: {{synced}} / {{total}}"
+    "metacriticMetadataDownloaded": "Datos de Metacritic: {{synced}} / {{total}}",
+    "rawgMetadataDownloaded": "Metadatos RAWG: {{synced}} / {{total}}"
   },
   "cleanup": {
     "title": "Limpieza",
@@ -261,7 +262,8 @@
       "prerequisitesInstalled": "Requisitos previos del juego instalados",
       "prerequisitesFailed": "Advertencia de requisitos",
       "prerequisitesFailedMessage": "Es posible que los requisitos previos no se hayan instalado correctamente",
-      "browserRequired": "Microsoft Edge requerido"
+      "browserRequired": "Microsoft Edge requerido",
+      "signingIn": "Iniciando sesión..."
     },
     "updateComplete": "¡Actualización completada!",
     "updateCompleteMessage": "Se ha actualizado {{title}}.",
@@ -408,7 +410,8 @@
       "status": "Estado:",
       "spaceRequired": "Espacio requerido",
       "lastPlayed": "Última vez jugado",
-      "never": "Nunca"
+      "never": "Nunca",
+      "playTime": "Tiempo de Juego"
     },
     "compatibility": {
       "modalTitle": "Compatibilidad con Steam Deck",
@@ -465,7 +468,13 @@
     "errorInvalid2FA": "Código de verificación no válido. Inténtalo de nuevo.",
     "showPassword": "Mostrar contraseña",
     "hidePassword": "Ocultar contraseña",
-    "doubleLoginWarning": "Tendrás que iniciar sesión dos veces en Ubisoft."
+    "doubleLoginWarning": "Tendrás que iniciar sesión dos veces en Ubisoft.",
+    "signInViaUpc": "Iniciar sesión a través de Ubisoft Connect",
+    "upcDescription": "Ubisoft Connect se abrirá para que inicies sesión. Una vez que inicies sesión, tu sesión se capturará automáticamente.",
+    "launchingUpc": "Iniciando Ubisoft Connect...",
+    "waitingForLogin": "Esperando inicio de sesión...",
+    "retryLaunch": "Reintentar",
+    "launchFailed": "No se pudo iniciar Ubisoft Connect. Inténtalo de nuevo."
   },
   "relativeDate": {
     "today": "Hoy",
@@ -474,7 +483,8 @@
   "common": {
     "thisGame": "este juego",
     "game": "Juego",
-    "unknown": "Desconocido"
+    "unknown": "Desconocido",
+    "cancel": "Cancelar"
   },
   "microsoft": {
     "notCompatible": "El formato de este juego no es compatible con SteamOS",
@@ -485,7 +495,7 @@
     "loggedOut": "Sesión cerrada en Microsoft Store",
     "xcloudNotInstalled": "Los juegos xCloud no están instalados localmente",
     "chromiumRequired": "Microsoft Edge requerido",
-    "chromiumRequiredMessage": "Xbox Cloud Gaming requiere Microsoft Edge. ¿Desea instalarlo automáticamente? (Solo es necesario hacerlo una vez.)",
+    "chromiumRequiredMessage": "El inicio de sesión requiere Microsoft Edge. ¿Desea instalarlo automáticamente? (Solo es necesario hacerlo una vez.)",
     "chromiumInstallButton": "Instalar Microsoft Edge",
     "chromiumInstalling": "Instalando Microsoft Edge...",
     "chromiumInstalled": "¡Microsoft Edge instalado!",

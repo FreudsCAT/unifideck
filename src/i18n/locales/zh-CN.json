@@ -128,7 +128,8 @@
     "artworkDownloaded": "{{synced}} / {{total}} 个封面已下载",
     "steamMetadataDownloaded": "Steam 元数据：{{synced}} / {{total}}",
     "unifidbMetadataDownloaded": "unifiDB 元数据：{{synced}} / {{total}}",
-    "metacriticMetadataDownloaded": "Metacritic 数据：{{synced}} / {{total}}"
+    "metacriticMetadataDownloaded": "Metacritic 数据：{{synced}} / {{total}}",
+    "rawgMetadataDownloaded": "RAWG 元数据：{{synced}} / {{total}}"
   },
   "cleanup": {
     "title": "清理",
@@ -261,7 +262,8 @@
       "prerequisitesInstalled": "游戏前置条件已安装",
       "prerequisitesFailed": "前置条件警告",
       "prerequisitesFailedMessage": "前置条件可能未正确安装",
-      "browserRequired": "需要 Microsoft Edge"
+      "browserRequired": "需要 Microsoft Edge",
+      "signingIn": "登录中..."
     },
     "updateComplete": "更新完成！",
     "updateCompleteMessage": "{{title}} 已更新。",
@@ -408,7 +410,8 @@
       "status": "状态:",
       "spaceRequired": "所需空间",
       "lastPlayed": "最后游玩",
-      "never": "从未"
+      "never": "从未",
+      "playTime": "游玩时间"
     },
     "compatibility": {
       "modalTitle": "Steam Deck 兼容性",
@@ -465,7 +468,13 @@
     "errorInvalid2FA": "验证码无效。请重试。",
     "showPassword": "显示密码",
     "hidePassword": "隐藏密码",
-    "doubleLoginWarning": "Ubisoft 需要您登录两次。"
+    "doubleLoginWarning": "Ubisoft 需要您登录两次。",
+    "signInViaUpc": "通过 Ubisoft Connect 登录",
+    "upcDescription": "Ubisoft Connect 将会打开以供您登录。登录后，您的会话将被自动捕获。",
+    "launchingUpc": "正在启动 Ubisoft Connect...",
+    "waitingForLogin": "等待登录...",
+    "retryLaunch": "重试",
+    "launchFailed": "无法启动 Ubisoft Connect。请重试。"
   },
   "relativeDate": {
     "today": "今天",
@@ -474,7 +483,8 @@
   "common": {
     "thisGame": "这款游戏",
     "game": "游戏",
-    "unknown": "未知"
+    "unknown": "未知",
+    "cancel": "取消"
   },
   "microsoft": {
     "notCompatible": "该游戏的格式不兼容 SteamOS",
@@ -485,7 +495,7 @@
     "loggedOut": "已从 Microsoft Store 登出",
     "xcloudNotInstalled": "xCloud 游戏未在本地安装",
     "chromiumRequired": "需要 Microsoft Edge",
-    "chromiumRequiredMessage": "Xbox Cloud Gaming 需要 Microsoft Edge。是否自动安装？（只需执行一次。）",
+    "chromiumRequiredMessage": "登录需要 Microsoft Edge。是否自动安装？（只需执行一次。）",
     "chromiumInstallButton": "安装 Microsoft Edge",
     "chromiumInstalling": "正在安装 Microsoft Edge...",
     "chromiumInstalled": "Microsoft Edge 已安装！",

@@ -128,7 +128,8 @@
     "artworkDownloaded": "{{synced}} / {{total}} Illustrationen heruntergeladen",
     "steamMetadataDownloaded": "Steam-Metadaten: {{synced}} / {{total}}",
     "unifidbMetadataDownloaded": "unifiDB-Metadaten: {{synced}} / {{total}}",
-    "metacriticMetadataDownloaded": "Metacritic-Daten: {{synced}} / {{total}}"
+    "metacriticMetadataDownloaded": "Metacritic-Daten: {{synced}} / {{total}}",
+    "rawgMetadataDownloaded": "RAWG-Metadaten: {{synced}} / {{total}}"
   },
   "cleanup": {
     "title": "Aufräumen",
@@ -261,7 +262,8 @@
       "prerequisitesInstalled": "Spielvoraussetzungen installiert",
       "prerequisitesFailed": "Voraussetzungen Warnung",
       "prerequisitesFailedMessage": "Voraussetzungen wurden möglicherweise nicht korrekt installiert",
-      "browserRequired": "Microsoft Edge erforderlich"
+      "browserRequired": "Microsoft Edge erforderlich",
+      "signingIn": "Anmeldung..."
     },
     "updateComplete": "Update abgeschlossen!",
     "updateCompleteMessage": "{{title}} wurde aktualisiert.",
@@ -408,7 +410,8 @@
       "status": "Status:",
       "spaceRequired": "Speicherplatz",
       "lastPlayed": "Zuletzt gespielt",
-      "never": "Nie"
+      "never": "Nie",
+      "playTime": "Spielzeit"
     },
     "compatibility": {
       "modalTitle": "Steam Deck-Kompatibilität",
@@ -465,7 +468,13 @@
     "errorInvalid2FA": "Ungültiger Bestätigungscode. Bitte versuche es erneut.",
     "showPassword": "Passwort anzeigen",
     "hidePassword": "Passwort ausblenden",
-    "doubleLoginWarning": "Für Ubisoft musst du dich zweimal anmelden."
+    "doubleLoginWarning": "Für Ubisoft musst du dich zweimal anmelden.",
+    "signInViaUpc": "Über Ubisoft Connect anmelden",
+    "upcDescription": "Ubisoft Connect wird geöffnet, damit du dich anmelden kannst. Sobald du dich einloggst, wird deine Sitzung automatisch erfasst.",
+    "launchingUpc": "Ubisoft Connect wird gestartet...",
+    "waitingForLogin": "Warte auf Anmeldung...",
+    "retryLaunch": "Erneut versuchen",
+    "launchFailed": "Ubisoft Connect konnte nicht gestartet werden. Bitte versuche es erneut."
   },
   "relativeDate": {
     "today": "Heute",
@@ -474,7 +483,8 @@
   "common": {
     "thisGame": "dieses Spiel",
     "game": "Spiel",
-    "unknown": "Unbekannt"
+    "unknown": "Unbekannt",
+    "cancel": "Abbrechen"
   },
   "microsoft": {
     "notCompatible": "Das Format dieses Spiels ist nicht kompatibel mit SteamOS",
@@ -485,7 +495,7 @@
     "loggedOut": "Vom Microsoft Store abgemeldet",
     "xcloudNotInstalled": "xCloud-Spiele sind nicht lokal installiert",
     "chromiumRequired": "Microsoft Edge erforderlich",
-    "chromiumRequiredMessage": "Xbox Cloud Gaming benötigt Microsoft Edge. Möchten Sie es automatisch installieren? (Dies muss nur einmal durchgeführt werden.)",
+    "chromiumRequiredMessage": "Die Anmeldung benötigt Microsoft Edge. Möchten Sie es automatisch installieren? (Dies muss nur einmal durchgeführt werden.)",
     "chromiumInstallButton": "Microsoft Edge installieren",
     "chromiumInstalling": "Microsoft Edge wird installiert...",
     "chromiumInstalled": "Microsoft Edge installiert!",

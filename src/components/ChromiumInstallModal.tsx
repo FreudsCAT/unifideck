@@ -38,7 +38,7 @@ export const ChromiumInstallModal = ({
         setTimeout(() => {
           closeModal();
           onInstalled();
-        }, 1500);
+        }, 3000);
       } else {
         setError(result.error ? t(result.error) : t("microsoft.chromiumInstallFailed"));
       }

@@ -21,7 +21,7 @@ __all__ = ["intercept_oauth_code"]
 
 async def intercept_oauth_code(
     pending_auth_url: str,
-    timeout: float = 300,
+    timeout: float = 430,
     cdp_port: int = 9222,
 ) -> Optional[str]:
     """
@@ -205,31 +205,32 @@ async def intercept_oauth_code(
                     elif "removed=true" in req_url:
                         removed_count += 1
                         logger.warning(
-                            f"[MS-net] removed=true (attempt {removed_count}/3) -- "
-                            "possible cookie or account issue, clearing and retrying"
+                            f"[MS-net] removed=true (attempt {removed_count}/6) -- "
+                            "possible cookie or account issue"
                         )
-                        if removed_count > 3:
+                        if removed_count > 6:
                             logger.error(
-                                "[MS-net] removed=true persists after 3 attempts. "
-                                "Possible causes: account rejected, device blocked, "
-                                "or session timeout. Try clearing browser cache."
+                                "[MS-net] removed=true persists after 6 attempts. "
+                                "Continuing to monitor — user may still complete auth."
                             )
-                            return None
+                            break  # Break inner WS loop, outer loop continues scanning
                         if pending_auth_url:
                             try:
                                 backoff = min(2 ** (removed_count - 1), 8)
                                 await asyncio.sleep(backoff)
-                                await send_cmd("Network.clearBrowserCookies", {})
-                                logger.info("[MS-net] Cookies cleared")
-                                await asyncio.sleep(0.5)
+                                # Only clear cookies on first attempt (stale session cleanup)
+                                if removed_count == 1:
+                                    await send_cmd("Network.clearBrowserCookies", {})
+                                    logger.info("[MS-net] Cookies cleared (first attempt only)")
+                                    await asyncio.sleep(0.5)
                                 await send_cmd("Page.navigate", {"url": pending_auth_url})
                                 logger.info("[MS-net] Re-navigated to auth URL")
                             except Exception as _nav_err:
                                 logger.error(f"[MS-net] Re-navigation failed: {_nav_err}")
-                                return None
+                                break  # Break inner loop, continue scanning
                         else:
                             logger.error("[MS-net] removed=true but no pending auth URL")
-                            return None
+                            break  # Break inner loop, continue scanning
 
         except Exception as e:
             if "ConnectionClosed" in type(e).__name__:

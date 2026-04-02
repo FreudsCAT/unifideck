@@ -128,7 +128,8 @@
     "artworkDownloaded": "{{synced}} / {{total}} артов загружено",
     "steamMetadataDownloaded": "Метаданные Steam: {{synced}} / {{total}}",
     "unifidbMetadataDownloaded": "Метаданные unifiDB: {{synced}} / {{total}}",
-    "metacriticMetadataDownloaded": "Данные Metacritic: {{synced}} / {{total}}"
+    "metacriticMetadataDownloaded": "Данные Metacritic: {{synced}} / {{total}}",
+    "rawgMetadataDownloaded": "Метаданные RAWG: {{synced}} / {{total}}"
   },
   "cleanup": {
     "title": "Очистка",
@@ -261,7 +262,8 @@
       "prerequisitesInstalled": "Необходимые компоненты игры установлены",
       "prerequisitesFailed": "Предупреждение о компонентах",
       "prerequisitesFailedMessage": "Необходимые компоненты могли быть установлены некорректно",
-      "browserRequired": "Требуется Microsoft Edge"
+      "browserRequired": "Требуется Microsoft Edge",
+      "signingIn": "Вход..."
     },
     "updateComplete": "Обновление завершено!",
     "updateCompleteMessage": "Обновление {{title}} завершено.",
@@ -408,7 +410,8 @@
       "status": "Статус:",
       "spaceRequired": "Место на диске",
       "lastPlayed": "Последний запуск",
-      "never": "Никогда"
+      "never": "Никогда",
+      "playTime": "Время в игре"
     },
     "compatibility": {
       "modalTitle": "Совместимость Steam Deck",
@@ -465,7 +468,13 @@
     "errorInvalid2FA": "Неверный код подтверждения. Попробуйте снова.",
     "showPassword": "Показать пароль",
     "hidePassword": "Скрыть пароль",
-    "doubleLoginWarning": "Для Ubisoft потребуется войти дважды."
+    "doubleLoginWarning": "Для Ubisoft потребуется войти дважды.",
+    "signInViaUpc": "Войти через Ubisoft Connect",
+    "upcDescription": "Откроется Ubisoft Connect для входа. После входа ваша сессия будет автоматически сохранена.",
+    "launchingUpc": "Запуск Ubisoft Connect...",
+    "waitingForLogin": "Ожидание входа...",
+    "retryLaunch": "Повторить",
+    "launchFailed": "Не удалось запустить Ubisoft Connect. Попробуйте ещё раз."
   },
   "relativeDate": {
     "today": "Сегодня",
@@ -474,7 +483,8 @@
   "common": {
     "thisGame": "эта игра",
     "game": "Игра",
-    "unknown": "Неизвестно"
+    "unknown": "Неизвестно",
+    "cancel": "Отмена"
   },
   "microsoft": {
     "notCompatible": "Формат этой игры несовместим со SteamOS",
@@ -485,7 +495,7 @@
     "loggedOut": "Выход из Microsoft Store",
     "xcloudNotInstalled": "Игры xCloud не установлены локально",
     "chromiumRequired": "Требуется Microsoft Edge",
-    "chromiumRequiredMessage": "Xbox Cloud Gaming требует Microsoft Edge. Установить автоматически? (Это нужно сделать только один раз.)",
+    "chromiumRequiredMessage": "Вход требует Microsoft Edge. Установить автоматически? (Это нужно сделать только один раз.)",
     "chromiumInstallButton": "Установить Microsoft Edge",
     "chromiumInstalling": "Установка Microsoft Edge...",
     "chromiumInstalled": "Microsoft Edge установлен!",

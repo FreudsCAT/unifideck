@@ -108,7 +108,7 @@ focus_auth_window_if_needed() {
         local wid
         for _ in $(seq 1 60); do
             sleep 0.25
-            wid="$(xdotool search --onlyvisible --class unifideck-auth 2>/dev/null | tail -n 1 || true)"
+            wid="$(xdotool search --class unifideck-auth 2>/dev/null | tail -n 1 || true)"
             [ -n "$wid" ] || continue
             xdotool windowactivate --sync "$wid" >/dev/null 2>&1 || true
             xdotool windowraise "$wid" >/dev/null 2>&1 || true
@@ -126,12 +126,12 @@ focus_xcloud_window_if_needed() {
         local wid
         for _ in $(seq 1 120); do
             sleep 0.25
-            wid="$(xdotool search --onlyvisible --classname 'unifideck-xcloud' 2>/dev/null | tail -n 1 || true)"
+            wid="$(xdotool search --classname 'unifideck-xcloud' 2>/dev/null | tail -n 1 || true)"
             if [ -z "$wid" ]; then
-                wid="$(xdotool search --onlyvisible --classname 'www.xbox.com__play' 2>/dev/null | tail -n 1 || true)"
+                wid="$(xdotool search --classname 'www.xbox.com__play' 2>/dev/null | tail -n 1 || true)"
             fi
             if [ -z "$wid" ]; then
-                wid="$(xdotool search --onlyvisible --name 'Xbox Cloud Gaming|xbox.com' 2>/dev/null | tail -n 1 || true)"
+                wid="$(xdotool search --name 'Xbox Cloud Gaming|xbox.com' 2>/dev/null | tail -n 1 || true)"
             fi
             [ -n "$wid" ] || continue
             xdotool windowactivate --sync "$wid" >/dev/null 2>&1 || true
@@ -141,6 +141,88 @@ focus_xcloud_window_if_needed() {
             break
         done
     ) &
+}
+
+# Check if CDP debug port is responding (browser alive)
+_is_cdp_alive() {
+    local port="$1"
+    curl -sf --max-time 2 "http://127.0.0.1:${port}/json/version" >/dev/null 2>&1
+}
+
+# Block until the CDP debug port stops responding (browser closed)
+_wait_for_cdp_close() {
+    local port="$1" max_wait="${2:-7200}"
+    local elapsed=0
+    while [ $elapsed -lt "$max_wait" ]; do
+        sleep 5
+        elapsed=$((elapsed + 5))
+        if ! _is_cdp_alive "$port"; then
+            log "[SessionWait] CDP port $port closed after ${elapsed}s"
+            return 0
+        fi
+    done
+    log "[SessionWait] CDP max wait (${max_wait}s) reached for port $port"
+}
+
+# Wait for a browser window to close (handles Flatpak single-instance exit).
+# When Edge is already running, `flatpak run` exits immediately — this function
+# polls for the window and blocks until it's gone, keeping the launcher alive
+# so Steam tracks the correct session duration.
+wait_for_browser_window_close() {
+    local class_pattern="$1"
+    local max_wait="${2:-7200}"  # default 2 hours
+    local cdp_port="${3:-9222}"  # CDP debug port for fallback detection
+    command -v xdotool >/dev/null 2>&1 || {
+        # No xdotool — fall back to CDP port polling
+        log "[SessionWait] xdotool not found, using CDP port $cdp_port for browser detection"
+        _wait_for_cdp_close "$cdp_port" "$max_wait"
+        return 0
+    }
+
+    # Give the window a moment to appear (single-instance handoff)
+    # NOTE: do NOT use --onlyvisible — gamescope (gaming mode) does not
+    # expose X11 visibility the same way, causing the search to miss
+    # fullscreen windows and the launcher to exit prematurely.
+    #
+    # Search with both --class (WM_CLASS class name, second field) and
+    # --classname (WM_CLASS instance name, first field).  Chrome's
+    # --class=unifideck-auth sets the class (second field), so --class
+    # is the primary match.  --classname is kept as a fallback in case
+    # a browser sets the instance name instead.
+    local wid=""
+    for _ in $(seq 1 40); do
+        sleep 0.25
+        wid="$(xdotool search --class "$class_pattern" 2>/dev/null | head -1 || true)"
+        [ -n "$wid" ] && break
+        wid="$(xdotool search --classname "$class_pattern" 2>/dev/null | head -1 || true)"
+        [ -n "$wid" ] && break
+    done
+
+    if [ -z "$wid" ]; then
+        # xdotool couldn't find the window — fall back to CDP port polling.
+        # The browser may still be alive (gamescope class name quirks, etc.).
+        if _is_cdp_alive "$cdp_port"; then
+            log "[SessionWait] No xdotool window for '$class_pattern', but CDP port $cdp_port is alive — switching to CDP polling"
+            _wait_for_cdp_close "$cdp_port" "$max_wait"
+            return 0
+        fi
+        log "[SessionWait] No window found for pattern '$class_pattern' and CDP port $cdp_port is dead, not waiting"
+        return 0
+    fi
+
+    log "[SessionWait] Found window $wid ($class_pattern), waiting for close..."
+    local elapsed=0
+    while [ $elapsed -lt "$max_wait" ]; do
+        sleep 5
+        elapsed=$((elapsed + 5))
+        # Check both class and classname — window must be gone from both
+        if ! xdotool search --class "$class_pattern" >/dev/null 2>&1 \
+        && ! xdotool search --classname "$class_pattern" >/dev/null 2>&1; then
+            log "[SessionWait] Window closed after ${elapsed}s"
+            return 0
+        fi
+    done
+    log "[SessionWait] Max wait (${max_wait}s) reached for $class_pattern"
 }
 
 # Toast notification for setup stages (visible in Game Mode)
@@ -351,7 +433,16 @@ run_umu_with_retry() {
         # command's status), so we must capture the exit code directly.
         # Only redirect stderr — stdout must stay inherited so umu-run/pressure-vessel
         # see a real TTY (redirecting stdout changes container process behavior).
-        "$python_bin" "$umu_path" "$@" 2>>"$LOG_FILE" && exit_code=0 || exit_code=$?
+        # Filter out noisy but harmless stderr from Gamescope WSI, Fossilize,
+        # GStreamer, DXVK, and capsule-capture-libs before writing to log.
+        "$python_bin" "$umu_path" "$@" 2> >(grep -v \
+            -e '^\[Gamescope WSI\]' \
+            -e '^Fossilize ' \
+            -e '^It has either not been recorded' \
+            -e '^ATTENTION: default value' \
+            -e 'GStreamer-WARNING' \
+            -e 'capsule-capture-libs: warning' \
+            >> "$LOG_FILE") && exit_code=0 || exit_code=$?
         
         if [ $exit_code -eq 0 ]; then
             return 0
@@ -904,9 +995,14 @@ GAME_ID="${KEY#*:}"
 # Ubisoft native launches use launcher URIs (uplay://) and don't need games.map
 # at all — they bypass the map both when the file is missing AND when the entry
 # is absent. Check the store early so Ubisoft never blocks on the map file.
-# Microsoft auth also bypasses the map — auth URL comes from ms_auth_url.txt.
+# Auth shortcuts (Microsoft, Epic, GOG, Amazon) also bypass the map — auth URLs
+# come from per-store *_auth_url.txt files written by the backend.
 GAME_ENTRY=""
-if [ "$STORE" = "ubisoft" ] || [ "${UNIFIDECK_MICROSOFT_ACTION:-}" = "auth" ]; then
+if [ "$STORE" = "ubisoft" ] \
+   || [ "${UNIFIDECK_MICROSOFT_ACTION:-}" = "auth" ] \
+   || [ "${UNIFIDECK_EPIC_ACTION:-}" = "auth" ] \
+   || [ "${UNIFIDECK_GOG_ACTION:-}" = "auth" ] \
+   || [ "${UNIFIDECK_AMAZON_ACTION:-}" = "auth" ]; then
     if [ -f "$MAP_FILE" ]; then
         GAME_ENTRY=$(grep "^$KEY|" "$MAP_FILE" | head -n 1)
     fi
@@ -949,7 +1045,11 @@ else
     WORK_DIR=""
 fi
 
-if [ -z "$EXE_PATH" ] && [ "$STORE" != "ubisoft" ] && [ "${UNIFIDECK_MICROSOFT_ACTION:-}" != "auth" ]; then
+if [ -z "$EXE_PATH" ] && [ "$STORE" != "ubisoft" ] \
+   && [ "${UNIFIDECK_MICROSOFT_ACTION:-}" != "auth" ] \
+   && [ "${UNIFIDECK_EPIC_ACTION:-}" != "auth" ] \
+   && [ "${UNIFIDECK_GOG_ACTION:-}" != "auth" ] \
+   && [ "${UNIFIDECK_AMAZON_ACTION:-}" != "auth" ]; then
     log "ERROR: No executable path in map entry"
     exit 1
 fi
@@ -1028,19 +1128,107 @@ if [ "${UNIFIDECK_MICROSOFT_ACTION:-}" = "auth" ]; then
     if command -v flatpak &>/dev/null && (flatpak info --user com.microsoft.Edge &>/dev/null 2>&1 || flatpak info com.microsoft.Edge &>/dev/null 2>&1); then
         log "Using Microsoft Edge flatpak for Microsoft auth"
         flatpak run com.microsoft.Edge "${CHROME_FLAGS[@]}" 2>>"$LOG_FILE"
-    elif command -v flatpak &>/dev/null && (flatpak info --user org.chromium.Chromium &>/dev/null 2>&1 || flatpak info org.chromium.Chromium &>/dev/null 2>&1); then
-        log "Using Chromium flatpak for Microsoft auth"
-        flatpak run org.chromium.Chromium "${CHROME_FLAGS[@]}" 2>>"$LOG_FILE"
-    elif command -v flatpak &>/dev/null && (flatpak info --user com.google.Chrome &>/dev/null 2>&1 || flatpak info com.google.Chrome &>/dev/null 2>&1); then
-        log "Using Google Chrome flatpak for Microsoft auth"
-        flatpak run com.google.Chrome "${CHROME_FLAGS[@]}" 2>>"$LOG_FILE"
     else
-        log "ERROR: No compatible Chromium-based browser found for Microsoft auth"
+        log "ERROR: Microsoft Edge is required for Microsoft auth but was not found"
+        log "Please install Microsoft Edge: flatpak install --user flathub com.microsoft.Edge"
         exit 1
     fi
 
+    # Flatpak may exit immediately if Edge was already running (single-instance).
+    # Wait for the auth window to actually close.
+    wait_for_browser_window_close "unifideck-auth"
+
     log "Microsoft auth browser closed, exiting launcher"
     exit 0
+fi
+
+# ── Generic store auth handlers (Epic, GOG, Amazon) ───────────────────
+# Each store writes its OAuth URL to a well-known file.  The backend
+# starts a CDP monitor on port 9222 *before* the frontend launches the
+# shortcut via RunGame, so the monitor is already waiting when the
+# browser opens.
+_generic_auth_handler() {
+    local store_label="$1" url_file="$2" action_var="$3"
+
+    log "$store_label auth detected — launching browser for OAuth"
+    notify_stage "toasts.launcher.signingIn" "$store_label" "low"
+
+    import_steam_session_env
+
+    if [ ! -f "$url_file" ]; then
+        log "ERROR: Auth URL file not found at $url_file"
+        exit 1
+    fi
+    local auth_url
+    auth_url="$(cat "$url_file")"
+    if [ -z "$auth_url" ]; then
+        log "ERROR: Auth URL file is empty"
+        exit 1
+    fi
+
+    local auth_profile="$HOME/.local/share/unifideck/chromium-auth"
+    mkdir -p "$auth_profile"
+    rm -f "$auth_profile/SingletonLock" "$auth_profile/SingletonSocket" "$auth_profile/SingletonCookie" 2>/dev/null
+
+    local win_mode
+    win_mode="$(auth_window_mode_flag)"
+
+    local -a chrome_flags=(
+        "--app=$auth_url"
+        "--class=unifideck-auth"
+        "$win_mode"
+        "--user-data-dir=$auth_profile"
+        "--no-first-run"
+        "--disable-translate"
+        "--disable-infobars"
+        "--disable-session-crashed-bubble"
+        "--disable-features=TranslateUI"
+        "--password-store=basic"
+        "--disable-dev-shm-usage"
+        "--disable-background-networking"
+        "--enable-touch-events"
+        "--enable-wayland-ime"
+        "--ozone-platform-hint=auto"
+        "--window-size=1280,800"
+        "--remote-debugging-port=9222"
+    )
+
+    unset LD_LIBRARY_PATH
+
+    if [ -z "$XAUTHORITY" ]; then
+        for f in /run/user/$(id -u)/xauth_*; do
+            [ -f "$f" ] && export XAUTHORITY="$f" && break
+        done
+    fi
+    log "Auth window mode: $win_mode"
+    log "XAUTHORITY=$XAUTHORITY DISPLAY=$DISPLAY"
+    focus_auth_window_if_needed "$win_mode"
+
+    if command -v flatpak &>/dev/null && (flatpak info --user com.microsoft.Edge &>/dev/null 2>&1 || flatpak info com.microsoft.Edge &>/dev/null 2>&1); then
+        log "Using Microsoft Edge flatpak for $store_label auth"
+        flatpak run com.microsoft.Edge "${chrome_flags[@]}" 2>>"$LOG_FILE"
+    else
+        log "ERROR: Microsoft Edge is required for $store_label auth but was not found"
+        exit 1
+    fi
+
+    # Flatpak may exit immediately if Edge was already running (single-instance).
+    wait_for_browser_window_close "unifideck-auth"
+
+    log "$store_label auth browser closed, exiting launcher"
+    exit 0
+}
+
+if [ "${UNIFIDECK_EPIC_ACTION:-}" = "auth" ]; then
+    _generic_auth_handler "Epic Games" "$HOME/.local/share/unifideck/epic_auth_url.txt" "UNIFIDECK_EPIC_ACTION"
+fi
+
+if [ "${UNIFIDECK_GOG_ACTION:-}" = "auth" ]; then
+    _generic_auth_handler "GOG" "$HOME/.local/share/unifideck/gog_auth_url.txt" "UNIFIDECK_GOG_ACTION"
+fi
+
+if [ "${UNIFIDECK_AMAZON_ACTION:-}" = "auth" ]; then
+    _generic_auth_handler "Amazon Games" "$HOME/.local/share/unifideck/amazon_auth_url.txt" "UNIFIDECK_AMAZON_ACTION"
 fi
 
 # 4a. Xbox Cloud Gaming — stream via Chromium in fullscreen app mode
@@ -1049,15 +1237,15 @@ if [ "$EXE_PATH" = "xcloud" ]; then
     notify_stage "toasts.launcher.launchingGame" "Xbox Cloud Gaming" "low"
 
     # WORK_DIR contains the game-specific URL (https://www.xbox.com/play/launch/{productId}).
-    # Launch the root xCloud shell first so our CDP helper can inject before the
-    # streaming page boots, then redirect to the requested game URL.
     XCLOUD_URL="https://www.xbox.com/play"
     XCLOUD_LAUNCH_URL="$WORK_DIR"
-    XCLOUD_CDP_PORT=9223
 
     # Auth profile for Chromium-based browsers (shared between auth and xCloud)
     AUTH_PROFILE="$HOME/.local/share/unifideck/chromium-auth"
     mkdir -p "$AUTH_PROFILE"
+
+    # Remove stale Singleton lock files that prevent the shared auth profile from starting
+    rm -f "$AUTH_PROFILE/SingletonLock" "$AUTH_PROFILE/SingletonSocket" "$AUTH_PROFILE/SingletonCookie" 2>/dev/null
 
     # Clear PluginLoader's bundled library paths to avoid OpenSSL conflicts.
     # Steam Input works independently via uinput — no LD_PRELOAD needed.
@@ -1071,124 +1259,72 @@ if [ "$EXE_PATH" = "xcloud" ]; then
     fi
     log "XAUTHORITY=$XAUTHORITY DISPLAY=$DISPLAY"
 
-    # Detect available browser — prefer Edge (native xCloud/Xbox gamepad support)
-    _xcloud_browser=""
-    _xcloud_browser_name=""
-    _xcloud_needs_gamepad_trigger=false
-
-    if command -v flatpak &>/dev/null; then
-        if flatpak info --user com.microsoft.Edge &>/dev/null 2>&1 || flatpak info com.microsoft.Edge &>/dev/null 2>&1; then
-            _xcloud_browser="com.microsoft.Edge"
-            _xcloud_browser_name="Microsoft Edge"
-        elif flatpak info --user org.chromium.Chromium &>/dev/null 2>&1 || flatpak info org.chromium.Chromium &>/dev/null 2>&1; then
-            _xcloud_browser="org.chromium.Chromium"
-            _xcloud_browser_name="Chromium"
-            _xcloud_needs_gamepad_trigger=true
-        elif flatpak info --user com.google.Chrome &>/dev/null 2>&1 || flatpak info com.google.Chrome &>/dev/null 2>&1; then
-            _xcloud_browser="com.google.Chrome"
-            _xcloud_browser_name="Google Chrome"
-            _xcloud_needs_gamepad_trigger=true
-        fi
-    fi
-
-    if [ -z "$_xcloud_browser" ]; then
-        log "ERROR: No compatible Chromium-based browser found for xCloud."
-        log "Please install Microsoft Edge via Discover or flatpak."
+    # Verify Microsoft Edge is installed (required for xCloud)
+    if ! command -v flatpak &>/dev/null || ! (flatpak info --user com.microsoft.Edge &>/dev/null 2>&1 || flatpak info com.microsoft.Edge &>/dev/null 2>&1); then
+        log "ERROR: Microsoft Edge is required for xCloud but was not found."
+        log "Please install Microsoft Edge via Unifideck settings or: flatpak install --user flathub com.microsoft.Edge"
         notify_stage "toasts.launcher.browserRequired" "Install Microsoft Edge" "critical"
         exit 1
     fi
 
-    log "Selected xCloud browser: $_xcloud_browser_name ($_xcloud_browser)"
+    log "Selected xCloud browser: Microsoft Edge (com.microsoft.Edge)"
 
-    # Build browser flags.
-    # Use --kiosk mode (matching the proven Edge xCloud shortcut approach) for
-    # proper fullscreen and gamepad focus handling.
-    if [ "$_xcloud_browser" = "com.microsoft.Edge" ]; then
-        # Edge: native Xbox gamepad support, no CDP injection needed.
-        # Share auth profile so OAuth cookies from Chromium sign-in persist.
-        # Navigate directly to the game URL (no CDP redirect needed).
-        _edge_target_url="${XCLOUD_LAUNCH_URL:-$XCLOUD_URL}"
-        CHROME_FLAGS=(
-            "--kiosk"
-            "--class=unifideck-xcloud"
-            "--user-data-dir=$AUTH_PROFILE"
-            "--no-first-run"
-            "--disable-translate"
-            "--disable-infobars"
-            "--disable-session-crashed-bubble"
-            "--disable-features=TranslateUI"
-            "--autoplay-policy=no-user-gesture-required"
-            "--window-size=1024,720"
-            "--force-device-scale-factor=1.25"
-            "--device-scale-factor=1.25"
-            "$_edge_target_url"
-        )
-    else
-        # Chromium/Chrome: use kiosk mode + CDP port for compat JS injection.
-        CHROME_FLAGS=(
-            "--kiosk"
-            "--class=unifideck-xcloud"
-            "--user-data-dir=$AUTH_PROFILE"
-            "--no-first-run"
-            "--disable-translate"
-            "--disable-infobars"
-            "--disable-session-crashed-bubble"
-            "--disable-features=TranslateUI"
-            "--password-store=basic"
-            "--disable-dev-shm-usage"
-            "--disable-background-networking"
-            "--autoplay-policy=no-user-gesture-required"
-            "--window-size=1024,720"
-            "--force-device-scale-factor=1.25"
-            "--device-scale-factor=1.25"
-            "--remote-debugging-port=$XCLOUD_CDP_PORT"
-            "--enable-gamepad-button-axis-events"
-            "$XCLOUD_URL"
-        )
-    fi
-
-    # CDP compat JS injection (Chromium/Chrome only — spoofs Edge UA, re-dispatches
-    # gamepad events, provides fullscreen shims for xCloud).
-    # NOTE: We no longer pass --steam-controller-appid; the CDP controller-layout
-    # bounce was counterproductive (temporarily put Steam Input in keyboard mode).
-    _xcloud_inject_pid=""
-    if [ "$_xcloud_browser" != "com.microsoft.Edge" ]; then
-        XCLOUD_INJECT_SCRIPT="$PLUGIN_DIR/bin/xcloud_cdp_inject.py"
-        if [ -f "$XCLOUD_INJECT_SCRIPT" ]; then
-            log "Starting xCloud CDP compatibility injector on port $XCLOUD_CDP_PORT (target: $XCLOUD_LAUNCH_URL)"
-            _xcloud_inject_args=(--port "$XCLOUD_CDP_PORT" --timeout 45)
-            if [ -n "$XCLOUD_LAUNCH_URL" ] && [ "$XCLOUD_LAUNCH_URL" != "$XCLOUD_URL" ]; then
-                _xcloud_inject_args+=(--launch-url "$XCLOUD_LAUNCH_URL")
-            fi
-            "$PYTHON_BIN" "$XCLOUD_INJECT_SCRIPT" "${_xcloud_inject_args[@]}" >>"$LOG_FILE" 2>&1 &
-            _xcloud_inject_pid=$!
-        fi
-    fi
-
-    # Gamepad trigger: inject synthetic button events into the SteamOS virtual
-    # Xbox pad so Chromium's Gamepad API detects the controller without manual
-    # interaction.  Edge has native gamepad support so this is only needed for
-    # Chromium/Chrome.
-    _gamepad_trigger_pid=""
-    if [ "$_xcloud_needs_gamepad_trigger" = true ]; then
-        GAMEPAD_TRIGGER_SCRIPT="$PLUGIN_DIR/bin/xcloud_gamepad_trigger.py"
-        if [ -f "$GAMEPAD_TRIGGER_SCRIPT" ]; then
-            log "Starting gamepad trigger (synthetic event injection for Chromium)"
-            "$PYTHON_BIN" "$GAMEPAD_TRIGGER_SCRIPT" \
-                --delay 5 --duration 20 --interval 3 >>"$LOG_FILE" 2>&1 &
-            _gamepad_trigger_pid=$!
-        fi
-    fi
+    # Build Edge browser flags.
+    # Share auth profile so OAuth cookies persist.
+    # Enable CDP remote debugging so the inject script can navigate/inject gamepad compat.
+    _edge_target_url="${XCLOUD_LAUNCH_URL:-$XCLOUD_URL}"
+    XCLOUD_CDP_PORT=9223
+    CHROME_FLAGS=(
+        "--kiosk"
+        "--class=unifideck-xcloud"
+        "--user-data-dir=$AUTH_PROFILE"
+        "--remote-debugging-port=$XCLOUD_CDP_PORT"
+        "--no-first-run"
+        "--disable-translate"
+        "--disable-infobars"
+        "--disable-session-crashed-bubble"
+        "--disable-features=TranslateUI"
+        "--password-store=basic"
+        "--autoplay-policy=no-user-gesture-required"
+        "--window-size=1024,720"
+        "--force-device-scale-factor=1.25"
+        "--device-scale-factor=1.25"
+        "$_edge_target_url"
+    )
 
     focus_xcloud_window_if_needed
 
-    log "Launching $_xcloud_browser_name flatpak in kiosk mode"
-    flatpak run --device=all "$_xcloud_browser" "${CHROME_FLAGS[@]}" 2>>"$LOG_FILE"
+    log "Launching Microsoft Edge flatpak in kiosk mode"
+    flatpak run --device=all --filesystem=/run/udev:ro com.microsoft.Edge "${CHROME_FLAGS[@]}" 2>>"$LOG_FILE" &
+    EDGE_PID=$!
 
-    # Clean up background helpers
-    for _pid in "${_xcloud_inject_pid:-}" "${_gamepad_trigger_pid:-}"; do
-        [ -n "$_pid" ] && kill "$_pid" 2>/dev/null && wait "$_pid" 2>/dev/null || true
-    done
+    # Launch CDP inject helper to ensure the game URL loads even if Xbox redirects
+    # to the homepage on first launch (missing session cookies). Also injects
+    # gamepad compatibility helpers so xCloud detects the controller.
+    CDP_INJECT="$PLUGIN_DIR/bin/xcloud_cdp_inject.py"
+    if [ -f "$CDP_INJECT" ]; then
+        log "Starting xCloud CDP inject (port=$XCLOUD_CDP_PORT, url=$_edge_target_url)"
+        python3 "$CDP_INJECT" \
+            --port "$XCLOUD_CDP_PORT" \
+            --timeout 60 \
+            --match "xbox.com" \
+            --launch-url "$_edge_target_url" \
+            >>"$LOG_FILE" 2>&1 &
+        CDP_INJECT_PID=$!
+    fi
+
+    # Wait for Edge to exit (or for single-instance handoff)
+    wait "$EDGE_PID" 2>/dev/null || true
+
+    # Flatpak may exit immediately if Edge was already running (single-instance).
+    # Poll for the xCloud window to close so Steam tracks the correct session duration.
+    wait_for_browser_window_close "unifideck-xcloud" 14400 "$XCLOUD_CDP_PORT"  # 4 hour max for gaming
+
+    # Clean up CDP inject if still running
+    if [ -n "${CDP_INJECT_PID:-}" ]; then
+        kill "$CDP_INJECT_PID" 2>/dev/null || true
+        wait "$CDP_INJECT_PID" 2>/dev/null || true
+    fi
 
     log "xCloud session ended, exiting launcher"
     exit 0

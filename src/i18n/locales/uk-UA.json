@@ -128,7 +128,8 @@
     "artworkDownloaded": "{{synced}} / {{total}} обкладинок завантажено",
     "steamMetadataDownloaded": "Метадані Steam: {{synced}} / {{total}}",
     "unifidbMetadataDownloaded": "Метадані unifiDB: {{synced}} / {{total}}",
-    "metacriticMetadataDownloaded": "Дані Metacritic: {{synced}} / {{total}}"
+    "metacriticMetadataDownloaded": "Дані Metacritic: {{synced}} / {{total}}",
+    "rawgMetadataDownloaded": "Метадані RAWG: {{synced}} / {{total}}"
   },
   "cleanup": {
     "title": "Очищення",
@@ -261,7 +262,8 @@
       "prerequisitesInstalled": "Передумови гри встановлені",
       "prerequisitesFailed": "Попередження про передумови",
       "prerequisitesFailedMessage": "Передумови можуть бути встановлені некоректно",
-      "browserRequired": "Потрібен Microsoft Edge"
+      "browserRequired": "Потрібен Microsoft Edge",
+      "signingIn": "Вхід..."
     },
     "updateComplete": "Оновлення завершено!",
     "updateCompleteMessage": "Оновлення {{title}} завершено.",
@@ -408,7 +410,8 @@
       "status": "Стан:",
       "spaceRequired": "Необхідне місце",
       "lastPlayed": "Останній запуск",
-      "never": "Ніколи"
+      "never": "Ніколи",
+      "playTime": "Час у грі"
     },
     "compatibility": {
       "modalTitle": "Сумісність Steam Deck",
@@ -465,7 +468,13 @@
     "errorInvalid2FA": "Неправильний код підтвердження. Спробуйте ще раз.",
     "showPassword": "Показати пароль",
     "hidePassword": "Приховати пароль",
-    "doubleLoginWarning": "Для Ubisoft потрібно буде увійти двічі."
+    "doubleLoginWarning": "Для Ubisoft потрібно буде увійти двічі.",
+    "signInViaUpc": "Увійти через Ubisoft Connect",
+    "upcDescription": "Ubisoft Connect відкриється для входу. Після входу ваша сесія буде автоматично збережена.",
+    "launchingUpc": "Запуск Ubisoft Connect...",
+    "waitingForLogin": "Очікування входу...",
+    "retryLaunch": "Повторити",
+    "launchFailed": "Не вдалося запустити Ubisoft Connect. Спробуйте ще раз."
   },
   "relativeDate": {
     "today": "Сьогодні",
@@ -474,7 +483,8 @@
   "common": {
     "thisGame": "ця гра",
     "game": "Гра",
-    "unknown": "Невідомо"
+    "unknown": "Невідомо",
+    "cancel": "Скасувати"
   },
   "microsoft": {
     "notCompatible": "Формат цієї гри не сумісний зі SteamOS",
@@ -485,7 +495,7 @@
     "loggedOut": "Вихід з Microsoft Store",
     "xcloudNotInstalled": "Ігри xCloud не встановлені локально",
     "chromiumRequired": "Потрібен Microsoft Edge",
-    "chromiumRequiredMessage": "Xbox Cloud Gaming потребує Microsoft Edge. Бажаєте встановити його автоматично? (Це потрібно зробити лише один раз.)",
+    "chromiumRequiredMessage": "Вхід потребує Microsoft Edge. Бажаєте встановити його автоматично? (Це потрібно зробити лише один раз.)",
     "chromiumInstallButton": "Встановити Microsoft Edge",
     "chromiumInstalling": "Встановлення Microsoft Edge...",
     "chromiumInstalled": "Microsoft Edge встановлено!",

@@ -47,6 +47,9 @@ SHORTCUTS_REGISTRY_FILE = "shortcuts_registry.json"
 PROTECTED_SHORTCUT_IDS = {
     "microsoft:ms-auth",
     "ubisoft:upc-auth",
+    "epic:epic-auth",
+    "gog:gog-auth",
+    "amazon:amazon-auth",
 }
 APPID_ARTWORK_PATTERNS = (
     "{id}p.jpg",
@@ -617,7 +620,7 @@ class ShortcutsManager:
 
             if microsoft_client:
                 try:
-                    microsoft_installed = microsoft_client.get_installed()
+                    microsoft_installed = await microsoft_client.get_installed()
                 except Exception as e:
                     errors.append(f"Microsoft fetch: {e}")
             

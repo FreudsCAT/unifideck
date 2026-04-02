@@ -32,10 +32,6 @@ export const SteamRestartModal: FC<SteamRestartModalProps> = ({
     }
   };
 
-  const handleLater = () => {
-    closeModal?.();
-  };
-
   const title =
     reason === "cleanup"
       ? t("confirmModals.steamRestartCleanupTitle")
@@ -55,7 +51,7 @@ export const SteamRestartModal: FC<SteamRestartModalProps> = ({
       strOKButtonText={t("confirmModals.restartNow")}
       strCancelButtonText={t("confirmModals.later")}
       onOK={handleRestartNow}
-      onCancel={handleLater}
+      onCancel={closeModal}
     />
   );
 };
