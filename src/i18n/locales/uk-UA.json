@@ -410,7 +410,8 @@
       "status": "Стан:",
       "spaceRequired": "Необхідне місце",
       "lastPlayed": "Останній запуск",
-      "never": "Ніколи"
+      "never": "Ніколи",
+      "playTime": "Час у грі"
     },
     "compatibility": {
       "modalTitle": "Сумісність Steam Deck",

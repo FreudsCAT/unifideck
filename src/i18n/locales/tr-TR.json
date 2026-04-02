@@ -410,7 +410,8 @@
       "status": "Durum:",
       "spaceRequired": "Gerekli Alan",
       "lastPlayed": "Son Oynama",
-      "never": "Hiçbir zaman"
+      "never": "Hiçbir zaman",
+      "playTime": "Oynama Süresi"
     },
     "compatibility": {
       "modalTitle": "Steam Deck Uyumluluğu",

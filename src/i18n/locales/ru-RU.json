@@ -410,7 +410,8 @@
       "status": "Статус:",
       "spaceRequired": "Место на диске",
       "lastPlayed": "Последний запуск",
-      "never": "Никогда"
+      "never": "Никогда",
+      "playTime": "Время в игре"
     },
     "compatibility": {
       "modalTitle": "Совместимость Steam Deck",

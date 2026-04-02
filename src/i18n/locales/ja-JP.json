@@ -410,7 +410,8 @@
       "status": "ステータス:",
       "spaceRequired": "必要容量",
       "lastPlayed": "最終プレイ",
-      "never": "なし"
+      "never": "なし",
+      "playTime": "プレイ時間"
     },
     "compatibility": {
       "modalTitle": "Steam Deck互換性",

@@ -883,7 +883,9 @@ const Content: FC = () => {
                       );
                       if (!steamRestartShownRef.current) {
                         steamRestartShownRef.current = true;
-                        showModal(<SteamRestartModal closeModal={() => { steamRestartShownRef.current = false; }} />);
+                        showModal(<SteamRestartModal />, undefined, {
+                          fnOnClose: () => { steamRestartShownRef.current = false; },
+                        });
                       }
                       startSyncCooldown();
                     } else if (result.status === "cancelled") {
@@ -1116,7 +1118,9 @@ const Content: FC = () => {
         if (syncResult?.status === "complete") {
           if (!steamRestartShownRef.current) {
             steamRestartShownRef.current = true;
-            showModal(<SteamRestartModal closeModal={() => { steamRestartShownRef.current = false; }} />);
+            showModal(<SteamRestartModal />, undefined, {
+              fnOnClose: () => { steamRestartShownRef.current = false; },
+            });
           }
         }
       }
@@ -1200,7 +1204,9 @@ const Content: FC = () => {
             if (result.status === "complete") {
               if (!steamRestartShownRef.current) {
                 steamRestartShownRef.current = true;
-                showModal(<SteamRestartModal closeModal={() => { steamRestartShownRef.current = false; }} />);
+                showModal(<SteamRestartModal />, undefined, {
+                  fnOnClose: () => { steamRestartShownRef.current = false; },
+                });
               }
             }
           } else {
@@ -1728,7 +1734,7 @@ const Content: FC = () => {
         });
 
         // Prompt user to restart Steam so changes take effect
-        showModal(<SteamRestartModal reason="cleanup" closeModal={() => {}} />);
+        showModal(<SteamRestartModal reason="cleanup" />);
       } else {
         console.error(`[Unifideck] Delete failed: ${result.error}`);
         toaster.toast({
@@ -1977,7 +1983,7 @@ export default definePlugin(() => {
                   artwork: r.artwork_copied,
                 }),
               });
-              showModal(<SteamRestartModal closeModal={() => {}} />);
+              showModal(<SteamRestartModal />);
             }}
             onClearAuths={async () => {
               await call<[], unknown>("clear_store_auths");

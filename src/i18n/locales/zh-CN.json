@@ -410,7 +410,8 @@
       "status": "状态:",
       "spaceRequired": "所需空间",
       "lastPlayed": "最后游玩",
-      "never": "从未"
+      "never": "从未",
+      "playTime": "游玩时间"
     },
     "compatibility": {
       "modalTitle": "Steam Deck 兼容性",

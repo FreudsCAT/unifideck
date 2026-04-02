@@ -410,7 +410,8 @@
       "status": "Status:",
       "spaceRequired": "Speicherplatz",
       "lastPlayed": "Zuletzt gespielt",
-      "never": "Nie"
+      "never": "Nie",
+      "playTime": "Spielzeit"
     },
     "compatibility": {
       "modalTitle": "Steam Deck-Kompatibilität",
