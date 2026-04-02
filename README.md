@@ -143,7 +143,6 @@ To build the plugin from source:
 1. Install dependencies: `pnpm install`
 2. Build the frontend bundle: `pnpm run build`
 3. Build the plugin package:
-   - local repo workflow: `./build-plugin_old.sh`
    - standard Decky / fork workflow: `./.vscode/build.sh` or the VS Code `build-plugin` task
 
 For frontend watch mode, use `pnpm run watch`.
@@ -162,7 +161,7 @@ This project builds on a lot of open source work and community help.
 - **Platform and UI** - [Decky Loader](https://github.com/SteamDeckHomebrew/decky-loader), `@decky/api`, `@decky/ui`, and the SteamDeckHomebrew community
 - **Store and runtime tooling** - [legendary](https://github.com/derrod/legendary), gogdl, [nile](https://github.com/imLinguin/nile), [comet](https://github.com/imLinguin/comet), [winetricks](https://github.com/Winetricks/winetricks), [umu-launcher](https://github.com/Open-Wine-Components/umu-launcher), and [SteamGridDB](https://www.steamgriddb.com/)
 - **Reference projects and patterns** - [TabMaster](https://github.com/CEbbinghaus/TabMaster), [SteamGridDB Decky](https://github.com/SteamGridDB/decky-steamgriddb), [ProtonDB Decky](https://github.com/OMGDuke/protondb-decky), [Heroic Games Launcher](https://github.com/Heroic-Games-Launcher/HeroicGamesLauncher), and [Junk-Store](https://github.com/ebenbruyns/junkstore)
-- **Special thanks** - @src893, @xXJSONDeruloXx, @moi952, @Lazer-zx5, @buddax2, @Grails125, DeckWizard, u/EnTei7K, u/IN50MNIAC, derrod, and the Discord testers who keep shipping feedback
+- **Special thanks** - @src893, @xXJSONDeruloXx, @moi952, @Lazer-zx5, @buddax2, @Grails125, DeckWizard, u/EnTei7K, u/IN50MNIAC, derrod, and the Discord testers for invaluable feedback.
 
 ## Support
 
