@@ -128,7 +128,8 @@
     "artworkDownloaded": "{{synced}} / {{total}}개 아트워크 다운로드됨",
     "steamMetadataDownloaded": "Steam 메타데이터: {{synced}} / {{total}}",
     "unifidbMetadataDownloaded": "unifiDB 메타데이터: {{synced}} / {{total}}",
-    "metacriticMetadataDownloaded": "Metacritic 데이터: {{synced}} / {{total}}"
+    "metacriticMetadataDownloaded": "Metacritic 데이터: {{synced}} / {{total}}",
+    "rawgMetadataDownloaded": "RAWG 메타데이터: {{synced}} / {{total}}"
   },
   "cleanup": {
     "title": "정리",
@@ -261,7 +262,8 @@
       "prerequisitesInstalled": "게임 사전 요구 사항이 설치되었습니다",
       "prerequisitesFailed": "사전 요구 사항 경고",
       "prerequisitesFailedMessage": "사전 요구 사항이 올바르게 설치되지 않았을 수 있습니다",
-      "browserRequired": "Microsoft Edge 필요"
+      "browserRequired": "Microsoft Edge 필요",
+      "signingIn": "로그인 중..."
     },
     "updateComplete": "업데이트 완료!",
     "updateCompleteMessage": "{{title}} 업데이트가 완료되었습니다.",
@@ -408,7 +410,8 @@
       "status": "상태:",
       "spaceRequired": "필요 공간",
       "lastPlayed": "마지막 플레이",
-      "never": "없음"
+      "never": "없음",
+      "playTime": "플레이 시간"
     },
     "compatibility": {
       "modalTitle": "Steam Deck 호환성",
@@ -465,7 +468,13 @@
     "errorInvalid2FA": "확인 코드가 올바르지 않습니다. 다시 시도하세요.",
     "showPassword": "비밀번호 표시",
     "hidePassword": "비밀번호 숨기기",
-    "doubleLoginWarning": "Ubisoft에서는 두 번 로그인해야 합니다."
+    "doubleLoginWarning": "Ubisoft에서는 두 번 로그인해야 합니다.",
+    "signInViaUpc": "Ubisoft Connect로 로그인",
+    "upcDescription": "Ubisoft Connect가 열리면 로그인하세요. 로그인하면 세션이 자동으로 캡처됩니다.",
+    "launchingUpc": "Ubisoft Connect 실행 중...",
+    "waitingForLogin": "로그인 대기 중...",
+    "retryLaunch": "재시도",
+    "launchFailed": "Ubisoft Connect를 실행하지 못했습니다. 다시 시도해 주세요."
   },
   "relativeDate": {
     "today": "오늘",
@@ -474,7 +483,8 @@
   "common": {
     "thisGame": "이 게임",
     "game": "게임",
-    "unknown": "알 수 없음"
+    "unknown": "알 수 없음",
+    "cancel": "취소"
   },
   "microsoft": {
     "notCompatible": "이 게임의 포맷은 SteamOS와 호환되지 않습니다",
@@ -485,7 +495,7 @@
     "loggedOut": "Microsoft Store에서 로그아웃되었습니다",
     "xcloudNotInstalled": "xCloud 게임이 로컬에 설치되어 있지 않습니다",
     "chromiumRequired": "Microsoft Edge 필요",
-    "chromiumRequiredMessage": "Xbox Cloud Gaming에는 Microsoft Edge가 필요합니다. 자동으로 설치하시겠습니까? (한 번만 수행하면 됩니다.)",
+    "chromiumRequiredMessage": "로그인에는 Microsoft Edge가 필요합니다. 자동으로 설치하시겠습니까? (한 번만 수행하면 됩니다.)",
     "chromiumInstallButton": "Microsoft Edge 설치",
     "chromiumInstalling": "Microsoft Edge 설치 중...",
     "chromiumInstalled": "Microsoft Edge가 설치되었습니다!",

@@ -14,6 +14,7 @@ export {
 export {
   updateUnifideckCache,
   updateSingleGameStatus,
+  updateAuthShortcutIds,
   runFilter,
   runFilters,
   isUnifideckGame,

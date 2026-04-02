@@ -15,6 +15,7 @@ import {
   ToggleField,
   showModal,
   Navigation,
+  QuickAccessTab,
 } from "@decky/ui";
 import React, { FC, useState, useEffect, useRef } from "react";
 import { FaGamepad } from "react-icons/fa";
@@ -42,13 +43,13 @@ import { DownloadsTab } from "./components/DownloadsTab";
 import { StorageSettings } from "./components/StorageSettings";
 
 import { SteamRestartModal } from "./components/SteamRestartModal";
-import { AuthSuccessModal } from "./components/AuthSuccessModal";
 import { ChromiumInstallModal } from "./components/ChromiumInstallModal";
 import { AccountSwitchModal } from "./components/AccountSwitchModal";
 import { LanguageSelector } from "./components/LanguageSelector";
 import { launchMicrosoftAuthViaShortcut } from "./utils/microsoftShortcutLaunch";
+import { launchEpicAuthViaShortcut, launchGogAuthViaShortcut, launchAmazonAuthViaShortcut } from "./utils/authShortcutLaunch";
 import { resetControllerConfigCache } from "./utils/controllerConfig";
-import { isShortcutAppRunning, launchUbisoftAuthViaShortcut } from "./utils/ubisoftShortcutLaunch";
+import { launchUbisoftAuthViaShortcut } from "./utils/ubisoftShortcutLaunch";
 import StoreConnections from "./components/settings/StoreConnections";
 import { Store } from "./types/store";
 import LibrarySync from "./components/settings/LibrarySync";
@@ -66,6 +67,7 @@ import {
 import {
   registerGameActionInterceptor,
   setGameInfoCacheRef,
+  setOnMicrosoftAuthFromPlay,
 } from "./hooks/gameActionInterceptor";
 import { SyncProgress } from "./types/syncProgress";
 import type { DownloadItem, DownloadQueueInfo } from "./types/downloads";
@@ -680,6 +682,65 @@ const Content: FC = () => {
     return () => clearTimeout(timer);
   }, []);
 
+  // Microsoft auth interceptor callback: handles Play-button-initiated auth
+  // from the ms-auth shortcut (game action interceptor)
+  useEffect(() => {
+    setOnMicrosoftAuthFromPlay((_appId) => {
+      if (microsoftAuthInProgressRef.current) return;
+      microsoftAuthInProgressRef.current = true;
+
+      call("start_microsoft_auth").catch(() => {});
+
+      const msStoreName = t("storeConnections.microsoftStore");
+
+      // Simple time-based polling — don't rely on shortcut app running state
+      // (the launcher may exit before Edge, or spurious lifetime events can
+      // trigger false "stopped" detection and cause immediate timeouts).
+      const pollCompletion = async (): Promise<boolean> => {
+        const maxMs = 7 * 60 * 1000; // 7 minutes
+        const startedAt = Date.now();
+
+        while (Date.now() - startedAt < maxMs) {
+          try {
+            const r = await call<[], { success: boolean; microsoft: string }>("check_store_status");
+            if (r.success && r.microsoft === "connected") return true;
+          } catch { /* ignore */ }
+
+          await new Promise<void>((resolve) => window.setTimeout(resolve, 5000));
+        }
+        return false;
+      };
+
+      pollCompletion()
+        .then(async (completed) => {
+          if (completed) {
+            toaster.toast({
+              title: t("toasts.authConnected", { store: msStoreName }),
+              body: t("toasts.authConnectedMessage", { store: msStoreName }),
+              duration: 7500,
+            });
+            setTimeout(() => Navigation.OpenQuickAccessMenu(QuickAccessTab.Decky), 500);
+            call<[string], { success: boolean }>("trigger_post_auth_sync", "microsoft").catch(() => {});
+          } else {
+            toaster.toast({
+              title: t("toasts.authTimeout"),
+              body: t("toasts.authTimeoutMessage", { store: msStoreName }),
+              critical: true,
+              duration: 7500,
+            });
+          }
+        })
+        .catch((err) => {
+          console.error("[Unifideck] Error polling Microsoft auth from shortcut:", err);
+        })
+        .finally(() => {
+          microsoftAuthInProgressRef.current = false;
+        });
+    });
+
+    return () => setOnMicrosoftAuthFromPlay(null);
+  }, []);
+
   const [storeStatus, setStoreStatus] = useState<Record<Store, string>>({
     epic: "checking",
     gog: "checking",
@@ -702,6 +763,7 @@ const Content: FC = () => {
   // Store polling interval ref to allow cleanup on unmount
   const pollIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const cancelRequestedRef = useRef(false);
+  const steamRestartShownRef = useRef(false);
 
   const clearSyncPolling = () => {
     if (pollIntervalRef.current) {
@@ -819,9 +881,11 @@ const Content: FC = () => {
                       console.log(
                         `[Unifideck] ✓ Sync completed: ${result.synced_games} games processed`,
                       );
-                      const addedGames = Number(result.current_game?.values?.added) || 0;
-                      if (addedGames > 0) {
-                        showModal(<SteamRestartModal closeModal={() => {}} />);
+                      if (!steamRestartShownRef.current) {
+                        steamRestartShownRef.current = true;
+                        showModal(<SteamRestartModal />, undefined, {
+                          fnOnClose: () => { steamRestartShownRef.current = false; },
+                        });
                       }
                       startSyncCooldown();
                     } else if (result.status === "cancelled") {
@@ -1052,9 +1116,11 @@ const Content: FC = () => {
       if (autoSyncStores.has(store)) {
         const syncResult = await waitForAuthTriggeredSync(store);
         if (syncResult?.status === "complete") {
-          const addedGames = Number(syncResult.current_game?.values?.added) || 0;
-          if (addedGames > 0) {
-            showModal(<SteamRestartModal closeModal={() => {}} />);
+          if (!steamRestartShownRef.current) {
+            steamRestartShownRef.current = true;
+            showModal(<SteamRestartModal />, undefined, {
+              fnOnClose: () => { steamRestartShownRef.current = false; },
+            });
           }
         }
       }
@@ -1136,9 +1202,11 @@ const Content: FC = () => {
             }
 
             if (result.status === "complete") {
-              const addedGames = Number(result.current_game?.values?.added) || 0;
-              if (addedGames > 0) {
-                showModal(<SteamRestartModal closeModal={() => {}} />);
+              if (!steamRestartShownRef.current) {
+                steamRestartShownRef.current = true;
+                showModal(<SteamRestartModal />, undefined, {
+                  fnOnClose: () => { steamRestartShownRef.current = false; },
+                });
               }
             }
           } else {
@@ -1335,7 +1403,7 @@ const Content: FC = () => {
     });
   };
 
-  const startAuth = async (store: Store) => {
+  const startAuth = async (store: Store, _postInstall = false) => {
     if (store === "microsoft" && microsoftAuthInProgressRef.current) {
       console.log("[Unifideck] Microsoft auth already in progress; ignoring duplicate request");
       return;
@@ -1383,6 +1451,9 @@ const Content: FC = () => {
                 body: t("toasts.authConnectedMessage", { store: storeName }),
                 duration: 5000,
               });
+              setTimeout(() => Navigation.OpenQuickAccessMenu(QuickAccessTab.Decky), 500);
+              // Trigger auth sync from frontend (Ubisoft has no browser callback)
+              call<[string], { success: boolean }>("trigger_post_auth_sync", "ubisoft").catch(() => {});
               await refreshLibraryAfterAuth("ubisoft");
             } else {
               console.log(`[Unifideck] Ubisoft authentication timed out`);
@@ -1423,7 +1494,7 @@ const Content: FC = () => {
       if (store === "epic") {
         methodName = "start_epic_auth";
       } else if (store === "gog") {
-        methodName = "start_gog_auth_auto";
+        methodName = "start_gog_auth";
       } else if (store === "microsoft") {
         methodName = "start_microsoft_auth";
       } else {
@@ -1435,61 +1506,105 @@ const Content: FC = () => {
         { success: boolean; url?: string; chromium_auth?: boolean; shortcut_launch?: boolean; needs_chromium?: boolean; message?: string; error?: string }
       >(methodName);
 
-      // Chromium not installed — show install modal
+      // Chromium not installed — show install modal (but not after a fresh install)
       if (result.success && result.needs_chromium) {
         if (store === "microsoft") {
           microsoftAuthInProgressRef.current = false;
         }
+        if (_postInstall) {
+          // Install just completed but detection still fails — don't loop
+          toaster.toast({
+            title: t("microsoft.chromiumRequired"),
+            body: t("microsoft.chromiumInstallFailed"),
+            critical: true,
+            duration: 7000,
+          });
+          return;
+        }
         showModal(
           <ChromiumInstallModal
             closeModal={() => {}}
-            onInstalled={() => startAuth(store)}
+            onInstalled={() => startAuth(store, true)}
           />,
         );
         return;
       }
 
-      if (result.success && result.url) {
-        const authUrl = result.url;
-
-        // Open popup window
-        const popup = window.open(
-          authUrl,
-          "_blank",
-          "width=800,height=600,popup=yes",
-        );
-
-        if (!popup) {
-          console.log(
-            `[Unifideck] Popup window did not open, continuing with backend auth monitoring...`,
-          );
-        }
-
+      if (result.success && result.chromium_auth) {
+        // All stores use RunGame shortcut-based auth via Edge browser
         console.log(
-          `[Unifideck] Opened ${store} auth popup. Backend monitoring via CDP...`,
+          `[Unifideck] ${store} auth: launching Edge via RunGame shortcut...`,
+        );
+        let launchResult: { success: boolean; error?: string; appId?: number; already_running?: boolean };
+        if (store === "microsoft") {
+          launchResult = await launchMicrosoftAuthViaShortcut();
+        } else if (store === "epic") {
+          launchResult = await launchEpicAuthViaShortcut();
+        } else if (store === "gog") {
+          launchResult = await launchGogAuthViaShortcut();
+        } else if (store === "amazon") {
+          launchResult = await launchAmazonAuthViaShortcut();
+        } else {
+          launchResult = { success: false, error: `Unknown store: ${store}` };
+        }
+        if (!launchResult.success) {
+          console.error(
+            `[Unifideck] ${store} RunGame launch failed:`,
+            launchResult.error,
+          );
+          if (store === "microsoft") {
+            microsoftAuthInProgressRef.current = false;
+          }
+          toaster.toast({
+            title: t("toasts.authFailed"),
+            body:
+              launchResult.error || t("toasts.authFailedMessage"),
+            critical: true,
+            duration: 5000,
+          });
+          return;
+        }
+        console.log(
+          `[Unifideck] ${store} auth shortcut launched: appId=${launchResult.appId}, alreadyRunning=${launchResult.already_running}`,
         );
 
-        // Poll for authentication completion in background (NON-BLOCKING)
-        // This allows multiple store auths to happen simultaneously
-        pollForAuthCompletion(store)
+        const pollShortcutAuthOutcome = async (): Promise<boolean> => {
+          const maxMs = 7 * 60 * 1000; // 7 minutes
+          const startedAt = Date.now();
+
+          while (Date.now() - startedAt < maxMs) {
+            if (await isStoreAuthConnected(store)) {
+              return true;
+            }
+            await new Promise<void>((resolve) =>
+              window.setTimeout(resolve, 1000),
+            );
+          }
+          return false;
+        };
+
+        pollShortcutAuthOutcome()
           .then(async (completed) => {
             if (completed) {
               console.log(
                 `[Unifideck] ✓ ${storeName} authentication successful!`,
               );
-              // Show full-screen success modal — covers the CEF popup
-              // which cannot be closed programmatically in Steam's CEF.
-              showModal(
-                <AuthSuccessModal store={storeName} closeModal={() => {}} />,
-              );
-              void refreshLibraryAfterAuth(store);
+              toaster.toast({
+                title: t("toasts.authConnected", { store: storeName }),
+                body: t("toasts.authConnectedMessage", { store: storeName }),
+                duration: 7500,
+              });
+              setTimeout(() => Navigation.OpenQuickAccessMenu(QuickAccessTab.Decky), 500);
+              // Ensure backend sync starts (safety net for fire-and-forget race)
+              call<[string], { success: boolean }>("trigger_post_auth_sync", store).catch(() => {});
+              await refreshLibraryAfterAuth(store);
             } else {
               console.log(`[Unifideck] ${storeName} authentication timed out`);
               toaster.toast({
                 title: t("toasts.authTimeout"),
                 body: t("toasts.authTimeoutMessage", { store: storeName }),
                 critical: true,
-                duration: 5000,
+                duration: 7500,
               });
             }
           })
@@ -1501,171 +1616,6 @@ const Content: FC = () => {
               microsoftAuthInProgressRef.current = false;
             }
           });
-
-        // Return immediately - don't block waiting for auth to complete
-      } else if (result.success && result.chromium_auth) {
-        // Chromium-based auth: launch via RunGame shortcut (gaming-mode
-        // visible) or fall back to direct backend launch.
-        if (result.shortcut_launch) {
-          console.log(
-            `[Unifideck] ${store} auth: launching Chromium via RunGame shortcut...`,
-          );
-          const launchResult = await launchMicrosoftAuthViaShortcut();
-          if (!launchResult.success) {
-            console.error(
-              `[Unifideck] ${store} RunGame launch failed:`,
-              launchResult.error,
-            );
-            // Auth shortcut is persistent — do NOT delete it on failure
-            microsoftAuthInProgressRef.current = false;
-            toaster.toast({
-              title: t("toasts.authFailed"),
-              body:
-                launchResult.error || t("toasts.authFailedMessage"),
-              critical: true,
-              duration: 5000,
-            });
-            return;
-          }
-          console.log(
-            `[Unifideck] ${store} auth shortcut launched: appId=${launchResult.appId}, alreadyRunning=${launchResult.already_running}`,
-          );
-          const pollMicrosoftShortcutOutcome = async (): Promise<boolean> => {
-            const maxAttempts = 60;
-            const appId = launchResult.appId;
-            const startedAt = Date.now();
-            let seenRunning =
-              typeof appId === "number" && isShortcutAppRunning(appId);
-            let sawStopAfterLaunch = false;
-            let lifetimeRegistration: { unregister(): void } | null = null;
-
-            try {
-              if (typeof appId === "number") {
-                lifetimeRegistration =
-                  window.SteamClient?.GameSessions?.RegisterForAppLifetimeNotifications?.(
-                    (data: { unAppID: number; bRunning: boolean }) => {
-                      if (data.unAppID !== 0 && data.unAppID !== appId) {
-                        return;
-                      }
-
-                      if (data.bRunning) {
-                        seenRunning = true;
-                        return;
-                      }
-
-                      if (seenRunning) {
-                        sawStopAfterLaunch = true;
-                      }
-                    },
-                  ) ?? null;
-              }
-
-              for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
-                if (await isStoreAuthConnected(store)) {
-                  return true;
-                }
-
-                if (
-                  typeof appId === "number" &&
-                  isShortcutAppRunning(appId)
-                ) {
-                  seenRunning = true;
-                }
-
-                if (
-                  sawStopAfterLaunch ||
-                  (seenRunning &&
-                    typeof appId === "number" &&
-                    !isShortcutAppRunning(appId))
-                ) {
-                  await new Promise<void>((resolve) =>
-                    window.setTimeout(resolve, 1000),
-                  );
-                  return await isStoreAuthConnected(store);
-                }
-
-                const startupGraceActive =
-                  typeof appId === "number" &&
-                  !seenRunning &&
-                  Date.now() - startedAt < 30000;
-
-                await new Promise<void>((resolve) =>
-                  window.setTimeout(resolve, startupGraceActive ? 1000 : 5000),
-                );
-              }
-
-              return false;
-            } finally {
-              lifetimeRegistration?.unregister?.();
-            }
-          };
-
-          pollMicrosoftShortcutOutcome()
-            .then(async (completed) => {
-              // Auth shortcut is persistent — do NOT clean it up after auth
-              if (completed) {
-                console.log(
-                  `[Unifideck] ✓ ${storeName} authentication successful!`,
-                );
-                toaster.toast({
-                  title: t("toasts.authConnected", { store: storeName }),
-                  body: t("toasts.authConnectedMessage", { store: storeName }),
-                  duration: 5000,
-                });
-                await refreshLibraryAfterAuth(store);
-              } else {
-                console.log(`[Unifideck] ${storeName} authentication timed out`);
-                toaster.toast({
-                  title: t("toasts.authTimeout"),
-                  body: t("toasts.authTimeoutMessage", { store: storeName }),
-                  critical: true,
-                  duration: 5000,
-                });
-              }
-            })
-            .catch((error) => {
-              console.error(`[Unifideck] Error polling ${store} auth:`, error);
-            })
-            .finally(() => {
-              if (store === "microsoft") {
-                microsoftAuthInProgressRef.current = false;
-              }
-            });
-        } else {
-          console.log(
-            `[Unifideck] ${store} auth opened in Chromium. Backend monitoring via CDP...`,
-          );
-          pollForAuthCompletion(store)
-            .then(async (completed) => {
-              if (completed) {
-                console.log(
-                  `[Unifideck] ✓ ${storeName} authentication successful!`,
-                );
-                toaster.toast({
-                  title: t("toasts.authConnected", { store: storeName }),
-                  body: t("toasts.authConnectedMessage", { store: storeName }),
-                  duration: 5000,
-                });
-                await refreshLibraryAfterAuth(store);
-              } else {
-                console.log(`[Unifideck] ${storeName} authentication timed out`);
-                toaster.toast({
-                  title: t("toasts.authTimeout"),
-                  body: t("toasts.authTimeoutMessage", { store: storeName }),
-                  critical: true,
-                  duration: 5000,
-                });
-              }
-            })
-            .catch((error) => {
-              console.error(`[Unifideck] Error polling ${store} auth:`, error);
-            })
-            .finally(() => {
-              if (store === "microsoft") {
-                microsoftAuthInProgressRef.current = false;
-              }
-            });
-        }
       } else {
         if (store === "microsoft") {
           microsoftAuthInProgressRef.current = false;
@@ -1784,7 +1734,7 @@ const Content: FC = () => {
         });
 
         // Prompt user to restart Steam so changes take effect
-        showModal(<SteamRestartModal reason="cleanup" closeModal={() => {}} />);
+        showModal(<SteamRestartModal reason="cleanup" />);
       } else {
         console.error(`[Unifideck] Delete failed: ${result.error}`);
         toaster.toast({
@@ -1901,9 +1851,6 @@ const Content: FC = () => {
             checkStoreStatus={checkStoreStatus}
           />
 
-          {/* Language Settings - centralized language control */}
-          <LanguageSelector />
-
           {/* Game Details View Mode */}
           <PanelSection title={t("gameDetailsSettings.title")}>
             <PanelSectionRow>
@@ -1920,6 +1867,9 @@ const Content: FC = () => {
               />
             </PanelSectionRow>
           </PanelSection>
+
+          {/* Language Settings - centralized language control */}
+          <LanguageSelector />
 
           {/* Cleanup Section */}
           <PanelSection title={t("cleanup.title")}>
@@ -2033,7 +1983,7 @@ export default definePlugin(() => {
                   artwork: r.artwork_copied,
                 }),
               });
-              showModal(<SteamRestartModal closeModal={() => {}} />);
+              showModal(<SteamRestartModal />);
             }}
             onClearAuths={async () => {
               await call<[], unknown>("clear_store_auths");
@@ -2067,7 +2017,7 @@ export default definePlugin(() => {
   const unregisterInterceptor = registerGameActionInterceptor();
   console.log("[Unifideck] ✓ Game action interceptor registered");
 
-  // Global listener: capture Ubisoft session when ANY game stops.
+  // Global listener: track play time + capture Ubisoft session when ANY game starts/stops.
   // This fires in gaming mode, desktop mode, overlay abort — everywhere.
   // The per-component listener in PlaySectionWrapper only works when
   // the library page is open; this covers all other scenarios.
@@ -2076,29 +2026,59 @@ export default definePlugin(() => {
     unregLifetimeGlobal =
       window.SteamClient?.GameSessions?.RegisterForAppLifetimeNotifications?.(
         (data: { unAppID: number; bRunning: boolean }) => {
-          if (data.bRunning) return; // Only interested in stop events
-
-          // Quick check: is this a Ubisoft game? (unifideckGameCache is always populated)
+          // Check if this is a Unifideck-managed game
           const cached = unifideckGameCache.get(data.unAppID);
-          if (!cached || cached.store !== "ubisoft") return;
 
-          console.log(
-            `[Unifideck] Global: Ubisoft game stopped (appId=${data.unAppID}), capturing session`,
-          );
-          call<[number], { success: boolean }>(
-            "capture_ubisoft_session_by_appid",
-            data.unAppID,
-          ).catch((err) =>
-            console.error(
-              "[Unifideck] Global: capture_ubisoft_session_by_appid failed:",
-              err,
-            ),
-          );
+          if (data.bRunning) {
+            // === PLAY TIME: Session Start ===
+            if (cached) {
+              call<[number], { success: boolean }>(
+                "playtime_start_session",
+                data.unAppID,
+              ).catch((err) =>
+                console.error(
+                  "[Unifideck] playtime_start_session failed:",
+                  err,
+                ),
+              );
+            }
+            return;
+          }
+
+          // === PLAY TIME: Session End ===
+          if (cached) {
+            call<[number, string], { success: boolean }>(
+              "playtime_end_session",
+              data.unAppID,
+              "normal",
+            ).catch((err) =>
+              console.error(
+                "[Unifideck] playtime_end_session failed:",
+                err,
+              ),
+            );
+          }
+
+          // Ubisoft-specific: capture UPC session data on stop
+          if (cached?.store === "ubisoft") {
+            console.log(
+              `[Unifideck] Global: Ubisoft game stopped (appId=${data.unAppID}), capturing session`,
+            );
+            call<[number], { success: boolean }>(
+              "capture_ubisoft_session_by_appid",
+              data.unAppID,
+            ).catch((err) =>
+              console.error(
+                "[Unifideck] Global: capture_ubisoft_session_by_appid failed:",
+                err,
+              ),
+            );
+          }
         },
       ) ?? null;
     if (unregLifetimeGlobal) {
       console.log(
-        "[Unifideck] ✓ Global Ubisoft session capture listener registered",
+        "[Unifideck] ✓ Global play time + Ubisoft session capture listener registered",
       );
     }
   } catch {
@@ -2338,6 +2318,30 @@ export default definePlugin(() => {
   // Background sync disabled - users manually sync via UI when needed
   console.log("[Unifideck] Background sync disabled (use manual sync button)");
 
+  // === PLAY TIME: Suspend/Resume detection ===
+  // Pause play time clock when device sleeps, resume when it wakes
+  let unregSuspend: { unregister(): void } | null = null;
+  let unregResume: { unregister(): void } | null = null;
+  try {
+    unregSuspend =
+      (window.SteamClient as any)?.System?.RegisterForOnSuspendRequest?.(
+        () => {
+          call("playtime_on_suspend").catch(() => {});
+        },
+      ) ?? null;
+    unregResume =
+      (window.SteamClient as any)?.System?.RegisterForOnResumeFromSuspend?.(
+        () => {
+          call("playtime_on_resume").catch(() => {});
+        },
+      ) ?? null;
+    if (unregSuspend || unregResume) {
+      console.log("[Unifideck] ✓ Play time suspend/resume hooks registered");
+    }
+  } catch {
+    // SteamClient.System may not be available
+  }
+
   return {
     name: "UNIFIDECK",
     icon: <FaGamepad />,
@@ -2355,8 +2359,12 @@ export default definePlugin(() => {
       // Clear controller config session cache
       resetControllerConfigCache();
 
-      // Unregister global Ubisoft session capture listener
+      // Unregister global play time + Ubisoft session capture listener
       unregLifetimeGlobal?.unregister?.();
+
+      // Unregister suspend/resume play time hooks
+      unregSuspend?.unregister?.();
+      unregResume?.unregister?.();
 
       // Unpatch Steam stores
       if (unpatchSteamStores) {

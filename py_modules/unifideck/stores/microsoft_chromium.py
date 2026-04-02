@@ -39,14 +39,14 @@ logger = logging.getLogger(__name__)
 PROFILE_DIR = os.path.expanduser("~/.local/share/unifideck/chromium-auth")
 LOG_FILE    = os.path.expanduser("~/.local/share/unifideck/chromium-auth.log")
 
-# Flatpak app IDs to search, in priority order (Edge preferred for native xCloud gamepad)
-_FLATPAK_APPS = ("com.microsoft.Edge", "org.chromium.Chromium", "com.google.Chrome")
+# Only Microsoft Edge is supported (native xCloud gamepad + Steam Deck controller support)
+_FLATPAK_APPS = ("com.microsoft.Edge",)
 _EDGE_FLATPAK_APP = "com.microsoft.Edge"
 _FLATHUB_REMOTE = "flathub"
 _FLATHUB_REMOTE_URL = "https://dl.flathub.org/repo/flathub.flatpakrepo"
 
-# Native binary names to search if no flatpak found
-_NATIVE_BINS = ("microsoft-edge", "microsoft-edge-stable", "chromium", "chromium-browser", "google-chrome")
+# Native binary names to search if no flatpak found (Edge only)
+_NATIVE_BINS = ("microsoft-edge", "microsoft-edge-stable")
 
 # Domains whose cookies are cleared on logout
 _MS_COOKIE_DOMAINS = (
@@ -302,6 +302,87 @@ class ChromiumBrowser:
         except Exception:
             return []
 
+    async def navigate_tab(self, url: str, timeout: float = 15.0) -> bool:
+        """Navigate the first page target to *url* via CDP and wait for load.
+
+        Used after OAuth to visit ``xbox.com`` so session cookies are
+        established in the shared profile before the browser is closed.
+
+        Returns ``True`` if navigation succeeded, ``False`` on any error.
+        """
+        targets = self._list_cdp_targets()
+        page_target = next(
+            (t for t in targets if t.get("type") == "page"), None
+        )
+        if not page_target:
+            logger.warning("[MS] navigate_tab: no page target found")
+            return False
+
+        ws_url = page_target.get("webSocketDebuggerUrl")
+        if not ws_url:
+            logger.warning("[MS] navigate_tab: no webSocketDebuggerUrl")
+            return False
+
+        try:
+            import websockets
+        except ImportError:
+            logger.warning("[MS] navigate_tab: websockets not available")
+            return False
+
+        try:
+            async with websockets.connect(ws_url, close_timeout=3) as ws:
+                # Enable Page events so we receive load notifications
+                await ws.send(json.dumps({
+                    "id": 1,
+                    "method": "Page.enable",
+                    "params": {},
+                }))
+                # Wait for Page.enable ack
+                try:
+                    await asyncio.wait_for(ws.recv(), timeout=3)
+                except asyncio.TimeoutError:
+                    pass
+                # Navigate
+                await ws.send(json.dumps({
+                    "id": 2,
+                    "method": "Page.navigate",
+                    "params": {"url": url},
+                }))
+                # Wait for Page.navigate response + frameStoppedLoading (or timeout)
+                deadline = asyncio.get_event_loop().time() + timeout
+                got_navigate_ok = False
+                while asyncio.get_event_loop().time() < deadline:
+                    remaining = deadline - asyncio.get_event_loop().time()
+                    if remaining <= 0:
+                        break
+                    try:
+                        raw = await asyncio.wait_for(ws.recv(), timeout=remaining)
+                    except asyncio.TimeoutError:
+                        break
+                    msg = json.loads(raw)
+                    # Response to our Page.navigate call
+                    if msg.get("id") == 2:
+                        if "error" in msg:
+                            logger.warning(f"[MS] navigate_tab error: {msg['error']}")
+                            return False
+                        got_navigate_ok = True
+                    # Frame finished loading
+                    if msg.get("method") in (
+                        "Page.frameStoppedLoading",
+                        "Page.loadEventFired",
+                    ):
+                        if got_navigate_ok:
+                            logger.info(f"[MS] navigate_tab: loaded {url}")
+                            return True
+                # Navigation started but page didn't fully load — still OK for cookies
+                if got_navigate_ok:
+                    logger.info(f"[MS] navigate_tab: navigation sent, load timed out for {url}")
+                    return True
+                return False
+        except Exception as exc:
+            logger.warning(f"[MS] navigate_tab failed: {exc}")
+            return False
+
     async def _close_all_cdp_targets(self, *, log_prefix: str) -> bool:
         """Close all live targets exposed on this browser's CDP port."""
         targets = self._list_cdp_targets()
@@ -354,6 +435,63 @@ class ChromiumBrowser:
         if closed:
             self.cleanup_stale_profile_state()
         return closed
+
+    # ── Controller permissions ───────────────────────────────────────────
+
+    @staticmethod
+    def ensure_controller_permissions() -> bool:
+        """Grant Edge flatpak read access to ``/run/udev`` for controller detection.
+
+        Chromium's Gamepad API needs udev metadata (device names, vendor IDs)
+        to identify controllers.  ``flatpak run --device=all`` only exposes
+        ``/dev/*`` nodes; ``/run/udev`` requires a separate filesystem override.
+
+        This is the same step Microsoft's official Steam Deck + xCloud guide
+        recommends users run manually::
+
+            flatpak --user override --filesystem=/run/udev:ro com.microsoft.Edge
+
+        Returns ``True`` if the override is already present or was applied
+        successfully, ``False`` on error.
+        """
+        if not shutil.which("flatpak"):
+            return False
+
+        overrides_path = os.path.expanduser(
+            f"~/.local/share/flatpak/overrides/{_EDGE_FLATPAK_APP}"
+        )
+
+        # Check if override is already present
+        try:
+            if os.path.isfile(overrides_path):
+                with open(overrides_path) as fh:
+                    if "/run/udev" in fh.read():
+                        logger.debug("[MS] Edge udev override already present")
+                        return True
+        except OSError:
+            pass
+
+        logger.info("[MS] Applying flatpak /run/udev:ro override for controller support")
+        try:
+            proc = subprocess.run(
+                [
+                    "flatpak", "--user", "override",
+                    f"--filesystem=/run/udev:ro",
+                    _EDGE_FLATPAK_APP,
+                ],
+                capture_output=True,
+                timeout=30,
+            )
+            if proc.returncode == 0:
+                logger.info("[MS] Edge udev override applied successfully")
+                return True
+
+            stderr = proc.stderr.decode("utf-8", errors="replace")[:200]
+            logger.warning(f"[MS] Edge udev override failed: {stderr}")
+            return False
+        except Exception as exc:
+            logger.warning(f"[MS] Edge udev override error: {exc}")
+            return False
 
     # ── Detection & install ──────────────────────────────────────────────
 
@@ -417,10 +555,10 @@ class ChromiumBrowser:
         return _FLATHUB_REMOTE in self._flatpak_remote_names("--user")
 
     def find_cmd(self) -> Optional[List[str]]:
-        """Find an available Edge/Chromium-based browser command.
+        """Find an available Microsoft Edge browser command.
 
         Checks both ``--user`` and ``--system`` flatpak installations,
-        then falls back to native binaries.
+        then falls back to native Edge binaries.
 
         Returns:
             Command as a list (for subprocess), or ``None``.
@@ -448,12 +586,51 @@ class ChromiumBrowser:
         """Return True if a compatible Chromium-based browser is available."""
         return self.find_cmd() is not None
 
+    @staticmethod
+    def _get_default_browser() -> Optional[str]:
+        """Snapshot the current default web browser before Edge install."""
+        try:
+            result = subprocess.run(
+                ["xdg-settings", "get", "default-web-browser"],
+                capture_output=True, text=True, timeout=5,
+                env=clean_env(),
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                return result.stdout.strip()
+        except Exception:
+            pass
+        return None
+
+    @staticmethod
+    def _restore_default_browser(original: Optional[str]) -> None:
+        """Restore the default browser if Edge install changed it."""
+        if not original:
+            return
+        try:
+            current = subprocess.run(
+                ["xdg-settings", "get", "default-web-browser"],
+                capture_output=True, text=True, timeout=5,
+                env=clean_env(),
+            ).stdout.strip()
+            if current != original:
+                subprocess.run(
+                    ["xdg-settings", "set", "default-web-browser", original],
+                    capture_output=True, timeout=5,
+                    env=clean_env(),
+                )
+                logger.info(f"[MS] Restored default browser to {original}")
+        except Exception as e:
+            logger.debug(f"[MS] Could not restore default browser: {e}")
+
     async def install(self) -> Dict[str, Any]:
         """Install Microsoft Edge via Flatpak in the user installation.
 
         Ensures the user Flathub remote exists first so this works on SteamOS
         variants, Bazzite, CachyOS, and other immutable Linux distros where
         Flatpak is present but only system remotes were preconfigured.
+
+        Saves and restores the user's default browser setting so that Edge
+        installation does not hijack URL handlers from Firefox or other browsers.
 
         Returns:
             Dict with ``success`` and ``message`` or ``error`` keys.
@@ -465,6 +642,9 @@ class ChromiumBrowser:
 
         if not await self._ensure_user_flathub_remote():
             return {"success": False, "error": "microsoft.browserInstallFailed"}
+
+        # Snapshot current default browser before installing Edge
+        original_browser = self._get_default_browser()
 
         logger.info("[MS] Attempting to install Microsoft Edge via flatpak...")
         try:
@@ -487,6 +667,16 @@ class ChromiumBrowser:
             )
             if proc.returncode == 0:
                 logger.info("[MS] Microsoft Edge installed successfully")
+                self._restore_default_browser(original_browser)
+                # Poll until flatpak metadata is indexed so callers
+                # see is_installed == True immediately after this returns.
+                import time
+                for _ in range(10):
+                    if self.find_cmd() is not None:
+                        break
+                    time.sleep(1)
+                # Grant udev access so Edge can detect controllers (xCloud)
+                self.ensure_controller_permissions()
                 return {"success": True, "message": "microsoft.browserInstalled"}
 
             stderr = proc.stderr.decode("utf-8", errors="replace")[:200]

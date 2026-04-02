@@ -23,6 +23,8 @@ import os
 import subprocess
 import json
 import time
+from urllib.request import Request, urlopen
+from urllib.error import HTTPError, URLError
 
 # Plugin directory (parent of bin/)
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -72,15 +74,18 @@ def find_gogdl() -> str:
 
 
 def convert_gog_token() -> bool:
-    """Convert Unifideck's GOG token to gogdl format"""
+    """Convert Unifideck's GOG token to gogdl format.
+
+    gogdl's get_auth_ids requires a valid user_id in the auth config.
+    """
     try:
         if not os.path.exists(UNIFIDECK_GOG_TOKEN):
             log("GOG token not found")
             return False
-        
+
         with open(UNIFIDECK_GOG_TOKEN, 'r') as f:
             token = json.load(f)
-        
+
         gogdl_auth = {
             GOG_CLIENT_ID: {
                 "access_token": token.get("access_token"),
@@ -88,16 +93,16 @@ def convert_gog_token() -> bool:
                 "token_type": "bearer",
                 "scope": "",
                 "refresh_token": token.get("refresh_token"),
-                "user_id": "",
+                "user_id": token.get("user_id", ""),
                 "session_id": "",
                 "loginTime": time.time()
             }
         }
-        
+
         os.makedirs(os.path.dirname(GOGDL_AUTH_FILE), exist_ok=True)
         with open(GOGDL_AUTH_FILE, 'w') as f:
             json.dump(gogdl_auth, f)
-        
+
         return True
     except Exception as e:
         log(f"Failed to convert GOG token: {e}")
@@ -141,6 +146,229 @@ def get_wine_prefix(prefix_path: str) -> str:
     
     # Prefix exists but no drive_c yet - return prefix_path and let Wine/Proton create it
     return prefix_path
+
+
+# --- GOG Cloud Save Path Resolution ---
+
+# GOG remote-config API endpoint
+GOG_REMOTE_CONFIG = "https://remote-config.gog.com"
+
+# Cache file for resolved GOG save paths
+GOG_SAVE_PATHS_CACHE = os.path.expanduser("~/.config/unifideck/gog_save_paths.json")
+
+# GOG uses <?TEMPLATE?> format for Windows path templates
+GOG_PATH_MAP = {
+    "<?APPLICATION_DATA_ROAMING?>": "drive_c/users/steamuser/AppData/Roaming",
+    "<?APPLICATION_DATA?>": "drive_c/users/steamuser/AppData/Roaming",
+    "<?APPLICATION_DATA_LOCAL?>": "drive_c/users/steamuser/AppData/Local",
+    "<?APPLICATION_DATA_LOCAL_LOW?>": "drive_c/users/steamuser/AppData/LocalLow",
+    "<?DOCUMENTS?>": "drive_c/users/steamuser/Documents",
+    "<?SAVED_GAMES?>": "drive_c/users/steamuser/Saved Games",
+    "<?LOCAL_APP_DATA?>": "drive_c/users/steamuser/AppData/Local",
+    "<?USER_PROFILE?>": "drive_c/users/steamuser",
+    "<?PUBLIC_DOCUMENTS?>": "drive_c/users/Public/Documents",
+    "<?COMMON_APP_DATA?>": "drive_c/ProgramData",
+}
+
+
+def _load_gog_save_paths_cache() -> dict:
+    """Load cached GOG save paths."""
+    try:
+        if os.path.exists(GOG_SAVE_PATHS_CACHE):
+            with open(GOG_SAVE_PATHS_CACHE, 'r') as f:
+                return json.load(f)
+    except Exception:
+        pass
+    return {}
+
+
+def _save_gog_save_paths_cache(cache: dict) -> None:
+    """Save GOG save paths cache."""
+    try:
+        os.makedirs(os.path.dirname(GOG_SAVE_PATHS_CACHE), exist_ok=True)
+        with open(GOG_SAVE_PATHS_CACHE, 'w') as f:
+            json.dump(cache, f, indent=2)
+    except Exception as e:
+        log(f"Failed to save GOG save paths cache: {e}")
+
+
+def get_gog_client_id(game_id: str, install_dir: str = "") -> str:
+    """
+    Look up the GOG Galaxy clientId for a game from its goggame-*.info file.
+
+    The remote-config API requires clientId, which is different from gameId.
+    """
+    target_file = f"goggame-{game_id}.info"
+    search_dirs = []
+    if install_dir:
+        search_dirs.append(install_dir)
+        search_dirs.append(os.path.join(install_dir, "game"))
+
+    # Also check games.map for install directory
+    games_map = os.path.expanduser("~/.local/share/unifideck/games.map")
+    if os.path.exists(games_map):
+        prefix = f"gog:{game_id}|"
+        try:
+            with open(games_map, 'r') as f:
+                for line in f:
+                    if line.startswith(prefix):
+                        parts = line.strip().split("|")
+                        if len(parts) >= 3 and parts[2] not in search_dirs:
+                            search_dirs.append(parts[2])
+        except Exception:
+            pass
+
+    # Scan ~/Games/ as fallback
+    games_dir = os.path.expanduser("~/Games")
+    if os.path.isdir(games_dir):
+        try:
+            for item in os.listdir(games_dir):
+                item_path = os.path.join(games_dir, item)
+                if os.path.isdir(item_path) and item_path not in search_dirs:
+                    search_dirs.append(item_path)
+        except Exception:
+            pass
+
+    for d in search_dirs:
+        info_path = os.path.join(d, target_file)
+        if os.path.exists(info_path):
+            try:
+                with open(info_path, 'r') as f:
+                    info = json.load(f)
+                client_id = info.get("clientId", "")
+                if client_id:
+                    return client_id
+            except (json.JSONDecodeError, OSError):
+                pass
+
+    return ""
+
+
+def _resolve_gog_path_template(template: str, wineprefix: str, install_dir: str = "") -> str:
+    """Map a GOG <?TEMPLATE?> path to a real Wine prefix path."""
+    path = template.replace("\\", "/")
+
+    # Handle <?INSTALL?> separately
+    if "<?INSTALL?>" in path:
+        if install_dir:
+            return os.path.normpath(path.replace("<?INSTALL?>", install_dir.rstrip("/")))
+        return ""
+
+    for gog_var, wine_relative in GOG_PATH_MAP.items():
+        if gog_var in path:
+            resolved = path.replace(gog_var, os.path.join(wineprefix, wine_relative))
+            return os.path.normpath(resolved)
+
+    log(f"Unknown GOG path template: {template}")
+    return ""
+
+
+def _query_gog_cloud_save_locations(client_id: str) -> list:
+    """Query GOG remote-config API for cloud save locations."""
+    try:
+        if not os.path.exists(UNIFIDECK_GOG_TOKEN):
+            return []
+        with open(UNIFIDECK_GOG_TOKEN, 'r') as f:
+            token = json.load(f).get("access_token", "")
+        if not token:
+            return []
+    except Exception:
+        return []
+
+    url = f"{GOG_REMOTE_CONFIG}/components/galaxy_client/clients/{client_id}?component_version=2.0.45"
+    req = Request(url, headers={"Authorization": f"Bearer {token}"})
+
+    try:
+        with urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read())
+    except (HTTPError, URLError, Exception) as e:
+        log(f"Failed to query GOG cloud config: {e}")
+        return []
+
+    content = data.get("content", {})
+    windows_info = content.get("Windows", {})
+    cloud_storage = windows_info.get("cloudStorage", {})
+
+    if not cloud_storage.get("enabled"):
+        return []
+
+    return cloud_storage.get("locations", [])
+
+
+def resolve_gog_save_locations(game_id: str, prefix_path: str, install_dir: str = "") -> list:
+    """
+    Auto-discover cloud save locations for a GOG game.
+
+    Returns list of {"name": str, "path": str} dicts, one per cloud save location.
+    Each entry has the location name (used as --name for gogdl) and the resolved local path.
+    Returns empty list if game doesn't support cloud saves.
+    """
+    # Check cache first
+    cache = _load_gog_save_paths_cache()
+    cached = cache.get(game_id)
+    if cached is not None:
+        # Migrate old string format to new list format
+        if isinstance(cached, str):
+            if cached:
+                cached = [{"name": "__default", "path": cached}]
+            else:
+                return []
+        if cached:
+            for loc in cached:
+                log(f"Using cached save location: {loc['name']} -> {loc['path']}")
+        return cached
+
+    # Look up clientId (different from gameId)
+    if not install_dir:
+        games_map = os.path.expanduser("~/.local/share/unifideck/games.map")
+        if os.path.exists(games_map):
+            prefix = f"gog:{game_id}|"
+            try:
+                with open(games_map, 'r') as f:
+                    for line in f:
+                        if line.startswith(prefix):
+                            parts = line.strip().split("|")
+                            if len(parts) >= 3:
+                                install_dir = parts[2]
+                                break
+            except Exception:
+                pass
+
+    client_id = get_gog_client_id(game_id, install_dir)
+    if not client_id:
+        log(f"Could not find clientId for GOG game {game_id}, using gameId as fallback")
+        client_id = game_id
+
+    # Query API
+    log(f"Querying GOG cloud save locations for {game_id} (client={client_id})...")
+    api_locations = _query_gog_cloud_save_locations(client_id)
+
+    if not api_locations:
+        log(f"Game {game_id} does not have cloud saves enabled on GOG")
+        cache[game_id] = []
+        _save_gog_save_paths_cache(cache)
+        return []
+
+    # Resolve all locations
+    wineprefix = get_wine_prefix(prefix_path)
+    if not wineprefix:
+        log(f"Could not detect Wine prefix at {prefix_path}")
+        return []
+
+    resolved_locations = []
+    for loc in api_locations:
+        name = loc.get("name", "__default")
+        template = loc.get("location", "")
+        resolved = _resolve_gog_path_template(template, wineprefix, install_dir)
+        if resolved:
+            log(f"Resolved GOG save location: {name} ({template}) -> {resolved}")
+            resolved_locations.append({"name": name, "path": resolved})
+        else:
+            log(f"Could not resolve GOG path template: {template}")
+
+    cache[game_id] = resolved_locations
+    _save_gog_save_paths_cache(cache)
+    return resolved_locations
 
 
 def ensure_epic_save_path_configured(legendary: str, game_id: str, prefix_path: str) -> str:
@@ -251,51 +479,78 @@ def sync_epic(game_id: str, direction: str, prefix_path: str) -> bool:
         return False
 
 
-def sync_gog(game_id: str, direction: str, save_path: str) -> bool:
-    """Sync GOG cloud saves using gogdl"""
+def sync_gog(game_id: str, direction: str, save_path: str, prefix_path: str = "") -> bool:
+    """Sync GOG cloud saves using gogdl.
+
+    If save_path is not provided, auto-discovers locations via the GOG remote-config API.
+    Syncs each cloud save location separately with the correct --name prefix.
+    """
     gogdl = find_gogdl()
     if not gogdl:
         log("gogdl not found, skipping GOG sync")
         return True  # Non-fatal
-    
-    if not save_path:
-        log("No save path provided for GOG sync")
-        return True  # Non-fatal
-    
+
+    # Build list of locations to sync
+    if save_path:
+        # Explicit save path provided — use __default as location name
+        locations = [{"name": "__default", "path": save_path}]
+    elif prefix_path:
+        locations = resolve_gog_save_locations(game_id, prefix_path)
+    else:
+        locations = []
+
+    if not locations:
+        log(f"No cloud save location found for GOG game {game_id}")
+        return True  # Non-fatal — game may not support cloud saves
+
     if not convert_gog_token():
         log("Failed to convert GOG token")
         return True  # Non-fatal
-    
-    cmd = [
-        gogdl,
-        "--auth-config-path", GOGDL_AUTH_FILE,
-        "save-sync",
-        save_path,
-        game_id,
-        "--os", "windows",
-        "--ts", "0",
-    ]
-    
-    if direction == "download":
-        cmd.append("--skip-upload")
-    elif direction == "upload":
-        cmd.append("--skip-download")
-    
-    log(f"Running: {' '.join(cmd)}")
-    
-    try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
-        if result.stdout:
-            log(f"stdout: {result.stdout[:300]}")
-        if result.stderr:
-            log(f"stderr: {result.stderr[:300]}")
-        return result.returncode == 0
-    except subprocess.TimeoutExpired:
-        log("Sync timed out (120s)")
-        return False
-    except Exception as e:
-        log(f"Sync error: {e}")
-        return False
+
+    all_ok = True
+    for loc in locations:
+        loc_name = loc["name"]
+        loc_path = loc["path"]
+
+        # Safety check for uploads - don't upload empty saves
+        if direction == "upload" and is_save_folder_empty(loc_path):
+            log(f"Local save folder empty for '{loc_name}', skipping upload")
+            continue
+
+        cmd = [
+            gogdl,
+            "--auth-config-path", GOGDL_AUTH_FILE,
+            "save-sync",
+            loc_path,
+            game_id,
+            "--os", "windows",
+            "--ts", "0",
+            "--name", loc_name,
+        ]
+
+        if direction == "download":
+            cmd.append("--force-download")
+        elif direction == "upload":
+            cmd.append("--force-upload")
+
+        log(f"Running: {' '.join(cmd)}")
+
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+            if result.stdout:
+                log(f"stdout: {result.stdout[:300]}")
+            if result.stderr:
+                log(f"stderr: {result.stderr[:300]}")
+            if result.returncode != 0:
+                all_ok = False
+        except subprocess.TimeoutExpired:
+            log(f"Sync timed out for location '{loc_name}'")
+            all_ok = False
+        except Exception as e:
+            log(f"Sync error for location '{loc_name}': {e}")
+            all_ok = False
+
+    return all_ok
 
 
 def main():
@@ -315,7 +570,7 @@ def main():
     if store == "epic":
         success = sync_epic(game_id, direction, prefix_path)
     elif store == "gog":
-        success = sync_gog(game_id, direction, save_path)
+        success = sync_gog(game_id, direction, save_path, prefix_path)
     else:
         log(f"Unknown store: {store}")
         success = True  # Non-fatal for unknown stores

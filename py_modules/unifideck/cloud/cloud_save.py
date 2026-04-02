@@ -382,6 +382,7 @@ class CloudSaveManager:
                 unifideck_token = json.load(f)
             
             # Build gogdl-compatible format
+            # gogdl's get_auth_ids requires a valid user_id
             gogdl_auth = {
                 self.GOG_CLIENT_ID: {
                     "access_token": unifideck_token.get("access_token"),
@@ -389,7 +390,7 @@ class CloudSaveManager:
                     "token_type": "bearer",
                     "scope": "",
                     "refresh_token": unifideck_token.get("refresh_token"),
-                    "user_id": "",
+                    "user_id": unifideck_token.get("user_id", ""),
                     "session_id": "",
                     "loginTime": time.time()
                 }
@@ -406,7 +407,230 @@ class CloudSaveManager:
             logger.error(f"[CloudSave] Failed to convert GOG token: {e}")
             return False
     
-    async def check_for_conflicts(self, store: str, game_id: str, 
+    # --- GOG Cloud Save Path Resolution ---
+
+    # GOG remote-config API
+    GOG_REMOTE_CONFIG = "https://remote-config.gog.com"
+
+    # Cache file for resolved save paths
+    GOG_SAVE_PATHS_CACHE = os.path.expanduser("~/.config/unifideck/gog_save_paths.json")
+
+    # GOG <?TEMPLATE?> format mappings (relative to WINEPREFIX)
+    GOG_PATH_MAP = {
+        "<?APPLICATION_DATA_ROAMING?>": "drive_c/users/steamuser/AppData/Roaming",
+        "<?APPLICATION_DATA?>": "drive_c/users/steamuser/AppData/Roaming",
+        "<?APPLICATION_DATA_LOCAL?>": "drive_c/users/steamuser/AppData/Local",
+        "<?APPLICATION_DATA_LOCAL_LOW?>": "drive_c/users/steamuser/AppData/LocalLow",
+        "<?DOCUMENTS?>": "drive_c/users/steamuser/Documents",
+        "<?SAVED_GAMES?>": "drive_c/users/steamuser/Saved Games",
+        "<?LOCAL_APP_DATA?>": "drive_c/users/steamuser/AppData/Local",
+        "<?USER_PROFILE?>": "drive_c/users/steamuser",
+        "<?PUBLIC_DOCUMENTS?>": "drive_c/users/Public/Documents",
+        "<?COMMON_APP_DATA?>": "drive_c/ProgramData",
+    }
+
+    def _get_gog_client_id(self, game_id: str) -> str:
+        """Look up GOG Galaxy clientId from goggame-*.info files."""
+        target_file = f"goggame-{game_id}.info"
+        search_dirs = []
+
+        # Check games.map for install directory
+        games_map = os.path.expanduser("~/.local/share/unifideck/games.map")
+        if os.path.exists(games_map):
+            prefix = f"gog:{game_id}|"
+            try:
+                with open(games_map, 'r') as f:
+                    for line in f:
+                        if line.startswith(prefix):
+                            parts = line.strip().split("|")
+                            if len(parts) >= 3:
+                                search_dirs.append(parts[2])
+                            break
+            except Exception:
+                pass
+
+        # Scan ~/Games/ as fallback
+        games_dir = os.path.expanduser("~/Games")
+        if os.path.isdir(games_dir):
+            try:
+                for item in os.listdir(games_dir):
+                    item_path = os.path.join(games_dir, item)
+                    if os.path.isdir(item_path) and item_path not in search_dirs:
+                        search_dirs.append(item_path)
+            except Exception:
+                pass
+
+        for d in search_dirs:
+            info_path = os.path.join(d, target_file)
+            if os.path.exists(info_path):
+                try:
+                    with open(info_path, 'r') as f:
+                        info = json.load(f)
+                    client_id = info.get("clientId", "")
+                    if client_id:
+                        return client_id
+                except (json.JSONDecodeError, OSError):
+                    pass
+
+        return ""
+
+    def _resolve_gog_path_template(self, template: str, wineprefix: str, install_dir: str = "") -> str:
+        """Map a GOG <?TEMPLATE?> path to a Wine prefix path."""
+        path = template.replace("\\", "/")
+
+        if "<?INSTALL?>" in path:
+            if install_dir:
+                return os.path.normpath(path.replace("<?INSTALL?>", install_dir.rstrip("/")))
+            return ""
+
+        for gog_var, wine_relative in self.GOG_PATH_MAP.items():
+            if gog_var in path:
+                resolved = path.replace(gog_var, os.path.join(wineprefix, wine_relative))
+                return os.path.normpath(resolved)
+
+        logger.warning(f"[CloudSave] Unknown GOG path template: {template}")
+        return ""
+
+    async def resolve_gog_save_locations(self, game_id: str, prefix_path: str = "") -> list:
+        """
+        Auto-discover cloud save locations for a GOG game.
+
+        Returns list of {"name": str, "path": str} dicts, one per cloud save location.
+        Each entry has the location name (used as --name for gogdl) and the resolved local path.
+        """
+        # Check cache
+        try:
+            if os.path.exists(self.GOG_SAVE_PATHS_CACHE):
+                with open(self.GOG_SAVE_PATHS_CACHE, 'r') as f:
+                    cache = json.load(f)
+                cached = cache.get(game_id)
+                if cached is not None:
+                    # Migrate old string format
+                    if isinstance(cached, str):
+                        if cached:
+                            cached = [{"name": "__default", "path": cached}]
+                        else:
+                            return []
+                    if cached:
+                        for loc in cached:
+                            logger.info(f"[CloudSave] Using cached save location: {loc['name']} -> {loc['path']}")
+                    return cached
+        except Exception:
+            pass
+
+        # Look up install dir from games.map
+        install_dir = ""
+        games_map = os.path.expanduser("~/.local/share/unifideck/games.map")
+        if os.path.exists(games_map):
+            gog_prefix = f"gog:{game_id}|"
+            try:
+                with open(games_map, 'r') as f:
+                    for line in f:
+                        if line.startswith(gog_prefix):
+                            parts = line.strip().split("|")
+                            if len(parts) >= 3:
+                                install_dir = parts[2]
+                            break
+            except Exception:
+                pass
+
+        # Look up clientId
+        client_id = self._get_gog_client_id(game_id)
+        if not client_id:
+            logger.warning(f"[CloudSave] No clientId for GOG game {game_id}, using gameId as fallback")
+            client_id = game_id
+
+        # Query GOG remote-config API
+        logger.info(f"[CloudSave] Querying GOG cloud save locations for {game_id} (client={client_id})...")
+
+        api_locations = []
+        try:
+            token_data = {}
+            if os.path.exists(self.unifideck_gog_token):
+                with open(self.unifideck_gog_token, 'r') as f:
+                    token_data = json.load(f)
+
+            token = token_data.get("access_token", "")
+            if not token:
+                logger.warning("[CloudSave] No GOG access token available")
+                return []
+
+            url = f"{self.GOG_REMOTE_CONFIG}/components/galaxy_client/clients/{client_id}?component_version=2.0.45"
+
+            # Use asyncio subprocess to call curl (no aiohttp dependency needed)
+            proc = await asyncio.create_subprocess_exec(
+                "curl", "-s", "-H", f"Authorization: Bearer {token}", url,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            stdout, _ = await proc.communicate()
+
+            if proc.returncode == 0 and stdout:
+                data = json.loads(stdout.decode())
+                content = data.get("content", {})
+                windows_info = content.get("Windows", {})
+                cloud_storage = windows_info.get("cloudStorage", {})
+
+                if cloud_storage.get("enabled"):
+                    api_locations = cloud_storage.get("locations", [])
+
+        except Exception as e:
+            logger.error(f"[CloudSave] Failed to query GOG cloud config: {e}")
+            return []
+
+        if not api_locations:
+            logger.info(f"[CloudSave] Game {game_id} does not have cloud saves enabled on GOG")
+            self._cache_gog_save_locations(game_id, [])
+            return []
+
+        # Resolve Wine prefix
+        if not prefix_path:
+            prefix_path = os.path.expanduser(f"~/.local/share/unifideck/prefixes/{game_id}")
+
+        wineprefix = ""
+        if prefix_path and os.path.exists(prefix_path):
+            proton_pfx = os.path.join(prefix_path, "pfx")
+            if os.path.exists(os.path.join(proton_pfx, "drive_c")):
+                wineprefix = proton_pfx
+            elif os.path.exists(os.path.join(prefix_path, "drive_c")):
+                wineprefix = prefix_path
+            else:
+                wineprefix = prefix_path
+
+        if not wineprefix:
+            logger.warning(f"[CloudSave] Could not detect Wine prefix at {prefix_path}")
+            return []
+
+        # Resolve all locations
+        resolved_locations = []
+        for loc in api_locations:
+            name = loc.get("name", "__default")
+            template = loc.get("location", "")
+            resolved = self._resolve_gog_path_template(template, wineprefix, install_dir)
+            if resolved:
+                logger.info(f"[CloudSave] Resolved GOG save location: {name} ({template}) -> {resolved}")
+                resolved_locations.append({"name": name, "path": resolved})
+            else:
+                logger.warning(f"[CloudSave] Could not resolve GOG path template: {template}")
+
+        self._cache_gog_save_locations(game_id, resolved_locations)
+        return resolved_locations
+
+    def _cache_gog_save_locations(self, game_id: str, locations: list) -> None:
+        """Cache resolved GOG save locations."""
+        try:
+            cache = {}
+            if os.path.exists(self.GOG_SAVE_PATHS_CACHE):
+                with open(self.GOG_SAVE_PATHS_CACHE, 'r') as f:
+                    cache = json.load(f)
+            cache[game_id] = locations
+            os.makedirs(os.path.dirname(self.GOG_SAVE_PATHS_CACHE), exist_ok=True)
+            with open(self.GOG_SAVE_PATHS_CACHE, 'w') as f:
+                json.dump(cache, f, indent=2)
+        except Exception as e:
+            logger.error(f"[CloudSave] Failed to cache GOG save path: {e}")
+
+    async def check_for_conflicts(self, store: str, game_id: str,
                                    local_save_path: str = "") -> Optional[Dict[str, Any]]:
         """
         Check if local saves conflict with cloud saves.
@@ -623,100 +847,118 @@ class CloudSaveManager:
             logger.error(f"[CloudSave] Exception during Epic sync: {e}", exc_info=True)
             return {"success": False, "error": str(e)}
     
-    async def sync_gog(self, game_id: str, save_path: str, direction: str = "download", game_name: str = "") -> Dict[str, Any]:
+    async def sync_gog(self, game_id: str, locations: list, direction: str = "download", game_name: str = "") -> Dict[str, Any]:
         """
         Sync cloud saves for a GOG game using gogdl.
-        
+
         Args:
-            game_id: GOG game ID (client_id)
-            save_path: Local path where saves are stored
+            game_id: GOG game ID (product ID)
+            locations: List of {"name": str, "path": str} save locations
             direction: "download" or "upload"
             game_name: Optional game name for logging
-        
+
         Returns:
             {success, message, duration}
         """
         start_time = time.time()
-        
+
         display_name = game_name or game_id
-        logger.info(f"[CloudSave] Starting GOG sync for {display_name} ({game_id}) - direction: {direction}")
-        
+        logger.info(f"[CloudSave] Starting GOG sync for {display_name} ({game_id}) - direction: {direction}, {len(locations)} location(s)")
+
         if not self.gogdl_bin:
             error = "gogdl binary not found"
             logger.error(f"[CloudSave] ERROR: {error}")
             return {"success": False, "error": error}
-        
+
         # Ensure token is converted
         if not self._convert_gog_token_for_gogdl():
             error = "Failed to convert GOG token for gogdl"
             logger.error(f"[CloudSave] ERROR: {error}")
             return {"success": False, "error": error}
-        
-        try:
-            # Build command
-            cmd = [
-                self.gogdl_bin,
-                "--auth-config-path", self.gogdl_auth_file,
-                "save-sync",
-                save_path,
-                game_id,
-                "--os", "windows",
-                "--ts", "0",
-            ]
-            
-            if direction == "download":
-                cmd.append("--skip-upload")
-            elif direction == "upload":
-                cmd.append("--skip-download")
-            
-            logger.info(f"[CloudSave] Command: {' '.join(cmd)}")
-            
-            # Execute
-            process = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE
-            )
-            stdout, stderr = await process.communicate()
-            
-            duration = time.time() - start_time
-            stdout_str = stdout.decode() if stdout else ""
-            stderr_str = stderr.decode() if stderr else ""
-            
-            # Log output
-            if stdout_str:
-                logger.info(f"[CloudSave] stdout: {stdout_str[:500]}")
-            if stderr_str:
-                logger.info(f"[CloudSave] stderr: {stderr_str[:500]}")
-            
-            success = process.returncode == 0
-            
-            # Update status and timestamps
-            self._update_sync_timestamp("gog", game_id)
-            
-            status_key = f"gog:{game_id}"
-            self.sync_status[status_key] = {
-                "last_sync": time.time(),
-                "status": "synced" if success else "error",
-                "direction": direction,
-                "error": stderr_str if not success else None
-            }
-            
-            if success:
-                logger.info(f"[CloudSave] Sync completed for {display_name} - duration: {duration:.2f}s")
-            else:
-                logger.error(f"[CloudSave] Sync failed for {display_name}: return code {process.returncode}")
-            
-            return {
-                "success": success,
-                "message": stdout_str or stderr_str,
-                "duration": duration,
-                "return_code": process.returncode
-            }
-            
-        except Exception as e:
-            logger.error(f"[CloudSave] Exception during GOG sync: {e}", exc_info=True)
-            return {"success": False, "error": str(e)}
+
+        all_success = True
+        all_messages = []
+
+        for loc in locations:
+            loc_name = loc["name"]
+            loc_path = loc["path"]
+
+            # Safety check for uploads - don't upload empty saves
+            if direction == "upload" and not os.path.exists(loc_path):
+                logger.info(f"[CloudSave] Save path missing for '{loc_name}', skipping upload")
+                continue
+            if direction == "upload" and os.path.isdir(loc_path) and not os.listdir(loc_path):
+                logger.info(f"[CloudSave] Save folder empty for '{loc_name}', skipping upload")
+                continue
+
+            try:
+                cmd = [
+                    self.gogdl_bin,
+                    "--auth-config-path", self.gogdl_auth_file,
+                    "save-sync",
+                    loc_path,
+                    game_id,
+                    "--os", "windows",
+                    "--ts", "0",
+                    "--name", loc_name,
+                ]
+
+                if direction == "download":
+                    cmd.append("--force-download")
+                elif direction == "upload":
+                    cmd.append("--force-upload")
+
+                logger.info(f"[CloudSave] Command: {' '.join(cmd)}")
+
+                process = await asyncio.create_subprocess_exec(
+                    *cmd,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE
+                )
+                stdout, stderr = await process.communicate()
+
+                stdout_str = stdout.decode() if stdout else ""
+                stderr_str = stderr.decode() if stderr else ""
+
+                if stdout_str:
+                    logger.info(f"[CloudSave] stdout ({loc_name}): {stdout_str[:500]}")
+                if stderr_str:
+                    logger.info(f"[CloudSave] stderr ({loc_name}): {stderr_str[:500]}")
+
+                if process.returncode != 0:
+                    all_success = False
+                    all_messages.append(f"{loc_name}: failed (rc={process.returncode})")
+                else:
+                    all_messages.append(f"{loc_name}: ok")
+
+            except Exception as e:
+                logger.error(f"[CloudSave] Exception syncing location '{loc_name}': {e}", exc_info=True)
+                all_success = False
+                all_messages.append(f"{loc_name}: error ({e})")
+
+        duration = time.time() - start_time
+
+        # Update status and timestamps
+        self._update_sync_timestamp("gog", game_id)
+
+        status_key = f"gog:{game_id}"
+        self.sync_status[status_key] = {
+            "last_sync": time.time(),
+            "status": "synced" if all_success else "error",
+            "direction": direction,
+            "error": None if all_success else "; ".join(all_messages)
+        }
+
+        if all_success:
+            logger.info(f"[CloudSave] Sync completed for {display_name} - duration: {duration:.2f}s")
+        else:
+            logger.error(f"[CloudSave] Sync had errors for {display_name}: {'; '.join(all_messages)}")
+
+        return {
+            "success": all_success,
+            "message": "; ".join(all_messages),
+            "duration": duration,
+        }
     
     async def on_game_launch(self, store: str, game_id: str, game_name: str = "", 
                              save_path: str = "", pid: int = 0) -> Dict[str, Any]:
@@ -746,15 +988,20 @@ class CloudSaveManager:
         if store == "epic":
             result = await self.sync_epic(game_id, direction="download", game_name=game_name)
         elif store == "gog":
-            if not save_path:
-                logger.warning(f"[CloudSave] No save_path for GOG game {game_id}, skipping sync")
-                result = {"success": False, "error": "No save path configured"}
+            # Auto-resolve save locations
+            if save_path:
+                locations = [{"name": "__default", "path": save_path}]
             else:
-                result = await self.sync_gog(game_id, save_path, direction="download", game_name=game_name)
+                locations = await self.resolve_gog_save_locations(game_id)
+            if not locations:
+                logger.info(f"[CloudSave] No cloud save location for GOG game {game_id} (may not support cloud saves)")
+                result = {"success": True, "message": "No cloud save location found"}
+            else:
+                result = await self.sync_gog(game_id, locations, direction="download", game_name=game_name)
         else:
             logger.warning(f"[CloudSave] Unknown store: {store}")
             return {"success": False, "error": f"Unknown store: {store}"}
-        
+
         # Start process monitoring for auto-push on exit
         if pid > 0:
             await self.process_monitor.start_monitoring(pid, store, game_id, game_name, save_path)
@@ -776,10 +1023,15 @@ class CloudSaveManager:
         if store == "epic":
             return await self.sync_epic(game_id, direction="upload", game_name=game_name)
         elif store == "gog":
-            if not save_path:
-                logger.warning(f"[CloudSave] No save_path for GOG game {game_id}, skipping sync")
-                return {"success": False, "error": "No save path configured"}
-            return await self.sync_gog(game_id, save_path, direction="upload", game_name=game_name)
+            # Auto-resolve save locations
+            if save_path:
+                locations = [{"name": "__default", "path": save_path}]
+            else:
+                locations = await self.resolve_gog_save_locations(game_id)
+            if not locations:
+                logger.info(f"[CloudSave] No cloud save location for GOG game {game_id} (may not support cloud saves)")
+                return {"success": True, "message": "No cloud save location found"}
+            return await self.sync_gog(game_id, locations, direction="upload", game_name=game_name)
         else:
             logger.warning(f"[CloudSave] Unknown store: {store}")
             return {"success": False, "error": f"Unknown store: {store}"}

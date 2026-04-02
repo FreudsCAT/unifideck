@@ -23,6 +23,7 @@ import { useTranslation } from "react-i18next";
 import { updateSingleGameStatus } from "../tabs";
 import { setDownloadStateRef as setInterceptorDownloadState } from "../hooks/gameActionInterceptor";
 import { GOGLanguageSelectModal } from "./GOGLanguageSelectModal";
+import { ChromiumInstallModal } from "./ChromiumInstallModal";
 import { launchAppWithConfiguredGamepad } from "../utils/controllerConfig";
 import {
   getShortcutRunGameId,
@@ -207,6 +208,7 @@ const PlaySectionWrapperInner: FC<PlaySectionWrapperProps> = ({
   } | null>(null);
   const [isRunning, setIsRunning] = useState(false);
   const [lastPlayedTimestamp, setLastPlayedTimestamp] = useState(0);
+  const [playtimeSecs, setPlaytimeSecs] = useState(0);
   const [updateAvailable, setUpdateAvailable] = useState<boolean | null>(null);
   const [isUpdating, setIsUpdating] = useState(false);
   const [ubisoftInstalling, setUbisoftInstalling] = useState(false);
@@ -224,6 +226,13 @@ const PlaySectionWrapperInner: FC<PlaySectionWrapperProps> = ({
     if (diffDays === 0) return t("relativeDate.today");
     if (diffDays === 1) return t("relativeDate.yesterday");
     return date.toLocaleDateString();
+  };
+  const formatPlaytime = (secs: number): string => {
+    if (secs <= 0) return "\u2014";
+    const hours = Math.floor(secs / 3600);
+    const mins = Math.floor((secs % 3600) / 60);
+    if (hours > 0) return `${hours}h ${mins}m`;
+    return `${mins}m`;
   };
 
   const isDownloading =
@@ -340,7 +349,7 @@ const PlaySectionWrapperInner: FC<PlaySectionWrapperProps> = ({
         );
         const processedInfo = info?.error ? null : info;
         setGameInfo(processedInfo);
-        if (processedInfo?.is_installed) {
+        if (processedInfo?.is_installed && !processedInfo?.is_auth_shortcut) {
           updateSingleGameStatus({
             appId,
             store: processedInfo.store,
@@ -374,6 +383,18 @@ const PlaySectionWrapperInner: FC<PlaySectionWrapperProps> = ({
       ?.then((result: any) => {
         if (result?.rtLastTimePlayed) {
           setLastPlayedTimestamp(result.rtLastTimePlayed);
+        }
+      })
+      .catch(() => {});
+
+    // Fetch Unifideck-tracked play time
+    call<[number], { success: boolean; total_secs?: number }>(
+      "playtime_get_game_stats",
+      appId,
+    )
+      .then((result) => {
+        if (result?.success && result.total_secs) {
+          setPlaytimeSecs(result.total_secs);
         }
       })
       .catch(() => {});
@@ -1188,7 +1209,38 @@ const PlaySectionWrapperInner: FC<PlaySectionWrapperProps> = ({
             zIndex: 2,
             minHeight: "80px",
           }}
-        />
+        >
+          <style>{`
+            .unifideck-play-btn { background: rgba(255,255,255,0.1) !important; }
+          `}</style>
+          <button
+            className="unifideck-play-btn"
+            disabled
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "flex-start",
+              gap: "8px",
+              minWidth: "200px",
+              height: "48px",
+              padding: "0 24px",
+              color: "#fff",
+              fontSize: "16px",
+              fontWeight: 500,
+              borderRadius: "4px",
+              border: "none",
+              textTransform: "uppercase" as const,
+              letterSpacing: "0.05em",
+              opacity: 0.6,
+              cursor: "default",
+            }}
+          >
+            <svg viewBox="0 0 24 24" fill="currentColor" width="1em" height="1em">
+              <path d="M8 5v14l11-7z" />
+            </svg>
+            {t("installButton.play")}
+          </button>
+        </div>
       );
     }
     // Error state: gameInfo is null/error — return null so native PlaySection shows
@@ -1508,12 +1560,43 @@ const PlaySectionWrapperInner: FC<PlaySectionWrapperProps> = ({
       >
         <style>{buttonStyles}</style>
 
-        {/* Play button — launches xCloud via Steam's RunGame (→ launcher → Chromium kiosk) */}
+        {/* Play button — launches xCloud via Steam's RunGame (→ launcher → Edge kiosk) */}
         <DialogButton
           className="unifideck-install-btn"
           disabled={!msConnected}
           onClick={async () => {
             if (!msConnected) return;
+
+            // Check if Microsoft Edge is installed before launching xCloud
+            try {
+              const browserCheck = await call<
+                [],
+                { installed: boolean }
+              >("check_chromium_installed");
+              if (!browserCheck.installed) {
+                showModal(
+                  <ChromiumInstallModal
+                    closeModal={() => {}}
+                    onInstalled={async () => {
+                      // After Edge install, launch the game
+                      try {
+                        const launched = await launchAppWithConfiguredGamepad(appId);
+                        if (!launched) {
+                          window.open(`steam://openurl/${xcloudUrl}`, "_blank");
+                        }
+                      } catch (e) {
+                        console.error("[PlaySection] Post-install xCloud launch failed:", e);
+                        window.open(`steam://openurl/${xcloudUrl}`, "_blank");
+                      }
+                    }}
+                  />,
+                );
+                return;
+              }
+            } catch (e) {
+              console.error("[PlaySection] Edge install check failed:", e);
+            }
+
             try {
               const launched = await launchAppWithConfiguredGamepad(appId);
               if (launched) {
@@ -1541,7 +1624,7 @@ const PlaySectionWrapperInner: FC<PlaySectionWrapperProps> = ({
             : t("microsoft.signInRequired", "Sign in to play")}
         </DialogButton>
 
-        {/* Restore the metadata slot so Last Played stays visible for xCloud */}
+        {/* Restore the metadata slot so Last Played + Play Time stay visible for xCloud */}
         <div
           style={{
             display: "flex",
@@ -1569,6 +1652,26 @@ const PlaySectionWrapperInner: FC<PlaySectionWrapperProps> = ({
               {formatLastPlayed(lastPlayedTimestamp)}
             </div>
           </div>
+          {playtimeSecs > 0 && (
+            <div>
+              <div
+                style={{
+                  fontSize: "11px",
+                  fontWeight: 600,
+                  textTransform: "uppercase",
+                  color: "#8f98a0",
+                  letterSpacing: "0.08em",
+                  lineHeight: "1",
+                  marginBottom: "5px",
+                }}
+              >
+                {t("gameInfoPanel.labels.playTime")}
+              </div>
+              <div style={{ fontSize: "14px", color: "#dcdedf" }}>
+                {formatPlaytime(playtimeSecs)}
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Right icon buttons — always present for settings access */}
@@ -2033,26 +2136,48 @@ const PlaySectionWrapperInner: FC<PlaySectionWrapperProps> = ({
           <div
             style={{
               display: "flex",
-              flexDirection: "column",
+              gap: "32px",
               marginLeft: "24px",
             }}
           >
-            <div
-              style={{
-                fontSize: "11px",
-                fontWeight: 600,
-                textTransform: "uppercase",
-                color: "#8f98a0",
-                letterSpacing: "0.08em",
-                lineHeight: "1",
-                marginBottom: "5px",
-              }}
-            >
-              {t("gameInfoPanel.labels.lastPlayed")}
+            <div>
+              <div
+                style={{
+                  fontSize: "11px",
+                  fontWeight: 600,
+                  textTransform: "uppercase",
+                  color: "#8f98a0",
+                  letterSpacing: "0.08em",
+                  lineHeight: "1",
+                  marginBottom: "5px",
+                }}
+              >
+                {t("gameInfoPanel.labels.lastPlayed")}
+              </div>
+              <div style={{ fontSize: "14px", color: "#dcdedf" }}>
+                {formatLastPlayed(lastPlayedTimestamp)}
+              </div>
             </div>
-            <div style={{ fontSize: "14px", color: "#dcdedf" }}>
-              {formatLastPlayed(lastPlayedTimestamp)}
-            </div>
+            {playtimeSecs > 0 && (
+              <div>
+                <div
+                  style={{
+                    fontSize: "11px",
+                    fontWeight: 600,
+                    textTransform: "uppercase",
+                    color: "#8f98a0",
+                    letterSpacing: "0.08em",
+                    lineHeight: "1",
+                    marginBottom: "5px",
+                  }}
+                >
+                  {t("gameInfoPanel.labels.playTime")}
+                </div>
+                <div style={{ fontSize: "14px", color: "#dcdedf" }}>
+                  {formatPlaytime(playtimeSecs)}
+                </div>
+              </div>
+            )}
           </div>
         )}
 
@@ -2228,6 +2353,26 @@ const PlaySectionWrapperInner: FC<PlaySectionWrapperProps> = ({
               {formatLastPlayed(lastPlayedTimestamp)}
             </div>
           </div>
+          {playtimeSecs > 0 && (
+            <div>
+              <div
+                style={{
+                  fontSize: "11px",
+                  fontWeight: 600,
+                  textTransform: "uppercase",
+                  color: "#8f98a0",
+                  letterSpacing: "0.08em",
+                  lineHeight: "1",
+                  marginBottom: "5px",
+                }}
+              >
+                {t("gameInfoPanel.labels.playTime")}
+              </div>
+              <div style={{ fontSize: "14px", color: "#dcdedf" }}>
+                {formatPlaytime(playtimeSecs)}
+              </div>
+            </div>
+          )}
         </div>
       )}
 

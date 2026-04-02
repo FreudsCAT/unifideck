@@ -411,9 +411,9 @@ class SteamGridDBClient:
         'white_logo': 2,  # Least preferred
     }
 
-    def select_best_artwork(self, assets: List) -> Optional[Any]:
+    def select_best_artwork(self, assets: List, rank: int = 0) -> Optional[Any]:
         """
-        Select the best artwork from a list of assets.
+        Select artwork from a list of assets by rank (0 = best, 1 = 2nd best, etc.).
 
         The SGDB API v2 returns 0 for score/upvotes/downvotes, so the API's
         default ordering (server-side popularity) is our best quality signal
@@ -446,7 +446,8 @@ class SteamGridDBClient:
             )
         )
 
-        return sorted_pairs[0][1]
+        idx = min(rank, len(sorted_pairs) - 1)
+        return sorted_pairs[idx][1]
 
     def _fetch_grids_by_dimensions(self, sgdb_game_id: int, dimensions: str = None, styles: str = 'alternate,white_logo,no_logo,blurred,material') -> Optional[List]:
         """Fetch grids from SGDB, optionally filtered by dimensions and styles.
@@ -562,7 +563,7 @@ class SteamGridDBClient:
         return False
 
     async def get_grid_images(self, sgdb_game_id: int, app_id: int, 
-                               only_types: set = None) -> Dict[str, bool]:
+                               only_types: set = None, artwork_ranks: dict = None) -> Dict[str, bool]:
         """
         Fetch and download grid images for a game - ALL IN PARALLEL
         Returns dict of image type -> success status
@@ -660,10 +661,11 @@ class SteamGridDBClient:
             # PHASE 2: Select best artwork and prepare downloads (only for requested types)
             download_tasks = []
             task_types = []
+            _ranks = artwork_ranks or {}
 
             # Portrait grid - only if requested
             if need_portrait and portrait_grids and not isinstance(portrait_grids, Exception):
-                best_grid = self.select_best_artwork(portrait_grids)
+                best_grid = self.select_best_artwork(portrait_grids, rank=_ranks.get('grid', 0))
                 if best_grid:
                     grid_file = os.path.join(self.grid_path, f"{unsigned_id}p.jpg")
                     download_tasks.append(self.download_image(best_grid.url, grid_file))
@@ -671,7 +673,7 @@ class SteamGridDBClient:
 
             # Landscape grid - only if requested
             if need_landscape and landscape_grids and not isinstance(landscape_grids, Exception):
-                best_landscape = self.select_best_artwork(landscape_grids)
+                best_landscape = self.select_best_artwork(landscape_grids, rank=_ranks.get('grid_l', 0))
                 if best_landscape:
                     landscape_file = os.path.join(self.grid_path, f"{unsigned_id}.jpg")
                     download_tasks.append(self.download_image(best_landscape.url, landscape_file))
@@ -679,7 +681,7 @@ class SteamGridDBClient:
             
             # Hero - only if requested
             if 'hero' in only_types and heroes and not isinstance(heroes, Exception):
-                best_hero = self.select_best_artwork(heroes)
+                best_hero = self.select_best_artwork(heroes, rank=_ranks.get('hero', 0))
                 if best_hero:
                     hero_file = os.path.join(self.grid_path, f"{unsigned_id}_hero.jpg")
                     download_tasks.append(self.download_image(best_hero.url, hero_file))
@@ -687,7 +689,7 @@ class SteamGridDBClient:
             
             # Logo - only if requested
             if 'logo' in only_types and logos and not isinstance(logos, Exception):
-                best_logo = self.select_best_artwork(logos)
+                best_logo = self.select_best_artwork(logos, rank=_ranks.get('logo', 0))
                 if best_logo:
                     logo_file = os.path.join(self.grid_path, f"{unsigned_id}_logo.png")
                     download_tasks.append(self.download_image(best_logo.url, logo_file))
@@ -695,7 +697,7 @@ class SteamGridDBClient:
             
             # Icon - only if requested
             if 'icon' in only_types and icons and not isinstance(icons, Exception):
-                best_icon = self.select_best_artwork(icons)
+                best_icon = self.select_best_artwork(icons, rank=_ranks.get('icon', 0))
                 if best_icon:
                     icon_file = os.path.join(self.grid_path, f"{unsigned_id}_icon.jpg")
                     download_tasks.append(self.download_image(best_icon.url, icon_file))
@@ -1059,7 +1061,7 @@ class SteamGridDBClient:
         
         return None
 
-    async def fetch_game_art(self, title: str, app_id: int, store: str = None, store_id: str = None, only_types: set = None, extra: dict = None, sgdb_game_id: int = None) -> Dict[str, Any]:
+    async def fetch_game_art(self, title: str, app_id: int, store: str = None, store_id: str = None, only_types: set = None, extra: dict = None, sgdb_game_id: int = None, artwork_ranks: dict = None) -> Dict[str, Any]:
         """
         Orchestrated Artwork Pipeline:
         1. Metadata Phase: Fetch URLs from all sources CONCURRENTLY
@@ -1225,7 +1227,7 @@ class SteamGridDBClient:
                 try:
                     gid = sgdb_game_id or await self.search_game(title)
                     if gid:
-                        sgdb_results = await self.get_grid_images(gid, app_id, only_types=missing)
+                        sgdb_results = await self.get_grid_images(gid, app_id, only_types=missing, artwork_ranks=artwork_ranks)
                         # Track SGDB downloads that succeeded
                         for art_type, success in sgdb_results.items():
                             if success and art_type not in downloaded:

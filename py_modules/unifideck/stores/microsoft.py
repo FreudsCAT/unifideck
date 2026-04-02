@@ -334,7 +334,6 @@ class MicrosoftConnector(Store):
                 logger.info("[MS] Triggering library sync after auth")
                 asyncio.create_task(
                     self.plugin_instance.request_auth_sync(
-                        force=True,
                         source='auth:microsoft',
                     )
                 )
@@ -782,11 +781,55 @@ class MicrosoftConnector(Store):
             # Keep native (no Proton -- launcher handles Chromium directly)
             await sm._clear_proton_compatibility(expected_appid)
 
+            # Download SteamGridDB artwork (Xbox Game Pass branding)
+            # Force re-download when shortcut was just (re)created; gap-fill otherwise
+            await self._fetch_auth_shortcut_artwork(
+                unsigned_id, force=(vdf_dirty and correct_idx is None)
+            )
+
             return unsigned_id
 
         except Exception as e:
             logger.error(f"[MS] Failed to create auth shortcut: {e}", exc_info=True)
             return None
+
+    # SteamGridDB game ID for "Xbox Game Pass" — avoids title-search ambiguity
+    _XBOX_GP_SGDB_ID = 5297303
+
+    async def _fetch_auth_shortcut_artwork(self, unsigned_id: int, force: bool = False) -> None:
+        """Download SteamGridDB artwork for the Microsoft auth shortcut.
+
+        Args:
+            force: If True, skip the has_artwork check and always attempt download.
+        """
+        try:
+            plugin = self.plugin_instance
+            if not plugin or not hasattr(plugin, 'steamgriddb') or not plugin.steamgriddb:
+                logger.debug("[MS] SteamGridDB client not available, skipping artwork")
+                return
+
+            if not force:
+                if hasattr(plugin, 'has_artwork') and await plugin.has_artwork(unsigned_id):
+                    logger.debug("[MS] Auth shortcut artwork already exists")
+                    return
+
+            only_types = None
+            if not force and hasattr(plugin, 'get_missing_artwork_types'):
+                missing = await plugin.get_missing_artwork_types(unsigned_id)
+                if missing:
+                    only_types = missing
+                    logger.info(f"[MS] Auth shortcut artwork gap-fill: {missing}")
+
+            logger.info(f"[MS] Fetching SteamGridDB artwork for Xbox Game Pass (force={force})")
+            await plugin.steamgriddb.fetch_game_art(
+                title="Xbox Game Pass",
+                app_id=unsigned_id,
+                only_types=only_types,
+                sgdb_game_id=self._XBOX_GP_SGDB_ID,
+                artwork_ranks={'grid_l': 1},
+            )
+        except Exception as e:
+            logger.warning(f"[MS] Auth shortcut artwork fetch failed: {e}")
 
     async def _delete_microsoft_auth_shortcut(self) -> bool:
         """Delete the temporary Microsoft auth shortcut from VDF + registry."""
@@ -860,7 +903,7 @@ class MicrosoftConnector(Store):
         intercept_task = asyncio.create_task(
             intercept_oauth_code(
                 pending_auth_url=getattr(self, "_pending_auth_url", ""),
-                timeout=300,
+                timeout=430,
                 cdp_port=cdp_port,
             )
         )
@@ -872,6 +915,19 @@ class MicrosoftConnector(Store):
                 result = await self.complete_auth(code)
                 if result["success"]:
                     logger.info("[MS] ✓ Authentication completed successfully — tokens saved")
+                    # Navigate to xbox.com to establish session cookies in the
+                    # shared profile so xCloud launches don't re-prompt sign-in.
+                    try:
+                        nav_ok = await self._browser.navigate_tab(
+                            "https://www.xbox.com/play", timeout=15.0
+                        )
+                        if nav_ok:
+                            logger.info("[MS] ✓ Visited xbox.com/play — session cookies established")
+                            await asyncio.sleep(3)
+                        else:
+                            logger.warning("[MS] Could not navigate to xbox.com — xCloud may ask for sign-in on first launch")
+                    except Exception as nav_err:
+                        logger.warning(f"[MS] xbox.com navigation error: {nav_err}")
                     try:
                         closed = await self._browser.close_auth_browser()
                         if closed:
@@ -883,7 +939,7 @@ class MicrosoftConnector(Store):
                 else:
                     logger.error(f"[MS] ✗ complete_auth failed: {result.get('error')}")
             else:
-                logger.warning("[MS] ✗ CDP interception timed out — no code received (300s)")
+                logger.warning("[MS] ✗ CDP interception timed out — no code received (330s)")
         except Exception as e:
             logger.error(f"[MS] ✗ Auth monitor error: {e}", exc_info=True)
         finally:

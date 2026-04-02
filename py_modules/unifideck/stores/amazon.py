@@ -16,6 +16,11 @@ from .base import Store, Game
 
 logger = logging.getLogger(__name__)
 
+# ── Auth shortcut constants ───────────────────────────────────────────
+DATA_DIR = os.path.join(os.path.expanduser("~"), ".local", "share", "unifideck")
+AMAZON_AUTH_SHORTCUT_STORE_ID = "amazon:amazon-auth"
+AMAZON_AUTH_SHORTCUT_LAUNCH_WAIT_MS = 2000
+
 
 class AmazonConnector(Store):
     """Handles Amazon Games via nile CLI"""
@@ -98,15 +103,14 @@ class AmazonConnector(Store):
             return False
 
     async def start_auth(self) -> Dict[str, Any]:
-        """Start Amazon OAuth flow via nile (non-interactive mode)"""
+        """Start Amazon OAuth flow via auth shortcut + CDP interception on port 9222."""
         if not self.nile_bin:
             return {'success': False, 'error': 'nile not found'}
 
         try:
-            from ..auth.browser import CDPOAuthMonitor
-            
             logger.info("[Amazon] Starting OAuth flow...")
 
+            # Call nile CLI to get login data
             proc = await asyncio.create_subprocess_exec(
                 self.nile_bin, 'auth', '--login', '--non-interactive',
                 stdout=asyncio.subprocess.PIPE,
@@ -114,28 +118,52 @@ class AmazonConnector(Store):
             )
             stdout, stderr = await proc.communicate()
 
-            if proc.returncode == 0:
-                try:
-                    login_data = json.loads(stdout.decode())
-                    # Store login data for completion step
-                    self._pending_login_data = login_data
-                    logger.info(f"[Amazon] Got login URL, waiting for user authorization")
-                    
-                    # Start CDP monitoring in background to auto-capture code
-                    asyncio.create_task(self._monitor_and_complete_auth())
-                    
-                    return {
-                        'success': True,
-                        'url': login_data.get('url', ''),
-                        'message': 'Please login in the browser window'
-                    }
-                except json.JSONDecodeError as e:
-                    logger.error(f"[Amazon] Failed to parse login data: {e}")
-                    return {'success': False, 'error': 'Failed to parse login response'}
-            else:
+            if proc.returncode != 0:
                 error_msg = stderr.decode() if stderr else 'Unknown error'
                 logger.error(f"[Amazon] Auth failed: {error_msg}")
                 return {'success': False, 'error': error_msg}
+
+            try:
+                login_data = json.loads(stdout.decode())
+                self._pending_login_data = login_data
+                auth_url = login_data.get('url', '')
+                if not auth_url:
+                    return {'success': False, 'error': 'No auth URL in nile response'}
+                logger.info(f"[Amazon] Got login URL, preparing auth shortcut")
+            except json.JSONDecodeError as e:
+                logger.error(f"[Amazon] Failed to parse login data: {e}")
+                return {'success': False, 'error': 'Failed to parse login response'}
+
+            # Check if compatible browser is available (reuse Microsoft's detection)
+            try:
+                ms = self.plugin_instance.microsoft
+                if not ms._browser.is_installed:
+                    return {'success': True, 'needs_chromium': True, 'message': 'microsoft.chromiumRequired'}
+            except Exception:
+                pass
+
+            # Cancel stale auth monitor
+            if hasattr(self, '_auth_monitor_task') and self._auth_monitor_task and not self._auth_monitor_task.done():
+                self._auth_monitor_task.cancel()
+
+            # Write auth URL for launcher to read
+            url_file = os.path.join(DATA_DIR, "amazon_auth_url.txt")
+            os.makedirs(DATA_DIR, exist_ok=True)
+            with open(url_file, "w") as f:
+                f.write(auth_url)
+
+            # Ensure auth shortcut exists
+            shortcut_appid = await self._ensure_amazon_auth_shortcut()
+
+            # Start CDP monitor on port 9222
+            self._auth_monitor_task = asyncio.create_task(self._monitor_and_complete_auth())
+
+            return {
+                'success': True,
+                'chromium_auth': True,
+                'shortcut_launch': True,
+                'message': 'amazon.signInMessage',
+            }
 
         except Exception as e:
             logger.error(f"[Amazon] Error starting auth: {e}")
@@ -176,7 +204,6 @@ class AmazonConnector(Store):
                     logger.info("[Amazon] Triggering library sync after auth")
                     asyncio.create_task(
                         self.plugin_instance.request_auth_sync(
-                            force=True,
                             source='auth:amazon',
                         )
                     )
@@ -191,28 +218,166 @@ class AmazonConnector(Store):
             return {'success': False, 'error': str(e)}
 
     async def _monitor_and_complete_auth(self):
-        """Monitor browser for OAuth callback and auto-complete authentication"""
+        """Background task: intercept OAuth redirect via CDP on port 9222."""
         try:
-            from ..auth.browser import CDPOAuthMonitor
-            
-            monitor = CDPOAuthMonitor()
-            logger.info("[Amazon] Starting CDP monitor for auth code...")
-            
-            # Monitor for Amazon OAuth code (5 min timeout)
-            code, store = await monitor.monitor_for_oauth_code(expected_store='amazon', timeout=300)
-            
-            if code and store == 'amazon':
-                logger.info(f"[Amazon] ✓ Auto-captured authorization code via CDP")
+            from ..auth.cdp_interceptor import intercept_oauth_code, close_cdp_auth_browser
+
+            logger.info("[Amazon] Auth monitor started — polling CDP port 9222")
+            code = await intercept_oauth_code(store='amazon', timeout=300, cdp_port=9222)
+
+            if code:
+                logger.info("[Amazon] ✓ Received OAuth code via CDP interception")
                 result = await self.complete_auth(code)
                 if result.get('success'):
-                    logger.info("[Amazon] ✓ Auto-authentication completed successfully")
+                    logger.info("[Amazon] ✓ Authentication completed successfully!")
+                    try:
+                        closed = await close_cdp_auth_browser(cdp_port=9222, store="amazon")
+                        if closed:
+                            logger.info("[Amazon] ✓ Closed auth browser after successful sign-in")
+                        else:
+                            logger.debug("[Amazon] No auth browser targets to close")
+                    except Exception as close_err:
+                        logger.warning(f"[Amazon] Could not close auth browser: {close_err}")
                 else:
-                    logger.error(f"[Amazon] Auto-auth completion failed: {result.get('error')}")
+                    logger.error(f"[Amazon] ✗ complete_auth failed: {result.get('error')}")
             else:
-                logger.warning("[Amazon] CDP monitoring timeout - user may need to manually enter code")
-                
+                logger.warning("[Amazon] ✗ CDP interception timed out — no code received")
         except Exception as e:
-            logger.error(f"[Amazon] Error in CDP monitoring: {e}", exc_info=True)
+            logger.error(f"[Amazon] ✗ Auth monitor error: {e}", exc_info=True)
+        finally:
+            url_file = os.path.join(DATA_DIR, "amazon_auth_url.txt")
+            try:
+                os.remove(url_file)
+            except OSError:
+                pass
+
+    async def _ensure_amazon_auth_shortcut(self) -> Optional[int]:
+        """Create or repair the persistent VDF shortcut for Amazon OAuth."""
+        if not self.plugin_instance or not hasattr(self.plugin_instance, 'shortcuts_manager'):
+            logger.error("[Amazon] No shortcuts_manager available")
+            return None
+
+        try:
+            from py_modules.unifideck.shortcuts.shortcuts_manager import (
+                load_shortcuts_registry, register_shortcut
+            )
+            from py_modules.unifideck.shortcuts.launch_options import get_full_id
+
+            sm = self.plugin_instance.shortcuts_manager
+            launcher_path = os.path.join(self.plugin_dir or "", "bin", "unifideck-launcher")
+            if not os.path.isfile(launcher_path):
+                logger.error(f"[Amazon] Launcher not found at {launcher_path}")
+                return None
+
+            expected_appid = sm.generate_app_id("Amazon Games Sign-In", launcher_path)
+            unsigned_id = expected_appid if expected_appid >= 0 else expected_appid + 2**32
+
+            expected_launch_options = (
+                f"{AMAZON_AUTH_SHORTCUT_STORE_ID} "
+                "UNIFIDECK_AMAZON_ACTION=auth"
+            )
+
+            shortcuts_data = await sm.read_shortcuts()
+            shortcuts = shortcuts_data.get('shortcuts', {})
+
+            matching_indices = [
+                idx for idx, s in shortcuts.items()
+                if get_full_id(s.get('LaunchOptions', '')) == AMAZON_AUTH_SHORTCUT_STORE_ID
+            ]
+
+            correct_idx = None
+            for idx in matching_indices:
+                sc = shortcuts[idx]
+                if (sc.get('appid') == expected_appid
+                        and sc.get('AppName') == 'Amazon Games Sign-In'
+                        and 'UNIFIDECK_AMAZON_ACTION=auth' in sc.get('LaunchOptions', '')):
+                    correct_idx = idx
+                    break
+
+            vdf_dirty = False
+            for idx in matching_indices:
+                if idx != correct_idx:
+                    logger.warning(f"[Amazon] Removing malformed auth VDF entry idx={idx}")
+                    del shortcuts[idx]
+                    vdf_dirty = True
+
+            if correct_idx is None:
+                existing_indices = [int(k) for k in shortcuts.keys() if k.isdigit()]
+                next_idx = max(existing_indices, default=-1) + 1
+                shortcuts[str(next_idx)] = {
+                    'appid': expected_appid,
+                    'AppName': 'Amazon Games Sign-In',
+                    'exe': f'"{launcher_path}"',
+                    'StartDir': f'"{os.path.dirname(launcher_path)}"',
+                    'LaunchOptions': expected_launch_options,
+                    'IsHidden': 1,
+                    'AllowDesktopConfig': 1,
+                    'OpenVR': 0,
+                    'tags': {'0': 'Amazon'},
+                }
+                vdf_dirty = True
+                logger.info(f"[Amazon] Created auth shortcut in VDF: appid={expected_appid} unsigned={unsigned_id}")
+
+            if vdf_dirty:
+                await sm.write_shortcuts(shortcuts_data)
+
+            register_shortcut(AMAZON_AUTH_SHORTCUT_STORE_ID, expected_appid, "Amazon Games Sign-In")
+            await sm._clear_proton_compatibility(expected_appid)
+            await self._fetch_auth_shortcut_artwork(unsigned_id, force=(vdf_dirty and correct_idx is None))
+
+            return unsigned_id
+
+        except Exception as e:
+            logger.error(f"[Amazon] Failed to create auth shortcut: {e}", exc_info=True)
+            return None
+
+    async def get_amazon_auth_shortcut_context(self) -> Dict[str, Any]:
+        """Return the auth shortcut appid so the frontend can call RunGame()."""
+        unsigned_id = await self._ensure_amazon_auth_shortcut()
+        launcher_path = os.path.join(self.plugin_dir or "", "bin", "unifideck-launcher")
+        launch_options = f"{AMAZON_AUTH_SHORTCUT_STORE_ID} UNIFIDECK_AMAZON_ACTION=auth"
+
+        if not unsigned_id:
+            logger.error("[Amazon] Auth shortcut creation/validation failed")
+            return {"success": False, "error": "Auth shortcut not ready"}
+
+        logger.info(f"[Amazon] Auth shortcut context: appid={unsigned_id}")
+        return {
+            "success": True,
+            "appid_unsigned": unsigned_id,
+            "launch_wait_ms": AMAZON_AUTH_SHORTCUT_LAUNCH_WAIT_MS,
+            "launcher_path": launcher_path,
+            "launch_options": launch_options,
+        }
+
+    async def _fetch_auth_shortcut_artwork(self, unsigned_id: int, force: bool = False) -> None:
+        """Download SteamGridDB artwork for the Amazon auth shortcut."""
+        try:
+            plugin = self.plugin_instance
+            if not plugin or not hasattr(plugin, 'steamgriddb') or not plugin.steamgriddb:
+                logger.debug("[Amazon] SteamGridDB client not available, skipping artwork")
+                return
+
+            if not force:
+                if hasattr(plugin, 'has_artwork') and await plugin.has_artwork(unsigned_id):
+                    logger.debug("[Amazon] Auth shortcut artwork already exists")
+                    return
+
+            only_types = None
+            if not force and hasattr(plugin, 'get_missing_artwork_types'):
+                missing = await plugin.get_missing_artwork_types(unsigned_id)
+                if missing:
+                    only_types = missing
+                    logger.info(f"[Amazon] Auth shortcut artwork gap-fill: {missing}")
+
+            logger.info(f"[Amazon] Fetching SteamGridDB artwork for Amazon Games (force={force})")
+            await plugin.steamgriddb.fetch_game_art(
+                title="Amazon Games",
+                app_id=unsigned_id,
+                only_types=only_types,
+            )
+        except Exception as e:
+            logger.warning(f"[Amazon] Auth shortcut artwork fetch failed: {e}")
 
     async def logout(self) -> Dict[str, Any]:
         """Logout from Amazon Games"""
