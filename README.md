@@ -1,6 +1,6 @@
 # Unifideck - Unified Game Library for Steam Deck
 
-A Decky Loader plugin that brings together games from Steam, Epic Games Store, GOG, Microsoft Store, Ubisoft Connect, and Amazon into a single, unified library experience on your Steam Deck.
+A Decky Loader plugin that brings together Steam, Epic Games Store, GOG, Amazon Games, Ubisoft Connect, and Xbox Cloud Gaming in a single library experience on your Steam Deck.
 
 ![License](https://img.shields.io/badge/license-GPL--3.0--or--later-blue.svg)
 ![Platform](https://img.shields.io/badge/platform-Steam%20OS-orange.svg)
@@ -14,27 +14,28 @@ A Decky Loader plugin that brings together games from Steam, Epic Games Store, G
 - [Prerequisites](#prerequisites)
 - [Installation](#installation)
 - [Getting Started](#getting-started)
-- [Launch Options](#launch-options)
-- [Building](#building)
+- [Documentation](#documentation)
 - [Known Limitations](#known-limitations)
 - [Troubleshooting](#troubleshooting)
-- [License](#license)
+- [Languages](#languages)
+- [Building](#building)
+- [Tech Stack](#tech-stack)
 - [Credits](#credits)
+- [Support](#support)
+- [License](#license)
 - [Author](#author)
 - [Disclaimer](#disclaimer)
 
 ## Features
 
-- **Unified Game Library** - Epic Games, GOG, Ubisoft Connect, and Amazon games appear directly in your Steam library\*
-- **Great On Deck for All** - Great on Deck tab will show all games in your connected libraries that are platinum rated or verified by Steam.
-- **One-Click Installation** - Install Third Party games directly from Steam's interface
-- **Cloud Saves** - Currenly available for Epic and GOG. Not all games supported.
-- **Automatic Artwork** - Game covers, banners, and logos fetched automatically from SteamGridDB
-- **In-App Authentication** - Log into supported Third Party stores without leaving Gaming Mode
-- **No Restart Required** - Installed games are playable immediately without restarting Steam\*\*
-
-\*Yes, other game store integrations are planned but depends on solutions available and our development pipeline
-\*\*Still needs one time restart after libraries have been synced
+- **Unified library tabs** - Browse Steam, Epic, GOG, Amazon, Ubisoft, Xbox Cloud Gaming, Installed, Great on Deck, and Non-Steam from one place.
+- **Steam-native install, update, and launch actions** - Manage supported games directly from the game details view, with progress and status feedback.
+- **Shortcut-based sign-in in Gaming Mode** - Authenticate Epic, GOG, Amazon, Ubisoft, and Microsoft without leaving the Steam UI.
+- **Flexible install locations** - Use internal storage, SD card, or a validated custom install directory.
+- **Launch options and Proton control** - Preserve custom launch options across syncs, installs, and Proton toggles. Supports wrappers, MangoHud, LSFG, `PROTON=`, and `PROTONPATH=`.
+- **Artwork and richer metadata** - Pull cover art, icons, banners, store links, Metacritic data, and Great on Deck style compatibility info where available.
+- **Cloud saves** - Epic and GOG cloud saves are supported, including conflict prompts when both local and cloud saves exist.
+- **Store-specific extras** - GOG language selection, Epic/GOG DLC auto-downloads, Epic offline mode, GOG Galaxy / Comet support for compatible titles, and xCloud "Play on Cloud" support through Edge.
 
 ## Screenshots
 
@@ -48,190 +49,132 @@ A Decky Loader plugin that brings together games from Steam, Epic Games Store, G
 
 ## Prerequisites
 
-**Decky Loader** must be installed on your Steam Deck
+- **Decky Loader** must be installed on your Steam Deck.
+- **Microsoft Edge** is required for store sign-in and Xbox Cloud Gaming. If it is missing, Unifideck will prompt you to install it.
+- All other store CLIs and helper tooling are bundled with the plugin.
 
-- [Decky Loader Installation Guide](https://github.com/SteamDeckHomebrew/decky-loader)
-
-That's it! All other tools and dependencies are bundled with the plugin.
+[Decky Loader Installation Guide](https://github.com/SteamDeckHomebrew/decky-loader)
 
 ## Installation
 
-1. Download the plugin ZIP file from the Releases section.
-2. Open **Quick Access Menu** (three dots button)
-3. Navigate to **Decky** → **Settings** (gear icon)
-4. Enable **Developer Mode** if not already enabled
-5. Click **Install Plugin from ZIP**
-6. Navigate to the downloaded ZIP file and select it
-7. The plugin will install automatically
+1. Download the latest plugin ZIP from the [Releases](https://github.com/mubaraknumann/unifideck/releases) page.
+2. Open **Quick Access Menu** (three dots button).
+3. Navigate to **Decky** -> **Settings** (gear icon).
+4. Enable **Developer Mode** if it is not already enabled.
+5. Click **Install Plugin from ZIP**.
+6. Select the downloaded ZIP file.
+
+If an update gets stuck on `installing plugin`, uninstall the current Unifideck plugin and install the latest ZIP again.
 
 https://www.youtube.com/watch?v=lP-90uYd72w
 
-## Building
-
-To build the plugin from source (for development or local testing):
-
-**Prerequisites:** Node.js 16.14+, [pnpm](https://pnpm.io/) v9, the [Decky CLI](https://github.com/SteamDeckHomebrew/cli) (run `.vscode/setup.sh`), and **Docker or Podman** for the plugin build step. The build script will use Podman if Docker is not installed (e.g. on Steam Deck).
-
-**Steps:**
-
-1. Install dependencies: `pnpm i`
-2. Build the frontend bundle: `pnpm run build` (this ensures `dist/index.js` exists).
-3. Build the plugin package: run `./.vscode/build.sh` from the project root.
-
-The build script wraps the Decky CLI (e.g. `cli/decky plugin build .`) to produce a Decky-compatible plugin zip in `out/` (for example, `out/Unifideck.zip`). It assumes the frontend has already been built (step 2) and that any required backend files are present in the repository.
-For the expected plugin zip layout (dist, package.json, plugin.json, main.py, LICENSE, bin, backend, etc.), see the [Decky Plugin Template](https://github.com/SteamDeckHomebrew/decky-plugin-template) [distribution section](https://github.com/SteamDeckHomebrew/decky-plugin-template#distribution).
-
 ## Getting Started
 
-1. Open the **Quick Access Menu** and find **Unifideck**
-2. Connect your **Epic Games**, **GOG**, **Ubisoft Connect**, and **Amazon** accounts using the authenticate buttons
-3. Click **Sync Libraries** and wait for completion. Restart Steam.
+1. Open the **Quick Access Menu** and launch **Unifideck**.
+2. Connect the stores you want to use.
+3. Set your default install location if you want internal storage, SD card, or a custom path.
+4. Run **Sync Libraries** or **Force Sync**.
+5. Restart Steam when prompted so new shortcuts and artwork are applied.
+6. For Ubisoft titles purchased through Epic, complete the one-time account link at [epicgames.com/id/link/ubisoft](https://epicgames.com/id/link/ubisoft).
 
-Your games will now appear in your Steam library!
+Installed games are playable immediately after install. The Steam restart is still needed after sync or cleanup so the library refreshes fully.
 
-## Launch Options
+## Documentation
 
-You can add custom parameters to your game launch options (e.g. `MANGOHUD=1`, `LSFG=1`, `PROTON=proton_9`). These are preserved across syncs, installs, and Proton compatibility toggles.
-
-See the full **[Launch Options Guide](docs/launch-options.md)** for details and examples.
+- **[FAQ](docs/faq.md)** - Common issues, workarounds, and version-specific fixes collected from releases, code comments, and GitHub issues.
+- **[Launch Options Guide](docs/launch-options.md)** - Custom parameters, wrappers, LSFG, and per-game launch tweaks.
+- **[Proton Compatibility Notes](docs/proton-compatibility.md)** - `PROTON=`, `PROTONPATH=`, and compatibility troubleshooting.
 
 ## Known Limitations
 
-- The plugin creates custom tabs that replace the standard Great on Deck, All Games and Installed tabs so standard filtering and sorting will not work (for now).
-- The plugin handles proton/winetricks automatically, but you can use any Proton version of your choice. See the [Proton compatibility docs](docs/proton-compatibility.md) and [launch options guide](docs/launch-options.md).
-- Game download paths (local and sd card) are fixed (for now)
-- Not all games have artwork available - some may show default images. Suggest using SteamGridDB.
-- Cloud saves implemented, but may not work for all games
-- Compatibility with Tabmaster - created collections that can be used to create tabs. Does not show custom tabs when this is installed.
+- Unifideck replaces Steam's default **All Games**, **Installed**, and **Great on Deck** tabs, so Steam's standard sort and filter behavior is not preserved there.
+- With **TabMaster** installed, Unifideck skips custom tab injection and relies on `[Unifideck]` collections instead.
+- Steam still needs a restart after sync or cleanup so new shortcuts and artwork fully apply.
+- Xbox Cloud Gaming support is **streaming-only** and depends on **Microsoft Edge**.
+- Cloud saves currently cover **Epic** and **GOG** only, and game-level support varies.
+- Some titles still need manual Proton experimentation or store-specific workarounds.
+- Not every game has SteamGridDB artwork or complete metadata.
+- For **Ubisoft**, choose your Proton version **before** installing. Changing Proton after install can invalidate the prefix and force a reinstall.
 
 ## Troubleshooting
 
-### Epic Store Login Shows Blank Screen or 'Pretty Print' Option
+For a longer list of release-specific problems and fixes, see the **[FAQ](docs/faq.md)**.
 
-1. Login to Epic via a different browser or device, confirm login works/accept any policies
-2. Try Again
+### Install Stuck on `installing plugin`
 
-**Why this happens**
-Apps and plugins that use the Epic API often get "locked out" when Epic updates its legal agreements. Because the plugin can’t display the full legal window, the login request simply fails until you manually agree to the terms on the official website or desktop app.
+Uninstall the current plugin and install the latest ZIP again. This was the recommended workaround for the 0.6.0 -> 0.6.1 transition.
 
-### Force Use of Compatibility Tool
+### Games or Artwork Do Not Appear After Sync
 
-Force Compatibility (Proton) is supported. The plugin automatically detects your selection and configures the launcher to use it. You can also set a specific Proton version via launch options — see the [Launch Options Guide](docs/launch-options.md) for details.
+Run **Force Sync** if needed, then restart Steam when prompted so shortcuts and artwork are reloaded.
 
-### Games Don't Appear After Syncing
+### Epic Login Shows a Blank Page or `Pretty Print`
 
-1. Restart Steam/Steam Deck
-2. Re-run sync/force sync from the Quick Access Menu
-3. Check that your accounts are still connected
+Sign into Epic in a regular browser first, accept any pending legal updates, then retry in Unifideck.
 
-### Can't Install a Game
+### A Game Will Not Install or Launch
 
-1. Make sure you have enough storage space
-2. Check that your store account is still authenticated
-3. Try logging out and back into the store
-4. Check the launcher logs at `~/.local/share/unifideck/launcher.log`
+Check available storage, make sure the store account is still connected, and inspect `~/.local/share/unifideck/launcher.log`.
 
-### Cover Art Missing
+### Microsoft / xCloud Will Not Open
 
-1. Run another sync - artwork is fetched during the sync process
-2. Some games may not have artwork available in the SteamGridDB database
+Install Microsoft Edge when prompted. After the first successful Microsoft sign-in, you may still need to click **Play via Cloud** once inside the xCloud home screen to finish OAuth.
 
-### Ubisoft Connect Games (Epic)
+### Ubisoft Titles from Epic Hang on Login or Ask for a Key
 
-Ubisoft games purchased through Epic Games require a **one-time account link** before they can launch on Steam Deck:
+Make sure your Epic and Ubisoft accounts are linked at [epicgames.com/id/link/ubisoft](https://epicgames.com/id/link/ubisoft). If problems continue, clear `~/.local/share/unifideck/chromium-auth`, `~/.local/share/unifideck/ubisoft_installer_cache`, and the Ubisoft prefixes under `~/.local/share/unifideck/prefixes/`, then try again.
 
-1. On a PC or browser, visit **[epicgames.com/id/link/ubisoft](https://epicgames.com/id/link/ubisoft)**
-2. Log into both your Epic and Ubisoft accounts and link them
+### Logs
 
-After linking, Ubisoft games will launch and authenticate automatically through the plugin. Without this step, games may get stuck on "Logging in..." or prompt for a product key.
+- **Decky/backend log** - `/home/deck/homebrew/logs/Unifideck`
+- **Launcher/runtime log** - `~/.local/share/unifideck/launcher.log`
+- **Edge/browser log** - `~/.local/share/unifideck/chromium-auth.log`
 
-### Game Won't Launch
+## Languages
 
-1. Check the launcher logs at `~/.local/share/unifideck/launcher.log`
-2. For GOG games, verify the game folder exists in `~/GOG Games/`
-3. Try reinstalling the game
+Unifideck currently ships with English (US), French, Brazilian Portuguese, Russian, Japanese, German, Spanish, Italian, Simplified Chinese, Korean, Dutch, Polish, Turkish, and Ukrainian.
 
-### Languages
+To add a new language, create a JSON file in `src/i18n/locales/` using `en-US.json` as the template and wire it into the language selector.
 
-Added support for multiple languages. The following translations are now included:
+## Building
 
-- Portuguese (Brazil) — pt-BR
-- Russian — ru-RU
-- Japanese — ja-JP
-- German — de-DE
-- Spanish — es-ES
-- Italian — it-IT
-- Simplified Chinese — zh-CN
-- Korean — ko-KR
-- Dutch — nl-NL
-- Polish — pl-PL
-- Turkish — tr-TR
-- Ukrainian - uk-UA
+To build the plugin from source:
 
-To add a new language, create a JSON file in `src/i18n/locales/` using `en-US.json` as a template and provide translations for each key.
+1. Install dependencies: `pnpm install`
+2. Build the frontend bundle: `pnpm run build`
+3. Build the plugin package:
+   - local repo workflow: `./build-plugin_old.sh`
+   - standard Decky / fork workflow: `./.vscode/build.sh` or the VS Code `build-plugin` task
 
-## Support
+For frontend watch mode, use `pnpm run watch`.
 
-(Since I have received multiple donation queries) If you enjoy this plugin and want to support its development, you can:
+## Tech Stack
 
-- [Become a GitHub Sponsor](https://github.com/sponsors/mubaraknumann)
-- [Buy me a coffee on Ko-fi](https://ko-fi.com/mubaraknumann)
-
-## License
-
-GNU General Public License v3.0 or later - see [LICENSE](./LICENSE) file for details
+- **Frontend** - React, TypeScript, Rollup, `@decky/api`, `@decky/ui`, `i18next`
+- **Backend** - Python, Decky Loader RPC, CDP-based auth and browser helpers
+- **Store tooling** - legendary, gogdl, nile, comet, winetricks, umu-launcher
+- **Services and data** - SteamGridDB, Epic/GOG/Amazon/Microsoft APIs, Microsoft Edge, Metacritic, compatibility metadata
 
 ## Credits
 
-This project builds upon numerous open source projects, libraries, and tools. We are grateful to all contributors and maintainers.
+This project builds on a lot of open source work and community help.
 
-### Core Framework
+- **Platform and UI** - [Decky Loader](https://github.com/SteamDeckHomebrew/decky-loader), `@decky/api`, `@decky/ui`, and the SteamDeckHomebrew community
+- **Store and runtime tooling** - [legendary](https://github.com/derrod/legendary), gogdl, [nile](https://github.com/imLinguin/nile), [comet](https://github.com/imLinguin/comet), [winetricks](https://github.com/Winetricks/winetricks), [umu-launcher](https://github.com/Open-Wine-Components/umu-launcher), and [SteamGridDB](https://www.steamgriddb.com/)
+- **Reference projects and patterns** - [TabMaster](https://github.com/CEbbinghaus/TabMaster), [SteamGridDB Decky](https://github.com/SteamGridDB/decky-steamgriddb), [ProtonDB Decky](https://github.com/OMGDuke/protondb-decky), [Heroic Games Launcher](https://github.com/Heroic-Games-Launcher/HeroicGamesLauncher), and [Junk-Store](https://github.com/ebenbruyns/junkstore)
+- **Special thanks** - @src893, @xXJSONDeruloXx, @moi952, @Lazer-zx5, @buddax2, @Grails125, DeckWizard, u/EnTei7K, u/IN50MNIAC, derrod, and the Discord testers who keep shipping feedback
 
-- **[Decky Loader](https://github.com/SteamDeckHomebrew/decky-loader)** - For plugin runtime environment and backend API integration
-- **[decky-frontend-lib](https://github.com/SteamDeckHomebrew/decky-frontend-lib)** - For Steam UI components, routing, and Deck-specific React hooks
+## Support
 
-### Game Store Integration (Binaries)
+If you want to support development or keep up with releases:
 
-- **[legendary](https://github.com/derrod/legendary)** - For authenticating, syncing library, downloading, and launching Epic Games Store titles
-- **[umu-launcher](https://github.com/Open-Wine-Components/umu-launcher)** - For running Windows games (.exe) with Proton compatibility layer
-- **[comet](https://github.com/imLinguin/comet)** - GOG Galaxy SDK replacement for achievements and multiplayer features
+- [Become a GitHub Sponsor](https://github.com/sponsors/mubaraknumann)
+- [Buy me a coffee on Ko-fi](https://ko-fi.com/mubaraknumann)
+- [Join the Discord](https://discord.gg/s9KVK2jRnp)
 
-### Python Libraries
+## License
 
-- **[websockets](https://github.com/python-websockets/websockets)** - For real-time communication with Steam client
-- **[python-vdf](https://github.com/ValvePython/vdf)** - For reading/writing Steam's shortcuts.vdf and config files
-- **[Requests](https://github.com/psf/requests)** - For GOG API authentication and game metadata fetching
-- **[steamgrid](https://github.com/ZebcoWeb/python-steamgrid)** - For fetching game artwork (grid, hero, logo) from SteamGridDB
-- **[certifi](https://github.com/certifi/python-certifi)** - For providing SSL certificates for HTTPS requests
-- **[charset-normalizer](https://github.com/Ousret/charset_normalizer)** - For handling character encoding in API responses
-- **[idna](https://github.com/kjd/idna)** - For internationalized domain name support in URLs
-- **[urllib3](https://github.com/urllib3/urllib3)** - For underlying HTTP client for requests library
-- **[pip](https://github.com/pypa/pip)** - For managing Python dependencies in isolated environment (bundled)
-
-### APIs & Services
-
-- **[SteamGridDB](https://www.steamgriddb.com/)** - For automatically downloading cover art, banners, and logos for non-Steam games
-- **Epic Games API** - For fetching Epic library data and game metadata via legendary
-- **GOG API** - For authenticating users, fetching game library, and retrieving installer URLs
-
-### Decky Plugins (Code Reference)
-
-The following Decky plugins were studied as reference during development:
-
-- **[TabMaster](https://github.com/CEbbinghaus/TabMaster)** - For library tab replacement and Steam UI patching techniques
-- **[CSSLoader](https://github.com/DeckThemes/SDH-CssLoader)** - For plugin architecture and settings management patterns
-- **[SteamGridDB Decky](https://github.com/SteamGridDB/decky-steamgriddb)** - For SteamGridDB API integration and artwork downloading
-- **[ProtonDB Decky](https://github.com/OMGDuke/protondb-decky)** - For game compatibility rating integration patterns
-- **[HeroicGamesLauncher](https://github.com/Heroic-Games-Launcher/HeroicGamesLauncher)** - For Epic and GOG launcher integration approaches
-- **[Junkstore](https://github.com/ebenbruyns/junkstore)** - For non-Steam game management and authentication references
-
-### Special Thanks
-
-- **Valve** - For the Steam Deck platform and Steam OS
-- **SteamDeckHomebrew Community** - For Decky Loader and extensive documentation
-- **derrod** - For legendary and Epic Games integration insights
-- **JSONDerulo** - For Amazon integration and code review
-- All open source contributors whose work makes this project possible
+GNU General Public License v3.0 or later - see [LICENSE](./LICENSE) for details.
 
 ## Author
 
@@ -239,4 +182,4 @@ Numan Mubarak (numanmuabrak@protonmail.com)
 
 ## Disclaimer
 
-This is an unofficial third-party tool. Not affiliated with Valve, Epic Games, Amazon, or CD Projekt (GOG).
+This is an unofficial third-party tool. It is not affiliated with Valve, Epic Games, CD Projekt / GOG, Amazon, Ubisoft, or Microsoft.
