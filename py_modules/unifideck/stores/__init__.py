@@ -1,8 +1,5 @@
-# Stores package
-from .base import Store, Game
-from .manager import StoreManager
-from .epic import EpicConnector
-from .amazon import AmazonConnector
-from .gog import GOGAPIClient
-from .ubisoft import UbisoftConnector
-from .microsoft import MicrosoftConnector
+# OP-46 | stores/__init__.py | Depends: OP-47a
+from __future__ import annotations
+from .shared.store_registry import StoreRegistry
+
+__all__ = ["StoreRegistry"]

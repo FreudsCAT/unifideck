@@ -1,5 +1,3 @@
-# Backend Package for Unifideck
-# This package contains modular components for stores, auth, download, and compatibility.
+from __future__ import annotations
 
-from .registry import GamesRegistry, GameEntry, get_registry
-from .utils import get_all_game_directories, get_games_map_path
+__version__ = "0.7.0"

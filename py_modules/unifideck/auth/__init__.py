@@ -1,2 +1,1 @@
-# Auth package
-from .browser import CDPOAuthMonitor
+# OP-28 auth package
