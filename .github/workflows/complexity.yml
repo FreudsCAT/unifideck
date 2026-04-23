@@ -1,0 +1,130 @@
+name: Complexity Gates
+
+# Complexity/size gates for the whole backend, aligned with the
+# five-layer architecture of the technical document v1.1.
+# Previously limited to core/ + services/, this workflow now
+# covers main.py and every module under py_modules/unifideck/.
+#
+# Thresholds (hard gates — PR blocked on violation):
+#   - Max cyclomatic complexity per function: 15
+#   - Max cognitive complexity per function: 15
+#   - Max function length: 80 lines (warn at 50)
+#   - Max file LOC: 550 (main.py: 800 transitional)
+#
+# Grandfathering (2026-04-18): the tightening from 1000→550 LOC
+# per file and 150→100 per function flags 9 existing files and
+# 12 existing functions. They are listed explicitly below so:
+#   1. No new violation can slip in — any additional offender
+#      fails the gate immediately.
+#   2. Progress is measurable — the allowlist can only shrink;
+#      fixing a grandfathered offender triggers a reminder to
+#      delete its entry from the list.
+# Tracked for incremental refactoring in technical doc §7.8.
+
+on:
+  pull_request:
+    paths:
+      - 'py_modules/**'
+      - 'main.py'
+      - 'pyproject.toml'
+  push:
+    branches:
+      - new_architecture
+      - staging
+      - main
+
+jobs:
+  complexity:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install tooling
+        run: |
+          pip install flake8 flake8-cognitive-complexity mccabe radon ruff
+
+      # ── Hard gate: CC > 15 across the whole backend ──────────
+      - name: flake8 max-complexity=15 (full scope)
+        run: |
+          flake8 \
+            --select=C \
+            --max-complexity=15 \
+            py_modules/ \
+            main.py
+
+      # ── Hard gate: cognitive complexity > 15 ─────────────────
+      # CC (cyclomatic) counts decisions; cognitive complexity
+      # additionally penalises nesting, breaks, continues. Two
+      # functions can have identical CC but very different
+      # readability — cognitive complexity catches the one that
+      # a human will struggle with. Threshold 15 matches Sonar's
+      # default. flake8-cognitive-complexity is already installed
+      # above, so this step just wires the select.
+      - name: flake8 cognitive-complexity (max 15)
+        run: |
+          flake8 \
+            --select=CCR \
+            --max-cognitive-complexity=15 \
+            py_modules/ \
+            main.py
+
+      # ── Hard gate: no function should reach grade E/F (CC>30)
+      - name: radon cc (fail on E/F grade)
+        run: |
+          radon cc -s -n C py_modules main.py | tee radon-cc.txt
+          if grep -E '\s[EF]\s' radon-cc.txt; then
+            echo "::error::Function with CC > 30 detected"
+            exit 1
+          fi
+
+      # ── Hard gate: file size limit ───────────────────────────
+      # Backend cap: 550 LOC. main.py transitional cap: 800 LOC.
+      # Grandfathered files (exceeding cap as of 2026-04-18)
+      # listed in tools/volumetry_allowlist.py — they are
+      # tolerated but cannot grow further, and any file not in
+      # the list exceeding the cap fails the gate.
+      - name: File size limit
+        run: python3 scripts/volumetry_check.py files
+
+      # ── Hard gate: function length > 80 (warn at 50) ─────────
+      - name: Function length limit
+        run: python3 scripts/volumetry_check.py functions
+
+      # ── Hard gate: locals > 15 per function ──────────────────
+      # Proxy for SRP violations. A function juggling 20 locals
+      # orchestrates too much state to plausibly do "one thing".
+      # Cap 15 matches pylint R0914's default. Grandfathered set
+      # in scripts/volumetry_check.py::LOCALS_ALLOWLIST.
+      - name: Locals per function limit
+        run: python3 scripts/volumetry_check.py locals
+
+      # ── Hard gate: nesting depth > 4 per function ────────────
+      # Deep nesting signals interleaved flows — if/for/while/
+      # with/try stacked 5+ levels deep almost always means the
+      # function serves multiple responsibilities. Cap 4 matches
+      # SonarQube's cognitive-complexity nesting penalty turnover.
+      # Grandfathered set in NESTING_ALLOWLIST.
+      - name: Nesting depth limit
+        run: python3 scripts/volumetry_check.py nesting
+
+      # ── Hard gate: fan-out > 10 distinct callees ─────────────
+      # Counts distinct call targets excluding builtins + logger
+      # + common collection ops (see FANOUT_EXCLUDED). High fan-
+      # out identifies orchestrators that should be split into
+      # smaller helpers. Threshold 10 empirically catches real
+      # violators without flagging hygienic utility functions.
+      - name: Fan-out limit
+        run: python3 scripts/volumetry_check.py fanout
+
+      # ── ruff lint — warn-only during the remediation period ──
+      - name: ruff check (report only)
+        run: |
+          ruff check --config pyproject.toml \
+                     --output-format=github \
+                     py_modules main.py \
+            || echo "::warning::ruff found issues"

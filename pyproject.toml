@@ -1,0 +1,276 @@
+# pyproject.toml — Unifideck
+#
+# Consolidated configuration for ruff, mypy, pytest.
+# Aligned with the five-layer architecture described in
+# unifideck_architecture_technical_document.pdf (v1.1, Apr 2026).
+#
+# Scope: py_modules/ + main.py. The fiche_sources/ legacy format
+# is not covered here — only the canonical 4-space tree.
+
+[project]
+name = "unifideck"
+version = "0.7.0"
+description = "Unified Steam Deck game library aggregator — Decky Loader plugin"
+requires-python = ">=3.11"
+authors = [{ name = "Mubarak Numann" }]
+
+# ─── ruff ──────────────────────────────────────────────────────
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+extend-exclude = [
+    "fiche_sources",
+    "build",
+    "dist",
+    "node_modules",
+    "__pycache__",
+]
+
+[tool.ruff.lint]
+# Rule selection reflects the audit priorities. We start in
+# "warn-but-don't-fail" mode for categories with a large backlog
+# (D, ANN, PTH) and graduate them to hard gates after Sprint B.
+select = [
+    "E", "W",         # pycodestyle
+    "F",              # Pyflakes — unused/undefined names
+    "I",              # isort
+    "B",              # flake8-bugbear
+    "C4",             # comprehensions
+    "UP",             # pyupgrade — PEP 585/604 modernisation
+    "SIM",            # simplify
+    "RET",            # return consistency — targets 424 RET503
+    "BLE",            # blind-except — targets 125 BLE001
+    "G",              # logging format
+    "PLC", "PLE",     # pylint convention + error
+    "PLR0911",        # too-many-returns (> 6)
+    "PLR0912",        # too-many-branches (> 12)
+    "PLR0913",        # too-many-arguments (> 7, threshold below)
+    "PLR0915",        # too-many-statements (> 50)
+    "PLR0917",        # too-many-positional-arguments (keyword-only)
+    "N",              # naming
+    "ASYNC",          # asyncio pitfalls
+    "S",              # bandit subset
+    "PTH",            # pathlib — targets 403 os.path usages
+    "TID",            # tidy imports
+    "PGH",            # pygrep hooks
+    "D",              # pydocstyle — enforce docstrings on modules,
+                      # classes, public methods, public functions,
+                      # packages, __init__ (magic methods exempt)
+]
+
+ignore = [
+    "E501",           # line-too-long — handled by formatter
+    "S101",           # assert — only 1 runtime case, tracked in Sprint B
+    "S603",           # subprocess — legit for legendary/gogdl/nile
+    "S607",           # partial paths for CLI tools — same reason
+    "PLC0415",        # import-outside-top-level — 117 cases, Sprint P3
+    # ── docstring rules — style/opinion exemptions ───────
+    "D105",           # docstrings in magic methods — __repr__/__eq__
+                      # semantics are obvious and self-documenting
+    "D203",           # 1 blank line before class docstring — conflicts
+                      # with D211 (no blank line). D211 is Google/NumPy-
+                      # style convention, chosen here.
+    "D213",           # multi-line docstring summary on second line —
+                      # conflicts with D212 (summary on first line).
+                      # D212 matches PEP 257 + Google style.
+    "D401",           # imperative mood — too opinionated, often false
+                      # positives on "Returns..." / "Whether..." summary
+                      # phrases that are idiomatic in Python stdlib.
+    "D406", "D407",   # section headings (Google-vs-NumPy debate) —
+                      # avoid prescribing which section style to use.
+    "D413",           # missing blank line after last section — NumPy-
+                      # specific, clashes with Google style.
+    # Stylistic rules on existing docstrings — deferred to
+    # a dedicated format commit (Sprint D). The *presence*
+    # gates (D100/D101/D102/D103/D104/D107) stay enforced.
+    "D205",           # 1 blank line between summary + body (351 sites)
+    "D208",           # over-indented docstring (10 sites)
+    "D301",           # r""" for docstrings with backslashes (13 sites)
+    "D400",           # first line ends with period (29 sites)
+    "D415",           # first line ends with punctuation (28 sites)
+    "D417",           # missing param docs in Google-style (7 sites)
+    "N805",           # self naming — dataclass descriptor false positives
+    "TID252",         # relative imports — project convention
+    "RET503",         # implicit-return — tracked, Sprint P3
+    "SIM108",         # ternary — preference
+    "SIM105",         # contextlib.suppress — prefer explicit try/except
+    # ── Sprint B transitional ────────────────────────────────────
+    # PTH migration (os.path → pathlib) tracked as a dedicated
+    # cleanup pass. The entire ruleset is informational and
+    # surfaces ~300 mechanical replacements across the tree.
+    # Re-enable after the dedicated commit lands; a separate
+    # ratchet can enforce "new code only" for new os.path usages.
+    "PTH",            # all pathlib-suggestion rules
+    "ASYNC240",       # suggests trio.Path/anyio.path — project is
+                      # asyncio-pure, rule inapplicable
+    "ASYNC109",       # timeout= param on async def — idiomatic for
+                      # HTTP/subprocess wrappers (aiohttp, epic_legendary,
+                      # gog_http, CDP primitives). Callers pass a numeric
+                      # seconds value that the wrapper converts to
+                      # asyncio.timeout() internally.
+]
+
+# Per-file exceptions
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = ["F401"]               # re-exports are the point
+"tests/**/*.py" = ["S101", "ANN", "PLR2004"]
+"main.py" = [
+    "PLR0915",                          # Plugin router transitional
+    "E402",                             # sys.path.insert for py_modules/
+                                        # must precede unifideck.* imports
+                                        # (Decky plugin layout constraint)
+]
+"py_modules/unifideck/core/types/**" = ["N805", "A"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["unifideck"]
+combine-as-imports = true
+
+[tool.ruff.lint.flake8-bugbear]
+# EventBus handlers legitimately use lambdas with unused args
+extend-immutable-calls = ["Events"]
+
+[tool.ruff.lint.pylint]
+# Volumetry gates — tuned per audit:
+#   max-args 7:         store constructors routinely take bus,
+#                       cache, config, plugin_dir, paths (5-6). A
+#                       few specialists take auth_state or session
+#                       (+1). Hard cap at 7 keeps typical patterns
+#                       legal while blocking god-constructors.
+#   max-returns 6:      default — matches ruff's PLR0911.
+#   max-branches 12:    default — matches ruff's PLR0912.
+#   max-statements 50:  default — matches ruff's PLR0915.
+#   max-positional-args 5: keyword-only discipline past the cap
+#                       makes call sites self-documenting.
+max-args = 7
+max-positional-args = 5
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+
+# ─── mypy ──────────────────────────────────────────────────────
+[tool.mypy]
+python_version = "3.11"
+strict_optional = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+warn_return_any = true
+check_untyped_defs = true
+no_implicit_optional = true
+# Required because py_modules/unifideck does not contain a
+# top-level __init__.py — without explicit_package_bases mypy
+# sees `unifideck.launcher.log_archive` as both a top-level and
+# a submodule and prints a namespace-conflict error.
+explicit_package_bases = true
+mypy_path = "py_modules"
+# Graduate to strict = true per module as coverage improves.
+# Phase 1 targets: core/, services/bootstrap, stores/store_base.
+exclude = "^(fiche_sources|build|dist|node_modules)/"
+
+[[tool.mypy.overrides]]
+# Layer 1+2 core target for strict mode (Phase 2 per migration
+# runbook). Today the code passes the default strictness
+# (strict_optional + warn_return_any + check_untyped_defs). The
+# additional disallow_* flags below are commented out and will
+# be re-enabled after the runtime tests confirm no regressions
+# — they're the gate for Sprint B.
+module = [
+    "unifideck.core.*",
+    "unifideck.event_bus.*",
+]
+# disallow_any_explicit = true
+# disallow_untyped_defs = true
+# disallow_incomplete_defs = true
+
+[[tool.mypy.overrides]]
+# Third-party libs without stubs. Covers both CI environments
+# (where we don't `pip install` the full Decky Loader runtime)
+# and the optional dependencies that the plugin uses at runtime
+# but that aren't part of the type-checked surface.
+module = [
+    "decky",
+    "decky_plugin",
+    "vdf",
+    "websockets.*",
+    "aiohttp",
+    "aiohttp.*",
+    "jsonschema",
+    "jsonschema.*",
+    "locale_config",
+    "yaml",
+]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+# Legacy modules absent during the new_architecture migration.
+# Each parent __init__.py wraps the re-export in a try/except
+# ImportError so runtime degrades gracefully. Mypy doesn't
+# narrow through try/except ImportError on module-not-found
+# errors, so we mute it at config level with a targeted ignore.
+# Remove this block once the migration runbook phase 8 lands.
+module = [
+    "unifideck.accounts.account_manager",
+    "unifideck.cloud.cloud_save",
+    "unifideck.download.manager",
+    "unifideck.playtime.database",
+    "unifideck.playtime.models",
+    "unifideck.registry.games_registry",
+    "unifideck.steam.steam_utils",
+    "unifideck.cdp.cdp_utils",
+    "unifideck.stores.ubisoft_parser",
+    "unifideck.stores.ubisoft.ubisoft_binary_resolver",
+]
+ignore_missing_imports = true
+
+# ─── pytest ────────────────────────────────────────────────────
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+asyncio_mode = "auto"
+addopts = [
+    "-ra",
+    "--strict-markers",
+    "--strict-config",
+    "-q",
+]
+markers = [
+    "unit: fast isolated tests (<3s)",
+    "integration: component interactions with mocks (<30s)",
+    "e2e: full flow on Steam Deck (minutes)",
+    "slow: deselect with '-m \"not slow\"'",
+]
+
+[tool.coverage.run]
+source = ["py_modules/unifideck", "main"]
+branch = true
+omit = [
+    "*/__init__.py",
+    "*/tests/*",
+]
+
+[tool.coverage.report]
+# Phase 1 target: 40% — per section 7.6 of the technical doc.
+# Graduates to 62% (TIER 4 complete) then 80% (core only).
+fail_under = 40
+show_missing = true
+skip_covered = false
+exclude_lines = [
+    "pragma: no cover",
+    "raise NotImplementedError",
+    "if TYPE_CHECKING:",
+    "if __name__ == .__main__.:",
+]
+
+# ─── bandit ────────────────────────────────────────────────────
+[tool.bandit]
+exclude_dirs = ["fiche_sources", "tests", "build", "dist"]
+skips = [
+    "B101",  # assert — 1 case tracked
+    "B404",  # subprocess import — legit
+    "B603",  # subprocess without shell — legit
+    "B607",  # partial paths for CLI — legit
+]

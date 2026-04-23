@@ -1,0 +1,61 @@
+name: Tests
+
+# Backend test suite + coverage gate. Runs on every PR and push.
+# Coverage target per technical doc §7.6: 40% Phase 1, 62% TIER4,
+# 80% core/. Hard fail under fail_under (pyproject.toml).
+
+on:
+  pull_request:
+    paths:
+      - 'py_modules/**'
+      - 'main.py'
+      - 'tests/**'
+      - 'pyproject.toml'
+      - 'requirements*.txt'
+  push:
+    branches: [new_architecture, staging, main]
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ['3.11', '3.12']
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install -r requirements-dev.txt
+
+      - name: Run tests with coverage
+        run: |
+          pytest tests/ \
+            --cov=py_modules/unifideck \
+            --cov-report=term-missing \
+            --cov-report=xml \
+            --cov-report=html \
+            -v
+
+      - name: Upload coverage to Codecov
+        if: matrix.python-version == '3.11'
+        uses: codecov/codecov-action@v4
+        with:
+          files: ./coverage.xml
+          fail_ci_if_error: false
+
+      - name: Archive coverage HTML
+        if: matrix.python-version == '3.11'
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-html
+          path: htmlcov/
+          retention-days: 14
