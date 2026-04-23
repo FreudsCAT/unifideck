@@ -1,4 +1,26 @@
+# Unifideck runtime dependencies.
+#
+# These are the only Python packages the plugin needs at runtime
+# on the Steam Deck. Decky Loader installs them automatically when
+# the plugin is loaded.
+#
+# Versions are pinned to major.minor only — patch updates are
+# accepted to pick up security fixes without re-validation.
+# HTTP client for store API calls (Epic, GOG, Amazon, Microsoft,
+# SteamGridDB, ProtonDB, Metacritic, UnifiDB).
 aiohttp>=3.9,<4.0
+# WebSocket client for the Chrome DevTools Protocol bridge that
+# powers Steam UI injection (CSS hide play button, OAuth redirect
+# capture, virtual keyboard for xCloud).
 websockets>=12.0,<14.0
+# symmetric authenticated encryption (AES-256-GCM)
+# for OAuth token persistence. Used by core/secure_token_store.py
+# to encrypt gog_token.json and microsoft_tokens.json with a key
+# derived from /etc/machine-id via scrypt. Standard library has
+# no AEAD primitive, so we depend on the canonical pyca lib.
 cryptography>=42.0,<47.0
+# JSON Schema validation for defaults/config.json and
+# user overrides at plugin boot. Used by config/validator.py to
+# catch typos and type errors before they cause runtime failures
+# in store adapters. Draft-07 schema lives in config/schema.json.
 jsonschema>=4.0,<5.0
