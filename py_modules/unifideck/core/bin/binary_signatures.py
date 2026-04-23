@@ -8,6 +8,8 @@ are out of scope — trusted by the OS package manager.
 """
 from __future__ import annotations
 
+import hashlib
+
 # Allowlist of known-good SHA256 hashes for bundled binaries.
 # When bumping a bundled binary, compute the new hash with
 # ``sha256sum bin/<tool>`` and update here IN THE SAME COMMIT.
@@ -25,7 +27,17 @@ def compute_sha256(path: str, chunk_size: int = 65536) -> str | None:
     Avoids loading 30MB binaries into RAM. Returns None on any
     OSError so callers treat unreadable + mismatched uniformly.
     """
-    raise NotImplementedError("OP-07b: implement streaming SHA256 using hashlib")
+    try:
+        h = hashlib.sha256()
+        with open(path, "rb") as f:
+            while True:
+                chunk = f.read(chunk_size)
+                if not chunk:
+                    break
+                h.update(chunk)
+        return h.hexdigest()
+    except OSError:
+        return None
 
 
 def verify_bundled_binary(tool_name: str, path: str) -> bool | None:
@@ -36,4 +48,12 @@ def verify_bundled_binary(tool_name: str, path: str) -> bool | None:
     Caller decides policy: fail-open in dev, fail-closed in prod.
     Store code should treat False as "do NOT invoke this binary".
     """
-    raise NotImplementedError("OP-07b: implement against _KNOWN_HASHES allowlist")
+    expected = _KNOWN_HASHES.get(tool_name)
+    if expected is None:
+        return None
+    if expected == "":
+        return None
+    actual = compute_sha256(path)
+    if actual is None:
+        return None
+    return actual == expected

@@ -8,6 +8,9 @@ default`` pattern exactly once. Designed to wrap sibling
 """
 from __future__ import annotations
 
+import asyncio
+import functools
+import logging
 from collections.abc import Awaitable, Callable
 from typing import Any, TypeVar
 
@@ -28,4 +31,25 @@ def safe_file_op(
     log line identifies which file triggered the failure. Pick
     ``None`` as default for readers, ``False`` for writers.
     """
-    raise NotImplementedError("OP-06b: implement sync/async decorator factory")
+    def decorator(fn: _Callable) -> _Callable:
+        if asyncio.iscoroutinefunction(fn):
+            @functools.wraps(fn)
+            async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
+                try:
+                    return await fn(*args, **kwargs)
+                except OSError as e:
+                    path_hint = args[0] if args else "?"
+                    logging.log(log_level, "%s(%s): %s", fn.__name__, path_hint, e)
+                    return default
+            return async_wrapper  # type: ignore[return-value]
+        else:
+            @functools.wraps(fn)
+            def sync_wrapper(*args: Any, **kwargs: Any) -> Any:
+                try:
+                    return fn(*args, **kwargs)
+                except OSError as e:
+                    path_hint = args[0] if args else "?"
+                    logging.log(log_level, "%s(%s): %s", fn.__name__, path_hint, e)
+                    return default
+            return sync_wrapper  # type: ignore[return-value]
+    return decorator

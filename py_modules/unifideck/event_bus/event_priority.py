@@ -47,6 +47,8 @@ _DEFAULT_PRIORITY: dict[Events, EventPriority] = {
     Events.STORE_AUTH_COMPLETE:     EventPriority.NORMAL,
     Events.STORE_AUTH_FAILED:       EventPriority.NORMAL,
     Events.STORE_LOGOUT:            EventPriority.NORMAL,
+    # Store registration
+    Events.STORE_REGISTERED:        EventPriority.NORMAL,
     # Download lifecycle
     Events.DOWNLOAD_QUEUED:         EventPriority.NORMAL,
     Events.DOWNLOAD_STARTED:        EventPriority.NORMAL,
@@ -56,6 +58,42 @@ _DEFAULT_PRIORITY: dict[Events, EventPriority] = {
     Events.DOWNLOAD_PROGRESS:       EventPriority.BACKGROUND,
     # Generic
     Events.STORE_ERROR:             EventPriority.BACKGROUND,
+    # Launcher
+    Events.LAUNCHER_STAGE:          EventPriority.NORMAL,
+    # Circuit breaker
+    Events.CIRCUIT_STATE_CHANGED:   EventPriority.NORMAL,
+    # Runtime probes
+    Events.RUNTIME_PROBES_REPORTED: EventPriority.BACKGROUND,
+    # Security
+    Events.SECURITY_TOKEN_ENCRYPTED:           EventPriority.NORMAL,
+    Events.SECURITY_TOKEN_DECRYPTED:           EventPriority.NORMAL,
+    Events.SECURITY_DECRYPT_FAILED:            EventPriority.NORMAL,
+    Events.SECURITY_TOKEN_FILE_MIGRATED:       EventPriority.NORMAL,
+    Events.SECURITY_LEGACY_PLAINTEXT_DETECTED: EventPriority.NORMAL,
+    Events.SECURITY_AUTH_FLOW_STARTED:         EventPriority.NORMAL,
+    Events.SECURITY_AUTH_FLOW_COMPLETED:       EventPriority.NORMAL,
+    Events.SECURITY_AUTH_FLOW_FAILED:          EventPriority.NORMAL,
+    Events.SECURITY_PERMISSIONS_CHECK:         EventPriority.BACKGROUND,
+    Events.SECURITY_PERMISSIONS_REPAIRED:      EventPriority.NORMAL,
+    Events.SECURITY_BRUTEFORCE_SUSPECTED:      EventPriority.CRITICAL,
+    Events.SECURITY_DEVICE_RESET_DETECTED:     EventPriority.CRITICAL,
+    Events.SECURITY_FINGERPRINT_INITIALIZED:   EventPriority.NORMAL,
+    Events.SECURITY_EXTERNAL_AUTH_CHECK_FAILED: EventPriority.NORMAL,
+    # Config
+    Events.CONFIG_VALIDATION_COMPLETED:        EventPriority.NORMAL,
+    Events.CONFIG_VALIDATION_FAILED:           EventPriority.NORMAL,
+    # Subscription
+    Events.SUBSCRIPTION_DETECTED:              EventPriority.NORMAL,
+    Events.SUBSCRIPTION_EXPIRED:               EventPriority.NORMAL,
+    Events.SUBSCRIPTION_CHECK_FAILED:          EventPriority.BACKGROUND,
+    # Sync skipped
+    Events.SYNC_SKIPPED:                       EventPriority.BACKGROUND,
+    # Account
+    Events.ACCOUNT_SWITCHED:                   EventPriority.CRITICAL,
+    # Shortcut
+    Events.SHORTCUT_CREATED:                   EventPriority.NORMAL,
+    # Artwork
+    Events.ARTWORK_REQUEST:                    EventPriority.BACKGROUND,
 }
 
 # Events whose payloads are idempotent enough to be coalesced in the
@@ -74,7 +112,13 @@ def get_priority(event: Events | str) -> EventPriority:
     back to NORMAL — never BACKGROUND — so a forgotten classification
     can't be silently dropped.
     """
-    raise NotImplementedError("OP-09b: lookup _DEFAULT_PRIORITY, fallback NORMAL")
+    # Resolve string to Events enum if possible
+    if isinstance(event, str):
+        try:
+            event = Events(event)
+        except ValueError:
+            return EventPriority.NORMAL
+    return _DEFAULT_PRIORITY.get(event, EventPriority.NORMAL)
 
 
 def get_coalesce_key(event: Events | str) -> str:
@@ -82,4 +126,9 @@ def get_coalesce_key(event: Events | str) -> str:
     Empty = each emission kept as a distinct queue entry. Non-empty
     = replace any pending event of the same (type, kwargs[key]).
     """
-    raise NotImplementedError("OP-09b: lookup COALESCE_KEY, return '' if absent")
+    if isinstance(event, str):
+        try:
+            event = Events(event)
+        except ValueError:
+            return ""
+    return COALESCE_KEY.get(event, "")

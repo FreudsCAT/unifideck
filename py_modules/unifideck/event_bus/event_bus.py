@@ -12,10 +12,15 @@ never blocks the others (errors captured via gather + logged).
 """
 from __future__ import annotations
 
+import asyncio
+import logging
+import time
 from collections.abc import Awaitable, Callable
 from typing import Any
 
 from ..core.types import Events
+
+logger = logging.getLogger(__name__)
 
 Handler = Callable[..., Awaitable[Any]] | Callable[..., Any]
 
@@ -29,36 +34,56 @@ class EventBus:
         Keys are event *string values* so the bus survives module
         reloads that would break enum identity.
         """
-        raise NotImplementedError("OP-09a: init _handlers and _oneshot dicts")
+        self._handlers: dict[str, list[Handler]] = {}
+        self._oneshot: set[int] = set()
 
     def on(self, event: Events | str, handler: Handler) -> None:
         """Register a persistent handler. Called on every emission
         until removed via ``off()``.
         """
-        raise NotImplementedError("OP-09a: append handler to _handlers[key]")
+        key = self._key(event)
+        self._handlers.setdefault(key, []).append(handler)
 
     def once(self, event: Events | str, handler: Handler) -> None:
         """Register a one-shot handler. Auto-removed after the
         next emission. Useful for awaiting a single completion
         (one sync cycle, one auth flow).
         """
-        raise NotImplementedError("OP-09a: register + mark for auto-removal")
+        key = self._key(event)
+        self._handlers.setdefault(key, []).append(handler)
+        self._oneshot.add(id(handler))
 
     def off(self, event: Events | str, handler: Handler) -> bool:
         """Unregister ``handler`` from ``event``. Return True if
         removed, False if not found. Safe on unknown handlers.
         """
-        raise NotImplementedError("OP-09a: remove from _handlers, return found bool")
+        key = self._key(event)
+        handlers = self._handlers.get(key)
+        if handlers is None:
+            return False
+        try:
+            handlers.remove(handler)
+            self._oneshot.discard(id(handler))
+            return True
+        except ValueError:
+            return False
 
     def clear(self, event: Events | None = None) -> None:
         """Remove all handlers for ``event``, or all events if None.
         Used on shutdown and in tests.
         """
-        raise NotImplementedError("OP-09a: clear specific event or all")
+        if event is None:
+            self._handlers.clear()
+            self._oneshot.clear()
+        else:
+            key = self._key(event)
+            removed = self._handlers.pop(key, [])
+            for h in removed:
+                self._oneshot.discard(id(h))
 
     def handler_count(self, event: Events | str) -> int:
         """Return number of handlers currently registered for ``event``."""
-        raise NotImplementedError("OP-09a: len(_handlers.get(key, []))")
+        return len(self._handlers.get(self._key(event), []))
 
     async def emit(self, event: Events | str, **payload: Any) -> list[Any]:
         """Emit ``event`` to all registered handlers.
@@ -69,7 +94,44 @@ class EventBus:
         AFTER emission so they can't fire twice if re-emitted inside
         a handler. Logs per-handler timing and success count at DEBUG.
         """
-        raise NotImplementedError("OP-09a: gather handlers, remove oneshots, log")
+        key = self._key(event)
+        handlers = list(self._handlers.get(key, []))
+        if not handlers:
+            return []
+
+        tasks = [self._invoke(h, payload) for h in handlers]
+        t0 = time.monotonic()
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        elapsed_ms = (time.monotonic() - t0) * 1000
+
+        ok_count = 0
+        for i, result in enumerate(results):
+            if isinstance(result, Exception):
+                logger.error(
+                    "[EventBus] Handler %s failed on %s: %s",
+                    getattr(handlers[i], "__qualname__", handlers[i]),
+                    key, result,
+                )
+            else:
+                ok_count += 1
+
+        logger.debug(
+            "[EventBus] %s: %d/%d handlers OK in %.1fms",
+            key, ok_count, len(handlers), elapsed_ms,
+        )
+
+        # Remove one-shot handlers AFTER emission
+        to_remove = [h for h in handlers if id(h) in self._oneshot]
+        for h in to_remove:
+            self._oneshot.discard(id(h))
+            current = self._handlers.get(key)
+            if current:
+                try:
+                    current.remove(h)
+                except ValueError:
+                    pass
+
+        return results
 
     async def _invoke(
         self, handler: Handler, payload: dict[str, Any],
@@ -79,12 +141,17 @@ class EventBus:
         offloaded via ``asyncio.to_thread`` so blocking I/O never
         freezes the event loop.
         """
-        raise NotImplementedError("OP-09a: await if coroutine, else to_thread")
+        if asyncio.iscoroutinefunction(handler):
+            return await handler(**payload)
+        else:
+            return await asyncio.to_thread(handler, **payload)
 
     @staticmethod
     def _key(event: Events | str) -> str:
         """Normalise an event reference to its string value.
-        Accepts both ``Events.FOO`` and the raw ``'"foo"'`` so legacy
+        Accepts both ``Events.FOO`` and the raw ``"foo"`` so legacy
         callers passing strings keep working.
         """
-        raise NotImplementedError("OP-09a: return str(event) / event.value")
+        if hasattr(event, "value"):
+            return event.value
+        return str(event)
