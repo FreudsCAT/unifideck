@@ -9,6 +9,8 @@ a frontend reconnect cannot pull megabytes.
 """
 from __future__ import annotations
 
+import time
+from collections import deque
 from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any
@@ -41,7 +43,11 @@ class _RecordedEvent:
 
     def to_dict(self) -> dict[str, Any]:
         """Return JSON-serialisable dict: event, kwargs, rounded ts."""
-        raise NotImplementedError("OP-09d: return {'event': event, 'kwargs': kwargs, 'ts': round(ts,3)}")
+        return {
+            "event": self.event,
+            "kwargs": self.kwargs,
+            "ts": round(self.timestamp, 3),
+        }
 
 
 class EventReplayBuffer:
@@ -57,17 +63,39 @@ class EventReplayBuffer:
         ``{event_str: deque}`` map; deques are created lazily on
         first ``record()`` for each type.
         """
-        raise NotImplementedError("OP-09d: merge caps, init empty _buffers dict")
+        self._caps: dict[str, int] = {}
+        # Merge default caps
+        for evt, cap in _DEFAULT_CAPS.items():
+            self._caps[evt.value if hasattr(evt, "value") else str(evt)] = cap
+        # Apply caller overrides
+        if caps:
+            for evt, cap in caps.items():
+                self._caps[evt.value if hasattr(evt, "value") else str(evt)] = cap
+        self._fallback_cap = fallback_cap
+        self._buffers: dict[str, deque[_RecordedEvent]] = {}
+        self._start_time = time.monotonic()
 
     def record(
-        self, event: Events | str, kwargs: dict[str, Any],
+        self,
+        event: Events | str,
+        kwargs: dict[str, Any],
     ) -> None:
         """Append one event to its per-type ring buffer.
         ``kwargs`` is stored by reference; callers must not mutate
         after recording (EventBus already treats emitted kwargs as
         immutable so this is safe in practice).
         """
-        raise NotImplementedError("OP-09d: lazily create deque, appendleft")
+        key = event.value if hasattr(event, "value") else str(event)
+        buf = self._buffers.get(key)
+        if buf is None:
+            cap = self._caps.get(key, self._fallback_cap)
+            buf = deque(maxlen=cap)
+            self._buffers[key] = buf
+        buf.appendleft(_RecordedEvent(
+            event=key,
+            kwargs=kwargs,
+            timestamp=time.monotonic() - self._start_time,
+        ))
 
     def snapshot(
         self, events: Iterable[Events | str] | None = None,
@@ -75,8 +103,29 @@ class EventReplayBuffer:
         """Return recent events as dicts, newest-first, globally capped
         to ``MAX_SNAPSHOT_ENTRIES``. Pass ``events`` to filter by type.
         """
-        raise NotImplementedError("OP-09d: collect from deques, sort by ts desc, cap")
+        if events is not None:
+            keys = {e.value if hasattr(e, "value") else str(e) for e in events}
+        else:
+            keys = None
+
+        all_entries: list[_RecordedEvent] = []
+        for key, buf in self._buffers.items():
+            if keys is not None and key not in keys:
+                continue
+            all_entries.extend(buf)
+
+        # Sort newest-first by timestamp
+        all_entries.sort(key=lambda e: e.timestamp, reverse=True)
+
+        # Cap globally
+        return [e.to_dict() for e in all_entries[:MAX_SNAPSHOT_ENTRIES]]
 
     def clear(self, event: Events | str | None = None) -> None:
         """Clear one event type's buffer, or all if None."""
-        raise NotImplementedError("OP-09d: clear one or all deques")
+        if event is None:
+            self._buffers.clear()
+        else:
+            key = event.value if hasattr(event, "value") else str(event)
+            buf = self._buffers.get(key)
+            if buf is not None:
+                buf.clear()

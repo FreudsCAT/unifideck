@@ -9,6 +9,7 @@ trends. ~20 KB total — safe to run for days.
 """
 from __future__ import annotations
 
+import statistics
 from collections import deque
 from dataclasses import dataclass, field
 from typing import Any
@@ -34,14 +35,28 @@ class HandlerLatencyStats:
         """Append a measurement, update counters + max, recompute
         percentiles from the current window.
         """
-        raise NotImplementedError("OP-10b: append to _window, update counters, call _recompute")
+        self.invocations += 1
+        self.total_ms += duration_ms
+        if duration_ms > self.max_ms:
+            self.max_ms = duration_ms
+        self._window.append(duration_ms)
+        self._recompute_percentiles()
 
     def to_dict(self) -> dict[str, Any]:
         """Return JSON-serializable snapshot (excludes internal deque).
         Includes computed ``avg_ms = total_ms / invocations`` rounded
         to 2 decimals; zero when no invocations yet.
         """
-        raise NotImplementedError("OP-10b: build dict without _window field")
+        avg_ms = round(self.total_ms / self.invocations, 2) if self.invocations else 0.0
+        return {
+            "name": self.name,
+            "invocations": self.invocations,
+            "total_ms": round(self.total_ms, 2),
+            "avg_ms": avg_ms,
+            "max_ms": round(self.max_ms, 2),
+            "p50_ms": round(self.p50_ms, 2),
+            "p95_ms": round(self.p95_ms, 2),
+        }
 
     def _recompute_percentiles(self) -> None:
         """Update ``p50_ms`` / ``p95_ms`` from the rolling window.
@@ -49,7 +64,22 @@ class HandlerLatencyStats:
         index 18 is p95. Degenerate cases: empty window → no-op,
         single sample → both percentiles equal that value.
         """
-        raise NotImplementedError("OP-10b: statistics.quantiles or single-sample fallback")
+        n = len(self._window)
+        if n == 0:
+            return
+        if n == 1:
+            self.p50_ms = self._window[0]
+            self.p95_ms = self._window[0]
+            return
+        sorted_window = sorted(self._window)
+        try:
+            q = statistics.quantiles(sorted_window, n=20)
+            self.p50_ms = q[9]   # 50th percentile
+            self.p95_ms = q[18]  # 95th percentile
+        except statistics.StatisticsError:
+            # Fewer than 2 data points for quantiles
+            self.p50_ms = sorted_window[n // 2]
+            self.p95_ms = sorted_window[-1]
 
 
 class HandlerLatencyCollector:
@@ -57,25 +87,34 @@ class HandlerLatencyCollector:
 
     def __init__(self) -> None:
         """Init empty ``{handler_name: HandlerLatencyStats}`` dict."""
-        raise NotImplementedError("OP-10b: self._stats: dict = {}")
+        self._stats: dict[str, HandlerLatencyStats] = {}
 
     def record(self, handler_name: str, duration_ms: float) -> None:
         """Record one invocation's duration. O(log n) from quantiles.
         Lazily creates the stats entry on first call per handler.
         """
-        raise NotImplementedError("OP-10b: get or create stats entry, call record()")
+        stats = self._stats.get(handler_name)
+        if stats is None:
+            stats = HandlerLatencyStats(name=handler_name)
+            self._stats[handler_name] = stats
+        stats.record(duration_ms)
 
     def get_snapshot(self) -> dict[str, dict[str, float]]:
         """Return all handler stats as ``{name: stats_dict}``."""
-        raise NotImplementedError("OP-10b: {k: v.to_dict() for k,v in self._stats.items()}")
+        return {name: stats.to_dict() for name, stats in self._stats.items()}
 
     def get_top_n(self, n: int = 10) -> dict[str, dict[str, float]]:
         """Return the top-N slowest handlers ranked by p95 latency.
         Useful for dashboards that want "which handlers to look at
         first" without rendering the full list.
         """
-        raise NotImplementedError("OP-10b: sort by p95_ms, return top n as dict")
+        ranked = sorted(
+            self._stats.items(),
+            key=lambda kv: kv[1].p95_ms,
+            reverse=True,
+        )
+        return {name: stats.to_dict() for name, stats in ranked[:n]}
 
     def reset(self, handler_name: str) -> bool:
         """Clear stats for one handler. Return True if it existed."""
-        raise NotImplementedError("OP-10b: pop handler_name from _stats")
+        return self._stats.pop(handler_name, None) is not None

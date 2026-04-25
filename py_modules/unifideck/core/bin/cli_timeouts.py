@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from ...config import ConfigManager
 
+
 # Hardcoded defaults matching the legacy behaviour. Stores can
 # override individual values via config.cli_timeouts.*
 DEFAULT_TIMEOUTS: dict[str, int] = {
@@ -30,4 +31,14 @@ def read_cli_timeouts(config: ConfigManager | None) -> dict[str, int]:
     Missing or non-int values fall back to ``DEFAULT_TIMEOUTS``
     silently. ``None`` config returns a copy of defaults unchanged.
     """
-    raise NotImplementedError("OP-07c: merge config.cli_timeouts.* over DEFAULT_TIMEOUTS")
+    result = dict(DEFAULT_TIMEOUTS)
+    if config is None:
+        return result
+    for key in DEFAULT_TIMEOUTS:
+        try:
+            val = config.get(f"cli_timeouts.{key}")
+            if isinstance(val, int) and val > 0:
+                result[key] = val
+        except Exception:
+            pass
+    return result
