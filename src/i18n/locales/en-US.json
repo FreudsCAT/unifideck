@@ -34,7 +34,7 @@
     "validationErrors.notAbsolute": "Path must be absolute",
     "validationErrors.systemDir": "Cannot use a system directory",
     "validationErrors.notWritable": "Location is not writable",
-    "validationErrors.notFound": "Directory does not exist",
+    "validationErrors.notFound": "Directory does not exist.",
     "validationErrors.homeRoot": "Cannot use home directory root",
     "freeSpaceLabel": "{{label}} ({{freeSpace}} GB free)"
   },
