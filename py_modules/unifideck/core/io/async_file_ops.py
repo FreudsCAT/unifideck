@@ -1,256 +1,306 @@
-"""core/io/async_file_ops.py — Non-blocking filesystem I/O.
+"""core/io/async_file_ops.py — Non-blocking I/O wrapper.
 
-# OP-06a | core/io/async_file_ops.py | Depends: (none)
+Moved from core/ to the new core/io/ subpackage,
+paired with safe_file_op.py under a single "filesystem I/O
+primitives" umbrella. Clean break: no shim in core/.
 
-Every sync stdlib call (``open``, ``Path.exists``, ``os.makedirs``,
-``shutil.copy``, ...) is wrapped in ``asyncio.to_thread`` so the
-Decky event loop is never blocked on disk access. Use via the
-conventional alias::
-
-    from unifideck.core.io import async_file_ops as aio
+Wraps all synchronous file operations (open, os.path.exists(),
+os.makedirs, shutil.copy) in asyncio.to_thread() to avoid blocking
+the single-threaded asyncio event loop Decky Loader runs on.
+Replaces 39+ blocking I/O calls found in main.py inside async def
+methods. Each blocking call froze the Steam UI for the duration of
+the disk access (1-10ms per call on eMMC).
+All functions in this module are standalone `async def` coroutines
+that accept the same arguments as their sync counterparts and return
+the same values. The only rule: `await` them from an async context.
+Features:
+- JSON read/write helpers with corrupt-file recovery.
+- Atomic write via tmp + rename with optional chmod (SEC-21b).
+- Directory helpers (exists, is_file, is_dir, listdir, makedirs).
+- Copy / move / remove helpers.
+Usage:
+ from unifideck.core import async_file_ops as aio
+ data = await aio.read_json("/path/to/cache.json")
+ await aio.write_json("/path/to/cache.json", data, mode=0o600)
+Reference: Technical Document v1.0 — Section 3.8 (Async I/O migration),
+Figure 29.
 """
-from __future__ import annotations
-
 import asyncio
 import json
 import logging
 import os
 import shutil
-from typing import Any
+from pathlib import Path
+from typing import Any, cast
 
 logger = logging.getLogger(__name__)
-
 PathLike = str | os.PathLike
-
-
-# ── Simple stat wrappers ─────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════
+# Path queries
+# ══════════════════════════════════════════════════════════════════
 
 
 async def exists(path: PathLike) -> bool:
-    """Return True if ``path`` exists (file or directory)."""
-    try:
-        return await asyncio.to_thread(os.path.exists, str(path))
-    except OSError:
-        return False
+    """Check if a path exists (file or directory)."""
+    return await asyncio.to_thread(
+        lambda: Path(path).exists(),
+    )
 
 
 async def is_file(path: PathLike) -> bool:
-    """Return True if ``path`` is a regular file."""
-    try:
-        return await asyncio.to_thread(os.path.isfile, str(path))
-    except OSError:
-        return False
+    """Check if a path is a regular file."""
+    return await asyncio.to_thread(
+        lambda: Path(path).is_file(),
+    )
 
 
 async def is_dir(path: PathLike) -> bool:
-    """Return True if ``path`` is a directory."""
-    try:
-        return await asyncio.to_thread(os.path.isdir, str(path))
-    except OSError:
-        return False
+    """Check if a path is a directory."""
+    return await asyncio.to_thread(
+        lambda: Path(path).is_dir(),
+    )
 
 
 async def listdir(path: PathLike) -> list[str]:
-    """Return directory entries. Empty list if missing or unreadable."""
+    """List entries in a directory. Returns [] on error."""
     try:
-        return await asyncio.to_thread(os.listdir, str(path))
-    except OSError:
+        return await asyncio.to_thread(
+            lambda: [p.name for p in Path(path).iterdir()],
+        )
+    except OSError as e:
+        logger.warning(
+            "[AsyncFileOps] listdir(%s) failed: %s", path, e,
+        )
         return []
 
 
 async def stat(path: PathLike) -> os.stat_result | None:
-    """Return ``os.stat_result`` or None if ``path`` is inaccessible."""
+    """Return os.stat_result for path or None on error."""
     try:
-        return await asyncio.to_thread(os.stat, str(path))
+        return await asyncio.to_thread(
+            lambda: Path(path).stat(),
+        )
     except OSError:
         return None
 
 
-# ── Directory operations ─────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════
+# Directory management
+# ══════════════════════════════════════════════════════════════
 
 
-async def makedirs(path: PathLike, mode: int = 0o755, exist_ok: bool = True) -> bool:
-    """Create ``path`` (and missing parents). Return True on success."""
+async def makedirs(path: PathLike, mode: int = 0o755,
+                   exist_ok: bool = True) -> bool:
+    """Create directory tree. Returns True on success."""
     try:
-        await asyncio.to_thread(os.makedirs, str(path), mode, exist_ok)
+        await asyncio.to_thread(
+            lambda: Path(path).mkdir(
+                mode=mode, parents=True, exist_ok=exist_ok,
+            ),
+        )
         return True
     except OSError as e:
-        logger.warning("makedirs(%s): %s", path, e)
+        logger.error(
+            "[AsyncFileOps] makedirs(%s) failed: %s", path, e,
+        )
         return False
 
 
 async def ensure_dir(path: PathLike) -> bool:
-    """Thin alias for ``makedirs(path, exist_ok=True)``."""
+    """Alias for makedirs(..., exist_ok=True)."""
     return await makedirs(path, exist_ok=True)
 
 
-# ── Copy / move / remove ─────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════
+# File copy / move / remove
+# ══════════════════════════════════════════════════════════════
 
 
 async def copy(src: PathLike, dst: PathLike) -> bool:
-    """Copy ``src`` → ``dst`` preserving metadata. Return True on success."""
+    """Copy a file. Returns True on success."""
     try:
-        await asyncio.to_thread(shutil.copy2, str(src), str(dst))
+        await asyncio.to_thread(shutil.copy2, src, dst)
         return True
-    except OSError as e:
-        logger.warning("copy(%s, %s): %s", src, dst, e)
+    except (OSError, shutil.Error) as e:
+        logger.error(
+            "[AsyncFileOps] copy(%s -> %s) failed: %s",
+            src, dst, e,
+        )
         return False
 
 
 async def move(src: PathLike, dst: PathLike) -> bool:
-    """Move ``src`` → ``dst``. Return True on success."""
+    """Move a file or directory. Returns True on success."""
     try:
         await asyncio.to_thread(shutil.move, str(src), str(dst))
         return True
-    except OSError as e:
-        logger.warning("move(%s, %s): %s", src, dst, e)
+    except (OSError, shutil.Error) as e:
+        logger.error(
+            "[AsyncFileOps] move(%s -> %s) failed: %s",
+            src, dst, e,
+        )
         return False
 
 
 async def remove(path: PathLike) -> bool:
-    """Delete a file or directory tree at ``path``. Return True on success."""
-    def _remove_sync() -> bool:
-        p = str(path)
-        if os.path.isdir(p):
-            shutil.rmtree(p)
-        elif os.path.exists(p):
-            os.remove(p)
-        return True
-
+    """Delete a file. Returns True on success (or file already gone)."""
     try:
-        return await asyncio.to_thread(_remove_sync)
+        await asyncio.to_thread(
+            lambda: Path(path).unlink(missing_ok=True),
+        )
+        return True
     except OSError as e:
-        logger.warning("remove(%s): %s", path, e)
+        logger.error(
+            "[AsyncFileOps] remove(%s) failed: %s", path, e,
+        )
         return False
 
 
-# ── Text read / write ────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════
+# Text I/O
+# ══════════════════════════════════════════════════════════════
 
 
 async def read_text(path: PathLike, encoding: str = "utf-8") -> str | None:
-    """Read text file. Return None on any OSError or decode failure."""
-    def _read_sync() -> str | None:
-        try:
-            with open(str(path), "r", encoding=encoding) as f:
-                return f.read()
-        except Exception:
-            return None
+    """Read file contents as text. Returns None on error."""
+    try:
+        return await asyncio.to_thread(
+            lambda: Path(path).read_text(encoding=encoding)
+        )
+    except (OSError, UnicodeDecodeError) as e:
+        logger.warning("[AsyncFileOps] read_text(%s) failed: %s", path, e)
+        return None
 
-    return await asyncio.to_thread(_read_sync)
 
-
-async def write_text(
-    path: PathLike,
-    content: str,
-    encoding: str = "utf-8",
-    mode: int | None = None,
-) -> bool:
-    """Atomic write via tmp + rename. ``mode`` applies chmod after write."""
+async def write_text(path: PathLike, content: str,
+                     encoding: str = "utf-8", mode: int = 0o644) -> bool:
+    """Write text atomically (tmp + rename) with optional chmod."""
     return await asyncio.to_thread(_write_text_sync, path, content, encoding, mode)
 
 
-def _write_text_sync(
-    path: PathLike,
-    content: str,
-    encoding: str,
-    mode: int | None,
-) -> bool:
-    """Sync implementation of ``write_text``; invoked via to_thread.
-
-    Write to ``<path>.tmp`` first, chmod if requested, then rename over
-    the target so readers never see a partial file.
-    """
-    p = str(path)
-    tmp = p + ".tmp"
+def _write_text_sync(path: PathLike, content: str,
+                     encoding: str, mode: int) -> bool:
+    """Synchronous helper for write_text, called via to_thread."""
+    p = Path(path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    tmp = Path(str(p) + ".tmp")
     try:
-        os.makedirs(os.path.dirname(p) or ".", exist_ok=True)
-        with open(tmp, "w", encoding=encoding) as f:
-            f.write(content)
-            f.flush()
-            os.fsync(f.fileno())
-        if mode is not None:
-            os.chmod(tmp, mode)
-        os.rename(tmp, p)
+        tmp.write_text(content, encoding=encoding)
+        tmp.replace(p)
+        if mode != 0o644:
+            p.chmod(mode)
         return True
-    except Exception as e:
-        logger.warning("write_text(%s): %s", path, e)
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
+    except OSError as e:
+        logger.error(
+            "[AsyncFileOps] write_text(%s) failed: %s", path, e,
+        )
+        if tmp.exists():
+            try:
+                tmp.unlink()
+            except OSError:
+                # best-effort cleanup; file may already be gone or locked
+                pass
         return False
 
 
-# ── Bytes read / write ───────────────────────────────────────────────
-
-
 async def write_bytes(path: PathLike, data: bytes) -> bool:
-    """Atomic bytes write via tmp + rename. Return True on success."""
+    """Atomic binary-file write. Uses temp-file-and-rename.
+
+    Same semantics as ``write_text`` but for ``bytes`` payloads.
+    Used for artwork downloads (PNG/JPEG) and any other blob
+    content. Returns True on success, False on any I/O failure
+    (logs via the caller — this helper stays silent).
+    """
     return await asyncio.to_thread(_write_bytes_sync, path, data)
 
 
 def _write_bytes_sync(path: PathLike, data: bytes) -> bool:
-    """Sync implementation of ``write_bytes``; invoked via to_thread."""
-    p = str(path)
-    tmp = p + ".tmp"
+    """Synchronous binary writer called via to_thread."""
+    p = Path(path)
+    tmp = p.with_suffix(p.suffix + ".tmp")
     try:
-        os.makedirs(os.path.dirname(p) or ".", exist_ok=True)
-        with open(tmp, "wb") as f:
-            f.write(data)
-            f.flush()
-            os.fsync(f.fileno())
-        os.rename(tmp, p)
+        tmp.parent.mkdir(parents=True, exist_ok=True)
+        tmp.write_bytes(data)
+        tmp.replace(p)
         return True
-    except Exception as e:
-        logger.warning("write_bytes(%s): %s", path, e)
+    except OSError:
         try:
-            os.unlink(tmp)
+            if tmp.exists():
+                tmp.unlink()
         except OSError:
+            # best-effort operation; failure is non-fatal here
             pass
         return False
 
 
-# ── JSON read / write ────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════
+# JSON I/O
+# ══════════════════════════════════════════════════════════════════
 
 
 async def read_json(path: PathLike) -> dict[str, Any]:
-    """Read + parse JSON. Return empty dict on any failure (missing,
-    malformed, unreadable) — callers can't distinguish these cases,
-    so wrap with explicit try/except if that matters.
-    """
+    """Read a JSON file. Returns {} on missing file or parse error."""
     return await asyncio.to_thread(_read_json_sync, path)
 
 
 def _read_json_sync(path: PathLike) -> dict[str, Any]:
-    """Sync implementation of ``read_json``; invoked via to_thread."""
+    """Synchronous JSON reader called via to_thread."""
+    p = Path(path)
+    if not p.exists():
+        return {}
     try:
-        with open(str(path), "r", encoding="utf-8") as f:
-            data = json.load(f)
-        return data if isinstance(data, dict) else {}
-    except Exception:
+        with p.open(encoding="utf-8") as f:
+            return cast("dict[str, Any]", json.load(f))
+    except (
+        json.JSONDecodeError, UnicodeDecodeError, OSError,
+    ) as e:
+        logger.warning(
+            "[AsyncFileOps] failed to read JSON %s: %s", path, e,
+        )
         return {}
 
 
-async def write_json(
-    path: PathLike,
-    data: dict[str, Any],
-    indent: int = 2,
-    mode: int | None = None,
-) -> bool:
-    """Serialize ``data`` and atomic-write as JSON. Return True on success."""
+async def write_json(path: PathLike, data: Any, indent: int = 2,
+                     mode: int = 0o644) -> bool:
+    """Write JSON atomically (SEC-21b: tmp + rename + chmod).
+
+    Args:
+    path: Destination file path.
+    data: JSON-serializable object.
+    indent: Pretty-print indent (default 2).
+    mode: Unix file mode applied after rename (default 0o644;
+    use 0o600 for files containing secrets).
+
+    Returns:
+    True on success, False on error.
+
+    """
     return await asyncio.to_thread(_write_json_sync, path, data, indent, mode)
 
 
-def _write_json_sync(
-    path: PathLike,
-    data: dict[str, Any],
-    indent: int,
-    mode: int | None,
-) -> bool:
-    """Sync implementation of ``write_json``; invoked via to_thread."""
+def _write_json_sync(path: PathLike, data: Any, indent: int,
+                     mode: int = 0o644) -> bool:
+    """Write JSON atomically via tmp + rename, with optional chmod."""
+    p = Path(path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    tmp = Path(str(p) + ".tmp")
     try:
-        content = json.dumps(data, indent=indent, ensure_ascii=False)
-    except (TypeError, ValueError) as e:
-        logger.warning("write_json(%s): serialization failed: %s", path, e)
+        content = json.dumps(
+            data, ensure_ascii=False, indent=indent,
+        )
+        tmp.write_text(content, encoding="utf-8")
+        tmp.replace(p)
+        if mode != 0o644:
+            p.chmod(mode)
+        return True
+    except (OSError, TypeError, ValueError) as e:
+        logger.error(
+            "[AsyncFileOps] write_json(%s) failed: %s", path, e,
+        )
+        if tmp.exists():
+            try:
+                tmp.unlink()
+            except OSError:
+                # best-effort cleanup; file may already be gone or locked
+                pass
         return False
-    return _write_text_sync(path, content + "\n", "utf-8", mode)
