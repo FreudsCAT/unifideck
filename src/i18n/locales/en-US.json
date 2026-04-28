@@ -1,4 +1,5 @@
 {
+  "_comment": "Unified catalog: merged from legacy src893/staging (28 top-level sections, 516 lines) + architectural-refactor additions (cloudSync, cloudSyncBehavior, launchLogs, library, navigation, playButton, saveFolder, security, settings, + new launcher toasts). The overlay policy is current-wins-on-conflict so new code's expected labels survive. Legacy top-level sections (accountSwitch, storageSettings, ubisoftAuth, etc.) are preserved as-is since their consumer components migrate unchanged.",
   "tabs": {
     "settings": "Settings",
     "downloads": "Downloads"
@@ -34,7 +35,7 @@
     "validationErrors.notAbsolute": "Path must be absolute",
     "validationErrors.systemDir": "Cannot use a system directory",
     "validationErrors.notWritable": "Location is not writable",
-    "validationErrors.notFound": "Directory does not exist.",
+    "validationErrors.notFound": "Directory does not exist",
     "validationErrors.homeRoot": "Cannot use home directory root",
     "freeSpaceLabel": "{{label}} ({{freeSpace}} GB free)"
   },
@@ -263,14 +264,31 @@
       "prerequisitesFailed": "Prerequisites Warning",
       "prerequisitesFailedMessage": "Prerequisites may not have installed correctly",
       "browserRequired": "Microsoft Edge Required",
-      "signingIn": "Signing In..."
+      "signingIn": "Signing In...",
+      "cloudSyncDownFailed": "Cloud save download failed for {{store}} ({{error}}). Playing with local saves.",
+      "cloudSyncUpFailed": "Cloud save upload failed for {{store}} ({{error}}). Your progress is stored locally only.",
+      "errorCircuitBreakerOpen": "{{game_key}} failed to launch {{count}} times recently. Automatic retries paused.",
+      "launcherError": "Couldn't launch {{game_key}} ({{error_code}}). Check the logs for details."
     },
     "updateComplete": "Update Complete!",
     "updateCompleteMessage": "{{title}} has been updated.",
     "updateCancelled": "Update Cancelled",
     "updateCancelledMessage": "Update for {{title}} was cancelled.",
     "updateFailed": "Update Failed",
-    "updateFailedMessage": "Failed to start update."
+    "updateFailedMessage": "Failed to start update.",
+    "actions": {
+      "_comment": "Action button labels rendered next to toasts when the backend payload includes an ``action`` field. Each one is a one-click remediation for a specific error code. Steam URLs use SteamClient.URL.ExecuteSteamURL; unifideck:// URLs are dispatched through the dispatch_unifideck_action RPC (backend verbs) or handled locally (frontend verbs). See LauncherToastListener.tsx + actions/unifideck_uri.py.",
+      "openStorageManager": "Free up space",
+      "signInToStore": "Sign in",
+      "retrySync": "Retry",
+      "retryLibrarySync": "Refresh library",
+      "openSaveFolder": "Show save folder",
+      "showLogs": "Show logs"
+    },
+    "library": {
+      "_comment": "Toasts emitted by SyncService when a per-store library sync fails. The retry button triggers a fire-and-forget refresh via the unifideck://refresh-library/<store> verb; the user doesn't wait for the result inline, the Library view picks it up through its SYNC_PROGRESS subscription.",
+      "syncStoreFailed": "Couldn't refresh {{store}} library ({{error}}). Your existing library stays visible."
+    }
   },
   "uninstallModal": {
     "title": "Confirm Uninstallation",
@@ -506,11 +524,193 @@
     "browserInstalled": "Microsoft Edge installed successfully!",
     "browserInstallFailed": "Microsoft Edge installation failed. Please install manually: flatpak install com.microsoft.Edge",
     "flatpakNotFound": "Flatpak is not available on this system",
-    "signInRequired": "Sign in to play"
+    "signInRequired": "Sign in to play",
+    "syncSkippedNoSubscription": "No active Xbox Game Pass subscription detected. Your xCloud library was not synchronized.",
+    "syncSkippedTierUnknown": "Your Xbox Game Pass subscription was detected but the plan could not be determined. Sync skipped to avoid listing unavailable games.",
+    "subscriptionCheckFailed": "Could not verify your Xbox Game Pass subscription. xCloud sync skipped. Retry when your connection stabilizes.",
+    "subscriptionDetected": "Xbox Game Pass {{tier}} subscription active."
   },
   "authSuccess": {
     "title": "Authentication",
     "titleStore": "{{store}} — Authentication ✓",
     "subtitle": "Press the B button to close this window"
+  },
+  "playButton": {
+    "play": "Play",
+    "install": "Install",
+    "cancel": "Cancel",
+    "retry": "Retry",
+    "downloadFailed": "Download failed",
+    "installing": "Installing"
+  },
+  "navigation": {
+    "loading": "Loading...",
+    "storesTitle": "Stores",
+    "syncTitle": "Library Sync",
+    "languageTitle": "Language"
+  },
+  "security": {
+    "panelTitle": "Security",
+    "counters": {
+      "label": "Counters",
+      "empty": "No events observed since startup"
+    },
+    "log": {
+      "label": "Audit log",
+      "entryCount": "{{count}} entry",
+      "entryCount_other": "{{count}} entries",
+      "emptyFiltered": "No events matching the filter"
+    },
+    "filter": {
+      "label": "Filter",
+      "all": "All events"
+    },
+    "timeline": {
+      "label": "24h timeline ({{count}} event)",
+      "label_other": "24h timeline ({{count}} events)",
+      "axisStart": "-24h",
+      "axisEnd": "now"
+    },
+    "relativeTime": {
+      "seconds": "{{count}}s ago",
+      "minutes": "{{count}} min ago",
+      "hours": "{{count}}h ago",
+      "days": "{{count}}d ago"
+    },
+    "bruteforce": {
+      "warningTitle": "Warning: brute-force detection (warning level)",
+      "escalationTitle": "ALERT: brute-force detection (escalation level)",
+      "detail": "{{failures}} decryption failures in the last {{window}}s. Thresholds: {{warning}} (warning) / {{escalation}} (escalation).",
+      "resetButton": "Acknowledge and reset the detector"
+    },
+    "actions": {
+      "clearLog": "Clear log and counters"
+    },
+    "events": {
+      "tokenEncrypted": "Token encrypted",
+      "tokenDecrypted": "Token decrypted",
+      "decryptFailed": "Decryption failed",
+      "tokenFileMigrated": "Token file migrated",
+      "legacyPlaintextDetected": "Legacy plaintext detected",
+      "authFlowStarted": "Auth started",
+      "authFlowCompleted": "Auth completed",
+      "authFlowFailed": "Auth failed",
+      "permissionsCheck": "Permissions checked",
+      "permissionsRepaired": "Permissions repaired",
+      "bruteforceSuspected": "Brute-force suspected",
+      "deviceResetDetected": "Device reset detected",
+      "fingerprintInitialized": "Fingerprint initialized",
+      "externalAuthCheckFailed": "External auth check failed",
+      "configValidationCompleted": "Config validation completed",
+      "configValidationFailed": "Config validation failed"
+    },
+    "configValidation": {
+      "degradedTitle": "Configuration invalid - degraded mode active",
+      "detail": "{{count}} validation error detected at boot",
+      "detail_other": "{{count}} validation errors detected at boot",
+      "sourceDefaults": "defaults",
+      "sourceUser": "user overrides",
+      "sourceMerged": "merged",
+      "overflow": "+ {{count}} more error",
+      "overflow_other": "+ {{count}} more errors"
+    }
+  },
+  "cloudSyncBehavior": {
+    "_comment": "Settings panel letting the user pick, per store, how cloud save sync failures should be surfaced. The five store_label entries mirror the rows rendered by CloudSyncBehaviorPanel.tsx. Microsoft deliberately omitted — xCloud streaming has no local save to sync.",
+    "title": "Cloud save sync behavior",
+    "description": "Choose how Unifideck should react when a cloud save download or upload fails at game launch.",
+    "loadError": "Could not load current settings",
+    "saveError": "Could not save your change — please retry",
+    "store_label": {
+      "default": "Default (all stores)",
+      "epic": "Epic Games",
+      "gog": "GOG",
+      "amazon": "Amazon Games",
+      "ubisoft": "Ubisoft Connect"
+    },
+    "mode": {
+      "silent": "Silent (log only)",
+      "toast": "Notify (toast)"
+    }
+  },
+  "cloudSync": {
+    "_comment": "Toast strings emitted by the launcher when a cloud sync fails. The error placeholder is resolved through cloudSync.error.<code> via the backend payload's error_i18n_key field.",
+    "error": {
+      "network_unreachable": "Network unreachable",
+      "auth_expired": "Authentication expired",
+      "forbidden": "Access denied",
+      "quota_exceeded": "Cloud quota exceeded",
+      "server_error": "Store server unavailable",
+      "timed_out": "Request timed out",
+      "disk_full": "Not enough disk space",
+      "disk_space_low": "Skipped — low disk space (free up some room and try again)",
+      "permission_denied": "Permission denied",
+      "cancelled": "Cancelled",
+      "unknown": "Unexpected error"
+    }
+  },
+  "launchLogs": {
+    "_comment": "LaunchLogsModal strings. The modal opens from the unifideck://show-logs/<launch_id> toast action, attached to launcher-failure toasts (circuit breaker + LauncherError). Reads per-launch archived logs from ~/.local/share/unifideck/launches/<launch_id>.log and renders them with level-based color coding.",
+    "title": "Launch logs — {{launchId}}",
+    "close": "Close",
+    "copyAll": "Copy all",
+    "export": "Export to file",
+    "copied": "Copied to clipboard",
+    "copyFailed": "Copy failed",
+    "exporting": "Exporting…",
+    "exportedTo": "Exported to {{path}}",
+    "exportFailed": "Export failed: {{error}}",
+    "loading": "Loading logs…",
+    "notAvailable": "Logs for this launch are no longer available (past the 7-day retention window).",
+    "error": "Couldn't read the logs: {{error}}",
+    "fileInfo": "{{path}} — showing {{shown}} of {{total}} lines",
+    "filterLabel": "Show",
+    "filterInfo": "Info",
+    "filterWarning": "Warning",
+    "filterError": "Error",
+    "nextError": "Next error ({{current}}/{{total}})",
+    "noErrors": "No errors",
+    "allFiltered": "All lines hidden by the current filter. Enable at least one level to see log entries."
+  },
+  "settings": {
+    "_comment": "UnifideckSettingsPanel action-type controls that aren't covered by more specific components (LanguageSelector, CloudSyncBehaviorPanel). refreshAll is a fire-and-forget button that triggers sync_all() across every registered store; the Library view shows the sync progress via its own subscription to SYNC_PROGRESS events.",
+    "refreshAll": {
+      "sectionTitle": "Library actions",
+      "button": "Refresh all libraries",
+      "buttonBusy": "Starting…",
+      "startedTitle": "Library refresh started",
+      "startedBody": "Syncing all stores in the background.",
+      "startedSingle": "Refreshing {{store}} library in the background.",
+      "failedTitle": "Couldn't start library refresh"
+    }
+  },
+  "saveFolder": {
+    "_comment": "SaveFolderModal strings. The modal opens from the unifideck://open-save-folder/<store>/<game_id> toast action, typically surfaced on cloud sync failures where the user wants to inspect what's actually stored locally. count and size are interpolated; truncated shows only when the result was capped.",
+    "title": "Save folder — {{store}} / {{gameId}}",
+    "close": "Close",
+    "copyPath": "Copy path",
+    "copyFileList": "Copy file list",
+    "depthLabel": "Depth",
+    "filterLabel": "Filter",
+    "loading": "Loading folder contents…",
+    "noSavesYet": "No saves found locally for this game yet. The folder will be created on the next successful cloud sync.",
+    "aggregate": "{{count}} files, {{size}} total",
+    "truncated": "{{count}} more files ({{size}}) not shown — narrow your filter to see them.",
+    "error": "Couldn't read the save folder: {{error}}"
+  },
+  "library": {
+    "_comment": "Per-game UI affordances rendered in the Library view, including the circuit-breaker badge and force-launch / reset controls when launches fail repeatedly.",
+    "circuitBreaker": {
+      "_comment": "Surface for the launch-failure circuit breaker. Badge appears only when failures within the configured window reach circuit_breaker.failures_threshold (default 3 in 600s). Force launch arms a one-shot bypass; Reset wipes the failure history entirely.",
+      "badgeRecent": "{{count}} recent launch failure",
+      "badgeRecent_other": "{{count}} recent launch failures",
+      "badgeTooltip": "{{count}} failed launches in the recent time window — the circuit breaker has paused automatic retries",
+      "forceLaunchButton": "Force launch",
+      "resetButton": "Reset failures",
+      "failureKind": {
+        "fastBoot": "Fast boot crash",
+        "launcherError": "Launch setup error"
+      }
+    }
   }
 }
