@@ -1,108 +1,137 @@
+/**
+ * src/i18n/translations.ts — i18n loader + runtime API.
+ *
+ * This module is intentionally thin. The canonical list of
+ * supported languages, their native names, their RTL flag, and
+ * the static imports of every {tag}.json locale file all live
+ * in `locales.generated.ts`, which is auto-generated from
+ * `defaults/config.json` by `scripts/gen_locale_imports.py`.
+ *
+ * Adding a new language requires ONLY adding an entry to the
+ * `i18n.locales` array in defaults/config.json. The CI workflow
+ * then regenerates `locales.generated.ts` and calls DeepL to
+ * produce the corresponding `{tag}.json` file. This file (the
+ * runtime API) never needs to change.
+ *
+ * What lives here:
+ * - `initI18n()`: one-time i18next setup with all bundled
+ * locales and RTL direction applied to the document root
+ * - `changeLanguage()`: runtime language switch that persists
+ * the choice and updates the document direction
+ * - `isRTL()`: convenience re-export from the generated catalog
+ * - `getSupportedLanguages()`: returns the canonical tuple
+ * - `detectInitialLanguage()`: localStorage → navigator → en-US
+ *
+ * Reference: Technical Document v1.0 — Section 10 (i18n),
+ * Figure 85.
+ */
 import i18n from "i18next";
 import { initReactI18next } from "react-i18next";
-
-import enUS from "./locales/en-US.json";
-import frFR from "./locales/fr-FR.json";
-import ptBR from "./locales/pt-BR.json";
-import ruRU from "./locales/ru-RU.json";
-import jaJP from "./locales/ja-JP.json";
-import deDE from "./locales/de-DE.json";
-import esES from "./locales/es-ES.json";
-import itIT from "./locales/it-IT.json";
-import zhCN from "./locales/zh-CN.json";
-import koKR from "./locales/ko-KR.json";
-import nlNL from "./locales/nl-NL.json";
-import plPL from "./locales/pl-PL.json";
-import trTR from "./locales/tr-TR.json";
-import ukUA from "./locales/uk-UA.json";
-
-const resources: Record<string, { translation: object }> = {
-  "en-US": { translation: enUS },
-  "fr-FR": { translation: frFR },
-  "pt-BR": { translation: ptBR },
-  "ru-RU": { translation: ruRU },
-  "ja-JP": { translation: jaJP },
-  "de-DE": { translation: deDE },
-  "es-ES": { translation: esES },
-  "it-IT": { translation: itIT },
-  "zh-CN": { translation: zhCN },
-  "ko-KR": { translation: koKR },
-  "nl-NL": { translation: nlNL },
-  "pl-PL": { translation: plPL },
-  "tr-TR": { translation: trTR },
-  "uk-UA": { translation: ukUA },
+// Everything locale-related comes from the generated catalog.
+// Editing the list of supported languages means editing
+// defaults/config.json, not this file.
+import {
+ SUPPORTED_LANGUAGES,
+ SupportedLanguage,
+ LANGUAGE_NAMES,
+ RTL_LANGUAGES,
+ LOCALE_RESOURCES,
+} from "./locales.generated";
+// Re-export so existing callers can import these from
+// "./translations" without caring that the data actually
+// comes from a generated file
+export {
+ SUPPORTED_LANGUAGES,
+ LANGUAGE_NAMES,
+ RTL_LANGUAGES,
 };
+export type { SupportedLanguage };
+/**
+ * Return true if the given language tag should be rendered in
+ * right-to-left mode. Centralized here so callers don't have to
+ * know which languages are RTL.
+ */
+export function isRTL(lang: SupportedLanguage): boolean {
+ return RTL_LANGUAGES.has(lang);
+}
 
-// Native language names for display in dropdown
-export const LANGUAGE_NAMES: Record<string, string> = {
-  "en-US": "English",
-  "de-DE": "Deutsch",
-  "es-ES": "Español",
-  "fr-FR": "Français",
-  "it-IT": "Italiano",
-  "ja-JP": "日本語",
-  "ko-KR": "한국어",
-  "nl-NL": "Nederlands",
-  "pl-PL": "Polski",
-  "pt-BR": "Português",
-  "ru-RU": "Русский",
-  "tr-TR": "Türkçe",
-  "zh-CN": "简体中文",
-  "uk-UA": "Українська",
-};
+/**
+ * Apply the correct `dir` and `lang` attributes to the document
+ * root. Idempotent — safe to call multiple times with the same
+ * value. Called internally by initI18n() and changeLanguage();
+ * most callers should never invoke it directly.
+ *
+ * When an RTL language becomes active, the entire React tree
+ * flips naturally: flexbox row directions reverse, text-align
+ * defaults to right, scrollbars move to the left, etc. Any
+ * component that wants to opt out of flipping for a specific
+ * element can override with an explicit `dir="ltr"` attribute.
+ */
+function applyDirection(lang: SupportedLanguage): void {
+ if (typeof document === "undefined") return; // SSR safety
+ document.documentElement.dir = isRTL(lang) ? "rtl" : "ltr";
+ document.documentElement.lang = lang;
+}
+/**
+ * Initialize i18next with all bundled locales. Called once at
+ * plugin startup. Safe to call multiple times (idempotent).
+ *
+ * Also applies the correct `dir` attribute to the document root
+ * based on the detected initial language, so RTL languages
+ * render correctly from the first frame.
+ */
+export async function initI18n(): Promise<void> {
+ if (i18n.isInitialized) return;
+ const initialLang = detectInitialLanguage();
+ await i18n
+ .use(initReactI18next)
+ .init({
+ resources: LOCALE_RESOURCES,
+ lng: initialLang,
+ fallbackLng: "en-US",
+ interpolation: { escapeValue: false },
+ returnEmptyString: false,
+ });
+ applyDirection(initialLang);
+}
+/**
+ * Change the current UI language at runtime, persist the choice
+ * to localStorage, and update the document direction so RTL
+ * languages flip immediately without a page reload.
+ */
+export async function changeLanguage(
+ lang: SupportedLanguage,
+): Promise<void> {
+ await i18n.changeLanguage(lang);
+ applyDirection(lang);
+ try {
+ localStorage.setItem("unifideck.lang", lang);
+ } catch {
+ // ignore quota/availability errors
+ }
+}
+/** Return the list of supported language tags. */
+export function getSupportedLanguages(): readonly SupportedLanguage[] {
+ return SUPPORTED_LANGUAGES;
+}
+/**
+ * Detect the initial language from localStorage, then the
+ * browser's navigator.language, then fall back to en-US.
+ */
 
-export const loadTranslations = (savedLanguage?: string) => {
-  // Use saved language if provided, otherwise use browser language
-  const initialLanguage =
-    savedLanguage && savedLanguage !== "auto"
-      ? savedLanguage
-      : navigator.language;
-
-  console.log("[Unifideck] i18n browser language:", navigator.language);
-  console.log("[Unifideck] i18n using language:", initialLanguage);
-
-  i18n.use(initReactI18next).init({
-    resources,
-    lng: initialLanguage,
-    fallbackLng: {
-      pt: ["pt-BR"],
-      fr: ["fr-FR"],
-      en: ["en-US"],
-      ru: ["ru-RU"],
-      ja: ["ja-JP"],
-      de: ["de-DE"],
-      es: ["es-ES"],
-      it: ["it-IT"],
-      zh: ["zh-CN"],
-      ko: ["ko-KR"],
-      nl: ["nl-NL"],
-      pl: ["pl-PL"],
-      tr: ["tr-TR"],
-      uk: ["uk-UA"],
-      default: ["en-US"],
-    },
-    load: "languageOnly",
-    interpolation: { escapeValue: false },
-    debug: true,
-  });
-
-  console.log("[Unifideck] i18n initialized");
-};
-
-export const t = i18n.t.bind(i18n);
-
-// Change language at runtime
-export const changeLanguage = async (langCode: string): Promise<void> => {
-  console.log("[Unifideck] Changing language to:", langCode);
-  await i18n.changeLanguage(langCode);
-};
-
-// Get list of supported language codes
-export const getSupportedLanguages = (): string[] => {
-  return Object.keys(resources);
-};
-
-// Get current language
-export const getCurrentLanguage = (): string => {
-  return i18n.language || "en-US";
-};
+function detectInitialLanguage(): SupportedLanguage {
+ try {
+ const saved = localStorage.getItem("unifideck.lang");
+ if (saved && (SUPPORTED_LANGUAGES as readonly string[]).includes(saved)) {
+ return saved as SupportedLanguage;
+ }
+ } catch {
+ // localStorage unavailable
+ }
+ // Fall back to browser language if it matches a supported tag
+ const browserLang = navigator.language || "en-US";
+ const match = SUPPORTED_LANGUAGES.find(
+ (l) => l === browserLang || l.startsWith(browserLang.split("-")[0]),
+ );
+ return match || "en-US";
+}
