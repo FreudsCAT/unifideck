@@ -1,29 +1,29 @@
-"""utils/paths.py — Centralised path resolution for game installations.
+"""utils/paths.py — Centralized path resolution for game installations.
 
-# OP-33a | py_modules/unifideck/utils/paths.py | Depends: (none)
-
-Single source of truth for where Unifideck looks for installed
-games: default install dirs per store, mounted SD cards / USB
+Refactor of legacy ``utils/paths.py`` (130 lines). Provides a
+single source of truth for where Unifideck looks for installed
+games: default install dirs per store, mounted SD cards/USB
 drives, and optional user-configured custom paths.
 
 The legacy module hardcoded ``~/.local/share/unifideck/...``
 paths and a fixed list of store install directories. This
 refactor:
-  - Reads default install paths from ``stores.<n>.install_dir``.
-  - Reads custom override from ``download.custom_path``.
-  - Reads the SD-card mount root from ``paths.sd_card_root``.
-  - Returns a deduplicated list of existing directories.
+
+- Reads default install paths from ``stores.<n>.install_dir``
+- Reads custom override from ``download.custom_path``
+- Reads the SD card mount root from ``paths.sd_card_root``
+- Returns a deduplicated list of existing directories
 
 Pure helpers (no I/O):
-  - ``expand``       : tilde + env-var expansion in one shot.
-  - ``dedupe_paths`` : remove duplicates preserving order.
+
+- ``expand`` : tilde + env-var expansion in one shot
+- ``dedupe_paths`` : remove duplicates preserving order
 
 Filesystem helpers:
-  - ``get_all_game_directories(config)`` : full discovery scan.
-  - ``get_games_map_path(config)``       : the games.map
-                                           location.
-  - ``ensure_games_map_dir(config)``     : create the parent
-                                           dir.
+
+- ``get_all_game_directories(config)`` : full discovery scan
+- ``get_games_map_path(config)`` : the games.map location
+- ``ensure_games_map_dir(config)`` : create the parent dir
 
 Reference: Technical Document v1.0 — Section 3.6.1 (games.map),
 3.9 (ConfigManager), 5.6 (installation pipeline).
@@ -34,6 +34,8 @@ import logging
 import os
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
+
+from .config_helpers import get_cfg
 
 if TYPE_CHECKING:
     from ..config import ConfigManager
@@ -51,19 +53,20 @@ DEFAULT_INSTALL_DIRS = {
     "ubisoft": "~/Games/Ubisoft",
 }
 
-# Where games.map lives by default. Steam Deck never relocates
-# this without explicit user action, so the path is stable.
+# Where the games.map lives by default. Steam Deck never
+# relocates this without explicit user action, so the path is
+# stable.
 DEFAULT_GAMES_MAP = "~/.local/share/unifideck/games.map"
 
-# Mount root for SD cards / external drives on the Steam Deck.
+# Mount root for SD cards / external drives on the Steam Deck
 DEFAULT_SD_ROOT = "/run/media"
 
-# — Legacy compatibility aliases ——————————————————————————————
-# Old constant names kept working so legacy modules
-# (``utils/__init__.py``, ``accounts/account_manager.py``, etc.)
-# that ``from .paths import GAMES_MAP_PATH, DEFAULT_PATHS``
-# continue to import successfully during the migration window.
-# Both forms resolve to the same expanded value.
+# ── Legacy compatibility aliases ──────────────────────────────
+# Keep the old constant names working so legacy modules
+# (utils/__init__.py, accounts/account_manager.py, etc.) that
+# ``from .paths import GAMES_MAP_PATH, DEFAULT_PATHS`` continue
+# to import successfully during the migration window. Both forms
+# resolve to the same expanded value.
 GAMES_MAP_PATH = str(Path(DEFAULT_GAMES_MAP).expanduser())
 DEFAULT_PATHS = {
     store: str(Path(path).expanduser())
@@ -71,191 +74,196 @@ DEFAULT_PATHS = {
 }
 
 
-# ── Pure helpers ─────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════
+# Pure helpers
+# ══════════════════════════════════════════════════════════════
 
 
 def expand(path: str) -> str:
     """Expand ``~`` and ``$VAR`` references in a path string.
-    Pure function — no filesystem I/O. Returns an
-    absolute path when the input is absolute or contains
-    ``~``; a relative path unchanged otherwise. Uses
-    ``os.path.expandvars`` for env-var substitution
-    because ``pathlib.Path`` has no equivalent, then
-    wraps through ``Path(...).expanduser()`` for tilde
+
+    Pure function — no filesystem I/O. Returns an absolute path
+    (when the input is absolute or contains ``~``) or a relative
+    path unchanged.
+
+    Uses ``os.path.expandvars`` for env var substitution because
+    ``pathlib.Path`` has no equivalent. The result is then
+    wrapped through ``Path(...).expanduser()`` for the tilde
     resolution.
     """
     return str(Path(os.path.expandvars(path)).expanduser())
 
 
 def dedupe_paths(paths: list[str]) -> list[str]:
-    """Remove duplicate paths, preserving first-occurrence order.
-    Uses a seen-set for O(n) dedup. Path comparison is by
-    resolved string — caller should pass already-expanded
-    paths. Used after collecting paths from multiple
-    sources (default dirs + SD-card mounts + user
-    overrides) where the same directory can legitimately
-    appear twice.
+    """Remove duplicate paths preserving order.
+
+    Two paths are considered equal if their normalized form
+    (``os.path.normpath``) matches. Useful when merging
+    discovery results from multiple sources that may overlap.
     """
     seen: set[str] = set()
-    result: list[str] = []
+    out: list[str] = []
     for p in paths:
-        if p not in seen:
-            seen.add(p)
-            result.append(p)
-    return result
+        norm = os.path.normpath(p)
+        if norm in seen:
+            continue
+        seen.add(norm)
+        out.append(p)
+    return out
 
 
-# ── Config helper ────────────────────────────────────────────
+def _cfg(config: ConfigManager | None, key: str, default: Any) -> Any:
+    """Legacy alias for backward compatibility. Delegates to `get_cfg`."""
+    return get_cfg(config, key, default)
 
 
-def _cfg(
-    config: ConfigManager | None, key: str, default: Any,
-) -> Any:
-    """Read a config value with a default fallback.
-    Thin helper used throughout the module so the
-    ``config is None`` check stays in one place. Returns
-    ``default`` when config is None OR when the key is
-    missing / empty.
+# ══════════════════════════════════════════════════════════════
+# Filesystem discovery
+# ══════════════════════════════════════════════════════════════
+
+
+def get_all_game_directories(config: ConfigManager | None = None) -> list[str]:
+    """Return every directory that may contain installed games.
+
+    Combines:
+
+    1. Per-store install dirs from ``stores.<n>.install_dir``
+       (or ``DEFAULT_INSTALL_DIRS`` as fallback)
+    2. The user's custom path from ``download.custom_path``
+    3. SD card / external drive mounts under
+       ``paths.sd_card_root`` — scans 2 levels deep for
+       ``Games/`` and ``GOG Games/`` folders
+
+    Only returns directories that actually exist on disk.
+    Result is deduplicated.
     """
-    if config is None:
-        return default
-    try:
-        val = config.get(key, default)
-        return val if val is not None else default
-    except Exception:
-        return default
+    candidates: list[str] = []
 
+    # 1. Per-store install dirs
+    for store, default in DEFAULT_INSTALL_DIRS.items():
+        path = _cfg(config, f"stores.{store}.install_dir", default)
+        candidates.append(expand(path))
 
-# ── Filesystem helpers ───────────────────────────────────────
-
-
-def get_all_game_directories(
-    config: ConfigManager | None = None,
-) -> list[str]:
-    """Return every directory Unifideck should scan for installed games.
-    Aggregates:
-      - Each store's ``install_dir`` via ``_collect_game_dirs``
-        (reads ``stores.<n>.install_dir`` or falls back to
-        ``DEFAULT_INSTALL_DIRS``).
-      - Custom user override ``download.custom_path`` when
-        set.
-      - Every mounted SD-card / USB drive via
-        ``_scan_mount_root`` (looks under
-        ``paths.sd_card_root`` or ``DEFAULT_SD_ROOT``).
-    Each candidate path is expanded, existence-checked,
-    deduped. Non-existent dirs silently skipped. Returns
-    the final list in discovery order (Steam installs +
-    store dirs before external drives) so the caller's
-    first-hit detection picks the canonical install
-    location.
-    """
-    dirs: list[str] = []
-
-    # Store default install dirs
-    dirs.extend(_collect_game_dirs(config))
-
-    # Custom user override
-    custom = _cfg(config, "download.custom_path", "")
+    # 2. Custom user path
+    custom = get_cfg(config, "download.custom_path", "")
     if custom:
-        expanded = expand(custom)
-        if os.path.isdir(expanded):
-            dirs.append(expanded)
+        candidates.append(expand(custom))
 
-    # SD card / external drives
-    dirs.extend(_scan_mount_root(config))
+    # 3. SD card / external drive scan
+    media_root = get_cfg(config, "paths.sd_card_root", DEFAULT_SD_ROOT)
+    candidates.extend(_scan_mount_root(media_root))
 
-    return dedupe_paths(dirs)
+    # Filter to existing dirs and dedupe
+    existing = [p for p in candidates if Path(p).is_dir()]
+    return dedupe_paths(existing)
 
 
-def _collect_game_dirs(
-    config: ConfigManager | None,
-) -> list[str]:
-    """Read per-store install dirs from config, fall back to defaults.
-    Iterates ``DEFAULT_INSTALL_DIRS`` keys; for each,
-    tries ``stores.<n>.install_dir`` from config,
-    falls back to the default value. Returns the
-    expanded paths in store-enumeration order. Missing
-    store keys skipped (a store disabled in config
-    shouldn't drag its install dir into the scan).
+def _collect_game_dirs(parent_path: Path) -> list[str]:
+    """Return ``Games/`` and ``GOG Games/`` subdirs of ``parent_path``.
+
+    Helper for ``_scan_mount_root`` — factored out so the scan
+    loop stays shallow. Symlinks are skipped to avoid loops.
     """
-    result: list[str] = []
-    for store, default_path in DEFAULT_INSTALL_DIRS.items():
-        raw = _cfg(config, f"stores.{store}.default_install_root", default_path)
-        expanded = expand(raw)
-        if os.path.isdir(expanded):
-            result.append(expanded)
-    return result
+    found: list[str] = []
+    for sub in ("Games", "GOG Games"):
+        p = parent_path / sub
+        if p.is_dir() and not p.is_symlink():
+            found.append(str(p))
+    return found
 
 
-def _scan_mount_root(
-    config: ConfigManager | None,
-) -> list[str]:
-    """Enumerate mounted volumes under the SD-card root.
-    Reads ``paths.sd_card_root`` from config, falls back
-    to ``DEFAULT_SD_ROOT``. Walks 2 levels via
-    ``_scan_level2``. Returns existing directories only.
-    Used by ``get_all_game_directories`` to include
-    games installed on removable media.
+def _scan_level2(level1_path: Path) -> list[str]:
+    """Scan the level-2 subtree under ``level1_path`` for game dirs.
+
+    Some Decks (LUKS-on-external SSD setups notably) mount
+    game partitions one level deeper than the standard
+    ``/run/media/<user>/<mount>/Games`` layout — this helper
+    handles the ``<mount>/<level2>/Games`` case. Returns an
+    empty list on any I/O error (mount disappeared between
+    listings, permissions trouble).
     """
-    root = expand(_cfg(config, "paths.sd_card_root", DEFAULT_SD_ROOT))
-    if not os.path.isdir(root):
-        return []
-    return _scan_level2(root)
-
-
-def _scan_level2(
-    root: str,
-) -> list[str]:
-    """Return second-level subdirs of ``root``.
-    SD cards typically layout as
-    ``/run/media/deck/<volume>/<games-dir>/``. We scan
-    two levels deep from the mount root so we pick up
-    the inner games directory rather than just the
-    volume. Empty list on missing root / permission
-    error — SD cards often produce transient errors
-    during mount/unmount.
-    """
-    result: list[str] = []
+    found: list[str] = []
     try:
-        for volume in os.scandir(root):
-            if not volume.is_dir():
+        for level2_path in level1_path.iterdir():
+            if (
+                not level2_path.is_dir()
+                or level2_path.is_symlink()
+            ):
                 continue
-            try:
-                for subdir in os.scandir(volume.path):
-                    if subdir.is_dir():
-                        result.append(subdir.path)
-            except OSError:
-                pass
+            found.extend(_collect_game_dirs(level2_path))
     except OSError:
+        # best-effort operation; failure is non-fatal here
         pass
-    return result
+    return found
 
 
-def get_games_map_path(
-    config: ConfigManager | None = None,
-) -> str:
-    """Return the ``games.map`` file path, expanded.
-    Reads ``paths.games_map`` from config, falls back to
-    ``DEFAULT_GAMES_MAP``. Always returns an absolute
-    path. Creates no directories — caller calls
-    ``ensure_games_map_dir`` when write access is about
-    to be needed.
+def _scan_mount_root(root: str) -> list[str]:
+    """Walk ``/run/media/<user>/<mount>/`` looking for game folders.
+
+    Returns paths matching ``<mount>/Games/`` or
+    ``<mount>/GOG Games/`` where they exist. Errors are logged
+    at debug level only — a missing ``/run/media`` on a
+    non-Deck system is normal.
+
+    SECURITY/ROBUSTNESS: symbolic links are skipped at every
+    level. A symlink loop (e.g. ``Games/Other -> Games/``) would
+    otherwise cause the scan to recurse indefinitely or return
+    duplicate paths. The dedupe pass at the caller would mask
+    the duplicates but the wasted CPU on a symlink loop could
+    freeze sync.
     """
-    raw = _cfg(config, "paths.games_map", DEFAULT_GAMES_MAP)
+    root_path = Path(root)
+    if not root_path.is_dir():
+        return []
+
+    found: list[str] = []
+    try:
+        for level1_path in root_path.iterdir():
+            if (
+                not level1_path.is_dir()
+                or level1_path.is_symlink()
+            ):
+                continue
+            # /run/media/<level1>/Games or GOG Games
+            found.extend(_collect_game_dirs(level1_path))
+            # /run/media/<level1>/<level2>/Games (some Decks)
+            found.extend(_scan_level2(level1_path))
+    except OSError as e:
+        logger.debug(
+            "[paths] mount scan failed on %s: %s", root, e,
+        )
+    return found
+
+
+# ══════════════════════════════════════════════════════════════
+# games.map location
+# ══════════════════════════════════════════════════════════════
+
+
+def get_games_map_path(config: ConfigManager | None = None) -> str:
+    """Return the absolute path to the games.map file.
+
+    Reads ``paths.games_map`` from config if set, otherwise
+    falls back to ``~/.local/share/unifideck/games.map``. Tilde
+    and env vars in the configured path are expanded.
+    """
+    raw = get_cfg(config, "paths.games_map", DEFAULT_GAMES_MAP)
     return expand(raw)
 
 
-def ensure_games_map_dir(
-    config: ConfigManager | None = None,
-) -> str:
-    """Create the parent directory of ``games.map`` if missing.
-    Returns the resolved ``games.map`` path for
-    convenience (so callers can ``ensure_games_map_dir()``
-    and use the result directly without a second call to
-    ``get_games_map_path``). Uses
-    ``Path.mkdir(parents=True, exist_ok=True)`` — no-op
-    when the dir already exists.
+def ensure_games_map_dir(config: ConfigManager | None = None) -> str | None:
+    """Create the parent directory for games.map if missing.
+
+    Returns the directory path on success, None on failure.
+    Idempotent — safe to call on every plugin start.
     """
-    gm_path = get_games_map_path(config)
-    Path(gm_path).parent.mkdir(parents=True, exist_ok=True)
-    return gm_path
+    path = Path(get_games_map_path(config))
+    parent = path.parent
+    try:
+        parent.mkdir(parents=True, exist_ok=True)
+        return str(parent)
+    except OSError as e:
+        logger.warning(
+            "[paths] mkdir %s failed: %s", parent, e,
+        )
+        return None

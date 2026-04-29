@@ -1,131 +1,182 @@
 """core/exe_finder.py — Game executable locator.
-
-# OP-04c | core/exe_finder.py | Depends: OP-05
-
-Walks an install dir (max depth 3), filters known wrappers,
-scores candidates by hint match > shallow depth > file size.
-Consolidates exe detection logic from Epic/GOG/Amazon/Ubisoft.
+Searches install directories and Wine prefixes for the main .exe file.
+Replaces duplicated exe detection logic across Epic, GOG, Amazon, and
+Ubisoft stores.
+Strategy:
+1. Walk the install directory tree (max depth 3)
+2. Filter out known wrappers/launchers/redistributables
+3. Score candidates by: hint match > shallow depth > larger file size
+4. Return the highest-scoring candidate
+Reference: Technical Document v1.0 — Section 3.4.2.
 """
-from __future__ import annotations
-
 import logging
 import os
-from typing import Generator
+from pathlib import Path
+from typing import cast
 
 logger = logging.getLogger(__name__)
-
-# Known wrapper/launcher executables to skip during scan.
-# Crash handlers, redistributable installers, uninstallers,
-# and generic helpers that are never the main game binary.
+# Known wrapper/launcher executables to skip.
+# These are common redistributable installers, crash handlers,
+# and Unity/Unreal helper binaries that are NOT the main game.
 WRAPPER_EXES = {
-    # Crash handlers
-    "unitycrashhandler64.exe", "unitycrashhandler32.exe",
-    "crashreportclient.exe", "crashpad_handler.exe", "bugreport.exe",
-    # Redistributable installers
-    "ue4prereqsetup_x64.exe", "dxwebsetup.exe",
-    "vcredist_x64.exe", "vcredist_x86.exe",
-    "dotnetfx35setup.exe", "ndp48-x86-x64-allos-enu.exe",
-    "dxsetup.exe",
-    # Uninstallers
-    "unins000.exe", "unins001.exe", "uninstall.exe",
-    # Generic launchers/updaters
-    "installer.exe", "setup.exe", "updater.exe",
-    "patcher.exe", "launcher.exe",
-    # UE4/UE5 specific
-    "unrealcefsubprocess.exe",
+ # Crash handlers
+ "unitycrashhandler64.exe",
+ "unitycrashhandler32.exe",
+ "crashreportclient.exe",
+ "crashpad_handler.exe",
+ "bugreport.exe",
+ # Redistributable installers
+ "ue4prereqsetup_x64.exe",
+ "dxwebsetup.exe",
+ "vcredist_x64.exe",
+ "vcredist_x86.exe",
+ "dotnetfx35setup.exe",
+ "ndp48-x86-x64-allos-enu.exe",
+ "dxsetup.exe",
+ # Uninstallers
+ "unins000.exe",
+ "unins001.exe",
+ "uninstall.exe",
+ # Generic launchers/updaters
+ "installer.exe",
+ "setup.exe",
+ "updater.exe",
+ "patcher.exe",
+ "launcher.exe",
+ # UE4/UE5 specific (ue4prereqsetup_x64.exe already listed above)
+ "unrealcefsubprocess.exe",
 }
-
-
 class ExeFinder:
     """Find the main game executable in an install directory.
-
-    Scoring (higher = better):
-      +1000 if filename matches a hint (store metadata)
-      +(4 - depth) * 100 — prefer shallower paths
-      +min(size_mb, 500) — main binary is usually the biggest
+    Scores candidates to pick the best match:
+    - +1000 if the filename matches a hint (from store metadata)
+    - +(4-depth)*100 for shallower directories (prefer root)
+    - +min(size_mb, 500) for larger files (main binaries are usually bigger)
+    Usage:
+    finder = ExeFinder()
+    exe = finder.find("/path/to/game", hints=["Game.exe"]).
     """
 
-    def find(self, install_path: str, hints: list[str] | None = None) -> str | None:
-        """Return absolute path to the best .exe candidate, or None.
+    def find(
+    self,
+    install_path: str,
+    hints: list[str] | None = None,
+    ) -> str | None:
+        """Find the main .exe in install_path.
 
-        Returns None when ``install_path`` is missing, unreadable, or
-        contains no scoreable .exe. ``hints`` come from store metadata
-        or ``games.map`` and weight strongly in scoring.
+        Args:
+          install_path: Game installation directory.
+          hints: Optional list of known exe names to prefer
+            (e.g. from store metadata or games.map).
+
+        Returns:
+          Absolute path to the best .exe candidate, or None.
+
         """
-        if not install_path or not os.path.isdir(install_path):
+        if not install_path or not Path(install_path).is_dir():
             return None
 
-        hint_lower = {h.lower() for h in (hints or [])}
-        candidates: list[tuple[str, int, str, int]] = []
+        hint_lower = {h.lower() for h in hints} if hints else set()
 
-        for full_path, depth, filename in self._walk_exe_candidates(install_path):
-            score = self._score_candidate(full_path, depth, filename, hint_lower)
-            candidates.append((full_path, depth, filename, score))
+        candidates = [
+            (
+                self._score_candidate(
+                    path, depth, filename, hint_lower,
+                ),
+                path,
+            )
+            for path, depth, filename in (
+                self._walk_exe_candidates(install_path)
+            )
+        ]
 
         return self._rank_candidates(candidates, install_path)
 
-    def _walk_exe_candidates(self, install_path: str) -> Generator[tuple[str, int, str], None, None]:
-        """Yield ``(full_path, depth, filename)`` for each scoreable .exe.
+    def _walk_exe_candidates(
+        self, install_path: str,
+    ):
+        """Yield (full_path, depth, filename) for every scoreable .exe.
 
-        Walks up to depth 3. Skips filenames in ``WRAPPER_EXES``.
+        Side effect: filesystem walk. Depth is capped at 3
+        levels to keep the scan bounded on games with deep
+        asset hierarchies. Wrapper binaries (unins*, vcredist,
+        launcher helpers) are filtered here to keep the scorer
+        pure.
         """
-        install_path = os.path.abspath(install_path)
-        prefix_len = len(install_path)
-
         for root, dirs, files in os.walk(install_path):
-            # Compute depth from install_path
-            rel = root[prefix_len:]
-            depth = rel.count(os.sep) if rel else 0
-
-            if depth >= 3:
-                dirs.clear()
+            rel = os.path.relpath(root, install_path)
+            depth = 0 if rel == "." else rel.count(os.sep) + 1
+            if depth > 3:
+                dirs.clear()  # stop descending this branch
                 continue
-
             for filename in files:
-                if not filename.lower().endswith(".exe"):
+                lower = filename.lower()
+                if not lower.endswith(".exe"):
                     continue
-                if filename.lower() in WRAPPER_EXES:
+                if lower in WRAPPER_EXES:
                     continue
-                yield (os.path.join(root, filename), depth, filename)
+                yield str(Path(root) / filename), depth, filename
 
     @staticmethod
     def _score_candidate(
-        full_path: str, depth: int, filename: str, hint_lower: set,
+        full_path: str,
+        depth: int,
+        filename: str,
+        hint_lower: set,
     ) -> int:
-        """Return heuristic score for one .exe candidate (pure function).
-        Silently returns the hint+depth component if ``stat`` fails.
+        """Return a heuristic score for one .exe candidate.
+
+        Pure function: no I/O except ``Path.stat().st_size``
+        which is wrapped in try/except OSError. The three
+        signals, from strongest to weakest, are hint match
+        (+1000), shallow depth (+100 per level), and file size
+        in MB (capped at 500).
+
+        The hint match dominates because metadata from a store
+        is usually right. Size dominates in the absence of
+        hints because the main game binary is typically the
+        largest .exe in the install tree (engines, splash
+        wrappers, crash handlers are smaller).
         """
         score = 0
-
-        # Hint match: +1000
         if filename.lower() in hint_lower:
             score += 1000
-
-        # Depth preference: shallower is better
         score += (4 - depth) * 100
-
-        # Size tiebreaker: bigger binary is usually the game
         try:
-            size_mb = os.path.getsize(full_path) / (1024 * 1024)
-            score += min(int(size_mb), 500)
+            size_mb = (
+                Path(full_path).stat().st_size // (1024 * 1024)
+            )
+            score += min(size_mb, 500)
         except OSError:
+            # Missing / unreadable file — the walk shouldn't
+            # return it, but defend anyway so we never raise
+            # from scoring.
             pass
-
         return score
 
     @staticmethod
     def _rank_candidates(
-        candidates: list[tuple], install_path: str,
+    candidates: list[tuple],
+    install_path: str,
     ) -> str | None:
-        """Return highest-scoring candidate, or None. Log best at INFO."""
+        """Pick the highest-scoring candidate, or None if empty.
+
+        Pure function. Logging lives here (not in the scorer) because
+        the "no candidates" case is a useful diagnostic at DEBUG level
+        and we only want one log line per `find()` call.
+        """
         if not candidates:
+            logger.debug(
+                "[ExeFinder] No .exe found in %s", install_path,
+            )
             return None
-        best = max(candidates, key=lambda c: c[3])  # index 3 = score
+        candidates.sort(key=lambda x: x[0], reverse=True)
+        best_score, best_path = candidates[0]
         logger.info(
-            "[ExeFinder] Best exe for %s: %s (score=%d)",
-            install_path, best[0], best[3],
+            "[ExeFinder] Best candidate (score=%d): %s",
+            best_score, best_path,
         )
-        return best[0]
+        return cast("str | None", best_path)
 
 
 # Singleton instance — shared across all stores
