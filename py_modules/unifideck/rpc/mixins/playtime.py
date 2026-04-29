@@ -1,9 +1,27 @@
-"""rpc/mixins/playtime.py — Playtime RPC mixin for Plugin class.
-# OP-26x | rpc/mixins/playtime.py | Depends: OP-25x, OP-24c
+"""Playtime RPC mixin for Plugin class.
+
+OP-26j | rpc/mixins/playtime.py
 """
 from __future__ import annotations
 
+from typing import Any
+
+from unifideck.rpc.errors import RpcError
+
 
 class PlaytimeRPCMixin:
-    """RPC methods for playtime operations. Mixed into Plugin class."""
-    pass  # TODO: implement — see operational plan PDF for full method list
+    """Per-game and aggregate playtime queries."""
+
+    services: Any
+
+    def _require_playtime(self) -> Any:
+        svc = getattr(self.services, "playtime", None)
+        if svc is None:
+            raise RpcError("service_unavailable", service="playtime")
+        return svc
+
+    async def get_playtime(self, store: str, game_id: str) -> Any:
+        return await self._require_playtime().get(store, game_id)
+
+    async def get_all_playtimes(self) -> Any:
+        return await self._require_playtime().get_all()

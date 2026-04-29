@@ -1,11 +1,24 @@
-"""rpc/auto_wire.py — Auto-wrap Plugin class methods for RPC.
-# OP-24c | rpc/auto_wire.py | Depends: OP-24b
+"""Auto-wrap Plugin class methods for RPC.
+
+OP-24c | py_modules/unifideck/rpc/auto_wire.py
 """
 from __future__ import annotations
 
+import asyncio
 
-def auto_wrap_rpc_methods(cls):
-    """Class decorator: wraps all async def methods with RPC error handling.
-    Applied to Plugin class via @auto_wrap_rpc_methods.
-    """
-    raise NotImplementedError("OP-24c: wrap each async method with try/except + to_dict")
+from unifideck.rpc.wrapper import rpc_wrapper
+
+
+def auto_wrap_rpc_methods(cls: type) -> type:
+    """Class decorator: apply ``rpc_wrapper`` to every public async method."""
+    seen: set[str] = set()
+    for klass in cls.__mro__:
+        for name, attr in vars(klass).items():
+            if name.startswith("_") or name in seen:
+                continue
+            seen.add(name)
+            if asyncio.iscoroutinefunction(attr) and not getattr(
+                attr, "__rpc_wrapped__", False
+            ):
+                setattr(cls, name, rpc_wrapper(attr))
+    return cls
