@@ -1,162 +1,225 @@
 """utils/locale.py — Locale detection and market resolution.
 
-# OP-33b | py_modules/unifideck/utils/locale.py | Depends: (none)
+Single source of truth: the `i18n.locales` section of
+defaults/config.json (parsed and validated by
+scripts/locale_config.py). This module never hardcodes a list
+of supported locales — adding a new language is a one-line
+edit to config.json, and this module picks it up automatically
+on the next plugin start.
 
-Single source of truth for the active locale tag and market code.
-
-The new architecture (Technical Document v1.3, Section 10) replaces
-manual 14-file i18n maintenance with build-time DeepL translation:
-  - ``en-US.json`` is the only file developers edit.
-  - CI detects changed keys, calls DeepL API, generates 13 locale
-    files, commits them to ``src/i18n/locales/``.
-  - Zero runtime dependency — generated files are committed to git.
-  - The frontend ``LanguageSelector`` reads available locales from
-    the ``locales/`` directory.
-
-This backend module does NOT hardcode a locale list. Instead it:
-  1. Reads the user's saved preference from ``ui.language`` in config.
-  2. Discovers available locale tags by scanning the ``locales/``
-     directory for ``*.json`` files (the build-generated set).
-  3. Falls back to system POSIX locale detection.
-  4. Ultimate fallback: ``"en-US"``.
-
-The translation pipeline itself (DeepL integration, delta detection,
-CI workflow) is developed by a separate contributor and is outside
-the scope of this module.
+Resolution priority:
+  1. User preference → ConfigManager key 'ui.language'
+     (only if the saved value is a tag present in
+     i18n.locales; unknown saved tags are silently ignored
+     and we fall through to system detection)
+  2. System POSIX → locale.getlocale() → mapped to the first
+     i18n.locales entry whose tag begins with the same 2-
+     letter prefix (case-insensitive)
+  3. Source fallback → LocaleConfig.source.tag
 """
 from __future__ import annotations
 
-import locale as _locale_mod
+import locale as _locale
 import logging
-import os
-from typing import TYPE_CHECKING
+import sys
+from pathlib import Path
+from typing import TYPE_CHECKING, Any
+
+from .config_helpers import get_cfg
 
 if TYPE_CHECKING:
     from ..config import ConfigManager
 
 logger = logging.getLogger(__name__)
 
-# Config key the UI writes when the user picks a language.
+# Config keys used by this module.
 _USER_LANGUAGE_KEY = "ui.language"
 
-# Fallback when nothing else works.
-_DEFAULT_LOCALE = "en-US"
-_DEFAULT_MARKET = "US"
+# The locale_config module lives in scripts/ which is a sibling
+# of py_modules/. It's not on the default Python path so we add
+# it on first use. This import is done lazily to avoid paying
+# the cost on every module import.
+_LOCALE_CONFIG_MODULE = None
 
 
-# ── Available locale discovery ───────────────────────────────
+def _import_locale_config():
+    """Lazy import of scripts/locale_config.py, cached.
 
-
-def _discover_available_locales() -> set[str]:
-    """Scan ``src/i18n/locales/`` for generated *.json files.
-
-    Returns a set of BCP-47 tags derived from filenames
-    (e.g. ``fr-FR.json`` → ``"fr-FR"``). Returns empty set
-    if the directory doesn't exist (e.g. in unit tests or
-    before first CI build).
+    Returns the module handle or None if scripts/ can't be
+    located (unusual install layout). None signals "no schema
+    validation available" and the caller falls through to its
+    default behaviour.
     """
-    tags: set[str] = set()
+    global _LOCALE_CONFIG_MODULE
+    if _LOCALE_CONFIG_MODULE is not None:
+        return _LOCALE_CONFIG_MODULE
+    # Walk up from this file to find <repo>/scripts/locale_config.py.
+    here = Path(__file__).resolve()
+    candidates = [
+        here.parent.parent.parent.parent / "scripts",
+        # Fallback: some dev layouts may differ
+        here.parent.parent.parent / "scripts",
+    ]
+    for scripts_dir in candidates:
+        target = scripts_dir / "locale_config.py"
+        if target.is_file():
+            scripts_str = str(scripts_dir)
+            if scripts_str not in sys.path:
+                sys.path.insert(0, scripts_str)
+            try:
+                import locale_config
+                _LOCALE_CONFIG_MODULE = locale_config
+                return _LOCALE_CONFIG_MODULE
+            except ImportError as e:
+                logger.debug(
+                    "[locale] Found %s but import failed: %s",
+                    target, e,
+                )
+                return None
+    logger.debug(
+        "[locale] scripts/locale_config.py not found on any "
+        "candidate path; locale resolution will use degraded "
+        "mode",
+    )
+    return None
+
+
+def get_locale_config(config: ConfigManager | None):
+    """Return the parsed i18n.locales section, or None on failure.
+
+    The returned object (a LocaleConfig from
+    scripts/locale_config.py) exposes `all_tags`, `get(tag)`,
+    `source`, and `targets` for consumers that need the full
+    list.
+
+    Returns None if config has no i18n section or the scripts
+    helper is unavailable.
+    """
+    lc_module = _import_locale_config()
+    if lc_module is None:
+        return None
+    # ConfigManager exposes the full merged dict via _merged,
+    # but accessing a private attribute would be fragile.
+    # Instead we rebuild the i18n branch using public .get().
+    i18n_section = get_cfg(config, "i18n", None)
+    if not isinstance(i18n_section, dict):
+        return None
     try:
-        from ..core.paths import resolve_plugin_dir
-        locales_dir = resolve_plugin_dir() / "src" / "i18n" / "locales"
-        if locales_dir.is_dir():
-            for f in locales_dir.iterdir():
-                if f.suffix == ".json" and f.stem != "index":
-                    tags.add(f.stem)
-    except Exception:
-        pass
-    return tags
+        return lc_module.load_from_dict(
+            {"i18n": i18n_section},
+        )
+    except Exception as e:  # noqa: BLE001
+        # Validation failed — log and return None. Runtime
+        # code must never crash just because someone edited
+        # config.json incorrectly.
+        logger.warning(
+            "[locale] i18n schema validation failed at "
+            "runtime: %s", e,
+        )
+        return None
 
 
-# ── Public API ───────────────────────────────────────────────
+def get_unifideck_locale(config: ConfigManager | None) -> str:
+    """Return the BCP-47 locale tag to use for UI and store APIs.
 
-
-def get_unifideck_locale(
-    config: ConfigManager | None = None,
-) -> str:
-    """Resolve the locale tag Unifideck should use this session.
-
-    Resolution priority:
-      1. User's saved ``ui.language`` if it matches an available
-         locale file in ``src/i18n/locales/``. Unknown saved tags
-         are silently ignored.
-      2. System POSIX locale via ``_detect_system_locale``,
-         2-letter prefix matched against available locales.
-      3. ``"en-US"`` fallback.
+    Returns a BCP-47 tag that is guaranteed to exist in
+    i18n.locales, or a degraded fallback if the config is
+    unavailable. The fallback is 'en-US' only as a last
+    resort — normal operation always returns a config-sourced
+    tag.
     """
-    available = _discover_available_locales()
+    lc = get_locale_config(config)
+    # ─── 1. Explicit user preference ──────────────────────────
+    saved = get_cfg(config, _USER_LANGUAGE_KEY, None)
+    if isinstance(saved, str) and saved:
+        # Normalise: accept both 'fr-FR' and 'fr_FR' for
+        # compatibility with POSIX-style values.
+        normalised = saved.replace("_", "-")
+        if lc is not None and lc.get(normalised) is not None:
+            logger.debug(
+                "[locale] user preference: %s", normalised,
+            )
+            return normalised
+        if lc is None:
+            # No canonical list available — trust the saved
+            # value as-is. This is the degraded path.
+            logger.debug(
+                "[locale] user preference (unvalidated): %s",
+                normalised,
+            )
+            return normalised
+        logger.debug(
+            "[locale] user preference '%s' not in "
+            "i18n.locales, falling back to system", saved,
+        )
+    # ─── 2. System POSIX locale ───────────────────────────────
+    system = _detect_system_locale(lc)
+    if system:
+        logger.debug("[locale] system: %s", system)
+        return system
+    # ─── 3. Source fallback ───────────────────────────────────
+    if lc is not None:
+        source_tag = str(lc.source.tag)
+        logger.debug(
+            "[locale] source fallback: %s", source_tag,
+        )
+        return source_tag
+    # Final degraded fallback: hardcoded en-US only when the
+    # config system is completely broken.
+    logger.warning(
+        "[locale] no config available, using hardcoded "
+        "en-US",
+    )
+    return "en-US"
 
-    # Tier 1: explicit user preference
-    if config is not None:
-        try:
-            user_lang = config.get(_USER_LANGUAGE_KEY)
-            if user_lang and user_lang != "auto":
-                if not available or user_lang in available:
-                    return user_lang
-        except Exception:
-            pass
 
-    # Tier 2: system POSIX locale
-    sys_locale = _detect_system_locale()
-    if sys_locale and available:
-        prefix = sys_locale[:2].lower()
-        for tag in available:
-            if tag[:2].lower() == prefix:
-                return tag
+def get_unifideck_market(config: ConfigManager | None) -> str:
+    """Return the ISO 3166-1 alpha-2 market code.
 
-    return _DEFAULT_LOCALE
-
-
-def get_unifideck_market(
-    config: ConfigManager | None = None,
-) -> str:
-    """Resolve the market tag (2-letter country code).
-
-    Extracts the country code from the BCP-47 tag (after
-    the dash). For tags without a country code, looks up
-    a matching available locale that does have one.
+    Derived from the region suffix of the active locale tag.
+    Examples: 'fr-FR' → 'FR', 'pt-BR' → 'BR', 'zh-CN' → 'CN'.
+    Falls back to 'US' only when the active locale has no
+    region suffix.
     """
     tag = get_unifideck_locale(config)
-
-    if "-" in tag:
-        return tag.split("-", 1)[1].upper()
-
-    # No country in tag — find a matching available locale
-    available = _discover_available_locales()
-    if available:
-        prefix = tag[:2].lower()
-        for avail_tag in available:
-            if avail_tag[:2].lower() == prefix and "-" in avail_tag:
-                return avail_tag.split("-", 1)[1].upper()
-
-    return _DEFAULT_MARKET
+    parts = tag.split("-")
+    if len(parts) >= 2 and len(parts[-1]) == 2:
+        return parts[-1].upper()
+    return "US"
 
 
-def _detect_system_locale() -> str | None:
-    """Return a system locale tag from POSIX or None.
+# ══════════════════════════════════════════════════════════════════
+# Private helpers
+# ══════════════════════════════════════════════════════════════════
 
-    Tries ``locale.getlocale(locale.LC_MESSAGES)``, falls
-    back to ``LANG`` env var parse. Normalises the result
-    to a BCP-47-ish tag (``"fr_FR.UTF-8"`` → ``"fr-FR"``).
-    Returns None when nothing usable is detected.
+
+def _detect_system_locale(lc: Any) -> str | None:
+    """Map the POSIX system locale to an i18n.locales tag.
+
+    Returns a tag from lc.all_tags whose 2-letter prefix
+    matches the POSIX lang code, or None on any failure.
     """
-    raw = None
+    if lc is None:
+        return None
     try:
-        raw = _locale_mod.getlocale(_locale_mod.LC_MESSAGES)[0]
-    except Exception:
-        pass
-
-    if not raw:
-        raw = os.environ.get("LANG", "")
-
-    if not raw or raw in ("C", "POSIX"):
+        lang_tuple = _locale.getlocale()
+    except (ValueError, TypeError) as e:
+        logger.debug("[locale] getlocale() failed: %s", e)
         return None
-
-    # Normalise: "fr_FR.UTF-8" → "fr-FR"
-    raw = raw.split(".")[0]
-    raw = raw.replace("_", "-")
-
-    if len(raw) < 2:
+    if not lang_tuple or not lang_tuple[0]:
         return None
-
-    return raw
+    # lang_tuple[0] is like 'fr_FR' or 'en_US' — extract the
+    # 2-letter prefix in a case-insensitive way.
+    prefix = lang_tuple[0].split("_")[0].lower()
+    if not prefix:
+        return None
+    # Find the first entry in the canonical list whose tag
+    # starts with this prefix. Order matches config.json,
+    # which is also the UI dropdown order.
+    for loc in lc.locales:
+        if (
+            loc.tag.lower().startswith(prefix + "-")
+            or loc.tag.lower() == prefix
+        ):
+            return str(loc.tag)
+    return None
