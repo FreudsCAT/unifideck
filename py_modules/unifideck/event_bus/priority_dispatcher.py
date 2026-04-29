@@ -1,13 +1,20 @@
 """event_bus/priority_dispatcher.py — Priority queue + coalescing + backpressure.
 
-# OP-09c | event_bus/priority_dispatcher.py | Depends: OP-09b
+  1. A priority queue so CRITICAL events jump ahead of BACKGROUND
+  2. Coalescing of idempotent events (SYNC_PROGRESS, DOWNLOAD_PROGRESS)
+  3. Bounded BACKGROUND queue with silent drop + metrics counter
+  4. Throttled WARNING log (one per minute) when drops occur
 
-Wraps ``EventBus`` with a single-worker ``asyncio.PriorityQueue``:
-CRITICAL events dispatch ahead of NORMAL ahead of BACKGROUND.
-Idempotent events (SYNC_PROGRESS, DOWNLOAD_PROGRESS) are coalesced
-by a key so thousands of ticks collapse into few dispatches. The
-BACKGROUND queue is bounded — drops beyond the cap are counted and
-a throttled WARNING is logged once per minute.
+Why a separate class rather than patching EventBus directly:
+  - SRP: EventBus handles pub/sub; PriorityDispatcher handles
+    scheduling. Two files, two test suites, two concerns.
+  - Backward compatibility: existing code that calls `bus.emit()`
+    keeps working unchanged. The dispatcher wires itself as an
+    emit interceptor, not a replacement.
+  - Testability: dispatcher can be exercised with a mock bus that
+    just records calls.
+
+Size limit: this module stays below 200 lines and every method is
 """
 from __future__ import annotations
 
@@ -18,7 +25,11 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from ..core.types import Events
-from .event_priority import EventPriority, get_coalesce_key, get_priority
+from .event_priority import (
+    EventPriority,
+    get_coalesce_key,
+    get_priority,
+)
 
 if TYPE_CHECKING:
     from .event_bus import EventBus
@@ -28,16 +39,27 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+
+# Max pending BACKGROUND events. Above this threshold, new
+# BACKGROUND events are dropped silently and a metrics counter is
+# incremented. CRITICAL and NORMAL queues are unbounded — losing
+# them would break correctness.
 DEFAULT_BACKGROUND_CAP = 500
+
+# Minimum seconds between consecutive drop-warning log lines.
+# Prevents log flood when the queue saturates for a long time.
 DROP_WARNING_INTERVAL_SEC = 60.0
 
 
 @dataclass(order=True)
 class _QueueItem:
-    """Single event waiting in the dispatch queue.
-    Sort order is ``(priority, seq)`` so identical priorities
-    preserve FIFO. Non-comparable fields via ``compare=False``.
+    """A single event waiting in the dispatch queue.
+
+    Order is (priority, seq) so identical priorities preserve FIFO.
+    Kwargs and event name are kept out of the comparison by using
+    `field(compare=False)`.
     """
+
     priority: int
     seq: int
     event: Events | str | None = field(compare=False)
@@ -47,25 +69,36 @@ class _QueueItem:
 
 @dataclass
 class DispatcherMetrics:
-    """Observable state of the dispatcher for ``get_bus_health()``.
-    ``dropped_background_total`` is a lifetime counter;
-    ``pending_by_priority`` is a live snapshot.
+    """Observable state of the dispatcher for get_bus_health().
+
+    `dropped_background_total` is the lifetime counter — it only
+    grows. `pending_by_priority` is a snapshot of the live queue.
     """
+
     emitted_total: int = 0
     dispatched_total: int = 0
     coalesced_total: int = 0
     dropped_background_total: int = 0
     pending_by_priority: dict[str, int] = field(
-        default_factory=lambda: {
-            "CRITICAL": 0, "NORMAL": 0, "BACKGROUND": 0,
-        },
+        default_factory=lambda: {"CRITICAL": 0, "NORMAL": 0, "BACKGROUND": 0},
     )
 
 
 class PriorityDispatcher:
-    """Schedules event dispatches through a priority queue."""
+    """Schedules event dispatches through a priority queue.
 
-    def __init__(
+    Usage:
+        bus = EventBus()
+        dispatcher = PriorityDispatcher(bus)
+        await dispatcher.start()          # spawns the worker task
+        await dispatcher.enqueue(
+            Events.SYNC_PROGRESS, store="epic", progress=42,
+        )
+        # ... later, at plugin shutdown:
+        await dispatcher.stop()
+    """
+
+    def __init__(  # noqa: D107 — class docstring documents the constructor's contract
         self,
         bus: EventBus,
         *,
@@ -75,237 +108,245 @@ class PriorityDispatcher:
         replay_buffer: EventReplayBuffer | None = None,
         batch_dispatcher: BatchDispatcher | None = None,
     ) -> None:
-        """Init the priority queue, coalesce map, metrics, and refs
-        to optional collaborators (watchdog, latency, replay, batcher).
-        Worker task is NOT started here — call ``start()`` explicitly
-        so the bus can be constructed in non-async context.
-        """
         self._bus = bus
         self._background_cap = background_cap
         self._watchdog = watchdog
-        self._latency_collector = latency_collector
-        self._replay_buffer = replay_buffer
-        self._batch_dispatcher = batch_dispatcher
-
-        self._queue: asyncio.PriorityQueue[_QueueItem] = asyncio.PriorityQueue()
+        self._latency = latency_collector
+        self._replay = replay_buffer
+        self._batcher = batch_dispatcher
+        self._queue: asyncio.PriorityQueue[_QueueItem] = (
+            asyncio.PriorityQueue()
+        )
+        self._coalesce_map: dict[tuple[str, str], _QueueItem] = {}
         self._seq = 0
-        self._bg_count = 0
-        self._coalesce_map: dict[str, _QueueItem] = {}
         self._metrics = DispatcherMetrics()
+        self._last_drop_warn: float = 0.0
         self._worker_task: asyncio.Task | None = None
         self._stopping = False
-        self._last_drop_warn: float = 0
+
+    # ── Lifecycle ────────────────────────────────────────────────
 
     async def start(self) -> None:
-        """Spawn the single worker task that drains the queue.
-        Idempotent — multiple ``start()`` calls keep the same worker.
-        """
+        """Spawn the background worker. Idempotent."""
         if self._worker_task is not None and not self._worker_task.done():
             return
         self._stopping = False
-        self._worker_task = asyncio.create_task(self._worker())
+        self._worker_task = asyncio.create_task(
+            self._worker(),
+            name="priority-dispatcher",
+        )
 
     async def stop(self) -> None:
-        """Signal the worker to exit, wait for it, flush queue.
-        Drains pending CRITICAL events (they are never dropped on
-        shutdown). Cancels the worker task cleanly.
-        """
+        """Drain the queue and stop the worker. Idempotent."""
         self._stopping = True
-        if self._worker_task is not None:
-            # Push a sentinel to unblock the worker
-            self._queue.put_nowait(_QueueItem(
-                priority=999, seq=self._seq, event=None, kwargs={},
-            ))
-            self._seq += 1
-            try:
-                await asyncio.wait_for(self._worker_task, timeout=5.0)
-            except (asyncio.TimeoutError, asyncio.CancelledError):
-                self._worker_task.cancel()
-            self._worker_task = None
+        if self._worker_task is None:
+            return
+        # Poison pill: push a sentinel so the worker wakes up and
+        # checks the _stopping flag even if the queue is empty.
+        await self._queue.put(
+            _QueueItem(
+                priority=int(EventPriority.CRITICAL),
+                seq=-1,
+                event=None,
+                kwargs={},
+            ),
+        )
+        try:
+            await asyncio.wait_for(self._worker_task, timeout=5.0)
+        except TimeoutError:
+            logger.warning(
+                "[PriorityDispatcher] worker did not stop in 5s — "
+                "cancelling",
+            )
+            self._worker_task.cancel()
+        self._worker_task = None
+
+    # ── Public API ───────────────────────────────────────────────
 
     def enqueue(
-        self, event: Events | str, **kwargs: Any,
+        self,
+        event: Events | str,
+        *,
+        priority: EventPriority | None = None,
+        **kwargs: Any,
     ) -> bool:
-        """Add an event to the priority queue.
-        Return False if the event was dropped (BACKGROUND saturation).
-        Coalescing happens before the backpressure check: if a
-        matching in-flight event exists, we replace it and return True.
+        """Schedule an event for dispatch. Returns True if accepted.
+
+        Returns False only when the BACKGROUND queue is saturated
+        and this event was dropped. CRITICAL and NORMAL always
+        return True. Synchronous by design — does not await the
+        actual handler invocation.
         """
         self._metrics.emitted_total += 1
-        priority = get_priority(event)
+        prio = priority if priority is not None else get_priority(event)
 
-        # Try coalescing first
-        if self._coalesce_if_possible(event, kwargs):
-            self._metrics.coalesced_total += 1
-            return True
-
-        # Backpressure: drop BACKGROUND if saturated
-        if self._is_saturated(priority):
+        if self._is_saturated(prio):
             self._record_drop()
             return False
 
-        self._push(priority, event, kwargs)
+        if self._coalesce_if_possible(event, prio, kwargs):
+            return True
+
+        self._push(event, prio, kwargs)
         return True
 
     def get_metrics(self) -> DispatcherMetrics:
-        """Return the current ``DispatcherMetrics`` snapshot.
-        Pending counts are recomputed from the live queue each call.
-        """
-        # Recompute pending by priority (approximate — queue is concurrent)
-        counts = {"CRITICAL": 0, "NORMAL": 0, "BACKGROUND": 0}
-        counts["BACKGROUND"] = self._bg_count
-        self._metrics.pending_by_priority = counts
+        """Return a snapshot of dispatcher metrics for health RPC."""
+        # Recompute pending counts from the live queue. The queue
+        # is single-threaded (asyncio) so this snapshot is race-free.
+        pending = {"CRITICAL": 0, "NORMAL": 0, "BACKGROUND": 0}
+        for item in list(self._queue._queue):  # type: ignore[attr-defined]
+            if item.dropped:
+                continue
+            name = EventPriority(item.priority).name
+            pending[name] = pending.get(name, 0) + 1
+        self._metrics.pending_by_priority = pending
         return self._metrics
 
-    def _is_saturated(self, priority: EventPriority) -> bool:
-        """Return True when BACKGROUND queue length ≥ cap.
-        CRITICAL and NORMAL are never saturated — always False for them.
-        """
-        if priority != EventPriority.BACKGROUND:
+    # ── Internal helpers ─────────────────────────────────────────
+
+    def _is_saturated(self, prio: EventPriority) -> bool:
+        """Return True if a BACKGROUND event must be dropped."""
+        if prio != EventPriority.BACKGROUND:
             return False
-        return self._bg_count >= self._background_cap
+        # Count only non-dropped BACKGROUND items in the queue.
+        # Summing the boolean predicate directly sidesteps a mypy
+        # typing quirk on `sum(1 for ...)` in this cross-module
+        # context.
+        pending_bg = sum(
+            not item.dropped
+            and item.priority == int(EventPriority.BACKGROUND)
+            for item in list(self._queue._queue)  # type: ignore[attr-defined]
+        )
+        return pending_bg >= self._background_cap
 
     def _record_drop(self) -> None:
-        """Increment drop counter and emit a throttled WARNING.
-        Only logs once per ``DROP_WARNING_INTERVAL_SEC`` to avoid
-        flooding the journal during a saturation spike.
-        """
+        """Increment drop counter + emit a throttled WARNING."""
         self._metrics.dropped_background_total += 1
         now = time.monotonic()
-        if now - self._last_drop_warn > DROP_WARNING_INTERVAL_SEC:
+        if now - self._last_drop_warn >= DROP_WARNING_INTERVAL_SEC:
             self._last_drop_warn = now
             logger.warning(
                 "[PriorityDispatcher] BACKGROUND queue saturated — "
-                "dropped %d events total",
+                "dropped %d events total (cap=%d)",
                 self._metrics.dropped_background_total,
+                self._background_cap,
             )
+        logger.debug(
+            "[PriorityDispatcher] drop #%d",
+            self._metrics.dropped_background_total,
+        )
 
     def _coalesce_if_possible(
-        self, event: Events | str, kwargs: dict[str, Any],
+        self,
+        event: Events | str,
+        prio: EventPriority,
+        kwargs: dict[str, Any],
     ) -> bool:
-        """If this event type has a coalesce key and a matching
-        in-flight event exists, replace its kwargs in place and
-        return True. Otherwise return False so the caller pushes a
-        new queue entry.
+        """Try to replace a pending event with the same coalesce key.
+
+        Returns True if a coalesce happened (caller is done), False
+        if the event must be pushed as a new queue entry.
         """
-        coalesce_key_name = get_coalesce_key(event)
-        if not coalesce_key_name:
+        key_name = get_coalesce_key(event)
+        if not key_name or key_name not in kwargs:
             return False
-
-        key_value = kwargs.get(coalesce_key_name, "")
-        event_str = event.value if hasattr(event, "value") else str(event)
-        map_key = f"{event_str}:{key_value}"
-
-        existing = self._coalesce_map.get(map_key)
-        if existing is not None and not existing.dropped:
-            # Replace kwargs in-place on the existing queue item
-            existing.kwargs = kwargs
-            return True
-        return False
+        event_str = event.value if isinstance(event, Events) else str(event)
+        coalesce_map_key = (event_str, str(kwargs[key_name]))
+        existing = self._coalesce_map.get(coalesce_map_key)
+        if existing is None or existing.dropped:
+            return False
+        # Replace: mark the old one as dropped, push a new one
+        existing.dropped = True
+        self._metrics.coalesced_total += 1
+        self._push(event, prio, kwargs, coalesce_map_key)
+        return True
 
     def _push(
-        self, priority: EventPriority, event: Events | str, kwargs: dict[str, Any],
+        self,
+        event: Events | str,
+        prio: EventPriority,
+        kwargs: dict[str, Any],
+        coalesce_map_key: tuple[str, str] | None = None,
     ) -> None:
-        """Create ``_QueueItem`` with the next seq, put on the queue,
-        update coalesce map and metrics. Internal — callers go
-        through ``enqueue()``.
-        """
+        """Push a fresh item onto the queue."""
+        self._seq += 1
         item = _QueueItem(
-            priority=int(priority),
+            priority=int(prio),
             seq=self._seq,
             event=event,
             kwargs=kwargs,
         )
-        self._seq += 1
-
-        # Update coalesce map if applicable
-        coalesce_key_name = get_coalesce_key(event)
-        if coalesce_key_name:
-            key_value = kwargs.get(coalesce_key_name, "")
-            event_str = event.value if hasattr(event, "value") else str(event)
-            map_key = f"{event_str}:{key_value}"
-            self._coalesce_map[map_key] = item
-
-        if priority == EventPriority.BACKGROUND:
-            self._bg_count += 1
-
         self._queue.put_nowait(item)
+        if coalesce_map_key is None:
+            # Register for future coalescing if applicable
+            key_name = get_coalesce_key(event)
+            if key_name and key_name in kwargs:
+                event_str = (
+                    event.value if isinstance(event, Events) else str(event)
+                )
+                coalesce_map_key = (event_str, str(kwargs[key_name]))
+        if coalesce_map_key is not None:
+            self._coalesce_map[coalesce_map_key] = item
 
     async def _worker(self) -> None:
-        """Main drain loop — get next item, dispatch, repeat.
-        Runs until cancelled. One item per iteration so priorities
-        are respected every tick, not batched.
-        """
-        while True:
+        """Background task: drain the queue and invoke the bus."""
+        while not self._stopping:
+            item = await self._queue.get()
             try:
-                item = await self._queue.get()
-            except asyncio.CancelledError:
-                break
-
-            # Sentinel check for shutdown
-            if item.event is None:
-                self._queue.task_done()
-                if self._stopping:
-                    break
-                continue
-
-            if item.dropped:
-                self._queue.task_done()
-                continue
-
-            try:
+                if self._stopping and item.seq == -1:
+                    return
+                if item.dropped:
+                    continue
                 await self._dispatch_one(item)
-            except Exception as exc:
-                self._handle_dispatch_error(item, exc)
+            except Exception as e:  # noqa: BLE001 — worker loop must survive
+                self._handle_dispatch_error(item, e)
             finally:
                 self._queue.task_done()
 
-            if self._stopping and self._queue.empty():
-                break
-
     async def _dispatch_one(self, item: _QueueItem) -> None:
-        """Invoke the bus with one item, handle collaborators.
-        Removes the item from the coalesce map first, then: watchdog
-        timing, batch dispatch if enabled, replay recording, latency
-        collection, error isolation via ``_handle_dispatch_error``.
+        """Dispatch a single queue item through the full pipeline.
+
+        Split from _worker to keep both under the 60-line norm.
+        Measures latency, records in replay + recorder, dispatches
+        via the bus. If a BatchDispatcher is configured and the
+        event is coalesceable (high-frequency by definition), it
+        accumulates items and flushes them as a list to the bus
+        via a synthetic `<event>_batch` suffix — handlers that
+        opt in receive the full window at once.
         """
-        event = item.event
-        kwargs = item.kwargs
-
-        # Remove from coalesce map
-        coalesce_key_name = get_coalesce_key(event)
-        if coalesce_key_name:
-            key_value = kwargs.get(coalesce_key_name, "")
-            event_str = event.value if hasattr(event, "value") else str(event)
-            map_key = f"{event_str}:{key_value}"
-            self._coalesce_map.pop(map_key, None)
-
-        if item.priority == EventPriority.BACKGROUND:
-            self._bg_count = max(0, self._bg_count - 1)
-
-        # Dispatch through the bus
+        import time
+        if item.event is None:
+            # Stop sentinel: the worker's seq==-1 short-circuit
+            # normally intercepts this, but defend in depth.
+            return
+        event_str = (
+            item.event.value
+            if isinstance(item.event, Events)
+            else str(item.event)
+        )
         t0 = time.monotonic()
-        await self._bus.emit(event, **kwargs)
-        elapsed_ms = (time.monotonic() - t0) * 1000
-
+        if self._batcher is not None and get_coalesce_key(item.event):
+            should_flush = self._batcher.add(event_str, item.kwargs)
+            if should_flush:
+                batch = self._batcher.drain(event_str)
+                await self._bus.emit(
+                    f"{event_str}_batch", batch=batch,
+                )
+        else:
+            await self._bus.emit(item.event, **item.kwargs)
+        duration_ms = (time.monotonic() - t0) * 1000
         self._metrics.dispatched_total += 1
-
-        # Record to replay buffer if available
-        if self._replay_buffer is not None:
-            self._replay_buffer.record(event, kwargs)
-
-        # Record latency if collector available
-        if self._latency_collector is not None:
-            event_str = event.value if hasattr(event, "value") else str(event)
-            self._latency_collector.record(event_str, elapsed_ms)
+        if self._latency is not None:
+            self._latency.record(event_str, duration_ms)
+        if self._replay is not None:
+            self._replay.record(item.event, item.kwargs)
 
     def _handle_dispatch_error(
-        self, item: _QueueItem, exc: Exception,
+        self, item: _QueueItem, err: Exception,
     ) -> None:
-        """Log the error with event name + exc type.
-        Never re-raises — a failed dispatch must not stop the worker.
-        """
-        logger.error(
-            "[PriorityDispatcher] Dispatch failed for %s: %s",
-            item.event, exc,
+        """Log the error. Errors never propagate out of the worker."""
+        logger.exception(
+            "[PriorityDispatcher] handler error on %s: %s",
+            item.event, err,
         )
