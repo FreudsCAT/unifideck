@@ -1,5 +1,35 @@
-"""download.py — Download RPC handlers
-# OP-25c | py_modules/unifideck/rpc/handlers/download.py | Depends: OP-25a
+"""Download RPC handlers.
+
+OP-25c | py_modules/unifideck/rpc/handlers/download.py
 """
 from __future__ import annotations
-# TODO: implement — see operational plan PDF page referenced in OP-25c
+
+import logging
+from typing import Any
+
+from unifideck.rpc.handlers.base import RpcHandlerBase
+
+logger = logging.getLogger(__name__)
+
+
+class DownloadHandlers(RpcHandlerBase):
+    """Download queue and storage location operations."""
+
+    def _download(self) -> Any:
+        """Return the download service, raising if unavailable."""
+        return self._require(self._services.download, "download")
+
+    async def cancel_download(self, store: str, game_id: str) -> Any:
+        """Cancel an in-progress download."""
+        return await self._download().cancel(store, game_id)
+
+    async def get_download_queue(self) -> Any:
+        """Return the current download queue."""
+        return await self._download().get_queue()
+
+    async def get_storage_locations(self) -> Any:
+        """Return available storage locations."""
+        storage = getattr(self._services, "storage", None)
+        if storage is None:
+            return []
+        return await storage.get_locations()
