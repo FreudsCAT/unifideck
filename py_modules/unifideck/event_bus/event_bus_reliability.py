@@ -1,65 +1,81 @@
-"""event_bus/event_bus_reliability.py — Circuit breaker for event handlers.
+"""event_bus/event_bus_reliability.py — Circuit breaker for handlers.
 
-# OP-09f | event_bus/event_bus_reliability.py | Depends: (none)
+CircuitBreaker trips per handler when the failure rate exceeds a
+threshold over a sliding window, complementing the consecutive-
+timeout quarantine from watchdog_handler.py.
 """
 from __future__ import annotations
 
+import logging
 import time
 from collections import deque
-from enum import StrEnum
+from dataclasses import dataclass, field
+
+logger = logging.getLogger(__name__)
 
 
-class CircuitState(StrEnum):
-    CLOSED = "closed"       # Normal operation
-    OPEN = "open"           # Failures exceeded threshold — skip handler
-    HALF_OPEN = "half_open" # One probe allowed to test recovery
+CB_WINDOW_SIZE = 20
+CB_OPEN_THRESHOLD = 0.5
+CB_RESET_TIMEOUT_SEC = 30.0
+
+@dataclass
+class _CBState:
+    window: deque[bool] = field(
+        default_factory=lambda: deque(maxlen=CB_WINDOW_SIZE),
+    )
+    open_until: float = 0.0  # monotonic, 0 = closed
 
 
 class CircuitBreaker:
-    """Open/half-open/closed circuit per handler. Prevents cascade failures."""
+    """Per-handler open/closed state based on failure rate.
 
-    def __init__(self, failure_threshold: int = 3, window_seconds: float = 600) -> None:
-        self._threshold = failure_threshold
-        self._window = window_seconds
-        self._failures: dict[str, deque[float]] = {}
-        self._states: dict[str, CircuitState] = {}
-        self._last_open: dict[str, float] = {}
+    Unlike the watchdog's consecutive-timeout quarantine, the
+    circuit breaker trips on **rate** over a sliding window. A
+    handler that fails 50% of the time is clearly broken even
+    if it never has 10 consecutive failures.
 
-    def record_success(self, handler_name: str) -> None:
-        """Reset circuit to CLOSED on any success."""
-        self._states[handler_name] = CircuitState.CLOSED
-        if handler_name in self._failures:
-            self._failures[handler_name].clear()
+    States:
+      - closed: all calls pass through; failures tracked.
+      - open: calls rejected immediately for `reset_timeout`
+        seconds, after which one probe is allowed.
+    """
 
-    def record_failure(self, handler_name: str) -> None:
-        """Record a failure. Opens circuit if threshold exceeded within window."""
-        now = time.monotonic()
-        if handler_name not in self._failures:
-            self._failures[handler_name] = deque()
+    def __init__(  # noqa: D107 — class docstring documents the constructor's contract
+        self,
+        *,
+        open_threshold: float = CB_OPEN_THRESHOLD,
+        reset_timeout: float = CB_RESET_TIMEOUT_SEC,
+    ) -> None:
+        self._open_threshold = open_threshold
+        self._reset_timeout = reset_timeout
+        self._state: dict[str, _CBState] = {}
 
-        dq = self._failures[handler_name]
-        dq.append(now)
-
-        # Prune old failures outside window
-        cutoff = now - self._window
-        while dq and dq[0] < cutoff:
-            dq.popleft()
-
-        if len(dq) >= self._threshold:
-            self._states[handler_name] = CircuitState.OPEN
-            self._last_open[handler_name] = now
-
-    def is_open(self, handler_name: str) -> bool:
-        """Return True if handler's circuit is OPEN (should be skipped)."""
-        state = self._states.get(handler_name, CircuitState.CLOSED)
-        if state == CircuitState.OPEN:
-            # Check if enough time has passed to try half-open
-            opened_at = self._last_open.get(handler_name, 0)
-            if time.monotonic() - opened_at > self._window:
-                self._states[handler_name] = CircuitState.HALF_OPEN
-                return False  # Allow one probe
+    def allow(self, handler_name: str) -> bool:
+        """Return True if the call should proceed."""
+        s = self._state.get(handler_name)
+        if s is None or s.open_until == 0.0:
+            return True
+        if time.monotonic() >= s.open_until:
+            # Half-open probe: one call allowed
+            s.open_until = 0.0
             return True
         return False
 
-    def get_state(self, handler_name: str) -> CircuitState:
-        return self._states.get(handler_name, CircuitState.CLOSED)
+    def record(self, handler_name: str, success: bool) -> None:
+        """Record outcome. Trips the breaker if rate exceeds."""
+        s = self._state.setdefault(handler_name, _CBState())
+        s.window.append(success)
+        if len(s.window) < (s.window.maxlen or 0):
+            return
+        failures = s.window.count(False)
+        rate = failures / len(s.window)
+        if rate >= self._open_threshold and s.open_until == 0.0:
+            s.open_until = time.monotonic() + self._reset_timeout
+            logger.warning(
+                "[CircuitBreaker] %s opened (failure rate=%.0f%%)",
+                handler_name, rate * 100,
+            )
+
+    def is_open(self, handler_name: str) -> bool:  # noqa: D102 — documentation pending (Sprint D)
+        s = self._state.get(handler_name)
+        return s is not None and s.open_until > time.monotonic()

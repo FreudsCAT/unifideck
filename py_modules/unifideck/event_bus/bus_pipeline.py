@@ -1,88 +1,70 @@
-"""event_bus/bus_pipeline.py — Assembled EventBus + PriorityDispatcher pipeline.
+"""event_bus/bus_pipeline.py — Typed bundle of bus-pipeline components.
 
-# OP-09i | event_bus/bus_pipeline.py | Depends: OP-09a, OP-09c, OP-09f, OP-09g, OP-09h, OP-10a, OP-10b
+The EventBus pipeline is composed of five independent components
+that are constructed once at plugin boot and live for the whole
+process lifetime:
+
+  - watchdog   : HandlerWatchdog — quarantines slow/raising handlers
+  - latency    : HandlerLatencyCollector — per-handler latency stats
+  - replay     : EventReplayBuffer — bounded ring buffer for late
+                   subscribers (frontend reconnects, services that
+                   register after some events have already fired)
+  - batcher    : BatchDispatcher — coalesces high-frequency events
+                   into single delivery passes
+  - dispatcher : PriorityDispatcher — the actual event router that
+                   composes the above four into a coherent pipeline
+
+These are NOT services in the dependency-injection sense — they
+are infrastructure that the services consume, not peers in the
+service container. Keeping them in their own typed bundle (rather
+than spreading them as flat attributes on Plugin) makes it
+possible to pass the whole pipeline as a single argument to
+``bootstrap_services`` so any service that needs a reference to
+one of them (e.g. ProbeReactionService → watchdog) can pick it
+up declaratively from a ``_SERVICE_DEFS`` lambda.
+
+## Why a namedtuple instead of a dataclass
+
+NamedTuple gives us:
+  - Immutability — pipeline is built once, never mutated
+  - Tuple-shaped destructuring for tests:
+        ``watchdog, latency, replay, batcher, dispatcher = pipeline``
+  - Zero overhead vs a plain tuple
+  - Clear field names for IDE introspection
+
+A dataclass would also work but adds mutability we don't want
+and a ``__init__`` we don't need (NamedTuple's positional
+constructor is enough for our use case).
 """
 from __future__ import annotations
 
-import logging
-from typing import Any, TYPE_CHECKING
+from typing import TYPE_CHECKING, NamedTuple
 
 if TYPE_CHECKING:
-    from .event_bus import EventBus
+    from .event_bus_scaling import BatchDispatcher
     from .event_replay import EventReplayBuffer
     from .priority_dispatcher import PriorityDispatcher
     from .supervision.metrics_handler import HandlerLatencyCollector
     from .supervision.watchdog_handler import HandlerWatchdog
 
-logger = logging.getLogger(__name__)
 
+class BusPipeline(NamedTuple):
+    """Immutable bundle of the five EventBus pipeline components.
 
-class BusPipeline:
-    """Fully wired bus: EventBus + PriorityDispatcher + supervision."""
+    Built once by ``Plugin._build_eventbus_pipeline`` and passed
+    by value to ``bootstrap_services`` so service constructors
+    can depend on specific pipeline components (currently only
+    ``ProbeReactionService`` consumes ``watchdog``, but other
+    services may grow such dependencies — e.g. a future debugging
+    service might want to attach to ``latency`` or ``replay``).
 
-    def __init__(
-        self,
-        bus: EventBus,
-        dispatcher: PriorityDispatcher,
-        watchdog: HandlerWatchdog | None = None,
-        latency: HandlerLatencyCollector | None = None,
-        replay: EventReplayBuffer | None = None,
-    ) -> None:
-        self.bus = bus
-        self.dispatcher = dispatcher
-        self.watchdog = watchdog
-        self.latency = latency
-        self.replay = replay
+    Fields are quoted forward-references resolved via
+    ``TYPE_CHECKING`` so static checkers see the precise
+    component types without triggering circular imports at runtime.
+    """
 
-    async def start(self) -> None:
-        """Start the dispatcher worker task."""
-        await self.dispatcher.start()
-        logger.info("[BusPipeline] Started")
-
-    async def stop(self) -> None:
-        """Stop the dispatcher and clear the bus."""
-        await self.dispatcher.stop()
-        self.bus.clear()
-        logger.info("[BusPipeline] Stopped")
-
-    def emit(self, event: str, **kwargs: Any) -> bool:
-        """Enqueue an event through the priority dispatcher.
-        Returns False if the event was dropped (BACKGROUND saturated).
-        """
-        return self.dispatcher.enqueue(event, **kwargs)
-
-    def get_health(self) -> dict[str, Any]:
-        """Aggregate metrics from all pipeline components."""
-        health: dict[str, Any] = {}
-
-        # Dispatcher metrics
-        dm = self.dispatcher.get_metrics()
-        health["dispatcher"] = {
-            "emitted_total": dm.emitted_total,
-            "dispatched_total": dm.dispatched_total,
-            "coalesced_total": dm.coalesced_total,
-            "dropped_background_total": dm.dropped_background_total,
-            "pending_by_priority": dm.pending_by_priority,
-        }
-
-        # Watchdog metrics
-        if self.watchdog is not None:
-            wm = self.watchdog.get_metrics()
-            health["watchdog"] = {
-                name: {
-                    "invocations": m.invocations,
-                    "timeouts": m.timeouts,
-                    "quarantined": m.quarantined,
-                }
-                for name, m in wm.items()
-            }
-
-        # Latency metrics
-        if self.latency is not None:
-            health["latency"] = self.latency.get_snapshot()
-
-        # Replay buffer size
-        if self.replay is not None:
-            health["replay_entries"] = len(self.replay.snapshot())
-
-        return health
+    watchdog: HandlerWatchdog
+    latency: HandlerLatencyCollector
+    replay: EventReplayBuffer
+    batcher: BatchDispatcher
+    dispatcher: PriorityDispatcher

@@ -1,47 +1,71 @@
-"""event_bus/event_bus_scaling.py — Batch dispatcher for bulk events.
+"""event_bus/event_bus_scaling.py — Batch dispatch for same-type events.
 
-# OP-09g | event_bus/event_bus_scaling.py | Depends: (none)
+BatchDispatcher buffers same-type events for a short time window
+and delivers them as a list to handlers that opt in via a
+`supports_batch = True` class attribute plus an `on_batch()` method.
 """
 from __future__ import annotations
 
-import asyncio
-import logging
-from typing import Any, TYPE_CHECKING
+import time
+from collections.abc import Callable
+from typing import Any
 
-if TYPE_CHECKING:
-    from .event_bus import EventBus
-
-logger = logging.getLogger(__name__)
+DEFAULT_BATCH_WINDOW_MS = 50
+DEFAULT_BATCH_MAX_SIZE = 100
 
 
 class BatchDispatcher:
-    """Accumulate events and flush in batches to reduce overhead."""
+    """Buffer events for a short window before flushing as a list.
 
-    def __init__(self, bus: EventBus, batch_size: int = 50, flush_interval: float = 0.1) -> None:
-        self._bus = bus
-        self._batch_size = batch_size
-        self._flush_interval = flush_interval
-        self._buffer: list[tuple[str, dict[str, Any]]] = []
-        self._flush_task: asyncio.Task | None = None
+    Handlers opt in by declaring `supports_batch = True` + an
+    `async def on_batch(self, events)` method. The dispatcher
+    checks this via `handler_supports_batch()` and routes the
+    call through batched delivery instead of per-event.
 
-    async def add(self, event: str, **kwargs: Any) -> None:
-        """Add an event to the batch buffer. Auto-flushes at batch_size."""
-        self._buffer.append((event, kwargs))
-        if len(self._buffer) >= self._batch_size:
-            await self.flush()
-        elif self._flush_task is None or self._flush_task.done():
-            self._flush_task = asyncio.create_task(self._delayed_flush())
+    Buffers flush on size threshold OR time window expiration.
+    `flush_all()` is called at shutdown to avoid losing items.
+    """
 
-    async def flush(self) -> None:
-        """Emit all buffered events immediately."""
-        if not self._buffer:
-            return
-        batch = list(self._buffer)
-        self._buffer.clear()
-        for event, kwargs in batch:
-            await self._bus.emit(event, **kwargs)
+    def __init__(  # noqa: D107 — class docstring documents the constructor's contract
+        self,
+        *,
+        window_ms: int = DEFAULT_BATCH_WINDOW_MS,
+        max_size: int = DEFAULT_BATCH_MAX_SIZE,
+    ) -> None:
+        self._window_ms = window_ms
+        self._max_size = max_size
+        self._buffers: dict[str, list[Any]] = {}
+        self._last_flush_ms: dict[str, float] = {}
 
-    async def _delayed_flush(self) -> None:
-        """Wait for flush_interval then flush remaining buffer."""
-        await asyncio.sleep(self._flush_interval)
-        await self.flush()
+    def add(self, key: str, item: Any) -> bool:
+        """Append to the buffer. Returns True if flush is due."""
+        buf = self._buffers.setdefault(key, [])
+        buf.append(item)
+        if len(buf) >= self._max_size:
+            return True
+        last = self._last_flush_ms.get(key)
+        now_ms = time.monotonic() * 1000
+        if last is None:
+            self._last_flush_ms[key] = now_ms
+            return False
+        return (now_ms - last) >= self._window_ms
+
+    def drain(self, key: str) -> list[Any]:
+        """Remove and return the buffered items for `key`."""
+        items = self._buffers.pop(key, [])
+        self._last_flush_ms[key] = time.monotonic() * 1000
+        return items
+
+    def flush_all(self) -> dict[str, list[Any]]:
+        """Drain every buffered key at shutdown."""
+        out = {k: v for k, v in self._buffers.items() if v}
+        self._buffers.clear()
+        return out
+
+    @staticmethod
+    def handler_supports_batch(handler: Callable) -> bool:
+        """True if the handler declares batch mode."""
+        return (
+            getattr(handler, "supports_batch", False) is True
+            and callable(getattr(handler, "on_batch", None))
+        )
