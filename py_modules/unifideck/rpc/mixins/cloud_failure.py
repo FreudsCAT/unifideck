@@ -18,6 +18,7 @@ class CloudFailureRPCMixin:
     config: Any
 
     async def get_cloud_failure_behaviors(self) -> Any:
+        """Return per-store cloud failure behavior map."""
         return {
             store: self.config.get(
                 f"cloud.failure_behavior.{store}", "toast",
@@ -28,6 +29,7 @@ class CloudFailureRPCMixin:
     async def set_cloud_failure_behavior(
         self, store: str, value: str,
     ) -> Any:
+        """Persist a per-store cloud failure behavior override."""
         if store not in _CLOUD_FAILURE_STORES:
             raise RpcError(
                 "unsupported_store",

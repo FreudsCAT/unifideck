@@ -17,6 +17,7 @@ class ActionHandlers(RpcHandlerBase):
     """Dispatch ``unifideck://`` action URIs to backend handlers."""
 
     async def dispatch_unifideck_action(self, uri: str) -> Any:
+        """Parse a ``unifideck://`` URI and execute its handler."""
         from unifideck.actions.dispatch import dispatch_backend_action
 
         return await dispatch_backend_action(

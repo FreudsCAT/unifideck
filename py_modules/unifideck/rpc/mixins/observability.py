@@ -37,18 +37,21 @@ class ObservabilityRPCMixin:
         latency: Any,
         replay: Any,
     ) -> None:
+        """Inject optional EventBus pipeline collaborators."""
         self.dispatcher = dispatcher
         self.watchdog = watchdog
         self.latency = latency
         self.replay = replay
 
     async def get_plugin_metrics(self) -> Any:
+        """Return MetricsCollector snapshot."""
         metrics = getattr(self.services, "metrics", None)
         if metrics is None:
             raise RpcError("service_unavailable", service="metrics")
         return metrics.collect()
 
     async def get_bus_health(self) -> Any:
+        """Aggregate full EventBus + collaborator health."""
         health: dict[str, Any] = self.bus.health()
         if getattr(self, "dispatcher", None) is not None:
             health["dispatcher"] = self.dispatcher.stats()
@@ -62,25 +65,30 @@ class ObservabilityRPCMixin:
         return health
 
     async def subscribe_replay(self, events: list[str]) -> Any:
+        """Return recent events for a frontend reconnect."""
         if getattr(self, "replay", None) is None:
             raise RpcError("service_unavailable", service="replay")
         return self.replay.subscribe(events)
 
     async def release_quarantine(self, handler_name: str) -> Any:
+        """Release a watchdog-quarantined handler after a fix."""
         if getattr(self, "watchdog", None) is None:
             raise RpcError("service_unavailable", service="watchdog")
         return self.watchdog.release(handler_name)
 
     async def get_feature_flags(self) -> Any:
+        """Return current feature flag state."""
         flags = getattr(self.services, "feature_flags", None)
         if flags is None:
             return {}
         return flags.get_all()
 
     async def get_probe_history(self) -> Any:
+        """Return recent probe-reaction history."""
         return getattr(self, "runtime_probes", None) or []
 
     async def report_runtime_probes(self, probes: list[dict[str, Any]]) -> Any:
+        """Store frontend boot-time CEF probe results."""
         if not isinstance(probes, list):
             raise RpcError("invalid_input", detail="probes must be a list")
         for probe in probes:
