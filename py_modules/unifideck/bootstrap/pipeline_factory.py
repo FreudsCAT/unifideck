@@ -1,5 +1,83 @@
-"""pipeline_factory.py — EventBus pipeline factory
-# OP-61c | py_modules/unifideck/bootstrap/pipeline_factory.py | Depends: OP-09i
+"""bootstrap.pipeline_factory — construct the EventBus pipeline.
+
+Builds the five pipeline primitives and bundles them into a
+``BusPipeline`` namedtuple:
+
+  - ``HandlerWatchdog``           — quarantines misbehaving handlers
+  - ``HandlerLatencyCollector``   — measures per-handler latency
+  - ``EventReplayBuffer``         — retains recent events for replay
+  - ``BatchDispatcher``           — batches low-priority events
+  - ``PriorityDispatcher``        — queues + routes to handlers
+
+Each primitive is also assigned to the plugin as a ``self.*``
+attribute so ``get_bus_health`` (exposed via ``ObservabilityRPCMixin``)
+can read their metrics at runtime.
+
+Service instantiation that historically lived in
+``_build_eventbus_pipeline`` (``feature_flags``, ``probe_reaction``,
+``security``) has been migrated into ``ServiceContainer`` —
+those services now go through the same wiring + lifecycle path
+as every other Layer-5 service, so this factory does exactly
+what its name claims: builds the bus pipeline, nothing more.
 """
 from __future__ import annotations
-# TODO: implement — see operational plan PDF
+
+import logging
+from typing import TYPE_CHECKING, Any
+
+from unifideck.event_bus.priority_dispatcher import PriorityDispatcher
+
+if TYPE_CHECKING:
+    from unifideck.event_bus.bus_pipeline import BusPipeline
+
+logger = logging.getLogger(__name__)
+
+
+async def build_eventbus_pipeline(plugin: Any) -> BusPipeline:
+    """Build + start the EventBus pipeline, assigning to ``plugin``.
+
+    Args:
+        plugin: The ``Plugin`` instance. Must have ``plugin.bus``
+            already initialised. This function mutates plugin by
+            setting ``plugin.watchdog``, ``plugin.latency``,
+            ``plugin.replay``, ``plugin.batcher``, ``plugin.dispatcher``.
+
+    Returns:
+        A ``BusPipeline`` namedtuple containing the same five
+        primitives. The dispatcher is already started before
+        return — the caller can forward the pipeline to
+        ``bootstrap_services`` for any service that needs to
+        attach to a specific component (e.g. ``ProbeReactionService``
+        consuming ``watchdog`` for handler quarantine reactions).
+    """
+    from unifideck.event_bus.bus_pipeline import BusPipeline
+    from unifideck.event_bus.event_bus_scaling import BatchDispatcher
+    from unifideck.event_bus.event_replay import EventReplayBuffer
+    from unifideck.event_bus.supervision.metrics_handler import (
+        HandlerLatencyCollector,
+    )
+    from unifideck.event_bus.supervision.watchdog_handler import HandlerWatchdog
+
+    plugin.watchdog = HandlerWatchdog()
+    plugin.latency = HandlerLatencyCollector()
+    plugin.replay = EventReplayBuffer()
+    plugin.batcher = BatchDispatcher()
+    plugin.dispatcher = PriorityDispatcher(
+        plugin.bus,
+        watchdog=plugin.watchdog,
+        latency_collector=plugin.latency,
+        replay_buffer=plugin.replay,
+        batch_dispatcher=plugin.batcher,
+    )
+    await plugin.dispatcher.start()
+    logger.info(
+        "[Unifideck] EventBus pipeline ready: dispatcher + "
+        "watchdog + metrics + replay + batch",
+    )
+    return BusPipeline(
+        watchdog=plugin.watchdog,
+        latency=plugin.latency,
+        replay=plugin.replay,
+        batcher=plugin.batcher,
+        dispatcher=plugin.dispatcher,
+    )
