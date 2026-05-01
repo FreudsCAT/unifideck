@@ -1,5 +1,80 @@
-"""manifest.py — Cloud save manifest
-# OP-17c | py_modules/unifideck/service/cloud_save/manifest.py | Depends: (none)
+"""services/cloud_save/manifest.py — Manifest file ops.
+
+Manifest (``.unifideck_sync.json``) lives inside each save
+directory and records the mtime of every tracked file at the
+last successful sync. Source of truth for conflict detection:
+local mtimes drifted vs the last-known-good from either side.
 """
 from __future__ import annotations
-# TODO: implement — see operational plan PDF page referenced in OP-17c
+
+import asyncio
+import json
+import logging
+import os
+
+logger = logging.getLogger(__name__)
+
+_MANIFEST_NAME = ".unifideck_sync.json"
+
+
+async def read_manifest(directory: str) -> dict[str, float]:
+    """Load the manifest file if it exists, else return ``{}``.
+
+    Missing file, OSError, or malformed JSON all collapse to
+    empty dict — callers treat "no manifest" and "corrupt
+    manifest" identically (forces a full remote compare).
+    Offloaded via ``to_thread`` since read is sync.
+    """
+    manifest_path = os.path.join(directory, _MANIFEST_NAME)
+
+    if not os.path.isfile(manifest_path):
+        return {}
+
+    def _read_sync() -> dict[str, float]:
+        try:
+            with open(manifest_path, encoding="utf-8") as f:
+                data = json.load(f)
+                
+            if not isinstance(data, dict):
+                logger.warning("[CloudSaveManifest] %s is not a dict", manifest_path)
+                return {}
+                
+            # Ensure all values are floats
+            return {k: float(v) for k, v in data.items()}
+        except Exception as e:
+            logger.warning("[CloudSaveManifest] failed to read %s: %s", manifest_path, e)
+            return {}
+
+    return await asyncio.to_thread(_read_sync)
+
+
+async def write_manifest(directory: str, manifest: dict[str, float]) -> None:
+    """Write the manifest file atomically (tmp + rename).
+
+    Writes to ``<path>.tmp``, renames into place — readers
+    never observe a half-written manifest. OSError logged at
+    WARNING but not raised.
+    """
+    manifest_path = os.path.join(directory, _MANIFEST_NAME)
+    tmp_path = manifest_path + ".tmp"
+
+    def _write_sync() -> None:
+        try:
+            if not os.path.isdir(directory):
+                os.makedirs(directory, exist_ok=True)
+
+            with open(tmp_path, "w", encoding="utf-8") as f:
+                json.dump(manifest, f)
+                f.flush()
+                os.fsync(f.fileno())
+
+            os.replace(tmp_path, manifest_path)
+        except Exception as e:
+            logger.warning("[CloudSaveManifest] failed to write %s: %s", manifest_path, e)
+            if os.path.exists(tmp_path):
+                try:
+                    os.remove(tmp_path)
+                except OSError:
+                    pass
+
+    await asyncio.to_thread(_write_sync)
