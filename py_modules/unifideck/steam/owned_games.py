@@ -1,0 +1,115 @@
+from __future__ import annotations
+import logging
+import re
+from pathlib import Path
+from typing import TYPE_CHECKING
+from ..metadata.unifidb import normalize_title_for_matching
+from .library import find_steam_path
+if TYPE_CHECKING:
+    from ..config import ConfigManager
+logger = logging.getLogger(__name__)
+_ACF_NAME_PATTERN = re.compile(r'"name"\s+"([^"]*)"')
+_LIBFOLDER_PATH_PATTERN = re.compile(r'"path"\s+"([^"]*)"')
+_Fingerprint = tuple[str, float | None, tuple[tuple[str, float | None], ...]]
+_cache: tuple[_Fingerprint, frozenset[str]] | None = None
+def get_owned_titles(
+    config: ConfigManager | None = None,
+) -> frozenset[str]:
+    """Get owned titles."""
+    global _cache
+    steam_path = find_steam_path(config)
+    if steam_path is None:
+        logger.debug("[owned_games] no Steam install found")
+        return frozenset()
+    fingerprint = _compute_fingerprint(Path(steam_path))
+    if _cache is not None and _cache[0] == fingerprint:
+        return _cache[1]
+    titles = _scan_all_libraries(Path(steam_path))
+    logger.info(
+        "[owned_games] indexed %d Steam-native title(s) from %s",
+        len(titles), steam_path,
+    )
+    _cache = (fingerprint, titles)
+    return titles
+def invalidate_cache() -> None:
+    """Invalidate cache."""
+    global _cache
+    _cache = None
+def _compute_fingerprint(steam_path: Path) -> _Fingerprint:
+    """Compute fingerprint."""
+    libfolders_vdf = steam_path / "steamapps" / "libraryfolders.vdf"
+    libfolders_mtime = _stat_mtime(libfolders_vdf)
+    library_roots = _list_library_roots(steam_path)
+    per_library: list[tuple[str, float | None]] = []
+    for root in library_roots:
+        steamapps = root / "steamapps"
+        per_library.append((str(root), _stat_mtime(steamapps)))
+    return (str(steam_path), libfolders_mtime, tuple(per_library))
+def _stat_mtime(path: Path) -> float | None:
+    """Stat mtime."""
+    try:
+        return path.stat().st_mtime
+    except OSError:
+        return None
+
+def _scan_all_libraries(steam_path: Path) -> frozenset[str]:
+
+    """Scan all libraries."""
+    titles: set[str] = set()
+    for library_root in _list_library_roots(steam_path):
+        try:
+            titles.update(_titles_from_library(library_root))
+        except OSError as e:
+            logger.warning(
+                "[owned_games] could not scan %s: %s",
+                library_root, e,
+            )
+    return frozenset(titles)
+def _list_library_roots(steam_path: Path) -> list[Path]:
+    """List library roots."""
+    roots: list[Path] = [steam_path]
+    libfolders_vdf = steam_path / "steamapps" / "libraryfolders.vdf"
+    if not libfolders_vdf.is_file():
+        return roots
+    try:
+        content = libfolders_vdf.read_text(
+            encoding="utf-8", errors="replace",
+        )
+    except OSError as e:
+        logger.warning(
+            "[owned_games] cannot read %s: %s", libfolders_vdf, e,
+        )
+        return roots
+    for match in _LIBFOLDER_PATH_PATTERN.finditer(content):
+        candidate = Path(match.group(1))
+        if candidate == steam_path:
+            continue
+        if (candidate / "steamapps").is_dir():
+            roots.append(candidate)
+    return roots
+def _titles_from_library(library_root: Path) -> set[str]:
+    """Titles from library."""
+    steamapps = library_root / "steamapps"
+    if not steamapps.is_dir():
+        return set()
+    titles: set[str] = set()
+    for manifest in steamapps.glob("appmanifest_*.acf"):
+        title = _extract_name_from_manifest(manifest)
+        if title:
+            normalized = normalize_title_for_matching(title)
+            if normalized:
+                titles.add(normalized)
+    return titles
+def _extract_name_from_manifest(manifest: Path) -> str | None:
+    """Extract name from manifest."""
+    try:
+        content = manifest.read_text(
+            encoding="utf-8", errors="replace",
+        )
+    except OSError as e:
+        logger.warning(
+            "[owned_games] cannot read %s: %s", manifest, e,
+        )
+        return None
+    match = _ACF_NAME_PATTERN.search(content)
+    return match.group(1) if match else None
