@@ -1,10 +1,20 @@
+"""Steam Store search helpers.
+
+Resolves a non-Steam game title to its public Steam app id by
+querying the storefront search API. Used to enrich shortcuts
+with Steam's own metadata where available.
+"""
 from __future__ import annotations
+
+import asyncio
 import logging
 import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
+
 from ..utils.config_helpers import get_cfg
+
 if TYPE_CHECKING:
     from ..config import ConfigManager
 logger = logging.getLogger(__name__)
@@ -65,7 +75,6 @@ def find_shortcuts_vdf(
     )
 
 def _cfg(config: ConfigManager | None, key: str, default: Any) -> Any:
-
     """Cfg."""
     return get_cfg(config, key, default)
 def _find_most_recent_user(steam_path: str) -> str | None:
@@ -88,6 +97,7 @@ def _find_most_recent_user(steam_path: str) -> str | None:
 @dataclass
 class SteamStoreResult:
     """Steam store result."""
+
     app_id: int
     name: str
     header_image: str
@@ -125,7 +135,7 @@ async def search_store(
             if resp.status != 200:
                 return None
             data = await resp.json()
-    except Exception as e:
+    except (aiohttp.ClientError, OSError, ValueError, asyncio.TimeoutError) as e:
         logger.debug(
             "[steam/library] search(%s) failed: %s",
             title, e,
@@ -147,7 +157,6 @@ async def search_store(
     ).to_dict()
 
 async def batch_search_store(titles: list[str]) -> dict:
-
     """Batch search store."""
     results = {}
     for title in titles:

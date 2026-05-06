@@ -1,8 +1,18 @@
+"""SteamGridDB API client.
+
+Searches and downloads grid / hero / logo / icon artwork from
+the SteamGridDB community database to populate Steam's grid
+directory for non-Steam shortcuts.
+"""
 from __future__ import annotations
+
+import asyncio
 import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
+
 from unifideck.utils.config_helpers import get_cfg
+
 if TYPE_CHECKING:
     from ..config import ConfigManager
 logger = logging.getLogger(__name__)
@@ -16,6 +26,7 @@ ARTWORK_KINDS = {
 @dataclass
 class ArtworkAsset:
     """Artwork asset."""
+
     url: str
     width: int
     height: int
@@ -63,7 +74,6 @@ async def fetch_all_kinds(
     api_key: str | None,
     config: ConfigManager | None = None,
 ) -> dict[str, str | None]:
-
     """Fetch all kinds."""
     if not api_key:
         return dict.fromkeys(ARTWORK_KINDS)
@@ -108,7 +118,7 @@ async def _search_game(
                 )
                 return None
             payload = await resp.json()
-    except Exception as e:
+    except (aiohttp.ClientError, OSError, ValueError, asyncio.TimeoutError) as e:
         logger.debug(
             "[sgdb] search(%s) failed: %s", title, e,
         )
@@ -122,7 +132,6 @@ async def _fetch_assets(
     game_id: int, endpoint: str, api_key: str,
     base: str, timeout: int,
 ) -> list[ArtworkAsset]:
-
     """Fetch assets."""
     import aiohttp
     url = f"{base}/{endpoint}/game/{game_id}"
@@ -137,7 +146,7 @@ async def _fetch_assets(
             if resp.status != 200:
                 return []
             payload = await resp.json()
-    except Exception as e:
+    except (aiohttp.ClientError, OSError, ValueError, asyncio.TimeoutError) as e:
         logger.debug(
             "[sgdb] fetch(%d, %s) failed: %s",
             game_id, endpoint, e,
@@ -173,6 +182,7 @@ def _pick_best_asset(
     return max(assets, key=rank)
 class SteamGridDBClient:
     """Steam grid dbclient."""
+
     def __init__(self, api_key=None):
         """Initialize the instance."""
         self.api_key = api_key

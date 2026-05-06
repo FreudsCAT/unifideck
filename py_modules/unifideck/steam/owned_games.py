@@ -1,10 +1,19 @@
+"""Owned Steam games detection.
+
+Walks the user's Steam config to enumerate apps already owned
+on the native Steam account so we can avoid re-importing them
+as non-Steam shortcuts.
+"""
 from __future__ import annotations
+
 import logging
 import re
 from pathlib import Path
 from typing import TYPE_CHECKING
+
 from ..metadata.unifidb import normalize_title_for_matching
 from .library import find_steam_path
+
 if TYPE_CHECKING:
     from ..config import ConfigManager
 logger = logging.getLogger(__name__)
@@ -53,7 +62,6 @@ def _stat_mtime(path: Path) -> float | None:
         return None
 
 def _scan_all_libraries(steam_path: Path) -> frozenset[str]:
-
     """Scan all libraries."""
     titles: set[str] = set()
     for library_root in _list_library_roots(steam_path):

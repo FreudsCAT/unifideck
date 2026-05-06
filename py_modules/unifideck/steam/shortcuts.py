@@ -27,10 +27,12 @@ Reference: Technical Document v1.0 — Section 3.6.2 (shortcuts.vdf
 format), Figure 23.
 """
 from __future__ import annotations
+
 import logging
 import os
 import shutil
 from typing import Any, cast
+
 try:
     import vdf
 except ImportError:
@@ -44,6 +46,7 @@ def load_shortcuts_vdf(path: str) -> dict[str, Any]:
     not exist (Steam's behavior on first plugin run). Raises
     VDFError if the file exists but cannot be parsed.
     """
+
     if vdf is None:
         raise VDFError("vdf library not installed")
     if not os.path.isfile(path):
@@ -51,7 +54,7 @@ def load_shortcuts_vdf(path: str) -> dict[str, Any]:
     try:
         with open(path, "rb") as f:
             return cast("dict[str, Any]", vdf.binary_loads(f.read()))
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         raise VDFError(f"failed to parse {path}: {e}") from e
 
 def read_shortcuts(path: str) -> list[dict[str, Any]]:
@@ -92,7 +95,7 @@ def save_shortcuts_vdf(path: str, data: dict[str, Any]) -> None:
             f.write(vdf.binary_dumps(data))
             f.flush()
             os.fsync(f.fileno())
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         _cleanup_tmp(tmp_path)
         raise VDFError(f"write failed: {e}") from e
     # Step 3: atomic rename
