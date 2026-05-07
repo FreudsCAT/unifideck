@@ -53,9 +53,8 @@ def read_cli_timeouts(config: ConfigManager | None) -> dict[str, int]:
     out: dict[str, int] = {}
     for key, default in DEFAULT_TIMEOUTS.items():
         try:
-            out[key] = int(
-                config.get(f"cli_timeouts.{key}", default),
-            )
+            val = int(config.get(f"cli_timeouts.{key}", default))
+            out[key] = val if val > 0 else default
         except (TypeError, ValueError):
             out[key] = default
     return out

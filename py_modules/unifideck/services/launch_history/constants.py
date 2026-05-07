@@ -1,5 +1,10 @@
-"""constants.py — Launch history constants
-# OP-21f | py_modules/unifideck/service/launch_history/constants.py | Depends: (none)
-"""
+"""services/launch_history/constants.py"""
 from __future__ import annotations
-# TODO: implement — see operational plan PDF page referenced in OP-21f
+
+FAILURE_KIND_FAST_BOOT = "fast_boot"
+FAILURE_KIND_LAUNCHER_ERROR = "launcher_error"
+
+_VALID_KINDS = frozenset({
+    FAILURE_KIND_FAST_BOOT,
+    FAILURE_KIND_LAUNCHER_ERROR,
+})

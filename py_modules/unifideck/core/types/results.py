@@ -53,6 +53,8 @@ class Result:
     error: str | None = None
     error_code: str | None = None
     store: str | None = None
+    rc: int | None = None
+    elapsed: float | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
