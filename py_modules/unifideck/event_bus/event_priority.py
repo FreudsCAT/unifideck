@@ -74,6 +74,11 @@ _DEFAULT_PRIORITY: dict[Events, EventPriority] = {
     Events.GAME_INSTALLED:      EventPriority.NORMAL,
     Events.GAME_UNINSTALLED:    EventPriority.NORMAL,
     Events.GAME_UPDATE_AVAILABLE: EventPriority.BACKGROUND,
+    Events.PLAYTIME_UPDATED:    EventPriority.BACKGROUND,
+
+    # ── Power/Sleep lifecycle ────────────────────────────────
+    Events.SUSPEND:             EventPriority.CRITICAL,
+    Events.RESUME:              EventPriority.CRITICAL,
 
     # ── Sync lifecycle ───────────────────────────────────────
     Events.SYNC_STARTED:        EventPriority.NORMAL,
@@ -81,12 +86,19 @@ _DEFAULT_PRIORITY: dict[Events, EventPriority] = {
     Events.SYNC_CANCELLED:      EventPriority.NORMAL,
     Events.SYNC_FAILED:         EventPriority.NORMAL,
     Events.SYNC_PROGRESS:       EventPriority.BACKGROUND,
+    Events.SYNC_SKIPPED:        EventPriority.NORMAL,
+    Events.SYNC_DEDUP:          EventPriority.NORMAL,
 
     # ── Store auth lifecycle ─────────────────────────────────
     Events.STORE_AUTH_STARTED:  EventPriority.NORMAL,
     Events.STORE_AUTH_COMPLETE: EventPriority.NORMAL,
     Events.STORE_AUTH_FAILED:   EventPriority.NORMAL,
     Events.STORE_LOGOUT:        EventPriority.NORMAL,
+    Events.STORE_REGISTERED:    EventPriority.NORMAL,
+
+    # ── Launcher & Circuit lifecycle ─────────────────────────
+    Events.LAUNCHER_STAGE:      EventPriority.CRITICAL,
+    Events.CIRCUIT_STATE_CHANGED: EventPriority.NORMAL,
 
     # ── Download lifecycle ───────────────────────────────────
     Events.DOWNLOAD_QUEUED:     EventPriority.NORMAL,
@@ -96,8 +108,42 @@ _DEFAULT_PRIORITY: dict[Events, EventPriority] = {
     Events.DOWNLOAD_FAILED:     EventPriority.NORMAL,
     Events.DOWNLOAD_PROGRESS:   EventPriority.BACKGROUND,
 
+    # ── Security lifecycle ───────────────────────────────────
+    Events.SECURITY_TOKEN_ENCRYPTED:      EventPriority.NORMAL,
+    Events.SECURITY_TOKEN_DECRYPTED:      EventPriority.NORMAL,
+    Events.SECURITY_DECRYPT_FAILED:       EventPriority.NORMAL,
+    Events.SECURITY_TOKEN_FILE_MIGRATED:  EventPriority.NORMAL,
+    Events.SECURITY_LEGACY_PLAINTEXT_DETECTED: EventPriority.NORMAL,
+    Events.SECURITY_AUTH_FLOW_STARTED:    EventPriority.NORMAL,
+    Events.SECURITY_AUTH_FLOW_COMPLETED:  EventPriority.NORMAL,
+    Events.SECURITY_AUTH_FLOW_FAILED:     EventPriority.NORMAL,
+    Events.SECURITY_TOKEN_AGE_EXCEEDED:   EventPriority.NORMAL,
+    Events.SECURITY_PERMISSIONS_CHECK:    EventPriority.NORMAL,
+    Events.SECURITY_PERMISSIONS_REPAIRED: EventPriority.NORMAL,
+    Events.SECURITY_BRUTEFORCE_SUSPECTED: EventPriority.NORMAL,
+    Events.SECURITY_DEVICE_RESET_DETECTED: EventPriority.NORMAL,
+    Events.SECURITY_FINGERPRINT_INITIALIZED: EventPriority.NORMAL,
+    Events.SECURITY_EXTERNAL_AUTH_CHECK_FAILED: EventPriority.NORMAL,
+
+    # ── Config lifecycle ─────────────────────────────────────
+    Events.CONFIG_VALIDATION_COMPLETED:   EventPriority.NORMAL,
+    Events.CONFIG_VALIDATION_FAILED:      EventPriority.NORMAL,
+
+    # ── Subscription lifecycle ───────────────────────────────
+    Events.SUBSCRIPTION_DETECTED:         EventPriority.NORMAL,
+    Events.SUBSCRIPTION_EXPIRED:          EventPriority.NORMAL,
+    Events.SUBSCRIPTION_CHECK_FAILED:      EventPriority.NORMAL,
+
+    # ── Account lifecycle ────────────────────────────────────
+    Events.ACCOUNT_SWITCHED:              EventPriority.CRITICAL,
+
+    # ── Shortcut & Artwork ───────────────────────────────────
+    Events.SHORTCUT_CREATED:              EventPriority.NORMAL,
+    Events.ARTWORK_REQUEST:               EventPriority.BACKGROUND,
+
     # ── Generic ──────────────────────────────────────────────
-    Events.STORE_ERROR:         EventPriority.BACKGROUND,
+    Events.STORE_ERROR:                   EventPriority.BACKGROUND,
+    Events.RUNTIME_PROBES_REPORTED:        EventPriority.BACKGROUND,
 }
 
 

@@ -1,5 +1,201 @@
-"""service_defs.py — Service definitions
-# OP-13c | py_modules/unifideck/service/bootstrap/service_defs.py | Depends: OP-13b
+"""services/bootstrap/service_defs.py — Layer-5 wiring table + instantiator.
+
+Single source of truth for Layer-5 service wiring. The
+``_SERVICE_DEFS`` tuple declares every service's module path,
+class name, and constructor argument builders. The companion
+``_instantiate_service()`` helper consumes one row of that
+table plus shared dependencies and returns the constructed
+service instance.
+
+Both consumers of this file — ``bootstrap_services`` (full
+plugin path) and ``build_service_subset`` (launcher
+out-of-process reduced path) — funnel through the same
+``_instantiate_service`` helper so the two bootstrap paths
+never drift apart.
+
+Extracted from the flat ``service_bootstrap.py`` on 2026-04-19.
+
+Adding a new Layer-5 service means:
+1. One new attribute on ``ServiceContainer`` (in ``container.py``)
+2. One new entry at the bottom of ``_SERVICE_DEFS`` here
+
+No ``constructor.py`` or ``main.py`` edit required.
 """
 from __future__ import annotations
-# TODO: implement — see operational plan PDF page referenced in OP-13c
+
+from importlib import import_module
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from ...config import ConfigManager
+    from ...core.cache_manager import CacheManager
+    from ...event_bus.bus_pipeline import BusPipeline
+    from ...event_bus.event_bus import EventBus
+    from ...stores import StoreRegistry
+    from .paths import ServicePaths
+
+# Service wiring table. Each entry is a tuple:
+# (container_attr, module_path, class_name, build_args, build_kwargs)
+# where ``build_args`` and ``build_kwargs`` are callables that
+# receive (bus, registry, cache, config, paths, pipeline) and
+# return args/kwargs.
+#
+# This is the single source of truth for Layer-5 wiring. Adding
+# a new service means one entry here plus one attribute on
+# ServiceContainer — no main.py edit required.
+#
+# Note: LauncherService is deliberately absent from this table.
+# The plugin itself never launches games — the launch flow runs
+# out-of-process via bin/unifideck-launcher → dispatcher.py.
+# LauncherService is constructed on demand inside the dispatcher's
+# own minimal service graph, not here.
+_SERVICE_DEFS: tuple[tuple, ...] = (
+    (
+        "shortcut", "unifideck.services.shortcut",
+        "ShortcutService",
+        lambda b, r, c, cfg, p, pl: (b, p.shortcuts_path, p.games_map_path),
+        lambda b, r, c, cfg, p, pl: {},
+    ),
+    (
+        "download", "unifideck.services.download",
+        "DownloadService",
+        lambda b, r, c, cfg, p, pl: (b, r, p.queue_file),
+        lambda b, r, c, cfg, p, pl: {},
+    ),
+    (
+        "metadata", "unifideck.services.metadata_service",
+        "MetadataService",
+        lambda b, r, c, cfg, p, pl: (b, c),
+        lambda b, r, c, cfg, p, pl: {"config": cfg},
+    ),
+    (
+        "artwork", "unifideck.services.artwork",
+        "ArtworkService",
+        lambda b, r, c, cfg, p, pl: (b, c, p.grid_dir),
+        lambda b, r, c, cfg, p, pl: {"config": cfg},
+    ),
+    (
+        "proton", "unifideck.services.proton_service",
+        "ProtonService",
+        lambda b, r, c, cfg, p, pl: (b, p.config_vdf_path),
+        lambda b, r, c, cfg, p, pl: {},
+    ),
+    (
+        "cdp", "unifideck.cdp.cdp_client",
+        "CDPClient",
+        lambda b, r, c, cfg, p, pl: (),
+        lambda b, r, c, cfg, p, pl: {"config": cfg},
+    ),
+    (
+        "cloudsave", "unifideck.services.cloud_save",
+        "CloudSaveService",
+        lambda b, r, c, cfg, p, pl: (b, p.local_save_root),
+        lambda b, r, c, cfg, p, pl: {"cloud_root": p.cloud_root},
+    ),
+    (
+        "metrics", "unifideck.core.metrics_collector",
+        "MetricsCollector",
+        lambda b, r, c, cfg, p, pl: (b,),
+        lambda b, r, c, cfg, p, pl: {},
+    ),
+    (
+        "account", "unifideck.services.account_service",
+        "AccountService",
+        lambda b, r, c, cfg, p, pl: (b, p.loginusers_path),
+        lambda b, r, c, cfg, p, pl: {},
+    ),
+    (
+        "playtime", "unifideck.services.playtime",
+        "PlaytimeService",
+        lambda b, r, c, cfg, p, pl: (b, p.playtime_db),
+        lambda b, r, c, cfg, p, pl: {},
+    ),
+    # ── Bus-pipeline-aware services ──────────────────────────
+    # These three were historically instantiated in
+    # _build_eventbus_pipeline as flat attributes on Plugin.
+    # Migration to ServiceContainer benefits:
+    # - Uniform lifecycle (stop_all_services, start_async_services)
+    # - Error isolation (failed wiring = degraded mode, not crash)
+    # - Single source of truth for service access
+    # - Eliminates getattr(self, "config", None) defensive workarounds
+    # The ``pl`` (BusPipeline) param surfaces watchdog/latency/
+    # replay/batcher/dispatcher to services that need them. Today
+    # only ProbeReactionService consumes it (for watchdog), but
+    # future debug/observability services may attach to other
+    # pipeline components without further bootstrap changes.
+    (
+        "feature_flags", "unifideck.services.feature_flag_service",
+        "FeatureFlagService",
+        lambda b, r, c, cfg, p, pl: (b,),
+        lambda b, r, c, cfg, p, pl: {"config": cfg},
+    ),
+    (
+        "probe_reaction", "unifideck.services.probe_reaction_service",
+        "ProbeReactionService",
+        lambda b, r, c, cfg, p, pl: (b, pl.watchdog if pl else None),
+        lambda b, r, c, cfg, p, pl: {"config": cfg},
+    ),
+    (
+        "security", "unifideck.services.security",
+        "SecurityService",
+        lambda b, r, c, cfg, p, pl: (b,),
+        lambda b, r, c, cfg, p, pl: {
+            "config": cfg,
+            "replay": pl.replay if pl else None,
+        },
+    ),
+    # LaunchHistoryService — circuit breaker storage for the
+    # per-game launch failure tracker (rework piste #8). Used by
+    # the plugin RPC handlers (get_launch_failures,
+    # clear_launch_failures) for read access and UI badge
+    # rendering. Write access is exclusive to the launcher
+    # process (which constructs its own instance via
+    # launcher/bootstrap.py); the plugin instance here is
+    # read-only by convention.
+    (
+        "launch_history", "unifideck.services.launch_history",
+        "LaunchHistoryService",
+        lambda b, r, c, cfg, p, pl: (cfg,),
+        lambda b, r, c, cfg, p, pl: {"bus": b},
+    ),
+    # Sprint 18e — MicrosoftSubscriptionService. Consumes the
+    # shared EventBus and CacheManager; reads config for its
+    # endpoint URL. Must be instantiated BEFORE the StoreRegistry
+    # wires MicrosoftStore so the store can receive it via its
+    # subscription_service kwarg. Order is enforced by the
+    # bootstrap sequence (services → stores → registry).
+    (
+        "microsoft_subscription",
+        "unifideck.services.microsoft_subscription",
+        "MicrosoftSubscriptionService",
+        lambda b, r, c, cfg, p, pl: (b, c),
+        lambda b, r, c, cfg, p, pl: {"config": cfg},
+    ),
+)
+
+
+def _instantiate_service(
+    def_entry: tuple,
+    bus: EventBus,
+    registry: StoreRegistry | None,
+    cache: CacheManager | None,
+    config: ConfigManager,
+    paths: ServicePaths,
+    pipeline: BusPipeline | None = None,
+) -> Any:
+    """Instantiate a single service from a ``_SERVICE_DEFS`` row.
+
+    Shared by full bootstrap and launcher subset bootstrap so the
+    two paths never drift. None-safe for registry/cache/pipeline
+    — the launcher subset doesn't consume them; services whose
+    lambdas dereference ``pl.<component>`` will fail if pl is None.
+    Import + constructor errors propagate to the caller.
+    """
+    attr, module_path, class_name, build_args, build_kwargs = def_entry
+    module = import_module(module_path)
+    cls = getattr(module, class_name)
+
+    args = build_args(bus, registry, cache, config, paths, pipeline)
+    kwargs = build_kwargs(bus, registry, cache, config, paths, pipeline)
+
+    return cls(*args, **kwargs)

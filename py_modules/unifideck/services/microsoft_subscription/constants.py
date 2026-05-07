@@ -1,5 +1,9 @@
-"""constants.py — Subscription constants
-# OP-22g | py_modules/unifideck/service/microsoft_subscription/constants.py | Depends: (none)
-"""
+"""services/microsoft_subscription/constants.py"""
 from __future__ import annotations
-# TODO: implement — see operational plan PDF page referenced in OP-22g
+
+_CACHE_STORE_NAME = "microsoft_subscription"
+_CACHE_KEY_PREFIX = "ms_sub_"
+
+_DEFAULT_PROBE_URL = (
+    "https://xgpuweb.gssv-play-prod.xboxlive.com/v2/login/user"
+)
