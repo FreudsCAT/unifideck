@@ -1,5 +1,17 @@
-"""time_utils.py — Time utilities
-# OP-22f | py_modules/unifideck/service/microsoft_subscription/time_utils.py | Depends: (none)
-"""
+"""services/microsoft_subscription/time_utils.py"""
 from __future__ import annotations
-# TODO: implement — see operational plan PDF page referenced in OP-22f
+
+from datetime import UTC, datetime
+
+
+def _end_of_month_utc(now: datetime | None = None) -> float:
+    now = now if now is not None else datetime.now(UTC)
+    if now.month == 12:
+        nxt = datetime(now.year + 1, 1, 1, tzinfo=UTC)
+    else:
+        nxt = datetime(now.year, now.month + 1, 1, tzinfo=UTC)
+    return nxt.timestamp()
+
+
+def _fmt_ts(ts: float) -> str:
+    return datetime.fromtimestamp(ts, tz=UTC).isoformat()

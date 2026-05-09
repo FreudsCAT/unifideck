@@ -138,9 +138,4 @@ class HandlerLatencyCollector:
 
     def reset(self, handler_name: str) -> bool:
         """Clear stats for one handler. Returns True if it existed."""
-        if handler_name in self._stats:
-            self._stats[handler_name] = HandlerLatencyStats(
-                name=handler_name,
-            )
-            return True
-        return False
+        return self._stats.pop(handler_name, None) is not None

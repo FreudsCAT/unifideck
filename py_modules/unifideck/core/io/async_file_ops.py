@@ -143,11 +143,18 @@ async def move(src: PathLike, dst: PathLike) -> bool:
 
 
 async def remove(path: PathLike) -> bool:
-    """Delete a file. Returns True on success (or file already gone)."""
+    """Delete a file or directory tree. Returns True on success."""
     try:
-        await asyncio.to_thread(
-            lambda: Path(path).unlink(missing_ok=True),
-        )
+        def _remove_sync():
+            p = Path(path)
+            if not p.exists():
+                return
+            if p.is_dir() and not p.is_symlink():
+                shutil.rmtree(p)
+            else:
+                p.unlink(missing_ok=True)
+
+        await asyncio.to_thread(_remove_sync)
         return True
     except OSError as e:
         logger.error(
@@ -250,7 +257,14 @@ def _read_json_sync(path: PathLike) -> dict[str, Any]:
         return {}
     try:
         with p.open(encoding="utf-8") as f:
-            return cast("dict[str, Any]", json.load(f))
+            data = json.load(f)
+            if not isinstance(data, dict):
+                logger.warning(
+                    "[AsyncFileOps] JSON %s is not a dict; returning {}",
+                    path,
+                )
+                return {}
+            return data
     except (
         json.JSONDecodeError, UnicodeDecodeError, OSError,
     ) as e:
