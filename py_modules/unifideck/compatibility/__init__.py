@@ -1,3 +1,5 @@
+"""Game compatibility ratings (ProtonDB, Steam Deck Verified) and Proton tools management."""
+
 from .library import (
     BackgroundCompatFetcher,
     CompatLibrary,

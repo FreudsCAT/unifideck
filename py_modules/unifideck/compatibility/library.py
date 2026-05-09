@@ -1,32 +1,48 @@
+"""Game compatibility ratings via ProtonDB and Steam Deck Verified."""
+
 from __future__ import annotations
+
 import asyncio
 import logging
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
+from unifideck.utils.config_helpers import get_cfg
+
 if TYPE_CHECKING:
-    from ..config import ConfigManager
-    from ..core.cache_manager import CacheManager
-from ..utils.config_helpers import get_cfg
+    from unifideck.config import ConfigManager
+    from unifideck.core.cache_manager import CacheManager
+
+
 logger = logging.getLogger(__name__)
+
 PROTONDB_TIERS = ("platinum", "gold", "silver", "bronze", "borked")
-DECK_CATEGORIES = {
+DECK_CATEGORIES: dict[int, str] = {
  0: "unknown",
  1: "unsupported",
  2: "playable",
  3: "verified",
 }
+
 PROTONDB_URL = (
  "https://www.protondb.com/api/v1/reports/summaries/{appid}.json"
 )
+
 DECK_VERIFIED_URL = (
  "https://store.steampowered.com/saleaction/"
  "ajaxgetdeckappcompatibilityreport?nAppID={appid}"
 )
+
 DEFAULT_USER_AGENT = "Unifideck/1.0 (compat-library)"
 CACHE_NAMESPACE = "compat"
+
+# HTTP status code constants — kept here so PLR2004 doesn't flag the magic numbers in the fetch helpers below.
+HTTP_OK = 200
+HTTP_NOT_FOUND = 404
+
 @dataclass
 class CompatRating:
     """Compat rating."""
+
     appid: int | None = None
     title: str = ""
     protondb_tier: str | None = None
@@ -135,9 +151,9 @@ class CompatLibrary:
                     timeout=timeout,
                 ) as resp,
             ):
-                if resp.status == 404:
+                if resp.status == HTTP_NOT_FOUND:
                     return None
-                if resp.status != 200:
+                if resp.status != HTTP_OK:
                     return None
                 return parse_protondb_response(
                     await resp.json(),
@@ -165,7 +181,7 @@ class CompatLibrary:
                     timeout=timeout,
                 ) as resp,
             ):
-                if resp.status != 200:
+                if resp.status != HTTP_OK:
                     return "unknown"
                 return parse_deck_verified_response(
                     await resp.json(),
