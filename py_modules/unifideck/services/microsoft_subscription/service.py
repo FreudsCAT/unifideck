@@ -1,116 +1,112 @@
-"""services/microsoft_subscription/service.py — xCloud subscription state.
-
-Layer-5 service that owns Microsoft Xbox Game Pass subscription
-detection. Reactive to auth lifecycle (STORE_LOGOUT,
-STORE_AUTH_COMPLETE, ACCOUNT_SWITCHED). MicrosoftStore queries
-``get_tier(token_manager)`` before every library sync.
-
-Shell class composed of 3 mixins:
-- ``_CacheMixin``        : read/write/store cached entries
-- ``_ProbeEmissionMixin`` : HTTP probe + EventBus emission
-- ``_EventHandlersMixin`` : auth lifecycle subscribers
-"""
 from __future__ import annotations
-
 import asyncio
 import logging
-from typing import TYPE_CHECKING, Any
-
+import time
+from typing import TYPE_CHECKING
 from ...core.types import SubscriptionTier
+from ...core.types.events import Events
+from ...event_bus.event_bus import EventBus
+from ...event_bus.event_bus_devex import auto_wire
 from .cache_mixin import _CacheMixin
 from .constants import _CACHE_STORE_NAME
 from .event_handlers import _EventHandlersMixin
 from .probe_emission import _ProbeEmissionMixin
-
+from .time_utils import _fmt_ts
 if TYPE_CHECKING:
     from ...config import ConfigManager
     from ...core.cache_manager import CacheManager
-    from ...event_bus.event_bus import EventBus
-    from ...stores.microsoft.tokens import MicrosoftTokenManager
-
+    from ...stores.microsoft.tokens import (
+        MicrosoftTokenManager,
+        XBLTokenChain,
+    )
 logger = logging.getLogger(__name__)
-
-
 class MicrosoftSubscriptionService(
     _CacheMixin, _ProbeEmissionMixin, _EventHandlersMixin,
 ):
-    """Reactive xCloud subscription state for MicrosoftStore."""
-
+    """Microsoft subscription service."""
     def __init__(
         self,
         bus: EventBus,
         cache: CacheManager,
         config: ConfigManager | None = None,
     ) -> None:
-        """Store collaborators, init cache state and locks."""
+        """Initialize the instance."""
         self._bus = bus
         self._cache = cache
         self._config = config
-        
-        self._last_emitted: dict[str, SubscriptionTier] = {}
-        self._locks: dict[str, asyncio.Lock] = {}
-        self._last_standard_chain = None
-        
-        # Load existing cache to populate _last_emitted
         try:
-            store_data = self._cache.get_store(_CACHE_STORE_NAME)
-            if store_data:
-                for key, raw in store_data.items():
-                    entry = self._read_cache(key)
-                    if entry and entry.is_fresh():
-                        self._last_emitted[key] = entry.tier
-        except Exception as e:
-            logger.debug("[MicrosoftSubscription] Failed to load initial cache: %s", e)
-            
-        if hasattr(self._bus, "auto_wire"):
-            self._bus.auto_wire(self)
-
-    def _get_lock(self, key: str) -> asyncio.Lock:
-        if key not in self._locks:
-            self._locks[key] = asyncio.Lock()
-        return self._locks[key]
+            self._cache.register(_CACHE_STORE_NAME, ttl_seconds=0)
+        except Exception:
+            logger.exception(
+                "[MSSubSvc] could not register cache store %s",
+                _CACHE_STORE_NAME,
+            )
+        self._lock = asyncio.Lock()
+        self._last_emitted: dict[str, SubscriptionTier] = {}
+        self._last_standard_chain: XBLTokenChain | None = None
+        auto_wire(self, self._bus)
+        logger.info(
+            "[MSSubSvc] initialized (endpoint=%s)",
+            self._probe_url(),
+        )
 
     async def get_tier(
-        self, token_manager: MicrosoftTokenManager,
+        self,
+        token_manager: MicrosoftTokenManager,
     ) -> SubscriptionTier:
-        """Return the currently detected subscription tier."""
-        cache_key = await self._resolve_cache_key(token_manager)
-        lock = self._get_lock(cache_key)
-        
-        async with lock:
-            # Check cache
-            cached = self._read_cache(cache_key)
-            if cached and cached.is_fresh():
-                return cached.tier
-                
-            # Cache miss or expired — probe
-            logger.info("[MicrosoftSubscription] Probing subscription for %s", cache_key)
-            result = await self._run_probe(token_manager)
-            
-            if result.ok:
-                await self._store_tier_result(cache_key, result.tier)
-                return result.tier
-            else:
-                logger.warning(
-                    "[MicrosoftSubscription] Probe failed for %s: %s", 
-                    cache_key, result.error
-                )
-                return SubscriptionTier.NONE
 
+        """Get tier."""
+        cache_key = await self._resolve_cache_key(token_manager)
+        async with self._lock:
+            cached = self._read_cache(cache_key)
+            if cached is not None and cached.is_fresh():
+                logger.debug(
+                    "[MSSubSvc] cache hit for %s: tier=%s "
+                    "(expires in %ds)",
+                    cache_key,
+                    cached.tier.value,
+                    int(cached.expires_at - time.time()),
+                )
+                return cached.tier
+            probe_result = await self._run_probe(token_manager)
+            if probe_result.ok:
+                await self._store_tier_result(
+                    cache_key, probe_result.tier,
+                )
+                result_tier: SubscriptionTier = probe_result.tier
+                return result_tier
+            if cached is not None:
+                logger.warning(
+                    "[MSSubSvc] probe failed (%s), using stale "
+                    "cache tier=%s from %s",
+                    probe_result.error,
+                    cached.tier.value,
+                    _fmt_ts(cached.detected_at),
+                )
+                return cached.tier
+            await self._bus.emit(
+                Events.SUBSCRIPTION_CHECK_FAILED,
+                store="microsoft",
+                reason=probe_result.error or "unknown",
+            )
+            logger.warning(
+                "[MSSubSvc] probe failed (%s) and no cache "
+                "— returning NONE",
+                probe_result.error,
+            )
+            return SubscriptionTier.NONE
     async def has_active_subscription(
-        self, token_manager: MicrosoftTokenManager,
+        self,
+        token_manager: MicrosoftTokenManager,
     ) -> bool:
-        """Convenience wrapper for get_tier() != NONE."""
+        """Check whether active subscription."""
         tier = await self.get_tier(token_manager)
         return tier != SubscriptionTier.NONE
-
     async def invalidate(self) -> None:
-        """Drop every cached entry (explicit refresh)."""
-        logger.info("[MicrosoftSubscription] Invalidating subscription cache")
-        self._last_emitted.clear()
-        self._last_standard_chain = None
-        
+        """Invalidate."""
         try:
-            self._cache.clear_store(_CACHE_STORE_NAME)
-        except Exception as e:
-            logger.warning("[MicrosoftSubscription] Failed to clear cache store: %s", e)
+            self._cache.clear(_CACHE_STORE_NAME)
+        except Exception:
+            logger.exception("[MSSubSvc] cache clear failed")
+        self._last_emitted.clear()
+        logger.info("[MSSubSvc] cache invalidated")
