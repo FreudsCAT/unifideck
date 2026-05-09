@@ -1,6 +1,9 @@
-# OP-47 | stores/shared/__init__.py | Depends: OP-47a, OP-47b
-from __future__ import annotations
-from .store_registry import StoreRegistry
+from . import cli_install_helpers, dlc
 from .store_base import StoreBase
-
-__all__ = ["StoreRegistry", "StoreBase"]
+from .store_registry import StoreRegistry
+__all__ = [
+    "StoreBase",
+    "StoreRegistry",
+    "cli_install_helpers",
+    "dlc",
+]
