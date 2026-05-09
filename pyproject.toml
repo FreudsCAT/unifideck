@@ -114,6 +114,13 @@ ignore = [
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["F401"]               # re-exports are the point
 "tests/**/*.py" = ["S101", "ANN", "PLR2004"]
+"bin/unifideck-launcher" = [
+    "E402",                             # os.environ.pop() must run
+                                        # before importing sys/Path
+                                        # to scrub Steam Runtime
+                                        # variables from inheritance
+]
+"bin/unifideck-launcher.py" = ["E402"] # the Python module sibling
 "main.py" = [
     "PLR0915",                          # Plugin router transitional
     "E402",                             # sys.path.insert for py_modules/
