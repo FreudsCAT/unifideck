@@ -59,6 +59,11 @@ class Events(StrEnum):
     GAME_UPDATE_AVAILABLE = "game_update_available"
     GAME_LAUNCHED = "game_launched"
     GAME_STOPPED = "game_stopped"
+    PLAYTIME_UPDATED = "playtime_updated"
+
+    # Power/Sleep lifecycle
+    SUSPEND = "suspend"
+    RESUME = "resume"
 
     # Launcher progress stages + toast bridge.
     # Emitted by LauncherService and cloud_failure.py as a

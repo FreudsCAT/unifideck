@@ -1,5 +1,94 @@
-"""service.py — ShortcutService — VDF + games.map
-# OP-14a | py_modules/unifideck/service/shortcut/service.py | Depends: OP-09a,OP-05
+"""services/shortcut/service.py — ShortcutService facade class.
+
+Non-Steam shortcut management. Mutates ``shortcuts.vdf``
+(Steam's registry) and ``games.map`` (Unifideck's own exe
+manifest read by the launcher wrapper at game-launch time).
+
+Shell class composing multiple mixins:
+- ``EventsMixin``       : ``@subscribe`` handlers
+- ``_GamesMapMixin``    : typed mutations + queries
+- ``_VdfShortcutsMixin``: escape-hatch read/write + auth
+                          shortcut delegator
+
+Shell itself owns ``__init__`` / ``stop`` / ``generate_app_id``
+and three loaders that pair ``_loaded`` flags with
+``persistence.py`` stateless helpers.
 """
 from __future__ import annotations
-# TODO: implement — see operational plan PDF page referenced in OP-14a
+
+import logging
+from typing import TYPE_CHECKING, Any
+
+from .events import EventsMixin
+from .games_map import generate_app_id
+from .games_map_mixin import UNIFIDECK_TAG, _GamesMapMixin
+from .persistence import read_games_map, read_vdf, write_games_map, write_vdf
+from .vdf_shortcuts import _VdfShortcutsMixin
+
+if TYPE_CHECKING:
+    from ...event_bus.event_bus import EventBus
+
+logger = logging.getLogger(__name__)
+
+__all__ = ["ShortcutService", "UNIFIDECK_TAG"]
+
+
+class ShortcutService(
+    EventsMixin,
+    _GamesMapMixin,
+    _VdfShortcutsMixin,
+):
+    """Facade for shortcuts.vdf + games.map mutations."""
+
+    def __init__(
+        self,
+        bus: EventBus,
+        shortcuts_path: str,
+        games_map_path: str,
+    ) -> None:
+        """Store refs + paths, init empty state + per-file loaded flags."""
+        self._bus = bus
+        self._shortcuts_path = shortcuts_path
+        self._games_map_path = games_map_path
+
+        self._shortcuts: dict[str, Any] = {}
+        self._games_map: dict[str, dict[str, str]] = {}
+
+        self._shortcuts_loaded = False
+        self._games_map_loaded = False
+
+        self._bus.auto_wire(self)
+
+    async def stop(self) -> None:
+        """Unsubscribe from EventBus events and persist pending changes."""
+        self._bus.unsubscribe_all(self)
+        await self._save_all()
+
+    @staticmethod
+    def generate_app_id(exe: str, title: str) -> int:
+        """Delegate to module-level generate_app_id in games_map.py."""
+        return generate_app_id(exe, title)
+
+    async def _load_shortcuts(self) -> None:
+        """Load shortcuts.vdf into memory (idempotent)."""
+        if self._shortcuts_loaded:
+            return
+
+        self._shortcuts = await read_vdf(self._shortcuts_path)
+        self._shortcuts_loaded = True
+
+    async def _load_games_map(self) -> None:
+        """Load games.map with retry-on-corruption (idempotent)."""
+        if self._games_map_loaded:
+            return
+
+        self._games_map = await read_games_map(self._games_map_path)
+        self._games_map_loaded = True
+
+    async def _save_all(self) -> None:
+        """Persist shortcuts.vdf + games.map atomically."""
+        if self._shortcuts_loaded:
+            await write_vdf(self._shortcuts_path, self._shortcuts)
+
+        if self._games_map_loaded:
+            await write_games_map(self._games_map_path, self._games_map)

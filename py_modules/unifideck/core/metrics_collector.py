@@ -74,17 +74,22 @@ class MetricsCollector:
         (Events.DOWNLOAD_QUEUED, "download_queued"),
         (Events.DOWNLOAD_COMPLETE, "download_completed"),
         (Events.DOWNLOAD_FAILED, "download_failed"),
+        (Events.GAME_INSTALLED, "game_installed"),
+        (Events.GAME_UNINSTALLED, "game_uninstalled"),
         ]
         # Counter events remain imperative because they share a
-        # generic lambda handler (not compatible with @subscribe
+        # generic lambda handler (not compatible with @subscribe)
         for event, name in counter_events:
             self._bus.on(
-             event,
-             lambda n=name, **kw: self._inc_counter(n))
-            from unifideck.event_bus.event_bus_devex import auto_wire
-            auto_wire(self, self._bus)
-            logger.info("[MetricsCollector] wired (%d counter + decorated handlers)",
-             len(counter_events))
+                event,
+                lambda n=name, **kw: self._inc_counter(n),
+            )
+        from unifideck.event_bus.event_bus_devex import auto_wire
+        auto_wire(self, self._bus)
+        logger.info(
+            "[MetricsCollector] wired (%d counter + decorated handlers)",
+            len(counter_events),
+        )
     async def stop(self) -> None:
         """Clear all subscriptions (for shutdown/tests)."""
         # Simplest: clear the entire bus. In production we'd store
@@ -109,29 +114,48 @@ class MetricsCollector:
         # ── Internal event handlers ────────────────────────────────
     def _inc_counter(self, name: str) -> None:
         self._counters[name] = self._counters.get(name, 0) + 1
+
+    from unifideck.event_bus.event_bus_devex import subscribe
+
+    @subscribe(Events.STORE_AUTH_STARTED)
     def _on_auth_start(self, store: str = "", **kwargs) -> None:
         self._pending_timers[f"auth:{store}"] = time.monotonic()
+
+    @subscribe(Events.STORE_AUTH_COMPLETE)
     def _on_auth_complete(self, store: str = "", **kwargs) -> None:
-        self._complete_timer(f"auth:{store}", "auth_duration_ms")
+        name = f"auth_duration_ms:{store}" if store else "auth_duration_ms"
+        self._complete_timer(f"auth:{store}", name)
+
+    @subscribe(Events.SYNC_STARTED)
     def _on_sync_start(self, **kwargs) -> None:
         self._pending_timers["sync"] = time.monotonic()
+
+    @subscribe(Events.SYNC_COMPLETE)
     def _on_sync_complete(self, **kwargs) -> None:
         self._complete_timer("sync", "sync_duration_ms")
+        self._on_sync_gauge(**kwargs)
+
+    @subscribe(Events.DOWNLOAD_STARTED)
     def _on_download_start(self, store: str = "",
-    game_id: str = "", **kwargs) -> None:
+                           game_id: str = "", **kwargs) -> None:
         self._pending_timers[f"dl:{store}:{game_id}"] = time.monotonic()
 
+    @subscribe(Events.DOWNLOAD_COMPLETE)
     def _on_download_complete(self, store: str = "",
-    game_id: str = "", **kwargs) -> None:
+                               game_id: str = "", **kwargs) -> None:
         self._complete_timer(
-        f"dl:{store}:{game_id}", "download_duration_ms",
+            f"dl:{store}:{game_id}", "download_duration_ms",
         )
+
     def _on_sync_gauge(self, games=None, stores_synced=None, **kw):
         """Record gauge metrics from SYNC_COMPLETE payload."""
         if games is not None:
             self._gauges["sync_games_total"] = float(len(games))
-            if stores_synced is not None:
+        if stores_synced is not None:
+            if hasattr(stores_synced, "__len__"):
                 self._gauges["sync_stores_count"] = float(len(stores_synced))
+            else:
+                self._gauges["sync_stores_count"] = float(stores_synced)
     def _complete_timer(self, key: str, metric_name: str) -> None:
         """Close a timer and record its duration."""
         started = self._pending_timers.pop(key, None)
