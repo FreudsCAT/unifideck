@@ -4,7 +4,7 @@ import os
 import subprocess
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any, Optional
-from ...core.bin import binary_resolver
+from ...core.binaries import binary_resolver
 from ...core.exe_finder import exe_finder
 from ...core.types import (
     AuthResult,

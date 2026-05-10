@@ -1,2 +1,4 @@
 # OP-58 | stores/ubisoft/auth/__init__.py
-from __future__ import annotations
+from .facade import UbisoftAuth, UbisoftAuthServices, UbisoftAuthState
+
+__all__ = ['UbisoftAuth', 'UbisoftAuthServices', 'UbisoftAuthState']
