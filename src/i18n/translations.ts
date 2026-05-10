@@ -15,9 +15,9 @@
  *
  * What lives here:
  * - `initI18n()`: one-time i18next setup with all bundled
- * locales and RTL direction applied to the document root
+ *   locales and RTL direction applied to the document root
  * - `changeLanguage()`: runtime language switch that persists
- * the choice and updates the document direction
+ *   the choice and updates the document direction
  * - `isRTL()`: convenience re-export from the generated catalog
  * - `getSupportedLanguages()`: returns the canonical tuple
  * - `detectInitialLanguage()`: localStorage → navigator → en-US
@@ -31,19 +31,19 @@ import { initReactI18next } from "react-i18next";
 // Editing the list of supported languages means editing
 // defaults/config.json, not this file.
 import {
- SUPPORTED_LANGUAGES,
- SupportedLanguage,
- LANGUAGE_NAMES,
- RTL_LANGUAGES,
- LOCALE_RESOURCES,
+  SUPPORTED_LANGUAGES,
+  SupportedLanguage,
+  LANGUAGE_NAMES,
+  RTL_LANGUAGES,
+  LOCALE_RESOURCES,
 } from "./locales.generated";
 // Re-export so existing callers can import these from
 // "./translations" without caring that the data actually
 // comes from a generated file
 export {
- SUPPORTED_LANGUAGES,
- LANGUAGE_NAMES,
- RTL_LANGUAGES,
+  SUPPORTED_LANGUAGES,
+  LANGUAGE_NAMES,
+  RTL_LANGUAGES,
 };
 export type { SupportedLanguage };
 /**
@@ -52,9 +52,8 @@ export type { SupportedLanguage };
  * know which languages are RTL.
  */
 export function isRTL(lang: SupportedLanguage): boolean {
- return RTL_LANGUAGES.has(lang);
+  return RTL_LANGUAGES.has(lang);
 }
-
 /**
  * Apply the correct `dir` and `lang` attributes to the document
  * root. Idempotent — safe to call multiple times with the same
@@ -68,9 +67,9 @@ export function isRTL(lang: SupportedLanguage): boolean {
  * element can override with an explicit `dir="ltr"` attribute.
  */
 function applyDirection(lang: SupportedLanguage): void {
- if (typeof document === "undefined") return; // SSR safety
- document.documentElement.dir = isRTL(lang) ? "rtl" : "ltr";
- document.documentElement.lang = lang;
+  if (typeof document === "undefined") return; // SSR safety
+  document.documentElement.dir = isRTL(lang) ? "rtl" : "ltr";
+  document.documentElement.lang = lang;
 }
 /**
  * Initialize i18next with all bundled locales. Called once at
@@ -81,18 +80,18 @@ function applyDirection(lang: SupportedLanguage): void {
  * render correctly from the first frame.
  */
 export async function initI18n(): Promise<void> {
- if (i18n.isInitialized) return;
- const initialLang = detectInitialLanguage();
- await i18n
- .use(initReactI18next)
- .init({
- resources: LOCALE_RESOURCES,
- lng: initialLang,
- fallbackLng: "en-US",
- interpolation: { escapeValue: false },
- returnEmptyString: false,
- });
- applyDirection(initialLang);
+  if (i18n.isInitialized) return;
+  const initialLang = detectInitialLanguage();
+  await i18n
+    .use(initReactI18next)
+    .init({
+      resources: LOCALE_RESOURCES,
+      lng: initialLang,
+      fallbackLng: "en-US",
+      interpolation: { escapeValue: false },
+      returnEmptyString: false,
+    });
+  applyDirection(initialLang);
 }
 /**
  * Change the current UI language at runtime, persist the choice
@@ -100,38 +99,37 @@ export async function initI18n(): Promise<void> {
  * languages flip immediately without a page reload.
  */
 export async function changeLanguage(
- lang: SupportedLanguage,
+  lang: SupportedLanguage,
 ): Promise<void> {
- await i18n.changeLanguage(lang);
- applyDirection(lang);
- try {
- localStorage.setItem("unifideck.lang", lang);
- } catch {
- // ignore quota/availability errors
- }
+  await i18n.changeLanguage(lang);
+  applyDirection(lang);
+  try {
+    localStorage.setItem("unifideck.lang", lang);
+  } catch {
+    // ignore quota/availability errors
+  }
 }
 /** Return the list of supported language tags. */
 export function getSupportedLanguages(): readonly SupportedLanguage[] {
- return SUPPORTED_LANGUAGES;
+  return SUPPORTED_LANGUAGES;
 }
 /**
  * Detect the initial language from localStorage, then the
  * browser's navigator.language, then fall back to en-US.
  */
-
 function detectInitialLanguage(): SupportedLanguage {
- try {
- const saved = localStorage.getItem("unifideck.lang");
- if (saved && (SUPPORTED_LANGUAGES as readonly string[]).includes(saved)) {
- return saved as SupportedLanguage;
- }
- } catch {
- // localStorage unavailable
- }
- // Fall back to browser language if it matches a supported tag
- const browserLang = navigator.language || "en-US";
- const match = SUPPORTED_LANGUAGES.find(
- (l) => l === browserLang || l.startsWith(browserLang.split("-")[0]),
- );
- return match || "en-US";
+  try {
+    const saved = localStorage.getItem("unifideck.lang");
+    if (saved && (SUPPORTED_LANGUAGES as readonly string[]).includes(saved)) {
+      return saved as SupportedLanguage;
+    }
+  } catch {
+    // localStorage unavailable
+  }
+  // Fall back to browser language if it matches a supported tag
+  const browserLang = navigator.language || "en-US";
+  const match = SUPPORTED_LANGUAGES.find(
+    (l) => l === browserLang || l.startsWith(browserLang.split("-")[0]),
+  );
+  return match || "en-US";
 }
