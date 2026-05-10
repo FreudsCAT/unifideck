@@ -48,7 +48,9 @@ let cached: AppDetailsClassNames | null = null;
  *   callers should retry on the next animation frame).
  */
 export function getAppDetailsClasses(): AppDetailsClassNames {
-  if (cached) return cached;
+  if (cached)
+    return cached;
+
   cached = {
     details: pickFirstClass(appDetailsClasses),
     actionButton: pickFirstClass(appActionButtonClasses),
@@ -72,6 +74,7 @@ function pickFirstClass(classObj: Record<string, string>): string {
 
   return "";
 }
+
 /** Force-refresh the cache. Called from a dev menu when
  *  diagnosing a Steam update break. Not exposed in
  *  production UI. */

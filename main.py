@@ -43,7 +43,6 @@ sys.path.insert(0, os.path.join(DECKY_PLUGIN_DIR, "py_modules"))
 
 from unifideck.config.user_config_path import resolve_user_config_path
 from unifideck.rpc import auto_wrap_rpc_methods
-
 from unifideck.rpc.mixins.action import ActionRPCMixin
 from unifideck.rpc.mixins.cloud_failure import CloudFailureRPCMixin
 from unifideck.rpc.mixins.config_validation import ConfigValidationRPCMixin

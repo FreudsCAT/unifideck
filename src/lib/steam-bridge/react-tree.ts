@@ -22,7 +22,9 @@ const MAX_DEPTH = 50;
  *  first node satisfying `matcher`, or null if none found
  *  within MAX_DEPTH levels. */
 export function findInReactTree<T = unknown>(root: unknown, matcher: ReactTreeMatcher): T | null {
-  if (root == null) return null;
+  if (root == null)
+    return null;
+
   try {
     const result = deckyFind(root, matcher);
     return (result as T) ?? null;
@@ -43,7 +45,8 @@ export function findAllInReactTree<T = unknown>(root: unknown, matcher: ReactTre
 
 /** Walk. */
 function walk<T>(node: unknown, matcher: ReactTreeMatcher, out: T[], depth: number, limit: number): void {
-  if (out.length >= limit || depth > MAX_DEPTH || node == null) return;
+  if (out.length >= limit || depth > MAX_DEPTH || node == null)
+    return;
 
   if (matcher(node)) {
     out.push(node as T);
