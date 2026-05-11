@@ -119,6 +119,18 @@ def _resolve_exe_override(plan: ProtonLaunchPlan) -> Path | None:
     full = Path(install_path) / rel
     return full if full.is_file() else None
 
+async def _run_epic_prerequisites(plan: ProtonLaunchPlan) -> None:
+    """Run epic prerequisites."""
+    from ..fixes.epic_prerequisites import apply_epic_prerequisites
+    try:
+        await apply_epic_prerequisites(plan)
+    except Exception:
+        logger.exception(
+            "[launcher.proton.epic] prerequisites step crashed "
+            "(non-fatal)",
+        )
+
+
 async def epic_launch(plan: ProtonLaunchPlan) -> int:
 
     """Epic launch."""
@@ -126,6 +138,7 @@ async def epic_launch(plan: ProtonLaunchPlan) -> int:
     "[launcher.proton.epic] launching %s", plan.context.game_key,
    )
     _lazy_cleanup_ubisoft_artifacts(plan)
+    await _run_epic_prerequisites(plan)
     env = dict(plan.env)
     env["STORE"] = "none"
     env.pop("LEGENDARY_WRAPPER_EXE", None)

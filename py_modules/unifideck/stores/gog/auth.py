@@ -99,7 +99,7 @@ class GOGBrowserAuth:
             return AuthResult(
                 success=False, store='gog', error='exchange_failed',
             )
-        await self._bus.emit(Events.STORE_AUTH_SUCCESS, store='gog')
+        await self._bus.emit(Events.STORE_AUTH_COMPLETE, store='gog')
         return AuthResult(success=True, store='gog')
 
     async def logout(self, browser_monitor: Any | None = None) -> Result:

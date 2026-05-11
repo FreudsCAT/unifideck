@@ -122,6 +122,34 @@ def test_iter_skips_underscore_prefixed_entries(stores_dir: Path) -> None:
     assert _suffixes(stores_dir) == []
 
 
+def test_iter_finds_subpackage_with_prefixed_store_file(
+    stores_dir: Path,
+) -> None:
+    """``<name>/<name>_store.py`` is the layout Microsoft / Amazon
+    use (PDF-spec) — different filename than the bare ``store.py``
+    layout but semantically the same."""
+    pkg = stores_dir / "microsoft"
+    _write(pkg / "__init__.py", "")
+    _write(pkg / "microsoft_store.py", "x = 1\n")
+    suffixes = _suffixes(stores_dir)
+    assert "microsoft.microsoft_store" in suffixes
+
+
+def test_iter_prefers_prefixed_store_file_when_both_present(
+    stores_dir: Path,
+) -> None:
+    """If a subpackage has both ``<name>_store.py`` and ``store.py``
+    the prefixed one wins (it matches the PDF spec for Amazon /
+    Microsoft and is more explicit)."""
+    pkg = stores_dir / "microsoft"
+    _write(pkg / "__init__.py", "")
+    _write(pkg / "microsoft_store.py", "x = 1\n")
+    _write(pkg / "store.py", "x = 1\n")
+    suffixes = _suffixes(stores_dir)
+    assert "microsoft.microsoft_store" in suffixes
+    assert "microsoft.store" not in suffixes
+
+
 def test_iter_ignores_nested_files_below_one_level(stores_dir: Path) -> None:
     """Only ``<pkg>/store.py`` counts — deeper ``store.py`` files
     inside sub-subpackages must not be yielded (e.g. ``ubisoft/auth/store.py``
