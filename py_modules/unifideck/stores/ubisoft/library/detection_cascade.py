@@ -1,21 +1,30 @@
-"""detection_cascade.py — Cascade of fallback strategies for install detection.
-
-# OP-57g | py_modules/unifideck/stores/ubisoft/library/detection_cascade.py | Depends: (none)
-
-Tries (in order): the install-marker file, in-prefix UPC games dir,
-configured external game roots (default + sd-card + mounted media),
-and finally the per-prefix Wine registry.
 """
-from __future__ import annotations
+Detection cascade — chain of strategies to identify a game on disk.
 
+OP-57g | py_modules/unifideck/stores/ubisoft/library/detection_cascade.py
+
+Identifying an unknown Ubisoft install on disk requires trying several
+strategies in order:
+
+1. **manifest match** — read the UPC manifest, look up the space_id;
+2. **executable fingerprint** — match the .exe name against known patterns;
+3. **directory-name regex** — match the install-dir name against UPC's
+   canonical naming convention;
+4. **id_map source list** — search the crowd-sourced game-ID DB;
+5. **fallback** — register as "Unknown Ubisoft game" with a hash as ID.
+
+``_DetectionCascade`` wires these strategies and returns the first one
+that produces a confident match. Each strategy returns a confidence
+score; below threshold, the next is tried.
+"""
+
+from __future__ import annotations
 import logging
-import os
 import re
 from collections.abc import Callable
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
-
 from .detection_helpers import (
-    _DetectionHelpers,
     load_json_file_safe,
     looks_like_game_install,
     walk_install_candidates,
@@ -25,9 +34,8 @@ from .wine_path import wine_path_to_linux
 
 if TYPE_CHECKING:
     from .detection import _InstallDetector
-
 logger = logging.getLogger(__name__)
-_INSTALL_MARKER_FILENAME = '.unifideck_ubisoft'
+_INSTALL_MARKER_FILENAME = ".unifideck_ubisoft"
 
 
 class _DetectionCascade:
@@ -36,60 +44,84 @@ class _DetectionCascade:
     def __init__(self, parent: _InstallDetector) -> None:
         """Initialize the instance."""
         self._parent = parent
-        self._helpers = _DetectionHelpers(parent)
 
     def detect_via_marker(
-        self, space_id: str, known_name: str, search_roots: list[str],
+        self,
+        space_id: str,
+        known_name: str,
+        search_roots: list[str],
     ) -> dict[str, Any] | None:
         """Detect via marker."""
-        for _entry, game_dir in walk_install_candidates(search_roots):
-            marker_data = self._load_marker_for_space(game_dir, space_id)
+        for game_dir, folder in walk_install_candidates(
+            search_roots,
+        ):
+            marker_data = self._load_marker_for_space(
+                game_dir,
+                space_id,
+            )
             if marker_data is None:
                 continue
             return self._build_marker_result(
-                space_id, known_name, game_dir,
-                os.path.basename(game_dir), marker_data,
+                space_id,
+                known_name,
+                game_dir,
+                folder,
+                marker_data,
             )
         return None
 
     @staticmethod
     def _load_marker_for_space(
-        game_dir: str, space_id: str,
+        game_dir: str,
+        space_id: str,
     ) -> dict | None:
         """Load marker for space."""
-        path = os.path.join(game_dir, _INSTALL_MARKER_FILENAME)
-        marker = load_json_file_safe(path)
-        if not isinstance(marker, dict):
+        marker_path = Path(game_dir) / _INSTALL_MARKER_FILENAME
+        if not marker_path.is_file():
             return None
-        if marker.get('space_id') == space_id:
-            return marker
-        return None
+        marker_data = load_json_file_safe(str(marker_path))
+        if not isinstance(marker_data, dict):
+            return None
+        if marker_data.get("space_id") != space_id:
+            return None
+        return marker_data
 
     def _build_marker_result(
-        self, space_id: str, known_name: str, game_dir: str,
-        folder: str, marker_data: dict,
+        self,
+        space_id: str,
+        known_name: str,
+        game_dir: str,
+        folder: str,
+        marker_data: dict,
     ) -> dict[str, Any]:
         """Build marker result."""
-        executable = self._resolve_marker_executable(marker_data, game_dir)
+        install_path = marker_data.get("install_path") or game_dir
+        executable = self._resolve_marker_executable(
+            marker_data,
+            install_path,
+        )
         return {
-            'space_id': space_id,
-            'install_path': game_dir,
-            'install_dir': folder,
-            'executable': executable,
-            'name': marker_data.get('title') or known_name,
-            'install_id': '',
+            "space_id": space_id,
+            "executable": executable,
+            "install_path": install_path,
+            "work_dir": install_path,
+            "title": (marker_data.get("game_title") or known_name or folder),
         }
 
     def _resolve_marker_executable(
-        self, marker_data: dict, install_path: str,
+        self,
+        marker_data: dict,
+        install_path: str,
     ) -> str:
         """Resolve marker executable."""
-        rel = marker_data.get('executable')
-        if isinstance(rel, str) and rel:
-            full = os.path.join(install_path, rel)
-            if os.path.isfile(full):
-                return full
-        return self._parent.find_game_executable(install_path) or ''
+        executable = marker_data.get("executable", "") or ""
+        exe_path = Path(executable) if executable else None
+        if exe_path and not exe_path.is_absolute():
+            exe_path = Path(install_path) / executable
+            executable = str(exe_path)
+        if not executable or not Path(executable).exists():
+            return self._parent.find_game_executable(install_path) or ""
+        return executable
 
     def detect_via_prefix_install_state(
         self,
@@ -100,18 +132,34 @@ class _DetectionCascade:
         check_install_state: Callable[[str], bool],
     ) -> dict[str, Any] | None:
         """Detect via prefix install state."""
-        for _entry, game_dir in walk_install_candidates(prefix_game_roots):
-            folder = os.path.basename(game_dir)
-            if not self.fuzzy_folder_match(folder, normalized_known_name):
-                continue
-            state = os.path.join(game_dir, 'uplay_install.state')
-            if os.path.isfile(state) and not check_install_state(state):
-                continue
-            if not looks_like_game_install(game_dir):
-                continue
-            self._write_unifideck_marker(game_dir, space_id, known_name)
-            return self.build_install_info(space_id, game_dir, known_name)
-        return None
+        candidates: list[str] = []
+        for game_dir, _folder in walk_install_candidates(
+            prefix_game_roots,
+        ):
+            state_file = str(
+                Path(game_dir) / "uplay_install.state",
+            )
+            if check_install_state(state_file):
+                candidates.append(game_dir)
+        if not candidates:
+            return None
+        if normalized_known_name:
+            for game_dir in candidates:
+                if self.fuzzy_folder_match(
+                    Path(game_dir).name,
+                    normalized_known_name,
+                ):
+                    return self.build_install_info(
+                        space_id,
+                        game_dir,
+                        known_name or Path(game_dir).name,
+                    )
+        first_dir = candidates[0]
+        return self.build_install_info(
+            space_id,
+            first_dir,
+            known_name or Path(first_dir).name,
+        )
 
     def detect_via_external_roots(
         self,
@@ -122,14 +170,24 @@ class _DetectionCascade:
         check_install_state: Callable[[str], bool],
     ) -> dict[str, Any] | None:
         """Detect via external roots."""
-        for _entry, game_dir in walk_install_candidates(external_game_roots):
-            folder = os.path.basename(game_dir)
-            if not self.fuzzy_folder_match(folder, normalized_known_name):
+        for game_dir, folder in walk_install_candidates(
+            external_game_roots,
+        ):
+            state_file = str(
+                Path(game_dir) / "uplay_install.state",
+            )
+            if not check_install_state(state_file):
                 continue
-            if not looks_like_game_install(game_dir):
+            if not self.fuzzy_folder_match(
+                folder,
+                normalized_known_name,
+            ):
                 continue
-            self._write_unifideck_marker(game_dir, space_id, known_name)
-            return self.build_install_info(space_id, game_dir, known_name)
+            return self.build_install_info(
+                space_id,
+                game_dir,
+                known_name or folder,
+            )
         return None
 
     def detect_via_registry_install_id(
@@ -140,19 +198,24 @@ class _DetectionCascade:
         check_install_state: Callable[[str], bool],
     ) -> dict[str, Any] | None:
         """Detect via registry install ID."""
-        for reg_name in ('system.reg', os.path.join('pfx', 'system.reg')):
-            reg_path = os.path.join(prefix_path, reg_name)
-            if not os.path.isfile(reg_path):
-                continue
-            install_id = self._parent._id_map.get_entry(space_id).get(
-                'install_id',
-            )
-            if not install_id:
-                continue
-            pattern = self._build_registry_pattern(install_id)
+        install_id = self._parent._id_map.resolve_install_id(
+            space_id,
+        )
+        if not install_id:
+            return None
+        install_section_pattern = self._build_registry_pattern(
+            install_id,
+        )
+        for reg_name in ("pfx/system.reg", "system.reg"):
+            reg_path = str(Path(prefix_path) / reg_name)
             result = self._try_registry_file(
-                reg_path, pattern, space_id, install_id, prefix_path,
-                known_name, check_install_state,
+                reg_path,
+                install_section_pattern,
+                space_id,
+                install_id,
+                prefix_path,
+                known_name,
+                check_install_state,
             )
             if result is not None:
                 return result
@@ -162,11 +225,9 @@ class _DetectionCascade:
     def _build_registry_pattern(install_id: str) -> re.Pattern:
         """Build registry pattern."""
         return re.compile(
-            (
-                r'\[Software\\\\Wow6432Node\\\\Ubisoft\\\\Launcher\\\\'
-                r'Installs\\\\' + re.escape(install_id) + r'\][^\[]*?'
-                r'"InstallDir"\s*=\s*"([^"]*)"'
-            ),
+            r"\[Software\\\\(?:Wow6432Node\\\\)?"
+            r"Ubisoft\\\\Launcher\\\\Installs\\\\" + re.escape(install_id) + r"\]"
+            r'[^\[]*?"InstallDir"\s*=\s*"([^"]*)"',
             re.DOTALL,
         )
 
@@ -181,72 +242,89 @@ class _DetectionCascade:
         check_install_state: Callable[[str], bool],
     ) -> dict[str, Any] | None:
         """Try registry file."""
+        reg_p = Path(reg_path)
+        if not reg_p.is_file():
+            return None
         try:
-            with open(reg_path, encoding='utf-8', errors='replace') as f:
-                content = f.read()
+            reg_content = reg_p.read_text(
+                encoding="utf-8",
+                errors="replace",
+            )
         except OSError:
             return None
-        match = pattern.search(content)
-        if not match:
-            return None
-        wine_path = match.group(1).replace('\\\\', '\\')
-        linux_path = wine_path_to_linux(wine_path, prefix_path)
-        if not linux_path:
-            return None
-        if not self._validate_registry_install(linux_path, check_install_state):
-            return None
-        self._write_unifideck_marker(linux_path, space_id, known_name)
-        return self.build_install_info(space_id, linux_path, known_name)
+        for match in pattern.finditer(reg_content):
+            install_dir_raw = match.group(1).replace("\\\\", "/")
+            linux_path = wine_path_to_linux(
+                install_dir_raw,
+                prefix_path,
+            )
+            if not self._validate_registry_install(
+                linux_path,
+                check_install_state,
+            ):
+                continue
+            assert linux_path is not None
+            logger.info(
+                "[UbisoftLibrary] method 4: registry InstallDir for %s: %s",
+                install_id,
+                linux_path[:80],
+            )
+            result = self.build_install_info(
+                space_id,
+                linux_path,
+                known_name or Path(linux_path).name,
+            )
+            write_marker_sync(
+                linux_path,
+                space_id,
+                result["title"],
+            )
+            return result
+        return None
 
     @staticmethod
     def _validate_registry_install(
-        linux_path: str | None, check_install_state: Callable[[str], bool],
+        linux_path: str | None,
+        check_install_state: Callable[[str], bool],
     ) -> bool:
         """Validate registry install."""
-        if not linux_path or not os.path.isdir(linux_path):
+        if not linux_path or not Path(linux_path).is_dir():
             return False
-        state = os.path.join(linux_path, 'uplay_install.state')
-        if os.path.isfile(state) and not check_install_state(state):
-            return False
-        return looks_like_game_install(linux_path)
+        state_file = str(
+            Path(linux_path) / "uplay_install.state",
+        )
+        return check_install_state(state_file) or looks_like_game_install(linux_path)
 
     def build_install_info(
-        self, space_id: str, game_dir: str, title_hint: str,
+        self,
+        space_id: str,
+        game_dir: str,
+        title_hint: str,
     ) -> dict[str, Any]:
         """Build install info."""
-        executable = self._parent.find_game_executable(game_dir) or ''
+        exe = self._parent.find_game_executable(game_dir) or ""
+        title = title_hint or Path(game_dir).name
         return {
-            'space_id': space_id,
-            'install_path': game_dir,
-            'install_dir': os.path.basename(game_dir),
-            'executable': executable,
-            'name': title_hint,
-            'install_id': self._parent._id_map.get_entry(space_id).get(
-                'install_id', '',
-            ),
+            "space_id": space_id,
+            "executable": exe,
+            "install_path": game_dir,
+            "work_dir": game_dir,
+            "title": title,
         }
 
     def fuzzy_folder_match(
-        self, folder_name: str, normalized_known_name: str,
+        self,
+        folder_name: str,
+        normalized_known_name: str,
     ) -> bool:
         """Fuzzy folder match."""
         if not normalized_known_name:
             return False
-        norm = self._parent._id_map.normalize_for_matching(folder_name)
-        return (
-            norm == normalized_known_name
-            or normalized_known_name in norm
-            or norm in normalized_known_name
+        normalized_folder = self._parent._id_map.normalize_for_matching(
+            folder_name,
         )
-
-    def _write_unifideck_marker(
-        self, install_path: str, space_id: str, title: str,
-    ) -> None:
-        """Write unifideck marker."""
-        write_marker_sync(install_path, space_id, title)
-
-    @staticmethod
-    def _default_check_install_state(state_file: str) -> bool:
-        """Default check install state."""
-        from ..parser import check_install_state as _impl
-        return _impl(state_file)
+        return (
+            normalized_folder == normalized_known_name
+            or normalized_folder in normalized_known_name
+            or normalized_known_name in normalized_folder
+        )

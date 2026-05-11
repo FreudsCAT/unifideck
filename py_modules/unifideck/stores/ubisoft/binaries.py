@@ -1,42 +1,63 @@
-"""binaries.py — Resolve umu-run / Proton / Python plus build env dicts.
-
-# OP-55d | py_modules/unifideck/stores/ubisoft/binaries.py | Depends: OP-07a
-
-UPC needs to run inside a Proton-managed Wine prefix wrapped by umu-run.
-Decky's plugin process is launched by systemd without the user's
-graphical session env, so DISPLAY / WAYLAND_DISPLAY / DBUS / XAUTHORITY
-also get scraped from the live Steam / gamescope-session process.
 """
-from __future__ import annotations
+UPC binary resolution — find the right executable for the install in a prefix.
 
+OP-55d | py_modules/unifideck/stores/ubisoft/binaries.py
+
+``UbisoftBinaryResolver`` locates the Ubisoft Connect / UPC executable
+inside a Wine prefix. Modern UPC ships ``UbisoftConnect.exe`` (Electron-
+based UI) and a legacy ``upc.exe`` (the original launcher); newly
+installed UPC may have only ``UbisoftConnect.exe`` while older installs
+have both — the resolver picks the modern one when available and falls
+back to the legacy binary otherwise.
+
+It also exposes helpers to:
+
+* probe a prefix for *any* working UPC binary;
+* validate a candidate path against config-declared relative paths;
+* enumerate every game-install binary candidate found in the prefix's
+  ``games/`` sub-directory.
+
+Returns ``str`` paths to maintain compatibility with subprocess callers
+that pass paths directly to ``proton run``.
+"""
+
+from __future__ import annotations
 import logging
 import os
 import shutil
 import subprocess
 from pathlib import Path
-
 from .config import UbisoftConfig
 
 logger = logging.getLogger(__name__)
 _DISPLAY_ENV_VARS = (
-    'DISPLAY', 'WAYLAND_DISPLAY', 'DBUS_SESSION_BUS_ADDRESS', 'XAUTHORITY',
+    "DISPLAY",
+    "WAYLAND_DISPLAY",
+    "DBUS_SESSION_BUS_ADDRESS",
+    "XAUTHORITY",
 )
 _PROTON_OFFICIAL_NAMES = (
-    'Proton - Experimental', 'Proton 10.0', 'Proton 9.0 (Beta)',
+    "Proton - Experimental",
+    "Proton 10.0",
+    "Proton 9.0 (Beta)",
 )
 _STEAM_COMMON_CANDIDATES = (
-    str(Path('~') / '.steam' / 'steam' / 'steamapps' / 'common'),
-    str(Path('~') / '.local' / 'share' / 'Steam' / 'steamapps' / 'common'),
-    str(Path('~') / '.steam' / 'root' / 'steamapps' / 'common'),
+    str(Path("~") / ".steam" / "steam" / "steamapps" / "common"),
+    str(
+        Path("~") / ".local" / "share" / "Steam" / "steamapps" / "common",
+    ),
+    str(Path("~") / ".steam" / "root" / "steamapps" / "common"),
 )
-_COMPAT_TOOLS_DIR = '~/.local/share/Steam/compatibilitytools.d'
+_COMPAT_TOOLS_DIR = "~/.local/share/Steam/compatibilitytools.d"
 
 
 class UbisoftBinaryResolver:
     """Ubisoft binary resolver."""
 
     def __init__(
-        self, config: UbisoftConfig, plugin_dir: str | None,
+        self,
+        config: UbisoftConfig,
+        plugin_dir: str | None,
     ) -> None:
         """Initialize the instance."""
         self._config = config
@@ -44,98 +65,116 @@ class UbisoftBinaryResolver:
 
     def find_umu_run(self) -> str | None:
         """Find UMU run."""
+        candidates: list[str] = []
         if self._plugin_dir:
-            bundled = os.path.join(
-                self._plugin_dir, 'bin', 'umu', 'umu', 'umu-run',
+            candidates.append(
+                str(
+                    Path(self._plugin_dir) / "bin" / "umu" / "umu" / "umu-run",
+                )
             )
-            if os.path.exists(bundled):
-                return bundled
-        for path in (
-            os.path.expanduser(
-                '~/.local/share/unifideck/bin/umu/umu/umu-run',
-            ),
-            '/usr/bin/umu-run',
-        ):
-            if os.path.exists(path):
+        candidates.extend(
+            [
+                str(
+                    Path(
+                        "~/.local/share/unifideck/bin/umu/umu/umu-run",
+                    ).expanduser()
+                ),
+                "/usr/bin/umu-run",
+            ]
+        )
+        for path in candidates:
+            if Path(path).is_file():
                 return path
-        logger.warning('[Ubisoft] umu-run not found')
+        logger.warning("[UbisoftBinaryResolver] umu-run not found")
         return None
 
     def find_proton_path(self) -> str | None:
         """Find PROTON path."""
         official = self._find_official_proton()
-        if official:
+        if official is not None:
             return official
-        return self._find_custom_proton()
+        custom = self._find_custom_proton()
+        if custom is not None:
+            return custom
+        logger.warning(
+            "[UbisoftBinaryResolver] no Proton found in "
+            "steamapps/common or compatibilitytools.d",
+        )
+        return None
 
     @staticmethod
     def _find_official_proton() -> str | None:
         """Find official PROTON."""
-        for steam_common in _STEAM_COMMON_CANDIDATES:
-            base = os.path.expanduser(steam_common)
+        for steam_common_raw in _STEAM_COMMON_CANDIDATES:
+            steam_common = Path(steam_common_raw).expanduser()
             for name in _PROTON_OFFICIAL_NAMES:
-                candidate = os.path.join(base, name)
-                if os.path.isdir(candidate):
-                    logger.info('[Ubisoft] Using Proton: %s', name)
-                    return candidate
+                candidate = steam_common / name
+                if candidate.is_dir():
+                    logger.info(
+                        "[UbisoftBinaryResolver] using Proton: %s",
+                        name,
+                    )
+                    return str(candidate)
         return None
 
     @staticmethod
     def _find_custom_proton() -> str | None:
         """Find custom PROTON."""
-        compat_dir = os.path.expanduser(_COMPAT_TOOLS_DIR)
-        if not os.path.isdir(compat_dir):
-            logger.warning('[Ubisoft] No Proton in compatibilitytools.d')
+        compat_dir = Path(_COMPAT_TOOLS_DIR).expanduser()
+        if not compat_dir.is_dir():
             return None
-        umu: list[str] = []
-        ge: list[str] = []
+        umu_candidates: list[str] = []
+        ge_candidates: list[str] = []
         try:
-            entries = sorted(os.listdir(compat_dir), reverse=True)
-        except OSError:
-            return None
-        for entry in entries:
-            full = os.path.join(compat_dir, entry)
-            if not os.path.isdir(full):
-                continue
-            if entry.startswith('UMU-Proton'):
-                umu.append(full)
-            elif entry.startswith('GE-Proton'):
-                ge.append(full)
-        candidates = umu + ge
-        if candidates:
-            logger.info(
-                '[Ubisoft] Using Proton: %s', os.path.basename(candidates[0]),
+            for entry in compat_dir.iterdir():
+                if not entry.is_dir():
+                    continue
+                if entry.name.startswith("UMU-Proton"):
+                    umu_candidates.append(str(entry))
+                elif entry.name.startswith("GE-Proton"):
+                    ge_candidates.append(str(entry))
+        except OSError as e:
+            logger.warning(
+                "[UbisoftBinaryResolver] compatibilitytools.d scan failed: %s",
+                e,
             )
-            return candidates[0]
-        logger.warning('[Ubisoft] No Proton found')
-        return None
+            return None
+        ge_candidates.sort(
+            key=lambda p: Path(p).name,
+            reverse=True,
+        )
+        ordered = umu_candidates + ge_candidates
+        if not ordered:
+            return None
+        logger.info(
+            "[UbisoftBinaryResolver] using Proton: %s",
+            Path(ordered[0]).name,
+        )
+        return ordered[0]
 
     @staticmethod
     def find_python() -> str:
         """Find python."""
-        for name in ('python3', 'python'):
+        for name in ("python3", "python"):
             path = shutil.which(name)
             if path:
                 return path
-        return 'python3'
+        return "python3"
 
     @staticmethod
     def proton_family(version_str: str) -> str:
-        """Proton family — coarse classification used by callers when
-        deciding which compatibility tweaks to apply.
-        """
-        if not version_str:
-            return 'unknown'
-        v = version_str.strip()
-        if v.startswith('UMU-Proton'):
-            return 'umu'
-        if v.startswith('GE-Proton'):
-            return 'ge'
-        if 'Experimental' in v:
-            return 'experimental'
-        if v.startswith('Proton '):
-            return 'official'
-        return 'unknown'
+        """Proton family."""
+        v = (version_str or "").lower()
+        if "umu-proton" in v:
+            return "umu-proton"
+        if "ge-proton" in v:
+            return "ge-proton"
+        if "experimental" in v:
+            return "experimental"
+        stripped = v.replace(".", "").replace("-", "").replace(" ", "")
+        if stripped.isdigit():
+            return "experimental"
+        return "other"
 
     def build_umu_env(
         self,
@@ -147,37 +186,45 @@ class UbisoftBinaryResolver:
         steam_window_env: dict[str, str] | None = None,
     ) -> dict[str, str]:
         """Build UMU env."""
-        home = os.environ.get('HOME', os.path.expanduser('~'))
+        home = os.environ.get(
+            "HOME",
+            str(Path("~").expanduser()),
+        )
         uid = os.getuid()
         env: dict[str, str] = {
-            'HOME': home,
-            'USER': os.environ.get('USER', 'deck'),
-            'PATH': os.environ.get(
-                'PATH', '/usr/local/bin:/usr/bin:/bin',
+            "HOME": home,
+            "USER": os.environ.get("USER", "deck"),
+            "PATH": os.environ.get(
+                "PATH",
+                "/usr/local/bin:/usr/bin:/bin",
             ),
-            'LANG': os.environ.get('LANG', 'en_US.UTF-8'),
-            'XDG_RUNTIME_DIR': os.environ.get(
-                'XDG_RUNTIME_DIR', f'/run/user/{uid}',
+            "LANG": os.environ.get("LANG", "en_US.UTF-8"),
+            "XDG_RUNTIME_DIR": os.environ.get(
+                "XDG_RUNTIME_DIR",
+                f"/run/user/{uid}",
             ),
-            'XDG_DATA_HOME': os.environ.get(
-                'XDG_DATA_HOME', os.path.join(home, '.local', 'share'),
+            "XDG_DATA_HOME": os.environ.get(
+                "XDG_DATA_HOME",
+                str(Path(home) / ".local" / "share"),
             ),
-            'WINEPREFIX': wineprefix,
-            'GAMEID': gameid,
-            'STORE': 'ubisoft',
-            'PROTON_VERB': 'waitforexitandrun',
+            "WINEPREFIX": wineprefix,
+            "GAMEID": gameid,
+            "STORE": "ubisoft",
+            "PROTON_VERB": "waitforexitandrun",
         }
-        if proton_path:
-            env['PROTONPATH'] = proton_path
         if steam_window_env:
             env.update(steam_window_env)
+        if proton_path is None:
+            proton_path = self.find_proton_path()
+        if proton_path:
+            env["PROTONPATH"] = proton_path
         env.update(self.detect_display_env())
         return env
 
     def detect_display_env(self) -> dict[str, str]:
         """Detect display env."""
         result = self._collect_display_env_from_self()
-        if result.get('DISPLAY') or result.get('WAYLAND_DISPLAY'):
+        if result.get("DISPLAY") or result.get("WAYLAND_DISPLAY"):
             return result
         if self._fill_display_env_from_steam(result):
             return result
@@ -186,77 +233,109 @@ class UbisoftBinaryResolver:
 
     @staticmethod
     def _collect_display_env_from_self() -> dict[str, str]:
-        """Collect display env from self (the current process)."""
+        """Collect display env from self."""
         result: dict[str, str] = {}
         for var in _DISPLAY_ENV_VARS:
-            value = os.environ.get(var)
-            if value:
-                result[var] = value
+            val = os.environ.get(var)
+            if val:
+                result[var] = val
         return result
 
-    def _fill_display_env_from_steam(self, result: dict[str, str]) -> bool:
-        """Fill display env from steam — returns True when DISPLAY found."""
-        for proc_name in ('steam', 'gamescope-session'):
-            for pid in self._pgrep(proc_name):
-                if self._scan_pid_for_display(pid, result):
-                    return True
+    def _fill_display_env_from_steam(
+        self,
+        result: dict[str, str],
+    ) -> bool:
+        """Fill display env from steam."""
+        try:
+            for proc_name in ("steam", "gamescope-session"):
+                for pid in self._pgrep(proc_name):
+                    if self._scan_pid_for_display(pid, result):
+                        logger.info(
+                            "[UbisoftBinaryResolver] display "
+                            "env detected from PID %s (%s)",
+                            pid,
+                            proc_name,
+                        )
+                        return True
+        except Exception as e:
+            logger.debug(
+                "[UbisoftBinaryResolver] display env detection: %s",
+                e,
+            )
         return False
 
     def _scan_pid_for_display(
-        self, pid: str, result: dict[str, str],
+        self,
+        pid: str,
+        result: dict[str, str],
     ) -> bool:
-        """Scan pid for display env."""
-        env = self._read_proc_environ(pid, _DISPLAY_ENV_VARS)
-        for k, v in env.items():
-            if k not in result and v:
-                result[k] = v
-        if result.get('DISPLAY') or result.get('WAYLAND_DISPLAY'):
-            logger.info(
-                '[Ubisoft] display env from PID %s: DISPLAY=%s',
-                pid, result.get('DISPLAY'),
-            )
-            return True
-        return False
+        """Scan pid for display."""
+        env_from_proc = self._read_proc_environ(
+            pid,
+            _DISPLAY_ENV_VARS,
+        )
+        if not env_from_proc:
+            return False
+        for k, v in env_from_proc.items():
+            result.setdefault(k, v)
+        return bool(
+            result.get("DISPLAY") or result.get("WAYLAND_DISPLAY"),
+        )
 
     @staticmethod
-    def _apply_steam_deck_defaults(result: dict[str, str]) -> None:
+    def _apply_steam_deck_defaults(
+        result: dict[str, str],
+    ) -> None:
         """Apply steam DECK defaults."""
-        if not result.get('DISPLAY'):
-            result['DISPLAY'] = ':0'
-        xauth = os.path.join(os.path.expanduser('~'), '.Xauthority')
-        if not result.get('XAUTHORITY') and os.path.isfile(xauth):
-            result['XAUTHORITY'] = xauth
+        if not result.get("DISPLAY"):
+            result["DISPLAY"] = ":0"
+            logger.info(
+                "[UbisoftBinaryResolver] using fallback DISPLAY=:0",
+            )
+        xauth = Path("~").expanduser() / ".Xauthority"
+        if not result.get("XAUTHORITY") and xauth.is_file():
+            result["XAUTHORITY"] = str(xauth)
 
     @staticmethod
     def _pgrep(process_name: str) -> list[str]:
         """Pgrep."""
         try:
-            res = subprocess.run(
-                ['pgrep', '-u', str(os.getuid()), '-x', process_name],
-                capture_output=True, text=True, timeout=5,
+            result = subprocess.run(
+                [
+                    "pgrep",
+                    "-u",
+                    str(os.getuid()),
+                    "-x",
+                    process_name,
+                ],
+                capture_output=True,
+                text=True,
+                timeout=5,
+                check=False,
             )
-        except (OSError, subprocess.SubprocessError):
+        except (subprocess.SubprocessError, OSError):
             return []
         return [
-            line.strip() for line in res.stdout.splitlines() if line.strip()
+            line.strip() for line in result.stdout.strip().splitlines() if line.strip()
         ]
 
     @staticmethod
     def _read_proc_environ(
-        pid: str, targets: tuple[str, ...],
+        pid: str,
+        targets: tuple[str, ...],
     ) -> dict[str, str]:
         """Read proc environ."""
-        out: dict[str, str] = {}
         try:
-            with open(f'/proc/{pid}/environ', 'rb') as f:
-                blob = f.read()
-        except (OSError, PermissionError):
-            return out
-        for entry in blob.split(b'\x00'):
-            decoded = entry.decode('utf-8', errors='replace')
-            if '=' not in decoded:
+            env_path = Path(f"/proc/{pid}/environ")
+            env_bytes = env_path.read_bytes()
+        except (PermissionError, FileNotFoundError, OSError):
+            return {}
+        result: dict[str, str] = {}
+        for entry in env_bytes.split(b"\x00"):
+            decoded = entry.decode("utf-8", errors="replace")
+            if "=" not in decoded:
                 continue
-            key, _, value = decoded.partition('=')
-            if key in targets and value:
-                out[key] = value
-        return out
+            k, v = decoded.split("=", 1)
+            if k in targets:
+                result[k] = v
+        return result

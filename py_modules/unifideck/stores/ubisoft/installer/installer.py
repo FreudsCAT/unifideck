@@ -1,15 +1,30 @@
-"""installer.py — Public ``UbisoftInstaller`` surface.
-
-# OP-56a | py_modules/unifideck/stores/ubisoft/installer/installer.py | Depends: OP-55a
 """
-from __future__ import annotations
+UPC installer orchestration — drives the multi-phase install pipeline.
 
+OP-56a | py_modules/unifideck/stores/ubisoft/installer/installer.py
+
+``UbisoftInstaller`` orchestrates a full UPC install through the
+following phases:
+
+1. **bootstrap UPC** — download the UbisoftConnectInstaller.exe from the
+   Ubisoft CDN if absent, store in ``installer_cache_dir``;
+2. **launch UPC headlessly** — wine-run the installer with the right env;
+3. **drive the manual UI** — UPC has no silent-install switch, so the
+   manual_ui module operates UPC visually via window-detection;
+4. **register the install** — write Unifideck's marker + update the id_map.
+
+Errors at any phase are wrapped into an ``InstallResult`` envelope; the
+phase is identified in the error code so the UI can report exactly
+which step failed.
+"""
+
+from __future__ import annotations
+import asyncio
 import logging
 import os
 import subprocess
 from collections.abc import Awaitable, Callable
 from typing import Any
-
 from ....core.types import InstallResult, Result
 from ..binaries import UbisoftBinaryResolver
 from ..config import UbisoftConfig
@@ -18,7 +33,10 @@ from ..library import UbisoftLibrary
 from ..paths import UbisoftPrefixPaths
 from ..session import UbisoftSession
 from . import registry as _reg
-from .launch_env import UpcLaunchEnvBuildError, _UpcLaunchEnv
+from .launch_env import (
+    UpcLaunchEnvBuildError,
+    _UpcLaunchEnv,
+)
 from .launcher import _LauncherInstall
 from .manual_ui import _ManualUiInstaller
 from .registry import _ShortcutRegistry
@@ -40,7 +58,10 @@ class UbisoftInstaller:
         id_map: UbisoftIdMap,
         session: UbisoftSession,
         library: UbisoftLibrary,
-        bootstrap_game_prefix: Callable[[str], Awaitable[bool]],
+        bootstrap_game_prefix: Callable[
+            [str],
+            Awaitable[bool],
+        ],
     ) -> None:
         """Initialize the instance."""
         self._config = config
@@ -50,29 +71,44 @@ class UbisoftInstaller:
         self._session = session
         self._library = library
         self._bootstrap_game_prefix = bootstrap_game_prefix
-        self._active_install_pids: dict[str, int] = {}
         self._shortcut_registry = _ShortcutRegistry(config)
-        self._launcher = _LauncherInstall(self)
-        self._manual_ui = _ManualUiInstaller(
-            config, library, id_map, session, self._active_install_pids,
+        self._active_install_pids: dict[str, int] = {}
+        self._manual_ui_installer = _ManualUiInstaller(
+            config=config,
+            library=library,
+            id_map=id_map,
+            session=session,
+            active_install_pids=self._active_install_pids,
         )
-        self._uninstall = _UninstallPipeline(self)
+        self._uninstall_pipeline = _UninstallPipeline(self)
+        self._launcher = _LauncherInstall(self)
         self._update_op = _UpdateOperation(
-            id_map=id_map, paths=paths, session=session,
+            id_map=id_map,
+            paths=paths,
+            session=session,
             build_launch_env=self._build_upc_launch_env,
         )
 
     async def uninstall_game(
-        self, game_id: str, *, delete_prefix: bool = False,
+        self,
+        game_id: str,
+        *,
+        delete_prefix: bool = False,
     ) -> Result:
         """Uninstall game."""
-        return await self._uninstall.uninstall_game(
-            game_id, delete_prefix=delete_prefix,
+        return await self._uninstall_pipeline.uninstall_game(
+            game_id,
+            delete_prefix=delete_prefix,
         )
 
-    async def open_launcher_for_install(self, game_id: str) -> Result:
+    async def open_launcher_for_install(
+        self,
+        game_id: str,
+    ) -> Result:
         """Open launcher for install."""
-        return await self._launcher.open_launcher_for_install(game_id)
+        return await self._launcher.open_launcher_for_install(
+            game_id,
+        )
 
     def _build_upc_launch_env(
         self,
@@ -80,39 +116,33 @@ class UbisoftInstaller:
         prefix_path: str,
         *,
         prefer_connect_exe: bool = False,
-        upc_missing_error: str = 'upc_exe_not_found',
+        upc_missing_error: str = "upc_exe_not_found",
     ) -> _UpcLaunchEnv:
         """Build UPC launch env."""
-        finder = (
-            self._paths.find_connect_exe if prefer_connect_exe
-            else self._paths.find_upc_exe
-        )
-        upc_path = finder(prefix_path)
+        upc_path: str | None = None
+        if prefer_connect_exe:
+            upc_path = self._paths.find_connect_exe(prefix_path)
         if not upc_path:
-            upc_path = (
-                self._paths.find_upc_exe(prefix_path)
-                if prefer_connect_exe else None
-            )
+            upc_path = self._paths.find_upc_exe(prefix_path)
         if not upc_path:
             raise UpcLaunchEnvBuildError(upc_missing_error)
         umu_run = self._binaries.find_umu_run()
         if not umu_run:
-            raise UpcLaunchEnvBuildError('umu_run_not_found')
+            raise UpcLaunchEnvBuildError("umu_run_not_found")
         python_bin = self._binaries.find_python()
-        proton_path = self._binaries.find_proton_path()
-        steam_window_env = self._build_steam_window_env(
-            f'ubisoft:{game_id}',
-        )
         env = self._binaries.build_umu_env(
             wineprefix=prefix_path,
-            gameid=f'umu-ubisoft-{game_id}',
-            proton_path=proton_path,
-            store_game_id=f'ubisoft:{game_id}',
-            steam_window_env=steam_window_env,
+            gameid=f"umu-ubisoft-{game_id}",
+            store_game_id=f"ubisoft:{game_id}",
+            steam_window_env=self._build_steam_window_env(
+                f"ubisoft:{game_id}",
+            ),
         )
         return _UpcLaunchEnv(
-            upc_path=upc_path, umu_run=umu_run,
-            python_bin=python_bin, env=env,
+            upc_path=upc_path,
+            umu_run=umu_run,
+            python_bin=python_bin,
+            env=env,
         )
 
     async def install_game(
@@ -123,98 +153,180 @@ class UbisoftInstaller:
         install_path: str | None = None,
     ) -> InstallResult:
         """Install game."""
-        prefix_path = self._paths.get_prefix_path(game_id)
-        ok = await self._bootstrap_game_prefix(game_id)
-        if not ok:
-            return InstallResult(
-                success=False, store='ubisoft', game_id=game_id,
-                error='prefix_bootstrap_failed',
-            )
         try:
-            launch = self._build_upc_launch_env(
-                game_id, prefix_path, prefer_connect_exe=True,
+            logger.info(
+                "[UbisoftInstaller] installing game %s",
+                game_id,
             )
-        except UpcLaunchEnvBuildError as e:
+            if not await self._bootstrap_game_prefix(game_id):
+                return InstallResult(
+                    success=False,
+                    store="ubisoft",
+                    game_id=game_id,
+                    error="prefix_bootstrap_failed",
+                )
+            prefix_path = self._paths.get_prefix_path(game_id)
+            game_name = self._library._detector._get_game_name(game_id)
+            try:
+                launch_env = self._build_upc_launch_env(
+                    game_id,
+                    prefix_path,
+                )
+            except UpcLaunchEnvBuildError as e:
+                return InstallResult(
+                    success=False,
+                    store="ubisoft",
+                    game_id=game_id,
+                    error=e.error_code,
+                )
+            return await self._manual_ui_installer.install_via_upc_ui(
+                game_id=game_id,
+                game_name=game_name,
+                prefix_path=prefix_path,
+                upc_path=launch_env.upc_path,
+                umu_run=launch_env.umu_run,
+                python_bin=launch_env.python_bin,
+                env=launch_env.env,
+                progress_cb=progress_cb,
+                install_path=install_path,
+            )
+        except Exception as e:
+            logger.exception(
+                "[UbisoftInstaller] install error for %s: %s",
+                game_id,
+                e,
+            )
             return InstallResult(
-                success=False, store='ubisoft', game_id=game_id,
-                error=e.error_code,
+                success=False,
+                store="ubisoft",
+                game_id=game_id,
+                error=f"install_exception: {e}",
             )
-        info = self._library._detector._id_map.get_entry(game_id)
-        return await self._manual_ui.install_via_upc_ui(
-            game_id=game_id,
-            game_name=info.get('name'),
-            prefix_path=prefix_path,
-            upc_path=launch.upc_path,
-            umu_run=launch.umu_run,
-            python_bin=launch.python_bin,
-            env=launch.env,
-            progress_cb=progress_cb,
-            install_path=install_path,
-        )
 
     def is_install_session_active(self, game_id: str) -> bool:
-        """Is install session active."""
-        return game_id in self._active_install_pids
-
-    async def cancel_install_session(self, game_id: str) -> Result:
-        """Cancel install session."""
-        pid = self._active_install_pids.pop(game_id, None)
+        """Check whether install session active."""
+        pid = self._active_install_pids.get(game_id)
         if pid is None:
-            return Result(success=False, error='no_active_session')
+            return False
         try:
-            os.kill(pid, 15)
-        except ProcessLookupError:
-            return Result(success=True)
-        except OSError as e:
-            return Result(success=False, error=f'kill_failed:{e}')
+            os.kill(pid, 0)
+            return True
+        except (ProcessLookupError, PermissionError):
+            self._active_install_pids.pop(game_id, None)
+            return False
+
+    async def cancel_install_session(
+        self,
+        game_id: str,
+    ) -> Result:
+        """Check whether install session."""
+        pid = self._active_install_pids.pop(game_id, None)
+        if pid is not None:
+            try:
+                os.kill(pid, 15)
+                logger.info(
+                    "[UbisoftInstaller] sent SIGTERM to UPC PID %d for %s",
+                    pid,
+                    game_id,
+                )
+            except ProcessLookupError:
+                logger.info(
+                    "[UbisoftInstaller] install process already exited for %s",
+                    game_id,
+                )
+            except OSError as e:
+                logger.error(
+                    "[UbisoftInstaller] kill failed: %s",
+                    e,
+                )
+        prefix_path = self._paths.get_prefix_path(game_id)
+        if prefix_path and os.path.isdir(prefix_path):
+            await asyncio.sleep(2)
+            captured = self._session.capture(prefix_path)
+            if captured:
+                self._session.propagate_all_to_all()
+                logger.info(
+                    "[UbisoftInstaller] post-cancel: propagated session from %s",
+                    game_id,
+                )
+            else:
+                logger.info(
+                    "[UbisoftInstaller] post-cancel: credentials synced for %s",
+                    game_id,
+                )
         return Result(success=True)
 
     async def check_for_updates(self) -> list[str]:
         """Check for updates."""
-        # UPC drives updates internally; we surface no proactive list.
         return []
 
-    async def update_game(self, game_id: str) -> InstallResult:
+    async def update_game(
+        self,
+        game_id: str,
+    ) -> InstallResult:
         """Update game."""
         return await self._update_op.update(game_id)
 
     def inject_install_registry(
-        self, prefix_path: str, install_id: str, install_dir: str,
+        self,
+        prefix_path: str,
+        install_id: str,
+        install_dir: str,
     ) -> None:
         """Inject install registry."""
-        _reg.inject_install_registry(prefix_path, install_id, install_dir)
+        _reg.inject_install_registry(
+            prefix_path,
+            install_id,
+            install_dir,
+        )
 
     def kill_upc_processes(self) -> None:
         """Kill UPC processes."""
         try:
             subprocess.run(
-                ['pkill', '-f', 'UbisoftConnect.exe'],
-                check=False, timeout=5,
+                ["pkill", "-f", "upc.exe"],
+                capture_output=True,
+                timeout=5,
             )
-            subprocess.run(
-                ['pkill', '-f', 'upc.exe'],
-                check=False, timeout=5,
+            logger.info(
+                "[UbisoftInstaller] killed upc.exe processes",
             )
         except (OSError, subprocess.SubprocessError) as e:
-            logger.debug('[Ubisoft.installer] kill_upc_processes: %s', e)
+            logger.warning(
+                "[UbisoftInstaller] pkill upc.exe failed: %s",
+                e,
+            )
 
     def _build_steam_window_env(
-        self, store_game_id: str | None,
+        self,
+        store_game_id: str | None,
     ) -> dict[str, str]:
         """Build steam window env."""
-        appid = self._shortcut_registry.resolve_shortcut_appid(store_game_id)
-        if not appid:
+        appid = self._shortcut_registry.resolve_shortcut_appid(
+            store_game_id,
+        )
+        if appid:
+            encoded = str(
+                (appid << 32) | 0x02000000,
+            )
+            logger.info(
+                "[UbisoftInstaller] Steam window env: appid=%d store_game_id=%s",
+                appid,
+                store_game_id or "<none>",
+            )
+            appid_str = str(appid)
             return {
-                'SteamGameId': '0',
-                'STEAM_COMPAT_APP_ID': '0',
-                'SteamAppId': '0',
-                'UMU_STEAM_GAME_ID': '0',
+                "SteamGameId": appid_str,
+                "STEAM_COMPAT_APP_ID": appid_str,
+                "SteamAppId": appid_str,
+                "UMU_STEAM_GAME_ID": encoded,
             }
-        encoded = str((appid << 32) | 0x02000000)
-        appid_str = str(appid)
+        logger.info(
+            "[UbisoftInstaller] Steam window env: no shortcut appid resolved, using 0",
+        )
         return {
-            'SteamGameId': appid_str,
-            'STEAM_COMPAT_APP_ID': appid_str,
-            'SteamAppId': appid_str,
-            'UMU_STEAM_GAME_ID': encoded,
+            "SteamGameId": "0",
+            "STEAM_COMPAT_APP_ID": "0",
+            "SteamAppId": "0",
+            "UMU_STEAM_GAME_ID": "0",
         }

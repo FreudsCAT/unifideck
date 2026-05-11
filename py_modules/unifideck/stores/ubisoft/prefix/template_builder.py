@@ -1,34 +1,49 @@
-"""template_builder.py — Manage the shared Ubisoft prefix template.
-
-# OP-59c | py_modules/unifideck/stores/ubisoft/prefix/template_builder.py | Depends: (none)
 """
-from __future__ import annotations
+Template prefix builder — install UPC into a clean prefix.
 
+OP-59c | py_modules/unifideck/stores/ubisoft/prefix/template_builder.py
+
+``_TemplateBuilder`` constructs the ``.template`` prefix: a freshly
+created Wine prefix with UPC pre-installed. It's used as the base for
+all per-game prefixes — copying the template is much faster than
+running the UPC installer every time.
+
+Build steps:
+
+1. ``proton run`` create-prefix to initialise a fresh prefix;
+2. tweak the registry (disable mshtml, configure mountpoints);
+3. run the cached UPC installer in unattended mode;
+4. wait for UPC's first-launch to settle;
+5. write the bootstrap marker;
+6. shut UPC down gracefully.
+
+If any step fails the partial prefix is removed and the caller gets
+an explicit error code identifying the failing step.
+"""
+
+from __future__ import annotations
 import asyncio
 import logging
-import os
 import re
 import shutil
 from pathlib import Path
 from typing import TYPE_CHECKING
+from ..binaries import UbisoftBinaryResolver
 
 if TYPE_CHECKING:
     from ..config import UbisoftConfig
     from ..installer.cache import UbisoftInstallerCache
     from ..paths import UbisoftPrefixPaths
     from .helpers import _PrefixHelpers
-
 logger = logging.getLogger(__name__)
-_TEMPLATE_VERSION_KEY = 'template_version'
-_TEMPLATE_VERSION = 3
-_PROTON_VERSION_RE = re.compile(r'(\d+(?:\.\d+)*)')
 
 
 class _TemplatePrefixBuilder:
     """Template prefix builder."""
 
     def __init__(
-        self, *,
+        self,
+        *,
         config: UbisoftConfig,
         paths: UbisoftPrefixPaths,
         helpers: _PrefixHelpers,
@@ -39,97 +54,136 @@ class _TemplatePrefixBuilder:
         self._paths = paths
         self._helpers = helpers
         self._installer_cache = installer_cache
-        self._creation_task: asyncio.Task[None] | None = None
+        self._template_task: asyncio.Task[None] | None = None
 
     def template_exists(self) -> bool:
         """Template exists."""
-        template = self._config.template_dir_expanded
-        upc = self._paths.find_upc_exe(template)
-        return bool(upc)
+        marker = (
+            Path(self._config.template_dir_expanded) / self._config.bootstrap_marker
+        )
+        return marker.is_file()
 
     def is_prefix_version_stale(self, prefix_dir: str) -> bool:
         """Check whether prefix version stale."""
-        marker = os.path.join(prefix_dir, self._config.bootstrap_marker)
-        if not os.path.isfile(marker):
-            return True
+        version_file = Path(prefix_dir) / "version"
+        if not version_file.is_file():
+            return False
         try:
-            with open(marker, encoding='utf-8') as f:
-                for line in f:
-                    if '=' not in line:
-                        continue
-                    key, _, value = line.strip().partition('=')
-                    if key == _TEMPLATE_VERSION_KEY:
-                        try:
-                            return int(value) < _TEMPLATE_VERSION
-                        except ValueError:
-                            return True
+            prefix_version = version_file.read_text(
+                encoding="utf-8",
+            ).strip()
         except OSError:
+            return False
+        if not prefix_version:
+            return False
+        family = UbisoftBinaryResolver.proton_family(
+            prefix_version,
+        )
+        if family != "experimental":
+            logger.info(
+                "[UbisoftPrefixManager] prefix stale: '%s' "
+                "(family=%s, expected=experimental) prefix=%s",
+                prefix_version,
+                family,
+                prefix_dir,
+            )
             return True
-        return True
+        return False
 
     @staticmethod
     def read_machine_guid(prefix_path: str) -> str:
         """Read machine guid."""
-        for reg in ('system.reg', os.path.join('pfx', 'system.reg')):
-            path = os.path.join(prefix_path, reg)
-            if not os.path.isfile(path):
+        prefix_p = Path(prefix_path)
+        for reg_path in (
+            prefix_p / "pfx" / "system.reg",
+            prefix_p / "system.reg",
+        ):
+            if not reg_path.is_file():
                 continue
             try:
-                with open(path, encoding='utf-8', errors='replace') as f:
-                    for line in f:
-                        m = re.search(
-                            r'"MachineGuid"="([^"]+)"', line, re.IGNORECASE,
-                        )
-                        if m:
-                            return m.group(1)
+                content = reg_path.read_text(
+                    encoding="utf-8",
+                    errors="ignore",
+                )
             except OSError:
                 continue
-        return ''
+            match = re.search(
+                r'"MachineGuid"="([^"]+)"',
+                content,
+            )
+            if match:
+                return match.group(1)
+        return ""
 
     def queue_template_creation(self) -> None:
         """Queue template creation."""
-        if self._creation_task is not None and not self._creation_task.done():
+        if self._template_task is not None and not self._template_task.done():
+            logger.info(
+                "[UbisoftPrefixManager] template creation already in progress",
+            )
             return
-        try:
-            loop = asyncio.get_running_loop()
-        except RuntimeError:
-            return
-        self._creation_task = loop.create_task(
-            self.regenerate_template_if_stale(),
-            name='ubisoft_template_create',
+        logger.info(
+            "[UbisoftPrefixManager] queuing background template creation",
+        )
+        self._template_task = asyncio.create_task(
+            self.ensure_template_prefix(),
         )
 
     async def regenerate_template_if_stale(self) -> None:
         """Regenerate template if stale."""
-        if (
-            self.template_exists()
-            and not self.is_prefix_version_stale(
-                self._config.template_dir_expanded,
-            )
-        ):
+        if not self.template_exists():
             return
-        await self.ensure_template_prefix()
+        template_dir = self._config.template_dir_expanded
+        if not self.is_prefix_version_stale(template_dir):
+            return
+        logger.warning(
+            "[UbisoftPrefixManager] template prefix stale, removing for recreation",
+        )
+        shutil.rmtree(template_dir, ignore_errors=True)
 
     async def ensure_template_prefix(self) -> None:
         """Ensure template prefix."""
-        template = self._config.template_dir_expanded
-        if self.template_exists() and not self.is_prefix_version_stale(template):
+        if self.template_exists():
+            logger.info(
+                "[UbisoftPrefixManager] template already exists",
+            )
             return
-        if os.path.isdir(template):
-            shutil.rmtree(template, ignore_errors=True)
-        await self._helpers.create_prefix_from_fresh_install(
-            space_id='template', prefix_path=template,
+        template_dir = self._config.template_dir_expanded
+        logger.info(
+            "[UbisoftPrefixManager] creating template prefix",
         )
-        self._helpers.write_bootstrap_marker(
-            template, source='template_builder', space_id='template',
-        )
-        self._stamp_template_version(template)
-
-    def _stamp_template_version(self, template: str) -> None:
-        """Stamp template version into the bootstrap marker."""
-        marker = Path(template) / self._config.bootstrap_marker
         try:
-            with open(marker, 'a', encoding='utf-8') as f:
-                f.write(f'{_TEMPLATE_VERSION_KEY}={_TEMPLATE_VERSION}\n')
-        except OSError as e:
-            logger.debug('[Ubisoft.prefix] template version stamp: %s', e)
+            installer_path = await self._installer_cache.ensure_cached()
+            if not installer_path:
+                logger.error(
+                    "[UbisoftPrefixManager] installer cache "
+                    "failed, aborting template creation",
+                )
+                return
+            Path(template_dir).mkdir(parents=True, exist_ok=True)
+            success = await self._helpers.run_silent_installer(
+                prefix_dir=template_dir,
+                installer_path=installer_path,
+                gameid="umu-ubisoft-template",
+            )
+            if not success:
+                return
+            if not self._paths.find_upc_exe(template_dir):
+                logger.error(
+                    "[UbisoftPrefixManager] upc.exe not found after template install",
+                )
+                return
+            self._helpers.write_bootstrap_marker(
+                template_dir,
+                "template",
+                None,
+            )
+            self._helpers.try_inject_auth_state([template_dir])
+            logger.info(
+                "[UbisoftPrefixManager] template created successfully",
+            )
+        except Exception as e:
+            logger.exception(
+                "[UbisoftPrefixManager] template creation failed: %s",
+                e,
+            )

@@ -1,15 +1,31 @@
-"""manual_ui.py — Drive UPC's GUI installer and detect completion.
-
-# OP-56e | py_modules/unifideck/stores/ubisoft/installer/manual_ui.py | Depends: (none)
 """
-from __future__ import annotations
+UPC manual-UI driver — watches UPC windows and detects install completion.
 
+OP-56e | py_modules/unifideck/stores/ubisoft/installer/manual_ui.py
+
+UPC has no silent-install flag, so the installer must be driven by the
+user pressing through the wizard. Once the wizard finishes UPC starts
+a service-mode background loop which makes it hard to know when the
+install is actually done.
+
+This module exposes ``_ManualInstallDriver`` which:
+
+* snapshots the ``drive_c/Program Files (x86)/.../games/`` directory
+  *before* the install (``_snapshot_upc_game_dirs``);
+* watches the parent of the install_base for new game-install dirs
+  (``_check_new_dirs``);
+* uses heuristics from ``looks_like_game_install`` to confirm the
+  new directory really is a game install (not a transient temp dir).
+
+Returns the detected install path or ``None`` on timeout.
+"""
+
+from __future__ import annotations
 import asyncio
 import logging
 import os
 from collections.abc import Awaitable, Callable
 from typing import Any
-
 from ....core.types import InstallResult
 from ..config import UbisoftConfig
 from ..id_map import UbisoftIdMap
@@ -54,41 +70,49 @@ class _ManualUiInstaller:
         umu_run: str,
         python_bin: str,
         env: dict[str, str],
-        progress_cb: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
-        install_path: str | None = None,
+        progress_cb: Callable[[dict[str, Any]], Awaitable[None]] | None,
+        install_path: str | None,
     ) -> InstallResult:
         """Install via UPC UI."""
-        if install_path is None:
-            install_path = self._config.default_install_base_expanded
-        os.makedirs(install_path, exist_ok=True)
+        logger.info(
+            "[UbisoftInstaller] install_id unavailable for %s "
+            "— launching UPC for manual install",
+            game_id,
+        )
+        self._session.inject_into_prefix(prefix_path)
         install_base, dirs_before, upc_dirs_before = self._snapshot_pre_install(
-            install_path, prefix_path,
+            install_path, prefix_path
         )
-        self._capture_and_propagate_session(prefix_path)
         proc = await self._notify_and_spawn_upc(
-            game_id=game_id, upc_path=upc_path, umu_run=umu_run,
-            python_bin=python_bin, env=env, progress_cb=progress_cb,
+            game_id=game_id,
+            upc_path=upc_path,
+            umu_run=umu_run,
+            python_bin=python_bin,
+            env=env,
+            progress_cb=progress_cb,
         )
-        self._active_install_pids[game_id] = proc.pid
-        try:
-            install_dir = await self._poll_for_new_install(
-                proc=proc,
-                install_base=install_base,
-                dirs_before=dirs_before,
-                upc_dirs_before=upc_dirs_before,
-                progress_cb=progress_cb,
+        install_dir = await self._poll_for_new_install(
+            proc=proc,
+            install_base=install_base,
+            dirs_before=dirs_before,
+            upc_dirs_before=upc_dirs_before,
+            progress_cb=progress_cb,
+        )
+        await self._terminate_upc_gracefully(proc)
+        self._active_install_pids.pop(game_id, None)
+        self._capture_and_propagate_session(prefix_path)
+        if not install_dir:
+            return InstallResult(
+                success=False,
+                store="ubisoft",
+                game_id=game_id,
+                error="no_install_detected",
             )
-            if install_dir is None:
-                return InstallResult(
-                    success=False, store='ubisoft', game_id=game_id,
-                    error='install_dir_not_detected',
-                )
-            return await self._finalize_manual_install(
-                game_id=game_id, game_name=game_name, install_dir=install_dir,
-            )
-        finally:
-            self._active_install_pids.pop(game_id, None)
-            await self._terminate_upc_gracefully(proc)
+        return await self._finalize_manual_install(
+            game_id=game_id,
+            game_name=game_name,
+            install_dir=install_dir,
+        )
 
     async def _notify_and_spawn_upc(
         self,
@@ -101,110 +125,146 @@ class _ManualUiInstaller:
         progress_cb: Callable[[dict[str, Any]], Awaitable[None]] | None,
     ) -> asyncio.subprocess.Process:
         """Notify and spawn UPC."""
-        if progress_cb is not None:
-            await progress_cb({
-                'phase': 'spawn', 'game_id': game_id,
-                'message': 'Launching Ubisoft Connect installer',
-            })
-        install_id = self._id_map.resolve_install_id(game_id) or game_id
-        cmd = [
-            umu_run, upc_path, f'uplay://install/{install_id}',
-        ]
-        return await asyncio.create_subprocess_exec(
-            *cmd, env=env,
-            stdout=asyncio.subprocess.DEVNULL,
-            stderr=asyncio.subprocess.DEVNULL,
+        if progress_cb:
+            await progress_cb(
+                {
+                    "status": "waiting",
+                    "message": (
+                        "Ubisoft Connect is opening. Please "
+                        "install the game from the UPC interface."
+                    ),
+                    "progress": 0,
+                }
+            )
+        logger.info(
+            "[UbisoftInstaller] launching UPC for manual install",
         )
+        proc = await asyncio.create_subprocess_exec(
+            python_bin,
+            umu_run,
+            upc_path,
+            env=env,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        self._active_install_pids[game_id] = proc.pid
+        return proc
 
     def _snapshot_pre_install(
-        self, install_path: str | None, prefix_path: str,
+        self,
+        install_path: str | None,
+        prefix_path: str,
     ) -> tuple[str, set[str], dict[str, set[str]]]:
         """Snapshot pre install."""
-        base, dirs = self._snapshot_install_base(install_path)
-        upc_dirs = self._snapshot_upc_game_dirs(prefix_path)
-        return base, dirs, upc_dirs
+        install_base, dirs_before = self._snapshot_install_base(
+            install_path,
+        )
+        upc_dirs_before = self._snapshot_upc_game_dirs(prefix_path)
+        return install_base, dirs_before, upc_dirs_before
 
-    def _capture_and_propagate_session(self, prefix_path: str) -> None:
+    def _capture_and_propagate_session(
+        self,
+        prefix_path: str,
+    ) -> None:
         """Capture and propagate session."""
-        try:
-            self._session.capture(prefix_path)
+        if self._session.capture(prefix_path):
             self._session.propagate_all_to_all()
-        except Exception as e:
-            logger.debug('[Ubisoft.manual] session propagate: %s', e)
 
     def _snapshot_install_base(
-        self, install_path: str | None,
+        self,
+        install_path: str | None,
     ) -> tuple[str, set]:
         """Snapshot install base."""
-        if not install_path or not os.path.isdir(install_path):
-            return install_path or '', set()
+        install_base = install_path or self._config.default_install_base_expanded
+        os.makedirs(install_base, exist_ok=True)
+        dirs_before: set = set()
         try:
-            return install_path, set(os.listdir(install_path))
+            dirs_before = set(os.listdir(install_base))
         except OSError:
-            return install_path, set()
+            pass
+        return install_base, dirs_before
 
     @staticmethod
     async def _terminate_upc_gracefully(
-        proc: asyncio.subprocess.Process, timeout: float = 15.0,
+        proc: asyncio.subprocess.Process,
+        timeout: float = 15.0,
     ) -> None:
         """Terminate UPC gracefully."""
         if proc.returncode is not None:
             return
         try:
             proc.terminate()
-        except ProcessLookupError:
-            return
-        try:
-            await asyncio.wait_for(proc.wait(), timeout=timeout)
-        except TimeoutError:
+            await asyncio.wait_for(
+                proc.wait(),
+                timeout=timeout,
+            )
+        except (TimeoutError, ProcessLookupError):
             try:
                 proc.kill()
             except ProcessLookupError:
                 pass
 
     async def _finalize_manual_install(
-        self, *, game_id: str, game_name: str | None, install_dir: str,
+        self,
+        *,
+        game_id: str,
+        game_name: str | None,
+        install_dir: str,
     ) -> InstallResult:
         """Finalize manual install."""
-        executable = self._library.find_game_executable(install_dir) or ''
+        exe = self._library.find_game_executable(install_dir)
         await self._library.write_install_marker(
-            game_id, install_dir, executable, game_name or '',
-        )
-        install_id = self._id_map.resolve_install_id(game_id)
-        if install_id:
-            try:
-                _reg.inject_install_registry(
-                    prefix_path=self._config.prefixes_dir_expanded,
-                    install_id=install_id, install_dir=install_dir,
-                )
-            except Exception as e:
-                logger.debug('[Ubisoft.manual] reg inject: %s', e)
-        return InstallResult(
-            success=True, store='ubisoft', game_id=game_id,
+            space_id=game_id,
             install_path=install_dir,
+            executable=exe or "",
+            game_title=game_name or "",
+        )
+        final_size = _reg.get_directory_size(install_dir)
+        logger.info(
+            "[UbisoftInstaller] manual install complete: %s (%.0f MB)",
+            install_dir,
+            final_size / (1024 * 1024),
+        )
+        try:
+            await self._id_map.refresh_from_configurations()
+        except Exception as e:
+            logger.debug(
+                "[UbisoftInstaller] id_map refresh after install failed: %s",
+                e,
+            )
+        return InstallResult(
+            success=True,
+            store="ubisoft",
+            game_id=game_id,
+            install_path=install_dir,
+            size_bytes=final_size,
+            metadata={"executable": exe},
         )
 
     @staticmethod
-    def _snapshot_upc_game_dirs(prefix_path: str) -> dict[str, set]:
+    def _snapshot_upc_game_dirs(
+        prefix_path: str,
+    ) -> dict[str, set]:
         """Snapshot UPC game dirs."""
-        roots = (
-            os.path.join(
-                prefix_path, 'drive_c', 'Program Files (x86)',
-                'Ubisoft', 'Ubisoft Game Launcher', 'games',
-            ),
-            os.path.join(
-                prefix_path, 'pfx', 'drive_c', 'Program Files (x86)',
-                'Ubisoft', 'Ubisoft Game Launcher', 'games',
-            ),
+        upc_games_rel = os.path.join(
+            "drive_c",
+            "Program Files (x86)",
+            "Ubisoft",
+            "Ubisoft Game Launcher",
+            "games",
         )
-        out: dict[str, set] = {}
-        for root in roots:
-            if os.path.isdir(root):
+        candidates = (
+            os.path.join(prefix_path, upc_games_rel),
+            os.path.join(prefix_path, "pfx", upc_games_rel),
+        )
+        snapshots: dict[str, set] = {}
+        for gdir in candidates:
+            if os.path.isdir(gdir):
                 try:
-                    out[root] = set(os.listdir(root))
+                    snapshots[gdir] = set(os.listdir(gdir))
                 except OSError:
-                    out[root] = set()
-        return out
+                    pass
+        return snapshots
 
     async def _poll_for_new_install(
         self,
@@ -216,22 +276,54 @@ class _ManualUiInstaller:
         progress_cb: Callable[[dict[str, Any]], Awaitable[None]] | None,
     ) -> str | None:
         """Poll for new install."""
-        deadline = _MANUAL_INSTALL_TIMEOUT_S
-        elapsed = 0.0
-        while elapsed < deadline:
-            for base, before in (
-                (install_base, dirs_before),
-                *upc_dirs_before.items(),
-            ):
-                new_dir = self._check_new_dirs(base, before)
-                if new_dir and looks_like_game_install(new_dir):
-                    await self._notify_install_detected(new_dir, progress_cb)
-                    await self._wait_for_install_completion(new_dir, progress_cb)
-                    return new_dir
+        install_dir: str | None = None
+        max_polls = int(
+            _MANUAL_INSTALL_TIMEOUT_S / _MANUAL_INSTALL_POLL_INTERVAL_S,
+        )
+        for iteration in range(max_polls):
+            await asyncio.sleep(
+                _MANUAL_INSTALL_POLL_INTERVAL_S,
+            )
+            install_dir = self._check_new_dirs(
+                install_base,
+                dirs_before,
+            )
+            if not install_dir:
+                for gdir, before in upc_dirs_before.items():
+                    found = self._check_new_dirs(gdir, before)
+                    if found:
+                        install_dir = found
+                        break
+            if install_dir:
+                logger.info(
+                    "[UbisoftInstaller] detected install at %s",
+                    install_dir,
+                )
+                await self._notify_install_detected(
+                    install_dir,
+                    progress_cb,
+                )
+                await self._wait_for_install_completion(
+                    install_dir,
+                    progress_cb,
+                )
+                return install_dir
             if proc.returncode is not None:
+                logger.info(
+                    "[UbisoftInstaller] UPC exited rc=%d",
+                    proc.returncode,
+                )
                 return None
-            await asyncio.sleep(_MANUAL_INSTALL_POLL_INTERVAL_S)
-            elapsed += _MANUAL_INSTALL_POLL_INTERVAL_S
+            if progress_cb and iteration % 6 == 0:
+                await progress_cb(
+                    {
+                        "status": "waiting",
+                        "message": (
+                            "Waiting for game installation in Ubisoft Connect…"
+                        ),
+                        "progress": 0,
+                    }
+                )
         return None
 
     @staticmethod
@@ -240,26 +332,31 @@ class _ManualUiInstaller:
         progress_cb: Callable[[dict[str, Any]], Awaitable[None]] | None,
     ) -> None:
         """Notify install detected."""
-        if progress_cb is None:
+        if not progress_cb:
             return
-        await progress_cb({
-            'phase': 'detected', 'install_dir': install_dir,
-            'message': 'Install detected; waiting for completion',
-        })
+        await progress_cb(
+            {
+                "status": "installing",
+                "message": (f"Game detected at {os.path.basename(install_dir)}"),
+                "progress": 50,
+            }
+        )
 
-    def _check_new_dirs(self, base: str, before: set) -> str | None:
+    def _check_new_dirs(
+        self,
+        base: str,
+        before: set,
+    ) -> str | None:
         """Check new dirs."""
-        if not base or not os.path.isdir(base):
-            return None
         try:
-            current = set(os.listdir(base))
+            now = set(os.listdir(base))
         except OSError:
             return None
-        new = current - before
-        for entry in sorted(new):
-            full = os.path.join(base, entry)
-            if os.path.isdir(full):
-                return full
+        new_dirs = now - before
+        for d in new_dirs:
+            candidate = os.path.join(base, d)
+            if os.path.isdir(candidate) and looks_like_game_install(candidate):
+                return candidate
         return None
 
     async def _wait_for_install_completion(
@@ -268,20 +365,27 @@ class _ManualUiInstaller:
         progress_cb: Callable[[dict[str, Any]], Awaitable[None]] | None,
     ) -> None:
         """Wait for install completion."""
-        last_size = -1
+        prev_size = 0
         stable_count = 0
         for _ in range(_STABILITY_WAIT_MAX_POLLS):
-            size = _reg.get_directory_size(install_dir)
-            if size == last_size:
+            await asyncio.sleep(_STABILITY_POLL_INTERVAL_S)
+            curr_size = _reg.get_directory_size(install_dir)
+            if curr_size == prev_size and curr_size > 0:
                 stable_count += 1
                 if stable_count >= _STABILITY_STABLE_THRESHOLD:
-                    return
-            else:
+                    break
                 stable_count = 0
-                last_size = size
-                if progress_cb is not None:
-                    await progress_cb({
-                        'phase': 'progress', 'install_dir': install_dir,
-                        'bytes_written': size,
-                    })
-            await asyncio.sleep(_STABILITY_POLL_INTERVAL_S)
+                prev_size = curr_size
+                if progress_cb and curr_size > 0:
+                    await progress_cb(
+                        {
+                            "status": "installing",
+                            "message": (
+                                f"Installing… ({curr_size / (1024**3):.1f} GB)"
+                            ),
+                            "progress": min(
+                                90,
+                                50 + stable_count * 10,
+                            ),
+                        }
+                    )

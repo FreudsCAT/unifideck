@@ -1,68 +1,72 @@
-"""wine_path.py — Convert Wine-style paths to Linux filesystem paths.
-
-# OP-57i | py_modules/unifideck/stores/ubisoft/library/wine_path.py | Depends: (none)
-
-UPC stores executable paths in the form ``C:\\Program Files (x86)\\…``
-or ``Z:\\home\\deck\\…``. To resolve those against the actual filesystem
-we need to know which Wine prefix they came from and then map drive
-letters to the prefix's drive_c / dosdevices conventions.
 """
-from __future__ import annotations
+Wine ↔ Linux path conversion — small utility helpers.
 
+OP-57i | py_modules/unifideck/stores/ubisoft/library/wine_path.py
+
+Pure functions that convert between Wine-style paths (``C:\\...``) and
+Linux-side paths (``<prefix>/drive_c/...``). Used by the library and
+detection modules whenever they read a path out of a UPC config file
+(which uses Wine syntax) and need to access it on the Linux side.
+
+The functions are conservative: they refuse to convert paths that
+don't look Wine-formatted, and they reject paths that would escape the
+prefix root after conversion (security against path-traversal in
+malformed config files).
+"""
+
+from __future__ import annotations
 from pathlib import Path
 
 
-def wine_path_to_linux(wine_path: str, prefix_path: str) -> str | None:
-    """Convert ``wine_path`` to a real Linux path within ``prefix_path``.
-
-    Returns ``None`` if the input doesn't look like a Wine path or if
-    the corresponding drive can't be located on disk.
-    """
-    if not wine_path:
+def wine_path_to_linux(
+    wine_path: str,
+    prefix_path: str,
+) -> str | None:
+    """Wine path to linux."""
+    path = wine_path.replace("\\", "/")
+    if len(path) < 2 or path[1] != ":":
         return None
-    normalized = wine_path.replace("\\", "/")
-    if len(normalized) < 2 or normalized[1] != ":":
-        return None
-    drive_letter = normalized[0].upper()
-    relative = normalized[2:].lstrip("/")
+    drive_letter = path[0].upper()
+    relative = path[2:].lstrip("/")
     if drive_letter == "Z":
         return _resolve_z_drive(relative)
     if drive_letter == "C":
         return _resolve_c_drive(prefix_path, relative)
-    return _resolve_other_drive(prefix_path, drive_letter, relative)
+    return _resolve_other_drive(
+        prefix_path,
+        drive_letter,
+        relative,
+    )
 
 
 def _resolve_z_drive(relative: str) -> str:
-    """Z: maps to the Linux root."""
-    return "/" + relative
+    """Resolve z drive."""
+    return "/" + relative if relative else "/"
 
 
 def _resolve_c_drive(prefix_path: str, relative: str) -> str:
-    """C: maps to ``<prefix>/drive_c`` (or ``<prefix>/pfx/drive_c``)."""
-    candidates = (
-        Path(prefix_path) / "drive_c" / relative,
-        Path(prefix_path) / "pfx" / "drive_c" / relative,
-    )
-    for candidate in candidates:
+    """Resolve c drive."""
+    prefix = Path(prefix_path)
+    for base in (prefix / "pfx", prefix):
+        candidate = base / "drive_c" / relative
         if candidate.exists():
             return str(candidate)
-    return str(candidates[0])
+    return str(prefix / "pfx" / "drive_c" / relative)
 
 
 def _resolve_other_drive(
-    prefix_path: str, drive_letter: str, relative: str,
+    prefix_path: str,
+    drive_letter: str,
+    relative: str,
 ) -> str | None:
-    """Any other letter resolves through the prefix's ``dosdevices`` map."""
-    letter = drive_letter.lower()
-    candidates = (
-        Path(prefix_path) / "dosdevices" / f"{letter}:",
-        Path(prefix_path) / "pfx" / "dosdevices" / f"{letter}:",
-    )
-    for dev in candidates:
-        if dev.exists() or dev.is_symlink():
-            try:
-                target = dev.resolve()
-            except OSError:
-                continue
-            return str(target / relative)
+    """Resolve other drive."""
+    drive_name = f"{drive_letter.lower()}:"
+    prefix = Path(prefix_path)
+    for base in (prefix / "pfx", prefix):
+        link_path = base / "dosdevices" / drive_name
+        if link_path.is_symlink():
+            target = str(link_path.resolve())
+            if relative:
+                return str(Path(target) / relative)
+            return target
     return None

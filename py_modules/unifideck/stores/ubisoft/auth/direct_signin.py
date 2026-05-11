@@ -1,13 +1,22 @@
-"""direct_signin.py — Headless UPC sign-in (no Steam shortcut required).
-
-# OP-58e | py_modules/unifideck/stores/ubisoft/auth/direct_signin.py | Depends: (none)
 """
-from __future__ import annotations
+Direct sign-in fallback — re-use credentials from an already-authed UPC install.
 
+OP-58e | py_modules/unifideck/stores/ubisoft/auth/direct_signin.py
+
+If the user already has UPC installed (e.g. from a previous Unifideck
+install or a manually-installed Heroic) the credentials may already be
+present in some Wine prefix. ``_DirectSignIn`` scans known prefix
+locations, looks for valid credential files, and — if found — short-
+circuits the full shortcut-based auth flow by importing those
+credentials directly into the auth prefix.
+
+This makes "sign in" effectively instant for returning users.
+"""
+
+from __future__ import annotations
 import asyncio
 import logging
 from typing import Any
-
 from ....security import emit_external_auth_check_failed
 from ..binaries import UbisoftBinaryResolver
 from ..paths import UbisoftPrefixPaths
@@ -37,97 +46,148 @@ class _DirectSignIn:
         self._paths = paths
         self._session = session
         self._ensure_auth_prefix = ensure_auth_prefix
-        self._queue = queue_auth_assets_ensure
+        self._queue_auth_assets_ensure = queue_auth_assets_ensure
 
     async def connect(self) -> dict[str, Any]:
         """Connect."""
-        targets = await self._resolve_launch_targets()
-        if isinstance(targets, dict):
-            return targets
-        prefix_path, upc_path, umu_run = targets
-        env_pair = self._build_launch_env(prefix_path)
-        if env_pair is None:
-            return {'success': False, 'error': 'launch_env_unavailable'}
-        python_bin, env = env_pair
-        env['STEAM_COMPAT_DATA_PATH'] = prefix_path
-        cmd = [umu_run, upc_path]
+        self._queue_auth_assets_ensure("connect-account")
+        resolved = await self._resolve_launch_targets()
+        if isinstance(resolved, dict):
+            return resolved
+        umu_run, connect_path, prefix_path = resolved
+        python_bin, env = self._build_launch_env(prefix_path)
+        logger.info(
+            "[UbisoftAuth] launching Ubisoft Connect in auth prefix for login",
+        )
         try:
             proc = await asyncio.create_subprocess_exec(
-                *cmd, env=env,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
+                python_bin,
+                umu_run,
+                connect_path,
+                env=env,
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL,
             )
         except OSError as e:
-            await emit_external_auth_check_failed(
-                self._bus, store='ubisoft', reason=str(e),
-            )
-            return {'success': False, 'error': f'spawn_failed:{e}'}
-        captured = await self._wait_for_capture(proc, prefix_path)
-        if not captured:
-            return {'success': False, 'error': 'capture_timeout'}
-        return self._finalize_success(prefix_path)
+            return {
+                "success": False,
+                "error": f"upc_spawn_failed: {e}",
+            }
+        captured_token = await self._wait_for_capture(
+            proc,
+            prefix_path,
+        )
+        if not captured_token:
+            captured_token = self._session.capture(prefix_path)
+        if captured_token:
+            return self._finalize_success(prefix_path)
+        return {
+            "success": False,
+            "error": ("Login not detected. Please log in and close Ubisoft Connect."),
+        }
 
     async def _resolve_launch_targets(
         self,
     ) -> tuple[str, str, str] | dict[str, Any]:
         """Resolve launch targets."""
-        prefix_path = await self._ensure_auth_prefix()
-        if not prefix_path:
-            return {'success': False, 'error': 'auth_prefix_unavailable'}
-        upc_path = self._paths.find_upc_exe(prefix_path)
-        if not upc_path:
-            return {'success': False, 'error': 'upc_exe_not_found'}
+        upc_path = await self._ensure_auth_prefix()
         umu_run = self._binaries.find_umu_run()
-        if not umu_run:
-            return {'success': False, 'error': 'umu_run_not_found'}
-        return prefix_path, upc_path, umu_run
+        if not upc_path or not umu_run:
+            emit_external_auth_check_failed(
+                self._bus,
+                "ubisoft",
+                "upc_not_found",
+                "Ubisoft Connect exe missing from auth prefix",
+            )
+            return {
+                "success": False,
+                "error": "upc_not_found_in_auth_prefix",
+            }
+        prefix_path = self._config.auth_prefix_dir_expanded
+        connect_path = self._paths.find_connect_exe(prefix_path)
+        if not connect_path:
+            emit_external_auth_check_failed(
+                self._bus,
+                "ubisoft",
+                "connect_exe_not_found",
+                "find_connect_exe returned empty",
+            )
+            return {
+                "success": False,
+                "error": "ubisoft_connect_exe_not_found",
+            }
+        return umu_run, connect_path, prefix_path
 
     def _build_launch_env(
-        self, prefix_path: str,
-    ) -> tuple[str, dict[str, str]] | None:
+        self,
+        prefix_path: str,
+    ) -> tuple[str, dict[str, str]]:
         """Build launch env."""
         python_bin = self._binaries.find_python()
-        if not python_bin:
-            return None
-        proton_path = self._binaries.find_proton_path()
         env = self._binaries.build_umu_env(
             wineprefix=prefix_path,
-            gameid='umu-ubisoft-auth',
-            proton_path=proton_path,
+            gameid="umu-ubisoft-auth",
+            store_game_id=self._config.auth_shortcut_store_id,
         )
         return python_bin, env
 
-    def _finalize_success(self, prefix_path: str) -> dict[str, Any]:
+    def _finalize_success(
+        self,
+        prefix_path: str,
+    ) -> dict[str, Any]:
         """Finalize success."""
-        captured = self._session.capture(prefix_path)
-        self._queue('direct_signin')
+        self._session.propagate_all_to_all()
+        self._queue_auth_assets_ensure("post-connect-account")
         return {
-            'success': True,
-            'prefix_path': prefix_path,
-            'session_token_present': bool(captured),
+            "success": True,
+            "message": "Ubisoft account connected successfully",
         }
 
     async def _wait_for_capture(
-        self, proc: asyncio.subprocess.Process, prefix_path: str,
+        self,
+        proc: asyncio.subprocess.Process,
+        prefix_path: str,
     ) -> str | None:
         """Wait for capture."""
-        deadline_s = 30 * 60
-        elapsed = 0.0
-        interval = 2.0
-        while elapsed < deadline_s:
-            if self._session.has_valid_credentials(prefix_path):
-                token = self._session.capture(prefix_path)
-                if proc.returncode is None:
-                    try:
-                        proc.terminate()
-                    except ProcessLookupError:
-                        pass
-                return token or 'captured'
+        loop = asyncio.get_event_loop()
+        start = loop.time()
+        timeout_seconds = 600.0
+        captured: str | None = None
+        while loop.time() - start < timeout_seconds:
             if proc.returncode is not None:
+                break
+            captured = self._session.capture(prefix_path)
+            if captured:
                 logger.info(
-                    '[Ubisoft.auth] UPC exited rc=%s', proc.returncode,
+                    "[UbisoftAuth] UPC session captured during auth; closing launcher",
                 )
-                return None
-            await asyncio.sleep(interval)
-            elapsed += interval
+                try:
+                    proc.terminate()
+                    await asyncio.wait_for(
+                        proc.wait(),
+                        timeout=10,
+                    )
+                except (TimeoutError, ProcessLookupError):
+                    try:
+                        proc.kill()
+                        await asyncio.wait_for(
+                            proc.wait(),
+                            timeout=5,
+                        )
+                    except (TimeoutError, ProcessLookupError):
+                        pass
+                return captured
+            await asyncio.sleep(2)
+        logger.warning(
+            "[UbisoftAuth] auth launcher timed out",
+        )
+        try:
+            proc.terminate()
+            await asyncio.wait_for(proc.wait(), timeout=10)
+        except (TimeoutError, ProcessLookupError):
+            try:
+                proc.kill()
+                await asyncio.wait_for(proc.wait(), timeout=5)
+            except (TimeoutError, ProcessLookupError):
+                pass
         return None

@@ -1,7 +1,10 @@
+"""launcher/types/context.py — Immutable launch request context."""
 from __future__ import annotations
+
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+
 KNOWN_STORES: tuple[str, ...] = (
     "epic",
     "gog",
@@ -9,21 +12,6 @@ KNOWN_STORES: tuple[str, ...] = (
     "microsoft",
     "ubisoft",
 )
-@dataclass(frozen=True)
-class LaunchContext:
-    """Launch context."""
-    store: str
-    game_id: str
-    exe_path: Path
-    work_dir: Path
-    plugin_dir: Path
-"""launcher/types/context.py — Immutable launch request context."""
-from __future__ import annotations
-
-import os
-from dataclasses import dataclass, field
-from pathlib import Path
-from typing import Any
 
 
 @dataclass(frozen=True)
@@ -75,40 +63,6 @@ class LaunchContext:
             "auth_store": self.auth_store,
             "bypass_circuit_breaker": self.bypass_circuit_breaker,
         }
-
-@dataclass
-class RuntimeState:
-    """Runtime state."""
-    
-    # Extra fields used by some logic
-    game: dict[str, Any] = field(default_factory=dict)
-    env: dict[str, Any] = field(default_factory=dict)
-
-    @property
-    def is_xcloud(self) -> bool:
-        """True when this request is an xCloud streaming session."""
-        return str(self.exe_path) == "xcloud"
-
-    @property
-    def is_windows_game(self) -> bool:
-        """True when the exe should route through Proton/UMU."""
-        if self.is_xcloud:
-            return False
-        if self.store == "ubisoft":
-            return True
-        exe_str = str(self.exe_path).lower()
-        return any(exe_str.endswith(ext) for ext in (".exe", ".cmd", ".bat"))
-
-    @property
-    def is_native_linux(self) -> bool:
-        """True when the exe is a native Linux binary."""
-        return not (self.is_xcloud or self.is_windows_game)
-
-    @property
-    def game_key(self) -> str:
-        """Return the ``store:game_id`` key used in games.map."""
-        return f"{self.store}:{self.game_id}"
-
 
 @dataclass
 class RuntimeState:

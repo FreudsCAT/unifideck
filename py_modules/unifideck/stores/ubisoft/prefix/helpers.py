@@ -1,21 +1,32 @@
-"""helpers.py — Wine prefix manipulation primitives.
-
-# OP-59b | py_modules/unifideck/stores/ubisoft/prefix/helpers.py | Depends: (none)
 """
-from __future__ import annotations
+Wine prefix helpers — symlink fixups, marker writing, basic file ops.
 
+OP-59b | py_modules/unifideck/stores/ubisoft/prefix/helpers.py
+
+Helper class with a grab-bag of operations the prefix builders rely on:
+
+* ``fix_pfx_symlink`` — fixes the legacy ``<prefix>/pfx`` symlink some
+  Proton versions expect;
+* ``write_bootstrap_marker`` — writes the marker file that flags a
+  prefix as "Unifideck-managed";
+* ``has_bootstrap_marker`` — checks a prefix for the marker;
+* misc. ``Path``-based wrappers around create/delete/check operations.
+
+Kept as a separate module so the builders can stay focused on the
+high-level construction logic.
+"""
+
+from __future__ import annotations
 import asyncio
 import datetime
 import logging
 import os
-import shutil
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .manager import UbisoftPrefixManager
-
 logger = logging.getLogger(__name__)
-_SILENT_INSTALL_FLAG = '/S'
+_SILENT_INSTALL_FLAG = "/S"
 
 
 class _PrefixHelpers:
@@ -26,80 +37,166 @@ class _PrefixHelpers:
         self._parent = parent
 
     async def clone_prefix_from_template(
-        self, space_id: str, prefix_path: str,
+        self,
+        space_id: str,
+        prefix_path: str,
     ) -> bool:
         """Clone prefix from template."""
-        config = self._parent._config
-        template = config.template_dir_expanded
-        if not os.path.isdir(template):
-            return False
+        logger.info(
+            "[UbisoftPrefixManager] cloning template for %s",
+            space_id,
+        )
         try:
-            await self.rsync_clone(template, prefix_path, exclude_games=True)
+            os.makedirs(prefix_path, exist_ok=True)
+            ok = await self.rsync_clone(
+                self._parent._config.template_dir_expanded,
+                prefix_path,
+                exclude_games=False,
+            )
+            if not ok:
+                logger.error(
+                    "[UbisoftPrefixManager] rsync clone failed for %s",
+                    space_id,
+                )
+                return False
+            self.write_bootstrap_marker(
+                prefix_path,
+                "cloned_from_template",
+                space_id,
+            )
+            self.try_inject_auth_state([prefix_path])
+            logger.info(
+                "[UbisoftPrefixManager] prefix cloned for %s",
+                space_id,
+            )
+            return True
         except Exception as e:
-            logger.warning('[Ubisoft.prefix] clone failed: %s', e)
+            logger.error(
+                "[UbisoftPrefixManager] clone failed: %s",
+                e,
+            )
             return False
-        self.write_bootstrap_marker(prefix_path, source='template', space_id=space_id)
-        self.fix_pfx_symlink(prefix_path)
-        return True
 
     async def create_prefix_from_fresh_install(
-        self, space_id: str, prefix_path: str,
+        self,
+        space_id: str,
+        prefix_path: str,
     ) -> bool:
         """Create prefix from fresh install."""
-        installer_cache = self._parent._installer_cache
-        installer_path = await installer_cache.ensure_cached()
+        logger.info(
+            "[UbisoftPrefixManager] fresh install for %s",
+            space_id,
+        )
+        installer_path = await self._parent._installer_cache.ensure_cached()
         if not installer_path:
             return False
-        os.makedirs(prefix_path, exist_ok=True)
-        ok = await self.run_silent_installer(
-            prefix_dir=prefix_path,
-            installer_path=installer_path,
-            gameid=f'umu-ubisoft-{space_id}',
-            store_game_id=f'ubisoft:{space_id}',
-        )
-        if not ok:
-            return False
-        self.write_bootstrap_marker(prefix_path, source='fresh', space_id=space_id)
-        self.fix_pfx_symlink(prefix_path)
-        return True
-
-    async def create_template_from_game_prefix(self, game_prefix: str) -> None:
-        """Create template from game prefix."""
-        config = self._parent._config
-        template = config.template_dir_expanded
         try:
-            if os.path.isdir(template):
-                shutil.rmtree(template, ignore_errors=True)
-            await self.rsync_clone(game_prefix, template, exclude_games=True)
-            self.write_bootstrap_marker(template, source='derived_from_game', space_id=None)
+            os.makedirs(prefix_path, exist_ok=True)
+            success = await self.run_silent_installer(
+                prefix_dir=prefix_path,
+                installer_path=installer_path,
+                gameid=f"umu-ubisoft-{space_id}",
+                store_game_id=f"ubisoft:{space_id}",
+            )
+            if not success:
+                return False
+            if not self._parent._paths.find_upc_exe(prefix_path):
+                logger.error(
+                    "[UbisoftPrefixManager] upc.exe not "
+                    "found after fresh install for %s",
+                    space_id,
+                )
+                return False
+            self.write_bootstrap_marker(
+                prefix_path,
+                "fresh_install",
+                space_id,
+            )
+            self.try_inject_auth_state([prefix_path])
+            if not self._parent.template_exists():
+                await self.create_template_from_game_prefix(
+                    prefix_path,
+                )
+            return True
         except Exception as e:
-            logger.warning('[Ubisoft.prefix] template derivation failed: %s', e)
+            logger.exception(
+                "[UbisoftPrefixManager] fresh install failed for %s: %s",
+                space_id,
+                e,
+            )
+            return False
+
+    async def create_template_from_game_prefix(
+        self,
+        game_prefix: str,
+    ) -> None:
+        """Create template from game prefix."""
+        template_dir = self._parent._config.template_dir_expanded
+        logger.info(
+            "[UbisoftPrefixManager] creating template from first game prefix",
+        )
+        try:
+            os.makedirs(template_dir, exist_ok=True)
+            ok = await self.rsync_clone(
+                game_prefix,
+                template_dir,
+                exclude_games=False,
+            )
+            if not ok:
+                return
+            self.write_bootstrap_marker(
+                template_dir,
+                "template",
+                None,
+            )
+            self.try_inject_auth_state([template_dir])
+        except Exception as e:
+            logger.warning(
+                "[UbisoftPrefixManager] template creation from game prefix failed: %s",
+                e,
+            )
 
     async def run_silent_installer(
-        self, *, prefix_dir: str, installer_path: str, gameid: str,
+        self,
+        *,
+        prefix_dir: str,
+        installer_path: str,
+        gameid: str,
         store_game_id: str | None = None,
     ) -> bool:
         """Run silent installer."""
-        binaries = self._parent._binaries
-        umu_run = binaries.find_umu_run()
+        umu_run = self._parent._binaries.find_umu_run()
         if not umu_run:
+            logger.error(
+                "[UbisoftPrefixManager] umu-run not found",
+            )
             return False
-        proton = binaries.find_proton_path()
-        env = binaries.build_umu_env(
+        env = self._parent._binaries.build_umu_env(
             wineprefix=prefix_dir,
             gameid=gameid,
-            proton_path=proton,
             store_game_id=store_game_id,
         )
-        cmd = [umu_run, installer_path, _SILENT_INSTALL_FLAG]
+        python_bin = self._parent._binaries.find_python()
+        logger.info(
+            "[UbisoftPrefixManager] installer run: PROTONPATH=%s GAMEID=%s",
+            env.get("PROTONPATH"),
+            env.get("GAMEID"),
+        )
         try:
             proc = await asyncio.create_subprocess_exec(
-                *cmd, env=env,
-                stdout=asyncio.subprocess.DEVNULL,
-                stderr=asyncio.subprocess.DEVNULL,
+                python_bin,
+                umu_run,
+                installer_path,
+                _SILENT_INSTALL_FLAG,
+                env=env,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
             )
         except OSError as e:
-            logger.warning('[Ubisoft.prefix] installer spawn failed: %s', e)
+            logger.error(
+                "[UbisoftPrefixManager] subprocess spawn failed: %s",
+                e,
+            )
             return False
         return await self._await_installer_completion(proc)
 
@@ -109,80 +206,146 @@ class _PrefixHelpers:
     ) -> bool:
         """Await installer completion."""
         try:
-            await asyncio.wait_for(proc.wait(), timeout=30 * 60)
+            _stdout, stderr = await asyncio.wait_for(
+                proc.communicate(),
+                timeout=15 * 60,
+            )
         except TimeoutError:
+            logger.error(
+                "[UbisoftPrefixManager] installer timed out after 15 min — killing",
+            )
             try:
-                proc.terminate()
+                proc.kill()
             except ProcessLookupError:
                 pass
-            return False
-        return proc.returncode == 0
-
-    async def rsync_clone(
-        self, src: str, dst: str, *, exclude_games: bool,
-    ) -> bool:
-        """Rsync clone."""
-        cmd = ['rsync', '-a', '--delete']
-        if exclude_games:
-            cmd += [
-                '--exclude',
-                'drive_c/Program Files (x86)/Ubisoft/Ubisoft Game Launcher/games/',
-            ]
-        cmd += [src.rstrip('/') + '/', dst.rstrip('/') + '/']
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdout=asyncio.subprocess.DEVNULL,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            _, stderr = await proc.communicate()
-        except OSError as e:
-            logger.warning('[Ubisoft.prefix] rsync spawn failed: %s', e)
+            await proc.wait()
             return False
         if proc.returncode != 0:
-            logger.warning(
-                '[Ubisoft.prefix] rsync rc=%s err=%s',
-                proc.returncode, stderr[:200].decode('utf-8', errors='replace'),
+            stderr_text = (
+                stderr.decode(
+                    errors="replace",
+                )[:500]
+                if stderr
+                else ""
+            )
+            logger.error(
+                "[UbisoftPrefixManager] installer exited %d: %s",
+                proc.returncode,
+                stderr_text,
+            )
+            return False
+        return True
+
+    async def rsync_clone(
+        self,
+        src: str,
+        dst: str,
+        *,
+        exclude_games: bool,
+    ) -> bool:
+        """Rsync clone."""
+        args: list[str] = ["rsync", "-a"]
+        if exclude_games:
+            args.append("--exclude=games")
+        args.extend([f"{src}/", f"{dst}/"])
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *args,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+        except OSError as e:
+            logger.error(
+                "[UbisoftPrefixManager] rsync spawn failed: %s",
+                e,
+            )
+            return False
+        try:
+            _stdout, stderr = await asyncio.wait_for(
+                proc.communicate(),
+                timeout=30 * 60,
+            )
+        except TimeoutError:
+            logger.error(
+                "[UbisoftPrefixManager] rsync timed out — killing",
+            )
+            try:
+                proc.kill()
+            except ProcessLookupError:
+                pass
+            await proc.wait()
+            return False
+        if proc.returncode != 0:
+            logger.error(
+                "[UbisoftPrefixManager] rsync failed (%d): %s",
+                proc.returncode,
+                stderr.decode(errors="replace")[:300],
             )
             return False
         return True
 
     @staticmethod
     def fix_pfx_symlink(prefix_dir: str) -> None:
-        """Fix pfx symlink — Proton expects ``<prefix>/pfx`` to exist
-        as a symlink back to the prefix root for sub-tools that rely
-        on it. Many bare-Wine prefixes don't have it.
-        """
-        pfx = os.path.join(prefix_dir, 'pfx')
-        if os.path.islink(pfx) or os.path.isdir(pfx):
+        """Fix pfx symlink."""
+        pfx_link = os.path.join(prefix_dir, "pfx")
+        if not os.path.islink(pfx_link):
             return
         try:
-            os.symlink('.', pfx, target_is_directory=True)
+            current_target = os.readlink(pfx_link)
+            if current_target in (prefix_dir, "."):
+                return
+            os.remove(pfx_link)
+            os.symlink(prefix_dir, pfx_link)
+            logger.info(
+                "[UbisoftPrefixManager] fixed pfx symlink: %s → %s",
+                current_target,
+                prefix_dir,
+            )
         except OSError as e:
-            logger.debug('[Ubisoft.prefix] pfx symlink: %s', e)
+            logger.warning(
+                "[UbisoftPrefixManager] could not fix pfx symlink: %s",
+                e,
+            )
 
     def write_bootstrap_marker(
-        self, prefix_dir: str, source: str, space_id: str | None,
+        self,
+        prefix_dir: str,
+        source: str,
+        space_id: str | None,
     ) -> None:
         """Write bootstrap marker."""
-        config = self._parent._config
-        marker_path = os.path.join(prefix_dir, config.bootstrap_marker)
-        payload = {
-            'created_at': datetime.datetime.utcnow().isoformat() + 'Z',
-            'source': source,
-            'space_id': space_id or '',
-        }
-        try:
-            os.makedirs(os.path.dirname(marker_path), exist_ok=True)
-            with open(marker_path, 'w', encoding='utf-8') as f:
-                for key, value in payload.items():
-                    f.write(f'{key}={value}\n')
-        except OSError as e:
-            logger.debug('[Ubisoft.prefix] bootstrap marker: %s', e)
+        marker_path = os.path.join(
+            prefix_dir,
+            self._parent._config.bootstrap_marker,
+        )
+        created_at = datetime.datetime.now().isoformat()
+        lines = [source, f"created={created_at}"]
+        if space_id:
+            lines.insert(1, f"game={space_id}")
+            try:
+                with open(
+                    marker_path,
+                    "w",
+                    encoding="utf-8",
+                ) as f:
+                    f.write("\n".join(lines) + "\n")
+            except OSError as e:
+                logger.warning(
+                    "[UbisoftPrefixManager] could not write bootstrap marker: %s",
+                    e,
+                )
 
-    def try_inject_auth_state(self, prefix_paths: list[str]) -> None:
+    def try_inject_auth_state(
+        self,
+        prefix_paths: list[str],
+    ) -> None:
         """Try inject auth state."""
+        if not prefix_paths:
+            return
         try:
             self._parent._inject_auth_state(prefix_paths)
         except Exception as e:
-            logger.debug('[Ubisoft.prefix] inject auth state failed: %s', e)
+            logger.warning(
+                "[UbisoftPrefixManager] auth state injection failed: %s",
+                e,
+            )
