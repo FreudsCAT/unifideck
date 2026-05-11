@@ -31,7 +31,9 @@ _STORE_INJECTIONS: dict[str, tuple[tuple[str, str], ...]] = {
     "microsoft": (
         ("_subscription_service", "microsoft_subscription"),
     ),
-    # Future: "ubisoft": (("_shortcut_service", "shortcut"), ...)
+    "ubisoft": (
+        ("_shortcut_service", "shortcut"),
+    ),
     # Future: "gog": (("_cloud_save", "cloudsave"), ...)
 }
 

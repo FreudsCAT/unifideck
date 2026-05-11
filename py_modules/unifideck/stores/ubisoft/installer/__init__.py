@@ -1,2 +1,5 @@
 # OP-56 | stores/ubisoft/installer/__init__.py
-from __future__ import annotations
+from .cache import UbisoftInstallerCache
+from .installer import UbisoftInstaller
+
+__all__ = ['UbisoftInstaller', 'UbisoftInstallerCache']

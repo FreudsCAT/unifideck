@@ -1,2 +1,4 @@
 # OP-57 | stores/ubisoft/library/__init__.py
-from __future__ import annotations
+from .facade import UbisoftLibrary
+
+__all__ = ['UbisoftLibrary']

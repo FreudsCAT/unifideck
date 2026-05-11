@@ -3,7 +3,9 @@ import logging
 from dataclasses import asdict
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
+
 from ...core.types import Events, Result, StoreError
+
 if TYPE_CHECKING:
     from ...core.cache_manager import CacheManager
     from ...event_bus import EventBus
@@ -11,6 +13,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 class StoreRegistry:
     """Store registry."""
+
     def __init__(self, bus: "EventBus") -> None:
         """Initialize the instance."""
         self._stores: dict[str, StoreBase] = {}
@@ -47,9 +50,9 @@ class StoreRegistry:
         plugin_dir: str = "",
         config=None,
     ) -> int:
-
         """Auto discover."""
         import importlib
+
         from .store_base import StoreBase as _StoreBase
         real_stores = self._validate_stores_dir(
             stores_dir, plugin_dir,
@@ -66,11 +69,11 @@ class StoreRegistry:
             )
             return 0
         registered = 0
-        for filename, full_path in self._iter_store_files(
+        for module_suffix, full_path in self._iter_store_files(
             real_stores,
         ):
             store_cls = self._load_store_class(
-                package_name, filename, full_path,
+                package_name, module_suffix, full_path,
                 _StoreBase,
             )
             if store_cls is None:
@@ -84,14 +87,14 @@ class StoreRegistry:
                 logger.info(
                     "[StoreRegistry] registered %s (%s) "
                     "from %s",
-                    store_id, store_cls.__name__, filename,
+                    store_id, store_cls.__name__, full_path,
                 )
                 registered += 1
             except Exception as e:
                 logger.error(
                     "[StoreRegistry] Failed to instantiate "
                     "%s from %s: %s",
-                    store_cls.__name__, filename, e,
+                    store_cls.__name__, full_path, e,
                 )
         logger.info(
             "[StoreRegistry] Auto-discovery: %d stores "
@@ -145,13 +148,25 @@ class StoreRegistry:
         return real_stores
     @staticmethod
     def _iter_store_files(real_stores: str):
-        """Iter store files."""
+        """Iter store files.
+
+        Yields (module_suffix, full_path) tuples where module_suffix
+        is the dotted module path relative to ``unifideck.stores``.
+
+        Two layouts are accepted:
+
+        * Flat: a top-level ``<name>_store.py`` file → yields
+          ("<name>_store", path).
+        * Subpackage: a top-level ``<name>/`` directory containing
+          a ``store.py`` → yields ("<name>.store", path).
+
+        Symlinks and ``_``-prefixed entries are skipped at every
+        level for the same reasons as the flat path: confinement.
+        """
         real_stores_p = Path(real_stores)
         for entry in sorted(real_stores_p.iterdir()):
-            filename = entry.name
-            if not filename.endswith("_store.py"):
-                continue
-            if filename.startswith("_"):
+            name = entry.name
+            if name.startswith("_"):
                 continue
             if entry.is_symlink():
                 logger.warning(
@@ -159,18 +174,31 @@ class StoreRegistry:
                     "symlink %s", str(entry),
                 )
                 continue
-            yield filename, str(entry)
+            if entry.is_file() and name.endswith("_store.py"):
+                yield name[:-3], str(entry)
+                continue
+            if entry.is_dir():
+                store_py = entry / "store.py"
+                if not store_py.is_file():
+                    continue
+                if store_py.is_symlink():
+                    logger.warning(
+                        "[StoreRegistry] SECURITY: skipping "
+                        "symlinked store.py in %s", str(entry),
+                    )
+                    continue
+                yield f"{name}.store", str(store_py)
 
     @staticmethod
     def _load_store_class(
         package_name: str,
-        filename: str,
+        module_suffix: str,
         full_path: str,
         store_base_cls: type,
     ) -> type | None:
         """Load store class."""
         import importlib
-        module_name = f"{package_name}.{filename[:-3]}"
+        module_name = f"{package_name}.{module_suffix}"
         logger.info(
             "[StoreRegistry] loading %s from %s",
             module_name, full_path,
@@ -179,7 +207,7 @@ class StoreRegistry:
             mod = importlib.import_module(module_name)
         except Exception as e:
             logger.debug(
-                "[StoreRegistry] Skip %s: %s", filename, e,
+                "[StoreRegistry] Skip %s: %s", module_suffix, e,
             )
             return None
         for attr_name in dir(mod):
@@ -232,7 +260,6 @@ class StoreRegistry:
     async def auth_action(
         self, store_id: str, action: str, **kwargs,
     ) -> Result:
-
         """Auth action."""
         try:
             store = self.get(store_id)
