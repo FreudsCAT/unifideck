@@ -1,21 +1,30 @@
-"""helpers.py — Language probe + picker for the install pipeline.
+"""Install-pipeline helpers — game info probe + language picking.
 
-# OP-51h | py_modules/unifideck/stores/gog/install/helpers.py | Depends: (none)
+OP-51h | py_modules/unifideck/stores/gog/install/helpers.py
+
+``_InstallHelpers`` exposes the two helper methods that the installer
+calls during the "probe & prepare" phase :
+
+* ``probe_game_info(game_id)`` — query gogdl for the game's platform,
+  expected folder name, and supported languages;
+* ``pick_languages(preferred, explicit, supported)`` — given the user's
+  locale and the game's available languages, decide which language
+  list to pass to gogdl. Honors an explicit override (always wins) or
+  picks a smart match (delegates to ``languages.py``, OP-51c).
 """
-from __future__ import annotations
 
+from __future__ import annotations
 import asyncio
 import json
 import logging
-from typing import TYPE_CHECKING
-
+from typing import (
+    TYPE_CHECKING,
+)
 from .languages import smart_match_language
 
 if TYPE_CHECKING:
     from .installer import GOGInstaller
-
 logger = logging.getLogger(__name__)
-_LANG_PROBE_TIMEOUT_S = 30.0
 
 
 class _InstallHelpers:
@@ -25,93 +34,144 @@ class _InstallHelpers:
         """Initialize the instance."""
         self._parent = parent
 
-    async def probe_game_info(
-        self, game_id: str,
-    ) -> tuple[str, str | None, list[str]]:
+    async def probe_game_info(self, game_id: str) -> tuple[str, str | None, list[str]]:
         """Probe game info."""
-        gogdl_bin = self._parent._gogdl_bin
-        if not gogdl_bin:
-            return 'windows', None, []
-        try:
-            async with self._parent._tokens.gogdl_credentials() as env:
+        platform = "linux"
+        folder_name: str | None = None
+        languages: list[str] = []
+        for trial_platform in ("linux", "windows"):
+            cmd = [
+                self._parent._gogdl_bin,
+                "--auth-config-path",
+                self._parent._config.auth_config_path,
+                "info",
+                "--platform",
+                trial_platform,
+                game_id,
+            ]
+            env, _gogdl_cleanup = await self._parent._tokens.acquire_gogdl_creds()
+            stdout = b""
+            try:
                 proc = await asyncio.create_subprocess_exec(
-                    gogdl_bin, 'info', game_id, '--os', 'windows',
-                    env={**env},
+                    *cmd,
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
+                    env=env,
                 )
                 try:
-                    stdout, _err = await asyncio.wait_for(
-                        proc.communicate(), timeout=_LANG_PROBE_TIMEOUT_S,
+                    stdout, _stderr = await asyncio.wait_for(
+                        proc.communicate(),
+                        timeout=60,
                     )
                 except TimeoutError:
-                    return 'windows', None, []
-                if proc.returncode != 0:
-                    return 'windows', None, []
-        except OSError as e:
-            logger.debug('[GOGHelpers] probe failed: %s', e)
-            return 'windows', None, []
-        folder, langs = self.parse_info_output(
-            stdout.decode('utf-8', errors='replace'),
-        )
-        return 'windows', folder, langs
+                    logger.warning(
+                        "[GOGInstaller] gogdl info timed out on "
+                        "%s/%s — killing subprocess",
+                        trial_platform,
+                        game_id,
+                    )
+                    try:
+                        proc.kill()
+                    except ProcessLookupError:
+                        pass
+                    await proc.wait()
+                    stdout = b""
+            finally:
+                await _gogdl_cleanup()
+            if proc.returncode != 0 and trial_platform == "linux":
+                logger.info(
+                    "[GOGInstaller] no Linux build for %s, trying Windows",
+                    game_id,
+                )
+                continue
+            platform = trial_platform
+            folder_name, languages = self.parse_info_output(
+                stdout.decode(errors="replace"),
+            )
+            break
+        if folder_name:
+            logger.info(
+                "[GOGInstaller] info: platform=%s folder=%s langs=%s",
+                platform,
+                folder_name,
+                languages,
+            )
+        return platform, folder_name, languages
 
     @staticmethod
-    def parse_info_output(
-        stdout: str,
-    ) -> tuple[str | None, list[str]]:
+    def parse_info_output(stdout: str) -> tuple[str | None, list[str]]:
         """Parse info output."""
-        folder: str | None = None
+        folder_name: str | None = None
         languages: list[str] = []
-        for line in stdout.splitlines():
+        for line in reversed(stdout.splitlines()):
             line = line.strip()
-            if not line.startswith('{'):
+            if not line:
                 continue
             try:
                 data = json.loads(line)
             except json.JSONDecodeError:
                 continue
-            if not isinstance(data, dict):
-                continue
-            if folder is None and isinstance(data.get('folder'), str):
-                folder = data['folder']
-            langs = data.get('languages')
-            if isinstance(langs, list) and not languages:
-                languages = [str(l) for l in langs]
-        return folder, languages
+            if "folder_name" in data and not folder_name:
+                folder_name = data["folder_name"]
+            if "languages" in data and not languages:
+                langs = data["languages"]
+                if isinstance(langs, list):
+                    languages = [str(x) for x in langs]
+            if folder_name and languages:
+                break
+        return folder_name, languages
 
     @staticmethod
     def pick_languages(
-        primary_lang: str, explicit: bool, supported: list[str],
+        primary_lang: str,
+        explicit: bool,
+        supported: list[str],
     ) -> list[str]:
         """Pick languages."""
-        if not supported:
-            return ['en-US']
         if explicit:
-            return _InstallHelpers._pick_explicit_lang(primary_lang, supported)
-        return _InstallHelpers._pick_implicit_langs(primary_lang, supported)
+            return _InstallHelpers._pick_explicit_lang(
+                primary_lang,
+                supported,
+            )
+        return _InstallHelpers._pick_implicit_langs(
+            primary_lang,
+            supported,
+        )
 
     @staticmethod
-    def _pick_explicit_lang(
-        primary_lang: str, supported: list[str],
-    ) -> list[str]:
+    def _pick_explicit_lang(primary_lang: str, supported: list[str]) -> list[str]:
         """Pick explicit lang."""
-        match = smart_match_language(primary_lang, supported)
-        if match:
-            return [match]
-        return ['en-US' if 'en-US' in supported else supported[0]]
+        if not supported:
+            return [primary_lang]
+        matched = smart_match_language(primary_lang, supported)
+        if matched:
+            return [matched]
+        logger.warning(
+            "[GOGInstaller] %s not available, using %s",
+            primary_lang,
+            supported[0],
+        )
+        return [supported[0]]
 
     @staticmethod
-    def _pick_implicit_langs(
-        primary_lang: str, supported: list[str],
-    ) -> list[str]:
+    def _pick_implicit_langs(primary_lang: str, supported: list[str]) -> list[str]:
         """Pick implicit langs."""
-        out: list[str] = []
-        match = smart_match_language(primary_lang, supported)
-        if match:
-            out.append(match)
-        for fallback in ('en-US', 'en'):
-            picked = smart_match_language(fallback, supported)
-            if picked and picked not in out:
-                out.append(picked)
-        return out or supported[:1]
+        if not supported:
+            langs = [primary_lang]
+            if "en-US" not in langs:
+                langs.append("en-US")
+            return langs
+        result: list[str] = []
+        matched = smart_match_language(primary_lang, supported)
+        if matched:
+            result.append(matched)
+        else:
+            matched_english = smart_match_language(
+                "en-US",
+                supported,
+            )
+            if matched_english:
+                result.append(matched_english)
+            else:
+                result.append(supported[0])
+        return result

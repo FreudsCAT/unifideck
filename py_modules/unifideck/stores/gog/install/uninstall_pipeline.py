@@ -1,21 +1,27 @@
-"""uninstall_pipeline.py — Best-effort uninstall of a GOG install.
+"""Uninstall pipeline orchestrator.
 
-# OP-51e | py_modules/unifideck/stores/gog/install/uninstall_pipeline.py | Depends: (none)
+OP-51e | py_modules/unifideck/stores/gog/install/uninstall_pipeline.py
+
+``_UninstallPipeline`` is the symmetric counterpart to ``GOGInstaller``:
+removes a game from every state-tracking layer (install directory,
+gogdl manifests, .unifideck-id marker, Steam shortcut, SteamGridDB
+artwork cache).
+
+Operates idempotently — if any layer's entry is already gone, the
+corresponding cleanup is a no-op rather than a failure.
 """
-from __future__ import annotations
 
+from __future__ import annotations
 import asyncio
 import logging
 import os
 import shutil
 from typing import TYPE_CHECKING
-
 from ....core.types import Result
 from .primitives import GOGFolderOps
 
 if TYPE_CHECKING:
     from .installer import GOGInstaller
-
 logger = logging.getLogger(__name__)
 _UNINSTALL_MAX_ATTEMPTS = 3
 
@@ -28,30 +34,61 @@ class _UninstallPipeline:
         self._parent = parent
 
     async def uninstall_game(
-        self, game_id: str, install_path: str | None = None,
+        self,
+        game_id: str,
+        install_path: str | None = None,
     ) -> Result:
         """Uninstall game."""
-        if not install_path:
-            return Result(success=False, error='install_path_required')
-        if not os.path.isdir(install_path):
-            return Result(success=True, data={'already_gone': True})
-        for attempt in range(1, _UNINSTALL_MAX_ATTEMPTS + 1):
+        if not install_path or not os.path.exists(install_path):
+            logger.info(
+                "[GOGInstaller] %s already gone, nothing to do",
+                game_id,
+            )
+            return Result(success=True)
+        for attempt in range(_UNINSTALL_MAX_ATTEMPTS):
             try:
                 await asyncio.to_thread(
-                    shutil.rmtree, install_path,
+                    shutil.rmtree,
+                    install_path,
+                )
+            except PermissionError as e:
+                logger.warning(
+                    "[GOGInstaller] attempt %d permission: %s",
+                    attempt + 1,
+                    e,
                 )
             except OSError as e:
                 logger.warning(
-                    '[GOGUninstall] attempt %d failed: %s', attempt, e,
+                    "[GOGInstaller] attempt %d failed: %s",
+                    attempt + 1,
+                    e,
                 )
-                await asyncio.sleep(0.5)
-                continue
-            if not os.path.isdir(install_path):
+            if not os.path.exists(install_path):
+                logger.info(
+                    "[GOGInstaller] uninstalled %s",
+                    install_path,
+                )
                 break
-        if os.path.isdir(install_path):
-            await GOGFolderOps.force_cleanup_folder(install_path)
-        if os.path.isdir(install_path):
-            return Result(success=False, error='deletion_failed')
-        return Result(
-            success=True, data={'game_id': game_id, 'path': install_path},
-        )
+            remaining = GOGFolderOps.count_files(install_path)
+            logger.warning(
+                "[GOGInstaller] attempt %d: %d files remain",
+                attempt + 1,
+                remaining,
+            )
+            if attempt == _UNINSTALL_MAX_ATTEMPTS - 1:
+                logger.info(
+                    "[GOGInstaller] falling back to force cleanup",
+                )
+                await GOGFolderOps.force_cleanup_folder(
+                    install_path,
+                )
+        await self._parent._wipe_support_cache(game_id)
+        await self._parent._wipe_manifests(game_id)
+        if os.path.exists(install_path):
+            remaining = GOGFolderOps.count_files(install_path)
+            if remaining > 0:
+                return Result(
+                    success=False,
+                    error=(f"uninstall_incomplete_{remaining}_remaining"),
+                )
+        return Result(success=True)

@@ -1,15 +1,22 @@
-"""exe_resolver.py — Find the playable executable inside a GOG install.
+"""Locate the launchable .exe for an installed GOG game.
 
-# OP-50e | py_modules/unifideck/stores/gog/exe_resolver.py | Depends: OP-04c
+OP-50e | py_modules/unifideck/stores/gog/exe_resolver.py
 
-GOG installs end up with a mix of installer leftovers (vcredist, dxsetup),
-wrapper launchers (dosbox.exe, scummvm.exe), and the actual game .exe.
-The resolver prefers the explicit ``primaryTask`` from a ``goggame-*.info``
-manifest, then falls back to a ``start.sh`` script, then to the largest
-non-skip .exe in the tree.
+GOG installers often produce nested directory structures with several
+.exe files (the game, side tools, redistributables); ``GOGExeResolver``
+implements the heuristics to pick the right one to launch:
+
+1. ``goggame-<id>.info`` manifest — read the ``playTasks`` field;
+2. ``game/`` sub-directory check — common GOG layout;
+3. .exe size filter — exclude obvious tools (≤ 1 MiB);
+4. naming heuristic — prefer "game-name.exe" over "uninstall.exe" etc.
+
+Module-level helpers (``parse_size_string``,
+``get_game_id_from_goggame_filename``) are pure utilities shared with
+``install/marker.py`` and ``install/planner.py``.
 """
-from __future__ import annotations
 
+from __future__ import annotations
 import glob
 import json
 import logging
@@ -19,130 +26,213 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 _SKIP_EXE_PATTERNS = (
-    'unins', 'setup', 'install', 'crash', 'redist', 'vcredist',
-    'vc_redist', 'dxsetup', 'physx', 'dotnet', 'directx',
+    "unins",
+    "setup",
+    "install",
+    "crash",
+    "redist",
+    "vcredist",
+    "vc_redist",
+    "dxsetup",
+    "physx",
+    "dotnet",
+    "directx",
 )
-_ROOT_DATA_EXTENSIONS = ('.arch05', '.forge')
-_WRAPPER_EXE_NAMES = {'dosbox.exe', 'scummvm.exe'}
+_ROOT_DATA_EXTENSIONS = (".arch05", ".forge")
+_WRAPPER_EXE_NAMES = {"dosbox.exe", "scummvm.exe"}
 
 
 class GOGExeResolver:
-    """GOG exe resolver."""
+    """Gogexe resolver."""
 
     def find(self, install_path: str) -> str | None:
         """Find."""
-        result = self._resolve(install_path)
+        result = self.find_with_workdir(install_path)
         return result[0] if result else None
 
     def find_with_workdir(self, install_path: str) -> tuple[str, str] | None:
         """Find with workdir."""
-        return self._resolve(install_path)
+        try:
+            return self._resolve(install_path)
+        except Exception as e:
+            logger.exception(
+                "[GOGExeResolver] unexpected error for %s: %s",
+                install_path,
+                e,
+            )
+            return None
 
     def _resolve(self, install_path: str) -> tuple[str, str] | None:
         """Resolve."""
-        if not install_path or not os.path.isdir(install_path):
-            return None
         search_dirs = self._build_search_dirs(install_path)
-        result = self._resolve_via_goggame_info(install_path, search_dirs)
-        if result:
-            return result
-        result = self._resolve_via_start_sh(search_dirs)
-        if result:
-            return result
-        return self._resolve_via_largest_exe(search_dirs)
+        info_result = self._resolve_via_goggame_info(
+            install_path,
+            search_dirs,
+        )
+        if info_result:
+            return info_result
+        start_sh_result = self._resolve_via_start_sh(search_dirs)
+        if start_sh_result:
+            return start_sh_result
+        fallback_result = self._resolve_via_largest_exe(
+            search_dirs,
+        )
+        if fallback_result:
+            return fallback_result
+        logger.warning(
+            "[GOGExeResolver] no executable found in %s",
+            search_dirs,
+        )
+        return None
 
     @staticmethod
     def _build_search_dirs(install_path: str) -> list[str]:
         """Build search dirs."""
-        dirs = [install_path]
-        for entry in ('game', 'bin'):
-            sub = os.path.join(install_path, entry)
-            if os.path.isdir(sub):
-                dirs.append(sub)
-        try:
-            for entry in sorted(os.listdir(install_path)):
-                full = os.path.join(install_path, entry)
-                if os.path.isdir(full) and full not in dirs:
-                    dirs.append(full)
-        except OSError:
-            pass
-        return dirs
+        search_dirs: list[str] = []
+        game_subdir = str(Path(install_path) / "game")
+        if Path(game_subdir).is_dir():
+            search_dirs.append(game_subdir)
+        search_dirs.append(install_path)
+        return search_dirs
 
     def _resolve_via_goggame_info(
-        self, install_path: str, search_dirs: list[str],
+        self,
+        install_path: str,
+        search_dirs: list[str],
     ) -> tuple[str, str] | None:
         """Resolve via goggame info."""
-        primary, root_dir = self._load_primary_play_task(search_dirs)
-        if not primary:
+        primary, root_dir = self._load_primary_play_task(
+            search_dirs,
+        )
+        if primary is None:
             return None
-        return self._resolve_play_task_paths(install_path, root_dir, primary)
-
-    def _load_primary_play_task(
-        self, search_dirs: list[str],
-    ) -> tuple[dict[str, Any] | None, str]:
-        """Load primary play task."""
-        info, root_dir = self._find_goggame_info(search_dirs)
-        if info is None:
-            return None, ''
-        play_tasks = info.get('playTasks') or []
-        if not isinstance(play_tasks, list):
-            return None, root_dir
-        for task in play_tasks:
-            if not isinstance(task, dict):
-                continue
-            if task.get('isPrimary') or task.get('isPrimaryTask'):
-                return task, root_dir
-        return (play_tasks[0] if play_tasks else None), root_dir
-
-    def _resolve_play_task_paths(
-        self, install_path: str, root_dir: str, primary: dict[str, Any],
-    ) -> tuple[str, str] | None:
-        """Resolve play task paths."""
-        rel = primary.get('path') or ''
-        workdir_rel = primary.get('workingDir') or ''
-        if not isinstance(rel, str):
-            return None
-        base = root_dir or install_path
-        exe_path = os.path.normpath(os.path.join(base, rel))
-        if not os.path.isfile(exe_path):
-            return None
-        wrapper = self._check_wrapper_override(install_path, base, primary)
+        wrapper = self._check_wrapper_override(
+            install_path,
+            root_dir,
+            primary,
+        )
         if wrapper:
             return wrapper
-        if isinstance(workdir_rel, str) and workdir_rel:
-            workdir = os.path.normpath(os.path.join(base, workdir_rel))
-        else:
-            workdir = os.path.dirname(exe_path)
-        return exe_path, workdir
+        return self._resolve_play_task_paths(
+            install_path,
+            root_dir,
+            primary,
+        )
 
-    @staticmethod
-    def _find_goggame_info(
+    def _load_primary_play_task(
+        self,
         search_dirs: list[str],
     ) -> tuple[dict[str, Any] | None, str]:
+        """Load primary play task."""
+        info_file, root_dir = self._find_goggame_info(search_dirs)
+        if not info_file:
+            return None, ""
+        try:
+            data = json.loads(
+                Path(info_file).read_text(encoding="utf-8"),
+            )
+        except (OSError, json.JSONDecodeError) as e:
+            logger.warning(
+                "[GOGExeResolver] info file read failed: %s",
+                e,
+            )
+            return None, ""
+        play_tasks = data.get("playTasks", [])
+        if not isinstance(play_tasks, list):
+            return None, ""
+        primary = next(
+            (t for t in play_tasks if isinstance(t, dict) and t.get("isPrimary")),
+            None,
+        )
+        return primary, root_dir
+
+    def _resolve_play_task_paths(
+        self,
+        install_path: str,
+        root_dir: str,
+        primary: dict[str, Any],
+    ) -> tuple[str, str] | None:
+        """Resolve play task paths."""
+        exe_rel = primary.get("path", "")
+        if not exe_rel:
+            return None
+        work_rel = primary.get("workingDir", "")
+        full_exe = str(
+            Path(root_dir) / exe_rel,
+        ).replace("\\", "/")
+        full_work = (
+            str(Path(root_dir) / work_rel).replace("\\", "/")
+            if work_rel
+            else str(Path(full_exe).parent)
+        )
+        if full_work != install_path and self._has_root_data_files(install_path):
+            logger.info(
+                "[GOGExeResolver] data files in root, overriding workdir to %s",
+                install_path,
+            )
+            full_work = install_path
+        if not Path(full_exe).is_file():
+            return None
+        logger.info(
+            "[GOGExeResolver] resolved via goggame info: %s",
+            full_exe,
+        )
+        return (full_exe, full_work)
+
+    @staticmethod
+    def _find_goggame_info(search_dirs: list[str]) -> tuple[str | None, str]:
         """Find goggame info."""
-        for dirpath in search_dirs:
-            for match in glob.glob(os.path.join(dirpath, 'goggame-*.info')):
-                try:
-                    with open(match, encoding='utf-8') as f:
-                        data = json.load(f)
-                    if isinstance(data, dict):
-                        return data, dirpath
-                except (OSError, json.JSONDecodeError):
-                    continue
-        return None, ''
+        for directory in search_dirs:
+            if not Path(directory).is_dir():
+                continue
+            try:
+                for item in os.listdir(directory):
+                    if item.startswith("goggame-") and item.endswith(".info"):
+                        return (
+                            str(Path(directory) / item),
+                            directory,
+                        )
+            except OSError:
+                continue
+        return (None, search_dirs[0] if search_dirs else "")
 
     def _check_wrapper_override(
-        self, install_path: str, root_dir: str, primary_task: dict[str, Any],
+        self,
+        install_path: str,
+        root_dir: str,
+        primary_task: dict[str, Any],
     ) -> tuple[str, str] | None:
         """Check wrapper override."""
-        if not self._has_root_data_files(install_path):
+        task_path = primary_task.get("path", "")
+        if not task_path:
             return None
-        rel = (primary_task.get('path') or '').lower()
-        for wrapper in _WRAPPER_EXE_NAMES:
-            if wrapper in rel:
-                full = os.path.normpath(os.path.join(root_dir, rel))
-                if os.path.isfile(full):
-                    return full, os.path.dirname(full)
+        task_basename = Path(task_path).name.lower()
+        candidates = [root_dir]
+        if install_path not in candidates:
+            candidates.append(install_path)
+        for candidate_root in candidates:
+            wrapper_path = str(
+                Path(candidate_root) / "run-game.bat",
+            )
+            if not Path(wrapper_path).is_file():
+                continue
+            try:
+                content = (
+                    Path(wrapper_path)
+                    .read_text(
+                        encoding="utf-8",
+                        errors="ignore",
+                    )
+                    .lower()
+                )
+            except OSError:
+                content = ""
+            if task_basename in content or task_basename in _WRAPPER_EXE_NAMES:
+                logger.info(
+                    "[GOGExeResolver] using wrapper: %s",
+                    wrapper_path,
+                )
+                return (wrapper_path, candidate_root)
         return None
 
     @staticmethod
@@ -150,81 +240,94 @@ class GOGExeResolver:
         """Has root data files."""
         try:
             for name in os.listdir(install_path):
-                if name.lower().endswith(_ROOT_DATA_EXTENSIONS):
+                full = Path(install_path) / name
+                if not full.is_file():
+                    continue
+                if any(name.endswith(ext) for ext in _ROOT_DATA_EXTENSIONS):
                     return True
         except OSError:
             pass
         return False
 
     @staticmethod
-    def _resolve_via_start_sh(
-        search_dirs: list[str],
-    ) -> tuple[str, str] | None:
+    def _resolve_via_start_sh(search_dirs: list[str]) -> tuple[str, str] | None:
         """Resolve via start sh."""
-        for dirpath in search_dirs:
-            path = os.path.join(dirpath, 'start.sh')
-            if os.path.isfile(path):
-                return path, dirpath
+        for directory in search_dirs:
+            if not Path(directory).is_dir():
+                continue
+            candidate = str(Path(directory) / "start.sh")
+            if Path(candidate).is_file():
+                logger.info(
+                    "[GOGExeResolver] resolved via start.sh: %s",
+                    candidate,
+                )
+                return (candidate, directory)
         return None
 
     @staticmethod
-    def _resolve_via_largest_exe(
-        search_dirs: list[str],
-    ) -> tuple[str, str] | None:
+    def _resolve_via_largest_exe(search_dirs: list[str]) -> tuple[str, str] | None:
         """Resolve via largest exe."""
-        best: tuple[int, str] | None = None
-        for dirpath in search_dirs:
-            try:
-                for root, _dirs, files in os.walk(dirpath):
-                    depth = root[len(dirpath):].count(os.sep)
-                    if depth >= 3:
-                        continue
-                    for name in files:
-                        lower = name.lower()
-                        if not lower.endswith('.exe'):
-                            continue
-                        if any(p in lower for p in _SKIP_EXE_PATTERNS):
-                            continue
-                        full = os.path.join(root, name)
-                        try:
-                            size = os.path.getsize(full)
-                        except OSError:
-                            continue
-                        if best is None or size > best[0]:
-                            best = (size, full)
-            except OSError:
+        for directory in search_dirs:
+            if not Path(directory).is_dir():
                 continue
-        if best is None:
-            return None
-        path = best[1]
-        return path, os.path.dirname(path)
+            candidates: list[tuple[str, int]] = []
+            for pattern in ("*.exe", "**/*.exe"):
+                for exe_path in glob.glob(
+                    str(Path(directory) / pattern),
+                    recursive=True,
+                ):
+                    basename = Path(exe_path).name.lower()
+                    if any(skip in basename for skip in _SKIP_EXE_PATTERNS):
+                        continue
+                    try:
+                        candidates.append(
+                            (
+                                exe_path,
+                                Path(exe_path).stat().st_size,
+                            ),
+                        )
+                    except OSError:
+                        continue
+            if not candidates:
+                continue
+            candidates.sort(key=lambda item: item[1], reverse=True)
+            best_exe, best_size = candidates[0]
+            logger.info(
+                "[GOGExeResolver] fallback: largest exe (%.1f MB): %s",
+                best_size / (1024 * 1024),
+                best_exe,
+            )
+            return (best_exe, str(Path(best_exe).parent))
+        return None
 
 
 def parse_size_string(size_str: str) -> int:
     """Parse size string."""
     if not size_str:
         return 0
-    s = size_str.strip().upper()
-    multipliers = {'KB': 1024, 'MB': 1024 ** 2, 'GB': 1024 ** 3, 'TB': 1024 ** 4}
-    for suffix, mult in multipliers.items():
-        if s.endswith(suffix):
-            try:
-                return int(float(s[:-len(suffix)].strip()) * mult)
-            except ValueError:
-                return 0
     try:
-        return int(float(s))
-    except ValueError:
+        parts = str(size_str).strip().split()
+        if len(parts) != 2:
+            return 0
+        value = float(parts[0])
+        unit = parts[1].upper()
+        if unit == "GB":
+            return int(value * 1024 * 1024 * 1024)
+        if unit == "MB":
+            return int(value * 1024 * 1024)
+        if unit == "KB":
+            return int(value * 1024)
+        return int(value)
+    except (ValueError, TypeError):
         return 0
 
 
 def get_game_id_from_goggame_filename(filename: str) -> str | None:
     """Get game ID from goggame filename."""
-    name = Path(filename).name
-    if not name.startswith('goggame-'):
+    if not filename:
         return None
-    if name.endswith('.info'):
-        return name[len('goggame-'):-len('.info')]
-    if name.endswith('.script'):
-        return name[len('goggame-'):-len('.script')]
-    return None
+    name = filename.strip()
+    if not name.startswith("goggame-") or not name.endswith(".info"):
+        return None
+    game_id = name[len("goggame-") : -len(".info")]
+    return game_id if game_id else None
