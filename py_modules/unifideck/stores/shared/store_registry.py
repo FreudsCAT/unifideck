@@ -153,12 +153,15 @@ class StoreRegistry:
         Yields (module_suffix, full_path) tuples where module_suffix
         is the dotted module path relative to ``unifideck.stores``.
 
-        Two layouts are accepted:
+        Three layouts are accepted:
 
         * Flat: a top-level ``<name>_store.py`` file → yields
           ("<name>_store", path).
-        * Subpackage: a top-level ``<name>/`` directory containing
-          a ``store.py`` → yields ("<name>.store", path).
+        * Subpackage with bare ``store.py``: ``<name>/store.py`` →
+          yields ("<name>.store", path).
+        * Subpackage with prefixed ``<name>_store.py``:
+          ``<name>/<name>_store.py`` → yields
+          ("<name>.<name>_store", path).
 
         Symlinks and ``_``-prefixed entries are skipped at every
         level for the same reasons as the flat path: confinement.
@@ -178,16 +181,23 @@ class StoreRegistry:
                 yield name[:-3], str(entry)
                 continue
             if entry.is_dir():
-                store_py = entry / "store.py"
-                if not store_py.is_file():
+                yielded = False
+                for candidate_name in (f"{name}_store.py", "store.py"):
+                    candidate = entry / candidate_name
+                    if not candidate.is_file():
+                        continue
+                    if candidate.is_symlink():
+                        logger.warning(
+                            "[StoreRegistry] SECURITY: skipping "
+                            "symlinked %s in %s",
+                            candidate_name, str(entry),
+                        )
+                        continue
+                    yield f"{name}.{candidate_name[:-3]}", str(candidate)
+                    yielded = True
+                    break
+                if not yielded:
                     continue
-                if store_py.is_symlink():
-                    logger.warning(
-                        "[StoreRegistry] SECURITY: skipping "
-                        "symlinked store.py in %s", str(entry),
-                    )
-                    continue
-                yield f"{name}.store", str(store_py)
 
     @staticmethod
     def _load_store_class(
