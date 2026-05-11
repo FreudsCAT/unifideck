@@ -1,9 +1,26 @@
-"""payload.py — Sync UPC credentials/auth artifacts between prefixes.
-
-# OP-60b | py_modules/unifideck/stores/ubisoft/session/payload.py | Depends: (none)
 """
-from __future__ import annotations
+UPC payload sync between Wine prefixes.
 
+OP-60b | py_modules/unifideck/stores/ubisoft/session/payload.py
+
+``_PayloadSync`` copies credentials and auth-cache artifacts from one
+Wine prefix to another. Two kinds of payload exist:
+
+* **credentials** (``ConnectSecureStorage.dat``, ``user.dat``) —
+  DPAPI-encrypted, bound to the machine GUID; sync requires the
+  GUID match.
+* **auth-cache artifacts** (settings, cookies, http2 cache, ownership
+  cache) — not DPAPI-protected, sync without the guard.
+
+The sync is idempotent: artifacts are hashed before copying so identical
+files aren't re-copied. The hash function preserves a strict ordering
+(files sorted alphabetically per directory, sub-dirs in filesystem
+order) to keep digest stability across runs — caches built before this
+ordering policy was applied may produce different hashes and trigger a
+one-time re-sync.
+"""
+
+from __future__ import annotations
 import hashlib
 import logging
 import os
@@ -12,7 +29,6 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .facade import UbisoftSession
-
 logger = logging.getLogger(__name__)
 _CSS_MIN_SOURCE_SIZE = 10
 _HASH_CHUNK_SIZE = 1024 * 1024
@@ -37,169 +53,219 @@ class _PayloadSync:
     ) -> int:
         """Sync payload to prefix."""
         if self.should_skip_payload_sync(
-            source_prefix, target_prefix, payload_sources, apply_dpapi_guard,
+            source_prefix,
+            target_prefix,
+            payload_sources,
+            apply_dpapi_guard,
         ):
             return 0
-        copied = 0
-        for rel_path, src_path in payload_sources.items():
-            dst_path = os.path.join(target_prefix, rel_path)
-            if self.copy_payload_entry(
-                src_path, dst_path,
-                handle_directories=handle_directories,
-                log_label=log_label, rel_path=rel_path,
-            ):
-                copied += 1
-        if copied:
-            logger.info(
-                '[Ubisoft.session] %s synced %d items %s → %s',
-                log_label, copied, source_prefix, target_prefix,
+        synced = 0
+        for _root, user_home in self._parent._paths.iter_user_homes(target_prefix):
+            target_root = os.path.join(
+                user_home,
+                self._parent._config.upc_local_subdir,
             )
-        return copied
+            for rel_path, src_path in payload_sources.items():
+                dst_path = os.path.join(target_root, rel_path)
+                if self.copy_payload_entry(
+                    src_path,
+                    dst_path,
+                    handle_directories=handle_directories,
+                    log_label=log_label,
+                    rel_path=rel_path,
+                ):
+                    synced += 1
+        return synced
 
     def should_skip_payload_sync(
         self,
-        source_prefix: str, target_prefix: str,
-        payload_sources: dict[str, str], apply_dpapi_guard: bool,
+        source_prefix: str,
+        target_prefix: str,
+        payload_sources: dict[str, str],
+        apply_dpapi_guard: bool,
     ) -> bool:
         """Check whether skip payload sync."""
-        if source_prefix == target_prefix:
+        if os.path.realpath(source_prefix) == os.path.realpath(target_prefix):
             return True
         if not payload_sources:
             return True
         if apply_dpapi_guard:
-            try:
-                src_guid = self._parent._read_machine_guid(source_prefix)
-                dst_guid = self._parent._read_machine_guid(target_prefix)
-            except Exception:
-                src_guid = dst_guid = ''
-            if src_guid and dst_guid and src_guid != dst_guid:
-                logger.debug(
-                    '[Ubisoft.session] DPAPI guard: machineGuid mismatch',
+            source_guid = self._parent._read_machine_guid(
+                source_prefix,
+            )
+            target_guid = self._parent._read_machine_guid(
+                target_prefix,
+            )
+            if source_guid and target_guid and source_guid != target_guid:
+                logger.warning(
+                    "[UbisoftSession] MachineGuid mismatch: "
+                    "source=%s… target=%s… — skipping "
+                    "DPAPI sync",
+                    source_guid[:8],
+                    target_guid[:8],
                 )
                 return True
         return False
 
     def copy_payload_entry(
         self,
-        src_path: str, dst_path: str, *,
-        handle_directories: bool, log_label: str, rel_path: str,
+        src_path: str,
+        dst_path: str,
+        *,
+        handle_directories: bool,
+        log_label: str,
+        rel_path: str,
     ) -> bool:
         """Copy payload entry."""
-        if not os.path.exists(src_path):
-            return False
+        if os.path.exists(dst_path):
+            try:
+                same = self.hash_artifact(src_path) == self.hash_artifact(dst_path)
+            except OSError:
+                same = False
+            if same:
+                return False
         try:
-            os.makedirs(os.path.dirname(dst_path), exist_ok=True)
-            if os.path.isdir(src_path):
-                if not handle_directories:
-                    return False
+            parent = os.path.dirname(dst_path)
+            if parent:
+                os.makedirs(parent, exist_ok=True)
+            if handle_directories:
                 if os.path.isdir(dst_path):
-                    shutil.rmtree(dst_path, ignore_errors=True)
-                shutil.copytree(src_path, dst_path)
+                    shutil.rmtree(
+                        dst_path,
+                        ignore_errors=True,
+                    )
+                elif os.path.exists(dst_path):
+                    os.remove(dst_path)
+                if os.path.isdir(src_path):
+                    shutil.copytree(src_path, dst_path)
+                else:
+                    shutil.copy2(src_path, dst_path)
             else:
                 shutil.copy2(src_path, dst_path)
             return True
         except OSError as e:
             logger.warning(
-                '[Ubisoft.session] %s copy %s failed: %s',
-                log_label, rel_path, e,
+                "[UbisoftSession] %s copy failed for %s: %s",
+                log_label,
+                rel_path,
+                e,
             )
             return False
 
     def sync_credentials_to_prefix(
-        self, source_prefix: str, target_prefix: str,
+        self,
+        source_prefix: str,
+        target_prefix: str,
     ) -> int:
         """Sync credentials to prefix."""
-        sources = self.collect_credential_sources(source_prefix)
         return self.sync_payload_to_prefix(
-            source_prefix, target_prefix,
-            payload_sources=sources,
+            source_prefix=source_prefix,
+            target_prefix=target_prefix,
+            payload_sources=self.collect_credential_sources(
+                source_prefix,
+            ),
             apply_dpapi_guard=True,
             handle_directories=False,
-            log_label='credentials',
+            log_label="credential",
         )
 
-    def collect_credential_sources(self, source_prefix: str) -> dict[str, str]:
+    def collect_credential_sources(
+        self,
+        source_prefix: str,
+    ) -> dict[str, str]:
         """Collect credential sources."""
-        config = self._parent._config
-        paths_helper = self._parent._paths
-        sources: dict[str, str] = {}
-        for prefix_root, user_home in paths_helper.iter_user_homes(
-            source_prefix, pfx_first=True,
+        source_files: dict[str, str] = {}
+        for _root, user_home in self._parent._paths.iter_user_homes(
+            source_prefix,
+            pfx_first=True,
         ):
-            for filename in config.upc_credential_files:
-                full = os.path.join(
-                    user_home, config.upc_local_subdir, filename,
+            for fname in self._parent._config.upc_credential_files:
+                if fname in source_files:
+                    continue
+                src = os.path.join(
+                    user_home,
+                    self._parent._config.upc_local_subdir,
+                    fname,
                 )
-                if os.path.isfile(full) and os.path.getsize(full) >= _CSS_MIN_SOURCE_SIZE:
-                    rel = os.path.relpath(full, prefix_root)
-                    sources.setdefault(rel, full)
-        return sources
+                if self._parent._is_valid_css(
+                    src,
+                    _CSS_MIN_SOURCE_SIZE,
+                ):
+                    source_files[fname] = src
+        return source_files
 
     def sync_auth_artifacts_to_prefix(
-        self, source_prefix: str, target_prefix: str,
+        self,
+        source_prefix: str,
+        target_prefix: str,
     ) -> int:
         """Sync auth artifacts to prefix."""
-        sources = self.collect_artifact_sources(source_prefix)
         return self.sync_payload_to_prefix(
-            source_prefix, target_prefix,
-            payload_sources=sources,
+            source_prefix=source_prefix,
+            target_prefix=target_prefix,
+            payload_sources=self.collect_artifact_sources(
+                source_prefix,
+            ),
             apply_dpapi_guard=False,
             handle_directories=True,
-            log_label='auth_artifacts',
+            log_label="auth cache artifact",
         )
 
-    def collect_artifact_sources(self, source_prefix: str) -> dict[str, str]:
+    def collect_artifact_sources(
+        self,
+        source_prefix: str,
+    ) -> dict[str, str]:
         """Collect artifact sources."""
-        config = self._parent._config
-        paths_helper = self._parent._paths
-        sources: dict[str, str] = {}
-        for prefix_root, user_home in paths_helper.iter_user_homes(
-            source_prefix, pfx_first=True,
+        artifacts: dict[str, str] = {}
+        for _root, user_home in self._parent._paths.iter_user_homes(
+            source_prefix,
+            pfx_first=True,
         ):
-            for artifact in config.upc_auth_cache_artifacts:
-                full = os.path.join(
-                    user_home, config.upc_local_subdir, artifact,
+            local_root = os.path.join(
+                user_home,
+                self._parent._config.upc_local_subdir,
+            )
+            for rel_path in self._parent._config.upc_auth_cache_artifacts:
+                if rel_path in artifacts:
+                    continue
+                candidate = os.path.join(
+                    local_root,
+                    rel_path,
                 )
-                if os.path.exists(full):
-                    rel = os.path.relpath(full, prefix_root)
-                    sources.setdefault(rel, full)
-        return sources
+                if os.path.isfile(candidate) or os.path.isdir(candidate):
+                    artifacts[rel_path] = candidate
+        return artifacts
 
     @staticmethod
     def hash_artifact(path: str) -> str:
-        """Hash artifact."""
+        """Check whether artifact."""
         digest = hashlib.sha256()
-        if not os.path.exists(path):
-            return ''
-        try:
-            if os.path.isdir(path):
-                _PayloadSync._hash_directory_into(digest, path)
-            else:
-                _PayloadSync._hash_file_into(digest, path)
-        except OSError:
-            return ''
+        if os.path.isdir(path):
+            _PayloadSync._hash_directory_into(digest, path)
+        elif os.path.isfile(path):
+            _PayloadSync._hash_file_into(digest, path)
         return digest.hexdigest()
 
     @staticmethod
     def _hash_directory_into(digest: hashlib._Hash, path: str) -> None:
         """Hash directory into."""
-        for root, dirs, files in os.walk(path):
-            dirs.sort()
-            for fname in sorted(files):
-                full = os.path.join(root, fname)
-                rel = os.path.relpath(full, path).encode('utf-8')
-                digest.update(rel)
-                _PayloadSync._hash_file_into(digest, full)
+        for root, _dirs, files in os.walk(path):
+            files.sort()
+            for name in files:
+                file_path = os.path.join(root, name)
+                rel_path = os.path.relpath(file_path, path)
+                digest.update(rel_path.encode("utf-8"))
+                _PayloadSync._hash_file_into(digest, file_path)
 
     @staticmethod
     def _hash_file_into(digest: hashlib._Hash, path: str) -> None:
         """Hash file into."""
         try:
-            with open(path, 'rb') as f:
-                while True:
-                    chunk = f.read(_HASH_CHUNK_SIZE)
-                    if not chunk:
-                        break
+            with open(path, "rb") as f:
+                for chunk in iter(
+                    lambda: f.read(_HASH_CHUNK_SIZE),
+                    b"",
+                ):
                     digest.update(chunk)
         except OSError:
             pass

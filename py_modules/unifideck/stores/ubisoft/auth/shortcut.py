@@ -1,66 +1,77 @@
-"""shortcut.py — Manage the "Ubisoft Connect" Steam shortcut.
-
-# OP-58c | py_modules/unifideck/stores/ubisoft/auth/shortcut.py | Depends: (none)
-
-The auth flow leans on a Steam shortcut so UPC opens inside gamescope
-with the right Proton runtime. This module owns the shortcut's
-creation, validation, and pruning of stale variants left over from
-older plugin builds.
 """
-from __future__ import annotations
+Steam shortcut creation for the auth flow — ensures a UPC launcher exists.
 
+OP-58c | py_modules/unifideck/stores/ubisoft/auth/shortcut.py
+
+``_AuthShortcut`` is responsible for creating (or re-using) a Steam
+shortcut that launches UPC inside the auth-dedicated Wine prefix. The
+shortcut is named "Ubisoft Connect", uses the UPC icon from SteamGridDB,
+and is registered in Unifideck's shortcut registry with a stable
+store_id (``ubisoft:upc-auth``) so it can be looked up later.
+
+If a shortcut already exists in the registry, it's reused. If the
+appid recorded in the registry doesn't match any actual Steam shortcut
+(stale entry after the user reset Steam config), the entry is rebuilt
+fresh.
+"""
+
+from __future__ import annotations
 import logging
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 if TYPE_CHECKING:
     from ....services.shortcut import ShortcutService
     from .facade import UbisoftAuth
-
 logger = logging.getLogger(__name__)
 _AUTH_LAUNCH_OPTIONS_TEMPLATE = (
-    '{store_id} UNIFIDECK_UBISOFT_ACTION=auth '
-    'UNIFIDECK_UBISOFT_PREFIX_NAME={prefix_name}'
+    "{store_id} "
+    "UNIFIDECK_UBISOFT_ACTION=auth "
+    "UNIFIDECK_UBISOFT_PREFIX_NAME={prefix_name}"
 )
-_AUTH_SHORTCUT_NAME = 'Ubisoft Connect'
-_LEGACY_AUTH_LAUNCH_OPTIONS = 'ubisoft:.template'
-_ORPHAN_SHORTCUT_NAMES = frozenset({'upc.exe', 'ubisoft connect'})
+_AUTH_SHORTCUT_NAME = "Ubisoft Connect"
+_LEGACY_AUTH_LAUNCH_OPTIONS = "ubisoft:.template"
+_ORPHAN_SHORTCUT_NAMES = frozenset(
+    {"upc.exe", "ubisoft connect"},
+)
 
 
 def _prune_orphan_shortcuts(shortcuts: dict[str, Any]) -> int:
-    """Prune orphan shortcuts.
-
-    Removes entries whose AppName matches a known orphan and whose
-    LaunchOptions don't carry a current Unifideck launch token.
-    """
-    removed = 0
-    for key in list(shortcuts.keys()):
-        entry = shortcuts.get(key)
-        if not isinstance(entry, dict):
-            continue
-        name = str(entry.get('AppName') or entry.get('appname') or '').strip().lower()
-        if name not in _ORPHAN_SHORTCUT_NAMES:
-            continue
-        opts = str(entry.get('LaunchOptions') or '')
-        if 'UNIFIDECK_UBISOFT_ACTION' in opts:
-            continue
-        del shortcuts[key]
-        removed += 1
-    return removed
+    """Prune orphan shortcuts."""
+    orphan_ids = [
+        idx
+        for idx, s in shortcuts.items()
+        if s.get("AppName", "").lower() in _ORPHAN_SHORTCUT_NAMES
+        and not s.get("exe", "").strip('"')
+        and not s.get("LaunchOptions", "")
+    ]
+    for idx in orphan_ids:
+        name = shortcuts[idx].get("AppName", "?")
+        logger.info(
+            "[UbisoftAuth] removing orphaned shortcut [%s] %r",
+            idx,
+            name,
+        )
+        del shortcuts[idx]
+    return len(orphan_ids)
 
 
-def _prune_legacy_template_shortcuts(shortcuts: dict[str, Any]) -> int:
-    """Prune legacy template shortcuts (ubisoft:.template store_id)."""
-    removed = 0
-    for key in list(shortcuts.keys()):
-        entry = shortcuts.get(key)
-        if not isinstance(entry, dict):
-            continue
-        opts = str(entry.get('LaunchOptions') or '')
-        if _LEGACY_AUTH_LAUNCH_OPTIONS in opts:
-            del shortcuts[key]
-            removed += 1
-    return removed
+def _prune_legacy_template_shortcuts(
+    shortcuts: dict[str, Any],
+) -> int:
+    """Prune legacy template shortcuts."""
+    legacy_ids = [
+        idx
+        for idx, s in shortcuts.items()
+        if s.get("LaunchOptions", "") == _LEGACY_AUTH_LAUNCH_OPTIONS
+    ]
+    for idx in legacy_ids:
+        logger.info(
+            "[UbisoftAuth] removing legacy .template shortcut [%s]",
+            idx,
+        )
+        del shortcuts[idx]
+    return len(legacy_ids)
 
 
 class _AuthShortcut:
@@ -72,84 +83,138 @@ class _AuthShortcut:
 
     def get_launcher_path(self) -> str:
         """Get launcher path."""
-        config = self._parent._state.config
+        plugin_dir = self._parent._plugin_dir
+        if not plugin_dir:
+            plugin_dir = str(
+                Path(__file__).resolve().parent.parent.parent.parent,
+            )
         return str(
-            Path(config.auth_prefix_dir_expanded)
-            / config.upc_connect_relative_path
+            Path(plugin_dir)
+            / "py_modules"
+            / "unifideck"
+            / "launcher"
+            / "dispatcher.py",
         )
 
     def build_auth_launch_options(self) -> str:
         """Build auth launch options."""
-        config = self._parent._state.config
         return _AUTH_LAUNCH_OPTIONS_TEMPLATE.format(
-            store_id=config.auth_shortcut_store_id,
-            prefix_name=config.auth_prefix_name,
+            store_id=(self._parent._config.auth_shortcut_store_id),
+            prefix_name=self._parent._config.auth_prefix_name,
         )
 
     async def ensure_auth_shortcut(self) -> int | None:
         """Ensure auth shortcut."""
-        sm = self._parent._services.shortcut_service
-        if sm is None:
+        if self._parent._shortcut_service is None:
+            logger.debug(
+                "[UbisoftAuth] no shortcut_service; skipping auth shortcut creation",
+            )
             return None
-        config = self._parent._state.config
-        existing = await self.try_existing_shortcut(
-            sm, config.auth_shortcut_store_id,
-        )
-        if existing is not None:
-            return existing
-        return await self.create_new_auth_shortcut(
-            sm, config.auth_shortcut_store_id,
-        )
-
-    async def try_existing_shortcut(
-        self, sm: ShortcutService, store_id: str,
-    ) -> int | None:
-        """Try existing shortcut."""
         try:
-            registry = await sm.get_registry()
-        except Exception:
-            return None
-        entry = registry.get(store_id)
-        if not isinstance(entry, dict):
-            return None
-        appid = entry.get('appid_unsigned') or entry.get('appid')
-        try:
-            return int(appid) if appid is not None else None
-        except (TypeError, ValueError):
-            return None
-
-    async def create_new_auth_shortcut(
-        self, sm: ShortcutService, store_id: str,
-    ) -> int | None:
-        """Create new auth shortcut."""
-        try:
-            appid = await sm.create_shortcut(
-                name=_AUTH_SHORTCUT_NAME,
-                exe=self.get_launcher_path(),
-                start_dir=str(Path(self.get_launcher_path()).parent),
-                launch_options=self.build_auth_launch_options(),
-                store_id=store_id,
+            sm = self._parent._shortcut_service
+            store_id = self._parent._config.auth_shortcut_store_id
+            existing_appid = await self.try_existing_shortcut(
+                sm,
+                store_id,
+            )
+            if existing_appid is not None:
+                return existing_appid
+            return await self.create_new_auth_shortcut(
+                sm,
+                store_id,
             )
         except Exception as e:
             logger.warning(
-                '[Ubisoft.auth] create_shortcut failed: %s', e,
+                "[UbisoftAuth] auth shortcut creation failed: %s",
+                e,
             )
             return None
-        unsigned = self._coerce_int(appid)
-        if unsigned is None:
+
+    async def try_existing_shortcut(
+        self,
+        sm: ShortcutService,
+        store_id: str,
+    ) -> int | None:
+        """Try existing shortcut."""
+        registry = await self._parent._load_registry(sm)
+        if store_id not in registry:
             return None
-        await self._finalize_new_shortcut(sm, appid=unsigned, unsigned_id=unsigned)
-        return unsigned
+        vdf_found = await self.validate_auth_shortcut(sm)
+        if vdf_found:
+            uid = registry[store_id].get("appid_unsigned")
+            if uid:
+                await self._parent.fetch_auth_shortcut_artwork(
+                    uid,
+                )
+                return cast("int | None", uid)
+        entry = registry[store_id]
+        appid = entry.get("appid")
+        unsigned_id = entry.get("appid_unsigned")
+        if not (appid and unsigned_id):
+            return None
+        logger.info(
+            "[UbisoftAuth] recreating auth shortcut VDF from registry (appid=%d)",
+            unsigned_id,
+        )
+        await self.add_shortcut_to_vdf(sm, appid)
+        await self._parent._clear_compat(sm, appid)
+        await self._parent.fetch_auth_shortcut_artwork(
+            unsigned_id,
+            force=True,
+        )
+        return cast("int | None", unsigned_id)
+
+    async def create_new_auth_shortcut(
+        self,
+        sm: ShortcutService,
+        store_id: str,
+    ) -> int | None:
+        """Create new auth shortcut."""
+        launcher_path = self.get_launcher_path()
+        appid = sm.generate_app_id(
+            launcher_path,
+            _AUTH_SHORTCUT_NAME,
+        )
+        unsigned_id = appid if appid >= 0 else appid + 2**32
+        shortcuts_data = await sm.read_shortcuts()
+        shortcuts = shortcuts_data.get("shortcuts", {})
+        orphans_removed = _prune_orphan_shortcuts(shortcuts)
+        legacy_removed = _prune_legacy_template_shortcuts(shortcuts)
+        canonical_added = self._add_canonical_if_missing(
+            shortcuts,
+            launcher_path,
+            appid,
+            unsigned_id,
+        )
+        vdf_dirty = bool(
+            orphans_removed or legacy_removed or canonical_added,
+        )
+        if vdf_dirty:
+            await sm.write_shortcuts(shortcuts_data)
+            logger.info(
+                "[UbisoftAuth] VDF updated: orphans=%d legacy=%d added=%s",
+                orphans_removed,
+                legacy_removed,
+                canonical_added,
+            )
+        await self._finalize_new_shortcut(sm, appid, unsigned_id)
+        return cast("int | None", unsigned_id)
 
     async def _finalize_new_shortcut(
-        self, sm: ShortcutService, appid: int, unsigned_id: int,
+        self,
+        sm: ShortcutService,
+        appid: int,
+        unsigned_id: int,
     ) -> None:
         """Finalize new shortcut."""
-        try:
-            await self._parent._fetch_auth_shortcut_artwork(unsigned_id, force=True)
-        except Exception as e:
-            logger.debug('[Ubisoft.auth] artwork fetch failed: %s', e)
-        await self._parent._register_shortcut(sm, appid, _AUTH_SHORTCUT_NAME)
+        await self._parent._register_shortcut(
+            sm,
+            appid,
+            _AUTH_SHORTCUT_NAME,
+        )
+        await self._parent._cleanup_legacy_registry(sm)
+        await self._parent._clear_compat(sm, appid)
+        await self._parent.fetch_auth_shortcut_artwork(unsigned_id)
 
     def _add_canonical_if_missing(
         self,
@@ -159,97 +224,173 @@ class _AuthShortcut:
         unsigned_id: int,
     ) -> bool:
         """Add canonical if missing."""
-        for entry in shortcuts.values():
-            if not isinstance(entry, dict):
-                continue
-            if entry.get('appid') == appid or entry.get('appid_unsigned') == unsigned_id:
-                return False
-        new_key = str(len(shortcuts))
-        shortcuts[new_key] = {
-            'appid': appid,
-            'appid_unsigned': unsigned_id,
-            'AppName': _AUTH_SHORTCUT_NAME,
-            'Exe': launcher_path,
-            'StartDir': str(Path(launcher_path).parent),
-            'LaunchOptions': self.build_auth_launch_options(),
+        if self.shortcut_in_vdf(shortcuts):
+            return False
+        existing_indices = [int(k) for k in shortcuts if k.isdigit()]
+        next_idx = max(existing_indices, default=-1) + 1
+        shortcuts[str(next_idx)] = {
+            "appid": appid,
+            "AppName": _AUTH_SHORTCUT_NAME,
+            "exe": f'"{launcher_path}"',
+            "StartDir": f'"{Path(launcher_path).parent}"',
+            "LaunchOptions": self.build_auth_launch_options(),
+            "IsHidden": 1,
+            "AllowDesktopConfig": 1,
+            "OpenVR": 0,
+            "tags": {"0": "Ubisoft"},
         }
+        logger.info(
+            "[UbisoftAuth] created auth shortcut in VDF (appid=%d)",
+            unsigned_id,
+        )
         return True
 
     async def validate_auth_shortcut(self, sm: ShortcutService) -> bool:
         """Validate auth shortcut."""
         try:
-            shortcuts = await sm.get_vdf_shortcuts()
-        except Exception:
-            return False
-        config = self._parent._state.config
-        expected_opts = self.build_auth_launch_options()
-        for entry in shortcuts.values() if isinstance(shortcuts, dict) else []:
-            if not isinstance(entry, dict):
-                continue
-            if config.auth_shortcut_store_id in str(entry.get('LaunchOptions') or ''):
-                return self._fix_shortcut_fields(
-                    entry, self.get_launcher_path(),
-                    expected_opts,
-                    self._coerce_int(entry.get('appid')) or 0,
+            launcher_path = self.get_launcher_path()
+            expected_launch_options = self.build_auth_launch_options()
+            expected_appid = sm.generate_app_id(
+                launcher_path,
+                _AUTH_SHORTCUT_NAME,
+            )
+            shortcuts_data = await sm.read_shortcuts()
+            shortcuts = shortcuts_data.get("shortcuts", {})
+            vdf_updated = False
+            found = False
+            for _idx, s in shortcuts.items():
+                full_id = self.extract_store_id(
+                    s.get("LaunchOptions", ""),
                 )
-        return False
+                if full_id != (self._parent._config.auth_shortcut_store_id):
+                    continue
+                found = True
+                if self._fix_shortcut_fields(
+                    s,
+                    launcher_path,
+                    expected_launch_options,
+                    expected_appid,
+                ):
+                    vdf_updated = True
+                break
+            if vdf_updated:
+                await sm.write_shortcuts(shortcuts_data)
+            if not found:
+                logger.warning(
+                    "[UbisoftAuth] auth shortcut not found in VDF during validation",
+                )
+                return False
+            await self._parent._register_shortcut(
+                sm,
+                expected_appid,
+                _AUTH_SHORTCUT_NAME,
+            )
+            await self._parent._clear_compat(
+                sm,
+                expected_appid,
+            )
+            return True
+        except Exception as e:
+            logger.warning(
+                "[UbisoftAuth] auth shortcut validation failed: %s",
+                e,
+            )
+            return True
 
     def _fix_shortcut_fields(
-        self, entry: dict[str, Any], launcher_path: str,
-        expected_launch_options: str, expected_appid: int,
+        self,
+        entry: dict[str, Any],
+        launcher_path: str,
+        expected_launch_options: str,
+        expected_appid: int,
     ) -> bool:
         """Fix shortcut fields."""
         changed = False
-        if entry.get('Exe') != launcher_path:
-            entry['Exe'] = launcher_path
+        if entry.get("LaunchOptions", "") != expected_launch_options:
+            logger.info(
+                "[UbisoftAuth] auth shortcut launch options outdated, fixing",
+            )
+            entry["LaunchOptions"] = expected_launch_options
             changed = True
-        if entry.get('LaunchOptions') != expected_launch_options:
-            entry['LaunchOptions'] = expected_launch_options
+        current_exe = entry.get("exe", "").strip('"')
+        if current_exe != launcher_path:
+            logger.info(
+                "[UbisoftAuth] auth shortcut exe outdated, fixing",
+            )
+            entry["exe"] = f'"{launcher_path}"'
+            entry["StartDir"] = f'"{Path(launcher_path).parent}"'
             changed = True
-        return not changed  # True when nothing needed fixing
+        if entry.get("appid") != expected_appid:
+            logger.info(
+                "[UbisoftAuth] auth shortcut appid changed, fixing",
+            )
+            entry["appid"] = expected_appid
+            changed = True
+        return changed
 
     async def auth_shortcut_exists_in_vdf(self) -> bool:
         """Auth shortcut exists in VDF."""
-        sm = self._parent._services.shortcut_service
-        if sm is None:
-            return False
+        if self._parent._shortcut_service is None:
+            return True
         try:
-            shortcuts = await sm.get_vdf_shortcuts()
+            sm = self._parent._shortcut_service
+            shortcuts_data = await sm.read_shortcuts()
+            shortcuts = shortcuts_data.get("shortcuts", {})
+            target = self._parent._config.auth_shortcut_store_id
+            return any(
+                self.extract_store_id(
+                    s.get("LaunchOptions", ""),
+                )
+                == target
+                for s in shortcuts.values()
+            )
         except Exception:
-            return False
-        return self.shortcut_in_vdf(shortcuts if isinstance(shortcuts, dict) else {})
+            return True
 
     async def add_shortcut_to_vdf(
-        self, sm: ShortcutService, appid: int,
+        self,
+        sm: ShortcutService,
+        appid: int,
     ) -> None:
         """Add shortcut to VDF."""
-        try:
-            await sm.persist_shortcut(appid=appid)
-        except Exception as e:
-            logger.debug('[Ubisoft.auth] persist_shortcut failed: %s', e)
+        launcher_path = self.get_launcher_path()
+        launch_options = self.build_auth_launch_options()
+        shortcuts_data = await sm.read_shortcuts()
+        shortcuts = shortcuts_data.get("shortcuts", {})
+        if self.shortcut_in_vdf(shortcuts):
+            return
+        existing_indices = [int(k) for k in shortcuts if k.isdigit()]
+        next_idx = max(existing_indices, default=-1) + 1
+        shortcuts[str(next_idx)] = {
+            "appid": appid,
+            "AppName": _AUTH_SHORTCUT_NAME,
+            "exe": f'"{launcher_path}"',
+            "StartDir": f'"{Path(launcher_path).parent}"',
+            "LaunchOptions": launch_options,
+            "IsHidden": 1,
+            "AllowDesktopConfig": 1,
+            "OpenVR": 0,
+            "tags": {"0": "Ubisoft"},
+        }
+        await sm.write_shortcuts(shortcuts_data)
 
-    def shortcut_in_vdf(self, shortcuts: dict[str, Any]) -> bool:
+    def shortcut_in_vdf(
+        self,
+        shortcuts: dict[str, Any],
+    ) -> bool:
         """Shortcut in VDF."""
-        config = self._parent._state.config
-        for entry in shortcuts.values():
-            if not isinstance(entry, dict):
-                continue
-            if config.auth_shortcut_store_id in str(entry.get('LaunchOptions') or ''):
+        target = self._parent._config.auth_shortcut_store_id
+        for s in shortcuts.values():
+            full_id = self.extract_store_id(
+                s.get("LaunchOptions", ""),
+            )
+            if full_id == target:
                 return True
         return False
 
     @staticmethod
     def extract_store_id(launch_options: str) -> str:
-        """Extract store ID from a LaunchOptions string."""
+        """Extract store ID."""
         if not launch_options:
-            return ''
-        head = launch_options.split(' ', 1)[0]
-        return head.strip()
-
-    @staticmethod
-    def _coerce_int(value: Any) -> int | None:
-        """Coerce int."""
-        try:
-            return int(value) if value is not None else None
-        except (TypeError, ValueError):
-            return None
+            return ""
+        return launch_options.split(maxsplit=1)[0]

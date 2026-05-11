@@ -1,13 +1,27 @@
-"""facade.py — Public ``UbisoftLibrary`` surface.
-
-# OP-57a | py_modules/unifideck/stores/ubisoft/library/facade.py | Depends: OP-55a
 """
-from __future__ import annotations
+Ubisoft library facade — orchestrates fetch, detect, build, filter.
 
+OP-57a | py_modules/unifideck/stores/ubisoft/library/facade.py
+
+``UbisoftLibrary`` is the public entry-point of the library sub-package.
+It composes the work of:
+
+* ``fetch.py`` (OP-57b) — pull the UPC owned-games catalog;
+* ``data_loader.py`` (OP-57c) — load installed-state from disk markers;
+* ``detection.py`` (OP-57f) — detect installs the catalog doesn't know about;
+* ``manifest.py`` (OP-57e) — produce display-ready ``GameRecord`` entries;
+* ``steam_filter.py`` (OP-55i) — hide games already on Steam.
+
+The result is the merged list of owned + installed Ubisoft games that
+the UI displays. Cached in-memory by the store and invalidated on:
+auth state change, install/uninstall, manual user refresh.
+"""
+
+from __future__ import annotations
 import logging
+import os
 from collections.abc import Callable
 from typing import Any
-
 from ....core.types import Game
 from ..config import UbisoftConfig
 from ..id_map import UbisoftIdMap
@@ -34,46 +48,92 @@ class UbisoftLibrary:
         self._paths = paths
         self._id_map = id_map
         self._queue_template_creation = queue_template_creation
-        self._detector = _InstallDetector(config, id_map)
-        self._fetcher = _LibraryFetcher(config, paths, id_map)
+        self._detector = _InstallDetector(
+            config=config,
+            id_map=id_map,
+        )
+        self._fetcher = _LibraryFetcher(
+            config=config,
+            paths=paths,
+            id_map=id_map,
+        )
         self._manifest = _VisibleManifestProcessor(
-            config, id_map,
-            load_json_file_safe=_InstallDetector.load_json_file_safe,
+            config=config,
+            id_map=id_map,
+            load_json_file_safe=self._detector.load_json_file_safe,
         )
 
     async def get_library(self) -> list[Game]:
         """Get library."""
-        installed = await self.get_installed()
-        games = await self._fetcher.fetch_local_binaries(installed)
-        if games is None:
-            self._queue_template_creation()
-            games = []
-        manifest = self._manifest.load_manifest()
-        if manifest:
-            games = self._manifest.apply_filter(
-                games, installed, manifest, source_label='visible_manifest',
+        try:
+            installed = await self._detector.get_installed()
+            local_games = await self._fetcher.fetch_local_binaries(
+                installed,
             )
-        return games
+            if local_games is None:
+                logger.info(
+                    "[UbisoftLibrary] no local binary data available yet",
+                )
+                return []
+            logger.info(
+                "[UbisoftLibrary] library: %d games from local binaries",
+                len(local_games),
+            )
+            override_manifest = self._manifest.load_manifest()
+            if override_manifest:
+                local_games = self._manifest.apply_filter(
+                    local_games,
+                    installed,
+                    override_manifest,
+                    source_label="override",
+                )
+            if local_games:
+                template_dir = self._config.template_dir_expanded
+                template_marker = os.path.join(
+                    template_dir,
+                    self._config.bootstrap_marker,
+                )
+                if not os.path.isfile(template_marker):
+                    self._queue_template_creation()
+            return local_games
+        except Exception as e:
+            logger.exception(
+                "[UbisoftLibrary] error fetching library: %s",
+                e,
+            )
+            return []
 
     async def get_installed(self) -> dict[str, Any]:
         """Get installed."""
         return await self._detector.get_installed()
 
-    def get_installed_game_info(self, game_id: str) -> dict[str, Any] | None:
+    def get_installed_game_info(
+        self,
+        game_id: str,
+    ) -> dict[str, Any] | None:
         """Get installed game info."""
         return self._detector.get_installed_game_info(game_id)
 
-    def find_game_executable(self, install_path: str) -> str | None:
+    def find_game_executable(
+        self,
+        install_path: str,
+    ) -> str | None:
         """Find game executable."""
         return self._detector.find_game_executable(install_path)
 
     async def write_install_marker(
-        self, space_id: str, install_path: str, executable: str,
-        game_title: str = '',
+        self,
+        space_id: str,
+        install_path: str,
+        executable: str,
+        game_title: str = "",
     ) -> None:
         """Write install marker."""
         await self._detector.write_install_marker(
-            space_id, install_path, executable, game_title,
+            space_id=space_id,
+            install_path=install_path,
+            executable=executable,
+            game_title=game_title,
         )
 
     @staticmethod

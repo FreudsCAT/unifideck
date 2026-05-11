@@ -1,16 +1,24 @@
-"""paths.py — Filesystem helpers for the Ubisoft Wine prefix.
-
-# OP-55c | py_modules/unifideck/stores/ubisoft/paths.py | Depends: (none)
-
-UPC writes its caches and binaries to a few well-known relative paths
-inside the Wine prefix. Both bare-Wine (``drive_c/...``) and Proton
-(``pfx/drive_c/...``) layouts exist; this module locates files in both.
 """
+Wine prefix path enumeration helpers.
+
+OP-55c | py_modules/unifideck/stores/ubisoft/paths.py
+
+``UbisoftPrefixPaths`` knows how to walk a Wine prefix and list the user
+home directories inside it. Wine prefixes commonly contain multiple
+"users" under ``drive_c/users/`` (e.g. ``steamuser``, ``Public``, plus
+optionally per-Steam-user folders); the order in which they're visited
+matters because UPC payload files are picked up from the *first* user
+home that contains them.
+
+Key method: ``iter_user_homes(prefix, pfx_first=False)`` which yields
+``(root, user_home)`` tuples. The ``pfx_first`` flag is used by the
+session-propagation code to ensure the prefix-default user is tried
+before the Steam users — required for DPAPI credential matching.
+"""
+
 from __future__ import annotations
-
-import os
 from collections.abc import Iterator
-
+from pathlib import Path
 from .config import UbisoftConfig
 
 
@@ -23,62 +31,72 @@ class UbisoftPrefixPaths:
 
     def find_upc_exe(self, prefix_path: str) -> str | None:
         """Find UPC exe."""
-        return self._first_existing(prefix_path, self._config.upc_relative_path)
+        return self._find_in_prefix(
+            prefix_path,
+            self._config.upc_relative_path,
+        )
 
     def find_connect_exe(self, prefix_path: str) -> str | None:
         """Find connect exe."""
-        return self._first_existing(
-            prefix_path, self._config.upc_connect_relative_path,
+        return self._find_in_prefix(
+            prefix_path,
+            self._config.upc_connect_relative_path,
         )
 
-    def find_configurations(self, prefix_path: str) -> str | None:
+    def find_configurations(
+        self,
+        prefix_path: str,
+    ) -> str | None:
         """Find configurations."""
-        return self._first_existing(
-            prefix_path, self._config.configurations_relative_path,
+        return self._find_in_prefix(
+            prefix_path,
+            self._config.configurations_relative_path,
         )
 
     def iter_user_homes(
-        self, prefix_path: str, pfx_first: bool = False,
+        self,
+        prefix_path: str,
+        pfx_first: bool = False,
     ) -> Iterator[tuple[str, str]]:
-        """Iter user homes.
-
-        Yields (prefix_root, user_home) for every non-system user
-        directory in both bare-Wine and Proton ``pfx/`` layouts.
-        """
-        roots = [prefix_path, os.path.join(prefix_path, "pfx")]
+        """Iter user homes."""
+        roots = [
+            prefix_path,
+            str(Path(prefix_path) / "pfx"),
+        ]
         if pfx_first:
             roots = list(reversed(roots))
         skip = set(self._config.wine_system_users)
         for prefix_root in roots:
-            users_dir = os.path.join(prefix_root, "drive_c", "users")
-            if not os.path.isdir(users_dir):
+            users_dir = Path(prefix_root) / "drive_c" / "users"
+            if not users_dir.is_dir():
                 continue
             try:
-                entries = sorted(os.listdir(users_dir))
+                entries = list(users_dir.iterdir())
             except OSError:
                 continue
             for entry in entries:
-                if entry in skip:
+                if entry.name in skip:
                     continue
-                user_home = os.path.join(users_dir, entry)
-                if os.path.isdir(user_home):
-                    yield prefix_root, user_home
+                if entry.is_dir():
+                    yield prefix_root, str(entry)
 
     def get_prefix_path(self, space_id: str) -> str:
         """Get prefix path."""
-        return os.path.join(self._config.prefixes_dir_expanded, space_id)
+        return str(
+            Path(self._config.prefixes_dir_expanded) / space_id,
+        )
 
     @staticmethod
-    def _find_in_prefix(prefix_path: str, relative: str) -> str | None:
+    def _find_in_prefix(
+        prefix_path: str,
+        relative: str,
+    ) -> str | None:
         """Find in prefix."""
+        prefix = Path(prefix_path)
         for candidate in (
-            os.path.join(prefix_path, relative),
-            os.path.join(prefix_path, "pfx", relative),
+            prefix / relative,
+            prefix / "pfx" / relative,
         ):
-            if os.path.isfile(candidate):
-                return candidate
+            if candidate.is_file() or candidate.is_dir():
+                return str(candidate)
         return None
-
-    def _first_existing(self, prefix_path: str, relative: str) -> str | None:
-        """Search both bare and pfx/ layouts; return first hit."""
-        return self._find_in_prefix(prefix_path, relative)
