@@ -137,7 +137,7 @@ class UbisoftAuth:
     async def complete_auth(self, code: str = '', **kwargs: Any) -> AuthResult:
         """Complete auth."""
         if await self.is_available():
-            await self._bus.emit(Events.STORE_AUTH_SUCCESS, store='ubisoft')
+            await self._bus.emit(Events.STORE_AUTH_COMPLETE, store='ubisoft')
             return AuthResult(success=True, store='ubisoft')
         return AuthResult(
             success=False, store='ubisoft', error='credentials_not_captured',
