@@ -1,13 +1,25 @@
-"""game_builder.py — Convert parsed configurations into ``Game`` objects.
-
-# OP-57d | py_modules/unifideck/stores/ubisoft/library/game_builder.py | Depends: OP-05
 """
-from __future__ import annotations
+Build display-ready GameRecord entries from owned + installed data.
 
+OP-57d | py_modules/unifideck/stores/ubisoft/library/game_builder.py
+
+``_GameBuilder`` combines:
+
+* the UPC catalog (owned-games + metadata);
+* the install registry (installed-state);
+* the id_map (UPC ↔ Unifideck IDs);
+* the SteamGridDB artwork URLs (if cached);
+
+into a uniform ``GameRecord`` shape consumed by the UI. The builder
+applies normalisation rules (lowercase names for sort, strip trademark
+glyphs, deduplicate when UPC reports a game under multiple space_ids)
+and assigns each record a stable display order.
+"""
+
+from __future__ import annotations
 import logging
 import re
 from typing import TYPE_CHECKING, Any
-
 from ....core.types import Game
 from ..steam_filter import filter_steam_linked_configs
 
@@ -15,37 +27,47 @@ if TYPE_CHECKING:
     from ..config import UbisoftConfig
     from ..id_map import UbisoftIdMap
     from ..parser import GameConfig
-
 logger = logging.getLogger(__name__)
 _MOJIBAKE_REPLACEMENTS = (
-    ('Â®', '®'), ('â\x80¢', '™'), ('â¢', '™'), ('â\x80\x99', "'"),
-    ('Â', ''),
+    ("Â®", "®"),
+    ("â\u0080¢", "™"),
+    ("â\u0084¢", "™"),
+    ("â\u0080\u0099", "’"),
+    ("Â", ""),
 )
 _SKIP_TITLE_KEYWORDS = re.compile(
-    r'\b(test\b|beta|alpha|closed|preorder|pre-order|promotion|internal|'
-    r'dev|qc|pts|test server|demo|trial)\b',
+    r"\b(test\b|beta|alpha|closed|preorder|pre-order|promotion|"
+    r"internal|dev/qc|pts|test server|demo|trial)\b",
     re.IGNORECASE,
 )
 _SKIP_DLC_KEYWORDS = re.compile(
-    r'\b(dlc|season pass|expansion|pack|bonus|soundtrack|art ?book|skins?|'
-    r'outfit|costume|weapon|map|mission|episode|revolver|kukri|cane-sword|'
-    r'hammer|knife|dagger|conspiracy|runaway train|texture|language|'
-    r'starter edition|battle pass|car shipment|full stock|full unlock|master '
-    r'unlock|paint|perk|club|credit pack|currency pack|ownership|'
-    r'ubicollectibles|legion of the dead|calling all units)\b',
+    r"\b(dlc|season pass|expansion|pack|bonus|soundtrack|"
+    r"art ?book|skins?|outfit|costume|weapon|map|mission|"
+    r"episode|revolver|kukri|cane-sword|hammer|knife|dagger|"
+    r"conspiracy|runaway train|texture|language|starter edition|"
+    r"battle pass|car shipment|full stock|full ownership|"
+    r"master unlock|paint|perk|club|credit pack|currency pack|"
+    r"ownership|ubicollectibles|legion of the dead|"
+    r"calling all units)\b",
     re.IGNORECASE,
 )
-_STORE_MARKER_PATTERN = re.compile(r'\[STEAM\]|\[Uplay', re.IGNORECASE)
-_CYRILLIC_PATTERN = re.compile(r'[Ѐ-ӿ]')
-_PLACEHOLDER_L_PATTERN = re.compile(r'(l\d+|[A-Z0-9_]+)')
-_PLACEHOLDER_LITERALS = frozenset({'a ubisoft game'})
+_STORE_MARKER_PATTERN = re.compile(
+    r"\[STEAM\]|\[Uplay",
+    re.IGNORECASE,
+)
+_CYRILLIC_PATTERN = re.compile(r"[\u0400-\u04FF]")
+_PLACEHOLDER_L_PATTERN = re.compile(r"(l\d+|[A-Z0-9_]+)")
+_PLACEHOLDER_LITERALS = frozenset({"a ubisoft game"})
 
 
 class _GameBuilder:
     """Game builder."""
 
     def __init__(
-        self, *, config: UbisoftConfig, id_map: UbisoftIdMap,
+        self,
+        *,
+        config: UbisoftConfig,
+        id_map: UbisoftIdMap,
     ) -> None:
         """Initialize the instance."""
         self._config = config
@@ -56,7 +78,12 @@ class _GameBuilder:
         configs: list[GameConfig],
     ) -> dict[int, GameConfig]:
         """Build config lookup."""
-        return {cfg.launch_id: cfg for cfg in configs if cfg.launch_id}
+        config_by_id: dict[int, GameConfig] = {}
+        for cfg in configs:
+            config_by_id[cfg.install_id] = cfg
+            if cfg.launch_id and cfg.launch_id != cfg.install_id:
+                config_by_id[cfg.launch_id] = cfg
+        return config_by_id
 
     @staticmethod
     def cross_reference_ownership(
@@ -65,25 +92,39 @@ class _GameBuilder:
         owned_set: set[int] | None,
     ) -> list[GameConfig]:
         """Cross reference ownership."""
-        if not owned_set:
-            return configs
-        owned: list[GameConfig] = []
-        for launch_id in owned_set:
-            cfg = config_by_id.get(launch_id)
-            if cfg is not None:
-                owned.append(cfg)
-        return owned
+        if owned_set is not None:
+            return [
+                config_by_id[oid]
+                for oid in owned_set
+                if oid in config_by_id and config_by_id[oid].name
+            ]
+        result = [c for c in configs if c.name]
+        logger.info(
+            "[UbisoftLibrary] no ownership binary — using all %d config entries",
+            len(result),
+        )
+        return result
 
     def apply_steam_filter(
-        self, configs: list[GameConfig],
+        self,
+        configs: list[GameConfig],
     ) -> list[GameConfig]:
         """Apply steam filter."""
         if not self._config.filter_steam_linked:
             return configs
-        return self._filter_steam_linked_configs(configs)
+        before_count = len(configs)
+        result = self._filter_steam_linked_configs(configs)
+        dropped = before_count - len(result)
+        if dropped:
+            logger.info(
+                "[UbisoftLibrary] filtered %d Steam-linked game(s) from library",
+                dropped,
+            )
+        return result
 
     def _filter_steam_linked_configs(
-        self, configs: list[GameConfig],
+        self,
+        configs: list[GameConfig],
     ) -> list[GameConfig]:
         """Filter steam linked configs."""
         return filter_steam_linked_configs(
@@ -98,18 +139,24 @@ class _GameBuilder:
         installed: dict[str, Any],
     ) -> list[Game]:
         """Build games from configs."""
+        games: list[Game] = []
         seen_norms: set[str] = set()
         id_map_updates: dict[str, dict[str, Any]] = {}
-        out: list[Game] = []
-        for cfg in matched_configs:
+        for cfg in sorted(
+            matched_configs,
+            key=lambda c: (c.name or "").lower(),
+        ):
             game = self._build_one_game(
-                cfg, installed, seen_norms, id_map_updates,
+                cfg,
+                installed,
+                seen_norms,
+                id_map_updates,
             )
             if game is not None:
-                out.append(game)
+                games.append(game)
         if id_map_updates:
             self._id_map.update_bulk(id_map_updates)
-        return out
+        return games
 
     def _build_one_game(
         self,
@@ -120,60 +167,71 @@ class _GameBuilder:
     ) -> Game | None:
         """Build one game."""
         title = self._clean_launcher_title(cfg.name)
-        if not title or self._should_skip_launcher_title(title):
+        if self._should_skip_launcher_title(title):
             return None
-        norm = self._id_map.normalize_for_matching(title)
-        if not norm or norm in seen_norms:
+        norm_name = self._id_map.normalize_for_matching(title)
+        if norm_name in seen_norms:
             return None
-        seen_norms.add(norm)
-        space_id = cfg.space_id or str(cfg.launch_id)
-        installed_info = installed.get(space_id, {})
-        is_installed = bool(installed_info)
-        if cfg.space_id:
-            id_map_updates[cfg.space_id] = {
-                'install_id': str(cfg.install_id),
-                'launch_id': str(cfg.launch_id),
-                'name': title,
-            }
+        seen_norms.add(norm_name)
+        game_id = cfg.space_id if cfg.space_id else str(cfg.install_id)
+        is_installed = game_id in installed or cfg.space_id in installed
+        install_meta = installed.get(game_id) or installed.get(cfg.space_id) or {}
+        id_map_updates[game_id] = {
+            "install_id": str(cfg.install_id),
+            "launch_id": str(cfg.launch_id),
+            "name": title,
+            "executable": getattr(cfg, "executable", None),
+            "game_identifier": getattr(
+                cfg,
+                "game_identifier",
+                None,
+            ),
+            "source": "local_binary",
+        }
         return Game(
-            store='ubisoft',
-            game_id=space_id,
+            app_id=0,
+            store="ubisoft",
+            store_game_id=game_id,
             title=title,
             installed=is_installed,
-            install_path=str(installed_info.get('install_path', '')),
+            install_path=install_meta.get("install_path"),
+            exe_path=install_meta.get("executable"),
+            metadata={"ownership_type": "owned"},
         )
 
     @staticmethod
     def _clean_launcher_title(title: Any) -> str:
         """Clean launcher title."""
         if not isinstance(title, str):
-            return ''
-        cleaned = title
-        for src, dst in _MOJIBAKE_REPLACEMENTS:
-            cleaned = cleaned.replace(src, dst)
-        return cleaned.strip()
+            return ""
+        cleaned = title.strip().strip('"').strip("'")
+        for bad, good in _MOJIBAKE_REPLACEMENTS:
+            cleaned = cleaned.replace(bad, good)
+        return cleaned
 
     def _is_launcher_placeholder_title(self, title: str) -> bool:
         """Is launcher placeholder title."""
-        if not title:
+        cleaned = self._clean_launcher_title(title)
+        if not cleaned:
             return True
-        lower = title.lower().strip()
-        if lower in _PLACEHOLDER_LITERALS:
+        normalized = self._id_map.normalize_for_matching(
+            cleaned,
+        )
+        if normalized in _PLACEHOLDER_LITERALS:
             return True
-        if _PLACEHOLDER_L_PATTERN.fullmatch(title):
-            return True
-        return False
+        return bool(_PLACEHOLDER_L_PATTERN.fullmatch(cleaned))
 
     def _should_skip_launcher_title(self, title: str) -> bool:
         """Should skip launcher title."""
-        if self._is_launcher_placeholder_title(title):
+        cleaned = self._clean_launcher_title(title)
+        if not cleaned or len(cleaned.strip()) <= 2:
             return True
-        if _SKIP_TITLE_KEYWORDS.search(title):
+        if self._is_launcher_placeholder_title(cleaned):
             return True
-        if _SKIP_DLC_KEYWORDS.search(title):
+        if _STORE_MARKER_PATTERN.search(cleaned):
             return True
-        if _STORE_MARKER_PATTERN.search(title):
+        if _SKIP_TITLE_KEYWORDS.search(cleaned):
             return True
-        if _CYRILLIC_PATTERN.search(title):
+        if _CYRILLIC_PATTERN.search(cleaned):
             return True
-        return False
+        return bool(_SKIP_DLC_KEYWORDS.search(cleaned))

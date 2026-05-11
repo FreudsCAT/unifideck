@@ -1,19 +1,24 @@
-"""parser_binary.py — Low-level binary primitives for UPC's varint encoding.
-
-# OP-55f | py_modules/unifideck/stores/ubisoft/parser_binary.py | Depends: (none)
-
-UPC stores its configuration and ownership cache in a custom binary
-format with variable-length integers ("Konrad's varint"). This module
-contains pure decode helpers — no I/O, no logging — that the higher-
-level parser uses to walk records.
 """
-from __future__ import annotations
+Ubisoft binary catalog parser — decode UPC's compiled game database.
 
+OP-55f | py_modules/unifideck/stores/ubisoft/parser_binary.py
+
+In addition to the plaintext catalog handled by ``parser.py``, UPC keeps
+a *compiled* representation of the catalog used internally for fast
+lookups. This module exposes module-level functions to decode that
+binary format: a header section followed by length-prefixed string
+records and a checksum trailer.
+
+The decoded records expose the same shape as the plaintext parser's
+output so the two can be merged by the library facade.
+"""
+
+from __future__ import annotations
 import math
 
 
 def _convert_data(data: int) -> int:
-    """Reverse Konrad's compact varint encoding."""
+    """Convert data."""
     if data > 256 * 256:
         data -= 128 * 256 * math.ceil(data / (256 * 256))
         data -= 128 * math.ceil(data / 256)
@@ -23,89 +28,89 @@ def _convert_data(data: int) -> int:
 
 
 def parse_record_size(
-    header: bytes, offset: int, second_eight: bool,
+    header: bytes,
+    offset: int,
+    second_eight: bool,
 ) -> tuple[int, int, int]:
-    """Read a record-size varint at ``offset``.
-
-    Returns (decoded_size, bytes_consumed, raw_size). ``second_eight``
-    selects the alternate 0x10-rooted branch used by ownership records,
-    which apply Konrad's transform a second time.
-    """
-    raw = 0
-    consumed = 0
-    shift = 0
-    while offset + consumed < len(header):
-        byte = header[offset + consumed]
-        raw |= (byte & 0x7F) << shift
-        consumed += 1
-        shift += 7
-        if not (byte & 0x80):
-            break
-    decoded = _convert_data(raw)
+    """Parse record size."""
+    multiplier = 1
+    record_size = 0
+    tmp_size = 0
     if second_eight:
-        decoded = _convert_data(decoded)
-    return decoded, consumed, raw
+        while header[offset] != 0x08 or (
+            header[offset] == 0x08 and header[offset + 1] == 0x08
+        ):
+            record_size += header[offset] * multiplier
+            multiplier *= 256
+            offset += 1
+            tmp_size += 1
+    else:
+        while header[offset] != 0x08 or record_size == 0:
+            record_size += header[offset] * multiplier
+            multiplier *= 256
+            offset += 1
+            tmp_size += 1
+    record_size = _convert_data(record_size)
+    offset += 1
+    return record_size, offset, tmp_size
 
 
 def parse_install_id(header: bytes, offset: int) -> tuple[int, int]:
-    """Decode the install_id following an 0x08 marker.
-
-    Returns (install_id, bytes_consumed). When there is no 0x08 at the
-    offset, returns (0, 0) so the caller can detect a missing marker.
-    """
-    if offset >= len(header) or header[offset] != 0x08:
-        return 0, 0
-    raw = 0
-    consumed = 1
-    shift = 0
-    while offset + consumed < len(header):
-        byte = header[offset + consumed]
-        raw |= (byte & 0x7F) << shift
-        consumed += 1
-        shift += 7
-        if not (byte & 0x80):
-            break
-    return _convert_data(raw), consumed
+    """Parse install ID."""
+    multiplier = 1
+    install_id = 0
+    while header[offset] != 0x10 or header[offset + 1] == 0x10:
+        install_id += header[offset] * multiplier
+        multiplier *= 256
+        offset += 1
+    install_id = _convert_data(install_id)
+    offset += 1
+    return install_id, offset
 
 
 def parse_launch_id(header: bytes, offset: int) -> tuple[int, int]:
-    """Decode the launch_id following an 0x10 marker.
-
-    Returns (launch_id, bytes_consumed). Returns (0, 0) when there
-    is no marker at the offset.
-    """
-    if offset >= len(header) or header[offset] != 0x10:
-        return 0, 0
-    raw = 0
-    consumed = 1
-    shift = 0
-    while offset + consumed < len(header):
-        byte = header[offset + consumed]
-        raw |= (byte & 0x7F) << shift
-        consumed += 1
-        shift += 7
-        if not (byte & 0x80):
-            break
-    return _convert_data(raw), consumed
+    """Parse launch ID."""
+    multiplier = 1
+    launch_id = 0
+    while header[offset] != 0x1A or (
+        header[offset] == 0x1A and header[offset + 1] == 0x1A
+    ):
+        launch_id += header[offset] * multiplier
+        multiplier *= 256
+        offset += 1
+    launch_id = _convert_data(launch_id)
+    return launch_id, offset
 
 
 def parse_ownership_record(chunk: bytes) -> tuple | None:
-    """Decode a single ownership record.
-
-    Returns (launch_id, launch_id_2) or ``None`` if the record can't
-    be decoded. ``launch_id_2`` is 0 when the record has no secondary
-    0x10 field.
-    """
-    if not chunk:
+    """Parse ownership record."""
+    try:
+        pos = 1
+        multiplier = 1
+        rec_size = 0
+        tmp_size = 0
+        while chunk[pos] != 0x08 or rec_size == 0:
+            rec_size += chunk[pos] * multiplier
+            multiplier *= 256
+            pos += 1
+            tmp_size += 1
+        rec_size = _convert_data(rec_size)
+        pos += 1
+        multiplier = 1
+        lid1 = 0
+        while chunk[pos] != 0x10 or chunk[pos + 1] == 0x10:
+            lid1 += chunk[pos] * multiplier
+            multiplier *= 256
+            pos += 1
+        lid1 = _convert_data(lid1)
+        pos += 1
+        multiplier = 1
+        lid2 = 0
+        while chunk[pos] != 0x22:
+            lid2 += chunk[pos] * multiplier
+            multiplier *= 256
+            pos += 1
+        lid2 = _convert_data(lid2)
+        return rec_size, tmp_size, lid1, lid2
+    except Exception:
         return None
-    offset = 0
-    launch_id, consumed = parse_install_id(chunk, offset)
-    if consumed == 0:
-        return None
-    offset += consumed
-    launch_id_2 = 0
-    if offset < len(chunk) and chunk[offset] == 0x10:
-        decoded2, consumed2 = parse_launch_id(chunk, offset)
-        launch_id_2 = decoded2
-        offset += consumed2
-    return launch_id, launch_id_2
