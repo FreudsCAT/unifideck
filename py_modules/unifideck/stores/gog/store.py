@@ -1,17 +1,31 @@
-"""store.py — Public ``GOGStore`` (StoreBase implementation).
+"""GOG store — Layer-4 implementation of the unified store interface.
 
-# OP-50a | py_modules/unifideck/stores/gog/store.py | Depends: (none)
+OP-50a | py_modules/unifideck/stores/gog/store.py
 
-Façade that wires all the GOG submodules behind a single
-:class:`StoreBase` subclass.
+``GOGStore`` is the orchestration class that wires every sub-component
+of the GOG sub-package together and exposes them through the
+``StoreBase`` contract used by the rest of the plugin (RPC mixins,
+service layer, registry). It owns one instance each of:
+
+* ``GOGConfig`` (OP-50b)         — frozen configuration snapshot.
+* ``GOGTokenManager`` (OP-52a)   — OAuth tokens + persistence.
+* ``GOGLibrary`` (OP-50c)        — owned-games library facade.
+* ``GOGInstaller`` (OP-51a)      — install/uninstall pipeline.
+* ``GOGUpdatesChecker`` (OP-50g) — update polling.
+* ``GOGDlcManager`` (OP-50f)     — DLC enumeration + install.
+* ``GOGBrowserAuth`` (OP-50h)    — embedded-browser OAuth flow.
+* ``GOGExeResolver`` (OP-50e)    — locate the launchable .exe.
+
+Implements the standard ``StoreBase`` API: ``store_info``, ``is_authed``,
+``auth``, ``logout``, ``library``, ``install``, ``uninstall``, ``launch``,
+etc. — every method is delegated to the appropriate sub-component.
 """
-from __future__ import annotations
 
+from __future__ import annotations
 import logging
 import os
 from collections.abc import Awaitable, Callable
-from typing import TYPE_CHECKING, Any
-
+from typing import TYPE_CHECKING, Any, cast
 from ...auth.browser import OAuthBrowserMonitor
 from ...auth.edge_browser import EdgeBrowser
 from ...auth.orchestrator import AuthOrchestrator
@@ -23,6 +37,7 @@ from ...core.types import (
     Result,
     StoreInfo,
 )
+from ...services.shortcut import ShortcutService
 from ...utils.locale import get_unifideck_locale
 from ..shared.store_base import StoreBase
 from .auth import GOGBrowserAuth
@@ -38,19 +53,17 @@ if TYPE_CHECKING:
     from ...config import ConfigManager
     from ...core.cache_manager import CacheManager
     from ...event_bus.event_bus import EventBus
-    from ...services.shortcut.service import ShortcutService
-
 logger = logging.getLogger(__name__)
 
 
 class GOGStore(StoreBase):
-    """GOG store."""
+    """Gogstore."""
 
     store_info = StoreInfo(
-        name='gog',
-        display_name='GOG',
-        auth_method='oauth',
-        icon_asset='gog.png',
+        name="gog",
+        display_name="GOG",
+        auth_method="oauth",
+        icon_asset="gog.png",
         uses_wine=False,
         supports_install=True,
     )
@@ -67,48 +80,27 @@ class GOGStore(StoreBase):
     ) -> None:
         """Initialize the instance."""
         super().__init__(bus, cache, plugin_dir, config)
-        self._gog_config = GOGConfig.from_config_manager(config)
-        logger.info('[GOGStore] %s', self._gog_config.describe())
+        self._gog_config: GOGConfig = GOGConfig.from_config_manager(config)
+        logger.info(
+            "[GOGStore] %s",
+            self._gog_config.describe(),
+        )
         self._config_manager = config
         self._shortcut_service = shortcut_service
         self._edge = edge_browser
-        self._browser_monitor = browser_monitor
-        self._tokens = GOGTokenManager(
-            config=self._gog_config, bus=bus,
-        )
-        self._exe_resolver = GOGExeResolver()
+        self._tokens = GOGTokenManager(self._gog_config, bus=bus)
+        self._exe = GOGExeResolver()
+
         self._library = GOGLibrary(
             config=self._gog_config,
             tokens=self._tokens,
-            exe_finder=self._exe_resolver.find,
-        )
-        gogdl_bin = self._resolve_gogdl_bin()
-        self._installer = GOGInstaller(
-            config=self._gog_config,
-            tokens=self._tokens,
-            gogdl_bin=gogdl_bin or '',
-            exe_finder=self._exe_resolver.find,
-            locale_fn=self._unifideck_locale,
-        )
-        self._dlc = GOGDlcManager(
-            config=self._gog_config,
-            tokens=self._tokens,
-            gogdl_bin=gogdl_bin or '',
-            locale_fn=self._unifideck_locale,
-            resolve_install_path=self._library.get_installed_game_info,
-        )
-        self._updates = GOGUpdatesChecker(
-            config=self._gog_config,
-            tokens=self._tokens,
-            gogdl_bin=gogdl_bin or '',
-            get_installed_ids=self._library.get_installed,
-            resolve_install_info=self._library.get_installed_game_info,
+            exe_finder=self._exe.find,
         )
         if browser_monitor is not None:
             orchestrator = AuthOrchestrator(
                 bus=bus,
                 browser_monitor=browser_monitor,
-                store_name='gog',
+                store_name="gog",
             )
             self._auth: GOGBrowserAuth | None = GOGBrowserAuth(
                 bus=bus,
@@ -118,120 +110,139 @@ class GOGStore(StoreBase):
             )
         else:
             self._auth = None
-
-    def _unifideck_locale(self) -> str:
-        """Unifideck locale."""
-        try:
-            return get_unifideck_locale(self._config_manager) or 'en-US'
-        except Exception:
-            return 'en-US'
+            gogdl_bin = self._resolve_gogdl_bin()
+            self._installer = GOGInstaller(
+                config=self._gog_config,
+                tokens=self._tokens,
+                gogdl_bin=gogdl_bin,
+                exe_finder=self._exe.find,
+                locale_fn=lambda: get_unifideck_locale(
+                    self._config_manager,
+                ),
+            )
+            self._dlc = GOGDlcManager(
+                config=self._gog_config,
+                tokens=self._tokens,
+                gogdl_bin=gogdl_bin,
+                locale_fn=lambda: get_unifideck_locale(
+                    self._config_manager,
+                ),
+                resolve_install_path=self._library.get_installed_game_info,
+            )
+            self._updates = GOGUpdatesChecker(
+                config=self._gog_config,
+                tokens=self._tokens,
+                gogdl_bin=gogdl_bin,
+                get_installed_ids=self._library.get_installed,
+                resolve_install_info=self._library.get_installed_game_info,
+            )
 
     async def is_available(self) -> bool:
-        """Is available."""
+        """Check whether available."""
         if not self._gog_config.is_valid():
             self._cached_available = False
             return False
-        if not await self._tokens.load():
-            self._cached_available = False
-            return False
-        result = await self._library.is_available()
-        self._cached_available = result
-        return result
+        available = await self._library.is_available()
+        self._cached_available = available
+        return available
 
-    async def start_auth(self, **kwargs: Any) -> AuthResult:
+    async def start_auth(self, **kwargs) -> AuthResult:
         """Start auth."""
         if self._auth is None:
             return AuthResult(
-                success=False, store='gog', error='auth_not_configured',
+                success=False,
+                error="auth_not_configured",
+                store="gog",
             )
-        return await self._auth.start_auth()
-
-    async def complete_auth(
-        self, code: str = '', **kwargs: Any,
-    ) -> AuthResult:
-        """Complete auth."""
-        if self._auth is None:
-            return AuthResult(
-                success=False, store='gog', error='auth_not_configured',
-            )
-        if not code:
-            return AuthResult(
-                success=False, store='gog', error='no_auth_code',
-            )
-        ok = await self._tokens.exchange_code(code)
-        if not ok:
-            await self._bus.emit(
-                Events.STORE_AUTH_FAILED, store='gog', error='exchange_failed',
+        if self._edge is None or not self._edge.is_installed:
+            logger.info(
+                "[GOGStore] Edge not installed — prompting user",
             )
             return AuthResult(
-                success=False, store='gog', error='exchange_failed',
+                success=False,
+                error="edge_not_installed",
+                store="gog",
             )
         await self._ensure_auth_shortcut()
-        await self._bus.emit(Events.STORE_AUTH_COMPLETE, store='gog')
-        return AuthResult(success=True, store='gog')
+        return cast("AuthResult", await self._auth.start_auth())
+
+    async def complete_auth(self, code: str = "", **kwargs) -> AuthResult:
+        """Complete auth."""
+        if await self.is_available():
+            return AuthResult(success=True, store="gog")
+        return AuthResult(
+            success=False,
+            error="not_authenticated",
+            store="gog",
+        )
 
     async def logout(self) -> Result:
         """Logout."""
-        await self._tokens.clear()
         if self._auth is not None:
-            return await self._auth.logout(
-                browser_monitor=self._browser_monitor,
+            result = await self._auth.logout(
+                browser_monitor=self._browser_monitor_from_auth(),
             )
-        await self._bus.emit(Events.STORE_LOGOUT, store='gog')
-        return Result(success=True)
+        else:
+            await self._tokens.clear()
+            await self._bus.emit(
+                Events.STORE_LOGOUT,
+                store="gog",
+            )
+            result = Result(success=True)
+        auth_url_file = os.path.expanduser(GOG_AUTH_URL_FILE)
+        if os.path.isfile(auth_url_file):
+            try:
+                os.remove(auth_url_file)
+            except OSError as e:
+                logger.warning(
+                    "[GOGStore] could not remove %s: %s",
+                    auth_url_file,
+                    e,
+                )
+        return result
 
     async def get_library(self) -> list[Game] | None:
         """Get library."""
-        try:
-            return await self._library.fetch_library()
-        except Exception as e:
-            logger.warning('[GOGStore] get_library failed: %s', e)
-            return None
+        return await self._library.fetch_library()
 
     async def install_game(
         self,
         game_id: str,
-        *,
         base_path: str | None = None,
         progress_cb: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
         language: str | None = None,
-        **kwargs: Any,
+        **kwargs,
     ) -> InstallResult:
         """Install game."""
         return await self._installer.install_game(
-            game_id,
+            game_id=game_id,
             base_path=base_path,
             progress_cb=progress_cb,
             language=language,
         )
 
-    async def uninstall_game(
-        self, game_id: str, **kwargs: Any,
-    ) -> Result:
+    async def uninstall_game(self, game_id: str, **kwargs: Any) -> Result:
         """Uninstall game."""
-        info = self._library.get_installed_game_info(game_id) or {}
-        install_path = info.get('install_path')
+        info = self._library.get_installed_game_info(game_id)
+        install_path = info.get("install_path") if info else None
         return await self._installer.uninstall_game(
-            game_id, install_path=install_path,
+            game_id=game_id,
+            install_path=install_path,
         )
 
     async def update_game(
-        self, game_id: str, **kwargs: Any,
+        self,
+        game_id: str,
+        progress_cb: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
+        **kwargs,
     ) -> InstallResult:
         """Update game."""
-        info = self._library.get_installed_game_info(game_id) or {}
-        install_path = info.get('install_path')
-        result = await self._updates.update_game(
-            game_id, install_path=install_path,
-        )
-        if result.success:
-            return InstallResult(
-                success=True, store='gog', game_id=game_id,
-                install_path=install_path or '',
-            )
+        result = await self._updates.update_game(game_id)
         return InstallResult(
-            success=False, store='gog', game_id=game_id,
-            error=str(result.error or 'update_failed'),
+            success=result.success,
+            error=result.error,
+            store="gog",
+            game_id=game_id,
         )
 
     async def check_for_updates(self) -> list[str]:
@@ -240,15 +251,14 @@ class GOGStore(StoreBase):
 
     async def get_game_size(self, game_id: str) -> int | None:
         """Get game size."""
-        info = self._library.get_installed_game_info(game_id) or {}
-        path = info.get('install_path')
-        if not path or not os.path.isdir(path):
-            return None
-        from .install.primitives import GOGFolderOps
-        return GOGFolderOps.folder_size(path)
+        size = await self._installer._planner.get_expected_disk_size(
+            game_id,
+            "windows",
+        )
+        return size if size > 0 else None
 
     async def get_game_dlcs(self, game_id: str) -> list[dict[str, Any]]:
-        """Get game DLCs."""
+        """Get game dlcs."""
         return await self._dlc.get_game_dlcs(game_id)
 
     async def get_available_languages(self, game_id: str) -> list[str]:
@@ -262,9 +272,12 @@ class GOGStore(StoreBase):
         base_path: str | None = None,
         progress_cb: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
     ) -> Result:
-        """Install DLC."""
+        """Install dlc."""
         return await self._dlc.install_dlc(
-            game_id, dlc_id, base_path=base_path, progress_cb=progress_cb,
+            game_id=game_id,
+            dlc_id=dlc_id,
+            base_path=base_path,
+            progress_cb=progress_cb,
         )
 
     async def get_game_store_url(self, game_id: str) -> str | None:
@@ -279,9 +292,7 @@ class GOGStore(StoreBase):
         """Get installed."""
         return self._library.get_installed()
 
-    def get_installed_game_info(
-        self, game_id: str,
-    ) -> dict[str, str | None] | None:
+    def get_installed_game_info(self, game_id: str) -> dict[str, str | None] | None:
         """Get installed game info."""
         return self._library.get_installed_game_info(game_id)
 
@@ -291,25 +302,64 @@ class GOGStore(StoreBase):
 
     def _resolve_gogdl_bin(self) -> str:
         """Resolve GOGDL bin."""
-        if self._plugin_dir:
-            candidate = os.path.join(self._plugin_dir, 'bin', 'gogdl', 'gogdl')
-            if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
-                return candidate
-        for candidate in (
-            os.path.expanduser('~/.local/bin/gogdl'),
-            '/usr/bin/gogdl',
-        ):
-            if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
-                return candidate
-        return ''
+        if not self._plugin_dir:
+            logger.warning(
+                "[GOGStore] no plugin_dir; gogdl path unresolvable",
+            )
+            return ""
+        path = os.path.join(
+            self._plugin_dir,
+            "bin",
+            "gogdl",
+        )
+        if not os.path.isfile(path):
+            logger.warning(
+                "[GOGStore] gogdl binary not found at %s",
+                path,
+            )
+        else:
+            logger.info(
+                "[GOGStore] using gogdl at %s",
+                path,
+            )
+        return path
 
     async def _ensure_auth_shortcut(self) -> None:
         """Ensure auth shortcut."""
-        # GOG doesn't need a Steam auth shortcut — UPC-only concern.
+        if self._shortcut_service is None:
+            logger.debug(
+                "[GOGStore] no shortcut_service; skipping auth shortcut creation",
+            )
+            return
+        launcher = os.path.join(
+            self._plugin_dir or "",
+            "py_modules",
+            "unifideck",
+            "launcher",
+            "dispatcher.py",
+        )
+        if not os.path.isfile(launcher):
+            logger.warning(
+                "[GOGStore] launcher dispatcher not found at %s",
+                launcher,
+            )
+            return
+        result = await self._shortcut_service.add_auth_shortcut(
+            store="gog",
+            launcher_path=launcher,
+            title="GOG Sign-In",
+        )
+        if not result.success:
+            logger.warning(
+                "[GOGStore] add_auth_shortcut failed: %s",
+                result.error,
+            )
 
     def _browser_monitor_from_auth(self) -> OAuthBrowserMonitor | None:
         """Browser monitor from auth."""
-        return self._browser_monitor
-
-
-_ = GOG_AUTH_URL_FILE
+        if self._auth is None:
+            return None
+        try:
+            return self._auth._orch._monitor
+        except AttributeError:
+            return None

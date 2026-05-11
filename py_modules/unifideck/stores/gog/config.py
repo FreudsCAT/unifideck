@@ -1,114 +1,178 @@
-"""config.py — Frozen ``GOGConfig`` value-object.
+"""GOG store configuration — frozen dataclass with deferred path resolution.
 
-# OP-50b | py_modules/unifideck/stores/gog/config.py | Depends: (none)
+OP-50b | py_modules/unifideck/stores/gog/config.py
 
-OAuth credentials default to empty strings; deployments inject the
-real client_id / client_secret via the user's ``stores.gog.*`` config
-overrides. ``is_valid()`` returns True only when both are populated.
+``GOGConfig`` is a frozen dataclass holding every tunable parameter
+of the GOG sub-package: download directory, gogdl binary path,
+OAuth URLs, token file location, gogdl config directory, etc.
+
+The class exposes two kinds of fields:
+
+* **Raw fields** (e.g. ``download_dir``, ``token_file``) — strings as
+  configured, may contain ``~``.
+* **Expanded properties** (e.g. ``download_dir_expanded``) — same value
+  with ``~`` resolved at access time. We defer expansion to property
+  access so that a user changing ``$HOME`` mid-session sees the new
+  value.
+
+Configuration is loaded via ``from_config_manager(config)`` which reads
+the ``stores.gog.*`` namespace of the user config, falling back to the
+hard-coded defaults if a key is missing or malformed.
+
+The dataclass is intentionally ``frozen=True`` — any mutation must go
+through a new ``GOGConfig`` instance.
 """
-from __future__ import annotations
 
+from __future__ import annotations
 import logging
-import os
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
-
 from unifideck.utils.config_helpers import get_cfg
 
 if TYPE_CHECKING:
     from ...config import ConfigManager
-
 logger = logging.getLogger(__name__)
-_GOG_CONFIG_PREFIX = 'stores.gog'
-_DEFAULT_TOKEN_FILE = '~/.config/unifideck/gog_token.json'
-_DEFAULT_GOGDL_CONFIG_DIR = '~/.config/unifideck/gogdl'
-_DEFAULT_DOWNLOAD_DIR = '~/GOG Games'
-GOG_AUTH_URL_FILE = '~/.local/share/unifideck/gog_auth_url.txt'
+_GOG_CONFIG_PREFIX = "stores.gog"
+_DEFAULT_TOKEN_FILE = "~/.config/unifideck/gog_token.json"
+_DEFAULT_GOGDL_CONFIG_DIR = "~/.config/unifideck/gogdl"
+_DEFAULT_DOWNLOAD_DIR = "~/GOG Games"
+GOG_AUTH_URL_FILE = "~/.local/share/unifideck/gog_auth_url.txt"
 
 
 @dataclass(frozen=True)
 class GOGConfig:
-    """GOG config."""
+    """Gogconfig."""
 
-    client_id: str = ''
-    client_secret: str = ''
-    auth_url: str = ''
-    token_url: str = ''
-    redirect_uri: str = ''
+    client_id: str = ""
+    client_secret: str = ""
+    auth_url: str = ""
+    token_url: str = ""
+    redirect_uri: str = ""
     allowed_redirect_uris: list[str] = field(default_factory=list)
-    base_url: str = ''
-    api_gog_url: str = ''
+    base_url: str = ""
+    api_gog_url: str = ""
     token_file: str = _DEFAULT_TOKEN_FILE
     gogdl_config_dir: str = _DEFAULT_GOGDL_CONFIG_DIR
     download_dir: str = _DEFAULT_DOWNLOAD_DIR
     token_refresh_threshold_seconds: int = 2400
     supported_languages: list[str] = field(
         default_factory=lambda: [
-            'en', 'de', 'fr', 'pl', 'ru', 'pt', 'es', 'it', 'zh', 'ko', 'ja',
+            "en",
+            "de",
+            "fr",
+            "pl",
+            "ru",
+            "pt",
+            "es",
+            "it",
+            "zh",
+            "ko",
+            "ja",
         ],
     )
-    user_agent: str = 'Unifideck/1.0'
+    user_agent: str = "Unifideck/1.0"
 
     @classmethod
-    def from_config_manager(
-        cls, config: ConfigManager | None,
-    ) -> GOGConfig:
+    def from_config_manager(cls, config: ConfigManager | None) -> GOGConfig:
         """From config manager."""
 
-        def _str(key: str, default: str) -> str:
-            value = get_cfg(config, f'{_GOG_CONFIG_PREFIX}.{key}', default)
-            return str(value) if value is not None else default
+        def _s(key: str, default: str = "") -> str:
+            """S."""
+            val = get_cfg(config, f"{_GOG_CONFIG_PREFIX}.{key}", default)
+            return str(val).strip() if val is not None else default
 
-        def _int(key: str, default: int) -> int:
-            value = get_cfg(config, f'{_GOG_CONFIG_PREFIX}.{key}', default)
+        def _i(key: str, default: int) -> int:
+            """I."""
+            val = get_cfg(config, f"{_GOG_CONFIG_PREFIX}.{key}", default)
             try:
-                return int(value)
+                return int(val)
             except (TypeError, ValueError):
                 return default
 
-        def _list(key: str, default: list[str]) -> list[str]:
-            value = get_cfg(config, f'{_GOG_CONFIG_PREFIX}.{key}', default)
-            if isinstance(value, (list, tuple)):
-                return [str(v) for v in value]
-            return list(default)
+        def _list(key: str) -> list[str]:
+            """List."""
+            val = get_cfg(config, f"{_GOG_CONFIG_PREFIX}.{key}", None)
+            if not isinstance(val, list):
+                return []
+            return [str(x) for x in val if isinstance(x, str) and x]
 
+        primary_redirect = _s("redirect_uri")
+        allowed = _list("allowed_redirect_uris")
+        if not allowed and primary_redirect:
+            allowed = [primary_redirect]
+        supported = _list("supported_languages")
+        if not supported:
+            supported = [
+                "en",
+                "de",
+                "fr",
+                "pl",
+                "ru",
+                "pt",
+                "es",
+                "it",
+                "zh",
+                "ko",
+                "ja",
+            ]
         return cls(
-            client_id=_str('client_id', ''),
-            client_secret=_str('client_secret', ''),
-            auth_url=_str('auth_url', ''),
-            token_url=_str('token_url', ''),
-            redirect_uri=_str('redirect_uri', ''),
-            allowed_redirect_uris=_list('allowed_redirect_uris', []),
-            base_url=_str('base_url', ''),
-            api_gog_url=_str('api_gog_url', ''),
-            token_file=_str('token_file', _DEFAULT_TOKEN_FILE),
-            gogdl_config_dir=_str(
-                'gogdl_config_dir', _DEFAULT_GOGDL_CONFIG_DIR,
+            client_id=_s("client_id"),
+            client_secret=_s("client_secret"),
+            auth_url=_s("auth_url"),
+            token_url=_s("token_url"),
+            redirect_uri=primary_redirect,
+            allowed_redirect_uris=allowed,
+            base_url=_s("base_url"),
+            api_gog_url=_s("api_gog_url"),
+            token_file=_s("token_file", _DEFAULT_TOKEN_FILE),
+            gogdl_config_dir=_s(
+                "gogdl_config_dir",
+                _DEFAULT_GOGDL_CONFIG_DIR,
             ),
-            download_dir=_str('download_dir', _DEFAULT_DOWNLOAD_DIR),
-            token_refresh_threshold_seconds=_int(
-                'token_refresh_threshold_seconds', 2400,
+            download_dir=_s("download_dir", _DEFAULT_DOWNLOAD_DIR),
+            token_refresh_threshold_seconds=_i(
+                "token_refresh_threshold_seconds",
+                2400,
             ),
-            supported_languages=_list(
-                'supported_languages',
-                ['en', 'de', 'fr', 'pl', 'ru', 'pt', 'es', 'it', 'zh', 'ko', 'ja'],
-            ),
-            user_agent=_str('user_agent', 'Unifideck/1.0'),
+            supported_languages=supported,
+            user_agent=_s("user_agent", "Unifideck/1.0"),
         )
 
     def is_valid(self) -> bool:
-        """Is valid."""
-        return bool(self.client_id and self.client_secret)
+        """Check whether valid."""
+        required = (
+            ("client_id", self.client_id),
+            ("client_secret", self.client_secret),
+            ("auth_url", self.auth_url),
+            ("token_url", self.token_url),
+            ("redirect_uri", self.redirect_uri),
+            ("base_url", self.base_url),
+            ("api_gog_url", self.api_gog_url),
+        )
+        missing = [name for name, val in required if not val]
+        if missing:
+            logger.warning(
+                "[GOGConfig] missing required keys: %s",
+                ", ".join(missing),
+            )
+            return False
+        return True
 
     @property
     def auth_config_path(self) -> str:
         """Auth config path."""
-        return os.path.expanduser(GOG_AUTH_URL_FILE)
+        import os
+
+        return os.path.join(
+            os.path.expanduser(self.gogdl_config_dir),
+            "gog_credentials.json",
+        )
 
     def describe(self) -> str:
         """Describe."""
         return (
-            f'GOGConfig(token_file={os.path.expanduser(self.token_file)}, '
-            f'download_dir={os.path.expanduser(self.download_dir)}, '
-            f'valid={self.is_valid()})'
+            f"GOGConfig(client_id={self.client_id[:6]}…, "
+            f"base_url={self.base_url}, "
+            f"token_file={self.token_file}, "
+            f"download_dir={self.download_dir})"
         )

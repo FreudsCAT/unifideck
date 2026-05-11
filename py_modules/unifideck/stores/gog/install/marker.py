@@ -1,23 +1,34 @@
-"""marker.py — Post-install marker writer + manifest regeneration.
+"""Post-install bookkeeping — locate install dir + write marker.
 
-# OP-51g | py_modules/unifideck/stores/gog/install/marker.py | Depends: (none)
+OP-51g | py_modules/unifideck/stores/gog/install/marker.py
+
+``_PostInstallMarker`` handles the post-download phase of an install:
+
+* **locate the install** — GOG installer behaviour is inconsistent
+  (flat vs nested layout); the locator probes for the
+  ``goggame-<id>.info`` marker in the predicted folder and falls back
+  to a diff-against-snapshot strategy if not found;
+* **reorganise flat installs** — when gogdl produces a flat install at
+  the base of the download dir, move everything into a canonical
+  ``GOG_<id>`` subdirectory;
+* **write the ``.unifideck-id`` marker** — JSON file carrying the
+  game_id, language, and metadata extracted from ``goggame-*.info``;
+* **regenerate the manifest** — re-run ``gogdl info`` to refresh the
+  cached manifest after install/update.
 """
-from __future__ import annotations
 
+from __future__ import annotations
 import asyncio
 import json
 import logging
 import os
 import shutil
 from typing import TYPE_CHECKING, Any, cast
-
 from .primitives import GOGFolderOps
 
 if TYPE_CHECKING:
     from .installer import GOGInstaller
-
 logger = logging.getLogger(__name__)
-_INSTALL_MARKER = '.unifideck-id'
 
 
 class _PostInstallMarker:
@@ -30,13 +41,8 @@ class _PostInstallMarker:
     @staticmethod
     def snapshot_dirs(base_path: str) -> set:
         """Snapshot dirs."""
-        if not os.path.isdir(base_path):
-            return set()
         try:
-            return {
-                name for name in os.listdir(base_path)
-                if os.path.isdir(os.path.join(base_path, name))
-            }
+            return set(os.listdir(base_path))
         except OSError:
             return set()
 
@@ -48,18 +54,44 @@ class _PostInstallMarker:
         existing_dirs: set,
     ) -> str | None:
         """Locate install."""
+        flat_info = self._find_flat_goggame(base_path, game_id)
+        if flat_info:
+            return await self._reorganise_flat_install(
+                base_path,
+                game_id,
+                folder_name,
+                existing_dirs,
+            )
         if folder_name:
             candidate = os.path.join(base_path, folder_name)
-            if GOGFolderOps.has_goggame_info(candidate, game_id):
+            if os.path.isdir(candidate):
+                logger.info(
+                    "[GOGInstaller] found at predicted: %s",
+                    candidate,
+                )
                 return candidate
-        for name in self.snapshot_dirs(base_path) - existing_dirs:
-            candidate = os.path.join(base_path, name)
-            if GOGFolderOps.has_goggame_info(candidate, game_id):
-                return candidate
-        if self._find_flat_goggame(base_path, game_id):
-            return await self._reorganise_flat_install(
-                base_path, game_id, folder_name, existing_dirs,
-            )
+        try:
+            current = set(os.listdir(base_path))
+        except OSError:
+            return None
+        new_dirs = current - existing_dirs
+        for name in new_dirs:
+            item_path = os.path.join(base_path, name)
+            if not os.path.isdir(item_path):
+                continue
+            for search_dir in (
+                item_path,
+                os.path.join(item_path, "game"),
+            ):
+                if GOGFolderOps.has_goggame_info(
+                    search_dir,
+                    game_id,
+                ):
+                    logger.info(
+                        "[GOGInstaller] found via scan: %s",
+                        item_path,
+                    )
+                    return item_path
         return None
 
     @staticmethod
@@ -67,10 +99,13 @@ class _PostInstallMarker:
         """Find flat goggame."""
         try:
             for name in os.listdir(base_path):
-                if name == f'goggame-{game_id}.info':
+                full = os.path.join(base_path, name)
+                if not os.path.isfile(full):
+                    continue
+                if name == f"goggame-{game_id}.info":
                     return True
         except OSError:
-            return False
+            pass
         return False
 
     @staticmethod
@@ -81,110 +116,151 @@ class _PostInstallMarker:
         existing_dirs: set,
     ) -> str:
         """Reorganise flat install."""
-        target_name = folder_name or f'goggame-{game_id}'
-        target = os.path.join(base_path, target_name)
-        os.makedirs(target, exist_ok=True)
+        target = folder_name or f"GOG_{game_id}"
+        target_path = os.path.join(base_path, target)
 
-        def _move() -> None:
+        def _sync_move() -> None:
+            """Sync move."""
+            os.makedirs(target_path, exist_ok=True)
             try:
-                for name in os.listdir(base_path):
-                    if name == target_name or name in existing_dirs:
-                        continue
-                    src = os.path.join(base_path, name)
-                    dst = os.path.join(target, name)
-                    if src != target:
-                        shutil.move(src, dst)
-            except OSError as e:
-                logger.warning('[GOGMarker] reorg failed: %s', e)
+                current = set(os.listdir(base_path))
+            except OSError:
+                return
+            new_files = current - existing_dirs
+            for item in new_files:
+                if item == target:
+                    continue
+                src = os.path.join(base_path, item)
+                dst = os.path.join(target_path, item)
+                try:
+                    shutil.move(src, dst)
+                except OSError as e:
+                    logger.warning(
+                        "[GOGInstaller] move %s failed: %s",
+                        item,
+                        e,
+                    )
 
-        await asyncio.to_thread(_move)
-        return target
+        await asyncio.to_thread(_sync_move)
+        logger.info(
+            "[GOGInstaller] reorganised flat install → %s",
+            target_path,
+        )
+        return target_path
 
     async def write_install_marker(
-        self, install_path: str, game_id: str, language: str,
+        self,
+        install_path: str,
+        game_id: str,
+        language: str,
     ) -> bool:
         """Write install marker."""
-        if not install_path or not os.path.isdir(install_path):
-            return False
-        info_data = self._load_info_data_from_goggame(install_path, game_id)
-        info_data.setdefault('game_id', game_id)
-        info_data.setdefault('install_path', install_path)
-        info_data['language'] = language
-        marker = os.path.join(install_path, _INSTALL_MARKER)
-        return await asyncio.to_thread(
-            self._write_marker_sync, marker, info_data,
+        marker_path = os.path.join(install_path, ".unifideck-id")
+        info_data = self._load_info_data_from_goggame(
+            install_path,
+            game_id,
         )
+        info_data["language"] = language
+        ok = await asyncio.to_thread(
+            self._write_marker_sync,
+            marker_path,
+            info_data,
+        )
+        if ok:
+            logger.info(
+                "[GOGInstaller] wrote marker at %s (lang=%s)",
+                marker_path,
+                language,
+            )
+        return ok
 
     @staticmethod
-    def _load_info_data_from_goggame(
-        install_path: str, game_id: str,
-    ) -> dict[str, Any]:
+    def _load_info_data_from_goggame(install_path: str, game_id: str) -> dict[str, Any]:
         """Load info data from goggame."""
-        search_dirs = [install_path]
-        for sub in ('game', 'bin'):
-            sub_path = os.path.join(install_path, sub)
-            if os.path.isdir(sub_path):
-                search_dirs.append(sub_path)
-        for directory in search_dirs:
-            data = _PostInstallMarker._try_load_info_in_dir(directory, game_id)
-            if data is not None:
-                return data
-        return {}
+        info_data: dict[str, Any] = {"game_id": game_id}
+        for candidate in (
+            install_path,
+            os.path.join(install_path, "game"),
+        ):
+            if not os.path.isdir(candidate):
+                continue
+            loaded = _PostInstallMarker._try_load_info_in_dir(
+                candidate,
+                game_id,
+            )
+            if loaded is not None:
+                info_data = loaded
+                if "name" in info_data:
+                    break
+        return info_data
 
     @staticmethod
-    def _try_load_info_in_dir(
-        directory: str, game_id: str,
-    ) -> dict[str, Any] | None:
+    def _try_load_info_in_dir(directory: str, game_id: str) -> dict[str, Any] | None:
         """Try load info in dir."""
-        candidate = os.path.join(directory, f'goggame-{game_id}.info')
-        if not os.path.isfile(candidate):
-            return None
         try:
-            with open(candidate, encoding='utf-8') as f:
-                data = json.load(f)
-        except (OSError, json.JSONDecodeError):
+            entries = os.listdir(directory)
+        except OSError:
             return None
-        if not isinstance(data, dict):
-            return None
-        return {
-            'title': data.get('name') or '',
-            'install_id': data.get('rootGameId') or data.get('gameId') or '',
-            'build_id': str(data.get('buildId', '')),
-        }
+        for name in entries:
+            if not name.startswith("goggame-"):
+                continue
+            if not name.endswith(".info"):
+                continue
+            try:
+                with open(
+                    os.path.join(directory, name),
+                    encoding="utf-8",
+                ) as f:
+                    parsed = json.load(f)
+                    parsed["game_id"] = game_id
+                    return cast("dict[str, Any] | None", parsed)
+            except (OSError, json.JSONDecodeError):
+                return None
+        return None
 
     @staticmethod
-    def _write_marker_sync(
-        marker_path: str, info_data: dict[str, Any],
-    ) -> bool:
+    def _write_marker_sync(marker_path: str, info_data: dict[str, Any]) -> bool:
         """Write marker sync."""
         try:
-            with open(marker_path, 'w', encoding='utf-8') as f:
+            with open(marker_path, "w", encoding="utf-8") as f:
                 json.dump(info_data, f, indent=2)
+            return True
         except OSError as e:
-            logger.warning(
-                '[GOGMarker] write %s: %s', marker_path, e,
+            logger.error(
+                "[GOGInstaller] marker write failed: %s",
+                e,
             )
             return False
-        return True
 
-    async def regenerate_manifest(
-        self, game_id: str, platform: str,
-    ) -> None:
+    async def regenerate_manifest(self, game_id: str, platform: str) -> None:
         """Regenerate manifest."""
-        gogdl_bin = self._parent._gogdl_bin
-        if not gogdl_bin:
-            return
+        cmd = [
+            self._parent._gogdl_bin,
+            "--auth-config-path",
+            self._parent._config.auth_config_path,
+            "info",
+            "--platform",
+            platform,
+            game_id,
+        ]
         try:
-            async with self._parent._tokens.gogdl_credentials() as env:
+            env, _gogdl_cleanup = await self._parent._tokens.acquire_gogdl_creds()
+            try:
                 proc = await asyncio.create_subprocess_exec(
-                    gogdl_bin, 'manifest', game_id, '--platform', platform,
-                    env={**env},
-                    stdout=asyncio.subprocess.DEVNULL,
-                    stderr=asyncio.subprocess.DEVNULL,
+                    *cmd,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                    env=env,
                 )
                 await proc.wait()
+                logger.info(
+                    "[GOGInstaller] manifest regenerated (code %d)",
+                    proc.returncode,
+                )
+            finally:
+                await _gogdl_cleanup()
         except OSError as e:
-            logger.debug('[GOGMarker] manifest spawn: %s', e)
-
-
-_ = cast
+            logger.error(
+                "[GOGInstaller] manifest regen failed: %s",
+                e,
+            )
