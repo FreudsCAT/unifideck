@@ -1,9 +1,21 @@
-"""auth_builder.py — Build / repair the dedicated auth prefix.
-
-# OP-59d | py_modules/unifideck/stores/ubisoft/prefix/auth_builder.py | Depends: (none)
 """
-from __future__ import annotations
+Auth prefix builder — variant of template_builder for the auth flow.
 
+OP-59d | py_modules/unifideck/stores/ubisoft/prefix/auth_builder.py
+
+The auth prefix has different requirements from the template prefix:
+it must allow the UPC GUI to come up and the user to sign in
+interactively, whereas the template prefix runs UPC headlessly. This
+class is the auth-flow-specific build path that produces the
+``.upc-auth`` prefix.
+
+Largely shares the underlying steps with ``_TemplateBuilder`` but
+configures the prefix with display-aware overrides (DXVK enabled,
+display server connected) and leaves UPC running at the end so the
+user can sign in.
+"""
+
+from __future__ import annotations
 import asyncio
 import logging
 import os
@@ -17,7 +29,6 @@ if TYPE_CHECKING:
     from ..paths import UbisoftPrefixPaths
     from .helpers import _PrefixHelpers
     from .template_builder import _TemplatePrefixBuilder
-
 logger = logging.getLogger(__name__)
 
 
@@ -25,7 +36,8 @@ class _AuthPrefixBuilder:
     """Auth prefix builder."""
 
     def __init__(
-        self, *,
+        self,
+        *,
         config: UbisoftConfig,
         paths: UbisoftPrefixPaths,
         helpers: _PrefixHelpers,
@@ -38,98 +50,195 @@ class _AuthPrefixBuilder:
         self._helpers = helpers
         self._installer_cache = installer_cache
         self._template_builder = template_builder
-        self._ensure_lock = asyncio.Lock()
+        self._auth_assets_task: asyncio.Task[None] | None = None
+        self._auth_assets_lock = asyncio.Lock()
 
     async def ensure_auth_prefix(self) -> str | None:
         """Ensure auth prefix."""
-        async with self._ensure_lock:
-            auth_dir = self._config.auth_prefix_dir_expanded
-            await self._repair_auth_prefix_if_needed()
-            if self._auth_prefix_needs_rebuild(
-                auth_dir, self._paths.find_upc_exe(auth_dir),
-            ):
-                return await self._rebuild_and_finalise_auth_prefix(auth_dir)
-            return auth_dir
+        auth_dir = self._config.auth_prefix_dir_expanded
+        upc_path = self._paths.find_upc_exe(auth_dir)
+        rebuild = self._auth_prefix_needs_rebuild(
+            auth_dir,
+            upc_path,
+        )
+        if not rebuild and Path(auth_dir).is_dir() and not upc_path:
+            logger.warning(
+                "[UbisoftPrefixManager] auth prefix exists "
+                "but upc.exe missing, re-cloning",
+            )
+            shutil.rmtree(auth_dir, ignore_errors=True)
+            upc_path = None
+            rebuild = True
+        if upc_path and not rebuild:
+            return upc_path
+        return await self._rebuild_and_finalise_auth_prefix(
+            auth_dir,
+        )
 
     def _auth_prefix_needs_rebuild(
-        self, auth_dir: str, upc_path: str | None,
+        self,
+        auth_dir: str,
+        upc_path: str | None,
     ) -> bool:
         """Auth prefix needs rebuild."""
-        if not os.path.isdir(auth_dir) or not upc_path:
+        if not upc_path:
+            return False
+        if self._template_builder.is_prefix_version_stale(auth_dir):
+            logger.warning(
+                "[UbisoftPrefixManager] auth prefix Proton version stale, rebuilding",
+            )
             return True
-        return self._template_builder.is_prefix_version_stale(auth_dir)
+        if self._template_builder.template_exists():
+            auth_guid = self._template_builder.read_machine_guid(
+                auth_dir,
+            )
+            tmpl_guid = self._template_builder.read_machine_guid(
+                self._config.template_dir_expanded,
+            )
+            if tmpl_guid and auth_guid and tmpl_guid != auth_guid:
+                logger.warning(
+                    "[UbisoftPrefixManager] auth prefix "
+                    "MachineGuid desynced from template — "
+                    "rebuilding for DPAPI compatibility",
+                )
+                return True
+        return False
 
     async def _rebuild_and_finalise_auth_prefix(
-        self, auth_dir: str,
+        self,
+        auth_dir: str,
     ) -> str | None:
         """Rebuild and finalise auth prefix."""
-        if os.path.isdir(auth_dir):
-            shutil.rmtree(auth_dir, ignore_errors=True)
-        if not await self._build_auth_prefix_from_source():
+        await self._template_builder.regenerate_template_if_stale()
+        cloned = await self._build_auth_prefix_from_source()
+        if not cloned:
             return None
-        return auth_dir
+        self._helpers.fix_pfx_symlink(auth_dir)
+        upc_path = self._paths.find_upc_exe(auth_dir)
+        if upc_path:
+            self._helpers.try_inject_auth_state([auth_dir])
+            logger.info(
+                "[UbisoftPrefixManager] auth prefix ready",
+            )
+            return upc_path
+        return None
 
     async def _build_auth_prefix_from_source(self) -> bool:
         """Build auth prefix from source."""
         auth_dir = self._config.auth_prefix_dir_expanded
-        clone_source, source_label = self._pick_clone_source()
-        if clone_source and source_label == 'template':
-            ok = await self._helpers.clone_prefix_from_template(
-                space_id='auth', prefix_path=auth_dir,
+        src, label = self._pick_clone_source()
+        if src:
+            logger.info(
+                "[UbisoftPrefixManager] cloning %s → auth prefix",
+                label,
             )
-            if ok:
-                return True
-        return await self._helpers.create_prefix_from_fresh_install(
-            space_id='auth', prefix_path=auth_dir,
+            Path(auth_dir).mkdir(parents=True, exist_ok=True)
+            ok = await self._helpers.rsync_clone(
+                src,
+                auth_dir,
+                exclude_games=True,
+            )
+            if not ok:
+                logger.error(
+                    "[UbisoftPrefixManager] rsync clone failed for auth prefix",
+                )
+                return False
+            return True
+        logger.info(
+            "[UbisoftPrefixManager] no template/game prefix — "
+            "bootstrapping auth prefix via fresh install",
         )
+        installer_path = await self._installer_cache.ensure_cached()
+        if not installer_path:
+            return False
+        Path(auth_dir).mkdir(parents=True, exist_ok=True)
+        success = await self._helpers.run_silent_installer(
+            prefix_dir=auth_dir,
+            installer_path=installer_path,
+            gameid="umu-ubisoft-auth",
+            store_game_id=self._config.auth_shortcut_store_id,
+        )
+        if not success and not self._paths.find_upc_exe(auth_dir):
+            return False
+        self._helpers.write_bootstrap_marker(
+            auth_dir,
+            "auth_prefix",
+            None,
+        )
+        return True
 
     def _pick_clone_source(self) -> tuple[str | None, str]:
         """Pick clone source."""
-        template = self._config.template_dir_expanded
-        if (
-            self._template_builder.template_exists()
-            and not self._template_builder.is_prefix_version_stale(template)
-        ):
-            return template, 'template'
-        for prefix in self._config.iter_game_prefix_paths():
-            if (
-                self._paths.find_upc_exe(prefix)
-                and not self._template_builder.is_prefix_version_stale(prefix)
-            ):
-                return prefix, 'game_prefix'
-        return None, 'fresh'
-
-    def queue_auth_assets_ensure(self, reason: str = 'background') -> None:
-        """Queue auth assets ensure."""
+        if self._template_builder.template_exists():
+            return (
+                self._config.template_dir_expanded,
+                "template",
+            )
+        prefixes_dir = self._config.prefixes_dir_expanded
+        if not Path(prefixes_dir).is_dir():
+            return (None, "")
         try:
-            loop = asyncio.get_running_loop()
-        except RuntimeError:
+            entries = sorted(os.listdir(prefixes_dir))
+        except OSError:
+            return (None, "")
+        for entry in entries:
+            if entry.startswith("."):
+                continue
+            candidate = str(Path(prefixes_dir) / entry)
+            if self._paths.find_upc_exe(candidate):
+                return (candidate, f"game prefix {entry[:8]}")
+        return (None, "")
+
+    def queue_auth_assets_ensure(
+        self,
+        reason: str = "background",
+    ) -> None:
+        """Queue auth assets ensure."""
+        if self._auth_assets_task is not None and not self._auth_assets_task.done():
+            logger.info(
+                "[UbisoftPrefixManager] auth asset ensure "
+                "already in progress (reason=%s)",
+                reason,
+            )
             return
-        loop.create_task(
+        logger.info(
+            "[UbisoftPrefixManager] queueing auth asset ensure (reason=%s)",
+            reason,
+        )
+        self._auth_assets_task = asyncio.create_task(
             self._ensure_auth_assets(reason),
-            name=f'ubisoft_auth_assets:{reason}',
         )
 
     async def _ensure_auth_assets(self, reason: str) -> None:
         """Ensure auth assets."""
-        try:
-            await self.ensure_auth_prefix()
-        except Exception as e:
-            logger.warning(
-                '[Ubisoft.prefix] ensure_auth_assets(%s) failed: %s',
-                reason, e,
+        async with self._auth_assets_lock:
+            logger.info(
+                "[UbisoftPrefixManager] ensuring auth assets (reason=%s)",
+                reason,
             )
+            await self._template_builder.regenerate_template_if_stale()
+            if not self._template_builder.template_exists():
+                await self._template_builder.ensure_template_prefix()
+                return
+            template_dir = self._config.template_dir_expanded
+            self._helpers.try_inject_auth_state([template_dir])
+            await self._repair_auth_prefix_if_needed()
 
     async def _repair_auth_prefix_if_needed(self) -> None:
         """Repair auth prefix if needed."""
         auth_dir = self._config.auth_prefix_dir_expanded
-        if not os.path.isdir(auth_dir):
+        session_file = self._config.upc_session_file_expanded
+        if os.path.isdir(auth_dir):
+            self._helpers.try_inject_auth_state([auth_dir])
             return
-        marker = Path(auth_dir) / self._config.bootstrap_marker
-        if marker.is_file():
+        if not os.path.isfile(session_file):
             return
-        # Missing marker means an interrupted bootstrap — wipe and rebuild.
         logger.info(
-            '[Ubisoft.prefix] auth prefix missing marker, will rebuild',
+            "[UbisoftPrefixManager] auth prefix "
+            "missing but user is authenticated; "
+            "recreating",
         )
-        shutil.rmtree(auth_dir, ignore_errors=True)
+        await self.ensure_auth_prefix()
+        game_prefixes = list(self._config.iter_game_prefix_paths())
+        if game_prefixes:
+            self._helpers.try_inject_auth_state(game_prefixes)

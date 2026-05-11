@@ -1,15 +1,23 @@
-"""session_monitor.py — Background poll that detects UPC auth captures.
-
-# OP-58d | py_modules/unifideck/stores/ubisoft/auth/session_monitor.py | Depends: (none)
 """
-from __future__ import annotations
+Monitor the auth prefix for credential-file appearance — signals sign-in completion.
 
+OP-58d | py_modules/unifideck/stores/ubisoft/auth/session_monitor.py
+
+After the user is redirected to UPC for sign-in, we have no callback to
+know when they've finished — UPC just writes credentials to disk and
+exits. ``_AuthSessionMonitor`` polls the auth prefix for the appearance
+of the canonical credential files (``ConnectSecureStorage.dat``,
+``user.dat``) and signals completion through an ``asyncio.Event``.
+
+Polling rate is moderate (~1 Hz) to avoid burning CPU during long
+sign-in flows.
+"""
+
+from __future__ import annotations
 import asyncio
 import logging
-import time
 from collections.abc import Callable
 from typing import Any
-
 from ....core.types import Result
 
 _AUTH_MONITOR_TIMEOUT_S = 30 * 60
@@ -30,52 +38,57 @@ class _AuthSessionMonitor:
         """Initialize the instance."""
         self._config = config
         self._session = session
-        self._queue = queue_auth_assets_ensure
-        self._task: asyncio.Task[None] | None = None
-        self._started_at: float = 0.0
-        self._captured: bool = False
-        self._error: str | None = None
+        self._queue_auth_assets_ensure = queue_auth_assets_ensure
+        self._monitor_task: asyncio.Task[None] | None = None
+        self._session_captured = False
 
     async def start(self) -> Result:
         """Start."""
-        if self._task is not None and not self._task.done():
-            return Result(success=True)
-        self._started_at = time.monotonic()
-        self._captured = False
-        self._error = None
-        self._task = asyncio.create_task(
-            self._loop(), name='ubisoft_auth_session_monitor',
+        if self._monitor_task is not None and not self._monitor_task.done():
+            self._monitor_task.cancel()
+            try:
+                await self._monitor_task
+            except asyncio.CancelledError:
+                pass
+            except Exception as e:
+                logger.debug(
+                    "[UbisoftAuth] old monitor task error on cancel: %s",
+                    e,
+                )
+        self._session_captured = False
+        self._monitor_task = asyncio.create_task(self._loop())
+        logger.info(
+            "[UbisoftAuth] started auth session monitor",
         )
         return Result(success=True)
 
     async def _loop(self) -> None:
         """Loop."""
-        deadline = self._started_at + _AUTH_MONITOR_TIMEOUT_S
-        while time.monotonic() < deadline:
-            try:
-                source = self._session.find_best_credential_source()
-                if source:
-                    self._captured = True
-                    self._queue('auth_session_monitor')
-                    logger.info(
-                        '[Ubisoft.auth] session captured at %s', source,
-                    )
-                    return
-            except Exception as e:
-                self._error = str(e)
-                logger.debug('[Ubisoft.auth] monitor poll error: %s', e)
+        auth_dir = self._config.auth_prefix_dir_expanded
+        elapsed = 0.0
+        while elapsed < _AUTH_MONITOR_TIMEOUT_S:
             await asyncio.sleep(_AUTH_MONITOR_POLL_INTERVAL_S)
-        self._error = self._error or 'timeout'
+            elapsed += _AUTH_MONITOR_POLL_INTERVAL_S
+            captured = self._session.capture(auth_dir)
+            if captured:
+                logger.info(
+                    "[UbisoftAuth] auth session monitor: token captured",
+                )
+                self._session.propagate_all_to_all()
+                self._queue_auth_assets_ensure(
+                    "post-auth-session-capture",
+                )
+                self._session_captured = True
+                return
+        logger.warning(
+            "[UbisoftAuth] auth session monitor timed out after %ds",
+            _AUTH_MONITOR_TIMEOUT_S,
+        )
 
     def status(self) -> dict[str, Any]:
         """Status."""
-        running = self._task is not None and not self._task.done()
+        monitoring = self._monitor_task is not None and not self._monitor_task.done()
         return {
-            'running': running,
-            'captured': self._captured,
-            'error': self._error,
-            'elapsed_s': (
-                round(time.monotonic() - self._started_at, 1)
-                if self._started_at else 0.0
-            ),
+            "captured": self._session_captured,
+            "monitoring": monitoring,
         }
