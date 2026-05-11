@@ -1,54 +1,52 @@
-"""oauth.py — GOG OAuth code/refresh exchanger.
+"""OAuth protocol — exchange auth code for tokens, refresh expired tokens.
 
-# OP-52c | py_modules/unifideck/stores/gog/tokens/oauth.py | Depends: (none)
+OP-52c | py_modules/unifideck/stores/gog/tokens/oauth.py
 
-Handles the three OAuth verbs GOG cares about — auth_code exchange,
-silent refresh, and user_info fetch — using :mod:`..http` underneath.
-The ``save_callback`` is invoked whenever new tokens are minted so
-the :class:`_TokenStorage` can persist them.
+``_TokenOAuth`` speaks GOG's OAuth 2.0 endpoint :
+
+* ``exchange_code(auth_code)`` — POSTs the authorization code obtained
+  from ``auth.py`` (OP-50h) and returns ``(access_token, refresh_token,
+  user_info)``;
+* ``refresh(refresh_token)`` — POSTs the refresh token and returns a
+  new pair of access/refresh tokens (GOG rotates refresh tokens, so
+  the old refresh token becomes invalid after refresh).
+
+HTTP calls go through ``http.py`` (OP-50i) for the bundled CA chain.
+Errors are wrapped into a typed exception so the caller can distinguish
+network failures (retryable) from auth failures (force re-login).
 """
-from __future__ import annotations
 
+from __future__ import annotations
 import logging
-import time
 import urllib.parse
 from typing import TYPE_CHECKING, Any
-
 from ..http import fetch_json_get
 from .user_info import GOGUserInfo
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
-
     from ..config import GOGConfig
-    SaveCallback = Callable[[str, str], Awaitable[bool]]
 
+    SaveCallback = Callable[[str, str], Awaitable[bool]]
 logger = logging.getLogger(__name__)
 
 
 class _TokenOAuth:
     """Token oauth."""
 
-    def __init__(
-        self, *, config: GOGConfig, save_callback: SaveCallback,
-    ) -> None:
+    def __init__(self, *, config: GOGConfig, save_callback: SaveCallback) -> None:
         """Initialize the instance."""
         self._config = config
-        self._save_callback = save_callback
-        self._access_token: str | None = None
-        self._refresh_token: str | None = None
-        self._token_minted_at: float = 0.0
+        self._save = save_callback
 
     async def exchange_code(self, auth_code: str) -> bool:
         """Exchange code."""
-        if not auth_code or not self._config.token_url:
-            return False
         params = {
-            'client_id': self._config.client_id,
-            'client_secret': self._config.client_secret,
-            'grant_type': 'authorization_code',
-            'code': auth_code,
-            'redirect_uri': self._config.redirect_uri,
+            "client_id": self._config.client_id,
+            "client_secret": self._config.client_secret,
+            "grant_type": "authorization_code",
+            "code": auth_code,
+            "redirect_uri": self._config.redirect_uri,
         }
         return await self._token_request(params)
 
@@ -60,63 +58,72 @@ class _TokenOAuth:
         age_seconds: float,
     ) -> bool:
         """Refresh if stale."""
-        self._access_token = access_token
-        self._refresh_token = refresh_token
-        if not refresh_token:
-            return False
-        if age_seconds < self._config.token_refresh_threshold_seconds:
+        threshold = self._config.token_refresh_threshold_seconds
+        if age_seconds < threshold and access_token:
             return True
+        if not refresh_token:
+            logger.info(
+                "[GOGTokens] no refresh token — session is dead",
+            )
+            return False
+        logger.info(
+            "[GOGTokens] token age %.0fs ≥ %ds, refreshing",
+            age_seconds,
+            threshold,
+        )
         params = {
-            'client_id': self._config.client_id,
-            'client_secret': self._config.client_secret,
-            'grant_type': 'refresh_token',
-            'refresh_token': refresh_token,
+            "client_id": self._config.client_id,
+            "client_secret": self._config.client_secret,
+            "grant_type": "refresh_token",
+            "refresh_token": refresh_token,
         }
         return await self._token_request(params)
 
     async def fetch_user_info(
-        self, access_token: str, fallback: GOGUserInfo,
+        self,
+        access_token: str,
+        fallback: GOGUserInfo,
     ) -> GOGUserInfo:
         """Fetch user info."""
-        if not access_token or not self._config.api_gog_url:
-            return fallback
-        payload = await fetch_json_get(
-            f'{self._config.api_gog_url}/user/data/account',
+        url = f"{self._config.base_url}/userData.json"
+        data = await fetch_json_get(
+            url,
             bearer=access_token,
             user_agent=self._config.user_agent,
-            log_prefix='[GOGOAuth]',
+            timeout=10.0,
+            log_prefix="[GOGTokens] userData",
         )
-        if not isinstance(payload, dict):
+        if not isinstance(data, dict):
             return fallback
-        username = payload.get('username') or payload.get('email') or ''
-        galaxy_user_id = (
-            str(payload.get('galaxyUserId') or payload.get('userId') or '')
-        )
         return GOGUserInfo(
-            username=str(username),
-            galaxy_user_id=galaxy_user_id,
+            username=str(
+                data.get("username", "") or fallback.username,
+            ),
+            galaxy_user_id=str(
+                data.get("galaxyUserId", "") or fallback.galaxy_user_id,
+            ),
         )
 
     async def _token_request(self, params: dict[str, str]) -> bool:
         """Token request."""
-        url = (
-            f'{self._config.token_url}?{urllib.parse.urlencode(params)}'
-        )
-        payload = await fetch_json_get(
+        url = f"{self._config.token_url}?{urllib.parse.urlencode(params)}"
+        data = await fetch_json_get(
             url,
             user_agent=self._config.user_agent,
-            log_prefix='[GOGOAuth]',
+            timeout=15.0,
+            log_prefix="[GOGTokens] token endpoint",
         )
-        if not isinstance(payload, dict):
+        if not isinstance(data, dict):
             return False
-        access = payload.get('access_token')
-        refresh = payload.get('refresh_token')
-        if not isinstance(access, str) or not isinstance(refresh, str):
+        access = data.get("access_token")
+        refresh = data.get("refresh_token")
+        if not access or not refresh:
+            logger.error(
+                "[GOGTokens] token response missing tokens: keys=%s",
+                list(data.keys()),
+            )
             return False
-        self._access_token = access
-        self._refresh_token = refresh
-        self._token_minted_at = time.time()
-        return await self._save_callback(access, refresh)
+        return await self._save(access, refresh)
 
 
-_: Any = None
+_ = Any

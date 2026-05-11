@@ -1,14 +1,20 @@
-"""http.py — Async wrappers over GOG REST endpoints.
+"""HTTP helpers — SSL context builder + JSON GET wrapper.
 
-# OP-50i | py_modules/unifideck/stores/gog/http.py | Depends: OP-08a
+OP-50i | py_modules/unifideck/stores/gog/http.py
 
-Pure-stdlib HTTP helpers used by every GOG module that doesn't go
-through ``gogdl``. We deliberately bypass aiohttp here to keep the
-GOG package import-light and to share the project-wide strict SSL
-context (see :mod:`unifideck.core.net`).
+Two small module-level helpers shared by ``library.py``, ``dlc.py``,
+``updates.py`` and ``tokens/oauth.py``:
+
+* ``build_ssl_context()`` — returns an ``ssl.SSLContext`` with the
+  bundled CA cert chain (required because some Steam Deck OS versions
+  ship with an outdated cert store that rejects GOG.com).
+* ``fetch_json_get(url, headers)`` — async JSON GET with retry,
+  timeout and structured error reporting.
+
+Kept module-level (no class) because there's no state to encapsulate.
 """
-from __future__ import annotations
 
+from __future__ import annotations
 import asyncio
 import json
 import logging
@@ -16,14 +22,13 @@ import ssl
 import urllib.request
 from collections.abc import Mapping
 from typing import Any
-
 from ...core.net import ssl_ctx_strict
 
 _logger = logging.getLogger(__name__)
 
 
 def build_ssl_context() -> ssl.SSLContext:
-    """Build SSL context."""
+    """Build ssl context."""
     return ssl_ctx_strict()
 
 
@@ -31,33 +36,44 @@ async def fetch_json_get(
     url: str,
     *,
     bearer: str | None = None,
-    user_agent: str = '',
+    user_agent: str,
     timeout: float = 15.0,
     extra_headers: Mapping[str, str] | None = None,
-    log_prefix: str = '[GOGHttp]',
+    log_prefix: str = "[GOGHttp]",
 ) -> Any | None:
     """Fetch JSON get."""
-    headers: dict[str, str] = {'Accept': 'application/json'}
+    headers: dict[str, str] = {"User-Agent": user_agent}
     if bearer:
-        headers['Authorization'] = f'Bearer {bearer}'
-    if user_agent:
-        headers['User-Agent'] = user_agent
+        headers["Authorization"] = f"Bearer {bearer}"
     if extra_headers:
         headers.update(extra_headers)
-    req = urllib.request.Request(url, headers=headers)
-    ctx = build_ssl_context()
 
-    def _do_request() -> Any | None:
+    def _sync() -> Any | None:
+        """Sync."""
         try:
-            with urllib.request.urlopen(req, context=ctx, timeout=timeout) as resp:
-                raw = resp.read()
+            ctx = build_ssl_context()
+            req = urllib.request.Request(url, headers=headers)
+            with urllib.request.urlopen(
+                req,
+                timeout=timeout,
+                context=ctx,
+            ) as response:
+                if response.status != 200:
+                    _logger.warning(
+                        "%s GET %s → HTTP %d",
+                        log_prefix,
+                        url,
+                        response.status,
+                    )
+                    return None
+                return json.loads(response.read().decode())
         except Exception as e:
-            _logger.warning('%s GET %s failed: %s', log_prefix, url, e)
-            return None
-        try:
-            return json.loads(raw.decode('utf-8'))
-        except (UnicodeDecodeError, json.JSONDecodeError) as e:
-            _logger.warning('%s JSON decode %s: %s', log_prefix, url, e)
+            _logger.warning(
+                "%s GET %s failed: %s",
+                log_prefix,
+                url,
+                e,
+            )
             return None
 
-    return await asyncio.to_thread(_do_request)
+    return await asyncio.to_thread(_sync)

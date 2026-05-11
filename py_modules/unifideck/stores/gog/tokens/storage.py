@@ -1,22 +1,34 @@
-"""storage.py — On-disk store for GOG tokens.
+"""Encrypted token persistence — load, persist, clear.
 
-# OP-52b | py_modules/unifideck/stores/gog/tokens/storage.py | Depends: (none)
+OP-52b | py_modules/unifideck/stores/gog/tokens/storage.py
 
-Token file is encrypted via :class:`SecureTokenStore` when possible
-and degrades to plaintext when the secure store can't be opened.
-Plaintext reads emit a ``LEGACY_PLAINTEXT_DETECTED`` audit event so
-the deployment can be flagged for migration.
+``_TokenStorage`` is responsible for the on-disk representation of GOG
+tokens. The file lives at ``GOGConfig.token_file_expanded`` and is
+encrypted via ``SecureTokenStore`` — refusing to fall back to plaintext
+if encryption is unavailable (we'd rather lose the session than leak
+the refresh token).
+
+Atomic write: tokens are written through ``os.open`` + ``os.fdopen``
++ ``os.replace`` with ``mode=0o600`` set at creation time. This is
+deliberately kept verbose because ``Path.open`` doesn't support the
+UNIX permission mode argument and ``Path.rename`` isn't atomic across
+all filesystems.
+
+Migrates legacy plaintext token files on the fly: reads them
+unencrypted (emits ``legacy_plaintext_detected``), and re-encrypts at
+the next ``persist`` call.
+
+Also cleans up the stale gogdl plaintext mirror that gogdl writes to
+its config dir after every subprocess invocation (security hardening).
 """
-from __future__ import annotations
 
+from __future__ import annotations
 import asyncio
 import json
 import logging
 import os
 import time
-from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
-
 from ....security import (
     SecureTokenStore,
     SecureTokenStoreError,
@@ -28,7 +40,6 @@ from .user_info import GOGUserInfo
 
 if TYPE_CHECKING:
     from ..config import GOGConfig
-
 logger = logging.getLogger(__name__)
 
 
@@ -46,29 +57,41 @@ class _TokenStorage:
         self._config = config
         self._bus = bus
         self._secure_store = secure_store
-        self._token_path = os.path.expanduser(config.token_file)
 
     async def load(self) -> tuple[str, str, GOGUserInfo] | None:
         """Load."""
-        path = self._token_path
-        if not Path(path).is_file():
+        path = os.path.expanduser(self._config.token_file)
+        if not os.path.isfile(path):
             return None
-        blob = await asyncio.to_thread(self._read_sync)
+
+        def _read_sync() -> bytes | None:
+            """Read sync."""
+            try:
+                with open(path, "rb") as f:
+                    return f.read()
+            except OSError as e:
+                logger.warning("[GOGTokens] load failed: %s", e)
+                return None
+
+        blob = await asyncio.to_thread(_read_sync)
         if blob is None:
             return None
         data = self._parse_token_blob(blob, path)
-        if data is None:
+        if not isinstance(data, dict):
             return None
-        access = data.get('access_token')
-        refresh = data.get('refresh_token')
-        if not isinstance(access, str) or not isinstance(refresh, str):
+        access = data.get("access_token")
+        refresh = data.get("refresh_token")
+        if not access or not refresh:
             return None
-        user = data.get('user_info') or {}
-        info = GOGUserInfo(
-            username=str(user.get('username', '')),
-            galaxy_user_id=str(user.get('galaxy_user_id', '')),
+        user_info = GOGUserInfo(
+            username=str(data.get("username", "")),
+            galaxy_user_id=str(data.get("user_id", "")),
         )
-        return access, refresh, info
+        logger.info(
+            "[GOGTokens] loaded tokens from disk (user=%s)",
+            user_info.username or "unknown",
+        )
+        return access, refresh, user_info
 
     async def persist(
         self,
@@ -77,149 +100,174 @@ class _TokenStorage:
         user_info: GOGUserInfo,
     ) -> bool:
         """Persist."""
-        payload: dict[str, Any] = {
-            'access_token': access_token,
-            'refresh_token': refresh_token,
-            'user_info': {
-                'username': user_info.username,
-                'galaxy_user_id': user_info.galaxy_user_id,
-            },
-            'saved_at': int(time.time()),
+        path = os.path.expanduser(self._config.token_file)
+        payload = {
+            "access_token": access_token,
+            "refresh_token": refresh_token,
+            "username": user_info.username,
+            "user_id": user_info.galaxy_user_id,
         }
         try:
             blob = self._secure_store.encrypt_payload(payload)
         except SecureTokenStoreError as e:
-            logger.warning('[GOGTokens] encrypt failed, plaintext: %s', e)
-            blob = json.dumps(payload).encode('utf-8')
+            logger.error(
+                "[GOGTokens] cannot encrypt tokens: %s — "
+                "refusing to write plaintext fallback",
+                e,
+            )
+            return False
         ok = await asyncio.to_thread(
-            self._write_token_file_atomic, self._token_path, blob,
+            self._write_token_file_atomic,
+            path,
+            blob,
         )
-        if ok:
-            await self._emit_post_save_security(self._token_path)
-            await asyncio.to_thread(self._remove_stale_gogdl_mirror)
-        return ok
+        if not ok:
+            return False
+        await self._remove_stale_gogdl_mirror()
+        await self._emit_post_save_security(path)
+        logger.info("[GOGTokens] saved tokens (encrypted)")
+        return True
 
     async def clear_files(self) -> None:
         """Clear files."""
-        for path in (
-            self._token_path,
-            os.path.expanduser(self._gogdl_creds_path()),
-        ):
-            try:
-                if os.path.isfile(path):
-                    os.unlink(path)
-            except OSError as e:
-                logger.debug('[GOGTokens] unlink %s: %s', path, e)
+        paths_to_remove = [
+            os.path.expanduser(self._config.token_file),
+            os.path.join(
+                os.path.expanduser(
+                    self._config.gogdl_config_dir,
+                ),
+                "gog_credentials.json",
+            ),
+        ]
+
+        def _remove_sync() -> None:
+            """Remove sync."""
+            for path in paths_to_remove:
+                if not os.path.isfile(path):
+                    continue
+                try:
+                    os.remove(path)
+                    logger.info(
+                        "[GOGTokens] removed %s",
+                        path,
+                    )
+                except OSError as e:
+                    logger.warning(
+                        "[GOGTokens] could not remove %s: %s",
+                        path,
+                        e,
+                    )
+
+        await asyncio.to_thread(_remove_sync)
 
     @staticmethod
     def _write_token_file_atomic(path: str, blob: bytes) -> bool:
         """Write token file atomic."""
         try:
-            os.makedirs(os.path.dirname(path), exist_ok=True)
-            tmp = path + '.tmp'
-            with open(tmp, 'wb') as f:
+            parent = os.path.dirname(path)
+            if parent:
+                os.makedirs(parent, exist_ok=True)
+            tmp = path + ".tmp"
+            fd = os.open(
+                tmp,
+                os.O_WRONLY | os.O_CREAT | os.O_TRUNC,
+                0o600,
+            )
+            with os.fdopen(fd, "wb") as f:
                 f.write(blob)
-            os.chmod(tmp, 0o600)
             os.replace(tmp, path)
         except OSError as e:
-            logger.warning('[GOGTokens] write %s: %s', path, e)
+            logger.warning(
+                "[GOGTokens] save failed: %s",
+                e,
+            )
             return False
         return True
 
     async def _emit_post_save_security(self, path: str) -> None:
         """Emit post save security."""
-        try:
-            mode = os.stat(path).st_mode & 0o777 if os.path.isfile(path) else None
-        except OSError:
-            mode = None
+
+        def _stat_mode() -> int | None:
+            """Stat mode."""
+            try:
+                st = os.stat(path)
+                return st.st_mode & 0o7777
+            except OSError:
+                return None
+
+        mode = await asyncio.to_thread(_stat_mode)
         if mode is not None:
-            await emit_permissions_check(
-                self._bus, store='gog', path=path, mode=mode,
+            emit_permissions_check(
+                self._bus,
+                "gog",
+                path,
+                mode,
             )
 
-    def _parse_token_blob(
-        self, blob: bytes, path: str,
-    ) -> dict[str, Any] | None:
+    def _parse_token_blob(self, blob: bytes, path: str) -> dict[str, Any] | None:
         """Parse token blob."""
         if self._secure_store.is_encrypted(blob):
             try:
                 return self._secure_store.decrypt_payload(blob)
             except SecureTokenStoreError as e:
-                logger.warning('[GOGTokens] decrypt %s: %s', path, e)
-                return None
-        try:
-            data = json.loads(blob.decode('utf-8'))
-        except (UnicodeDecodeError, json.JSONDecodeError) as e:
-            logger.warning('[GOGTokens] parse %s: %s', path, e)
-            return None
-        if isinstance(data, dict):
-            asyncio.get_event_loop_policy()
-            try:
-                loop = asyncio.get_running_loop()
-                loop.create_task(
-                    emit_legacy_plaintext_detected(
-                        self._bus, store='gog', path=path,
-                    ),
-                    name='gog_legacy_plaintext_detected',
+                logger.warning(
+                    "[GOGTokens] decrypt failed for %s: %s",
+                    path,
+                    e,
                 )
-            except RuntimeError:
-                pass
-            return cast(dict[str, Any], data)
-        return None
-
-    async def _emit_post_save_security(self, path: str) -> None:  # noqa: F811
-        """Emit post save security (kept for symmetry with PDF spec)."""
+                return None
+        logger.info(
+            "[GOGTokens] reading legacy plaintext token file "
+            "at %s — will encrypt on next save",
+            path,
+        )
+        emit_legacy_plaintext_detected(self._bus, "gog", path)
         try:
-            mode = os.stat(path).st_mode & 0o777 if os.path.isfile(path) else None
-        except OSError:
-            mode = None
-        if mode is not None:
-            await emit_permissions_check(
-                self._bus, store='gog', path=path, mode=mode,
+            return cast(
+                "dict[str, Any] | None",
+                json.loads(blob.decode("utf-8")),
             )
-
-    def _read_sync(self) -> bytes | None:
-        """Read sync."""
-        try:
-            with open(self._token_path, 'rb') as f:
-                return f.read()
-        except OSError as e:
-            logger.warning('[GOGTokens] read failed: %s', e)
+        except (ValueError, UnicodeDecodeError) as e:
+            logger.warning(
+                "[GOGTokens] legacy JSON parse failed: %s",
+                e,
+            )
             return None
 
-    def _gogdl_creds_path(self) -> str:
-        """GOGDL creds path."""
-        return os.path.join(self._config.gogdl_config_dir, 'credentials.json')
+    async def _remove_stale_gogdl_mirror(self) -> None:
+        """Remove stale GOGDL mirror."""
+        stale = os.path.join(
+            os.path.expanduser(self._config.gogdl_config_dir),
+            "gog_credentials.json",
+        )
 
-    def _remove_stale_gogdl_mirror(self) -> None:
-        """Remove stale GOGDL mirror.
+        def _remove() -> bool:
+            """Remove."""
+            if not os.path.isfile(stale):
+                return False
+            try:
+                os.remove(stale)
+                logger.info(
+                    "[GOGTokens] removed stale gogdl mirror at %s",
+                    stale,
+                )
+                return True
+            except OSError as e:
+                logger.warning(
+                    "[GOGTokens] could not remove stale gogdl mirror %s: %s",
+                    stale,
+                    e,
+                )
+                return False
 
-        After a fresh secure-store write we drop the old plaintext
-        gogdl credentials mirror so the next ``gogdl`` invocation
-        re-mints it from the live tokens.
-        """
-        mirror = os.path.expanduser(self._gogdl_creds_path())
-        try:
-            if os.path.isfile(mirror):
-                os.unlink(mirror)
-                _emit_migrated(self._bus)
-        except OSError as e:
-            logger.debug('[GOGTokens] mirror unlink: %s', e)
-
-
-def _emit_migrated(bus: Any) -> None:
-    """Emit migrated.
-
-    Schedules ``emit_token_file_migrated`` on the running loop if any.
-    """
-    try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        return
-    loop.create_task(
-        emit_token_file_migrated(bus, store='gog'),
-        name='gog_token_file_migrated',
-    )
+        removed = await asyncio.to_thread(_remove)
+        if removed:
+            emit_token_file_migrated(
+                self._bus,
+                "gog",
+                stale,
+                "",
+            )
 
 
 _ = time

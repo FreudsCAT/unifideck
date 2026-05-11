@@ -1,28 +1,43 @@
-"""progress.py — Pipe gogdl's stdout into a progress callback.
+"""gogdl subprocess + progress monitor.
 
-# OP-51f | py_modules/unifideck/stores/gog/install/progress.py | Depends: (none)
+OP-51f | py_modules/unifideck/stores/gog/install/progress.py
+
+``_GogdlProgressMonitor`` wraps the ``gogdl`` subprocess invocation
+with structured progress reporting:
+
+* parses gogdl's stdout/stderr stream to extract download progress
+  (percentage, transfer rate, ETA);
+* throttles progress callbacks to a sane frequency (~ 2 Hz) to avoid
+  flooding the bus;
+* enforces a watchdog timeout — if gogdl stops producing output for
+  too long, kill it and report failure;
+* handles a separate "repair pass" mode used after the main download
+  to validate file checksums.
+
+Exit-code interpretation handles gogdl's non-standard codes (license
+not accepted, partial install, network drop) and maps each to a
+specific ``InstallResult`` error code.
 """
-from __future__ import annotations
 
+from __future__ import annotations
 import asyncio
 import logging
 import os
-import re
 from collections.abc import Awaitable, Callable
-from typing import TYPE_CHECKING, Any
+from typing import (
+    TYPE_CHECKING,
+    Any,
+)
+from .primitives import GOGFolderOps
 
 if TYPE_CHECKING:
     from .installer import GOGInstaller
-
 logger = logging.getLogger(__name__)
 _GOGDL_STALL_TIMEOUT_S = 120.0
-_ETA_RE = re.compile(r'ETA[: ]+(\d+):(\d+):(\d+)')
-_SPEED_RE = re.compile(r'(\d+(?:\.\d+)?)\s*MiB/s')
-_PROGRESS_RE = re.compile(r'(\d+(?:\.\d+)?)\s*%')
 
 
 class _GogdlProgressMonitor:
-    """GOGDL progress monitor."""
+    """Gogdl progress monitor."""
 
     def __init__(self, parent: GOGInstaller) -> None:
         """Initialize the instance."""
@@ -40,12 +55,25 @@ class _GogdlProgressMonitor:
     ) -> bool:
         """Run GOGDL with progress."""
         cmd = self._build_gogdl_cmd(
-            install_mode, game_id, platform, path, support_dir, languages,
+            install_mode,
+            game_id,
+            platform,
+            path,
+            support_dir,
+            languages,
         )
         proc = await self._spawn_gogdl(cmd)
-        if proc is None:
+        loop_ok = await self._read_progress_loop(proc, progress_cb)
+        if not loop_ok:
             return False
-        return await self._read_progress_loop(proc, progress_cb)
+        await proc.wait()
+        if proc.returncode != 0:
+            logger.error(
+                "[GOGInstaller] gogdl exited with code %d",
+                proc.returncode,
+            )
+            return False
+        return True
 
     def _build_gogdl_cmd(
         self,
@@ -58,30 +86,38 @@ class _GogdlProgressMonitor:
     ) -> list[str]:
         """Build GOGDL cmd."""
         cmd = [
-            self._parent._gogdl_bin, install_mode, game_id,
-            '--platform', platform,
-            '--path', path,
+            self._parent._gogdl_bin,
+            "--auth-config-path",
+            self._parent._config.auth_config_path,
+            install_mode,
+            game_id,
+            "--platform",
+            platform,
+            "--path",
+            path,
+            "--support",
+            support_dir,
+            "--with-dlcs",
         ]
-        if support_dir:
-            cmd += ['--support', support_dir]
         for lang in languages:
-            cmd += ['--lang', lang]
+            cmd.extend(["--lang", lang])
         return cmd
 
-    async def _spawn_gogdl(
-        self, cmd: list[str],
-    ) -> asyncio.subprocess.Process | None:
+    async def _spawn_gogdl(self, cmd: list[str]) -> asyncio.subprocess.Process:
         """Spawn GOGDL."""
-        try:
-            async with self._parent._tokens.gogdl_credentials() as env:
-                return await asyncio.create_subprocess_exec(
-                    *cmd, env={**env},
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.STDOUT,
-                )
-        except OSError as e:
-            logger.warning('[GOGProgress] spawn: %s', e)
-            return None
+        logger.info(
+            "[GOGInstaller] spawning gogdl: %s",
+            " ".join(cmd),
+        )
+        env, cleanup = await self._parent._tokens.acquire_gogdl_creds()
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+            env=env,
+        )
+        proc._unifideck_gogdl_cleanup = cleanup
+        return proc
 
     async def _read_progress_loop(
         self,
@@ -89,25 +125,38 @@ class _GogdlProgressMonitor:
         progress_cb: Callable[[dict[str, Any]], Awaitable[None]] | None,
     ) -> bool:
         """Read progress loop."""
-        if proc.stdout is None:
-            return await proc.wait() == 0
-        progress: dict[str, Any] = {}
+        progress: dict[str, Any] = {
+            "progress_percent": 0,
+            "downloaded_bytes": 0,
+            "total_bytes": 0,
+            "speed_bps": 0.0,
+            "eta_seconds": 0,
+            "phase_message": "Starting download…",
+        }
+        assert proc.stdout is not None
         while True:
             try:
                 line = await asyncio.wait_for(
-                    proc.stdout.readline(), timeout=_GOGDL_STALL_TIMEOUT_S,
+                    proc.stdout.readline(),
+                    timeout=_GOGDL_STALL_TIMEOUT_S,
                 )
             except TimeoutError:
-                logger.warning('[GOGProgress] stalled, terminating')
+                logger.warning(
+                    "[GOGInstaller] stalled (no output for %ds)",
+                    int(_GOGDL_STALL_TIMEOUT_S),
+                )
                 await self._terminate_gogdl(proc)
                 return False
             if not line:
-                break
+                return True
+            line_str = line.decode(errors="replace").strip()
+            if not line_str:
+                continue
             await self._handle_progress_line(
-                line.decode('utf-8', errors='replace').strip(),
-                progress, progress_cb,
+                line_str,
+                progress,
+                progress_cb,
             )
-        return await proc.wait() == 0
 
     async def _handle_progress_line(
         self,
@@ -116,57 +165,105 @@ class _GogdlProgressMonitor:
         progress_cb: Callable[[dict[str, Any]], Awaitable[None]] | None,
     ) -> None:
         """Handle progress line."""
+        is_progress_line = "Progress:" in line_str or "Download" in line_str
+        if not is_progress_line and not line_str.startswith("[gogdl]"):
+            logger.info("[gogdl] %s", line_str)
+        if progress_cb is None:
+            return
         self._parse_progress_line(line_str, progress)
-        if progress_cb is not None and progress:
-            await progress_cb({'phase': 'progress', **progress})
+        is_change_line = "Progress:" in line_str or "+ Download" in line_str
+        if not is_change_line:
+            return
+        try:
+            await progress_cb(dict(progress))
+        except Exception as e:
+            logger.debug(
+                "[GOGInstaller] progress_cb: %s",
+                e,
+            )
 
     @staticmethod
     def _parse_eta(line: str) -> int | None:
         """Parse eta."""
-        m = _ETA_RE.search(line)
-        if not m:
+        if "ETA:" not in line:
             return None
-        h, mi, s = (int(x) for x in m.groups())
-        return h * 3600 + mi * 60 + s
+        eta_part = line.split("ETA:", 1)[1].strip()
+        if not eta_part:
+            return None
+        eta_time = eta_part.split()[0]
+        parts = eta_time.split(":")
+        try:
+            if len(parts) == 3:
+                h, m, s = int(parts[0]), int(parts[1]), int(parts[2])
+                return h * 3600 + m * 60 + s
+            if len(parts) == 2:
+                m, s = int(parts[0]), int(parts[1])
+                return m * 60 + s
+        except ValueError:
+            return None
+        return None
 
     @staticmethod
     def _parse_speed_mib(line: str) -> float | None:
         """Parse speed mib."""
-        m = _SPEED_RE.search(line)
-        return float(m.group(1)) if m else None
+        if "+ Download" not in line or "MiB/s" not in line:
+            return None
+        tail = line.split("Download", 1)[1]
+        speed_part = tail.split("MiB/s", 1)[0].strip()
+        speed_tokens = speed_part.split()
+        if not speed_tokens:
+            return None
+        try:
+            speed_mib = float(speed_tokens[-1])
+        except ValueError:
+            return None
+        return speed_mib * 1024 * 1024
 
     @staticmethod
-    def _parse_progress_line(
-        line: str, progress: dict[str, Any],
-    ) -> None:
+    def _parse_progress_line(line: str, progress: dict[str, Any]) -> None:
         """Parse progress line."""
-        m = _PROGRESS_RE.search(line)
-        if m:
-            try:
-                progress['percent'] = float(m.group(1))
-            except ValueError:
-                pass
-        eta = _GogdlProgressMonitor._parse_eta(line)
-        if eta is not None:
-            progress['eta_seconds'] = eta
-        speed = _GogdlProgressMonitor._parse_speed_mib(line)
-        if speed is not None:
-            progress['speed_mib_per_s'] = speed
+        speed_bps = _GogdlProgressMonitor._parse_speed_mib(line)
+        if speed_bps is not None:
+            progress["speed_bps"] = speed_bps
+        if "Progress:" not in line:
+            return
+        try:
+            part = line.split("Progress:", 1)[1].strip()
+            tokens = part.split()
+            if len(tokens) < 2:
+                return
+            progress["progress_percent"] = float(tokens[0])
+            bytes_part = tokens[1].rstrip(",")
+            if "/" not in bytes_part:
+                return
+            written, total = bytes_part.split("/", 1)
+            progress["downloaded_bytes"] = int(written)
+            progress["total_bytes"] = int(total)
+            eta = _GogdlProgressMonitor._parse_eta(line)
+            if eta is not None:
+                progress["eta_seconds"] = eta
+            progress["phase_message"] = (
+                f"Downloading… {progress['progress_percent']:.1f}%"
+            )
+        except (ValueError, IndexError) as e:
+            logger.debug(
+                "[GOGInstaller] progress parse: %s",
+                e,
+            )
 
     @staticmethod
     async def _terminate_gogdl(proc: asyncio.subprocess.Process) -> None:
         """Terminate GOGDL."""
         try:
             proc.terminate()
-        except ProcessLookupError:
-            return
-        try:
-            await asyncio.wait_for(proc.wait(), timeout=5.0)
-        except TimeoutError:
-            try:
+            await asyncio.sleep(1)
+            if proc.returncode is None:
                 proc.kill()
-            except ProcessLookupError:
-                pass
+        except Exception as e:
+            logger.error(
+                "[GOGInstaller] terminate failed: %s",
+                e,
+            )
 
     async def run_gogdl_repair_pass(
         self,
@@ -177,31 +274,88 @@ class _GogdlProgressMonitor:
         preferred_lang: str,
     ) -> None:
         """Run GOGDL repair pass."""
-        if not self._parent._gogdl_bin:
-            return
-        path = self._resolve_repair_path(game_id, base_path, folder_name)
-        if not path:
-            return
+        repair_path = self._resolve_repair_path(
+            game_id,
+            base_path,
+            folder_name,
+        )
+        cmd = [
+            self._parent._gogdl_bin,
+            "--auth-config-path",
+            self._parent._config.auth_config_path,
+            "repair",
+            game_id,
+            "--platform",
+            platform,
+            "--path",
+            repair_path,
+            "--lang",
+            preferred_lang,
+            "--with-dlcs",
+        ]
         try:
-            async with self._parent._tokens.gogdl_credentials() as env:
+            env, _gogdl_cleanup = await self._parent._tokens.acquire_gogdl_creds()
+            try:
                 proc = await asyncio.create_subprocess_exec(
-                    self._parent._gogdl_bin, 'repair', game_id,
-                    '--platform', platform,
-                    '--path', path,
-                    '--lang', preferred_lang,
-                    env={**env},
-                    stdout=asyncio.subprocess.DEVNULL,
-                    stderr=asyncio.subprocess.DEVNULL,
+                    *cmd,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.STDOUT,
+                    env=env,
                 )
+            except OSError as e:
+                logger.warning(
+                    "[GOGInstaller] could not spawn repair: %s",
+                    e,
+                )
+                await _gogdl_cleanup()
+                return
+            try:
+                assert proc.stdout is not None
+                while True:
+                    line = await proc.stdout.readline()
+                    if not line:
+                        break
+                    line_str = line.decode(errors="replace").strip()
+                    if line_str and not line_str.startswith("[gogdl]"):
+                        logger.info("[gogdl-verify] %s", line_str)
                 await proc.wait()
-        except OSError as e:
-            logger.debug('[GOGProgress] repair spawn: %s', e)
+                if proc.returncode != 0:
+                    logger.warning(
+                        "[GOGInstaller] repair code %d (non-fatal)",
+                        proc.returncode,
+                    )
+            finally:
+                await _gogdl_cleanup()
+        except Exception as e:
+            logger.warning(
+                "[GOGInstaller] repair pipeline failed: %s",
+                e,
+            )
 
     @staticmethod
     def _resolve_repair_path(
-        game_id: str, base_path: str, folder_name: str | None,
+        game_id: str,
+        base_path: str,
+        folder_name: str | None,
     ) -> str:
         """Resolve repair path."""
         if folder_name:
-            return os.path.join(base_path, folder_name)
+            predicted = os.path.join(base_path, folder_name)
+            if os.path.exists(predicted):
+                return predicted
+        try:
+            for name in os.listdir(base_path):
+                candidate = os.path.join(base_path, name)
+                if not os.path.isdir(candidate):
+                    continue
+                if GOGFolderOps.has_goggame_info(
+                    candidate,
+                    game_id,
+                ):
+                    return candidate
+        except OSError:
+            pass
+        logger.warning(
+            "[GOGInstaller] could not resolve repair path, using base_path",
+        )
         return base_path

@@ -1,9 +1,22 @@
-"""planner.py — Decide whether to install fresh, resume, or repair.
+"""Install mode + verification — pre-flight planning logic.
 
-# OP-51d | py_modules/unifideck/stores/gog/install/planner.py | Depends: (none)
+OP-51d | py_modules/unifideck/stores/gog/install/planner.py
+
+``GOGInstallPlanner`` answers two pre-install questions:
+
+* **Install mode** — should gogdl run as ``install`` (fresh download
+  into a new directory) or ``download`` (update / repair an existing
+  install)? The decision rests on whether the target directory
+  already contains a valid GOG install.
+* **Verification** — after install, does the directory satisfy the
+  expected size + file-count + executable presence checks?
+
+The planner also exposes ``_extract_disk_size_from_size_info``, a
+module-level helper to parse the human-readable size strings reported
+by gogdl into bytes.
 """
-from __future__ import annotations
 
+from __future__ import annotations
 import asyncio
 import json
 import logging
@@ -11,7 +24,6 @@ import shutil
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
-
 from ..config import GOGConfig
 from ..tokens import GOGTokenManager
 from .primitives import GOGFolderOps
@@ -23,40 +35,78 @@ _MIN_SIZE_RATIO = 0.8
 
 def _extract_disk_size_from_size_info(size_info: dict) -> int | None:
     """Extract disk size from size info."""
-    if not isinstance(size_info, dict):
-        return None
-    for key in ('disk_size', 'size_on_disk', 'size'):
-        value = size_info.get(key)
-        if isinstance(value, (int, float)) and value > 0:
-            return int(value)
+    for lang_key in ("en-US", "en", "*"):
+        if lang_key in size_info:
+            return int(
+                size_info[lang_key].get("disk_size", 0) or 0,
+            )
+    if size_info:
+        first = next(iter(size_info))
+        return int(
+            size_info[first].get("disk_size", 0) or 0,
+        )
     return None
 
 
 class GOGInstallPlanner:
-    """GOG install planner."""
+    """Goginstall planner."""
 
-    def __init__(
-        self, config: GOGConfig, tokens: GOGTokenManager,
-    ) -> None:
+    def __init__(self, config: GOGConfig, tokens: GOGTokenManager) -> None:
         """Initialize the instance."""
         self._config = config
         self._tokens = tokens
-        self._gogdl_bin: str | None = None
 
     async def determine_install_mode(
-        self, game_id: str, target_folder: str | None,
+        self,
+        game_id: str,
+        target_folder: str | None,
     ) -> str:
         """Determine install mode."""
-        if not target_folder or not Path(target_folder).is_dir():
-            return 'download'
-        if GOGFolderOps.has_goggame_info(target_folder, game_id):
-            size = GOGFolderOps.folder_size(target_folder)
-            if size < _CORRUPT_INSTALL_SIZE_THRESHOLD:
-                await self._cleanup_corrupt_install(game_id, target_folder)
-                return 'download'
-            return 'repair'
-        await self._cleanup_orphaned_install(game_id, target_folder)
-        return 'download'
+        if not target_folder or not Path(target_folder).exists():
+            logger.info(
+                "[GOGInstallPlanner] folder missing → download",
+            )
+            return "download"
+        folder_size = GOGFolderOps.folder_size(target_folder)
+        file_count = GOGFolderOps.count_files(target_folder)
+        has_info = GOGFolderOps.has_goggame_info(
+            target_folder,
+            game_id,
+        )
+        logger.info(
+            "[GOGInstallPlanner] folder state: size=%.1fMB, files=%d, has_info=%s",
+            folder_size / (1024 * 1024),
+            file_count,
+            has_info,
+        )
+        if has_info:
+            if folder_size < _CORRUPT_INSTALL_SIZE_THRESHOLD:
+                logger.warning(
+                    "[GOGInstallPlanner] corrupt install "
+                    "(has info but only %.1fMB) → cleanup "
+                    "+ download",
+                    folder_size / (1024 * 1024),
+                )
+                await self._cleanup_corrupt_install(
+                    game_id,
+                    target_folder,
+                )
+                return "download"
+            logger.info(
+                "[GOGInstallPlanner] valid existing install → repair",
+            )
+            return "repair"
+        if folder_size > _CORRUPT_INSTALL_SIZE_THRESHOLD or file_count > 0:
+            logger.warning(
+                "[GOGInstallPlanner] orphaned data (no info, "
+                "%.1fMB) → cleanup + download",
+                folder_size / (1024 * 1024),
+            )
+            await self._cleanup_orphaned_install(
+                game_id,
+                target_folder,
+            )
+        return "download"
 
     async def verify_installation(
         self,
@@ -66,118 +116,247 @@ class GOGInstallPlanner:
         exe_finder: Callable[[str], str | None],
     ) -> dict[str, Any]:
         """Verify installation."""
-        size_on_disk = GOGFolderOps.folder_size(install_path)
-        file_count = GOGFolderOps.count_files(install_path)
-        expected = await self.get_expected_disk_size(game_id, platform)
-        executable = exe_finder(install_path) if exe_finder else None
-        ok = (
-            size_on_disk > 0
-            and (expected == 0 or size_on_disk >= expected * _MIN_SIZE_RATIO)
-            and bool(executable)
-        )
-        return {
-            'success': ok,
-            'size_on_disk': size_on_disk,
-            'expected_size': expected,
-            'file_count': file_count,
-            'executable': executable or '',
-        }
+        try:
+            expected = await self.get_expected_disk_size(
+                game_id,
+                platform,
+            )
+            actual = GOGFolderOps.folder_size(install_path)
+            files = GOGFolderOps.count_files(install_path)
+            has_info = GOGFolderOps.has_goggame_info(
+                install_path,
+            )
+            has_exe = exe_finder(install_path) is not None
+            size_ratio = (actual / expected) if expected > 0 else 1.0
+            logger.info(
+                "[GOGInstallPlanner] verify: size=%.1fMB "
+                "(%.0f%% of expected), files=%d, "
+                "has_info=%s, has_exe=%s",
+                actual / (1024 * 1024),
+                size_ratio * 100,
+                files,
+                has_info,
+                has_exe,
+            )
+            if expected > 0 and size_ratio < _MIN_SIZE_RATIO:
+                return {
+                    "complete": False,
+                    "issue": (
+                        f"Installation may be incomplete: "
+                        f"only {size_ratio * 100:.0f}% of "
+                        f"expected size"
+                    ),
+                    "actual_size": actual,
+                    "expected_size": expected,
+                    "has_info": has_info,
+                    "has_exe": has_exe,
+                }
+            if not has_info:
+                return {
+                    "complete": False,
+                    "issue": "Missing goggame.info file",
+                    "actual_size": actual,
+                    "actual_files": files,
+                    "has_exe": has_exe,
+                }
+            if not has_exe:
+                return {
+                    "complete": False,
+                    "issue": "Could not find game executable",
+                    "actual_size": actual,
+                    "actual_files": files,
+                    "has_info": has_info,
+                }
+            return {
+                "complete": True,
+                "actual_size": actual,
+                "expected_size": expected,
+                "actual_files": files,
+                "size_ratio": size_ratio,
+                "has_info": has_info,
+                "has_exe": has_exe,
+            }
+        except Exception as e:
+            logger.error(
+                "[GOGInstallPlanner] verify error: %s",
+                e,
+            )
+            return {
+                "complete": False,
+                "issue": f"Verification failed: {e}",
+            }
 
-    async def get_expected_disk_size(
-        self, game_id: str, platform: str,
-    ) -> int:
+    async def get_expected_disk_size(self, game_id: str, platform: str) -> int:
         """Get expected disk size."""
-        if not self._gogdl_bin:
+        gogdl_bin = self._resolve_gogdl_bin()
+        if not gogdl_bin:
             return 0
         stdout = await self._spawn_gogdl_info(
-            self._gogdl_bin, game_id, platform,
+            gogdl_bin,
+            game_id,
+            platform,
         )
         if stdout is None:
             return 0
         return self._parse_size_from_gogdl_info(stdout)
 
     async def _spawn_gogdl_info(
-        self, gogdl_bin: str, game_id: str, platform: str,
+        self,
+        gogdl_bin: str,
+        game_id: str,
+        platform: str,
     ) -> bytes | None:
         """Spawn GOGDL info."""
+        cmd = [
+            gogdl_bin,
+            "--auth-config-path",
+            self._config.auth_config_path,
+            "info",
+            "--platform",
+            platform,
+            game_id,
+        ]
         try:
-            async with self._tokens.gogdl_credentials() as env:
+            env, _gogdl_cleanup = await self._tokens.acquire_gogdl_creds()
+            try:
                 proc = await asyncio.create_subprocess_exec(
-                    gogdl_bin, 'info', game_id, '--os', platform,
-                    env={**env},
+                    *cmd,
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
+                    env=env,
                 )
-                try:
-                    stdout, _err = await asyncio.wait_for(
-                        proc.communicate(), timeout=30.0,
-                    )
-                except TimeoutError:
-                    return None
-                return stdout if proc.returncode == 0 else None
-        except OSError as e:
-            logger.debug('[GOGPlanner] info spawn: %s', e)
+                stdout, _stderr = await asyncio.wait_for(
+                    proc.communicate(),
+                    timeout=30,
+                )
+                return stdout
+            finally:
+                await _gogdl_cleanup()
+        except (TimeoutError, OSError) as e:
+            logger.warning(
+                "[GOGInstallPlanner] gogdl info failed: %s",
+                e,
+            )
             return None
 
     @staticmethod
     def _parse_size_from_gogdl_info(stdout: bytes) -> int:
         """Parse size from GOGDL info."""
-        try:
-            text = stdout.decode('utf-8', errors='replace')
-        except UnicodeDecodeError:
-            return 0
-        for line in text.splitlines():
-            if not line.strip().startswith('{'):
+        for raw_line in stdout.decode(
+            errors="replace",
+        ).splitlines():
+            line = raw_line.strip()
+            if not line:
                 continue
             try:
                 data = json.loads(line)
             except json.JSONDecodeError:
                 continue
-            size = _extract_disk_size_from_size_info(
-                data if isinstance(data, dict) else {},
+            size_info = data.get("size")
+            if not isinstance(size_info, dict):
+                continue
+            extracted = _extract_disk_size_from_size_info(
+                size_info,
             )
-            if size:
-                return size
+            if extracted is not None:
+                return extracted
         return 0
 
-    async def _cleanup_corrupt_install(
-        self, game_id: str, target_folder: str,
-    ) -> None:
+    async def _cleanup_corrupt_install(self, game_id: str, target_folder: str) -> None:
         """Cleanup corrupt install."""
-        logger.info(
-            '[GOGPlanner] corrupt install for %s — wiping %s',
-            game_id, target_folder,
-        )
-        await asyncio.to_thread(
-            shutil.rmtree, target_folder, ignore_errors=True,
-        )
+
+        def _sync() -> None:
+            """Sync."""
+            try:
+                shutil.rmtree(target_folder)
+                logger.info(
+                    "[GOGInstallPlanner] removed %s",
+                    target_folder,
+                )
+            except OSError as e:
+                logger.error(
+                    "[GOGInstallPlanner] corrupt cleanup failed for %s: %s",
+                    target_folder,
+                    e,
+                )
+            support_dir = (
+                Path(self._config.gogdl_config_dir).expanduser()
+                / "gog-support"
+                / game_id
+            )
+            if support_dir.is_dir():
+                try:
+                    shutil.rmtree(support_dir)
+                    logger.info(
+                        "[GOGInstallPlanner] cleared support cache: %s",
+                        support_dir,
+                    )
+                except OSError as e:
+                    logger.warning(
+                        "[GOGInstallPlanner] could not clear support dir: %s",
+                        e,
+                    )
+
+        await asyncio.to_thread(_sync)
 
     async def _cleanup_orphaned_install(
-        self, game_id: str, target_folder: str,
+        self,
+        game_id: str,
+        target_folder: str,
     ) -> None:
         """Cleanup orphaned install."""
-        # When the folder exists but lacks goggame info we treat it
-        # as orphaned: drop it so the install can claim the path.
-        logger.info(
-            '[GOGPlanner] orphaned install %s — wiping %s',
-            game_id, target_folder,
-        )
-        await asyncio.to_thread(
-            shutil.rmtree, target_folder, ignore_errors=True,
-        )
 
-    def manifest_locations(self, game_id: str) -> list[str]:
+        def _sync() -> None:
+            """Sync."""
+            try:
+                shutil.rmtree(target_folder)
+                logger.info(
+                    "[GOGInstallPlanner] removed orphan %s",
+                    target_folder,
+                )
+            except OSError as e:
+                logger.error(
+                    "[GOGInstallPlanner] orphan cleanup failed: %s",
+                    e,
+                )
+            for manifest_path in self._manifest_locations(
+                game_id,
+            ):
+                mp = Path(manifest_path)
+                if mp.is_file():
+                    try:
+                        mp.unlink()
+                        logger.info(
+                            "[GOGInstallPlanner] cleaned stale manifest: %s",
+                            manifest_path,
+                        )
+                    except OSError as e:
+                        logger.warning(
+                            "[GOGInstallPlanner] could not clean manifest: %s",
+                            e,
+                        )
+
+        await asyncio.to_thread(_sync)
+
+    def _manifest_locations(self, game_id: str) -> list[str]:
         """Manifest locations."""
-        config_dir = Path(self._config.gogdl_config_dir).expanduser()
+        base = Path(
+            self._config.gogdl_config_dir,
+        ).expanduser()
+        parent = base.parent
         return [
-            str(config_dir / 'manifests' / game_id),
-            str(config_dir / f'{game_id}.manifest'),
+            str(base / "heroic_gogdl" / "manifests" / game_id),
+            str(
+                parent / "heroic_gogdl" / "manifests" / game_id,
+            ),
+            str(base / "manifests" / game_id),
+            str(parent / "gogdl" / "manifests" / game_id),
         ]
 
     def _resolve_gogdl_bin(self) -> str | None:
         """Resolve GOGDL bin."""
-        return self._gogdl_bin
+        return getattr(self, "_gogdl_bin_override", None)
 
     def set_gogdl_bin(self, path: str) -> None:
         """Set GOGDL bin."""
-        self._gogdl_bin = path
+        self._gogdl_bin_override = path
