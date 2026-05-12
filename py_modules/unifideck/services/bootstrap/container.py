@@ -1,11 +1,18 @@
-"""services/bootstrap/container.py — Dependency injection container.
+"""Service container — typed registry of all Layer-5 services.
 
-Holds typed references to all service instances. Used as the single injection
-point — main.py creates one and passes it to RPC handlers, or test harnesses
-can create one with a subset of services.
+OP-13b | py_modules/unifideck/services/bootstrap/container.py
+
+``ServiceContainer`` holds one reference per service constructed at
+boot time. It's a simple typed bag — no dependency-injection magic,
+just a place to find any service by attribute name with full type
+hints for IDEs.
+
+Services that depend on other services receive their dependencies as
+constructor arguments (not by reaching into the container at runtime),
+keeping each service independently testable.
 """
-from __future__ import annotations
 
+from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -18,7 +25,6 @@ if TYPE_CHECKING:
     from ..download import DownloadService
     from ..feature_flag_service import FeatureFlagService
     from ..launch_history import LaunchHistoryService
-    from ..launcher import LauncherService
     from ..metadata_service import MetadataService
     from ..microsoft_subscription import (
         MicrosoftSubscriptionService,
@@ -32,7 +38,7 @@ if TYPE_CHECKING:
 
 @dataclass
 class ServiceContainer:
-    """Dependency injection container holding all service instances."""
+    """Service container."""
 
     shortcut: ShortcutService | None = None
     download: DownloadService | None = None
@@ -49,4 +55,3 @@ class ServiceContainer:
     security: SecurityService | None = None
     launch_history: LaunchHistoryService | None = None
     microsoft_subscription: MicrosoftSubscriptionService | None = None
-    launcher: LauncherService | None = None

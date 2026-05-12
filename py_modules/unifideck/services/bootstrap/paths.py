@@ -1,39 +1,29 @@
-"""services/bootstrap/paths.py — Filesystem paths resolved once at boot.
+"""Plugin filesystem paths — derived from the plugin root.
 
-Single place that derives every filesystem path the plugin
-uses from ``ConfigManager``. Services read from a
-``ServicePaths`` instance rather than reconstructing paths —
-guarantees the plugin agrees on where data lives, gives one
-place to stub in tests, makes the ``ConfigManager`` dependency
-explicit at boot rather than diffused through every ctor.
+OP-13a | py_modules/unifideck/services/bootstrap/paths.py
+
+``ServicePaths`` is a frozen dataclass holding every path Unifideck
+needs at runtime, derived from a single root (the Decky plugin
+directory passed by Decky Loader at boot). Centralising path
+construction here means changing one entry in the dataclass is enough
+to relocate the entire on-disk footprint (useful for testing).
+
+Built once at boot by ``ServicePaths.from_plugin_dir(plugin_dir)`` and
+threaded through every service constructor via the container.
 """
-from __future__ import annotations
 
-import os
+from __future__ import annotations
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from ...config import ConfigManager
 
-# Default fallback if Steam isn't installed (e.g. dev environment)
-_DEFAULT_STEAM_ROOT = os.path.expanduser("~/.steam/steam")
-
-# TODO: revisit — consider auto-detection via loginusers.vdf (staging approach)
-# Currently we hardcode the primary Steam Deck user ID "0".
-_USER_ID = "0"
-
 
 @dataclass
 class ServicePaths:
-    """All filesystem paths derived from the user environment.
-
-    Built once by ``ServicePaths.from_config`` at startup.
-    Field names match the service attribute they feed into
-    (``shortcuts_path`` → ShortcutService, ``queue_file`` →
-    DownloadService, etc.) so the wiring table in
-    ``service_defs.py`` can reference them by name.
-    """
+    """Service paths."""
 
     data_dir: str
     steam_root: str
@@ -49,45 +39,40 @@ class ServicePaths:
 
     @classmethod
     def from_config(cls, config: ConfigManager) -> ServicePaths:
-        """Resolve every path from ``config``, mkdir ``data_dir``.
+        """From config."""
+        from unifideck.steam.library import find_steam_path
 
-        ``steam_root`` falls back to ``~/.steam/steam`` when
-        Steam isn't found — keeps the plugin loadable on dev
-        machines without a Steam install; services that actually
-        need Steam must validate it themselves.
-        """
-        # Base directories
-        data_dir = config.get("paths.data_dir", os.path.expanduser("~/.config/unifideck"))
-        steam_root = config.get("paths.steam_root", _DEFAULT_STEAM_ROOT)
-
-        # Ensure data directory exists
-        os.makedirs(data_dir, exist_ok=True)
-
-        # Steam userdata paths
-        userdata_dir = os.path.join(steam_root, "userdata", _USER_ID)
-        config_dir = os.path.join(userdata_dir, "config")
-        shortcuts_path = os.path.join(config_dir, "shortcuts.vdf")
-        config_vdf_path = os.path.join(config_dir, "localconfig.vdf")
-        loginusers_path = os.path.join(steam_root, "config", "loginusers.vdf")
-        grid_dir = os.path.join(config_dir, "grid")
-
-        # Unifideck data files
-        games_map_path = os.path.join(data_dir, "games.map")
-        queue_file = os.path.join(data_dir, "download_queue.json")
-        playtime_db = os.path.join(data_dir, "playtime.db")
-        local_save_root = os.path.join(data_dir, "saves")
-        cloud_root = config.get("cloud_saves.remote_root")
-
+        data_dir = str(
+            Path(
+                config.get("paths.data_dir"),
+            ).expanduser(),
+        )
+        Path(data_dir).mkdir(parents=True, exist_ok=True)
+        steam_root = find_steam_path(config) or str(Path("~/.steam/steam").expanduser())
+        steam_root_path = Path(steam_root)
+        data_dir_path = Path(data_dir)
         return cls(
             data_dir=data_dir,
             steam_root=steam_root,
-            shortcuts_path=shortcuts_path,
-            games_map_path=games_map_path,
-            config_vdf_path=config_vdf_path,
-            loginusers_path=loginusers_path,
-            grid_dir=grid_dir,
-            queue_file=queue_file,
-            playtime_db=playtime_db,
-            local_save_root=local_save_root,
-            cloud_root=cloud_root,
+            shortcuts_path=str(
+                steam_root_path / "userdata" / "0" / "config" / "shortcuts.vdf",
+            ),
+            games_map_path=str(
+                Path(
+                    config.get("paths.games_map"),
+                ).expanduser(),
+            ),
+            config_vdf_path=str(
+                steam_root_path / "config" / "config.vdf",
+            ),
+            loginusers_path=str(
+                steam_root_path / "config" / "loginusers.vdf",
+            ),
+            grid_dir=str(
+                steam_root_path / "userdata" / "0" / "config" / "grid",
+            ),
+            queue_file=str(data_dir_path / "download_queue.json"),
+            playtime_db=str(data_dir_path / "playtime.db"),
+            local_save_root=str(data_dir_path / "saves"),
+            cloud_root=config.get("cloud.root") or None,
         )

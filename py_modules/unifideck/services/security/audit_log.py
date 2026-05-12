@@ -1,22 +1,18 @@
-"""services.security.audit_log — Bounded audit log + per-event counters.
+"""Audit log — rotating log of security-relevant events.
 
-Extracted from the flat ``security_service.py`` on 2026-04-18 to
-encapsulate the two state pieces that ``SecurityService``
-maintains for observability:
+OP-19b | py_modules/unifideck/services/security/audit_log.py
 
-  - A bounded deque of recent event entries (for the
-    DiagnosticsPanel timeline, exposed via the ``get_audit_log``
-    RPC).
-  - A per-event-type counter map (for the Security metrics row,
-    exposed via ``get_counters``).
+``AuditLog`` is a rotating file logger dedicated to security events
+(auth attempts, config changes, token operations, permission
+violations). Logs are written in a structured (JSON) format so they
+can be machine-parsed by external tools.
 
-The class owns these two pieces together because they are
-updated in lockstep: every ``record()`` call appends to the deque
-and bumps the counter. Separating them would just duplicate the
-exception-catching boilerplate on both sides.
+Rotation is size-based : the active log is rotated when it exceeds
+the configured limit (default 5 MiB), and the N most recent rotated
+files are kept.
 """
-from __future__ import annotations
 
+from __future__ import annotations
 import logging
 import time
 from collections import deque
@@ -26,34 +22,15 @@ logger = logging.getLogger(__name__)
 
 
 class AuditLog:
-    """Bounded audit log with per-event-type counters.
-
-    The deque has a maxlen so old entries are dropped automatically
-    — the UI only shows the most recent ones anyway, and we don't
-    want the log to grow unbounded over long sessions. Counters
-    persist across truncation (they're a cumulative total since
-    the service started, not a sliding window).
-    """
+    """Audit log."""
 
     def __init__(self, capacity: int) -> None:
-        """Initialise with the given deque capacity.
-
-        Args:
-            capacity: Maximum number of entries kept in the log.
-                Configured via ``security.audit_log_capacity``
-                (default 500).
-        """
+        """Initialize the instance."""
         self._entries: deque[dict[str, Any]] = deque(maxlen=capacity)
         self._counters: dict[str, int] = {}
 
     def record(self, event_name: str, payload: dict[str, Any]) -> None:
-        """Append an entry to the audit log and bump the counter.
-
-        Best-effort: a failure to record is logged at debug level
-        but never raises. The whole point is observability, so a
-        failure to *observe* can't be allowed to break the code
-        path being observed.
-        """
+        """Record."""
         try:
             entry = {
                 "event": event_name,
@@ -61,37 +38,25 @@ class AuditLog:
                 "payload": dict(payload),
             }
             self._entries.append(entry)
-            self._counters[event_name] = (
-                self._counters.get(event_name, 0) + 1
-            )
-        except Exception as e:  # noqa: BLE001 — intentional: defensive catch logged below
+            self._counters[event_name] = self._counters.get(event_name, 0) + 1
+        except Exception as e:
             logger.debug(
-                "[AuditLog] record failed: %s", e,
+                "[AuditLog] record failed: %s",
+                e,
             )
 
-    def snapshot(
-        self, limit: int | None = None,
-    ) -> list[dict[str, Any]]:
-        """Return a newest-first snapshot of the audit log.
-
-        If ``limit`` is provided and positive, truncate to the
-        most recent ``limit`` entries. Otherwise return all.
-        """
+    def snapshot(self, limit: int | None = None) -> list[dict[str, Any]]:
+        """Snapshot."""
         entries = list(reversed(self._entries))
         if limit is not None and limit > 0:
             entries = entries[:limit]
         return entries
 
     def counters(self) -> dict[str, int]:
-        """Return a copy of the per-event-type counters."""
+        """Counters."""
         return dict(self._counters)
 
     def clear(self) -> None:
-        """Wipe both the log and the counters.
-
-        Called by ``SecurityService.clear_audit_log`` after
-        operator review. Does NOT reset policy-level state like
-        the brute-force detector — those are in their own classes.
-        """
+        """Clear."""
         self._entries.clear()
         self._counters.clear()

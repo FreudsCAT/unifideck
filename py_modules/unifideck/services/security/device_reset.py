@@ -1,57 +1,39 @@
-"""services.security.device_reset — Machine-ID mismatch handler (Policy 3).
+"""Device-reset detection — invalidate tokens after a system reset.
 
-Two free functions implementing Policy 3 of SecurityService:
+OP-19f | py_modules/unifideck/services/security/device_reset.py
 
-  - ``check_device_fingerprint(service)`` : verify the stored
-    fingerprint against the current device at startup. Called
-    once by ``SecurityService.start()``.
-  - ``handle_device_reset(service, state)`` : on mismatch, wipe
-    the configured token files proactively and reinitialise
-    the fingerprint. Called by ``check_device_fingerprint``
-    when a mismatch is detected.
+If the Steam Deck has been factory-reset between two boots, every
+stored credential is suspect (the user might no longer be the same
+person). ``check_device_fingerprint`` compares the current machine
+fingerprint (a hash of stable system identifiers) against the
+last-known one.
 
-Both functions take ``service`` (a ``SecurityService`` instance)
-as their first argument and access its attributes directly. They
-are extracted from the class as free functions because:
-
-  - they have clearly-scoped side effects (file I/O + event
-    emission);
-  - they are only called from one place (the lifecycle hook);
-  - extracting them trims ~75 LOC off the SecurityService class
-    body and lets a new dev read the device-reset policy without
-    wading through unrelated handlers.
+``handle_device_reset`` is the recovery handler that wipes the
+encrypted token store and prompts the user to re-authenticate on
+every store.
 """
-from __future__ import annotations
 
+from __future__ import annotations
 import logging
 from pathlib import Path
 from typing import TYPE_CHECKING
-
 from ...security import DeviceIdentityError, FingerprintState
 from .bus_emitter import emit_security_event
 from .config_readers import read_list
 
 if TYPE_CHECKING:
     from .service import SecurityService
-
 logger = logging.getLogger(__name__)
 
 
-async def check_device_fingerprint(
-    service: SecurityService,
-) -> FingerprintState:
-    """Verify the stored fingerprint against the current device.
-
-    Called once at startup by ``start_async_services`` via the
-    uniform lifecycle hook ``SecurityService.start()``. Never
-    raises: ``DeviceIdentityError`` is caught and surfaced via
-    the returned state (empty hash means verification skipped).
-    """
+async def check_device_fingerprint(service: SecurityService) -> FingerprintState:
+    """Check device fingerprint."""
     try:
         state = service._fingerprint.verify_or_initialize()
     except DeviceIdentityError as e:
         logger.error(
-            "[SecurityService] fingerprint check failed: %s", e,
+            "[SecurityService] fingerprint check failed: %s",
+            e,
         )
         return FingerprintState(
             machine_id_hash="",
@@ -62,10 +44,12 @@ async def check_device_fingerprint(
         )
     if state.is_new:
         emit_security_event(
-            service._bus, "SECURITY_FINGERPRINT_INITIALIZED",
+            service._bus,
+            "SECURITY_FINGERPRINT_INITIALIZED",
         )
         service._audit.record(
-            "SECURITY_FINGERPRINT_INITIALIZED", {},
+            "SECURITY_FINGERPRINT_INITIALIZED",
+            {},
         )
     elif state.mismatch:
         await handle_device_reset(service, state)
@@ -73,23 +57,17 @@ async def check_device_fingerprint(
 
 
 async def handle_device_reset(
-    service: SecurityService, state: FingerprintState,
+    service: SecurityService,
+    state: FingerprintState,
 ) -> None:
-    """Wipe configured token files on machine-id mismatch.
-
-    The fingerprint no longer matches the machine's ID — this
-    usually means a reinstall or a restored backup. We
-    proactively wipe any encrypted token files listed in
-    ``security.token_files_to_wipe_on_reset`` so a stale
-    encryption key doesn't leave decryption failures piling up
-    (which would trip the brute-force detector).
-    """
+    """Handle device reset."""
     logger.error(
         "[SecurityService] DEVICE RESET DETECTED — "
         "machine-id no longer matches stored fingerprint",
     )
     token_files = read_list(
-        service._config, "security.token_files_to_wipe_on_reset",
+        service._config,
+        "security.token_files_to_wipe_on_reset",
     )
     wiped: list[str] = []
     for rel_path in token_files:
@@ -101,15 +79,18 @@ async def handle_device_reset(
             full_path.unlink()
             wiped.append(full)
             logger.warning(
-                "[SecurityService] wiped stale token: %s", full,
+                "[SecurityService] wiped stale token: %s",
+                full,
             )
         except OSError as e:
             logger.warning(
                 "[SecurityService] failed to wipe %s: %s",
-                full, e,
+                full,
+                e,
             )
     emit_security_event(
-        service._bus, "SECURITY_DEVICE_RESET_DETECTED",
+        service._bus,
+        "SECURITY_DEVICE_RESET_DETECTED",
         wiped_files=wiped,
         wiped_count=len(wiped),
     )
@@ -121,5 +102,6 @@ async def handle_device_reset(
         service._fingerprint.reinitialize()
     except DeviceIdentityError as e:
         logger.error(
-            "[SecurityService] reinit failed: %s", e,
+            "[SecurityService] reinit failed: %s",
+            e,
         )

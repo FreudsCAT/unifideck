@@ -1,31 +1,34 @@
-"""services/bootstrap/constructor.py — Public service-construction entry points.
+"""Plugin bootstrap orchestrator — single entry-point called from ``main.py``.
 
-Two functions walking ``_SERVICE_DEFS`` via ``_instantiate_service``,
-differing in **scope** and **dependency availability**:
-- ``bootstrap_services()`` — full plugin path. Every service in
-  the table attempted; each failure isolated on the container.
-- ``build_service_subset()`` — reduced path for the out-of-process
-  launcher. Only a named subset attempted; registry/cache/pipeline
-  passed as None.
+OP-13d | py_modules/unifideck/services/bootstrap/constructor.py
+
+``bootstrap_services(plugin)`` is the function called by
+``Plugin._main`` to wire up the entire Layer-5 graph. It :
+
+1. builds the ``ServicePaths``;
+2. iterates the service-definition table from ``service_defs``;
+3. constructs each service in order (resolving dependencies from
+   the partially-built container);
+4. returns the populated ``ServiceContainer``.
+
+``build_service_subset`` is the variant used by tests : it constructs
+only a named subset of services to keep test boot time minimal.
 """
+
 from __future__ import annotations
-
 import logging
-from typing import TYPE_CHECKING
-
+from typing import TYPE_CHECKING, Any
 from .container import ServiceContainer
 from .paths import ServicePaths
 from .service_defs import _SERVICE_DEFS, _instantiate_service
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
-
     from ...config import ConfigManager
     from ...core.cache_manager import CacheManager
     from ...event_bus.bus_pipeline import BusPipeline
     from ...event_bus.event_bus import EventBus
     from ...stores import StoreRegistry
-
 logger = logging.getLogger(__name__)
 
 
@@ -36,86 +39,75 @@ def bootstrap_services(
     config: ConfigManager,
     pipeline: BusPipeline,
 ) -> ServiceContainer:
-    """Instantiate every Layer-5 service into a ServiceContainer.
-
-    Each service created in an isolated try/except — one failure
-    leaves that slot as None without aborting plugin boot
-    (degraded mode). Failures logged at WARNING so production
-    deployments see them in the Decky log.
-
-    Must be called AFTER ``registry.auto_discover`` — some
-    services subscribe to per-store events at construction time.
-    """
-    logger.info("[Bootstrap] resolving service paths from config")
+    """Bootstrap services."""
     paths = ServicePaths.from_config(config)
-
     container = ServiceContainer()
-    logger.info("[Bootstrap] instantiating %d Layer-5 services", len(_SERVICE_DEFS))
-
     for def_entry in _SERVICE_DEFS:
         attr = def_entry[0]
         try:
             instance = _instantiate_service(
                 def_entry,
-                bus=bus,
-                registry=registry,
-                cache=cache,
-                config=config,
-                paths=paths,
-                pipeline=pipeline,
+                bus,
+                registry,
+                cache,
+                config,
+                paths,
+                pipeline,
             )
             setattr(container, attr, instance)
+            logger.debug(
+                "[bootstrap] %s wired: %s.%s",
+                attr,
+                def_entry[1],
+                def_entry[2],
+            )
         except Exception as e:
             logger.warning(
-                "[Bootstrap] failed to instantiate service '%s': %s",
-                attr, e,
+                "[bootstrap] failed to wire %s (%s.%s): %s",
+                attr,
+                def_entry[1],
+                def_entry[2],
+                e,
             )
-
     return container
 
 
 def build_service_subset(
     bus: EventBus,
     config: ConfigManager,
-    services: Iterable[str],
-) -> ServiceContainer:
-    """Construct a named subset of Layer-5 services.
-
-    Used by ``launcher/bootstrap.py`` for the out-of-process
-    launcher's reduced graph (shortcut, proton, cloudsave,
-    launch_history typically). Registry / cache / pipeline passed
-    as None to ``_instantiate_service``; services whose lambdas
-    dereference those components will fail — caller's
-    responsibility to only request compatible services.
-
-    Unknown service names are logged + skipped.
-    """
-    paths = ServicePaths.from_config(config)
-    container = ServiceContainer()
-
-    # Map requested names to their definition row
-    def_map = {row[0]: row for row in _SERVICE_DEFS}
-
-    for name in services:
-        if name not in def_map:
-            logger.warning("[BootstrapSubset] unknown service requested: %s", name)
+    paths: ServicePaths,
+    attrs: Iterable[str],
+) -> dict[str, Any]:
+    """Build service subset."""
+    selected = set(attrs)
+    services: dict[str, Any] = {}
+    for def_entry in _SERVICE_DEFS:
+        attr = def_entry[0]
+        if attr not in selected:
             continue
-
         try:
-            instance = _instantiate_service(
-                def_map[name],
-                bus=bus,
-                registry=None,
-                cache=None,
-                config=config,
-                paths=paths,
-                pipeline=None,
+            services[attr] = _instantiate_service(
+                def_entry,
+                bus,
+                None,
+                None,
+                config,
+                paths,
+                None,
             )
-            setattr(container, name, instance)
+            logger.debug(
+                "[subset] %s wired: %s.%s",
+                attr,
+                def_entry[1],
+                def_entry[2],
+            )
         except Exception as e:
             logger.warning(
-                "[BootstrapSubset] failed to instantiate service '%s': %s",
-                name, e,
+                "[subset] failed to wire %s (%s.%s): %s",
+                attr,
+                def_entry[1],
+                def_entry[2],
+                e,
             )
-
-    return container
+            services[attr] = None
+    return services

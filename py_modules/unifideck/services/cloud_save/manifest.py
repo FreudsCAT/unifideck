@@ -1,80 +1,67 @@
-"""services/cloud_save/manifest.py — Manifest file ops.
+"""Cloud save manifest — per-game list of save files.
 
-Manifest (``.unifideck_sync.json``) lives inside each save
-directory and records the mtime of every tracked file at the
-last successful sync. Source of truth for conflict detection:
-local mtimes drifted vs the last-known-good from either side.
+OP-17c | py_modules/unifideck/services/cloud_save/manifest.py
+
+A "manifest" is the list of save files (paths + last-known mtimes)
+for a given game. The manifest is stored alongside the cloud cache
+and updated on every successful sync. Three functions :
+
+* ``read_manifest(game_id, paths)`` — load from disk;
+* ``write_manifest(manifest, paths)`` — atomic save;
+* ``build_manifest(local_dir)`` — walk a save directory and produce
+  a fresh manifest snapshot.
 """
-from __future__ import annotations
 
+from __future__ import annotations
 import asyncio
 import json
 import logging
-import os
+from pathlib import Path
+from typing import cast
+from .constants import MANIFEST_FILE
+from .fs_ops import read_text, walk_mtimes, write_text
 
 logger = logging.getLogger(__name__)
 
-_MANIFEST_NAME = ".unifideck_sync.json"
-
 
 async def read_manifest(directory: str) -> dict[str, float]:
-    """Load the manifest file if it exists, else return ``{}``.
-
-    Missing file, OSError, or malformed JSON all collapse to
-    empty dict — callers treat "no manifest" and "corrupt
-    manifest" identically (forces a full remote compare).
-    Offloaded via ``to_thread`` since read is sync.
-    """
-    manifest_path = os.path.join(directory, _MANIFEST_NAME)
-
-    if not os.path.isfile(manifest_path):
+    """Read manifest."""
+    path = str(Path(directory) / MANIFEST_FILE)
+    if not await asyncio.to_thread(
+        lambda: Path(path).is_file(),
+    ):
         return {}
-
-    def _read_sync() -> dict[str, float]:
-        try:
-            with open(manifest_path, encoding="utf-8") as f:
-                data = json.load(f)
-                
-            if not isinstance(data, dict):
-                logger.warning("[CloudSaveManifest] %s is not a dict", manifest_path)
-                return {}
-                
-            # Ensure all values are floats
-            return {k: float(v) for k, v in data.items()}
-        except Exception as e:
-            logger.warning("[CloudSaveManifest] failed to read %s: %s", manifest_path, e)
-            return {}
-
-    return await asyncio.to_thread(_read_sync)
+    try:
+        raw = await asyncio.to_thread(read_text, path)
+        return cast("dict[str, float]", json.loads(raw))
+    except (OSError, json.JSONDecodeError):
+        return {}
 
 
 async def write_manifest(directory: str, manifest: dict[str, float]) -> None:
-    """Write the manifest file atomically (tmp + rename).
+    """Write manifest."""
+    path = str(Path(directory) / MANIFEST_FILE)
+    tmp = f"{path}.tmp"
+    try:
+        await asyncio.to_thread(
+            write_text,
+            tmp,
+            json.dumps(manifest),
+        )
+        await asyncio.to_thread(
+            lambda: Path(tmp).replace(path),
+        )
+    except OSError as e:
+        logger.warning(
+            "[CloudSaveService] manifest write failed: %s",
+            e,
+        )
 
-    Writes to ``<path>.tmp``, renames into place — readers
-    never observe a half-written manifest. OSError logged at
-    WARNING but not raised.
-    """
-    manifest_path = os.path.join(directory, _MANIFEST_NAME)
-    tmp_path = manifest_path + ".tmp"
 
-    def _write_sync() -> None:
-        try:
-            if not os.path.isdir(directory):
-                os.makedirs(directory, exist_ok=True)
-
-            with open(tmp_path, "w", encoding="utf-8") as f:
-                json.dump(manifest, f)
-                f.flush()
-                os.fsync(f.fileno())
-
-            os.replace(tmp_path, manifest_path)
-        except Exception as e:
-            logger.warning("[CloudSaveManifest] failed to write %s: %s", manifest_path, e)
-            if os.path.exists(tmp_path):
-                try:
-                    os.remove(tmp_path)
-                except OSError:
-                    pass
-
-    await asyncio.to_thread(_write_sync)
+async def build_manifest(directory: str) -> dict[str, float]:
+    """Build manifest."""
+    if not await asyncio.to_thread(
+        lambda: Path(directory).is_dir(),
+    ):
+        return {}
+    return await asyncio.to_thread(walk_mtimes, directory)

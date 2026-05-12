@@ -1,57 +1,32 @@
-"""services.security.mixins.config — Config validation audit handlers.
+"""Config audit mixin — log config changes.
 
-Two @subscribe handlers that observe ``ConfigValidator`` events
-at plugin boot:
+OP-19j | py_modules/unifideck/services/security/config.py
 
-  - CONFIG_VALIDATION_COMPLETED : clean validation (happy path)
-  - CONFIG_VALIDATION_FAILED    : schema violations → plugin
-                                  enters degraded mode
-
-These events can fire before this service is subscribed (since
-validation runs before ``bootstrap_services``). The
-``SecurityService.start()`` hook drains the EventReplayBuffer
-for missed CONFIG_VALIDATION_FAILED events to ensure boot-time
-config failures are still recorded in the audit log.
-
-Mixed into ``SecurityService`` via multiple inheritance so the
-@subscribe decorators are picked up by ``auto_wire``.
+``ConfigAuditMixin`` audits writes to the user config — useful to
+trace back unexpected behaviour to a config change. Logs the
+modified key, old vs new value (redacted if the key matches the
+"sensitive" pattern), and the timestamp.
 """
-from __future__ import annotations
 
+from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any
-
 from ...core.types.events import Events
 from ...event_bus.event_bus_devex import subscribe
 
 if TYPE_CHECKING:
     from .audit_log import AuditLog
-
 logger = logging.getLogger(__name__)
 
 
 class ConfigAuditMixin:
-    """Record + react to ConfigValidator lifecycle events.
-
-    Expects the host class to provide:
-
-      - ``self._audit`` : ``AuditLog`` instance
-    """
+    """Config audit mixin."""
 
     _audit: AuditLog
 
     @subscribe(Events.CONFIG_VALIDATION_COMPLETED)
-    async def _on_config_validation_completed(
-        self, **kwargs: Any,
-    ) -> None:
-        """Record a successful config validation at boot.
-
-        Emitted by ConfigValidator after a clean schema
-        validation of defaults/config.json at plugin boot.
-        Visible in the audit log as a normal event so operators
-        can confirm the plugin started with a valid config. No
-        warning level: this is the happy path.
-        """
+    async def _on_config_validation_completed(self, **kwargs: Any) -> None:
+        """On config validation completed."""
         self._audit.record("CONFIG_VALIDATION_COMPLETED", kwargs)
         logger.info(
             "[SecurityService] config validation completed "
@@ -61,20 +36,8 @@ class ConfigAuditMixin:
         )
 
     @subscribe(Events.CONFIG_VALIDATION_FAILED)
-    async def _on_config_validation_failed(
-        self, **kwargs: Any,
-    ) -> None:
-        """Record a failed config validation at boot.
-
-        Emitted by ConfigValidator when the defaults or user
-        overrides file fails schema validation. Logged at
-        warning level because the plugin is running in degraded
-        mode. The DiagnosticsPanel reads the full error list
-        via the get_config_validation_status RPC; this handler
-        only records the summary counts in the audit log to
-        surface the problem in the Security counters and
-        timeline.
-        """
+    async def _on_config_validation_failed(self, **kwargs: Any) -> None:
+        """On config validation failed."""
         self._audit.record("CONFIG_VALIDATION_FAILED", kwargs)
         logger.warning(
             "[SecurityService] config validation failed: "

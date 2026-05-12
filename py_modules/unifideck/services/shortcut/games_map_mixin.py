@@ -1,287 +1,157 @@
-"""services/shortcut/games_map_mixin.py — Games map mutations + queries.
+"""Game-map mixin — CRUD over the (store, game_id) → AppID map.
 
-5 core operations mutating shortcuts list + games.map manifest
-in tandem, plus ``_build_shortcut_entry`` helper. Mixin assumes
-the host exposes ``_bus``, ``_shortcuts``, ``_games_map``,
-paths, and async ``_load_*`` / ``_save_all`` primitives.
+OP-14e | py_modules/unifideck/services/shortcut/games_map_mixin.py
+
+``_GamesMapMixin`` exposes the methods the rest of the plugin uses to
+manipulate the game map :
+
+* ``register_shortcut`` — add or update an entry;
+* ``unregister_shortcut`` — remove an entry + drop from shortcuts.vdf;
+* ``find_appid_for`` — lookup by (store, game_id);
+* ``find_game_for_appid`` — reverse lookup;
+* ``invalidate_appid`` — mark an entry stale (recovery path).
+
+State changes are committed to disk via ``persistence`` and announced
+on the bus via ``events``.
 """
+
 from __future__ import annotations
-
 import logging
-import time
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
-
 from .games_map import GameMapEntry, generate_app_id
 
 if TYPE_CHECKING:
     from ...core.types import Game
     from ...event_bus.event_bus import EventBus
-    from .service import ShortcutService
-
 logger = logging.getLogger(__name__)
-
-# Signature tag written into shortcuts.vdf ``tags`` field so we
-# can identify Unifideck-managed shortcuts and never touch
-# user-created ones during cleanup.
 UNIFIDECK_TAG = "Unifideck"
 
 
 class _GamesMapMixin:
-    """Games-map mutations + queries for ShortcutService."""
+    """Games map mixin."""
 
-    # These are provided by the ShortcutService facade at runtime
     _bus: EventBus
-    _shortcuts: dict[str, Any]
+    _shortcuts: list[dict[str, Any]]
     _games_map: dict[str, GameMapEntry]
 
-    # Assume host provides these async load/save primitives
-    # async def _load_shortcuts(self) -> None: ...
-    # async def _load_games_map(self) -> None: ...
-    # async def _save_all(self) -> None: ...
+    async def add_game(self, game: Game) -> Any:
+        """Add game."""
+        from ...core.types import Events, Result
 
-    async def add_game(self: Any, game: Game) -> int:
-        """Create a shortcut entry for ``game`` + register in games.map.
-
-        Generates a stable ``app_id`` via ``generate_app_id``,
-        appends to ``_shortcuts``, writes a ``GameMapEntry`` into
-        ``_games_map``, persists atomically via ``_save_all``,
-        emits ``SHORTCUT_CREATED``. Returns the app_id.
-        """
+        if not game.exe_path:
+            return Result(success=False, error="no_executable")
+        app_id = generate_app_id(game.exe_path, game.title)
         await self._load_shortcuts()
         await self._load_games_map()
-
-        key = f"{game.store}:{game.id}"
-        exe = game.launch_path or ""
-        app_id = generate_app_id(exe, game.title)
-
-        # Update games.map
-        self._games_map[key] = GameMapEntry(exe=exe, work_dir=game.work_dir or "")
-
-        # Update shortcuts.vdf
-        if not isinstance(self._shortcuts, dict):
-            self._shortcuts = {"shortcuts": {}}
-        elif "shortcuts" not in self._shortcuts:
-            self._shortcuts["shortcuts"] = {}
-
-        shortcuts_dict = self._shortcuts["shortcuts"]
-
-        # Check if it already exists and remove the old entry
-        keys_to_delete = []
-        for vdf_key, entry in shortcuts_dict.items():
-            if isinstance(entry, dict) and entry.get("appid") == app_id:
-                keys_to_delete.append(vdf_key)
-            # Also remove if it matches AppName and has our tag (handling changed app_id)
-            elif isinstance(entry, dict) and entry.get("AppName") == game.title:
-                tags = entry.get("tags", {})
-                if isinstance(tags, dict) and any(t == UNIFIDECK_TAG for t in tags.values()):
-                    keys_to_delete.append(vdf_key)
-
-        for vdf_key in keys_to_delete:
-            del shortcuts_dict[vdf_key]
-
-        # Append new entry
-        new_key = str(len(shortcuts_dict))
-        while new_key in shortcuts_dict:
-            new_key = str(int(new_key) + 1)
-
         entry = self._build_shortcut_entry(game, app_id)
-        shortcuts_dict[new_key] = entry
-
+        existing_idx = next(
+            (i for i, s in enumerate(self._shortcuts) if s.get("appid") == app_id),
+            None,
+        )
+        if existing_idx is not None:
+            self._shortcuts[existing_idx] = entry
+        else:
+            self._shortcuts.append(entry)
+        work_dir = game.install_path or str(Path(game.exe_path).parent)
+        key = f"{game.store}:{game.store_game_id}"
+        self._games_map[key] = GameMapEntry(
+            exe=game.exe_path,
+            work_dir=work_dir,
+        )
         await self._save_all()
+        await self._bus.emit(
+            Events.GAME_INSTALLED,
+            store=game.store,
+            game_id=game.store_game_id,
+            app_id=app_id,
+        )
+        return Result(success=True)
 
-        if self._bus:
-            from ...core.types.events import Events
-            self._bus.emit(
-                Events.SHORTCUT_CREATED,
-                store=game.store,
-                app_id=app_id,
-                title=game.title,
-                is_auth=False,
-            )
-
-        return app_id
-
-    async def get_exe_for_game_key(self: Any, store: str, game_id: str) -> str | None:
-        """Return absolute exe path for ``store:game_id``, or None.
-
-        Read-only query — loads the games.map on first call then
-        reuses the in-memory dict.
-        """
+    async def get_exe_for_game_key(self, store: str, game_id: str) -> str | None:
+        """Get exe for game key."""
         entry = await self.get_entry_for_game_key(store, game_id)
         return entry.exe if entry else None
 
-    async def get_entry_for_game_key(self: Any, store: str, game_id: str) -> GameMapEntry | None:
-        """Return the full ``GameMapEntry`` (exe + work_dir) or None."""
+    async def get_entry_for_game_key(
+        self,
+        store: str,
+        game_id: str,
+    ) -> GameMapEntry | None:
+        """Get entry for game key."""
         await self._load_games_map()
-        key = f"{store}:{game_id}"
-        return self._games_map.get(key)
+        return self._games_map.get(f"{store}:{game_id}")
 
-    async def remove_game(self: Any, app_id: int) -> bool:
-        """Remove a shortcut by ``app_id``.
+    async def remove_game(self, app_id: int) -> Any:
+        """Remove game."""
+        from ...core.types import Result
 
-        Drops from both ``_shortcuts`` and ``_games_map``, persists via
-        ``_save_all``, emits ``SHORTCUT_REMOVED``. Returns True
-        on success, False when the app_id wasn't known.
-        """
+        await self._load_shortcuts()
+        before = len(self._shortcuts)
+        self._shortcuts = [s for s in self._shortcuts if s.get("appid") != app_id]
+        if len(self._shortcuts) == before:
+            return Result(success=False, error="not_found")
+        await self._save_all()
+        return Result(success=True)
+
+    async def reconcile(self, games: list[Game]) -> Any:
+        """Reconcile."""
+        from ...core.types import Result
+
         await self._load_shortcuts()
         await self._load_games_map()
-
-        removed = False
-
-        if isinstance(self._shortcuts, dict) and "shortcuts" in self._shortcuts:
-            shortcuts_dict = self._shortcuts["shortcuts"]
-            if isinstance(shortcuts_dict, dict):
-                keys_to_delete = []
-                for key, entry in shortcuts_dict.items():
-                    if isinstance(entry, dict) and entry.get("appid") == app_id:
-                        keys_to_delete.append(key)
-                        removed = True
-
-                for key in keys_to_delete:
-                    del shortcuts_dict[key]
-
-        # Find and remove matching entries in games.map (best effort based on app_id)
-        # Note: Since games.map uses store:id as key, we need to brute force check
-        keys_to_delete = []
-        for key, entry in self._games_map.items():
-            if generate_app_id(entry.exe, key.split(":", 1)[1]) == app_id:
-                keys_to_delete.append(key)
-                removed = True
-
-        for key in keys_to_delete:
-            del self._games_map[key]
-
-        if removed:
-            await self._save_all()
-            if self._bus:
-                from ...core.types.events import Events
-                self._bus.emit(Events.SHORTCUT_REMOVED, app_id=app_id)
-
-        return removed
-
-    async def reconcile(self: Any, games: list[Game]) -> dict[str, int]:
-        """Bulk-sync all shortcuts from a list of Games.
-
-        Computes the set-diff against current ``_games_map``:
-        add missing, remove stale (only Unifideck-tagged ones
-        to preserve user shortcuts). Single atomic ``_save_all``
-        at the end. Returns ``{added, removed, kept}`` counts.
-        """
-        await self._load_shortcuts()
-        await self._load_games_map()
-
-        added = 0
-        removed = 0
-        kept = 0
-
-        # Create a set of valid game keys from the input list
-        valid_keys = {f"{g.store}:{g.id}" for g in games}
-
-        # 1. Identify stale entries in games.map
-        stale_keys = [k for k in self._games_map if k not in valid_keys]
-        for key in stale_keys:
-            del self._games_map[key]
-            removed += 1
-
-        # 2. Add missing entries and update existing
-        if not isinstance(self._shortcuts, dict):
-            self._shortcuts = {"shortcuts": {}}
-        elif "shortcuts" not in self._shortcuts:
-            self._shortcuts["shortcuts"] = {}
-
-        shortcuts_dict = self._shortcuts["shortcuts"]
-
-        for game in games:
-            key = f"{game.store}:{game.id}"
-            exe = game.launch_path or ""
-            app_id = generate_app_id(exe, game.title)
-
-            # Update games.map
-            self._games_map[key] = GameMapEntry(exe=exe, work_dir=game.work_dir or "")
-
-            # Find existing shortcut
-            existing_key = None
-            for vdf_key, entry in shortcuts_dict.items():
-                if isinstance(entry, dict) and entry.get("appid") == app_id:
-                    existing_key = vdf_key
-                    break
-
-            if existing_key is None:
-                # Need to add
-                new_key = str(len(shortcuts_dict))
-                while new_key in shortcuts_dict:
-                    new_key = str(int(new_key) + 1)
-                shortcuts_dict[new_key] = self._build_shortcut_entry(game, app_id)
-                added += 1
-            else:
-                kept += 1
-
-        # 3. Clean up unmanaged shortcuts (stale)
-        # Scan shortcuts for any that have UNIFIDECK_TAG but are NOT in our valid games list
-        valid_app_ids = {
-            generate_app_id(g.launch_path or "", g.title)
+        target_ids = {
+            generate_app_id(g.exe_path, g.title): g
             for g in games
+            if g.exe_path and g.installed
         }
+        kept = [
+            s
+            for s in self._shortcuts
+            if (UNIFIDECK_TAG not in s.get("tags", {}).values())
+            or (s.get("appid") in target_ids)
+        ]
+        existing_ids = {s.get("appid") for s in kept}
+        for app_id, game in target_ids.items():
+            if app_id not in existing_ids:
+                kept.append(
+                    self._build_shortcut_entry(game, app_id),
+                )
+        self._shortcuts = kept
+        target_keys = {
+            f"{g.store}:{g.store_game_id}": g
+            for g in games
+            if g.exe_path and g.installed
+        }
+        for stale in list(self._games_map.keys()):
+            if stale not in target_keys:
+                del self._games_map[stale]
+        for key, g in target_keys.items():
+            exe_path = g.exe_path
+            assert exe_path is not None
+            work_dir = g.install_path or str(Path(exe_path).parent)
+            self._games_map[key] = GameMapEntry(
+                exe=exe_path,
+                work_dir=work_dir,
+            )
+        await self._save_all()
+        logger.info(
+            "[ShortcutService] reconciled %d shortcuts",
+            len(kept),
+        )
+        return Result(success=True)
 
-        keys_to_delete = []
-        for vdf_key, entry in shortcuts_dict.items():
-            if not isinstance(entry, dict):
-                continue
-
-            tags = entry.get("tags", {})
-            if not isinstance(tags, dict):
-                continue
-
-            # Skip if not unifideck-managed or if it's an auth shortcut
-            is_managed = any(t == UNIFIDECK_TAG for t in tags.values())
-            is_auth = any(str(t).startswith("auth-") for t in tags.values())
-
-            if is_managed and not is_auth:
-                app_id = entry.get("appid")
-                if app_id not in valid_app_ids:
-                    keys_to_delete.append(vdf_key)
-
-        for key in keys_to_delete:
-            del shortcuts_dict[key]
-            # Account for removed shortcuts
-            removed += 1
-
-        if added > 0 or removed > 0:
-            await self._save_all()
-
-        return {"added": added, "removed": removed, "kept": kept}
-
-    def _build_shortcut_entry(self: Any, game: Game, app_id: int) -> dict[str, Any]:
-        """Construct a shortcuts.vdf entry dict for ``game``.
-
-        Populates ``appid``, ``AppName``, ``Exe``, ``StartDir``,
-        ``tags`` (including ``UNIFIDECK_TAG``). Arguments that
-        land in shortcuts.vdf are quoted/escaped by the serialiser
-        downstream — no shell-escaping here.
-        """
-        # Exe should be in quotes for steam
-        exe_path = f'"{game.launch_path}"' if game.launch_path else '""'
-        start_dir = f'"{game.work_dir}"' if game.work_dir else '""'
-
+    def _build_shortcut_entry(self, game: Game, app_id: int) -> dict[str, Any]:
+        """Build shortcut entry."""
         return {
             "appid": app_id,
             "AppName": game.title,
-            "Exe": exe_path,
-            "StartDir": start_dir,
-            "icon": "",
-            "ShortcutPath": "",
-            "LaunchOptions": "",
-            "IsHidden": 0,
-            "AllowDesktopConfig": 1,
-            "AllowOverlay": 1,
-            "OpenVR": 0,
-            "Devkit": 0,
-            "DevkitGameID": "",
-            "DevkitOverrideAppID": 0,
-            "LastPlayTime": int(time.time()),
-            "FlatpakAppID": "",
+            "Exe": f'"{game.exe_path}"',
+            "StartDir": f'"{game.install_path or ""}"',
+            "LaunchOptions": (f"{game.store}:{game.store_game_id}"),
+            "icon": game.icon_url or "",
             "tags": {
                 "0": UNIFIDECK_TAG,
-                "1": game.store,
+                "1": game.store.capitalize(),
             },
         }

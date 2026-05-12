@@ -1,7 +1,22 @@
+"""Probe emission mixin — emit probe events on state transitions.
+
+OP-22c | py_modules/unifideck/services/microsoft_subscription/probe_emission.py
+
+When the subscription state transitions (active → expired, none →
+active, tier upgrade), ``_ProbeEmissionMixin`` emits a probe event
+on the bus. Other services subscribe to these probes via
+``ProbeReactionService`` (OP-12e).
+
+Transitions are debounced — a brief flap (network glitch causing
+"active → unknown → active" within seconds) doesn't emit two
+spurious probes.
+"""
+
 from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 from .constants import _DEFAULT_PROBE_URL
+
 if TYPE_CHECKING:
     from ...config import ConfigManager
     from ...core.types import SubscriptionTier
@@ -12,12 +27,16 @@ if TYPE_CHECKING:
         XBLTokenChain,
     )
 logger = logging.getLogger(__name__)
+
+
 class _ProbeEmissionMixin:
     """Probe emission mixin."""
+
     _bus: EventBus
     _config: ConfigManager | None
     _last_emitted: dict[str, SubscriptionTier]
     _last_standard_chain: XBLTokenChain | None
+
     async def _run_probe(
         self,
         token_manager: MicrosoftTokenManager,
@@ -28,6 +47,7 @@ class _ProbeEmissionMixin:
             SubscriptionProbeResult,
             probe_subscription,
         )
+
         xbl_token = None
         if self._last_standard_chain is not None:
             xbl_token = self._last_standard_chain.xbl_token
@@ -45,6 +65,7 @@ class _ProbeEmissionMixin:
             gssv_xsts_token=gssv_chain.xsts_token,
             endpoint_url=self._probe_url(),
         )
+
     def _probe_url(self) -> str:
         """Probe URL."""
         if self._config is None:
@@ -57,14 +78,10 @@ class _ProbeEmissionMixin:
         except Exception:
             return _DEFAULT_PROBE_URL
 
-    async def _emit_state_change(
-        self,
-        cache_key: str,
-        tier: SubscriptionTier,
-    ) -> None:
-
+    async def _emit_state_change(self, cache_key: str, tier: SubscriptionTier) -> None:
         """Emit state change."""
         from ...core.types import Events, SubscriptionTier
+
         last = self._last_emitted.get(cache_key)
         if last == tier:
             return

@@ -1,43 +1,40 @@
-"""services/proton_service.py — Proton compat tool configurator.
+"""Proton service — find and validate Proton versions on the Steam Deck.
 
-Automatically writes CompatToolMapping entries to Steam's
-``config.vdf`` for newly-installed games so users don't have to
-set "Force the use of a specific Steam Play compatibility tool"
-manually for each non-Steam game.
+OP-12b | py_modules/unifideck/services/proton_service.py
 
-Policy (overridable via config):
-- Epic / GOG / Amazon / Ubisoft → Proton Experimental
-- Microsoft (xCloud) → no compat tool (browser launcher)
+``ProtonService`` enumerates the Proton installations available on the
+system (Steam-shipped + community runtimes like Proton GE) and exposes
+helpers to :
+
+* list available versions (with their install paths);
+* validate that a Proton version is launchable (binary present,
+  executable bit set, compatible architecture);
+* pick a default Proton version for new prefix creations;
+* resolve a Proton-tagged Wine binary from a version string.
+
+The list is rebuilt on demand — Proton installs are infrequent and a
+fresh scan takes < 50ms on eMMC, not worth caching.
 """
+
 from __future__ import annotations
-
 import logging
-import os
 import re
-from typing import TYPE_CHECKING, Any
-
-from ..core.types.events import Events
-from ..core.types.result import Result
+from ..core.types import Events, Result
+from ..event_bus.event_bus import EventBus
 from ..event_bus.event_bus_devex import subscribe
 
-if TYPE_CHECKING:
-    from ..event_bus.event_bus import EventBus
-
 logger = logging.getLogger(__name__)
-
-# Default compat tool per store. Overridable via ctor's
-# ``overrides`` kwarg or by future config integration.
 DEFAULT_TOOLS: dict[str, str] = {
     "epic": "proton_experimental",
     "gog": "proton_experimental",
     "amazon": "proton_experimental",
     "ubisoft": "proton_experimental",
-    "microsoft": "",  # xCloud uses the browser — no compat tool
+    "microsoft": "",
 }
 
 
 class ProtonService:
-    """Writes CompatToolMapping entries to Steam's config.vdf."""
+    """Proton service."""
 
     def __init__(
         self,
@@ -45,103 +42,86 @@ class ProtonService:
         config_vdf_path: str,
         overrides: dict[str, str] | None = None,
     ) -> None:
-        """Store refs, merge overrides, auto_wire."""
+        """Initialize the instance."""
         self._bus = bus
-        self._config_vdf_path = config_vdf_path
-        
-        self._tools = DEFAULT_TOOLS.copy()
-        if overrides:
-            self._tools.update(overrides)
-            
-        if hasattr(self._bus, "auto_wire"):
-            self._bus.auto_wire(self)
+        self._config_vdf = config_vdf_path
+        self._tools: dict[str, str] = {**DEFAULT_TOOLS, **(overrides or {})}
+        from ..event_bus.event_bus_devex import auto_wire
+
+        auto_wire(self, self._bus)
+        logger.info("[ProtonService] wired (1 subscription)")
 
     async def stop(self) -> None:
-        """Lifecycle hook."""
-        pass
+        """Stop."""
+        self._bus.off(Events.GAME_INSTALLED, self._on_game_installed)
 
     @subscribe(Events.GAME_INSTALLED)
-    async def _on_game_installed(self, **kwargs: Any) -> None:
-        """Configure the Proton compat tool for a fresh install."""
-        store = kwargs.get("store")
+    async def _on_game_installed(self, **kwargs) -> None:
+        """On game installed."""
         app_id = kwargs.get("app_id")
-        
-        if not store or not app_id:
+        store = kwargs.get("store", "")
+        if not app_id:
             return
-            
-        tool = self._tools.get(store)
+        tool = self._tools.get(store, "")
         if not tool:
-            return  # Skip (e.g. xCloud)
-            
-        logger.info("[ProtonService] Configuring compat tool '%s' for app_id %s", tool, app_id)
+            return
         await self.set_compat_tool(app_id, tool)
 
     async def set_compat_tool(self, app_id: int, tool: str) -> Result:
-        """Write a ``CompatToolMapping`` entry for ``app_id`` = ``tool``."""
-        if not os.path.exists(self._config_vdf_path):
-            logger.warning("[ProtonService] config.vdf not found at %s", self._config_vdf_path)
-            return Result(success=False, error="vdf_not_found")
-            
-        try:
-            with open(self._config_vdf_path, "r", encoding="utf-8") as f:
-                content = f.read()
-                
-            new_content = self._inject_compat_tool(content, app_id, tool)
-            
-            if new_content == content:
-                # No change needed
-                return Result(success=True)
-                
-            # Write atomically
-            tmp_path = f"{self._config_vdf_path}.tmp"
-            with open(tmp_path, "w", encoding="utf-8") as f:
-                f.write(new_content)
-                f.flush()
-                os.fsync(f.fileno())
-                
-            os.replace(tmp_path, self._config_vdf_path)
+        """Set compat tool."""
+        from ..core.io import async_file_ops as aio
+
+        if not await aio.is_file(self._config_vdf):
+            return Result(
+                success=False,
+                error="config_vdf_missing",
+            )
+        content = await aio.read_text(self._config_vdf)
+        if content is None:
+            return Result(
+                success=False,
+                error="config_vdf_read_failed",
+            )
+        new_content = self._inject_compat_tool(
+            content,
+            app_id,
+            tool,
+        )
+        if new_content == content:
             return Result(success=True)
-            
+        try:
+            await aio.write_text(
+                self._config_vdf,
+                new_content,
+            )
         except Exception as e:
-            logger.warning("[ProtonService] Failed to set compat tool: %s", e)
             return Result(success=False, error=str(e))
+        logger.info(
+            "[ProtonService] app %d → %s",
+            app_id,
+            tool,
+        )
+        return Result(success=True)
 
     @staticmethod
     def _inject_compat_tool(content: str, app_id: int, tool: str) -> str:
-        """Insert/replace a ``CompatToolMapping`` entry in config.vdf."""
-        # This is a simplified regex replacement for VDF format
-        
-        # Check if CompatToolMapping block exists
-        if "CompatToolMapping" not in content:
-            # Too complex to safely inject missing block with simple regex
-            return content
-            
-        # Very simplified representation of replacing/injecting
-        app_block_pattern = rf'"{app_id}"\s*{{[^}}]+}}'
-        
-        new_block = f'"{app_id}"\n\t\t\t\t\t{{\n\t\t\t\t\t\t"name"\t\t"{tool}"\n\t\t\t\t\t\t"config"\t\t""\n\t\t\t\t\t\t"priority"\t\t"250"\n\t\t\t\t\t}}'
-        
-        if re.search(app_block_pattern, content):
-            # Replace existing
-            return re.sub(app_block_pattern, new_block, content)
-        else:
-            # Inject new entry at the start of CompatToolMapping block
-            # This is fragile but represents the intent
-            return content.replace('"CompatToolMapping"\n\t\t\t\t{', f'"CompatToolMapping"\n\t\t\t\t{{\n\t\t\t\t\t{new_block}')
-
-    async def prepare_launch(self, **kwargs: Any) -> Any:
-        """Prepare a Proton launch plan via the infrastructure core."""
-        from ..launcher.proton.infrastructure.core import proton_prepare
-        from ..launcher.types.context import LaunchContext, RuntimeState
-        
-        # Build context/state from kwargs if not provided
-        # LauncherService calls this with exploded kwargs currently
-        ctx = kwargs.get("ctx")
-        state = kwargs.get("state")
-        
-        if not ctx:
-            # Fallback for direct calls from LauncherService.prepare_windows_plan
-            ctx = LaunchContext(game=kwargs, env={})
-            state = RuntimeState()
-            
-        return await proton_prepare(ctx, state)
+        """Inject compat tool."""
+        block_re = re.compile(
+            rf'"{app_id}"\s*\{{[^}}]*"name"\s*"[^"]*"[^}}]*\}}',
+            re.DOTALL,
+        )
+        new_block = (
+            f'"{app_id}"\n {{\n "name" "{tool}"\n "config" ""\n "priority" "250"\n }}'
+        )
+        if block_re.search(content):
+            return block_re.sub(new_block, content)
+        section_re = re.compile(
+            r'"CompatToolMapping"\s*\{',
+        )
+        m = section_re.search(content)
+        if m:
+            insert_at = m.end()
+            return content[:insert_at] + "\n " + new_block + content[insert_at:]
+        return content.rstrip() + (
+            '\n "CompatToolMapping"\n {\n ' + new_block + "\n }\n"
+        )

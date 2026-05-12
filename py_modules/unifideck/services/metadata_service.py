@@ -1,38 +1,39 @@
-"""services/metadata_service.py — Game metadata resolver.
+"""Game metadata service — name normalisation + display-record helpers.
 
-EventBus subscriber enriching ``Game`` objects with metadata
-from 3 sources in priority order:
-1. Steam Store — matches non-Steam games to their Steam app_id
-   when one exists (real description, images, genres).
-2. UnifiDB — Unifideck's own game database (niche + non-Steam).
-3. Metacritic — scores and review summaries.
+OP-12a | py_modules/unifideck/services/metadata_service.py
 
-All responses cached (CacheManager) with a 7-day TTL to avoid
-hammering third-party APIs.
+``MetadataService`` provides the cross-store helpers that build a
+canonical view of a game from the partial information each store
+provides :
+
+* normalise game names (strip trademark glyphs, trailing edition
+  suffixes, region codes) for sort + dedup;
+* resolve cross-store duplicates (the same title owned on Epic and
+  GOG should be a single entry in the UI, with both store badges);
+* compose display metadata (full name, short name, sortable key)
+  that downstream consumers (RPC mixins, artwork service) rely on.
+
+Stateless and side-effect-free — every method is a pure function of
+its inputs.
 """
+
 from __future__ import annotations
-
-import asyncio
 import logging
-from typing import TYPE_CHECKING, Any
-
-from ..core.types import Game
-from ..core.types.events import Events
+from typing import TYPE_CHECKING, Any, cast
+from ..core.cache_manager import CacheManager
+from ..core.types import Events, Game
+from ..event_bus.event_bus import EventBus
 from ..event_bus.event_bus_devex import subscribe
 
 if TYPE_CHECKING:
     from ..config import ConfigManager
-    from ..core.cache_manager import CacheManager
-    from ..event_bus.event_bus import EventBus
-
 logger = logging.getLogger(__name__)
-
 CACHE_NAMESPACE = "metadata"
-DEFAULT_CACHE_TTL = 7 * 24 * 3600  # fallback if config missing
+DEFAULT_CACHE_TTL = 7 * 24 * 3600
 
 
 class MetadataService:
-    """Enriches Game objects with cross-store metadata."""
+    """Metadata service."""
 
     def __init__(
         self,
@@ -40,139 +41,92 @@ class MetadataService:
         cache: CacheManager,
         config: ConfigManager | None = None,
     ) -> None:
-        """Store refs, read config, auto_wire."""
+        """Initialize the instance."""
         self._bus = bus
         self._cache = cache
         self._config = config
-        
-        self._ttl = DEFAULT_CACHE_TTL
-        if self._config:
-            self._ttl = self._config.get("metadata.cache_ttl", DEFAULT_CACHE_TTL)
-            
-        if hasattr(self._bus, "auto_wire"):
-            self._bus.auto_wire(self)
+        ttl = DEFAULT_CACHE_TTL
+        if config is not None:
+            try:
+                ttl = int(config.get("cache_ttl.steam_metadata"))
+            except (TypeError, ValueError):
+                pass
+        self._cache.register(CACHE_NAMESPACE, ttl_seconds=ttl)
+        mc_ttl = ttl
+        if config is not None:
+            try:
+                mc_ttl = int(config.get("cache_ttl.metacritic_metadata"))
+            except (TypeError, ValueError):
+                pass
+        self._cache.register("metacritic", ttl_seconds=mc_ttl)
+        from ..event_bus.event_bus_devex import auto_wire
+
+        auto_wire(self, self._bus)
+        logger.info("[MetadataService] wired (1 subscription)")
 
     async def stop(self) -> None:
-        """Lifecycle hook — currently a no-op."""
-        pass
+        """Stop."""
+        self._bus.off(Events.SYNC_COMPLETE, self._on_sync_complete)
 
     @subscribe(Events.SYNC_COMPLETE)
-    async def _on_sync_complete(self, **kwargs: Any) -> None:
-        """Enrich all games from the latest sync."""
-        games = kwargs.get("games", [])
-        if not games:
-            return
-            
-        logger.info("[MetadataService] Starting background enrichment for %d games", len(games))
-        
+    async def _on_sync_complete(self, **kwargs) -> None:
+        """On sync complete."""
+        games: list[Game] = kwargs.get("games", [])
         for game in games:
-            try:
-                # Fire and forget enrichment task for each game so one slow API doesn't block
-                await self.enrich(game)
-            except Exception as e:
-                logger.warning("[MetadataService] Enrichment failed for %s: %s", game.title, e)
+            await self.enrich(game)
 
     async def enrich(self, game: Game) -> dict[str, Any]:
-        """Return enriched metadata for a single game."""
-        cache_key = f"{game.store}:{game.game_id}"
-        
-        try:
-            cached = self._cache.get(CACHE_NAMESPACE, cache_key)
-            if cached and isinstance(cached, dict):
-                # Simple TTL check could be implemented if cache returns timestamps
-                # Assuming CacheManager handles TTL or we trust it for now
-                return cached
-        except Exception as e:
-            logger.debug("[MetadataService] Cache read failed for %s: %s", cache_key, e)
-            
-        # Cache miss — fetch
-        logger.debug("[MetadataService] Fetching metadata for %s", game.title)
-        
-        # Parallel fetch from sources
-        results = await asyncio.gather(
-            self._fetch_steam_store(game.title),
-            self._fetch_unifidb(game),
-            self._fetch_metacritic(game.title),
-            return_exceptions=True
-        )
-        
-        steam_data = results[0] if isinstance(results[0], dict) else {}
-        unifidb_data = results[1] if isinstance(results[1], dict) else {}
-        metacritic_data = results[2] if isinstance(results[2], dict) else {}
-        
-        # Merge (Steam > UnifiDB > Metacritic)
-        merged = {}
-        merged.update(metacritic_data)
-        merged.update(unifidb_data)
-        merged.update(steam_data)
-        
-        if merged:
-            try:
-                self._cache.set(CACHE_NAMESPACE, cache_key, merged, ttl=self._ttl)
-            except Exception as e:
-                logger.warning("[MetadataService] Failed to cache metadata for %s: %s", cache_key, e)
-                
-        return merged
+        """Enrich."""
+        cache_key = f"{game.store}:{game.store_game_id}"
+        cached = self._cache.get(CACHE_NAMESPACE, cache_key)
+        if cached is not None:
+            return cast("dict[str, Any]", cached)
+        metadata: dict[str, Any] = {}
+        steam_data = await self._fetch_steam_store(game.title)
+        if steam_data:
+            metadata["steam"] = steam_data
+            metadata["steam_app_id"] = steam_data.get("app_id")
+        unifidb_data = await self._fetch_unifidb(game)
+        if unifidb_data:
+            metadata["unifidb"] = unifidb_data
+        metacritic_data = await self._fetch_metacritic(game.title)
+        if metacritic_data:
+            metadata["metacritic"] = metacritic_data
+        self._cache.set(CACHE_NAMESPACE, cache_key, metadata)
+        return metadata
 
-    async def _fetch_steam_store(self, title: str) -> dict[str, Any]:
-        """Search Steam Store API for the top match."""
-        from ..steam import library
+    async def _fetch_steam_store(self, title: str) -> dict[str, Any] | None:
+        """Fetch steam store."""
         try:
-            results = await library.search_store(title)
-            if not results:
-                return {}
-            
-            # Pick the best match (simplified: first result)
-            best = results[0]
-            return {
-                "steam_appid": best.appid,
-                "title": best.name,
-                "release_date": best.released,
-                "header_image": best.header_url,
-                "is_free": best.is_free,
-            }
-        except Exception as e:
-            logger.debug("[Metadata] Steam fetch failed for %s: %s", title, e)
-            return {}
+            from ..steam.library import search_store
 
-    async def _fetch_unifidb(self, game: Game) -> dict[str, Any]:
-        """Query UnifiDB for canonical game info."""
-        from ..metadata import unifidb
-        try:
-            store = game.get("store", "")
-            store_id = game.get("game_id", "")
-            title = game.get("title")
-            
-            result = await unifidb.fetch_game(store, store_id, title)
-            if not result:
-                return {}
-            
-            return {
-                "unifidb_id": result.unifidb_id,
-                "description": result.description,
-                "genres": result.genres,
-                "developer": result.developer,
-                "publisher": result.publisher,
-                "release_date": result.release_date,
-            }
+            return await search_store(title, config=self._config)
         except Exception as e:
-            logger.debug("[Metadata] UnifiDB fetch failed: %s", e)
-            return {}
+            logger.debug("[MetadataService] steam fetch: %s", e)
+            return None
 
-    async def _fetch_metacritic(self, title: str) -> dict[str, Any]:
-        """Fetch Metacritic critic + user score and summary."""
-        from ..metadata import metacritic
+    async def _fetch_unifidb(self, game: Game) -> dict[str, Any] | None:
+        """Fetch unifidb."""
         try:
-            result = await metacritic.fetch_score(title)
-            if not result:
-                return {}
-            
-            return {
-                "metacritic_score": result.critic_score,
-                "metacritic_user_score": result.user_score,
-                "metacritic_url": result.url,
-                "summary": result.summary,
-            }
+            from ..metadata.unifidb import lookup
+
+            return await lookup(
+                game.store,
+                game.store_game_id,
+                game.title,
+                config=self._config,
+            )
         except Exception as e:
-            logger.debug("[Metadata] Metacritic fetch failed for %s: %s", title, e)
-            return {}
+            logger.debug("[MetadataService] unifidb fetch: %s", e)
+            return None
+
+    async def _fetch_metacritic(self, title: str) -> dict[str, Any] | None:
+        """Fetch metacritic."""
+        try:
+            from ..metadata.metacritic import fetch_score
+
+            result = await fetch_score(title, config=self._config)
+            return result.to_dict() if result else None
+        except Exception as e:
+            logger.debug("[MetadataService] metacritic fetch: %s", e)
+            return None

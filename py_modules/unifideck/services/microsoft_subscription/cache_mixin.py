@@ -1,3 +1,19 @@
+"""Subscription cache mixin.
+
+OP-22b | py_modules/unifideck/services/microsoft_subscription/cache_mixin.py
+
+``_CacheMixin`` exposes the cached-state surface :
+
+* ``load_cached`` — read from disk on boot;
+* ``save_cached`` — flush after every refresh;
+* TTL accessor — derive the next expiration from the cached
+  entry's ``checked_at`` + the configured window.
+
+The cache survives plugin restarts so the user doesn't see a
+spinner on every boot — the cached state is shown immediately
+while a background refresh runs.
+"""
+
 from __future__ import annotations
 import logging
 import time
@@ -5,6 +21,7 @@ from typing import TYPE_CHECKING
 from .cache import _CachedEntry
 from .constants import _CACHE_KEY_PREFIX, _CACHE_STORE_NAME
 from .time_utils import _end_of_month_utc
+
 if TYPE_CHECKING:
     from ...core.cache_manager import CacheManager
     from ...core.types import SubscriptionTier
@@ -13,14 +30,15 @@ if TYPE_CHECKING:
         XBLTokenChain,
     )
 logger = logging.getLogger(__name__)
+
+
 class _CacheMixin:
     """Cache mixin."""
+
     _cache: CacheManager
     _last_standard_chain: XBLTokenChain | None
-    async def _resolve_cache_key(
-        self,
-        token_manager: MicrosoftTokenManager,
-    ) -> str:
+
+    async def _resolve_cache_key(self, token_manager: MicrosoftTokenManager) -> str:
         """Resolve cache key."""
         xuid: str | None = None
         try:
@@ -34,6 +52,7 @@ class _CacheMixin:
                 exc_info=True,
             )
         return f"{_CACHE_KEY_PREFIX}{xuid or 'default'}"
+
     def _read_cache(self, key: str) -> _CachedEntry | None:
         """Read cache."""
         try:
@@ -46,15 +65,15 @@ class _CacheMixin:
         if isinstance(raw, dict):
             return _CachedEntry.from_dict(raw)
         return None
+
     def _write_cache(self, key: str, entry: _CachedEntry) -> None:
         """Write cache."""
         try:
             self._cache.set(_CACHE_STORE_NAME, key, entry.to_dict())
         except Exception:
             logger.exception("[MSSubSvc] cache write failed")
-    async def _store_tier_result(
-        self, cache_key: str, tier: SubscriptionTier,
-    ) -> None:
+
+    async def _store_tier_result(self, cache_key: str, tier: SubscriptionTier) -> None:
         """Store tier result."""
         entry = _CachedEntry(
             tier=tier,

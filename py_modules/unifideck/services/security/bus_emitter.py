@@ -1,60 +1,37 @@
-"""services.security.bus_emitter — Fire-and-forget SECURITY_* emitter.
+"""Bus emitter helper for security events.
 
-Free function ``emit_security_event`` that fires a SECURITY_*
-event onto the EventBus from synchronous code (handlers and
-policies that need to emit without awaiting).
+OP-19e | py_modules/unifideck/services/security/bus_emitter.py
 
-Extracted from ``security_service._emit`` on 2026-04-18 because
-the logic is entirely generic: schedule ``bus.emit`` on the
-running loop, swallow errors, log at debug. None of the 4
-callers (brute-force callback, permissions repair,
-device-reset, fingerprint-initialized) care about the task
-result — they just want the event to reach subscribers.
+``emit_security_event`` is the canonical helper used by every
+audit mixin to emit a structured security event on the bus. Wraps
+the bus call with consistent metadata (event source, timestamp,
+correlation id).
 """
-from __future__ import annotations
 
+from __future__ import annotations
 import asyncio
 import logging
-
 from ...core.types.events import Events
 from ...event_bus.event_bus import EventBus
 
 logger = logging.getLogger(__name__)
 
 
-def emit_security_event(
-    bus: EventBus, event_name: str, **kwargs: object,
-) -> None:
-    """Fire-and-forget emit of a SECURITY_* event.
-
-    Schedules ``bus.emit`` on the running event loop without
-    awaiting. Safe to call from synchronous code paths. All
-    failures are swallowed at debug level — the emitter is
-    purely observational, so its failure must never break the
-    code path being observed.
-
-    Args:
-        bus: The EventBus instance to emit on.
-        event_name: Symbolic name of the event (e.g.
-            ``"SECURITY_PERMISSIONS_REPAIRED"``). Resolved via
-            ``getattr(Events, event_name)``.
-        **kwargs: Forwarded to ``bus.emit`` as the event payload.
-    """
+def emit_security_event(bus: EventBus, event_name: str, **kwargs: object) -> None:
+    """Emit security event."""
     try:
         event = getattr(Events, event_name)
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
-            # No running loop (e.g. unit test calling sync code
-            # outside an async context). Skip — the event would
-            # have no subscribers in that environment anyway.
             return
         loop.create_task(
             bus.emit(event, **kwargs),
             name=f"security-emit-{event_name}",
         )
-    except Exception as e:  # noqa: BLE001 — intentional: defensive catch logged below
+    except Exception as e:
         logger.debug(
             "[bus_emitter] emit %s failed: %s",
-            event_name, e,
+            event_name,
+            e,
         )

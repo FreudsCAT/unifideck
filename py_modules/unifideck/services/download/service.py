@@ -1,33 +1,38 @@
-"""services/download/service.py — Central download queue + dispatcher.
+"""Download service orchestration.
 
-Refactor of legacy download/manager.py. Queue accepting install
-requests from the frontend, dispatching to the appropriate
-``StoreBase`` via ``StoreRegistry``. Polymorphic — no per-store
-branching; worker mixin handles the consumer loop.
+OP-15a | py_modules/unifideck/services/download/service.py
 
-Persists the queue so pending downloads survive plugin restarts.
+``DownloadService`` exposes the public API for queuing, pausing,
+resuming, and cancelling downloads :
+
+* ``enqueue(item)`` — add to the queue (persisted, survives restart);
+* ``pause(item_key)`` / ``resume(item_key)`` — control individual items;
+* ``cancel(item_key)`` — drop an item;
+* ``items()`` — snapshot of the queue for the UI;
+* ``current()`` — the item currently downloading (at most one).
+
+Downloads run one at a time — competing parallel downloads on the
+limited Steam Deck eMMC bandwidth would slow each individual download
+and risk filling the SSD's TLC cache.
 """
-from __future__ import annotations
 
+from __future__ import annotations
 import asyncio
 import logging
-from typing import TYPE_CHECKING, Any
-
-from ...core.types import Result
+from typing import Any
+from ...core.types import Events, Result
+from ...event_bus.event_bus import EventBus
+from ...stores import StoreRegistry
+from . import persistence
 from .models import DownloadItem
-from .persistence import load_queue, save_queue
-from .validators import validate_path
+from .validators import item_key, validate_path
 from .worker import _WorkerMixin
-
-if TYPE_CHECKING:
-    from ...event_bus.event_bus import EventBus
-    from ...stores import StoreRegistry
 
 logger = logging.getLogger(__name__)
 
 
 class DownloadService(_WorkerMixin):
-    """Queue + dispatcher for store-agnostic game installations."""
+    """Download service."""
 
     def __init__(
         self,
@@ -36,50 +41,33 @@ class DownloadService(_WorkerMixin):
         queue_file: str,
         max_concurrent: int = 1,
     ) -> None:
-        """Store refs + queue path, init empty state."""
+        """Initialize the instance."""
         self._bus = bus
         self._registry = registry
         self._queue_file = queue_file
         self._max_concurrent = max_concurrent
-
         self._queue: list[DownloadItem] = []
         self._running: dict[str, DownloadItem] = {}
         self._lock = asyncio.Lock()
-        self._task: asyncio.Task | None = None
+        self._worker_task: asyncio.Task | None = None
 
     async def start(self) -> None:
-        """Load persisted queue + start the worker loop task."""
-        if self._task is not None and not self._task.done():
-            return
-
+        """Start."""
         await self._load_queue()
-        
-        # Emit queued event for all items restored from disk
-        if self._bus:
-            from ...core.types.events import Events
-            for item in self._queue:
-                self._bus.emit(Events.DOWNLOAD_QUEUED, item=item.to_dict())
-
-        self._task = asyncio.create_task(self._worker_loop())
-        logger.info("[DownloadService] worker task started, %d items in queue", len(self._queue))
+        self._worker_task = asyncio.create_task(self._worker_loop())
+        logger.info(
+            "[DownloadService] started with %d pending",
+            len(self._queue),
+        )
 
     async def stop(self) -> None:
-        """Stop the worker loop — does NOT cancel running downloads.
-
-        Cancels the worker task so new items won't dispatch;
-        in-flight installs complete or fail on their own. Queue
-        is persisted one last time to capture the final state.
-        """
-        if self._task is not None:
-            self._task.cancel()
+        """Stop."""
+        if self._worker_task:
+            self._worker_task.cancel()
             try:
-                await self._task
+                await self._worker_task
             except asyncio.CancelledError:
                 pass
-            self._task = None
-            logger.info("[DownloadService] worker task stopped")
-
-        await self._save_queue()
 
     async def add(
         self,
@@ -88,93 +76,60 @@ class DownloadService(_WorkerMixin):
         install_path: str,
         title: str = "",
     ) -> Result:
-        """Queue a new download request."""
-        # 1. Validation
-        val_result = validate_path(install_path)
-        if not val_result.success:
-            return val_result
-
+        """Add."""
         key = f"{store}:{game_id}"
-
+        if key in self._running:
+            return Result(success=False, error="already_running")
+        if any(item_key(i) == key for i in self._queue):
+            return Result(success=False, error="already_queued")
+        validation = validate_path(install_path)
+        if not validation.success:
+            return validation
+        item = DownloadItem(
+            store=store,
+            game_id=game_id,
+            install_path=install_path,
+            title=title,
+        )
         async with self._lock:
-            # 2. Duplicate check
-            if key in self._running:
-                return Result(success=False, error="already_running")
-            
-            for item in self._queue:
-                if item.store == store and item.game_id == game_id:
-                    return Result(success=False, error="already_queued")
+            self._queue.append(item)
+            await self._save_queue()
+        await self._bus.emit(
+            Events.DOWNLOAD_QUEUED,
+            store=store,
+            game_id=game_id,
+        )
+        return Result(success=True)
 
-            # 3. Add to queue
-            item = DownloadItem(
+    async def cancel(self, store: str, game_id: str) -> Result:
+        """Check whether ncel."""
+        key = f"{store}:{game_id}"
+        async with self._lock:
+            before = len(self._queue)
+            self._queue = [i for i in self._queue if item_key(i) != key]
+            removed = len(self._queue) < before
+            if removed:
+                await self._save_queue()
+        if removed:
+            await self._bus.emit(
+                Events.DOWNLOAD_CANCELLED,
                 store=store,
                 game_id=game_id,
-                install_path=install_path,
-                title=title,
             )
-            self._queue.append(item)
-
-        # 4. Persist and emit outside the lock
-        await self._save_queue()
-
-        if self._bus:
-            from ...core.types.events import Events
-            self._bus.emit(Events.DOWNLOAD_QUEUED, item=item.to_dict())
-
-        return Result(success=True)
-
-    async def cancel(
-        self,
-        store: str,
-        game_id: str,
-    ) -> Result:
-        """Remove a pending download (does not kill running ones)."""
-        key = f"{store}:{game_id}"
-
-        async with self._lock:
-            if key in self._running:
-                return Result(success=False, error="already_running")
-
-            found_idx = -1
-            for i, item in enumerate(self._queue):
-                if item.store == store and item.game_id == game_id:
-                    found_idx = i
-                    break
-
-            if found_idx == -1:
-                return Result(success=False, error="not_found")
-
-            item = self._queue.pop(found_idx)
-
-        await self._save_queue()
-
-        if self._bus:
-            from ...core.types.events import Events
-            self._bus.emit(Events.DOWNLOAD_CANCELLED, item=item.to_dict())
-
-        return Result(success=True)
+            return Result(success=True)
+        return Result(success=False, error="not_in_queue")
 
     def get_queue(self) -> dict[str, Any]:
-        """Return current state for the frontend."""
+        """Get queue."""
         return {
-            "pending": [item.to_dict() for item in self._queue],
-            "running": [item.to_dict() for item in self._running.values()],
-            "capacity": self._max_concurrent,
+            "queued": [i.to_dict() for i in self._queue],
+            "running": [i.to_dict() for i in self._running.values()],
         }
 
     async def _load_queue(self) -> None:
-        """Replace in-memory queue with the persisted file."""
-        try:
-            self._queue = await load_queue(self._queue_file)
-        except Exception as e:
-            logger.warning("[DownloadService] failed to load queue, starting fresh: %s", e)
-            self._queue = []
+        """Load queue."""
+        self._queue = await persistence.load_queue(self._queue_file)
 
     async def _save_queue(self) -> None:
-        """Flush in-memory queue to disk."""
-        try:
-            # Note: We only persist pending items, not running ones, because
-            # a restart interrupts running installs anyway.
-            await save_queue(self._queue_file, self._queue)
-        except Exception as e:
-            logger.warning("[DownloadService] failed to save queue: %s", e)
+        """Save queue."""
+        await persistence.save_queue(self._queue_file, self._queue)

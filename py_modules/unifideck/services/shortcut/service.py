@@ -1,44 +1,42 @@
-"""services/shortcut/service.py — ShortcutService facade class.
+"""Steam shortcut orchestration — the public ``ShortcutService`` class.
 
-Non-Steam shortcut management. Mutates ``shortcuts.vdf``
-(Steam's registry) and ``games.map`` (Unifideck's own exe
-manifest read by the launcher wrapper at game-launch time).
+OP-14a | py_modules/unifideck/services/shortcut/service.py
 
-Shell class composing multiple mixins:
-- ``EventsMixin``       : ``@subscribe`` handlers
-- ``_GamesMapMixin``    : typed mutations + queries
-- ``_VdfShortcutsMixin``: escape-hatch read/write + auth
-                          shortcut delegator
+``ShortcutService`` is the multi-inheritance facade that composes :
 
-Shell itself owns ``__init__`` / ``stop`` / ``generate_app_id``
-and three loaders that pair ``_loaded`` flags with
-``persistence.py`` stateless helpers.
+* ``_VdfShortcutsMixin`` — read/write the ``shortcuts.vdf`` binary file;
+* ``_GamesMapMixin``     — maintain the Unifideck-side game → appid map;
+* ``EventsMixin``        — emit bus events on shortcut create/update/delete;
+* ``auth_shortcut``      — the special-case auth shortcut for Ubisoft/Epic;
+* ``persistence``        — read/write the on-disk state on boot/save.
+
+The class is intentionally a thin shell over the mixins so individual
+responsibilities can be tested in isolation.
 """
-from __future__ import annotations
 
+from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any
-
+from ...core.types import Events
+from ...event_bus.event_bus_devex import auto_wire
+from . import persistence
 from .events import EventsMixin
-from .games_map import generate_app_id
+from .games_map import GameMapEntry, generate_app_id
 from .games_map_mixin import UNIFIDECK_TAG, _GamesMapMixin
-from .persistence import read_games_map, read_vdf, write_games_map, write_vdf
 from .vdf_shortcuts import _VdfShortcutsMixin
 
 if TYPE_CHECKING:
     from ...event_bus.event_bus import EventBus
-
 logger = logging.getLogger(__name__)
-
 __all__ = ["ShortcutService", "UNIFIDECK_TAG"]
 
 
 class ShortcutService(
-    EventsMixin,
     _GamesMapMixin,
     _VdfShortcutsMixin,
+    EventsMixin,
 ):
-    """Facade for shortcuts.vdf + games.map mutations."""
+    """Shortcut service."""
 
     def __init__(
         self,
@@ -46,49 +44,60 @@ class ShortcutService(
         shortcuts_path: str,
         games_map_path: str,
     ) -> None:
-        """Store refs + paths, init empty state + per-file loaded flags."""
+        """Initialize the instance."""
         self._bus = bus
         self._shortcuts_path = shortcuts_path
         self._games_map_path = games_map_path
-
-        self._shortcuts: dict[str, Any] = {}
-        self._games_map: dict[str, dict[str, str]] = {}
-
-        self._shortcuts_loaded = False
-        self._games_map_loaded = False
-
-        self._bus.auto_wire(self)
+        self._shortcuts: list[dict[str, Any]] = []
+        self._games_map: dict[str, GameMapEntry] = {}
+        self._shortcuts_loaded: bool = False
+        self._games_map_loaded: bool = False
+        auto_wire(self, self._bus)
+        logger.info("[ShortcutService] wired (3 subscriptions)")
 
     async def stop(self) -> None:
-        """Unsubscribe from EventBus events and persist pending changes."""
-        self._bus.unsubscribe_all(self)
-        await self._save_all()
+        """Stop."""
+        self._bus.off(
+            Events.DOWNLOAD_COMPLETE,
+            self._on_download_complete,
+        )
+        self._bus.off(
+            Events.GAME_UNINSTALLED,
+            self._on_game_uninstalled,
+        )
+        self._bus.off(
+            Events.SYNC_COMPLETE,
+            self._on_sync_complete,
+        )
 
     @staticmethod
     def generate_app_id(exe: str, title: str) -> int:
-        """Delegate to module-level generate_app_id in games_map.py."""
+        """Generate app ID."""
         return generate_app_id(exe, title)
 
     async def _load_shortcuts(self) -> None:
-        """Load shortcuts.vdf into memory (idempotent)."""
+        """Load shortcuts."""
         if self._shortcuts_loaded:
             return
-
-        self._shortcuts = await read_vdf(self._shortcuts_path)
         self._shortcuts_loaded = True
+        self._shortcuts = await persistence.load_shortcuts(
+            self._shortcuts_path,
+        )
 
     async def _load_games_map(self) -> None:
-        """Load games.map with retry-on-corruption (idempotent)."""
+        """Load games map."""
         if self._games_map_loaded:
             return
-
-        self._games_map = await read_games_map(self._games_map_path)
         self._games_map_loaded = True
+        self._games_map = await persistence.load_games_map(
+            self._games_map_path,
+        )
 
     async def _save_all(self) -> None:
-        """Persist shortcuts.vdf + games.map atomically."""
-        if self._shortcuts_loaded:
-            await write_vdf(self._shortcuts_path, self._shortcuts)
-
-        if self._games_map_loaded:
-            await write_games_map(self._games_map_path, self._games_map)
+        """Save all."""
+        await persistence.save_all(
+            self._shortcuts_path,
+            self._shortcuts,
+            self._games_map_path,
+            self._games_map,
+        )
