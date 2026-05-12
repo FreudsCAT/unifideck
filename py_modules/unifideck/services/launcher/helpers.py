@@ -1,27 +1,34 @@
-"""Launcher helpers — the bulk of the launch pipeline mechanics.
+"""Launcher pipeline helpers — the moving parts of a game launch.
 
 OP-20e | py_modules/unifideck/services/launcher/helpers.py
 
 Module-level helpers that the service composes into the launch
-pipeline :
+pipeline. Each helper is a discrete phase wrapped in a
+``PhaseTimer`` so telemetry can attribute the time spent in each
+phase per launch:
 
-* ``prepare_windows_plan`` — build the full Proton launch plan
-  (env vars, working dir, executable, args, Proton version);
-* ``cloud_sync_phase``     — orchestrate the pre-launch save sync
-  with timeout + fallback;
-* ``run_game_subprocess``  — spawn the subprocess, wire stdout/
-  stderr to the audit log, return the exit code.
+* ``prepare_windows_plan`` — resolve Proton, ensure the UMU
+  runtime is ready, and build the ``ProtonLaunchPlan``;
+* ``cloud_sync_phase``     — pre-flight disk-space check + cloud
+  sync (down or up) + observed-size recording;
+* ``run_game_subprocess``  — actually dispatch the plan and emit
+  GAME_STOPPED in the finally;
+* ``sync_saves_and_track_size`` — same sync logic as
+  ``cloud_sync_phase`` but for native launches (no PhaseTimer);
+* ``resolve_exit_code`` / ``elapsed_since_launch`` — small synch
+  utilities shared by orchestrator and service.
 
-This module concentrates the moving parts that would clutter
-``service.py`` ; keeping them here makes the service file readable
-as a top-level pipeline.
+Keeping these here lets ``service.py`` read as a clean top-level
+pipeline.
 """
 
 from __future__ import annotations
+
 import logging
 import os
 from collections.abc import Callable
 from typing import TYPE_CHECKING, cast
+
 from ...launcher.rpc import emit_game_stopped
 from ...launcher.types.context import RuntimeState
 from ...launcher.types.errors import LauncherError
@@ -30,6 +37,7 @@ if TYPE_CHECKING:
     from ...launcher.proton.infrastructure.core import ProtonLaunchPlan
     from ...launcher.types.context import LaunchContext
     from .service import LauncherService
+
 logger = logging.getLogger(__name__)
 
 
@@ -38,7 +46,34 @@ async def prepare_windows_plan(
     ctx: LaunchContext,
     state: RuntimeState,
 ) -> tuple[ProtonLaunchPlan, object]:
-    """Prepare windows plan."""
+    """Build the ``ProtonLaunchPlan`` for a Windows game.
+
+    Three timed phases:
+
+    1. **resolve_runtime** — find a Python 3.10+ interpreter
+       (umu needs it) and pick the right Proton version for
+       the shortcut's AppID.
+    2. **umu_runtime_ready** — verify (and lazily install) the
+       umu runtime bundle.
+    3. **proton_prepare** — assemble the actual plan via
+       ``proton_prepare`` and overlay LSFG + user env overrides.
+
+    Parsed launch options (wrappers, game args, LSFG flag) are
+    pushed into the runtime state so downstream phases see them.
+
+    The ``on_process_start`` hook registers the spawned PID with
+    the launcher's signal-handler registry so SIGTERM /
+    SIGINT during plugin shutdown propagates to the game.
+
+    Args:
+        svc: launcher service (provides bus + registry).
+        ctx: launch context (carries store, game id, options).
+        state: mutable runtime state populated with parsed
+            options.
+
+    Returns:
+        Tuple ``(plan, parsed_options)``.
+    """
     from ...launcher.diagnostics.telemetry import PhaseTimer
     from ...launcher.proton.infrastructure.core import proton_prepare
     from ...launcher.proton.infrastructure.selector import (
@@ -97,10 +132,34 @@ async def cloud_sync_phase(
     ctx: LaunchContext,
     direction: str,
 ) -> None:
-    """Cloud sync phase."""
+    """Run a pre- or post-launch cloud-save sync, with safety nets.
+
+    Workflow:
+
+    1. **assert_enough_space** — fail fast if the plugin dir
+       doesn't have enough free space for the save sync (using
+       prior observed sizes from the cache).
+    2. **sync** — call ``CloudSaveService.sync_down`` or
+       ``sync_up`` depending on direction.
+    3. **observe + record** — measure the local-save directory
+       size after the sync and update the size cache so future
+       runs have a better disk-space estimate.
+
+    Any failure is routed to ``handle_cloud_sync_failure``
+    (which decides whether to abort the launch or proceed with
+    a degraded-mode warning). The entire phase is wrapped in a
+    ``PhaseTimer`` for telemetry.
+
+    Args:
+        svc: launcher service.
+        ctx: launch context.
+        direction: ``"down"`` (pre-launch pull) or ``"up"``
+            (post-launch push).
+    """
     from pathlib import (
         Path as _P,
     )
+
     from ...launcher.cloud.disk_space import assert_enough_space
     from ...launcher.cloud.save_size_cache import (
         measure_directory_size,
@@ -163,7 +222,34 @@ async def run_game_subprocess(
     ctx: LaunchContext,
     state: RuntimeState,
 ) -> int:
-    """Run game subprocess."""
+    """Dispatch the Proton plan and emit GAME_STOPPED in the finally.
+
+    Wraps ``launcher.proton.dispatch(plan)`` which spawns the
+    subprocess and awaits its exit code. The whole block is
+    inside a ``PhaseTimer("game_run")`` so the per-game
+    runtime is captured for telemetry.
+
+    Exit code resolution:
+
+    * **state.game_exit_code** — set by ``dispatch`` from the
+      subprocess return code.
+    * **fallback to 1** — if dispatch errored out before
+      setting it.
+    * **override to 143** — if a signal terminated the process
+      (143 = SIGTERM exit, the most useful canonical value).
+
+    ``LauncherError`` is re-raised intact ; other exceptions are
+    NOT caught here (they propagate up to the orchestrator).
+
+    Args:
+        svc: launcher service.
+        plan: the prepared Proton plan.
+        ctx: launch context.
+        state: mutable runtime state.
+
+    Returns:
+        The subprocess exit code from ``proton_pkg.dispatch``.
+    """
     from ...launcher import proton as proton_pkg
     from ...launcher.diagnostics.telemetry import PhaseTimer
 
@@ -206,10 +292,22 @@ async def sync_saves_and_track_size(
     ctx: LaunchContext,
     phase: str,
 ) -> None:
-    """Sync saves and track size."""
+    """Native-launch variant of ``cloud_sync_phase``.
+
+    Same workflow (disk-space check → sync → observed-size
+    recording) but without the ``PhaseTimer`` wrapper because
+    native launches don't go through the Proton telemetry
+    pipeline.
+
+    Args:
+        svc: launcher service.
+        ctx: launch context.
+        phase: ``"sync_down"`` (pre) or ``"sync_up"`` (post).
+    """
     from pathlib import (
         Path as _P,
     )
+
     from ...launcher.cloud.cloud_failure import handle_cloud_sync_failure
     from ...launcher.cloud.disk_space import assert_enough_space
     from ...launcher.cloud.save_size_cache import (
@@ -252,7 +350,22 @@ async def sync_saves_and_track_size(
 
 
 def resolve_exit_code(svc: LauncherService, state: RuntimeState) -> int:
-    """Resolve exit code."""
+    """Compute the final exit code with signal-handler awareness.
+
+    Priority:
+
+    1. Explicit ``state.game_exit_code`` from the subprocess.
+    2. SIGTERM-style code (143) if a signal terminated us.
+    3. Fallback 1 — something failed before exit-code capture.
+
+    Args:
+        svc: launcher service (for signal state).
+        state: runtime state to mutate with
+            ``terminated_by_signal`` if applicable.
+
+    Returns:
+        Resolved exit code.
+    """
     if state.game_exit_code is not None:
         return state.game_exit_code
     if svc._signal_state.terminated_by_signal:
@@ -262,7 +375,21 @@ def resolve_exit_code(svc: LauncherService, state: RuntimeState) -> int:
 
 
 def elapsed_since_launch(svc: LauncherService) -> float:
-    """Elapsed since launch."""
+    """Compute wall-clock seconds since ``launch`` started.
+
+    Returns 0 if ``_launch_started_at`` was never set — which
+    happens when the launch flow short-circuited before setting
+    it (e.g. circuit breaker refused immediately).
+
+    Uses ``time.monotonic`` so NTP/clock adjustments during the
+    game session can't produce negative or inflated durations.
+
+    Args:
+        svc: launcher service.
+
+    Returns:
+        Elapsed seconds, or 0.0 if no launch in progress.
+    """
     if not hasattr(svc, "_launch_started_at"):
         return 0.0
     import time as _t

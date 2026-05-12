@@ -32,7 +32,42 @@ async def build_auth_shortcut(
     launcher_path: str,
     title: str,
 ) -> Result:
-    """Build auth shortcut."""
+    """Create (or repair) the auth shortcut for a given store.
+
+    Auth shortcuts exist so that the user can launch the store's
+    native client inside Unifideck's dedicated auth-only Wine
+    prefix, complete the sign-in flow, and have Unifideck pick up
+    the resulting credential file from the prefix.
+
+    Workflow:
+
+    1. Validate ``launcher_path`` and ``title`` are non-empty.
+    2. Compute the deterministic AppID + its unsigned twin
+       (Steam's UI sometimes shows the unsigned form).
+    3. Build the canonical ``LaunchOptions`` string carrying the
+       ``UNIFIDECK_<STORE>_ACTION=auth`` marker that the RPC
+       layer parses on shortcut launches.
+    4. Prune any malformed duplicates from prior plugin versions
+       (``_prune_malformed_duplicates``).
+    5. If no correct entry exists yet, append a fresh one.
+    6. Save + emit ``SHORTCUT_CREATED`` (with ``is_auth=True``)
+       so the artwork service can fetch launcher artwork.
+
+    The unsigned id is returned in ``Result.error`` (despite the
+    name) so the caller can navigate Steam to the new shortcut —
+    abusing the field but keeping the ``Result`` shape consistent.
+
+    Args:
+        service: the host ``ShortcutService`` instance.
+        store: store identifier.
+        launcher_path: absolute path to the launcher executable.
+        title: display title (e.g. ``"Ubisoft Connect"``).
+
+    Returns:
+        ``Result(success=True, error=<unsigned_id_string>)`` on
+        success; ``Result(success=False, error="no_launcher_path")``
+        or ``"no_title"`` on validation failure.
+    """
     if not launcher_path:
         return Result(success=False, error="no_launcher_path")
     if not title:
@@ -82,7 +117,33 @@ def _prune_malformed_duplicates(
     app_id: int,
     title: str,
 ) -> tuple[int | None, bool]:
-    """Prune malformed duplicates."""
+    """Remove any old/broken auth shortcuts for ``store``.
+
+    Auth shortcuts have evolved over Unifideck versions — older
+    plugins produced entries that don't match the current
+    schema. This pass scans every shortcut whose
+    ``LaunchOptions`` contains the ``<store>:<store>-auth``
+    marker and:
+
+    * remembers the index of the one matching the current
+      (app_id, title, schema) — that one is correct;
+    * removes the others (sorted by index DESC so the
+      ``del service._shortcuts[idx]`` calls don't invalidate the
+      indices we still need to process).
+
+    Args:
+        service: the host ``ShortcutService`` instance.
+        store: store identifier.
+        app_id: the canonical AppID for the current entry.
+        title: the canonical title for the current entry.
+
+    Returns:
+        Tuple ``(correct_idx, dirty)`` where ``correct_idx`` is
+        the index of the correct entry if one was found (so the
+        caller knows whether to append or not), and ``dirty`` is
+        True if any pruning happened (so the caller knows
+        whether to save).
+    """
     auth_prefix = f"{store}:{store}-auth"
     matching = [
         (i, s)
@@ -122,7 +183,26 @@ def _build_auth_entry(
     launch_options: str,
     store: str,
 ) -> dict:
-    """Build auth entry."""
+    """Construct the dict for a single auth-shortcut entry.
+
+    Differs from a regular game shortcut by:
+
+    * ``IsHidden=1`` — auth shortcuts shouldn't clutter the
+      user's main library view (they're only used once);
+    * ``AllowDesktopConfig=1`` — user may need a keyboard in the
+      sign-in form, so allow desktop controller config.
+
+    Args:
+        app_id: pre-computed AppID.
+        title: display title.
+        launcher_path: launcher executable path.
+        launch_options: pre-built launch options string with the
+            ``UNIFIDECK_*_ACTION=auth`` marker.
+        store: store identifier (used for the tag).
+
+    Returns:
+        Auth-shortcut entry dict.
+    """
     return {
         "appid": app_id,
         "AppName": title,

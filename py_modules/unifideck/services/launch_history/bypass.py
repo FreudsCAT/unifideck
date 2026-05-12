@@ -25,12 +25,30 @@ _BYPASS_VALIDITY_SECONDS = 300
 
 
 class _BypassMixin:
-    """Bypass mixin."""
+    """One-shot circuit-breaker bypass tokens with TTL."""
 
     _path: Path
 
     def arm_bypass(self, game_key: str) -> None:
-        """Arm bypass."""
+        """Record a "try anyway" request for the given game.
+
+        Called from the RPC layer when the user clicks the
+        "try anyway" button on the circuit-open toast. The bypass
+        is one-shot: a single subsequent ``consume_bypass`` call
+        will return ``True``, after which the bypass is gone.
+
+        A timestamp is stored alongside the bypass so an old
+        request (e.g. user clicked "try anyway" then changed their
+        mind and went to sleep) doesn't silently disable the
+        circuit breaker forever — the 5-minute TTL kicks in.
+
+        Failures during the file write are caught and logged but
+        not propagated — the bypass might not arm, but that's
+        recoverable (the user can re-click).
+
+        Args:
+            game_key: ``"<store>:<game_id>"`` key.
+        """
         try:
             data = load_history(self._path)
             entry = data.setdefault(game_key, {"failures": []})
@@ -48,7 +66,30 @@ class _BypassMixin:
             )
 
     def consume_bypass(self, game_key: str) -> bool:
-        """Consume bypass."""
+        """Atomically check + consume a pending bypass.
+
+        Called by the launcher service when about to launch a
+        game with an open circuit. Three cases:
+
+        * **No bypass armed** → returns ``False``, launcher
+          refuses the launch.
+        * **Bypass armed within TTL** → returns ``True``,
+          launcher proceeds; the bypass is deleted (one-shot).
+        * **Bypass armed but expired** (> 5 minutes old) →
+          returns ``False`` and deletes the stale token to keep
+          state clean.
+
+        The check + delete is non-atomic in the strict sense
+        (two file operations), but only one launcher invocation
+        happens at a time for a given game so a race is impossible
+        in practice.
+
+        Args:
+            game_key: ``"<store>:<game_id>"`` key.
+
+        Returns:
+            ``True`` iff a valid, non-expired bypass was consumed.
+        """
         try:
             data = load_history(self._path)
             entry = data.get(game_key)

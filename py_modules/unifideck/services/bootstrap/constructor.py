@@ -39,7 +39,31 @@ def bootstrap_services(
     config: ConfigManager,
     pipeline: BusPipeline,
 ) -> ServiceContainer:
-    """Bootstrap services."""
+    """Construct every Layer-5 service and return a populated container.
+
+    Walks ``_SERVICE_DEFS`` in declared order. For each entry it
+    calls ``_instantiate_service`` to build the service and sets it
+    on the container under the entry's attribute name.
+
+    Per-service construction failures are caught and logged at WARN
+    level rather than propagated — a single broken service must not
+    block the entire plugin from booting. The corresponding
+    container slot stays at ``None`` and downstream consumers are
+    responsible for ``None``-checks (or graceful degradation).
+
+    Args:
+        bus: live event bus from the pipeline.
+        registry: store registry (already populated by
+            ``StoreRegistry.auto_discover``).
+        cache: shared cache manager.
+        config: live config manager.
+        pipeline: composed bus pipeline (replay, watchdog, etc.).
+
+    Returns:
+        A ``ServiceContainer`` with one slot per ``_SERVICE_DEFS``
+        entry, populated with the constructed service or ``None``
+        on construction failure.
+    """
     paths = ServicePaths.from_config(config)
     container = ServiceContainer()
     for def_entry in _SERVICE_DEFS:
@@ -78,7 +102,31 @@ def build_service_subset(
     paths: ServicePaths,
     attrs: Iterable[str],
 ) -> dict[str, Any]:
-    """Build service subset."""
+    """Build a named subset of services for testing.
+
+    Iterates ``_SERVICE_DEFS`` but only constructs entries whose
+    attribute names appear in ``attrs``. Unlike ``bootstrap_services``
+    this variant skips the registry, cache and pipeline (passes
+    ``None`` for each), so it can only build services that don't
+    depend on those — typically the leaf services with minimal
+    wiring.
+
+    Failures are caught and recorded as ``None`` slots in the
+    returned dict (rather than raising), matching the production
+    bootstrap's tolerance policy.
+
+    Args:
+        bus: stub or real event bus for the test.
+        config: stub or real config manager.
+        paths: pre-built ``ServicePaths`` (the subset variant
+            doesn't derive paths from config).
+        attrs: iterable of service-attribute names to build (e.g.
+            ``["metadata", "proton"]``).
+
+    Returns:
+        Mapping ``attr → service_instance | None`` for every
+        requested attribute, in iteration order.
+    """
     selected = set(attrs)
     services: dict[str, Any] = {}
     for def_entry in _SERVICE_DEFS:

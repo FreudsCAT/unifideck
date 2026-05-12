@@ -26,7 +26,25 @@ logger = logging.getLogger(__name__)
 
 
 async def start_async_services(container: ServiceContainer) -> None:
-    """Start async services."""
+    """Run the async start-up phase on every service that needs one.
+
+    Walks a fixed allow-list of services (``download``, ``account``,
+    ``playtime``, ``security``, ``launch_history``) and calls
+    ``start()`` on each one when present. The order matters:
+    ``download`` is started first so it can rehydrate its queue
+    from disk before any other service tries to enqueue items, and
+    ``security`` is started before ``launch_history`` so that its
+    audit log is ready to receive launch-history's failure events.
+
+    Per-service failures are tolerated (logged at WARN) — a broken
+    ``start`` must not prevent the rest of the plugin from coming
+    up. After every service is started, ``_self_heal_executable_bits``
+    runs as a one-off safety pass.
+
+    Args:
+        container: the populated ``ServiceContainer`` returned by
+            ``bootstrap_services``.
+    """
     for attr in (
         "download",
         "account",
@@ -52,7 +70,20 @@ async def start_async_services(container: ServiceContainer) -> None:
 
 
 def _self_heal_executable_bits() -> None:
-    """Self heal executable bits."""
+    """Restore the executable bit on bundled binaries.
+
+    Git on Windows strips the executable bit when checking out the
+    plugin's wheel, leaving binaries like ``gogdl``, ``nile`` and
+    ``legendary`` non-launchable on the Steam Deck. This pass
+    locates the plugin directory (4 levels above this file) and
+    delegates to ``launcher.packaging.ensure_executable_files``
+    which scans the known-binary paths and chmod-s them ``+x``.
+
+    Logs at INFO when any file was fixed (one-time event on first
+    boot after install), at WARN if the heal pass itself crashes
+    (rare — typically permission issues if the plugin dir is
+    read-only).
+    """
     try:
         plugin_dir_path = Path(__file__).resolve().parents[4]
         from ...launcher.packaging import ensure_executable_files

@@ -38,7 +38,18 @@ if TYPE_CHECKING:
 
 @dataclass
 class ServiceContainer:
-    """Service container."""
+    """Typed bag holding every Layer-5 service constructed at boot.
+
+    Each field is one service slot; the constructor leaves them all
+    at ``None`` and the ``bootstrap_services`` function in
+    ``constructor.py`` (OP-13d) populates them in order. After boot
+    every field is either a service instance or ``None`` (if the
+    service was opt-out via configuration).
+
+    Storing services on a dataclass (rather than in a dict) gives
+    IDEs and type checkers visibility into ``container.shortcut``,
+    ``container.download``, etc., and makes refactors safe.
+    """
 
     shortcut: ShortcutService | None = None
     download: DownloadService | None = None

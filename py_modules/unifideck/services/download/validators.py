@@ -19,12 +19,45 @@ from .models import DownloadItem
 
 
 def item_key(item: DownloadItem) -> str:
-    """Item key."""
+    """Compute the canonical de-dup key for a download item.
+
+    ``"<store>:<game_id>"`` — the same key the rest of the service
+    uses to look up running downloads in ``_running`` and to reject
+    duplicates in ``add``.
+
+    Args:
+        item: a ``DownloadItem``.
+
+    Returns:
+        Stable string key.
+    """
     return f"{item.store}:{item.game_id}"
 
 
 def validate_path(path: str) -> Result:
-    """Validate path."""
+    """Pre-flight check the install path before queuing.
+
+    Three checks in order:
+
+    1. **Non-empty** — reject empty paths;
+    2. **Directory exists or can be created** — try ``mkdir
+       -p``, reject with ``mkdir_failed`` if the OS rejects it
+       (permission denied, parent missing on a read-only mount);
+    3. **Writable** — ``os.access(W_OK)``;
+    4. **At least 1 GB free** — quick check via ``statvfs``;
+       reject with ``low_space:<GB>`` below the threshold.
+       ``statvfs`` failures (unusual filesystems) are tolerated
+       and the check is skipped — better to attempt the install
+       than to refuse on a stat quirk.
+
+    Args:
+        path: target install directory.
+
+    Returns:
+        ``Result(success=True)`` if the path passes every check,
+        ``Result(success=False, error=…)`` with a specific error
+        code otherwise.
+    """
     if not path:
         return Result(success=False, error="empty_path")
     p = Path(path)

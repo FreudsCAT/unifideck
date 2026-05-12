@@ -19,7 +19,27 @@ logger = logging.getLogger(__name__)
 
 
 async def stop_all_services(container: ServiceContainer) -> None:
-    """Stop all services."""
+    """Tear down every service in reverse-dependency order.
+
+    Iterates a hard-coded teardown order that mirrors the
+    construction order in reverse — services that depend on others
+    are stopped before their dependencies. The list is explicit
+    (rather than derived from ``_SERVICE_DEFS``) so it's reviewable
+    at a glance and a developer changing service wiring is forced
+    to think about teardown.
+
+    For each service, prefers ``stop()`` and falls back to
+    ``disconnect()`` (used by the CDP client, which has a
+    network-shutdown semantic rather than a generic stop).
+
+    Per-service failures are tolerated (logged at WARN) so one
+    broken teardown doesn't leave subsequent services hanging — at
+    plugin unload Decky will kill the process anyway after a short
+    deadline.
+
+    Args:
+        container: the populated ``ServiceContainer`` to drain.
+    """
     teardown_order = [
         "cloud_prompt",
         "security",

@@ -31,7 +31,12 @@ logger = logging.getLogger(__name__)
 
 
 class _WorkerMixin:
-    """Worker mixin."""
+    """Background worker loop glued onto ``DownloadService``.
+
+    Stateful: relies on attributes set by the host class
+    (``_bus``, ``_registry``, ``_lock``, ``_max_concurrent``,
+    ``_queue``, ``_running``).
+    """
 
     _bus: EventBus
     _registry: StoreRegistry
@@ -41,7 +46,16 @@ class _WorkerMixin:
     _running: dict[str, DownloadItem]
 
     async def _worker_loop(self) -> None:
-        """Worker loop."""
+        """Pop items off the queue and install them, one at a time.
+
+        Polls every 500 ms when idle (queue empty or worker
+        capacity reached) — a tighter interval would burn CPU for
+        no benefit since downloads take minutes. When capacity is
+        available and an item is ready, atomically pops it under
+        the queue lock, marks it as running, persists the queue,
+        and spawns a separate task for the install (so the loop
+        can keep polling while the install runs).
+        """
         while True:
             if len(self._running) >= self._max_concurrent or not self._queue:
                 await asyncio.sleep(0.5)
@@ -56,7 +70,30 @@ class _WorkerMixin:
             asyncio.create_task(self._run_install(item))
 
     async def _run_install(self, item: DownloadItem) -> None:
-        """Run install."""
+        """Drive one item through the store's install pipeline.
+
+        Looks up the store in the registry (fails fast with
+        ``unknown_store`` if absent), emits ``DOWNLOAD_STARTED``,
+        then awaits ``store.install_game`` with a progress
+        callback that mutates the item's ``progress`` field as the
+        store reports.
+
+        Three outcomes:
+
+        * **success** — emit ``DOWNLOAD_COMPLETE`` with the
+          install path and resolved executable;
+        * **structured failure** (``result.success=False``) —
+          emit ``DOWNLOAD_FAILED`` with the result's error code;
+        * **exception** — log, classify the exception via
+          ``classify_download_error`` (transient vs permanent),
+          emit ``DOWNLOAD_FAILED``.
+
+        Either way, the item is removed from ``_running`` at the
+        end via ``_cleanup_running``.
+
+        Args:
+            item: the queued ``DownloadItem`` being processed.
+        """
         store = self._registry.get(item.store)
         if store is None:
             logger.error(
@@ -114,10 +151,30 @@ class _WorkerMixin:
         self._cleanup_running(item)
 
     def _cleanup_running(self, item: DownloadItem) -> None:
-        """Cleanup running."""
+        """Drop an item from ``_running`` once its install task ends.
+
+        Synchronous (no I/O), so safe to call from any context.
+        Idempotent — popping an absent key is a silent no-op.
+
+        Args:
+            item: the item whose install task just finished
+                (successfully or not).
+        """
         key = item_key(item)
         self._running.pop(key, None)
 
     def _update_progress(self, item: DownloadItem, progress: float) -> None:
-        """Update progress."""
+        """Apply a store-side progress update to the item.
+
+        Callback passed to ``store.install_game`` so the store can
+        report progress as it sees it. This implementation just
+        mutates the item's ``progress`` field — the bus emission
+        of ``DOWNLOAD_PROGRESS`` is handled at a higher level
+        (typically in the store itself or in a dedicated polling
+        task) to allow throttling.
+
+        Args:
+            item: the running download item.
+            progress: percentage 0.0–100.0.
+        """
         item.progress = progress

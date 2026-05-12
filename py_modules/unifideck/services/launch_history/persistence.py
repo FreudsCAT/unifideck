@@ -21,7 +21,20 @@ logger = logging.getLogger(__name__)
 
 
 def load_history(path: Path) -> dict[str, Any]:
-    """Load history."""
+    """Load the persisted launch history from disk.
+
+    Returns an empty dict when the file is absent (first boot) or
+    when the JSON is malformed (logged at WARN). A corrupt file
+    is recoverable — the user just loses the failure history for
+    the games involved, but their circuit breakers reset and
+    everything keeps working.
+
+    Args:
+        path: absolute path of the history JSON file.
+
+    Returns:
+        Mapping ``"game_key" → {failures: [...], bypass_armed: ts}``.
+    """
     if not path.exists():
         return {}
     try:
@@ -39,7 +52,21 @@ def load_history(path: Path) -> dict[str, Any]:
 
 
 def save_history(path: Path, data: dict[str, Any]) -> None:
-    """Save history."""
+    """Persist the launch history to disk atomically.
+
+    Creates the parent directory if absent, writes to ``<path>.tmp``,
+    then ``replace`` to swap the temp file over the target.
+    ``replace`` is atomic on every supported filesystem.
+
+    On failure, the temp file is cleaned up so a partial write
+    can't accumulate. The save error itself is logged at ERROR
+    (not WARN) because losing the launch history means the
+    circuit breaker decisions will be wrong for a while.
+
+    Args:
+        path: absolute path of the history JSON file.
+        data: the mapping to serialise.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + ".tmp")
     try:

@@ -25,7 +25,21 @@ logger = logging.getLogger(__name__)
 
 
 async def read_manifest(directory: str) -> dict[str, float]:
-    """Read manifest."""
+    """Load the saved-manifest file from a directory.
+
+    Reads ``<directory>/MANIFEST_FILE`` (typically
+    ``.unifideck-cloud-manifest.json``) and parses it. Returns an
+    empty dict when the file is absent or malformed — never raises.
+    The caller treats an empty manifest as "no prior sync state".
+
+    Args:
+        directory: absolute path of the save directory (local or
+            remote — both sides keep a manifest).
+
+    Returns:
+        Mapping ``"relative/path/to/file" → posix_mtime``.
+        Empty dict on missing or corrupted manifest.
+    """
     path = str(Path(directory) / MANIFEST_FILE)
     if not await asyncio.to_thread(
         lambda: Path(path).is_file(),
@@ -39,7 +53,23 @@ async def read_manifest(directory: str) -> dict[str, float]:
 
 
 async def write_manifest(directory: str, manifest: dict[str, float]) -> None:
-    """Write manifest."""
+    """Atomically persist the manifest to disk.
+
+    Writes the JSON-serialised manifest to ``<file>.tmp`` then
+    renames it over the target path. The rename is atomic on every
+    supported filesystem, so a crash mid-write can't leave a
+    partial manifest visible.
+
+    On I/O errors (disk full, permission denied, etc.) the write is
+    silently dropped and logged at WARN — a missing manifest is
+    recoverable (next sync rebuilds it), so a hard failure here
+    would be more harmful than the missed write.
+
+    Args:
+        directory: directory to write the manifest into.
+        manifest: mapping returned by ``build_manifest`` or merged
+            from prior syncs.
+    """
     path = str(Path(directory) / MANIFEST_FILE)
     tmp = f"{path}.tmp"
     try:
@@ -59,7 +89,20 @@ async def write_manifest(directory: str, manifest: dict[str, float]) -> None:
 
 
 async def build_manifest(directory: str) -> dict[str, float]:
-    """Build manifest."""
+    """Snapshot a directory's contents into a fresh manifest.
+
+    Walks the directory recursively (via ``walk_mtimes``) and
+    captures every regular file's mtime. The result is keyed by
+    path **relative to** ``directory`` so manifests can be compared
+    cross-host without dragging absolute paths into the comparison.
+
+    Args:
+        directory: directory to snapshot.
+
+    Returns:
+        Fresh mapping ``"relative/path" → posix_mtime``. Empty
+        dict if the directory doesn't exist or is empty.
+    """
     if not await asyncio.to_thread(
         lambda: Path(directory).is_dir(),
     ):

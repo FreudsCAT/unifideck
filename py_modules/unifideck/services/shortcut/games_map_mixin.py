@@ -1,42 +1,74 @@
-"""Game-map mixin — CRUD over the (store, game_id) → AppID map.
+"""Games-map mixin — high-level shortcut CRUD operations.
 
 OP-14e | py_modules/unifideck/services/shortcut/games_map_mixin.py
 
-``_GamesMapMixin`` exposes the methods the rest of the plugin uses to
-manipulate the game map :
+``_GamesMapMixin`` provides the public CRUD operations on top of
+the two flat in-memory data structures owned by ``ShortcutService``:
 
-* ``register_shortcut`` — add or update an entry;
-* ``unregister_shortcut`` — remove an entry + drop from shortcuts.vdf;
-* ``find_appid_for`` — lookup by (store, game_id);
-* ``find_game_for_appid`` — reverse lookup;
-* ``invalidate_appid`` — mark an entry stale (recovery path).
+* ``_shortcuts`` — the list of dicts that mirrors
+  ``shortcuts.vdf``;
+* ``_games_map`` — the ``"<store>:<game_id>" → GameMapEntry``
+  mapping that lets us go from a Unifideck game key to its
+  Steam-side AppID and back.
 
-State changes are committed to disk via ``persistence`` and announced
-on the bus via ``events``.
+Every mutating operation here loads the two structures lazily
+(via the host class's ``_load_*`` methods), mutates them, saves
+everything atomically via ``_save_all``, then optionally emits a
+bus event.
+
+The ``UNIFIDECK_TAG`` constant is the Steam-side "tag" used to
+mark shortcuts as Unifideck-managed — ``reconcile`` only removes
+shortcuts carrying this tag, so shortcuts added through other
+means (Steam's own "Add a Non-Steam Game" dialog) are preserved.
 """
 
 from __future__ import annotations
+
 import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
+
 from .games_map import GameMapEntry, generate_app_id
 
 if TYPE_CHECKING:
     from ...core.types import Game
     from ...event_bus.event_bus import EventBus
+
 logger = logging.getLogger(__name__)
+
 UNIFIDECK_TAG = "Unifideck"
 
 
 class _GamesMapMixin:
-    """Games map mixin."""
+    """CRUD over the in-memory shortcuts list and games map."""
 
     _bus: EventBus
     _shortcuts: list[dict[str, Any]]
     _games_map: dict[str, GameMapEntry]
 
     async def add_game(self, game: Game) -> Any:
-        """Add game."""
+        """Create or update a Steam shortcut for a game.
+
+        Workflow:
+
+        1. Refuse if the game has no resolved ``exe_path``
+           (``no_executable``).
+        2. Derive the AppID deterministically from
+           ``(exe_path, title)``.
+        3. Lazy-load the shortcuts + games map.
+        4. If a shortcut with this AppID already exists, replace
+           it in place (idempotent re-install); otherwise append.
+        5. Update the games-map entry.
+        6. Persist atomically and emit ``GAME_INSTALLED``.
+
+        Args:
+            game: the ``Game`` record describing the install.
+
+        Returns:
+            ``Result(success=True)`` on success or
+            ``Result(success=False, error="no_executable")`` when
+            the game has no launchable binary.
+        """
         from ...core.types import Events, Result
 
         if not game.exe_path:
@@ -69,7 +101,20 @@ class _GamesMapMixin:
         return Result(success=True)
 
     async def get_exe_for_game_key(self, store: str, game_id: str) -> str | None:
-        """Get exe for game key."""
+        """Return the executable path for a ``(store, game_id)`` key.
+
+        Thin convenience wrapper over ``get_entry_for_game_key``
+        that surfaces only the ``exe`` field. Used by the
+        launcher service to find what to run.
+
+        Args:
+            store: store identifier.
+            game_id: store-specific game id.
+
+        Returns:
+            Absolute path to the executable, or ``None`` if no
+            entry exists for this key.
+        """
         entry = await self.get_entry_for_game_key(store, game_id)
         return entry.exe if entry else None
 
@@ -78,12 +123,44 @@ class _GamesMapMixin:
         store: str,
         game_id: str,
     ) -> GameMapEntry | None:
-        """Get entry for game key."""
+        """Return the full games-map entry for a ``(store, game_id)`` key.
+
+        Lazy-loads the games map on first call. Returns ``None``
+        when the game isn't tracked (typical case for games
+        installed before Unifideck was set up, or via a different
+        tool).
+
+        Args:
+            store: store identifier.
+            game_id: store-specific game id.
+
+        Returns:
+            The ``GameMapEntry`` or ``None``.
+        """
         await self._load_games_map()
         return self._games_map.get(f"{store}:{game_id}")
 
     async def remove_game(self, app_id: int) -> Any:
-        """Remove game."""
+        """Remove the shortcut with the given Steam AppID.
+
+        Filters the shortcuts list rather than mutating in place
+        (immutable-style: builds a new list excluding the matching
+        AppID). Returns ``not_found`` if no shortcut matched —
+        useful to surface to the user when a manual delete
+        attempts to remove an already-removed entry.
+
+        Note: this does **not** clean up the games-map entry —
+        ``reconcile`` is the canonical cleanup path on the next
+        library sync.
+
+        Args:
+            app_id: Steam AppID of the shortcut to remove.
+
+        Returns:
+            ``Result(success=True)`` on successful removal,
+            ``Result(success=False, error="not_found")`` if no
+            shortcut had that AppID.
+        """
         from ...core.types import Result
 
         await self._load_shortcuts()
@@ -95,7 +172,35 @@ class _GamesMapMixin:
         return Result(success=True)
 
     async def reconcile(self, games: list[Game]) -> Any:
-        """Reconcile."""
+        """Reconcile shortcuts + games-map with a fresh library snapshot.
+
+        Two-pass algorithm:
+
+        **Shortcuts pass:**
+
+        1. Build the target AppID set from the games list (only
+           installed games with an exe path qualify).
+        2. Keep every existing shortcut that's either:
+           - **not** tagged as Unifideck-managed (preserve
+             user-added entries), **or**
+           - in the target set (still installed).
+        3. Append any AppID in the target set that doesn't have
+           an existing shortcut yet.
+
+        **Games-map pass:**
+
+        4. Drop entries no longer in the target.
+        5. Insert/update entries for everything in the target.
+
+        Atomic: a single ``_save_all`` at the end commits both
+        passes so they can't diverge.
+
+        Args:
+            games: fresh library snapshot from the sync event.
+
+        Returns:
+            ``Result(success=True)``.
+        """
         from ...core.types import Result
 
         await self._load_shortcuts()
@@ -142,7 +247,26 @@ class _GamesMapMixin:
         return Result(success=True)
 
     def _build_shortcut_entry(self, game: Game, app_id: int) -> dict[str, Any]:
-        """Build shortcut entry."""
+        """Build the dict representing one shortcut.vdf entry.
+
+        Encodes the canonical shortcut shape Steam expects:
+
+        * ``Exe`` and ``StartDir`` are quoted strings (Steam's VDF
+          format requires the quotes for paths with spaces).
+        * ``LaunchOptions`` carries the ``"<store>:<game_id>"``
+          string — Unifideck's RPC layer parses this back when
+          intercepting Steam launches.
+        * Tags include ``UNIFIDECK_TAG`` (used by ``reconcile``
+          for identification) and the capitalised store name (for
+          UI category display in Steam).
+
+        Args:
+            game: the ``Game`` record.
+            app_id: pre-computed Steam AppID.
+
+        Returns:
+            Shortcut dict ready to be inserted into ``_shortcuts``.
+        """
         return {
             "appid": app_id,
             "AppName": game.title,

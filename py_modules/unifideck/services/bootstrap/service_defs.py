@@ -151,7 +151,35 @@ def _instantiate_service(
     paths: ServicePaths,
     pipeline: BusPipeline | None = None,
 ) -> Any:
-    """Instantiate service."""
+    """Build one service from its entry in ``_SERVICE_DEFS``.
+
+    Each entry is a 5-tuple ``(attr, module_path, class_name,
+    build_args, build_kw)``. ``build_args`` and ``build_kw`` are
+    lambdas that receive the six available dependencies (bus,
+    registry, cache, config, paths, pipeline) and return the
+    positional and keyword arguments to forward to the service's
+    constructor.
+
+    The lambdas encapsulate the per-service wiring rules in the
+    table itself, so this helper stays generic: import the module,
+    resolve the class, expand the lambdas, instantiate.
+
+    Args:
+        def_entry: one row of ``_SERVICE_DEFS`` describing how to
+            construct a single service.
+        bus: live event bus, threaded into every service.
+        registry: store registry (some services need to enumerate
+            stores; may be ``None`` in stripped-down test boots).
+        cache: shared cache manager.
+        config: live config manager.
+        paths: derived filesystem paths.
+        pipeline: composed bus pipeline (replay, watchdog, etc.) —
+            optional, only some services consume it.
+
+    Returns:
+        The freshly-constructed service instance, ready to be
+        stored on the ``ServiceContainer``.
+    """
     _attr, module_path, class_name, build_args, build_kw = def_entry
     module = import_module(module_path)
     cls = getattr(module, class_name)

@@ -27,7 +27,33 @@ logger = logging.getLogger(__name__)
 
 
 async def check_device_fingerprint(service: SecurityService) -> FingerprintState:
-    """Check device fingerprint."""
+    """Compare the current machine fingerprint against the stored one.
+
+    Called once during ``SecurityService.start``. The
+    ``DeviceFingerprint`` instance computes a hash of stable
+    machine identifiers (Steam Deck serial-equivalent values)
+    and compares against the previously-recorded fingerprint.
+
+    Three outcomes:
+
+    * **First boot ever** (no stored fingerprint) — initialise
+      the file, emit ``SECURITY_FINGERPRINT_INITIALIZED``.
+    * **Match** — no action.
+    * **Mismatch** — likely a device reset or hardware swap;
+      delegate to ``handle_device_reset`` which wipes the
+      credential cache and re-initialises the fingerprint.
+
+    ``DeviceIdentityError`` (e.g. unable to read the machine-id
+    file at all) is caught and surfaced as an empty
+    ``FingerprintState`` rather than propagated — a broken
+    fingerprint check shouldn't prevent the plugin from booting.
+
+    Args:
+        service: the ``SecurityService`` instance.
+
+    Returns:
+        The ``FingerprintState`` describing the outcome.
+    """
     try:
         state = service._fingerprint.verify_or_initialize()
     except DeviceIdentityError as e:
@@ -60,7 +86,28 @@ async def handle_device_reset(
     service: SecurityService,
     state: FingerprintState,
 ) -> None:
-    """Handle device reset."""
+    """Wipe cached credentials and reinitialise after a device reset.
+
+    Loud ERROR log (this is unusual). The behaviour:
+
+    1. Read ``security.token_files_to_wipe_on_reset`` from
+       config — list of paths to delete.
+    2. Iterate, ``unlink`` each existing one, count successes.
+    3. Emit ``SECURITY_DEVICE_RESET_DETECTED`` with the list of
+       wiped files (UI shows a banner explaining the
+       re-authentication need).
+    4. Audit-log the wipe.
+    5. Reinitialise the fingerprint so subsequent boots match.
+
+    Per-file unlink failures (permission denied) are tolerated:
+    we still emit the event and the user knows to re-auth.
+    Reinit failure is logged at ERROR but isn't fatal — the next
+    boot will retry.
+
+    Args:
+        service: the ``SecurityService`` instance.
+        state: the ``FingerprintState`` with ``mismatch=True``.
+    """
     logger.error(
         "[SecurityService] DEVICE RESET DETECTED — "
         "machine-id no longer matches stored fingerprint",

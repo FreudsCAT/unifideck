@@ -21,7 +21,22 @@ if TYPE_CHECKING:
 
 
 def read_int(config: ConfigManager | None, key: str, default: int) -> int:
-    """Read int."""
+    """Read an integer from the config with a fallback default.
+
+    Three failure modes all return ``default``:
+
+    * config is ``None`` or doesn't expose ``get``;
+    * the key is absent or the value is falsy (None/0/"");
+    * the value can't be coerced to ``int``.
+
+    Args:
+        config: optional config manager.
+        key: dotted config path.
+        default: value returned on any failure.
+
+    Returns:
+        Parsed integer, or ``default``.
+    """
     if config is None or not hasattr(config, "get"):
         return default
     try:
@@ -32,7 +47,18 @@ def read_int(config: ConfigManager | None, key: str, default: int) -> int:
 
 
 def read_float(config: ConfigManager | None, key: str, default: float) -> float:
-    """Read float."""
+    """Read a float from the config with a fallback default.
+
+    Same failure semantics as ``read_int``.
+
+    Args:
+        config: optional config manager.
+        key: dotted config path.
+        default: value returned on any failure.
+
+    Returns:
+        Parsed float, or ``default``.
+    """
     if config is None or not hasattr(config, "get"):
         return default
     try:
@@ -43,7 +69,19 @@ def read_float(config: ConfigManager | None, key: str, default: float) -> float:
 
 
 def read_str(config: ConfigManager | None, key: str, default: str) -> str:
-    """Read str."""
+    """Read a string from the config with a fallback default.
+
+    Coerces non-string truthy values via ``str()``. Empty
+    strings + ``None`` fall back to ``default``.
+
+    Args:
+        config: optional config manager.
+        key: dotted config path.
+        default: value returned on absence or empty string.
+
+    Returns:
+        String value or ``default``.
+    """
     if config is None or not hasattr(config, "get"):
         return default
     val = config.get(key, default)
@@ -51,7 +89,20 @@ def read_str(config: ConfigManager | None, key: str, default: str) -> str:
 
 
 def read_list(config: ConfigManager | None, key: str) -> list[str]:
-    """Read list."""
+    """Read a list-of-strings from the config.
+
+    Defensive parsing — anything that isn't actually a list, or
+    contains non-string / empty entries, is filtered out. Returns
+    an empty list rather than ``None`` on absence, so callers can
+    iterate unconditionally.
+
+    Args:
+        config: optional config manager.
+        key: dotted config path.
+
+    Returns:
+        List of non-empty strings; empty if absent or malformed.
+    """
     if config is None or not hasattr(config, "get"):
         return []
     val = config.get(key, None)

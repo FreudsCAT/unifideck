@@ -30,7 +30,27 @@ def inject_store_dependencies(
     registry: StoreRegistry | None,
     container: ServiceContainer,
 ) -> None:
-    """Inject store dependencies."""
+    """Set service references on auto-discovered store instances.
+
+    Walks the ``_STORE_INJECTIONS`` table — each entry maps a store
+    id to a list of ``(store_attr, container_attr)`` pairs telling
+    "this store needs this attribute populated from this service in
+    the container".
+
+    For each pair, looks up the store in the registry, the service
+    in the container, and uses ``setattr`` to wire them together.
+    Missing stores (not loaded), missing services (failed
+    construction or absent from the container) and assignment
+    failures are all logged but never raised — the plugin must keep
+    booting even if a specific store/service combination is
+    unavailable.
+
+    Args:
+        registry: the populated store registry (or ``None`` if
+            auto-discovery hasn't run — in which case the function
+            returns immediately).
+        container: the populated service container.
+    """
     if registry is None:
         return
     for store_id, mappings in _STORE_INJECTIONS.items():

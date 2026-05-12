@@ -21,19 +21,41 @@ logger = logging.getLogger(__name__)
 
 
 class _VdfShortcutsMixin:
-    """Vdf shortcuts mixin."""
+    """Direct read/write access to the shortcuts.vdf data structure."""
 
     _shortcuts: list[dict[str, Any]]
 
     async def read_shortcuts(self) -> dict[str, Any]:
-        """Read shortcuts."""
+        """Return the shortcuts.vdf contents in its on-disk shape.
+
+        Steam's VDF format stores the shortcut list as a dict
+        keyed by stringified indices (``"0"``, ``"1"``, …) rather
+        than as a JSON-style array. This method converts our
+        in-memory list back to that shape so callers (RPC layer)
+        that need to pass the data straight to Steam don't have
+        to transform it themselves.
+
+        Returns:
+            ``{"shortcuts": {"0": entry, "1": entry, …}}``.
+        """
         await self._load_shortcuts()
         return {
             "shortcuts": {str(i): entry for i, entry in enumerate(self._shortcuts)},
         }
 
     async def write_shortcuts(self, data: dict[str, Any]) -> None:
-        """Write shortcuts."""
+        """Replace the in-memory shortcuts list and persist.
+
+        Used by the RPC layer when the user (or another tool)
+        rewrites shortcuts.vdf wholesale. Bypasses the per-game
+        CRUD methods — useful for restoring a backup, but caller
+        beware: no validation of the dict's shape is performed.
+
+        Args:
+            data: ``{"shortcuts": {…}}`` dict; the values are
+                taken as the new shortcuts list (key order is
+                ignored, dict insertion order is preserved).
+        """
         shortcuts_map = data.get("shortcuts", {})
         self._shortcuts = list(shortcuts_map.values())
         await self._save_all()
@@ -44,7 +66,22 @@ class _VdfShortcutsMixin:
         launcher_path: str,
         title: str,
     ) -> Any:
-        """Add auth shortcut."""
+        """Create a Steam shortcut for a store's auth launcher.
+
+        Delegates to ``auth_shortcut.build_auth_shortcut`` which
+        builds the per-store shortcut (Ubisoft Connect, Epic
+        Games Launcher, etc.) used to drive the embedded auth
+        flow.
+
+        Args:
+            store: store identifier.
+            launcher_path: absolute path to the launcher
+                executable.
+            title: display title shown in the Steam library.
+
+        Returns:
+            ``Result`` from ``build_auth_shortcut``.
+        """
         return await _auth.build_auth_shortcut(
             self,
             store,

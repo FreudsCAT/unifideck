@@ -1,20 +1,27 @@
-"""Game metadata service — name normalisation + display-record helpers.
+"""Metadata enrichment service — pull external metadata for owned games.
 
 OP-12a | py_modules/unifideck/services/metadata_service.py
 
-``MetadataService`` provides the cross-store helpers that build a
-canonical view of a game from the partial information each store
-provides :
+``MetadataService`` enriches the bare ``Game`` records emitted by
+stores with metadata fetched from three external sources:
 
-* normalise game names (strip trademark glyphs, trailing edition
-  suffixes, region codes) for sort + dedup;
-* resolve cross-store duplicates (the same title owned on Epic and
-  GOG should be a single entry in the UI, with both store badges);
-* compose display metadata (full name, short name, sortable key)
-  that downstream consumers (RPC mixins, artwork service) rely on.
+* **Steam Store** — exact title match → Steam app id + storefront
+  metadata (genres, tags, etc.);
+* **UniFiDB** — the project's curated database of cross-store
+  identifiers and per-game corrections;
+* **Metacritic** — review aggregate score.
 
-Stateless and side-effect-free — every method is a pure function of
-its inputs.
+The service subscribes to ``SYNC_COMPLETE`` on the bus, iterates
+each game in the payload, and enriches them on demand. Results
+are cached per ``(store, store_game_id)`` key with TTL configurable
+through ``cache_ttl.steam_metadata`` and ``cache_ttl.metacritic_metadata``
+(both default to 7 days).
+
+The external lookups are best-effort: each fetch is wrapped in
+``try/except`` so a network failure on one source doesn't block the
+other two. The cached result may therefore be partial, which the UI
+handles by hiding the missing fields rather than refusing to render
+the game.
 """
 
 from __future__ import annotations
@@ -33,7 +40,7 @@ DEFAULT_CACHE_TTL = 7 * 24 * 3600
 
 
 class MetadataService:
-    """Metadata service."""
+    """Enrich games with Steam Store / UniFiDB / Metacritic metadata."""
 
     def __init__(
         self,
@@ -41,7 +48,22 @@ class MetadataService:
         cache: CacheManager,
         config: ConfigManager | None = None,
     ) -> None:
-        """Initialize the instance."""
+        """Wire the service to its dependencies and subscribe to the bus.
+
+        Registers two cache namespaces with their respective TTLs
+        (read from config if available, falling back to 7 days),
+        then auto-wires every ``@subscribe``-decorated method on the
+        instance.
+
+        Args:
+            bus: live event bus on which the service will subscribe
+                to ``SYNC_COMPLETE`` to trigger enrichment.
+            cache: shared cache manager. Two namespaces are
+                registered: ``"metadata"`` for Steam / UniFiDB results
+                and ``"metacritic"`` for the Metacritic score cache.
+            config: optional config manager. Used to read the two
+                cache TTL settings; ignored if absent or malformed.
+        """
         self._bus = bus
         self._cache = cache
         self._config = config
@@ -65,18 +87,43 @@ class MetadataService:
         logger.info("[MetadataService] wired (1 subscription)")
 
     async def stop(self) -> None:
-        """Stop."""
+        """Unsubscribe from the bus on plugin shutdown.
+
+        Removes the ``SYNC_COMPLETE`` subscription so the bus no
+        longer holds a reference to this instance.
+        """
         self._bus.off(Events.SYNC_COMPLETE, self._on_sync_complete)
 
     @subscribe(Events.SYNC_COMPLETE)
     async def _on_sync_complete(self, **kwargs) -> None:
-        """On sync complete."""
+        """Handle a ``SYNC_COMPLETE`` event by enriching each game.
+
+        Triggered when a store finishes syncing its library. Iterates
+        the ``games`` payload sequentially (one HTTP-heavy fetch at a
+        time) and calls ``enrich`` on each — results land in the
+        cache for the RPC layer to consume on the next library read.
+        """
         games: list[Game] = kwargs.get("games", [])
         for game in games:
             await self.enrich(game)
 
     async def enrich(self, game: Game) -> dict[str, Any]:
-        """Enrich."""
+        """Return cached metadata for ``game``, fetching it if absent.
+
+        Cache key is ``"{store}:{store_game_id}"``. On a miss, queries
+        the three external sources in sequence and stores the merged
+        result. Each source's failure is silently dropped (logged at
+        DEBUG): a missing Metacritic score is not a reason to refuse
+        returning the Steam metadata.
+
+        Args:
+            game: the ``Game`` record to enrich.
+
+        Returns:
+            Dict with up to three keys (``steam``, ``unifidb``,
+            ``metacritic``), plus ``steam_app_id`` when Steam data
+            was found. May be partial.
+        """
         cache_key = f"{game.store}:{game.store_game_id}"
         cached = self._cache.get(CACHE_NAMESPACE, cache_key)
         if cached is not None:
@@ -96,7 +143,19 @@ class MetadataService:
         return metadata
 
     async def _fetch_steam_store(self, title: str) -> dict[str, Any] | None:
-        """Fetch steam store."""
+        """Search the Steam Store for ``title`` and return the top match.
+
+        Wraps ``steam.library.search_store`` with a try/except so
+        network failures, parser errors and rate limiting all
+        degrade silently to ``None``.
+
+        Args:
+            title: game title to search for.
+
+        Returns:
+            Storefront metadata dict (app_id, genres, tags, …) or
+            ``None`` on any failure.
+        """
         try:
             from ..steam.library import search_store
 
@@ -106,7 +165,20 @@ class MetadataService:
             return None
 
     async def _fetch_unifidb(self, game: Game) -> dict[str, Any] | None:
-        """Fetch unifidb."""
+        """Look up the game in the UniFiDB curated database.
+
+        UniFiDB is the project's curated catalog of cross-store
+        identifiers and per-game corrections (e.g. canonical name
+        across stores, known bad metadata fixes). The lookup is
+        keyed on (store, store_game_id, title) for robustness when
+        one of those fields is missing.
+
+        Args:
+            game: the ``Game`` record being enriched.
+
+        Returns:
+            UniFiDB entry dict, or ``None`` on miss or failure.
+        """
         try:
             from ..metadata.unifidb import lookup
 
@@ -121,7 +193,19 @@ class MetadataService:
             return None
 
     async def _fetch_metacritic(self, title: str) -> dict[str, Any] | None:
-        """Fetch metacritic."""
+        """Fetch the Metacritic score record for ``title``.
+
+        Delegates to ``metadata.metacritic.fetch_score`` and unwraps
+        the typed result into a plain dict for cache storage (the
+        cache layer doesn't know about the typed dataclass).
+
+        Args:
+            title: game title to look up.
+
+        Returns:
+            Dict with ``critic_score``, ``user_score``, etc., or
+            ``None`` on miss or failure.
+        """
         try:
             from ..metadata.metacritic import fetch_score
 

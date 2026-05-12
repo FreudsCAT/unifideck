@@ -19,7 +19,26 @@ from typing import Any
 
 @dataclass
 class DownloadItem:
-    """Download item."""
+    """One queued or running download entry.
+
+    Not actually frozen — the worker mutates ``progress``,
+    ``status`` and ``error`` as the install proceeds. Persistence
+    serialises through ``to_dict`` / ``from_dict`` so a stable
+    on-disk format is preserved across schema changes (extra fields
+    in the dict are ignored, missing fields fall back to dataclass
+    defaults).
+
+    Attributes:
+        store: store identifier (``"epic"`` / ``"gog"`` / etc.).
+        game_id: store-specific game id.
+        install_path: target install directory on disk.
+        title: human-readable game name (used by the UI).
+        progress: percentage 0.0–100.0 (mutated by the worker).
+        status: one of ``"queued"`` / ``"running"`` /
+            ``"complete"`` / ``"failed"``.
+        error: failure code (empty string when status isn't
+            ``"failed"``).
+    """
 
     store: str
     game_id: str
@@ -30,7 +49,14 @@ class DownloadItem:
     error: str = ""
 
     def to_dict(self) -> dict[str, Any]:
-        """To dict."""
+        """Serialise to a JSON-friendly dict.
+
+        Used by ``DownloadService.get_queue`` for the UI payload
+        and by ``persistence.save_queue`` for on-disk persistence.
+
+        Returns:
+            Dict with every public field. No nested objects.
+        """
         return {
             "store": self.store,
             "game_id": self.game_id,
@@ -43,12 +69,45 @@ class DownloadItem:
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> DownloadItem:
-        """From dict."""
+        """Reconstruct a ``DownloadItem`` from a dict.
+
+        Extra keys in ``d`` (from forward-compatibility schemas)
+        are silently ignored. Missing keys fall back to the
+        dataclass defaults — a queue persisted on an older plugin
+        version is still loadable on a newer version that added
+        fields.
+
+        Args:
+            d: dict (typically from ``to_dict`` or a JSON load).
+
+        Returns:
+            A fresh ``DownloadItem`` populated from the dict.
+        """
         return cls(**{k: v for k, v in d.items() if k in cls.__dataclass_fields__})
 
 
 def classify_download_error(exc: Exception) -> str:
-    """Classify download error."""
+    """Map an exception's message to a typed error code.
+
+    Used by the worker when an install raises an unhandled
+    exception (typically a subprocess error). Pattern-matches the
+    exception's string for known substrings and falls back to
+    ``"unknown_error"`` on no match.
+
+    The classification is intentionally simple and English-only —
+    finer-grained classification (e.g. distinguishing transient
+    network errors from a permanent DNS failure) lives in the
+    store-side installer which produces structured ``InstallResult``
+    errors that bypass this fallback.
+
+    Args:
+        exc: the exception caught by the worker.
+
+    Returns:
+        One of ``"permission_denied"`` / ``"disk_full"`` /
+        ``"timeout"`` / ``"network_error"`` / ``"not_found"`` /
+        ``"unknown_error"``.
+    """
     msg = str(exc).lower()
     if "permission" in msg or "denied" in msg:
         return "permission_denied"

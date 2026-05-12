@@ -1,29 +1,39 @@
-"""Proton service — find and validate Proton versions on the Steam Deck.
+"""Proton compat-tool assignment — sets Steam's per-app compatibility tool.
 
 OP-12b | py_modules/unifideck/services/proton_service.py
 
-``ProtonService`` enumerates the Proton installations available on the
-system (Steam-shipped + community runtimes like Proton GE) and exposes
-helpers to :
+``ProtonService`` is the Steam-side bridge that ensures freshly-
+registered shortcuts run under a Proton version. When a game is
+installed on a non-Steam store (Epic, GOG, Amazon, Ubisoft) and
+Unifideck creates a Steam shortcut for it, Steam by default would
+try to run the Windows executable natively (which fails). Setting
+the per-app ``CompatToolMapping`` in ``config.vdf`` tells Steam to
+launch the shortcut through Proton instead.
 
-* list available versions (with their install paths);
-* validate that a Proton version is launchable (binary present,
-  executable bit set, compatible architecture);
-* pick a default Proton version for new prefix creations;
-* resolve a Proton-tagged Wine binary from a version string.
+The service subscribes to ``GAME_INSTALLED`` and reads the
+per-store default tool from a hard-coded table (``DEFAULT_TOOLS``) —
+all stores default to ``proton_experimental`` except Microsoft
+(xCloud) which doesn't need a compat tool because it streams in a
+browser. Overrides can be passed to the constructor for testing or
+non-default setups.
 
-The list is rebuilt on demand — Proton installs are infrequent and a
-fresh scan takes < 50ms on eMMC, not worth caching.
+VDF editing is regex-based rather than using a full VDF parser
+because ``config.vdf`` is Steam-owned and we don't want to risk
+re-serialising fields whose schema we don't fully understand —
+surgical edits are safer.
 """
 
 from __future__ import annotations
+
 import logging
 import re
+
 from ..core.types import Events, Result
 from ..event_bus.event_bus import EventBus
 from ..event_bus.event_bus_devex import subscribe
 
 logger = logging.getLogger(__name__)
+
 DEFAULT_TOOLS: dict[str, str] = {
     "epic": "proton_experimental",
     "gog": "proton_experimental",
@@ -34,7 +44,7 @@ DEFAULT_TOOLS: dict[str, str] = {
 
 
 class ProtonService:
-    """Proton service."""
+    """Set Steam compat-tool mappings when a game is installed."""
 
     def __init__(
         self,
@@ -42,7 +52,17 @@ class ProtonService:
         config_vdf_path: str,
         overrides: dict[str, str] | None = None,
     ) -> None:
-        """Initialize the instance."""
+        """Wire the service to the bus and prepare its tool table.
+
+        Args:
+            bus: live event bus on which the service subscribes to
+                ``GAME_INSTALLED``.
+            config_vdf_path: absolute path to Steam's ``config.vdf``
+                (the file holding ``CompatToolMapping``).
+            overrides: optional per-store override of the default
+                tool table. Useful for tests or for users who
+                pin a specific Proton version.
+        """
         self._bus = bus
         self._config_vdf = config_vdf_path
         self._tools: dict[str, str] = {**DEFAULT_TOOLS, **(overrides or {})}
@@ -52,12 +72,23 @@ class ProtonService:
         logger.info("[ProtonService] wired (1 subscription)")
 
     async def stop(self) -> None:
-        """Stop."""
+        """Unsubscribe the ``GAME_INSTALLED`` handler on shutdown.
+
+        Symmetric to ``__init__``'s auto-wire. Removes the
+        subscription so the bus no longer holds a reference to
+        this instance after the plugin unloads.
+        """
         self._bus.off(Events.GAME_INSTALLED, self._on_game_installed)
 
     @subscribe(Events.GAME_INSTALLED)
     async def _on_game_installed(self, **kwargs) -> None:
-        """On game installed."""
+        """Apply the per-store default Proton tool to a freshly-added app.
+
+        Reads ``app_id`` and ``store`` from the event payload, looks
+        up the default tool for the store, and delegates to
+        ``set_compat_tool``. Skips silently if either ``app_id`` is
+        missing or the store has no default tool (e.g. Microsoft).
+        """
         app_id = kwargs.get("app_id")
         store = kwargs.get("store", "")
         if not app_id:
@@ -68,7 +99,26 @@ class ProtonService:
         await self.set_compat_tool(app_id, tool)
 
     async def set_compat_tool(self, app_id: int, tool: str) -> Result:
-        """Set compat tool."""
+        """Set the compat-tool mapping for ``app_id`` to ``tool``.
+
+        Reads ``config.vdf``, patches the ``CompatToolMapping``
+        section for the given app id (creating the section if
+        absent), and writes the result back. The write is skipped
+        when the patched content is identical to the original
+        (idempotency — calling this twice with the same tool is a
+        no-op on the second call).
+
+        Args:
+            app_id: Steam app id of the shortcut to configure.
+            tool: name of the Proton tool (e.g.
+                ``"proton_experimental"``, ``"proton_ge_8_7"``).
+
+        Returns:
+            ``Result(success=True)`` on success or no-op,
+            ``Result(success=False, error=…)`` on failure
+            (``config_vdf_missing``, ``config_vdf_read_failed``, or
+            the underlying I/O exception message).
+        """
         from ..core.io import async_file_ops as aio
 
         if not await aio.is_file(self._config_vdf):
@@ -105,7 +155,31 @@ class ProtonService:
 
     @staticmethod
     def _inject_compat_tool(content: str, app_id: int, tool: str) -> str:
-        """Inject compat tool."""
+        """Surgically rewrite ``content`` to set ``app_id`` → ``tool``.
+
+        Three cases:
+
+        1. **App entry exists** — find the block matching
+           ``"<app_id>" { "name" "<old>" … }`` and replace it
+           wholesale with the new mapping.
+        2. **App entry absent, section exists** — find
+           ``"CompatToolMapping" {`` and insert the new mapping
+           right after the opening brace.
+        3. **Section absent** — append a complete
+           ``CompatToolMapping`` section at the end of the file.
+
+        Whitespace and quoting mimic Steam's own layout so the file
+        remains readable in case the user opens it manually.
+
+        Args:
+            content: full text of the existing ``config.vdf``.
+            app_id: Steam app id to set the mapping for.
+            tool: Proton tool name.
+
+        Returns:
+            The patched VDF text. Identical to the input if and
+            only if the file already had the requested mapping.
+        """
         block_re = re.compile(
             rf'"{app_id}"\s*\{{[^}}]*"name"\s*"[^"]*"[^}}]*\}}',
             re.DOTALL,

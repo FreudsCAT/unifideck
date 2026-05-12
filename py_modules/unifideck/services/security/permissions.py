@@ -24,14 +24,35 @@ logger = logging.getLogger(__name__)
 
 
 class PermissionsMixin:
-    """Permissions mixin."""
+    """Verify + auto-repair filesystem permissions on sensitive files.
+
+    Differs from the module docstring's description: the mixin
+    doesn't just warn — it actively ``chmod 0o600`` the offending
+    file and emits a ``SECURITY_PERMISSIONS_REPAIRED`` event so
+    the user is informed.
+    """
 
     _audit: AuditLog
     _bus: EventBus
 
     @subscribe(Events.SECURITY_PERMISSIONS_CHECK)
     async def _on_permissions_check(self, **kwargs: Any) -> None:
-        """On permissions check."""
+        """Audit + repair a too-permissive sensitive file.
+
+        Workflow:
+
+        1. Audit the check itself.
+        2. Skip if ``path`` or ``mode`` is missing (malformed
+           event).
+        3. Skip if the mode is already ``0o600`` (correct).
+        4. Try to ``chmod 0o600`` the file. If chmod fails (read-
+           only mount, foreign filesystem), log a warning and
+           return — we did what we could.
+        5. On successful repair, log + emit
+           ``SECURITY_PERMISSIONS_REPAIRED`` + audit-record the
+           repair so the user sees both the original mismatch
+           and the repair in the audit log.
+        """
         self._audit.record("SECURITY_PERMISSIONS_CHECK", kwargs)
         path = kwargs.get("path")
         mode = kwargs.get("mode")

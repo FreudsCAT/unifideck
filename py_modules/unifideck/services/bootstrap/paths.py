@@ -23,7 +23,34 @@ if TYPE_CHECKING:
 
 @dataclass
 class ServicePaths:
-    """Service paths."""
+    """Frozen container of every Layer-1 path the plugin needs.
+
+    Fields are populated once at boot via ``from_config`` and threaded
+    through every service constructor — services never call
+    ``find_steam_path`` or read the path config themselves, they just
+    consume the ``ServicePaths`` instance.
+
+    Attributes:
+        data_dir: writable directory under ``~/.local/share/`` where
+            Unifideck stores its own state (DB, queue, save cache).
+        steam_root: Steam installation root (typically
+            ``~/.local/share/Steam``).
+        shortcuts_path: absolute path to ``shortcuts.vdf`` inside the
+            Steam userdata directory.
+        games_map_path: path to Unifideck's games-map JSON file.
+        config_vdf_path: path to Steam's main ``config.vdf``.
+        loginusers_path: path to Steam's ``loginusers.vdf`` (watched
+            by ``AccountService`` for account-switch detection).
+        grid_dir: directory where Steam stores per-shortcut artwork
+            (capsule / hero / logo / icon files).
+        queue_file: path to the download queue persistence file.
+        playtime_db: path to the SQLite playtime database.
+        local_save_root: directory where per-game cloud-save mirrors
+            are cached.
+        cloud_root: optional override for the cloud-save root
+            (set via ``cloud.root`` in the user config); ``None``
+            means use the default location under ``data_dir``.
+    """
 
     data_dir: str
     steam_root: str
@@ -39,7 +66,31 @@ class ServicePaths:
 
     @classmethod
     def from_config(cls, config: ConfigManager) -> ServicePaths:
-        """From config."""
+        """Build a ``ServicePaths`` from the user configuration.
+
+        Reads ``paths.data_dir`` and ``paths.games_map`` from the
+        config, locates the Steam install root through
+        ``find_steam_path`` (falling back to ``~/.steam/steam`` if
+        Steam couldn't be auto-detected), and derives every other
+        path from those two roots:
+
+        * ``shortcuts.vdf``, ``config.vdf``, ``loginusers.vdf`` and
+          the ``grid/`` artwork directory all live under
+          ``<steam_root>/userdata/0/config/`` or
+          ``<steam_root>/config/``;
+        * ``download_queue.json``, ``playtime.db`` and ``saves/``
+          all live directly under ``<data_dir>``.
+
+        The data directory is created on the fly so subsequent
+        service constructors can assume it exists.
+
+        Args:
+            config: live ``ConfigManager`` from which path settings
+                are read.
+
+        Returns:
+            A fully-populated, ready-to-thread ``ServicePaths``.
+        """
         from unifideck.steam.library import find_steam_path
 
         data_dir = str(

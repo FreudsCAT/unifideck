@@ -38,7 +38,36 @@ async def launch_windows(
     ctx: LaunchContext,
     state: RuntimeState,
 ) -> Result:
-    """Launch windows."""
+    """Drive the full Windows-game launch pipeline.
+
+    Pipeline:
+
+    1. **Plan build** — compose the Proton command (env, prefix,
+       compat tool, argv) into a ``ProtonLaunchPlan``.
+    2. **Cloud sync down** — pull remote saves before launch so
+       the user picks up where they left off.
+    3. **Emit GAME_LAUNCHED** — fires playtime tracking + other
+       launch-aware services.
+    4. **Run subprocess** — spawn Proton, await its exit, capture
+       the return code.
+    5. **Cloud sync up** — push fresh saves after exit so they
+       survive across devices.
+    6. **Wrap as Result** — non-zero exit → ``Result.error_code =
+       "exit_<N>"`` (consumed by launch-history for circuit
+       breaker classification).
+
+    ``LauncherError`` is re-raised intact so the service's
+    top-level handler can transform it into a typed toast.
+
+    Args:
+        svc: the launcher service.
+        ctx: launch context.
+        state: mutable runtime state.
+
+    Returns:
+        ``Result`` with success/failure based on the subprocess
+        exit code.
+    """
     plan, _parsed = await prepare_windows_plan(svc, ctx, state)
     await cloud_sync_phase(svc, ctx, direction="down")
     await emit_game_launched(
@@ -64,7 +93,27 @@ async def launch_native(
     ctx: LaunchContext,
     state: RuntimeState,
 ) -> Result:
-    """Launch native."""
+    """Drive the native-Linux launch pipeline.
+
+    Mirrors ``launch_windows`` but skips the Proton plan and
+    delegates the actual ``exec`` to
+    ``launcher.flows.native.native_launch``. The launch options
+    parser extracts wrappers (``gamemoderun``, ``mangohud``…),
+    game args, and LSFG (latency-sensitive feature gate) flag
+    from the raw options string.
+
+    The GAME_STOPPED emission lives in a ``finally`` so playtime
+    tracking gets a stop event even when ``native_launch``
+    throws.
+
+    Args:
+        svc: the launcher service.
+        ctx: launch context.
+        state: mutable runtime state.
+
+    Returns:
+        ``Result`` from ``native_launch``.
+    """
     from ...launcher.flows.native import native_launch
     from ...launcher.types.options import parse_launch_options
 

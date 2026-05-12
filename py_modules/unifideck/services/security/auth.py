@@ -19,23 +19,40 @@ logger = logging.getLogger(__name__)
 
 
 class AuthAuditMixin:
-    """Auth audit mixin."""
+    """Auth-related bus subscriptions for the audit log."""
 
     _audit: AuditLog
 
     @subscribe(Events.SECURITY_AUTH_FLOW_STARTED)
     async def _on_auth_started(self, **kwargs: Any) -> None:
-        """On auth started."""
+        """Record an auth-flow start to the audit log.
+
+        Captures the moment the user clicks "sign in" — paired
+        with the ``_completed`` / ``_failed`` event to compute
+        per-flow durations and success rates in diagnostics.
+        """
         self._audit.record("SECURITY_AUTH_FLOW_STARTED", kwargs)
 
     @subscribe(Events.SECURITY_AUTH_FLOW_COMPLETED)
     async def _on_auth_completed(self, **kwargs: Any) -> None:
-        """On auth completed."""
+        """Record a successful auth-flow completion.
+
+        Logged at the audit level only — no console log, because
+        successful auths are the common case and shouldn't
+        clutter the plugin's normal logs.
+        """
         self._audit.record("SECURITY_AUTH_FLOW_COMPLETED", kwargs)
 
     @subscribe(Events.SECURITY_AUTH_FLOW_FAILED)
     async def _on_auth_failed(self, **kwargs: Any) -> None:
-        """On auth failed."""
+        """Record an auth-flow failure and emit a WARN-level log.
+
+        The console log mirrors the audit entry so a developer
+        watching plugin logs sees auth failures in real time
+        without needing to open the QAM. The reason field is
+        extracted for the log line specifically — full payload
+        goes to the audit log.
+        """
         self._audit.record("SECURITY_AUTH_FLOW_FAILED", kwargs)
         reason = kwargs.get("reason", "unknown")
         logger.warning(
@@ -45,7 +62,14 @@ class AuthAuditMixin:
 
     @subscribe(Events.SECURITY_EXTERNAL_AUTH_CHECK_FAILED)
     async def _on_external_auth_check_failed(self, **kwargs: Any) -> None:
-        """On external auth check failed."""
+        """Record a failed sanity-check on an external auth artefact.
+
+        Different from a plain auth failure: this fires when an
+        existing token/cookie/credential fails a post-hoc
+        validation (e.g. the credential format is wrong, or
+        signature verification fails). Logged at WARN with both
+        the store and the reason in the log line.
+        """
         self._audit.record(
             "SECURITY_EXTERNAL_AUTH_CHECK_FAILED",
             kwargs,
