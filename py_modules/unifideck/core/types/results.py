@@ -1,18 +1,15 @@
 """core/types/results.py — Result dataclasses and StoreError exceptions.
-
 The split keeps `events.py` free of runtime imports (no dataclass
 module needed) and lets future result additions touch only this
 file without rebuilding the enums.
-
 Design: every result subclass adds its own fields but inherits
 `success: bool`, `error: Optional[str]`, and `store: Optional[str]`
 from `Result`. This lets generic code (logging, telemetry) treat
 all results uniformly via isinstance checks on `Result`.
-
 Reference: Technical Document v1.0 — Section 3.4.5 (Result types).
 """
-from __future__ import annotations
 
+from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -20,7 +17,6 @@ from typing import Any
 @dataclass
 class Result:
     """Base dataclass for every store operation return value.
-
     Fields:
       success: True if the operation completed without error.
         Callers should NEVER parse `error` to decide success —
@@ -53,8 +49,6 @@ class Result:
     error: str | None = None
     error_code: str | None = None
     store: str | None = None
-    rc: int | None = None
-    elapsed: float | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
@@ -152,22 +146,35 @@ class AccountResult(Result):
 
 
 # ── Exception hierarchy ─────────────────────────────────────────
-
 class StoreError(Exception):
     """Base class for all store-originated errors.
-
     Store connectors should raise subclasses of StoreError rather
     than bare Exception so callers can catch `StoreError` to match
     any store failure without catching unrelated programmer errors.
     """
 
-    def __init__(  # noqa: D107 — class docstring documents the constructor's contract
+    def __init__(
         self,
         message: str,
         *,
         store: str | None = None,
         code: str | None = None,
     ) -> None:
+        """Build a typed store error with optional store + machine code.
+
+        The message goes to ``Exception.__init__`` so it
+        renders as ``str(exc)``; ``store`` and ``code`` are
+        kept as instance attributes for typed handlers
+        (e.g. classifying ``code=="not_authenticated"`` to
+        trigger a re-auth flow).
+
+        Args:
+            message: human-readable error description.
+            store: optional store identifier producing the
+                error (e.g. ``"epic"``).
+            code: optional machine-readable classification
+                (typically an ``ErrorCode`` value).
+        """
         super().__init__(message)
         self.store = store
         self.code = code

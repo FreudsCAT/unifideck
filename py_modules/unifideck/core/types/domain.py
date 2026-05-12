@@ -1,11 +1,21 @@
-"""core/types/domain.py — Domain dataclasses (Game, StoreInfo, CLITool).
+"""Domain dataclasses — Game, StoreInfo, CLITool.
 
-  - Events add entries frequently → their own file
-  - Results mirror service surface → grouped with dataclass base
-  - Domain types are stable → rarely touched, grouped together
+OP-08a | py_modules/unifideck/core/types/domain.py
 
-Reference: Technical Document v1.0 — Section 3.4.1 (Core types).
+The three core domain records used everywhere across the
+plugin:
+
+* ``Game``      — the cross-store unified game record;
+* ``StoreInfo`` — static descriptor of one store (display
+  name, auth method, capability flags);
+* ``CLITool``   — descriptor of an external CLI dependency
+  (legendary, nile, umu-run, …) used by ``bin/binary_resolver``.
+
+Plain ``@dataclass`` (not frozen) — fields are mutable so the
+sync service can update ``installed`` / ``install_path``
+in place after a successful install detection.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -14,28 +24,28 @@ from typing import Any
 
 @dataclass
 class Game:
-    """A single game entry as stored in Unifideck's unified library.
+    """Cross-store unified game record.
 
-    This is the canonical representation after store-specific
-    fields have been normalized. Store connectors convert their
-    raw payloads into Game instances via a `_to_game()` helper.
-
-    Fields:
-      app_id: stable integer ID assigned by Unifideck (hash of
-        store + store's game_id). Used as the Steam shortcut ID.
-      store: canonical store name (see StoreEnum values)
-      store_game_id: the store-native identifier
-      title: display title
-      installed: True if the game is currently on disk
-      install_path: absolute path to the game's install directory,
-        None if not installed
-      exe_path: absolute path to the main executable, None if not
-        resolved yet
-      size_bytes: installed size (0 if unknown or not installed)
-      tags: filter tags — see GameTag enum
-      icon_url / hero_url / logo_url: artwork source URLs, used
-        before ArtworkService materializes them into files
-      metadata: free-form per-store payload kept for debugging
+    Attributes:
+        app_id: Steam-style AppID (deterministic from store
+            + game_id + title; collision-free across stores).
+        store: store identifier (``"epic"``, ``"gog"``, …).
+        store_game_id: store-native game id, used to call
+            back into the store's RPC.
+        title: human-readable title for display.
+        installed: True if a local install directory was
+            detected.
+        install_path: absolute path to the install directory,
+            or ``None`` when not installed.
+        exe_path: detected launcher executable, or ``None``
+            when not yet resolved.
+        size_bytes: on-disk size of the install directory,
+            0 when unknown.
+        tags: list of game tags (genre, feature flags).
+        icon_url / hero_url / logo_url: artwork URLs from
+            the metadata service, ``None`` until enriched.
+        metadata: free-form dict for store-specific extras
+            (release date, last-played, etc.).
     """
 
     app_id: int
@@ -55,32 +65,58 @@ class Game:
 
 @dataclass
 class StoreInfo:
-    """Metadata exposed by a store connector via `StoreBase.store_info`.
+    """Static descriptor for one store.
 
-    This is the public face of a store — what the frontend displays
-    in the "Stores" tab. It's a class-level constant on each store
-    class, not per-instance, so the frontend can list available
-    stores before any auth flow starts.
+    Returned by ``StoreRegistry.get_store_infos`` so the
+    frontend can render the per-store badges + capability
+    chips without RPC round-trips per store.
+
+    Attributes:
+        name: internal id (``"epic"``).
+        display_name: localised name shown to the user
+            (``"Epic Games"``).
+        auth_method: identifier used by the auth UI (e.g.
+            ``"oauth"``, ``"cdp"``).
+        icon_asset: asset path or URL of the store logo.
+        uses_wine: True for Windows-only stores running
+            under Proton/Wine.
+        supports_install: True if the store can install games
+            locally (False for streaming-only services).
+        supports_cloud_saves: True if the store has its own
+            cloud-save system that ``CloudSaveService``
+            integrates with.
     """
 
-    name: str                     # canonical ID (lowercase)
-    display_name: str             # user-visible name
-    auth_method: str              # "oauth", "shortcut", "manual", ...
-    icon_asset: str               # path under assets/
-    uses_wine: bool = False       # True if games need a Wine prefix
-    supports_install: bool = True # False for xCloud-style streaming
+    name: str
+    display_name: str
+    auth_method: str
+    icon_asset: str
+    uses_wine: bool = False
+    supports_install: bool = True
     supports_cloud_saves: bool = False
 
 
 @dataclass
 class CLITool:
-    """A command-line tool needed by a store connector.
+    """Descriptor for an external CLI dependency.
 
-    Used by `BinaryResolver` to find a tool across the 3-tier
-    search (bundled → PATH → ~/.local/bin/<n>).
+    Used by ``bin/binary_resolver`` to locate and verify
+    bundled CLI tools (legendary, nile, umu-run, etc.).
+    The resolver iterates ``search_paths`` until it finds a
+    matching executable, optionally checks the version
+    against ``min_version``.
+
+    Attributes:
+        name: tool name (``"legendary"``).
+        search_paths: ordered list of candidate paths
+            (relative to the plugin root or absolute).
+        version_flag: CLI flag that prints the version,
+            default ``"--version"``.
+        min_version: optional semver-style minimum version
+            string; ``None`` skips the version check.
     """
 
-    name: str                     # binary name (e.g. "legendary")
+    name: str
     search_paths: list[str] = field(default_factory=list)
     version_flag: str = "--version"
     min_version: str | None = None

@@ -1,33 +1,22 @@
-"""py_modules/unifideck/core/io/ — Filesystem I/O primitives.
+"""Async file I/O helpers + safe-file-op decorator.
 
-Consolidated. This subpackage owns the low-level,
-non-blocking filesystem primitives used throughout the Unifideck
-backend:
+OP-08c | py_modules/unifideck/core/io/__init__.py
 
-  - async_file_ops : asyncio wrappers around blocking stdlib calls
-                      (open, exists, makedirs, copy, rmdir, ...).
-                      Every file operation inside an ``async def``
-                      method in Unifideck goes through these
-                      wrappers so the single asyncio event loop
-                      Decky Loader runs on is never blocked by disk
-                      I/O. Importing convention across the codebase::
+Two complementary surfaces:
 
-                          from unifideck.core.io import async_file_ops as aio
-
-  - safe_file_op : error-handling decorator that captures the
-                      canonical ``try/except OSError → log + return
-                      default`` pattern exactly once. Designed to
-                      wrap coroutines from async_file_ops (which is
-                      why the two modules live side-by-side in this
-                      subpackage).
-
-Clean break: the previous locations unifideck.core.async_file_ops
-and unifideck.core.safe_file_op no longer exist. Every callsite
-has been rewritten. If you hit an ``ImportError`` on either of
-those names, you are on a pre-17f checkout — update your imports
-to unifideck.core.io.
+* ``async_file_ops`` — namespace module with async wrappers
+  around standard file operations (read, write, rename,
+  stat, listdir, …) that run on ``asyncio.to_thread`` to
+  keep the event loop responsive.
+* ``safe_file_op``   — decorator factory that wraps a
+  function (sync or async) with ``OSError`` handling: on
+  failure, logs the offending path + exception class and
+  returns a caller-supplied default value. Used to keep
+  call sites linear when "file not there" or "read error"
+  should be silently degraded.
 """
-from . import async_file_ops  # noqa: F401
+
+from . import async_file_ops
 from .safe_file_op import safe_file_op
 
 __all__ = [
