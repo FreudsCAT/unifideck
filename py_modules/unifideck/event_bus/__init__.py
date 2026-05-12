@@ -1,72 +1,51 @@
-"""unifideck.event_bus — Event bus subpackage.
+"""Event bus sub-package — public surface.
 
-Centralises all modules related to the pub/sub event bus that
-powers Unifideck's inter-service communication. Extracted from
-`unifideck.core` where these 10 modules had grown into their own
-cohesive unit but still shared space with type definitions,
-cache management, config, and store registration.
+OP-09 | py_modules/unifideck/event_bus/__init__.py
 
-Contents
---------
+Re-exports the canonical event-bus symbols a caller (services, RPC
+mixins, stores) typically reaches for : ``EventBus`` itself, the
+``EventPriority`` enum, the ``BusPipeline`` orchestrator, and the
+typed extension classes (``EventPayload``, ``EventSchema``,
+``TypedEventRegistry``, ``DeadLetterQueue``, ``DebugSnapshot``).
 
-Core dispatch:
-  - event_bus : EventBus, the main pub/sub hub
-  - event_priority : EventPriority enum + priority lookup
-  - priority_dispatcher : PriorityDispatcher that consumes the bus
+The internal modules (``priority_dispatcher``, ``event_replay``,
+``event_bus_reliability``, ``event_bus_scaling``, ``event_bus_devex``)
+are not re-exported — they're glued together by ``BusPipeline`` and
+the ``EventBus`` constructor, not consumed directly.
 
-Reliability:
-  - watchdog_handler : HandlerWatchdog with quarantine detection
-  - metrics_handler : HandlerLatencyCollector + per-handler stats
-  - event_bus_reliability : CircuitBreaker for repeat-failing handlers
-  - event_bus_scaling : BatchDispatcher for same-type coalescing
-
-Developer experience:
-  - event_replay : EventReplayBuffer for event log replay
-  - event_bus_extensions : DeadLetterQueue, PredicateFilter,
-                             TypedEventRegistry, EventSchema, DebugSnapshot
-  - event_bus_devex : subscribe decorator + auto_wire + SchemaExtractor
-
-The subpackage has **zero external dependencies** beyond stdlib —
-no aiohttp, no decky, no Steam-specific code. Every module here
-can be unit-tested in complete isolation.
-
-Convenience re-exports below let callers write
-`from unifideck.event_bus import EventBus` instead of the longer
-`from unifideck.event_bus.event_bus import EventBus`. Only the
-most-used names are promoted; specialised symbols stay in their
-submodules to avoid polluting the namespace.
-
-Reference: refactor notes — architectural extraction
-from core/ into a dedicated subpackage for clarity and to reflect
-the real module cohesion.
+Architecture role : Layer 3 of the plan's five-layer model — the
+message backbone. Sits below the service layer (which emits and
+consumes events) and above the cache + config layers (which the bus
+relies on for state).
 """
-from .event_bus import EventBus  # noqa: F401
-from .event_bus_devex import (  # noqa: F401
+
+from .event_bus import EventBus
+from .event_bus_devex import (
     SchemaExtractor,
     auto_wire,
     subscribe,
 )
-from .event_bus_extensions import (  # noqa: F401
+from .event_bus_extensions import (
     DeadLetterQueue,
     DebugSnapshot,
     EventSchema,
     PredicateFilter,
     TypedEventRegistry,
 )
-from .event_bus_reliability import CircuitBreaker  # noqa: F401
-from .event_bus_scaling import BatchDispatcher  # noqa: F401
-from .event_priority import (  # noqa: F401
+from .event_bus_reliability import CircuitBreaker
+from .event_bus_scaling import BatchDispatcher
+from .event_priority import (
     EventPriority,
     get_coalesce_key,
     get_priority,
 )
-from .event_replay import EventReplayBuffer  # noqa: F401
-from .priority_dispatcher import PriorityDispatcher  # noqa: F401
-from .supervision.metrics_handler import (  # noqa: F401
+from .event_replay import EventReplayBuffer
+from .priority_dispatcher import PriorityDispatcher
+from .supervision.metrics_handler import (
     HandlerLatencyCollector,
     HandlerLatencyStats,
 )
-from .supervision.watchdog_handler import (  # noqa: F401
+from .supervision.watchdog_handler import (
     HandlerQuarantinedError,
     HandlerWatchdog,
 )
