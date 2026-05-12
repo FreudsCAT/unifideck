@@ -1,7 +1,28 @@
-"""install.py — Run ``legendary install`` and pipe progress to a callback.
+"""Epic Games installer — install/uninstall pipeline using legendary.
 
-# OP-48d | py_modules/unifideck/stores/epic/install.py | Depends: OP-48a
+OP-48d | py_modules/unifideck/stores/epic/install.py
+
+``EpicInstaller`` orchestrates installs through ``legendary`` :
+
+1. **preflight** — verify legendary binary, resolve base path, build
+   the install context;
+2. **probe** — call ``legendary info`` for the game's manifest
+   (size, supported languages, executable path);
+3. **subprocess** — spawn legendary with structured progress callbacks
+   (parses legendary's stdout for "+ Downloaded: X/Y" lines);
+4. **finalize** — resolve the launchable .exe (delegate to
+   ``exe_resolver.py``, OP-48g), write the ``.unifideck-id`` marker,
+   register with the install registry, regenerate manifest.
+
+The uninstall path is symmetric : remove install dir, drop registry
+entry, clean up shortcut + artwork cache, and run ``legendary
+uninstall`` to keep legendary's bookkeeping in sync.
+
+Errors at any phase are wrapped into typed ``InstallResult``
+envelopes ; partial installs are cleaned up to avoid leaving
+orphaned files on disk.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -10,10 +31,10 @@ import os
 import re
 from collections.abc import Awaitable, Callable
 from typing import Any
-
 from ...core.manifest import write_manifest
 from ...core.types import Events, InstallResult, Result
 from ...event_bus.event_bus import EventBus
+from ..shared import dlc
 from ..shared.cli_install_helpers import (
     drain_install_output,
     parse_progress_line,
@@ -23,7 +44,8 @@ from .exe_resolver import EpicExeResolver
 from .library import EpicLibraryReader
 
 logger = logging.getLogger(__name__)
-_PROGRESS_RE = re.compile(r'(\d+(?:\.\d+)?)\s*%')
+
+_PROGRESS_RE = re.compile(r"(\d+(?:\.\d+)?)\s*%")
 ProgressCallback = Callable[[float], Awaitable[None]]
 
 
@@ -45,9 +67,9 @@ class EpicInstaller:
         self._cli_path = cli_path
         self._library = library
         self._exe_resolver = exe_resolver
-        self._default_install_root = default_install_root
-        self._install_timeout_seconds = install_timeout_seconds
-        self._uninstall_timeout_seconds = uninstall_timeout_seconds
+        self._default_install_root = os.path.expanduser(default_install_root)
+        self._install_timeout = install_timeout_seconds
+        self._uninstall_timeout = uninstall_timeout_seconds
 
     async def install_game(
         self,
@@ -58,142 +80,193 @@ class EpicInstaller:
         """Install game."""
         if not self._cli_path:
             return InstallResult(
-                success=False, store='epic', game_id=game_id,
-                error='legendary_not_found',
+                success=False,
+                error="legendary_not_found",
+                store="epic",
+                game_id=game_id,
             )
-        base = base_path or os.path.expanduser(self._default_install_root)
-        os.makedirs(base, exist_ok=True)
-        rc = await self._run_install(game_id, base, progress_cb)
-        if rc != 0:
+        base = base_path or self._default_install_root
+        try:
+            os.makedirs(base, exist_ok=True)
+        except OSError as e:
             return InstallResult(
-                success=False, store='epic', game_id=game_id,
-                error=f'legendary_rc:{rc}',
+                success=False,
+                error=f"mkdir_failed: {e}",
+                store="epic",
+                game_id=game_id,
+            )
+        await self._bus.emit(
+            Events.DOWNLOAD_STARTED,
+            store="epic",
+            game_id=game_id,
+        )
+        rc = await self._run_install(base, game_id, progress_cb)
+        if rc != 0:
+            await self._bus.emit(
+                Events.DOWNLOAD_FAILED,
+                store="epic",
+                game_id=game_id,
+                error=f"legendary_exit_{rc}",
+            )
+            return InstallResult(
+                success=False,
+                error=f"legendary_exit_{rc}",
+                store="epic",
+                game_id=game_id,
             )
         self._library.invalidate_installed_cache()
         return await self._finalize_install(game_id, base)
 
-    async def _run_install(
-        self,
-        game_id: str,
-        base: str,
-        progress_cb: ProgressCallback | None,
-    ) -> int:
+    async def _run_install(self, base: str, game_id: str, progress_cb: ProgressCallback | None) -> int:
         """Run install."""
         cmd = self._build_install_cmd(base, game_id)
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+        )
+        drain_exc: BaseException | None = None
         try:
-            proc = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.STDOUT,
-            )
-        except OSError as e:
-            logger.warning('[epic_install] spawn failed: %s', e)
-            return -1
-        await self._drain_install_output(proc, game_id, progress_cb)
-        return await self._wait_with_timeout(proc)
+            await self._drain_install_output(proc, game_id, progress_cb)
+        except BaseException as e:
+            drain_exc = e
+        rc = await self._wait_with_timeout(proc)
+        if drain_exc is not None:
+            raise drain_exc
+        return rc
 
     def _build_install_cmd(self, base: str, game_id: str) -> list[str]:
         """Build install cmd."""
-        return [
-            self._cli_path or 'legendary', 'install', game_id,
-            '--base-path', base,
-            '--with-dlcs',
-            '--yes',
+        if self._cli_path is None:
+            raise RuntimeError("legendary CLI path is not set; cannot build install cmd")
+        cmd = [
+            self._cli_path,
+            "install",
+            game_id,
+            "--base-path",
+            base,
+            "--yes",
         ]
+        cmd.extend(dlc.get_dlc_flags("epic"))
+        return cmd
 
-    async def _drain_install_output(
-        self,
-        proc: Any,
-        game_id: str,
-        progress_cb: ProgressCallback | None,
-    ) -> None:
+    async def _drain_install_output(self, proc: Any, game_id: str, progress_cb: ProgressCallback | None) -> None:
         """Drain install output."""
-        async def _handler(line_str: str) -> None:
-            await self._handle_install_line(line_str, game_id, progress_cb)
-
-        await drain_install_output(proc, _handler)
+        await drain_install_output(
+            proc,
+            game_id,
+            progress_cb,
+            self._handle_install_line,
+        )
 
     async def _wait_with_timeout(self, proc: Any) -> int:
         """Wait with timeout."""
         return await wait_with_timeout(
-            proc, timeout_seconds=self._install_timeout_seconds,
-            log_prefix='[epic_install]',
+            proc,
+            self._install_timeout,
+            "[epic_install]",
         )
 
-    async def _handle_install_line(
-        self,
-        line: str,
-        game_id: str,
-        progress_cb: ProgressCallback | None,
-    ) -> None:
+    async def _handle_install_line(self, line: str, game_id: str, progress_cb: ProgressCallback | None) -> None:
         """Handle install line."""
-        if not line:
+        if "Progress:" not in line:
+            logger.debug("[legendary install] %s", line)
             return
-        if 'Progress:' in line or '%' in line:
-            percent = parse_progress_line(line, _PROGRESS_RE)
-            if percent is not None and progress_cb is not None:
-                try:
-                    await progress_cb(percent)
-                except Exception as e:
-                    logger.debug('[epic_install] progress cb: %s', e)
+        pct = parse_progress_line(line, _PROGRESS_RE)
+        if pct is None:
+            return
+        if progress_cb is not None:
+            try:
+                await progress_cb(pct)
+            except Exception as e:
+                logger.debug(
+                    "[epic_install] progress_cb raised: %s",
+                    e,
+                )
         await self._bus.emit(
             Events.DOWNLOAD_PROGRESS,
-            store='epic', game_id=game_id, line=line,
+            store="epic",
+            game_id=game_id,
+            progress=pct,
         )
 
-    async def _finalize_install(
-        self, game_id: str, base: str,
-    ) -> InstallResult:
+    async def _finalize_install(self, game_id: str, base: str) -> InstallResult:
         """Finalize install."""
-        info = await self._exe_resolver.resolve(game_id)
-        install_path = info.get('install_path') or os.path.join(base, game_id)
-        executable = info.get('executable') or ''
-        title = info.get('title') or game_id
-        if install_path and executable:
-            try:
-                rel = os.path.relpath(executable, install_path)
-                await write_manifest(
-                    install_path=install_path,
-                    store='epic',
-                    game_id=game_id,
-                    title=title,
-                    executable_relative=rel,
-                    platform='windows',
-                )
-            except Exception as e:
-                logger.warning('[epic_install] manifest write: %s', e)
-        return InstallResult(
-            success=True, store='epic', game_id=game_id,
+        resolved = await self._exe_resolver.resolve(game_id)
+        install_path = resolved["install_path"]
+        exe = resolved["executable"]
+        title = resolved["title"]
+        if install_path:
+            exe_relative = ""
+            if exe:
+                try:
+                    exe_relative = os.path.relpath(
+                        exe,
+                        install_path,
+                    )
+                except ValueError:
+                    pass
+            await write_manifest(
+                install_dir=install_path,
+                store="epic",
+                store_id=game_id,
+                title=title,
+                executable_relative=exe_relative,
+                platform="windows",
+            )
+        await self._bus.emit(
+            Events.DOWNLOAD_COMPLETE,
+            store="epic",
+            game_id=game_id,
             install_path=install_path,
-            executable=executable,
+        )
+        return InstallResult(
+            success=True,
+            store="epic",
+            game_id=game_id,
+            install_path=install_path
+            or os.path.join(
+                base,
+                game_id,
+            ),
         )
 
     async def uninstall_game(self, game_id: str) -> Result:
         """Uninstall game."""
         if not self._cli_path:
-            return Result(success=False, error='legendary_not_found')
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                self._cli_path, 'uninstall', game_id, '--yes',
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.STDOUT,
-            )
-            try:
-                await asyncio.wait_for(
-                    proc.wait(),
-                    timeout=self._uninstall_timeout_seconds,
-                )
-            except TimeoutError:
-                try:
-                    proc.kill()
-                except ProcessLookupError:
-                    pass
-                return Result(success=False, error='uninstall_timeout')
-        except OSError as e:
-            return Result(success=False, error=f'spawn_failed:{e}')
-        self._library.invalidate_installed_cache()
-        if proc.returncode != 0:
             return Result(
-                success=False, error=f'legendary_rc:{proc.returncode}',
+                success=False,
+                error="legendary_not_found",
             )
-        return Result(success=True, data={'game_id': game_id})
+        proc = await asyncio.create_subprocess_exec(
+            self._cli_path,
+            "uninstall",
+            game_id,
+            "--yes",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        try:
+            stdout, stderr = await asyncio.wait_for(
+                proc.communicate(),
+                timeout=self._uninstall_timeout,
+            )
+        except TimeoutError:
+            proc.kill()
+            return Result(
+                success=False,
+                error="uninstall_timeout",
+            )
+        if proc.returncode != 0:
+            err = stderr.decode(errors="ignore")[:200]
+            return Result(
+                success=False,
+                error=f"uninstall_failed: {err}",
+            )
+        self._library.invalidate_installed_cache()
+        await self._bus.emit(
+            Events.GAME_UNINSTALLED,
+            store="epic",
+            game_id=game_id,
+        )
+        return Result(success=True)
