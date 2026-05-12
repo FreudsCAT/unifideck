@@ -1,18 +1,29 @@
-"""amazon_library.py — Read owned + installed Amazon games from nile's caches.
+"""Amazon Games library reader — owned games list + install status merger.
 
-# OP-49c | py_modules/unifideck/stores/amazon/amazon_library.py | Depends: OP-49a
+OP-49c | py_modules/unifideck/stores/amazon/amazon_library.py
 
-Nile stores owned-library and installed-game state under its config
-dir (``~/.config/nile``). We parse those JSON blobs directly instead
-of shelling out to ``nile`` because the CLI's output isn't stable.
+``AmazonLibraryReader`` reads the user's owned-games list from the
+``nile`` user data file (the JSON state that nile maintains after a
+successful login).
+
+Public methods :
+
+* ``fetch_owned_games()`` — load the games list from the user file;
+* ``ensure_user_file_present()`` — check the file exists, warn the
+  user if not;
+* ``parse_entries(data)`` — extract game records from raw JSON;
+* ``check_user_data_freshness()`` — TTL-aware freshness check.
+
+The module-level helper ``merge_install_status`` overlays installed-
+state (from the install registry) onto the owned-games list to
+produce the final ``GameRecord`` shape the UI consumes.
 """
-from __future__ import annotations
 
+from __future__ import annotations
 import json
 import logging
 from pathlib import Path
 from typing import Any
-
 from ...core.io import async_file_ops as aio
 from ...core.types import Game
 
@@ -24,118 +35,129 @@ class AmazonLibraryReader:
 
     def __init__(self, config_dir: str) -> None:
         """Initialize the instance."""
-        self._config_dir = config_dir
+        config_path = Path(config_dir).expanduser()
+        self._config_dir = str(config_path)
+        self._library_path = str(config_path / "library.json")
+        self._installed_path = str(
+            config_path / "installed.json",
+        )
 
     async def read_owned_games(self) -> list[Game]:
         """Read owned games."""
-        path = str(Path(self._config_dir).expanduser() / 'library.json')
-        data = await self._read_json(path)
+        data = await self._read_json(self._library_path)
         if not isinstance(data, list):
             return []
         games: list[Game] = []
-        for entry in data:
-            if not isinstance(entry, dict):
+        for item in data:
+            if not isinstance(item, dict):
                 continue
-            product = entry.get('product') or {}
+            product = item.get("product")
             if not isinstance(product, dict):
                 continue
-            game_id = str(
-                entry.get('id')
-                or product.get('id')
-                or product.get('asin')
-                or '',
-            )
+            game_id = product.get("id", "")
             if not game_id:
                 continue
-            title = str(
-                product.get('title')
-                or entry.get('title')
-                or game_id,
-            )
             games.append(
                 Game(
-                    store='amazon',
-                    game_id=game_id,
-                    title=title,
+                    app_id=0,
+                    store="amazon",
+                    store_game_id=game_id,
+                    title=str(product.get("title") or game_id),
                     installed=False,
-                    install_path='',
-                ),
+                )
             )
-        logger.info('[amazon_library] %d owned games', len(games))
+        logger.info(
+            "[amazon_library] %d owned games",
+            len(games),
+        )
         return games
 
     async def read_installed_ids(self) -> dict[str, dict[str, Any]]:
         """Read installed ids."""
-        path = str(Path(self._config_dir).expanduser() / 'installed.json')
-        data = await self._read_json(path)
+        data = await self._read_json(self._installed_path)
         if not isinstance(data, list):
             return {}
-        out: dict[str, dict[str, Any]] = {}
+        result: dict[str, dict[str, Any]] = {}
         for entry in data:
             if not isinstance(entry, dict):
                 continue
-            game_id = str(entry.get('id') or '')
+            game_id = entry.get("id")
             if not game_id:
                 continue
-            out[game_id] = entry
-        return out
+            result[game_id] = {
+                "path": entry.get("path", ""),
+                "version": entry.get("version", ""),
+            }
+        logger.info(
+            "[amazon_library] %d installed games",
+            len(result),
+        )
+        return result
 
     async def get_official_url(self, game_id: str) -> str | None:
         """Get official URL."""
-        if not game_id:
-            return None
-        path = str(Path(self._config_dir).expanduser() / 'library.json')
-        data = await self._read_json(path)
+        data = await self._read_json(self._library_path)
         if not isinstance(data, list):
             return None
-        for entry in data:
-            if not isinstance(entry, dict):
+        for item in data:
+            if not isinstance(item, dict):
                 continue
-            entry_id = str(
-                entry.get('id') or (entry.get('product') or {}).get('id') or '',
-            )
-            if entry_id != game_id:
+            product = item.get("product", {})
+            if product.get("id") != game_id:
                 continue
-            product = entry.get('product') or {}
-            slug = product.get('productDetail', {}).get(
-                'product', {},
-            ).get('vendorSku') if isinstance(product, dict) else None
-            asin = product.get('asin') if isinstance(product, dict) else None
-            if isinstance(asin, str) and asin:
-                return f'https://www.amazon.com/gp/product/{asin}'
-            if isinstance(slug, str) and slug:
-                return f'https://gaming.amazon.com/{slug}'
+            details = product.get("productDetail", {}).get("details", {})
+            websites = details.get("websites", {})
+            for key in ("OFFICIAL", "STEAM"):
+                url = websites.get(key)
+                if isinstance(url, str) and url:
+                    return url
+            return None
         return None
 
     async def _read_json(self, path: str) -> Any:
         """Read JSON."""
-        if not await aio.is_file(path):
-            return None
         try:
-            text = await aio.read_text(path)
-        except Exception as e:
-            logger.debug('[amazon_library] read %s: %s', path, e)
-            return None
-        if text is None:
-            return None
-        try:
-            return json.loads(text)
-        except json.JSONDecodeError as e:
-            logger.warning('[amazon_library] json decode %s: %s', path, e)
+            if not await aio.is_file(path):
+                return None
+            content = await aio.read_text(path)
+            if content is None:
+                return None
+            return json.loads(content)
+        except (OSError, json.JSONDecodeError) as e:
+            logger.debug(
+                "[amazon_library] read %s failed: %s",
+                path,
+                e,
+            )
             return None
 
 
 def merge_install_status(
-    owned: list[Game], installed: dict[str, dict[str, Any]],
+    owned: list[Game],
+    installed: dict[str, dict[str, Any]],
 ) -> list[Game]:
     """Merge install status."""
-    if not installed:
-        return owned
-    out: list[Game] = []
+    merged: list[Game] = []
     for game in owned:
-        info = installed.get(game.game_id)
-        if info:
-            game.installed = True
-            game.install_path = str(info.get('path') or info.get('install_path') or '')
-        out.append(game)
-    return out
+        info = installed.get(game.store_game_id)
+        if info is None:
+            merged.append(game)
+            continue
+        merged.append(
+            Game(
+                app_id=game.app_id,
+                store=game.store,
+                store_game_id=game.store_game_id,
+                title=game.title,
+                installed=True,
+                install_path=info.get("path"),
+                exe_path=game.exe_path,
+                icon_url=game.icon_url,
+                hero_url=game.hero_url,
+                logo_url=game.logo_url,
+                size_bytes=game.size_bytes,
+                tags=list(game.tags),
+                metadata=dict(game.metadata),
+            )
+        )
+    return merged

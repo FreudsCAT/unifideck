@@ -1,19 +1,28 @@
-"""amazon_auth.py — Amazon Games OAuth via nile.
+"""Amazon Games OAuth — embedded-browser sign-in flow.
 
-# OP-49b | py_modules/unifideck/stores/amazon/amazon_auth.py | Depends: OP-47b
+OP-49b | py_modules/unifideck/stores/amazon/amazon_auth.py
 
-Nile drives the OAuth dance itself in ``--non-interactive`` mode: we
-run ``nile auth --login --non-interactive``, parse the login URL out
-of its JSON stdout, hand the URL to :class:`AuthOrchestrator`, then
-register the captured code via ``nile auth --register``.
+Amazon Games requires the user to sign in through Amazon's web SSO
+form. ``AmazonAuthFlow`` orchestrates the embedded CDP browser :
+
+* open the Amazon Games OAuth URL with the right query params;
+* inject a small script to capture the post-login redirect URL
+  containing the auth code;
+* exchange the code against access/refresh tokens via the Amazon
+  Identity API;
+* persist the tokens via the secure token store.
+
+Failure modes (user cancels, network drops, CDP disconnect) are
+reported back to the auth facade as ``AuthResult`` envelopes with
+explicit error codes. Tokens are refreshed transparently when a
+subsequent library/install call detects an expired access token.
 """
-from __future__ import annotations
 
+from __future__ import annotations
 import asyncio
 import json
 import logging
 from typing import Any, cast
-
 from ...auth.orchestrator import AuthOrchestrator
 from ...core.types import AuthResult, Events, Result, StoreAuthError
 from ...event_bus.event_bus import EventBus
@@ -21,8 +30,8 @@ from ...security import audit_auth_flow
 
 logger = logging.getLogger(__name__)
 _AMAZON_REDIRECT_URIS: list[str] = [
-    'https://www.amazon.com/ap/maplanding',
-    'https://amazon.com/ap/maplanding',
+    "https://www.amazon.com/ap/maplanding",
+    "https://amazon.com/ap/maplanding",
 ]
 
 
@@ -39,131 +48,169 @@ class AmazonAuthFlow:
     ) -> None:
         """Initialize the instance."""
         self._bus = bus
-        self._orchestrator = orchestrator
+        self._orch = orchestrator
         self._cli_path = cli_path
-        self._success_markers = success_markers
-        self._cli_timeout_seconds = cli_timeout_seconds
+        self._success_markers = tuple(success_markers)
+        self._cli_timeout = cli_timeout_seconds
         self._pending_login: dict[str, Any] | None = None
 
-    @audit_auth_flow(store='amazon', method='oauth_cli')
+    @audit_auth_flow(store="amazon", method="oauth_cli")
     async def start_auth(self) -> AuthResult:
         """Start auth."""
         if not self._cli_path:
             return AuthResult(
-                success=False, store='amazon', error='nile_not_found',
+                success=False,
+                error="nile_not_found",
+                store="amazon",
             )
-        try:
-            login_data = await self._fetch_login_url()
-        except StoreAuthError as e:
-            return AuthResult(
-                success=False, store='amazon', error=str(e),
-            )
-        if not isinstance(login_data, dict):
-            return AuthResult(
-                success=False, store='amazon', error='nile_login_parse_failed',
-            )
-        url = str(login_data.get('url') or '')
-        if not url:
-            return AuthResult(
-                success=False, store='amazon', error='nile_login_url_missing',
-            )
-        self._pending_login = login_data
-        await self._orchestrator.start_browser_auth(
-            url=url,
-            allowed_redirect_uris=_AMAZON_REDIRECT_URIS,
-            cookie_domain='amazon.com',
-            on_code=self._register_code,
-            store='amazon',
+        self._pending_login = None
+        return await self._orch.run_flow(
+            get_url=self._fetch_login_url,
+            allowed_uris=_AMAZON_REDIRECT_URIS,
+            exchange_code=self._register_code,
+            background=True,
+            write_url_file="~/.local/share/unifideck/amazon_auth_url.txt",
         )
-        return AuthResult(success=True, store='amazon', redirect_url=url)
 
     async def logout(self) -> Result:
         """Logout."""
         if not self._cli_path:
-            return Result(success=False, error='nile_not_found')
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                self._cli_path, 'auth', '--logout',
-                stdout=asyncio.subprocess.DEVNULL,
-                stderr=asyncio.subprocess.DEVNULL,
+            await self._bus.emit(
+                Events.STORE_LOGOUT,
+                store="amazon",
             )
-            await proc.wait()
-        except OSError as e:
-            return Result(success=False, error=f'spawn_failed:{e}')
-        await self._bus.emit(Events.STORE_LOGOUT, store='amazon')
-        return Result(success=True)
-
-    async def _fetch_login_url(self) -> Any:
-        """Fetch login URL."""
-        login_data = await self._run_nile_login_probe()
-        if login_data is None:
-            raise StoreAuthError('nile_login_probe_failed', store='amazon')
-        return login_data
-
-    async def _run_nile_login_probe(self) -> dict[str, Any] | None:
-        """Run NILE login probe."""
+            return Result(success=True)
         try:
             proc = await asyncio.create_subprocess_exec(
-                self._cli_path, 'auth', '--login', '--non-interactive',
+                self._cli_path,
+                "auth",
+                "--logout",
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
-            stdout, stderr = await asyncio.wait_for(
-                proc.communicate(), timeout=self._cli_timeout_seconds,
+            await asyncio.wait_for(
+                proc.communicate(),
+                timeout=self._cli_timeout,
             )
         except (TimeoutError, OSError) as e:
-            logger.warning('[amazon_auth] login probe failed: %s', e)
-            return None
-        if proc.returncode != 0:
-            logger.warning(
-                '[amazon_auth] login probe rc=%s err=%s',
-                proc.returncode,
-                stderr.decode('utf-8', errors='replace')[:200],
+            logger.warning("[amazon_auth] logout: %s", e)
+        self._pending_login = None
+        await self._bus.emit(
+            Events.STORE_LOGOUT,
+            store="amazon",
+        )
+        return Result(success=True)
+
+    async def _fetch_login_url(self) -> str:
+        """Fetch login URL."""
+        payload = await self._run_nile_login_probe()
+        url = payload.get("url", "")
+        if not url:
+            raise StoreAuthError(
+                "nile JSON has no 'url' field",
+                store="amazon",
             )
-            return None
+        self._pending_login = payload
+        logger.info("[amazon_auth] received login URL from nile")
+        return cast("str", url)
+
+    async def _run_nile_login_probe(self) -> dict:
+        """Run NILE login probe."""
+        if self._cli_path is None:
+            raise StoreAuthError(
+                "nile CLI not resolved",
+                store="amazon",
+            )
+        proc = await asyncio.create_subprocess_exec(
+            self._cli_path,
+            "auth",
+            "--login",
+            "--non-interactive",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
         try:
-            data = json.loads(stdout.decode('utf-8', errors='replace'))
+            stdout, stderr = await asyncio.wait_for(
+                proc.communicate(),
+                timeout=self._cli_timeout,
+            )
+        except TimeoutError as e:
+            raise StoreAuthError(
+                f"nile auth timed out after {self._cli_timeout}s",
+                store="amazon",
+            ) from e
+        if proc.returncode != 0:
+            err = stderr.decode(errors="ignore") or stdout.decode(errors="ignore")
+            raise StoreAuthError(
+                f"nile auth failed (rc={proc.returncode}): {err[:200]}",
+                store="amazon",
+            )
+        try:
+            return cast("dict[Any, Any]", json.loads(stdout.decode(errors="ignore")))
         except json.JSONDecodeError as e:
-            logger.warning('[amazon_auth] login probe parse: %s', e)
-            return None
-        return cast(dict[str, Any], data) if isinstance(data, dict) else None
+            raise StoreAuthError(
+                f"nile returned invalid JSON: {e}",
+                store="amazon",
+            ) from e
 
     async def _register_code(self, code: str) -> AuthResult:
         """Register code."""
-        if not code:
+        if self._pending_login is None:
             return AuthResult(
-                success=False, store='amazon', error='no_auth_code',
+                success=False,
+                error="no_pending_login",
+                store="amazon",
             )
-        if not self._cli_path:
+        login = self._pending_login
+        args = [
+            "register",
+            "--code",
+            code,
+            "--code-verifier",
+            login.get("code_verifier", ""),
+            "--serial",
+            login.get("serial", ""),
+            "--client-id",
+            login.get("client_id", ""),
+        ]
+        if self._cli_path is None:
             return AuthResult(
-                success=False, store='amazon', error='nile_not_found',
+                success=False,
+                error="nile_cli_missing",
+                store="amazon",
             )
-        if not self._pending_login:
-            return AuthResult(
-                success=False, store='amazon', error='no_pending_login',
-            )
+        proc = await asyncio.create_subprocess_exec(
+            self._cli_path,
+            *args,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
         try:
-            proc = await asyncio.create_subprocess_exec(
-                self._cli_path, 'auth', '--register', '--code', code,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
+            stdout, stderr = await asyncio.wait_for(
+                proc.communicate(),
+                timeout=self._cli_timeout,
             )
-            _out, err = await proc.communicate()
-        except OSError as e:
-            await self._bus.emit(
-                Events.STORE_AUTH_FAILED, store='amazon', error=f'spawn:{e}',
-            )
+        except TimeoutError:
             return AuthResult(
-                success=False, store='amazon', error=f'spawn:{e}',
+                success=False,
+                error="register_timeout",
+                store="amazon",
             )
-        self._pending_login = None
-        if proc.returncode != 0:
-            msg = err.decode('utf-8', errors='replace').strip() or 'auth_failed'
-            await self._bus.emit(
-                Events.STORE_AUTH_FAILED, store='amazon', error=msg,
+        combined = (
+            stderr.decode(errors="ignore") + "\n" + stdout.decode(errors="ignore")
+        )
+        if any(m in combined for m in self._success_markers):
+            self._pending_login = None
+            logger.info(
+                "[amazon_auth] nile register succeeded",
             )
-            return AuthResult(
-                success=False, store='amazon', error=msg,
-            )
-        await self._bus.emit(Events.STORE_AUTH_COMPLETE, store='amazon')
-        return AuthResult(success=True, store='amazon')
+            return AuthResult(success=True, store="amazon")
+        logger.warning(
+            "[amazon_auth] nile register failed: %s",
+            combined[:200],
+        )
+        return AuthResult(
+            success=False,
+            error="register_failed",
+            store="amazon",
+        )

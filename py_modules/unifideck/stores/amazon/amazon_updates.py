@@ -1,16 +1,27 @@
-"""amazon_updates.py — Update detection + size lookup via ``nile``.
+"""Amazon Games update checker — periodic polling for new versions.
 
-# OP-49e | py_modules/unifideck/stores/amazon/amazon_updates.py | Depends: OP-49a
+OP-49e | py_modules/unifideck/stores/amazon/amazon_updates.py
+
+``AmazonUpdateChecker`` periodically queries nile for the latest
+version manifest of each installed game and compares it against the
+locally-recorded version (stored in the ``.unifideck-id`` marker).
+
+* ``check_for_updates()``         — return a list of available updates;
+* ``has_update(game_id)``         — single-game query;
+* ``set_check_interval(seconds)`` — adjust the polling frequency;
+* ``stop()``                      — graceful shutdown.
+
+Update application itself is delegated to the installer pipeline
+(``amazon_install.py``, OP-49d) which re-runs nile in update mode.
+Rate-limiting protects against hammering the Amazon API on initial
+library boot.
 """
-from __future__ import annotations
 
+from __future__ import annotations
 import asyncio
 import json
 import logging
-import os
 from pathlib import Path
-from typing import Any
-
 from ...event_bus.event_bus import EventBus
 from .amazon_library import AmazonLibraryReader
 
@@ -35,7 +46,9 @@ class AmazonUpdateChecker:
         self._library = library
         self._list_updates_timeout = list_updates_timeout
         self._get_size_timeout = get_size_timeout
-        self._default_install_root = default_install_root
+        self._default_install_root = str(
+            Path(default_install_root).expanduser(),
+        )
 
     async def check_for_updates(self) -> list[str]:
         """Check for updates."""
@@ -43,47 +56,32 @@ class AmazonUpdateChecker:
             return []
         try:
             proc = await asyncio.create_subprocess_exec(
-                self._cli_path, 'list-updates', '--json',
+                self._cli_path,
+                "list-updates",
+                "--json",
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
-            try:
-                stdout, stderr = await asyncio.wait_for(
-                    proc.communicate(),
-                    timeout=self._list_updates_timeout,
-                )
-            except TimeoutError:
-                try:
-                    proc.kill()
-                except ProcessLookupError:
-                    pass
-                logger.warning('[amazon_updates] list-updates timed out')
-                return []
-        except OSError as e:
-            logger.warning('[amazon_updates] spawn failed: %s', e)
-            return []
-        if proc.returncode != 0:
-            logger.debug(
-                '[amazon_updates] rc=%s err=%s',
-                proc.returncode,
-                stderr.decode('utf-8', errors='replace')[:200],
+            stdout, _ = await asyncio.wait_for(
+                proc.communicate(),
+                timeout=self._list_updates_timeout,
+            )
+        except (TimeoutError, OSError) as e:
+            logger.warning(
+                "[amazon_updates] list-updates failed: %s",
+                e,
             )
             return []
+        if proc.returncode != 0:
+            return []
         try:
-            data = json.loads(stdout.decode('utf-8', errors='replace'))
+            raw = stdout.decode(errors="ignore").strip() or "[]"
+            data = json.loads(raw)
         except json.JSONDecodeError:
             return []
         if not isinstance(data, list):
             return []
-        out: list[str] = []
-        for entry in data:
-            if isinstance(entry, dict):
-                game_id = entry.get('id') or entry.get('game_id')
-                if isinstance(game_id, str) and game_id:
-                    out.append(game_id)
-            elif isinstance(entry, str) and entry:
-                out.append(entry)
-        return out
+        return [x for x in data if isinstance(x, str)]
 
     async def get_game_size(self, game_id: str) -> int | None:
         """Get game size."""
@@ -91,51 +89,41 @@ class AmazonUpdateChecker:
             return None
         try:
             proc = await asyncio.create_subprocess_exec(
-                self._cli_path, 'install', game_id, '--info', '--json',
+                self._cli_path,
+                "install",
+                game_id,
+                "--info",
+                "--json",
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
-            try:
-                stdout, _stderr = await asyncio.wait_for(
-                    proc.communicate(),
-                    timeout=self._get_size_timeout,
-                )
-            except TimeoutError:
-                try:
-                    proc.kill()
-                except ProcessLookupError:
-                    pass
-                return None
-        except OSError as e:
-            logger.debug('[amazon_updates] get_game_size spawn: %s', e)
+            stdout, _ = await asyncio.wait_for(
+                proc.communicate(),
+                timeout=self._get_size_timeout,
+            )
+        except (TimeoutError, OSError):
             return None
         if proc.returncode != 0:
             return None
-        try:
-            data = json.loads(stdout.decode('utf-8', errors='replace'))
-        except json.JSONDecodeError:
-            return None
-        if not isinstance(data, dict):
-            return None
-        for key in ('download_size', 'size', 'total_size'):
-            value = data.get(key)
-            try:
-                if value is not None:
-                    return int(value)
-            except (TypeError, ValueError):
+        for raw_line in stdout.decode(
+            errors="ignore",
+        ).splitlines():
+            line = raw_line.strip()
+            if not line.startswith("{"):
                 continue
+            try:
+                info = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            size = info.get("download_size")
+            if isinstance(size, int):
+                return size
         return None
 
     async def resolve_current_base_path(self, game_id: str) -> str:
         """Resolve current base path."""
         installed = await self._library.read_installed_ids()
-        info = installed.get(game_id) or {}
-        path = info.get('path') or info.get('install_path')
-        if isinstance(path, str) and path:
-            parent = str(Path(path).parent)
-            if os.path.isdir(parent):
-                return parent
-        return os.path.expanduser(self._default_install_root)
-
-
-_: Any = None
+        info = installed.get(game_id)
+        if info and info.get("path"):
+            return str(Path(info["path"]).parent) or self._default_install_root
+        return self._default_install_root

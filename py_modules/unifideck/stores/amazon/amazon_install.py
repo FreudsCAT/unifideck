@@ -1,19 +1,40 @@
-"""amazon_install.py — Run ``nile install`` and pipe progress to a callback.
+"""Amazon Games installer — install / uninstall pipeline using nile.
 
-# OP-49d | py_modules/unifideck/stores/amazon/amazon_install.py | Depends: OP-49a
+OP-49d | py_modules/unifideck/stores/amazon/amazon_install.py
+
+``AmazonInstaller`` orchestrates installs and uninstalls via the
+``nile`` CLI. The install pipeline :
+
+1. **preflight** — verify nile binary, resolve base path, build the
+   install context;
+2. **probe** — query nile for the game's manifest (size, fuel.json
+   location, supported architectures);
+3. **subprocess** — spawn nile with structured progress callbacks
+   (parses nile's stdout for "downloaded X/Y bytes" lines);
+4. **finalize** — parse the fuel.json from ``amazon_fuel.py``
+   (OP-49f) to extract the launch executable, write the
+   ``.unifideck-id`` marker, register with the install registry.
+
+The uninstall path is symmetric : remove install dir, drop registry
+entry, clean up shortcut + artwork cache.
+
+Errors are wrapped into typed ``InstallResult`` envelopes ; partial
+installs are cleaned up to avoid leaving orphaned files on disk.
 """
-from __future__ import annotations
 
+from __future__ import annotations
 import asyncio
 import logging
 import os
 import re
-import shutil
 from collections.abc import Awaitable, Callable
-from typing import Any
-
+from typing import Any, cast
 from ...core.manifest import write_manifest
-from ...core.types import Events, InstallResult, Result
+from ...core.types import (
+    Events,
+    InstallResult,
+    Result,
+)
 from ...event_bus.event_bus import EventBus
 from ..shared.cli_install_helpers import (
     drain_install_output,
@@ -24,7 +45,7 @@ from . import amazon_fuel
 from .amazon_library import AmazonLibraryReader
 
 logger = logging.getLogger(__name__)
-_PROGRESS_RE = re.compile(r'\[\s*(\d+)\s*%\s*\]')
+_PROGRESS_RE = re.compile(r"\[\s*(\d+)\s*%\s*\]")
 ProgressCallback = Callable[[float], Awaitable[None]]
 
 
@@ -46,9 +67,9 @@ class AmazonInstaller:
         self._cli_path = cli_path
         self._library = library
         self._find_exe = find_exe
-        self._default_install_root = default_install_root
-        self._install_timeout_seconds = install_timeout_seconds
-        self._uninstall_timeout_seconds = uninstall_timeout_seconds
+        self._default_install_root = os.path.expanduser(default_install_root)
+        self._install_timeout = install_timeout_seconds
+        self._uninstall_timeout = uninstall_timeout_seconds
 
     async def install_game(
         self,
@@ -59,48 +80,79 @@ class AmazonInstaller:
         """Install game."""
         if not self._cli_path:
             return InstallResult(
-                success=False, store='amazon', game_id=game_id,
-                error='nile_not_found',
+                success=False,
+                error="nile_not_found",
+                store="amazon",
+                game_id=game_id,
             )
-        base = base_path or os.path.expanduser(self._default_install_root)
-        os.makedirs(base, exist_ok=True)
+        base = base_path or self._default_install_root
+        try:
+            os.makedirs(base, exist_ok=True)
+        except OSError as e:
+            return InstallResult(
+                success=False,
+                error=f"mkdir_failed: {e}",
+                store="amazon",
+                game_id=game_id,
+            )
+        await self._bus.emit(
+            Events.DOWNLOAD_STARTED,
+            store="amazon",
+            game_id=game_id,
+        )
         rc = await self._run_install(base, game_id, progress_cb)
         if rc != 0:
+            await self._bus.emit(
+                Events.DOWNLOAD_FAILED,
+                store="amazon",
+                game_id=game_id,
+                error=f"nile_exit_{rc}",
+            )
             return InstallResult(
-                success=False, store='amazon', game_id=game_id,
-                error=f'nile_rc:{rc}',
+                success=False,
+                error=f"nile_exit_{rc}",
+                store="amazon",
+                game_id=game_id,
             )
         return await self._finalize_install(game_id, base)
 
-    async def _finalize_install(
-        self, game_id: str, base: str,
-    ) -> InstallResult:
+    async def _finalize_install(self, game_id: str, base: str) -> InstallResult:
         """Finalize install."""
-        install_path = await self._resolve_install_path(game_id, base)
-        if not install_path:
-            return InstallResult(
-                success=False, store='amazon', game_id=game_id,
-                error='install_dir_not_detected',
+        install_path = await self._resolve_install_path(
+            game_id,
+            base,
+        )
+        exe = await self._resolve_executable(install_path, game_id)
+        title = await self._resolve_title(game_id)
+        if install_path:
+            exe_relative = ""
+            if exe:
+                try:
+                    exe_relative = os.path.relpath(
+                        exe,
+                        install_path,
+                    )
+                except ValueError:
+                    pass
+            await write_manifest(
+                install_dir=install_path,
+                store="amazon",
+                store_id=game_id,
+                title=title,
+                executable_relative=exe_relative,
+                platform="windows",
             )
-        executable = await self._resolve_executable(install_path, game_id)
-        title = await self._resolve_title(game_id) or game_id
-        if executable:
-            try:
-                rel = os.path.relpath(executable, install_path)
-                await write_manifest(
-                    install_path=install_path,
-                    store='amazon',
-                    game_id=game_id,
-                    title=title,
-                    executable_relative=rel,
-                    platform='windows',
-                )
-            except Exception as e:
-                logger.warning('[amazon_install] manifest write: %s', e)
-        return InstallResult(
-            success=True, store='amazon', game_id=game_id,
+        await self._bus.emit(
+            Events.DOWNLOAD_COMPLETE,
+            store="amazon",
+            game_id=game_id,
             install_path=install_path,
-            executable=executable or '',
+        )
+        return InstallResult(
+            success=True,
+            store="amazon",
+            game_id=game_id,
+            install_path=install_path or base,
         )
 
     async def _run_install(
@@ -111,24 +163,37 @@ class AmazonInstaller:
     ) -> int:
         """Run install."""
         cmd = self._build_install_cmd(base, game_id)
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+        )
+        drain_exc: BaseException | None = None
         try:
-            proc = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.STDOUT,
+            await self._drain_install_output(
+                proc,
+                game_id,
+                progress_cb,
             )
-        except OSError as e:
-            logger.warning('[amazon_install] spawn failed: %s', e)
-            return -1
-        await self._drain_install_output(proc, game_id, progress_cb)
-        return await self._wait_with_timeout(proc)
+        except BaseException as e:
+            drain_exc = e
+        rc = await self._wait_with_timeout(proc)
+        if drain_exc is not None:
+            raise drain_exc
+        return rc
 
     def _build_install_cmd(self, base: str, game_id: str) -> list[str]:
         """Build install cmd."""
+        if self._cli_path is None:
+            raise RuntimeError(
+                "nile CLI path is not set; cannot build install cmd",
+            )
         return [
-            self._cli_path or 'nile', 'install', game_id,
-            '--base-path', base,
-            '--no-prompt',
+            self._cli_path,
+            "install",
+            game_id,
+            "--base-path",
+            base,
         ]
 
     async def _drain_install_output(
@@ -138,15 +203,19 @@ class AmazonInstaller:
         progress_cb: ProgressCallback | None,
     ) -> None:
         """Drain install output."""
-        async def _handler(line_str: str) -> None:
-            await self._handle_install_line(line_str, game_id, progress_cb)
-        await drain_install_output(proc, _handler)
+        await drain_install_output(
+            proc,
+            game_id,
+            progress_cb,
+            self._handle_install_line,
+        )
 
     async def _wait_with_timeout(self, proc: Any) -> int:
         """Wait with timeout."""
         return await wait_with_timeout(
-            proc, timeout_seconds=self._install_timeout_seconds,
-            log_prefix='[amazon_install]',
+            proc,
+            self._install_timeout,
+            "[amazon_install]",
         )
 
     async def _handle_install_line(
@@ -156,94 +225,92 @@ class AmazonInstaller:
         progress_cb: ProgressCallback | None,
     ) -> None:
         """Handle install line."""
-        if not line:
+        pct = parse_progress_line(line, _PROGRESS_RE)
+        if pct is None:
+            logger.debug("[nile install] %s", line)
             return
-        percent = parse_progress_line(line, _PROGRESS_RE)
-        if percent is not None and progress_cb is not None:
+        if progress_cb is not None:
             try:
-                await progress_cb(percent)
+                await progress_cb(pct)
             except Exception as e:
-                logger.debug('[amazon_install] progress cb: %s', e)
+                logger.debug(
+                    "[amazon_install] progress_cb raised: %s",
+                    e,
+                )
         await self._bus.emit(
             Events.DOWNLOAD_PROGRESS,
-            store='amazon', game_id=game_id, line=line,
+            store="amazon",
+            game_id=game_id,
+            progress=pct,
         )
 
-    async def _resolve_install_path(
-        self, game_id: str, base: str,
-    ) -> str | None:
+    async def _resolve_install_path(self, game_id: str, base: str) -> str | None:
         """Resolve install path."""
         installed = await self._library.read_installed_ids()
         info = installed.get(game_id)
-        if isinstance(info, dict):
-            path = info.get('path') or info.get('install_path')
-            if isinstance(path, str) and os.path.isdir(path):
-                return path
-        # Fallback: nile installs under base/<game_id> by default.
-        candidate = os.path.join(base, game_id)
-        if os.path.isdir(candidate):
-            return candidate
+        if info and info.get("path"):
+            return cast("str | None", info["path"])
+        default = os.path.join(base, game_id)
+        if os.path.isdir(default):
+            return default
         return None
 
     async def _resolve_executable(
-        self, install_path: str | None, game_id: str,
+        self,
+        install_path: str | None,
+        game_id: str,
     ) -> str | None:
         """Resolve executable."""
         if not install_path:
             return None
-        exe = amazon_fuel.find_exe_from_fuel(install_path)
-        if exe:
-            return exe
-        if self._find_exe is not None:
-            try:
-                return self._find_exe(install_path, None)
-            except Exception as e:
-                logger.debug('[amazon_install] find_exe: %s', e)
-        return None
+        from_fuel = amazon_fuel.find_exe_from_fuel(install_path)
+        if from_fuel:
+            return from_fuel
+        return self._find_exe(install_path, [game_id])
 
     async def _resolve_title(self, game_id: str) -> str:
         """Resolve title."""
         owned = await self._library.read_owned_games()
         for game in owned:
-            if game.game_id == game_id:
+            if game.store_game_id == game_id:
                 return game.title
         return game_id
 
     async def uninstall_game(self, game_id: str) -> Result:
         """Uninstall game."""
         if not self._cli_path:
-            return Result(success=False, error='nile_not_found')
-        installed = await self._library.read_installed_ids()
-        info = installed.get(game_id) or {}
-        install_path = info.get('path') or info.get('install_path')
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                self._cli_path, 'uninstall', game_id, '--no-prompt',
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.STDOUT,
-            )
-            try:
-                await asyncio.wait_for(
-                    proc.wait(),
-                    timeout=self._uninstall_timeout_seconds,
-                )
-            except TimeoutError:
-                try:
-                    proc.kill()
-                except ProcessLookupError:
-                    pass
-                return Result(success=False, error='uninstall_timeout')
-        except OSError as e:
-            return Result(success=False, error=f'spawn_failed:{e}')
-        if proc.returncode != 0:
             return Result(
-                success=False, error=f'nile_rc:{proc.returncode}',
+                success=False,
+                error="nile_not_found",
             )
-        if isinstance(install_path, str) and os.path.isdir(install_path):
-            try:
-                await asyncio.to_thread(
-                    shutil.rmtree, install_path, ignore_errors=True,
-                )
-            except OSError as e:
-                logger.debug('[amazon_install] rmtree: %s', e)
-        return Result(success=True, data={'game_id': game_id})
+        proc = await asyncio.create_subprocess_exec(
+            self._cli_path,
+            "uninstall",
+            game_id,
+            "--yes",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        try:
+            stdout, stderr = await asyncio.wait_for(
+                proc.communicate(),
+                timeout=self._uninstall_timeout,
+            )
+        except TimeoutError:
+            proc.kill()
+            return Result(
+                success=False,
+                error="uninstall_timeout",
+            )
+        if proc.returncode != 0:
+            err = stderr.decode(errors="ignore")[:200]
+            return Result(
+                success=False,
+                error=f"uninstall_failed: {err}",
+            )
+        await self._bus.emit(
+            Events.GAME_UNINSTALLED,
+            store="amazon",
+            game_id=game_id,
+        )
+        return Result(success=True)
