@@ -23,8 +23,8 @@
  */
 import { definePlugin } from "@decky/api";
 import { FaGamepad } from "react-icons/fa";
-import React, { FC } from "react";
-import { loadTranslations } from "./i18n";
+import { FC } from "react";
+import { initI18n } from "./i18n";
 import { SteamBridge } from "./lib/steam-bridge";
 import { RootProvider } from "./contexts/RootProvider";
 import { QuickAccessPanel } from "./views/QuickAccessPanel";
@@ -33,7 +33,7 @@ import { runBootstrapTasks } from "./bootstrap-tasks";
 import { runTeardown, type TeardownHandles } from "./teardown";
 // Eager translation load — Decky's UI mounts before any
 // async work resolves, so we kick this off at module import.
-loadTranslations();
+void initI18n();
 /** Panel content. */
 const PanelContent: FC = () => (
   <RootProvider>

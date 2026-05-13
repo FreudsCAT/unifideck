@@ -122,3 +122,4 @@ test_shortcut_launch.py
 test_upc_auth_launch.sh
 
 docs/UBISOFT_INTEGRATION_FIXES.md
+build-plugin_old-backup.sh

@@ -16,7 +16,6 @@
     "toastUpdatedTitle": "Storage Location Updated",
     "toastUpdatedBody": "New games will be installed to {{location}}",
     "freeSpaceLabel": "{{label}} ({{freeSpace}} GB free)"
-    
   },
   "downloadsTab": {
     "current": "Now downloading",
@@ -38,5 +37,4 @@
     "cancel": "Cancel",
     "cancelling": "Cancelling..."
   }
-  
 }
