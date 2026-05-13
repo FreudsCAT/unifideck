@@ -1,26 +1,18 @@
-"""event_bus.supervision — EventBus handler supervision primitives.
+"""Bus supervision sub-package — public exports.
 
-Groups the two per-handler supervisory components that wrap the
-user-registered callbacks before they reach the dispatcher:
+OP-10 | py_modules/unifideck/event_bus/supervision/__init__.py
 
-  - ``watchdog_handler`` : timeout + quarantine detection. Aborts
-    handlers that exceed their budget and quarantines repeat
-    offenders so one slow consumer can't poison the whole bus.
-  - ``metrics_handler`` : per-handler latency collector with a
-    bounded histogram ring, consumed by the observability RPC
-    surface to surface top-N slow handlers without external APM.
+Re-exports the two supervision components that wrap the bus at
+runtime : ``HandlerLatencyCollector`` (per-handler latency
+histograms) and ``HandlerWatchdog`` (per-handler timeout quarantine).
 
-Name chosen over ``handlers/`` to avoid confusion with
-``rpc/handlers/`` which is a different concern (RPC method
-group implementations, not supervisory infrastructure). These
-modules don't define handlers — they supervise the handlers
-that users register with the EventBus.
-
-Public API (re-exported at the ``event_bus`` package level via
-``event_bus/__init__.py``) is unchanged — callers importing
-``from unifideck.event_bus import HandlerWatchdog`` still work.
+These wrap every subscription registered on the bus so that
+operational health is observable (latency distribution) and
+self-healing (quarantine slow/hung handlers).
 """
-from __future__ import annotations
 
-from .metrics_handler import HandlerLatencyCollector  # noqa: F401
-from .watchdog_handler import HandlerWatchdog  # noqa: F401
+from __future__ import annotations
+from .metrics_handler import HandlerLatencyCollector
+from .watchdog_handler import HandlerWatchdog
+
+__all__ = ["HandlerLatencyCollector", "HandlerWatchdog"]

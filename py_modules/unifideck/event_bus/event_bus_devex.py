@@ -1,17 +1,32 @@
-"""Observability and developer experience utilities.
+"""Bus developer-experience helpers — auto-wire + introspection.
 
-P8.8 TraceContext — propagates trace_id + parent_span_id through
-event kwargs so you can reconstruct causal chains.
-P8.9 EventRecorder — captures every emitted event to a JSONL
-file for later replay. Opt-in via `start_recording()`.
-Companion EventReplayer reads the file and re-injects.
-P8.10 @subscribe decorator — declarative handler registration
-at module import time, collected by SubscriptionRegistry.
-P8.11 SchemaExtractor — static AST analysis of `bus.emit()`
-calls to extract the set of kwargs per event type,
-used to generate JSON Schema documentation.
+OP-09h | py_modules/unifideck/event_bus/event_bus_devex.py
 
+Developer-facing helpers that make working with the bus less
+boilerplate-heavy:
+
+* ``_Subscription``         — typed record of one subscription
+  declaration (event, handler, priority, timeout, scope).
+* ``SubscriptionRegistry``  — in-process registry where the
+  ``@subscribe`` decorator stashes its declarations for later
+  application to a bus.
+* ``subscribe(event, ...)`` — decorator. On a free function it
+  registers immediately; on an instance method it just stamps
+  metadata for ``auto_wire`` to pick up later.
+* ``auto_wire(obj, bus)``   — walk an object's attributes for
+  ``@subscribe``-decorated methods and register them on the
+  bus, with optional watchdog registration and registry
+  recording.
+* ``SchemaExtractor``       — AST-based static analysis to
+  extract per-event kwarg sets from emit/enqueue call sites
+  in source code (used by tooling to bootstrap
+  ``EventSchema`` declarations).
+
+This module exists to keep the core ``EventBus`` API minimal —
+the decorator + auto-wire pattern lives here, not on the bus
+itself.
 """
+
 from __future__ import annotations
 
 import ast
@@ -31,10 +46,22 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-# ── P8.10 — @subscribe decorator + registry ─────────────────────
-
 @dataclass
 class _Subscription:
+    """One subscription declaration produced by ``@subscribe``.
+
+    Attributes:
+        event: event identifier (always stringified; the enum
+            members are converted to their ``.value``).
+        handler: the callable target.
+        priority: optional priority hint for dispatchers that
+            care (the basic ``EventBus`` ignores it; the
+            ``PriorityDispatcher`` uses it).
+        timeout: optional per-handler watchdog timeout override.
+        scope: optional free-form tag for diagnostics
+            (e.g. ``"security"``).
+    """
+
     event: str
     handler: Callable
     priority: int | None = None
@@ -43,24 +70,64 @@ class _Subscription:
 
 
 class SubscriptionRegistry:
-    """Global-ish registry populated by the @subscribe decorator.
+    """Append-only registry of declared subscriptions.
 
-    A singleton at module level is dangerous for tests, so we
-    expose both the class and a default instance. Tests can
-    create fresh registries to avoid cross-contamination.
+    Populated by the ``@subscribe`` decorator for free-function
+    handlers (instance-method handlers are registered later by
+    ``auto_wire``). ``apply(bus)`` walks the registry and
+    actually subscribes everything on the given bus.
     """
 
-    def __init__(self) -> None:  # noqa: D107 — class docstring documents the constructor's contract
+    def __init__(self) -> None:
+        """Initialise an empty subscription list.
+
+        No global setup; each registry instance is independent.
+        The ``default_registry`` module-level instance is used
+        by the bare ``@subscribe`` decorator when no explicit
+        registry is passed.
+        """
         self._subs: list[_Subscription] = []
 
-    def add(self, sub: _Subscription) -> None:  # noqa: D102 — documentation pending (Sprint D)
+    def add(self, sub: _Subscription) -> None:
+        """Append a subscription record to the registry.
+
+        Called by the ``@subscribe`` decorator (for free
+        functions) and by ``auto_wire`` (for instance methods
+        when a registry is supplied).
+
+        Args:
+            sub: the subscription declaration to record.
+        """
         self._subs.append(sub)
 
-    def all(self) -> list[_Subscription]:  # noqa: D102 — documentation pending (Sprint D)
+    def all(self) -> list[_Subscription]:
+        """Return a shallow copy of every recorded subscription.
+
+        Order is insertion order. Shallow copy so the caller
+        can iterate while new subscriptions are added on
+        another task (rare but possible).
+
+        Returns:
+            List of ``_Subscription`` records.
+        """
         return list(self._subs)
 
     def apply(self, bus: EventBus) -> int:
-        """Register every pending subscription on the bus."""
+        """Subscribe every recorded handler on the given bus.
+
+        Iterates the registry and calls ``bus.on(event, handler)``
+        for each. Defensive ``hasattr`` check on ``bus.on``
+        means a half-baked stub bus (used in some tests) won't
+        crash here.
+
+        Args:
+            bus: the target ``EventBus``.
+
+        Returns:
+            Number of subscriptions actually applied (matches
+            the registry size unless ``bus`` lacked an ``on``
+            method, in which case 0).
+        """
         count = 0
         for s in self._subs:
             if hasattr(bus, "on"):
@@ -68,11 +135,16 @@ class SubscriptionRegistry:
                 count += 1
         return count
 
-    def clear(self) -> None:  # noqa: D102 — documentation pending (Sprint D)
+    def clear(self) -> None:
+        """Drop every recorded subscription.
+
+        Test-only — production code that wants to rebuild the
+        subscription graph should typically build a fresh
+        registry instance instead.
+        """
         self._subs.clear()
 
 
-# Module-level singleton for decorator use
 default_registry = SubscriptionRegistry()
 
 
@@ -84,24 +156,49 @@ def subscribe(
     scope: str | None = None,
     registry: SubscriptionRegistry | None = None,
 ):
-    """Decorator that registers a handler at import time OR at
-    instance wiring time.
+    """Decorator factory that marks a function as a bus subscriber.
 
-    Mode 1 — module-level function: registered immediately in
-    the default_registry. Call registry.apply(bus) at startup.
+    Two registration paths:
 
-    Mode 2 — instance method: metadata is attached to the
-    function; auto_wire(instance, bus) in __init__ walks the
-    instance and binds each method at runtime when `self` is
-    available. See auto_wire() docstring for an example.
+    * **Free function** — appended directly to the registry
+      (the ``default_registry`` if no explicit one was given).
+    * **Instance method** — detected via
+      ``_looks_like_instance_method`` (first parameter is
+      ``self`` or ``cls``); the decorator only stamps
+      ``__subscribe_meta__`` onto the function but does **not**
+      register immediately, because there's no instance to
+      bind to. The host service calls ``auto_wire(self, bus)``
+      later to do the real registration.
+
+    Args:
+        event: event identifier (``Events`` enum value or
+            string). Coerced to its string form for storage.
+        priority: optional dispatcher priority hint.
+        timeout: optional watchdog timeout override.
+        scope: optional diagnostic tag.
+        registry: optional registry to register into; defaults
+            to ``default_registry``.
+
+    Returns:
+        The actual decorator that consumes the function being
+        decorated.
     """
 
     def decorator(fn: Callable) -> Callable:
+        """Apply the metadata stamp and conditional registration.
+
+        Stores a ``_Subscription`` on the function as
+        ``__subscribe_meta__`` regardless of path so
+        ``auto_wire`` can find it later.
+
+        Args:
+            fn: the decorated callable.
+
+        Returns:
+            The same callable (decoration is a metadata stamp,
+            not a wrap).
+        """
         event_key = getattr(event, "value", event)
-        # Dynamic attribute: @subscribe decorator attaches metadata
-        # to the function so auto_wire() (or the module-level
-        # registration below) can discover it. setattr/getattr
-        # avoid a Protocol detour for one internal convention.
         meta = _Subscription(
             event=str(event_key),
             handler=fn,
@@ -109,28 +206,39 @@ def subscribe(
             timeout=timeout,
             scope=scope,
         )
-        setattr(fn, "__subscribe_meta__", meta)  # noqa: B010
-        # Instance methods delayed to auto_wire time; free
-        # functions registered immediately.
+        setattr(fn, "__subscribe_meta__", meta)
         if _looks_like_instance_method(fn):
             return fn
         reg = registry or default_registry
-        reg.add(getattr(fn, "__subscribe_meta__"))  # noqa: B009
+        reg.add(getattr(fn, "__subscribe_meta__"))
         return fn
 
     return decorator
 
 
 def _looks_like_instance_method(fn: Callable) -> bool:
-    """Heuristic: first positional arg is 'self' or 'cls'.
+    """Heuristic: does ``fn``'s first parameter look like ``self`` / ``cls``?
 
-    Used to delay registration until auto_wire() is called with
-    a real instance. Not foolproof (a free function could name
-    its first arg 'self'), but matches PEP 8 conventions that
-    every real codebase follows.
+    Inspects the function signature and checks the first
+    parameter's name. Decorated methods being inspected before
+    binding don't yet have ``__self__``, so we rely on the
+    name convention.
+
+    Returns ``False`` on inspection errors (some builtins or
+    C-level callables don't have an inspectable signature) so
+    those get registered immediately as free functions — the
+    safer default.
+
+    Args:
+        fn: the callable to inspect.
+
+    Returns:
+        ``True`` iff the first parameter is named ``self`` or
+        ``cls``.
     """
     try:
         import inspect
+
         sig = inspect.signature(fn)
         params = list(sig.parameters.keys())
         return bool(params) and params[0] in ("self", "cls")
@@ -145,15 +253,33 @@ def auto_wire(
     registry: SubscriptionRegistry | None = None,
     watchdog: HandlerWatchdog | None = None,
 ) -> int:
-    """Scan `instance` for @subscribe-decorated methods and wire them.
+    """Walk ``instance``'s attributes and subscribe ``@subscribe``-marked methods.
 
-    Call from a service's `__init__` after the bus is stored:
+    For each public attribute (no leading ``__``):
 
-        class MyService:
-            def __init__(self, bus, watchdog=None):
-                self._bus = bus
-                auto_wire(self, bus, watchdog=watchdog)
+    1. Resolve the attribute and any ``__subscribe_meta__``
+       stamp via ``_resolve_subscribe_target`` (which also
+       handles bound methods, where the metadata lives on
+       ``__func__``).
+    2. If a metadata stamp exists, call ``bus.on(event, method)``
+       — registering the **bound** method so the bus calls
+       ``instance.method(...)`` correctly.
+    3. Optionally register the handler name with the watchdog
+       and append a record to the registry.
 
+    Used by every service's ``__init__`` to wire its bus
+    handlers without explicit ``bus.on(...)`` calls — keeps
+    constructor bodies declarative.
+
+    Args:
+        instance: the object whose methods will be inspected.
+        bus: target bus.
+        registry: optional registry to record into.
+        watchdog: optional watchdog to register handler names
+            on.
+
+    Returns:
+        Number of methods that were actually subscribed.
     """
     count = 0
     for attr_name in dir(instance):
@@ -182,7 +308,30 @@ def auto_wire(
 
 
 def _resolve_subscribe_target(instance: Any, attr_name: str):
-    """Return (bound_attr, subscribe_meta) or (None, None)."""
+    """Fetch an attribute and its ``__subscribe_meta__`` stamp.
+
+    Two-layer lookup:
+
+    1. ``getattr(instance, attr_name)`` to get the attribute
+       (may be a bound method).
+    2. ``__subscribe_meta__`` on the attribute first, falling
+       back to ``__subscribe_meta__`` on the underlying
+       ``__func__`` for bound methods (the decorator stamps
+       the function, not the bound method).
+
+    Returns ``(None, None)`` when the attribute is missing or
+    has no metadata so the caller can simply skip without
+    further checks.
+
+    Args:
+        instance: object being scanned.
+        attr_name: name of the attribute to resolve.
+
+    Returns:
+        Tuple ``(attribute, metadata)`` — both ``None`` when no
+        match, otherwise the bound callable and its
+        ``_Subscription`` stamp.
+    """
     try:
         attr = getattr(instance, attr_name)
     except AttributeError:
@@ -196,11 +345,26 @@ def _resolve_subscribe_target(instance: Any, attr_name: str):
 
 
 def _register_with_watchdog(
-    instance: Any, attr_name: str, watchdog: HandlerWatchdog,
+    instance: Any,
+    attr_name: str,
+    watchdog: HandlerWatchdog,
 ) -> None:
-    """Register the handler with the watchdog under its qualname.
+    """Register the qualified handler name with the watchdog.
 
-    Best-effort: a failure to register never blocks bus wiring.
+    Builds the canonical name as ``<ClassName>.<attr_name>``
+    so the watchdog's metrics are readable
+    (``ShortcutService._on_download_complete`` rather than
+    just ``_on_download_complete``).
+
+    Watchdog registration failures (e.g. a stub watchdog
+    without a ``register`` method) are caught and logged at
+    DEBUG — the bus subscription still succeeds, the handler
+    just won't have watchdog supervision.
+
+    Args:
+        instance: the host instance.
+        attr_name: the method's attribute name.
+        watchdog: the watchdog to register on.
     """
     qualname = f"{type(instance).__name__}.{attr_name}"
     try:
@@ -208,23 +372,43 @@ def _register_with_watchdog(
     except (AttributeError, RuntimeError) as e:
         logger.debug(
             "[event_bus_devex] watchdog register failed for %s: %s",
-            qualname, e,
+            qualname,
+            e,
         )
 
 
-# ── P8.11 — Static schema extraction ────────────────────────────
-
 class SchemaExtractor:
-    """Walk a Python source file and extract bus.emit() kwargs.
+    """Static analysis: pull per-event kwarg sets out of source code.
 
-    Not called at runtime — this runs as part of a CI/codegen
-    step to produce a JSON schema of all events a module emits.
-    Helps catch typos in kwargs names before they reach runtime.
+    Walks the AST of a source string, finds every
+    ``bus.emit(EVENT, k1=..., k2=...)`` or
+    ``dispatcher.enqueue(EVENT, k1=..., k2=...)`` call, and
+    aggregates the kwarg names per event.
+
+    Used by build-time tooling to bootstrap ``EventSchema``
+    declarations: scan every emit site in the codebase, take
+    the union of kwargs seen for each event, and you have the
+    runtime contract for free.
+
+    Not used at runtime — pure static analysis helper.
     """
 
     @staticmethod
     def extract_from_source(source: str) -> dict[str, set[str]]:
-        """Return {event_value: {kwarg_names}} from `source`."""
+        """Parse ``source`` and return ``event_name → {kwarg_name, ...}``.
+
+        AST parsing failures (syntax errors in the source)
+        are caught and surface as an empty dict — the caller
+        treats malformed files as "nothing extractable" rather
+        than aborting.
+
+        Args:
+            source: Python source code as a string.
+
+        Returns:
+            Mapping ``event_name → set_of_kwarg_names`` for
+            every detected emit/enqueue site.
+        """
         out: dict[str, set[str]] = {}
         try:
             tree = ast.parse(source)
@@ -238,14 +422,27 @@ class SchemaExtractor:
             event_name = SchemaExtractor._extract_event_name(node)
             if event_name is None:
                 continue
-            kwarg_names = {
-                kw.arg for kw in node.keywords if kw.arg is not None
-            }
+            kwarg_names = {kw.arg for kw in node.keywords if kw.arg is not None}
             out.setdefault(event_name, set()).update(kwarg_names)
         return out
 
     @staticmethod
     def _is_emit_call(node: ast.Call) -> bool:
+        """Return whether the AST call is a ``.emit(...)`` or ``.enqueue(...)``.
+
+        Method-call detection only — bare ``emit(...)``
+        function calls aren't matched (they don't exist in
+        the codebase anyway). The accepted names are
+        deliberately narrow: ``emit`` for the basic bus,
+        ``enqueue`` for the priority dispatcher.
+
+        Args:
+            node: the AST call node.
+
+        Returns:
+            ``True`` for matching method calls, ``False``
+            otherwise.
+        """
         func = node.func
         if isinstance(func, ast.Attribute) and func.attr == "emit":
             return True
@@ -253,12 +450,30 @@ class SchemaExtractor:
 
     @staticmethod
     def _extract_event_name(node: ast.Call) -> str | None:
+        """Pull the event name out of the first positional argument.
+
+        Two accepted shapes:
+
+        * ``Events.SOMETHING`` — read ``Attribute.attr`` (the
+          enum member name).
+        * ``"event.name"``     — read ``Constant.value`` (the
+          string literal).
+
+        Anything else (a variable, a function call) returns
+        ``None`` — the static analysis can't follow data flow.
+
+        Args:
+            node: the AST call node.
+
+        Returns:
+            The event name as a string, or ``None`` if the
+            first argument doesn't match the expected shapes.
+        """
         if not node.args:
             return None
         first = node.args[0]
-        # Either Events.X or "literal_string"
         if isinstance(first, ast.Attribute):
-            return first.attr  # e.g. "GAME_LAUNCHED"
+            return first.attr
         if isinstance(first, ast.Constant) and isinstance(first.value, str):
             return first.value
         return None
