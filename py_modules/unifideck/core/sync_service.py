@@ -1,28 +1,38 @@
-"""core/sync_service.py — Generic library synchronization orchestrator.
-Replaces the legacy 623-line `Plugin.sync_libraries()` monolith in
-main.py which contained 5 hardcoded branches (one per store), 5 null
-checks, 5 install-status loops and 5 games_map updates — adding a
-6th store required duplicating code in every phase.
-In the new architecture:
-1. SyncService iterates `StoreRegistry.all()` — zero hardcoded branches
-2. Each store is fetched via polymorphic `store.get_library()` call
-3. Results are merged into a dict keyed by store name
-4. SYNC_PROGRESS is emitted per store so the frontend can update a
- progress bar without knowing which stores are registered
-5. SYNC_COMPLETE is emitted once with the full merged result
-6. Errors are isolated per store: one failing store does not block
- the others; a STORE_ERROR event is emitted with the typed error
-Concurrency model:
-- A single `asyncio.Lock` prevents concurrent sync runs (the legacy
- behaviour: trying to start a sync while one is already running
- returns an error immediately)
-- Cancellation is supported via an `asyncio.Event` that handlers check
- between stores; `cancel()` sets it and returns immediately
-- Metadata and artwork services subscribe to SYNC_COMPLETE and run in
- parallel after sync finishes (via EventBus fan-out)
-Reference: Technical Document v1.0 — Sections 3.4.4 (623L → 20L),
-5.5 (sync flow comparison), Figure 52/53.
+"""Multi-store library sync orchestrator.
+
+OP-08l | py_modules/unifideck/core/sync_service.py
+
+``SyncService`` walks every registered store, calls its
+``get_library`` method, deduplicates the combined output, and
+emits bus events at every stage so the frontend can render a
+progress bar + per-store status.
+
+Lifecycle of one sync:
+
+1. ``SYNC_STARTED``    — once at entry with the store list.
+2. Per store:
+   * ``SYNC_PROGRESS`` — i/N progress;
+   * ``SYNC_FAILED``   — on per-store failure (other
+     stores continue);
+   * ``LAUNCHER_STAGE`` — user-facing toast with a retry
+     action.
+3. Dedup pass → emits ``SYNC_DEDUP`` if any duplicates were
+   dropped.
+4. ``SYNC_COMPLETE``   — once with the final unified list.
+
+If cancelled mid-sync (``SYNC_CANCELLED``) the partial result
+is preserved + returned so a follow-up sync resumes cleanly.
+
+State retained across sync passes:
+
+* ``_all_games``       — per-store deduplicated library;
+* ``_last_sync_time``  — wall-clock timestamp;
+* ``_current_store``   — for progress display;
+* ``_lock``            — single-flight (only one sync at a
+  time);
+* ``_cancel_event``    — cooperative cancel signal.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -31,11 +41,9 @@ import time
 from typing import TYPE_CHECKING, Any
 
 from ..event_bus import EventBus
-
-# StoreRegistry moved from core/ to unifideck.stores
+from ..steam.owned_games import get_owned_titles as _steam_owned_titles
 from ..stores import StoreRegistry
 from .cross_store_dedup import deduplicate_libraries
-from ..steam.owned_games import get_owned_titles as _steam_owned_titles
 from .types import Events, Game, SyncResult
 
 if TYPE_CHECKING:
@@ -43,53 +51,56 @@ if TYPE_CHECKING:
     from ..stores.shared.store_base import StoreBase
 
 logger = logging.getLogger(__name__)
+
+
 class SyncService:
-    """Orchestrates library synchronization across all registered stores.
-    The service is stateless with respect to store-specific logic: it
-    knows how to iterate the registry, call get_library() polymorphically,
-    merge results, and emit events. All store-specific behaviour lives
-    in the StoreBase subclasses.
-    Usage:
-    registry = StoreRegistry()
-    bus = EventBus()
-    sync = SyncService(registry, bus)
-    # Trigger a sync (usually from an RPC handler)
-    result = await sync.sync_all()
-    # Or subscribe to completion events
-    bus.on(Events.SYNC_COMPLETE, on_sync_complete).
-    """
+    """Single-flight multi-store library sync orchestrator."""
 
     def __init__(
         self,
         registry: StoreRegistry,
         bus: EventBus,
         config: ConfigManager | None = None,
-    ) -> None:  # noqa: D107 — class docstring documents the constructor's contract
+    ) -> None:
+        """Initialise with the store registry + event bus + optional config.
+
+        Lock + cancel event are constructed eagerly so
+        ``sync_all`` can be called immediately after
+        construction without an init pass.
+
+        Args:
+            registry: ``StoreRegistry`` to enumerate
+                available stores.
+            bus: event bus for status / progress events.
+            config: optional ``ConfigManager`` (used to
+                read tracked-stores list for dedup).
+        """
         self._registry = registry
         self._bus = bus
         self._config = config
-        # Only one sync at a time — concurrent calls return immediately
         self._lock = asyncio.Lock()
-        # Cancellation flag checked between stores
         self._cancel_event = asyncio.Event()
-        # In-memory cache of the last merged library (used by RPC
-        # methods that want to return the current library without
-        # triggering a new fetch)
         self._all_games: dict[str, list[Game]] = {}
         self._last_sync_time: float | None = None
         self._current_store: str | None = None
-        # ── Public API ──────────────────────────────────────────────
+
     async def sync_all(self, *, force: bool = False) -> SyncResult:
-        """Fetch libraries from every available store, merge and emit.
+        """Run a full multi-store sync, rejecting concurrent calls by default.
+
+        Single-flight semantics: while a sync is in
+        progress the lock is held and a second
+        ``sync_all`` returns immediately with
+        ``error="sync_already_running"``. ``force=True``
+        bypasses the lock check — used by tests / admin
+        actions; production callers should respect the
+        single-flight rule.
 
         Args:
-        force: If True, bypass the "already syncing" guard by
-        waiting for the lock. If False and a sync is already
-        running, returns a SYNC_FAILED result immediately.
-        Returns a SyncResult with the merged game list and per-store
-        counts. Even if some stores fail, the result contains the
-        games from the stores that succeeded.
+            force: bypass the concurrency check.
 
+        Returns:
+            ``SyncResult`` from the full sync, or an
+            error result when rejected by the lock.
         """
         if self._lock.locked() and not force:
             logger.warning(
@@ -103,20 +114,28 @@ class SyncService:
             )
         async with self._lock:
             return await self._run_sync()
-    async def _run_sync(self) -> SyncResult:
-        """Internal sync loop — assumes the lock is already held.
 
-        Uses three helpers so the loop stays testable:
-        ``_sync_one_store`` (fetch with error isolation),
-        ``_emit_progress`` (percentage event), and
-        ``_aggregate_results`` (flatten + build SyncResult).
+    async def _run_sync(self) -> SyncResult:
+        """Core sync loop — emits events + handles cancellation.
+
+        Walks every available store sequentially (not
+        parallel, to avoid hammering the user's network
+        and to keep progress reporting linear). After
+        every store, checks the cancel flag and bails out
+        early if set.
+
+        Empty-store edge case: emits SYNC_COMPLETE with
+        empty list rather than treating "no stores" as an
+        error.
+
+        Returns:
+            ``SyncResult`` with the merged games list +
+            timing.
         """
         self._cancel_event.clear()
         started = time.monotonic()
         available_stores = self._registry.available()
         total = len(available_stores)
-        # SYNC_STARTED triggers the frontend's toast confirmation,
-        # decoupled from whichever code path called this sync.
         store_names = [s.store_name for s in available_stores]
         await self._bus.emit(
             Events.SYNC_STARTED,
@@ -124,26 +143,29 @@ class SyncService:
             scope="all",
         )
         logger.info("[SyncService] sync starting (%d stores)", total)
-
         libraries: dict[str, list[Game]] = {}
         errors: dict[str, str] = {}
-
         if total == 0:
             logger.warning(
                 "[SyncService] no available stores — nothing to sync",
             )
             await self._bus.emit(
-                Events.SYNC_COMPLETE, games=[], stores_synced=[],
+                Events.SYNC_COMPLETE,
+                games=[],
+                stores_synced=[],
             )
             return SyncResult(
-                success=True, games=[], count=0, duration_ms=0,
+                success=True,
+                games=[],
+                count=0,
+                duration_ms=0,
             )
-
         for idx, store in enumerate(available_stores):
             if self._cancel_event.is_set():
                 logger.info(
                     "[SyncService] sync cancelled at store %d/%d",
-                    idx, total,
+                    idx,
+                    total,
                 )
                 await self._bus.emit(Events.SYNC_CANCELLED)
                 return SyncResult(
@@ -151,28 +173,23 @@ class SyncService:
                     error="cancelled",
                     games=self._flatten(libraries),
                 )
-
             self._current_store = store.store_name
             await self._emit_progress(store.store_name, idx, total)
-
             games, err = await self._sync_one_store(store)
             libraries[store.store_name] = games
             if err is not None:
                 errors[store.store_name] = err
-
         self._current_store = None
         duration_ms = int((time.monotonic() - started) * 1000)
-
         libraries = await self._apply_dedup_and_emit(libraries)
-
         self._all_games = libraries
         self._last_sync_time = time.time()
-
         result = self._aggregate_results(
-            libraries, errors, duration_ms, total,
+            libraries,
+            errors,
+            duration_ms,
+            total,
         )
-
-        # Fan-out to subscribers (metadata, artwork, shortcuts...)
         await self._bus.emit(
             Events.SYNC_COMPLETE,
             games=result.games,
@@ -183,26 +200,24 @@ class SyncService:
         return result
 
     async def _apply_dedup_and_emit(
-        self, libraries: dict[str, list[Game]],
+        self,
+        libraries: dict[str, list[Game]],
     ) -> dict[str, list[Game]]:
-        """Run the dedup pipeline and emit SYNC_DEDUP if anything dropped.
+        """Run cross-store dedup, emitting ``SYNC_DEDUP`` if anything was dropped.
 
-        Two filters in order (see ``core/cross_store_dedup.py``),
-        both scoped to ``config.dedup.tracked_stores``:
-          1. Steam-native ownership filter — drops titles the user
-             already has on Steam from tracked stores only.
-          2. Cross-store filter — keeps one copy across tracked
-             stores in priority order.
+        Delegates to
+        ``cross_store_dedup.deduplicate_libraries``
+        passing the configured tracked-stores list and
+        the Steam-owned title set. Emits the dedup event
+        only if at least one duplicate was actually
+        dropped — keeps the event channel quiet for
+        no-op sync cycles.
 
-        Untracked stores (typically Microsoft xCloud / Game Pass)
-        pass through both filters unchanged.
+        Args:
+            libraries: raw per-store library mapping.
 
-        ``_steam_owned_titles()`` is called with the same config so
-        ``paths.steam_candidates`` overrides are honoured.
-
-        Returns the deduped libraries. SYNC_DEDUP is emitted only
-        when at least one game was dropped — no point waking
-        subscribers for a no-op cycle.
+        Returns:
+            Deduplicated mapping (same shape).
         """
         tracked = self._tracked_stores()
         steam_owned = _steam_owned_titles(self._config)
@@ -211,7 +226,6 @@ class SyncService:
             tracked_stores=tracked,
             steam_owned_titles=steam_owned,
         )
-
         total_dropped = sum(dropped_per_store.values())
         if total_dropped:
             await self._bus.emit(
@@ -222,13 +236,21 @@ class SyncService:
         return deduped
 
     def _tracked_stores(self) -> tuple[str, ...]:
-        """Return the configured tracked-stores tuple for dedup.
+        """Resolve the tracked-stores list for dedup priority.
 
-        Reads ``config.dedup.tracked_stores`` via the standard
-        None-safe accessor. When SyncService was constructed
-        without a ConfigManager (e.g. some unit tests), falls back
-        to the same default list shipped in ``defaults/config.json``
-        — so behaviour stays consistent with production.
+        Reads ``dedup.tracked_stores`` from config; falls
+        back to the four-store hardcoded default
+        (``("epic", "gog", "amazon", "ubisoft")``) on:
+
+        * No config supplied;
+        * Config raises during ``get``;
+        * Value isn't a list / tuple.
+
+        Wrong-type values log at WARN so misconfigurations
+        are visible.
+
+        Returns:
+            Tuple of store names, ordered by priority.
         """
         default = ("epic", "gog", "amazon", "ubisoft")
         if self._config is None:
@@ -246,29 +268,23 @@ class SyncService:
             return default
         return tuple(value)
 
-    async def sync_single_store(
-    self, store_name: str,
-    ) -> tuple[bool, str | None]:
-        """Re-sync the library for exactly one store.
+    async def sync_single_store(self, store_name: str) -> tuple[bool, str | None]:
+        """Sync just one store and merge its result into the running library.
 
-        Used by the ``unifideck://refresh-library/<store>`` toast
-        action verb when the user retries a failed sync from a
-        toast notification. Unlike ``sync_all()``, this method:
+        Used by the ``refresh-library`` URI verb. Unlike
+        ``sync_all``, doesn't hold the single-flight
+        lock — the caller is responsible for not racing
+        a full sync.
 
-          - **Doesn't lock out** other syncs — it's a surgical
-            refresh of a single store, expected to run
-            concurrently with other background activity.
-          - **Updates the cache in place** for the targeted store
-            only — other stores keep their last-known library.
-          - **Emits SYNC_PROGRESS + SYNC_COMPLETE** with only the
-            refreshed store so the Library view can update its
-            inline state without refetching everything.
+        After fetching the store's library, runs the
+        full dedup pass over the merged state so
+        cross-store consistency is preserved.
 
-        Returns (success, error_or_none). On failure, the toast
-        helpers in ``_sync_one_store`` have already emitted a new
-        LAUNCHER_STAGE toast with its own retry button — so a
-        second failure becomes another click opportunity rather
-        than silent dead end.
+        Args:
+            store_name: store id to refresh.
+
+        Returns:
+            ``(success_bool, optional_error_string)``.
         """
         store = self._registry.get_store(store_name)
         if store is None:
@@ -277,58 +293,47 @@ class SyncService:
                 store_name,
             )
             return False, "unknown_store"
-
-        # Emit progress so the Library view shows a spinner
-        # for this store. idx/total are 0/1 since we're only
-        # touching one store in this call.
         await self._bus.emit(
             Events.SYNC_STARTED,
             stores=[store_name],
             scope="single",
         )
         await self._emit_progress(store_name, 0, 1)
-
         games, err = await self._sync_one_store(store)
-
-        # Merge into the existing cache in place. Other
-        # stores' games are preserved.
         if self._all_games is None:
             self._all_games = {}
         self._all_games[store_name] = games
-
-        # Re-run dedup against the full merged cache (idempotent —
-        # both filters re-running on a clean cache are a no-op).
-        # The helper also emits SYNC_DEDUP when relevant.
         self._all_games = await self._apply_dedup_and_emit(self._all_games)
         self._last_sync_time = time.time()
-
-        # Emit SYNC_COMPLETE scoped to just this store, so UI
-        # consumers can refresh the affected rows without
-        # rebuilding their entire game list.
         await self._bus.emit(
             Events.SYNC_COMPLETE,
             games=self._flatten(self._all_games),
             stores_synced=[store_name],
             errors={store_name: err} if err else {},
-            duration_ms=0,  # single-store refresh — not timed
+            duration_ms=0,
         )
         return err is None, err
 
-    async def _sync_one_store(
-    self, store: StoreBase,
-    ) -> tuple[list[Game], str | None]:
-        """Fetch one store's library with full error isolation.
+    async def _sync_one_store(self, store: StoreBase) -> tuple[list[Game], str | None]:
+        """Fetch one store's library, with broad exception handling.
 
-        Returns a tuple `(games, error_or_none)`. If the store raises
-        during `get_library()`:
-          - the exception is logged at ERROR with full traceback
-          - a SYNC_FAILED event is emitted with the error text
-          - we return `([], "<error text>")` so the sync can continue
-            with other stores
+        Success path: log the count + return the list.
+        Failure path: catch any exception (broad
+        ``Exception`` — store implementations may raise
+        store-specific custom types), log the traceback,
+        emit two events (``SYNC_FAILED`` for machinery +
+        ``LAUNCHER_STAGE`` with a user-facing retry toast),
+        return an empty list with the error string.
 
-        This is the **only** place in the sync loop where an exception
-        is caught. Callers can rely on the invariant that this method
-        never propagates a store-side error.
+        The toast carries an ``unifideck://refresh-library/<store>``
+        deep link as its action so the user can retry
+        with one tap.
+
+        Args:
+            store: a ``StoreBase`` instance.
+
+        Returns:
+            ``(games_list, optional_error_string)``.
         """
         try:
             games = await store.get_library()
@@ -336,64 +341,49 @@ class SyncService:
                 games = []
             logger.info(
                 "[SyncService] %s: %d games",
-                store.store_name, len(games),
+                store.store_name,
+                len(games),
             )
             return games, None
         except Exception as e:
             logger.exception(
                 "[SyncService] %s sync failed: %s",
-                store.store_name, e,
+                store.store_name,
+                e,
             )
-            # Legacy event — kept for other consumers that already
-            # listen on SYNC_FAILED (metrics collector, UI library
-            # view's inline error message). Do not alter its payload
-            # shape; downstream code depends on the (store, error)
-            # contract.
             await self._bus.emit(
                 Events.SYNC_FAILED,
                 store=store.store_name,
                 error=str(e),
             )
-            # Separately, emit a toast-formatted event on the
-            # LAUNCHER_STAGE channel so the LauncherToastListener
-            # surfaces a notification with a one-click retry. Uses
-            # the unifideck://refresh-library/{store} URI scheme:
-            # the user clicks, the backend re-attempts the sync for
-            # that single store in the background (fire-and-forget
-            # from the user's perspective — the Library view will
-            # refresh via its own event stream when the sync
-            # completes). Kept as a separate emit to preserve the
-            # single-responsibility of SYNC_FAILED.
             await self._bus.emit(
                 Events.LAUNCHER_STAGE,
                 severity="warning",
                 i18n_key="toasts.library.syncStoreFailed",
                 i18n_params={
                     "store": store.store_name,
-                    "error": str(e)[:120],  # truncate long stacks
+                    "error": str(e)[:120],
                 },
-                duration_ms=8000,  # longer: library sync is less
-                                   # frequent than cloud sync, so
-                                   # give the user time to click
+                duration_ms=8000,
                 action={
                     "i18n_label_key": "toasts.actions.retryLibrarySync",
-                    "target_url": (
-                        f"unifideck://refresh-library/{store.store_name}"
-                    ),
+                    "target_url": (f"unifideck://refresh-library/{store.store_name}"),
                 },
                 store=store.store_name,
             )
             return [], str(e)
 
-    async def _emit_progress(
-    self, store_name: str, idx: int, total: int,
-    ) -> None:
-        """Emit SYNC_PROGRESS with a computed percentage.
+    async def _emit_progress(self, store_name: str, idx: int, total: int) -> None:
+        """Emit ``SYNC_PROGRESS`` with the i/N progress payload.
 
-        Pure side effect — no business logic. The percentage is the
-        fraction of stores already processed (not the current one),
-        so a 5-store sync emits 0%, 20%, 40%, 60%, 80% as each store
-        begins. The final 100% is emitted by SYNC_COMPLETE.
+        Progress is integer percent (0-100); guards
+        against division-by-zero when ``total`` is 0
+        (yields ``progress=0``).
+
+        Args:
+            store_name: store currently being processed.
+            idx: zero-based index in the store list.
+            total: total store count.
         """
         await self._bus.emit(
             Events.SYNC_PROGRESS,
@@ -404,29 +394,39 @@ class SyncService:
         )
 
     def _aggregate_results(
-    self,
-    libraries: dict[str, list[Game]],
-    errors: dict[str, str],
-    duration_ms: int,
-    total_stores: int,
+        self,
+        libraries: dict[str, list[Game]],
+        errors: dict[str, str],
+        duration_ms: int,
+        total_stores: int,
     ) -> SyncResult:
-        """Flatten per-store libraries and build the final SyncResult.
+        """Build the final ``SyncResult`` + log the summary line.
 
-        Pure function: no I/O, no event emission, no state mutation.
-        The caller decides what to do with the result (emit, return,
-        persist). Keeping this pure lets tests verify aggregation
-        logic in isolation without mocking bus/registry.
+        Partial-success heuristic: ``success=True`` if
+        at least one store contributed (i.e.
+        ``len(errors) < total_stores``). Surfacing
+        partial failures via the error string lets the
+        frontend show a per-store badge while still
+        treating the overall sync as usable.
 
-        Success semantics: partial success is allowed. The sync is
-        considered successful as long as at least one store returned
-        without error. Only if every store failed do we mark the
-        overall result as a failure.
+        Args:
+            libraries: per-store deduplicated mapping.
+            errors: per-store error strings.
+            duration_ms: total elapsed time.
+            total_stores: enumerable-store count from the
+                registry (used in the success heuristic).
+
+        Returns:
+            ``SyncResult`` with merged games + counts.
         """
         merged = self._flatten(libraries)
         logger.info(
             "[SyncService] sync complete — %d games across %d stores "
             "in %dms (%d errors)",
-            len(merged), len(libraries), duration_ms, len(errors),
+            len(merged),
+            len(libraries),
+            duration_ms,
+            len(errors),
         )
         return SyncResult(
             success=len(errors) < total_stores,
@@ -437,59 +437,110 @@ class SyncService:
         )
 
     async def cancel(self) -> bool:
-        """Signal the current sync to stop.
-        Sets the cancellation event; the sync loop will stop between
-        stores (not mid-fetch — cancelling a CLI call or HTTP request
-        is the store's responsibility). Returns True if a sync was
-        running, False otherwise.
+        """Request cancellation of the in-flight sync.
+
+        Cooperative: the sync loop checks
+        ``self._cancel_event`` between stores, so cancel
+        takes effect at the next iteration (not
+        mid-store). Returns ``False`` immediately if no
+        sync is running.
+
+        Returns:
+            ``True`` if a sync was running and a cancel
+            request was registered, ``False`` otherwise.
         """
         if not self._lock.locked():
             return False
         self._cancel_event.set()
         logger.info("[SyncService] cancel requested")
         return True
-            # ── Query API (no side effects) ────────────────────────────
+
     def get_status(self) -> dict[str, Any]:
-        """Return current sync status for the frontend progress bar."""
+        """Return a JSON-friendly status snapshot.
+
+        Used by the frontend's status poller. Cheap —
+        all four fields are O(1) reads + one sum.
+
+        Returns:
+            Dict with ``syncing``, ``current_store``,
+            ``last_sync_time``, ``total_games``.
+        """
         return {
-        "syncing": self._lock.locked(),
-        "current_store": self._current_store,
-        "last_sync_time": self._last_sync_time,
-        "total_games": sum(
-        len(g) for g in self._all_games.values()
-        ),
+            "syncing": self._lock.locked(),
+            "current_store": self._current_store,
+            "last_sync_time": self._last_sync_time,
+            "total_games": sum(len(g) for g in self._all_games.values()),
         }
+
     def get_all_games(self) -> list[Game]:
-        """Return the flat merged list of games from the last sync.
-        Returns an empty list if no sync has run yet. Used by RPC
-        methods that need to show the library without triggering a
-        New fetch.
+        """Return the merged unified library (flattened across stores).
+
+        Snapshot copy via ``_flatten`` — caller can
+        iterate without worrying about ``_all_games``
+        being mutated by a concurrent sync.
+
+        Returns:
+            List of ``Game`` instances.
         """
         return self._flatten(self._all_games)
 
     def get_games_by_store(self, store: str) -> list[Game]:
-        """Return games for a single store from the last sync."""
+        """Return the games list for one store (shallow copy).
+
+        Empty list when the store has no games or
+        doesn't exist — callers don't need to handle a
+        ``None`` return.
+
+        Args:
+            store: store identifier.
+
+        Returns:
+            List of games (shallow copy).
+        """
         return list(self._all_games.get(store, []))
 
     def get_game_info(self, app_id: int) -> dict[str, Any] | None:
-        """Look up a single game by its Unifideck app_id.
+        """Find a game by AppID and return its dict form.
 
-        Scans the cached libraries from the last sync — no I/O.
-        Returns ``None`` if the app_id isn't known, so the RPC
-        handler can translate that to a clean 404 for the
-        frontend rather than an exception.
+        Linear scan across every store's list — O(N) on
+        total library size. Acceptable because callers
+        are interactive (single game per call from RPC),
+        not bulk loops.
+
+        ``dataclasses.asdict`` is imported lazily inside
+        the hit branch to keep the cold path zero-cost
+        (no import unless something matches).
+
+        Args:
+            app_id: Steam-style AppID.
+
+        Returns:
+            Dict form of the game, or ``None`` if not
+            found.
         """
         for games in self._all_games.values():
             for game in games:
                 if game.app_id == app_id:
-                    # Return a plain dict for RPC serialization.
                     from dataclasses import asdict
+
                     return asdict(game)
         return None
-        # ── Internals ───────────────────────────────────────────────
+
     @staticmethod
     def _flatten(libraries: dict[str, list[Game]]) -> list[Game]:
-        """Merge a {store: games} dict into a single flat list."""
+        """Merge per-store lists into one flat list.
+
+        Order: dict-iteration order over stores (insertion
+        order on CPython 3.7+), then per-store insertion
+        order. Stable across calls so the UI's game
+        ordering doesn't shuffle between syncs.
+
+        Args:
+            libraries: per-store mapping.
+
+        Returns:
+            Single flat list of games.
+        """
         merged: list[Game] = []
         for games in libraries.values():
             merged.extend(games)

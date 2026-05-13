@@ -117,10 +117,10 @@ class Events(StrEnum):
     # security package + token managers + auth flows. Consumed
     # by SecurityService for audit logging, counters, and
     # centralised policy enforcement.
-    SECURITY_TOKEN_ENCRYPTED = "security_token_encrypted"  # noqa: S105 — event name
-    SECURITY_TOKEN_DECRYPTED = "security_token_decrypted"  # noqa: S105 — event name
+    SECURITY_TOKEN_ENCRYPTED = "security_token_encrypted"
+    SECURITY_TOKEN_DECRYPTED = "security_token_decrypted"
     SECURITY_DECRYPT_FAILED = "security_decrypt_failed"
-    SECURITY_TOKEN_FILE_MIGRATED = "security_token_file_migrated"  # noqa: S105 — event name
+    SECURITY_TOKEN_FILE_MIGRATED = "security_token_file_migrated"
     SECURITY_LEGACY_PLAINTEXT_DETECTED = "security_legacy_plaintext_detected"
     SECURITY_AUTH_FLOW_STARTED = "security_auth_flow_started"
     SECURITY_AUTH_FLOW_COMPLETED = "security_auth_flow_completed"
@@ -132,7 +132,7 @@ class Events(StrEnum):
     # event is surfaced to the audit log + counters so operators
     # can correlate "user kicked out" with the policy decision
     # rather than guessing it was a server-side revocation.
-    SECURITY_TOKEN_AGE_EXCEEDED = "security_token_age_exceeded"  # noqa: S105 — event name
+    SECURITY_TOKEN_AGE_EXCEEDED = "security_token_age_exceeded"
 
     # active policy events. Emitted either by
     # token managers (permissions check at each save) or by
@@ -282,7 +282,7 @@ class ErrorCode(StrEnum):
     """
 
     NOT_AUTHENTICATED = "not_authenticated"
-    TOKEN_EXPIRED = "token_expired"  # noqa: S105 — error code
+    TOKEN_EXPIRED = "token_expired"
     NETWORK_ERROR = "network_error"
     NOT_FOUND = "not_found"
     PERMISSION_DENIED = "permission_denied"

@@ -1,55 +1,39 @@
-"""unifideck.core — Layers 1-3 of the new architecture.
+"""Core sub-package — cross-cutting primitives used everywhere.
 
-This package contains the foundational types and services that
-the rest of the codebase builds on. It has **zero external
-dependencies** beyond Python's stdlib (no aiohttp, no decky, no
-Steam-specific code), so any module here can be unit-tested in
-complete isolation.
+OP-08 | py_modules/unifideck/core/__init__.py
 
-Layer 1 — Core types (no logic, just dataclasses):
-  - types : Game, Result, AuthResult, SyncResult, Events, ...
-  - async_file_ops: thin wrappers around asyncio.to_thread
+The ``core/`` sub-package holds the **foundation layer** —
+primitives that every higher-level package (services, stores,
+rpc, event_bus) depends on:
 
-Layer 2 — Core services (stateless infrastructure):
-  - event_bus : pub/sub with error isolation
-  - cache_manager : 9 named caches with TTL + atomic writes
-  - binary_resolver : 3-tier CLI binary discovery
-  - exe_finder : game executable detection
-  - config_manager : MOVED to unifideck.config
-  - store_registry : MOVED to unifideck.stores
-  - sync_service : generic library sync loop
+* ``types/``           — typed records (``Game``, ``Result``
+  family, ``Events`` enum, etc.);
+* ``io/``              — async file I/O helpers + atomic
+  write primitive;
+* ``bin/``             — bundled-CLI resolver + version
+  signature checks;
+* ``net/``             — TLS / SSL helpers;
+* ``cache_manager``    — TTL-keyed cache with persistent
+  optional backing;
+* ``manifest``         — install-manifest reader/writer
+  (per-game state on disk);
+* ``metrics_collector`` — plugin-wide counters/timers;
+* ``sync_service``     — multi-store library-sync
+  orchestrator;
+* ``cross_store_dedup`` — title-matching across stores so
+  the unified library doesn't show duplicates;
+* ``exe_finder``       — heuristic executable resolver for
+  installed games;
+* ``paths``            — well-known path helpers.
 
-Layer 3 — Store base abstraction:
-  - store_base : MOVED to unifideck.stores
-
-The new architecture imports from this package upward but never
-downward — there are no circular dependencies into stores/ or
-services/. This is enforced by the integration smoke test.
-
-Reference: Technical Document v1.0 — Sections 3.1.1 (Core types),
-3.1.2 (Core services), 3.1.3 (StoreBase).
+This top-level ``__init__.py`` re-exports a curated subset
+of the most-used names so consumers can ``from unifideck.core
+import Game, Result, Events`` without knowing the internal
+split.
 """
 
-# Re-export the most-used types so callers can write
-# `from unifideck.core import Events` instead of the longer
-# `from unifideck.core.types import Events`. Only the names that
-# appear in 5+ call sites across the codebase are promoted here —
-# anything more specialized stays in its submodule to avoid
-# polluting the namespace.
-from .cache_manager import CacheManager  # noqa: F401
-
-# ConfigManager moved to unifideck.config. No shim:
-# callers must now import `from unifideck.config import ConfigManager`.
-# StoreBase and StoreRegistry moved to unifideck.stores — same
-# clean-break pattern. (StoreBaseInjected removed 2026-04-20 as
-# dead code.)
-#
-# Note: ``SyncService`` lives at ``unifideck.core.sync_service`` but is
-# NOT re-exported here because that would create a circular import
-# (sync_service → event_bus → core.types → core.__init__ → sync_service).
-# Callers must use the fully-qualified path:
-#     from unifideck.core.sync_service import SyncService
-from .types import (  # noqa: F401
+from .cache_manager import CacheManager
+from .types import (
     AuthResult,
     CLITool,
     DownloadResult,
@@ -62,3 +46,18 @@ from .types import (  # noqa: F401
     StoreStatus,
     SyncResult,
 )
+
+__all__ = [
+    "AuthResult",
+    "CLITool",
+    "CacheManager",
+    "DownloadResult",
+    "Events",
+    "Game",
+    "InstallResult",
+    "Result",
+    "StoreError",
+    "StoreInfo",
+    "StoreStatus",
+    "SyncResult",
+]
