@@ -1,46 +1,90 @@
-"""Cloud failure behaviour RPC mixin for Plugin class.
+"""CloudFailureRPCMixin — per-store cloud-failure UX configuration.
 
-OP-26h | rpc/mixins/cloud_failure.py
+OP-26b | py_modules/unifideck/rpc/mixins/cloud_failure.py
+
+Mixin equivalent of the two ``UIHandlers`` methods
+``get_cloud_failure_behaviors`` and
+``set_cloud_failure_behavior`` (OP-25h). Same allow-lists,
+same validation rules, same config keys.
+
+Reaches for ``self.config`` directly on the host plugin
+class (the older composition style).
 """
+
 from __future__ import annotations
 
 from typing import Any
 
-from unifideck.rpc.errors import RpcError
-
-_CLOUD_FAILURE_STORES = ("default", "epic", "gog", "amazon", "ubisoft")
-_CLOUD_FAILURE_MODES = ("silent", "toast")
+from unifideck.rpc import RpcError
 
 
 class CloudFailureRPCMixin:
-    """Per-store cloud-save failure behaviour configuration."""
+    """Per-store cloud-failure behaviour read/write RPC."""
 
     config: Any
+    _CLOUD_FAILURE_STORES: tuple[str, ...] = (
+        "default",
+        "epic",
+        "gog",
+        "amazon",
+        "ubisoft",
+    )
+    _CLOUD_FAILURE_MODES: tuple[str, ...] = ("silent", "toast")
 
     async def get_cloud_failure_behaviors(self) -> Any:
-        """Return per-store cloud failure behavior map."""
-        return {
-            store: self.config.get(
-                f"cloud.failure_behavior.{store}", "toast",
-            )
-            for store in _CLOUD_FAILURE_STORES
-        }
+        """Return the per-store cloud-failure behaviour map.
 
-    async def set_cloud_failure_behavior(
-        self, store: str, value: str,
-    ) -> Any:
-        """Persist a per-store cloud failure behavior override."""
-        if store not in _CLOUD_FAILURE_STORES:
+        Defaults to ``"toast"`` for any store not explicitly
+        configured. The ``"default"`` entry is a fallback
+        used for stores not in the explicit list.
+
+        Returns:
+            ``{store_id → "silent" | "toast"}`` for every
+            store in ``_CLOUD_FAILURE_STORES``.
+        """
+        result = {}
+        for store in self._CLOUD_FAILURE_STORES:
+            result[store] = self.config.get_str(
+                f"cloud.failure_behavior.{store}",
+                "toast",
+            )
+        return result
+
+    async def set_cloud_failure_behavior(self, store: str, value: str) -> Any:
+        """Persist a cloud-failure behaviour override for one store.
+
+        Strict validation: unsupported store or behaviour
+        raises a typed error with the allowed list in the
+        context dict so the frontend can show a clear error
+        message.
+
+        Args:
+            store: store id (must be in
+                ``_CLOUD_FAILURE_STORES``).
+            value: behaviour (must be in
+                ``_CLOUD_FAILURE_MODES``).
+
+        Returns:
+            ``{success: True, store, value}``.
+
+        Raises:
+            RpcError: ``unsupported_store`` or
+                ``invalid_behavior`` on bad inputs.
+        """
+        if store not in self._CLOUD_FAILURE_STORES:
             raise RpcError(
                 "unsupported_store",
-                f"Must be one of {_CLOUD_FAILURE_STORES}",
                 store=store,
+                supported=list(self._CLOUD_FAILURE_STORES),
             )
-        if value not in _CLOUD_FAILURE_MODES:
+        if value not in self._CLOUD_FAILURE_MODES:
             raise RpcError(
                 "invalid_behavior",
-                f"Must be one of {_CLOUD_FAILURE_MODES}",
                 value=value,
+                supported=list(self._CLOUD_FAILURE_MODES),
             )
-        self.config.set(f"cloud.failure_behavior.{store}", value)
-        return {"store": store, "value": value}
+        self.config.set(
+            f"cloud.failure_behavior.{store}",
+            value,
+        )
+        return {"success": True, "store": store, "value": value}
