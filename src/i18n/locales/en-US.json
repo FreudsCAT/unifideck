@@ -4,6 +4,26 @@
     "settings": "Settings",
     "downloads": "Downloads"
   },
+  "auth": {
+    "connect": "Connect",
+    "disconnect": "Disconnect",
+    "status": {
+      "connected": "Connected",
+      "disconnected": "Not connected",
+      "checking": "Checking…",
+      "error": "Error — check logs"
+    }
+  },
+  "storage": {
+    "title": "Storage",
+    "defaultUpdated": "Default storage updated",
+    "isDefault": "Default",
+    "setDefault": "Set Default",
+    "customPath": "Custom Path",
+    "up": "↑ Up",
+    "refresh": "Refresh",
+    "useThisPath": "Use This Path"
+  },
   "storageSettings": {
     "title": "Download Settings",
     "installLocationLabel": "Install Location",
@@ -346,6 +366,12 @@
     "steamAppsUnavailable": "SteamClient.Apps API not available"
   },
   "sync": {
+    "start": "Sync Libraries",
+    "force": "Force Sync",
+    "syncing": "Syncing…",
+    "cancel": "Cancel Sync",
+    "cancelling": "Cancelling…",
+    "preparing": "Preparing…",
     "downloadingArtwork": "Downloading artwork for {{game}}...",
     "fetchingGameLists": "Fetching game lists...",
     "cancelledByUser": "Sync cancelled by user",
@@ -503,7 +529,9 @@
     "thisGame": "this game",
     "game": "Game",
     "unknown": "Unknown",
-    "cancel": "Cancel"
+    "cancel": "Cancel",
+    "working": "Working…",
+    "loading": "Loading…"
   },
   "microsoft": {
     "notCompatible": "This game format is not compatible with SteamOS",
@@ -675,6 +703,10 @@
   },
   "settings": {
     "_comment": "UnifideckSettingsPanel action-type controls that aren't covered by more specific components (LanguageSelector, CloudSyncBehaviorPanel). refreshAll is a fire-and-forget button that triggers sync_all() across every registered store; the Library view shows the sync progress via its own subscription to SYNC_PROGRESS events.",
+    "storeConnections": "Store Connections",
+    "librarySync": "Library Sync",
+    "language": "Language",
+    "languageAuto": "Auto-detect",
     "refreshAll": {
       "sectionTitle": "Library actions",
       "button": "Refresh all libraries",

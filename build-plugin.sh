@@ -1,14 +1,27 @@
 #!/usr/bin/env bash
 # Unifideck Plugin Build Script — new-architecture branch
+# 
+# This script is responsible for preparing and packaging the Unifideck plugin
+# for Decky Loader. It handles both "production" and "development" builds,
+# pre-build requirements (like downloading external binaries and compiling
+# locale files), and packages the final structure into a .zip file.
+# 
+# It supports two build strategies:
+#   1. Docker/Podman with the Decky CLI (preferred, matches upstream CI).
+#   2. Local bash/pnpm fallback (useful for direct Steam Deck builds without containers).
+#
 # Reflects the 5-layer package restructure (v0.7+)
 
+# Exit immediately if a command exits with a non-zero status.
 set -e
 
+# Establish absolute paths to ensure script works regardless of where it's called from.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CLI_LOCATION="$SCRIPT_DIR/cli"
 OUTPUT_DIR="$SCRIPT_DIR/out"
 
 # ── Colors ──────────────────────────────────────────────────
+# Standard ANSI color codes for readable terminal output.
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
 BLUE='\033[0;34m'; NC='\033[0m'
 log_info()    { echo -e "${BLUE}[INFO]${NC} $1"; }
@@ -17,16 +30,26 @@ log_warn()    { echo -e "${YELLOW}[WARN]${NC} $1"; }
 log_error()   { echo -e "${RED}[ERROR]${NC} $1"; }
 
 # ── Argument parsing ─────────────────────────────────────────
+# Usage: ./build-plugin.sh [dev|prod] [install]
+# Default mode is 'dev'.
 ENV_MODE="${1:-dev}"
+# If the second argument is 'install', the script will automatically
+# copy the plugin to the Decky directory and restart the plugin_loader.
 INSTALL_AFTER="${2:-}"
+
+# Parse the base version from package.json (the JS/UI project).
+# We use grep/sed here instead of `jq` so we don't require the user to have `jq` installed.
 PACKAGE_VERSION=$(grep '"version"' "$SCRIPT_DIR/package.json" | head -1 | sed 's/.*"version": "\([^"]*\)".*/\1/')
 
 if [[ "$ENV_MODE" == "prod" ]]; then
+    # Production builds use exact version numbers.
     VERSION_TAG="v$PACKAGE_VERSION"
     ZIP_NAME="unifideck.prod.$VERSION_TAG.zip"
     PLUGIN_VERSION="$PACKAGE_VERSION"
     log_info "Building in PRODUCTION mode ($VERSION_TAG)"
 elif [[ "$ENV_MODE" == "dev" ]]; then
+    # Development builds auto-increment a local build number based on
+    # files currently in the `out/` directory to avoid overwriting testing builds.
     mkdir -p "$OUTPUT_DIR"
     LATEST_DEV=$(ls -1 "$OUTPUT_DIR"/unifideck.dev.v*.zip 2>/dev/null | \
         sed 's/.*unifideck\.dev\.v\([0-9]*\)\.zip/\1/' | sort -n | tail -1)
@@ -40,6 +63,7 @@ else
     exit 1
 fi
 
+# The final absolute path where the .zip file will be saved.
 OUTPUT_FILE="$OUTPUT_DIR/$ZIP_NAME"
 
 echo "========================================="
@@ -50,6 +74,10 @@ echo "Target: $OUTPUT_FILE"
 echo ""
 
 # ── Binary versions (sourced from package.json remote_binary) ─
+# To add a new binary:
+#   1. Add it to "remote_binary" in package.json.
+#   2. Add the URL below.
+#   3. Add a check step inside the `prebuild_binaries` function.
 # These must stay in sync with package.json "remote_binary" entries.
 LEGENDARY_URL="https://github.com/Heroic-Games-Launcher/legendary/releases/download/0.20.38/legendary_linux_x86_64"
 GOGDL_URL="https://github.com/Heroic-Games-Launcher/heroic-gogdl/releases/download/v1.1.2/gogdl_linux_x86_64"
@@ -58,9 +86,14 @@ COMET_URL="https://github.com/imLinguin/comet/releases/download/v0.3.2/comet-x86
 WINETRICKS_URL="https://raw.githubusercontent.com/Winetricks/winetricks/20260125/src/winetricks"
 
 # ── Pre-build: download/verify bundled binaries ───────────────
+# Decky Loader expects all dependencies to be included in the zip file.
+# This function pulls down the large third-party store clients.
 prebuild_binaries() {
     log_info "Running pre-build binary checks..."
 
+    # Helper function: Downloads to a `.new` file, marks executable,
+    # and runs a quick validation command (usually `--version`) before
+    # swapping it in place. This prevents corrupt downloads from breaking the plugin.
     _download_bin() {
         local name="$1" url="$2" dest="$3" validate_cmd="$4"
         log_info "Checking $name..."
@@ -78,19 +111,24 @@ prebuild_binaries() {
         fi
     }
 
+    # Legendary: Epic Games Store CLI.
     _download_bin "legendary" "$LEGENDARY_URL" "$SCRIPT_DIR/bin/legendary" \
         '"$SCRIPT_DIR/bin/legendary.new" --version'
 
+    # Gogdl: GOG download manager (developed by Heroic).
     _download_bin "gogdl" "$GOGDL_URL" "$SCRIPT_DIR/bin/gogdl" \
         '"$SCRIPT_DIR/bin/gogdl.new" --version --auth-config-path /dev/null'
 
+    # Nile: Amazon Games CLI.
     _download_bin "nile" "$NILE_URL" "$SCRIPT_DIR/bin/nile" \
         '"$SCRIPT_DIR/bin/nile.new" --version'
 
+    # Comet: GOG Galaxy online services wrapper.
     _download_bin "comet" "$COMET_URL" "$SCRIPT_DIR/bin/comet" \
         '"$SCRIPT_DIR/bin/comet.new" --version'
 
-    # Winetricks is a shell script — validate by grepping a known string
+    # Winetricks is a shell script, so it doesn't have a reliable --version flag.
+    # Instead, we validate it by checking if it contains the "WINETRICKS_VERSION" string.
     log_info "Checking winetricks..."
     if curl -sL "$WINETRICKS_URL" -o "$SCRIPT_DIR/bin/winetricks.new"; then
         chmod +x "$SCRIPT_DIR/bin/winetricks.new"
@@ -109,6 +147,9 @@ prebuild_binaries() {
 }
 
 # ── Pre-build: requirements check ────────────────────────────
+# Decky's backend expects a requirements.txt file to install Python dependencies.
+# We keep requirements.in as the source of truth, so this step ensures
+# it is correctly mirrored to requirements.txt for the build system.
 check_requirements() {
     if [ ! -f "$SCRIPT_DIR/requirements.txt" ] && [ -f "$SCRIPT_DIR/requirements.in" ]; then
         log_info "requirements.txt missing — copying from requirements.in..."
@@ -120,6 +161,10 @@ check_requirements() {
 }
 
 # ── Pre-build: generate src/i18n/locales.generated.ts ────────
+# The frontend uses i18next for localization, but ES modules cannot natively
+# do dynamic imports from JSON without breaking the bundler configuration.
+# This python script reads our supported languages config and generates
+# a `.ts` file with static imports that Rollup can consume.
 gen_locales() {
     log_info "Generating src/i18n/locales.generated.ts..."
     if cd "$SCRIPT_DIR/scripts" && python3 gen_locale_imports.py \
@@ -134,6 +179,7 @@ gen_locales() {
 }
 
 # ── Pre-build: read version from plugin.json ─────────────────
+# Grab the plugin version defined in Decky's plugin manifest for our logs.
 sync_version() {
     PLUGIN_VERSION=$(grep '"version"' "$SCRIPT_DIR/plugin.json" | head -1 | sed 's/.*"version": "\([^"]*\)".*/\1/')
     log_info "Plugin version (plugin.json): $PLUGIN_VERSION"
@@ -141,6 +187,8 @@ sync_version() {
 }
 
 # ── Decky CLI detection ───────────────────────────────────────
+# The Decky CLI handles building the UI and packaging everything securely.
+# These functions download the appropriate CLI binary for the host OS.
 get_decky_cli_url() {
     local os arch base="https://github.com/SteamDeckHomebrew/cli/releases/latest/download"
     case "$(uname -s)" in Linux*) os="linux";; Darwin*) os="darwin";; CYGWIN*|MINGW*|MSYS*) os="windows";; *) os="linux";; esac
@@ -151,7 +199,9 @@ get_decky_cli_url() {
 
 check_decky_cli() {
     local cli="$CLI_LOCATION/decky"
+    # If the CLI is already present and works, proceed.
     if test -f "$cli" && "$cli" --version > /dev/null 2>&1; then return 0; fi
+    # If it's present but broken (e.g. built for the wrong architecture after moving files), clear it.
     if test -f "$cli"; then
         log_warn "Decky CLI incompatible with this platform — re-downloading..."
         rm -f "$cli"
@@ -170,6 +220,8 @@ check_decky_cli() {
     return 1
 }
 
+# Determines whether Docker or Podman is available for the Decky CLI to use.
+# Podman is the default on SteamOS.
 check_container_engine() {
     if command -v docker &>/dev/null && docker info &>/dev/null 2>&1; then echo "docker"; return 0; fi
     if command -v podman &>/dev/null && podman info &>/dev/null 2>&1; then echo "podman"; return 0; fi
@@ -177,10 +229,11 @@ check_container_engine() {
 }
 
 # ── Staging directory contents ───────────────────────────────
-#   Mirrors the exact runtime layout expected by Decky Loader.
+#   Mirrors the exact runtime layout expected by Decky Loader on the Steam Deck.
+#   It avoids zipping unnecessary dev files (.git, tests, etc.)
 #   Directories included (relative to repo root):
 #     py_modules/   — vendored deps + unifideck 5-layer package
-#     bin/          — native binaries + shell wrappers (no .py scripts)
+#     bin/          — native binaries + shell wrappers (no .py scripts allowed here)
 #     defaults/     — config.json schema + backend defaults
 #     src/          — TypeScript source (built into dist/ by Decky CLI)
 #     assets/       — plugin artwork/icons
@@ -204,23 +257,28 @@ _stage_plugin_files() {
 }
 
 # ── Build with Decky CLI (Docker/Podman) ─────────────────────
+# This is the primary build path. It stages files, runs the Decky CLI inside
+# a container, compiles the frontend using Rollup, and generates a clean ZIP.
 build_with_cli() {
     local engine="$1"
     log_info "Building with Decky CLI using $engine..."
     rm -f "$OUTPUT_FILE"
 
-    # Clean dist (may be owned by root from previous container build)
+    # Clean dist. Because container builds might leave root-owned files behind,
+    # we have to run a containerized `rm -rf` to delete them without `sudo`.
     if [ -d "$SCRIPT_DIR/dist" ]; then
         log_info "Cleaning dist/..."
         rm -rf "$SCRIPT_DIR/dist" 2>/dev/null || \
             "$engine" run --rm -v "$SCRIPT_DIR":/v -w /v alpine rm -rf dist
     fi
 
+    # Stage files into a clean temporary directory.
     local staging; staging=$(mktemp -d)
     local staging_plugin="$staging/unifideck-staging"
     _stage_plugin_files "$staging_plugin"
     chmod -R a+rX "$staging_plugin" 2>/dev/null || true
 
+    # Fire up the Decky CLI builder
     mkdir -p "$OUTPUT_DIR"
     "$CLI_LOCATION/decky" plugin build "$staging_plugin" \
         --output-path "$OUTPUT_DIR" \
@@ -228,8 +286,10 @@ build_with_cli() {
         --follow-symlinks \
         --build-as-root
 
+    # Clean up staging dir
     rm -rf "$staging"
 
+    # The CLI hardcodes the output name to "Unifideck.zip". We rename it to our versioned format.
     local expected="$OUTPUT_DIR/Unifideck.zip"
     if [ -f "$expected" ] && [ "$expected" != "$OUTPUT_FILE" ]; then
         mv "$expected" "$OUTPUT_FILE"
@@ -243,6 +303,8 @@ build_with_cli() {
 }
 
 # ── Local build (Steam Deck / no container fallback) ─────────
+# This acts as a fallback for users building directly on their Steam Deck
+# without podman installed. It runs `pnpm` natively and manually zips the output.
 build_local() {
     log_info "Building locally (no container engine)..."
 
@@ -256,24 +318,31 @@ build_local() {
     local plugin_dir="$build_dir/Unifideck"
     _stage_plugin_files "$plugin_dir"
 
-    # Also copy the compiled frontend output
+    # The CLI builds into `dist/` natively. For the local fallback,
+    # we manually copy the newly built frontend into our staging area.
     [ -d "$SCRIPT_DIR/dist" ] && cp -r "$SCRIPT_DIR/dist" "$plugin_dir/"
 
     # ── Critical file verification ───────────────────────────
+    # Since we are zipping manually, we verify that every critical architectural
+    # component is present before packaging. If one of these is missing,
+    # it indicates a structural flaw (like a missing import or broken script)
+    # and we abort the build to prevent shipping a broken plugin.
+    # 
+    # NOTE: If you add a new service or store connector, ADD IT TO THIS LIST!
     log_info "Verifying critical files..."
     local CRITICAL_FILES=(
-        # Plugin root
+        # Plugin root files
         "main.py"
         "plugin.json"
         "dist/index.js"
 
-        # Layer 1 — core/types (pure data island)
+        # Layer 1 — core/types (pure data island, no dependencies)
         "py_modules/unifideck/core/types/__init__.py"
         "py_modules/unifideck/core/types/domain.py"
         "py_modules/unifideck/core/types/events.py"
         "py_modules/unifideck/core/types/results.py"
 
-        # Layer 2 — core infrastructure
+        # Layer 2 — core infrastructure (utils, binary resolvers, file I/O)
         "py_modules/unifideck/core/__init__.py"
         "py_modules/unifideck/core/cache_manager.py"
         "py_modules/unifideck/core/sync_service.py"
@@ -289,7 +358,7 @@ build_local() {
         "py_modules/unifideck/core/binaries/binary_signatures.py"
         "py_modules/unifideck/core/binaries/cli_timeouts.py"
 
-        # EventBus
+        # EventBus — Message queue and event routing
         "py_modules/unifideck/event_bus/__init__.py"
         "py_modules/unifideck/event_bus/event_bus.py"
         "py_modules/unifideck/event_bus/priority_dispatcher.py"
@@ -297,20 +366,20 @@ build_local() {
         "py_modules/unifideck/event_bus/event_bus_extensions.py"
         "py_modules/unifideck/event_bus/bus_pipeline.py"
 
-        # Config
+        # Config — Validation and startup schema
         "py_modules/unifideck/config/__init__.py"
         "py_modules/unifideck/config/config_manager.py"
         "py_modules/unifideck/config/schema.json"
         "py_modules/unifideck/config/validator.py"
         "py_modules/unifideck/config/startup.py"
 
-        # Bootstrap
+        # Bootstrap — Dependency injection and lifecycle
         "py_modules/unifideck/bootstrap/boot.py"
         "py_modules/unifideck/bootstrap/teardown.py"
         "py_modules/unifideck/bootstrap/pipeline_factory.py"
         "py_modules/unifideck/bootstrap/cache_registry.py"
 
-        # Layer 6 — RPC mixins
+        # Layer 6 — RPC mixins (Frontend communication API)
         "py_modules/unifideck/rpc/__init__.py"
         "py_modules/unifideck/rpc/mixins/store.py"
         "py_modules/unifideck/rpc/mixins/sync.py"
@@ -324,7 +393,7 @@ build_local() {
         "py_modules/unifideck/rpc/mixins/config_validation.py"
         "py_modules/unifideck/rpc/mixins/ui.py"
 
-        # Layer 4 — Store connectors
+        # Layer 4 — Store connectors (3rd party API implementations)
         "py_modules/unifideck/stores/__init__.py"
         "py_modules/unifideck/stores/epic/__init__.py"
         "py_modules/unifideck/stores/epic/store.py"
@@ -337,7 +406,7 @@ build_local() {
         "py_modules/unifideck/stores/microsoft/__init__.py"
         "py_modules/unifideck/stores/microsoft/microsoft_store.py"
 
-        # Layer 5 — Services
+        # Layer 5 — Services (Cross-cutting infrastructure like downloads/art)
         "py_modules/unifideck/services/__init__.py"
         "py_modules/unifideck/services/download/service.py"
         "py_modules/unifideck/services/playtime/service.py"
@@ -414,14 +483,15 @@ build_local() {
     fi
     log_success "All critical files present"
 
-    # Set executable bits on binaries
+    # Set executable bits on everything in bin/ just to be safe
     find "$plugin_dir/bin" -type f -exec chmod +x {} \; 2>/dev/null || true
 
-    # Sanity-check plugin.json
+    # Sanity-check plugin.json for api_version (required by newer Decky Loader versions)
     grep -q '"api_version"' "$plugin_dir/plugin.json" || \
         log_warn "plugin.json missing api_version — frontend may fail to load!"
 
-    # Package
+    # ── Package into ZIP ─────────────────────────────────────────
+    # Exclude development files, node_modules, and python artifacts.
     log_info "Creating zip package..."
     cd "$build_dir"
     zip -r "$OUTPUT_FILE" Unifideck \
@@ -440,6 +510,7 @@ build_local() {
     cd "$SCRIPT_DIR"
     rm -rf "$build_dir"
 
+    # Print final summary
     local size; size=$(ls -lh "$OUTPUT_FILE" | awk '{print $5}')
     echo ""
     echo "========================================="
@@ -456,6 +527,9 @@ build_local() {
 }
 
 # ── Install to Decky plugins dir ──────────────────────────────
+# When the --install flag is used, this function will directly extract
+# the new build into the Decky loader's plugin directory and restart Decky.
+# Very useful for rapid local iteration on a Steam Deck.
 install_plugin() {
     local plugins_dir="$HOME/homebrew/plugins"
     local install_dir="$plugins_dir/Unifideck"
@@ -481,6 +555,8 @@ install_plugin() {
 
     [ -d "$install_dir" ] || { log_error "Extraction failed"; sudo systemctl start plugin_loader; return 1; }
 
+    # Ensure permissions are correct; decky-loader runs as root, but plugin directories
+    # are usually owned by deck:deck.
     sudo chown -R deck:deck "$install_dir"
     chmod -R 755 "$install_dir"
     log_success "Installed to $install_dir"
@@ -491,13 +567,15 @@ install_plugin() {
     echo "========================================="
 }
 
-# ── Main ──────────────────────────────────────────────────────
+# ── Main Execution Flow ───────────────────────────────────────
 main() {
+    # Run pre-flight checks
     prebuild_binaries
     check_requirements
     gen_locales
     sync_version
 
+    # Attempt Decky CLI containerized build first
     if check_decky_cli; then
         ENGINE=$(check_container_engine || true)
         if [ -n "$ENGINE" ]; then
@@ -508,9 +586,11 @@ main() {
             build_local
         fi
     else
+        # Fallback if Decky CLI is totally broken
         build_local
     fi
 
+    # Auto-install if requested
     [[ "$INSTALL_AFTER" == "install" ]] && install_plugin
 }
 

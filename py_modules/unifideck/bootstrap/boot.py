@@ -150,6 +150,8 @@ def _boot_layer4_stores(plugin: Any, decky_plugin_dir: str) -> None:
     )
     plugin.registry.auto_discover(
         stores_dir,
+        bus=plugin.bus,
+        cache=plugin.cache,
         plugin_dir=decky_plugin_dir,
         config=plugin.config,
     )
