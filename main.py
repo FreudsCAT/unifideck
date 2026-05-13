@@ -1,3 +1,30 @@
+"""Decky Loader plugin entry point — Unifideck.
+
+This module is what Decky Loader imports at plugin load time. It
+declares the ``Plugin`` class that Decky instantiates ; everything
+else (services, stores, event bus, RPC handlers) is wired up by
+``unifideck.bootstrap.boot.boot_plugin`` from inside ``_main()``.
+
+The module deliberately stays thin :
+
+    * No business logic — the plugin class only owns the lifecycle
+      hooks (``_main`` / ``_unload`` / ``_validate_config``).
+    * No service construction at import time — that's the job of
+      ``boot_plugin``, called once Decky has signalled the plugin is
+      mounted and the event loop is alive.
+    * No top-level RPC method bodies — RPC surface comes from the
+      eleven mixins composed below ; ``@auto_wrap_rpc_methods``
+      decorates each public coroutine so it returns a typed
+      ``Result`` envelope instead of raising.
+
+The five-layer architecture (see operational plan v1.3, section 2)
+flows downward from this entry : Layer 6 (RPC mixins) → Layer 5
+(services) → Layer 4 (stores) → Layer 3 (event bus / cache /
+config) → Layer 2 (core) → Layer 1 (paths / I/O). This file
+references only Layer 6 (mixins) and the bootstrap helpers ; it
+never imports a service or store directly.
+"""
+
 from __future__ import annotations
 
 import logging
@@ -45,8 +72,42 @@ class Plugin(
     PlaytimeRPCMixin,
     ActionRPCMixin,
 ):
+    """The Decky Loader plugin class.
+
+    Decky Loader instantiates this class (no constructor argument),
+    keeps the instance for the lifetime of the plugin, and calls
+    the four lifecycle hooks below in this order :
+
+        1. ``_main()``                 — once, at plugin mount.
+        2. ``_validate_config()``      — once, after ``_main`` returned.
+        3. ``_build_eventbus_pipeline()`` — once, also after ``_main``.
+        4. ``_unload()``               — once, at plugin unmount.
+
+    Plus ``_register_caches()``, called by ``_main`` indirectly via
+    ``boot_plugin``. Splitting cache registration from the rest of
+    the boot keeps the cache lifecycle owned by ``_register_caches``,
+    which makes it possible to refresh caches without a full reboot
+    (used in dev mode and for the user-triggered "rebuild caches"
+    action).
+
+    The decorator ``@auto_wrap_rpc_methods`` rewrites every public
+    coroutine inherited from the mixins so it returns a typed
+    ``Result[T]`` envelope (success / error code / payload). The
+    raw coroutine never reaches the JS side — Decky's RPC bridge
+    only sees serialised envelopes, which keeps the contract with
+    the frontend stable across backend refactors.
+    """
+
     async def _main(self) -> None:
+        """Decky lifecycle entry — wire the plugin to its services.
+
+        Imports ``boot_plugin`` lazily to keep the module's import
+        graph minimal (the bootstrap subpackage pulls in the entire
+        Layer 5 surface, which we don't want loaded until the event
+        loop is alive).
+        """
         from unifideck.bootstrap.boot import boot_plugin
+
         await boot_plugin(
             self,
             decky_plugin_dir=DECKY_PLUGIN_DIR,
@@ -54,10 +115,23 @@ class Plugin(
         )
 
     async def _validate_config(self) -> None:
+        """Cross-check the user's config against the bundled defaults.
+
+        Runs after ``_main`` so the bus and config manager are
+        already wired. Stores two pieces of state on the plugin
+        instance : ``_config_validation_result`` (the diff /
+        validation report shown in the UI) and ``_config_degraded``
+        (a boolean flag the frontend reads to display a non-blocking
+        warning when the config is partially broken but the plugin
+        can still operate).
+        """
         from unifideck.config.startup import validate_config_at_startup
-        defaults_path = os.path.join(
-            DECKY_PLUGIN_DIR, "defaults", "config.json",
-        )
+
+        # Bundled defaults live in ``defaults/config.json`` next to
+        # this module. ``user_config_path`` is a Path that may or
+        # may not exist on first run — ``validate_config_at_startup``
+        # creates it from the defaults if missing.
+        defaults_path = os.path.join(DECKY_PLUGIN_DIR, "defaults", "config.json")
         (
             self._config_validation_result,
             self._config_degraded,
@@ -69,17 +143,43 @@ class Plugin(
         )
 
     async def _build_eventbus_pipeline(self) -> BusPipeline:
+        """Construct the bus pipeline — supervisor + replay buffer + handlers.
+
+        Returns the ``BusPipeline`` so ``boot_plugin`` can hand it
+        to whichever component needs to subscribe at boot time
+        (typically the cache invalidator and the persistence
+        services).
+        """
         from unifideck.bootstrap.pipeline_factory import (
             build_eventbus_pipeline,
         )
+
         return await build_eventbus_pipeline(self)
 
     async def _unload(self) -> None:
+        """Decky lifecycle exit — symmetric cleanup for ``_main``.
+
+        Walks the dependency graph in reverse construction order
+        (services → stores → bus → cache → config), drains every
+        in-flight task with a deadline, then closes file handles
+        and HTTP sessions. Called by Decky on plugin unmount or
+        when the user disables the plugin from the UI.
+        """
         from unifideck.bootstrap.teardown import unload_plugin
+
         await unload_plugin(self)
 
     def _register_caches(self) -> None:
+        """Register the canonical cache namespaces with the cache manager.
+
+        Synchronous because cache registration only mutates an
+        in-memory registry — no I/O — so it can run before the
+        event loop is fully spun up. The actual cache backends
+        (disk / memory) are constructed lazily by ``CacheManager``
+        on first ``get`` / ``set``.
+        """
         from unifideck.bootstrap.cache_registry import (
             register_default_caches,
         )
+
         register_default_caches(self.cache)

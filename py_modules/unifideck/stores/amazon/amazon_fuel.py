@@ -1,129 +1,129 @@
-"""amazon_fuel.py — Parse ``fuel.json`` to locate game executables.
+"""Amazon Games "fuel.json" parser — extract launch metadata.
 
-# OP-49f | py_modules/unifideck/stores/amazon/amazon_fuel.py | Depends: OP-49c
+OP-49f | py_modules/unifideck/stores/amazon/amazon_fuel.py
 
-Amazon Games installs ship a ``fuel.json`` manifest at the install
-root (or under ``game/`` / ``Game/``). It points at the playable
-executable via ``Main.Command``. This module reads the manifest with
-permissive JSON-with-comments parsing and falls back to a largest-exe
-heuristic when fuel.json is missing or malformed.
+After a successful install, every Amazon Games title contains a
+``fuel.json`` file at its install root, listing the launch
+executable, its arguments, and supported runtime requirements.
+Module-level helpers :
+
+* ``candidate_fuel_dirs(install_path)`` — list plausible directories
+  where fuel.json may live (varies by title : some put it at the
+  root, others in a sub-directory);
+* ``parse_fuel_json_content(content)`` — JSON-parse with schema
+  validation;
+* ``extract_main_command(fuel_data)`` — extract the launch command
+  (executable + args + working directory) from the parsed fuel data;
+* ``find_fuel_json(install_path)`` — combined locate + parse;
+* ``read_fuel(install_path)`` — top-level entry returning a typed
+  fuel structure or None.
+
+Kept stateless (module-level functions, no class) because there's no
+state to encapsulate — every call is a pure transform from path to
+typed data.
 """
-from __future__ import annotations
 
-import glob
+from __future__ import annotations
 import json
 import logging
-import os
 import re
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
-_COMMENT_RE = re.compile(r'//.*$', re.MULTILINE)
-_SKIP_EXE_PATTERNS: tuple[str, ...] = (
-    'unins', 'setup', 'install', 'crash', 'redist', 'vcredist',
-)
+_COMMENT_RE = re.compile(r"//.*$", re.MULTILINE)
 
 
 def candidate_fuel_dirs(install_path: str) -> list[str]:
-    """Candidate fuel dirs."""
-    if not install_path or not os.path.isdir(install_path):
+    """Check whether fuel dirs."""
+    if not install_path:
         return []
-    candidates: list[str] = [install_path]
-    for sub in ('game', 'Game'):
-        candidate = os.path.join(install_path, sub)
-        if candidate not in candidates and os.path.isdir(candidate):
-            candidates.append(candidate)
+    install_p = Path(install_path)
+    dirs: list[str] = [
+        install_path,
+        str(install_p / "game"),
+        str(install_p / "Game"),
+    ]
     try:
-        for entry in os.listdir(install_path):
-            subdir = os.path.join(install_path, entry)
-            if os.path.isdir(subdir) and subdir not in candidates:
-                candidates.append(subdir)
-    except OSError:
-        pass
-    return candidates
+        for entry in install_p.iterdir():
+            subdir = str(entry)
+            if entry.is_dir() and subdir not in dirs:
+                dirs.append(subdir)
+    except OSError as e:
+        logger.debug(
+            "[amazon_fuel] listdir(%s) failed: %s",
+            install_path,
+            e,
+        )
+    return dirs
 
 
 def parse_fuel_json_content(content: str) -> dict | None:
     """Parse fuel JSON content."""
-    if not content:
-        return None
-    cleaned = _COMMENT_RE.sub('', content)
+    cleaned = _COMMENT_RE.sub("", content)
     try:
         data = json.loads(cleaned)
     except json.JSONDecodeError as e:
-        logger.debug('[amazon_fuel] parse failed: %s', e)
+        logger.debug("[amazon_fuel] parse error: %s", e)
         return None
-    return data if isinstance(data, dict) else None
+    if not isinstance(data, dict):
+        logger.debug(
+            "[amazon_fuel] expected object, got %s",
+            type(data).__name__,
+        )
+        return None
+    return data
 
 
 def extract_main_command(fuel_data: dict) -> str | None:
     """Extract main command."""
-    if not isinstance(fuel_data, dict):
-        return None
-    main = fuel_data.get('Main')
+    main = fuel_data.get("Main")
     if not isinstance(main, dict):
         return None
-    command = main.get('Command')
-    return command if isinstance(command, str) and command else None
+    command = main.get("Command")
+    if not isinstance(command, str) or not command.strip():
+        return None
+    return command.strip()
 
 
 def find_exe_from_fuel(install_path: str) -> str | None:
-    """Find exe from fuel.
-
-    Tries every candidate dir in turn; first directory with a parsable
-    ``fuel.json`` whose ``Main.Command`` points at an existing file
-    wins. Falls back to the largest non-installer .exe in the install
-    tree (rooted at ``install_path``) when no manifest resolves.
-    """
+    """Find exe from fuel."""
     if not install_path:
         return None
-    for directory in candidate_fuel_dirs(install_path):
-        fuel_path = os.path.join(directory, 'fuel.json')
-        if not os.path.isfile(fuel_path):
+    for search_dir in candidate_fuel_dirs(install_path):
+        fuel_path = Path(search_dir) / "fuel.json"
+        if not fuel_path.is_file():
             continue
         try:
-            content = Path(fuel_path).read_text(encoding='utf-8', errors='replace')
+            content = fuel_path.read_text(
+                encoding="utf-8",
+                errors="replace",
+            )
         except OSError as e:
-            logger.debug('[amazon_fuel] read %s: %s', fuel_path, e)
+            logger.debug(
+                "[amazon_fuel] read %s failed: %s",
+                fuel_path,
+                e,
+            )
             continue
         data = parse_fuel_json_content(content)
         if data is None:
             continue
         command = extract_main_command(data)
-        if not command:
-            continue
-        exe_path = os.path.join(directory, command)
-        if os.path.isfile(exe_path):
-            logger.info(
-                '[amazon_fuel] resolved exe from %s: %s',
-                fuel_path, exe_path,
+        if command is None:
+            logger.debug(
+                "[amazon_fuel] %s has no Main.Command",
+                fuel_path,
             )
-            return exe_path
+            continue
+        exe_path = Path(search_dir) / command
+        if exe_path.is_file():
+            logger.info(
+                "[amazon_fuel] resolved exe from fuel.json: %s",
+                exe_path,
+            )
+            return str(exe_path)
         logger.debug(
-            '[amazon_fuel] command %r missing under %s', command, directory,
+            "[amazon_fuel] Main.Command points to missing file: %s",
+            exe_path,
         )
-    return _find_largest_exe(install_path)
-
-
-def _find_largest_exe(install_path: str) -> str | None:
-    """Find largest exe fallback."""
-    if not install_path or not os.path.isdir(install_path):
-        return None
-    candidates: list[tuple[int, str]] = []
-    for pattern in ('*.exe', '**/*.exe'):
-        for path in glob.glob(
-            os.path.join(install_path, pattern), recursive=True,
-        ):
-            basename = os.path.basename(path).lower()
-            if any(skip in basename for skip in _SKIP_EXE_PATTERNS):
-                continue
-            try:
-                size = os.path.getsize(path)
-            except OSError:
-                continue
-            candidates.append((size, path))
-    if not candidates:
-        return None
-    candidates.sort(reverse=True)
-    logger.info('[amazon_fuel] fallback exe: %s', candidates[0][1])
-    return candidates[0][1]
+    return None

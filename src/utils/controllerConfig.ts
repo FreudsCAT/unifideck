@@ -1,48 +1,59 @@
 /**
- * Microsoft/xCloud launch wrapper.
+ * Controller-aware launch wrapper.
  *
- * We intentionally avoid programmatic Steam controller-layout editing here.
- * The previous automation only proved Steam-side state changes, threw runtime
- * "Unknown method" errors in the Steam UI for some launches, and could race
- * Steam's own controller configurator. Until we have a Game Mode-safe signal,
- * this wrapper only launches the shortcut and leaves controller layouts alone.
+ * Programmatic Steam controller-layout editing was removed
+ * from this module after observation in production : the
+ * automation only proved Steam-side state changes, threw
+ * runtime "Unknown method" errors in the Steam UI for some
+ * launches, and could race Steam's own controller
+ * configurator. Until we have a Game Mode-safe signal, this
+ * wrapper only launches the shortcut and leaves controller
+ * layouts alone.
+ *
+ * Standards compliance : the previous version reached into
+ * `(window as any).appStore` directly, bypassing the
+ * SteamBridge isolation layer. This refactor delegates to
+ * `getShortcutRunGameId` which lives inside SteamBridge —
+ * any future change to the Steam internal path is then
+ * a one-file edit.
  */
+import { getShortcutRunGameId } from "../lib/steam-bridge";
 
 const LOG_PREFIX = "[ControllerConfig]";
 
-function getRunGameId(appId: number): string {
-  const appStore = (window as any).appStore;
-  const app = appStore?.m_mapApps?.get?.(appId);
-  const gameId = app?.gameid;
-  return typeof gameId === "string" && gameId.length > 0
-    ? gameId
-    : String(appId);
-}
-
+/** Hook left as a no-op for forward-compatibility : when a
+ *  Game-Mode-safe controller config signal lands, this is
+ *  where the per-app config orchestration will be invoked. */
 export async function ensureGamepadConfigForApp(appId: number): Promise<void> {
-  console.log(
-    `${LOG_PREFIX} Skipping automatic controller configuration for appId=${appId}`,
-  );
+  console.log(`${LOG_PREFIX} Skipping automatic controller configuration` + ` for appId=${appId}`);
 }
 
-export async function launchAppWithConfiguredGamepad(
-  appId: number,
-): Promise<boolean> {
+/** Launch a Steam shortcut by appId, going through Steam's
+ *  RunGame API. Returns false when Steam's Apps surface is
+ *  unavailable (test environments, very early plugin boot). */
+export async function launchAppWithConfiguredGamepad(appId: number): Promise<boolean> {
   const steamApps = window.SteamClient?.Apps;
   if (!steamApps?.RunGame) {
     return false;
   }
 
   await ensureGamepadConfigForApp(appId);
-  steamApps.RunGame(getRunGameId(appId), "", -1, 100);
-  console.log(
-    `${LOG_PREFIX} Launched appId=${appId} without changing controller layouts`,
-  );
+  steamApps.RunGame(getShortcutRunGameId(appId), "", -1, 100);
+  console.log(`${LOG_PREFIX} Launched appId=${appId} ` + `without changing controller layouts`);
+
   return true;
 }
 
+/** Reserved for the day a one-shot post-launch hand-off is
+ *  needed (e.g. to consume a deferred config payload). The
+ *  current implementation is a no-op so callers get a stable
+ *  API while the underlying signal is being designed. */
 export function consumeConfiguredLaunch(_appId: number): boolean {
   return false;
 }
-
-export function resetControllerConfigCache(): void {}
+/** Reset any in-process caches the controller-config layer
+ *  may have accumulated. No-op today; kept for symmetry with
+ *  the public surface the legacy module exposed. */
+export function resetControllerConfigCache(): void {
+  /* intentionally empty */
+}

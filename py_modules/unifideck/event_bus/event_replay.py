@@ -1,26 +1,38 @@
-"""event_bus/event_replay.py — Bounded ring buffer of recent events.
+"""Event replay buffer — per-event-type ring buffers of recent events.
 
-Design:
-  - One `deque(maxlen=N)` per event type (defaults per type).
-  - `record(event, kwargs)` is called by the EventBus after a
-    successful emit. Cheap — O(1) append.
-  - `snapshot(events, limit)` returns the most recent events of
-    the requested types, newest-first, with a hard cap on result
-    size to prevent a reconnect from transferring a MB of data.
-  - **Security-aware**: the default per-type cap is low (50 for
-    progress, 20 for state), and the global cap is 500. A
-    caller can't trigger a memory leak.
-  - **Never stores secrets**: callers are responsible for not
-    passing OAuth tokens or passwords as kwargs. The buffer just
-    records whatever EventBus receives.
+OP-09d | py_modules/unifideck/event_bus/event_replay.py
 
-Per-event defaults:
-  - SYNC_PROGRESS / DOWNLOAD_PROGRESS → 50 entries (progress ticks)
-  - GAME_INSTALLED / GAME_UNINSTALLED → 20 entries (state)
-  - STORE_AUTH_COMPLETE / STORE_LOGOUT → 10 entries
-  - Everything else → 20 entries
+``EventReplayBuffer`` is **not** a single FIFO of all events — it's
+a dict of per-event-type ``deque(maxlen=...)`` buffers. Different
+event types get different caps:
 
+* high-frequency events (``SYNC_PROGRESS``, ``DOWNLOAD_PROGRESS``)
+  → cap 50 (recent progress only);
+* lifecycle events (``GAME_INSTALLED``, ``STORE_AUTH_COMPLETE``)
+  → cap 10-20 (full history of recent state changes);
+* anything else → fallback cap (20).
+
+Two primary use cases:
+
+* **Late subscribers** — a service that subscribes after the bus
+  started can snapshot the buffer to backfill its state (e.g.
+  ``SecurityService.start`` drains
+  ``CONFIG_VALIDATION_FAILED`` events that fired during boot).
+* **Debugging** — the QAM debug panel uses ``snapshot()`` to show
+  what happened just before an error.
+
+Public API:
+
+* ``record(event, kwargs)``   — push into the per-type ring;
+* ``snapshot(events, limit)`` — flatten + sort by timestamp,
+  optionally filtered to a subset of event types;
+* ``size(event)``             — observability (total or per-type
+  count);
+* ``clear()``                 — wipe everything (test-only).
+
+State is in-memory; restart wipes it.
 """
+
 from __future__ import annotations
 
 import time
@@ -31,33 +43,47 @@ from typing import Any
 
 from ..core.types import Events
 
-# Global hard cap — a single snapshot() call can never return more
-# than this many events regardless of per-type limits. Prevents a
-# malformed RPC request from locking up the loop.
 MAX_SNAPSHOT_ENTRIES = 500
-
-# Per-event defaults. Values not in this map use the fallback.
 _DEFAULT_CAPS: dict[Events, int] = {
-    Events.SYNC_PROGRESS:     50,
+    Events.SYNC_PROGRESS: 50,
     Events.DOWNLOAD_PROGRESS: 50,
-    Events.GAME_INSTALLED:    20,
-    Events.GAME_UNINSTALLED:  20,
+    Events.GAME_INSTALLED: 20,
+    Events.GAME_UNINSTALLED: 20,
     Events.STORE_AUTH_COMPLETE: 10,
-    Events.STORE_LOGOUT:      10,
+    Events.STORE_LOGOUT: 10,
 }
-
 _FALLBACK_CAP = 20
 
 
 @dataclass
 class _RecordedEvent:
-    """A single entry in the ring buffer."""
+    """One recorded event entry.
+
+    Attributes:
+        event: event name as a plain string (the ``Events``
+            enum's ``.value``). String storage so the snapshot
+            output is directly JSON-serialisable for RPC.
+        kwargs: payload dict from the original emission. Stored
+            by reference — caller is expected not to mutate it
+            after emission (the bus convention).
+        timestamp: ``time.monotonic()`` at record time.
+    """
 
     event: str
     kwargs: dict[str, Any]
-    timestamp: float  # monotonic seconds since plugin start
+    timestamp: float
 
     def to_dict(self) -> dict[str, Any]:
+        """Return a JSON-friendly representation for snapshots.
+
+        Rounds the timestamp to 3 decimals (millisecond
+        precision) — sub-millisecond detail is noise for
+        diagnostic display.
+
+        Returns:
+            Dict with ``event`` (str), ``kwargs`` (dict),
+            ``timestamp`` (float, rounded).
+        """
         return {
             "event": self.event,
             "kwargs": self.kwargs,
@@ -66,41 +92,49 @@ class _RecordedEvent:
 
 
 class EventReplayBuffer:
-    """Ring buffer of recent events, one deque per type.
+    """Per-event-type ring buffers with custom caps."""
 
-    Usage:
-        replay = EventReplayBuffer()
-        # Inside EventBus.emit, after dispatching:
-        replay.record(Events.SYNC_PROGRESS, {"store": "epic", "pct": 42})
-        # Frontend reconnect:
-        snap = replay.snapshot([Events.SYNC_PROGRESS], limit=100)
-    """
-
-    def __init__(  # noqa: D107 — class docstring documents the constructor's contract
+    def __init__(
         self,
         *,
         fallback_cap: int = _FALLBACK_CAP,
         caps: dict[Events, int] | None = None,
     ) -> None:
+        """Initialise with default + optional override caps.
+
+        Defaults from ``_DEFAULT_CAPS`` are copied (not mutated),
+        then any ``caps`` overrides are merged on top. The
+        ``fallback_cap`` is used for event types absent from
+        both tables.
+
+        Args:
+            fallback_cap: cap for event types without an
+                explicit entry (default 20).
+            caps: optional per-event override. Useful for
+                testing (smaller buffers) or for special-case
+                deployments.
+        """
         self._fallback_cap = fallback_cap
         self._caps = dict(_DEFAULT_CAPS)
         if caps:
             self._caps.update(caps)
         self._buffers: dict[str, deque[_RecordedEvent]] = {}
 
-    # ── Recording ───────────────────────────────────────────────
+    def record(self, event: Events | str, kwargs: dict[str, Any]) -> None:
+        """Push a new ``_RecordedEvent`` into the per-type buffer.
 
-    def record(
-        self,
-        event: Events | str,
-        kwargs: dict[str, Any],
-    ) -> None:
-        """Append an event to the appropriate ring buffer.
+        Lazy buffer creation: the first time an event type is
+        recorded, its deque is built with the resolved cap.
+        Subsequent ``record`` calls for the same type reuse it.
+        ``deque(maxlen=...)`` auto-evicts the oldest entry when
+        the cap is reached.
 
-        The `kwargs` dict is stored by reference — callers should
-        not mutate it after calling `record()`. EventBus already
-        treats kwargs as immutable once emitted, so this is safe
-        in practice.
+        Stores ``event`` as a string (the enum's ``.value``) so
+        snapshot output is JSON-friendly.
+
+        Args:
+            event: ``Events`` enum value or its string form.
+            kwargs: payload dict from the bus emission.
         """
         event_str = event.value if isinstance(event, Events) else str(event)
         buf = self._buffers.get(event_str)
@@ -116,24 +150,30 @@ class EventReplayBuffer:
             ),
         )
 
-    # ── Retrieval ───────────────────────────────────────────────
-
     def snapshot(
         self,
         events: Iterable[Events | str] | None = None,
         limit: int = MAX_SNAPSHOT_ENTRIES,
     ) -> list[dict[str, Any]]:
-        """Return recent events matching the filter, newest first.
+        """Return a flattened, timestamp-sorted view of recent events.
+
+        Iterates every per-type buffer, optionally filtered to
+        only the requested types, flattens them into a single
+        list, sorts newest-first by timestamp, and truncates to
+        ``limit`` (capped by ``MAX_SNAPSHOT_ENTRIES`` to bound
+        the RPC payload size).
+
+        Each entry goes through ``_RecordedEvent.to_dict`` so
+        the result is directly JSON-serialisable.
 
         Args:
-          events: iterable of event types to include. None means
-            "all recorded types".
-          limit: hard cap on result size. Clamped to
-            MAX_SNAPSHOT_ENTRIES to prevent unbounded responses.
+            events: optional iterable of event types to include.
+                ``None`` (default) returns every type.
+            limit: maximum entries returned (hard-capped at
+                ``MAX_SNAPSHOT_ENTRIES`` = 500).
 
-        Returns a list of dicts (not _RecordedEvent instances) so
-        the result is directly JSON-serializable for the RPC layer.
-
+        Returns:
+            List of entry dicts, newest first.
         """
         limit = min(limit, MAX_SNAPSHOT_ENTRIES)
         wanted = self._resolve_wanted_set(events)
@@ -146,7 +186,17 @@ class EventReplayBuffer:
         return [r.to_dict() for r in gathered[:limit]]
 
     def size(self, event: Events | str | None = None) -> int:
-        """Return the number of stored entries (total or per event)."""
+        """Return the number of buffered entries, total or per event type.
+
+        Args:
+            event: optional event type. ``None`` (default) sums
+                across every type; otherwise returns the count
+                for that specific type only (0 if the type has
+                no buffer yet).
+
+        Returns:
+            Entry count.
+        """
         if event is None:
             return sum(len(b) for b in self._buffers.values())
         event_str = event.value if isinstance(event, Events) else str(event)
@@ -154,13 +204,29 @@ class EventReplayBuffer:
         return len(buf) if buf is not None else 0
 
     def clear(self) -> None:
-        """Drop all recorded events. Useful in tests."""
+        """Drop every buffered event across all types.
+
+        Test-only — there's no production scenario where wiping
+        the replay buffer is desirable. Wipes the entire dict
+        so subsequent ``record`` calls recreate buffers on
+        demand.
+        """
         self._buffers.clear()
 
-    # ── Private helpers ─────────────────────────────────────────
-
     def _resolve_cap(self, event: Events | str) -> int:
-        """Return the per-type cap for a given event."""
+        """Look up the cap for an event type with fallback.
+
+        Strings are converted to ``Events`` first (silently
+        falling back if not a known enum value). The fallback
+        ``_fallback_cap`` ensures every event type gets at
+        least some buffering.
+
+        Args:
+            event: ``Events`` or string form.
+
+        Returns:
+            The configured cap (default 20).
+        """
         if isinstance(event, Events):
             return self._caps.get(event, self._fallback_cap)
         try:
@@ -170,10 +236,20 @@ class EventReplayBuffer:
             return self._fallback_cap
 
     @staticmethod
-    def _resolve_wanted_set(
-        events: Iterable[Events | str] | None,
-    ) -> set | None:
-        """Normalize the filter iterable to a set of string keys."""
+    def _resolve_wanted_set(events: Iterable[Events | str] | None) -> set | None:
+        """Normalise the optional filter iterable into a set of strings.
+
+        Used by ``snapshot`` to convert the per-call filter into
+        the same string form used as buffer keys, so the
+        membership test is fast.
+
+        Args:
+            events: optional iterable from the caller.
+
+        Returns:
+            Set of string event names, or ``None`` to mean
+            "no filter".
+        """
         if events is None:
             return None
         out: set = set()

@@ -1,30 +1,48 @@
-"""auth.py — Epic Games OAuth via legendary subprocess.
+"""Epic Games OAuth — embedded-browser sign-in flow.
 
-# OP-48b | py_modules/unifideck/stores/epic/auth.py | Depends: OP-47b
+OP-48b | py_modules/unifideck/stores/epic/auth.py
 
-Legendary handles the OAuth handshake itself — we just spawn it, scrape
-the auth URL from its stdout, hand the URL to the
-:class:`AuthOrchestrator` (which drives a CDP-instrumented Edge
-browser), and finally call ``legendary auth --code <code>`` to mint
-tokens once the orchestrator delivers the redirect code.
+Epic Games requires the user to sign in through the Epic Games web
+login. ``EpicAuthFlow`` orchestrates the embedded CDP browser :
+
+* open the Epic OAuth URL with the right query params;
+* inject a small script to capture the SID (session identifier)
+  produced by Epic after a successful sign-in;
+* exchange the SID against access/refresh tokens via Epic's account
+  API;
+* persist the tokens via the secure token store and forward them
+  to ``legendary`` (which keeps its own credentials file separately).
+
+Public methods cover the full lifecycle :
+
+* ``start_auth(progress_cb)``  — open the browser and wait for SID;
+* ``exchange_sid(sid)``        — convert SID → tokens;
+* ``refresh_if_stale()``       — refresh expired access tokens;
+* ``logout()``                 — wipe tokens locally and through
+  legendary.
+
+Failure modes (user cancels, network drops, CDP disconnect) are
+reported back as ``AuthResult`` envelopes with explicit error codes.
 """
+
 from __future__ import annotations
 
 import asyncio
 import logging
 from typing import Any
-
 from ...auth.orchestrator import AuthOrchestrator
 from ...core.types import AuthResult, Events, Result, StoreAuthError
 from ...event_bus.event_bus import EventBus
 from ...security import audit_auth_flow
 
 logger = logging.getLogger(__name__)
+
 _EPIC_REDIRECT_URIS: list[str] = [
-    'https://legendary.epicgames.com/callback',
-    'https://www.epicgames.com/id/api/redirect',
+    "https://legendary.epicgames.com/callback",
+    "https://www.epicgames.com/id/api/redirect",
 ]
-_AUTH_URL_MARKERS = ('epicgames.com',)
+
+_AUTH_URL_MARKERS = ("epicgames.com",)
 
 
 class EpicAuthFlow:
@@ -39,149 +57,158 @@ class EpicAuthFlow:
     ) -> None:
         """Initialize the instance."""
         self._bus = bus
-        self._orchestrator = orchestrator
+        self._orch = orchestrator
         self._cli_path = cli_path
-        self._cli_timeout_seconds = cli_timeout_seconds
+        self._cli_timeout = cli_timeout_seconds
 
-    @audit_auth_flow(store='epic', method='oauth_cli')
+    @audit_auth_flow(store="epic", method="oauth_cli")
     async def start_auth(self) -> AuthResult:
         """Start auth."""
         if not self._cli_path:
             return AuthResult(
-                success=False, store='epic', error='legendary_not_found',
+                success=False,
+                error="legendary_not_found",
+                store="epic",
             )
-        try:
-            url = await self._fetch_login_url()
-        except StoreAuthError as e:
-            return AuthResult(
-                success=False, store='epic', error=str(e),
-            )
-        if not url:
-            return AuthResult(
-                success=False, store='epic', error='auth_url_not_found',
-            )
-        await self._orchestrator.start_browser_auth(
-            url=url,
-            allowed_redirect_uris=_EPIC_REDIRECT_URIS,
-            cookie_domain='epicgames.com',
-            on_code=self._register_code,
-            store='epic',
+        return await self._orch.run_flow(
+            get_url=self._fetch_login_url,
+            allowed_uris=_EPIC_REDIRECT_URIS,
+            exchange_code=self._register_code,
+            background=True,
+            write_url_file=("~/.local/share/unifideck/epic_auth_url.txt"),
         )
-        return AuthResult(success=True, store='epic', redirect_url=url)
 
     async def logout(self) -> Result:
         """Logout."""
         if not self._cli_path:
-            return Result(success=False, error='legendary_not_found')
+            await self._bus.emit(
+                Events.STORE_LOGOUT,
+                store="epic",
+            )
+            return Result(success=True)
         try:
             proc = await asyncio.create_subprocess_exec(
-                self._cli_path, 'auth', '--delete',
-                stdout=asyncio.subprocess.DEVNULL,
-                stderr=asyncio.subprocess.DEVNULL,
+                self._cli_path,
+                "auth",
+                "--delete",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
             )
-            await proc.wait()
-        except OSError as e:
-            return Result(success=False, error=f'spawn_failed:{e}')
-        await self._bus.emit(Events.STORE_LOGOUT, store='epic')
+            await asyncio.wait_for(
+                proc.communicate(),
+                timeout=self._cli_timeout,
+            )
+        except (TimeoutError, OSError) as e:
+            logger.warning("[epic_auth] logout: %s", e)
+        await self._bus.emit(
+            Events.STORE_LOGOUT,
+            store="epic",
+        )
         return Result(success=True)
 
     async def _fetch_login_url(self) -> str:
         """Fetch login URL."""
         proc = await self._spawn_legendary_auth()
         try:
-            url = await asyncio.wait_for(
-                self._scrape_url_from_proc(proc),
-                timeout=self._cli_timeout_seconds,
-            )
-        except TimeoutError:
+            url = await self._scrape_url_from_proc(proc)
+        finally:
             await self._terminate_legendary(proc)
+        if not url:
             raise StoreAuthError(
-                'auth_url_scrape_timeout', store='epic',
-            ) from None
-        await self._terminate_legendary(proc)
-        return url or ''
+                "no OAuth URL found in legendary auth output",
+                store="epic",
+            )
+        logger.info("[epic_auth] captured URL from legendary")
+        return url
 
     async def _spawn_legendary_auth(self) -> Any:
         """Spawn LEGENDARY auth."""
+        assert self._cli_path is not None, (
+            "_spawn_legendary_auth called before CLI is resolved"
+        )
         return await asyncio.create_subprocess_exec(
-            self._cli_path, 'auth',
+            self._cli_path,
+            "auth",
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
         )
 
     async def _scrape_url_from_proc(self, proc: Any) -> str | None:
         """Scrape URL from proc."""
-        if proc.stdout is None:
-            return None
-        while True:
-            line = await proc.stdout.readline()
-            if not line:
+        assert proc.stdout is not None
+        deadline = asyncio.get_event_loop().time() + self._cli_timeout
+        while asyncio.get_event_loop().time() < deadline:
+            remaining = deadline - asyncio.get_event_loop().time()
+            if remaining <= 0:
                 return None
-            decoded = line.decode('utf-8', errors='replace')
-            url = self._extract_url(decoded)
+            try:
+                line_bytes = await asyncio.wait_for(
+                    proc.stdout.readline(),
+                    timeout=remaining,
+                )
+            except TimeoutError:
+                return None
+            if not line_bytes:
+                return None
+            text = line_bytes.decode(errors="ignore").strip()
+            url = self._extract_url(text)
             if url:
                 return url
+        return None
 
     @staticmethod
     async def _terminate_legendary(proc: Any) -> None:
         """Terminate LEGENDARY."""
-        if proc is None or proc.returncode is not None:
-            return
         try:
             proc.terminate()
-        except ProcessLookupError:
-            return
-        try:
-            await asyncio.wait_for(proc.wait(), timeout=5.0)
+            await asyncio.wait_for(proc.wait(), timeout=2)
         except TimeoutError:
-            try:
-                proc.kill()
-            except ProcessLookupError:
-                pass
+            proc.kill()
+            await proc.wait()
 
     async def _register_code(self, code: str) -> AuthResult:
         """Register code."""
-        if not code:
-            return AuthResult(
-                success=False, store='epic', error='no_auth_code',
-            )
-        if not self._cli_path:
-            return AuthResult(
-                success=False, store='epic', error='legendary_not_found',
-            )
+        assert self._cli_path is not None, (
+            "_register_code called before CLI is resolved"
+        )
+        proc = await asyncio.create_subprocess_exec(
+            self._cli_path,
+            "auth",
+            "--code",
+            code,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
         try:
-            proc = await asyncio.create_subprocess_exec(
-                self._cli_path, 'auth', '--code', code,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
+            stdout, stderr = await asyncio.wait_for(
+                proc.communicate(),
+                timeout=self._cli_timeout,
             )
-            _out, err = await proc.communicate()
-        except OSError as e:
-            await self._bus.emit(
-                Events.STORE_AUTH_FAILED, store='epic', error=f'spawn:{e}',
-            )
+        except TimeoutError:
             return AuthResult(
-                success=False, store='epic', error=f'spawn:{e}',
+                success=False,
+                error="register_timeout",
+                store="epic",
             )
-        if proc.returncode != 0:
-            message = err.decode('utf-8', errors='replace').strip() or 'auth_failed'
-            await self._bus.emit(
-                Events.STORE_AUTH_FAILED, store='epic', error=message,
-            )
-            return AuthResult(
-                success=False, store='epic', error=message,
-            )
-        await self._bus.emit(Events.STORE_AUTH_COMPLETE, store='epic')
-        return AuthResult(success=True, store='epic')
+        if proc.returncode == 0:
+            logger.info("[epic_auth] legendary register succeeded")
+            return AuthResult(success=True, store="epic")
+        err = (stderr.decode(errors="ignore") or stdout.decode(errors="ignore"))[:200]
+        logger.warning("[epic_auth] register failed: %s", err)
+        return AuthResult(
+            success=False,
+            error="register_failed",
+            store="epic",
+        )
 
     @staticmethod
     def _extract_url(line: str) -> str | None:
         """Extract URL."""
-        if 'https://' not in line:
+        if "https://" not in line:
             return None
-        for word in line.split():
-            if not word.startswith('https://'):
+        for token in line.split():
+            if not token.startswith("https://"):
                 continue
-            if any(marker in word.lower() for marker in _AUTH_URL_MARKERS):
-                return word.rstrip(').,')
+            if any(m in token for m in _AUTH_URL_MARKERS):
+                return token
         return None

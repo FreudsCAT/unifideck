@@ -1,0 +1,144 @@
+/**
+ * Backend RPC contract — TypeScript mirror of `core/types/`.
+ *
+ * Every dataclass exposed via `to_dict()` on the Python side
+ * has its TS interface here. Field names use the wire format
+ * (snake_case) so JSON parsing is a no-op cast — no runtime
+ * adapter, no field rename pass.
+ *
+ * If a field is added on the backend dataclass, it MUST be
+ * added here in the same PR that lands the backend change.
+ * The contract is enforced by reviewers, not by tooling
+ * (TypeScript can't see Python).
+ */
+/** Universal `Game` representation aggregated from any store. */
+export interface Game {
+  id: string;
+  title: string;
+  store: StoreId;
+  is_installed: boolean;
+  cover_image?: string;
+  install_path?: string;
+  executable?: string;
+  app_id?: number;
+  steam_app_id?: number;
+  ownership_type?: OwnershipType;
+  store_tags?: GameTag[];
+  size_bytes?: number;
+  deck_rating?: DeckRating;
+}
+
+/** Common wrapper for every RPC method's response. */
+export interface Result {
+  success: boolean;
+  error?: string;
+}
+
+/** Auth start/complete/logout response. */
+export interface AuthResult extends Result {
+  url?: string;
+  needs_2fa?: boolean;
+  token?: string;
+  store: StoreId;
+}
+
+/** Install completion response. */
+export interface InstallResult extends Result {
+  install_path?: string;
+  game_id: string;
+  size_mb?: number;
+  store: StoreId;
+}
+
+/** Sync run summary. */
+export interface SyncResult extends Result {
+  games: Game[];
+  store: StoreId;
+  count: number;
+  duration_ms: number;
+}
+
+/** Download progress snapshot. */
+export interface DownloadResult extends Result {
+  progress: number;
+  game_id: string;
+  store: StoreId;
+  queued: boolean;
+}
+
+/** Per-store status block returned by `check_store_status`. */
+export interface StoreInfo {
+  name: StoreId;
+  display_name: string;
+  icon: string;
+  available: boolean;
+  auth_status: StoreStatus;
+}
+
+/**
+ * Discriminator for which store a Game/Auth/Download
+ * payload comes from.
+ *
+ * The set is closed on purpose : every backend route
+ * accepting a store argument validates against this
+ * union and rejects anything else. Adding a 6th store
+ * therefore requires a coordinated change in both
+ * `core/types/store_id.py` and this file.
+ */
+export type StoreId =
+  | "steam"
+  | "epic"
+  | "gog"
+  | "amazon"
+  | "microsoft"
+  | "ubisoft";
+
+/**
+ * Per-store availability + auth state, returned by
+ * `check_store_status` RPC. The frontend uses it to
+ * decide whether to show a Connect button, a Sync
+ * button, or a re-auth prompt.
+ *
+ *  - `unauthenticated` : no token present
+ *  - `authenticated`   : token valid, ready to sync
+ *  - `error`           : token rejected by the store API
+ *  - `unavailable`     : store CLI / Wine prefix missing
+ */
+export type StoreStatus =
+  | "connected"
+  | "disconnected"
+  | "expired"
+  | "error";
+
+/**
+ * How the user owns a given title. Discriminates
+ * subscription games (xCloud, Game Pass) from
+ * purchased ones, which matters for badge display
+ * and uninstall confirmation copy.
+ */
+export type OwnershipType = "owned" | "subscription" | "trial";
+
+/**
+ * Tag attached to a Game by its store. Drives the
+ * coloured pill rendered in `GameInfoMetadata`. Tags
+ * are additive : a game can carry several at once
+ * (e.g. `dlc` + `early-access`).
+ */
+export type GameTag =
+  | "demo"
+  | "addon"
+  | "dlc"
+  | "preorder"
+  | "early_access";
+
+/**
+ * Steam Deck verification rating, as returned by
+ * Valve's Deck Verified compatibility report (or
+ * inferred from ProtonDB community grades when
+ * Valve has no rating yet).
+ */
+export type DeckRating =
+  | "verified"
+  | "playable"
+  | "unsupported"
+  | "unknown";

@@ -1,23 +1,30 @@
-"""event_bus/supervision/metrics_handler.py — Per-handler latency metrics.
+"""Per-handler latency metrics — track invocation timing per subscriber.
 
-Design:
-  - Each handler has a rolling window of the last 100 measurements
-    (deque with maxlen). Oldest entries drop off naturally.
-  - Percentiles (p50, p95) are computed on-demand via
-    `statistics.quantiles()` from the rolling window.
-  - Lifetime counters (invocations, total_ms, max_ms) are kept
-    separately from the window for long-term trends.
-  - Memory bounded: 100 floats per handler × ~24 handlers = ~20 KB
-    total. Safe to keep running for days.
+OP-10b | py_modules/unifideck/event_bus/supervision/metrics_handler.py
 
-Why a separate module from watchdog_handler:
-  - SRP: watchdog = reliability, metrics = observability. Two
-    modules mean each can evolve independently.
-  - The metrics collector has no failure modes — it just records
-    numbers. It doesn't need the exception handling and state
-    management of the watchdog.
+Two cooperating types:
 
+* ``HandlerLatencyStats`` — one record per handler, accumulating
+  ``invocations``, ``total_ms``, ``max_ms`` and computing live
+  ``p50_ms`` / ``p95_ms`` over a rolling window of the last 100
+  measurements.
+* ``HandlerLatencyCollector`` — the top-level dict-of-stats keyed
+  by handler name, with helpers to dump a snapshot or the
+  top-N slowest handlers.
+
+The percentile computation uses ``statistics.quantiles(n=20)`` —
+divides the sorted window into 20 buckets, so element 9 is the
+median (p50) and element 18 is approximately the 95th percentile.
+Cheap enough to recompute on every ``record`` call without
+profiling concerns.
+
+Used by:
+
+* the dev UI ("which handler is slow?" panel);
+* the watchdog (OP-10a) to decide which handler to quarantine
+  when bus throughput drops.
 """
+
 from __future__ import annotations
 
 import statistics
@@ -25,15 +32,25 @@ from collections import deque
 from dataclasses import dataclass, field
 from typing import Any
 
-# Size of the rolling window per handler. 100 samples is enough
-# for a stable p95 while keeping memory bounded. At ~8 bytes per
-# float, that's 800 bytes per handler — negligible.
 ROLLING_WINDOW_SIZE = 100
 
 
 @dataclass
 class HandlerLatencyStats:
-    """Latency statistics for a single handler."""
+    """Per-handler timing statistics + rolling window.
+
+    Attributes:
+        name: handler identifier (typically
+            ``module.Class.method``).
+        invocations: total count, monotonically increasing.
+        total_ms: cumulative duration, used for the global
+            average (not just the rolling window).
+        max_ms: all-time maximum duration observed.
+        p50_ms / p95_ms: percentiles over the rolling window —
+            recomputed on every ``record``.
+        _window: bounded buffer of the last
+            ``ROLLING_WINDOW_SIZE`` (100) durations.
+    """
 
     name: str
     invocations: int = 0
@@ -41,14 +58,26 @@ class HandlerLatencyStats:
     max_ms: float = 0.0
     p50_ms: float = 0.0
     p95_ms: float = 0.0
-    # The rolling window itself. Not serialized in to_dict()
-    # because it's an implementation detail.
     _window: deque[float] = field(
         default_factory=lambda: deque(maxlen=ROLLING_WINDOW_SIZE),
     )
 
     def record(self, duration_ms: float) -> None:
-        """Append a new measurement and update aggregates."""
+        """Add a duration measurement and update all aggregates.
+
+        Updates four state pieces atomically:
+
+        1. Bump ``invocations``;
+        2. Add to ``total_ms`` for the cumulative average;
+        3. Update ``max_ms`` if this measurement is the new max
+           (running maximum, never decays — by design, max is
+           a "worst ever seen" alert signal);
+        4. Push into the rolling window and recompute the live
+           p50/p95.
+
+        Args:
+            duration_ms: handler execution time in milliseconds.
+        """
         self.invocations += 1
         self.total_ms += duration_ms
         if duration_ms > self.max_ms:
@@ -57,11 +86,17 @@ class HandlerLatencyStats:
         self._recompute_percentiles()
 
     def to_dict(self) -> dict[str, Any]:
-        """Return a JSON-serializable snapshot for the RPC response.
+        """Serialise to a JSON-friendly dict with ms values rounded.
 
-        Excludes the internal deque. Callers that want the raw
-        window can access `_window` directly (not recommended for
-        stable APIs).
+        Computes the cumulative average inline (not stored on
+        the dataclass — derived from ``total_ms / invocations``).
+        Every duration is rounded to 2 decimals (0.01 ms
+        precision) — sub-10 µs detail is meaningless given the
+        measurement overhead.
+
+        Returns:
+            Dict with ``name``, ``invocations``, ``total_ms``,
+            ``avg_ms``, ``max_ms``, ``p50_ms``, ``p95_ms``.
         """
         avg = self.total_ms / self.invocations if self.invocations else 0.0
         return {
@@ -74,15 +109,22 @@ class HandlerLatencyStats:
             "p95_ms": round(self.p95_ms, 2),
         }
 
-    # ── Private ──────────────────────────────────────────────────
-
     def _recompute_percentiles(self) -> None:
-        """Recompute p50/p95 from the rolling window.
+        """Refresh ``p50_ms`` / ``p95_ms`` from the rolling window.
 
-        `statistics.quantiles(n=20)` returns the 19 cut-points,
-        giving p5, p10, ..., p95 at index 18. p50 is index 9.
-        Needs at least 2 data points — for 1 sample we just use
-        that value.
+        Edge cases:
+
+        * **Empty window** (only happens just after reset) →
+          no-op.
+        * **Single sample** → both p50 and p95 equal that
+          sample (no real distribution yet).
+        * **2+ samples** → ``statistics.quantiles(n=20)``
+          divides the sorted window into 20 buckets;
+          ``qs[9]`` is the median (p50), ``qs[18]`` is
+          approximately the 95th percentile.
+
+        Called on every ``record`` — cheap enough at window
+        size 100 (≈ µs).
         """
         n = len(self._window)
         if n == 0:
@@ -96,21 +138,28 @@ class HandlerLatencyStats:
 
 
 class HandlerLatencyCollector:
-    """Central registry of per-handler latency stats.
+    """Top-level registry of per-handler latency stats."""
 
-    Usage:
-        collector = HandlerLatencyCollector()
-        t0 = time.monotonic()
-        await handler(...)
-        collector.record("my.handler", (time.monotonic() - t0) * 1000)
-        snapshot = collector.get_snapshot()  # for RPC response
-    """
+    def __init__(self) -> None:
+        """Initialise with an empty stats dict.
 
-    def __init__(self) -> None:  # noqa: D107 — class docstring documents the constructor's contract
+        Handlers are added lazily on first ``record`` — no need
+        to pre-declare them, which would require knowledge of
+        the full subscriber list at bus construction time.
+        """
         self._stats: dict[str, HandlerLatencyStats] = {}
 
     def record(self, handler_name: str, duration_ms: float) -> None:
-        """Record one invocation's duration. Cheap — O(log n)."""
+        """Record a measurement for ``handler_name``.
+
+        Lazy-creates the ``HandlerLatencyStats`` record on first
+        call. Delegates to the record's own ``record`` method
+        for the aggregation logic.
+
+        Args:
+            handler_name: handler identifier.
+            duration_ms: measured duration in milliseconds.
+        """
         stats = self._stats.get(handler_name)
         if stats is None:
             stats = HandlerLatencyStats(name=handler_name)
@@ -118,16 +167,30 @@ class HandlerLatencyCollector:
         stats.record(duration_ms)
 
     def get_snapshot(self) -> dict[str, dict[str, float]]:
-        """Return all handler stats as a JSON-serializable dict."""
-        return {
-            name: stats.to_dict() for name, stats in self._stats.items()
-        }
+        """Return per-handler stats as a JSON-friendly dict-of-dicts.
+
+        Used by the dev UI to render the full latency table.
+
+        Returns:
+            Mapping ``handler_name → stats_dict``. Each value
+            is the output of ``HandlerLatencyStats.to_dict``.
+        """
+        return {name: stats.to_dict() for name, stats in self._stats.items()}
 
     def get_top_n(self, n: int = 10) -> dict[str, dict[str, float]]:
-        """Return the top-N slowest handlers by p95 latency.
+        """Return the ``n`` slowest handlers ranked by p95.
 
-        Useful for frontend dashboards that want to show "which
-        handlers to look at first" without rendering all 24.
+        Why p95 (not max or mean): p95 captures sustained
+        slowness, immune to one-off spikes (max) and dilution
+        by fast calls (mean). Used by the dev UI to highlight
+        problem handlers.
+
+        Args:
+            n: maximum number of entries to return (default 10).
+
+        Returns:
+            Same shape as ``get_snapshot`` but truncated and
+            ordered by p95 descending.
         """
         sorted_stats = sorted(
             self._stats.values(),
@@ -137,5 +200,22 @@ class HandlerLatencyCollector:
         return {s.name: s.to_dict() for s in sorted_stats[:n]}
 
     def reset(self, handler_name: str) -> bool:
-        """Clear stats for one handler. Returns True if it existed."""
-        return self._stats.pop(handler_name, None) is not None
+        """Replace the stats record for ``handler_name`` with a fresh one.
+
+        Used after a deployment / config change when historical
+        data would be misleading. The handler keeps its identity
+        but starts counting from zero.
+
+        Args:
+            handler_name: handler identifier.
+
+        Returns:
+            ``True`` if a record existed and was reset, ``False``
+            if no such handler had been recorded yet (no-op).
+        """
+        if handler_name in self._stats:
+            self._stats[handler_name] = HandlerLatencyStats(
+                name=handler_name,
+            )
+            return True
+        return False

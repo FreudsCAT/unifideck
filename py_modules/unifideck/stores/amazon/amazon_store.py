@@ -1,22 +1,34 @@
-"""amazon_store.py — Public ``AmazonStore`` (StoreBase implementation).
+"""Amazon Games store — Layer-4 implementation of the unified store interface.
 
-# OP-49a | py_modules/unifideck/stores/amazon/amazon_store.py | Depends: OP-47b
+OP-49a | py_modules/unifideck/stores/amazon/amazon_store.py
 
-Façade that wires nile, the library reader, install/update pipelines
-and the OAuth auth flow into a single :class:`StoreBase` subclass.
+``AmazonStore`` is the orchestration class that wires every Amazon
+sub-component together and exposes them through the ``StoreBase``
+contract. It owns one instance each of :
+
+* ``AmazonAuthFlow`` (OP-49b)      — embedded-browser OAuth flow.
+* ``AmazonLibraryReader`` (OP-49c) — owned-games library reader.
+* ``AmazonInstaller`` (OP-49d)     — install/uninstall pipeline.
+* ``AmazonUpdateChecker`` (OP-49e) — periodic update polling.
+
+Amazon Games uses ``nile`` (a community CLI mirror of the Amazon
+Games launcher) for the actual downloads ; the store class is the
+high-level coordinator that orchestrates token lifecycle, library
+fetch, install pipeline, and update detection.
+
+Implements the standard ``StoreBase`` API : ``store_info``,
+``is_authed``, ``auth``, ``logout``, ``library``, ``install``,
+``uninstall``, ``launch``, etc. — each method delegates to the
+appropriate sub-component.
 """
-from __future__ import annotations
 
+from __future__ import annotations
 import json
 import logging
 import os
-from collections.abc import Awaitable, Callable
-from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
-
 from ...auth.browser import OAuthBrowserMonitor
 from ...auth.orchestrator import AuthOrchestrator
-from ...core.binaries import read_cli_timeouts
 from ...core.types import (
     AuthResult,
     CLITool,
@@ -27,6 +39,7 @@ from ...core.types import (
     StoreInfo,
 )
 from ...security import emit_external_auth_check_failed
+from ...services.shortcut import ShortcutService
 from ...utils.config_helpers import get_cfg
 from ..shared.store_base import StoreBase
 from .amazon_auth import AmazonAuthFlow
@@ -38,31 +51,24 @@ if TYPE_CHECKING:
     from ...config import ConfigManager
     from ...core.cache_manager import CacheManager
     from ...event_bus.event_bus import EventBus
-    from ...services.shortcut.service import ShortcutService
-
 logger = logging.getLogger(__name__)
-_NILE_USER_JSON = '~/.config/nile/user.json'
-_NILE_CONFIG_DIR = '~/.config/nile'
-_DEFAULT_SUCCESS_MARKERS: list[str] = [
-    'maplanding', 'access_token', 'refresh_token',
-]
 
 
 class AmazonStore(StoreBase):
     """Amazon store."""
 
     store_info = StoreInfo(
-        name='amazon',
-        display_name='Amazon Games',
-        auth_method='oauth',
-        icon_asset='amazon.png',
+        name="amazon",
+        display_name="Amazon Games",
+        auth_method="oauth",
+        icon_asset="amazon.png",
         uses_wine=False,
         supports_install=True,
     )
     CLI_TOOL = CLITool(
-        name='nile',
-        search_paths=['bin/nile'],
-        version_flag='--version',
+        name="nile",
+        search_paths=["bin/nile"],
+        version_flag="--version",
     )
 
     def __init__(
@@ -76,142 +82,139 @@ class AmazonStore(StoreBase):
     ) -> None:
         """Initialize the instance."""
         super().__init__(bus, cache, plugin_dir, config)
-        self._config_manager = config
+        self.cli_path: str | None = self._find_binary(self.CLI_TOOL)
+        if not self.cli_path:
+            logger.warning("[AmazonStore] nile binary not found")
         self._shortcut_service = shortcut_service
-        self._browser_monitor = browser_monitor
-        self._cli_path = self._find_binary(self.CLI_TOOL)
-        amazon_cfg = self._read_amazon_config(config)
+        amazon_cfg = config.get("stores.amazon") if config else None
+        if amazon_cfg is None:
+            raise KeyError(
+                "config.stores.amazon is required",
+            )
         self._library = AmazonLibraryReader(
-            config_dir=str(amazon_cfg['nile_config_dir']),
+            config_dir=amazon_cfg["nile_config_dir"],
         )
         self._installer = AmazonInstaller(
             bus=bus,
-            cli_path=self._cli_path,
+            cli_path=self.cli_path,
             library=self._library,
             find_exe=self._find_exe,
-            default_install_root=str(amazon_cfg['install_root']),
-            install_timeout_seconds=int(amazon_cfg['install_timeout']),
-            uninstall_timeout_seconds=int(amazon_cfg['uninstall_timeout']),
+            default_install_root=amazon_cfg["default_install_root"],
         )
         self._updates = AmazonUpdateChecker(
             bus=bus,
-            cli_path=self._cli_path,
+            cli_path=self.cli_path,
             library=self._library,
-            list_updates_timeout=int(amazon_cfg['updates_list_timeout']),
-            get_size_timeout=int(amazon_cfg['info_timeout']),
-            default_install_root=str(amazon_cfg['install_root']),
+            list_updates_timeout=amazon_cfg["list_updates_timeout_seconds"],
+            get_size_timeout=amazon_cfg["get_size_timeout_seconds"],
+            default_install_root=amazon_cfg["default_install_root"],
         )
-        self._auth_url_timeout = int(amazon_cfg['auth_url_timeout'])
-        self._success_markers = list(amazon_cfg['success_markers'])
         if browser_monitor is not None:
             orchestrator = AuthOrchestrator(
                 bus=bus,
                 browser_monitor=browser_monitor,
-                store_name='amazon',
+                store_name="amazon",
             )
             self._auth: AmazonAuthFlow | None = AmazonAuthFlow(
                 bus=bus,
                 orchestrator=orchestrator,
-                cli_path=self._cli_path,
-                success_markers=self._success_markers,
-                cli_timeout_seconds=self._auth_url_timeout,
+                cli_path=self.cli_path,
+                success_markers=amazon_cfg["nile_register_success_markers"],
             )
         else:
             self._auth = None
-        logger.info(
-            '[AmazonStore] cli=%s install_root=%s',
-            self._cli_path, amazon_cfg['install_root'],
-        )
-
-    def _read_amazon_config(
-        self, config: ConfigManager | None,
-    ) -> dict[str, Any]:
-        """Read amazon config."""
-        cli_timeouts = read_cli_timeouts(config) if config else {}
-        return {
-            'install_root': str(get_cfg(
-                config, 'stores.amazon.install_root', '~/Games/Amazon',
-            )),
-            'nile_config_dir': str(get_cfg(
-                config, 'stores.amazon.nile_config_dir', _NILE_CONFIG_DIR,
-            )),
-            'install_timeout': int(get_cfg(
-                config, 'stores.amazon.install_timeout_seconds', 3600,
-            )),
-            'uninstall_timeout': int(get_cfg(
-                config, 'stores.amazon.uninstall_timeout_seconds', 120,
-            )),
-            'updates_list_timeout': int(cli_timeouts.get('install_poll', 30)),
-            'info_timeout': int(cli_timeouts.get('version_check', 30)),
-            'auth_url_timeout': int(cli_timeouts.get('auth_check', 30)),
-            'success_markers': _DEFAULT_SUCCESS_MARKERS,
-        }
+            logger.debug(
+                "[AmazonStore] no browser_monitor; auth disabled",
+            )
 
     async def is_available(self) -> bool:
-        """Is available."""
-        if not self._cli_path:
-            self._cached_available = False
-            return False
-        authenticated = self._check_nile_authenticated()
-        self._cached_available = authenticated
-        if not authenticated:
-            await emit_external_auth_check_failed(
-                self._bus, store='amazon', reason='no_nile_user_json',
-            )
-        return authenticated
+        """Check whether available."""
+        ok = self._check_nile_authenticated()
+        self._cached_available = ok
+        return ok
 
     def _check_nile_authenticated(self) -> bool:
         """Check NILE authenticated."""
-        user_json = os.path.expanduser(_NILE_USER_JSON)
-        if not os.path.isfile(user_json):
+        if not self.cli_path:
+            emit_external_auth_check_failed(
+                self._bus,
+                "amazon",
+                "cli_not_found",
+                "nile binary missing from search paths",
+            )
+            return False
+        user_file = os.path.expanduser(
+            get_cfg(
+                self._config,
+                "stores.amazon.user_file",
+                "~/.config/nile/user.json",
+            ),
+        )
+        if not os.path.isfile(user_file):
             return False
         try:
-            with open(user_json, encoding='utf-8') as f:
+            with open(user_file, encoding="utf-8") as f:
                 data = json.load(f)
         except (OSError, json.JSONDecodeError) as e:
-            logger.warning('[AmazonStore] user.json read: %s', e)
+            logger.debug(
+                "[AmazonStore] user.json invalid: %s",
+                e,
+            )
+            emit_external_auth_check_failed(
+                self._bus,
+                "amazon",
+                "parse_error",
+                f"{type(e).__name__}",
+            )
             return False
-        if not isinstance(data, dict):
-            return False
-        extensions = data.get('extensions')
-        return isinstance(extensions, dict) and 'customer_info' in extensions
+        extensions = data.get("extensions", {})
+        return "customer_info" in extensions
 
-    async def start_auth(self, **kwargs: Any) -> AuthResult:
+    async def start_auth(self, **kwargs) -> AuthResult:
         """Start auth."""
         if self._auth is None:
             return AuthResult(
-                success=False, store='amazon', error='auth_not_configured',
+                success=False,
+                error="auth_not_configured",
+                store="amazon",
             )
-        result = await self._auth.start_auth()
         await self._ensure_auth_shortcut()
-        return result
+        return cast("AuthResult", await self._auth.start_auth())
 
-    async def complete_auth(
-        self, code: str = '', **kwargs: Any,
-    ) -> AuthResult:
+    async def complete_auth(self, code: str = "", **kwargs) -> AuthResult:
         """Complete auth."""
-        if self._auth is None:
-            return AuthResult(
-                success=False, store='amazon', error='auth_not_configured',
-            )
-        return await self._auth._register_code(code)
+        if await self.is_available():
+            return AuthResult(success=True, store="amazon")
+        return AuthResult(
+            success=False,
+            error="not_authenticated",
+            store="amazon",
+        )
 
     async def logout(self) -> Result:
         """Logout."""
         if self._auth is None:
-            await self._bus.emit(Events.STORE_LOGOUT, store='amazon')
+            await self._emit(
+                Events.STORE_LOGOUT,
+                store="amazon",
+            )
             return Result(success=True)
         return await self._auth.logout()
 
     async def get_library(self) -> list[Game] | None:
         """Get library."""
+        if not self.cli_path:
+            return []
         try:
             owned = await self._library.read_owned_games()
             installed = await self._library.read_installed_ids()
             return merge_install_status(owned, installed)
         except Exception as e:
-            logger.warning('[AmazonStore] get_library failed: %s', e)
-            return None
+            logger.error(
+                "[AmazonStore] get_library failed: %s",
+                e,
+            )
+            return []
 
     async def install_game(
         self,
@@ -222,12 +225,12 @@ class AmazonStore(StoreBase):
     ) -> InstallResult:
         """Install game."""
         return await self._installer.install_game(
-            game_id, base_path=base_path, progress_cb=progress_cb,
+            game_id,
+            base_path,
+            progress_cb,
         )
 
-    async def uninstall_game(
-        self, game_id: str, **kwargs: Any,
-    ) -> Result:
+    async def uninstall_game(self, game_id: str, **kwargs: Any) -> Result:
         """Uninstall game."""
         return await self._installer.uninstall_game(game_id)
 
@@ -237,16 +240,12 @@ class AmazonStore(StoreBase):
         progress_cb: ProgressCallback | None = None,
         **kwargs: Any,
     ) -> InstallResult:
-        """Update game.
-
-        Amazon's ``nile`` doesn't ship a distinct ``update`` verb —
-        ``install`` is idempotent and applies any pending content
-        update. We delegate to install_game so the same progress
-        callback pipeline runs.
-        """
+        """Update game."""
         base_path = await self._updates.resolve_current_base_path(game_id)
         return await self._installer.install_game(
-            game_id, base_path=base_path, progress_cb=progress_cb,
+            game_id,
+            base_path=base_path,
+            progress_cb=progress_cb,
         )
 
     async def check_for_updates(self) -> list[str]:
@@ -262,16 +261,33 @@ class AmazonStore(StoreBase):
         return await self._library.get_official_url(game_id)
 
     async def _ensure_auth_shortcut(self) -> None:
-        """Ensure auth shortcut.
-
-        Amazon's OAuth runs through the Edge browser orchestrator
-        (no Wine binary involved), so no Steam auth shortcut is
-        required. Kept for PDF-spec parity.
-        """
-        return
-
-
-_: Callable[..., Any] | None = None
-_ = cast
-_ = Path
-_ = Awaitable
+        """Ensure auth shortcut."""
+        if self._shortcut_service is None:
+            logger.debug(
+                "[AmazonStore] no shortcut_service "
+                "injected; skipping auth shortcut creation",
+            )
+            return
+        launcher = os.path.join(
+            self._plugin_dir or "",
+            "py_modules",
+            "unifideck",
+            "launcher",
+            "dispatcher.py",
+        )
+        if not os.path.isfile(launcher):
+            logger.warning(
+                "[AmazonStore] launcher dispatcher not found at %s",
+                launcher,
+            )
+            return
+        result = await self._shortcut_service.add_auth_shortcut(
+            store="amazon",
+            launcher_path=launcher,
+            title="Amazon Games Sign-In",
+        )
+        if not result.success:
+            logger.warning(
+                "[AmazonStore] add_auth_shortcut failed: %s",
+                result.error,
+            )
