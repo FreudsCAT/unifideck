@@ -1,9 +1,22 @@
-"""services/artwork/event_handlers.py — EventBus subscribers.
+"""Artwork event handlers — drive artwork fetching from bus events.
 
-4 ``@subscribe``-decorated handlers driving the artwork
-pipeline. All ultimately call ``self.fetch_artwork`` on the
-host; they differ in trigger signals and payload shapes.
+OP-16b | py_modules/unifideck/services/artwork/event_handlers.py
+
+The mixin subscribes the artwork service to four bus events:
+
+* ``GAME_INSTALLED``    — fetch for a single freshly-installed game;
+* ``ARTWORK_REQUEST``   — explicit user-triggered fetch (e.g. via
+  the QAM "refresh artwork" button), with optional ``force`` flag;
+* ``SHORTCUT_CREATED``  — populate the artwork for an auth shortcut
+  (special handling because auth shortcuts have no real game title);
+* ``SYNC_COMPLETE``     — bulk-fetch on library sync completion,
+  parallelised under the service's concurrency semaphore.
+
+Separating the bus wiring from the service class keeps the latter
+focused on its synchronous query API (``has``, ``get_url``, etc.)
+and the reactive behaviour independently testable.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -12,130 +25,126 @@ from typing import TYPE_CHECKING, Any
 
 from ...core.types import Events
 from ...event_bus.event_bus_devex import subscribe
+from .fetcher import has_artwork
 
 if TYPE_CHECKING:
     from ...core.types import Game
-    # This is a mixin; `self` will be the ArtworkService facade at runtime.
-    pass
 
 logger = logging.getLogger(__name__)
 
-# Store id → SteamGridDB title for auth shortcuts. SGDB has art
-# for "Amazon Games", not for "amazon" or "Amazon Games Sign-In".
-# Reference data — kept here so the auth-shortcut handler stays
-# short and the table is greppable from anywhere.
-_AUTH_TITLE_FOR_LOOKUP: dict[str, str] = {
-    "amazon": "Amazon Games",
-    "epic": "Epic Games",
-    "gog": "GOG Galaxy",
-    "microsoft": "Xbox",
-    "ubisoft": "Ubisoft Connect",
-}
-
 
 class _EventHandlersMixin:
-    """EventBus subscribers for artwork fetching."""
+    """Bus subscriptions glued onto ``ArtworkService`` via inheritance."""
 
-    # Handlers assume host provides fetch_artwork
-    # async def fetch_artwork(self, app_id: int, store: str, game_id: str, title: str) -> dict: ...
+    _grid_dir: str
 
     @subscribe(Events.GAME_INSTALLED)
-    async def _on_game_installed(self: Any, **kwargs: Any) -> None:
-        """Fetch artwork immediately after a new install.
+    async def _on_game_installed(self, **kwargs: Any) -> None:
+        """Fetch artwork for a single freshly-installed game.
 
-        Missing ``app_id``/``store``/``game_id`` → silent skip
-        (partial payloads happen when the emitter failed to
-        resolve one of the fields).
+        Reads ``app_id``, ``store``, ``game_id`` and ``title`` from
+        the event payload and delegates to ``fetch_artwork``.
+        Silently no-ops if any of the three identifying fields is
+        missing (incomplete event from a misbehaving emitter).
         """
         app_id = kwargs.get("app_id")
         store = kwargs.get("store")
         game_id = kwargs.get("game_id")
-        title = kwargs.get("title")
-
-        if not all((app_id, store, game_id, title)):
-            return
-
-        # Fire and forget; background task
-        asyncio.create_task(self.fetch_artwork(app_id, store, game_id, title))
+        title = kwargs.get("title", "")
+        if app_id and store and game_id:
+            await self.fetch_artwork(app_id, store, game_id, title)
 
     @subscribe(Events.ARTWORK_REQUEST)
-    async def _on_artwork_request(self: Any, **kwargs: Any) -> None:
-        """Handle on-demand artwork fetch requests.
+    async def _on_artwork_request(self, **kwargs: Any) -> None:
+        """Honour an explicit ``ARTWORK_REQUEST`` event.
 
-        Contract: ``app_id`` + ``title`` required. ``force=True``
-        bypasses the "already has artwork" check (useful on
-        account switch when existing art is stale). ``store`` /
-        ``game_id`` optional — SteamGridDB only needs the title.
+        Skips the fetch when artwork is already present (unless
+        ``force=True`` is in the payload, used by the "refresh"
+        button to override the cache and re-download). The default
+        skip avoids redundant network calls when the UI fires
+        repeated requests for the same game.
         """
         app_id = kwargs.get("app_id")
-        title = kwargs.get("title")
-        force = kwargs.get("force", False)
-        store = kwargs.get("store", "unknown")
-        game_id = kwargs.get("game_id", "unknown")
-
+        title = kwargs.get("title", "")
         if not app_id or not title:
+            logger.debug(
+                "[ArtworkService] ARTWORK_REQUEST ignored: missing app_id or title",
+            )
             return
-
-        asyncio.create_task(
-            self.fetch_artwork(app_id, store, game_id, title, force=force)
-        )
+        force = bool(kwargs.get("force", False))
+        if not force and await has_artwork(self._grid_dir, app_id):
+            logger.debug(
+                "[ArtworkService] artwork already present for app_id=%d, skipping",
+                app_id,
+            )
+            return
+        store = kwargs.get("store", "")
+        game_id = kwargs.get("game_id", "")
+        await self.fetch_artwork(app_id, store, game_id, title)
 
     @subscribe(Events.SHORTCUT_CREATED)
-    async def _on_shortcut_created(self: Any, **kwargs: Any) -> None:
-        """Fetch a cover for a newly-created shortcut.
+    async def _on_shortcut_created(self, **kwargs: Any) -> None:
+        """Special-case artwork fetch for auth shortcuts.
 
-        Only acts on auth shortcuts (``is_auth=True``) — game
-        shortcuts already get artwork via ``GAME_INSTALLED``
-        with richer data. Uses ``_AUTH_TITLE_FOR_LOOKUP`` to
-        map the store id to what SGDB actually has art for.
+        Auth shortcuts (Ubisoft Connect, Epic Games Launcher, …)
+        don't have a real game title to search SGDB for. This
+        handler maps each store identifier to a human-readable
+        launcher name (``"Ubisoft Connect"``, ``"Epic Games"``,
+        etc.) used as the SGDB query so the launcher's official
+        artwork shows up in the Steam library.
+
+        Skips silently if the event isn't for an auth shortcut
+        (``is_auth=True`` must be in the payload), if the artwork
+        is already present, or if essential fields are missing.
         """
-        is_auth = kwargs.get("is_auth", False)
-        if not is_auth:
+        if not kwargs.get("is_auth"):
             return
-
-        app_id = kwargs.get("app_id")
-        store = kwargs.get("store")
-        title = kwargs.get("title")
-
-        if not app_id or not store:
+        unsigned_id = kwargs.get("unsigned_id")
+        store = kwargs.get("store", "")
+        if not unsigned_id or not store:
             return
-
-        sgdb_title = _AUTH_TITLE_FOR_LOOKUP.get(store, title or store)
-        
-        asyncio.create_task(
-            self.fetch_artwork(app_id, store, "auth", sgdb_title)
-        )
+        title_for_lookup = {
+            "amazon": "Amazon Games",
+            "epic": "Epic Games",
+            "gog": "GOG Galaxy",
+            "microsoft": "Xbox",
+            "ubisoft": "Ubisoft Connect",
+        }.get(store, store.capitalize())
+        if not await has_artwork(self._grid_dir, unsigned_id):
+            await self.fetch_artwork(
+                unsigned_id,
+                store,
+                f"{store}-auth",
+                title_for_lookup,
+            )
 
     @subscribe(Events.SYNC_COMPLETE)
-    async def _on_sync_complete(self: Any, **kwargs: Any) -> None:
-        """Bulk-fetch artwork for every synced game missing art.
+    async def _on_sync_complete(self, **kwargs: Any) -> None:
+        """Bulk-fetch artwork for every game in a sync result.
 
-        All fetches run concurrently via ``asyncio.gather`` —
-        rate limiting comes from the semaphore inside
-        ``fetch_artwork``. ``return_exceptions=True`` so one
-        failure doesn't block the batch.
+        Walks the ``games`` payload, filters out entries without
+        ``app_id`` or ``title``, skips those with artwork already
+        on disk, then launches every remaining fetch in parallel
+        through ``asyncio.gather``. Concurrency is bounded by the
+        service's internal semaphore (so this gather doesn't open
+        500 HTTP connections on a fresh install), and
+        ``return_exceptions=True`` keeps a single fetch failure
+        from cancelling the others.
         """
-        games = kwargs.get("games", [])
-        if not games:
-            return
-
-        from .fetcher import has_artwork
-
-        async def _process_game(game: Game) -> None:
-            if not game.launch_path:
-                return
-            
-            from ..shortcut.games_map import generate_app_id
-            app_id = generate_app_id(game.launch_path, game.title)
-            
-            if not getattr(self, "_grid_dir", None):
-                return
-                
-            has_art = await has_artwork(self._grid_dir, app_id)
-            if not has_art:
-                await self.fetch_artwork(app_id, game.store, game.id, game.title)
-
-        # Launch all fetches. The semaphore inside fetch_artwork controls concurrency.
-        tasks = [_process_game(game) for game in games]
+        games: list[Game] = kwargs.get("games", [])
+        tasks = []
+        for game in games:
+            if not game.app_id or not game.title:
+                continue
+            if await has_artwork(self._grid_dir, game.app_id):
+                continue
+            tasks.append(
+                self.fetch_artwork(
+                    game.app_id,
+                    game.store,
+                    game.store_game_id,
+                    game.title,
+                )
+            )
         if tasks:
-            asyncio.create_task(asyncio.gather(*tasks, return_exceptions=True))
+            await asyncio.gather(*tasks, return_exceptions=True)

@@ -1,68 +1,84 @@
-"""services/download/validators.py — Path validation + queue key derivation.
+"""Download validators — pure-function checks.
 
-Pure helpers — no service state, no I/O coupling. Kept
-separate so the service layer stays focused on orchestration
-while file-system sanity checks stay individually testable.
+OP-15d | py_modules/unifideck/services/download/validators.py
+
+Two pure functions :
+
+* ``item_key(item)`` — the canonical key for a download item
+  (``store:game_id``), used as the queue's de-dup primary key;
+* ``validate_path(path)`` — sanity check the target path before
+  starting a download (writable, enough free space, not inside a
+  protected directory).
 """
+
 from __future__ import annotations
-
 import os
-from typing import TYPE_CHECKING
-
+from pathlib import Path
 from ...core.types import Result
-
-if TYPE_CHECKING:
-    from .models import DownloadItem
-
-# Minimum free space (GB) required on the install volume.
-# Below this, the download is refused with ``low_space:<x>GB``
-# so the frontend can render a specific toast.
-_MIN_FREE_GB = 1.0
+from .models import DownloadItem
 
 
 def item_key(item: DownloadItem) -> str:
-    """Return ``"<store>:<game_id>"`` — the queue's unique key.
+    """Compute the canonical de-dup key for a download item.
 
-    Used for de-dup checks in ``DownloadService.add`` and for
-    progress-event coalescing at the dispatcher level.
+    ``"<store>:<game_id>"`` — the same key the rest of the service
+    uses to look up running downloads in ``_running`` and to reject
+    duplicates in ``add``.
+
+    Args:
+        item: a ``DownloadItem``.
+
+    Returns:
+        Stable string key.
     """
     return f"{item.store}:{item.game_id}"
 
 
 def validate_path(path: str) -> Result:
-    """Check that ``path`` is writable and has enough free space.
+    """Pre-flight check the install path before queuing.
 
-    Sequence: empty string → ``empty_path``; missing dir →
-    ``mkdir -p`` (``mkdir_failed`` on OSError);
-    ``os.access(W_OK)`` → ``not_writable``; ``statvfs`` free
-    space < ``_MIN_FREE_GB`` → ``low_space:<x>GB``.
-    ``statvfs`` failure is best-effort skip — we don't refuse
-    a download just because we couldn't stat the volume (some
-    FUSE mounts don't support it).
+    Three checks in order:
 
-    Returns ``Result(success=True)`` on pass.
+    1. **Non-empty** — reject empty paths;
+    2. **Directory exists or can be created** — try ``mkdir
+       -p``, reject with ``mkdir_failed`` if the OS rejects it
+       (permission denied, parent missing on a read-only mount);
+    3. **Writable** — ``os.access(W_OK)``;
+    4. **At least 1 GB free** — quick check via ``statvfs``;
+       reject with ``low_space:<GB>`` below the threshold.
+       ``statvfs`` failures (unusual filesystems) are tolerated
+       and the check is skipped — better to attempt the install
+       than to refuse on a stat quirk.
+
+    Args:
+        path: target install directory.
+
+    Returns:
+        ``Result(success=True)`` if the path passes every check,
+        ``Result(success=False, error=…)`` with a specific error
+        code otherwise.
     """
     if not path:
         return Result(success=False, error="empty_path")
-
-    try:
-        os.makedirs(path, exist_ok=True)
-    except OSError:
-        return Result(success=False, error="mkdir_failed")
-
+    p = Path(path)
+    if not p.is_dir():
+        try:
+            p.mkdir(parents=True, exist_ok=True)
+        except OSError as e:
+            return Result(
+                success=False,
+                error=f"mkdir_failed: {e}",
+            )
     if not os.access(path, os.W_OK):
         return Result(success=False, error="not_writable")
-
     try:
-        st = os.statvfs(path)
-        # Check free bytes available to non-root user (f_bavail * f_frsize)
-        free_bytes = st.f_bavail * st.f_frsize
-        free_gb = free_bytes / (1024**3)
-
-        if free_gb < _MIN_FREE_GB:
-            return Result(success=False, error=f"low_space:{free_gb:.1f}GB")
-    except Exception:
-        # Best-effort skip if statvfs fails
+        stat = os.statvfs(path)
+        free_gb = (stat.f_bavail * stat.f_frsize) / (1024**3)
+        if free_gb < 1.0:
+            return Result(
+                success=False,
+                error=f"low_space:{free_gb:.1f}GB",
+            )
+    except OSError:
         pass
-
     return Result(success=True)

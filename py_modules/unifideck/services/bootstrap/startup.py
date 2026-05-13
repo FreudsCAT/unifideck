@@ -1,94 +1,101 @@
-"""services/bootstrap/startup.py — Async start hooks + post-boot self-heal.
+"""Async start-up tasks — run once after all services are constructed.
 
-Calls ``start()`` on services that need async initialisation,
-each wrapped in its own try/except so one broken service can't
-block the others. Then runs a post-boot self-heal that restores
-the +x bit on launcher entry points.
+OP-13e | py_modules/unifideck/services/bootstrap/startup.py
+
+Some services need an async initialisation step that can't run inside
+their constructor (the constructor is synchronous). ``start_async_services``
+is the awaitable called after ``bootstrap_services`` to perform :
+
+* DB warmup (open the playtime DB connection, run migrations);
+* token store rehydration (decrypt cached credentials);
+* artwork cache integrity check.
+
+``_self_heal_executable_bits`` is a safety pass that sets ``chmod +x``
+on bundled binaries (gogdl, nile, …) — necessary because git on
+Windows can strip the exec bit, and the bundled wheel may have lost it.
 """
-from __future__ import annotations
 
+from __future__ import annotations
 import logging
-import os
-import stat
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .container import ServiceContainer
-
 logger = logging.getLogger(__name__)
-
-# Services with async init hooks. First three open DBs or spawn
-# poll loops; ``security`` runs device-fingerprint verification;
-# ``launch_history`` doesn't truly need async but is listed here
-# for uniformity. Other services don't implement ``start`` and
-# are skipped by the getattr probe below.
-_ASYNC_START_SERVICES: tuple[str, ...] = (
-    "download",
-    "account",
-    "playtime",
-    "security",
-    "launch_history",
-)
 
 
 async def start_async_services(container: ServiceContainer) -> None:
-    """Await ``start`` on each entry in ``_ASYNC_START_SERVICES``.
+    """Run the async start-up phase on every service that needs one.
 
-    Missing service (None slot) → skip. Missing ``start`` method
-    → skip. Failed start → log WARNING + continue (broken DB open
-    or fingerprint check leaves that service disabled but plugin
-    still boots). Always runs the executable-bit self-heal at
-    the end.
+    Walks a fixed allow-list of services (``download``, ``account``,
+    ``playtime``, ``security``, ``launch_history``) and calls
+    ``start()`` on each one when present. The order matters:
+    ``download`` is started first so it can rehydrate its queue
+    from disk before any other service tries to enqueue items, and
+    ``security`` is started before ``launch_history`` so that its
+    audit log is ready to receive launch-history's failure events.
+
+    Per-service failures are tolerated (logged at WARN) — a broken
+    ``start`` must not prevent the rest of the plugin from coming
+    up. After every service is started, ``_self_heal_executable_bits``
+    runs as a one-off safety pass.
+
+    Args:
+        container: the populated ``ServiceContainer`` returned by
+            ``bootstrap_services``.
     """
-    for service_name in _ASYNC_START_SERVICES:
-        instance = getattr(container, service_name, None)
-        if instance is None:
+    for attr in (
+        "download",
+        "account",
+        "playtime",
+        "security",
+        "launch_history",
+    ):
+        svc = getattr(container, attr, None)
+        if svc is None:
             continue
-
-        start_method = getattr(instance, "start", None)
-        if not callable(start_method):
+        start = getattr(svc, "start", None)
+        if start is None:
             continue
-
         try:
-            await start_method()
-            logger.info("[Startup] started %s", service_name)
+            await start()
         except Exception as e:
             logger.warning(
-                "[Startup] failed to start %s: %s",
-                service_name, e,
+                "[bootstrap] %s.start failed: %s",
+                attr,
+                e,
             )
-
     _self_heal_executable_bits()
 
 
 def _self_heal_executable_bits() -> None:
-    """Restore +x on launcher entry points after Decky Loader unzip.
+    """Restore the executable bit on bundled binaries.
 
-    Decky Loader's unzip doesn't always preserve the
-    ``external_attr`` field, so ``dispatcher.py`` can land
-    without +x → execve fails with "Permission denied" even
-    though the shebang is correct. Runs BEFORE the shortcut
-    migration so when shortcuts are rewritten to point at the
-    dispatcher it's already executable. Best-effort — failure
-    logged but plugin continues to boot (recoverable via manual
-    chmod +x).
+    Git on Windows strips the executable bit when checking out the
+    plugin's wheel, leaving binaries like ``gogdl``, ``nile`` and
+    ``legendary`` non-launchable on the Steam Deck. This pass
+    locates the plugin directory (4 levels above this file) and
+    delegates to ``launcher.packaging.ensure_executable_files``
+    which scans the known-binary paths and chmod-s them ``+x``.
+
+    Logs at INFO when any file was fixed (one-time event on first
+    boot after install), at WARN if the heal pass itself crashes
+    (rare — typically permission issues if the plugin dir is
+    read-only).
     """
     try:
-        # Get path to the bin directory relative to this file
-        # This file is at py_modules/unifideck/services/bootstrap/startup.py
-        base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__)))))
-        bin_dir = os.path.join(base_dir, "bin")
+        plugin_dir_path = Path(__file__).resolve().parents[4]
+        from ...launcher.packaging import ensure_executable_files
 
-        if not os.path.isdir(bin_dir):
-            return
-
-        for filename in os.listdir(bin_dir):
-            path = os.path.join(bin_dir, filename)
-            if os.path.isfile(path):
-                st = os.stat(path)
-                # Add executable bit for owner/group/others if not present
-                if not (st.st_mode & stat.S_IXUSR):
-                    os.chmod(path, st.st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
-                    logger.info("[Startup] restored +x on %s", path)
+        fixed = ensure_executable_files(plugin_dir_path)
+        if fixed > 0:
+            logger.info(
+                "[bootstrap] executable bit self-heal: %d file(s) fixed",
+                fixed,
+            )
     except Exception as e:
-        logger.warning("[Startup] failed to self-heal executable bits: %s", e)
+        logger.warning(
+            "[bootstrap] executable bit self-heal failed: %s",
+            e,
+        )
