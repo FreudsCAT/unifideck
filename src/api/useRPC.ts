@@ -21,8 +21,31 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { mapRpcError, RpcError } from "./rpc-errors";
 import type { RouteName } from "./rpc-routes";
 
+/**
+ * Backend RPC envelope shape. Every method wrapped by
+ * `@auto_wrap_rpc_methods` returns this three-key dict.
+ * We unwrap it here so consumers see only `TReturn`.
+ */
+interface RpcEnvelope<T = unknown> {
+  success: boolean;
+  error: string | null;
+  data: T;
+}
+
+/** Type guard for the backend envelope. */
+function isRpcEnvelope(v: unknown): v is RpcEnvelope {
+  return (
+    typeof v === "object" &&
+    v !== null &&
+    "success" in v &&
+    "data" in v
+  );
+}
+
 /** Low-level RPC caller. Returns a stable async function
- *  bound to the given route. */
+ *  bound to the given route. Automatically unwraps the
+ *  backend `{success, error, data}` envelope so callers
+ *  receive only the `data` payload. */
 export function useRPC<TArgs extends readonly unknown[], TReturn>(
   route: RouteName): (...args: TArgs) => Promise<TReturn> {
   return useCallback(
@@ -31,9 +54,27 @@ export function useRPC<TArgs extends readonly unknown[], TReturn>(
         // @decky/api's call signature is variadic-typed; we
         // erase the variadic at the boundary and re-impose
         // the strict type via the generic.
-        return await call<TArgs, TReturn>(route, ...args);
-      } catch (raw) {
-        throw mapRpcError(raw, route);
+        const raw = await call<unknown[], RpcEnvelope<TReturn> | TReturn>(route, ...(args as unknown as unknown[]));
+
+        // Unwrap the backend envelope if present.
+        if (isRpcEnvelope(raw)) {
+          if (!raw.success) {
+            throw new RpcError(
+              "UNKNOWN",
+              raw.error ?? "RPC call failed",
+              route,
+              raw,
+            );
+          }
+          return raw.data as TReturn;
+        }
+
+        // Fallback: if the response is not enveloped (should
+        // not happen with the current backend, but defensive).
+        return raw as TReturn;
+      } catch (err) {
+        if (err instanceof RpcError) throw err;
+        throw mapRpcError(err, route);
       }
     },
     [route],

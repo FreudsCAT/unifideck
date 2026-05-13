@@ -75,11 +75,11 @@ export const LANGUAGE_NAMES: Record<SupportedLanguage, string> = {
   "ru-RU": "Русский",
   "uk-UA": "Українська",
   "tr-TR": "Türkçe",
-  "ja-JP": "日本語",
-  "ko-KR": "한국어",
-  "zh-CN": "简体中文",
-  "zh-TW": "繁體中文",
-  "ar-SA": "العربية",
+  "ja-JP": "Japanese",
+  "ko-KR": "Korean",
+  "zh-CN": "Simplified Chinese",
+  "zh-TW": "Traditional Chinese",
+  "ar-SA": "Arabic",
 };
 
 /**
