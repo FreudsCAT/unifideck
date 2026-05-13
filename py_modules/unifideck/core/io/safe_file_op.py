@@ -1,43 +1,24 @@
-"""core/io/safe_file_op.py — Error-handling decorator for file I/O.
+"""``@safe_file_op`` decorator — uniform OSError handling for file ops.
 
-Moved from core/ to the new core/io/ subpackage,
-paired with async_file_ops.py. The decorator is specifically
-designed to wrap coroutines from the sibling async_file_ops
-module; colocating them documents that coupling. Clean break:
-no shim in core/.
+OP-08c1 | py_modules/unifideck/core/io/safe_file_op.py
 
+Most file operations across the plugin (config reads, cache
+loads, manifest writes) have the same fallback contract:
+``OSError`` → log + return a default. Without this decorator
+every call site has to wrap with try/except, which makes the
+code unreadable.
 
-    try:
-        return await _do_the_thing(path, ...)
-    except (OSError, PermissionError) as e:
-        logger.warning("[async_file_ops] %s failed: %s", path, e)
-        return None
+Usage::
 
-This decorator captures that pattern exactly once:
+    @safe_file_op(default=[])
+    def list_games(path: str) -> list[str]: ...
 
-    @safe_file_op(default=None)
-    async def read_text(path: str) -> Optional[str]:
-        return (await aiofiles_like_read(path)).decode()
-
-The decorator logs at WARNING with the function name and the
-first positional argument (conventionally the path) so the log
-line always identifies which file triggered the failure.
-
-Design choices:
-  - `default` is the sentinel returned on any caught exception —
-    typically None for readers, False for writers. Explicit
-    default avoids the "silent None everywhere" antipattern.
-  - The caught exception set is `(OSError,)` since PermissionError
-    is already a subclass of OSError — catching both was redundant
-    in the legacy code but preserved here as a docstring note.
-  - `FileNotFoundError` is also an OSError subclass — if a caller
-    wants to distinguish "missing" from "broken", they should NOT
-    use this decorator and catch explicitly.
-  - The decorator supports both sync and async callables so it
-    can wrap helpers in cache_manager, config_persistence, etc.
-    in later refactors.
-
+The decorator detects whether the wrapped function is sync
+or async and applies the right wrapper. The first positional
+arg is captured as ``path_hint`` for the log line — relies on
+the convention that file ops take the path first.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -47,7 +28,6 @@ from collections.abc import Awaitable, Callable
 from typing import Any, TypeVar
 
 logger = logging.getLogger(__name__)
-
 T = TypeVar("T")
 _Callable = Callable[..., T | Awaitable[T]]
 
@@ -57,57 +37,101 @@ def safe_file_op(
     *,
     log_level: int = logging.WARNING,
 ) -> Callable[[_Callable], _Callable]:
-    """Return a decorator that catches OSError and returns `default`.
+    """Decorator factory that wraps a file op with ``OSError`` handling.
 
-    Works transparently on both sync and async callables: the
-    wrapper detects the coroutine-ness of the wrapped function at
-    decoration time and returns the matching wrapper shape.
+    Returns the actual decorator (the factory pattern lets
+    callers configure the default value + log level per call
+    site). The decorator inspects ``fn``: if it's a
+    coroutine function, builds an async wrapper; otherwise
+    builds a sync wrapper. Both wrappers have identical
+    semantics — try, catch ``OSError``, log, return default.
+
+    Only ``OSError`` is caught — other exceptions (logic
+    errors, unexpected types) propagate normally. This is
+    deliberate: ``OSError`` covers the legitimate "filesystem
+    said no" cases (file missing, permission denied, disk
+    full, broken symlink) without swallowing programmer
+    bugs.
 
     Args:
-      default: value returned on any caught exception. Pick None
-        for readers ("no data"), False for writers ("write failed
-        gracefully"), or {} / [] for collection builders.
-      log_level: level at which exceptions are logged. Defaults
-        to WARNING — production deployments want to see these in
-        the Decky log but not treat them as critical. Use ERROR
-        if a specific operation is considered fatal.
+        default: value to return on ``OSError``. Defaults
+            to ``None``; callers typically pass ``[]`` or
+            ``{}`` for collection-returning ops.
+        log_level: ``logging`` level for the failure log
+            line. Defaults to WARNING; pass DEBUG for ops
+            that fail noisily and harmlessly (e.g. cache
+            misses).
 
-    Usage:
-      @safe_file_op(default=None)
-      async def read_text(path: str) -> Optional[str]:
-          ...
-
-      @safe_file_op(default=False)
-      def write_bytes(path: str, data: bytes) -> bool:
-          ...
-
+    Returns:
+        The actual decorator, ready to apply to a function.
     """
 
     def decorator(fn: _Callable) -> _Callable:
-        # First positional arg is conventionally the path — we
-        # capture it for the log message so callers see which
-        # file triggered the failure without wiring up extra args.
-        fname = getattr(fn, "__name__", repr(fn))
+        """Pick async or sync wrapper based on ``fn``'s nature.
 
+        ``asyncio.iscoroutinefunction`` is checked at
+        decoration time (not call time) so wrapper
+        selection is one-shot per decorated function — no
+        per-call overhead.
+
+        Args:
+            fn: function to wrap (sync or async).
+
+        Returns:
+            Wrapped function with identical signature.
+        """
+        fname = getattr(fn, "__name__", repr(fn))
         if asyncio.iscoroutinefunction(fn):
+
             @functools.wraps(fn)
             async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
+                """Await ``fn``; on OSError log + return default.
+
+                The path-hint extraction
+                (``args[0] or kwargs["path"]``) reflects the
+                project convention: file ops always take
+                their path as first positional or as a
+                ``path`` kwarg. Doesn't reach further into
+                kwargs to keep the logic predictable.
+
+                Args:
+                    *args / **kwargs: forwarded to ``fn``.
+
+                Returns:
+                    ``fn``'s return value, or ``default`` on
+                    OSError.
+                """
                 try:
                     return await fn(*args, **kwargs)
                 except OSError as e:
-                    # PermissionError, FileNotFoundError, IsADirectoryError
-                    # etc. are all OSError subclasses and land here.
                     path_hint = args[0] if args else kwargs.get("path", "?")
                     logger.log(
                         log_level,
                         "[safe_file_op] %s(%r) failed: %s: %s",
-                        fname, path_hint, type(e).__name__, e,
+                        fname,
+                        path_hint,
+                        type(e).__name__,
+                        e,
                     )
                     return default
+
             return async_wrapper
 
         @functools.wraps(fn)
         def sync_wrapper(*args: Any, **kwargs: Any) -> Any:
+            """Call ``fn`` sync; on OSError log + return default.
+
+            Same logic as ``async_wrapper`` but without the
+            await — used when the wrapped function is a
+            plain ``def``.
+
+            Args:
+                *args / **kwargs: forwarded to ``fn``.
+
+            Returns:
+                ``fn``'s return value, or ``default`` on
+                OSError.
+            """
             try:
                 return fn(*args, **kwargs)
             except OSError as e:
@@ -115,9 +139,13 @@ def safe_file_op(
                 logger.log(
                     log_level,
                     "[safe_file_op] %s(%r) failed: %s: %s",
-                    fname, path_hint, type(e).__name__, e,
+                    fname,
+                    path_hint,
+                    type(e).__name__,
+                    e,
                 )
                 return default
+
         return sync_wrapper
 
     return decorator

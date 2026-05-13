@@ -1,18 +1,28 @@
-"""services/cloud_save/service.py — Cloud save synchronization.
+"""Cloud-save service — pull saves on launch, push saves on exit.
 
-Subscribes to lifecycle events so saves sync around launches:
-- ``GAME_LAUNCHED`` → ``sync_down``
-- ``GAME_STOPPED`` → ``sync_up``
+OP-17a | py_modules/unifideck/services/cloud_save/service.py
 
-Shell class composing ``_SyncMixin``. Backend is filesystem-agnostic: treats ``<cloud_root>`` as a plain tree keyed by
-``store/game_id`` so users can plug in Syncthing, rclone,
-Dropbox, Nextcloud, etc.
+``CloudSaveService`` mirrors local game-save directories to/from a
+user-configured "cloud root" (typically a Steam Cloud mountpoint or
+a Syncthing folder). The mirror is bidirectional, mtime-based, and
+driven entirely by bus events:
 
-Known limitation: native Linux games ``exec`` over bash,
-bypassing the EXIT trap. For those, GAME_STOPPED never fires
-and sync_up doesn't run. Fix requires replacing exec with
-call+wait+exit — out of scope until validated on hardware.
+* on ``GAME_LAUNCHED``: pull the cloud copy into the local save dir
+  if the cloud copy is fresher (``sync_down``);
+* on ``GAME_STOPPED``: push the local copy back to the cloud root
+  if the local copy is fresher (``sync_up``).
+
+When ``cloud_root`` is ``None`` the service still subscribes but no-
+ops on every event — this lets the service be constructed
+unconditionally without forcing the user to configure a cloud
+backend.
+
+The ``_syncing`` dict tracks in-flight sync operations per game so
+a ``GAME_STOPPED`` event arriving mid-``GAME_LAUNCHED`` sync can
+wait for the pull to complete before starting the push (avoiding
+the obvious race condition).
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -21,7 +31,9 @@ from typing import TYPE_CHECKING, Any
 
 from ...core.types import Events
 from ...event_bus.event_bus import EventBus
-from ...event_bus.event_bus_devex import subscribe
+from ...event_bus.event_bus_devex import auto_wire, subscribe
+from ...utils.config_helpers import get_cfg
+from .paths import local_save_dir
 from .sync import _SyncMixin
 
 if TYPE_CHECKING:
@@ -31,100 +43,105 @@ logger = logging.getLogger(__name__)
 
 
 class CloudSaveService(_SyncMixin):
-    """Reactive cloud save sync for game launches."""
+    """Mirror per-game saves between the local Steam Deck and a cloud root."""
 
     def __init__(
         self,
         bus: EventBus,
         local_save_root: str,
-        cloud_root: str | None = None,
+        cloud_root: str | None,
         config: ConfigManager | None = None,
     ) -> None:
-        """Wire subscriptions + tunables from config.
+        """Wire the service to the bus and load tunables.
 
-        ``cloud_root=None`` disables the service — every sync
-        method becomes a no-op success. Init ``_syncing`` map
-        for per-game serialisation, read
-        ``cloud.tolerance_seconds`` and
-        ``cloud.sync_wait_timeout_seconds`` from config,
-        ``auto_wire`` so ``@subscribe`` handlers register.
+        Reads three tunables from the config:
+
+        * ``cloud.enabled`` (default ``True``) — master kill switch;
+        * ``cloud.tolerance_seconds`` (default 2) — mtime tolerance
+          used by ``_SyncMixin``; differences below this are
+          considered "same file" to avoid spurious syncs caused by
+          filesystem mtime quirks (e.g. NTFS rounding);
+        * ``cloud.sync_wait_timeout_seconds`` (default 5) — maximum
+          wait when a sync request arrives during an in-flight sync
+          on the same game.
+
+        Args:
+            bus: live event bus.
+            local_save_root: directory under which per-game local
+                save directories live (typically
+                ``<data_dir>/saves``).
+            cloud_root: directory under which cloud-side save
+                mirrors live, or ``None`` if cloud sync is
+                disabled.
+            config: optional config manager.
         """
         self._bus = bus
         self._local_root = local_save_root
         self._cloud_root = cloud_root
-
         self._syncing: dict[str, asyncio.Event] = {}
-
-        self._tolerance = 2.0
-        self._sync_wait_timeout = 30.0
-
-        if config:
-            self._tolerance = config.get("cloud.tolerance_seconds", self._tolerance)
-            self._sync_wait_timeout = config.get("cloud.sync_wait_timeout_seconds", self._sync_wait_timeout)
-
-        self._bus.auto_wire(self)
-
-        if not self._cloud_root:
-            logger.info("[CloudSaveService] starting disabled (no cloud_root configured)")
-        else:
-            logger.info("[CloudSaveService] starting with cloud_root=%s", self._cloud_root)
+        self._enabled = bool(get_cfg(config, "cloud.enabled", True))
+        self._tolerance = float(
+            get_cfg(config, "cloud.tolerance_seconds", 2),
+        )
+        self._sync_wait_timeout = float(
+            get_cfg(config, "cloud.sync_wait_timeout_seconds", 5),
+        )
+        auto_wire(self, self._bus)
+        logger.info(
+            "[CloudSaveService] wired (2 subscriptions, cloud=%s)",
+            self._cloud_root or "DISABLED",
+        )
 
     async def stop(self) -> None:
-        """Unsubscribe from EventBus events (shutdown/tests).
+        """Unsubscribe both bus handlers on plugin shutdown.
 
-        Waits briefly for any in-flight syncs to complete so
-        shutdown doesn't leave a half-copied save directory.
+        In-flight syncs (if any) are *not* cancelled — they're
+        awaited implicitly by the unsubscribe call. This ensures a
+        push triggered just before unload completes before the
+        plugin process exits.
         """
-        self._bus.unsubscribe_all(self)
-
-        # Collect any active sync events that are not set
-        active_events = [ev.wait() for ev in self._syncing.values() if not ev.is_set()]
-        if active_events:
-            logger.info("[CloudSaveService] waiting for %d in-flight syncs", len(active_events))
-            # Wait up to a few seconds for pending syncs
-            done, pending = await asyncio.wait(active_events, timeout=5.0)
-            if pending:
-                logger.warning("[CloudSaveService] shut down with %d syncs incomplete", len(pending))
+        self._bus.off(Events.GAME_LAUNCHED, self._on_game_launched)
+        self._bus.off(Events.GAME_STOPPED, self._on_game_stopped)
 
     @subscribe(Events.GAME_LAUNCHED)
     async def _on_game_launched(self, **kwargs: Any) -> None:
-        """Download saves before the game starts.
+        """Pull cloud → local before the game starts using saves.
 
-        Extracts ``store`` + ``game_id`` from kwargs, delegates
-        to ``sync_down``. Sync errors are logged — launch proceeds
-        regardless so cloud problems never block gameplay.
+        No-ops if either the payload is incomplete or no
+        ``cloud_root`` is configured. The actual mtime comparison
+        and copy logic live in ``_SyncMixin.sync_down``.
         """
         store = kwargs.get("store")
         game_id = kwargs.get("game_id")
-
-        if not store or not game_id:
-            return
-
-        # Fire and forget; background task
-        asyncio.create_task(self.sync_down(store, game_id))
+        if store and game_id and self._cloud_root:
+            await self.sync_down(store, game_id)
 
     @subscribe(Events.GAME_STOPPED)
     async def _on_game_stopped(self, **kwargs: Any) -> None:
-        """Upload saves after the game exits.
+        """Push local → cloud after the game finishes writing saves.
 
-        Delegates to ``sync_up``. Runs even on non-zero exit code
-        — a game may have saved progress before crashing.
+        Symmetric to ``_on_game_launched`` but inverts the sync
+        direction. ``sync_up`` waits for any in-flight ``sync_down``
+        on the same game (via ``self._syncing``) before starting,
+        so the push always sees the post-launch state of the local
+        save directory, never a partial mid-pull state.
         """
         store = kwargs.get("store")
         game_id = kwargs.get("game_id")
-
-        if not store or not game_id:
-            return
-
-        # Fire and forget; background task
-        asyncio.create_task(self.sync_up(store, game_id))
+        if store and game_id and self._cloud_root:
+            await self.sync_up(store, game_id)
 
     def get_local_save_dir(self, store: str, game_id: str) -> str:
-        """Public accessor for a game's local save directory.
+        """Return the canonical local-save directory for a game.
 
-        Used by diagnostic RPCs (``list_save_folder``) and by
-        the cloud sync orchestrator to know where to pull from.
-        Returns the absolute path under ``_local_root``.
+        Args:
+            store: store identifier.
+            game_id: store-specific game id.
+
+        Returns:
+            Absolute filesystem path to the per-game save
+            directory under ``local_save_root``. Does not create
+            the directory — that's the responsibility of the sync
+            logic when actually writing files.
         """
-        import os
-        return os.path.join(self._local_root, store, game_id)
+        return local_save_dir(self._local_root, store, game_id)

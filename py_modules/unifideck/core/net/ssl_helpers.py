@@ -1,20 +1,22 @@
-"""core/net/ssl_helpers.py — Centralised SSL context builders.
+"""TLS SSLContext factories with thread-safe lazy singletons.
 
-Sprint B security: consolidates the 4 ``ssl.CERT_NONE`` occurrences
-scattered across ``stores/gog/gog_http.py``, ``stores/microsoft/microsoft_auth.py``,
-``stores/ubisoft/ubisoft_id_map_sources.py`` and
-``stores/ubisoft/ubisoft_installer_cache.py``. The legacy comment
-claimed Steam Deck's CA bundle was outdated; measurement on SteamOS
-3.6+ shows this is no longer true. The new default is ``ssl_ctx_strict``
-which performs full hostname + cert chain validation. The permissive
-path is kept as ``ssl_ctx_permissive`` for parity but emits a WARNING
-on first use and must be opted into explicitly.
+OP-08e1 | py_modules/unifideck/core/net/ssl_helpers.py
 
-Both helpers are lazy-singletons so a single context object is reused
-across requests — the handshake parameters don't change at runtime,
-and creating a fresh context per call (as the legacy code did) was
-~3 ms wasted per request.
+Two singleton ``SSLContext`` instances kept module-level
+because ``ssl.create_default_context`` is non-trivial
+(reads cert chain from disk) and reusing the context
+across requests is the standard ``ssl`` recommendation.
+
+The double-check locking pattern (check, lock, check)
+keeps the first-call cost paid exactly once even under
+concurrent first-touch from multiple tasks.
+
+The permissive context emits a one-shot WARN log on
+first use so operators see a clear signal in plugin logs
+that some endpoint is bypassing strict TLS — with the
+caller-supplied reason for traceability.
 """
+
 from __future__ import annotations
 
 import logging
@@ -25,22 +27,22 @@ logger = logging.getLogger(__name__)
 
 _strict_lock = Lock()
 _strict_ctx: ssl.SSLContext | None = None
-
 _permissive_lock = Lock()
 _permissive_ctx: ssl.SSLContext | None = None
 _permissive_warned = False
 
 
 def ssl_ctx_strict() -> ssl.SSLContext:
-    """Return a shared, fully-validating SSL context.
+    """Return the shared strict-mode SSLContext (singleton).
 
-    Defaults from ``ssl.create_default_context()``:
-        - TLS 1.2+ minimum
-        - hostname verification on
-        - full CA chain verification on
+    Equivalent to ``ssl.create_default_context()`` —
+    enforces hostname check + full cert chain verification.
+    Used everywhere by default; should be the first choice
+    unless the endpoint is known broken.
 
-    Use this for EVERY outbound HTTPS call unless there is a
-    documented, host-specific reason to bypass validation.
+    Returns:
+        The cached strict context. Subsequent calls are
+        O(1) dict lookups.
     """
     global _strict_ctx
     if _strict_ctx is None:
@@ -51,18 +53,25 @@ def ssl_ctx_strict() -> ssl.SSLContext:
 
 
 def ssl_ctx_permissive(reason: str) -> ssl.SSLContext:
-    """Return a shared SSL context with verification DISABLED.
+    """Return the permissive SSLContext (hostname + cert checks disabled).
 
-    Kept only for backward compatibility with legacy callers that
-    were shipped with ``CERT_NONE``. Every use should be removed
-    on sight: the TLS chain is the only thing stopping a local
-    network attacker from swapping API responses. The ``reason``
-    argument is logged at WARNING level on first use so abuse is
-    auditable.
+    Used only for a handful of stores that ship
+    self-signed certs (CDP-driven Microsoft login pages,
+    certain Ubisoft endpoints). The first call logs at
+    WARN with the caller-supplied ``reason`` so operators
+    can audit why permissive mode was needed.
+
+    The warn is one-shot per process to keep logs clean
+    even when the permissive context is hit thousands of
+    times per session.
 
     Args:
-        reason: Short human-readable justification. Logged once.
+        reason: short description of why permissive is
+            needed (typically a store name + brief
+            justification).
 
+    Returns:
+        The cached permissive context.
     """
     global _permissive_ctx, _permissive_warned
     if _permissive_ctx is None:

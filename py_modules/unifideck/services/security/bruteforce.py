@@ -1,22 +1,27 @@
-"""services.security.bruteforce — Brute-force detector (sliding window).
+"""Brute-force detector — count recent failures, emit threshold events.
 
-Extracted from the flat ``security_service.py`` on 2026-04-18 to
-encapsulate the state and thresholds of the brute-force detection
-policy (Policy 1).
+OP-19c | py_modules/unifideck/services/security/bruteforce.py
 
-The detector is **stateful** — it owns:
+``BruteForceDetector`` tracks the total count of failed
+authentication attempts (across **all** stores and users) within a
+rolling time window. When the count crosses one of two thresholds,
+a callback fires:
 
-  - A ring buffer of decrypt failure timestamps.
-  - Two thresholds (warning and escalation).
-  - A sliding window in seconds.
-  - An "escalated" latch that fires the escalation event exactly
-    once per burst (not on every subsequent failure).
+* **warning** — N failures in the window: emit a UI warning;
+* **escalation** — M failures in the window (where M > N): emit a
+  louder alert, intended to surface to the user via a non-
+  dismissible toast (future work) and possibly disable auth flows
+  temporarily.
 
-SecurityService composes a single detector via ``self._bf`` and
-calls ``check()`` from its SECURITY_DECRYPT_FAILED handler.
-Threshold-crossings are surfaced via a caller-supplied callback
-so this module stays independent of the event bus.
+The escalation is debounced — once raised, it stays raised until
+``reset`` is called. The warning emits every time the threshold is
+crossed (no debounce), which lets the UI keep a live counter.
+
+State is in-memory only — a plugin restart wipes the counters.
+This is intentional: a brute-force attack is a session-scoped
+concern, not a persistent one.
 """
+
 from __future__ import annotations
 
 import logging
@@ -29,19 +34,7 @@ logger = logging.getLogger(__name__)
 
 
 class BruteForceDetector:
-    """Sliding-window counter with warning + escalation thresholds.
-
-    Two thresholds:
-
-      - ``warning_threshold`` (default 5 failures in 60s): logs a
-        warning and fires the callback with ``level="warning"``.
-        Can fire repeatedly — each subsequent failure above the
-        warning but below escalation re-fires.
-      - ``escalation_threshold`` (default 20): fires the callback
-        with ``level="escalation"`` exactly once per burst. The
-        escalated flag is latched until ``reset()`` is called by
-        an operator via the RPC.
-    """
+    """Rolling-window failure counter with two-tier alerting."""
 
     def __init__(
         self,
@@ -50,65 +43,87 @@ class BruteForceDetector:
         escalation_threshold: int,
         on_threshold_crossed: Callable[..., None],
     ) -> None:
-        """Initialise the detector.
+        """Configure the detector with thresholds + alert callback.
+
+        Buffer size is ``2 * escalation_threshold`` so the deque
+        never grows unbounded but always has enough slack to count
+        the escalation threshold within the window even if
+        failures arrive faster than they age out.
 
         Args:
-            window_seconds: Sliding window duration in seconds.
-            warning_threshold: Failures-in-window count that
-                triggers a warning-level notification.
-            escalation_threshold: Higher count that triggers a
-                one-shot escalation notification.
-            on_threshold_crossed: Callback invoked when a
-                threshold is crossed. Signature:
-                ``on_threshold_crossed(level, recent_failures)``
-                where ``level`` is ``"warning"`` or
-                ``"escalation"``. Intended to emit the
-                SECURITY_BRUTEFORCE_SUSPECTED event.
+            window_seconds: rolling-window length.
+            warning_threshold: failure count that triggers the
+                warning-level callback.
+            escalation_threshold: failure count that triggers the
+                escalation-level callback (must be > warning).
+            on_threshold_crossed: callable invoked with
+                ``level=<warning|escalation>`` and
+                ``recent_failures=<int>`` when a threshold is
+                crossed. Typically the ``SecurityService``'s
+                ``_emit_bruteforce`` method.
         """
         self._window = window_seconds
         self._warning = warning_threshold
         self._escalation = escalation_threshold
-        # Capacity = 2x escalation so we keep enough headroom to
-        # observe recent bursts but don't grow unbounded.
         self._failures: deque[float] = deque(maxlen=escalation_threshold * 2)
         self._escalated = False
         self._on_crossed = on_threshold_crossed
 
     def check(self) -> None:
-        """Record a decrypt failure and check thresholds.
+        """Record a new failure and evaluate the thresholds.
 
-        Called from SecurityService's SECURITY_DECRYPT_FAILED
-        handler. Appends the current monotonic time and scans
-        the deque for failures within the window. Fires the
-        callback if a threshold is crossed.
+        Called by the auth-audit mixin every time a
+        ``STORE_AUTH_FAILED`` event arrives. Two-step evaluation:
+
+        1. Append the current timestamp to the rolling buffer.
+        2. Count the timestamps within the window.
+
+        Threshold decisions:
+
+        * **At or above escalation, not yet escalated** → mark
+          escalated, log at ERROR, fire callback with
+          ``"escalation"``.
+        * **At or above warning** (but below escalation, or
+          already escalated) → log at WARN, fire callback with
+          ``"warning"``.
+        * **Below warning** → no action.
+
+        Uses ``time.monotonic`` (not ``time.time``) so wall-clock
+        adjustments (NTP sync, user changing the system time) can't
+        confuse the rolling-window comparison.
         """
         now = time.monotonic()
         self._failures.append(now)
-        recent = sum(
-            1 for ts in self._failures
-            if now - ts <= self._window
-        )
+        recent = sum(1 for ts in self._failures if now - ts <= self._window)
         if recent >= self._escalation and not self._escalated:
             self._escalated = True
             logger.error(
-                "[BruteForceDetector] ESCALATION: %d failures "
-                "in %.0fs", recent, self._window,
+                "[BruteForceDetector] ESCALATION: %d failures in %.0fs",
+                recent,
+                self._window,
             )
             self._on_crossed(level="escalation", recent_failures=recent)
         elif recent >= self._warning:
             logger.warning(
-                "[BruteForceDetector] warning: %d failures "
-                "in %.0fs", recent, self._window,
+                "[BruteForceDetector] warning: %d failures in %.0fs",
+                recent,
+                self._window,
             )
             self._on_crossed(level="warning", recent_failures=recent)
 
     def status(self) -> dict[str, Any]:
-        """Return a snapshot of the detector state for RPC exposure."""
+        """Return a snapshot of the detector's current state.
+
+        Used by the QAM UI to show the live counter and by tests
+        to verify the configured thresholds.
+
+        Returns:
+            Dict with ``recent_failures`` (count within window),
+            ``window_seconds``, ``warning_threshold``,
+            ``escalation_threshold``, and ``escalated`` flag.
+        """
         now = time.monotonic()
-        recent = sum(
-            1 for ts in self._failures
-            if now - ts <= self._window
-        )
+        recent = sum(1 for ts in self._failures if now - ts <= self._window)
         return {
             "recent_failures": recent,
             "window_seconds": self._window,
@@ -118,14 +133,11 @@ class BruteForceDetector:
         }
 
     def reset(self) -> None:
-        """Clear the failure buffer and unlatch the escalation.
+        """Clear the failure buffer and the escalation flag.
 
-        Called by the operator via ``reset_bruteforce_state``
-        RPC after reviewing the audit log. Not called by
-        ``clear_audit_log`` on purpose: clearing the visible log
-        should not also clear the detector state (an attacker
-        could otherwise hide their trail by triggering a log
-        wipe).
+        Called by ``SecurityService.reset_bruteforce_state`` from
+        the RPC layer (admin reset) or after a confirmed
+        legitimate auth.
         """
         self._failures.clear()
         self._escalated = False

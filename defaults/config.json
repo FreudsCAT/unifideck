@@ -1,388 +1,289 @@
 {
-  "_comment": "Default Unifideck configuration. Every key is consumed by the code.",
-  "paths": {
-    "data_dir": "~/.local/share/unifideck",
-    "cache_dir": "~/.cache/unifideck",
-    "steam_candidates": [
-      "~/.steam/steam",
-      "~/.local/share/Steam",
-      "~/.var/app/com.valvesoftware.Steam/.steam/steam"
-    ],
-    "games_map": "~/.local/share/unifideck/games.map",
-    "sd_card_root": "/run/media"
-  },
-  "cache_ttl": {
-    "steam_metadata": 604800,
-    "compat": 604800,
-    "metacritic_metadata": 2592000
-  },
-  "sync": {
-    "artwork_concurrency": 4
-  },
-  "dedup": {
-    "_comment": "Stores tracked by the cross-store + Steam-native deduplication pipeline. Order is significant: it doubles as the priority order when the same title appears in two of these stores with the same install status (first wins). Any store NOT listed here is fully exempt — its library passes through unchanged AND its titles do not enter the claimed set, which is how Microsoft xCloud / Game Pass entries stay visible even when the same title is on Steam or another tracked store.",
-    "tracked_stores": ["epic", "gog", "amazon", "ubisoft"]
-  },
-  "download": {
-    "custom_path": ""
-  },
-  "cli_timeouts": {
-    "auth_check": 10,
-    "version_check": 2,
-    "library_fetch": 30,
-    "install_poll": 60,
-    "uninstall": 120
-  },
-  "stores": {
-    "gog": {
-      "client_id": "46899977096215655",
-      "client_secret": "9d85c43b1482497dbbce61f6e4aa173a433796eeae2ca8c5f6129f2dc4de46d9",
-      "auth_url": "https://auth.gog.com/auth",
-      "token_url": "https://auth.gog.com/token",
-      "redirect_uri": "https://embed.gog.com/on_login_success?origin=client",
-      "allowed_redirect_uris": [
-        "https://embed.gog.com/on_login_success"
-      ],
-      "base_url": "https://embed.gog.com",
-      "api_gog_url": "https://api.gog.com",
-      "token_file": "~/.config/unifideck/gog_token.json",
-      "gogdl_config_dir": "~/.config/unifideck/gogdl",
-      "download_dir": "~/GOG Games",
-      "token_refresh_threshold_seconds": 2400,
-      "supported_languages": [
-        "en",
-        "de",
-        "fr",
-        "pl",
-        "ru",
-        "pt",
-        "es",
-        "it",
-        "zh",
-        "ko",
-        "ja"
-      ],
-      "user_agent": "Unifideck/1.0"
+    "paths": {
+        "data_dir": "~/.local/share/unifideck",
+        "cache_dir": "~/.cache/unifideck",
+        "steam_candidates": [
+            "~/.steam/steam",
+            "~/.local/share/Steam",
+            "~/.var/app/com.valvesoftware.Steam/.steam/steam"
+        ],
+        "games_map": "~/.local/share/unifideck/games.map",
+        "sd_card_root": "/run/media"
     },
-    "epic": {
-      "_comment": "Epic Games Store via the bundled legendary CLI. Unifideck delegates the OAuth flow to legendary, which writes its session to user_file.",
-      "cli_binary_search_paths": [
-        "bin/legendary"
-      ],
-      "cli_version_flag": "--version",
-      "user_file": "~/.config/legendary/user.json",
-      "default_install_root": "~/Games/Epic",
-      "auth_redirect_urls": [
-        "https://legendary.epicgames.com/callback",
-        "https://www.epicgames.com/id/api/redirect"
-      ],
-      "auth_url_markers": [
-        "epicgames.com"
-      ],
-      "info_timeout_seconds": 30,
-      "list_updates_timeout_seconds": 60,
-      "installed_cache_ttl_seconds": 30,
-      "size_cache_ttl_seconds": 300
+    "cache_ttl": {
+        "steam_metadata": 604800,
+        "compat": 604800,
+        "metacritic_metadata": 2592000
     },
-    "amazon": {
-      "_comment": "Amazon Games via the bundled nile CLI. Unifideck delegates OAuth to nile, which writes its session to user_file.",
-      "cli_binary_search_paths": [
-        "bin/nile"
-      ],
-      "cli_version_flag": "--version",
-      "nile_config_dir": "~/.config/nile",
-      "user_file": "~/.config/nile/user.json",
-      "default_install_root": "~/Games/Amazon",
-      "auth_redirect_urls": [
-        "https://www.amazon.com/ap/maplanding",
-        "https://amazon.com/ap/maplanding"
-      ],
-      "nile_register_success_markers": [
-        "Successfully registered",
-        "Succesfully registered"
-      ],
-      "list_updates_timeout_seconds": 60,
-      "get_size_timeout_seconds": 60
+    "sync": {
+        "artwork_concurrency": 4
     },
-    "ubisoft": {
-      "data_dir": "~/.local/share/unifideck",
-      "id_map_file": "~/.local/share/unifideck/ubisoft_id_map.json",
-      "visible_games_file": "~/.local/share/unifideck/ubisoft_visible_games.json",
-      "prefixes_dir": "~/.local/share/unifideck/prefixes/ubisoft-games",
-      "installer_cache_dir": "~/.cache/unifideck/ubisoft",
-      "upc_session_file": "~/.local/share/unifideck/ubisoft_session_marker",
-      "game_id_db_file": "~/.cache/unifideck/ubisoft/game_id_db.txt",
-      "default_install_base": "~/Games/Ubisoft",
-      "sdcard_install_base": "/run/media/mmcblk0p1/Games/Ubisoft",
-      "template_prefix_name": ".template",
-      "auth_prefix_name": ".upc-auth",
-      "auth_shortcut_store_id": "ubisoft:.upc-auth",
-      "auth_shortcut_launch_wait_ms": 2000,
-      "installer_url": "https://ubistatic3-a.akamaihd.net/orbit/launcher_installer/UbisoftConnectInstaller.exe",
-      "installer_filename": "UbisoftConnectInstaller.exe",
-      "bootstrap_marker": ".unifideck_bootstrapped",
-      "game_id_db_url": "https://raw.githubusercontent.com/iArtorias/ubisoft_game_ids/main/game_ids.txt",
-      "game_id_db_max_age_seconds": 604800,
-      "upc_relative_path": "drive_c/Program Files (x86)/Ubisoft/Ubisoft Game Launcher/upc.exe",
-      "upc_connect_relative_path": "drive_c/Program Files (x86)/Ubisoft/Ubisoft Game Launcher/UbisoftConnect.exe",
-      "configurations_relative_path": "users/{user}/Local Settings/Application Data/Ubisoft Game Launcher/cache/configuration/configurations",
-      "ownership_relative_path": "users/{user}/Local Settings/Application Data/Ubisoft Game Launcher/cache/ownership",
-      "upc_credential_files": [
-        "ConnectSecureStorage.dat",
-        "OldSecureStorage.dat"
-      ],
-      "wine_system_users": [
-        "steamuser",
-        "deck",
-        "Public"
-      ],
-      "filter_steam_linked": true,
-      "steam_library_cross_ref": false
+    "dedup": {
+        "tracked_stores": [
+            "epic",
+            "gog",
+            "amazon",
+            "ubisoft"
+        ]
     },
-    "microsoft": {
-      "client_id": "000000004C12AE6F",
-      "token_file": "~/.local/share/unifideck/microsoft_tokens.json",
-      "scope": "service::user.auth.xboxlive.com::MBI_SSL",
-      "auth_url": "https://login.live.com/oauth20_authorize.srf",
-      "token_url": "https://login.live.com/oauth20_token.srf",
-      "redirect_uri": "https://login.live.com/oauth20_desktop.srf",
-      "allowed_redirect_uris": [
-        "https://login.live.com/oauth20_desktop.srf",
-        "https://login.microsoftonline.com/common/oauth2/nativeclient"
-      ],
-      "xbl_auth_url": "https://user.auth.xboxlive.com/user/authenticate",
-      "xsts_url": "https://xsts.auth.xboxlive.com/xsts/authorize",
-      "xcloud_catalog_url": "https://catalog.gamepass.com/sigls/v2?id=fdd9e2a7-0fee-49f6-ad69-4354098401ff",
-      "xcloud_titles_url": "https://catalog.gamepass.com/v3/products?market=US&language=en-US",
-      "xcloud_launch_url": "https://www.xbox.com/play/launch",
-      "gssv_relying_party": "http://gssv.xboxlive.com/",
-      "subscription_check_url": "https://xgpuweb.gssv-play-prod.xboxlive.com/v2/login/user"
+    "download": {
+        "custom_path": ""
+    },
+    "cli_timeouts": {
+        "auth_check": 10,
+        "version_check": 2,
+        "library_fetch": 30,
+        "install_poll": 60,
+        "uninstall": 120
+    },
+    "stores": {
+        "gog": {
+            "client_id": "46899977096215655",
+            "client_secret": "9d85c43b1482497dbbce61f6e4aa173a433796eeae2ca8c5f6129f2dc4de46d9",
+            "auth_url": "https://auth.gog.com/auth",
+            "token_url": "https://auth.gog.com/token",
+            "redirect_uri": "https://embed.gog.com/on_login_success?origin=client",
+            "allowed_redirect_uris": [
+                "https://embed.gog.com/on_login_success"
+            ],
+            "base_url": "https://embed.gog.com",
+            "api_gog_url": "https://api.gog.com",
+            "token_file": "~/.config/unifideck/gog_token.json",
+            "gogdl_config_dir": "~/.config/unifideck/gogdl",
+            "download_dir": "~/GOG Games",
+            "token_refresh_threshold_seconds": 2400,
+            "supported_languages": ["en", "de", "fr", "pl", "ru", "pt", "es", "it", "zh", "ko", "ja"],
+            "user_agent": "Unifideck/1.0"
+        },
+        "epic": {
+            "cli_binary_search_paths": [
+                "bin/legendary"
+            ],
+            "cli_version_flag": "--version",
+            "user_file": "~/.config/legendary/user.json",
+            "default_install_root": "~/Games/Epic",
+            "auth_redirect_urls": [
+                "https://legendary.epicgames.com/callback",
+                "https://www.epicgames.com/id/api/redirect"
+            ],
+            "auth_url_markers": [
+                "epicgames.com"
+            ],
+            "info_timeout_seconds": 30,
+            "list_updates_timeout_seconds": 60,
+            "installed_cache_ttl_seconds": 30,
+            "size_cache_ttl_seconds": 300
+        },
+        "amazon": {
+            "cli_binary_search_paths": [
+                "bin/nile"
+            ],
+            "cli_version_flag": "--version",
+            "nile_config_dir": "~/.config/nile",
+            "user_file": "~/.config/nile/user.json",
+            "default_install_root": "~/Games/Amazon",
+            "auth_redirect_urls": [
+                "https://www.amazon.com/ap/maplanding",
+                "https://amazon.com/ap/maplanding"
+            ],
+            "nile_register_success_markers": [
+                "Successfully registered",
+                "Succesfully registered"
+            ],
+            "list_updates_timeout_seconds": 60,
+            "get_size_timeout_seconds": 60
+        },
+        "ubisoft": {
+            "data_dir": "~/.local/share/unifideck",
+            "id_map_file": "~/.local/share/unifideck/ubisoft_id_map.json",
+            "visible_games_file": "~/.local/share/unifideck/ubisoft_visible_games.json",
+            "prefixes_dir": "~/.local/share/unifideck/prefixes/ubisoft-games",
+            "installer_cache_dir": "~/.cache/unifideck/ubisoft",
+            "upc_session_file": "~/.local/share/unifideck/ubisoft_session_marker",
+            "game_id_db_file": "~/.cache/unifideck/ubisoft/game_id_db.txt",
+            "default_install_base": "~/Games/Ubisoft",
+            "sdcard_install_base": "/run/media/mmcblk0p1/Games/Ubisoft",
+            "template_prefix_name": ".template",
+            "auth_prefix_name": ".upc-auth",
+            "auth_shortcut_store_id": "ubisoft:.upc-auth",
+            "auth_shortcut_launch_wait_ms": 2000,
+            "installer_url": "https://ubistatic3-a.akamaihd.net/orbit/launcher_installer/UbisoftConnectInstaller.exe",
+            "installer_filename": "UbisoftConnectInstaller.exe",
+            "bootstrap_marker": ".unifideck_bootstrapped",
+            "game_id_db_url": "https://raw.githubusercontent.com/iArtorias/ubisoft_game_ids/main/game_ids.txt",
+            "game_id_db_max_age_seconds": 604800,
+            "upc_relative_path": "drive_c/Program Files (x86)/Ubisoft/Ubisoft Game Launcher/upc.exe",
+            "upc_connect_relative_path": "drive_c/Program Files (x86)/Ubisoft/Ubisoft Game Launcher/UbisoftConnect.exe",
+            "configurations_relative_path": "users/{user}/Local Settings/Application Data/Ubisoft Game Launcher/cache/configuration/configurations",
+            "ownership_relative_path": "users/{user}/Local Settings/Application Data/Ubisoft Game Launcher/cache/ownership",
+            "upc_credential_files": [
+                "ConnectSecureStorage.dat",
+                "OldSecureStorage.dat"
+            ],
+            "wine_system_users": [
+                "steamuser",
+                "deck",
+                "Public"
+            ],
+            "filter_steam_linked": true,
+            "steam_library_cross_ref": false
+        },
+        "microsoft": {
+            "client_id": "000000004C12AE6F",
+            "token_file": "~/.local/share/unifideck/microsoft_tokens.json",
+            "scope": "service::user.auth.xboxlive.com::MBI_SSL",
+            "auth_url": "https://login.live.com/oauth20_authorize.srf",
+            "token_url": "https://login.live.com/oauth20_token.srf",
+            "redirect_uri": "https://login.live.com/oauth20_desktop.srf",
+            "allowed_redirect_uris": [
+                "https://login.live.com/oauth20_desktop.srf",
+                "https://login.microsoftonline.com/common/oauth2/nativeclient"
+            ],
+            "xbl_auth_url": "https://user.auth.xboxlive.com/user/authenticate",
+            "xsts_url": "https://xsts.auth.xboxlive.com/xsts/authorize",
+            "xcloud_catalog_url": "https://catalog.gamepass.com/sigls/v2?id=fdd9e2a7-0fee-49f6-ad69-4354098401ff",
+            "xcloud_titles_url": "https://catalog.gamepass.com/v3/products?market=US&language=en-US",
+            "xcloud_launch_url": "https://www.xbox.com/play/launch",
+            "gssv_relying_party": "http://gssv.xboxlive.com/",
+            "subscription_check_url": "https://xgpuweb.gssv-play-prod.xboxlive.com/v2/login/user"
+        }
+    },
+    "metadata": {
+        "metacritic": {
+            "composer_url": "https://backend.metacritic.com/composer/metacritic/pages/games/{slug}/web",
+            "fetch_timeout_seconds": 15
+        },
+        "unifidb": {
+            "cdn_base": "https://cdn.jsdelivr.net/gh/mubaraknumann/unifiDB@main",
+            "match_threshold": 0.65,
+            "fetch_timeout_seconds": 15
+        },
+        "steam_store": {
+            "search_url": "https://store.steampowered.com/api/storesearch",
+            "search_timeout_seconds": 15
+        }
+    },
+    "artwork": {
+        "steamgriddb_api_key": "",
+        "steamgriddb_api_base": "https://www.steamgriddb.com/api/v2",
+        "download_timeout_seconds": 30,
+        "failure_cooldown_seconds": 3600
+    },
+    "cdp": {
+        "host": "127.0.0.1",
+        "port": 8080,
+        "eval_timeout_seconds": 30,
+        "response_timeout_seconds": 10
+    },
+    "accounts": {
+        "poll_interval_seconds": 5
+    },
+    "cloud": {
+        "enabled": true,
+        "root": "",
+        "tolerance_seconds": 2,
+        "sync_wait_timeout_seconds": 5,
+        "failure_behavior": {
+            "default": "toast",
+            "epic": "toast",
+            "gog": "toast",
+            "amazon": "toast",
+            "ubisoft": "toast"
+        }
+    },
+    "logs": {
+        "archive_path": "~/.local/share/unifideck/launches",
+        "export_path": "~/Downloads",
+        "retention_days": 7
+    },
+    "circuit_breaker": {
+        "failures_threshold": 3,
+        "window_seconds": 600,
+        "fast_boot_seconds": 10
+    },
+    "disk_space": {
+        "min_free_bytes": 1073741824,
+        "size_multiplier": 1.5,
+        "size_cache_path": "~/.cache/unifideck/cloud_save_sizes.json",
+        "size_cache_ttl_seconds": 2592000
+    },
+    "compat": {
+        "protondb_timeout_seconds": 30,
+        "deck_verified_timeout_seconds": 10
+    },
+    "auth": {
+        "browser_poll_interval_seconds": 0.5,
+        "browser_oauth_timeout_seconds": 300
+    },
+    "discovery": {
+        "manifest_filename": ".unifideck_manifest.json"
+    },
+    "ui": {
+        "locale": "en-US"
+    },
+    "probes": {
+        "probe_to_features": {
+            "steam_client_input": [
+                "controller_hints",
+                "custom_binding_ui",
+                "steam_input_overlay"
+            ],
+            "router_hook_patch": [
+                "library_view_patch",
+                "quickaccess_menu_icon"
+            ],
+            "steam_client_apps": [
+                "circuit_breaker_ui"
+            ]
+        },
+        "probe_to_handlers": {
+            "steam_client_apps": [
+                "ArtworkService._on_shortcut_created",
+                "ShortcutService._on_download_complete",
+                "ShortcutService._on_sync_complete",
+                "ShortcutService._on_game_uninstalled"
+            ],
+            "steam_client_downloads": [
+                "ShortcutService._on_download_complete"
+            ]
+        }
+    },
+    "proton": {
+        "settings_path": "~/.local/share/unifideck/proton_settings.json",
+        "shortcuts_registry_path": "~/.local/share/unifideck/shortcuts_registry.json"
+    },
+    "binary_resolver": {
+        "version_check_timeout_seconds": 10
+    },
+    "i18n": {
+        "locales": [
+            {"tag": "en-US", "deepl_code": null, "name": "English", "rtl": false},
+            {"tag": "fr-FR", "deepl_code": "FR", "name": "Français", "rtl": false},
+            {"tag": "de-DE", "deepl_code": "DE", "name": "Deutsch", "rtl": false},
+            {"tag": "es-ES", "deepl_code": "ES", "name": "Español", "rtl": false},
+            {"tag": "it-IT", "deepl_code": "IT", "name": "Italiano", "rtl": false},
+            {"tag": "pt-BR", "deepl_code": "PT-BR", "name": "Português (Brasil)", "rtl": false},
+            {"tag": "nl-NL", "deepl_code": "NL", "name": "Nederlands", "rtl": false},
+            {"tag": "pl-PL", "deepl_code": "PL", "name": "Polski", "rtl": false},
+            {"tag": "ru-RU", "deepl_code": "RU", "name": "Русский", "rtl": false},
+            {"tag": "uk-UA", "deepl_code": "UK", "name": "Українська", "rtl": false},
+            {"tag": "tr-TR", "deepl_code": "TR", "name": "Türkçe", "rtl": false},
+            {"tag": "ja-JP", "deepl_code": "JA", "name": "Japanese", "rtl": false},
+            {"tag": "ko-KR", "deepl_code": "KO", "name": "Korean", "rtl": false},
+            {"tag": "zh-CN", "deepl_code": "ZH-HANS", "name": "Simplified Chinese", "rtl": false},
+            {"tag": "zh-TW", "deepl_code": "ZH-HANT", "name": "Traditional Chinese", "rtl": false},
+            {"tag": "ar-SA", "deepl_code": "AR", "name": "Arabic", "rtl": true}
+        ]
+    },
+    "security": {
+        "audit_log_capacity": 500,
+        "bruteforce_window_seconds": 60.0,
+        "bruteforce_warning_threshold": 5,
+        "bruteforce_escalation_threshold": 20,
+        "fingerprint_path": "~/.config/unifideck/device_fingerprint.json",
+        "token_files_to_wipe_on_reset": [
+            "~/.local/share/unifideck/microsoft_tokens.json",
+            "~/.config/unifideck/gog_token.json"
+        ]
     }
-  },
-  "metadata": {
-    "metacritic": {
-      "composer_url": "https://backend.metacritic.com/composer/metacritic/pages/games/{slug}/web",
-      "fetch_timeout_seconds": 15
-    },
-    "unifidb": {
-      "cdn_base": "https://cdn.jsdelivr.net/gh/mubaraknumann/unifiDB@main",
-      "match_threshold": 0.65,
-      "fetch_timeout_seconds": 15
-    },
-    "steam_store": {
-      "search_url": "https://store.steampowered.com/api/storesearch",
-      "search_timeout_seconds": 15
-    }
-  },
-  "artwork": {
-    "steamgriddb_api_key": "",
-    "steamgriddb_api_base": "https://www.steamgriddb.com/api/v2",
-    "download_timeout_seconds": 30,
-    "failure_cooldown_seconds": 3600
-  },
-  "cdp": {
-    "host": "127.0.0.1",
-    "port": 8080,
-    "eval_timeout_seconds": 30,
-    "response_timeout_seconds": 10
-  },
-  "accounts": {
-    "poll_interval_seconds": 5
-  },
-  "cloud": {
-    "enabled": true,
-    "root": "",
-    "tolerance_seconds": 2,
-    "sync_wait_timeout_seconds": 5,
-    "failure_behavior": {
-      "_comment": "Per-store policy for cloud sync failures at game launch. Values: 'silent' (log only, no UI) or 'toast' (dismissable warning, default). A blocking 'prompt' mode was considered but rejected — it would require IPC between the out-of-process launcher and the long-lived plugin, trading the current architecture's robustness for a marginal UX gain. Microsoft is absent because Unifideck only integrates xCloud streaming which has no local save state to sync.",
-      "default": "toast",
-      "epic": "toast",
-      "gog": "toast",
-      "amazon": "toast",
-      "ubisoft": "toast"
-    }
-  },
-  "logs": {
-    "_comment": "Per-launch log archive. Each launcher dispatcher run opens its own log file keyed by correlation ID (see launcher/correlation.py) and writes INFO+WARNING+ERROR records there. The LaunchLogsModal frontend displays these for post-mortem debugging when a launch fails. retention_days controls how long files survive (pruned on launcher startup — cheap directory scan). export_path is the default target when the user clicks the Export button in the modal; accepts ~-prefixed paths.",
-    "archive_path": "~/.local/share/unifideck/launches",
-    "export_path": "~/Downloads",
-    "retention_days": 7
-  },
-  "circuit_breaker": {
-    "_comment": "Per-game launch failure protection. When a game fails to launch failures_threshold times within window_seconds, the circuit opens and subsequent Play clicks return immediately with a typed error code. The frontend exposes a 'Force launch' button to bypass + a 'Reset launch failures' to clear the history manually. Auto-reset on window expiry. fast_boot_seconds defines what counts as a 'failed boot': a subprocess that exits in less than this duration after launch is treated as a configuration failure (corrupted Wine prefix, missing dependency, wrong Proton version) and counted toward the threshold; longer-lived processes that exit non-zero are treated as game bugs and ignored — the circuit can't help with those. Set fast_boot_seconds higher (15-20) for AAA titles with long splash screens, lower (5) for fast-booting indies.",
-    "failures_threshold": 3,
-    "window_seconds": 600,
-    "fast_boot_seconds": 10
-  },
-  "disk_space": {
-    "_comment": "Pre-launch disk space verification. Before each cloud save sync (download at game start, upload at game exit), the launcher checks that the filesystem hosting the user data directory has enough free space. If a per-game observation is cached (size_cache_path), the threshold is max(min_free_bytes, observed × size_multiplier); otherwise the absolute min_free_bytes floor applies (typical first launch of a new game). EWMA smoothing on observed sizes (α=0.3 in code) absorbs outliers. Stale cache entries (older than size_cache_ttl_seconds, default 30 days) are re-observed from scratch.",
-    "min_free_bytes": 1073741824,
-    "size_multiplier": 1.5,
-    "size_cache_path": "~/.cache/unifideck/cloud_save_sizes.json",
-    "size_cache_ttl_seconds": 2592000
-  },
-  "compat": {
-    "protondb_timeout_seconds": 30,
-    "deck_verified_timeout_seconds": 10
-  },
-  "auth": {
-    "browser_poll_interval_seconds": 0.5,
-    "browser_oauth_timeout_seconds": 300
-  },
-  "discovery": {
-    "manifest_filename": ".unifideck_manifest.json"
-  },
-  "ui": {
-    "_comment": "Frontend-facing preferences. `locale` drives the React i18next selection; defaults to en-US when the user hasn't chosen a language yet via the settings UI.",
-    "locale": "en-US"
-  },
-  "probes": {
-    "_comment": "Override probe mappings without editing code. Each key maps a probe id to a list of feature flags or handler qualnames. Partial overrides are merged with the module defaults.",
-    "probe_to_features": {
-      "steam_client_input": [
-        "controller_hints",
-        "custom_binding_ui",
-        "steam_input_overlay"
-      ],
-      "router_hook_patch": [
-        "library_view_patch",
-        "quickaccess_menu_icon"
-      ],
-      "steam_client_apps": [
-        "circuit_breaker_ui"
-      ]
-    },
-    "probe_to_handlers": {
-      "steam_client_apps": [
-        "ArtworkService._on_shortcut_created",
-        "ShortcutService._on_download_complete",
-        "ShortcutService._on_sync_complete",
-        "ShortcutService._on_game_uninstalled"
-      ],
-      "steam_client_downloads": [
-        "ShortcutService._on_download_complete"
-      ]
-    }
-  },
-  "proton": {
-    "settings_path": "~/.local/share/unifideck/proton_settings.json",
-    "shortcuts_registry_path": "~/.local/share/unifideck/shortcuts_registry.json"
-  },
-  "binary_resolver": {
-    "version_check_timeout_seconds": 10
-  },
-  "i18n": {
-    "_comment": "Canonical list of supported locales. The entry with deepl_code=null IS the source language.",
-    "locales": [
-      {
-        "tag": "en-US",
-        "deepl_code": null,
-        "name": "English",
-        "rtl": false
-      },
-      {
-        "tag": "fr-FR",
-        "deepl_code": "FR",
-        "name": "Français",
-        "rtl": false
-      },
-      {
-        "tag": "de-DE",
-        "deepl_code": "DE",
-        "name": "Deutsch",
-        "rtl": false
-      },
-      {
-        "tag": "es-ES",
-        "deepl_code": "ES",
-        "name": "Español",
-        "rtl": false
-      },
-      {
-        "tag": "it-IT",
-        "deepl_code": "IT",
-        "name": "Italiano",
-        "rtl": false
-      },
-      {
-        "tag": "pt-BR",
-        "deepl_code": "PT-BR",
-        "name": "Português (Brasil)",
-        "rtl": false
-      },
-      {
-        "tag": "nl-NL",
-        "deepl_code": "NL",
-        "name": "Nederlands",
-        "rtl": false
-      },
-      {
-        "tag": "pl-PL",
-        "deepl_code": "PL",
-        "name": "Polski",
-        "rtl": false
-      },
-      {
-        "tag": "ru-RU",
-        "deepl_code": "RU",
-        "name": "Русский",
-        "rtl": false
-      },
-      {
-        "tag": "uk-UA",
-        "deepl_code": "UK",
-        "name": "Українська",
-        "rtl": false
-      },
-      {
-        "tag": "tr-TR",
-        "deepl_code": "TR",
-        "name": "Türkçe",
-        "rtl": false
-      },
-      {
-        "tag": "ja-JP",
-        "deepl_code": "JA",
-        "name": "日本語",
-        "rtl": false
-      },
-      {
-        "tag": "ko-KR",
-        "deepl_code": "KO",
-        "name": "한국어",
-        "rtl": false
-      },
-      {
-        "tag": "zh-CN",
-        "deepl_code": "ZH-HANS",
-        "name": "简体中文",
-        "rtl": false
-      },
-      {
-        "tag": "zh-TW",
-        "deepl_code": "ZH-HANT",
-        "name": "繁體中文",
-        "rtl": false
-      },
-      {
-        "tag": "ar-SA",
-        "deepl_code": "AR",
-        "name": "العربية",
-        "rtl": true
-      }
-    ]
-  },
-  "security": {
-    "_comment": "SecurityService policies. Only Microsoft and GOG tokens are managed by Unifideck directly (encrypted via SecureTokenStore). Epic delegates to legendary, Amazon to nile, Ubisoft to Wine-native Ubisoft Connect — those 3 stores have their own credential storage outside Unifideck's scope.",
-    "audit_log_capacity": 500,
-    "bruteforce_window_seconds": 60.0,
-    "bruteforce_warning_threshold": 5,
-    "bruteforce_escalation_threshold": 20,
-    "fingerprint_path": "~/.config/unifideck/device_fingerprint.json",
-    "token_files_to_wipe_on_reset": [
-      "~/.local/share/unifideck/microsoft_tokens.json",
-      "~/.config/unifideck/gog_token.json"
-    ]
-  }
 }

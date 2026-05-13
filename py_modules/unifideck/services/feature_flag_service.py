@@ -1,29 +1,37 @@
-"""services/feature_flag_service.py — Probe-driven feature flags.
+"""Feature-flag service — probe-driven runtime feature toggles.
 
-Listens for ``RUNTIME_PROBES_REPORTED`` after the frontend's
-boot-time CEF probe suite completes. Translates failing probes
-into disabled features via ``PROBE_TO_FEATURES``, exposes flags
-via RPC so hooks consult them before using a capability.
-State is in-memory only — resets at every plugin reload. Probes
-re-run at each boot so flags stay fresh with the current Steam
-client state.
+OP-12d | py_modules/unifideck/services/feature_flag_service.py
+
+``FeatureFlagService`` automatically enables or disables features
+based on the verdicts of runtime probes. A probe is a small
+diagnostic that checks one capability of the Steam Deck environment
+(``steam_client_apps`` checks that the SteamClient.Apps JS API is
+reachable, ``router_hook_patch`` checks that Decky's router patching
+took effect, etc.).
+
+The ``PROBE_TO_FEATURES`` table declares which features depend on
+which probe — when ``steam_client_apps`` fails, shortcut creation,
+artwork injection and play-button override are all auto-disabled
+because none of them can work without that API. When the probe
+passes again on the next report, the features are auto-re-enabled.
+
+This is the inverse of a kill-switch: features default to **on** at
+construction and only flip off if a probe explicitly reports a
+failure. Listening services check ``is_enabled("shortcut_creation")``
+before performing any work that needs the underlying capability,
+and gracefully degrade when it returns ``False``.
 """
+
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any
 
-from ..core.types.events import Events
-from ..event_bus.event_bus_devex import subscribe
-
-if TYPE_CHECKING:
-    from ..event_bus.event_bus import EventBus
+from ..core.types import Events
+from ..event_bus.event_bus import EventBus
+from ..event_bus.event_bus_devex import auto_wire, subscribe
 
 logger = logging.getLogger(__name__)
 
-# Probe id → features it gates. One failing probe disables every
-# feature in its list. Kept as the module-level default; user
-# config at ``probes.probe_to_features`` can override per probe id.
 PROBE_TO_FEATURES: dict[str, list[str]] = {
     "steam_client_apps": [
         "shortcut_creation",
@@ -44,97 +52,154 @@ PROBE_TO_FEATURES: dict[str, list[str]] = {
         "diagnostics_panel_polling",
     ],
 }
-
-# Every feature we know about. Starts enabled; probes may disable.
-ALL_FEATURES: list[str] = sorted({
-    f for features in PROBE_TO_FEATURES.values() for f in features
-})
+ALL_FEATURES: list[str] = sorted(
+    {f for features in PROBE_TO_FEATURES.values() for f in features}
+)
 
 
 class FeatureFlagService:
-    """Reactive feature flag store driven by runtime probes."""
+    """Toggle features on/off based on runtime probe verdicts."""
 
-    def __init__(
-        self, bus: EventBus, config: object | None = None,
-    ) -> None:
-        """Merge config-supplied mapping, init flags."""
+    def __init__(self, bus: EventBus, config: object | None = None) -> None:
+        """Initialise flags to True and subscribe to probe events.
+
+        The probe → feature mapping is loaded from the config (with
+        the bundled ``PROBE_TO_FEATURES`` as fallback). Every
+        feature starts as enabled — they only flip off when a probe
+        explicitly fails.
+
+        Args:
+            bus: live event bus on which the service subscribes to
+                ``RUNTIME_PROBES_REPORTED``.
+            config: optional config-like object exposing ``get()``.
+                If provided and ``probes.probe_to_features`` is a
+                well-shaped dict, it overrides the defaults.
+        """
         self._bus = bus
         self._mapping = self._load_mapping(config)
-        
-        self._flags = {feature: True for feature in ALL_FEATURES}
-        
-        if hasattr(self._bus, "auto_wire"):
-            self._bus.auto_wire(self)
+        self._all_features = sorted({f for fs in self._mapping.values() for f in fs})
+        self._flags: dict[str, bool] = dict.fromkeys(self._all_features, True)
+        self._last_report: dict | None = None
+        auto_wire(self, self._bus)
+        logger.info(
+            "[FeatureFlagService] initialized with %d features from %d probe mappings",
+            len(self._flags),
+            len(self._mapping),
+        )
 
     @staticmethod
     def _load_mapping(config: object | None) -> dict[str, list[str]]:
-        """Return the probe→features mapping."""
-        mapping = PROBE_TO_FEATURES.copy()
-        
-        if config and hasattr(config, "get"):
-            try:
-                user_mapping = config.get("probes.probe_to_features") # type: ignore
-                if isinstance(user_mapping, dict):
-                    for k, v in user_mapping.items():
-                        if isinstance(v, list) and all(isinstance(i, str) for i in v):
-                            mapping[k] = v
-            except Exception:
-                pass
-                
-        return mapping
+        """Build the probe-to-features map from config + defaults.
+
+        Starts with the hard-coded ``PROBE_TO_FEATURES`` and merges
+        in any well-shaped overrides from ``probes.probe_to_features``
+        in the config. Each value must be a list of strings to be
+        accepted (defensive: a typo in the user config shouldn't
+        crash the service).
+
+        Args:
+            config: optional config-like object exposing ``get()``.
+
+        Returns:
+            The merged mapping (defaults + valid overrides).
+        """
+        if config is None or not hasattr(config, "get"):
+            return dict(PROBE_TO_FEATURES)
+        raw = config.get("probes.probe_to_features")
+        if not isinstance(raw, dict):
+            return dict(PROBE_TO_FEATURES)
+        merged = dict(PROBE_TO_FEATURES)
+        for k, v in raw.items():
+            if isinstance(v, list) and all(isinstance(x, str) for x in v):
+                merged[k] = v
+        return merged
 
     def get_flags(self) -> dict[str, bool]:
-        """Return a copy of the current feature flag state."""
-        return self._flags.copy()
+        """Return a snapshot copy of the current flag state.
+
+        Returns:
+            ``feature_name → bool`` mapping. Mutating the returned
+            dict has no effect on the service (it's a fresh copy).
+        """
+        return dict(self._flags)
 
     def is_enabled(self, feature: str) -> bool:
-        """Check one flag. Unknown features return True."""
+        """Return whether the named feature is currently enabled.
+
+        Unknown feature names default to ``True`` — the service
+        deliberately doesn't gate on its own knowledge of feature
+        names so a caller asking about a feature that was added
+        after the service started is treated as "yes, that works".
+
+        Args:
+            feature: feature name (e.g. ``"shortcut_creation"``).
+
+        Returns:
+            ``True`` if the feature is enabled (or unknown to the
+            service), ``False`` if a probe has explicitly disabled
+            it.
+        """
         return self._flags.get(feature, True)
 
     @subscribe(Events.RUNTIME_PROBES_REPORTED)
-    async def _on_probes_reported(self, **kwargs: Any) -> None:
-        """Update flags from the report."""
+    async def _on_probes_reported(self, **kwargs) -> None:
+        """React to a ``RUNTIME_PROBES_REPORTED`` event.
+
+        Stores the latest report (for diagnostics readout) and
+        applies the new probe verdicts to the flag state through
+        ``_apply_probes_to_flags``. Logs at INFO when any feature
+        actually changed state, silently otherwise.
+        """
         probes = kwargs.get("probes")
         if not isinstance(probes, list):
+            logger.warning(
+                "[FeatureFlagService] probes kwarg missing or bad type",
+            )
             return
-            
+        self._last_report = {"probes": probes}
         changed = self._apply_probes_to_flags(probes)
         if changed:
-            logger.info("[FeatureFlagService] Flags changed: %s", changed)
+            logger.info(
+                "[FeatureFlagService] updated %d features: %s",
+                len(changed),
+                sorted(changed),
+            )
 
-    def _apply_probes_to_flags(self, probes: list[dict[str, Any]]) -> list[str]:
-        """Walk probes and update affected features."""
-        changed = []
-        
+    def _apply_probes_to_flags(self, probes: list) -> list[str]:
+        """Walk probes and update flags for the affected features.
+
+        For each probe with a clear verdict (``"ok"`` or ``"fail"``,
+        or equivalent severity), looks up the affected features in
+        the mapping and flips them. Returns the list of features
+        whose state actually changed (a probe re-confirming a
+        verdict doesn't produce a change).
+
+        Probes with ambiguous verdicts (no ``verdict`` / ``severity``
+        field, or a ``"warn"`` severity) are silently skipped —
+        partial reports are tolerated.
+
+        Args:
+            probes: list of probe dicts as emitted by the runtime
+                probe runner.
+
+        Returns:
+            List of feature names whose enabled state was changed
+            by this call.
+        """
+        changed: list[str] = []
         for probe in probes:
-            # Handle both formats
+            if not isinstance(probe, dict):
+                continue
             probe_id = probe.get("id") or probe.get("name")
-            if not probe_id or probe_id not in self._mapping:
+            if not isinstance(probe_id, str):
                 continue
-                
-            verdict = probe.get("verdict") or probe.get("severity")
-            if not verdict:
+            is_fail = probe.get("verdict") == "fail" or probe.get("severity") == "error"
+            is_ok = probe.get("verdict") == "ok" or probe.get("severity") == "info"
+            if not (is_fail or is_ok):
                 continue
-                
-            verdict = str(verdict).lower()
-            
-            # Disable on fail/error, enable on ok/info
-            features_affected = self._mapping[probe_id]
-            
-            if verdict in ("fail", "error"):
-                new_state = False
-            elif verdict in ("ok", "info"):
-                new_state = True
-            else:
-                continue  # 'warn' leaves untouched
-                
-            for feature in features_affected:
-                # Add to unknown features dynamically if missing
-                if feature not in self._flags:
-                    self._flags[feature] = True
-                    
-                if self._flags[feature] != new_state:
+            new_state = not is_fail
+            for feature in self._mapping.get(probe_id, []):
+                if self._flags.get(feature) != new_state:
                     self._flags[feature] = new_state
-                    changed.append(f"{feature}={new_state}")
-                    
+                    changed.append(feature)
         return changed

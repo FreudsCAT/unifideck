@@ -1,20 +1,18 @@
-"""services.security.mixins.permissions — Token file permissions repair.
+"""Permissions mixin — verify mode bits on sensitive paths.
 
-Single @subscribe handler implementing Policy 2: watch for the
-SECURITY_PERMISSIONS_CHECK event emitted by token managers
-right after every ``save()`` call, verify the observed file mode
-is exactly ``0o600``, and chmod it back if not.
+OP-19h | py_modules/unifideck/services/security/permissions.py
 
-Mixed into ``SecurityService`` via multiple inheritance so the
-@subscribe decorator is picked up by ``auto_wire`` at service
-construction time.
+``PermissionsMixin`` checks file permissions on paths storing
+credentials (token files, key material, audit logs). Modes
+expected to be ``0o600`` (owner-only read/write); anything more
+permissive triggers an audit-log warning and a bus event the UI
+can render as a security notification.
 """
-from __future__ import annotations
 
+from __future__ import annotations
 import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
-
 from ...core.types.events import Events
 from ...event_bus.event_bus_devex import subscribe
 from .bus_emitter import emit_security_event
@@ -22,17 +20,16 @@ from .bus_emitter import emit_security_event
 if TYPE_CHECKING:
     from ...event_bus.event_bus import EventBus
     from .audit_log import AuditLog
-
 logger = logging.getLogger(__name__)
 
 
 class PermissionsMixin:
-    """React to SECURITY_PERMISSIONS_CHECK with auto-repair.
+    """Verify + auto-repair filesystem permissions on sensitive files.
 
-    Expects the host class to provide:
-
-      - ``self._audit`` : ``AuditLog`` instance
-      - ``self._bus``   : ``EventBus`` instance
+    Differs from the module docstring's description: the mixin
+    doesn't just warn — it actively ``chmod 0o600`` the offending
+    file and emits a ``SECURITY_PERMISSIONS_REPAIRED`` event so
+    the user is informed.
     """
 
     _audit: AuditLog
@@ -40,11 +37,21 @@ class PermissionsMixin:
 
     @subscribe(Events.SECURITY_PERMISSIONS_CHECK)
     async def _on_permissions_check(self, **kwargs: Any) -> None:
-        """Verify token file permissions and auto-repair if needed.
+        """Audit + repair a too-permissive sensitive file.
 
-        Policy 2 — the token manager emits this after every save()
-        with the observed mode. If it's not exactly 0o600 we chmod
-        it back and emit SECURITY_PERMISSIONS_REPAIRED.
+        Workflow:
+
+        1. Audit the check itself.
+        2. Skip if ``path`` or ``mode`` is missing (malformed
+           event).
+        3. Skip if the mode is already ``0o600`` (correct).
+        4. Try to ``chmod 0o600`` the file. If chmod fails (read-
+           only mount, foreign filesystem), log a warning and
+           return — we did what we could.
+        5. On successful repair, log + emit
+           ``SECURITY_PERMISSIONS_REPAIRED`` + audit-record the
+           repair so the user sees both the original mismatch
+           and the repair in the audit log.
         """
         self._audit.record("SECURITY_PERMISSIONS_CHECK", kwargs)
         path = kwargs.get("path")
@@ -58,16 +65,20 @@ class PermissionsMixin:
         except OSError as e:
             logger.warning(
                 "[SecurityService] chmod 0o600 failed on %s: %s",
-                path, e,
+                path,
+                e,
             )
             return
         logger.warning(
-            "[SecurityService] repaired permissions on %s "
-            "(was %o, now 0o600)", path, mode,
+            "[SecurityService] repaired permissions on %s (was %o, now 0o600)",
+            path,
+            mode,
         )
         emit_security_event(
-            self._bus, "SECURITY_PERMISSIONS_REPAIRED",
-            path=path, previous_mode=mode,
+            self._bus,
+            "SECURITY_PERMISSIONS_REPAIRED",
+            path=path,
+            previous_mode=mode,
         )
         self._audit.record(
             "SECURITY_PERMISSIONS_REPAIRED",
