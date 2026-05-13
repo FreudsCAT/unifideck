@@ -1,5 +1,9 @@
-/** Types for the Unifideck activity tracking & play time system. */
-
+/**
+ * Playtime / activity tracking DTOs.
+ *
+ * Mirrors the backend `services/playtime/` package. Field
+ * names use the wire format (snake_case) directly.
+ */
 export interface PlaySession {
   id: number;
   game_id: number;
@@ -15,6 +19,10 @@ export interface PlaySession {
   session_note: string | null;
 }
 
+/**
+ * Per-game playtime stats : total minutes, last session date,
+ * sessions count. Used by GameInfoPanel and DownloadsTab.
+ */
 export interface GameStats {
   game_id: number;
   title: string;
@@ -31,6 +39,10 @@ export interface GameStats {
   longest_streak_days: number;
 }
 
+/**
+ * One bucket of the daily playtime histogram, used by the
+ * QuickAccessPanel chart. Date is ISO YYYY-MM-DD.
+ */
 export interface DailyTotal {
   date: string;
   total_secs: number;
@@ -38,15 +50,10 @@ export interface DailyTotal {
   games_played: number;
 }
 
-export interface StoreSummary {
-  store: string;
-  total_secs: number;
-  game_count: number;
-  session_count: number;
-  most_played_title: string | null;
-  most_played_secs: number;
-}
-
+/**
+ * Aggregated playtime across all games and stores, with the
+ * top-N favourites surfaced for the dashboard widget.
+ */
 export interface OverallStats {
   total_secs: number;
   total_sessions: number;
@@ -56,24 +63,4 @@ export interface OverallStats {
   average_daily_secs: number;
   this_week_secs: number;
   last_week_secs: number;
-}
-
-export interface HourDistribution {
-  hour: number;
-  session_count: number;
-  total_secs: number;
-}
-
-export interface WeeklyComparison {
-  this_week: {
-    total_secs: number;
-    session_count: number;
-    games_played: number;
-  };
-  last_week: {
-    total_secs: number;
-    session_count: number;
-    games_played: number;
-  };
-  change_percent: number;
 }

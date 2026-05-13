@@ -1,110 +1,65 @@
-import { PanelSection, PanelSectionRow, Field } from "@decky/ui";
-import { loadTranslations, t } from "../../i18n";
-import StoreIcon from "../StoreIcon";
-import { Store } from "../../types/store";
-import StoreAuthButton from "./StoreAuthButton";
+/**
+ * StoreConnections — list of registered stores with auth
+ * status + connect/disconnect actions.
+ *
+ * Replaces the legacy hardcoded if/elif of 5 store-specific
+ * sections with a single map over `useStores()`. Adding a
+ * 6th store requires zero changes to this file — the new
+ * store registers itself in the backend `StoreRegistry`
+ * and the frontend picks it up automatically.
+ */
+import React, { FC } from "react";
+import {PanelSection, PanelSectionRow, ButtonItem, Field} from "@decky/ui";
+import { useTranslation } from "react-i18next";
+import { useStores } from "../../contexts/StoreContext";
+import { useStoreAuth } from "../../hooks/useStoreAuth";
+import { StoreIcon } from "../shared/StoreIcon";
+import type { StoreId } from "../../types/api";
 
-loadTranslations();
-
-interface StoreConnectionsProps {
-  storeStatus: Record<Store, string>;
-  onLogout: (store: Store) => void;
-  onStartAuth: (store: Store) => void;
-}
-
-const STORES: {
-  key: Store;
-  label: string;
-  notInstalledStatus?: string;
-  notInstalledMessage?: string;
-}[] = [
-  {
-    key: "epic",
-    label: "storeConnections.epicGames",
-    notInstalledStatus: "legendary_not_installed",
-    notInstalledMessage: "storeConnections.legendaryNotInstalled",
-  },
-  { key: "gog", label: "storeConnections.gog" },
-  {
-    key: "amazon",
-    label: "storeConnections.amazonGames",
-    notInstalledStatus: "nile_not_installed",
-    notInstalledMessage: "storeConnections.nileNotInstalled",
-  },
-  { key: "ubisoft", label: "storeConnections.ubisoftConnect" },
-  {
-    key: "microsoft",
-    label: "storeConnections.microsoftStore",
-  },
-];
-
-const StoreConnections = ({
-  storeStatus,
-  onLogout,
-  onStartAuth,
-}: StoreConnectionsProps) => {
+const StoreRow: FC<{ storeId: StoreId; displayName: string }> = ({storeId, displayName}) => {
+  const { t } = useTranslation();
+  const { status, busy, connect, disconnect } = useStoreAuth(storeId);
+  const isConnected = status === "connected";
   return (
-    <PanelSection title={t("storeConnections.title")}>
-      <div style={{ display: "flex", flexDirection: "column", gap: "2px" }}>
-        {STORES.map(
-          ({ key, label, notInstalledStatus, notInstalledMessage }) => {
-            const status = storeStatus[key];
-            const isConnected = status === "connected";
-            const isCheckingOrError =
-              status === "checking" ||
-              status === "error" ||
-              status === notInstalledStatus;
-
-            return (
-              <div key={key}>
-                {/* Status indicators */}
-                <div
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    flexDirection: "row",
-                    justifyContent: "space-between",
-                    padding: 0,
-                  }}
-                >
-                  <div
-                    style={{
-                      display: "inline-flex",
-                      alignItems: "center",
-                      gap: "8px",
-                    }}
-                  >
-                    <StoreIcon
-                      store={key}
-                      size="18px"
-                      color={isConnected ? "#4ade80" : "#fff"}
-                    />
-                    <span style={{ fontSize: "14px" }}>{t(label)}</span>
-                  </div>
-
-                  {!isCheckingOrError && (
-                    <StoreAuthButton
-                      store={key}
-                      status={status}
-                      onLogout={onLogout}
-                      onStartAuth={onStartAuth}
-                    />
-                  )}
-                </div>
-
-                {/* Error/warning messages */}
-                {status === notInstalledStatus && notInstalledMessage && (
-                  <PanelSectionRow>
-                    <Field description={t(notInstalledMessage)} />
-                  </PanelSectionRow>
-                )}
-              </div>
-            );
-          },
-        )}
-      </div>
-    </PanelSection>
+    <PanelSectionRow>
+      <Field
+        label={
+          <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <StoreIcon store={storeId} size={16} /> {displayName}
+          </span>
+        }
+        description={t(`auth.status.${status ?? "disconnected"}`)}
+      >
+        <ButtonItem
+          layout="below"
+          disabled={busy}
+          onClick={() => (isConnected ? disconnect() : connect())}
+        >
+          {busy
+            ? t("common.working")
+            : isConnected ? t("auth.disconnect") : t("auth.connect")}
+        </ButtonItem>
+      </Field>
+    </PanelSectionRow>
   );
 };
 
-export default StoreConnections;
+/**
+ * Per-store connection list : status badge, Connect /
+ * Disconnect button, last-sync timestamp. Driven by the
+ * StoreContext + AuthContext combo so the list stays in
+ * sync with backend events.
+ */
+export const StoreConnections: FC = () => {
+  const { t } = useTranslation();
+  const { stores, loading } = useStores();
+  if (loading) return null;
+  return (
+    <PanelSection title={t("settings.storeConnections")}>
+      {stores.map((s) => (
+        <StoreRow key={s.name} storeId={s.name}
+                  displayName={s.display_name} />
+      ))}
+    </PanelSection>
+  );
+};
