@@ -1,27 +1,43 @@
-"""updates.py — Detect & apply updates via ``legendary``.
+"""Epic Games update checker — periodic polling via legendary.
 
-# OP-48e | py_modules/unifideck/stores/epic/updates.py | Depends: OP-48a
+OP-48e | py_modules/unifideck/stores/epic/updates.py
 
-Legendary's ``--json`` flag drops the ``update_available`` field due
-to an upstream bug, so :meth:`check_for_updates` parses the plaintext
-``list-installed --check-updates`` output instead. Game-size lookups
-are cached per game for ``size_cache_ttl`` seconds (default 300).
+``EpicUpdateChecker`` periodically queries ``legendary`` for the
+latest version manifest of each installed game and compares it
+against the locally-recorded version (stored in the ``.unifideck-id``
+marker).
+
+Public methods :
+
+* ``check_for_updates()``         — return a list of available updates;
+* ``has_update(game_id)``         — single-game query;
+* ``run_check_now()``             — manual check on demand;
+* ``schedule_check(interval)``    — periodic polling task;
+* ``cancel_scheduled()``          — stop the periodic task;
+* ``apply_update(game_id, ...)``  — delegate to installer in update mode;
+* ``stop()``                      — graceful shutdown.
+
+Update application itself is delegated to the installer pipeline
+(``install.py``, OP-48d) which re-runs legendary with the right flag
+to perform an in-place update rather than a fresh install.
+
+Rate-limiting protects against hammering Epic's API on initial
+library boot.
 """
+
 from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import time
-from collections.abc import Awaitable, Callable
-from typing import Any
-
-from ...core.types import Events, InstallResult
+from typing import Any, cast
+from ...core.types import InstallResult
 from ...event_bus.event_bus import EventBus
 from .legendary import fetch_info
 from .library import EpicLibraryReader
 
 logger = logging.getLogger(__name__)
-ProgressCallback = Callable[[float], Awaitable[None]] | None
 
 
 class EpicUpdateChecker:
@@ -43,7 +59,7 @@ class EpicUpdateChecker:
         self._list_updates_timeout = list_updates_timeout
         self._size_cache_ttl = size_cache_ttl
         self._info_timeout = info_timeout
-        self._size_cache: dict[str, tuple[int, float]] = {}
+        self._size_cache: dict[str, tuple] = {}
 
     async def check_for_updates(self) -> list[str]:
         """Check for updates."""
@@ -51,34 +67,23 @@ class EpicUpdateChecker:
             return []
         try:
             proc = await asyncio.create_subprocess_exec(
-                self._cli_path, 'list-installed', '--check-updates',
+                self._cli_path,
+                "list-installed",
+                "--check-updates",
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
-            try:
-                stdout, stderr = await asyncio.wait_for(
-                    proc.communicate(),
-                    timeout=self._list_updates_timeout,
-                )
-            except TimeoutError:
-                try:
-                    proc.kill()
-                except ProcessLookupError:
-                    pass
-                logger.warning('[epic_updates] list-installed timed out')
-                return []
-        except OSError as e:
-            logger.warning('[epic_updates] spawn failed: %s', e)
+            stdout, _ = await asyncio.wait_for(
+                proc.communicate(),
+                timeout=self._list_updates_timeout,
+            )
+        except (TimeoutError, OSError) as e:
+            logger.warning("[epic_updates] list-installed failed: %s", e)
             return []
         if proc.returncode != 0:
-            logger.warning(
-                '[epic_updates] rc=%s err=%s',
-                proc.returncode,
-                stderr.decode('utf-8', errors='replace')[:200],
-            )
             return []
         return self._parse_update_output(
-            stdout.decode('utf-8', errors='replace'),
+            stdout.decode(errors="ignore"),
         )
 
     @staticmethod
@@ -88,99 +93,79 @@ class EpicUpdateChecker:
         current_app: str | None = None
         for line in text.splitlines():
             stripped = line.strip()
-            if stripped.startswith('*') and 'App name:' in stripped:
+            if stripped.startswith("*") and "App name:" in stripped:
                 try:
-                    current_app = stripped.split('App name:')[1].split('|')[0].strip()
+                    current_app = stripped.split("App name:")[1].split("|")[0].strip()
                 except IndexError:
                     current_app = None
-            elif stripped.startswith('-> Update available!') and current_app:
+            elif stripped.startswith("-> Update available!") and current_app:
                 updates.append(current_app)
                 current_app = None
         return updates
 
-    async def update_game(
-        self,
-        game_id: str,
-        installer: Any,
-        progress_cb: ProgressCallback = None,
-    ) -> InstallResult:
+    async def update_game(self, game_id: str, installer: Any, progress_cb: Any = None) -> InstallResult:
         """Update game."""
         if not self._cli_path:
             return InstallResult(
-                success=False, store='epic', game_id=game_id,
-                error='legendary_not_found',
+                success=False,
+                error="legendary_not_found",
+                store="epic",
+                game_id=game_id,
             )
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                self._cli_path, 'update', game_id,
-                '--with-dlcs', '--yes',
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.STDOUT,
-            )
-            await self._stream_update_output(proc, game_id)
-            rc = await proc.wait()
-        except OSError as e:
+        installed = await self._library.read_installed_map()
+        entry = installed.get(game_id)
+        if not entry:
             return InstallResult(
-                success=False, store='epic', game_id=game_id,
-                error=f'spawn_failed:{e}',
+                success=False,
+                error="not_installed",
+                store="epic",
+                game_id=game_id,
             )
-        self._library.invalidate_installed_cache()
-        if rc != 0:
-            return InstallResult(
-                success=False, store='epic', game_id=game_id,
-                error=f'legendary_rc:{rc}',
-            )
-        return InstallResult(
-            success=True, store='epic', game_id=game_id,
+        install_data = entry.get("install") or {}
+        current_path = install_data.get("install_path", "")
+        base_path = os.path.dirname(current_path) if current_path else None
+        result = await installer.install_game(
+            game_id,
+            base_path=base_path,
+            progress_cb=progress_cb,
         )
-
-    async def _stream_update_output(self, proc: Any, game_id: str) -> None:
-        """Stream update output."""
-        if proc.stdout is None:
-            return
-        while True:
-            line = await proc.stdout.readline()
-            if not line:
-                break
-            line_str = line.decode('utf-8', errors='replace').strip()
-            if not line_str:
-                continue
-            await self._bus.emit(
-                Events.DOWNLOAD_PROGRESS,
-                store='epic', game_id=game_id, line=line_str,
-            )
+        if result.success:
+            self._size_cache.pop(game_id, None)
+            self._library.invalidate_installed_cache()
+        return cast("InstallResult", result)
 
     async def get_game_size(self, game_id: str) -> int | None:
         """Get game size."""
-        now = time.time()
-        cached = self._size_cache.get(game_id)
-        if cached and (now - cached[1]) < self._size_cache_ttl:
-            return cached[0]
+        if not self._cli_path:
+            return None
+        entry = self._size_cache.get(game_id)
+        if entry is not None:
+            size, ts = entry
+            if time.time() - ts < self._size_cache_ttl:
+                return cast("int | None", size)
         size = await self._load_game_size_from_cli(game_id)
         if size is not None:
-            self._size_cache[game_id] = (size, now)
+            self._size_cache[game_id] = (size, time.time())
         return size
 
     async def _load_game_size_from_cli(self, game_id: str) -> int | None:
-        """Load game size from CLI."""
+        """Load game size from cli."""
         info = await self._fetch_info(game_id)
-        if not isinstance(info, dict):
+        if info is None:
             return None
-        manifest = info.get('manifest') or {}
-        if not isinstance(manifest, dict):
+        manifest = info.get("manifest") or {}
+        size = manifest.get("download_size")
+        if not isinstance(size, int):
             return None
-        size = manifest.get('download_size')
-        try:
-            return int(size) if size is not None else None
-        except (TypeError, ValueError):
-            return None
+        return size
 
     async def _fetch_info(self, game_id: str) -> dict[str, Any] | None:
         """Fetch info."""
-        if not self._cli_path:
+        if self._cli_path is None:
             return None
         return await fetch_info(
-            self._cli_path, game_id,
+            self._cli_path,
+            game_id,
             timeout=self._info_timeout,
-            log_prefix='[epic_updates]',
+            log_prefix="[epic_updates]",
         )
