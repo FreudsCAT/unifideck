@@ -1,0 +1,40 @@
+{
+  "_comment": "Unified catalog: legacy staging top-level sections + new-architecture additions. Overlay policy: current-wins-on-conflict.",
+  "tabs": {
+    "settings": "Settings",
+    "downloads": "Downloads"
+  },
+  "common": {
+    "cancel": "Cancel",
+    "loading": "Loading...",
+    "working": "Working..."
+  },
+  "storageSettings": {
+    "title": "Download Settings",
+    "installLocationLabel": "Install Location",
+    "installLocationDescription": "Where new games will be downloaded",
+    "toastUpdatedTitle": "Storage Location Updated",
+    "toastUpdatedBody": "New games will be installed to {{location}}",
+    "freeSpaceLabel": "{{label}} ({{freeSpace}} GB free)"
+  },
+  "downloadsTab": {
+    "current": "Now downloading",
+    "queued": "Queued",
+    "finished": "Recently finished",
+    "empty": "No downloads",
+    "cancelDownload": "Cancel download",
+    "outcome": {
+      "completed": "Completed",
+      "cancelled": "Cancelled",
+      "error": "Error"
+    }
+  },
+  "playButton": {
+    "play": "Play",
+    "install": "Install",
+    "installing": "Installing...",
+    "uninstall": "Uninstall",
+    "cancel": "Cancel",
+    "cancelling": "Cancelling..."
+  }
+}
