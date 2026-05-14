@@ -20,6 +20,18 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from ...config import ConfigManager
 
+# Hardcoded fallbacks mirroring ``defaults/config.json``. Used when the
+# defaults file failed to load (corrupt JSON, missing from install,
+# permissions) AND the user's config has no override either. Without
+# these, ``config.get(...)`` returns None and ``Path(None)`` crashes
+# Layer 5 — taking down the whole plugin instead of degrading gracefully.
+# Keep these in sync with defaults/config.json — the JSON is the source
+# of truth, this dict is the resilience net.
+_FALLBACK_PATHS = {
+    "paths.data_dir": "~/.local/share/unifideck",
+    "paths.games_map": "~/.local/share/unifideck/games.map",
+}
+
 
 @dataclass
 class ServicePaths:
@@ -95,7 +107,10 @@ class ServicePaths:
 
         data_dir = str(
             Path(
-                config.get("paths.data_dir"),
+                config.get(
+                    "paths.data_dir",
+                    _FALLBACK_PATHS["paths.data_dir"],
+                ),
             ).expanduser(),
         )
         Path(data_dir).mkdir(parents=True, exist_ok=True)
@@ -110,7 +125,10 @@ class ServicePaths:
             ),
             games_map_path=str(
                 Path(
-                    config.get("paths.games_map"),
+                    config.get(
+                        "paths.games_map",
+                        _FALLBACK_PATHS["paths.games_map"],
+                    ),
                 ).expanduser(),
             ),
             config_vdf_path=str(

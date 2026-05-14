@@ -132,16 +132,45 @@ class DownloadRPCMixin:
     async def get_storage_locations(self) -> Any:
         """Return the list of available install locations.
 
-        Delegates to ``DownloadService.get_storage_locations``;
-        in v1.3 this typically reports the Steam Deck's
-        internal eMMC + any mounted microSD card.
+        Computed directly from the filesystem rather than
+        delegating to ``DownloadService`` — per OP-15a the
+        download service has no awareness of storage, only of
+        the queue. The mixin owns this responsibility.
+
+        Sources, in priority order:
+
+        1. Per-store install dirs from
+           ``stores.<name>.install_dir`` config + a custom
+           user path (``download.custom_path``);
+        2. SD card / external drive mounts under
+           ``paths.sd_card_root`` (default ``/run/media``).
+
+        Each entry is annotated with free-space information
+        from ``shutil.disk_usage`` so the frontend can show
+        capacity warnings before kicking off a download.
 
         Returns:
-            List of location dicts (path + free-space
-            info).
+            List of dicts: ``[{"path", "free_bytes",
+            "total_bytes"}]``. Empty list when no usable
+            location is detected.
         """
-        download = self._require_download()
-        return download.get_storage_locations()
+        import shutil
+
+        from unifideck.utils.paths import get_all_game_directories
+
+        config = getattr(self, "config", None)
+        locations: list[dict[str, Any]] = []
+        for path in get_all_game_directories(config):
+            try:
+                usage = shutil.disk_usage(path)
+            except OSError:
+                continue
+            locations.append({
+                "path": path,
+                "free_bytes": usage.free,
+                "total_bytes": usage.total,
+            })
+        return locations
 
     def _require_store(self, store: str) -> Any:
         """Return the store from the registry or raise ``store_not_found``.

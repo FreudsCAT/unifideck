@@ -55,6 +55,7 @@ async def boot_plugin(
     plugin: Any,
     *,
     decky_plugin_dir: str,
+    decky_runtime_dir: str,
     user_config_path_resolver: Any,
 ) -> None:
     """Cold-start ``plugin`` in place.
@@ -66,8 +67,15 @@ async def boot_plugin(
             services depend on (each new service may subscribe
             to events emitted by attributes set earlier).
         decky_plugin_dir: The absolute path passed by Decky Loader
-            as the plugin root. Used to resolve ``defaults/``,
-            ``data/``, and ``py_modules/unifideck/stores/``.
+            as the plugin root. **Read-only on user installs.**
+            Used to resolve ``defaults/`` and
+            ``py_modules/unifideck/stores/``.
+        decky_runtime_dir: Writable per-plugin runtime directory
+            (``DECKY_PLUGIN_RUNTIME_DIR``). Holds the cache and any
+            other state that needs to survive plugin reloads.
+            Never use ``decky_plugin_dir`` for writable state — that
+            location is owned by the install process and is
+            read-only on normal user installs.
         user_config_path_resolver: Zero-arg callable that returns
             the user overrides JSON path. Injected so tests can
             stub out the XDG/env resolution without monkey-patching.
@@ -77,7 +85,7 @@ async def boot_plugin(
     the ServiceContainer itself and leave the failed service
     entry as ``None`` for the mixin guards to handle.
     """
-    pipeline = await _boot_layer2_core(plugin, decky_plugin_dir)
+    pipeline = await _boot_layer2_core(plugin, decky_runtime_dir)
     await _boot_config_and_validate(
         plugin, decky_plugin_dir, user_config_path_resolver,
     )
@@ -86,7 +94,7 @@ async def boot_plugin(
     logger.info("[Unifideck] plugin loaded")
 
 
-async def _boot_layer2_core(plugin: Any, decky_plugin_dir: str) -> Any:
+async def _boot_layer2_core(plugin: Any, decky_runtime_dir: str) -> Any:
     """Layer 2 — EventBus + pipeline + cache.
 
     Returns the ``BusPipeline`` so ``boot_plugin`` can forward it
@@ -95,10 +103,39 @@ async def _boot_layer2_core(plugin: Any, decky_plugin_dir: str) -> Any:
     plugin.bus = EventBus()
     pipeline = await build_eventbus_pipeline(plugin)
     plugin.cache = CacheManager(
-        os.path.join(decky_plugin_dir, "data", "cache"),
+        os.path.join(decky_runtime_dir, "cache"),
     )
     register_default_caches(plugin.cache)
     return pipeline
+
+
+def _resolve_defaults_path(decky_plugin_dir: str) -> str:
+    """Locate the bundled config.json across Decky build layouts.
+
+    Two install layouts are valid in production:
+
+    1. ``<plugin>/defaults/config.json`` — local builds via
+       ``build-plugin.sh build_local`` and dev syncs that preserve
+       the source directory layout.
+    2. ``<plugin>/config.json`` — Decky CLI builds (``decky plugin
+       build``). Decky CLI 0.0.8+ has a convention where the contents
+       of ``defaults/`` get flattened to the install root on first
+       install (so users can edit them, with the file preserved
+       across plugin updates).
+
+    We pick whichever exists, preferring the unflattened layout when
+    both are present (more explicit). Returns the unflattened path
+    even when neither exists — ConfigManager handles "missing
+    defaults" by logging a warning and entering degraded mode, and
+    paths.py has fallback defaults so boot still completes.
+    """
+    nested = os.path.join(decky_plugin_dir, "defaults", "config.json")
+    if os.path.isfile(nested):
+        return nested
+    flattened = os.path.join(decky_plugin_dir, "config.json")
+    if os.path.isfile(flattened):
+        return flattened
+    return nested
 
 
 async def _boot_config_and_validate(
@@ -123,9 +160,7 @@ async def _boot_config_and_validate(
     to defaults + hardcoded values.
     """
     plugin._user_config_path = user_config_path_resolver()
-    defaults_path = os.path.join(
-        decky_plugin_dir, "defaults", "config.json",
-    )
+    defaults_path = _resolve_defaults_path(decky_plugin_dir)
     plugin.config = ConfigManager(
         defaults_path=defaults_path,
         user_path=plugin._user_config_path,

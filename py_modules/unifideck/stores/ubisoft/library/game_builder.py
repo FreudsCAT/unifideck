@@ -21,7 +21,12 @@ import logging
 import re
 from typing import TYPE_CHECKING, Any
 from ....core.types import Game
-from ..steam_filter import filter_steam_linked_configs
+
+# NOTE: ``..steam_filter`` (the Ubisoft Steam dedup filter) was
+# removed in commits 6c84e7e and 908d350 because it caused issues
+# in production. The feature is currently disabled — see
+# ``apply_steam_filter`` below — and will be re-introduced in a
+# future update with a fixed implementation.
 
 if TYPE_CHECKING:
     from ..config import UbisoftConfig
@@ -109,29 +114,22 @@ class _GameBuilder:
         self,
         configs: list[GameConfig],
     ) -> list[GameConfig]:
-        """Apply steam filter."""
-        if not self._config.filter_steam_linked:
-            return configs
-        before_count = len(configs)
-        result = self._filter_steam_linked_configs(configs)
-        dropped = before_count - len(result)
-        if dropped:
-            logger.info(
-                "[UbisoftLibrary] filtered %d Steam-linked game(s) from library",
-                dropped,
-            )
-        return result
+        """No-op passthrough — Steam dedup filter is currently disabled.
 
-    def _filter_steam_linked_configs(
-        self,
-        configs: list[GameConfig],
-    ) -> list[GameConfig]:
-        """Filter steam linked configs."""
-        return filter_steam_linked_configs(
-            configs,
-            self._config.steam_library_cross_ref,
-            self._id_map,
-        )
+        The implementation in ``..steam_filter`` was removed in
+        commits 6c84e7e and 908d350 because it caused production
+        issues. Until it returns, this method preserves the call
+        site (``fetch.py``) without altering the config list.
+        Any ``filter_steam_linked`` config flag the user has set
+        is silently ignored — re-enabling will require restoring
+        ``steam_filter.py`` and reverting this method.
+        """
+        if self._config.filter_steam_linked:
+            logger.debug(
+                "[UbisoftLibrary] filter_steam_linked=True ignored — "
+                "feature disabled pending steam_filter.py restoration",
+            )
+        return configs
 
     def build_games_from_configs(
         self,

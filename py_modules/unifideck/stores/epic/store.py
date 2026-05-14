@@ -232,7 +232,7 @@ class EpicStore(StoreBase):
             logger.error("[EpicStore] get_library failed: %s", e)
             return []
 
-    async def install_game(self, game_id: str, base_path: str | None = None
+    async def install_game(self, game_id: str, base_path: str | None = None,
                            progress_cb: ProgressCallback | None = None, **kwargs: Any) -> InstallResult:
         """Install game."""
         return await self._installer.install_game(

@@ -30,8 +30,15 @@ log_warn()    { echo -e "${YELLOW}[WARN]${NC} $1"; }
 log_error()   { echo -e "${RED}[ERROR]${NC} $1"; }
 
 # ── Argument parsing ─────────────────────────────────────────
-# Usage: ./build-plugin.sh [dev|prod] [install]
-# Default mode is 'dev'.
+# Usage: ./build-plugin.sh [dev|prod] [install|quick-install]
+#   dev (default)     development build (auto-incremented dev number)
+#   prod              production build (uses package.json version)
+#   install           after build, full reinstall to ~/homebrew/plugins/Unifideck
+#                     (rm -rf + unzip + chown — ~30s)
+#   quick-install     skip build entirely, rsync source → install in seconds.
+#                     Use after editing Python / config / bundled binaries.
+#                     Includes defaults/ so config never drifts. For frontend
+#                     edits, run ``pnpm run build`` first to refresh dist/.
 ENV_MODE="${1:-dev}"
 # If the second argument is 'install', the script will automatically
 # copy the plugin to the Decky directory and restart the plugin_loader.
@@ -158,6 +165,71 @@ check_requirements() {
     elif [ ! -f "$SCRIPT_DIR/requirements.txt" ]; then
         log_warn "requirements.txt missing and requirements.in not found!"
     fi
+}
+
+# ── Pre-build: vendor Python deps into py_modules/ ──────────
+# Decky Loader is *supposed* to pip-install requirements.txt at
+# plugin load time, but in practice this is unreliable across
+# Loader versions. We vendor the wheels into py_modules/ ourselves
+# so the install zip is self-contained and doesn't depend on the
+# Loader's pip behaviour.
+#
+# We download manylinux wheels for Python 3.11 (the SteamOS Python
+# version), regardless of the host's Python — this matches the
+# .so files already in py_modules/ and lets you build on any
+# distro / Python version. ``--only-binary :all:`` refuses sdists
+# so we never accidentally compile against the host's libpython.
+#
+# Idempotent: if a package is already in py_modules/ we leave it
+# alone (--upgrade-strategy only-if-needed). Disk-cheap and fast
+# (~2s when fully cached, ~10s on first run).
+DECK_PYTHON_VERSION="3.11"
+DECK_PLATFORM_TAG="manylinux2014_x86_64"
+
+vendor_deps() {
+    [ -f "$SCRIPT_DIR/requirements.txt" ] || {
+        log_warn "requirements.txt not found — skipping vendor step"
+        return 0
+    }
+    log_info "Vendoring Python deps into py_modules/ (Python $DECK_PYTHON_VERSION, $DECK_PLATFORM_TAG)..."
+
+    # Use a quiet cache dir so repeated builds don't re-download.
+    local cache_dir="$SCRIPT_DIR/.cache/pip-vendor"
+    mkdir -p "$cache_dir"
+
+    # --target installs into py_modules/ instead of site-packages.
+    # --platform + --python-version + --only-binary force the
+    # SteamOS-compatible wheel set regardless of host interpreter.
+    # --upgrade-strategy only-if-needed avoids churning unchanged deps.
+    if python3 -m pip install \
+            --quiet \
+            --target "$SCRIPT_DIR/py_modules" \
+            --platform "$DECK_PLATFORM_TAG" \
+            --python-version "$DECK_PYTHON_VERSION" \
+            --only-binary ":all:" \
+            --upgrade \
+            --upgrade-strategy only-if-needed \
+            --cache-dir "$cache_dir" \
+            -r "$SCRIPT_DIR/requirements.txt" 2>&1 | tail -20; then
+        log_success "Python deps vendored"
+    else
+        log_warn "vendor_deps failed — the zip may be missing required Python deps"
+        log_warn "(check that you have pip and a network connection)"
+    fi
+
+    # Sanity-check that the four runtime deps actually landed.
+    local missing_deps=()
+    for dep in aiohttp websockets cryptography jsonschema; do
+        if ! ls "$SCRIPT_DIR/py_modules/$dep" >/dev/null 2>&1 \
+                && ! ls "$SCRIPT_DIR/py_modules/${dep}-"*.dist-info >/dev/null 2>&1; then
+            missing_deps+=("$dep")
+        fi
+    done
+    if [ "${#missing_deps[@]}" -gt 0 ]; then
+        log_warn "Missing vendored deps after pip install: ${missing_deps[*]}"
+        log_warn "Plugin features depending on these will be disabled at runtime."
+    fi
+    echo ""
 }
 
 # ── Pre-build: generate src/i18n/locales.generated.ts ────────
@@ -447,11 +519,13 @@ build_local() {
         "py_modules/unifideck/actions/__init__.py"
         "py_modules/unifideck/actions/dispatch.py"
 
-        # Vendored third-party deps
+        # Vendored third-party deps (auto-installed by vendor_deps())
         "py_modules/vdf/__init__.py"
         "py_modules/websockets/__init__.py"
         "py_modules/aiohttp/__init__.py"
         "py_modules/certifi/__init__.py"
+        "py_modules/cryptography/__init__.py"
+        "py_modules/jsonschema/__init__.py"
 
         # Native binaries
         "bin/legendary"
@@ -526,6 +600,104 @@ build_local() {
     echo "========================================="
 }
 
+# ── Quick-install (dev sync) ──────────────────────────────────
+# Fast incremental sync of the working tree into an existing Decky
+# install — no zip, no unzip, no Docker. Use this for tight dev
+# iteration when you've changed Python or defaults and want them
+# live in seconds.
+#
+# Why this exists: full ``install_plugin`` does a containerised
+# build → zip → sudo rm -rf → unzip → chown cycle that can take
+# 30s+. ``quick_install`` rsyncs only the runtime payload
+# (py_modules, defaults, dist, bin, main.py, plugin.json,
+# requirements.txt) and restarts the loader. Sub-second on the
+# Deck.
+#
+# Critically, this includes ``defaults/`` so the source-of-truth
+# config can never drift out of the install — the most common
+# breakage during manual dev syncs.
+#
+# Frontend changes still require ``pnpm run build`` first to
+# refresh ``dist/index.js``; this script is for backend +
+# config + bundled-binary edits where Rollup doesn't need to
+# re-run.
+#
+# Usage: ``./build-plugin.sh dev quick-install``
+quick_install() {
+    local plugins_dir="$HOME/homebrew/plugins"
+    local install_dir="$plugins_dir/Unifideck"
+
+    [ -d "$plugins_dir" ] || { log_error "Decky plugins dir not found: $plugins_dir"; return 1; }
+
+    # Verify the source has every critical bundled artefact BEFORE
+    # touching the install — never half-sync a broken source tree.
+    local CRITICAL_SOURCE_FILES=(
+        "main.py"
+        "plugin.json"
+        "defaults/config.json"
+        "py_modules/unifideck/bootstrap/boot.py"
+    )
+    local missing=0
+    for f in "${CRITICAL_SOURCE_FILES[@]}"; do
+        if [ ! -e "$SCRIPT_DIR/$f" ]; then
+            log_error "Source missing: $f"
+            missing=$((missing + 1))
+        fi
+    done
+    if [ "$missing" -gt 0 ]; then
+        log_error "$missing source file(s) missing — aborting quick-install"
+        return 1
+    fi
+    [ -f "$SCRIPT_DIR/dist/index.js" ] || \
+        log_warn "dist/index.js missing — frontend won't load. Run 'pnpm run build' first."
+
+    echo ""
+    echo "========================================="
+    echo "Quick-install (dev sync)"
+    echo "========================================="
+    log_info "Stopping Decky plugin loader..."
+    sudo systemctl stop plugin_loader 2>/dev/null || true
+    sleep 1
+
+    sudo mkdir -p "$install_dir"
+
+    # Rsync each runtime payload with --delete so removed source
+    # files are also removed from the install. Using rsync via sudo
+    # because the install dir is owned by root for normal user
+    # installs — this matches Decky's permission model without
+    # requiring chmod 777.
+    log_info "Syncing payload to $install_dir..."
+    local rsync_opts=(-a --delete --no-owner --no-group --chown=deck:deck)
+    for dir in py_modules bin defaults src dist; do
+        if [ -d "$SCRIPT_DIR/$dir" ]; then
+            sudo rsync "${rsync_opts[@]}" \
+                --exclude='__pycache__' --exclude='*.pyc' \
+                --exclude='.git' --exclude='node_modules' \
+                "$SCRIPT_DIR/$dir/" "$install_dir/$dir/"
+            log_success "synced $dir/"
+        fi
+    done
+    sudo cp -p "$SCRIPT_DIR"/assets/* "$install_dir/assets/" 2>/dev/null || true
+    for f in main.py plugin.json package.json pnpm-lock.yaml tsconfig.json \
+              rollup.config.mjs requirements.txt LICENSE README.md; do
+        if [ -f "$SCRIPT_DIR/$f" ]; then
+            sudo cp -p "$SCRIPT_DIR/$f" "$install_dir/$f"
+        fi
+    done
+
+    # Make sure the install dir itself is writable by deck so the
+    # plugin can mkdir state under it (e.g. data/cache fallback,
+    # if DECKY_PLUGIN_RUNTIME_DIR is unset). Decky guarantees
+    # runtime_dir is writable but defending against missing env.
+    sudo chown deck:deck "$install_dir"
+    sudo find "$install_dir/bin" -type f -exec chmod +x {} \; 2>/dev/null || true
+
+    log_info "Starting Decky plugin loader..."
+    sudo systemctl start plugin_loader
+    log_success "Quick-install complete — tail logs at ~/homebrew/logs/Unifideck/"
+    echo "========================================="
+}
+
 # ── Install to Decky plugins dir ──────────────────────────────
 # When the --install flag is used, this function will directly extract
 # the new build into the Decky loader's plugin directory and restart Decky.
@@ -569,9 +741,18 @@ install_plugin() {
 
 # ── Main Execution Flow ───────────────────────────────────────
 main() {
+    # quick-install short-circuits the full build pipeline. Use it
+    # when you've only edited Python / config / bundled binaries
+    # and want them live in the existing Decky install in seconds.
+    if [[ "$INSTALL_AFTER" == "quick-install" ]]; then
+        quick_install
+        return $?
+    fi
+
     # Run pre-flight checks
     prebuild_binaries
     check_requirements
+    vendor_deps
     gen_locales
     sync_version
 

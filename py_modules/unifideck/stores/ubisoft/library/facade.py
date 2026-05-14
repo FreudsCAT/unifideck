@@ -9,8 +9,11 @@ It composes the work of:
 * ``fetch.py`` (OP-57b) — pull the UPC owned-games catalog;
 * ``data_loader.py`` (OP-57c) — load installed-state from disk markers;
 * ``detection.py`` (OP-57f) — detect installs the catalog doesn't know about;
-* ``manifest.py`` (OP-57e) — produce display-ready ``GameRecord`` entries;
-* ``steam_filter.py`` (OP-55i) — hide games already on Steam.
+* ``manifest.py`` (OP-57e) — produce display-ready ``GameRecord`` entries.
+
+(``steam_filter.py`` (OP-55i) — Steam dedup — was removed in
+commits 6c84e7e / 908d350; the filter is currently a no-op
+pending a fixed implementation.)
 
 The result is the merged list of owned + installed Ubisoft games that
 the UI displays. Cached in-memory by the store and invalidated on:

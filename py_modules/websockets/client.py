@@ -3,8 +3,7 @@ from __future__ import annotations
 import os
 import random
 import warnings
-from collections.abc import Generator, Sequence
-from typing import Any
+from typing import Any, Generator, Sequence
 
 from .datastructures import Headers, MultipleValuesError
 from .exceptions import (
@@ -27,7 +26,6 @@ from .headers import (
     parse_upgrade,
 )
 from .http11 import Request, Response
-from .imports import lazy_import
 from .protocol import CLIENT, CONNECTING, OPEN, Protocol, State
 from .typing import (
     ConnectionOption,
@@ -41,7 +39,13 @@ from .uri import WebSocketURI
 from .utils import accept_key, generate_key
 
 
-__all__ = ["ClientProtocol"]
+# See #940 for why lazy_import isn't used here for backwards compatibility.
+# See #1400 for why listing compatibility imports in __all__ helps PyCharm.
+from .legacy.client import *  # isort:skip  # noqa: I001
+from .legacy.client import __all__ as legacy__all__
+
+
+__all__ = ["ClientProtocol"] + legacy__all__
 
 
 class ClientProtocol(Protocol):
@@ -309,7 +313,7 @@ class ClientProtocol(Protocol):
 
         self.writes.append(request.serialize())
 
-    def parse(self) -> Generator[None]:
+    def parse(self) -> Generator[None, None, None]:
         if self.state is CONNECTING:
             try:
                 response = yield from Response.parse(
@@ -370,7 +374,7 @@ def backoff(
     min_delay: float = BACKOFF_MIN_DELAY,
     max_delay: float = BACKOFF_MAX_DELAY,
     factor: float = BACKOFF_FACTOR,
-) -> Generator[float]:
+) -> Generator[float, None, None]:
     """
     Generate a series of backoff delays between reconnection attempts.
 
@@ -387,14 +391,3 @@ def backoff(
         delay *= factor
     while True:
         yield max_delay
-
-
-lazy_import(
-    globals(),
-    deprecated_aliases={
-        # deprecated in 14.0 - 2024-11-09
-        "WebSocketClientProtocol": ".legacy.client",
-        "connect": ".legacy.client",
-        "unix_connect": ".legacy.client",
-    },
-)
