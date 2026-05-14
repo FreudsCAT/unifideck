@@ -403,12 +403,25 @@ omit = [
 #
 # ──────────────────────────────────────────────────────────────────
 #
-# 1. ``pip-audit`` — reads ``requirements.txt`` directly. Already
+# 1. ``flake8`` — reads ``.flake8`` (or ``setup.cfg [flake8]``).
+#    flake8 does NOT honour pyproject.toml: this is why ruff's
+#    ``[tool.ruff] exclude`` doesn't stop flake8 from descending
+#    into ``py_modules/urllib3/``, ``py_modules/vdf/``, etc.
+#    The companion ``.flake8`` file in this repo mirrors the
+#    vendored exclusions and the complexity ceilings below.
+#    Note that flake8 has no ``force-exclude`` — explicit-path
+#    invocations (``flake8 py_modules/urllib3/foo.py``) bypass
+#    the exclude list. Make sure CI invokes flake8 on
+#    ``py_modules/unifideck/`` (or the repo root with the walk
+#    relying on ``.flake8`` exclusions), never on a path inside a
+#    vendored dir.
+#
+# 2. ``pip-audit`` — reads ``requirements.txt`` directly. Already
 #    scoped correctly: we list only the 4 direct runtime deps
 #    (``aiohttp``, ``websockets``, ``cryptography``, ``jsonschema``),
 #    not the transitive vendor tree. No config change needed.
 #
-# 2. ``import-linter`` — reads ``.importlinter`` at the repo root.
+# 3. ``import-linter`` — reads ``.importlinter`` at the repo root.
 #    Contracts there must ignore packages they don't own. The
 #    canonical scope filter for that file is:
 #
@@ -422,14 +435,16 @@ omit = [
 #    descending into ``site-packages``/``defaults/python``/
 #    ``python_modules`` when resolving imports.
 #
-# 3. ``vulture`` (dead-code finder, if used in CI) — scope via
+# 4. ``vulture`` (dead-code finder, if used in CI) — scope via
 #    ``--exclude defaults/python,frontend,python_modules`` on the
 #    command line, or a ``vulture.toml`` next to ``pyproject.toml``.
 #
-# 4. GitHub Actions workflows — make sure every linter invocation
+# 5. GitHub Actions workflows — make sure every linter invocation
 #    runs ``py_modules/unifideck`` (or the package root) as its
 #    working directory rather than the repo root, OR passes
 #    ``py_modules/unifideck`` as the explicit path argument. With
 #    ``force-exclude = true`` set above, even a bad CI invocation
 #    can't accidentally lint vendored code through ruff — but
-#    mypy honours its own ``exclude``, so the same care applies.
+#    flake8 (no force-exclude) and mypy honour their own
+#    ``exclude`` only during directory walking, so the same care
+#    applies.

@@ -1,0 +1,172 @@
+# .flake8 — companion to pyproject.toml [tool.ruff]
+#
+# flake8 doesn't read pyproject.toml (only pep621-namespace tools
+# do; flake8 follows the older [flake8] section convention). It
+# therefore needs its own scope filter, and its filter must mirror
+# the ruff one or CI gates will diverge — exactly what's been
+# happening with the cognitive-complexity (CCR001) and mccabe
+# (C901) errors firing on vendored ``py_modules/urllib3/``,
+# ``py_modules/vdf/``, ``py_modules/websockets/`` files.
+#
+# Layout reminder (Decky Loader plugin bundle):
+#
+#   py_modules/
+#       unifideck/        ← Hardcpp's code (audit target)
+#       urllib3/          ← vendored 3rd-party
+#       requests/         ← vendored
+#       websockets/       ← vendored
+#       vdf/              ← vendored
+#       ...
+#
+# CI runs ``flake8 py_modules/`` from the repo root. Without an
+# exclude filter, every vendored sibling gets linted.
+#
+# ── flake8 exclude semantics ────────────────────────────────────
+#
+# flake8 uses ``fnmatch.fnmatch`` against the *relative* path of
+# each candidate, not glob ``**``. So:
+#
+#   exclude = urllib3            # matches ``urllib3`` (a dir) but NOT
+#                                # ``py_modules/urllib3``
+#   exclude = py_modules/urllib3 # matches the exact relative path
+#   exclude = */urllib3          # matches any one-level-deep urllib3
+#
+# Patterns are listed three ways to defeat invocation-path
+# ambiguity (CI from repo root vs from inside py_modules/):
+#
+#   1. ``py_modules/<lib>``        — when CI is at the repo root
+#   2. ``<lib>``                   — when CI is inside py_modules/
+#   3. ``*/<lib>``                 — generic single-segment catch
+#
+# A 4th-level prefix (``*/*/<lib>``) is not needed because Decky
+# never nests vendored deps deeper than one level under py_modules/.
+
+[flake8]
+max-line-length = 100
+# We don't enforce line length; the formatter owns that.
+extend-ignore =
+    E501,
+    # ── Style rules ruff also ignores (keep flake8 in sync) ────
+    W503,
+    W504,
+    E203,
+
+# Don't follow imports into excluded directories — without this,
+# pyflakes can still descend via ``from urllib3 import …`` and
+# emit warnings on the imported file.
+no-isort-config = true
+
+# Cognitive complexity ceiling matches the project's C901 ceiling
+# (the existing ruff config has ``C90``: mccabe threshold).
+# CCR001 plugin uses ``max-cognitive-complexity``.
+max-complexity = 10
+max-cognitive-complexity = 10
+
+# ── Exclusions ──────────────────────────────────────────────────
+# Comma-separated, comments not allowed on the same line as a
+# pattern (flake8 doesn't tolerate inline comments inside the
+# value of a multi-line setting). Use one pattern per line.
+extend-exclude =
+    __pycache__,
+    .ruff_cache,
+    .mypy_cache,
+    .pytest_cache,
+    .git,
+    .tox,
+    .venv,
+    venv,
+    env,
+    build,
+    dist,
+    *.egg-info,
+    docs/_build,
+    node_modules,
+    frontend,
+    frontend/dist,
+    frontend/node_modules,
+    py_modules/pip,
+    py_modules/pip-*,
+    py_modules/requests,
+    py_modules/urllib3,
+    py_modules/aiohttp,
+    py_modules/websockets,
+    py_modules/idna,
+    py_modules/charset_normalizer,
+    py_modules/certifi,
+    py_modules/cryptography,
+    py_modules/jsonschema,
+    py_modules/jsonschema_specifications,
+    py_modules/vdf,
+    py_modules/steamgrid,
+    py_modules/yaml,
+    py_modules/_yaml,
+    py_modules/attrs,
+    py_modules/attr,
+    py_modules/multidict,
+    py_modules/yarl,
+    py_modules/frozenlist,
+    py_modules/aiohappyeyeballs,
+    py_modules/aiosignal,
+    py_modules/async_timeout,
+    py_modules/cffi,
+    py_modules/pycparser,
+    py_modules/referencing,
+    py_modules/rpds,
+    py_modules/jsonschema_specifications,
+    pip,
+    pip-*,
+    requests,
+    urllib3,
+    aiohttp,
+    websockets,
+    idna,
+    charset_normalizer,
+    certifi,
+    cryptography,
+    jsonschema,
+    jsonschema_specifications,
+    vdf,
+    steamgrid,
+    yaml,
+    _yaml,
+    attrs,
+    attr,
+    multidict,
+    yarl,
+    frozenlist,
+    aiohappyeyeballs,
+    aiosignal,
+    async_timeout,
+    cffi,
+    pycparser,
+    referencing,
+    rpds,
+    */pip,
+    */requests,
+    */urllib3,
+    */aiohttp,
+    */websockets,
+    */idna,
+    */charset_normalizer,
+    */certifi,
+    */cryptography,
+    */jsonschema,
+    */vdf,
+    */steamgrid,
+    */yaml,
+    defaults/python,
+    defaults/python/*,
+    python_modules,
+    python_modules/*,
+    site-packages,
+    */site-packages,
+    */_vendor,
+    */vendored,
+    *.dist-info,
+    */*.dist-info,
+
+# ── Per-file selection ──────────────────────────────────────────
+# Type re-export modules: F401 is the expected pattern.
+per-file-ignores =
+    __init__.py:F401
+    py_modules/unifideck/**/__init__.py:F401
