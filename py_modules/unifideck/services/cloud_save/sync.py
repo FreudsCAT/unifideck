@@ -39,6 +39,81 @@ def _get_lock(syncing: dict[str, asyncio.Lock], key: str) -> asyncio.Lock:
     return syncing.setdefault(key, asyncio.Lock())
 
 
+# Name of the manifest file written/read at the root of every
+# synced save directory. Kept as a module constant so the walks
+# in ``_walk_mtimes_sync`` and the writers in ``manifest.py``
+# never diverge.
+_MANIFEST_FILENAME = ".unifideck_sync.json"
+
+
+def _walk_mtimes_sync(directory: str) -> dict[str, float]:
+    """Return ``{rel_path: mtime}`` for every non-manifest file under
+    ``directory``.
+
+    Pure synchronous helper — callers run it inside
+    ``asyncio.to_thread`` to avoid blocking the event loop.
+    Extracted from the former ``_is_modified._check_sync`` and
+    ``_build_manifest._build_sync`` closures which inlined the
+    exact same walk : having one canonical implementation kills
+    the drift risk and shaves cognitive complexity off both
+    callers.
+
+    Per-file ``OSError`` (file vanished mid-walk) is silently
+    skipped — the resulting partial map still feeds correctly
+    into the divergence check. Missing root → empty dict (the
+    caller's ``set(...) != set(...)`` comparison handles it as
+    "all files deleted").
+
+    Pathlib-native: walks via ``rglob('*')`` and computes the
+    relative path with ``Path.relative_to``. The string-typed
+    return contract is preserved so manifest persistence
+    (JSON-serialised) stays portable across machines and
+    filesystems.
+    """
+    mtimes: dict[str, float] = {}
+    root_p = Path(directory)
+    if not root_p.exists():
+        return mtimes
+    for entry in root_p.rglob("*"):
+        if not entry.is_file():
+            continue
+        if entry.name == _MANIFEST_FILENAME:
+            continue
+        rel = str(entry.relative_to(root_p))
+        try:
+            mtimes[rel] = entry.stat().st_mtime
+        except OSError:
+            pass
+    return mtimes
+
+
+def _mtimes_diverge(
+    current: dict[str, float],
+    manifest: dict[str, float],
+    *,
+    tolerance: float,
+) -> bool:
+    """Compare two mtime maps and return True at the first divergence.
+
+    Two divergence signals :
+
+        * The file sets differ (added or removed files since
+          the manifest was written) — short-circuits without
+          touching mtimes.
+        * Any per-file mtime drifted beyond ``tolerance``
+          seconds. The tolerance accounts for filesystems that
+          round mtimes to 1s (FAT32 on SD cards) or 2s (some
+          NAS), and for clock skew between the local machine
+          and the cloud target.
+    """
+    if set(current.keys()) != set(manifest.keys()):
+        return True
+    for rel, mtime in current.items():
+        if abs(mtime - manifest.get(rel, 0.0)) > tolerance:
+            return True
+    return False
+
+
 class _SyncMixin:
     """Bidirectional cloud sync methods for CloudSaveService."""
 
@@ -300,57 +375,31 @@ class _SyncMixin:
     # --- Private Helpers ---
 
     async def _is_modified(self, directory: str, manifest: dict[str, float]) -> bool:
-        """Check if any file in `directory` differs from `manifest` mtimes."""
+        """Check if any file in `directory` differs from `manifest` mtimes.
+
+        Refactor history (2026-05-14): was at CC=22 — the inner
+        ``_check_sync`` closure inlined the mtime collection
+        (triple loop with try/except) and the two divergence
+        checks (set-diff + per-key tolerance). The mtime
+        collection is identical to ``_build_manifest`` and was
+        duplicated across both methods. Pulled it into the
+        module-level ``_walk_mtimes_sync`` helper (used by both)
+        and split the divergence detection into a flat helper
+        ``_mtimes_diverge``. Net: ``_is_modified`` drops to
+        single digits AND a 15-line duplicate disappears.
+        """
         def _check_sync() -> bool:
-            if not os.path.exists(directory):
-                return False
-
-            current = {}
-            for root, _, files in os.walk(directory):
-                for f in files:
-                    # Ignore the manifest file itself
-                    if f == ".unifideck_sync.json":
-                        continue
-                    path = os.path.join(root, f)
-                    rel = os.path.relpath(path, directory)
-                    try:
-                        current[rel] = os.path.getmtime(path)
-                    except OSError:
-                        pass
-
-            # If sets of files differ
-            if set(current.keys()) != set(manifest.keys()):
-                return True
-
-            # If any mtime drifted beyond tolerance
-            for rel, mtime in current.items():
-                if abs(mtime - manifest.get(rel, 0.0)) > getattr(self, "_tolerance", 2.0):
-                    return True
-
-            return False
+            current = _walk_mtimes_sync(directory)
+            return _mtimes_diverge(
+                current, manifest,
+                tolerance=getattr(self, "_tolerance", 2.0),
+            )
 
         return await asyncio.to_thread(_check_sync)
 
     async def _build_manifest(self, directory: str) -> dict[str, float]:
         """Build a fresh manifest dict of rel_path -> mtime."""
-        def _build_sync() -> dict[str, float]:
-            manifest = {}
-            if not os.path.exists(directory):
-                return manifest
-
-            for root, _, files in os.walk(directory):
-                for f in files:
-                    if f == ".unifideck_sync.json":
-                        continue
-                    path = os.path.join(root, f)
-                    rel = os.path.relpath(path, directory)
-                    try:
-                        manifest[rel] = os.path.getmtime(path)
-                    except OSError:
-                        pass
-            return manifest
-
-        return await asyncio.to_thread(_build_sync)
+        return await asyncio.to_thread(_walk_mtimes_sync, directory)
 
     async def _copy_tree(self, src: str, dst: str) -> None:
         """Copy src directory to dst atomically (via tmp)."""

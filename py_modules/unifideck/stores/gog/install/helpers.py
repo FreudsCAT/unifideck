@@ -11,6 +11,15 @@ calls during the "probe & prepare" phase :
   locale and the game's available languages, decide which language
   list to pass to gogdl. Honors an explicit override (always wins) or
   picks a smart match (delegates to ``languages.py``, OP-51c).
+
+Refactor history (2026-05-14): ``parse_info_output`` was a single
+function at CC=17 — the reversed-line walk inlined the JSON parse,
+the skip-empty + skip-malformed branches, and the two-field
+extraction (folder_name + languages) with their dedicated isinstance
+guard. Cognitive complexity exploded because the nesting reached
+4 levels deep on the ``languages`` branch. Split into a small
+generator (``_iter_json_lines_reversed``) + two pure extractors so
+the main loop is a flat assignment-and-break read.
 """
 
 from __future__ import annotations
@@ -18,8 +27,10 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from collections.abc import Iterator
 from typing import (
     TYPE_CHECKING,
+    Any,
 )
 
 from .languages import smart_match_language
@@ -102,26 +113,75 @@ class _InstallHelpers:
 
     @staticmethod
     def parse_info_output(stdout: str) -> tuple[str | None, list[str]]:
-        """Parse info output."""
+        """Parse ``gogdl info`` stdout and return ``(folder_name, languages)``.
+
+        gogdl emits one JSON object per line ; the interesting
+        fields (``folder_name`` and ``languages``) usually live on
+        the last few lines, so we iterate bottom-up and short-
+        circuit as soon as both are filled. Returns ``(None, [])``
+        when the output contains no usable JSON line — caller
+        decides how to react (typically fall back to defaults).
+        """
         folder_name: str | None = None
         languages: list[str] = []
+        for data in _InstallHelpers._iter_json_lines_reversed(stdout):
+            if folder_name is None:
+                folder_name = _InstallHelpers._extract_folder_name(data)
+            if not languages:
+                languages = _InstallHelpers._extract_languages(data)
+            if folder_name and languages:
+                break
+        return folder_name, languages
+
+    # ─────────────────────────────────────────────────────────────
+    # Helpers extracted from the former CC=17 parse_info_output
+    # ─────────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _iter_json_lines_reversed(stdout: str) -> Iterator[dict[str, Any]]:
+        """Yield parsed JSON objects from ``stdout``, bottom-up.
+
+        Skips empty lines and lines that fail to parse — gogdl
+        occasionally emits human-readable log lines interleaved
+        with the structured output, and we don't want those to
+        abort the walk.
+        """
         for raw_line in reversed(stdout.splitlines()):
             line = raw_line.strip()
             if not line:
                 continue
             try:
-                data = json.loads(line)
+                yield json.loads(line)
             except json.JSONDecodeError:
                 continue
-            if "folder_name" in data and not folder_name:
-                folder_name = data["folder_name"]
-            if "languages" in data and not languages:
-                langs = data["languages"]
-                if isinstance(langs, list):
-                    languages = [str(x) for x in langs]
-            if folder_name and languages:
-                break
-        return folder_name, languages
+
+    @staticmethod
+    def _extract_folder_name(data: dict[str, Any]) -> str | None:
+        """Return the ``folder_name`` field from a gogdl JSON line, or None.
+
+        Defensive against type coercions: gogdl has occasionally
+        emitted nulls or numeric values here ; we only accept
+        non-empty strings.
+        """
+        val = data.get("folder_name")
+        if isinstance(val, str) and val:
+            return val
+        return None
+
+    @staticmethod
+    def _extract_languages(data: dict[str, Any]) -> list[str]:
+        """Return the ``languages`` field as a list of str, or empty.
+
+        The wire format guarantees a JSON array of locale tags
+        (``["en-US", "fr-FR", …]``) but past versions of gogdl
+        have emitted unexpected shapes (single string, null) on
+        edge games — we coerce to ``list[str]`` and silently
+        return ``[]`` on anything else.
+        """
+        langs = data.get("languages")
+        if isinstance(langs, list):
+            return [str(x) for x in langs]
+        return []
 
     @staticmethod
     def pick_languages(

@@ -163,6 +163,15 @@ class StoreRegistry:
 
         Symlinks and ``_``-prefixed entries are skipped at every
         level for the same reasons as the flat path: confinement.
+
+        Refactor history (2026-05-14): was at CC=24 (the worst
+        in the codebase) — the outer loop's body inlined the
+        three layout branches with nested ``if entry.is_dir() /
+        for candidate_name / if not is_file / if is_symlink /
+        yield / break / if not yielded`` which pushed nesting
+        to five levels deep. Pulled both the flat-file branch
+        and the subpackage walk into private static helpers so
+        the outer loop reads as ``for entry: skip-or-delegate``.
         """
         real_stores_p = Path(real_stores)
         for entry in sorted(real_stores_p.iterdir()):
@@ -176,26 +185,54 @@ class StoreRegistry:
                 )
                 continue
             if entry.is_file() and name.endswith("_store.py"):
-                yield name[:-3], str(entry)
+                yield from StoreRegistry._yield_for_flat_file(entry)
                 continue
             if entry.is_dir():
-                yielded = False
-                for candidate_name in (f"{name}_store.py", "store.py"):
-                    candidate = entry / candidate_name
-                    if not candidate.is_file():
-                        continue
-                    if candidate.is_symlink():
-                        logger.warning(
-                            "[StoreRegistry] SECURITY: skipping "
-                            "symlinked %s in %s",
-                            candidate_name, str(entry),
-                        )
-                        continue
-                    yield f"{name}.{candidate_name[:-3]}", str(candidate)
-                    yielded = True
-                    break
-                if not yielded:
-                    continue
+                yield from StoreRegistry._yield_for_subpackage(entry)
+
+    @staticmethod
+    def _yield_for_flat_file(entry: Path):
+        """Yield the ``(suffix, path)`` tuple for a flat-file store.
+
+        Layout: ``stores/<name>_store.py`` (no subpackage). The
+        module suffix is the filename without ``.py``. Single-
+        yield generator — kept as a generator for symmetry with
+        ``_yield_for_subpackage`` and so the caller stays a
+        clean ``yield from``.
+        """
+        # Strip the ``.py`` extension to obtain the suffix.
+        yield entry.name[:-3], str(entry)
+
+    @staticmethod
+    def _yield_for_subpackage(entry: Path):
+        """Yield the ``(suffix, path)`` for a subpackage-layout store.
+
+        Layout: ``stores/<name>/``. Two candidate filenames
+        are tried in priority order :
+
+            * ``<name>_store.py`` (prefixed — the canonical
+              layout post-Decky-template-v2).
+            * ``store.py`` (bare — legacy layout retained for
+              third-party stores still on v1).
+
+        First match wins and the search stops. Symlinked
+        candidates are skipped with a SECURITY warning for the
+        same reason flat-file symlinks are skipped — confinement.
+        """
+        name = entry.name
+        for candidate_name in (f"{name}_store.py", "store.py"):
+            candidate = entry / candidate_name
+            if not candidate.is_file():
+                continue
+            if candidate.is_symlink():
+                logger.warning(
+                    "[StoreRegistry] SECURITY: skipping "
+                    "symlinked %s in %s",
+                    candidate_name, str(entry),
+                )
+                continue
+            yield f"{name}.{candidate_name[:-3]}", str(candidate)
+            return
 
     @staticmethod
     def _load_store_class(

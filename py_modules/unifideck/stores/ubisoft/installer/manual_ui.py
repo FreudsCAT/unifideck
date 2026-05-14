@@ -278,7 +278,16 @@ class _ManualUiInstaller:
         upc_dirs_before: dict[str, set],
         progress_cb: Callable[[dict[str, Any]], Awaitable[None]] | None,
     ) -> str | None:
-        """Poll for new install."""
+        """Poll until a new install directory appears or UPC exits.
+
+        Refactor history (2026-05-14): the original implementation
+        nested the "is there a new dir anywhere" check three
+        levels deep (main install_base → UPC fallback loop → match
+        test) and inlined the periodic-progress emit at the same
+        level as the exit-detection branch. CC was 17. Pulled the
+        detection sweep and the progress tick into helpers so the
+        loop body reads as a flat ``detect → react → tick``.
+        """
         install_dir: str | None = None
         max_polls = int(
             _MANUAL_INSTALL_TIMEOUT_S / _MANUAL_INSTALL_POLL_INTERVAL_S,
@@ -287,16 +296,9 @@ class _ManualUiInstaller:
             await asyncio.sleep(
                 _MANUAL_INSTALL_POLL_INTERVAL_S,
             )
-            install_dir = self._check_new_dirs(
-                install_base,
-                dirs_before,
+            install_dir = self._detect_new_install(
+                install_base, dirs_before, upc_dirs_before,
             )
-            if not install_dir:
-                for gdir, before in upc_dirs_before.items():
-                    found = self._check_new_dirs(gdir, before)
-                    if found:
-                        install_dir = found
-                        break
             if install_dir:
                 logger.info(
                     "[UbisoftInstaller] detected install at %s",
@@ -317,17 +319,64 @@ class _ManualUiInstaller:
                     proc.returncode,
                 )
                 return None
-            if progress_cb and iteration % 6 == 0:
-                await progress_cb(
-                    {
-                        "status": "waiting",
-                        "message": (
-                            "Waiting for game installation in Ubisoft Connect…"
-                        ),
-                        "progress": 0,
-                    }
-                )
+            await self._maybe_emit_waiting_tick(progress_cb, iteration)
         return None
+
+    # ─────────────────────────────────────────────────────────────
+    # Helpers extracted from the former CC=17 _poll_for_new_install
+    # ─────────────────────────────────────────────────────────────
+
+    def _detect_new_install(
+        self,
+        install_base: str,
+        dirs_before: set,
+        upc_dirs_before: dict[str, set],
+    ) -> str | None:
+        """Probe every watched directory for a new install dir.
+
+        Two locations are watched in priority order :
+
+            1. The user-configured ``install_base`` (the path
+               we asked UPC to use).
+            2. UPC's per-prefix ``games`` directories — fallback
+               for the case where UPC overrides ``install_base``
+               and drops the game in its default folder anyway.
+
+        Returns the *first* match found (priority preserved) or
+        ``None`` if nothing showed up since the snapshot.
+        """
+        install_dir = self._check_new_dirs(install_base, dirs_before)
+        if install_dir:
+            return install_dir
+        for gdir, before in upc_dirs_before.items():
+            found = self._check_new_dirs(gdir, before)
+            if found:
+                return found
+        return None
+
+    @staticmethod
+    async def _maybe_emit_waiting_tick(
+        progress_cb: Callable[[dict[str, Any]], Awaitable[None]] | None,
+        iteration: int,
+    ) -> None:
+        """Emit a "still waiting" progress tick every 6 iterations.
+
+        At ``_MANUAL_INSTALL_POLL_INTERVAL_S = 10s``, every 6
+        iterations is ~1 minute — enough to keep the UI alive
+        without spamming the bus on every poll. Silent no-op
+        when no progress callback is wired.
+        """
+        if not progress_cb or iteration % 6 != 0:
+            return
+        await progress_cb(
+            {
+                "status": "waiting",
+                "message": (
+                    "Waiting for game installation in Ubisoft Connect…"
+                ),
+                "progress": 0,
+            }
+        )
 
     @staticmethod
     async def _notify_install_detected(

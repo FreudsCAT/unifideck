@@ -4,6 +4,15 @@
 in tandem, plus ``_build_shortcut_entry`` helper. Mixin assumes
 the host exposes ``_bus``, ``_shortcuts``, ``_games_map``,
 paths, and async ``_load_*`` / ``_save_all`` primitives.
+
+Refactor history (2026-05-14): ``add_game`` was a single async
+method at CC=17 — it inlined the shortcuts dict normalisation,
+the obsolete-entry sweep (two-branch matching: by app_id and by
+AppName+tag), the new key allocation, and the bus emit. Pulled
+the obsolete-key search and tag check into private helpers; the
+shape-normalisation and key allocation reuse existing helpers
+(``_ensure_shortcuts_root``, ``_allocate_new_shortcut_key``)
+that were already defined for ``reconcile``.
 """
 from __future__ import annotations
 
@@ -54,38 +63,27 @@ class _GamesMapMixin:
         exe = game.launch_path or ""
         app_id = generate_app_id(exe, game.title)
 
-        # Update games.map
-        self._games_map[key] = GameMapEntry(exe=exe, work_dir=game.work_dir or "")
+        # Update games.map first — even if the shortcuts.vdf write
+        # below fails, the canonical record of "what Unifideck owns"
+        # is correct.
+        self._games_map[key] = GameMapEntry(
+            exe=exe, work_dir=game.work_dir or "",
+        )
 
-        # Update shortcuts.vdf
-        if not isinstance(self._shortcuts, dict):
-            self._shortcuts = {"shortcuts": {}}
-        elif "shortcuts" not in self._shortcuts:
-            self._shortcuts["shortcuts"] = {}
-
+        # Normalise the shortcuts dict shape (tolerates corrupt VDF
+        # produced by a third party clobbering the file).
+        self._shortcuts = self._ensure_shortcuts_root(self._shortcuts)
         shortcuts_dict = self._shortcuts["shortcuts"]
 
-        # Check if it already exists and remove the old entry
-        keys_to_delete = []
-        for vdf_key, entry in shortcuts_dict.items():
-            if isinstance(entry, dict) and entry.get("appid") == app_id:
-                keys_to_delete.append(vdf_key)
-            # Also remove if it matches AppName and has our tag (handling changed app_id)
-            elif isinstance(entry, dict) and entry.get("AppName") == game.title:
-                tags = entry.get("tags", {})
-                if isinstance(tags, dict) and any(t == UNIFIDECK_TAG for t in tags.values()):
-                    keys_to_delete.append(vdf_key)
-
-        for vdf_key in keys_to_delete:
+        # Remove any prior entry that would now collide.
+        for vdf_key in self._find_obsolete_keys(
+            shortcuts_dict, app_id, game.title,
+        ):
             del shortcuts_dict[vdf_key]
 
-        # Append new entry
-        new_key = str(len(shortcuts_dict))
-        while new_key in shortcuts_dict:
-            new_key = str(int(new_key) + 1)
-
-        entry = self._build_shortcut_entry(game, app_id)
-        shortcuts_dict[new_key] = entry
+        # Allocate a fresh ordinal key and store the new entry.
+        new_key = self._allocate_new_shortcut_key(shortcuts_dict)
+        shortcuts_dict[new_key] = self._build_shortcut_entry(game, app_id)
 
         await self._save_all()
 
@@ -100,6 +98,59 @@ class _GamesMapMixin:
             )
 
         return app_id
+
+    # ─────────────────────────────────────────────────────────────
+    # Helpers extracted from the former CC=17 add_game
+    # ─────────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _find_obsolete_keys(
+        shortcuts_dict: dict[str, Any],
+        app_id: int,
+        title: str,
+    ) -> list[str]:
+        """Return shortcut keys to replace when adding ``app_id``/``title``.
+
+        Two collision cases trigger a deletion:
+
+            * ``appid`` matches — straightforward reinstall or
+              metadata refresh; we drop the old entry so the new
+              one takes its slot (Steam itself tolerates duplicate
+              ``appid`` rows but the UI shows two tiles).
+            * ``AppName`` matches AND the entry carries the
+              ``UNIFIDECK_TAG`` — same game, different app_id.
+              This happens when ``game.launch_path`` changes
+              (e.g. game moved to SD card): ``generate_app_id``
+              produces a new hash and the previous tile becomes
+              orphaned. We only delete tagged entries to leave
+              user-created shortcuts alone.
+        """
+        obsolete: list[str] = []
+        for vdf_key, entry in shortcuts_dict.items():
+            if not isinstance(entry, dict):
+                continue
+            if entry.get("appid") == app_id:
+                obsolete.append(vdf_key)
+                continue
+            if (
+                entry.get("AppName") == title
+                and _GamesMapMixin._entry_has_unifideck_tag(entry)
+            ):
+                obsolete.append(vdf_key)
+        return obsolete
+
+    @staticmethod
+    def _entry_has_unifideck_tag(entry: dict[str, Any]) -> bool:
+        """Whether a VDF entry is tagged as Unifideck-managed.
+
+        Defensive: tags can be missing (user-created shortcut),
+        ``None`` (legacy entries), or a non-dict value (corrupt
+        file) — all three reduce to "not managed".
+        """
+        tags = entry.get("tags", {})
+        if not isinstance(tags, dict):
+            return False
+        return any(t == UNIFIDECK_TAG for t in tags.values())
 
     async def get_exe_for_game_key(self: Any, store: str, game_id: str) -> str | None:
         """Return absolute exe path for ``store:game_id``, or None.

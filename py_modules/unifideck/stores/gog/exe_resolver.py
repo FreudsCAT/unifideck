@@ -263,28 +263,19 @@ class GOGExeResolver:
 
     @staticmethod
     def _resolve_via_largest_exe(search_dirs: list[str]) -> tuple[str, str] | None:
-        """Resolve via largest exe."""
+        """Pick the heaviest non-skipped ``.exe`` across ``search_dirs``.
+
+        Refactor history (2026-05-14): was a triple-nested
+        ``for dir / for pattern / for exe`` with an inline
+        per-file ``stat`` try/except (CC=18). Pulled the per-
+        directory candidate gathering into ``_collect_exe_candidates_in``
+        so this method is a flat "scan each dir, pick the
+        largest, log, return" read.
+        """
         for directory in search_dirs:
             if not Path(directory).is_dir():
                 continue
-            candidates: list[tuple[str, int]] = []
-            for pattern in ("*.exe", "**/*.exe"):
-                for exe_path in glob.glob(
-                    str(Path(directory) / pattern),
-                    recursive=True,
-                ):
-                    basename = Path(exe_path).name.lower()
-                    if any(skip in basename for skip in _SKIP_EXE_PATTERNS):
-                        continue
-                    try:
-                        candidates.append(
-                            (
-                                exe_path,
-                                Path(exe_path).stat().st_size,
-                            ),
-                        )
-                    except OSError:
-                        continue
+            candidates = GOGExeResolver._collect_exe_candidates_in(directory)
             if not candidates:
                 continue
             candidates.sort(key=lambda item: item[1], reverse=True)
@@ -296,6 +287,34 @@ class GOGExeResolver:
             )
             return (best_exe, str(Path(best_exe).parent))
         return None
+
+    @staticmethod
+    def _collect_exe_candidates_in(directory: str) -> list[tuple[str, int]]:
+        """Return all non-skipped ``.exe`` files under ``directory`` with sizes.
+
+        Walks the directory twice (top-level + recursive globs)
+        so a quick win in the root is found before deeper trees ;
+        glob's natural ordering preserves this. Skipped filename
+        patterns (uninstaller, crash handler, ...) live in
+        ``_SKIP_EXE_PATTERNS``. Per-file ``stat`` failure is
+        silent — a broken symlink or unreadable file just drops
+        out of the candidate set.
+        """
+        candidates: list[tuple[str, int]] = []
+        for pattern in ("*.exe", "**/*.exe"):
+            for exe_path in glob.glob(
+                str(Path(directory) / pattern),
+                recursive=True,
+            ):
+                basename = Path(exe_path).name.lower()
+                if any(skip in basename for skip in _SKIP_EXE_PATTERNS):
+                    continue
+                try:
+                    size = Path(exe_path).stat().st_size
+                except OSError:
+                    continue
+                candidates.append((exe_path, size))
+        return candidates
 
 
 def parse_size_string(size_str: str) -> int:
