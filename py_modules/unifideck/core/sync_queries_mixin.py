@@ -1,0 +1,144 @@
+"""Read-only query mixin for :class:`SyncService`.
+
+OP-08l-bis | py_modules/unifideck/core/sync_queries_mixin.py
+
+Extracted from ``core/sync_service.py`` (2026-05-14) to keep
+the host file under the 550-LOC volumetry cap. The split is
+clean along the read/write axis :
+
+* **Writes** stay in ``SyncService`` proper — sync orchestration,
+  cancellation, event emission, cache management.
+* **Reads** (this file) — pure snapshot accessors over
+  ``_all_games``: status dict, full library, per-store list,
+  per-AppID lookup, plus the ``_flatten`` static helper.
+
+This mirrors the mixin pattern used elsewhere in the project
+(``_VdfShortcutsMixin``, ``_FailuresMixin``, ``_GamesMapMixin``)
+so the import surface — ``from unifideck.core.sync_service
+import SyncService`` — stays unchanged.
+
+The mixin declares its consumed attributes (``_all_games``,
+``_lock``, ``_current_store``, ``_last_sync_time``) as
+``TYPE_CHECKING`` annotations only — they are provided by the
+host ``SyncService`` at runtime, the same convention the other
+mixins use.
+"""
+
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any
+
+from .types import Game
+
+if TYPE_CHECKING:
+    import asyncio
+
+
+class _SyncQueriesMixin:
+    """Read-only snapshot accessors for :class:`SyncService`.
+
+    Every method here is a non-mutating view over
+    ``_all_games`` and the timing/cursor fields. Safe to call
+    concurrently with a running sync — Python's GIL gives us
+    atomic dict-get semantics, and the lists we return are
+    shallow copies so the caller can iterate without fear.
+    """
+
+    # Attributes provided by the host SyncService at runtime.
+    # Declared here so type-checkers don't complain about the
+    # mixin reading state it didn't set itself.
+    _all_games: dict[str, list[Game]]
+    _last_sync_time: float
+    _current_store: str | None
+    _lock: asyncio.Lock
+
+    def get_status(self) -> dict[str, Any]:
+        """Return a JSON-friendly status snapshot.
+
+        Used by the frontend's status poller. Cheap —
+        all four fields are O(1) reads + one sum.
+
+        Returns:
+            Dict with ``syncing``, ``current_store``,
+            ``last_sync_time``, ``total_games``.
+        """
+        return {
+            "syncing": self._lock.locked(),
+            "current_store": self._current_store,
+            "last_sync_time": self._last_sync_time,
+            "total_games": sum(len(g) for g in self._all_games.values()),
+        }
+
+    def get_all_games(self) -> list[Game]:
+        """Return the merged unified library (flattened across stores).
+
+        Snapshot copy via ``_flatten`` — caller can
+        iterate without worrying about ``_all_games``
+        being mutated by a concurrent sync.
+
+        Returns:
+            List of ``Game`` instances.
+        """
+        return self._flatten(self._all_games)
+
+    def get_games_by_store(self, store: str) -> list[Game]:
+        """Return the games list for one store (shallow copy).
+
+        Empty list when the store has no games or
+        doesn't exist — callers don't need to handle a
+        ``None`` return.
+
+        Args:
+            store: store identifier.
+
+        Returns:
+            List of games (shallow copy).
+        """
+        return list(self._all_games.get(store, []))
+
+    def get_game_info(self, app_id: int) -> dict[str, Any] | None:
+        """Find a game by AppID and return its dict form.
+
+        Linear scan across every store's list — O(N) on
+        total library size. Acceptable because callers
+        are interactive (single game per call from RPC),
+        not bulk loops.
+
+        ``dataclasses.asdict`` is imported lazily inside
+        the hit branch to keep the cold path zero-cost
+        (no import unless something matches).
+
+        Args:
+            app_id: Steam-style AppID.
+
+        Returns:
+            Dict form of the game, or ``None`` if not
+            found.
+        """
+        for games in self._all_games.values():
+            for game in games:
+                if game.app_id == app_id:
+                    from dataclasses import asdict
+
+                    return asdict(game)
+        return None
+
+    @staticmethod
+    def _flatten(libraries: dict[str, list[Game]]) -> list[Game]:
+        """Merge per-store lists into one flat list.
+
+        Order: dict-iteration order over stores (insertion
+        order on CPython 3.7+), then per-store insertion
+        order. Stable across calls so the UI's game
+        ordering doesn't shuffle between syncs.
+
+        Args:
+            libraries: per-store mapping.
+
+        Returns:
+            Single flat list of games.
+        """
+        merged: list[Game] = []
+        for games in libraries.values():
+            merged.extend(games)
+        return merged
