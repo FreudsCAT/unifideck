@@ -205,6 +205,21 @@ class AmazonStore(StoreBase):
                 error="auth_not_configured",
                 store="amazon",
             )
+        # Edge prerequisite : the launcher subprocess opens
+        # the nile OAuth URL inside Microsoft Edge. Returning
+        # a structured `edge_not_installed` here lets the
+        # frontend spawn the install modal instead of letting
+        # the launcher subprocess crash later.
+        edge = getattr(self, "_edge", None)
+        if edge is None or not edge.is_installed:
+            logger.info(
+                "[AmazonStore] Edge not installed — prompting user",
+            )
+            return AuthResult(
+                success=False,
+                error="edge_not_installed",
+                store="amazon",
+            )
         await self._ensure_auth_shortcut()
         return cast("AuthResult", await self._auth.start_auth())
 

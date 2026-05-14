@@ -17,6 +17,9 @@ export const rpcRoutes = {
   checkStoreStatus:        "check_store_status",
   getStoreInfos:           "get_store_infos",
   clearStoreAuths:         "clear_store_auths",
+  // Edge prereq (EdgeRPCMixin)
+  isEdgeInstalled:                 "is_edge_installed",
+  installEdge:                     "install_edge",
   // Auth-shortcut context (AuthShortcutsRPCMixin)
   getEpicAuthShortcutContext:      "get_epic_auth_shortcut_context",
   getGogAuthShortcutContext:       "get_gog_auth_shortcut_context",

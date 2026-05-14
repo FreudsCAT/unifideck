@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from ...auth.browser import OAuthBrowserMonitor
+    from ...auth.edge_browser import EdgeBrowser
     from ...cdp.cdp_client import CDPClient
     from ...core.metrics_collector import MetricsCollector
     from ..account_service import AccountService
@@ -71,3 +72,7 @@ class ServiceContainer:
     # consumed by every store's `AuthOrchestrator`. Injected into
     # stores via `store_injector._STORE_INJECTIONS`.
     browser_monitor: OAuthBrowserMonitor | None = None
+    # Edge browser — flatpak installer + CDP launcher used by
+    # the four OAuth stores (Epic / GOG / Amazon / Microsoft).
+    # Constructed once per plugin and shared via the injector.
+    edge_browser: EdgeBrowser | None = None

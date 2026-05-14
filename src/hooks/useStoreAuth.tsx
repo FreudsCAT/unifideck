@@ -16,10 +16,12 @@
  *  - `busy`        : true when an auth call is in flight
  */
 import { useCallback, useState } from "react";
+import { showModal } from "@decky/ui";
 import { useAuth } from "../contexts/AuthContext";
 import { useStores } from "../contexts/StoreContext";
 import { useToast } from "./useToast";
 import { AuthDispatcher } from "../services/auth/AuthDispatcher";
+import { ChromiumInstallModal } from "../components/modals/ChromiumInstallModal";
 import type { AuthResult, StoreId } from "../types/api";
 
 /**
@@ -60,6 +62,22 @@ export function useStoreAuth(store: StoreId): UseStoreAuthResult {
     try {
       toast.info(`Starting ${store} sign-in…`);
       const result = await AuthDispatcher.start(store);
+      // Browser-based OAuth needs Microsoft Edge. When the
+      // backend reports the prereq is missing, surface a
+      // modal with an Install button rather than a useless
+      // toast. The modal retries the auth flow on success.
+      if (!result.success && result.error === "edge_not_installed") {
+        showModal(
+          <ChromiumInstallModal
+            onInstalled={() => {
+              // Retry the auth flow now that Edge is in.
+              void connect();
+            }}
+            closeModal={() => {}}
+          />,
+        );
+        return result;
+      }
       if (result.success) {
         toast.success(`${store} connected`);
       } else {

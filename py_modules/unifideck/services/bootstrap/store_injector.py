@@ -25,18 +25,22 @@ _STORE_INJECTIONS: dict[str, tuple[tuple[str, str], ...]] = {
     "amazon": (
         ("_browser_monitor", "browser_monitor"),
         ("_shortcut_service", "shortcut"),
+        ("_edge", "edge_browser"),
     ),
     "epic": (
         ("_browser_monitor", "browser_monitor"),
         ("_shortcut_service", "shortcut"),
+        ("_edge", "edge_browser"),
     ),
     "gog": (
         ("_browser_monitor", "browser_monitor"),
         ("_shortcut_service", "shortcut"),
+        ("_edge", "edge_browser"),
     ),
     "microsoft": (
         ("_browser_monitor", "browser_monitor"),
         ("_shortcut_service", "shortcut"),
+        ("_edge", "edge_browser"),
         ("_subscription_service", "microsoft_subscription"),
     ),
     "ubisoft": (

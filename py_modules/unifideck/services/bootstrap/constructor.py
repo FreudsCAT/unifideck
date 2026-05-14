@@ -115,6 +115,30 @@ def bootstrap_services(
         logger.warning(
             "[bootstrap] failed to wire browser_monitor: %s", e,
         )
+
+    # EdgeBrowser — flatpak install + CDP launcher for OAuth
+    # flows. The PDF spec lists it under ``auth/edge_browser/``
+    # but never wires it into a service ; we instantiate it
+    # here so the injector can hand a single shared instance
+    # to every OAuth store.
+    try:
+        from ...auth.edge_browser import EdgeBrowser
+        cdp_port = 9222
+        try:
+            cdp_port = int(config.get("edge.cdp_port", 9222))
+        except Exception:
+            pass
+        container.edge_browser = EdgeBrowser(
+            cdp_port=cdp_port,
+            locale_fn=lambda: str(
+                config.get("ui.locale", "en-US"),
+            ),
+        )
+        logger.info("[bootstrap] edge_browser wired")
+    except Exception as e:
+        logger.warning(
+            "[bootstrap] failed to wire edge_browser: %s", e,
+        )
     return container
 
 

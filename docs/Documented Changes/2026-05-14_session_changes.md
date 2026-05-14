@@ -576,7 +576,64 @@ the try/except to module scope. Smoke-tested:
 
 ---
 
-## Phase 6 — CLI integration (this commit)
+## Phase 6 — CLI integration & fast-path UX
+
+### 6.-1 `AuthDispatcher.runFlow` hung at "Working…" on fast-path success
+
+**Symptom:** after the 6.0 fix below skipped the shortcut
+launch, clicking Connect on an already-authed store left the
+button stuck on "Working…" forever.
+
+**Root cause:** [src/services/auth/AuthDispatcher.ts](../../src/services/auth/AuthDispatcher.ts)'s
+`runFlow` Promise resolves only via the EventBus subscriptions
+to `STORE_AUTH_COMPLETE` / `_FAILED`. The fast-path
+short-circuited `kickAndLaunch` and returned without
+launching the shortcut — but the backend's
+`STORE_AUTH_COMPLETE` event raced the RPC response: the
+EventBus polls every 250-2000 ms, so the event was either
+delivered before the subscription was active OR was missed
+by `lastSeenTimestamp` dedup. The Promise hung until the
+10-minute timeout.
+
+**Fix:** `kickAndLaunch` now returns
+`Promise<AuthResult | null>`. On fast-path success it
+returns `{success: true, store}`; on slow-path it returns
+`null` and the caller waits for the event. `runFlow` checks
+the return value:
+
+```ts
+void this.kickAndLaunch(store).then((early) => {
+  if (early) onResolved(early);   // ← resolves immediately
+}).catch(reject);
+```
+
+Both paths resolve cleanly — no race, no timeout.
+
+### 6.0 `AuthDispatcher` launched shortcut even after fast-path success
+
+**Symptom:** after the Phase 6.1 backend fix, the log
+showed `[epic_auth] credentials still valid — skipping OAuth`
+and `[StoreAuth:epic] action=start success=True` — but the
+launcher still ran moments later, the `unifideck-launcher`
+binary hit a `DependencyMissingError("Microsoft Edge flatpak
+required for OAuth")` inside `handle_store_auth`, and the
+user saw "launcher crashes immediately".
+
+**Root cause:** [src/services/auth/AuthDispatcher.ts](../../src/services/auth/AuthDispatcher.ts)'s
+`kickAndLaunch` had two unconditional steps: call
+`rpcRoutes.storeAuth`, then call `launchForStore(store)`. The
+fast-path success was already emitted as
+`STORE_AUTH_COMPLETE` by the backend (resolving the
+surrounding Promise via the event subscription), but the
+shortcut launch fired anyway.
+
+**Fix:** `kickAndLaunch` now inspects the unwrapped
+`store_auth` response. When `startResult.success === true`,
+it returns early — skipping the shortcut launch entirely.
+For already-authed stores this means: backend emits
+`STORE_AUTH_COMPLETE` → frontend's `runFlow` Promise
+resolves via the subscription → UI flips to "Connected"
+without ever running the launcher binary.
 
 ### 6.1 Epic / Amazon "already logged in" treated as error
 
@@ -610,6 +667,114 @@ report success without opening a browser.
   for `_NILE_ALREADY_AUTHED_MARKERS` (`"You are already
   logged in"`, `"already authenticated"`). On hit, emits
   `STORE_AUTH_COMPLETE` + success.
+
+---
+
+## Phase 7 — Microsoft Edge install prerequisite
+
+### 7.0 Edge install flow never reached the UI
+
+**Symptom:** opening Connect on any OAuth store (Epic / GOG /
+Amazon / Microsoft) with Edge not installed silently failed.
+Either the auth flow returned `edge_not_installed` as a raw
+error string (GOG / Microsoft) or the launcher subprocess
+crashed mid-flight (Epic / Amazon). No modal, no install
+button.
+
+**Root cause:** the PDF spec ([OP-29e](../../py_modules/unifideck/auth/edge_browser/installer.py),
+[OP-53](../../py_modules/unifideck/stores/microsoft/microsoft_store.py))
+defined `EdgeInstaller` + `MicrosoftStore.install_edge` but
+**never** exposed them as RPCs and **never** specified a
+frontend modal. Additionally :
+
+1. `EdgeBrowser` was never instantiated in the running plugin
+   — `auto_discover` constructed stores without an
+   `edge_browser=` argument, so even GOG/Microsoft had
+   `self._edge = None` permanently.
+2. Epic and Amazon stores had no Edge check at all — they
+   let the launcher subprocess crash with
+   `DependencyMissingError` instead of returning a
+   structured error.
+3. The frontend had no modal — the staging-era
+   `ChromiumInstallModal` was deleted in the F1-F8 refactor
+   and not restored.
+
+**Fix (5 pieces, fully covers Epic / GOG / Amazon / Microsoft
+— Ubisoft excluded since it uses its own client):**
+
+1. **Backend container wiring**
+   ([py_modules/unifideck/services/bootstrap/container.py](../../py_modules/unifideck/services/bootstrap/container.py),
+   [constructor.py](../../py_modules/unifideck/services/bootstrap/constructor.py))
+   — added `edge_browser: EdgeBrowser | None` field to
+   `ServiceContainer`. After the service-defs loop,
+   `bootstrap_services` instantiates a single shared
+   `EdgeBrowser(cdp_port=config["edge.cdp_port"], locale_fn=…)`
+   and stores it on the container.
+
+2. **Store injection**
+   ([store_injector.py](../../py_modules/unifideck/services/bootstrap/store_injector.py))
+   — extended `_STORE_INJECTIONS` so each of `amazon`, `epic`,
+   `gog`, `microsoft` gets `("_edge", "edge_browser")` set
+   post-construction. Ubisoft skipped.
+
+3. **Edge prereq check on all 4 OAuth stores** — Epic
+   ([epic/store.py:211](../../py_modules/unifideck/stores/epic/store.py))
+   and Amazon
+   ([amazon/amazon_store.py:174](../../py_modules/unifideck/stores/amazon/amazon_store.py))
+   now mirror GOG / Microsoft : before kicking the auth flow,
+   check `self._edge is None or not self._edge.is_installed`
+   and return `AuthResult(success=False, error="edge_not_installed")`.
+   The launcher subprocess never runs without Edge present —
+   no more `DependencyMissingError` crashes.
+
+4. **New `EdgeRPCMixin`**
+   ([py_modules/unifideck/rpc/mixins/edge.py](../../py_modules/unifideck/rpc/mixins/edge.py),
+   ~100 LOC) — exposes two RPCs:
+   - `is_edge_installed()` → `{installed: bool}` — pre-flight
+     check, proxies through `MicrosoftStore.is_edge_installed`.
+   - `install_edge()` → `{success: bool, error?: str}` —
+     triggers the flatpak install via
+     `MicrosoftStore.install_edge` → `EdgeBrowser.install` →
+     `EdgeInstaller._run_flatpak_install`. Both calls log
+     entry + result for diagnostics. Wired into the Plugin
+     class in [main.py](../../main.py) right after
+     `AuthShortcutsRPCMixin`.
+
+5. **Frontend modal**
+   ([src/components/modals/ChromiumInstallModal.tsx](../../src/components/modals/ChromiumInstallModal.tsx),
+   ~95 LOC, restored from staging) — `ConfirmModal` with
+   localized title / description / "Install" button. Calls
+   `rpcRoutes.installEdge` via the standard envelope-unwrap
+   helper, shows a `<Spinner>` while the flatpak install
+   runs (30-90 s typical), toasts the result, calls
+   `onInstalled()` on success. Barrel
+   ([modals/index.ts](../../src/components/modals/index.ts))
+   updated.
+
+6. **Trigger + auto-retry**
+   ([src/hooks/useStoreAuth.tsx](../../src/hooks/useStoreAuth.tsx),
+   renamed from `.ts` because it now embeds JSX) —
+   `connect()` inspects the `AuthDispatcher` result. When
+   `result.error === "edge_not_installed"`, spawns
+   `<ChromiumInstallModal>` with an `onInstalled` callback
+   that re-invokes `connect()` so the user doesn't have to
+   click Connect a second time.
+
+**Resulting flow** when Edge is missing:
+
+```
+Click Connect → AuthDispatcher.start(store)
+  → store.start_auth() → returns edge_not_installed
+  → frontend sees error → showModal(<ChromiumInstallModal/>)
+  → user clicks "Install Microsoft Edge"
+  → backend `install_edge` → flatpak install com.microsoft.Edge
+  → success toast → modal closes → onInstalled() fires
+  → connect() retries → real auth flow runs
+```
+
+**i18n** — all `microsoft.chromium*` and
+`microsoft.browser*` keys already present in
+`en-US.json` from the staging-era catalog merge.
 
 ---
 

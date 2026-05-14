@@ -216,6 +216,22 @@ class EpicStore(StoreBase):
                 error="auth_not_configured",
                 store="epic",
             )
+        # Edge prerequisite : the launcher subprocess opens
+        # the legendary OAuth URL inside Microsoft Edge.
+        # Returning a structured `edge_not_installed` here
+        # lets the frontend spawn the install modal instead
+        # of letting the launcher subprocess crash with a
+        # generic DependencyMissingError.
+        edge = getattr(self, "_edge", None)
+        if edge is None or not edge.is_installed:
+            logger.info(
+                "[EpicStore] Edge not installed — prompting user",
+            )
+            return AuthResult(
+                success=False,
+                error="edge_not_installed",
+                store="epic",
+            )
         await self._ensure_auth_shortcut()
         return cast("AuthResult", await self._auth.start_auth())
 

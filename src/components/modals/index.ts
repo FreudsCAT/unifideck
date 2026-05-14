@@ -24,4 +24,5 @@ export { AuthSuccessModal } from "./AuthSuccessModal";
 export { GOGLanguageSelectModal } from "./GOGLanguageSelectModal";
 export { ForceSyncModal } from "./ForceSyncModal";
 export { StorageBrowserModal } from "./StorageBrowserModal";
+export { ChromiumInstallModal } from "./ChromiumInstallModal";
 export { ToastEventListener } from "./ToastEventListener";

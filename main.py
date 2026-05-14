@@ -60,6 +60,7 @@ from unifideck.rpc.mixins.auth_shortcuts import AuthShortcutsRPCMixin
 from unifideck.rpc.mixins.cloud_failure import CloudFailureRPCMixin
 from unifideck.rpc.mixins.config_validation import ConfigValidationRPCMixin
 from unifideck.rpc.mixins.download import DownloadRPCMixin
+from unifideck.rpc.mixins.edge import EdgeRPCMixin
 from unifideck.rpc.mixins.launch import LaunchRPCMixin
 from unifideck.rpc.mixins.observability import ObservabilityRPCMixin
 from unifideck.rpc.mixins.playtime import PlaytimeRPCMixin
@@ -81,6 +82,7 @@ class Plugin(
     LaunchRPCMixin,
     StoreRPCMixin,
     AuthShortcutsRPCMixin,
+    EdgeRPCMixin,
     SyncRPCMixin,
     UIRPCMixin,
     CloudFailureRPCMixin,

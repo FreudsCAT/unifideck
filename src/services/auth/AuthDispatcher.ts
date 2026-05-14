@@ -139,7 +139,14 @@ class AuthDispatcherImpl {
       // listeners are installed — otherwise a fast backend
       // flow could emit its terminal event before we
       // subscribe.
-      void this.kickAndLaunch(store).catch((e) => {
+      void this.kickAndLaunch(store).then((early) => {
+        // Fast-path : the backend's ``store_auth`` returned
+        // ``success: true`` right away (already-authed user).
+        // Don't wait for an EventBus echo — the event may
+        // race the RPC response and arrive before our poll
+        // tick, leaving the Promise hung. Resolve directly.
+        if (early) onResolved(early);
+      }).catch((e) => {
         for (const fn of cleanup) fn();
         reject(e);
       });
@@ -147,8 +154,28 @@ class AuthDispatcherImpl {
   }
 
   /** Two-stage kick : backend prep then frontend shortcut
-   *  launch. Throws if either stage fails. */
-  private async kickAndLaunch(store: StoreId): Promise<void> {
+   *  launch.
+   *
+   *  Returns an ``AuthResult`` only on the **fast path** —
+   *  i.e. when ``store_auth`` reports ``success: true``
+   *  immediately (the store's fast-path detected existing
+   *  valid tokens). In that case the caller resolves the
+   *  Promise directly with the returned result : the
+   *  backend's ``STORE_AUTH_COMPLETE`` event may race the
+   *  RPC response (the EventBus polls every 250-2000ms), so
+   *  waiting for it would hang the UI at "Working…".
+   *
+   *  Returns ``null`` on the slow path — the shortcut has
+   *  been kicked, and the surrounding ``runFlow`` waits for
+   *  ``STORE_AUTH_COMPLETE`` / ``STORE_AUTH_FAILED`` events
+   *  to resolve.
+   *
+   *  Throws if either stage fails outright (so ``runFlow``
+   *  rejects the Promise).
+   */
+  private async kickAndLaunch(
+    store: StoreId,
+  ): Promise<AuthResult | null> {
     console.log(`[AuthDispatcher:${store}] backend prep via store_auth`);
     const raw = await call<[StoreId, string], unknown>(
       rpcRoutes.storeAuth, store, "start",
@@ -159,6 +186,13 @@ class AuthDispatcherImpl {
     console.log(
       `[AuthDispatcher:${store}] store_auth returned:`, startResult,
     );
+    if (startResult?.success === true) {
+      console.log(
+        `[AuthDispatcher:${store}] backend reports already-authed, ` +
+        `resolving without shortcut launch`,
+      );
+      return { success: true, store };
+    }
     console.log(`[AuthDispatcher:${store}] launching shortcut`);
     const launchResult = await this.launchForStore(store);
     console.log(
@@ -169,6 +203,9 @@ class AuthDispatcherImpl {
         launchResult.error ?? `${store} auth shortcut failed to launch`,
       );
     }
+    // Slow path : shortcut launched, wait for the backend's
+    // terminal event to land on the EventBus.
+    return null;
   }
 
   /** Dispatch to the per-store shortcut launcher. */
