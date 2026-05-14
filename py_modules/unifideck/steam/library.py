@@ -234,6 +234,60 @@ def get_steam_library_names(
 # --------------------------------------------------------------------------- #
 
 
+async def _fetch_search_payload(url: str) -> dict[str, Any] | None:
+    """HTTP GET ``url`` and parse JSON, returning ``None`` on any failure.
+
+    Failure modes collapsed to ``None`` :
+        * HTTP transport error or timeout (``ClientError``,
+          ``TimeoutError``).
+        * Non-200 status.
+        * Response body that doesn't decode as JSON.
+
+    Logs every miss at DEBUG so a noisy outage doesn't flood
+    the WARN channel — caller's contract is "soft miss".
+    """
+    client_timeout = aiohttp.ClientTimeout(total=_STEAM_STORE_SEARCH_TIMEOUT_S)
+    try:
+        async with aiohttp.ClientSession(timeout=client_timeout) as session, \
+                session.get(url) as resp:
+            if resp.status != 200:
+                logger.debug(
+                    "[steam.library] search_store HTTP %s for %s",
+                    resp.status, url,
+                )
+                return None
+            try:
+                payload = await resp.json(content_type=None)
+            except (aiohttp.ContentTypeError, json.JSONDecodeError) as err:
+                logger.debug(
+                    "[steam.library] search_store JSON decode failed: %s", err,
+                )
+                return None
+    except (aiohttp.ClientError, TimeoutError) as err:
+        logger.debug(
+            "[steam.library] search_store HTTP failed for %s: %s",
+            url, err,
+        )
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _extract_first_item(payload: dict[str, Any]) -> dict[str, Any] | None:
+    """Pull the first usable item from a Steam Store search payload.
+
+    Defensive against three shape variations seen in the wild :
+        * No ``items`` key (legacy "no result" shape).
+        * ``items`` is not a list (API change).
+        * ``items`` is an empty list (zero matches).
+        * First item is not a dict (rare but observed).
+    """
+    items = payload.get("items")
+    if not isinstance(items, list) or not items:
+        return None
+    first = items[0]
+    return first if isinstance(first, dict) else None
+
+
 async def search_store(
     title: str,
     config: ConfigManager | None = None,
@@ -266,43 +320,16 @@ async def search_store(
         return None
 
     url = _STEAM_STORE_SEARCH_URL.format(term=quote_plus(title.strip()))
-    client_timeout = aiohttp.ClientTimeout(total=_STEAM_STORE_SEARCH_TIMEOUT_S)
+    payload = await _fetch_search_payload(url)
+    if payload is None:
+        return None
+
+    first = _extract_first_item(payload)
+    if first is None:
+        return None
 
     try:
-        async with aiohttp.ClientSession(timeout=client_timeout) as session, \
-                session.get(url) as resp:
-            if resp.status != 200:
-                logger.debug(
-                    "[steam.library] search_store HTTP %s for %r",
-                    resp.status, title,
-                )
-                return None
-            try:
-                payload = await resp.json(content_type=None)
-            except (aiohttp.ContentTypeError, json.JSONDecodeError) as e:
-                logger.debug(
-                    "[steam.library] search_store JSON decode failed: %s", e,
-                )
-                return None
-    except (aiohttp.ClientError, TimeoutError) as e:
-        logger.debug(
-            "[steam.library] search_store HTTP failed for %r: %s",
-            title, e,
-        )
-        return None
-
-    if not isinstance(payload, dict):
-        return None
-    items = payload.get("items")
-    if not isinstance(items, list) or not items:
-        return None
-    first = items[0]
-    if not isinstance(first, dict):
-        return None
-
-    raw_id = first.get("id")
-    try:
-        app_id = int(raw_id)
+        app_id = int(first.get("id"))
     except (TypeError, ValueError):
         return None
 

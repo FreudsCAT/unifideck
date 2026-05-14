@@ -111,25 +111,51 @@ class ProbeReactionService:
         })
 
     def _quarantine_affected_handlers(self, probes: list[dict[str, Any]]) -> None:
+        """Pre-emptively quarantine handlers tied to failing probes.
+
+        Refactor history (2026-05-14): inline ``if not probe_id /
+        if not verdict / if verdict in (fail, error) / for handler
+        in handlers`` was at CC=11. Pulled the per-probe handler
+        extraction out so the loop body is a flat "if affected,
+        quarantine each".
+        """
         if not self._watchdog or not hasattr(self._watchdog, "force_quarantine"):
             return
 
         for probe in probes:
+            handlers = self._extract_failed_handlers(probe)
+            if handlers is None:
+                continue
             probe_id = probe.get("id") or probe.get("name")
-            if not probe_id or probe_id not in self._mapping:
-                continue
+            for handler_name in handlers:
+                logger.info(
+                    "[ProbeReaction] Preemptively quarantining %s due to %s failure",
+                    handler_name, probe_id,
+                )
+                self._watchdog.force_quarantine(
+                    handler_name, reason=f"{probe_id} probe failed",
+                )
 
-            verdict = probe.get("verdict") or probe.get("severity")
-            if not verdict:
-                continue
+    def _extract_failed_handlers(
+        self, probe: dict[str, Any],
+    ) -> list[str] | None:
+        """Return the handlers to quarantine for ``probe``, or ``None``.
 
-            verdict = str(verdict).lower()
+        Returns ``None`` (caller should skip this probe) when :
 
-            if verdict in ("fail", "error"):
-                handlers = self._mapping[probe_id]
-                for handler_name in handlers:
-                    logger.info(
-                        "[ProbeReaction] Preemptively quarantining %s due to %s failure",
-                        handler_name, probe_id
-                    )
-                    self._watchdog.force_quarantine(handler_name, reason=f"{probe_id} probe failed")
+            * Probe id is missing or unknown to the mapping.
+            * Verdict is absent.
+            * Verdict isn't a failure verdict (``fail`` / ``error``).
+
+        Returns the configured handler list when the probe is a
+        confirmed failure that maps to one or more handlers.
+        """
+        probe_id = probe.get("id") or probe.get("name")
+        if not probe_id or probe_id not in self._mapping:
+            return None
+        verdict = probe.get("verdict") or probe.get("severity")
+        if not verdict:
+            return None
+        if str(verdict).lower() not in ("fail", "error"):
+            return None
+        return self._mapping[probe_id]

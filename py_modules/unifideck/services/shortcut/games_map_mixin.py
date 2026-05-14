@@ -315,6 +315,13 @@ class _GamesMapMixin:
              entry, refresh ``games.map``.
           3. Drop ``shortcuts.vdf`` entries tagged as Unifideck-
              managed but absent from the new library.
+
+        Refactor history (2026-05-14): was at McCabe CC=16 — the
+        three phases were inlined with their own loops, set
+        builds and counter increments. Pulled each phase into a
+        dedicated helper so this top-level method now reads as a
+        manifest of the algorithm itself: phase 1, phase 2,
+        phase 3, save.
         """
         await self._load_shortcuts()
         await self._load_games_map()
@@ -324,45 +331,101 @@ class _GamesMapMixin:
             generate_app_id(g.launch_path or "", g.title) for g in games
         }
 
-        # ── Phase 1: prune games.map ──────────────────────────────
-        removed = 0
+        # Phase 1 — prune the games.map entries that no longer
+        # correspond to a game in the new library.
+        removed = self._reconcile_phase_prune_map(valid_keys)
+
+        # Phase 2 — ensure each current game has both a games.map
+        # entry and a shortcuts.vdf entry.
+        self._shortcuts = self._ensure_shortcuts_root(self._shortcuts)
+        shortcuts_dict = self._shortcuts["shortcuts"]
+        added, kept = self._reconcile_phase_sync_games(
+            games, shortcuts_dict,
+        )
+
+        # Phase 3 — drop shortcuts.vdf entries that are tagged
+        # as Unifideck-managed but whose app_id is no longer in
+        # the current library (e.g. game uninstalled outside
+        # Unifideck's knowledge).
+        removed += self._reconcile_phase_drop_stale(
+            shortcuts_dict, valid_app_ids,
+        )
+
+        if added > 0 or removed > 0:
+            await self._save_all()
+
+        return {"added": added, "removed": removed, "kept": kept}
+
+    # ─────────────────────────────────────────────────────────────
+    # Reconcile phases — extracted to flatten the CC of reconcile.
+    # ─────────────────────────────────────────────────────────────
+
+    def _reconcile_phase_prune_map(
+        self: Any, valid_keys: set[str],
+    ) -> int:
+        """Phase 1: drop ``_games_map`` keys absent from ``valid_keys``.
+
+        Returns the number of entries removed.
+        """
         stale_keys = [k for k in self._games_map if k not in valid_keys]
         for key in stale_keys:
             del self._games_map[key]
-            removed += 1
+        return len(stale_keys)
 
-        # ── Phase 2: add or keep entries for every current game ──
-        self._shortcuts = self._ensure_shortcuts_root(self._shortcuts)
-        shortcuts_dict = self._shortcuts["shortcuts"]
+    def _reconcile_phase_sync_games(
+        self: Any,
+        games: list[Game],
+        shortcuts_dict: dict[str, Any],
+    ) -> tuple[int, int]:
+        """Phase 2: ensure each game has both a map entry and a VDF entry.
 
+        Returns ``(added, kept)`` — number of new shortcuts
+        appended vs left in place. The ``games.map`` is rewritten
+        unconditionally so a metadata-only refresh (e.g. work_dir
+        moved) propagates without churning the VDF.
+        """
         added = 0
         kept = 0
         for game in games:
             key = f"{game.store}:{game.id}"
             exe = game.launch_path or ""
             app_id = generate_app_id(exe, game.title)
-            self._games_map[key] = GameMapEntry(exe=exe, work_dir=game.work_dir or "")
-
+            self._games_map[key] = GameMapEntry(
+                exe=exe, work_dir=game.work_dir or "",
+            )
             if self._find_existing_shortcut_key(shortcuts_dict, app_id) is None:
                 new_key = self._allocate_new_shortcut_key(shortcuts_dict)
-                shortcuts_dict[new_key] = self._build_shortcut_entry(game, app_id)
+                shortcuts_dict[new_key] = self._build_shortcut_entry(
+                    game, app_id,
+                )
                 added += 1
             else:
                 kept += 1
+        return added, kept
 
-        # ── Phase 3: drop unmanaged-or-stale shortcuts ───────────
+    def _reconcile_phase_drop_stale(
+        self: Any,
+        shortcuts_dict: dict[str, Any],
+        valid_app_ids: set[int],
+    ) -> int:
+        """Phase 3: delete Unifideck-managed shortcuts no longer needed.
+
+        Only entries with our tag get deleted — user-created
+        shortcuts are preserved even if they happen to share an
+        appid (very unlikely, but the symmetry with ``add_game``
+        and ``remove_game`` matters). Auth shortcuts (tagged
+        ``auth-*``) are also preserved here ; their lifecycle is
+        managed by ``services/shortcut/shortcut.py``.
+
+        Returns the number of entries dropped.
+        """
         keys_to_delete = [
             vdf_key for vdf_key, entry in shortcuts_dict.items()
             if self._is_stale_managed_shortcut(entry, valid_app_ids)
         ]
         for key in keys_to_delete:
             del shortcuts_dict[key]
-            removed += 1
-
-        if added > 0 or removed > 0:
-            await self._save_all()
-
-        return {"added": added, "removed": removed, "kept": kept}
+        return len(keys_to_delete)
 
     def _build_shortcut_entry(self: Any, game: Game, app_id: int) -> dict[str, Any]:
         """Construct a shortcuts.vdf entry dict for ``game``.

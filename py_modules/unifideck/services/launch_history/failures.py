@@ -17,6 +17,53 @@ from .persistence import load_history, save_history
 logger = logging.getLogger(__name__)
 
 
+def _gc_expired_entries(
+    data: dict[str, Any], now: float, window: float,
+) -> None:
+    """Drop failure entries older than ``window`` seconds, in place.
+
+    Opportunistic garbage-collect — runs on every ``record_failure``
+    so the on-disk history doesn't grow unbounded. A game whose
+    last failure rolls out of the window AND that has no
+    ``bypass_armed`` flag is removed entirely (its dict is empty
+    after the prune).
+    """
+    for k, v in list(data.items()):
+        if "failures" not in v:
+            continue
+        v["failures"] = [
+            f for f in v["failures"]
+            if now - f.get("timestamp", 0) <= window
+        ]
+        if not v["failures"] and "bypass_armed" not in v:
+            del data[k]
+
+
+def _append_failure_entry(
+    data: dict[str, Any],
+    game_key: str,
+    kind: str,
+    error_code: str,
+    now: float,
+) -> None:
+    """Append a freshly-built failure record to ``data[game_key]``.
+
+    Defensively initialises the nested dicts so callers don't
+    have to know the persistence layer's schema. The added entry
+    has the same shape regardless of whether the game was
+    previously known.
+    """
+    if game_key not in data:
+        data[game_key] = {}
+    if "failures" not in data[game_key]:
+        data[game_key]["failures"] = []
+    data[game_key]["failures"].append({
+        "timestamp": now,
+        "kind": kind,
+        "error_code": error_code,
+    })
+
+
 class _FailuresMixin:
     """Failures API + circuit predicate for LaunchHistoryService."""
 
@@ -51,44 +98,36 @@ class _FailuresMixin:
         return count >= self.threshold(), count
 
     def record_failure(self, game_key: str, kind: str, error_code: str = "") -> None:
-        """Append a failure entry for a game."""
+        """Append a failure entry for a game.
+
+        Refactor history (2026-05-14): inlined GC sweep (double
+        for + 2 ifs) + append flow with the try/except envelope
+        was at CC=12. Pulled the GC and append into helpers so
+        the public method is a flat read.
+        """
         if kind not in _VALID_KINDS:
-            logger.warning("[LaunchHistory] Invalid failure kind %r for %s, dropping", kind, game_key)
+            logger.warning(
+                "[LaunchHistory] Invalid failure kind %r for %s, dropping",
+                kind, game_key,
+            )
             return
 
         try:
             data = load_history(self._path)
-
-            # Opportunistic GC: prune expired entries for all games
             now = time.time()
-            window = self.window_seconds()
-
-            for k, v in list(data.items()):
-                if "failures" in v:
-                    v["failures"] = [f for f in v["failures"] if now - f.get("timestamp", 0) <= window]
-                    if not v["failures"] and "bypass_armed" not in v:
-                        del data[k]
-
-            # Append new failure
-            if game_key not in data:
-                data[game_key] = {}
-            if "failures" not in data[game_key]:
-                data[game_key]["failures"] = []
-
-            data[game_key]["failures"].append({
-                "timestamp": now,
-                "kind": kind,
-                "error_code": error_code,
-            })
-
+            _gc_expired_entries(data, now, self.window_seconds())
+            _append_failure_entry(data, game_key, kind, error_code, now)
             save_history(self._path, data)
-            logger.info("[LaunchHistory] Recorded %s failure for %s", kind, game_key)
-
+            logger.info(
+                "[LaunchHistory] Recorded %s failure for %s", kind, game_key,
+            )
             if hasattr(self, "_emit_state"):
                 self._emit_state(game_key, f"record_failure_{kind}")
-
-        except Exception as e:
-            logger.warning("[LaunchHistory] Failed to record failure for %s: %s", game_key, e)
+        except Exception as err:  # noqa: BLE001
+            logger.warning(
+                "[LaunchHistory] Failed to record failure for %s: %s",
+                game_key, err,
+            )
 
     def clear_failures(self, game_key: str) -> None:
         """Remove all failures for a game + emit state change."""

@@ -119,38 +119,37 @@ async def inject_scripts(
     logger_prefix: str = "cdp-inject",
     poll_delay: float = 0.5,
 ) -> bool:
+    """Inject ``sources`` into every matching CDP page target.
 
-    """Inject scripts."""
+    Polls the CDP target list at ``poll_delay`` intervals until
+    ``timeout`` elapses or every matching target has been
+    injected successfully. Returns True if at least one
+    injection happened ; False if the deadline expired with no
+    matches found.
+
+    Refactor history (2026-05-14): the polling loop inlined the
+    try/except around ``list_page_targets``, the URL filtering
+    comprehension, the empty-targets continue, the
+    inject-and-update flags, and the early-success return —
+    cyclomatic complexity 13. Pulled the per-iteration work
+    into ``_attempt_inject_cycle`` so this function reads as the
+    deadline envelope only.
+    """
     if not sources or not url_patterns:
         return False
+
     deadline = asyncio.get_running_loop().time() + timeout
     injected_once = False
     while asyncio.get_running_loop().time() < deadline:
-        try:
-            targets = await list_page_targets(port, timeout=3.0)
-        except (TimeoutError, aiohttp.ClientError, OSError) as exc:
-            logger.debug(
-                "[%s] list_page_targets failed: %s",
-                logger_prefix, exc,
-            )
-            await asyncio.sleep(poll_delay)
-            continue
-        page_targets = [
-            t for t in targets
-            if t.get("type") == "page"
-            and _target_url_matches(t, url_patterns)
-        ]
-        if not page_targets:
-            await asyncio.sleep(poll_delay)
-            continue
-        all_ok, had_success = await _inject_into_matching_targets(
-            page_targets, sources, timeout, logger_prefix,
+        all_ok, had_success = await _attempt_inject_cycle(
+            port, sources, url_patterns, timeout, logger_prefix,
         )
         if had_success:
             injected_once = True
         if injected_once and all_ok:
             return True
         await asyncio.sleep(poll_delay)
+
     if injected_once:
         return True
     logger.warning(
@@ -158,6 +157,48 @@ async def inject_scripts(
         logger_prefix, url_patterns,
     )
     return False
+
+
+async def _attempt_inject_cycle(
+    port: int,
+    sources: list[str],
+    url_patterns: list[str],
+    timeout: float,
+    logger_prefix: str,
+) -> tuple[bool, bool]:
+    """One poll iteration : list targets, filter, inject, return flags.
+
+    Returns ``(all_ok, had_success)`` :
+
+        * ``all_ok`` = every matching target was injected this
+          cycle (or there were no matching targets — vacuously
+          true in that case ; the caller distinguishes via
+          ``had_success`` not flipping).
+        * ``had_success`` = at least one target was injected.
+
+    Returns ``(True, False)`` for both "list_page_targets raised"
+    and "no targets matched" so the caller's "all_ok AND
+    injected_once" guard still requires real progress before
+    returning success.
+    """
+    try:
+        targets = await list_page_targets(port, timeout=3.0)
+    except (TimeoutError, aiohttp.ClientError, OSError) as exc:
+        logger.debug(
+            "[%s] list_page_targets failed: %s", logger_prefix, exc,
+        )
+        return True, False
+
+    page_targets = [
+        t for t in targets
+        if t.get("type") == "page" and _target_url_matches(t, url_patterns)
+    ]
+    if not page_targets:
+        return True, False
+
+    return await _inject_into_matching_targets(
+        page_targets, sources, timeout, logger_prefix,
+    )
 async def _inject_into_matching_targets(
     page_targets: list[dict[str, Any]],
     sources: list[str],

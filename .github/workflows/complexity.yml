@@ -119,11 +119,24 @@ jobs:
       # ── Hard gate: no function should reach grade E/F (CC>30)
       # radon doesn't read .flake8; its scope is controlled by
       # the path argument. We scan py_modules/unifideck explicitly.
+      #
+      # Fix history (2026-05-14): the previous implementation
+      # used ``grep -E '\s[EF]\s'`` against the diagnostic
+      # output of ``radon cc -n C``. Radon's format is
+      # ``    F 237:0 search_store - C (11)`` where the leading
+      # ``F`` is the *kind* (Function), not the rank. The grep
+      # therefore matched every module-level function regardless
+      # of its actual rank and failed the gate on healthy code.
+      # Switched to ``radon cc -n E`` which natively filters on
+      # rank E (CC 31-40) or F (CC ≥ 41) — no regex maintenance,
+      # immune to radon format changes.
       - name: radon cc (fail on E/F grade)
         run: |
           radon cc -s -n C py_modules/unifideck main.py | tee radon-cc.txt
-          if grep -E '\s[EF]\s' radon-cc.txt; then
+          violations=$(radon cc -s -n E py_modules/unifideck main.py)
+          if [ -n "$violations" ]; then
             echo "::error::Function with CC > 30 detected"
+            echo "$violations"
             exit 1
           fi
 
