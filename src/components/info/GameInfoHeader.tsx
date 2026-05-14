@@ -9,7 +9,9 @@
  * The `<StoreIcon>` from shared/ provides the brand badge.
  */
 import React, { FC } from "react";
-import { Focusable } from "@decky/ui";
+import { DialogButton, Focusable } from "@decky/ui";
+import { useTranslation } from "react-i18next";
+import { useViewMode } from "../../hooks/useViewMode";
 import { StoreIcon } from "../shared/StoreIcon";
 import type { Game } from "../../types/api";
 
@@ -25,6 +27,8 @@ interface Props {
  * via SteamBridge so we don't show two of them stacked.
  */
 export const GameInfoHeader: FC<Props> = ({ game, mode }) => {
+  const { t } = useTranslation();
+  const { toggle } = useViewMode();
   const coverSize = mode === "compact"
     ? { w: 96, h: 144 }
     : { w: 180, h: 270 };
@@ -63,6 +67,14 @@ export const GameInfoHeader: FC<Props> = ({ game, mode }) => {
             {game.store}
           </span>
         </div>
+        <DialogButton
+          onClick={toggle}
+          style={{ marginTop: 8, alignSelf: "flex-start", fontSize: 12 }}
+        >
+          {mode === "compact"
+            ? t("info.expandDetails")
+            : t("info.collapseDetails")}
+        </DialogButton>
       </div>
     </Focusable>
   );

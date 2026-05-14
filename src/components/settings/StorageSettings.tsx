@@ -16,12 +16,12 @@
  */
 import React, { FC } from "react";
 import {
-  PanelSection, PanelSectionRow, ButtonItem, Field, Spinner,
+  PanelSection, PanelSectionRow, ButtonItem, Field, Spinner, showModal,
 } from "@decky/ui";
 import { useTranslation } from "react-i18next";
 import { useStorageConfig } from "../../hooks/useStorageConfig";
 import { useToast } from "../../hooks/useToast";
-import { StoragePathPicker } from "./StoragePathPicker";
+import { StorageBrowserModal } from "../modals/StorageBrowserModal";
 import type { StorageLocation } from "../../types/downloads";
 
 /**
@@ -84,12 +84,22 @@ export const StorageSettings: FC = () => {
         </PanelSectionRow>
       ))}
       <PanelSectionRow>
-        <StoragePathPicker
-          startPath={
-            locations.find((l) => l.id === "custom")?.path ?? "/home/deck"
+        <ButtonItem
+          layout="below"
+          onClick={() =>
+            showModal(
+              <StorageBrowserModal
+                startPath={
+                  locations.find((l) => l.id === "custom")?.path ?? "/home/deck"
+                }
+                onConfirm={onConfirmCustom}
+                closeModal={() => {}}
+              />,
+            )
           }
-          onConfirm={onConfirmCustom}
-        />
+        >
+          {t("storageSettings.browseButton")}
+        </ButtonItem>
       </PanelSectionRow>
     </PanelSection>
   );

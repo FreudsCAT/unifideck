@@ -35,7 +35,7 @@ interface DownloadContextValue {
   installGame: (
     store: StoreId,
     gameId: string,
-    options?: { storage?: string },
+    options?: { storage?: string; language?: string },
   ) => Promise<Result | null>;
   uninstallGame: (appId: number) => Promise<Result | null>;
   cancelDownload: (downloadId: string) => Promise<Result | null>;
@@ -61,7 +61,8 @@ export const DownloadProvider: FC<{ children: ReactNode }> = ({ children }) => {
   }, [initial.data]);
   // RPC mutations
   const installMut = useRPCMutation<
-    [StoreId, string, { storage?: string } | undefined], Result
+    [StoreId, string, { storage?: string; language?: string } | undefined],
+    Result
   >(rpcRoutes.installGame);
 
   const uninstallMut = useRPCMutation<[number], Result>(
@@ -108,8 +109,11 @@ export const DownloadProvider: FC<{ children: ReactNode }> = ({ children }) => {
   useEventBus(Events.DOWNLOAD_CANCELLED, refetchQueue);
 
   const installGame = useCallback(
-    (store: StoreId, gameId: string, options?: { storage?: string }) =>
-      installMut.mutate(store, gameId, options),
+    (
+      store: StoreId,
+      gameId: string,
+      options?: { storage?: string; language?: string },
+    ) => installMut.mutate(store, gameId, options),
     [installMut],
   );
 

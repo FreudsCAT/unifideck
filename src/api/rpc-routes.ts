@@ -34,6 +34,7 @@ export const rpcRoutes = {
   getGameInfo:             "get_game_info",
   getGameMetadata:         "get_game_metadata",
   getStorageLocations:     "get_storage_locations",
+  getGogGameLanguages:     "get_gog_game_languages",
   // UI helpers (UIRPCMixin)
   injectHideCss:           "inject_hide_css",
   hidePlaySection:         "hide_play_section",

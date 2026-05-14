@@ -386,7 +386,9 @@
     "retryingMissingArtwork": "Retrying {{synced}} / {{total}} games with missing artwork...",
     "savingShortcuts": "Saving shortcuts...",
     "completed": "Sync completed! Added {{added}}, Art {{artwork}}.",
-    "fetchingStore": "Fetching {{store}}..."
+    "fetchingStore": "Fetching {{store}}...",
+    "cooldown": "Wait {{secs}}s",
+    "artworkPhase": "Artwork {{done}} / {{total}}"
   },
   "force_sync": {
     "migratingOldInstallations": "Force sync: Migrating old installations...",
@@ -529,9 +531,14 @@
     "thisGame": "this game",
     "game": "Game",
     "unknown": "Unknown",
+    "ok": "OK",
     "cancel": "Cancel",
     "working": "Working…",
     "loading": "Loading…"
+  },
+  "info": {
+    "expandDetails": "Show details",
+    "collapseDetails": "Hide details"
   },
   "microsoft": {
     "notCompatible": "This game format is not compatible with SteamOS",

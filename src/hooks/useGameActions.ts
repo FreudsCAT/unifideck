@@ -33,7 +33,11 @@ interface SteamBridgeShape {
  */
 export interface UseGameActionsResult {
   isWorking: boolean;
-  install: (store: StoreId, gameId: string, options?: { storage?: string }) => Promise<Result | null>;
+  install: (
+    store: StoreId,
+    gameId: string,
+    options?: { storage?: string; language?: string },
+  ) => Promise<Result | null>;
   uninstall: (appId: number) => Promise<Result | null>;
   cancel: (downloadId: string) => Promise<Result | null>;
   launch: (appId: number, launchOptions: string) => void;
@@ -57,7 +61,7 @@ export function useGameActions(bridge: SteamBridgeShape): UseGameActionsResult {
   const install = useCallback(
     async (
       store: StoreId, gameId: string,
-      options?: { storage?: string },
+      options?: { storage?: string; language?: string },
     ) => {
       setWorking(true);
       try {

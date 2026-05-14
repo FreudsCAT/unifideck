@@ -52,11 +52,23 @@ export interface UseGameInfoResult {
  */
 export function useGameInfo(appId: number | null): UseGameInfoResult {
   const fetch = useRPC<[number], Game>(rpcRoutes.getGameMetadata);
+  // Lazy priming : if the module-level cache has ANY entry for
+  // this appId (fresh OR stale), seed the initial state with it
+  // so consumers paint immediately. Stale data still triggers a
+  // background refresh below.
   const [state, setState] = useState<{
     data: Game | null;
     loading: boolean;
     error: Error | null;
-  }>({ data: null, loading: appId != null, error: null });
+  }>(() => {
+    if (appId == null) return { data: null, loading: false, error: null };
+    const cached = cache.get(appId);
+    return {
+      data: cached?.data ?? null,
+      loading: cached?.data == null,
+      error: null,
+    };
+  });
 
   const load = useCallback(
     async (force: boolean): Promise<void> => {
@@ -78,7 +90,13 @@ export function useGameInfo(appId: number | null): UseGameInfoResult {
         return;
       }
 
-      setState((s) => ({ ...s, loading: true, error: null }));
+      // Stale-while-revalidate : if we have ANY cached data,
+      // keep showing it while the background refresh runs.
+      setState((s) => ({
+        data: s.data ?? cached?.data ?? null,
+        loading: s.data == null && cached?.data == null,
+        error: null,
+      }));
       const promise = fetch(appId).then(
         (data) => {
           cache.set(appId, { data, ts: Date.now(), inflight: null });
