@@ -1,0 +1,204 @@
+# .flake8 — Unifideck backend linter scope filter
+# =================================================================
+#
+# flake8 ne lit PAS ``pyproject.toml`` (seuls les outils
+# PEP 621 le font ; flake8 utilise la convention historique
+# ``[flake8]`` dans ``.flake8`` ou ``setup.cfg``). Ce fichier est
+# donc la SEULE source de vérité pour le périmètre et les seuils
+# qu'applique flake8 sur la base de code.
+#
+# ── Périmètre d'audit ────────────────────────────────────────────
+#
+#   py_modules/
+#       unifideck/        ← code Unifideck (CIBLE de l'audit)
+#       pip/              ← vendored (HORS scope)
+#       requests/         ← vendored
+#       urllib3/          ← vendored
+#       websockets/       ← vendored
+#       idna/             ← vendored
+#       charset_normalizer/  ← vendored
+#       …                 ← idem
+#
+# Le workflow ``.github/workflows/complexity.yml`` invoque flake8
+# avec ``py_modules/ main.py`` en argument. Sans ce fichier de
+# config, flake8 retombe sur ses défauts (seuil cognitive=7) et
+# descend dans TOUS les vendors → ~189 erreurs CCR001/C901 sur
+# du code amont qui n'est pas notre territoire.
+#
+# Cause racine vérifiée empiriquement : avec ``.flake8`` chargé
+# → exit 0 ; sans → mêmes 189 erreurs que dans le log CI.
+#
+# ── Sémantique flake8 des exclusions ─────────────────────────────
+#
+# flake8 utilise ``fnmatch.fnmatch`` contre :
+#   * le chemin RELATIF complet du fichier/dossier candidat
+#   * son basename
+#
+# Pour exclure ``py_modules/urllib3/`` quand le CI lance
+# ``flake8 py_modules/`` depuis la racine, trois écritures
+# fonctionnent — on liste les trois par défense en profondeur :
+#
+#   urllib3              → match le basename (le plus robuste)
+#   py_modules/urllib3   → match le chemin relatif racine
+#   */urllib3            → wildcard générique
+#
+# Source : https://flake8.pycqa.org/en/latest/user/configuration.html
+#
+# ── Pas de commentaires inline dans les valeurs multi-lignes ────
+#
+# Doc flake8, section "Configuring Flake8" :
+#
+#   "Following the recommended settings for Python's configparser,
+#    Flake8 does not support inline comments for any of the keys."
+#
+# Les ``#`` en début de ligne SONT acceptés (configparser les
+# traite comme commentaires de ligne). Mais on évite par
+# prudence d'en mettre à l'intérieur des blocs ``extend-exclude =``
+# et ``extend-ignore =`` pour rester portable entre versions de
+# configparser et flake8.
+
+[flake8]
+
+# ── Longueur de ligne ────────────────────────────────────────────
+# Géré par le formatter (ruff format), pas par le linter. On
+# garde ``max-line-length`` à 100 pour cohérence visuelle
+# (pyproject.toml ligne 11), mais E501 est ignoré ci-dessous.
+max-line-length = 100
+
+# ── Codes ignorés (extension des défauts) ───────────────────────
+# E501 : longueur de ligne (cf. ci-dessus).
+# W503/W504/E203 : conflits formatter, ignorés aussi par ruff
+# (cf. pyproject.toml [tool.ruff.lint] ignore).
+extend-ignore = E501, W503, W504, E203
+
+# ── Seuils de complexité ─────────────────────────────────────────
+# **Alignés sur le workflow ``.github/workflows/complexity.yml``**
+# qui passe ``--max-complexity=15`` et ``--max-cognitive-complexity=15``
+# en CLI. On reprend les mêmes valeurs ici comme source de vérité
+# pour les invocations locales (pre-commit, IDE) afin d'éviter
+# qu'un dev voie 10 en local et 15 en CI (ou inversement).
+#
+# CCR001 vient du plugin ``flake8-cognitive-complexity``.
+# C901 vient de mccabe (intégré à flake8).
+#
+# Valeurs CLI > valeurs ``.flake8`` > valeurs défaut. Si un jour
+# le CI passe à 10, ce fichier devra être mis à jour en miroir
+# (et le test ``test_flake8_config_thresholds_are_set`` qui
+# vérifie l'alignement).
+max-complexity = 15
+max-cognitive-complexity = 15
+
+# ── Exclusions ──────────────────────────────────────────────────
+# Format : virgules SANS commentaires inline. Une entrée par ligne
+# pour faciliter les diffs git. Trois variantes par dépendance
+# (basename, chemin racine, wildcard) pour défendre contre les
+# variations d'invocation CI (depuis la racine vs depuis
+# py_modules/, vs explicite-paths en pre-commit).
+extend-exclude =
+    __pycache__,
+    .ruff_cache,
+    .mypy_cache,
+    .pytest_cache,
+    .git,
+    .tox,
+    .venv,
+    venv,
+    env,
+    build,
+    dist,
+    *.egg-info,
+    docs/_build,
+    node_modules,
+    frontend,
+    frontend/dist,
+    frontend/node_modules,
+    py_modules/pip,
+    py_modules/pip-*,
+    py_modules/requests,
+    py_modules/urllib3,
+    py_modules/aiohttp,
+    py_modules/websockets,
+    py_modules/idna,
+    py_modules/charset_normalizer,
+    py_modules/certifi,
+    py_modules/cryptography,
+    py_modules/jsonschema,
+    py_modules/jsonschema_specifications,
+    py_modules/vdf,
+    py_modules/steamgrid,
+    py_modules/yaml,
+    py_modules/_yaml,
+    py_modules/attrs,
+    py_modules/attr,
+    py_modules/multidict,
+    py_modules/yarl,
+    py_modules/frozenlist,
+    py_modules/aiohappyeyeballs,
+    py_modules/aiosignal,
+    py_modules/async_timeout,
+    py_modules/cffi,
+    py_modules/pycparser,
+    py_modules/referencing,
+    py_modules/rpds,
+    pip,
+    pip-*,
+    requests,
+    urllib3,
+    aiohttp,
+    websockets,
+    idna,
+    charset_normalizer,
+    certifi,
+    cryptography,
+    jsonschema,
+    jsonschema_specifications,
+    vdf,
+    steamgrid,
+    yaml,
+    _yaml,
+    attrs,
+    attr,
+    multidict,
+    yarl,
+    frozenlist,
+    aiohappyeyeballs,
+    aiosignal,
+    async_timeout,
+    cffi,
+    pycparser,
+    referencing,
+    rpds,
+    */pip,
+    */pip-*,
+    */requests,
+    */urllib3,
+    */aiohttp,
+    */websockets,
+    */idna,
+    */charset_normalizer,
+    */certifi,
+    */cryptography,
+    */jsonschema,
+    */jsonschema_specifications,
+    */vdf,
+    */steamgrid,
+    */yaml,
+    */_yaml,
+    defaults/python,
+    defaults/python/*,
+    python_modules,
+    python_modules/*,
+    site-packages,
+    */site-packages,
+    */_vendor,
+    */_vendor/*,
+    */vendored,
+    */vendored/*,
+    *.dist-info,
+    */*.dist-info
+
+# ── Per-file overrides ──────────────────────────────────────────
+# F401 : re-exports dans __init__.py (pattern explicite intentionnel).
+per-file-ignores =
+    __init__.py:F401
+    py_modules/unifideck/**/__init__.py:F401
