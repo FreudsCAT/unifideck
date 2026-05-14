@@ -4,6 +4,13 @@ Queue consumer: polls pending queue, enforces concurrency cap,
 dispatches each install to the right store via the registry,
 emits ``DOWNLOAD_{STARTED,COMPLETE,FAILED}``. Mixin — only
 touches host state, no I/O primitives of its own.
+
+Refactor history (2026-05-14): ``_worker_loop`` was a single
+async function at CC=16. The locked critical section, the
+post-lock dispatch, and the error/cancel envelope were all
+inlined, making the main loop hard to scan. Split into two
+private helpers so the outer loop reads as
+``while: pop → dispatch → sleep``.
 """
 from __future__ import annotations
 
@@ -30,6 +37,13 @@ def _track(task: asyncio.Task[Any]) -> None:
     task.add_done_callback(_BACKGROUND_TASKS.discard)
 
 
+# Polling cadence — kept as module constants so a future test
+# can monkeypatch them to speed up integration runs without
+# touching the loop logic itself.
+_POLL_INTERVAL_SEC: float = 1.0
+_ERROR_BACKOFF_SEC: float = 5.0
+
+
 class _WorkerMixin:
     """Queue worker + install dispatcher for DownloadService.
 
@@ -45,41 +59,68 @@ class _WorkerMixin:
     _running: dict[str, DownloadItem]
 
     async def _worker_loop(self) -> None:
-        """Poll the queue and dispatch installs.
+        """Poll the queue and dispatch installs until cancelled.
 
-        Runs until cancelled. Each iteration: acquire lock,
-        while ``len(running) < max_concurrent and queue``, pop
-        next item, spawn ``_run_install`` as a task. Sleep
-        briefly between polls so cancellation is responsive.
+        Each iteration: pop items eligible to start under the
+        lock, dispatch them outside the lock (so the queue save
+        and ``create_task`` don't block other producers), then
+        sleep. Cancellation and unexpected errors are handled
+        as flat branches at the top level.
         """
         while True:
             try:
-                # 1. Check if we have capacity and items
-                to_start = []
-                async with self._lock:
-                    while len(self._running) < self._max_concurrent and self._queue:
-                        item = self._queue.pop(0)
-                        key = f"{item.store}:{item.game_id}"
-                        self._running[key] = item
-                        to_start.append(item)
-
-                # 2. Start the tasks outside the lock
-                # We save the queue so the popped items are persisted as removed
+                to_start = await self._pop_ready_items()
                 if to_start:
-                    save_method = getattr(self, "_save_queue", None)
-                    if callable(save_method):
-                        await save_method()
-
-                    for item in to_start:
-                        _track(asyncio.create_task(self._run_install(item)))
-
-                # 3. Sleep before next poll
-                await asyncio.sleep(1.0)
+                    await self._dispatch_items(to_start)
+                await asyncio.sleep(_POLL_INTERVAL_SEC)
             except asyncio.CancelledError:
                 break
-            except Exception:
-                logger.exception("[DownloadWorker] unhandled error in loop")
-                await asyncio.sleep(5.0)  # Backoff on error
+            except Exception:  # noqa: BLE001
+                # Any unexpected error: log with full traceback,
+                # back off harder than the regular poll so we
+                # don't burn CPU if the cause is persistent.
+                logger.exception(
+                    "[DownloadWorker] unhandled error in loop",
+                )
+                await asyncio.sleep(_ERROR_BACKOFF_SEC)
+
+    async def _pop_ready_items(self) -> list[DownloadItem]:
+        """Pop queue items eligible to start under the worker lock.
+
+        Holds ``self._lock`` while mutating both ``self._queue``
+        and ``self._running`` so concurrent producers (queue
+        adders) see a consistent state. Returns the popped items
+        for the caller to dispatch *outside* the lock — keeps
+        the critical section as short as possible.
+        """
+        to_start: list[DownloadItem] = []
+        async with self._lock:
+            while (
+                len(self._running) < self._max_concurrent
+                and self._queue
+            ):
+                item = self._queue.pop(0)
+                key = f"{item.store}:{item.game_id}"
+                self._running[key] = item
+                to_start.append(item)
+        return to_start
+
+    async def _dispatch_items(
+        self, to_start: list[DownloadItem],
+    ) -> None:
+        """Persist the queue change, then spawn install tasks.
+
+        Persistence runs first so a crash between pop and
+        spawn doesn't resurrect items we've already committed
+        to running. ``_save_queue`` is looked up dynamically:
+        the queue-persistence mixin is optional, so the host
+        class may or may not provide it.
+        """
+        save_method = getattr(self, "_save_queue", None)
+        if callable(save_method):
+            await save_method()
+        for item in to_start:
+            _track(asyncio.create_task(self._run_install(item)))
 
     async def _run_install(self, item: DownloadItem) -> None:
         """Execute one install via ``StoreBase.install_game``.

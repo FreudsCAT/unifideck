@@ -4,6 +4,13 @@ Pure sync functions — the service runs them via
 ``asyncio.to_thread`` to avoid blocking the event loop. Kept
 separate so ``service.py`` stays focused on orchestration
 (manifest compare, conflict routing) rather than I/O mechanics.
+
+Refactor history (2026-05-14): ``copy_tree`` was a single
+function at CC=17. The inner ``for file in files`` body had
+three stacked ``if`` branches (dot-file check, manifest check,
+copy with try/except) which all added to the parent nesting
+score. Pulled the skip decision and the per-file copy out into
+helpers so the outer loop is a flat read.
 """
 from __future__ import annotations
 
@@ -64,25 +71,52 @@ def copy_tree(
     for dirpath, _dirnames, files in os.walk(src):
         rel_dir = os.path.relpath(dirpath, src)
         dst_dir = os.path.join(dst, rel_dir) if rel_dir != "." else dst
-
         os.makedirs(dst_dir, exist_ok=True)
-
         for f in files:
-            if f.startswith("."):
-                # Handle manifest skipping explicitly if it's dot-prefixed
-                if skip_manifest and f == MANIFEST_FILE:
-                    continue
-                # The spec says "skips dot-files". But saves might use dot files?
-                # We will follow the spec "Skips dot-files".
+            if _should_skip_file(f, skip_manifest):
                 continue
+            _copy_one_file(dirpath, dst_dir, f)
 
-            src_file = os.path.join(dirpath, f)
-            dst_file = os.path.join(dst_dir, f)
 
-            try:
-                shutil.copy2(src_file, dst_file)
-            except OSError as e:
-                logger.debug("[CloudSaveFsOps] failed to copy %s: %s", src_file, e)
+# ─────────────────────────────────────────────────────────────────
+# Private helpers — extracted from a former single CC=17 function
+# ─────────────────────────────────────────────────────────────────
+
+
+def _should_skip_file(name: str, skip_manifest: bool) -> bool:
+    """Decide whether a file name should be skipped by ``copy_tree``.
+
+    The spec is "always skip dot-files". The ``skip_manifest``
+    flag adds the manifest to the skip set (manifest is
+    dot-prefixed in current layout, so it's *already* skipped
+    by the dot-rule — the explicit branch is kept for a future
+    where the manifest file name changes; right now the second
+    ``return`` is the always-taken path for dot-prefixed names).
+    """
+    if name.startswith("."):
+        return True
+    if skip_manifest and name == MANIFEST_FILE:
+        return True
+    return False
+
+
+def _copy_one_file(src_dir: str, dst_dir: str, name: str) -> None:
+    """Copy one file from ``src_dir`` into ``dst_dir`` preserving mtime.
+
+    Uses ``shutil.copy2`` which preserves metadata (mtime,
+    permissions) — mtime preservation is what makes the next
+    ``walk_mtimes`` comparison reliable. Per-file OSError is
+    swallowed at DEBUG : a cloud save with a few unreadable
+    files is still worth syncing for the rest.
+    """
+    src_file = os.path.join(src_dir, name)
+    dst_file = os.path.join(dst_dir, name)
+    try:
+        shutil.copy2(src_file, dst_file)
+    except OSError as err:
+        logger.debug(
+            "[CloudSaveFsOps] failed to copy %s: %s", src_file, err,
+        )
 
 
 def read_text(path: str) -> str:
