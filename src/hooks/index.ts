@@ -24,3 +24,4 @@ export { useHidePlaySection } from "./useHidePlaySection";
 export { useDownloadProgress } from "./useDownloadProgress";
 export { useToast } from "./useToast";
 export { useSteamLibrary } from "./useSteamLibrary";
+export { useStorageConfig } from "./useStorageConfig";

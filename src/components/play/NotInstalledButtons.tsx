@@ -13,7 +13,7 @@
  * `components/modals/StoragePickerModal.tsx`.
  */
 import React, { FC, useCallback } from "react";
-import { DialogButton } from "@decky/ui";
+import { DialogButton, Focusable } from "@decky/ui";
 import { useTranslation } from "react-i18next";
 import { useGameInfo } from "../../hooks/useGameInfo";
 import { useGameActions } from "../../hooks/useGameActions";
@@ -56,13 +56,18 @@ export const NotInstalledButtons: FC<Props> = ({appId, bridge = defaultBridge}) 
     }
   }, [actions, game, t, toast]);
   return (
-    <div style={{ display: "flex", gap: 8 }}>
+    <Focusable
+      flow-children="row"
+      onActivate={() => {}}
+      style={{ display: "flex", gap: 8 }}
+    >
       <DialogButton
+        className="unifideck-install-btn"
         disabled={loading || actions.isWorking || !game}
         onClick={onInstall}
       >
         {actions.isWorking ? t("play.installing") : t("play.install")}
       </DialogButton>
-    </div>
+    </Focusable>
   );
 };

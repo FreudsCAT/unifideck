@@ -120,3 +120,17 @@ export function useGameInfo(appId: number | null): UseGameInfoResult {
 export function _clearGameInfoCache(): void {
   cache.clear();
 }
+
+/** Drop the cache entry for one appId so the next render
+ *  re-fetches. Called after destructive actions (uninstall,
+ *  cancel) where `is_installed` flips. Mirrors the legacy
+ *  `gameInfoCache.delete(appId)` semantics — also drops the
+ *  signed/unsigned variants since Steam shortcuts may be
+ *  represented either way in the cache. */
+export function invalidateGameInfo(appId: number): void {
+  cache.delete(appId);
+  const signed = appId > 0x7FFFFFFF ? appId - 0x100000000 : appId;
+  const unsigned = appId < 0 ? appId + 0x100000000 : appId;
+  if (signed !== appId) cache.delete(signed);
+  if (unsigned !== appId) cache.delete(unsigned);
+}

@@ -9,6 +9,7 @@
  * The `<StoreIcon>` from shared/ provides the brand badge.
  */
 import React, { FC } from "react";
+import { Focusable } from "@decky/ui";
 import { StoreIcon } from "../shared/StoreIcon";
 import type { Game } from "../../types/api";
 
@@ -28,7 +29,11 @@ export const GameInfoHeader: FC<Props> = ({ game, mode }) => {
     ? { w: 96, h: 144 }
     : { w: 180, h: 270 };
   return (
-    <div style={{ display: "flex", gap: 12, alignItems: "flex-start" }}>
+    <Focusable
+      flow-children="row"
+      onActivate={() => {}}
+      style={{ display: "flex", gap: 12, alignItems: "flex-start" }}
+    >
       {game.cover_image && (
         <img
           src={game.cover_image}
@@ -59,6 +64,6 @@ export const GameInfoHeader: FC<Props> = ({ game, mode }) => {
           </span>
         </div>
       </div>
-    </div>
+    </Focusable>
   );
 };

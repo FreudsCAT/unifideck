@@ -41,6 +41,7 @@ export const rpcRoutes = {
   setLanguagePreference:   "set_language_preference",
   getLanguagePreference:   "get_language_preference",
   setDefaultStorageLocation: "set_default_storage_location",
+  setCustomInstallPath:      "set_custom_install_path",
   listDirectory:             "list_directory",
   // Playtime (PlaytimeRPCMixin)
   notifyGameLaunched:      "notify_game_launched",

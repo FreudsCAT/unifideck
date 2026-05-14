@@ -7,6 +7,7 @@
  * the deck rating, not "Install path: —").
  */
 import React, { FC } from "react";
+import { Focusable } from "@decky/ui";
 import { useTranslation } from "react-i18next";
 import type { Game, DeckRating } from "../../types/api";
 
@@ -50,7 +51,11 @@ export const GameInfoMetadata: FC<Props> = ({ game, mode }) => {
   const size = formatSize(game.size_bytes);
   const rating = game.deck_rating ?? "unknown";
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+    <Focusable
+      flow-children="column"
+      onActivate={() => {}}
+      style={{ display: "flex", flexDirection: "column", gap: 4 }}
+    >
       {game.install_path && mode === "full" && (
         <Row label={t("info.installPath")} value={game.install_path} />
       )}
@@ -70,6 +75,6 @@ export const GameInfoMetadata: FC<Props> = ({ game, mode }) => {
           {t(`info.rating.${rating}`)}
         </span>
       </div>
-    </div>
+    </Focusable>
   );
 };

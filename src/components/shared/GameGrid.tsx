@@ -9,6 +9,7 @@
  * style picker (e.g. multi-select for batch operations).
  */
 import React, { FC } from "react";
+import { Focusable, DialogButton } from "@decky/ui";
 import { StoreIcon } from "./StoreIcon";
 import type { Game } from "../../types/api";
 
@@ -27,21 +28,24 @@ interface Props {
  */
 export const GameGrid: FC<Props> = ({games, onSelect, tileWidth = 140}) => {
   return (
-    <div style={{
-      display: "grid",
-      gridTemplateColumns: `repeat(auto-fill, minmax(${tileWidth}px, 1fr))`,
-      gap: 12,
-      padding: 12,
-    }}>
+    <Focusable
+      flow-children="grid"
+      onActivate={() => {}}
+      style={{
+        display: "grid",
+        gridTemplateColumns: `repeat(auto-fill, minmax(${tileWidth}px, 1fr))`,
+        gap: 12,
+        padding: 12,
+      }}
+    >
       {games.map((game) => (
-        <button
+        <DialogButton
           key={game.id}
           onClick={() => onSelect(game)}
           style={{
             position: "relative",
             background: "transparent",
             border: "none",
-            cursor: "pointer",
             padding: 0,
             display: "flex",
             flexDirection: "column",
@@ -79,8 +83,8 @@ export const GameGrid: FC<Props> = ({games, onSelect, tileWidth = 140}) => {
           }}>
             <StoreIcon store={game.store} size={12} />
           </span>
-        </button>
+        </DialogButton>
       ))}
-    </div>
+    </Focusable>
   );
 };

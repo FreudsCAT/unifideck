@@ -16,6 +16,8 @@
  */
 import { useCallback, useState } from "react";
 import { useDownloads } from "../contexts/DownloadContext";
+import { invalidateGameInfo } from "./useGameInfo";
+import { bumpGameStateVersion } from "../lib/game-state-version";
 import type { Result, StoreId } from "../types/api";
 
 /** Steam bridge shape. */
@@ -71,7 +73,12 @@ export function useGameActions(bridge: SteamBridgeShape): UseGameActionsResult {
     async (appId: number) => {
       setWorking(true);
       try {
-        return await downloads.uninstallGame(appId);
+        const result = await downloads.uninstallGame(appId);
+        if (result?.success) {
+          invalidateGameInfo(appId);
+          bumpGameStateVersion(appId);
+        }
+        return result;
       } finally {
         setWorking(false);
       }
