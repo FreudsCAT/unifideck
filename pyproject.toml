@@ -363,12 +363,39 @@ warn_unreachable = true
 follow_imports = "silent"
 
 # ──────────────────────────────────────────────────────────────────
-# pytest — coverage scope matches the audit scope
+# pytest — test suite at the repo root
 # ──────────────────────────────────────────────────────────────────
+#
+# Layout convention (cf. "Test coverage companion v1.0", section
+# "Naming conventions") :
+#
+#   tests/unit/<sub_package>/test_<source_file>.py
+#
+# So ``py_modules/unifideck/core/cache_manager.py`` is mirrored
+# by ``tests/unit/core/test_cache_manager.py`` — drop the
+# ``py_modules/unifideck/`` prefix, keep the rest of the path,
+# prepend ``test_`` to the basename.
+#
+# ``testpaths`` is set to ``tests`` (relative to the repo root)
+# so that a bare ``pytest`` invocation walks the right tree.
+# This matches the CI commands :
+#   * ``.github/workflows/tests.yml`` — runs ``pytest tests/``
+#   * ``.github/workflows/complexity.yml`` — runs ``pytest tests/unit/_tooling/``
+#
+# Historical note : an earlier version of this config pointed
+# at ``py_modules/unifideck/tests`` (in-package). That layout
+# was abandoned in favour of root-level ``tests/`` so the test
+# tree doesn't ship inside the plugin zip (Decky bundles
+# ``py_modules/`` whole) and so the coverage companion's
+# mirror convention is enforceable by CI without a path
+# rewrite step.
 [tool.pytest.ini_options]
 minversion = "8.0"
-testpaths = ["py_modules/unifideck/tests"]
-# Coverage scope: only the package source — not vendored deps.
+testpaths = ["tests"]
+# Strict markers/config keep test scaffolding honest : a typo
+# in a marker name fails the suite instead of silently being a
+# no-op. ``no:cacheprovider`` disables the .pytest_cache dir
+# which is pure noise in CI runners.
 addopts = [
     "--strict-markers",
     "--strict-config",
