@@ -132,6 +132,12 @@ class SyncService:
         Returns:
             ``SyncResult`` with the merged games list +
             timing.
+
+        Refactor history (2026-05-14): the no-stores early
+        return and the per-iteration cancellation handling
+        were inlined, pushing the function over the 80-line
+        cap. Pulled into ``_sync_no_stores_shortcircuit`` and
+        ``_sync_cancelled_result`` helpers.
         """
         self._cancel_event.clear()
         started = time.monotonic()
@@ -144,35 +150,14 @@ class SyncService:
             scope="all",
         )
         logger.info("[SyncService] sync starting (%d stores)", total)
+        if total == 0:
+            return await self._sync_no_stores_shortcircuit()
         libraries: dict[str, list[Game]] = {}
         errors: dict[str, str] = {}
-        if total == 0:
-            logger.warning(
-                "[SyncService] no available stores — nothing to sync",
-            )
-            await self._bus.emit(
-                Events.SYNC_COMPLETE,
-                games=[],
-                stores_synced=[],
-            )
-            return SyncResult(
-                success=True,
-                games=[],
-                count=0,
-                duration_ms=0,
-            )
         for idx, store in enumerate(available_stores):
             if self._cancel_event.is_set():
-                logger.info(
-                    "[SyncService] sync cancelled at store %d/%d",
-                    idx,
-                    total,
-                )
-                await self._bus.emit(Events.SYNC_CANCELLED)
-                return SyncResult(
-                    success=False,
-                    error="cancelled",
-                    games=self._flatten(libraries),
+                return await self._sync_cancelled_result(
+                    idx, total, libraries,
                 )
             self._current_store = store.store_name
             await self._emit_progress(store.store_name, idx, total)
@@ -199,6 +184,53 @@ class SyncService:
             duration_ms=duration_ms,
         )
         return result
+
+    async def _sync_no_stores_shortcircuit(self) -> SyncResult:
+        """Emit SYNC_COMPLETE with an empty payload and return.
+
+        Used when the registry exposes zero available stores —
+        a legitimate state (e.g. all stores in offline mode),
+        not an error. The empty SYNC_COMPLETE keeps any UI
+        listener in sync with backend reality.
+        """
+        logger.warning(
+            "[SyncService] no available stores — nothing to sync",
+        )
+        await self._bus.emit(
+            Events.SYNC_COMPLETE,
+            games=[],
+            stores_synced=[],
+        )
+        return SyncResult(
+            success=True,
+            games=[],
+            count=0,
+            duration_ms=0,
+        )
+
+    async def _sync_cancelled_result(
+        self,
+        idx: int,
+        total: int,
+        libraries: dict[str, list[Game]],
+    ) -> SyncResult:
+        """Emit SYNC_CANCELLED and return the partial result.
+
+        The result carries any games already fetched so the
+        caller can decide what to do with them (typically:
+        keep showing the previously-synced state).
+        """
+        logger.info(
+            "[SyncService] sync cancelled at store %d/%d",
+            idx,
+            total,
+        )
+        await self._bus.emit(Events.SYNC_CANCELLED)
+        return SyncResult(
+            success=False,
+            error="cancelled",
+            games=self._flatten(libraries),
+        )
 
     async def _apply_dedup_and_emit(
         self,

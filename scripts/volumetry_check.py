@@ -181,7 +181,11 @@ FILES_ALLOWLIST: Dict[str, int] = {
 # Baseline snapshot 2026-04-18 (post-docstring-autofix): 38
 # functions over 80L cap.
 FUNCTIONS_ALLOWLIST: Dict[str, int] = {
-    "py_modules/unifideck/stores/gog/store.py::__init__": 87,
+    # ``stores/gog/store.py::__init__`` graduated on 2026-05-14:
+    # the function shrank to 67 lines (down from baseline 87)
+    # after extracting helper construction into module-level
+    # builders. Removed per allowlist contract — grandfathered
+    # entries must stay above the cap or be cleaned up.
 }
 
 # Key = "<path>::<function_name>". Value = baseline count.
