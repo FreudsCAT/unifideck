@@ -28,7 +28,6 @@
  *  - Non-Steam-game gate (`appId > 2_000_000_000`) so we
  *    only override shortcuts, never first-party Steam games.
  */
-import React from "react";
 import {
   afterPatch,
   createReactTreePatcher,
@@ -39,6 +38,7 @@ import {
 import { SteamBridge, type RouterPatchHandle } from "../lib/steam-bridge";
 import { findInReactTree } from "../lib/steam-bridge/react-tree";
 import { getGameStateVersion } from "../lib/game-state-version";
+import { InjectedSubtreeProvider } from "../contexts/InjectedSubtreeProvider";
 import { PlaySectionWrapper } from "../components/play";
 import { GameInfoPanel } from "../components/info";
 
@@ -144,14 +144,17 @@ function injectPlayWrapper(
 
   if (existingIdx === -1) {
     const idx = findPlaySectionInsertIndex(children);
+    // Wrap in InjectedSubtreeProvider so the contexts the
+    // children read (DownloadContext, AuthContext, ...) are
+    // available — Steam's React tree is rendered outside our
+    // top-level RootProvider so we have to provide a fresh
+    // context stack here.
     children.splice(
       idx,
       0,
-      React.createElement(PlaySectionWrapper, {
-        key: `${baseKey}-v${version}`,
-        appId,
-        children: null,
-      }),
+      <InjectedSubtreeProvider key={`${baseKey}-v${version}`}>
+        <PlaySectionWrapper appId={appId}>{null}</PlaySectionWrapper>
+      </InjectedSubtreeProvider>,
     );
     return;
   }
@@ -183,13 +186,17 @@ function injectGameInfoPanel(
       wrapperIdx >= 0
         ? wrapperIdx + 1
         : findPlaySectionInsertIndex(children) + 1;
+    // Same wrapping rationale as `injectPlayWrapper`. GameInfoPanel
+    // itself uses module-level caches today but its sub-sections
+    // call `useRPC` / `useTranslation` which work fine standalone ;
+    // we still wrap for symmetry + to future-proof against any
+    // sub-section growing a context dependency.
     children.splice(
       idx,
       0,
-      React.createElement(GameInfoPanel, {
-        key: `${baseKey}-v${version}`,
-        appId,
-      }),
+      <InjectedSubtreeProvider key={`${baseKey}-v${version}`}>
+        <GameInfoPanel appId={appId} />
+      </InjectedSubtreeProvider>,
     );
     return;
   }

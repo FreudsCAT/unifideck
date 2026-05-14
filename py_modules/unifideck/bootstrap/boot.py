@@ -44,6 +44,7 @@ from unifideck.core.sync_service import SyncService
 from unifideck.event_bus.event_bus import EventBus
 from unifideck.services.bootstrap import (
     bootstrap_services,
+    inject_store_dependencies,
     start_async_services,
 )
 from unifideck.stores import StoreRegistry
@@ -193,9 +194,24 @@ def _boot_layer4_stores(plugin: Any, decky_plugin_dir: str) -> None:
 
 
 async def _boot_layer5_services(plugin: Any, pipeline: Any) -> None:
-    """Layer 5 — infrastructure services + async workers."""
+    """Layer 5 — infrastructure services + async workers.
+
+    Three phases :
+
+    1. ``bootstrap_services`` builds the full service container
+       (shortcut, download, cdp, browser_monitor, ...).
+    2. ``inject_store_dependencies`` walks ``_STORE_INJECTIONS``
+       (OP-13g) and writes each (attr, service) pair onto its
+       auto-discovered store. Stores that expose
+       ``_rebuild_auth_after_injection`` get it called so they
+       can wire their auth flow against the freshly-injected
+       ``_browser_monitor``.
+    3. ``start_async_services`` kicks any background tasks
+       (download worker, security audit pump, ...).
+    """
     plugin.services = bootstrap_services(
         plugin.bus, plugin.registry, plugin.cache, plugin.config,
         pipeline,
     )
+    inject_store_dependencies(plugin.registry, plugin.services)
     await start_async_services(plugin.services)

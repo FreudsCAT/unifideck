@@ -25,6 +25,8 @@ import {
   getShortcutRunGameId,
   isShortcutAppRunning,
 } from "../lib/steam-bridge";
+import { rpcRoutes } from "../api/rpc-routes";
+import { unwrapRpcEnvelope } from "../api/useRPC";
 
 const RESTORE_POLL_DELAY_MS = 250;
 const RESTORE_START_DELAY_MS = 500;
@@ -176,10 +178,13 @@ function scheduleLaunchStateRestore(appId: number, context: ShortcutLaunchContex
  *  the install_id so the launcher knows which UPC entry to
  *  start. */
 export async function launchUbisoftInstallViaShortcut(storeGameId: string, extraEnv: Record<string, string> = {}): Promise<ShortcutLaunchResult> {
-  const ctx = await call<[string], ShortcutLaunchContext>(
-    "get_compat_tool_for_game",
+  const rawCtx = await call<[string], unknown>(
+    rpcRoutes.getCompatToolForGame,
     storeGameId,
   );
+  const ctx = unwrapRpcEnvelope<ShortcutLaunchContext>(rawCtx, {
+    route: rpcRoutes.getCompatToolForGame, throwing: false,
+  });
 
   if (!ctx?.success || !ctx.appid_unsigned) {
     return { success: false, error: ctx?.error || "Context unavailable" };

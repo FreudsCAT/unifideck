@@ -75,23 +75,43 @@ class MicrosoftStore(StoreBase):
             config=self._ms_config,
             config_manager=self._config_manager,
         )
-        if browser_monitor is not None:
-            orchestrator = AuthOrchestrator(
-                bus=bus,
-                browser_monitor=browser_monitor,
-                store_name="microsoft",
+        # Auth is late-bound : at boot ``browser_monitor`` is
+        # ``None`` (auto-discovery doesn't see the service
+        # container yet). The injector sets ``_browser_monitor``
+        # post-discovery and calls
+        # ``_rebuild_auth_after_injection``.
+        self._browser_monitor = browser_monitor
+        self._auth: MicrosoftBrowserAuth | None = None
+        self._rebuild_auth_after_injection()
+    def _rebuild_auth_after_injection(self) -> None:
+        """(Re-)build the Microsoft browser-auth flow once a monitor is set.
+
+        Called by `store_injector` after the OAuth browser
+        monitor has been wired into the container. Idempotent —
+        early-returns if `_auth` is already built.
+        """
+        if self._auth is not None:
+            return
+        monitor = getattr(self, "_browser_monitor", None)
+        if monitor is None:
+            logger.debug(
+                "[MicrosoftStore] no browser_monitor; auth disabled",
             )
-            self._auth: MicrosoftBrowserAuth | None = (
-                MicrosoftBrowserAuth(
-                    bus=bus,
-                    orchestrator=orchestrator,
-                    tokens=self._tokens,
-                    config=self._ms_config,
-                    config_manager=self._config_manager,
-                )
-            )
-        else:
-            self._auth = None
+            return
+        orchestrator = AuthOrchestrator(
+            bus=self._bus,
+            browser_monitor=monitor,
+            store_name="microsoft",
+        )
+        self._auth = MicrosoftBrowserAuth(
+            bus=self._bus,
+            orchestrator=orchestrator,
+            tokens=self._tokens,
+            config=self._ms_config,
+            config_manager=self._config_manager,
+        )
+        logger.info("[MicrosoftStore] auth flow wired")
+
     async def is_available(self) -> bool:
         """Check whether available."""
         if not self._ms_config.is_valid():

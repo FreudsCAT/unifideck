@@ -8,8 +8,12 @@ Mixin merging two slices that the handler groups split apart:
   ``check_game_update``) — these live in ``StoreHandlers`` in
   the newer API;
 * download-queue management (``cancel_download`` /
-  ``get_download_queue`` / ``get_storage_locations``) — these
-  live in ``DownloadHandlers``.
+  ``get_download_queue``) — these live in ``DownloadHandlers``.
+
+Storage-location RPCs (``get_storage_locations``,
+``set_default_storage_location``, ``set_custom_install_path``)
+live in a sibling ``StorageRPCMixin`` (OP-26j) so this file
+keeps the 200 LOC ceiling.
 
 Two private helpers centralise the null checks:
 
@@ -128,49 +132,6 @@ class DownloadRPCMixin:
         """
         download = self._require_download()
         return download.get_queue()
-
-    async def get_storage_locations(self) -> Any:
-        """Return the list of available install locations.
-
-        Computed directly from the filesystem rather than
-        delegating to ``DownloadService`` — per OP-15a the
-        download service has no awareness of storage, only of
-        the queue. The mixin owns this responsibility.
-
-        Sources, in priority order:
-
-        1. Per-store install dirs from
-           ``stores.<name>.install_dir`` config + a custom
-           user path (``download.custom_path``);
-        2. SD card / external drive mounts under
-           ``paths.sd_card_root`` (default ``/run/media``).
-
-        Each entry is annotated with free-space information
-        from ``shutil.disk_usage`` so the frontend can show
-        capacity warnings before kicking off a download.
-
-        Returns:
-            List of dicts: ``[{"path", "free_bytes",
-            "total_bytes"}]``. Empty list when no usable
-            location is detected.
-        """
-        import shutil
-
-        from unifideck.utils.paths import get_all_game_directories
-
-        config = getattr(self, "config", None)
-        locations: list[dict[str, Any]] = []
-        for path in get_all_game_directories(config):
-            try:
-                usage = shutil.disk_usage(path)
-            except OSError:
-                continue
-            locations.append({
-                "path": path,
-                "free_bytes": usage.free,
-                "total_bytes": usage.total,
-            })
-        return locations
 
     def _require_store(self, store: str) -> Any:
         """Return the store from the registry or raise ``store_not_found``.

@@ -14,3 +14,4 @@ export { AuthProvider, useAuth } from "./AuthContext";
 export { DownloadProvider, useDownloads } from "./DownloadContext";
 export { LocaleProvider, useLocale } from "./LocaleContext";
 export { RootProvider } from "./RootProvider";
+export { InjectedSubtreeProvider } from "./InjectedSubtreeProvider";

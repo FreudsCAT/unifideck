@@ -35,59 +35,106 @@ class LaunchRPCMixin:
     config: Any
     services: Any
 
-    async def notify_game_launched(self, store: str, game_id: str, **kw: Any) -> Any:
+    async def notify_game_launched(
+        self,
+        app_id: int | None = None,
+        store: str | None = None,
+        game_id: str | None = None,
+        **kw: Any,
+    ) -> Any:
         """Bridge a frontend-initiated launch onto the bus.
 
-        When the user clicks Steam's "Play" button on a
-        Unifideck shortcut, the dispatcher runs the game
-        outside of ``LauncherService``. The frontend
-        notifies via this method so playtime tracking +
-        cloud-save sync etc. still observe ``GAME_LAUNCHED``.
+        Two call signatures accepted :
 
-        Args:
-            store: store identifier.
-            game_id: store-specific game id.
-            **kw: extra payload forwarded as event kwargs.
+        1. ``notify_game_launched(app_id)`` — what the
+           frontend bootstrap subscriber sends after
+           Steam's ``RegisterForAppLifetimeNotifications``
+           fires (the only info Steam gives us is the
+           AppID). The mixin resolves ``store`` / ``game_id``
+           internally via the sync-service lookup ; if the
+           AppID isn't a Unifideck shortcut, it's a no-op.
+
+        2. ``notify_game_launched(store=…, game_id=…)`` —
+           explicit callers that already know the pair.
+
+        Emitting ``GAME_LAUNCHED`` with partial info would
+        confuse downstream subscribers (playtime, cloud
+        save), so missing args yield a typed skip response
+        rather than a crash.
 
         Returns:
-            ``{success: True}``.
+            ``{success: True}`` on emit, or
+            ``{success: True, skipped: <reason>}`` when
+            the AppID isn't a Unifideck shortcut.
         """
+        resolved_store, resolved_game = self._resolve_app_id(
+            app_id, store, game_id,
+        )
+        if resolved_store is None or resolved_game is None:
+            return {"success": True, "skipped": "not_unifideck_app"}
         await self.bus.emit(
             Events.GAME_LAUNCHED,
-            store=store,
-            game_id=game_id,
+            store=resolved_store,
+            game_id=resolved_game,
+            app_id=app_id,
             **kw,
         )
         return {"success": True}
 
     async def notify_game_stopped(
         self,
-        store: str,
-        game_id: str,
+        app_id: int | None = None,
+        store: str | None = None,
+        game_id: str | None = None,
         exit_code: int = 0,
     ) -> Any:
         """Bridge a frontend-detected game exit onto the bus.
 
-        Counterpart to ``notify_game_launched``. The exit
-        code defaults to 0 — the frontend may not know the
-        real code if it only watches for window-close
-        signals.
-
-        Args:
-            store: store identifier.
-            game_id: store-specific game id.
-            exit_code: detected exit status.
-
-        Returns:
-            ``{success: True}``.
+        Counterpart to ``notify_game_launched`` — accepts
+        the same two-signature contract.
         """
+        resolved_store, resolved_game = self._resolve_app_id(
+            app_id, store, game_id,
+        )
+        if resolved_store is None or resolved_game is None:
+            return {"success": True, "skipped": "not_unifideck_app"}
         await self.bus.emit(
             Events.GAME_STOPPED,
-            store=store,
-            game_id=game_id,
+            store=resolved_store,
+            game_id=resolved_game,
+            app_id=app_id,
             exit_code=exit_code,
         )
         return {"success": True}
+
+    def _resolve_app_id(
+        self,
+        app_id: int | None,
+        store: str | None,
+        game_id: str | None,
+    ) -> tuple[str | None, str | None]:
+        """Resolve ``(store, game_id)`` from any of the inputs.
+
+        Explicit ``(store, game_id)`` always wins ; otherwise
+        we ask the sync service to find the game whose
+        AppID matches. Returns ``(None, None)`` if the AppID
+        doesn't belong to a known Unifideck shortcut — the
+        caller treats that as a quiet no-op.
+        """
+        if store and game_id:
+            return store, game_id
+        if app_id is None:
+            return None, None
+        sync = getattr(self, "sync_service", None)
+        if sync is None or not hasattr(sync, "get_game_info"):
+            return None, None
+        try:
+            info = sync.get_game_info(app_id)
+        except Exception:
+            return None, None
+        if not isinstance(info, dict):
+            return None, None
+        return info.get("store"), info.get("id") or info.get("game_id")
 
     async def get_launch_failures(self, game_key: str) -> Any:
         """Return the rolling failure window + breaker state for a game.

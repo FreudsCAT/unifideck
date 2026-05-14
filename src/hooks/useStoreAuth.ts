@@ -1,23 +1,25 @@
 /**
  * useStoreAuth — high-level auth flow per store.
  *
- * Glues `AuthContext` (status + actions) and `StoreContext`
- * (registered stores + visuals) for components that drive
- * the auth UX. Returned shape :
- *  - `info`     : StoreInfo for the requested store (name,
- *                 display_name, brand color, icon path)
- *  - `status`   : current StoreStatus (connected / ...)
- *  - `connect`  : kick off auth (returns AuthResult or null)
- *  - `disconnect` : logout + clear local status
- *  - `submit2FA`: complete an in-flight auth with a code
- *  - `busy`     : true when an auth call is in flight
+ * Thin React adapter over the orchestration layer. The actual
+ * multi-step handshake (backend prep → Steam shortcut launch
+ * → wait for `STORE_AUTH_COMPLETE`) lives in
+ * `services/auth/AuthDispatcher.ts` per the PDF spec : hooks
+ * shouldn't own multi-stage coordination.
  *
- * Components don't compose AuthContext + StoreContext
- * manually; this hook hides the wiring.
+ * Returned shape :
+ *  - `info`        : StoreInfo for the requested store
+ *  - `status`      : current StoreStatus
+ *  - `connect`     : start auth, await terminal event
+ *  - `disconnect`  : logout + clear local status
+ *  - `submit2FA`   : complete an in-flight auth with a code
+ *  - `busy`        : true when an auth call is in flight
  */
 import { useCallback, useState } from "react";
 import { useAuth } from "../contexts/AuthContext";
 import { useStores } from "../contexts/StoreContext";
+import { useToast } from "./useToast";
+import { AuthDispatcher } from "../services/auth/AuthDispatcher";
 import type { AuthResult, StoreId } from "../types/api";
 
 /**
@@ -36,15 +38,11 @@ export interface UseStoreAuthResult {
 }
 
 /**
- * Hook that drives per-store auth flows. Wraps the
- * generic `store_auth` RPC and exposes
- * `start` / `complete` / `logout` callbacks scoped
- * to the store id provided.
- *
- * The returned `status` is reactive : auth events
- * trigger a re-evaluation of `is_available()` so
- * the UI reflects the latest state without
- * polling.
+ * Hook that drives per-store auth flows. Delegates the
+ * full handshake to {@link AuthDispatcher} and surfaces
+ * the result as toasts. Status is reactive : auth events
+ * trigger a re-render in `AuthContext` so the UI flips
+ * Connect → Connected without polling.
  *
  * @param storeId — id of the store to drive.
  * @returns auth state + action callbacks.
@@ -52,18 +50,30 @@ export interface UseStoreAuthResult {
 export function useStoreAuth(store: StoreId): UseStoreAuthResult {
   const auth = useAuth();
   const { stores } = useStores();
+  const toast = useToast();
   const [busy, setBusy] = useState(false);
   const info = stores.find((s) => s.name === store) ?? null;
   const status = auth.statuses[store];
 
-  const connect = useCallback(async () => {
+  const connect = useCallback(async (): Promise<AuthResult | null> => {
     setBusy(true);
     try {
-      return await auth.startAuth(store);
+      toast.info(`Starting ${store} sign-in…`);
+      const result = await AuthDispatcher.start(store);
+      if (result.success) {
+        toast.success(`${store} connected`);
+      } else {
+        toast.error(`${store} sign-in failed`, result.error);
+      }
+      return result;
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      toast.error(`${store} sign-in failed`, message);
+      return { success: false, store, error: message };
     } finally {
       setBusy(false);
     }
-  }, [auth, store]);
+  }, [store, toast]);
 
   const disconnect = useCallback(async () => {
     setBusy(true);

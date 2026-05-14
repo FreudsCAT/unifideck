@@ -51,7 +51,11 @@ export interface UseGameInfoResult {
  * @returns aggregated info + loading/error flags.
  */
 export function useGameInfo(appId: number | null): UseGameInfoResult {
-  const fetch = useRPC<[number], Game>(rpcRoutes.getGameMetadata);
+  // Backend's `get_game_metadata(store, game_id)` requires a
+  // store/game-id pair we don't have at the appId boundary.
+  // `get_game_info(app_id)` is the right route for "look up
+  // by Steam shortcut appid".
+  const fetch = useRPC<[number], Game>(rpcRoutes.getGameInfo);
   // Lazy priming : if the module-level cache has ANY entry for
   // this appId (fresh OR stale), seed the initial state with it
   // so consumers paint immediately. Stale data still triggers a

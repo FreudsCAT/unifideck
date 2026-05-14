@@ -25,8 +25,31 @@ import { useRPCMutation, useRPCQuery } from "../api/useRPC";
 import { rpcRoutes } from "../api/rpc-routes";
 import { useEventBus, EventBusClient } from "../api/event-bus-client";
 import { Events } from "../types/events";
-import type { DownloadQueueInfo } from "../types/downloads";
+import type { DownloadItem, DownloadQueueInfo } from "../types/downloads";
 import type { Result, StoreId } from "../types/api";
+
+/** Wire shape the backend currently returns from
+ *  `get_download_queue` — `{queued, running}`. The frontend
+ *  needs `{current, queued, finished, state}`, so we adapt
+ *  defensively : `current` = first running item, `finished`
+ *  = empty until backend exposes a history, `state` derived
+ *  from `running.length`. */
+function adaptQueue(raw: unknown): DownloadQueueInfo {
+  const obj = (typeof raw === "object" && raw !== null)
+    ? raw as Record<string, unknown>
+    : {};
+  const queued = Array.isArray(obj.queued) ? obj.queued as DownloadItem[] : [];
+  const running = Array.isArray(obj.running) ? obj.running as DownloadItem[] : [];
+  const finished = Array.isArray(obj.finished) ? obj.finished as DownloadItem[] : [];
+  const current = (obj.current as DownloadItem | undefined) ?? running[0] ?? null;
+  return {
+    success: true,
+    queued,
+    finished,
+    current,
+    state: running.length > 0 ? "running" : "idle",
+  };
+}
 
 /** Download context value. */
 interface DownloadContextValue {
@@ -54,10 +77,10 @@ const Ctx = createContext<DownloadContextValue | null>(null);
  */
 export const DownloadProvider: FC<{ children: ReactNode }> = ({ children }) => {
   const [queue, setQueue] = useState<DownloadQueueInfo | null>(null);
-  const initial = useRPCQuery<[], DownloadQueueInfo>(rpcRoutes.getDownloadQueue, []);
+  const initial = useRPCQuery<[], unknown>(rpcRoutes.getDownloadQueue, []);
 
   useEffect(() => {
-    if (initial.data) setQueue(initial.data);
+    if (initial.data) setQueue(adaptQueue(initial.data));
   }, [initial.data]);
   // RPC mutations
   const installMut = useRPCMutation<

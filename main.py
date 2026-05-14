@@ -56,6 +56,7 @@ sys.path.insert(0, os.path.join(DECKY_PLUGIN_DIR, "py_modules"))
 from unifideck.config.user_config_path import resolve_user_config_path
 from unifideck.rpc import auto_wrap_rpc_methods
 from unifideck.rpc.mixins.action import ActionRPCMixin
+from unifideck.rpc.mixins.auth_shortcuts import AuthShortcutsRPCMixin
 from unifideck.rpc.mixins.cloud_failure import CloudFailureRPCMixin
 from unifideck.rpc.mixins.config_validation import ConfigValidationRPCMixin
 from unifideck.rpc.mixins.download import DownloadRPCMixin
@@ -63,6 +64,7 @@ from unifideck.rpc.mixins.launch import LaunchRPCMixin
 from unifideck.rpc.mixins.observability import ObservabilityRPCMixin
 from unifideck.rpc.mixins.playtime import PlaytimeRPCMixin
 from unifideck.rpc.mixins.security import SecurityRPCMixin
+from unifideck.rpc.mixins.storage import StorageRPCMixin
 from unifideck.rpc.mixins.store import StoreRPCMixin
 from unifideck.rpc.mixins.sync import SyncRPCMixin
 from unifideck.rpc.mixins.ui import UIRPCMixin
@@ -75,8 +77,10 @@ class Plugin(
     ObservabilityRPCMixin,
     SecurityRPCMixin,
     DownloadRPCMixin,
+    StorageRPCMixin,
     LaunchRPCMixin,
     StoreRPCMixin,
+    AuthShortcutsRPCMixin,
     SyncRPCMixin,
     UIRPCMixin,
     CloudFailureRPCMixin,

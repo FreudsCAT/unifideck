@@ -44,6 +44,16 @@ _EPIC_REDIRECT_URIS: list[str] = [
 
 _AUTH_URL_MARKERS = ("epicgames.com",)
 
+# Lines `legendary auth` prints when the user is already logged
+# in. We detect either marker, terminate the process, and emit
+# STORE_AUTH_COMPLETE without showing a browser. Matching is
+# substring-based so minor wording changes in future legendary
+# versions don't break detection.
+_LEGENDARY_ALREADY_AUTHED_MARKERS = (
+    "Stored credentials are still valid",
+    "Login successful",
+)
+
 
 class EpicAuthFlow:
     """Epic auth flow."""
@@ -70,6 +80,18 @@ class EpicAuthFlow:
                 error="legendary_not_found",
                 store="epic",
             )
+        # Fast path : if legendary already has valid credentials,
+        # skip the entire OAuth dance and emit a success event
+        # so the frontend updates the badge to "Connected" without
+        # opening a browser.
+        if await self._is_already_authed():
+            logger.info(
+                "[epic_auth] credentials still valid — skipping OAuth",
+            )
+            await self._bus.emit(
+                Events.STORE_AUTH_COMPLETE, store="epic",
+            )
+            return AuthResult(success=True, store="epic")
         return await self._orch.run_flow(
             get_url=self._fetch_login_url,
             allowed_uris=_EPIC_REDIRECT_URIS,
@@ -77,6 +99,45 @@ class EpicAuthFlow:
             background=True,
             write_url_file=("~/.local/share/unifideck/epic_auth_url.txt"),
         )
+
+    async def _is_already_authed(self) -> bool:
+        """Detect whether ``legendary auth`` would no-op.
+
+        Runs ``legendary auth`` (no args), reads up to a few
+        lines of stdout, and looks for the
+        "credentials still valid" marker. Returns False on any
+        I/O / timeout error so the caller falls back to the
+        normal OAuth flow.
+        """
+        assert self._cli_path is not None
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                self._cli_path,
+                "auth",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+            )
+        except OSError as e:
+            logger.warning("[epic_auth] spawn for auth-check failed: %s", e)
+            return False
+        try:
+            try:
+                stdout_bytes, _ = await asyncio.wait_for(
+                    proc.communicate(),
+                    # legendary's auth-check completes in <1s when
+                    # creds are present ; cap so we never hang.
+                    timeout=min(self._cli_timeout, 5),
+                )
+            except TimeoutError:
+                return False
+            text = stdout_bytes.decode(errors="ignore")
+            return any(
+                marker in text
+                for marker in _LEGENDARY_ALREADY_AUTHED_MARKERS
+            )
+        finally:
+            if proc.returncode is None:
+                await self._terminate_legendary(proc)
 
     async def logout(self) -> Result:
         """Logout."""

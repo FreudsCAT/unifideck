@@ -73,18 +73,21 @@ export const AuthProvider: FC<{ children: ReactNode }> = ({ children }) => {
     rpcRoutes.clearStoreAuths,
   );
 
-  // Bus reactions
-  useEventBus(Events.AUTH_COMPLETE, (payload) => {
+  // Bus reactions — use the canonical STORE_* names from
+  // `Events`. The legacy AUTH_COMPLETE / AUTH_FAILED /
+  // LOGOUT_COMPLETE aliases never existed on the bus so the
+  // old code silently never updated status.
+  useEventBus(Events.STORE_AUTH_COMPLETE, (payload) => {
     const store = payload.store as StoreId | undefined;
     if (store) setStatuses((s) => ({ ...s, [store]: "connected" }));
   });
 
-  useEventBus(Events.AUTH_FAILED, (payload) => {
+  useEventBus(Events.STORE_AUTH_FAILED, (payload) => {
     const store = payload.store as StoreId | undefined;
     if (store) setStatuses((s) => ({ ...s, [store]: "error" }));
   });
 
-  useEventBus(Events.LOGOUT_COMPLETE, (payload) => {
+  useEventBus(Events.STORE_LOGOUT, (payload) => {
     const store = payload.store as StoreId | undefined;
     if (store) setStatuses((s) => ({ ...s, [store]: "disconnected" }));
   });

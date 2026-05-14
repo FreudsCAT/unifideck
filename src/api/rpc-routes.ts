@@ -17,6 +17,13 @@ export const rpcRoutes = {
   checkStoreStatus:        "check_store_status",
   getStoreInfos:           "get_store_infos",
   clearStoreAuths:         "clear_store_auths",
+  // Auth-shortcut context (AuthShortcutsRPCMixin)
+  getEpicAuthShortcutContext:      "get_epic_auth_shortcut_context",
+  getGogAuthShortcutContext:       "get_gog_auth_shortcut_context",
+  getAmazonAuthShortcutContext:    "get_amazon_auth_shortcut_context",
+  getMicrosoftAuthShortcutContext: "get_microsoft_auth_shortcut_context",
+  getUbisoftAuthShortcutContext:   "get_ubisoft_auth_shortcut_context",
+  getCompatToolForGame:            "get_compat_tool_for_game",
   // Library sync (SyncRPCMixin)
   syncLibraries:           "sync_libraries",
   forceSyncLibraries:      "force_sync_libraries",

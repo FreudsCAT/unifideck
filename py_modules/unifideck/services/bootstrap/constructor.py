@@ -93,6 +93,28 @@ def bootstrap_services(
                 def_entry[2],
                 e,
             )
+
+    # OAuthBrowserMonitor depends on the just-built `cdp` client.
+    # Service-defs lambdas only see (bus, registry, cache, config,
+    # paths, pipeline) — no partial-container access — so we
+    # construct it here in the post-loop step instead of adding a
+    # special case to `_instantiate_service`. Quiet on `None` cdp
+    # so a missing dependency doesn't block the rest of the boot.
+    try:
+        if container.cdp is not None:
+            from ...auth.browser import OAuthBrowserMonitor
+            container.browser_monitor = OAuthBrowserMonitor(
+                cdp_client=container.cdp, config=config,
+            )
+            logger.debug("[bootstrap] browser_monitor wired")
+        else:
+            logger.info(
+                "[bootstrap] browser_monitor skipped — no cdp client",
+            )
+    except Exception as e:
+        logger.warning(
+            "[bootstrap] failed to wire browser_monitor: %s", e,
+        )
     return container
 
 

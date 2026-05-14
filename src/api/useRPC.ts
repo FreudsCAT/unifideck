@@ -42,6 +42,38 @@ function isRpcEnvelope(v: unknown): v is RpcEnvelope {
   );
 }
 
+/** Unwrap the backend ``{success, error, data}`` envelope.
+ *
+ *  ``useRPC`` does this for component callers automatically, but
+ *  modules outside React (`AuthDispatcher`, `EventBusClient`,
+ *  shortcut launchers) call ``call()`` directly and must unwrap
+ *  manually. Exported here so the unwrap logic lives in one
+ *  place — a change to the envelope shape is a one-file fix.
+ *
+ *  On a non-success envelope this throws `RpcError`, mirroring
+ *  the hook behaviour. Pass `{ throwing: false }` to opt out
+ *  (e.g. when the caller wants to inspect the failure shape
+ *  itself).
+ */
+export function unwrapRpcEnvelope<T>(
+  raw: unknown,
+  options: { route?: string; throwing?: boolean } = {},
+): T {
+  const { route = "<unknown>", throwing = true } = options;
+  if (isRpcEnvelope(raw)) {
+    if (!raw.success && throwing) {
+      throw new RpcError(
+        "UNKNOWN",
+        raw.error ?? "RPC call failed",
+        route,
+        raw,
+      );
+    }
+    return raw.data as T;
+  }
+  return raw as T;
+}
+
 /** Low-level RPC caller. Returns a stable async function
  *  bound to the given route. Automatically unwraps the
  *  backend `{success, error, data}` envelope so callers

@@ -119,4 +119,9 @@ class SyncRPCMixin:
         Returns:
             Game info dict, or empty / None when unknown.
         """
-        return await self.sync_service.get_game_info(app_id)
+        # `sync_service.get_game_info` is a synchronous helper
+        # (linear scan over `_all_games`) — no coroutine, no
+        # await. The previous body had a stray `await` which
+        # raised `TypeError: object NoneType can't be used
+        # in 'await' expression`.
+        return self.sync_service.get_game_info(app_id)
