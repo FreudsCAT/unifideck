@@ -10,75 +10,124 @@
 target-version = "py310"
 line-length = 100
 
-# Skip generated/cached directories and every path outside the
-# backend Python scope. Audit scope = ``py_modules/unifideck/``
-# (this package) + ``scripts/`` only. Everything else is excluded
-# for one of two reasons:
+# ── Why both ``exclude`` AND ``force-exclude`` ────────────────────
+# ``extend-exclude`` only applies when ruff walks the filesystem
+# itself. CI gates that pass explicit file paths — ``pip-audit``
+# expanding ``defaults/python/**/*.py``, ``mypy --strict`` on a glob,
+# pre-commit hooks feeding the staged file list, or
+# ``ruff check defaults/python/`` invoked directly from a workflow —
+# bypass that filter entirely.
 #
-# 1. Vendored 3rd-party libraries (``pip``, ``requests``, ``urllib3``,
-#    ``websockets``, ``idna``, ``charset_normalizer``, ``certifi``,
-#    ``vdf``, ``steamgrid``, ``aiohttp`` etc.) ship pinned upstream
-#    code Hardcpp doesn't author. Their CVE exposure is tracked via
-#    ``requirements.txt`` + ``pip-audit``; their style/complexity
-#    findings are upstream choices that produce only noise here
-#    (a previous full-scope audit returned 24 K issues, 0 actionable).
+# Setting ``force-exclude = true`` makes ruff honour these patterns
+# even when files are passed by name. Combined with the catch-all
+# patterns below, the audit scope becomes "backend Python only"
+# regardless of how ruff is invoked.
 #
-# 2. The frontend (TS/React) has its own ESLint pipeline. Anything
-#    leaking into a ``.py`` file under ``frontend/`` would be a
-#    packaging accident, not audit territory.
-#
-# Patterns are listed both bare (matches at repo-root level) and as
-# nested globs (matches when a vendored dir is sunk under the
-# package, e.g. when Decky Loader rewrites paths during install).
-extend-exclude = [
-    # ─── Generated / cached ──────────────────────────────────────
-    "__pycache__",
-    ".ruff_cache",
+# Patterns live in ``exclude`` (not ``extend-exclude``) so they
+# replace, not merge with, ruff's defaults — keeping the resolved
+# list short and predictable.
+force-exclude = true
+exclude = [
+    # ─── Ruff defaults we still want to keep ─────────────────────
+    ".bzr",
+    ".direnv",
+    ".eggs",
+    ".git",
+    ".git-rewrite",
+    ".hg",
+    ".ipynb_checkpoints",
     ".mypy_cache",
+    ".nox",
+    ".pants.d",
+    ".pyenv",
     ".pytest_cache",
+    ".pytype",
+    ".ruff_cache",
+    ".svn",
+    ".tox",
+    ".venv",
+    ".vscode",
+    "__pypackages__",
+    "_build",
+    "buck-out",
     "build",
     "dist",
-    "*.egg-info",
-    # ─── Vendored 3rd-party HTTP / encoding / IO stack ───────────
-    "pip",
-    "pip-*",
-    "requests",
-    "urllib3",
-    "aiohttp",
-    "websockets",
-    "idna",
-    "charset_normalizer",
-    "certifi",
-    "cryptography",
-    "jsonschema",
-    "vdf",
-    "steamgrid",
-    "PyYAML",
-    "yaml",
-    # ─── Catch-all for vendored content under any layout ─────────
-    # Decky plugins typically drop vendored deps into one of
-    # ``defaults/python/``, ``python_modules/``, or
-    # ``site-packages/``. The globbed variants below cover the
-    # case where the package is invoked with the vendor dir nested
-    # under us (e.g. ``py_modules/unifideck/defaults/python/``).
-    "defaults/python",
-    "python_modules",
-    "site-packages",
-    "**/site-packages",
-    "**/_vendor",
-    "**/vendored",
-    "**/dist-info",
-    "**/*.dist-info",
-    # ─── Frontend tree ───────────────────────────────────────────
-    "frontend",
-    "frontend/dist",
-    "frontend/node_modules",
     "node_modules",
-    # ─── Documentation / non-code roots ──────────────────────────
-    "docs/_build",
-    ".venv",
+    "site-packages",
     "venv",
     "env",
+    "__pycache__",
+    "*.egg-info",
+    # ─── Vendored 3rd-party libraries ────────────────────────────
+    # Pinned upstream code. CVE exposure is tracked via
+    # ``requirements.txt`` + ``pip-audit``; ruff style/complexity
+    # findings on this code are upstream choices that produce only
+    # noise here. A previous full-scope audit returned 24 K issues
+    # in the vendor tree, 0 actionable.
+    #
+    # Patterns are listed three ways to defeat invocation-path
+    # ambiguity:
+    #   * bare name             — matches dirs at the search root
+    #   * `**/<name>/`         — matches the dir anywhere under root
+    #   * specific full paths   — for the Decky Loader install layout
+    "pip",
+    "pip-*",
+    "**/pip",
+    "**/pip-*",
+    "requests",
+    "**/requests",
+    "urllib3",
+    "**/urllib3",
+    "aiohttp",
+    "**/aiohttp",
+    "websockets",
+    "**/websockets",
+    "idna",
+    "**/idna",
+    "charset_normalizer",
+    "**/charset_normalizer",
+    "certifi",
+    "**/certifi",
+    "cryptography",
+    "**/cryptography",
+    "jsonschema",
+    "jsonschema_specifications",
+    "**/jsonschema",
+    "**/jsonschema_specifications",
+    "vdf",
+    "**/vdf",
+    "steamgrid",
+    "**/steamgrid",
+    "yaml",
+    "**/yaml",
+    "_yaml",
+    # ─── Decky Loader vendor layouts ─────────────────────────────
+    # Decky drops vendored deps into one of these depending on the
+    # plugin version; all three are out of audit scope.
+    "defaults/python",
+    "defaults/python/*",
+    "**/defaults/python",
+    "**/defaults/python/*",
+    "python_modules",
+    "python_modules/*",
+    "**/python_modules",
+    "**/python_modules/*",
+    "**/site-packages",
+    "**/_vendor",
+    "**/_vendor/*",
+    "**/vendored",
+    "**/vendored/*",
+    "**/dist-info",
+    "**/*.dist-info",
+    # ─── Frontend ────────────────────────────────────────────────
+    # The TS/React layer has its own ESLint pipeline. Any ``.py``
+    # under ``frontend/`` would be a packaging accident, not audit
+    # territory.
+    "frontend",
+    "frontend/*",
+    # ─── Docs build output ───────────────────────────────────────
+    "docs/_build",
+    "docs/_build/*",
 ]
 
 [tool.ruff.lint]
@@ -261,3 +310,126 @@ ignore = [
 # Treat ``unifideck`` as the first-party namespace so its imports
 # group correctly relative to stdlib/3rd-party.
 known-first-party = ["unifideck"]
+
+# ──────────────────────────────────────────────────────────────────
+# mypy — same scope as ruff
+# ──────────────────────────────────────────────────────────────────
+#
+# mypy honours ``files`` and ``exclude`` settings under
+# ``[tool.mypy]``. The CI gate runs ``mypy py_modules/unifideck/``
+# from the repo root; that explicit-path invocation would
+# *otherwise* descend into any vendored deps under the package
+# unless we filter them here. The exclude regex mirrors the ruff
+# exclude list above — same scope, different tool.
+[tool.mypy]
+python_version = "3.10"
+# We list the package as ``files`` so a bare ``mypy`` invocation
+# without arguments still type-checks the right tree.
+files = ["py_modules/unifideck"]
+# Regex (not glob!) — mypy's exclude uses Python's ``re.search``.
+# Each alternative is a path fragment that disqualifies the file.
+exclude = '''(?x)(
+    /__pycache__/
+    | /\.ruff_cache/
+    | /\.mypy_cache/
+    | /build/
+    | /dist/
+    | /defaults/python/
+    | /python_modules/
+    | /site-packages/
+    | /_vendor/
+    | /vendored/
+    | \.dist-info/
+    | /pip/
+    | /requests/
+    | /urllib3/
+    | /aiohttp/
+    | /websockets/
+    | /idna/
+    | /charset_normalizer/
+    | /certifi/
+    | /cryptography/
+    | /jsonschema/
+    | /vdf/
+    | /steamgrid/
+    | /yaml/
+    | /frontend/
+)'''
+# Strict mode (matches the project's mypy invariant).
+strict = true
+warn_unused_configs = true
+warn_unreachable = true
+# Don't follow imports into excluded dirs.
+follow_imports = "silent"
+
+# ──────────────────────────────────────────────────────────────────
+# pytest — coverage scope matches the audit scope
+# ──────────────────────────────────────────────────────────────────
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["py_modules/unifideck/tests"]
+# Coverage scope: only the package source — not vendored deps.
+addopts = [
+    "--strict-markers",
+    "--strict-config",
+    "-p", "no:cacheprovider",
+]
+asyncio_mode = "auto"
+
+[tool.coverage.run]
+source = ["py_modules/unifideck"]
+# Mirror the exclusion list as omit patterns — coverage.py uses
+# fnmatch syntax (not regex like mypy, not glob like ruff).
+omit = [
+    "*/defaults/python/*",
+    "*/python_modules/*",
+    "*/site-packages/*",
+    "*/_vendor/*",
+    "*/vendored/*",
+    "*/*.dist-info/*",
+    "*/__pycache__/*",
+    "*/tests/*",
+    "*/frontend/*",
+]
+
+# ──────────────────────────────────────────────────────────────────
+# Tools whose scope is NOT controlled from this file
+# ──────────────────────────────────────────────────────────────────
+#
+# These tools take their config from separate root-level files.
+# They each need their own scope filter to avoid auditing vendored
+# deps. Left out of this file because mixing their TOML sections
+# here would split ownership of those tools' configuration.
+#
+# ──────────────────────────────────────────────────────────────────
+#
+# 1. ``pip-audit`` — reads ``requirements.txt`` directly. Already
+#    scoped correctly: we list only the 4 direct runtime deps
+#    (``aiohttp``, ``websockets``, ``cryptography``, ``jsonschema``),
+#    not the transitive vendor tree. No config change needed.
+#
+# 2. ``import-linter`` — reads ``.importlinter`` at the repo root.
+#    Contracts there must ignore packages they don't own. The
+#    canonical scope filter for that file is:
+#
+#       [importlinter]
+#       root_packages =
+#           unifideck
+#       include_external_packages = False
+#
+#    ``include_external_packages = False`` is the equivalent of
+#    ``force-exclude`` for this tool: it stops the linter from
+#    descending into ``site-packages``/``defaults/python``/
+#    ``python_modules`` when resolving imports.
+#
+# 3. ``vulture`` (dead-code finder, if used in CI) — scope via
+#    ``--exclude defaults/python,frontend,python_modules`` on the
+#    command line, or a ``vulture.toml`` next to ``pyproject.toml``.
+#
+# 4. GitHub Actions workflows — make sure every linter invocation
+#    runs ``py_modules/unifideck`` (or the package root) as its
+#    working directory rather than the repo root, OR passes
+#    ``py_modules/unifideck`` as the explicit path argument. With
+#    ``force-exclude = true`` set above, even a bad CI invocation
+#    can't accidentally lint vendored code through ruff — but
+#    mypy honours its own ``exclude``, so the same care applies.
