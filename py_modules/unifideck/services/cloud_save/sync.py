@@ -199,11 +199,16 @@ class _SyncMixin:
         Read both manifests, detect conflict (both sides newer than
         the last shared manifest), bail out if remote is unchanged,
         otherwise copy remote → local and write the fresh manifest.
+
+        Refactor history (2026-05-14): the on-disk ``is_dir``
+        check was extracted to ``_existing_dir_or_none`` so this
+        function's fan-out stays under the 10-callee cap. The
+        symmetric helper is shared with ``_sync_up_locked``.
         """
         local_dir = self.get_local_save_dir(store, game_id)
         remote_dir = str(Path(self._cloud_root) / store, game_id)
 
-        if not await asyncio.to_thread(lambda: Path(remote_dir).is_dir()):
+        if await self._existing_dir_or_none(remote_dir) is None:
             await self._emit_down("CLOUD_SYNC_DOWN_COMPLETE", store, game_id, synced=False)
             return Result(success=True)
 
@@ -270,11 +275,15 @@ class _SyncMixin:
         moved relative to remote, skip the copy. Otherwise push
         local → remote, write the manifest on BOTH sides so a
         subsequent sync_down sees a no-op.
+
+        Refactor history (2026-05-14): on-disk ``is_dir`` check
+        extracted to the shared ``_existing_dir_or_none`` helper
+        so this function's fan-out stays under the 10-callee cap.
         """
         local_dir = self.get_local_save_dir(store, game_id)
         remote_dir = str(Path(self._cloud_root) / store, game_id)
 
-        if not await asyncio.to_thread(lambda: Path(local_dir).is_dir()):
+        if await self._existing_dir_or_none(local_dir) is None:
             await self._emit_up("CLOUD_SYNC_UP_COMPLETE", store, game_id, synced=False)
             return Result(success=True)
 
@@ -294,6 +303,30 @@ class _SyncMixin:
 
         await self._emit_up("CLOUD_SYNC_UP_COMPLETE", store, game_id, synced=True)
         return Result(success=True)
+
+    async def _existing_dir_or_none(self: Any, path: str) -> str | None:
+        """Return ``path`` if it points to an existing directory, else ``None``.
+
+        Wraps the ``Path(...).is_dir()`` syscall in
+        ``asyncio.to_thread`` so the event loop isn't blocked
+        by a slow filesystem (network mounts, sleeping disk,
+        etc). Shared by ``_sync_down_locked`` and
+        ``_sync_up_locked``: each checks its respective side
+        (remote for down, local for up) but the symmetry is
+        the same — abort with a no-op success when the source
+        doesn't exist.
+
+        Args:
+            path: Filesystem path to check.
+
+        Returns:
+            ``path`` itself if it's an existing directory, or
+            ``None`` if it doesn't exist / isn't a directory.
+            The caller decides what to do with the absence;
+            this helper is value-neutral.
+        """
+        is_dir = await asyncio.to_thread(lambda: Path(path).is_dir())
+        return path if is_dir else None
 
     async def sync_up(self: Any, store: str, game_id: str) -> Result:
         """Push the local save to the cloud after the game exits.

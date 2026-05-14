@@ -256,7 +256,14 @@ class GOGInstaller:
         self,
         ctx: _InstallContext,
     ) -> InstallResult | None:
-        """Install probe and prepare."""
+        """Install probe and prepare.
+
+        Refactor history (2026-05-14): extracted
+        ``_setup_support_dir`` to bring the fan-out under the
+        10-callee cap (was 12). The filesystem-prep concerns
+        (Path/expanduser/to_thread/makedirs) collapse cleanly
+        into one helper since they're a single semantic step.
+        """
         if not self._tokens.has_tokens:
             await self._tokens.load()
         if not await self._tokens.refresh_if_stale():
@@ -272,12 +279,7 @@ class GOGInstaller:
             ctx.supported_langs,
         ) = await self._helpers.probe_game_info(ctx.game_id)
         ctx.existing_dirs = self._snapshot_dirs(ctx.base_path)
-        ctx.support_dir = os.path.join(
-            await asyncio.to_thread(lambda: str(Path(self._config.gogdl_config_dir).expanduser())),
-            "gog-support",
-            ctx.game_id,
-        )
-        os.makedirs(ctx.support_dir, exist_ok=True)
+        await self._setup_support_dir(ctx)
         target_folder = (
             os.path.join(ctx.base_path, ctx.folder_name) if ctx.folder_name else None
         )
@@ -287,6 +289,31 @@ class GOGInstaller:
         )
         await self._wipe_manifests(ctx.game_id)
         return None
+
+    async def _setup_support_dir(self, ctx: _InstallContext) -> None:
+        """Compute ``ctx.support_dir`` and ``mkdir -p`` it.
+
+        Pulled out of ``_install_probe_and_prepare`` to keep
+        that function under the 10-callee fan-out cap. Groups
+        the four filesystem primitives (Path / expanduser /
+        to_thread / makedirs) into one semantic step:
+        "ensure the gog-support directory for this game
+        exists on disk".
+
+        The ``asyncio.to_thread`` indirection is there because
+        ``Path.expanduser`` can do I/O on some platforms
+        (pwd database lookups on POSIX) — pushing it off the
+        event loop is cheap and avoids the rare blocking call.
+        """
+        gogdl_config_dir = await asyncio.to_thread(
+            lambda: str(Path(self._config.gogdl_config_dir).expanduser()),
+        )
+        ctx.support_dir = os.path.join(
+            gogdl_config_dir,
+            "gog-support",
+            ctx.game_id,
+        )
+        os.makedirs(ctx.support_dir, exist_ok=True)
 
     async def _install_run_gogdl_phase(
         self,
