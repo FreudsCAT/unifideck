@@ -27,6 +27,7 @@ import logging
 import os
 from collections.abc import Callable
 from typing import Any
+
 from .legendary import fetch_info
 
 logger = logging.getLogger(__name__)

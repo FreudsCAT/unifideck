@@ -48,7 +48,8 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from . import launch as _launch, process_ops
+from . import launch as _launch
+from . import process_ops
 from .cdp_client import EdgeCDPClient
 from .env import clean_env
 from .installer import EdgeInstaller
@@ -133,7 +134,7 @@ class EdgeBrowser:
 
     """
 
-    def __init__(  # noqa: D107 — class docstring documents the constructor's contract
+    def __init__(
         self,
         cdp_port: int = 9222,
         locale_fn: Callable[[], str] | None = None,
@@ -193,7 +194,7 @@ class EdgeBrowser:
     async def navigate_tab(
         self,
         url: str,
-        timeout: float = 15.0,  # noqa: ASYNC109 — delegated deadline
+        timeout: float = 15.0,
     ) -> bool:
         """Delegate to EdgeCDPClient."""
         return await self._cdp.navigate_tab(url, timeout=timeout)

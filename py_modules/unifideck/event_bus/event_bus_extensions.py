@@ -26,6 +26,7 @@ enforce.
 """
 
 from __future__ import annotations
+
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -34,7 +35,8 @@ from typing import (
     Any,
     Protocol,
 )
-from ..core.types import Events
+
+from unifideck.core.types import Events
 
 if TYPE_CHECKING:
     from .event_bus import EventBus
@@ -341,7 +343,7 @@ class DebugSnapshot:
             return None
         try:
             return fn()
-        except Exception as e:  # noqa: BLE001 — deliberate: isolate user callback
+        except Exception as e:
             return {"error": str(e)}
 
 

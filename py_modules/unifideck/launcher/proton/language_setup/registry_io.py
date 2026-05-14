@@ -1,14 +1,17 @@
 from __future__ import annotations
+
 import logging
 import os
 import re
 import tempfile
+
 from .matchers import smart_match_locale
 from .resolver import _DEFAULT_LANGUAGE, LOCALE_MAP
+
 logger = logging.getLogger(__name__)
 def _resolve_prefix(prefix_path: str) -> str:
     """Resolve prefix."""
-    from ..infrastructure.prefix_layout import resolve_registry_prefix
+    from unifideck.launcher.proton.infrastructure.prefix_layout import resolve_registry_prefix
     return str(resolve_registry_prefix(prefix_path))
 def _atomic_write_text(path: str, content: str) -> None:
     """Atomic write text."""

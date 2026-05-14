@@ -18,11 +18,14 @@ library boot.
 """
 
 from __future__ import annotations
+
 import asyncio
 import json
 import logging
 from pathlib import Path
-from ...event_bus.event_bus import EventBus
+
+from unifideck.event_bus.event_bus import EventBus
+
 from .amazon_library import AmazonLibraryReader
 
 logger = logging.getLogger(__name__)

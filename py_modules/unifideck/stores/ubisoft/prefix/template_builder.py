@@ -22,18 +22,21 @@ an explicit error code identifying the failing step.
 """
 
 from __future__ import annotations
+
 import asyncio
 import logging
 import re
 import shutil
 from pathlib import Path
 from typing import TYPE_CHECKING
-from ..binaries import UbisoftBinaryResolver
+
+from unifideck.stores.ubisoft.binaries import UbisoftBinaryResolver
 
 if TYPE_CHECKING:
-    from ..config import UbisoftConfig
-    from ..installer.cache import UbisoftInstallerCache
-    from ..paths import UbisoftPrefixPaths
+    from unifideck.stores.ubisoft.config import UbisoftConfig
+    from unifideck.stores.ubisoft.installer.cache import UbisoftInstallerCache
+    from unifideck.stores.ubisoft.paths import UbisoftPrefixPaths
+
     from .helpers import _PrefixHelpers
 logger = logging.getLogger(__name__)
 
@@ -160,7 +163,7 @@ class _TemplatePrefixBuilder:
                     "failed, aborting template creation",
                 )
                 return
-            Path(template_dir).mkdir(parents=True, exist_ok=True)
+            await asyncio.to_thread(lambda: Path(template_dir).mkdir(parents=True, exist_ok=True))
             success = await self._helpers.run_silent_installer(
                 prefix_dir=template_dir,
                 installer_path=installer_path,
@@ -182,8 +185,5 @@ class _TemplatePrefixBuilder:
             logger.info(
                 "[UbisoftPrefixManager] template created successfully",
             )
-        except Exception as e:
-            logger.exception(
-                "[UbisoftPrefixManager] template creation failed: %s",
-                e,
-            )
+        except Exception:
+            logger.exception("[UbisoftPrefixManager] template creation failed")

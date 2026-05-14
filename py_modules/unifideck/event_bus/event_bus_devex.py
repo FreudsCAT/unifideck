@@ -39,7 +39,8 @@ from typing import (
 )
 
 if TYPE_CHECKING:
-    from ..core.types import Events
+    from unifideck.core.types import Events
+
     from .event_bus import EventBus
     from .supervision.watchdog_handler import HandlerWatchdog
 
@@ -206,11 +207,11 @@ def subscribe(
             timeout=timeout,
             scope=scope,
         )
-        setattr(fn, "__subscribe_meta__", meta)
+        fn.__subscribe_meta__ = meta
         if _looks_like_instance_method(fn):
             return fn
         reg = registry or default_registry
-        reg.add(getattr(fn, "__subscribe_meta__"))
+        reg.add(fn.__subscribe_meta__)
         return fn
 
     return decorator

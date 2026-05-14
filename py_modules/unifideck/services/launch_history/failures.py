@@ -1,20 +1,9 @@
-"""Failure recording mixin — append-only log with rolling-window queries.
+"""services/launch_history/failures.py — Failures read/write + circuit predicate.
 
-OP-21b | py_modules/unifideck/services/launch_history/failures.py
-
-``_FailuresMixin`` is one half of ``LaunchHistoryService`` (the
-other being ``_BypassMixin``). It owns the failure log + the
-circuit-breaker decision.
-
-The on-disk format is a JSON dict
-``{ "<store>:<game_id>": { "failures": [ {ts, kind}, ... ] } }``.
-The mixin garbage-collects entries falling outside the rolling
-window on every write so the file doesn't grow unbounded.
-
-The host class is expected to expose ``threshold()`` and
-``window_seconds()`` methods plus ``_emit_state`` for bus events.
+Mixin exposing the failures API (get / record / clear / success)
+and the ``is_circuit_open`` predicate. Host must provide
+``_path``, ``window_seconds()``, ``threshold()``, ``_emit_state``.
 """
-
 from __future__ import annotations
 
 import logging
@@ -29,139 +18,112 @@ logger = logging.getLogger(__name__)
 
 
 class _FailuresMixin:
-    """Per-game failure log + circuit-breaker query."""
+    """Failures API + circuit predicate for LaunchHistoryService."""
 
+    # Provided by host class.
     _path: Path
 
     def get_recent_failures(self, game_key: str) -> list[dict[str, Any]]:
-        """Return failures for ``game_key`` within the rolling window.
+        """Return failures for a game within the sliding window."""
+        try:
+            data = load_history(self._path)
+            game_data = data.get(game_key, {})
+            failures = game_data.get("failures", [])
 
-        Reads from disk fresh on every call — no in-memory cache.
-        The persistence layer is fast enough (a few KB of JSON)
-        that caching would add complexity without measurable
-        benefit.
+            if not failures:
+                return []
 
-        Args:
-            game_key: ``"<store>:<game_id>"`` key.
+            # Filter in memory
+            now = time.time()
+            window = self.window_seconds()
 
-        Returns:
-            List of failure dicts ``{ts, kind}`` ordered as
-            stored (chronological insertion order). Empty list if
-            the game has no recent failures.
-        """
-        all_failures = (
-            load_history(self._path)
-            .get(game_key, {})
-            .get(
-                "failures",
-                [],
-            )
-        )
-        cutoff = time.time() - self.window_seconds()
-        return [f for f in all_failures if f.get("ts", 0) >= cutoff]
+            return [f for f in failures if now - f.get("timestamp", 0) <= window]
 
-    def is_circuit_open(self, game_key: str) -> bool:
-        """Return whether the launch circuit is currently open.
+        except Exception as e:
+            logger.debug("[LaunchHistory] get_recent_failures failed for %s: %s", game_key, e)
+            return []
 
-        Open = the game has accumulated at least ``threshold()``
-        failures within the rolling window. Used by the launcher
-        service to decide whether to launch or to display a
-        circuit-open toast.
+    def is_circuit_open(self, game_key: str) -> tuple[bool, int]:
+        """True if the game has hit the failure threshold."""
+        recent = self.get_recent_failures(game_key)
+        count = len(recent)
 
-        Args:
-            game_key: ``"<store>:<game_id>"`` key.
+        return count >= self.threshold(), count
 
-        Returns:
-            ``True`` if the circuit is open (refuse to launch).
-        """
-        threshold: int = self.threshold()
-        return len(self.get_recent_failures(game_key)) >= threshold
-
-    def record_failure(self, game_key: str, kind: str) -> None:
-        """Append a new failure entry for ``game_key``.
-
-        Performs three steps atomically (via the load/save pair):
-
-        1. Validate the failure ``kind`` against the allow-list —
-           unknown kinds are logged at WARN and dropped.
-        2. Garbage-collect every entry older than the rolling
-           window across all games (not just ``game_key``) — keeps
-           the file size bounded over time without needing a
-           separate cleanup task.
-        3. Append the new entry for ``game_key`` and persist.
-
-        Does not emit ``CIRCUIT_STATE_CHANGED`` directly — the
-        host class's ``_emit_state`` is responsible for that, and
-        it's not always called from here (the launcher service
-        chains the emission after checking ``is_circuit_open``).
-
-        Args:
-            game_key: ``"<store>:<game_id>"`` key.
-            kind: failure category (must be in ``_VALID_KINDS``).
-        """
+    def record_failure(self, game_key: str, kind: str, error_code: str = "") -> None:
+        """Append a failure entry for a game."""
         if kind not in _VALID_KINDS:
-            logger.warning(
-                "[LaunchHistory] ignoring unknown failure kind: %s",
-                kind,
-            )
+            logger.warning("[LaunchHistory] Invalid failure kind %r for %s, dropping", kind, game_key)
             return
-        data = load_history(self._path)
-        cutoff = time.time() - self.window_seconds()
-        for gk in list(data.keys()):
-            entry = data.get(gk, {})
-            failures = entry.get("failures", [])
-            kept = [f for f in failures if f.get("ts", 0) >= cutoff]
-            if kept:
-                data[gk] = {"failures": kept}
-            else:
-                del data[gk]
-        data.setdefault(game_key, {"failures": []})
-        data[game_key]["failures"].append(
-            {
-                "ts": time.time(),
+
+        try:
+            data = load_history(self._path)
+
+            # Opportunistic GC: prune expired entries for all games
+            now = time.time()
+            window = self.window_seconds()
+
+            for k, v in list(data.items()):
+                if "failures" in v:
+                    v["failures"] = [f for f in v["failures"] if now - f.get("timestamp", 0) <= window]
+                    if not v["failures"] and "bypass_armed" not in v:
+                        del data[k]
+
+            # Append new failure
+            if game_key not in data:
+                data[game_key] = {}
+            if "failures" not in data[game_key]:
+                data[game_key]["failures"] = []
+
+            data[game_key]["failures"].append({
+                "timestamp": now,
                 "kind": kind,
-            }
-        )
-        save_history(self._path, data)
-        logger.info(
-            "[LaunchHistory] recorded %s for %s (total in window: %d)",
-            kind,
-            game_key,
-            len(data[game_key]["failures"]),
-        )
+                "error_code": error_code,
+            })
+
+            save_history(self._path, data)
+            logger.info("[LaunchHistory] Recorded %s failure for %s", kind, game_key)
+
+            if hasattr(self, "_emit_state"):
+                self._emit_state(game_key, f"record_failure_{kind}")
+
+        except Exception as e:
+            logger.warning("[LaunchHistory] Failed to record failure for %s: %s", game_key, e)
 
     def clear_failures(self, game_key: str) -> None:
-        """Remove every failure entry for ``game_key``.
+        """Remove all failures for a game + emit state change."""
+        try:
+            data = load_history(self._path)
 
-        Closes the circuit immediately. Used by ``record_success``
-        on a clean exit (the streak is broken) and by the RPC layer
-        when the user manually resets the circuit from the QAM.
+            if game_key in data and "failures" in data[game_key]:
+                del data[game_key]["failures"]
+                if not data[game_key]:
+                    del data[game_key]
 
-        Args:
-            game_key: ``"<store>:<game_id>"`` key.
-        """
-        data = load_history(self._path)
-        if game_key in data:
-            del data[game_key]
-            save_history(self._path, data)
-            logger.info(
-                "[LaunchHistory] cleared failures for %s",
-                game_key,
-            )
-            self._emit_state(game_key, "clear_failures")
+                save_history(self._path, data)
+                logger.info("[LaunchHistory] Cleared failures for %s", game_key)
+
+            if hasattr(self, "_emit_state"):
+                self._emit_state(game_key, "clear_failures")
+
+        except Exception as e:
+            logger.warning("[LaunchHistory] Failed to clear failures for %s: %s", game_key, e)
 
     def record_success(self, game_key: str) -> None:
-        """Record a clean launch outcome.
+        """Wipe failure history after a successful launch."""
+        try:
+            data = load_history(self._path)
 
-        If the game had any prior failures, this clears the entire
-        history (a successful launch resets the streak — the
-        circuit breaker is forgiving in that sense). Otherwise
-        just emits a state event for diagnostics.
+            if game_key in data and "failures" in data[game_key]:
+                del data[game_key]["failures"]
+                if not data[game_key]:
+                    del data[game_key]
 
-        Args:
-            game_key: ``"<store>:<game_id>"`` key.
-        """
-        if load_history(self._path).get(game_key):
-            self.clear_failures(game_key)
-        else:
-            self._emit_state(game_key, "record_success")
+                save_history(self._path, data)
+                logger.info("[LaunchHistory] Wiped failures after success for %s", game_key)
+
+            if hasattr(self, "_emit_state"):
+                self._emit_state(game_key, "closed")
+
+        except Exception as e:
+            logger.warning("[LaunchHistory] Failed to record success for %s: %s", game_key, e)

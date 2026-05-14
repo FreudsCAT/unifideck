@@ -18,13 +18,15 @@ recovered on the next run.
 """
 
 from __future__ import annotations
+
 import asyncio
 import logging
 import os
 import urllib.request
 from typing import Any
-from ....core.net import ssl_ctx_strict
-from ..config import UbisoftConfig
+
+from unifideck.core.net import ssl_ctx_strict
+from unifideck.stores.ubisoft.config import UbisoftConfig
 
 logger = logging.getLogger(__name__)
 _INSTALLER_MIN_SIZE_BYTES = 1000
@@ -56,11 +58,8 @@ class UbisoftInstallerCache:
         )
         try:
             os.makedirs(cache_dir, exist_ok=True)
-        except OSError as e:
-            logger.error(
-                "[UbisoftInstallerCache] cache dir creation failed: %s",
-                e,
-            )
+        except OSError:
+            logger.exception("[UbisoftInstallerCache] cache dir creation failed")
             return None
         success = await asyncio.to_thread(
             self._download_sync,
@@ -113,11 +112,8 @@ class UbisoftInstallerCache:
                 total / (1024 * 1024),
             )
             return True
-        except Exception as e:
-            logger.error(
-                "[UbisoftInstallerCache] download failed: %s",
-                e,
-            )
+        except Exception:
+            logger.exception("[UbisoftInstallerCache] download failed")
             if os.path.isfile(tmp_path):
                 try:
                     os.remove(tmp_path)

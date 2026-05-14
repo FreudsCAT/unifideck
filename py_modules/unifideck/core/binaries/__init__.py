@@ -69,7 +69,7 @@ __all__ = [
     "binary_resolver",
     # binary_signatures.py
     "compute_sha256",
-    "verify_bundled_binary",
     # cli_timeouts.py
     "read_cli_timeouts",
+    "verify_bundled_binary",
 ]

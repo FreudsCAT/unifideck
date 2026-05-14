@@ -25,7 +25,7 @@ import stat
 import subprocess
 from pathlib import Path
 
-from ..types.domain import CLITool
+from unifideck.core.types.domain import CLITool
 
 logger = logging.getLogger(__name__)
 
@@ -54,7 +54,7 @@ class BinaryResolver:
             version = resolver.check_version(tool, path)
     """
 
-    def __init__(self, config=None) -> None:  # noqa: D107 — class docstring documents the constructor's contract
+    def __init__(self, config=None) -> None:
         # The version-check timeout is the only tunable knob;
         # loaded once at init so we don't pay the config lookup
         # on every resolve() call.

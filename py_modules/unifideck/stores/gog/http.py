@@ -15,6 +15,7 @@ Kept module-level (no class) because there's no state to encapsulate.
 """
 
 from __future__ import annotations
+
 import asyncio
 import json
 import logging
@@ -22,7 +23,8 @@ import ssl
 import urllib.request
 from collections.abc import Mapping
 from typing import Any
-from ...core.net import ssl_ctx_strict
+
+from unifideck.core.net import ssl_ctx_strict
 
 _logger = logging.getLogger(__name__)
 

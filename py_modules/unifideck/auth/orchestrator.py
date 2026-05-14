@@ -37,10 +37,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from ..core.types import AuthResult, Events
+from unifideck.core.types import AuthResult, Events
 
 if TYPE_CHECKING:
-    from ..event_bus.event_bus import EventBus
+    from unifideck.event_bus.event_bus import EventBus
+
     from .browser import OAuthBrowserMonitor
     # Type aliases for the store-specific callbacks. Keeping them
     # explicit makes the contract between the orchestrator and its
@@ -109,7 +110,7 @@ class AuthOrchestrator:
         allowed_uris: list[str],
         exchange_code: ExchangeCodeCallback,
         *,
-        timeout: float | None = None,  # noqa: ASYNC109 — flow deadline
+        timeout: float | None = None,
         write_url_file: str | None = None,
         background: bool = False,
     ) -> AuthResult:
@@ -141,11 +142,8 @@ class AuthOrchestrator:
 
         try:
             url = await get_url()
-        except Exception as e:  # noqa: BLE001
-            logger.error(
-                "[AuthOrchestrator/%s] get_url failed: %s",
-                self._store, e,
-            )
+        except Exception as e:
+            logger.exception("[AuthOrchestrator/%s] get_url failed", self._store)
             return await self._emit_failed(
                 "get_url_failed", str(e),
             )
@@ -231,11 +229,8 @@ class AuthOrchestrator:
                 "[AuthOrchestrator/%s] flow cancelled", self._store,
             )
             raise
-        except Exception as e:  # noqa: BLE001
-            logger.error(
-                "[AuthOrchestrator/%s] monitor crashed: %s",
-                self._store, e,
-            )
+        except Exception as e:
+            logger.exception("[AuthOrchestrator/%s] monitor crashed", self._store)
             return await self._emit_failed("monitor_crashed", str(e))
 
         if not capture.success:
@@ -275,11 +270,8 @@ class AuthOrchestrator:
         """
         try:
             result = await exchange_code(code)
-        except Exception as e:  # noqa: BLE001
-            logger.error(
-                "[AuthOrchestrator/%s] exchange_code failed: %s",
-                self._store, e,
-            )
+        except Exception as e:
+            logger.exception("[AuthOrchestrator/%s] exchange_code failed", self._store)
             return await self._emit_failed(
                 "exchange_failed", str(e), url=url,
             )
@@ -397,7 +389,7 @@ class AuthOrchestrator:
             if "/" in domain:
                 domain = domain.split("/", 1)[0]
             await self._monitor.close_oauth_tab(domain)
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.debug(
                 "[AuthOrchestrator/%s] close_oauth_tab failed "
                 "(ignored): %s",
@@ -431,9 +423,6 @@ class AuthOrchestrator:
                 "[AuthOrchestrator] wrote auth URL to %s", expanded,
             )
             return True
-        except OSError as e:
-            logger.error(
-                "[AuthOrchestrator] failed to write %s: %s",
-                expanded, e,
-            )
+        except OSError:
+            logger.exception("[AuthOrchestrator] failed to write %s", expanded)
             return False

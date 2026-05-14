@@ -1,8 +1,10 @@
 from __future__ import annotations
+
 import asyncio
 import logging
 from typing import TYPE_CHECKING, Any
-from unifideck.actions.unifideck_uri import (SCOPE_FRONTEND, parse_unifideck_uri)
+
+from unifideck.actions.unifideck_uri import SCOPE_FRONTEND, parse_unifideck_uri
 from unifideck.rpc import RpcError
 
 if TYPE_CHECKING:
@@ -11,6 +13,20 @@ if TYPE_CHECKING:
     from unifideck.stores import StoreRegistry
 
 logger = logging.getLogger(__name__)
+
+# Fire-and-forget tasks scheduled by dispatch handlers (refresh-library,
+# refresh-all). We keep strong references in a module-level set so the
+# tasks aren't garbage-collected mid-flight — without this, the Python
+# event loop only holds a weak reference and the task can vanish.
+# Each task removes itself on completion via the discard callback.
+_background_tasks: set[asyncio.Task[Any]] = set()
+
+
+def _spawn_background(coro: Any, *, name: str) -> None:
+    """Schedule ``coro`` as a tracked background task."""
+    task = asyncio.create_task(coro, name=name)
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
 
 async def dispatch_backend_action(*, uri: str, registry: StoreRegistry,
     cloudsave: CloudSaveService | None, sync_service: SyncService | None) -> Any:
@@ -74,7 +90,7 @@ def _dispatch_refresh_library(action: Any,
     if sync_service is None:
         raise RpcError("service_unavailable", service="sync_service")
     store = action.args[0]
-    asyncio.create_task(
+    _spawn_background(
         sync_service.sync_single_store(store),
         name=f"refresh-library-{store}",
     )
@@ -86,7 +102,7 @@ def _dispatch_refresh_all(sync_service: SyncService | None) -> dict[str, Any]:
     if sync_service is None:
         raise RpcError("service_unavailable", service="sync_service")
 
-    asyncio.create_task(
+    _spawn_background(
         sync_service.sync_all(),
         name="refresh-all-libraries",
     )

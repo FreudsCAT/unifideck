@@ -4,7 +4,9 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from typing import cast
-from ...core.net import ssl_ctx_strict
+
+from unifideck.core.net import ssl_ctx_strict
+
 logger = logging.getLogger(__name__)
 __all__ = [
     "build_xbl_chain",
@@ -86,10 +88,8 @@ def build_xbl_chain(
             "xsts_rp": xsts_rp,
             "xuid": xuid,
         }
-    except Exception as e:
-        logger.exception(
-            "[MS] XBL chain error: %s", e,
-        )
+    except Exception:
+        logger.exception("[MS] XBL chain error")
         return None
 def request_xsts_token(
     xbl_token: str,

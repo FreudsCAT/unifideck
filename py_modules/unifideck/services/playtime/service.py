@@ -1,243 +1,484 @@
-"""Playtime tracking service — record game sessions to SQLite.
+"""services/playtime/service.py — Per-game session tracker.
 
-OP-18a | py_modules/unifideck/services/playtime/service.py
-
-``PlaytimeService`` listens to ``GAME_LAUNCHED`` / ``GAME_STOPPED``
-events on the bus and records each session (start + end + duration)
-in a SQLite database. The launcher service is the canonical
-producer of these events; this service is the canonical consumer
-and storage layer for playtime data.
-
-Public API:
-
-* ``get_playtime(store, game_id)`` — aggregate totals for one game;
-* ``get_all_playtimes()`` — aggregate totals for every tracked game;
-* ``get_session_history(store, game_id, limit)`` — recent session
-  list for one game.
-
-The DB connection is opened lazily in ``start`` (off the event loop
-because ``sqlite3`` is blocking) and closed in ``stop`` after any
-in-progress sessions are flushed.
-
-Very short sessions (< 5 s) are discarded to filter accidental
-launches the user immediately cancelled — they would skew the
-``session_count`` aggregate otherwise.
+SQLite-backed playtime tracker. Refactor of legacy playtime/
+package. Emits ``PLAYTIME_UPDATED`` after each session.
+Persistence lives in ``db.py`` (``PlaytimeDB``); this module
+owns event wiring + session lifecycle.
 """
-
 from __future__ import annotations
 
-import asyncio
 import logging
-import time
-from typing import Any
+from datetime import datetime, timedelta, timezone
+from typing import TYPE_CHECKING, Any
 
-from ...core.types import Events
-from ...event_bus.event_bus import EventBus
-from ...event_bus.event_bus_devex import auto_wire, subscribe
-from .db import PlaytimeDB
+from unifideck.core.types import Events
+from unifideck.event_bus.event_bus_devex import auto_wire, subscribe
+
+from .db import ActivityDatabase
+
+if TYPE_CHECKING:
+    from unifideck.event_bus.event_bus import EventBus
 
 logger = logging.getLogger(__name__)
 
+# Sessions shorter than this are ignored as accidental launches.
 _MIN_SESSION_SECONDS = 5
 
 
 class PlaytimeService:
-    """Track and persist game-session durations to SQLite."""
+    """SQLite-backed playtime tracker wired to the EventBus."""
 
     def __init__(self, bus: EventBus, db_path: str) -> None:
-        """Wire the service to the bus and prepare DB state.
-
-        The DB connection itself is not opened here — it would
-        block the event loop. ``start()`` opens it.
-
-        Args:
-            bus: live event bus on which the service subscribes to
-                ``GAME_LAUNCHED`` and ``GAME_STOPPED``.
-            db_path: absolute path to the SQLite file (typically
-                ``<data_dir>/playtime.db``). Created on first open
-                if absent.
-        """
+        """Store refs, init empty ``_active`` map, and auto_wire."""
         self._bus = bus
         self._db_path = db_path
-        self._active: dict[str, float] = {}
-        self._db: PlaytimeDB | None = None
-        n = auto_wire(self, self._bus)
-        logger.info("[PlaytimeService] wired (%d subscriptions)", n)
+        self._db: ActivityDatabase | None = None
+        self._active: dict[str, dict[str, Any]] = {}
+
+        # ``auto_wire(self, bus)`` walks ``self``'s methods
+        # and registers every ``@subscribe(Events.X)``-marked
+        # handler with the bus. Earlier this site called
+        # ``self._bus.auto_wire(self)`` as if it were a bus
+        # method, but ``auto_wire`` is module-level — the
+        # call raised ``AttributeError`` and every
+        # subscription was lost (caught and silenced upstream).
+        auto_wire(self, self._bus)
 
     async def start(self) -> None:
-        """Open the SQLite connection off the event loop.
-
-        ``sqlite3.connect`` plus schema migration are blocking, so
-        they run in a thread executor to keep the event loop
-        responsive during plugin boot.
-        """
-        self._db = await asyncio.to_thread(PlaytimeDB, self._db_path)
-        logger.info("[PlaytimeService] database ready")
+        """Open the SQLite database + create tables if missing."""
+        if self._db is None:
+            self._db = ActivityDatabase(self._db_path)
+            self._db.open()
 
     async def stop(self) -> None:
-        """Flush in-progress sessions and close the DB.
-
-        Iterates the in-memory ``_active`` dict and calls
-        ``_end_session`` on each, persisting any session that's been
-        running long enough to count. Then closes the DB handle.
-
-        This is essential: without this flush, a user closing the
-        Steam Deck mid-game would lose the session entirely.
-        """
-        self._bus.off(Events.GAME_LAUNCHED, self._on_game_launched)
-        self._bus.off(Events.GAME_STOPPED, self._on_game_stopped)
-        for key in list(self._active.keys()):
-            store, game_id = key.split(":", 1)
-            await self._end_session(store, game_id)
+        """Flush in-flight sessions and close the DB."""
         if self._db is not None:
-            await asyncio.to_thread(self._db.close)
+            # End all active sessions
+            keys = list(self._active.keys())
+            for key in keys:
+                store, game_id = key.split(":", 1)
+                await self._end_session(store, game_id, end_reason="plugin_unload")
+
+            self._db.close()
+            self._db = None
 
     @subscribe(Events.GAME_LAUNCHED)
-    async def _on_game_launched(self, **kwargs) -> None:
-        """Record the start time of a new game session.
+    async def _on_game_launched(self, **kwargs: Any) -> None:
+        """Record session start in ``_active`` under ``store:game_id``."""
+        if self._db is None:
+            return
 
-        Stores the launch timestamp in the in-memory ``_active``
-        dict, keyed by ``"<store>:<game_id>"``. The actual DB
-        write happens in ``_end_session`` once we know the session's
-        duration.
-        """
         store = kwargs.get("store")
         game_id = kwargs.get("game_id")
-        if store and game_id:
-            self._active[f"{store}:{game_id}"] = time.time()
+        title = kwargs.get("title", "")
+        app_id = kwargs.get("app_id", 0)
+
+        if not store or not game_id:
+            return
+
+        key = f"{store}:{game_id}"
+
+        if key in self._active:
+            logger.warning("[PlaytimeService] Session already active for %s", key)
+            return
+
+        now = datetime.now(timezone.utc)
+        now_iso = now.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+
+        # Get or create game ID
+        game_db_id = self._db.get_or_create_game(store, game_id, title, app_id)
+
+        # Insert session with ended_at=NULL (active)
+        cursor = self._db.execute(
+            """INSERT INTO play_sessions
+               (game_id, started_at, end_reason)
+               VALUES (?, ?, 'unknown')""",
+            (game_db_id, now_iso),
+        )
+        self._db.conn.commit()
+        row_id = cursor.lastrowid
+
+        self._active[key] = {
+            "game_db_id": game_db_id,
+            "title": title,
+            "started_at": now,
+            "db_row_id": row_id,
+            "total_sleep_secs": 0.0,
+            "suspended_at": None,
+        }
+
+        logger.info("[PlaytimeService] Session started: %s (%s)", title, key)
 
     @subscribe(Events.GAME_STOPPED)
-    async def _on_game_stopped(self, **kwargs) -> None:
-        """Close the open session for the stopped game.
-
-        Delegates to ``_end_session`` which computes the duration,
-        filters out sub-5 s sessions, persists to DB, and emits a
-        ``playtime_updated`` event for the UI.
-        """
+    async def _on_game_stopped(self, **kwargs: Any) -> None:
+        """Delegate to ``_end_session(store, game_id)``."""
         store = kwargs.get("store")
         game_id = kwargs.get("game_id")
+
         if store and game_id:
-            await self._end_session(store, game_id)
+            await self._end_session(store, game_id, end_reason="normal")
+
+    @subscribe(Events.SUSPEND)
+    async def _on_suspend(self, **kwargs: Any) -> None:
+        """Pause the clock for all active sessions."""
+        now = datetime.now(timezone.utc)
+        count = 0
+        for session in self._active.values():
+            if session["suspended_at"] is None:
+                session["suspended_at"] = now
+                count += 1
+        if count > 0:
+            logger.info("[PlaytimeService] Suspended %d active session(s)", count)
+
+    @subscribe(Events.RESUME)
+    async def _on_resume(self, **kwargs: Any) -> None:
+        """Resume the clock for all suspended sessions."""
+        now = datetime.now(timezone.utc)
+        count = 0
+        for session in self._active.values():
+            if session["suspended_at"] is not None:
+                sleep_duration = (now - session["suspended_at"]).total_seconds()
+                session["total_sleep_secs"] += sleep_duration
+                session["suspended_at"] = None
+                count += 1
+        if count > 0:
+            logger.info("[PlaytimeService] Resumed %d active session(s)", count)
 
     async def get_playtime(self, store: str, game_id: str) -> dict[str, Any]:
-        """Return aggregated playtime for a single (store, game_id).
+        """Return cumulative playtime for a single game."""
+        if self._db is None:
+            return {}
 
-        Args:
-            store: store identifier (e.g. ``"epic"``, ``"gog"``).
-            game_id: store-specific game identifier.
+        key = f"{store}:{game_id}"
+        is_active = key in self._active
 
-        Returns:
-            Dict with ``total_seconds``, ``session_count`` and
-            ``last_played`` (POSIX timestamp or ``None``). Returns
-            zeros if the game has no recorded sessions.
-        """
-        assert self._db is not None
-        row = await asyncio.to_thread(
-            self._db.fetch_total,
-            store,
-            game_id,
+        row = self._db.query_one(
+            """SELECT gs.total_secs, gs.total_sessions, gs.last_played_at,
+                      gs.current_streak_days, gs.longest_streak_days
+               FROM games g
+               JOIN game_stats gs ON g.id = gs.game_id
+               WHERE g.store = ? AND g.store_game_id = ?""",
+            (store, game_id)
         )
-        if row is None:
+
+        if row:
             return {
-                "total_seconds": 0,
-                "session_count": 0,
-                "last_played": None,
+                "total_seconds": row["total_secs"],
+                "session_count": row["total_sessions"],
+                "last_played": row["last_played_at"],
+                "current_streak": row["current_streak_days"],
+                "longest_streak": row["longest_streak_days"],
+                "is_active": is_active,
             }
+
         return {
-            "total_seconds": row[0],
-            "session_count": row[1],
-            "last_played": row[2],
+            "total_seconds": 0,
+            "session_count": 0,
+            "last_played": None,
+            "current_streak": 0,
+            "longest_streak": 0,
+            "is_active": is_active,
         }
 
     async def get_all_playtimes(self) -> list[dict[str, Any]]:
-        """Return aggregated playtime for every tracked game.
+        """Return cumulative playtime for every tracked game.
 
-        Useful for "recently played" UI lists. The result is in DB
-        order — typically last-played desc thanks to the index, but
-        callers shouldn't rely on it and should sort explicitly if
-        a specific order matters.
+        Joins ``games`` × ``game_stats`` so each row carries both
+        the canonical identity (``store`` + ``store_game_id``) and
+        the aggregated stats the frontend needs to render the
+        "Most played" list. Returns ``[]`` when the database is
+        unavailable so callers don't have to guard the result.
 
-        Returns:
-            List of dicts with ``store``, ``game_id``,
-            ``total_seconds``, ``session_count``, ``last_played``.
+        This method is the bulk equivalent of :meth:`get_playtime`
+        — added because the RPC handlers (both the new
+        ``rpc/handlers/launch.py`` and the legacy
+        ``rpc/mixins/playtime.py``) referenced a ``get_all`` /
+        ``get_all_playtimes`` method that didn't exist on the
+        service. The RPC therefore always raised
+        ``AttributeError`` and the frontend's "playtime stats"
+        page could never load.
         """
-        assert self._db is not None
-        rows = await asyncio.to_thread(self._db.fetch_all_totals)
-        return [
-            {
-                "store": r[0],
-                "game_id": r[1],
-                "total_seconds": r[2],
-                "session_count": r[3],
-                "last_played": r[4],
-            }
-            for r in rows
-        ]
+        if self._db is None:
+            return []
 
-    async def get_session_history(
-        self,
-        store: str,
-        game_id: str,
-        limit: int = 20,
-    ) -> list[dict]:
-        """Return the most recent sessions for one game, newest first.
-
-        Args:
-            store: store identifier.
-            game_id: store-specific game id.
-            limit: maximum number of sessions to return
-                (default 20).
-
-        Returns:
-            List of dicts ``{start, end, duration}`` where ``start``
-            and ``end`` are POSIX timestamps and ``duration`` is the
-            session length in seconds.
-        """
-        assert self._db is not None
-        rows = await asyncio.to_thread(
-            self._db.fetch_sessions,
-            store,
-            game_id,
-            limit,
+        rows = self._db.query(
+            """SELECT g.store, g.store_game_id AS game_id, g.title,
+                      gs.total_secs, gs.total_sessions, gs.last_played_at,
+                      gs.current_streak_days, gs.longest_streak_days
+               FROM games g
+               JOIN game_stats gs ON g.id = gs.game_id
+               ORDER BY gs.total_secs DESC""",
         )
-        return [{"start": r[0], "end": r[1], "duration": r[2]} for r in rows]
+        result: list[dict[str, Any]] = []
+        for row in rows:
+            key = f"{row['store']}:{row['game_id']}"
+            result.append({
+                "store": row["store"],
+                "game_id": row["game_id"],
+                "title": row["title"],
+                "total_seconds": row["total_secs"],
+                "session_count": row["total_sessions"],
+                "last_played": row["last_played_at"],
+                "current_streak": row["current_streak_days"],
+                "longest_streak": row["longest_streak_days"],
+                "is_active": key in self._active,
+            })
+        return result
 
-    async def _end_session(self, store: str, game_id: str) -> None:
-        """Close an in-progress session and persist it to the DB.
+    async def _end_session(self, store: str, game_id: str, end_reason: str = "normal") -> None:
+        """Record completed session + update totals."""
+        if self._db is None:
+            return
 
-        Pops the launch timestamp from ``_active``, computes the
-        duration, and persists only if the session lasted at least
-        ``_MIN_SESSION_SECONDS`` (5 s). Shorter sessions are
-        discarded: they would skew ``session_count`` aggregates
-        when a user clicks "play" then immediately cancels.
-
-        On a successful persist, emits a ``playtime_updated`` event
-        for the UI to refresh.
-
-        Args:
-            store: store identifier of the ending session.
-            game_id: store-specific game id of the ending session.
-        """
         key = f"{store}:{game_id}"
-        start_ts = self._active.pop(key, None)
-        if start_ts is None:
+        session = self._active.pop(key, None)
+        if not session:
             return
-        end_ts = time.time()
-        duration = int(end_ts - start_ts)
-        if duration < _MIN_SESSION_SECONDS:
+
+        now = datetime.now(timezone.utc)
+        now_iso = now.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+
+        # Handle in-flight suspend
+        if session["suspended_at"]:
+            sleep_duration = (now - session["suspended_at"]).total_seconds()
+            session["total_sleep_secs"] += sleep_duration
+            session["suspended_at"] = None
+
+        wall_secs = (now - session["started_at"]).total_seconds()
+        duration_secs = max(0, int(wall_secs - session["total_sleep_secs"]))
+
+        if duration_secs < _MIN_SESSION_SECONDS:
+            logger.debug("[PlaytimeService] Discarding short session (%ds) for %s", duration_secs, session["title"])
+            if session["db_row_id"]:
+                self._db.execute("DELETE FROM play_sessions WHERE id = ?", (session["db_row_id"],))
+                self._db.conn.commit()
             return
-        assert self._db is not None
-        await asyncio.to_thread(
-            self._db.insert_session,
-            store,
-            game_id,
-            start_ts,
-            end_ts,
-            duration,
+
+        if session["db_row_id"]:
+            # Update session
+            self._db.execute(
+                """UPDATE play_sessions
+                   SET ended_at = ?, duration_secs = ?, end_reason = ?,
+                       updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+                   WHERE id = ?""",
+                (now_iso, duration_secs, end_reason, session["db_row_id"]),
+            )
+
+            # Update daily stats
+            self._update_daily_stats(session["game_db_id"], session["started_at"], now, duration_secs)
+
+            # Refresh materialized totals and streaks
+            self._refresh_game_stats(session["game_db_id"])
+
+            self._db.conn.commit()
+
+        logger.info("[PlaytimeService] Session ended: %s (%ds)", session["title"], duration_secs)
+
+        if self._bus:
+            await self._bus.emit(
+                Events.PLAYTIME_UPDATED,
+                store=store,
+                game_id=game_id,
+                duration_secs=duration_secs,
+            )
+
+    def _update_daily_stats(self, game_db_id: int, started: datetime, ended: datetime, duration_secs: int) -> None:
+        """Split and record duration across day boundaries."""
+        if self._db is None:
+            return
+
+        # Use local time for day boundaries
+        local_start = started.astimezone()
+        local_end = ended.astimezone()
+
+        if local_start.date() == local_end.date():
+            splits = [(local_start.strftime("%Y-%m-%d"), duration_secs)]
+        else:
+            # Complex split logic
+            total_wall = (local_end - local_start).total_seconds()
+            if total_wall <= 0:
+                splits = [(local_start.strftime("%Y-%m-%d"), duration_secs)]
+            else:
+                ratio = duration_secs / total_wall
+                splits = []
+                current = local_start
+                remaining = duration_secs
+                while current.date() < local_end.date():
+                    next_midnight = datetime.combine(
+                        current.date() + timedelta(days=1), datetime.min.time(), tzinfo=current.tzinfo
+                    )
+                    wall_on_day = (next_midnight - current).total_seconds()
+                    secs_on_day = min(remaining, max(1, int(wall_on_day * ratio)))
+                    splits.append((current.strftime("%Y-%m-%d"), secs_on_day))
+                    remaining -= secs_on_day
+                    current = next_midnight
+                if remaining > 0:
+                    splits.append((current.strftime("%Y-%m-%d"), remaining))
+
+        for date_str, secs in splits:
+            self._db.execute(
+                """INSERT INTO daily_stats (game_id, date, total_secs, session_count, longest_session_secs)
+                   VALUES (?, ?, ?, 1, ?)
+                   ON CONFLICT(game_id, date) DO UPDATE SET
+                       total_secs = total_secs + excluded.total_secs,
+                       session_count = session_count + 1,
+                       longest_session_secs = MAX(longest_session_secs, excluded.longest_session_secs)""",
+                (game_db_id, date_str, secs, secs),
+            )
+
+    def _refresh_game_stats(self, game_db_id: int) -> None:
+        """Recompute materialized totals and streaks."""
+        if self._db is None:
+            return
+
+        row = self._db.query_one(
+            """SELECT COUNT(*) as total_sessions,
+                      COALESCE(SUM(duration_secs), 0) as total_secs,
+                      COALESCE(AVG(duration_secs), 0) as avg_session_secs,
+                      COALESCE(MAX(duration_secs), 0) as max_session_secs,
+                      MIN(started_at) as first_played_at,
+                      MAX(started_at) as last_played_at
+               FROM play_sessions
+               WHERE game_id = ? AND ended_at IS NOT NULL AND duration_secs > 0""",
+            (game_db_id,)
         )
-        await self._bus.emit(
-            "playtime_updated",
-            store=store,
-            game_id=game_id,
-            duration_seconds=duration,
+
+        if not row or row["total_sessions"] == 0:
+            return
+
+        current_streak, longest_streak = self._compute_streaks(game_db_id)
+
+        self._db.execute(
+            """INSERT INTO game_stats
+               (game_id, total_secs, total_sessions, avg_session_secs,
+                max_session_secs, first_played_at, last_played_at,
+                current_streak_days, longest_streak_days)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(game_id) DO UPDATE SET
+                   total_secs = excluded.total_secs,
+                   total_sessions = excluded.total_sessions,
+                   avg_session_secs = excluded.avg_session_secs,
+                   max_session_secs = excluded.max_session_secs,
+                   first_played_at = excluded.first_played_at,
+                   last_played_at = excluded.last_played_at,
+                   current_streak_days = excluded.current_streak_days,
+                   longest_streak_days = excluded.longest_streak_days,
+                   updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')""",
+            (
+                game_db_id, row["total_secs"], row["total_sessions"], int(row["avg_session_secs"]),
+                row["max_session_secs"], row["first_played_at"], row["last_played_at"],
+                current_streak, longest_streak
+            )
         )
+
+    @staticmethod
+    def _parse_daily_stats_dates(rows: list) -> list:
+        """Parse ``YYYY-MM-DD`` strings from daily_stats rows into UTC dates.
+
+        The daily_stats schema stores dates as plain strings (see
+        ``record_session`` which writes ``datetime.now(timezone.utc)``).
+        We re-pin to UTC explicitly so the streak math compares
+        apples to apples even on systems with a non-UTC local tz.
+        Malformed rows are silently dropped — partial data is fine
+        for a UI display, and we already log on write.
+        """
+        from datetime import datetime, timezone
+        dates: list = []
+        for r in rows:
+            try:
+                parsed = datetime.strptime(r["date"], "%Y-%m-%d").replace(
+                    tzinfo=timezone.utc,
+                )
+                dates.append(parsed.date())
+            except ValueError:
+                continue
+        return dates
+
+    @staticmethod
+    def _walk_consecutive_from(dates: list, anchor) -> int:
+        """Count consecutive days starting from ``anchor`` going backwards.
+
+        ``dates`` is assumed sorted descending. Returns the number
+        of dates matching ``anchor``, ``anchor - 1``, ``anchor - 2``,
+        … stopping at the first gap.
+        """
+        from datetime import timedelta
+        count = 0
+        expected = anchor
+        for d in dates:
+            if d == expected:
+                count += 1
+                expected -= timedelta(days=1)
+            elif d < expected:
+                break
+        return count
+
+    @classmethod
+    def _compute_current_streak(cls, dates: list) -> int:
+        """Compute the current streak ending today (or yesterday).
+
+        Tries today first; if there's no entry for today, falls
+        back to yesterday so the streak doesn't drop to 0 the
+        moment the date rolls over before the user has played.
+        """
+        from datetime import datetime, timedelta, timezone
+        today = datetime.now(timezone.utc).date()
+
+        current = cls._walk_consecutive_from(dates, today)
+        if current > 0:
+            return current
+
+        # No play today — try yesterday as anchor, but only if
+        # the most-recent record actually IS yesterday (otherwise
+        # the streak is genuinely broken).
+        if dates and dates[0] == today - timedelta(days=1):
+            return cls._walk_consecutive_from(dates, today - timedelta(days=1))
+        return 0
+
+    @staticmethod
+    def _compute_longest_streak(dates: list) -> int:
+        """Compute the longest consecutive run of dates ever seen.
+
+        Operates on a sorted-ascending de-duplicated copy of
+        ``dates`` so we can walk forward. The minimum is 1 (any
+        single day still counts as a one-day streak).
+        """
+        from datetime import timedelta
+        dates_sorted = sorted(set(dates))
+        longest = 1
+        streak = 1
+        for i in range(1, len(dates_sorted)):
+            if (dates_sorted[i] - dates_sorted[i - 1]) == timedelta(days=1):
+                streak += 1
+                longest = max(longest, streak)
+            else:
+                streak = 1
+        return longest
+
+    def _compute_streaks(self, game_db_id: int) -> tuple[int, int]:
+        """Compute (current, longest) play streaks from daily_stats.
+
+        Both streaks are in whole UTC days. ``current`` is the
+        number of consecutive days up to today (or yesterday if
+        the user hasn't played today yet); ``longest`` is the
+        longest such run anywhere in the history.
+        """
+        if self._db is None:
+            return (0, 0)
+
+        rows = self._db.query(
+            "SELECT DISTINCT date FROM daily_stats WHERE game_id = ? ORDER BY date DESC",
+            (game_db_id,),
+        )
+        if not rows:
+            return (0, 0)
+
+        dates = self._parse_daily_stats_dates(rows)
+        if not dates:
+            return (0, 0)
+
+        return (
+            self._compute_current_streak(dates),
+            self._compute_longest_streak(dates),
+        )
+

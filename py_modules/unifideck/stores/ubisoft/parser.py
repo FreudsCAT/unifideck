@@ -25,7 +25,9 @@ import logging
 import os
 import re
 from typing import Any, Optional, cast
+
 import yaml
+
 from .parser_binary import (
     parse_install_id,
     parse_launch_id,
@@ -134,11 +136,8 @@ def _read_binary_file(filepath: str) -> bytes | None:
     try:
         with open(filepath, "rb") as f:
             return f.read()
-    except Exception as e:
-        logger.error(
-            "[UbiParser] Failed to read configurations: %s",
-            e,
-        )
+    except Exception:
+        logger.exception("[UbiParser] Failed to read configurations")
         return None
 
 
@@ -316,11 +315,8 @@ def _read_ownership_file(filepath: str) -> bytes | None:
     try:
         with open(filepath, "rb") as f:
             return f.read()
-    except Exception as e:
-        logger.error(
-            "[UbiParser] Failed to read ownership: %s",
-            e,
-        )
+    except Exception:
+        logger.exception("[UbiParser] Failed to read ownership")
         return None
 
 

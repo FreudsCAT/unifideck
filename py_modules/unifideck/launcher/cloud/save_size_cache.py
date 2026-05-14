@@ -1,12 +1,14 @@
 from __future__ import annotations
+
 import json
 import logging
 import os
 import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, cast
+
 if TYPE_CHECKING:
-    from ...config import ConfigManager
+    from unifideck.config import ConfigManager
 logger = logging.getLogger(__name__)
 _EWMA_ALPHA = 0.3
 @dataclass(frozen=True)

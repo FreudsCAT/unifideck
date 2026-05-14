@@ -19,12 +19,15 @@ half-removed state from a previous uninstall.
 """
 
 from __future__ import annotations
+
 import asyncio
 import logging
 import shutil
 from pathlib import Path
 from typing import TYPE_CHECKING
-from ....core.types import Result
+
+from unifideck.core.types import Result
+
 from . import registry as _reg
 from .launch_env import UpcLaunchEnvBuildError
 
@@ -97,11 +100,7 @@ class _UninstallPipeline:
             )
             return Result(success=True)
         except Exception as e:
-            logger.exception(
-                "[UbisoftInstaller] uninstall error for %s: %s",
-                game_id,
-                e,
-            )
+            logger.exception("[UbisoftInstaller] uninstall error for %s", game_id)
             return Result(
                 success=False,
                 error=f"uninstall_exception: {e}",
@@ -168,12 +167,12 @@ class _UninstallPipeline:
         delete_prefix: bool,
     ) -> str | None:
         """Delete game directory."""
-        if not install_path or not Path(install_path).is_dir():
+        if not install_path or not await asyncio.to_thread(lambda: Path(install_path).is_dir()):
             return None
         inside_prefix = str(
-            Path(install_path).resolve(),
+            await asyncio.to_thread(lambda: Path(install_path).resolve()),
         ).startswith(
-            str(Path(prefix_path).resolve()) + "/",
+            str(await asyncio.to_thread(lambda: Path(prefix_path).resolve())) + "/",
         )
         if inside_prefix and delete_prefix:
             return None
@@ -197,7 +196,7 @@ class _UninstallPipeline:
         """Delete prefix if requested."""
         if not delete_prefix:
             return False, None
-        if not Path(prefix_path).is_dir():
+        if not await asyncio.to_thread(lambda: Path(prefix_path).is_dir()):
             return False, None
         deleted = await self.delete_tree_with_retries(
             prefix_path,
@@ -324,8 +323,8 @@ class _UninstallPipeline:
         """Delete tree with retries."""
         if not self._is_path_safe_to_delete(target_path, label):
             return False
-        resolved = str(Path(target_path).resolve())
-        if not Path(resolved).is_dir():
+        resolved = str(await asyncio.to_thread(lambda: Path(target_path).resolve()))
+        if not await asyncio.to_thread(lambda: Path(resolved).is_dir()):
             logger.info(
                 "[UbisoftInstaller] nothing to delete for %s: %s",
                 label,

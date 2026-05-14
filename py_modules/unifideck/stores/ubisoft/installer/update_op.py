@@ -12,17 +12,21 @@ directory" phase and reuses the existing prefix.
 """
 
 from __future__ import annotations
+
 import asyncio
 import logging
 from typing import TYPE_CHECKING
-from ....core.types import InstallResult
+
+from unifideck.core.types import InstallResult
+
 from .launch_env import UpcLaunchEnvBuildError, _UpcLaunchEnv
 
 if TYPE_CHECKING:
     from collections.abc import Callable
-    from ..id_map import UbisoftIdMap
-    from ..paths import UbisoftPrefixPaths
-    from ..session import UbisoftSession
+
+    from unifideck.stores.ubisoft.id_map import UbisoftIdMap
+    from unifideck.stores.ubisoft.paths import UbisoftPrefixPaths
+    from unifideck.stores.ubisoft.session import UbisoftSession
 _UPDATE_TIMEOUT_S = 4 * 60 * 60
 logger = logging.getLogger(__name__)
 
@@ -63,11 +67,7 @@ class _UpdateOperation:
                 prepared,
             )
         except Exception as e:
-            logger.exception(
-                "[UbisoftInstaller] update error for %s: %s",
-                game_id,
-                e,
-            )
+            logger.exception("[UbisoftInstaller] update error for %s", game_id)
             return InstallResult(
                 success=False,
                 store="ubisoft",

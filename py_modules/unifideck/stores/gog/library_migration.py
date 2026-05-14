@@ -16,6 +16,7 @@ marker doesn't block the whole library load.
 """
 
 from __future__ import annotations
+
 import glob
 import json
 import logging
@@ -63,11 +64,8 @@ class _MarkerMigration:
                     migrated += 1
                 else:
                     skipped += 1
-        except OSError as e:
-            logger.error(
-                "[GOGLibrary] migrate scan failed: %s",
-                e,
-            )
+        except OSError:
+            logger.exception("[GOGLibrary] migrate scan failed")
         logger.info(
             "[GOGLibrary] migration: %d upgraded, %d current",
             migrated,

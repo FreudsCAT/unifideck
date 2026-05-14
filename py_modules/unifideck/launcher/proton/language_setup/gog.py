@@ -1,14 +1,17 @@
 from __future__ import annotations
+
 import glob
 import json
 import logging
 import os
 from typing import TYPE_CHECKING
+
 from .matchers import smart_match_gog_language
 from .registry_io import _atomic_write_text
 from .resolver import GOG_DISPLAY_NAMES, get_unifideck_language
+
 if TYPE_CHECKING:
-    from ....config import ConfigManager
+    from unifideck.config import ConfigManager
 logger = logging.getLogger(__name__)
 def _find_goggame_info(game_id: str, install_dir: str) -> str | None:
     """Find goggame info."""

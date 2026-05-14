@@ -1,10 +1,13 @@
 from __future__ import annotations
+
 import asyncio
 import contextlib
 import json
 import logging
 from typing import Any
+
 import aiohttp
+
 logger = logging.getLogger(__name__)
 async def list_page_targets(
     port: int,

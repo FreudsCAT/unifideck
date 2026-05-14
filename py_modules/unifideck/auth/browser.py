@@ -16,11 +16,11 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 from urllib.parse import parse_qs, urlparse
 
-from ..utils.config_helpers import get_cfg
+from unifideck.utils.config_helpers import get_cfg
 
 if TYPE_CHECKING:
-    from ..cdp.cdp_client import CDPClient
-    from ..config import ConfigManager
+    from unifideck.cdp.cdp_client import CDPClient
+    from unifideck.config import ConfigManager
 
 
 logger = logging.getLogger(__name__)
@@ -54,7 +54,7 @@ class AuthCaptureResult:
         """Convenience: return the `state` query parameter if any."""
         return self.params.get("state")
 
-    def to_dict(self) -> dict[str, Any]:  # noqa: D102 — documentation pending (Sprint D)
+    def to_dict(self) -> dict[str, Any]:
         return {
             "success": self.success,
             "redirect_url": self.redirect_url,
@@ -148,7 +148,7 @@ class OAuthBrowserMonitor:
     the auth flow without leaving the plugin hanging.
     """
 
-    def __init__(  # noqa: D107 — class docstring documents the constructor's contract
+    def __init__(
         self,
         cdp_client: CDPClient,
         config: ConfigManager | None = None,
@@ -169,7 +169,7 @@ class OAuthBrowserMonitor:
     async def wait_for_redirect(
         self,
         allowed_uris: list[str],
-        timeout: float | None = None,  # noqa: ASYNC109 — internal polling deadline
+        timeout: float | None = None,
     ) -> AuthCaptureResult:
         """Block until a browser tab navigates to an allowed URI.
 
@@ -185,7 +185,7 @@ class OAuthBrowserMonitor:
         while time.monotonic() < deadline:
             try:
                 targets = await self._list_targets()
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 # Intentional: a transient CDP error must not
                 # abort the whole capture — we just wait and
                 # retry on the next poll.
@@ -222,7 +222,7 @@ class OAuthBrowserMonitor:
         """Close the first tab whose URL contains `url_substring`."""
         try:
             targets = await self._list_targets()
-        except Exception:  # noqa: BLE001
+        except Exception:
             return False
         for target in targets:
             if url_substring in target.get("url", ""):
@@ -232,7 +232,7 @@ class OAuthBrowserMonitor:
                 try:
                     await self._cdp.close_target(target_id)
                     return True
-                except Exception as e:  # noqa: BLE001
+                except Exception as e:
                     # Intentional: close failures are
                     # logged but not fatal — the capture
                     # already succeeded.
@@ -268,7 +268,7 @@ class OAuthBrowserMonitor:
                 f"path=/;domain={domain}'));",
             )
             return True
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.debug(
                 "[auth/browser] cookie clear failed: %s", e,
             )
@@ -278,7 +278,7 @@ class OAuthBrowserMonitor:
         """Wrapper around the CDP client's public target listing."""
         try:
             return await self._cdp.list_targets()
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.debug(
                 "[auth/browser] list_targets failed: %s", e,
             )

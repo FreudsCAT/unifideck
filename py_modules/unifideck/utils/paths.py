@@ -38,7 +38,7 @@ from typing import TYPE_CHECKING, Any
 from .config_helpers import get_cfg
 
 if TYPE_CHECKING:
-    from ..config import ConfigManager
+    from unifideck.config import ConfigManager
 
 logger = logging.getLogger(__name__)
 

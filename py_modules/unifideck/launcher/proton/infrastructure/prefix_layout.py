@@ -1,6 +1,8 @@
 from __future__ import annotations
+
 import logging
 from pathlib import Path
+
 logger = logging.getLogger(__name__)
 PathLike = str | Path
 def normalize_prefix_root(prefix_path: PathLike) -> Path:

@@ -13,18 +13,21 @@ back to "installed games only" mode if the owned list can't be read.
 """
 
 from __future__ import annotations
+
 import logging
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
-from ....core.types import Game
+
+from unifideck.core.types import Game
+
 from .data_loader import _DataLoader
 from .game_builder import _GameBuilder
 
 if TYPE_CHECKING:
-    from ..config import UbisoftConfig
-    from ..id_map import UbisoftIdMap
-    from ..parser import GameConfig
-    from ..paths import UbisoftPrefixPaths
+    from unifideck.stores.ubisoft.config import UbisoftConfig
+    from unifideck.stores.ubisoft.id_map import UbisoftIdMap
+    from unifideck.stores.ubisoft.parser import GameConfig
+    from unifideck.stores.ubisoft.paths import UbisoftPrefixPaths
 ParseConfigurationsFn = Callable[[str], "list[GameConfig]"]
 ParseOwnershipFn = Callable[[str], list[int]]
 logger = logging.getLogger(__name__)
@@ -92,14 +95,8 @@ class _LibraryFetcher:
     ):
         """Import UBISOFT parser."""
         try:
-            from ..parser import (
-                parse_configurations,
-                parse_ownership,
-            )
-        except ImportError as e:
-            logger.error(
-                "[UbisoftLibrary] ubisoft_parser unavailable: %s",
-                e,
-            )
+            from unifideck.stores.ubisoft.parser import parse_configurations, parse_ownership
+        except ImportError:
+            logger.exception("[UbisoftLibrary] ubisoft_parser unavailable")
             return None
         return parse_configurations, parse_ownership

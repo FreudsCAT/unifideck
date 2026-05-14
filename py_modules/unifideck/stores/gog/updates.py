@@ -13,13 +13,16 @@ Update application itself is delegated to the installer pipeline
 """
 
 from __future__ import annotations
+
 import asyncio
 import json
 import logging
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any, cast
-from ...core.types import Result
+
+from unifideck.core.types import Result
+
 from .config import GOGConfig
 from .http import fetch_json_get
 from .tokens import GOGTokenManager
@@ -273,11 +276,8 @@ class GOGUpdatesChecker:
             )
             proc._unifideck_gogdl_cleanup = cleanup
             return proc
-        except OSError as e:
-            logger.error(
-                "[GOGUpdatesChecker] gogdl spawn failed: %s",
-                e,
-            )
+        except OSError:
+            logger.exception("[GOGUpdatesChecker] gogdl spawn failed")
             return None
 
     @staticmethod

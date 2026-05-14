@@ -1,55 +1,37 @@
-"""Service container — typed registry of all Layer-5 services.
+"""services/bootstrap/container.py — Dependency injection container.
 
-OP-13b | py_modules/unifideck/services/bootstrap/container.py
-
-``ServiceContainer`` holds one reference per service constructed at
-boot time. It's a simple typed bag — no dependency-injection magic,
-just a place to find any service by attribute name with full type
-hints for IDEs.
-
-Services that depend on other services receive their dependencies as
-constructor arguments (not by reaching into the container at runtime),
-keeping each service independently testable.
+Holds typed references to all service instances. Used as the single injection
+point — main.py creates one and passes it to RPC handlers, or test harnesses
+can create one with a subset of services.
 """
-
 from __future__ import annotations
+
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from ...cdp.cdp_client import CDPClient
-    from ...core.metrics_collector import MetricsCollector
-    from ..account_service import AccountService
-    from ..artwork import ArtworkService
-    from ..cloud_save import CloudSaveService
-    from ..download import DownloadService
-    from ..feature_flag_service import FeatureFlagService
-    from ..launch_history import LaunchHistoryService
-    from ..metadata_service import MetadataService
-    from ..microsoft_subscription import (
-        MicrosoftSubscriptionService,
-    )
-    from ..playtime import PlaytimeService
-    from ..probe_reaction_service import ProbeReactionService
-    from ..proton_service import ProtonService
-    from ..security import SecurityService
-    from ..shortcut import ShortcutService
+    from unifideck.cdp.cdp_client import CDPClient
+    from unifideck.core.metrics_collector import MetricsCollector
+    from unifideck.services.account_service import AccountService
+    from unifideck.services.artwork import ArtworkService
+    from unifideck.services.cloud_save import CloudSaveService
+    from unifideck.services.download import DownloadService
+    from unifideck.services.feature_flag_service import FeatureFlagService
+    from unifideck.services.launch_history import LaunchHistoryService
+    from unifideck.services.launch_logs import LaunchLogsService
+    from unifideck.services.launcher import LauncherService
+    from unifideck.services.metadata_service import MetadataService
+    from unifideck.services.microsoft_subscription import MicrosoftSubscriptionService
+    from unifideck.services.playtime import PlaytimeService
+    from unifideck.services.probe_reaction_service import ProbeReactionService
+    from unifideck.services.proton_service import ProtonService
+    from unifideck.services.security import SecurityService
+    from unifideck.services.shortcut import ShortcutService
 
 
 @dataclass
 class ServiceContainer:
-    """Typed bag holding every Layer-5 service constructed at boot.
-
-    Each field is one service slot; the constructor leaves them all
-    at ``None`` and the ``bootstrap_services`` function in
-    ``constructor.py`` (OP-13d) populates them in order. After boot
-    every field is either a service instance or ``None`` (if the
-    service was opt-out via configuration).
-
-    Storing services on a dataclass (rather than in a dict) gives
-    IDEs and type checkers visibility into ``container.shortcut``,
-    ``container.download``, etc., and makes refactors safe.
-    """
+    """Dependency injection container holding all service instances."""
 
     shortcut: ShortcutService | None = None
     download: DownloadService | None = None
@@ -65,4 +47,6 @@ class ServiceContainer:
     probe_reaction: ProbeReactionService | None = None
     security: SecurityService | None = None
     launch_history: LaunchHistoryService | None = None
+    launch_logs: LaunchLogsService | None = None
     microsoft_subscription: MicrosoftSubscriptionService | None = None
+    launcher: LauncherService | None = None

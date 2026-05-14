@@ -1,9 +1,13 @@
 from __future__ import annotations
+
 import contextlib
 import logging
 from typing import Any
+
 import aiohttp
+
 from .cdp_primitives import cdp_command
+
 logger = logging.getLogger(__name__)
 async def _click_handler_object_id(
     websocket: aiohttp.ClientWebSocketResponse,

@@ -17,6 +17,7 @@ Module-level helpers (``parse_size_string``,
 """
 
 from __future__ import annotations
+
 import glob
 import json
 import logging
@@ -54,12 +55,8 @@ class GOGExeResolver:
         """Find with workdir."""
         try:
             return self._resolve(install_path)
-        except Exception as e:
-            logger.exception(
-                "[GOGExeResolver] unexpected error for %s: %s",
-                install_path,
-                e,
-            )
+        except Exception:
+            logger.exception("[GOGExeResolver] unexpected error for %s", install_path)
             return None
 
     def _resolve(self, install_path: str) -> tuple[str, str] | None:

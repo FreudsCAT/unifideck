@@ -220,10 +220,8 @@ class ConfigManager:
             )
             try:
                 load_from_dict(self._merged)
-            except LocaleConfigError as e:
-                logger.error(
-                    "[ConfigManager] i18n schema validation failed: %s", e,
-                )
+            except LocaleConfigError:
+                logger.exception("[ConfigManager] i18n schema validation failed")
                 raise
         finally:
             if added:
@@ -238,18 +236,18 @@ class ConfigManager:
         except KeyError:
             return default
 
-    def get_str(self, key: str, default: str = "") -> str:  # noqa: D102 — documentation pending (Sprint D)
+    def get_str(self, key: str, default: str = "") -> str:
         v = self.get(key, default)
         return str(v) if v is not None else default
 
-    def get_int(self, key: str, default: int = 0) -> int:  # noqa: D102 — documentation pending (Sprint D)
+    def get_int(self, key: str, default: int = 0) -> int:
         v = self.get(key, default)
         try:
             return int(v)
         except (TypeError, ValueError):
             return default
 
-    def get_bool(self, key: str, default: bool = False) -> bool:  # noqa: D102 — documentation pending (Sprint D)
+    def get_bool(self, key: str, default: bool = False) -> bool:
         v = self.get(key, default)
         if isinstance(v, bool):
             return v
@@ -293,11 +291,8 @@ class ConfigManager:
                 encoding="utf-8",
             )
             tmp.replace(self._user_path)
-        except OSError as e:
-            logger.error(
-                "[ConfigManager] failed to persist %s: %s",
-                key, e,
-            )
+        except OSError:
+            logger.exception("[ConfigManager] failed to persist %s", key)
             if tmp.exists():
                 try:
                     tmp.unlink()

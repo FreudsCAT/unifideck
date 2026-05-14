@@ -1,13 +1,12 @@
-"""Artwork service — game artwork fetcher + cache.
+"""services/artwork — SteamGridDB artwork fetcher service.
 
-OP-16 | py_modules/unifideck/services/artwork/__init__.py
-
-Re-exports ``ArtworkService``. The service fetches game capsules
-(library cover), heroes (page hero), logos, and icons from
-SteamGridDB and caches them on disk for offline display.
+Re-exports ``ArtworkService`` so callers can write
+``from unifideck.services.artwork import ArtworkService``
+rather than reaching into the private ``service`` submodule.
 """
 
 from __future__ import annotations
+
 from .service import ArtworkService
 
 __all__ = ["ArtworkService"]

@@ -68,7 +68,9 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from ..event_bus.event_bus import EventBus
+    import asyncio
+
+    from unifideck.event_bus.event_bus import EventBus
 
 logger = logging.getLogger(__name__)
 
@@ -162,6 +164,9 @@ class ConfigValidator:
         """
         self._bus = bus
         self._schema: dict | None = None
+        # Strong references to fire-and-forget event-emit tasks so they
+        # aren't garbage-collected mid-flight. See ``_emit_result_event``.
+        self._background_tasks: set[asyncio.Task[Any]] = set()
 
     # ── Public API ──────────────────────────────────────────────
 
@@ -355,11 +360,8 @@ class ConfigValidator:
             with Path(_SCHEMA_PATH).open(encoding="utf-8") as f:
                 self._schema = json.load(f)
             return self._schema
-        except (OSError, json.JSONDecodeError) as e:
-            logger.error(
-                "[ConfigValidator] cannot load schema at %s: %s",
-                _SCHEMA_PATH, e,
-            )
+        except (OSError, json.JSONDecodeError):
+            logger.exception("[ConfigValidator] cannot load schema at %s", _SCHEMA_PATH)
             return None
 
     @staticmethod
@@ -402,7 +404,7 @@ class ConfigValidator:
         try:
             import jsonschema
         except ImportError:
-            logger.error(
+            logger.exception(
                 "[ConfigValidator] jsonschema not installed — "
                 "validation skipped",
             )
@@ -457,20 +459,23 @@ class ConfigValidator:
         try:
             import asyncio
 
-            from ..core.types.events import Events
+            from unifideck.core.types.events import Events
             try:
                 loop = asyncio.get_running_loop()
             except RuntimeError:
                 # No running loop — drop the emission.
                 return
             if result.success:
-                loop.create_task(self._bus.emit(
+                # Track task so it isn't GC'd before the bus delivers the event.
+                task = loop.create_task(self._bus.emit(
                     Events.CONFIG_VALIDATION_COMPLETED,
                     defaults_validated=result.defaults_validated,
                     user_overrides_present=result.user_overrides_present,
                 ))
+                self._background_tasks.add(task)
+                task.add_done_callback(self._background_tasks.discard)
             else:
-                loop.create_task(self._bus.emit(
+                task = loop.create_task(self._bus.emit(
                     Events.CONFIG_VALIDATION_FAILED,
                     error_count=len(result.errors),
                     defaults_validated=result.defaults_validated,
@@ -482,6 +487,8 @@ class ConfigValidator:
                         result.errors[0].path if result.errors else ""
                     ),
                 ))
+                self._background_tasks.add(task)
+                task.add_done_callback(self._background_tasks.discard)
         except (RuntimeError, asyncio.CancelledError) as e:
             logger.debug(
                 "[ConfigValidator] event emit failed: %s", e,

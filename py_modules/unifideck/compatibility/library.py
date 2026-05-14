@@ -6,6 +6,7 @@ import asyncio
 import logging
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
+
 from unifideck.utils.config_helpers import get_cfg
 
 if TYPE_CHECKING:
@@ -98,8 +99,10 @@ class CompatLibrary:
             ttl = int(get_cfg(config, "cache_ttl.compat", 604800))
             try:
                 cache.register(CACHE_NAMESPACE, ttl_seconds=ttl)
-            except Exception:
-                pass
+            except Exception as e:
+                # Already registered or cache backend misconfigured;
+                # lookups will still work, just without our preferred TTL.
+                logger.debug("[CompatLibrary] cache.register failed: %s", e)
     async def get_for_appid(self, appid: int) -> CompatRating:
         """Get for appid."""
         cached = self._cache_get(str(appid))
@@ -116,7 +119,7 @@ class CompatLibrary:
         return result
     async def get_for_title(self, title: str) -> CompatRating:
         """Get for title."""
-        from ..steam.library import search_store
+        from unifideck.steam.library import search_store
         steam = await search_store(title, config=self._config)
         if steam is None or "app_id" not in steam:
             return CompatRating(
@@ -207,8 +210,10 @@ class CompatLibrary:
             return
         try:
             self._cache.set(CACHE_NAMESPACE, key, value)
-        except Exception:
-            pass
+        except Exception as e:
+            # Cache write failures are non-fatal: the rating was
+            # computed successfully, we just won't re-use it.
+            logger.debug("[CompatLibrary] cache.set %r failed: %s", key, e)
 def load_compat_cache():
     """Load compat cache."""
     logger.debug("[compat] load_compat_cache called via legacy path")
@@ -219,7 +224,7 @@ def save_compat_cache(cache):
     return True
 async def search_steam_store(session=None, title="", **kwargs):
     """Search steam store."""
-    from ..steam.library import search_store
+    from unifideck.steam.library import search_store
     return await search_store(title)
 async def fetch_protondb_rating(session=None, appid=0, **kwargs):
     """Fetch protondb rating."""
@@ -252,10 +257,8 @@ class BackgroundCompatFetcher:
         self._lib = CompatLibrary()
     def start(self):
         """Start."""
-        pass
     def stop(self):
         """Stop."""
-        pass
     async def fetch(self, title):
         """Fetch."""
         return await self._lib.get_for_title(title)

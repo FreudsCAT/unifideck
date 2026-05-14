@@ -1,23 +1,14 @@
-"""Shortcut service — Steam shortcut management.
+"""services/shortcut — Steam shortcuts management service.
 
-OP-14 | py_modules/unifideck/services/shortcut/__init__.py
-
-Re-exports ``ShortcutService``, the orchestration class for everything
-related to Steam shortcuts (the ``shortcuts.vdf`` file Steam uses to
-list non-Steam apps).
-
-Internal mixins (``games_map``, ``events``, ``vdf_shortcuts``,
-``persistence``, ``auth_shortcut``) are not re-exported — they're
-glued together via inheritance into ``ShortcutService``.
+Re-exports ``ShortcutService`` so callers can write
+``from unifideck.services.shortcut import ShortcutService``
+rather than reaching into the private ``service`` submodule.
+This is consumed by every store (Epic / GOG / Ubisoft / Amazon /
+Microsoft) so the import is a hot path for plugin startup.
 """
 
 from __future__ import annotations
-from .games_map import GameMapEntry, generate_app_id
-from .service import UNIFIDECK_TAG, ShortcutService
 
-__all__ = [
-    "UNIFIDECK_TAG",
-    "GameMapEntry",
-    "ShortcutService",
-    "generate_app_id",
-]
+from .service import ShortcutService
+
+__all__ = ["ShortcutService"]

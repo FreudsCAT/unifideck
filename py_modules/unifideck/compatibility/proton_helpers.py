@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 import json
 import logging
 import os
@@ -6,8 +7,9 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
+
 if TYPE_CHECKING:
-    from ..config import ConfigManager
+    from unifideck.config import ConfigManager
 logger = logging.getLogger(__name__)
 LINUX_RUNTIME_PREFIXES = (
     "steamlinuxruntime",
@@ -129,7 +131,7 @@ class ProtonToolsManager:
     def _resolve_config_vdf(self) -> Path:
 
         """Resolve config VDF."""
-        from ..steam.library import find_steam_path
+        from unifideck.steam.library import find_steam_path
         steam = find_steam_path(self._config)
         if steam is None:
             return (
@@ -220,11 +222,8 @@ class ProtonToolsManager:
             return self._config_vdf_path.read_text(
                 encoding="utf-8", errors="ignore",
             )
-        except OSError as e:
-            logger.error(
-                "[proton_helpers] read %s failed: %s",
-                self._config_vdf_path, e,
-            )
+        except OSError:
+            logger.exception("[proton_helpers] read %s failed", self._config_vdf_path)
             return ""
     def _write_config_vdf(self, content: str) -> bool:
         """Write config VDF."""
@@ -237,10 +236,8 @@ class ProtonToolsManager:
                 os.fsync(f.fileno())
             os.replace(tmp, self._config_vdf_path)
             return True
-        except OSError as e:
-            logger.error(
-                "[proton_helpers] write failed: %s", e,
-            )
+        except OSError:
+            logger.exception("[proton_helpers] write failed")
             try:
                 tmp.unlink()
             except OSError:
@@ -266,11 +263,8 @@ class ProtonToolsManager:
             tmp.write_text(json.dumps(data, indent=2))
             os.replace(tmp, path)
             return True
-        except OSError as e:
-            logger.error(
-                "[proton_helpers] save settings failed: %s",
-                e,
-            )
+        except OSError:
+            logger.exception("[proton_helpers] save settings failed")
             return False
 _singleton_pt_mgr = None
 def _pt_mgr():

@@ -1,55 +1,31 @@
-"""SGDB artwork fetcher — pure functions for the network layer.
+"""services/artwork/fetcher.py — Stateless artwork fetch + save.
 
-<<<<<<< Updated upstream
-OP-16c | py_modules/unifideck/services/artwork/fetcher.py
-
-Three module-level functions :
-
-* ``has_artwork(game_id, kind, cache_dir)`` — disk check;
-* ``find_artwork_url(game_name, kind, key)`` — query SGDB and
-  return the best artwork URL for the requested kind (grid, hero,
-  logo, icon);
-* ``download_and_save(url, target_path)`` — fetch + atomic save.
-
-Kept module-level because they're stateless — the cache state
-lives in the service, the fetcher is a pure transformer.
-=======
 Pure async functions: no ``self``, each takes its inputs
 explicitly so HTTP and filesystem mechanics stay testable
 independent of the service orchestrator.
-
-Steam grid/ layout accepts both JPG and PNG for grid, hero
-and icon, but the on-disk extension MUST match the actual
-byte content — Steam's CEF readers fail silently when a PNG
-payload is saved with a ``.jpg`` name (and vice versa).
-``logo`` is the strict exception: Steam requires PNG for the
-overlay because it relies on alpha transparency.
->>>>>>> Stashed changes
 """
-
 from __future__ import annotations
-<<<<<<< Updated upstream
-import logging
-from pathlib import Path
-from typing import TYPE_CHECKING
-=======
 
+import asyncio
 import logging
+import os
 from pathlib import Path
 from typing import TYPE_CHECKING
-from urllib.parse import urlparse
->>>>>>> Stashed changes
+from urllib.parse import quote
+
+import aiohttp
 
 if TYPE_CHECKING:
-    from ...config import ConfigManager
-logger = logging.getLogger(__name__)
-<<<<<<< Updated upstream
-=======
+    from unifideck.config import ConfigManager
 
-# Steam-preferred suffix per artwork kind. Used as the
-# fallback when the URL gives no format hint, and as the
-# "must-have" anchor for logos (where PNG is mandatory).
->>>>>>> Stashed changes
+logger = logging.getLogger(__name__)
+
+# SGDB API documentation: https://www.steamgriddb.com/api/v2
+_DEFAULT_SGDB_BASE = "https://www.steamgriddb.com/api/v2"
+
+# Filename conventions matching Steam's expected grid/ layout.
+# Extending to a new artwork type means one entry here + one in
+# the ``ArtworkService`` fetch loop — no other call-site edits.
 _KIND_SUFFIX = {
     "grid": "p.jpg",
     "hero": "_hero.jpg",
@@ -57,259 +33,209 @@ _KIND_SUFFIX = {
     "icon": "_icon.jpg",
 }
 
-<<<<<<< Updated upstream
+# Mapping from our internal kinds to SGDB API endpoints
+_SGDB_ENDPOINTS = {
+    "grid": "grids",
+    "hero": "heroes",
+    "logo": "logos",
+    "icon": "icons",
+}
+
 
 async def has_artwork(grid_dir: str, app_id: int) -> bool:
-    """Return whether the canonical grid + hero artwork exist on disk.
+    """True iff ``<app_id>p.jpg`` + ``<app_id>_hero.jpg`` both exist.
 
-    The check is intentionally conservative: it verifies the
-    presence of both the ``<id>p.jpg`` (grid) and ``<id>_hero.jpg``
-    (hero) files, which are the two artwork kinds that matter most
-    for the Steam library UI. Logo and icon are nice-to-have and not
-    required for the check to pass.
-
-    Args:
-        grid_dir: absolute path to Steam's ``grid`` directory.
-        app_id: Steam app id (the file naming key).
-
-    Returns:
-        ``True`` iff both files are present.
-=======
-# Kinds for which Steam Deck accepts both .jpg and .png.
-# Logo is excluded: Steam needs PNG (alpha overlay).
-_FORMAT_FLEXIBLE_KINDS = frozenset({"grid", "hero", "icon"})
-
-def _url_extension(url: str) -> str:
-    """Extract the lowercase file extension from a URL's path component.
-
-    Pipeline:
-
-    1. ``urlparse`` splits the URL into scheme/host/path/
-       query/fragment — we only care about ``path``;
-    2. ``Path(path).suffix`` returns the trailing extension
-       *with* the leading dot (e.g. ``".PNG"``);
-    3. ``.lower()`` normalises case so ``.PNG`` and
-       ``.png`` are treated identically;
-    4. ``.lstrip(".")`` drops the dot for clean
-       equality checks downstream (``ext == "png"``).
-
-    Query strings + fragments are silently ignored, which
-    matters for signed CDN URLs like
-    ``https://cdn.steamgriddb.com/grid.png?token=abc&v=2``
-    where a naive ``url.endswith(".png")`` would return
-    ``False`` and break the format-aware suffix logic.
-
-    Args:
-        url: full URL string (any scheme).
-
-    Returns:
-        Lowercase extension without the dot, e.g. ``"png"``,
-        ``"jpg"``, ``"jpeg"``. Empty string when the URL
-        path has no extension at all.
+    Grid + hero are the minimum set for a game to look good in
+    the Steam library — logo and icon are nice-to-haves. Uses
+    async file ops so the check runs off the event loop.
     """
-    path = urlparse(url).path
-    return Path(path).suffix.lower().lstrip(".")
+    def _check() -> bool:
+        grid_path = os.path.join(grid_dir, f"{app_id}{_KIND_SUFFIX['grid']}")
+        hero_path = os.path.join(grid_dir, f"{app_id}{_KIND_SUFFIX['hero']}")
+        return os.path.isfile(grid_path) and os.path.isfile(hero_path)
 
-def _suffix_for(kind: str, url: str) -> str:
-    """Resolve the on-disk filename suffix matching an artwork download.
+    return await asyncio.to_thread(_check)
 
-    Pipeline:
 
-    1. ``kind == "logo"`` short-circuits to
-       ``_logo.png`` — Steam mandates PNG for logos
-       because the library renderer composites them over
-       the hero with alpha blending, and a JPG would render
-       as a solid white rectangle;
-    2. Look up the Steam-preferred suffix from
-       ``_KIND_SUFFIX``; unknown kind → ``.jpg`` (safe
-       defensive default);
-    3. If the kind is in ``_FORMAT_FLEXIBLE_KINDS``
-       (grid/hero/icon) AND the URL extension is ``png``,
-       swap the trailing ``.jpg`` for ``.png`` so the
-       saved filename's extension matches the actual byte
-       content. Otherwise keep the JPG default.
+async def _sgdb_lookup_game_id(
+    session: aiohttp.ClientSession,
+    base_url: str,
+    title: str,
+) -> int | None:
+    """Resolve a game title to its SGDB numeric ID via /search/autocomplete.
 
-    The ``base.replace(".jpg", ".png")`` step is safe
-    because every flexible-kind entry in ``_KIND_SUFFIX``
-    ends in ``.jpg`` — there's no other ``.jpg``
-    substring that could be accidentally matched.
-
-    This function is the regression guard for the silent-
-    skip bug: Steam's CEF artwork reader rejects files
-    whose extension doesn't match their MIME signature,
-    with no error logged anywhere — covers and heroes
-    just don't render.
-
-    Args:
-        kind: artwork kind (``"grid"``, ``"hero"``,
-            ``"logo"``, ``"icon"``, or arbitrary unknown).
-        url: download URL — only inspected for its
-            extension; never fetched here.
-
-    Returns:
-        On-disk suffix including the leading character
-        (``p`` for grid, ``_hero`` for hero, etc) and
-        the format-correct extension. Always a
-        non-empty string.
+    Returns the most-confident match's ID, or ``None`` if SGDB
+    answered non-200, returned ``success=False``, returned an
+    empty ``data`` list, or the first entry has no ``id``.
+    The title is URL-quoted so titles with spaces / colons /
+    accents survive the path segment (e.g. *Hollow Knight: Silksong*).
     """
-    if kind == "logo":
-        return _KIND_SUFFIX["logo"]
-    base = _KIND_SUFFIX.get(kind, ".jpg")
-    if kind in _FORMAT_FLEXIBLE_KINDS and _url_extension(url) == "png":
-        return base.replace(".jpg", ".png")
-    return base
+    search_url = f"{base_url}/search/autocomplete/{quote(title)}"
+    async with session.get(search_url) as resp:
+        if resp.status != 200:
+            return None
+        data = await resp.json()
+    if not data.get("success") or not data.get("data"):
+        return None
+    return data["data"][0].get("id")
 
-async def has_artwork(grid_dir: str, app_id: int) -> bool:
-    """Predicate: is the minimum artwork set already present for this app?
 
-    "Minimum set" means both a grid (vertical capsule) AND
-    a hero (banner) — those are the two pieces of artwork
-    that show in the Steam library list and on the
-    game-detail page. Logo and icon are
-    nice-to-haves that don't affect this gate.
+def _sgdb_kind_params(kind: str) -> dict[str, str]:
+    """Build the dimensions filter for the SGDB artwork endpoint.
 
-    Pipeline:
-
-    1. Lazy-import ``async_file_ops`` to avoid a heavy
-       import at module load (kept lazy because this
-       module is loaded by the service bootstrap which is
-       latency-sensitive);
-    2. Build the four candidate paths — JPG + PNG
-       variants of both grid and hero — because both
-       extensions are valid Steam targets and the
-       format-aware ``download_and_save`` may have saved
-       either flavour on the previous sync;
-    3. Each artwork "exists" if at least one of its two
-       extension variants is present on disk;
-    4. Both grid AND hero must exist for the predicate to
-       be True.
-
-    Accepting both extensions is the anti-redownload
-    guard: without it, a previous sync that saved
-    ``42p.png`` (because SGDB served PNG) would not be
-    found by a check looking only for ``42p.jpg``, and
-    we'd hammer the SGDB API with redundant requests
-    every sync cycle (~500 syncs/day on an active install).
-
-    Args:
-        grid_dir: absolute path to Steam's ``grid/``
-            directory under the user's userdata folder.
-        app_id: Steam application id (unsigned 32-bit).
-
-    Returns:
-        True iff both grid (jpg or png) AND hero (jpg or
-        png) exist as regular files at the expected
-        locations. False if either is missing or if the
-        directory itself is unreadable (``aio.is_file``
-        returns False on OSError).
->>>>>>> Stashed changes
+    Grid art uses the Steam vertical capsule (600x900); hero art
+    uses Steam Deck-friendly widescreens (1080p + 4K so we have a
+    crisp option to fall back on). Other kinds (icon, logo) take
+    no dimension hint.
     """
-    from ...core.io import async_file_ops as aio
+    if kind == "grid":
+        return {"dimensions": "600x900"}
+    if kind == "hero":
+        return {"dimensions": "1920x1080,3840x2160"}
+    return {}
 
-    grid_path = Path(grid_dir)
-<<<<<<< Updated upstream
-    grid_file = str(grid_path / f"{app_id}p.jpg")
-    hero_file = str(grid_path / f"{app_id}_hero.jpg")
-    return await aio.is_file(grid_file) and await aio.is_file(hero_file)
-=======
-    grid_jpg = str(grid_path / f"{app_id}p.jpg")
-    grid_png = str(grid_path / f"{app_id}p.png")
-    hero_jpg = str(grid_path / f"{app_id}_hero.jpg")
-    hero_png = str(grid_path / f"{app_id}_hero.png")
-    grid_ok = (await aio.is_file(grid_jpg) or await aio.is_file(grid_png))
-    hero_ok = (await aio.is_file(hero_jpg) or await aio.is_file(hero_png))
->>>>>>> Stashed changes
 
-    return grid_ok and hero_ok
+async def _sgdb_pick_artwork_url(
+    session: aiohttp.ClientSession,
+    base_url: str,
+    game_id: int,
+    kind: str,
+) -> str | None:
+    """Query SGDB's per-kind endpoint and pick the top artwork URL.
+
+    Returns ``None`` on any error (non-200, malformed payload,
+    empty result). SGDB orders results by upvote count, so the
+    first entry is the community pick.
+    """
+    endpoint = _SGDB_ENDPOINTS[kind]
+    art_url = f"{base_url}/{endpoint}/game/{game_id}"
+    params = _sgdb_kind_params(kind)
+    async with session.get(art_url, params=params) as resp:
+        if resp.status != 200:
+            return None
+        data = await resp.json()
+    if not data.get("success") or not data.get("data"):
+        return None
+    return data["data"][0].get("url")
+
 
 async def find_artwork_url(
     title: str,
     kind: str,
     api_key: str,
-    config: ConfigManager | None,
+    config: ConfigManager | None = None,
 ) -> str | None:
-<<<<<<< Updated upstream
-    """Query SteamGridDB for the best-matching artwork URL.
+    """Query SGDB for the best artwork of ``kind`` for ``title``.
 
-    Delegates to ``steam.steamgriddb.search_artwork`` which does the
-    HTTP call and ranks results. Network / parsing / rate-limit
-    failures are swallowed and surfaced as ``None`` — the caller
-    (``ArtworkService.fetch_artwork``) treats ``None`` as a "no
-    artwork available" signal rather than a hard error.
-
-    Args:
-        title: game title used as the search query.
-        kind: one of ``"grid"`` / ``"hero"`` / ``"logo"`` / ``"icon"``.
-        api_key: SGDB API key (may be empty for unauthenticated
-            usage which is rate-limited more aggressively).
-        config: optional config manager (forwarded to the
-            steamgriddb module for its own tunables like timeout).
-
-    Returns:
-        Best-matching artwork URL string, or ``None`` if no match
-        was found or the call failed.
-=======
-    """Resolve the best SGDB artwork URL for a given game title + kind.
-
-    Thin delegation wrapper over ``steam.steamgriddb.search_artwork``
-    (owned by OP-32a). Two responsibilities:
-
-    1. **Lazy import** of the SGDB client to keep this
-       module's import graph clean — the SGDB module pulls
-       in aiohttp + config helpers, neither of which we
-       want loaded just because the artwork service was
-       instantiated;
-    2. **Exception barrier** — SGDB outages must NEVER
-       block a library sync. Any exception coming out of
-       ``search_artwork`` (network, JSON parse, auth, rate
-       limit, malformed response) is caught, logged at
-       DEBUG (not ERROR — this is expected behaviour
-       during SGDB hiccups), and translated to ``None``.
-
-    The caller treats ``None`` as "no artwork available
-    right now, try again next sync" — there's no retry
-    here because the service-level sync loop already
-    drives the retry cadence.
-
-    Args:
-        title: game title to search for (caller is
-            responsible for any normalisation —
-            we pass it through verbatim).
-        kind: artwork kind to fetch (``"grid"``,
-            ``"hero"``, ``"logo"``, ``"icon"``); SGDB
-            endpoints are resolved inside ``search_artwork``.
-        api_key: SGDB API key (Bearer token). Empty
-            string is acceptable — ``search_artwork``
-            handles the "no key" case by returning None.
-        config: optional ``ConfigManager`` for overriding
-            the SGDB base URL (used in tests + when
-            self-hosting an SGDB mirror).
-
-    Returns:
-        Absolute HTTPS URL of the highest-ranked artwork
-        of the requested kind, or ``None`` on any failure
-        mode (no key, no match, network error, malformed
-        response, etc).
->>>>>>> Stashed changes
+    Two-step: (1) resolve title → SGDB game id, (2) pick top
+    artwork URL for the requested kind. Swallows every error —
+    an SGDB hiccup must never block a sync.
     """
-    try:
-        from ...steam import steamgriddb
+    if not api_key or kind not in _SGDB_ENDPOINTS:
+        return None
 
-<<<<<<< Updated upstream
-        return await steamgriddb.search_artwork(
-            title,
-            kind,
-            api_key,
-            config=config,
-        )
+    base_url = _DEFAULT_SGDB_BASE
+    if config:
+        base_url = config.get("artwork.steamgriddb_api_base", _DEFAULT_SGDB_BASE)
+
+    headers = {"Authorization": f"Bearer {api_key}"}
+
+    try:
+        async with aiohttp.ClientSession(headers=headers) as session:
+            game_id = await _sgdb_lookup_game_id(session, base_url, title)
+            if not game_id:
+                return None
+            return await _sgdb_pick_artwork_url(session, base_url, game_id, kind)
     except Exception as e:
         logger.debug(
-            "[ArtworkService] search failed (%s/%s): %s",
-            title,
-            kind,
-            e,
+            "[ArtworkFetcher] find_artwork_url failed for %s (%s): %s",
+            title, kind, e,
         )
         return None
+
+
+def _adjust_artwork_suffix(suffix: str, url: str, kind: str) -> str:
+    """Pick the right file extension based on the source URL.
+
+    SGDB sometimes serves PNG for kinds we'd default to JPG (and
+    vice-versa for logos). We match the URL's extension so the
+    on-disk format matches the bytes we're about to write, which
+    Steam's renderer expects.
+    """
+    lower = url.lower()
+    if lower.endswith(".png") and kind in ("grid", "hero", "icon"):
+        return suffix.replace(".jpg", ".png")
+    if lower.endswith((".jpg", ".jpeg")) and kind == "logo":
+        return suffix.replace(".png", ".jpg")
+    return suffix
+
+
+async def _download_artwork_bytes(
+    url: str,
+    timeout: int,
+) -> bytes | None:
+    """Fetch ``url`` and return its bytes, or ``None`` on any failure.
+
+    Encapsulates the HTTP plumbing so :func:`download_and_save`
+    can focus on file placement. Non-200 responses log and return
+    None — they're not exceptional, SGDB CDN occasionally 403s.
+    """
+    client_timeout = aiohttp.ClientTimeout(total=timeout)
+    async with aiohttp.ClientSession(timeout=client_timeout) as session:
+        async with session.get(url) as resp:
+            if resp.status != 200:
+                logger.debug(
+                    "[ArtworkFetcher] download failed %s: HTTP %s",
+                    url, resp.status,
+                )
+                return None
+            return await resp.read()
+
+
+def _ensure_grid_dir(grid_dir: str) -> None:
+    """Create the grid dir lazily so first-time writers don't fail.
+
+    Module-scope (not nested) so it doesn't count against
+    :func:`download_and_save`'s mccabe complexity. ``exist_ok``
+    protects against the race where two artwork tasks both miss
+    the dir and try to create it simultaneously.
+    """
+    if not Path(grid_dir).is_dir():
+        Path(grid_dir).mkdir(parents=True, exist_ok=True)
+
+
+def _atomic_write_artwork(tmp_path: str, target_path: str, content: bytes) -> None:
+    """Atomic write: tmp file, fsync, rename. Avoids torn artwork.
+
+    Steam's renderer reads the file while we're writing it on
+    every grid refresh, so a direct write would race and show a
+    half-rendered image. The fsync + os.replace combo makes the
+    swap atomic at the OS level on every filesystem we target.
+    """
+    with open(tmp_path, "wb") as f:
+        f.write(content)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp_path, target_path)
+
+
+def _cleanup_artwork_tmp(tmp_path: str) -> None:
+    """Best-effort tmp removal — runs even on exceptional exit.
+
+    Called from ``finally:`` so a torn download doesn't leave
+    ``.tmp`` litter accumulating in the grid dir. Failures here
+    are logged at debug level only; the user's next sync will
+    overwrite or skip them.
+    """
+    if not Path(tmp_path).exists():
+        return
+    try:
+        Path(tmp_path).unlink()
+    except OSError as e:
+        logger.debug(
+            "[ArtworkFetcher] tmp cleanup failed %s: %s",
+            tmp_path, e,
+        )
 
 
 async def download_and_save(
@@ -319,147 +245,32 @@ async def download_and_save(
     url: str,
     timeout: int,
 ) -> bool:
-    """Download the artwork from ``url`` and write it under ``grid_dir``.
+    """Download ``url``, save under ``grid_dir`` with Steam's naming.
 
-    Target filename follows Steam's grid-naming convention encoded
-    in ``_KIND_SUFFIX`` (e.g. ``<id>p.jpg`` for grid,
-    ``<id>_hero.jpg`` for hero). The write is atomic at the
-    filesystem level (delegated to ``async_file_ops.write_bytes``).
-
-    Non-200 HTTP responses, network failures and filesystem errors
-    are all caught and logged at DEBUG (network) or WARN (write
-    error) and surface as ``False`` — the caller treats ``False``
-    as "skip this artwork" rather than as a hard failure.
-
-    Args:
-        grid_dir: absolute path to Steam's ``grid`` directory.
-        app_id: Steam app id.
-        kind: one of ``"grid"`` / ``"hero"`` / ``"logo"`` / ``"icon"``.
-        url: full URL to download.
-        timeout: HTTP timeout in seconds.
-
-    Returns:
-        ``True`` on successful download + save, ``False`` on any
-        kind of failure.
+    Filename = ``<app_id><_KIND_SUFFIX[kind]>``. Returns True
+    only on a successful 200 + full write. HTTP errors, DNS,
+    TLS, partial reads, permission, disk full — all logged
+    + return False. Artwork is best-effort; next sync retries.
     """
-    suffix = _KIND_SUFFIX.get(kind, ".jpg")
-    target = str(Path(grid_dir) / f"{app_id}{suffix}")
-    try:
-        import aiohttp
-
-=======
-        return await steamgriddb.search_artwork(title, kind, api_key, config=config)
-    except Exception as e:
-        logger.debug("[ArtworkService] search failed (%s/%s): %s", title, kind, e)
-        return None
-
-
-async def download_and_save(grid_dir: str, app_id: int, kind: str, url: str, timeout: int) -> bool:
-    """Download an artwork URL and save it to Steam's grid directory.
-
-    Pipeline:
-
-    1. **Suffix resolution** via ``_suffix_for(kind, url)``
-       — this is what makes the saved filename's
-       extension match the actual byte content so Steam's
-       CEF artwork reader doesn't silently reject it;
-    2. **Target path** built from ``grid_dir`` + app_id +
-       resolved suffix;
-    3. **HTTP fetch** via a fresh ``aiohttp.ClientSession``
-       — we don't pool across calls because artwork
-       downloads are infrequent and the session-creation
-       overhead is dwarfed by the actual network latency;
-       the ``async with`` combined statement ensures both
-       the session AND the response are properly closed
-       even on exception;
-    4. **Status check** — non-200 → False with no further
-       work (no logging at WARN level because 404 from
-       SGDB CDN is a routine occurrence during library
-       reindex events);
-    5. **Body read** — ``await resp.read()`` slurps the
-       entire payload into memory; artwork files are
-       small (under 1 MB typically, under 5 MB worst case
-       for 4K heroes) so streaming would only add
-       complexity;
-    6. **Atomic write** via ``async_file_ops.write_bytes``
-       (owned by OP-06a) — that helper handles the
-       tmp-file + ``os.replace`` + fsync dance so we
-       don't have to reimplement it here;
-    7. **Two exception barriers** with different log
-       levels:
-       - HTTP-side exceptions (timeout, DNS, TLS,
-         partial read, connection reset) → DEBUG —
-         transient and retryable next sync;
-       - Filesystem-side exceptions (permission, disk
-         full, read-only mount) → WARN — these usually
-         indicate a real configuration problem the user
-         should see.
-
-    Artwork is intentionally best-effort: any failure
-    returns False without raising. The next sync cycle
-    will retry the same URL, and if the underlying issue
-    persists, the user sees a missing capsule but the
-    rest of the library still works.
-
-    Args:
-        grid_dir: absolute path to Steam's ``grid/``
-            directory. Must already exist — we don't
-            create it here because the caller (the
-            service) handles directory bootstrap.
-        app_id: Steam application id (unsigned 32-bit).
-        kind: artwork kind for suffix resolution.
-        url: HTTPS URL to download from. Typically an
-            SGDB CDN URL with a signed query string.
-        timeout: total HTTP timeout in seconds — applies
-            to connect + headers + body read combined,
-            not per-phase.
-
-    Returns:
-        True iff the HTTP fetch succeeded with status 200
-        AND the bytes were successfully persisted to disk.
-        False on any failure mode (non-200 HTTP, network
-        error, filesystem error). Never raises.
-    """
-    suffix = _suffix_for(kind, url)
-    target = str(Path(grid_dir) / f"{app_id}{suffix}")
-    try:
-        import aiohttp
->>>>>>> Stashed changes
-        async with (
-            aiohttp.ClientSession() as session,
-            session.get(url, timeout=timeout) as resp,
-        ):
-            if resp.status != 200:
-                return False
-<<<<<<< Updated upstream
-            data = await resp.read()
-    except Exception as e:
-        logger.debug(
-            "[ArtworkService] download failed: %s",
-            e,
-        )
-        return False
-    from ...core.io import async_file_ops as aio
-
-=======
-
-            data = await resp.read()
-    except Exception as e:
-        logger.debug("[ArtworkService] download failed: %s", e)
+    if kind not in _KIND_SUFFIX:
         return False
 
-    from ...core.io import async_file_ops as aio
->>>>>>> Stashed changes
+    suffix = _adjust_artwork_suffix(_KIND_SUFFIX[kind], url, kind)
+    target_path = os.path.join(grid_dir, f"{app_id}{suffix}")
+    tmp_path = target_path + ".tmp"
+
     try:
-        await aio.write_bytes(target, data)
+        await asyncio.to_thread(_ensure_grid_dir, grid_dir)
+        content = await _download_artwork_bytes(url, timeout)
+        if content is None:
+            return False
+        await asyncio.to_thread(_atomic_write_artwork, tmp_path, target_path, content)
         return True
-    except Exception as e:
-<<<<<<< Updated upstream
-        logger.warning(
-            "[ArtworkService] save failed: %s",
-            e,
-        )
-=======
-        logger.warning("[ArtworkService] save failed: %s", e)
->>>>>>> Stashed changes
+    except asyncio.TimeoutError:
+        logger.debug("[ArtworkFetcher] download timed out: %s", url)
         return False
+    except Exception as e:
+        logger.debug("[ArtworkFetcher] download failed %s: %s", url, e)
+        return False
+    finally:
+        await asyncio.to_thread(_cleanup_artwork_tmp, tmp_path)

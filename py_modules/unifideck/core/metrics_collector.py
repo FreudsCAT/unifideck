@@ -31,8 +31,8 @@ import logging
 import time
 from typing import Any
 
-from ..core.types import Events
-from ..event_bus.event_bus import EventBus
+from unifideck.core.types import Events
+from unifideck.event_bus.event_bus import EventBus
 
 logger = logging.getLogger(__name__)
 
@@ -111,7 +111,6 @@ class MetricsCollector:
         during plugin teardown. Subscriptions on the bus
         are cleared by the bus itself when it shuts down.
         """
-        pass
 
     def get_plugin_metrics(self) -> dict[str, Any]:
         """Return a shallow snapshot of every metric family.

@@ -16,15 +16,17 @@ forwarding chain).
 """
 
 from __future__ import annotations
+
 import hashlib
 import logging
 import os
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
-from ....core.types import Game
-from ..config import UbisoftConfig
-from ..id_map import UbisoftIdMap
+
+from unifideck.core.types import Game
+from unifideck.stores.ubisoft.config import UbisoftConfig
+from unifideck.stores.ubisoft.id_map import UbisoftIdMap
 
 logger = logging.getLogger(__name__)
 

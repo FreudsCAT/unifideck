@@ -1,9 +1,11 @@
 from __future__ import annotations
+
 import logging
 import os
 import stat
 from collections.abc import Iterable
 from pathlib import Path
+
 logger = logging.getLogger(__name__)
 LAUNCHER_EXECUTABLE_FILES: tuple[str, ...] = (
  "bin/unifideck-launcher",

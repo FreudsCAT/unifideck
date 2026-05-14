@@ -12,12 +12,15 @@ corresponding cleanup is a no-op rather than a failure.
 """
 
 from __future__ import annotations
+
 import asyncio
 import logging
-import os
 import shutil
+from pathlib import Path
 from typing import TYPE_CHECKING
-from ....core.types import Result
+
+from unifideck.core.types import Result
+
 from .primitives import GOGFolderOps
 
 if TYPE_CHECKING:
@@ -39,7 +42,7 @@ class _UninstallPipeline:
         install_path: str | None = None,
     ) -> Result:
         """Uninstall game."""
-        if not install_path or not os.path.exists(install_path):
+        if not install_path or not await asyncio.to_thread(lambda: Path(install_path).exists()):
             logger.info(
                 "[GOGInstaller] %s already gone, nothing to do",
                 game_id,
@@ -63,7 +66,7 @@ class _UninstallPipeline:
                     attempt + 1,
                     e,
                 )
-            if not os.path.exists(install_path):
+            if not await asyncio.to_thread(lambda: Path(install_path).exists()):
                 logger.info(
                     "[GOGInstaller] uninstalled %s",
                     install_path,
@@ -84,7 +87,7 @@ class _UninstallPipeline:
                 )
         await self._parent._wipe_support_cache(game_id)
         await self._parent._wipe_manifests(game_id)
-        if os.path.exists(install_path):
+        if await asyncio.to_thread(lambda: Path(install_path).exists()):
             remaining = GOGFolderOps.count_files(install_path)
             if remaining > 0:
                 return Result(

@@ -17,6 +17,7 @@ Used by ``install/progress.py`` (OP-51f) and ``install/marker.py``
 """
 
 from __future__ import annotations
+
 import asyncio
 import json
 import logging
@@ -27,7 +28,8 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
-    from ..config import GOGConfig
+
+    from unifideck.stores.gog.config import GOGConfig
 
     CleanupFn = Callable[[], Awaitable[None]]
 logger = logging.getLogger(__name__)

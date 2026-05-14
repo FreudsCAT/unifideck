@@ -4,9 +4,10 @@ import os
 import subprocess
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any, Optional
-from ...core.binaries import binary_resolver
-from ...core.exe_finder import exe_finder
-from ...core.types import (
+
+from unifideck.core.binaries import binary_resolver
+from unifideck.core.exe_finder import exe_finder
+from unifideck.core.types import (
     AuthResult,
     CLITool,
     Events,
@@ -16,10 +17,11 @@ from ...core.types import (
     StoreError,
     StoreInfo,
 )
+
 if TYPE_CHECKING:
-    from ...config import ConfigManager
-    from ...core.cache_manager import CacheManager
-    from ...event_bus import EventBus
+    from unifideck.config import ConfigManager
+    from unifideck.core.cache_manager import CacheManager
+    from unifideck.event_bus import EventBus
 logger = logging.getLogger(__name__)
 class StoreBase(ABC):
     """Store base."""
@@ -122,7 +124,7 @@ class StoreBase(ABC):
                 "CLI binary not found",
                 store=self.store_name,
             )
-        cmd = [bin_path] + args
+        cmd = [bin_path, *args]
         process_env = (
             dict(os.environ) if env is None
             else {**os.environ, **env}
@@ -135,6 +137,7 @@ class StoreBase(ABC):
                 text=True,
                 timeout=timeout,
                 env=process_env,
+                check=False,  # rc read manually below to raise StoreError
             )
             if result.returncode != 0:
                 raise StoreError(

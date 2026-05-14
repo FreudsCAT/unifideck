@@ -31,15 +31,17 @@ import os
 import re
 from collections.abc import Awaitable, Callable
 from typing import Any
-from ...core.manifest import write_manifest
-from ...core.types import Events, InstallResult, Result
-from ...event_bus.event_bus import EventBus
-from ..shared import dlc
-from ..shared.cli_install_helpers import (
+
+from unifideck.core.manifest import write_manifest
+from unifideck.core.types import Events, InstallResult, Result
+from unifideck.event_bus.event_bus import EventBus
+from unifideck.stores.shared import dlc
+from unifideck.stores.shared.cli_install_helpers import (
     drain_install_output,
     parse_progress_line,
     wait_with_timeout,
 )
+
 from .exe_resolver import EpicExeResolver
 from .library import EpicLibraryReader
 
@@ -200,7 +202,10 @@ class EpicInstaller:
             exe_relative = ""
             if exe:
                 try:
-                    exe_relative = os.path.relpath(
+                    # ``os.path.relpath`` is pure string manipulation —
+                    # no filesystem access — so the ASYNC240 rule
+                    # gives a false positive here.
+                    exe_relative = os.path.relpath(  # noqa: ASYNC240
                         exe,
                         install_path,
                     )
@@ -247,7 +252,7 @@ class EpicInstaller:
             stderr=asyncio.subprocess.PIPE,
         )
         try:
-            stdout, stderr = await asyncio.wait_for(
+            _stdout, stderr = await asyncio.wait_for(
                 proc.communicate(),
                 timeout=self._uninstall_timeout,
             )

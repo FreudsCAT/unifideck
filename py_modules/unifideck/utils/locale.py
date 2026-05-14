@@ -28,7 +28,7 @@ from typing import TYPE_CHECKING, Any
 from .config_helpers import get_cfg
 
 if TYPE_CHECKING:
-    from ..config import ConfigManager
+    from unifideck.config import ConfigManager
 
 logger = logging.getLogger(__name__)
 
@@ -108,7 +108,7 @@ def get_locale_config(config: ConfigManager | None):
         return lc_module.load_from_dict(
             {"i18n": i18n_section},
         )
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         # Validation failed — log and return None. Runtime
         # code must never crash just because someone edited
         # config.json incorrectly.

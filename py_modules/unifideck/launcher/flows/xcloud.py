@@ -1,14 +1,17 @@
 from __future__ import annotations
+
 import asyncio
 import contextlib
 import logging
 from typing import TYPE_CHECKING
-from ...core.types import Result
-from ..cdp.xcloud_cdp import run_cdp_inject
-from ..types.context import LaunchContext
-from ..types.errors import DependencyMissingError
+
+from unifideck.core.types import Result
+from unifideck.launcher.cdp.xcloud_cdp import run_cdp_inject
+from unifideck.launcher.types.context import LaunchContext
+from unifideck.launcher.types.errors import DependencyMissingError
+
 if TYPE_CHECKING:
-    from ...auth.edge_browser import EdgeBrowser
+    from unifideck.auth.edge_browser import EdgeBrowser
 logger = logging.getLogger(__name__)
 _MAX_SESSION_SECONDS = 14400
 _POLL_INTERVAL_SECONDS = 5.0
@@ -16,7 +19,7 @@ _XCLOUD_CDP_PORT = 9223
 _CDP_INJECT_TIMEOUT = 60.0
 def _read_config_int(key: str, default: int) -> int:
     """Read config int."""
-    from ...utils.config_helpers import read_config_int_cold_start
+    from unifideck.utils.config_helpers import read_config_int_cold_start
     return read_config_int_cold_start(key, default)
 
 async def launch_xcloud(

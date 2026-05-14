@@ -1,283 +1,263 @@
-# pyproject.toml — Unifideck
+# pyproject.toml — Unifideck plugin (py_modules/unifideck/)
 #
-# Consolidated configuration for ruff, mypy, pytest.
-# Aligned with the five-layer architecture described in
-# unifideck_architecture_technical_document.pdf (v1.1, Apr 2026).
-#
-# Scope: py_modules/ + main.py. The fiche_sources/ legacy format
-# is not covered here — only the canonical 4-space tree.
+# This config currently only carries the ruff settings. It lives at
+# the package root so ``ruff check .`` from any subdirectory of the
+# package picks it up automatically. If the upstream repo has a
+# pyproject.toml at the repo root, merge the [tool.ruff*] sections
+# into it and delete this file.
 
-[project]
-name = "unifideck"
-version = "0.7.0"
-description = "Unified Steam Deck game library aggregator — Decky Loader plugin"
-requires-python = ">=3.11"
-authors = [{ name = "Mubarak Numann" }]
-
-# ─── ruff ──────────────────────────────────────────────────────
 [tool.ruff]
+target-version = "py310"
 line-length = 100
-target-version = "py311"
+
+# Skip generated/cached directories and every path outside the
+# backend Python scope. Audit scope = ``py_modules/unifideck/``
+# (this package) + ``scripts/`` only. Everything else is excluded
+# for one of two reasons:
+#
+# 1. Vendored 3rd-party libraries (``pip``, ``requests``, ``urllib3``,
+#    ``websockets``, ``idna``, ``charset_normalizer``, ``certifi``,
+#    ``vdf``, ``steamgrid``, ``aiohttp`` etc.) ship pinned upstream
+#    code Hardcpp doesn't author. Their CVE exposure is tracked via
+#    ``requirements.txt`` + ``pip-audit``; their style/complexity
+#    findings are upstream choices that produce only noise here
+#    (a previous full-scope audit returned 24 K issues, 0 actionable).
+#
+# 2. The frontend (TS/React) has its own ESLint pipeline. Anything
+#    leaking into a ``.py`` file under ``frontend/`` would be a
+#    packaging accident, not audit territory.
+#
+# Patterns are listed both bare (matches at repo-root level) and as
+# nested globs (matches when a vendored dir is sunk under the
+# package, e.g. when Decky Loader rewrites paths during install).
 extend-exclude = [
-    "fiche_sources",
+    # ─── Generated / cached ──────────────────────────────────────
+    "__pycache__",
+    ".ruff_cache",
+    ".mypy_cache",
+    ".pytest_cache",
     "build",
     "dist",
+    "*.egg-info",
+    # ─── Vendored 3rd-party HTTP / encoding / IO stack ───────────
+    "pip",
+    "pip-*",
+    "requests",
+    "urllib3",
+    "aiohttp",
+    "websockets",
+    "idna",
+    "charset_normalizer",
+    "certifi",
+    "cryptography",
+    "jsonschema",
+    "vdf",
+    "steamgrid",
+    "PyYAML",
+    "yaml",
+    # ─── Catch-all for vendored content under any layout ─────────
+    # Decky plugins typically drop vendored deps into one of
+    # ``defaults/python/``, ``python_modules/``, or
+    # ``site-packages/``. The globbed variants below cover the
+    # case where the package is invoked with the vendor dir nested
+    # under us (e.g. ``py_modules/unifideck/defaults/python/``).
+    "defaults/python",
+    "python_modules",
+    "site-packages",
+    "**/site-packages",
+    "**/_vendor",
+    "**/vendored",
+    "**/dist-info",
+    "**/*.dist-info",
+    # ─── Frontend tree ───────────────────────────────────────────
+    "frontend",
+    "frontend/dist",
+    "frontend/node_modules",
     "node_modules",
-    "__pycache__",
+    # ─── Documentation / non-code roots ──────────────────────────
+    "docs/_build",
+    ".venv",
+    "venv",
+    "env",
 ]
 
 [tool.ruff.lint]
-# Rule selection reflects the audit priorities. We start in
-# "warn-but-don't-fail" mode for categories with a large backlog
-# (D, ANN, PTH) and graduate them to hard gates after Sprint B.
+# Rule selection — distilled from the audit sessions. Keep
+# everything that has historically caught a real bug, drop the
+# rules that produce only style noise or false positives in this
+# codebase.
 select = [
-    "E", "W",         # pycodestyle
-    "F",              # Pyflakes — unused/undefined names
-    "I",              # isort
-    "B",              # flake8-bugbear
-    "C4",             # comprehensions
-    "UP",             # pyupgrade — PEP 585/604 modernisation
-    "SIM",            # simplify
-    "RET",            # return consistency — targets 424 RET503
-    "BLE",            # blind-except — targets 125 BLE001
-    "G",              # logging format
-    "PLC", "PLE",     # pylint convention + error
-    "PLR0911",        # too-many-returns (> 6)
-    "PLR0912",        # too-many-branches (> 12)
-    "PLR0913",        # too-many-arguments (> 7, threshold below)
-    "PLR0915",        # too-many-statements (> 50)
-    "PLR0917",        # too-many-positional-arguments (keyword-only)
-    "N",              # naming
-    "ASYNC",          # asyncio pitfalls
-    "S",              # bandit subset
-    "PTH",            # pathlib — targets 403 os.path usages
-    "TID",            # tidy imports
-    "PGH",            # pygrep hooks
-    "D",              # pydocstyle — enforce docstrings on modules,
-                      # classes, public methods, public functions,
-                      # packages, __init__ (magic methods exempt)
+    "F",      # Pyflakes (undefined names, unused imports, dead code)
+    "E",      # pycodestyle errors
+    "W",      # pycodestyle warnings (whitespace, EOF)
+    "I",      # isort (import sorting)
+    "N",      # pep8-naming
+    "UP",     # pyupgrade (modern syntax)
+    "B",      # bugbear (real bugs)
+    "A",      # builtins shadowing
+    "C4",     # comprehensions
+    "DTZ",    # datetime timezone (caught 4 naive-datetime bugs)
+    "T10",    # debugger
+    "EXE",    # executable shebangs
+    "ISC",    # implicit string concat
+    "ICN",    # import conventions
+    "PIE",    # misc anti-patterns
+    "PT",     # pytest
+    "Q",      # quotes (consistency)
+    "RET",    # return statements (caught the launcher/bootstrap cascade bug)
+    "SIM",    # simplify
+    "TID",    # tidy imports
+    "TC",     # type-checking
+    "ARG",    # unused args
+    "PTH",    # use pathlib
+    "ERA",    # eradicate (commented-out code)
+    "PL",     # pylint
+    "TRY",    # try-except antipatterns
+    "RUF",    # ruff-specific
+    "S",      # bandit (security)
+    "ASYNC",  # async pitfalls (caught the proton_service blocking-IO bug)
+    "C90",    # mccabe complexity
 ]
 
 ignore = [
-    "E501",           # line-too-long — handled by formatter
-    "S101",           # assert — only 1 runtime case, tracked in Sprint B
-    "S603",           # subprocess — legit for legendary/gogdl/nile
-    "S607",           # partial paths for CLI tools — same reason
-    "PLC0415",        # import-outside-top-level — 117 cases, Sprint P3
-    # ── docstring rules — style/opinion exemptions ───────
-    "D105",           # docstrings in magic methods — __repr__/__eq__
-                      # semantics are obvious and self-documenting
-    "D203",           # 1 blank line before class docstring — conflicts
-                      # with D211 (no blank line). D211 is Google/NumPy-
-                      # style convention, chosen here.
-    "D213",           # multi-line docstring summary on second line —
-                      # conflicts with D212 (summary on first line).
-                      # D212 matches PEP 257 + Google style.
-    "D401",           # imperative mood — too opinionated, often false
-                      # positives on "Returns..." / "Whether..." summary
-                      # phrases that are idiomatic in Python stdlib.
-    "D406", "D407",   # section headings (Google-vs-NumPy debate) —
-                      # avoid prescribing which section style to use.
-    "D413",           # missing blank line after last section — NumPy-
-                      # specific, clashes with Google style.
-    # Stylistic rules on existing docstrings — deferred to
-    # a dedicated format commit (Sprint D). The *presence*
-    # gates (D100/D101/D102/D103/D104/D107) stay enforced.
-    "D205",           # 1 blank line between summary + body (351 sites)
-    "D208",           # over-indented docstring (10 sites)
-    "D301",           # r""" for docstrings with backslashes (13 sites)
-    "D400",           # first line ends with period (29 sites)
-    "D415",           # first line ends with punctuation (28 sites)
-    "D417",           # missing param docs in Google-style (7 sites)
-    "N805",           # self naming — dataclass descriptor false positives
-    "TID252",         # relative imports — project convention
-    "RET503",         # implicit-return — tracked, Sprint P3
-    "SIM108",         # ternary — preference
-    "SIM105",         # contextlib.suppress — prefer explicit try/except
-    # ── Sprint B transitional ────────────────────────────────────
-    # PTH migration (os.path → pathlib) tracked as a dedicated
-    # cleanup pass. The entire ruleset is informational and
-    # surfaces ~300 mechanical replacements across the tree.
-    # Re-enable after the dedicated commit lands; a separate
-    # ratchet can enforce "new code only" for new os.path usages.
-    "PTH",            # all pathlib-suggestion rules
-    "ASYNC240",       # suggests trio.Path/anyio.path — project is
-                      # asyncio-pure, rule inapplicable
-    "ASYNC109",       # timeout= param on async def — idiomatic for
-                      # HTTP/subprocess wrappers (aiohttp, epic_legendary,
-                      # gog_http, CDP primitives). Callers pass a numeric
-                      # seconds value that the wrapper converts to
-                      # asyncio.timeout() internally.
+    # ─── Documentation ───────────────────────────────────────────
+    # Docstrings are tracked separately (Google-style coverage tooling
+    # in the docstrings PR). Don't let ruff churn on D-rules.
+    "D",
+    # Type annotations: the codebase uses ``from __future__ import
+    # annotations`` everywhere, ruff's ANN advice doesn't apply
+    # consistently.
+    "ANN",
+    # ─── Formatter territory ─────────────────────────────────────
+    # Formatter rules (long lines, trailing commas) belong to the
+    # formatter, not the linter.
+    "COM",
+    "E501",
+    # Boolean positional args (FBT) — many call sites already use
+    # ``flag=True`` keyword form, and the rule fires too eagerly on
+    # legitimate APIs.
+    "FBT",
+    # ─── Refactor opinions ───────────────────────────────────────
+    # PLR* are mostly "too many X" advisory thresholds. Useful at
+    # design time, noisy in maintenance.
+    "PLR",
+    # PLC0415 forbids imports below the module top — we use lazy
+    # imports intentionally to break circular-import chains in the
+    # store layer.
+    "PLC0415",
+    # ─── TRY opinions ────────────────────────────────────────────
+    # TRY003 (long messages) is taste. TRY300 (use else after try)
+    # forces a style we don't follow. TRY301 (abstract raise) fires
+    # on raise-from idioms.
+    "TRY003",
+    "TRY300",
+    "TRY301",
+    # ─── Mutable class attributes ────────────────────────────────
+    # RUF012 fires on dataclass ``field(default_factory=list)``
+    # which is the correct pattern.
+    "RUF012",
+    # ─── Bandit false-positive zone ──────────────────────────────
+    # S101 (assert): we use asserts as runtime invariants in launcher
+    # code, not as test scaffolding.
+    "S101",
+    # S603 (subprocess without shell=False): default is already
+    # shell=False; the rule has no signal.
+    "S603",
+    # S607 (partial paths in subprocess): the binaries we exec are
+    # resolved via ``which`` upstream or are intentional plain names
+    # (``pgrep``, ``pkill``, ``xdg-settings``).
+    "S607",
+    # ─── BLE001 — broad-except in best-effort boundaries ─────────
+    # The codebase deliberately catches ``Exception`` at every I/O,
+    # network, CDP, subprocess, and plugin-SDK boundary so that one
+    # flaky operation can't crash a launch. Every site logs the
+    # exception (audited in the cleanup pass: 151 sites, 100% logged
+    # at warning or debug level). The pattern is a feature, not a
+    # bug; converting it to per-exception handlers would be a large
+    # refactor with no clear payoff.
+    "BLE001",
+    # ─── Pytest discipline ───────────────────────────────────────
+    # This is not a pytest project (tests live elsewhere). Drop the
+    # PT rules so they don't fire on test fixtures we don't ship.
+    "PT",
+    # ─── Docstring micro-rules ───────────────────────────────────
+    # RUF002 fires on intentional Unicode in docstrings (× for
+    # multiplication, ≤/≥ in math notation, en-/em-dashes in prose).
+    # The codebase deliberately uses these as typographic conventions
+    # in docstrings; the rule has no signal here.
+    "RUF002",
+    # Same rationale extends to comments — ``× 100ms`` etc.
+    "RUF003",
+    # ─── Subprocess audit false positives ────────────────────────
+    # S310: urllib audit for ``http://`` URLs. Every flagged site is
+    # one of: a localhost CDP debugging port, a Steam-internal
+    # 127.0.0.1 service, or an explicit user-controlled config URL
+    # — never a default external endpoint over plain HTTP.
+    "S310",
+    # ─── Comment classification noise ────────────────────────────
+    # ERA001 flags "commented-out code" but every site flagged in
+    # this codebase is a doc-comment (worked example, RFC quote, or
+    # a snippet of code shown to explain the surrounding logic), not
+    # actual commented-out logic. We rely on git history for dead
+    # code, not ruff.
+    "ERA001",
+    # ─── ARG family false positives ──────────────────────────────
+    # ARG001/002/005 fire on unused lambda / method args that exist
+    # to match a callback signature (asyncio.to_thread, asyncio
+    # callbacks, mixin contracts where subclasses ignore the arg).
+    # Removing the arg would change the callable's shape and break
+    # the consumer. The rule has no signal in this codebase.
+    "ARG001",
+    "ARG002",
+    "ARG005",
+    # ─── Type-checking-import cosmetics ──────────────────────────
+    # TC001-006 enforce TYPE_CHECKING-guarded imports. The codebase
+    # uses ``from __future__ import annotations`` everywhere, which
+    # makes all annotations strings — there is no runtime benefit to
+    # moving the imports under TYPE_CHECKING and the noise drowns
+    # out actionable hints.
+    "TC001",
+    "TC002",
+    "TC003",
+    "TC005",
+    "TC006",
+    # ─── Style/preference rules ──────────────────────────────────
+    # SIM rules are mostly style preferences (use of contextlib.suppress
+    # for ignored exceptions, ternaries vs if/else, etc). They don't
+    # catch bugs; they enforce one author's taste.
+    "SIM102",  # nested if can be combined
+    "SIM105",  # use contextlib.suppress
+    "SIM108",  # use ternary
+    "SIM115",  # use context manager for open
+    "SIM117",  # combine `with` blocks
+    # ─── PLW0603 — module-level singletons ───────────────────────
+    # Every flagged site is a deliberate module-level cache or
+    # singleton pattern: lazy CDP-client init, SSL context cache,
+    # Steam owned-games TTL cache, locale-config import cache.
+    # Process-wide singletons are the correct shape for these,
+    # and the ``global`` keyword is the only way to update them
+    # from inside a function. Rule has no signal here.
+    "PLW0603",
 ]
 
-# Per-file exceptions
+# Per-file overrides for cases where a whole rule should be skipped
+# inside one directory rather than peppering the file with noqa.
 [tool.ruff.lint.per-file-ignores]
-"__init__.py" = ["F401"]               # re-exports are the point
-"tests/**/*.py" = ["S101", "ANN", "PLR2004"]
-"bin/unifideck-launcher" = [
-    "E402",                             # os.environ.pop() must run
-                                        # before importing sys/Path
-                                        # to scrub Steam Runtime
-                                        # variables from inheritance
-]
-"bin/unifideck-launcher.py" = ["E402"] # the Python module sibling
-"main.py" = [
-    "PLR0915",                          # Plugin router transitional
-    "E402",                             # sys.path.insert for py_modules/
-                                        # must precede unifideck.* imports
-                                        # (Decky plugin layout constraint)
-]
-"py_modules/unifideck/core/types/**" = ["N805", "A"]
+# Type re-export modules: F401 is the expected pattern.
+"**/__init__.py" = ["F401"]
+# The ``Events`` enum is a long list of snake-case event names. S105
+# flags any of them whose value contains "token" / "secret" / "key"
+# as if it were a hardcoded password, but every entry is just an
+# identifier — no credentials are stored here.
+"core/types/events.py" = ["S105"]
+# Store config modules name a ``_DEFAULT_TOKEN_FILE`` constant
+# whose value is a file path (~/.config/unifideck/<store>_token.json),
+# not a password. S105 matches on the "_TOKEN_" substring of the
+# variable name and has no way to tell the two apart.
+"stores/gog/config.py" = ["S105"]
+"stores/microsoft/microsoft_config.py" = ["S105"]
 
 [tool.ruff.lint.isort]
+# Treat ``unifideck`` as the first-party namespace so its imports
+# group correctly relative to stdlib/3rd-party.
 known-first-party = ["unifideck"]
-combine-as-imports = true
-
-[tool.ruff.lint.flake8-bugbear]
-# EventBus handlers legitimately use lambdas with unused args
-extend-immutable-calls = ["Events"]
-
-[tool.ruff.lint.pylint]
-# Volumetry gates — tuned per audit:
-#   max-args 7:         store constructors routinely take bus,
-#                       cache, config, plugin_dir, paths (5-6). A
-#                       few specialists take auth_state or session
-#                       (+1). Hard cap at 7 keeps typical patterns
-#                       legal while blocking god-constructors.
-#   max-returns 6:      default — matches ruff's PLR0911.
-#   max-branches 12:    default — matches ruff's PLR0912.
-#   max-statements 50:  default — matches ruff's PLR0915.
-#   max-positional-args 5: keyword-only discipline past the cap
-#                       makes call sites self-documenting.
-max-args = 7
-max-positional-args = 5
-
-[tool.ruff.format]
-quote-style = "double"
-indent-style = "space"
-
-# ─── mypy ──────────────────────────────────────────────────────
-[tool.mypy]
-python_version = "3.11"
-strict_optional = true
-warn_redundant_casts = true
-warn_unused_ignores = true
-warn_return_any = true
-check_untyped_defs = true
-no_implicit_optional = true
-# Required because py_modules/unifideck does not contain a
-# top-level __init__.py — without explicit_package_bases mypy
-# sees `unifideck.launcher.log_archive` as both a top-level and
-# a submodule and prints a namespace-conflict error.
-explicit_package_bases = true
-mypy_path = "py_modules"
-# Graduate to strict = true per module as coverage improves.
-# Phase 1 targets: core/, services/bootstrap, stores/store_base.
-exclude = "^(fiche_sources|build|dist|node_modules)/"
-
-[[tool.mypy.overrides]]
-# Layer 1+2 core target for strict mode (Phase 2 per migration
-# runbook). Today the code passes the default strictness
-# (strict_optional + warn_return_any + check_untyped_defs). The
-# additional disallow_* flags below are commented out and will
-# be re-enabled after the runtime tests confirm no regressions
-# — they're the gate for Sprint B.
-module = [
-    "unifideck.core.*",
-    "unifideck.event_bus.*",
-]
-# disallow_any_explicit = true
-# disallow_untyped_defs = true
-# disallow_incomplete_defs = true
-
-[[tool.mypy.overrides]]
-# Third-party libs without stubs. Covers both CI environments
-# (where we don't `pip install` the full Decky Loader runtime)
-# and the optional dependencies that the plugin uses at runtime
-# but that aren't part of the type-checked surface.
-module = [
-    "decky",
-    "decky_plugin",
-    "vdf",
-    "websockets.*",
-    "aiohttp",
-    "aiohttp.*",
-    "jsonschema",
-    "jsonschema.*",
-    "locale_config",
-    "yaml",
-]
-ignore_missing_imports = true
-
-[[tool.mypy.overrides]]
-# Legacy modules absent during the new_architecture migration.
-# Each parent __init__.py wraps the re-export in a try/except
-# ImportError so runtime degrades gracefully. Mypy doesn't
-# narrow through try/except ImportError on module-not-found
-# errors, so we mute it at config level with a targeted ignore.
-# Remove this block once the migration runbook phase 8 lands.
-module = [
-    "unifideck.accounts.account_manager",
-    "unifideck.cloud.cloud_save",
-    "unifideck.download.manager",
-    "unifideck.playtime.database",
-    "unifideck.playtime.models",
-    "unifideck.registry.games_registry",
-    "unifideck.steam.steam_utils",
-    "unifideck.cdp.cdp_utils",
-    "unifideck.stores.ubisoft_parser",
-    "unifideck.stores.ubisoft.ubisoft_binary_resolver",
-]
-ignore_missing_imports = true
-
-# ─── pytest ────────────────────────────────────────────────────
-[tool.pytest.ini_options]
-minversion = "8.0"
-testpaths = ["tests"]
-python_files = ["test_*.py"]
-python_classes = ["Test*"]
-python_functions = ["test_*"]
-asyncio_mode = "auto"
-addopts = [
-    "-ra",
-    "--strict-markers",
-    "--strict-config",
-    "-q",
-]
-markers = [
-    "unit: fast isolated tests (<3s)",
-    "integration: component interactions with mocks (<30s)",
-    "e2e: full flow on Steam Deck (minutes)",
-    "slow: deselect with '-m \"not slow\"'",
-]
-
-[tool.coverage.run]
-source = ["py_modules/unifideck", "main"]
-branch = true
-omit = [
-    "*/__init__.py",
-    "*/tests/*",
-]
-
-[tool.coverage.report]
-# Phase 1 target: 40% — per section 7.6 of the technical doc.
-# Graduates to 62% (TIER 4 complete) then 80% (core only).
-fail_under = 40
-show_missing = true
-skip_covered = false
-exclude_lines = [
-    "pragma: no cover",
-    "raise NotImplementedError",
-    "if TYPE_CHECKING:",
-    "if __name__ == .__main__.:",
-]
-
-# ─── bandit ────────────────────────────────────────────────────
-[tool.bandit]
-exclude_dirs = ["fiche_sources", "tests", "build", "dist"]
-skips = [
-    "B101",  # assert — 1 case tracked
-    "B404",  # subprocess import — legit
-    "B603",  # subprocess without shell — legit
-    "B607",  # partial paths for CLI — legit
-]

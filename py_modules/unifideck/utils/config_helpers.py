@@ -88,7 +88,7 @@ def get_cfg(
         return default
     try:
         return config.get(key, default)
-    except Exception:  # noqa: BLE001
+    except Exception:
         # Duck-typed config objects in tests may raise anything.
         return default
 
@@ -118,7 +118,9 @@ def read_config_int_cold_start(key: str, default: int) -> int:
     and migration rewrites.
     """
     import json
-    from pathlib import Path as _P  # noqa: N814 — intentional: module-scope alias of pathlib.Path
+    from pathlib import (
+        Path as _P,  # noqa: N814 — short alias kept for the hot-path read function below
+    )
 
     config_path = _P(_COLD_START_CONFIG_PATH).expanduser()
     if not config_path.is_file():

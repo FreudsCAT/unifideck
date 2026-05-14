@@ -178,7 +178,7 @@ class CacheStore:
                 self._save()
                 return
             except (json.JSONDecodeError, OSError, ValueError):
-                logger.error(
+                logger.exception(
                     "[CacheManager] %s backup also corrupt",
                     self.name,
                 )
@@ -239,12 +239,8 @@ class CacheStore:
                     self.path,
                     e,
                 )
-        except OSError as e:
-            logger.error(
-                "[CacheManager] write failed for %s: %s",
-                self.name,
-                e,
-            )
+        except OSError:
+            logger.exception("[CacheManager] write failed for %s", self.name)
             if tmp.exists():
                 try:
                     tmp.unlink()

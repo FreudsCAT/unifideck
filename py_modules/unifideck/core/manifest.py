@@ -33,12 +33,12 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
-from ..core.types import Events
-from ..event_bus.event_bus import EventBus
-from ..utils.config_helpers import get_cfg
+from unifideck.core.types import Events
+from unifideck.event_bus.event_bus import EventBus
+from unifideck.utils.config_helpers import get_cfg
 
 if TYPE_CHECKING:
-    from ..config import ConfigManager
+    from unifideck.config import ConfigManager
 
 logger = logging.getLogger(__name__)
 
@@ -290,13 +290,8 @@ async def write_manifest(
             path,
         )
         return True
-    except OSError as e:
-        logger.error(
-            "[discovery] write_manifest %s:%s failed: %s",
-            store,
-            store_id,
-            e,
-        )
+    except OSError:
+        logger.exception("[discovery] write_manifest %s:%s failed", store, store_id)
         return False
 
 
@@ -389,7 +384,7 @@ async def discover_all(
     Returns:
         ``DiscoveryResult`` with counters.
     """
-    from ..utils.paths import get_all_game_directories
+    from unifideck.utils.paths import get_all_game_directories
 
     result = DiscoveryResult()
     roots = await asyncio.to_thread(get_all_game_directories, config)

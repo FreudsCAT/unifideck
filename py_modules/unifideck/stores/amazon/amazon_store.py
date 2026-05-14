@@ -23,34 +23,31 @@ appropriate sub-component.
 """
 
 from __future__ import annotations
+
+import asyncio
 import json
 import logging
 import os
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
-from ...auth.browser import OAuthBrowserMonitor
-from ...auth.orchestrator import AuthOrchestrator
-from ...core.types import (
-    AuthResult,
-    CLITool,
-    Events,
-    Game,
-    InstallResult,
-    Result,
-    StoreInfo,
-)
-from ...security import emit_external_auth_check_failed
-from ...services.shortcut import ShortcutService
-from ...utils.config_helpers import get_cfg
-from ..shared.store_base import StoreBase
+
+from unifideck.auth.browser import OAuthBrowserMonitor
+from unifideck.auth.orchestrator import AuthOrchestrator
+from unifideck.core.types import AuthResult, CLITool, Events, Game, InstallResult, Result, StoreInfo
+from unifideck.security import emit_external_auth_check_failed
+from unifideck.services.shortcut import ShortcutService
+from unifideck.stores.shared.store_base import StoreBase
+from unifideck.utils.config_helpers import get_cfg
+
 from .amazon_auth import AmazonAuthFlow
 from .amazon_install import AmazonInstaller, ProgressCallback
 from .amazon_library import AmazonLibraryReader, merge_install_status
 from .amazon_updates import AmazonUpdateChecker
 
 if TYPE_CHECKING:
-    from ...config import ConfigManager
-    from ...core.cache_manager import CacheManager
-    from ...event_bus.event_bus import EventBus
+    from unifideck.config import ConfigManager
+    from unifideck.core.cache_manager import CacheManager
+    from unifideck.event_bus.event_bus import EventBus
 logger = logging.getLogger(__name__)
 
 
@@ -209,11 +206,8 @@ class AmazonStore(StoreBase):
             owned = await self._library.read_owned_games()
             installed = await self._library.read_installed_ids()
             return merge_install_status(owned, installed)
-        except Exception as e:
-            logger.error(
-                "[AmazonStore] get_library failed: %s",
-                e,
-            )
+        except Exception:
+            logger.exception("[AmazonStore] get_library failed")
             return []
 
     async def install_game(
@@ -275,7 +269,7 @@ class AmazonStore(StoreBase):
             "launcher",
             "dispatcher.py",
         )
-        if not os.path.isfile(launcher):
+        if not await asyncio.to_thread(lambda: Path(launcher).is_file()):
             logger.warning(
                 "[AmazonStore] launcher dispatcher not found at %s",
                 launcher,

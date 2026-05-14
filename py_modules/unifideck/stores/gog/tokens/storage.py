@@ -23,23 +23,27 @@ its config dir after every subprocess invocation (security hardening).
 """
 
 from __future__ import annotations
+
 import asyncio
 import json
 import logging
 import os
 import time
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
-from ....security import (
+
+from unifideck.security import (
     SecureTokenStore,
     SecureTokenStoreError,
     emit_legacy_plaintext_detected,
     emit_permissions_check,
     emit_token_file_migrated,
 )
+
 from .user_info import GOGUserInfo
 
 if TYPE_CHECKING:
-    from ..config import GOGConfig
+    from unifideck.stores.gog.config import GOGConfig
 logger = logging.getLogger(__name__)
 
 
@@ -60,8 +64,8 @@ class _TokenStorage:
 
     async def load(self) -> tuple[str, str, GOGUserInfo] | None:
         """Load."""
-        path = os.path.expanduser(self._config.token_file)
-        if not os.path.isfile(path):
+        path = await asyncio.to_thread(lambda: str(Path(self._config.token_file).expanduser()))
+        if not await asyncio.to_thread(lambda: Path(path).is_file()):
             return None
 
         def _read_sync() -> bytes | None:
@@ -100,7 +104,7 @@ class _TokenStorage:
         user_info: GOGUserInfo,
     ) -> bool:
         """Persist."""
-        path = os.path.expanduser(self._config.token_file)
+        path = await asyncio.to_thread(lambda: str(Path(self._config.token_file).expanduser()))
         payload = {
             "access_token": access_token,
             "refresh_token": refresh_token,
@@ -109,11 +113,10 @@ class _TokenStorage:
         }
         try:
             blob = self._secure_store.encrypt_payload(payload)
-        except SecureTokenStoreError as e:
-            logger.error(
-                "[GOGTokens] cannot encrypt tokens: %s — "
+        except SecureTokenStoreError:
+            logger.exception(
+                "[GOGTokens] cannot encrypt tokens — "
                 "refusing to write plaintext fallback",
-                e,
             )
             return False
         ok = await asyncio.to_thread(
@@ -130,15 +133,17 @@ class _TokenStorage:
 
     async def clear_files(self) -> None:
         """Clear files."""
-        paths_to_remove = [
-            os.path.expanduser(self._config.token_file),
-            os.path.join(
-                os.path.expanduser(
-                    self._config.gogdl_config_dir,
+        def _resolve_paths() -> list[str]:
+            """Resolve all credential paths synchronously (off the loop)."""
+            return [
+                str(Path(self._config.token_file).expanduser()),
+                os.path.join(
+                    str(Path(self._config.gogdl_config_dir).expanduser()),
+                    "gog_credentials.json",
                 ),
-                "gog_credentials.json",
-            ),
-        ]
+            ]
+
+        paths_to_remove = await asyncio.to_thread(_resolve_paths)
 
         def _remove_sync() -> None:
             """Remove sync."""
@@ -237,7 +242,7 @@ class _TokenStorage:
     async def _remove_stale_gogdl_mirror(self) -> None:
         """Remove stale GOGDL mirror."""
         stale = os.path.join(
-            os.path.expanduser(self._config.gogdl_config_dir),
+            await asyncio.to_thread(lambda: str(Path(self._config.gogdl_config_dir).expanduser())),
             "gog_credentials.json",
         )
 

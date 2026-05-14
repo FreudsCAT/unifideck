@@ -37,6 +37,15 @@ _NAMED_CACHES: tuple[tuple[str, int], ...] = (
     ("artwork_attempts", 0),
     ("game_sizes", 3600),
     ("compat", 0),
+    # ``MetadataService`` caches the merged-and-deduped metadata
+    # under the ``"metadata"`` namespace (see ``CACHE_NAMESPACE``
+    # in ``services/metadata_service.py``). Earlier this slot was
+    # missing from the registry — ``_get_store("metadata")`` raised
+    # ``ValueError: Cache 'metadata' not registered``, swallowed
+    # by the service's try/except, so every ``enrich()`` call
+    # silently re-fetched from all three upstream sources.
+    # 7 days mirrors the service's ``DEFAULT_CACHE_TTL``.
+    ("metadata", 7 * 24 * 3600),
 )
 
 _STORE_CACHES: tuple[str, ...] = (

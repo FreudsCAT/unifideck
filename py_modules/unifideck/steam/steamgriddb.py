@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, Any
 from unifideck.utils.config_helpers import get_cfg
 
 if TYPE_CHECKING:
-    from ..config import ConfigManager
+    from unifideck.config import ConfigManager
 logger = logging.getLogger(__name__)
 SGDB_API_BASE = "https://www.steamgriddb.com/api/v2"
 ARTWORK_KINDS = {

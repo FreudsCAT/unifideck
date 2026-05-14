@@ -16,6 +16,7 @@ user can sign in.
 """
 
 from __future__ import annotations
+
 import asyncio
 import logging
 import os
@@ -24,9 +25,10 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from ..config import UbisoftConfig
-    from ..installer.cache import UbisoftInstallerCache
-    from ..paths import UbisoftPrefixPaths
+    from unifideck.stores.ubisoft.config import UbisoftConfig
+    from unifideck.stores.ubisoft.installer.cache import UbisoftInstallerCache
+    from unifideck.stores.ubisoft.paths import UbisoftPrefixPaths
+
     from .helpers import _PrefixHelpers
     from .template_builder import _TemplatePrefixBuilder
 logger = logging.getLogger(__name__)
@@ -61,7 +63,7 @@ class _AuthPrefixBuilder:
             auth_dir,
             upc_path,
         )
-        if not rebuild and Path(auth_dir).is_dir() and not upc_path:
+        if not rebuild and await asyncio.to_thread(lambda: Path(auth_dir).is_dir()) and not upc_path:
             logger.warning(
                 "[UbisoftPrefixManager] auth prefix exists "
                 "but upc.exe missing, re-cloning",
@@ -132,7 +134,7 @@ class _AuthPrefixBuilder:
                 "[UbisoftPrefixManager] cloning %s → auth prefix",
                 label,
             )
-            Path(auth_dir).mkdir(parents=True, exist_ok=True)
+            await asyncio.to_thread(lambda: Path(auth_dir).mkdir(parents=True, exist_ok=True))
             ok = await self._helpers.rsync_clone(
                 src,
                 auth_dir,
@@ -151,7 +153,7 @@ class _AuthPrefixBuilder:
         installer_path = await self._installer_cache.ensure_cached()
         if not installer_path:
             return False
-        Path(auth_dir).mkdir(parents=True, exist_ok=True)
+        await asyncio.to_thread(lambda: Path(auth_dir).mkdir(parents=True, exist_ok=True))
         success = await self._helpers.run_silent_installer(
             prefix_dir=auth_dir,
             installer_path=installer_path,
@@ -228,10 +230,10 @@ class _AuthPrefixBuilder:
         """Repair auth prefix if needed."""
         auth_dir = self._config.auth_prefix_dir_expanded
         session_file = self._config.upc_session_file_expanded
-        if os.path.isdir(auth_dir):
+        if await asyncio.to_thread(lambda: Path(auth_dir).is_dir()):
             self._helpers.try_inject_auth_state([auth_dir])
             return
-        if not os.path.isfile(session_file):
+        if not await asyncio.to_thread(lambda: Path(session_file).is_file()):
             return
         logger.info(
             "[UbisoftPrefixManager] auth prefix "

@@ -1,10 +1,13 @@
 from __future__ import annotations
+
 import logging
 import shutil
 from pathlib import Path
-from ...types.errors import GameFailedError, UmuRuntimeError
-from ..infrastructure.core import ProtonLaunchPlan
-from ..infrastructure.umu_runtime import run_umu_with_retry
+
+from unifideck.launcher.proton.infrastructure.core import ProtonLaunchPlan
+from unifideck.launcher.proton.infrastructure.umu_runtime import run_umu_with_retry
+from unifideck.launcher.types.errors import GameFailedError, UmuRuntimeError
+
 logger = logging.getLogger(__name__)
 def _locate_store_cli(plan: ProtonLaunchPlan, tool_name: str) -> Path | None:
     """Locate store cli."""
@@ -16,8 +19,8 @@ def _locate_store_cli(plan: ProtonLaunchPlan, tool_name: str) -> Path | None:
 async def _gog_launch(plan: ProtonLaunchPlan) -> int:
     """Gog launch."""
     try:
-        from ....config.config_manager import ConfigManager
-        from ..language_setup import apply_gog_language
+        from unifideck.config.config_manager import ConfigManager
+        from unifideck.launcher.proton.language_setup import apply_gog_language
         _cfg = ConfigManager(
             str(plan.context.plugin_dir / "defaults" / "config.json"),
         )
@@ -31,7 +34,7 @@ async def _gog_launch(plan: ProtonLaunchPlan) -> int:
             err,
         )
     try:
-        from ..fixes.galaxy_stub import install_galaxy_stub
+        from unifideck.launcher.proton.fixes.galaxy_stub import install_galaxy_stub
         install_galaxy_stub(
             str(plan.prefix_path),
             plugin_dir=plan.context.plugin_dir,
@@ -62,8 +65,8 @@ async def _amazon_launch(plan: ProtonLaunchPlan) -> int:
 
     """Amazon launch."""
     try:
-        from ....config.config_manager import ConfigManager
-        from ..language_setup import apply_amazon_language
+        from unifideck.config.config_manager import ConfigManager
+        from unifideck.launcher.proton.language_setup import apply_amazon_language
         _cfg = ConfigManager(
             str(plan.context.plugin_dir / "defaults" / "config.json"),
         )

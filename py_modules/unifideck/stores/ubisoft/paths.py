@@ -17,8 +17,10 @@ before the Steam users — required for DPAPI credential matching.
 """
 
 from __future__ import annotations
+
 from collections.abc import Iterator
 from pathlib import Path
+
 from .config import UbisoftConfig
 
 

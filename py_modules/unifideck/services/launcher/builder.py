@@ -1,113 +1,84 @@
-"""Standalone ``LauncherService`` factory for the dispatcher CLI.
+"""services/launcher/builder.py — Standalone CLI factory.
 
-OP-20f | py_modules/unifideck/services/launcher/builder.py
+Factory used exclusively by ``launcher/dispatcher.py`` when the
+Python process spawned by ``bin/unifideck-launcher`` needs a
+``LauncherService`` but can't access the live plugin's
+``ServiceContainer`` (plugin runs in a separate Decky Loader
+interpreter).
 
-When the dispatcher CLI is invoked outside Decky Loader (e.g.
-from a Steam shortcut's ``Exec=`` line), there's no
-``ServiceBootstrap`` to wire up the launcher's dependencies.
-``build_standalone`` is the CLI-only factory that constructs the
-minimum set of collaborators directly so the launch path can
-still run.
-
-The standalone build differs from the in-plugin one:
-
-* a fresh ``EventBus`` (no subscribers — emissions are
-  fire-and-forget);
-* no ``StoreRegistry`` (the dispatcher receives the store id
-  via the launch context);
-* no ``LaunchHistoryService`` (the circuit breaker is bypassed
-  in CLI mode because the CLI is itself the manual recovery
-  path);
-* ``cloud_root=None`` (cloud saves disabled — the user can
-  re-run with a full plugin context to sync).
-
-``_pick_first_shortcuts_vdf`` picks the first valid
-``shortcuts.vdf`` under ``~/.steam/root/userdata`` — Steam
-creates one per logged-in account, the CLI just uses whichever
-it finds first.
+Minimal service graph: EventBus + ShortcutService +
+ProtonService + CloudSaveService + EdgeBrowser + LauncherService.
+Bypasses ``ConfigManager`` — the dispatcher is short-lived and
+doesn't need feature flags or UI locale; 50 ms boot cost saved.
 """
-
 from __future__ import annotations
+
+import glob
+import os
 
 from .service import LauncherService
 
 
-def _pick_first_shortcuts_vdf(userdata_root):
-    """Return the first ``shortcuts.vdf`` found under userdata_root.
+def _pick_first_shortcuts_vdf(userdata_root: str) -> str | None:
+    """Find a ``shortcuts.vdf`` under Steam's userdata dir.
 
-    Walks ``<userdata_root>/<account>/config/shortcuts.vdf`` for
-    each account directory and returns the first file that
-    actually exists. Useful when the Steam Deck has a single
-    Steam account — multiple accounts are unusual on the device.
-
-    Args:
-        userdata_root: path to Steam's ``userdata`` directory.
-
-    Returns:
-        ``Path`` of the first valid shortcuts.vdf, or ``None``
-        if none was found (fresh Steam, never used).
+    Scans ``~/.steam/root/userdata/*/config/shortcuts.vdf`` and
+    returns the first match — same heuristic the plugin uses at
+    boot so both processes read the same file. Returns None if
+    no Steam profiles exist (fresh install, missing SteamOS).
     """
-    from pathlib import Path as _Path
-
-    root = _Path(userdata_root)
-    if not root.is_dir():
-        return None
-    for user_dir in root.iterdir():
-        candidate = user_dir / "config" / "shortcuts.vdf"
-        if candidate.is_file():
-            return candidate
+    pattern = os.path.join(userdata_root, "*", "config", "shortcuts.vdf")
+    matches = glob.glob(pattern)
+    if matches:
+        return matches[0]
     return None
 
 
 def build_standalone() -> LauncherService:
-    """Construct a CLI-mode ``LauncherService`` with hard-coded paths.
+    """Build a fully-wired LauncherService for the CLI dispatcher.
 
-    Builds the minimum service graph needed to run a launch
-    outside Decky Loader:
-
-    * data directory at ``~/.local/share/unifideck/``
-      (created on the fly);
-    * Steam userdata at ``~/.steam/root/userdata``;
-    * games map at ``~/.local/share/unifideck/games.map``;
-    * Edge browser bound to CDP port 9222 (the default Edge
-      remote-debugging port).
-
-    Returns:
-        A ready-to-use ``LauncherService`` instance. The caller
-        is responsible for calling ``start`` and ``launch``.
+    Paths match what ``main.py`` configures but are hardcoded
+    here to avoid loading ConfigManager. Does not explicitly
+    raise — underlying ctors may raise OSError on some
+    filesystem errors, which the dispatcher maps to
+    ``ExitCode.DEPENDENCY_MISSING``. Cloud sync is disabled
+    (``cloud_root=None``) in the standalone path: the plugin's
+    ServiceBootstrap wires the real root from config; the CLI
+    only needs local saves.
     """
-    from pathlib import Path as _Path
-
-    from ...auth.edge_browser import EdgeBrowser
-    from ...event_bus import EventBus
-    from ..cloud_save import CloudSaveService
-    from ..proton_service import ProtonService
-    from ..shortcut import ShortcutService
+    from unifideck.auth.edge_browser import EdgeBrowser
+    from unifideck.event_bus.event_bus import EventBus
+    from unifideck.services.cloud_save.service import CloudSaveService
+    from unifideck.services.proton_service.service import ProtonService
+    from unifideck.services.shortcut.service import ShortcutService
 
     bus = EventBus()
-    data_dir = _Path("~/.local/share/unifideck").expanduser()
-    data_dir.mkdir(parents=True, exist_ok=True)
-    userdata_root = _Path("~/.steam/root/userdata").expanduser()
-    shortcuts_file = _pick_first_shortcuts_vdf(userdata_root)
-    games_map_path = data_dir / "games.map"
+
+    # Standalone paths
+    steam_root = os.path.expanduser("~/.steam/root")
+    userdata_root = os.path.join(steam_root, "userdata")
+    plugin_dir = os.path.expanduser("~/homebrew/plugins/unifideck")
+    local_saves_root = os.path.expanduser("~/.local/share/unifideck/saves")
+
+    shortcuts_vdf = _pick_first_shortcuts_vdf(userdata_root)
+
     shortcut_svc = ShortcutService(
         bus=bus,
-        shortcuts_path=str(shortcuts_file) if shortcuts_file else "",
-        games_map_path=str(games_map_path),
+        plugin_dir=plugin_dir,
+        shortcuts_vdf_path=shortcuts_vdf or "",
     )
-    proton_svc = ProtonService(
-        bus=bus,
-        config_vdf_path=str(userdata_root / "config" / "config.vdf"),
-    )
+
+    proton_svc = ProtonService()
+
     cloud_svc = CloudSaveService(
         bus=bus,
-        local_save_root=str(data_dir / "saves"),
-        cloud_root=None,
+        local_save_root=local_saves_root,
+        cloud_root=None, # Disabled in CLI
+        config=None,
     )
-    edge_browser = EdgeBrowser(
-        cdp_port=9222,
-        locale_fn=lambda: "en-US",
-    )
+
+    edge_browser = EdgeBrowser()
+
     return LauncherService(
         bus=bus,
         shortcut_svc=shortcut_svc,
@@ -115,3 +86,4 @@ def build_standalone() -> LauncherService:
         cloud_svc=cloud_svc,
         edge_browser=edge_browser,
     )
+

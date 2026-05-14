@@ -18,13 +18,16 @@ explicit error codes.
 """
 
 from __future__ import annotations
+
 import logging
 import urllib.parse
 from typing import Any
-from ...auth.orchestrator import AuthOrchestrator
-from ...core.types import AuthResult, Events, Result
-from ...event_bus.event_bus import EventBus
-from ...security import audit_auth_flow
+
+from unifideck.auth.orchestrator import AuthOrchestrator
+from unifideck.core.types import AuthResult, Events, Result
+from unifideck.event_bus.event_bus import EventBus
+from unifideck.security import audit_auth_flow
+
 from .config import GOG_AUTH_URL_FILE, GOGConfig
 from .tokens import GOGTokenManager
 

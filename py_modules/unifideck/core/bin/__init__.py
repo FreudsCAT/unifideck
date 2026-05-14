@@ -29,6 +29,6 @@ __all__ = [
     "BinaryResolver",
     "binary_resolver",
     "compute_sha256",
-    "verify_bundled_binary",
     "read_cli_timeouts",
+    "verify_bundled_binary",
 ]

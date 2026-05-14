@@ -1,11 +1,13 @@
 from __future__ import annotations
+
 import logging
 import os
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING
+
 if TYPE_CHECKING:
-    from ...config import ConfigManager
+    from unifideck.config import ConfigManager
 logger = logging.getLogger(__name__)
 def _resolve_archive_dir(config: ConfigManager | None) -> Path:
     """Resolve archive dir."""

@@ -1,17 +1,20 @@
 from __future__ import annotations
+
 import json
 import logging
 import os
 import re
 from typing import TYPE_CHECKING
+
 from .registry_io import (
     _apply_windows_locale,
     _atomic_write_text,
     _resolve_prefix,
 )
 from .resolver import UBISOFT_LANG_MAP, get_unifideck_language
+
 if TYPE_CHECKING:
-    from ....config import ConfigManager
+    from unifideck.config import ConfigManager
 logger = logging.getLogger(__name__)
 def _load_ubisoft_install_id(space_id: str) -> str | None:
     """Load UBISOFT install ID."""

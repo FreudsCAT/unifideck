@@ -22,7 +22,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from ...config import ConfigManager
+    from unifideck.config import ConfigManager
 
 
 # Hardcoded defaults matching the legacy code's behaviour. Stores

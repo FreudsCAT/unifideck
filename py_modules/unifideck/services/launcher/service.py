@@ -1,79 +1,37 @@
-"""services.launcher.service — LauncherService DI facade.
-LauncherService is the single entry point used by main.py and the
-dispatcher CLI. It holds references to the existing backend
-services (ShortcutService for games_map access, ProtonService for
-compat-tool resolution, CloudSaveService for pre/post sync, and
-EdgeBrowser for xCloud + OAuth kiosk modes) and orchestrates a
-single launch end-to-end.
-**No duplication of existing code.** Every non-trivial piece of
-logic is delegated to a backend service that already implements
-it. The only code that lives in this subpackage is:
-    - The dispatch logic (which store handler to call for a given
-            LaunchContext) — in ``launch`` below
-    - The signal-handler wiring (signals.py)
-    - The launch stage event sequence (launched → stopped)
-    - Wrapping subprocess.run calls for store-specific CLI tools
-            (legendary, gogdl, nile — these aren't a service)
-Module layout
--------------
-This class used to live as a single 821 LOC module. During the
-2026-04-18 volumetry refactor it was split into five sibling
-modules that this class delegates to:
-        - ``circuit_breaker``  : pre-launch failure-protection
-        - ``error_toasts``     : post-failure user reporting
-        - ``orchestrator``     : per-platform launch entry points
-        - ``helpers``          : technical primitives for launch flows
-        - ``builder``          : standalone-CLI factory (separate file)
-Dependencies (all injected — never instantiated here):
-    - bus: EventBus for emit_game_launched / _stopped
-    - shortcut_svc: ShortcutService for games_map read/write
-    - proton_svc: ProtonService for compat tool selection
-    - cloud_svc: CloudSaveService for sync_down / sync_up
-    - edge_browser: EdgeBrowser for auth flows and xCloud kiosk mode
-The service_bootstrap already wires up the four services above.
-LauncherService joins the bootstrap order after all of them so
-its dependencies are guaranteed to be ready at construction time.
-"""
+"""services/launcher/service.py — LauncherService DI facade.
 
+Single entry point used by main.py and the dispatcher CLI. Holds
+references to existing services (ShortcutService, ProtonService,
+CloudSaveService, EdgeBrowser) and orchestrates a single launch
+end-to-end. No logic duplication — all non-trivial work is
+delegated. The remaining code here is dispatch + signal wiring +
+launch stage events + CLI-tool subprocess wrapping.
+"""
 from __future__ import annotations
+
+import asyncio
 import logging
+import signal
 from typing import TYPE_CHECKING, Any
-from ...core.types import Result
-from ...launcher.rpc import (
-    emit_game_launched,
-    emit_game_stopped,
-    emit_stage,
-)
-from ...launcher.signals import (
-    GameProcessRegistry,
-    SignalState,
-    install_signal_handlers,
-)
-from ...launcher.types.context import LaunchContext, RuntimeState
-from ...launcher.types.errors import LauncherError
-from . import circuit_breaker, error_toasts, helpers, orchestrator
+
+from unifideck.core.types import Result
+from unifideck.launcher.types.context import LaunchContext, RuntimeState
 
 if TYPE_CHECKING:
-    from ...auth.edge_browser import EdgeBrowser
-    from ...event_bus import EventBus
-    from ...launcher.proton.infrastructure.core import ProtonLaunchPlan
-    from ..cloud_save import CloudSaveService
-    from ..proton_service import ProtonService
-    from ..shortcut import ShortcutService
+    from unifideck.auth.edge_browser import EdgeBrowser
+    from unifideck.event_bus.event_bus import EventBus
+    from unifideck.launcher.proton.infrastructure.core import ProtonLaunchPlan
+    from unifideck.services.cloud_save.service import CloudSaveService
+    from unifideck.services.proton_service import ProtonService
+    from unifideck.services.shortcut.service import ShortcutService
+
 logger = logging.getLogger(__name__)
 
 
 class LauncherService:
-    """Facade that orchestrates a single game launch.
-    Injected by ServiceBootstrap with references to every backend
-    service it needs. Does not instantiate anything itself. Does
-    not duplicate logic that lives elsewhere — the bash modules
-    that used to reimplement Proton selection, cloud save sync,
-    and Edge kiosk launch are replaced by delegation to the
-    existing services.
-    """
+    """Facade orchestrating one launch via delegation to services."""
 
-    def __init__(  # noqa: D107 — class docstring documents the constructor's contract
+    def __init__(
         self,
         bus: EventBus,
         shortcut_svc: ShortcutService,
@@ -83,29 +41,7 @@ class LauncherService:
         config: Any | None = None,
         launch_history: Any | None = None,
     ) -> None:
-        """Wire injected dependencies and prepare signal-handling state.
-
-        Constructs the signal-handling primitives but does **not**
-        install the OS-level handlers — that's deferred to
-        ``start()`` so the service can be instantiated in tests
-        without affecting the process's signal disposition.
-
-        Args:
-            bus: event bus used to emit GAME_LAUNCHED /
-                GAME_STOPPED / launch stage toasts.
-            shortcut_svc: shortcut service for games_map reads
-                (resolving game_key → executable path).
-            proton_svc: Proton service for compat-tool selection
-                during plan preparation.
-            cloud_svc: cloud-save service for pre/post-launch
-                sync.
-            edge_browser: CDP-driven browser used by xCloud and
-                OAuth-action launch paths.
-            config: optional config manager forwarded to helpers
-                that read launcher-specific tunables.
-            launch_history: optional launch-history service used
-                by the circuit breaker to consult prior outcomes.
-        """
+        """Store injected deps + initialise signal/process registry state."""
         self._bus = bus
         self._shortcut_svc = shortcut_svc
         self._proton_svc = proton_svc
@@ -113,333 +49,179 @@ class LauncherService:
         self._edge_browser = edge_browser
         self._config = config
         self._launch_history = launch_history
-        self._signal_state = SignalState()
-        self._registry = GameProcessRegistry(self._signal_state)
+
+        self._active_subprocess: Any = None
+        self._cancelled = False
+        self._launch_started_at: float | None = None
 
     async def start(self) -> None:
         """Install signal handlers. Called by ServiceBootstrap.
-        Idempotent: re-installing handlers during hot-reload is
-        safe. The state is reused so any tracked PIDs from the
-        previous instance are still honoured.
+
+        One-shot: ``SIGTERM``/``SIGINT`` routed to cancel the
+        active launch subprocess gracefully.
         """
-        install_signal_handlers(self._registry)
-        logger.info("[LauncherService] signal handlers installed")
+        def _handle_signal(sig: int, frame: Any) -> None:
+            logger.info("[LauncherService] received signal %s, cancelling launch", sig)
+            self._cancelled = True
+            if self._active_subprocess:
+                try:
+                    self._active_subprocess.terminate()
+                except Exception as e:
+                    logger.debug("[LauncherService] terminate failed: %s", e)
+
+        try:
+            signal.signal(signal.SIGTERM, _handle_signal)
+            signal.signal(signal.SIGINT, _handle_signal)
+        except ValueError:
+            # We might not be in the main thread
+            pass
+        except Exception as e:
+            logger.debug("[LauncherService] signal install failed: %s", e)
 
     async def stop(self) -> None:
-        """Bootstrap teardown hook. No-op for now.
-        Signal handlers are process-global and don't need to be
-        removed — they'll be replaced if another instance starts.
+        """Bootstrap teardown hook. No-op for now — signals are
+        removed when the event loop shuts down.
         """
-
-    # ══════════════════════════════════════════════════════════
-    # Public API
-    # ══════════════════════════════════════════════════════════
 
     async def launch(self, ctx: LaunchContext) -> Result:
-        """Launch a game described by the immutable LaunchContext.
-        Dispatches on the context flags to the right handler:
-        Windows games via Proton, xCloud via the streaming helper,
-        native Linux, or OAuth auth actions.
-        Control flow:
-                        1. Check circuit breaker — short-circuit if open
-                        2. Emit stage toast "launching ${game_title}"
-                        3. If ctx.is_launch_action is False: delegate to auth
-                        4. If ctx.is_xcloud: delegate to xcloud handler
-                        5. If ctx.is_windows_game: delegate to Windows launcher
-                        6. Otherwise: delegate to native Linux launcher
-                        7. On LauncherError: record failure + emit toast
+        """Launch a game described by the immutable ``LaunchContext``.
+
+        Dispatch matrix: xCloud → ``_launch_xcloud``; Windows →
+        ``_launch_windows``; native Linux → ``_launch_native``.
+        Wrapped in circuit-breaker check + error-toast emission.
+        Returns a ``Result`` summarising exit code + elapsed time.
         """
-        logger.info(
-            "[LauncherService] launch request: %s",
-            ctx.to_log_dict,
-        )
-        state = RuntimeState()
-        refusal = await self._check_circuit_breaker(ctx)
-        if refusal is not None:
-            return refusal
-        # Record subprocess start time for fast-boot detection in
-        # the finally block. monotonic to be immune to NTP jumps.
-        import time as _time
+        import time
+        self._launch_started_at = time.monotonic()
 
-        self._launch_started_at = _time.monotonic()
+        if await self._check_circuit_breaker(ctx):
+            return Result(success=False, error="circuit_open")
+
+        state = RuntimeState(started_at=ctx.env.get("started_at", 0))
+
         try:
-            await emit_stage(
-                self._bus,
-                i18n_key="toasts.launcher.launchingGame",
-                game_title=ctx.game_key,
-                priority="low",
-            )
-            if not ctx.is_launch_action:
-                # OAuth shortcut path — delegate to auth.py
-                from ...launcher.flows.auth import handle_store_auth
-
-                return await handle_store_auth(ctx, self._edge_browser)
             if ctx.is_xcloud:
-                return await self._launch_xcloud(ctx)
-            if ctx.is_windows_game:
-                return await self._launch_windows(ctx, state)
-            # Native Linux game — delegate to native.py
-            return await self._launch_native(ctx, state)
-        except LauncherError as err:
-            return await self._handle_launcher_error(ctx, err)
-        finally:
-            # No ``return`` in this ``finally`` (B012): real Result
-            # is emitted from the try/except branches above. Circuit
-            # breaker post-flight classification is handled in
-            # LaunchHistoryService._on_game_stopped via @subscribe.
-            logger.info(
-                "[LauncherService] launch finished: state=%s signal=%s",
-                state.to_log_dict,
-                self._signal_state.terminated_by_signal,
-            )
+                res = await self._launch_xcloud(ctx)
+            elif ctx.is_windows_game:
+                res = await self._launch_windows(ctx, state)
+            else:
+                res = await self._launch_native(ctx, state)
+
+            # Enrich with elapsed time
+            res.elapsed = self._elapsed_since_launch()
+            return res
+        except Exception as e:
+            return await self._handle_launcher_error(ctx, e)
 
     async def _launch_xcloud(self, ctx: LaunchContext) -> Result:
-        """xCloud streaming path.
-        Delegates to the ``launch_xcloud`` helper. We fire
-        ``GAME_LAUNCHED`` before streaming so Playtime tracking
-        starts immediately, and ``GAME_STOPPED`` in the finally
-        so the counterpart fires even if the browser throws.
-        """  # noqa: D403 — "xCloud" is the product name
-        from ...launcher.flows.xcloud import launch_xcloud
+        """xCloud streaming path — Edge kiosk mode on the Xbox URL."""
+        from unifideck.core.types.events import Events
 
-        await emit_game_launched(
-            self._bus,
-            store=ctx.store,
-            game_id=ctx.game_id,
+        store = ctx.game.get("store")
+        game_id = ctx.game.get("game_id")
+
+        await self._bus.emit(
+            Events.GAME_LAUNCHED,
+            store=store,
+            game_id=game_id,
+            title=ctx.game.get("title", ""),
+            app_id=ctx.game.get("app_id", 0)
         )
+
+        # xCloud specific URL
+        url = f"https://www.xbox.com/play/games/{game_id}"
+
         try:
-            return await launch_xcloud(ctx, self._edge_browser)
-        finally:
-            # No ``return`` here (B012) — real Result bubbled.
-            await emit_game_stopped(
-                self._bus,
-                store=ctx.store,
-                game_id=ctx.game_id,
-                exit_code=0,
-                elapsed_seconds=0.0,
-                terminated_by_signal=False,
+            # ``EdgeBrowser.launch_xcloud`` is synchronous and
+            # returns ``bool``. An earlier version of this code
+            # awaited it (TypeError: object bool can't be used
+            # in 'await' expression) AND treated the return as
+            # an integer rc, computing ``success = rc == 0`` —
+            # which is always ``False`` whether the bool was
+            # True or False, since ``True == 0`` is ``False``
+            # and ``False == 0`` is also ``False`` (the rc would
+            # be ``0`` only for an int, not a bool).
+            #
+            # We dispatch through ``asyncio.to_thread`` because
+            # the underlying ``subprocess.Popen`` blocks while
+            # Edge initializes; without the thread hop the event
+            # loop stalls for ~half a second on every launch.
+            launched = await asyncio.to_thread(
+                self._edge_browser.launch_xcloud, url,
             )
+            return Result(success=bool(launched))
+        except Exception as e:
+            logger.exception("[LauncherService] xCloud launch failed")
+            return Result(success=False, error=str(e))
+        finally:
+            await self._bus.emit(Events.GAME_STOPPED, store=store, game_id=game_id)
 
-    # ══════════════════════════════════════════════════════════
-    # Thin delegators — extracted to sibling modules for cohesion
-    # ══════════════════════════════════════════════════════════
     async def _get_launch_id_or_none(self) -> str | None:
-        """Return the active launch-id correlation token if any.
+        """Return the current launch id from ``launch_history`` or None."""
+        if self._launch_history:
+            return getattr(self._launch_history, "current_launch_id", None)
+        return None
 
-        Thin delegator to ``circuit_breaker.get_launch_id_or_none``.
-        Used by the circuit breaker module to tag toasts with the
-        same id as the launch attempt.
+    async def _emit_circuit_open_toast(self, ctx: LaunchContext, failure_count: int) -> None:
+        """Delegate to ``circuit_breaker.emit_circuit_open_toast``."""
+        # The toast helper lives in circuit_breaker.py because the
+        # message it renders is specific to the breaker's open state;
+        # error_toasts.py only handles post-failure toasts.
+        from .circuit_breaker import emit_circuit_open_toast
+        await emit_circuit_open_toast(self, ctx, failure_count)
 
-        Returns:
-            Launch correlation id, or ``None`` when not in a
-            launch flow.
-        """
-        return await circuit_breaker.get_launch_id_or_none(self)
+    async def _check_circuit_breaker(self, ctx: LaunchContext) -> bool:
+        """Delegate to ``circuit_breaker.check_before_launch``."""
+        from .circuit_breaker import check_circuit_breaker
+        res = await check_circuit_breaker(self, ctx)
+        return res is not None and not res.success
 
-    async def _emit_circuit_open_toast(
-        self,
-        ctx: LaunchContext,
-        failure_count: int,
-    ) -> None:
-        """Emit the "circuit open" toast on launch refusal.
+    async def _emit_launcher_error_toast(self, ctx: LaunchContext, err_code: str) -> None:
+        """Delegate to ``error_toasts.emit_launcher_error``."""
+        from .error_toasts import emit_launcher_error_toast
+        await emit_launcher_error_toast(self, ctx, err_code)
 
-        Thin delegator to
-        ``circuit_breaker.emit_circuit_open_toast``.
-
-        Args:
-            ctx: the rejected launch context.
-            failure_count: recent failures count shown in the
-                toast body so the user knows why we're refusing.
-        """
-        await circuit_breaker.emit_circuit_open_toast(
-            self,
-            ctx,
-            failure_count,
-        )
-
-    async def _check_circuit_breaker(self, ctx: LaunchContext) -> Result | None:
-        """Consult the launch-history service before launching.
-
-        Thin delegator to ``circuit_breaker.check_circuit_breaker``.
-
-        Args:
-            ctx: the launch context being evaluated.
-
-        Returns:
-            ``None`` if the launch may proceed, or a non-success
-            ``Result`` describing the refusal (typically with a
-            ``circuit_open`` error code).
-        """
-        return await circuit_breaker.check_circuit_breaker(self, ctx)
-
-    async def _emit_launcher_error_toast(
-        self,
-        ctx: LaunchContext,
-        err_code: str,
-    ) -> None:
-        """Emit a UI toast describing a launch failure.
-
-        Thin delegator to
-        ``error_toasts.emit_launcher_error_toast``.
-
-        Args:
-            ctx: the failed launch context.
-            err_code: typed error code mapped to an i18n key by
-                the toast helper.
-        """
-        await error_toasts.emit_launcher_error_toast(
-            self,
-            ctx,
-            err_code,
-        )
-
-    async def _handle_launcher_error(
-        self,
-        ctx: LaunchContext,
-        err: LauncherError,
-    ) -> Result:
-        """Convert a ``LauncherError`` into a ``Result`` + toast.
-
-        Thin delegator to ``error_toasts.handle_launcher_error``.
-        Single exit point for every launch-error path so the
-        bus emissions and ``Result`` shape are consistent.
-
-        Args:
-            ctx: the failed launch context.
-            err: the typed launcher error.
-
-        Returns:
-            Non-success ``Result`` with the mapped error code.
-        """
-        return await error_toasts.handle_launcher_error(self, ctx, err)
+    async def _handle_launcher_error(self, ctx: LaunchContext, err: Any) -> Result:
+        """Delegate to ``error_toasts.handle_launcher_error``."""
+        from .error_toasts import handle_launcher_error
+        return await handle_launcher_error(self, ctx, err)
 
     async def _launch_windows(self, ctx: LaunchContext, state: RuntimeState) -> Result:
-        """Launch a Windows game through Proton.
-
-        Thin delegator to ``orchestrator.launch_windows`` which
-        drives the full pipeline (plan build → cloud sync →
-        subprocess → save sync → exit).
-
-        Args:
-            ctx: the launch context (with ``is_windows_game``
-                set).
-            state: mutable runtime state updated as the launch
-                progresses.
-
-        Returns:
-            ``Result`` describing the launch outcome.
-        """
-        return await orchestrator.launch_windows(self, ctx, state)
+        """Delegate to ``orchestrator.launch_windows``."""
+        from .orchestrator import launch_windows
+        return await launch_windows(self, ctx, state)
 
     async def _launch_native(self, ctx: LaunchContext, state: RuntimeState) -> Result:
-        """Launch a native Linux game without Proton.
+        """Delegate to ``orchestrator.launch_native``."""
+        from .orchestrator import launch_native
+        return await launch_native(self, ctx, state)
 
-        Thin delegator to ``orchestrator.launch_native`` —
-        bypasses the Proton plan-building step but still goes
-        through the cloud-sync + subprocess + post-launch
-        phases.
-
-        Args:
-            ctx: the launch context.
-            state: mutable runtime state.
-
-        Returns:
-            ``Result`` describing the launch outcome.
-        """
-        return await orchestrator.launch_native(self, ctx, state)
-
-    async def _prepare_windows_plan(
-        self,
-        ctx: LaunchContext,
-        state: RuntimeState,
-    ) -> tuple[ProtonLaunchPlan, object]:
-        """Build the Proton launch plan for a Windows game.
-
-        Thin delegator to ``helpers.prepare_windows_plan`` which
-        composes the env vars, compat tool, prefix path and
-        argv into a ``ProtonLaunchPlan``.
-
-        Args:
-            ctx: the launch context.
-            state: mutable runtime state (the plan-build phase
-                may stash data into it).
-
-        Returns:
-            Tuple ``(plan, supplementary_data)``.
-        """
-        return await helpers.prepare_windows_plan(self, ctx, state)
+    async def _prepare_windows_plan(self, ctx: LaunchContext, state: RuntimeState) -> tuple[ProtonLaunchPlan, object]:
+        """Delegate to ``helpers.prepare_windows_plan``."""
+        from .helpers import prepare_windows_plan
+        return await prepare_windows_plan(self, ctx, state)
 
     async def _cloud_sync_phase(self, ctx: LaunchContext, direction: str) -> None:
-        """Run the pre- or post-launch cloud-save sync phase.
+        """Delegate to ``helpers.cloud_sync_phase``."""
+        from .helpers import cloud_sync_phase
+        await cloud_sync_phase(self, ctx, direction)
 
-        Thin delegator to ``helpers.cloud_sync_phase``.
-
-        Args:
-            ctx: the launch context.
-            direction: ``"down"`` for pre-launch pull,
-                ``"up"`` for post-launch push.
-        """
-        await helpers.cloud_sync_phase(self, ctx, direction)
-
-    async def _run_game_subprocess(
-        self,
-        plan: ProtonLaunchPlan,
-        ctx: LaunchContext,
-        state: RuntimeState,
-    ) -> int:
-        """Spawn the game subprocess and await its exit.
-
-        Thin delegator to ``helpers.run_game_subprocess`` which
-        handles the actual ``asyncio.subprocess`` plumbing, PID
-        registration with the signal-handler registry, and
-        captures the exit code.
-
-        Args:
-            plan: the prepared Proton or native launch plan.
-            ctx: the launch context.
-            state: mutable runtime state that receives the PID
-                and exit code.
-
-        Returns:
-            The subprocess exit code.
-        """
-        return await helpers.run_game_subprocess(self, plan, ctx, state)
+    async def _run_game_subprocess(self, plan: ProtonLaunchPlan, ctx: LaunchContext, state: RuntimeState) -> int:
+        """Delegate to ``helpers.run_game_subprocess``."""
+        from .helpers import run_game_subprocess
+        return await run_game_subprocess(self, plan, ctx, state)
 
     async def _sync_saves_and_track_size(self, ctx: LaunchContext, phase: str) -> None:
-        """Cloud-sync save files and record their size for telemetry.
-
-        Thin delegator to ``helpers.sync_saves_and_track_size``.
-
-        Args:
-            ctx: the launch context.
-            phase: ``"pre"`` or ``"post"``.
-        """
-        await helpers.sync_saves_and_track_size(self, ctx, phase)
+        """Delegate to ``helpers.sync_saves_and_track_size``."""
+        from .helpers import sync_saves_and_track_size
+        await sync_saves_and_track_size(self, ctx, phase)
 
     def _resolve_exit_code(self, state: RuntimeState) -> int:
-        """Determine the final exit code to report for the launch.
-
-        Thin delegator to ``helpers.resolve_exit_code`` which
-        applies the signal-handler-aware logic (a
-        ``terminated_by_signal=True`` flag adjusts the reported
-        code).
-
-        Args:
-            state: the runtime state populated during the launch.
-
-        Returns:
-            Resolved exit code.
-        """
-        return helpers.resolve_exit_code(self, state)
+        """Delegate to ``helpers.resolve_exit_code``."""
+        from .helpers import resolve_exit_code
+        return resolve_exit_code(self, state)
 
     def _elapsed_since_launch(self) -> float:
-        """Return wall-clock seconds since the launch started.
-
-        Thin delegator to ``helpers.elapsed_since_launch`` —
-        uses ``time.monotonic`` so NTP jumps don't skew the
-        measurement.
-
-        Returns:
-            Elapsed seconds since the launch was initiated.
-        """
-        return helpers.elapsed_since_launch(self)
+        """Delegate to ``helpers.elapsed_since_launch``."""
+        from .helpers import elapsed_since_launch
+        return elapsed_since_launch(self)

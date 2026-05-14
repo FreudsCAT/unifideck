@@ -15,6 +15,7 @@ malformed config files).
 """
 
 from __future__ import annotations
+
 from pathlib import Path
 
 

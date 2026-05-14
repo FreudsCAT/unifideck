@@ -30,7 +30,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-async def validate_config_at_startup(  # noqa: PLR0913 — intentional: explicit dependency injection signature
+async def validate_config_at_startup(
     *,
     bus: EventBus,
     config: ConfigManager,

@@ -18,12 +18,15 @@ OP-51g | py_modules/unifideck/stores/gog/install/marker.py
 """
 
 from __future__ import annotations
+
 import asyncio
 import json
 import logging
 import os
 import shutil
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
+
 from .primitives import GOGFolderOps
 
 if TYPE_CHECKING:
@@ -64,7 +67,7 @@ class _PostInstallMarker:
             )
         if folder_name:
             candidate = os.path.join(base_path, folder_name)
-            if os.path.isdir(candidate):
+            if await asyncio.to_thread(lambda: Path(candidate).is_dir()):
                 logger.info(
                     "[GOGInstaller] found at predicted: %s",
                     candidate,
@@ -77,7 +80,20 @@ class _PostInstallMarker:
         new_dirs = current - existing_dirs
         for name in new_dirs:
             item_path = os.path.join(base_path, name)
-            if not os.path.isdir(item_path):
+            # Bind ``item_path`` as a default arg of the lambda
+            # rather than capturing it by reference. The closure
+            # variant tripped ruff B023 (function-uses-loop-variable):
+            # because ``asyncio.to_thread`` schedules the lambda for
+            # later execution and the loop reassigns ``item_path``
+            # on each iteration, the lambda could observe the wrong
+            # path if execution were ever deferred across iterations.
+            # In practice the ``await`` here gates one iteration at
+            # a time so the bug couldn't fire, but binding the value
+            # at lambda-creation time is both safer and the
+            # idiomatic fix for B023.
+            if not await asyncio.to_thread(
+                lambda p=item_path: Path(p).is_dir(),
+            ):
                 continue
             for search_dir in (
                 item_path,
@@ -225,11 +241,8 @@ class _PostInstallMarker:
             with open(marker_path, "w", encoding="utf-8") as f:
                 json.dump(info_data, f, indent=2)
             return True
-        except OSError as e:
-            logger.error(
-                "[GOGInstaller] marker write failed: %s",
-                e,
-            )
+        except OSError:
+            logger.exception("[GOGInstaller] marker write failed")
             return False
 
     async def regenerate_manifest(self, game_id: str, platform: str) -> None:
@@ -259,8 +272,5 @@ class _PostInstallMarker:
                 )
             finally:
                 await _gogdl_cleanup()
-        except OSError as e:
-            logger.error(
-                "[GOGInstaller] manifest regen failed: %s",
-                e,
-            )
+        except OSError:
+            logger.exception("[GOGInstaller] manifest regen failed")

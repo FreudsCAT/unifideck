@@ -17,7 +17,7 @@ import logging
 import time
 from typing import TYPE_CHECKING, Any
 
-from ...core.types import Result
+from unifideck.core.types import Result
 
 if TYPE_CHECKING:
     from .service import ShortcutService
@@ -72,8 +72,8 @@ async def build_auth_shortcut(
             app_id = entry.get("appid")
 
             if service._bus:
-                from ...core.types.events import Events
-                service._bus.emit(
+                from unifideck.core.types.events import Events
+                await service._bus.emit(
                     Events.SHORTCUT_CREATED,
                     store=store,
                     app_id=app_id,
@@ -87,7 +87,7 @@ async def build_auth_shortcut(
         return Result(success=True)
 
     except Exception as e:
-        logger.error("[AuthShortcut] failed to build shortcut for %s: %s", store, e)
+        logger.exception("[AuthShortcut] failed to build shortcut for %s", store)
         return Result(success=False, error=str(e))
 
 

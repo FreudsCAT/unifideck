@@ -19,11 +19,13 @@ score; below threshold, the next is tried.
 """
 
 from __future__ import annotations
+
 import logging
 import re
 from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
+
 from .detection_helpers import (
     load_json_file_safe,
     looks_like_game_install,

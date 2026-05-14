@@ -229,6 +229,21 @@ class Events(StrEnum):
     # Payload fields: app_id (int), title (str), store (str, opt),
     #   game_id (str, opt), force (bool, opt, default False)
     ARTWORK_REQUEST = "artwork_request"
+    # ── Cloud-save sync lifecycle ────────────────────────────────
+    # Emitted by ``CloudSaveService`` to surface per-game save
+    # transfer outcomes to the UI. The DOWN events fire on the
+    # game→local pull (pre-launch); the UP events fire on the
+    # local→cloud push (post-exit). ``COMPLETE`` carries
+    # ``synced: bool`` so the UI can distinguish "ran the sync
+    # but had no changes" from "skipped entirely"; ``FAILED``
+    # carries an ``error`` string for the toast text.
+    # Common payload fields: store (str), game_id (str).
+    # COMPLETE adds: synced (bool).
+    # FAILED adds: error (str).
+    CLOUD_SYNC_DOWN_COMPLETE = "cloud_sync_down_complete"
+    CLOUD_SYNC_DOWN_FAILED = "cloud_sync_down_failed"
+    CLOUD_SYNC_UP_COMPLETE = "cloud_sync_up_complete"
+    CLOUD_SYNC_UP_FAILED = "cloud_sync_up_failed"
 
 
 class StoreStatus(StrEnum):

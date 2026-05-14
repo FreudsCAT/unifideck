@@ -1,14 +1,18 @@
 from __future__ import annotations
+
 import logging
 from collections.abc import Callable
 from typing import TYPE_CHECKING
-from ....security import SecureTokenStore
+
+from unifideck.security import SecureTokenStore
+
 from .oauth import OAuthMixin
 from .persistence import PersistenceMixin
 from .xbl_chain import XBLChainMixin
+
 if TYPE_CHECKING:
-    from ....event_bus.event_bus import EventBus
-    from ..microsoft_config import MicrosoftConfig
+    from unifideck.event_bus.event_bus import EventBus
+    from unifideck.stores.microsoft.microsoft_config import MicrosoftConfig
 logger = logging.getLogger(__name__)
 class MicrosoftTokenManager(
     PersistenceMixin,

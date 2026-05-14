@@ -22,12 +22,15 @@ key vault).
 """
 
 from __future__ import annotations
+
 import logging
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
-from ..config import UbisoftConfig
-from ..paths import UbisoftPrefixPaths
+
+from unifideck.stores.ubisoft.config import UbisoftConfig
+from unifideck.stores.ubisoft.paths import UbisoftPrefixPaths
+
 from .payload import _PayloadSync
 from .propagator import _CredentialPropagator
 from .reader import _CredentialReader

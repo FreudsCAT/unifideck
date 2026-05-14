@@ -27,7 +27,7 @@ import stat
 import subprocess
 from pathlib import Path
 
-from ..types.domain import CLITool
+from unifideck.core.types.domain import CLITool
 
 logger = logging.getLogger(__name__)
 

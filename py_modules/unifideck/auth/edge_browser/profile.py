@@ -220,7 +220,7 @@ class EdgeProfileManager:
                 return cast("bool", count > 0)
             finally:
                 conn.close()
-        except Exception as e:  # noqa: BLE001 — defensive read
+        except Exception as e:
             logger.debug("[Edge] Could not read cookie DB: %s", e)
             return True
         finally:
@@ -250,7 +250,7 @@ class EdgeProfileManager:
                 raise
             finally:
                 conn.close()
-        except Exception as e:  # noqa: BLE001 — defensive write
+        except Exception as e:
             logger.debug(
                 "[Edge] Could not clear shared browser cookies: %s", e,
             )
@@ -270,7 +270,7 @@ class EdgeProfileManager:
                 else:
                     path_obj.unlink()
                 removed.append(path_obj.name)
-            except Exception as e:  # noqa: BLE001 — best-effort wipe
+            except Exception as e:
                 logger.warning(
                     "[Edge] Could not clear auth profile path %s: %s",
                     path, e,

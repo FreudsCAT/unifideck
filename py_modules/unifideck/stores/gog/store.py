@@ -22,24 +22,22 @@ etc. — every method is delegated to the appropriate sub-component.
 """
 
 from __future__ import annotations
+
+import asyncio
 import logging
 import os
 from collections.abc import Awaitable, Callable
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
-from ...auth.browser import OAuthBrowserMonitor
-from ...auth.edge_browser import EdgeBrowser
-from ...auth.orchestrator import AuthOrchestrator
-from ...core.types import (
-    AuthResult,
-    Events,
-    Game,
-    InstallResult,
-    Result,
-    StoreInfo,
-)
-from ...services.shortcut import ShortcutService
-from ...utils.locale import get_unifideck_locale
-from ..shared.store_base import StoreBase
+
+from unifideck.auth.browser import OAuthBrowserMonitor
+from unifideck.auth.edge_browser import EdgeBrowser
+from unifideck.auth.orchestrator import AuthOrchestrator
+from unifideck.core.types import AuthResult, Events, Game, InstallResult, Result, StoreInfo
+from unifideck.services.shortcut import ShortcutService
+from unifideck.stores.shared.store_base import StoreBase
+from unifideck.utils.locale import get_unifideck_locale
+
 from .auth import GOGBrowserAuth
 from .config import GOG_AUTH_URL_FILE, GOGConfig
 from .dlc import GOGDlcManager
@@ -50,9 +48,9 @@ from .tokens import GOGTokenManager
 from .updates import GOGUpdatesChecker
 
 if TYPE_CHECKING:
-    from ...config import ConfigManager
-    from ...core.cache_manager import CacheManager
-    from ...event_bus.event_bus import EventBus
+    from unifideck.config import ConfigManager
+    from unifideck.core.cache_manager import CacheManager
+    from unifideck.event_bus.event_bus import EventBus
 logger = logging.getLogger(__name__)
 
 
@@ -189,8 +187,8 @@ class GOGStore(StoreBase):
                 store="gog",
             )
             result = Result(success=True)
-        auth_url_file = os.path.expanduser(GOG_AUTH_URL_FILE)
-        if os.path.isfile(auth_url_file):
+        auth_url_file = await asyncio.to_thread(lambda: str(Path(GOG_AUTH_URL_FILE).expanduser()))
+        if await asyncio.to_thread(lambda: Path(auth_url_file).is_file()):
             try:
                 os.remove(auth_url_file)
             except OSError as e:
@@ -338,7 +336,7 @@ class GOGStore(StoreBase):
             "launcher",
             "dispatcher.py",
         )
-        if not os.path.isfile(launcher):
+        if not await asyncio.to_thread(lambda: Path(launcher).is_file()):
             logger.warning(
                 "[GOGStore] launcher dispatcher not found at %s",
                 launcher,

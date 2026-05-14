@@ -1,9 +1,11 @@
 from __future__ import annotations
+
 import os
 import re
 import shlex
 from dataclasses import dataclass, field
 from pathlib import Path
+
 _ENV_TOKEN_RE = re.compile(r"^([A-Z_][A-Z0-9_]*)=(.*)$")
 _LSFG_KEY_RE = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)$")
 @dataclass
@@ -70,11 +72,52 @@ def _split_tokens_around_command(
     ):
         result.game_args = result.wrappers
         result.wrappers = []
+def _parse_lsfg_export_line(line: str) -> tuple[str, str] | None:
+    """Parse a single ``export KEY=VALUE`` line from an LSFG script.
+
+    Returns ``(key, value)`` if the line is a valid export of an
+    LSFG-prefixed variable, otherwise ``None``. Handles single-
+    and double-quoted values by stripping the surrounding quotes.
+    Anything else (comments, shebangs, ``exec``, non-export, keys
+    that don't match the LSFG filter) returns ``None`` so the
+    caller can ``continue`` cleanly.
+    """
+    line = line.strip()
+    if not line or line.startswith(("#", "#!")):
+        return None
+    if line.startswith("exec ") or not line.startswith("export "):
+        return None
+    kv = line[len("export "):]
+    if "=" not in kv:
+        return None
+    key, _, value = kv.partition("=")
+    key = key.strip()
+    value = value.strip()
+    # Strip a single layer of matching quotes; this matches the
+    # shell's basic dequoting and is enough for the export lines
+    # the LSFG launcher script produces.
+    if len(value) >= 2 and (
+        (value[0] == '"' and value[-1] == '"')
+        or (value[0] == "'" and value[-1] == "'")
+    ):
+        value = value[1:-1]
+    if not _LSFG_KEY_RE.match(key):
+        return None
+    return key, value
+
+
 def apply_lsfg_env(
     opts: ParsedOptions,
     lsfg_script: Path | None = None,
 ) -> dict[str, str]:
-    """Apply lsfg env."""
+    """Build the env overlay for an LSFG-wrapped launch.
+
+    Returns ``{"ENABLE_LSFG": "1", <LSFG_*>: <value>, ...}`` —
+    empty dict when LSFG was not requested or the script isn't on
+    disk. Parses ``export`` lines from ``~/lsfg`` (or the supplied
+    ``lsfg_script`` path, used by tests) and applies only keys
+    that pass :data:`_LSFG_KEY_RE`.
+    """
     if not opts.lsfg_requested:
         return {}
     if lsfg_script is None:
@@ -83,34 +126,15 @@ def apply_lsfg_env(
         return {}
     overlay: dict[str, str] = {"ENABLE_LSFG": "1"}
     try:
-        content = lsfg_script.read_text(
-            encoding="utf-8", errors="replace",
-        )
+        content = lsfg_script.read_text(encoding="utf-8", errors="replace")
     except OSError:
+        # We can't read the script (permissions, racing rotate),
+        # but the user did ask for LSFG — return the enable flag
+        # so the launcher can at least try with default values.
         return overlay
     for raw_line in content.splitlines():
-        line = raw_line.strip()
-        if (
-            not line
-            or line.startswith("#")
-            or line.startswith("#!")
-        ):
-            continue
-        if line.startswith("exec "):
-            continue
-        if not line.startswith("export "):
-            continue
-        kv = line[len("export "):]
-        if "=" not in kv:
-            continue
-        key, _, value = kv.partition("=")
-        key = key.strip()
-        value = value.strip()
-        if len(value) >= 2 and (
-            (value[0] == '"' and value[-1] == '"')
-            or (value[0] == "'" and value[-1] == "'")
-        ):
-            value = value[1:-1]
-        if _LSFG_KEY_RE.match(key):
+        parsed = _parse_lsfg_export_line(raw_line)
+        if parsed is not None:
+            key, value = parsed
             overlay[key] = value
     return overlay

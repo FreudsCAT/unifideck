@@ -19,14 +19,18 @@ The manager exposes ``ensure_template``, ``ensure_auth``, ``create_for_game``,
 """
 
 from __future__ import annotations
+
+import asyncio
 import logging
 import shutil
 from collections.abc import Callable
 from pathlib import Path
-from ..binaries import UbisoftBinaryResolver
-from ..config import UbisoftConfig
-from ..installer.cache import UbisoftInstallerCache
-from ..paths import UbisoftPrefixPaths
+
+from unifideck.stores.ubisoft.binaries import UbisoftBinaryResolver
+from unifideck.stores.ubisoft.config import UbisoftConfig
+from unifideck.stores.ubisoft.installer.cache import UbisoftInstallerCache
+from unifideck.stores.ubisoft.paths import UbisoftPrefixPaths
+
 from .auth_builder import _AuthPrefixBuilder
 from .helpers import _PrefixHelpers
 from .template_builder import _TemplatePrefixBuilder
@@ -135,16 +139,13 @@ class UbisoftPrefixManager:
             space_id,
         )
         try:
-            if Path(prefix_path).is_dir():
+            if await asyncio.to_thread(lambda: Path(prefix_path).is_dir()):
                 shutil.rmtree(prefix_path)
                 logger.info(
                     "[UbisoftPrefixManager] removed corrupted prefix for %s",
                     space_id,
                 )
-        except OSError as e:
-            logger.error(
-                "[UbisoftPrefixManager] could not remove corrupted prefix: %s",
-                e,
-            )
+        except OSError:
+            logger.exception("[UbisoftPrefixManager] could not remove corrupted prefix")
             return False
         return await self.bootstrap_game_prefix(space_id)

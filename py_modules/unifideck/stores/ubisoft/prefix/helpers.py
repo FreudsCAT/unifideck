@@ -17,6 +17,7 @@ high-level construction logic.
 """
 
 from __future__ import annotations
+
 import asyncio
 import datetime
 import logging
@@ -70,11 +71,8 @@ class _PrefixHelpers:
                 space_id,
             )
             return True
-        except Exception as e:
-            logger.error(
-                "[UbisoftPrefixManager] clone failed: %s",
-                e,
-            )
+        except Exception:
+            logger.exception("[UbisoftPrefixManager] clone failed")
             return False
 
     async def create_prefix_from_fresh_install(
@@ -118,12 +116,8 @@ class _PrefixHelpers:
                     prefix_path,
                 )
             return True
-        except Exception as e:
-            logger.exception(
-                "[UbisoftPrefixManager] fresh install failed for %s: %s",
-                space_id,
-                e,
-            )
+        except Exception:
+            logger.exception("[UbisoftPrefixManager] fresh install failed for %s", space_id)
             return False
 
     async def create_template_from_game_prefix(
@@ -192,11 +186,8 @@ class _PrefixHelpers:
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
-        except OSError as e:
-            logger.error(
-                "[UbisoftPrefixManager] subprocess spawn failed: %s",
-                e,
-            )
+        except OSError:
+            logger.exception("[UbisoftPrefixManager] subprocess spawn failed")
             return False
         return await self._await_installer_completion(proc)
 
@@ -211,7 +202,7 @@ class _PrefixHelpers:
                 timeout=15 * 60,
             )
         except TimeoutError:
-            logger.error(
+            logger.exception(
                 "[UbisoftPrefixManager] installer timed out after 15 min — killing",
             )
             try:
@@ -254,11 +245,8 @@ class _PrefixHelpers:
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
-        except OSError as e:
-            logger.error(
-                "[UbisoftPrefixManager] rsync spawn failed: %s",
-                e,
-            )
+        except OSError:
+            logger.exception("[UbisoftPrefixManager] rsync spawn failed")
             return False
         try:
             _stdout, stderr = await asyncio.wait_for(
@@ -266,7 +254,7 @@ class _PrefixHelpers:
                 timeout=30 * 60,
             )
         except TimeoutError:
-            logger.error(
+            logger.exception(
                 "[UbisoftPrefixManager] rsync timed out — killing",
             )
             try:
@@ -318,7 +306,9 @@ class _PrefixHelpers:
             prefix_dir,
             self._parent._config.bootstrap_marker,
         )
-        created_at = datetime.datetime.now().isoformat()
+        # UTC keeps the marker comparable across machines and survives
+        # DST transitions on the user's locale.
+        created_at = datetime.datetime.now(datetime.timezone.utc).isoformat()
         lines = [source, f"created={created_at}"]
         if space_id:
             lines.insert(1, f"game={space_id}")

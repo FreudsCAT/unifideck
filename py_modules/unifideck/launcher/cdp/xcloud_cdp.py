@@ -1,15 +1,19 @@
 from __future__ import annotations
+
 import logging
 import shutil
 import subprocess
 import time
 from urllib.parse import urlparse
+
 from unifideck.cdp.page_inject import inject_scripts
 from unifideck.cdp.xcloud_browser_shims import (
     get_xcloud_browser_shims_js,
     get_xcloud_navigation_js,
 )
+
 from .steam_controller_popup import refresh_steam_controller_layout
+
 logger = logging.getLogger(__name__)
 def _build_launch_matches(launch_url: str) -> list[str]:
     """Build launch matches."""

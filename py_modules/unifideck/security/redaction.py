@@ -154,7 +154,7 @@ def _is_sensitive_key(key: Any) -> bool:
     """
     try:
         normalised = str(key).lower()
-    except Exception:  # noqa: BLE001 — intentional: __str__ raised
+    except Exception:
         # A pathological key whose str() raises is itself
         # suspicious — treat as sensitive to be safe.
         return True

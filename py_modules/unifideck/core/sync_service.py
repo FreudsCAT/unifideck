@@ -40,15 +40,16 @@ import logging
 import time
 from typing import TYPE_CHECKING, Any
 
-from ..event_bus import EventBus
-from ..steam.owned_games import get_owned_titles as _steam_owned_titles
-from ..stores import StoreRegistry
+from unifideck.event_bus import EventBus
+from unifideck.steam.owned_games import get_owned_titles as _steam_owned_titles
+from unifideck.stores import StoreRegistry
+
 from .cross_store_dedup import deduplicate_libraries
 from .types import Events, Game, SyncResult
 
 if TYPE_CHECKING:
-    from ..config import ConfigManager
-    from ..stores.shared.store_base import StoreBase
+    from unifideck.config import ConfigManager
+    from unifideck.stores.shared.store_base import StoreBase
 
 logger = logging.getLogger(__name__)
 
@@ -346,11 +347,7 @@ class SyncService:
             )
             return games, None
         except Exception as e:
-            logger.exception(
-                "[SyncService] %s sync failed: %s",
-                store.store_name,
-                e,
-            )
+            logger.exception("[SyncService] %s sync failed", store.store_name)
             await self._bus.emit(
                 Events.SYNC_FAILED,
                 store=store.store_name,

@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 import os
 import platform
 import re
@@ -6,6 +7,7 @@ import shlex
 import sys
 from pathlib import Path
 from typing import NoReturn
+
 DOSBOX_CALL_RE = re.compile(r'run_dosbox\s+((?:\"[^\"]+\"\s*)+)')
 def find_steam_runtime() -> Path | None:
     """Find steam runtime."""
@@ -45,8 +47,12 @@ def launch_via_steam_runtime(
     if runtime_root:
         run_sh = runtime_root / "run.sh"
         if run_sh.exists():
-            os.execv(str(run_sh), [str(run_sh), str(start_script), *args])
-    os.execv(str(start_script), [str(start_script), *args])
+            # ``execv`` (no shell) replaces this Python process with
+            # ``run.sh``; running this through a shell would defeat
+            # the purpose of the wrapper (extra PID, signal forwarding,
+            # quoting hazards).
+            os.execv(str(run_sh), [str(run_sh), str(start_script), *args])  # noqa: S606 — execv replaces this process with run.sh; no shell involved
+    os.execv(str(start_script), [str(start_script), *args])  # noqa: S606 — execv replaces this process with the game's launcher; no shell involved
 def _parse_argv() -> tuple[Path, list[str]]:
     """Parse argv."""
     if len(sys.argv) < 2:
@@ -130,6 +136,10 @@ def main() -> None:
         command.extend(["-conf", conf])
     command.extend(["-no-console", "-c", "exit"])
     os.chdir(root_dir)
-    os.execvpe(str(binary), command, env)
+    # ``execvpe`` (no shell) replaces this Python process with
+    # the DOSBox binary; bypassing a shell avoids quoting hazards
+    # around the per-game ``.conf`` paths and keeps the env exactly
+    # as we built it above.
+    os.execvpe(str(binary), command, env)  # noqa: S606 — execvpe replaces this process with DOSBox; no shell involved
 if __name__ == "__main__":
     main()

@@ -19,6 +19,7 @@ artwork in the background if not already cached.
 """
 
 from __future__ import annotations
+
 import logging
 from typing import TYPE_CHECKING, Any
 

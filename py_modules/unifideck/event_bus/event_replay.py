@@ -41,7 +41,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any
 
-from ..core.types import Events
+from unifideck.core.types import Events
 
 MAX_SNAPSHOT_ENTRIES = 500
 _DEFAULT_CAPS: dict[Events, int] = {

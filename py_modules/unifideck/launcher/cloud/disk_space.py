@@ -1,11 +1,13 @@
 from __future__ import annotations
+
 import logging
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
+
 if TYPE_CHECKING:
-    from ...config import ConfigManager
+    from unifideck.config import ConfigManager
 logger = logging.getLogger(__name__)
 _DEFAULT_MIN_FREE_BYTES = 1024 * 1024 * 1024
 @dataclass(frozen=True)

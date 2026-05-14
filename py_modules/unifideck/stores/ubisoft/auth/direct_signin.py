@@ -14,13 +14,15 @@ This makes "sign in" effectively instant for returning users.
 """
 
 from __future__ import annotations
+
 import asyncio
 import logging
 from typing import Any
-from ....security import emit_external_auth_check_failed
-from ..binaries import UbisoftBinaryResolver
-from ..paths import UbisoftPrefixPaths
-from ..session import UbisoftSession
+
+from unifideck.security import emit_external_auth_check_failed
+from unifideck.stores.ubisoft.binaries import UbisoftBinaryResolver
+from unifideck.stores.ubisoft.paths import UbisoftPrefixPaths
+from unifideck.stores.ubisoft.session import UbisoftSession
 
 logger = logging.getLogger(__name__)
 

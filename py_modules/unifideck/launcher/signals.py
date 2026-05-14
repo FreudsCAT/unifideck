@@ -1,9 +1,11 @@
 from __future__ import annotations
+
 import logging
 import os
 import signal
 import subprocess
 from dataclasses import dataclass, field
+
 logger = logging.getLogger(__name__)
 CLEANUP_PATTERNS = (
     "steam-runtime-launch-client",
@@ -46,6 +48,7 @@ class GameProcessRegistry:
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
                     timeout=2,
+                    check=False,  # pkill rc=1 on "no match" is expected
                 )
             except (FileNotFoundError, subprocess.TimeoutExpired):
                 pass

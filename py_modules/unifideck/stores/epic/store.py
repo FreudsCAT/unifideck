@@ -26,26 +26,22 @@ appropriate sub-component.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
-from ...auth.browser import OAuthBrowserMonitor
-from ...auth.orchestrator import AuthOrchestrator
-from ...core.bin import read_cli_timeouts
-from ...core.types import (
-    AuthResult,
-    CLITool,
-    Events,
-    Game,
-    InstallResult,
-    Result,
-    StoreInfo,
-)
-from ...security import emit_external_auth_check_failed
-from ...services.shortcut import ShortcutService
-from ...utils.config_helpers import get_cfg
-from ..shared.store_base import StoreBase
+
+from unifideck.auth.browser import OAuthBrowserMonitor
+from unifideck.auth.orchestrator import AuthOrchestrator
+from unifideck.core.bin import read_cli_timeouts
+from unifideck.core.types import AuthResult, CLITool, Events, Game, InstallResult, Result, StoreInfo
+from unifideck.security import emit_external_auth_check_failed
+from unifideck.services.shortcut import ShortcutService
+from unifideck.stores.shared.store_base import StoreBase
+from unifideck.utils.config_helpers import get_cfg
+
 from .auth import EpicAuthFlow
 from .exe_resolver import EpicExeResolver
 from .install import EpicInstaller, ProgressCallback
@@ -53,9 +49,9 @@ from .library import EpicLibraryReader, merge_install_status
 from .updates import EpicUpdateChecker
 
 if TYPE_CHECKING:
-    from ...config import ConfigManager
-    from ...core.cache_manager import CacheManager
-    from ...event_bus.event_bus import EventBus
+    from unifideck.config import ConfigManager
+    from unifideck.core.cache_manager import CacheManager
+    from unifideck.event_bus.event_bus import EventBus
 
 logger = logging.getLogger(__name__)
 
@@ -228,11 +224,11 @@ class EpicStore(StoreBase):
             owned = await self._library.read_owned_games()
             installed = await self._library.read_installed_map()
             return merge_install_status(owned, installed)
-        except Exception as e:
-            logger.error("[EpicStore] get_library failed: %s", e)
+        except Exception:
+            logger.exception("[EpicStore] get_library failed")
             return []
 
-    async def install_game(self, game_id: str, base_path: str | None = None
+    async def install_game(self, game_id: str, base_path: str | None = None,
                            progress_cb: ProgressCallback | None = None, **kwargs: Any) -> InstallResult:
         """Install game."""
         return await self._installer.install_game(
@@ -278,7 +274,7 @@ class EpicStore(StoreBase):
             "launcher",
             "dispatcher.py",
         )
-        if not os.path.isfile(launcher):
+        if not await asyncio.to_thread(lambda: Path(launcher).is_file()):
             logger.warning("[EpicStore] launcher dispatcher not found at %s", launcher)
             return
         result = await self._shortcut_service.add_auth_shortcut(

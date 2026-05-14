@@ -124,6 +124,7 @@ def _scan_steam_process_env(
                 capture_output=True,
                 text=True,
                 timeout=5,
+                check=False,  # pgrep rc=1 on "no match" is expected
             ).stdout.strip().split("\n")
             for raw_pid in pids:
                 pid = raw_pid.strip()
@@ -135,11 +136,11 @@ def _scan_steam_process_env(
                         "PID %s (%s): DISPLAY=%s "
                         "WAYLAND_DISPLAY=%s",
                         pid, proc_name,
-                        result.get('DISPLAY'),
-                        result.get('WAYLAND_DISPLAY'),
+                        result.get("DISPLAY"),
+                        result.get("WAYLAND_DISPLAY"),
                     )
                     return
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         # pgrep missing, scheduling glitch — not fatal, caller
         # falls through to hardcoded fallbacks.
         logger.debug(

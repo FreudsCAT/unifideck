@@ -1,11 +1,15 @@
 from __future__ import annotations
+
 import asyncio
 import contextlib
 import json
 import logging
 from typing import Any, cast
+
 import aiohttp
+
 from unifideck.cdp.page_inject import list_page_targets
+
 logger = logging.getLogger(__name__)
 async def wait_for_titled_target(
     cdp_port: int,

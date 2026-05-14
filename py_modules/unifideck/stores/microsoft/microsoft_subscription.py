@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 import asyncio
 import json
 import logging
@@ -6,8 +7,11 @@ import urllib.error
 import urllib.request
 from dataclasses import dataclass
 from typing import Any
-from ...core.types import SubscriptionTier
+
+from unifideck.core.types import SubscriptionTier
+
 from .microsoft_auth import ssl_ctx_strict
+
 logger = logging.getLogger(__name__)
 _PROBE_TIMEOUT_SECONDS = 10
 _GSSV_CLIENT_HEADER = "XboxComBrowser"

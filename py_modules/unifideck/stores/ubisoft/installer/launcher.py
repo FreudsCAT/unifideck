@@ -18,10 +18,13 @@ Returns a ``Result`` with the launch outcome; the manual UI driver
 """
 
 from __future__ import annotations
+
 import asyncio
 import logging
-from typing import TYPE_CHECKING
-from ....core.types import Result
+from typing import TYPE_CHECKING, Any
+
+from unifideck.core.types import Result
+
 from .launch_env import UpcLaunchEnvBuildError
 
 if TYPE_CHECKING:
@@ -35,6 +38,10 @@ class _LauncherInstall:
     def __init__(self, parent: UbisoftInstaller) -> None:
         """Initialize the instance."""
         self._parent = parent
+        # Strong references to the post-spawn monitor tasks so they
+        # aren't garbage-collected while the UPC installer is still
+        # running. Each task removes itself on completion.
+        self._monitor_tasks: set[asyncio.Task[Any]] = set()
 
     async def open_launcher_for_install(
         self,
@@ -82,11 +89,7 @@ class _LauncherInstall:
                 prefix_path,
             )
         except Exception as e:
-            logger.exception(
-                "[UbisoftInstaller] launcher spawn failed for %s: %s",
-                game_id,
-                e,
-            )
+            logger.exception("[UbisoftInstaller] launcher spawn failed for %s", game_id)
             return Result(
                 success=False,
                 error=f"launcher_spawn_exception: {e}",
@@ -122,7 +125,7 @@ class _LauncherInstall:
         )
         self._parent._active_install_pids[game_id] = proc.pid
         spawned_pid = proc.pid
-        asyncio.create_task(
+        monitor_task = asyncio.create_task(
             self.monitor_after_exit(
                 game_id,
                 spawned_pid,
@@ -130,6 +133,8 @@ class _LauncherInstall:
                 prefix_path,
             ),
         )
+        self._monitor_tasks.add(monitor_task)
+        monitor_task.add_done_callback(self._monitor_tasks.discard)
         await asyncio.sleep(2)
         if proc.returncode is None:
             return Result(success=True)

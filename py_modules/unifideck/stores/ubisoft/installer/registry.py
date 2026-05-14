@@ -19,13 +19,15 @@ is authoritative for "which games are licensed".
 """
 
 from __future__ import annotations
+
 import json
 import logging
 import os
 import re
 from pathlib import Path
 from typing import Any
-from ..config import UbisoftConfig
+
+from unifideck.stores.ubisoft.config import UbisoftConfig
 
 logger = logging.getLogger(__name__)
 _INSTALLS_REG_SECTION_FMT = (

@@ -11,11 +11,12 @@ import re
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from ..metadata.unifidb import normalize_title_for_matching
+from unifideck.metadata.unifidb import normalize_title_for_matching
+
 from .library import find_steam_path
 
 if TYPE_CHECKING:
-    from ..config import ConfigManager
+    from unifideck.config import ConfigManager
 logger = logging.getLogger(__name__)
 _ACF_NAME_PATTERN = re.compile(r'"name"\s+"([^"]*)"')
 _LIBFOLDER_PATH_PATTERN = re.compile(r'"path"\s+"([^"]*)"')

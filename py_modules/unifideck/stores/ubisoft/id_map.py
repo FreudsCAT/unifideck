@@ -19,14 +19,18 @@ is known) by walking the local install directory and looking for
 """
 
 from __future__ import annotations
+
 import json
 import logging
 import os
 import re
 from typing import Any
+
 from .config import UbisoftConfig
 from .id_map_sources import (
     _IdMapSources,
+)
+from .id_map_sources import (
     extract_game_id_from_registry as _extract_game_id_from_registry,
 )
 from .paths import UbisoftPrefixPaths
@@ -201,7 +205,7 @@ class UbisoftIdMap:
     def get_steam_library_titles() -> set[str]:
         """Get steam library titles."""
         try:
-            from ...steam.library import get_steam_library_names
+            from unifideck.steam.library import get_steam_library_names
         except ImportError:
             logger.debug(
                 "[UbisoftIdMap] Steam library module not available",

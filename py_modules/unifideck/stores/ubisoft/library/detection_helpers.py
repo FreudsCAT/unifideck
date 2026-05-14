@@ -18,6 +18,8 @@ All helpers are stateless and safe to call concurrently.
 """
 
 from __future__ import annotations
+
+import asyncio
 import datetime
 import glob
 import json
@@ -166,14 +168,18 @@ async def write_install_marker(
             "game_title": game_title,
             "install_path": install_path,
             "executable": executable,
-            "install_date": (datetime.datetime.now().isoformat()),
+            # Always serialize timestamps in UTC so the marker is
+            # comparable across machines and DST transitions.
+            "install_date": (
+                datetime.datetime.now(datetime.timezone.utc).isoformat()
+            ),
         }
         install_p = Path(install_path)
         marker_path = install_p / _INSTALL_MARKER_FILENAME
         tmp_path = marker_path.with_suffix(
             marker_path.suffix + ".tmp",
         )
-        install_p.mkdir(parents=True, exist_ok=True)
+        await asyncio.to_thread(lambda: install_p.mkdir(parents=True, exist_ok=True))
         tmp_path.write_text(
             json.dumps(marker_data, indent=2),
             encoding="utf-8",

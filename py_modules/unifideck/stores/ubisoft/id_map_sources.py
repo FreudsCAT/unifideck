@@ -21,6 +21,7 @@ displays "Ubisoft Game" as a placeholder name.
 """
 
 from __future__ import annotations
+
 import asyncio
 import logging
 import re
@@ -28,7 +29,8 @@ import time
 import urllib.request
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
-from ...core.net import ssl_ctx_permissive
+
+from unifideck.core.net import ssl_ctx_permissive
 
 if TYPE_CHECKING:
     from .id_map import UbisoftIdMap
@@ -144,9 +146,7 @@ class _IdMapSources:
     ) -> bool:
         """Refresh from configurations."""
         try:
-            from ..ubisoft_parser import (
-                build_id_map_from_configurations,
-            )
+            from unifideck.stores.ubisoft_parser import build_id_map_from_configurations
         except ImportError as e:
             logger.warning(
                 "[UbisoftIdMap] ubisoft_parser unavailable: %s",
@@ -164,13 +164,13 @@ class _IdMapSources:
         ):
             return True
         prefixes_dir = Path(config.prefixes_dir_expanded)
-        if not prefixes_dir.is_dir():
+        if not await asyncio.to_thread(prefixes_dir.is_dir):
             logger.info(
                 "[UbisoftIdMap] no configurations found in any prefix",
             )
             return False
         try:
-            entries = list(prefixes_dir.iterdir())
+            entries = list(await asyncio.to_thread(prefixes_dir.iterdir))
         except OSError:
             return False
         for entry in entries:
@@ -232,9 +232,9 @@ class _IdMapSources:
         cache_file = config.game_id_db_file_expanded
         max_age = config.game_id_db_max_age_seconds
         cache_p = Path(cache_file)
-        if cache_p.is_file():
+        if await asyncio.to_thread(cache_p.is_file):
             try:
-                age = time.time() - cache_p.stat().st_mtime
+                age = time.time() - await asyncio.to_thread(cache_p.stat).st_mtime
                 if age < max_age:
                     return await asyncio.to_thread(
                         _parse_game_id_database,
@@ -256,7 +256,7 @@ class _IdMapSources:
                 "[UbisoftIdMap] game ID database download failed: %s",
                 e,
             )
-            if not cache_p.is_file():
+            if not await asyncio.to_thread(cache_p.is_file):
                 return []
         return await asyncio.to_thread(
             _parse_game_id_database,

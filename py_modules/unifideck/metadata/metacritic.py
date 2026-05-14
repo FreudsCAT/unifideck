@@ -7,10 +7,11 @@ import re
 import unicodedata
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, cast
-from ..utils.config_helpers import get_cfg
+
+from unifideck.utils.config_helpers import get_cfg
 
 if TYPE_CHECKING:
-    from ..config import ConfigManager
+    from unifideck.config import ConfigManager
 
 logger = logging.getLogger(__name__)
 

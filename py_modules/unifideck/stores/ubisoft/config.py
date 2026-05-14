@@ -27,14 +27,16 @@ when the user changes settings.
 """
 
 from __future__ import annotations
+
 import logging
 import os
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, ClassVar
+
 from unifideck.utils.config_helpers import get_cfg
 
 if TYPE_CHECKING:
-    from ...config import ConfigManager
+    from unifideck.config import ConfigManager
 logger = logging.getLogger(__name__)
 _DEFAULT_DATA_DIR = "~/.local/share/unifideck"
 _DEFAULT_ID_MAP_FILE = "~/.local/share/unifideck/ubisoft_id_map.json"

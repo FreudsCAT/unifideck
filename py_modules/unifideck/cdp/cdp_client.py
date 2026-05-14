@@ -1,12 +1,15 @@
 from __future__ import annotations
+
 import asyncio
 import json
 import logging
 from typing import TYPE_CHECKING, Any, cast
+
 from unifideck.utils.config_helpers import get_cfg
+
 logger = logging.getLogger(__name__)
 if TYPE_CHECKING:
-    from ..config import ConfigManager
+    from unifideck.config import ConfigManager
 class CDPClient:
     """Cdpclient."""
     def __init__(
@@ -40,8 +43,8 @@ class CDPClient:
                 target["webSocketDebuggerUrl"],
                 max_size=None,
             )
-        except Exception as e:
-            logger.error("[CDPClient] ws connect failed: %s", e)
+        except Exception:
+            logger.exception("[CDPClient] ws connect failed")
             return False
         self._recv_task = asyncio.create_task(self._recv_loop())
         return True

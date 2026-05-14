@@ -24,13 +24,15 @@ through a new ``GOGConfig`` instance.
 """
 
 from __future__ import annotations
+
 import logging
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
+
 from unifideck.utils.config_helpers import get_cfg
 
 if TYPE_CHECKING:
-    from ...config import ConfigManager
+    from unifideck.config import ConfigManager
 logger = logging.getLogger(__name__)
 _GOG_CONFIG_PREFIX = "stores.gog"
 _DEFAULT_TOKEN_FILE = "~/.config/unifideck/gog_token.json"

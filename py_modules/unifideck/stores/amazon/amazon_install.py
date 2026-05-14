@@ -23,24 +23,24 @@ installs are cleaned up to avoid leaving orphaned files on disk.
 """
 
 from __future__ import annotations
+
 import asyncio
 import logging
 import os
 import re
 from collections.abc import Awaitable, Callable
+from pathlib import Path
 from typing import Any, cast
-from ...core.manifest import write_manifest
-from ...core.types import (
-    Events,
-    InstallResult,
-    Result,
-)
-from ...event_bus.event_bus import EventBus
-from ..shared.cli_install_helpers import (
+
+from unifideck.core.manifest import write_manifest
+from unifideck.core.types import Events, InstallResult, Result
+from unifideck.event_bus.event_bus import EventBus
+from unifideck.stores.shared.cli_install_helpers import (
     drain_install_output,
     parse_progress_line,
     wait_with_timeout,
 )
+
 from . import amazon_fuel
 from .amazon_library import AmazonLibraryReader
 
@@ -128,7 +128,10 @@ class AmazonInstaller:
             exe_relative = ""
             if exe:
                 try:
-                    exe_relative = os.path.relpath(
+                    # ``os.path.relpath`` is pure string manipulation —
+                    # no filesystem access — so the ASYNC240 rule
+                    # gives a false positive here.
+                    exe_relative = os.path.relpath(  # noqa: ASYNC240
                         exe,
                         install_path,
                     )
@@ -251,7 +254,7 @@ class AmazonInstaller:
         if info and info.get("path"):
             return cast("str | None", info["path"])
         default = os.path.join(base, game_id)
-        if os.path.isdir(default):
+        if await asyncio.to_thread(lambda: Path(default).is_dir()):
             return default
         return None
 
@@ -292,7 +295,7 @@ class AmazonInstaller:
             stderr=asyncio.subprocess.PIPE,
         )
         try:
-            stdout, stderr = await asyncio.wait_for(
+            _stdout, stderr = await asyncio.wait_for(
                 proc.communicate(),
                 timeout=self._uninstall_timeout,
             )

@@ -19,19 +19,23 @@ which step failed.
 """
 
 from __future__ import annotations
+
 import asyncio
 import logging
 import os
 import subprocess
 from collections.abc import Awaitable, Callable
+from pathlib import Path
 from typing import Any
-from ....core.types import InstallResult, Result
-from ..binaries import UbisoftBinaryResolver
-from ..config import UbisoftConfig
-from ..id_map import UbisoftIdMap
-from ..library import UbisoftLibrary
-from ..paths import UbisoftPrefixPaths
-from ..session import UbisoftSession
+
+from unifideck.core.types import InstallResult, Result
+from unifideck.stores.ubisoft.binaries import UbisoftBinaryResolver
+from unifideck.stores.ubisoft.config import UbisoftConfig
+from unifideck.stores.ubisoft.id_map import UbisoftIdMap
+from unifideck.stores.ubisoft.library import UbisoftLibrary
+from unifideck.stores.ubisoft.paths import UbisoftPrefixPaths
+from unifideck.stores.ubisoft.session import UbisoftSession
+
 from . import registry as _reg
 from .launch_env import (
     UpcLaunchEnvBuildError,
@@ -191,11 +195,7 @@ class UbisoftInstaller:
                 install_path=install_path,
             )
         except Exception as e:
-            logger.exception(
-                "[UbisoftInstaller] install error for %s: %s",
-                game_id,
-                e,
-            )
+            logger.exception("[UbisoftInstaller] install error for %s", game_id)
             return InstallResult(
                 success=False,
                 store="ubisoft",
@@ -234,13 +234,10 @@ class UbisoftInstaller:
                     "[UbisoftInstaller] install process already exited for %s",
                     game_id,
                 )
-            except OSError as e:
-                logger.error(
-                    "[UbisoftInstaller] kill failed: %s",
-                    e,
-                )
+            except OSError:
+                logger.exception("[UbisoftInstaller] kill failed")
         prefix_path = self._paths.get_prefix_path(game_id)
-        if prefix_path and os.path.isdir(prefix_path):
+        if prefix_path and await asyncio.to_thread(lambda: Path(prefix_path).is_dir()):
             await asyncio.sleep(2)
             captured = self._session.capture(prefix_path)
             if captured:
@@ -287,6 +284,7 @@ class UbisoftInstaller:
                 ["pkill", "-f", "upc.exe"],
                 capture_output=True,
                 timeout=5,
+                check=False,  # pkill rc=1 on "no match" is expected
             )
             logger.info(
                 "[UbisoftInstaller] killed upc.exe processes",

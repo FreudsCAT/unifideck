@@ -1,7 +1,9 @@
 from __future__ import annotations
+
 import asyncio
 import logging
 from typing import TYPE_CHECKING, Any
+
 if TYPE_CHECKING:
     import re
     from collections.abc import Awaitable, Callable
@@ -34,7 +36,7 @@ async def wait_with_timeout(
     try:
         await asyncio.wait_for(proc.wait(), timeout=timeout_s)
     except TimeoutError:
-        logger.error(
+        logger.exception(
             "%s timeout after %ds, killing",
             log_prefix, timeout_s,
         )

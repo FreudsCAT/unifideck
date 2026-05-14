@@ -17,6 +17,7 @@ by gogdl into bytes.
 """
 
 from __future__ import annotations
+
 import asyncio
 import json
 import logging
@@ -24,8 +25,10 @@ import shutil
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
-from ..config import GOGConfig
-from ..tokens import GOGTokenManager
+
+from unifideck.stores.gog.config import GOGConfig
+from unifideck.stores.gog.tokens import GOGTokenManager
+
 from .primitives import GOGFolderOps
 
 logger = logging.getLogger(__name__)
@@ -62,7 +65,7 @@ class GOGInstallPlanner:
         target_folder: str | None,
     ) -> str:
         """Determine install mode."""
-        if not target_folder or not Path(target_folder).exists():
+        if not target_folder or not await asyncio.to_thread(lambda: Path(target_folder).exists()):
             logger.info(
                 "[GOGInstallPlanner] folder missing → download",
             )
@@ -123,8 +126,17 @@ class GOGInstallPlanner:
             )
             actual = GOGFolderOps.folder_size(install_path)
             files = GOGFolderOps.count_files(install_path)
+            # ``has_goggame_info(path, game_id="")`` falls back to
+            # "is *any* ``goggame-*.info`` file present?" when the
+            # ``game_id`` arg is empty. For a correctness check
+            # that verifies THIS specific game's install, we MUST
+            # supply ``game_id`` — otherwise an orphaned info file
+            # from a previous install in the same folder yields a
+            # false positive and the planner concludes the install
+            # is complete when it isn't.
             has_info = GOGFolderOps.has_goggame_info(
                 install_path,
+                game_id,
             )
             has_exe = exe_finder(install_path) is not None
             size_ratio = (actual / expected) if expected > 0 else 1.0
@@ -177,10 +189,7 @@ class GOGInstallPlanner:
                 "has_exe": has_exe,
             }
         except Exception as e:
-            logger.error(
-                "[GOGInstallPlanner] verify error: %s",
-                e,
-            )
+            logger.exception("[GOGInstallPlanner] verify error")
             return {
                 "complete": False,
                 "issue": f"Verification failed: {e}",
@@ -273,12 +282,8 @@ class GOGInstallPlanner:
                     "[GOGInstallPlanner] removed %s",
                     target_folder,
                 )
-            except OSError as e:
-                logger.error(
-                    "[GOGInstallPlanner] corrupt cleanup failed for %s: %s",
-                    target_folder,
-                    e,
-                )
+            except OSError:
+                logger.exception("[GOGInstallPlanner] corrupt cleanup failed for %s", target_folder)
             support_dir = (
                 Path(self._config.gogdl_config_dir).expanduser()
                 / "gog-support"
@@ -314,11 +319,8 @@ class GOGInstallPlanner:
                     "[GOGInstallPlanner] removed orphan %s",
                     target_folder,
                 )
-            except OSError as e:
-                logger.error(
-                    "[GOGInstallPlanner] orphan cleanup failed: %s",
-                    e,
-                )
+            except OSError:
+                logger.exception("[GOGInstallPlanner] orphan cleanup failed")
             for manifest_path in self._manifest_locations(
                 game_id,
             ):

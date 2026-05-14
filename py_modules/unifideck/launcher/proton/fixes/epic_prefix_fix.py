@@ -1,10 +1,12 @@
 from __future__ import annotations
+
 import asyncio
 import logging
 import os
 import shutil
 import subprocess
 from pathlib import Path
+
 logger = logging.getLogger(__name__)
 _PROTON_FALLBACK_WINE_PATHS: list[str] = [
     "~/.steam/steam/steamapps/common/Proton - Experimental/files/bin/wine",

@@ -8,7 +8,7 @@ Both methods share ~35 LOC of identical logic:
   - mkdir profile dir
   - Build args with shared base flags
   - Open stderr log file (best-effort)
-  - Popen with clean env + preexec_fn=os.setpgrp
+  - Popen with clean env + start_new_session=True (own process group)
   - Track PID, log metadata, handle exceptions
 
 Extracted from ``edge_browser.py`` on 2026-04-18. Each public
@@ -16,17 +16,18 @@ entry point now builds its own arg suffix (kiosk vs app mode,
 auth vs xcloud CDP port, class name for xdotool) and hands off
 to ``_spawn_edge_process`` for the common spawn mechanics.
 
-The ``preexec_fn=os.setpgrp`` coupling with ``EdgeBrowser.kill``
-(which calls ``os.killpg(pgid, SIGTERM)``) is preserved byte-
-identically — changing it would silently break process-group
-termination.
+Process-group coupling with ``EdgeBrowser.kill`` (which calls
+``os.killpg(pgid, SIGTERM)``) is preserved by ``start_new_session=True``,
+which calls ``setsid()`` in the child after fork. This replaces
+the legacy ``preexec_fn=os.setpgrp`` idiom — the new flag is
+async-signal-safe and therefore safe with multi-threaded callers,
+while ``preexec_fn`` is documented as unsafe with threads.
 
 Functions take the ``EdgeBrowser`` instance as first argument.
 """
 from __future__ import annotations
 
 import logging
-import os
 import subprocess
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -65,7 +66,7 @@ def _spawn_edge_process(
 ) -> bool:
     """Open stderr log, spawn Popen, track PID, handle errors.
 
-    Shared subprocess spawn with ``preexec_fn=os.setpgrp`` so the
+    Shared subprocess spawn with ``start_new_session=True`` so the
     ``os.killpg()`` in ``EdgeBrowser.kill()`` can terminate the
     whole process group cleanly.
 
@@ -84,21 +85,21 @@ def _spawn_edge_process(
     env = clean_env()
     logger.info(
         "[Edge] Launching %s browser: %s...",
-        label.lower(), ' '.join(args[:7]),
+        label.lower(), " ".join(args[:7]),
     )
     logger.info(
         "[Edge] %s browser env DISPLAY=%s "
         "WAYLAND_DISPLAY=%s SteamAppId=%s",
-        label, env.get('DISPLAY'), env.get('WAYLAND_DISPLAY'),
-        env.get('SteamAppId'),
+        label, env.get("DISPLAY"), env.get("WAYLAND_DISPLAY"),
+        env.get("SteamAppId"),
     )
     stderr_fh = None
     try:
-        stderr_fh = Path(LOG_FILE).open(log_mode)  # noqa: SIM115
-    except Exception:  # noqa: BLE001, S110 — log file is optional
-        # Intentional: log file is a convenience (not essential).
-        # Proceed with DEVNULL if we can't open.
-        pass
+        stderr_fh = Path(LOG_FILE).open(log_mode)
+    except Exception as e:
+        # The log file is a convenience (not essential).
+        # Proceed with DEVNULL if we can't open it.
+        logger.debug("[Edge] stderr log open failed: %s", e)
     try:
         browser.process = subprocess.Popen(
             args,
@@ -107,16 +108,20 @@ def _spawn_edge_process(
                 stderr_fh if stderr_fh else subprocess.DEVNULL
             ),
             env=env,
-            preexec_fn=os.setpgrp,
+            # ``start_new_session=True`` replaces the legacy
+            # ``preexec_fn=os.setpgrp`` idiom. The flag uses
+            # ``setsid()`` in the child after fork, which is
+            # async-signal-safe and therefore safe to use even
+            # when other threads are running (preexec_fn is not —
+            # see CPython docs, "Note on preexec_fn").
+            start_new_session=True,
         )
         logger.info(
             "[Edge] %s browser PID: %s", label, browser.process.pid,
         )
         return True
-    except Exception as e:  # noqa: BLE001 — launcher boundary
-        logger.exception(
-            "[Edge] Failed to launch %s browser: %s", label.lower(), e,
-        )
+    except Exception:
+        logger.exception("[Edge] Failed to launch %s browser", label.lower())
         return False
     finally:
         if stderr_fh is not None:
@@ -139,17 +144,7 @@ def launch_auth(browser: EdgeBrowser, auth_url: str) -> bool:
         return False
     from .edge import _BASE_FLAGS, PROFILE_DIR
 
-    args = cmd + [
-        f"--app={auth_url}",
-        "--class=unifideck-auth",
-        f"--remote-debugging-port={browser.cdp_port}",
-        f"--user-data-dir={PROFILE_DIR}",
-    ] + _BASE_FLAGS + [
-        "--start-fullscreen",
-        "--enable-touch-events",
-        "--window-size=1280,800",
-        f"--lang={browser.locale_fn().split('-')[0]}",
-    ]
+    args = [*cmd, f"--app={auth_url}", "--class=unifideck-auth", f"--remote-debugging-port={browser.cdp_port}", f"--user-data-dir={PROFILE_DIR}", *_BASE_FLAGS, "--start-fullscreen", "--enable-touch-events", "--window-size=1280,800", f"--lang={browser.locale_fn().split('-')[0]}"]
     return _spawn_edge_process(browser, args, log_mode="w", label="Auth")
 
 
@@ -192,19 +187,7 @@ def launch_xcloud(browser: EdgeBrowser, xcloud_url: str) -> bool:
     # browser.cdp_port, typically 9222) and the xCloud session
     # can coexist. Convention: auth=9222, xcloud=9223.
     xcloud_cdp_port = browser.cdp_port + 1
-    args = cmd + [
-        "--kiosk",
-        "--class=unifideck-xcloud",
-        f"--remote-debugging-port={xcloud_cdp_port}",
-        f"--user-data-dir={PROFILE_DIR}",
-    ] + _BASE_FLAGS + [
-        "--autoplay-policy=no-user-gesture-required",
-        "--window-size=1024,720",
-        "--force-device-scale-factor=1.25",
-        "--device-scale-factor=1.25",
-        f"--lang={browser.locale_fn().split('-')[0]}",
-        xcloud_url,
-    ]
+    args = [*cmd, "--kiosk", "--class=unifideck-xcloud", f"--remote-debugging-port={xcloud_cdp_port}", f"--user-data-dir={PROFILE_DIR}", *_BASE_FLAGS, "--autoplay-policy=no-user-gesture-required", "--window-size=1024,720", "--force-device-scale-factor=1.25", "--device-scale-factor=1.25", f"--lang={browser.locale_fn().split('-')[0]}", xcloud_url]
     logger.info(
         "[Edge] Launching xCloud kiosk: %s", xcloud_url[:80],
     )

@@ -16,12 +16,14 @@ fresh.
 """
 
 from __future__ import annotations
+
 import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
 if TYPE_CHECKING:
-    from ....services.shortcut import ShortcutService
+    from unifideck.services.shortcut import ShortcutService
+
     from .facade import UbisoftAuth
 logger = logging.getLogger(__name__)
 _AUTH_LAUNCH_OPTIONS_TEMPLATE = (

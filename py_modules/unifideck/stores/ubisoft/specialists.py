@@ -16,9 +16,11 @@ the actual ``proton run`` is invoked.
 """
 
 from __future__ import annotations
+
 import logging
 from dataclasses import dataclass
 from typing import Any
+
 from unifideck.stores.ubisoft.auth import (
     UbisoftAuth,
     UbisoftAuthServices,

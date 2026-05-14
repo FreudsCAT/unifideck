@@ -20,6 +20,7 @@ specific ``InstallResult`` error code.
 """
 
 from __future__ import annotations
+
 import asyncio
 import logging
 import os
@@ -28,6 +29,7 @@ from typing import (
     TYPE_CHECKING,
     Any,
 )
+
 from .primitives import GOGFolderOps
 
 if TYPE_CHECKING:
@@ -259,11 +261,8 @@ class _GogdlProgressMonitor:
             await asyncio.sleep(1)
             if proc.returncode is None:
                 proc.kill()
-        except Exception as e:
-            logger.error(
-                "[GOGInstaller] terminate failed: %s",
-                e,
-            )
+        except Exception:
+            logger.exception("[GOGInstaller] terminate failed")
 
     async def run_gogdl_repair_pass(
         self,

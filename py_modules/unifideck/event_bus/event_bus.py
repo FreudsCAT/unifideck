@@ -48,7 +48,7 @@ import time
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-from ..core.types import Events
+from unifideck.core.types import Events
 
 logger = logging.getLogger(__name__)
 Handler = Callable[..., Awaitable[Any]] | Callable[..., Any]

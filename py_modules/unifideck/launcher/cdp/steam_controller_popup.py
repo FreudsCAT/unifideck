@@ -1,9 +1,12 @@
 from __future__ import annotations
+
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable
 from typing import Any
+
 import aiohttp
+
 from .cdp_primitives import (
     close_target,
     close_titled_targets,
@@ -19,6 +22,7 @@ from .steam_controller_popup_targets import (
     open_controller_popup,
     wait_for_popup_root_ready,
 )
+
 logger = logging.getLogger(__name__)
 _STEAM_CONTROLLER_LAYOUT_TITLE = "Controller Layout"
 _WASD_TEMPLATE_URL = "template://controller_neptune_wasd.vdf"
@@ -176,8 +180,8 @@ async def refresh_steam_controller_layout(
         success, popup_target_id = await _open_popup_and_run_bounce(
             steam_port, shortcut_appid, dwell,
         )
-    except Exception as exc:
-        logger.exception("[popup] bounce failed: %s", exc)
+    except Exception:
+        logger.exception("[popup] bounce failed")
     finally:
         await _close_popup(steam_port, popup_target_id)
         await _invoke_post_bounce_hook(on_complete)

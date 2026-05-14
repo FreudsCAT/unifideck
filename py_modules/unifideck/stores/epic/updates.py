@@ -32,8 +32,10 @@ import logging
 import os
 import time
 from typing import Any, cast
-from ...core.types import InstallResult
-from ...event_bus.event_bus import EventBus
+
+from unifideck.core.types import InstallResult
+from unifideck.event_bus.event_bus import EventBus
+
 from .legendary import fetch_info
 from .library import EpicLibraryReader
 

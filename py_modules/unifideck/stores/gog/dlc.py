@@ -15,13 +15,16 @@ parent install in place.
 """
 
 from __future__ import annotations
+
 import asyncio
 import json
 import logging
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any, cast
-from ...core.types import Result
+
+from unifideck.core.types import Result
+
 from .config import GOGConfig
 from .http import fetch_json_get
 from .tokens import GOGTokenManager
@@ -126,7 +129,7 @@ class GOGDlcManager:
         """Spawn lang probe."""
         if not await self._tokens.refresh_if_stale():
             return None
-        if not Path(self._gogdl_bin).is_file():
+        if not await asyncio.to_thread(lambda: Path(self._gogdl_bin).is_file()):
             return None
         cmd = [
             self._gogdl_bin,
@@ -223,7 +226,7 @@ class GOGDlcManager:
 
     async def _dlc_preflight(self) -> Result | None:
         """Dlc preflight."""
-        if not Path(self._gogdl_bin).is_file():
+        if not await asyncio.to_thread(lambda: Path(self._gogdl_bin).is_file()):
             return Result(
                 success=False,
                 error="gogdl_not_found",
@@ -276,11 +279,8 @@ class GOGDlcManager:
             )
             proc._unifideck_gogdl_cleanup = cleanup
             return proc
-        except OSError as e:
-            logger.error(
-                "[GOGDlcManager] gogdl spawn failed: %s",
-                e,
-            )
+        except OSError:
+            logger.exception("[GOGDlcManager] gogdl spawn failed")
             return None
 
     async def _dlc_read_loop(

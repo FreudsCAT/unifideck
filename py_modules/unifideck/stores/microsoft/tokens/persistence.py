@@ -1,19 +1,22 @@
 from __future__ import annotations
+
 import asyncio
 import json
 import logging
 import os
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
-from ....security import (
+
+from unifideck.security import (
     SecureTokenStore,
     SecureTokenStoreError,
     emit_legacy_plaintext_detected,
     emit_permissions_check,
 )
+
 if TYPE_CHECKING:
-    from ....event_bus.event_bus import EventBus
-    from ..microsoft_config import MicrosoftConfig
+    from unifideck.event_bus.event_bus import EventBus
+    from unifideck.stores.microsoft.microsoft_config import MicrosoftConfig
 logger = logging.getLogger(__name__)
 class PersistenceMixin:
     """Persistence mixin."""
@@ -25,8 +28,8 @@ class PersistenceMixin:
     _bus: EventBus | None
     async def load(self) -> bool:
         """Load."""
-        path = str(Path(self._config.token_file).expanduser())
-        if not Path(path).is_file():
+        path = str(await asyncio.to_thread(lambda: Path(self._config.token_file).expanduser()))
+        if not await asyncio.to_thread(lambda: Path(path).is_file()):
             return False
         def _read_sync() -> bytes | None:
             """Read sync."""
@@ -101,7 +104,7 @@ class PersistenceMixin:
             and self._ms_refresh_token is None
         ):
             return True
-        path = str(Path(self._config.token_file).expanduser())
+        path = str(await asyncio.to_thread(lambda: Path(self._config.token_file).expanduser()))
         payload = {
             "access_token": self._ms_access_token,
             "refresh_token": self._ms_refresh_token,
@@ -110,11 +113,10 @@ class PersistenceMixin:
         }
         try:
             blob = self._secure_store.encrypt_payload(payload)
-        except SecureTokenStoreError as e:
-            logger.error(
-                "[MicrosoftTokens] cannot encrypt tokens: "
-                "%s — refusing to write plaintext fallback",
-                e,
+        except SecureTokenStoreError:
+            logger.exception(
+                "[MicrosoftTokens] cannot encrypt tokens "
+                "— refusing to write plaintext fallback",
             )
             return False
         ok = await asyncio.to_thread(
@@ -146,8 +148,8 @@ class PersistenceMixin:
         self._ms_access_token = None
         self._ms_refresh_token = None
         self._token_saved_at = 0.0
-        path = str(Path(self._config.token_file).expanduser())
-        if Path(path).is_file():
+        path = str(await asyncio.to_thread(lambda: Path(self._config.token_file).expanduser()))
+        if await asyncio.to_thread(lambda: Path(path).is_file()):
             def _remove_sync() -> None:
                 """Remove sync."""
                 try:

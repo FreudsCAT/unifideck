@@ -4,11 +4,12 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from ...core.types import Events, Result, StoreError
+from unifideck.core.types import Events, Result, StoreError
 
 if TYPE_CHECKING:
-    from ...core.cache_manager import CacheManager
-    from ...event_bus import EventBus
+    from unifideck.core.cache_manager import CacheManager
+    from unifideck.event_bus import EventBus
+
     from .store_base import StoreBase
 logger = logging.getLogger(__name__)
 class StoreRegistry:
@@ -18,6 +19,9 @@ class StoreRegistry:
         """Initialize the instance."""
         self._stores: dict[str, StoreBase] = {}
         self._bus = bus
+        # Hold strong references to STORE_REGISTERED emit tasks until
+        # they finish so the GC doesn't collect them mid-flight.
+        self._background_tasks: set[asyncio.Task[Any]] = set()
     def register(
         self, store_id: str, store: "StoreBase",
     ) -> None:
@@ -37,10 +41,12 @@ class StoreRegistry:
             "store_id": store_id,
             "store_info": asdict(store.store_info),
         }
-        loop.create_task(
+        task = loop.create_task(
             self._bus.emit(Events.STORE_REGISTERED, **payload),
             name=f"emit_store_registered_{store_id}",
         )
+        self._background_tasks.add(task)
+        task.add_done_callback(self._background_tasks.discard)
 
     def auto_discover(
         self,
@@ -90,12 +96,8 @@ class StoreRegistry:
                     store_id, store_cls.__name__, full_path,
                 )
                 registered += 1
-            except Exception as e:
-                logger.error(
-                    "[StoreRegistry] Failed to instantiate "
-                    "%s from %s: %s",
-                    store_cls.__name__, full_path, e,
-                )
+            except Exception:
+                logger.exception("[StoreRegistry] Failed to instantiate %s from %s", store_cls.__name__, full_path)
         logger.info(
             "[StoreRegistry] Auto-discovery: %d stores "
             "from %s",
@@ -110,12 +112,8 @@ class StoreRegistry:
         """Validate stores dir."""
         try:
             real_stores = str(Path(stores_dir).resolve())
-        except OSError as e:
-            logger.error(
-                "[StoreRegistry] Cannot resolve stores dir "
-                "%r: %s",
-                stores_dir, e,
-            )
+        except OSError:
+            logger.exception("[StoreRegistry] Cannot resolve stores dir %r", stores_dir)
             return None
         if not Path(real_stores).is_dir():
             logger.warning(
@@ -300,20 +298,14 @@ class StoreRegistry:
                 ),
             )
         except StoreError as e:
-            logger.error(
-                "[StoreRegistry] %s.%s failed: %s",
-                store_id, action, e,
-            )
+            logger.exception("[StoreRegistry] %s.%s failed", store_id, action)
             await self._bus.emit(
                 Events.STORE_AUTH_FAILED,
                 store=store_id, error=str(e),
             )
             return Result(success=False, error=str(e))
         except Exception as e:
-            logger.exception(
-                "[StoreRegistry] Unexpected error in %s.%s",
-                store_id, action,
-            )
+            logger.exception("[StoreRegistry] Unexpected error in %s.", store_id)
             return Result(
                 success=False, error=f"Unexpected: {e}",
             )

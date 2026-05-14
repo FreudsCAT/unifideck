@@ -30,10 +30,11 @@ from __future__ import annotations
 import asyncio
 import logging
 from typing import Any
-from ...auth.orchestrator import AuthOrchestrator
-from ...core.types import AuthResult, Events, Result, StoreAuthError
-from ...event_bus.event_bus import EventBus
-from ...security import audit_auth_flow
+
+from unifideck.auth.orchestrator import AuthOrchestrator
+from unifideck.core.types import AuthResult, Events, Result, StoreAuthError
+from unifideck.event_bus.event_bus import EventBus
+from unifideck.security import audit_auth_flow
 
 logger = logging.getLogger(__name__)
 

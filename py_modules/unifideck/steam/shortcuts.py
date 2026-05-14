@@ -33,11 +33,17 @@ import os
 import shutil
 from typing import Any, cast
 
+# Module-level logger defined unconditionally so every function in this
+# module can call it regardless of whether the optional `vdf` import
+# succeeded. Previously this binding lived only inside the
+# `except ImportError` branch below, which caused a NameError in
+# production whenever `vdf` was installed (the normal case).
+logger = logging.getLogger(__name__)
+
 try:
     import vdf
 except ImportError:
     vdf = None
-    logger = logging.getLogger(__name__)
 class VDFError(Exception):
     """Raised when VDF parsing or writing fails."""
 def load_shortcuts_vdf(path: str) -> dict[str, Any]:
@@ -54,7 +60,7 @@ def load_shortcuts_vdf(path: str) -> dict[str, Any]:
     try:
         with open(path, "rb") as f:
             return cast("dict[str, Any]", vdf.binary_loads(f.read()))
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         raise VDFError(f"failed to parse {path}: {e}") from e
 
 def read_shortcuts(path: str) -> list[dict[str, Any]]:
@@ -95,7 +101,7 @@ def save_shortcuts_vdf(path: str, data: dict[str, Any]) -> None:
             f.write(vdf.binary_dumps(data))
             f.flush()
             os.fsync(f.fileno())
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         _cleanup_tmp(tmp_path)
         raise VDFError(f"write failed: {e}") from e
     # Step 3: atomic rename
@@ -151,5 +157,5 @@ def _restore_backup(backup_path: str, path: str) -> None:
         try:
             shutil.copy2(backup_path, path)
             logger.warning("[vdf] restored backup to %s", path)
-        except OSError as e:
-            logger.error("[vdf] backup restore failed: %s", e)
+        except OSError:
+            logger.exception("[vdf] backup restore failed")

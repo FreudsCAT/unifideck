@@ -1,9 +1,11 @@
 from __future__ import annotations
+
 import logging
 import os
 import shutil
 import tempfile
 from pathlib import Path
+
 logger = logging.getLogger(__name__)
 _STUB_RELATIVE_PATH = "bin/stubs/GalaxyCommunication.exe"
 _TARGET_SUBPATH = os.path.join(
@@ -12,7 +14,7 @@ _TARGET_SUBPATH = os.path.join(
 )
 def _resolve_drive_c(prefix_path: str) -> str | None:
     """Resolve drive c."""
-    from ..infrastructure.prefix_layout import resolve_drive_c
+    from unifideck.launcher.proton.infrastructure.prefix_layout import resolve_drive_c
     result = resolve_drive_c(prefix_path)
     return str(result) if result is not None else None
 def _atomic_copy_file(src: Path | str, dst: str) -> None:
@@ -44,7 +46,7 @@ def install_galaxy_stub(
 
     """Install galaxy stub."""
     if plugin_dir is None:
-        from ....core.paths import resolve_plugin_dir
+        from unifideck.core.paths import resolve_plugin_dir
         plugin_dir = resolve_plugin_dir()
     stub_src = plugin_dir / _STUB_RELATIVE_PATH
     if not stub_src.is_file():

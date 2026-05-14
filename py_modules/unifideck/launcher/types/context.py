@@ -95,7 +95,7 @@ class RuntimeState:
             "wrappers_count": len(self.wrappers),
             "game_args_count": len(self.game_args),
         }
-    
+
     # Compat field used by LauncherService
     rc: int = 1
     started_at: float = 0.0

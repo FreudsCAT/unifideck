@@ -46,7 +46,8 @@ import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
-from ..core.types import Events
+from unifideck.core.types import Events
+
 from .event_priority import (
     EventPriority,
     get_coalesce_key,

@@ -1,11 +1,14 @@
 from __future__ import annotations
+
 import asyncio
 import logging
 import time
 from typing import TYPE_CHECKING
-from ..microsoft_auth import http_post
+
+from unifideck.stores.microsoft.microsoft_auth import http_post
+
 if TYPE_CHECKING:
-    from ..microsoft_config import MicrosoftConfig
+    from unifideck.stores.microsoft.microsoft_config import MicrosoftConfig
 logger = logging.getLogger(__name__)
 class OAuthMixin:
     """Oauth mixin."""
@@ -66,10 +69,8 @@ class OAuthMixin:
                     ),
                 )
             )
-        except Exception as e:
-            logger.error(
-                "[MicrosoftTokens] token HTTP failed: %s", e,
-            )
+        except Exception:
+            logger.exception("[MicrosoftTokens] token HTTP failed")
             return False
         if (
             not isinstance(token_data, dict)

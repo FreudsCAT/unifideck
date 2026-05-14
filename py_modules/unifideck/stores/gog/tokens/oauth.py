@@ -17,15 +17,19 @@ network failures (retryable) from auth failures (force re-login).
 """
 
 from __future__ import annotations
+
 import logging
 import urllib.parse
 from typing import TYPE_CHECKING, Any
-from ..http import fetch_json_get
+
+from unifideck.stores.gog.http import fetch_json_get
+
 from .user_info import GOGUserInfo
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
-    from ..config import GOGConfig
+
+    from unifideck.stores.gog.config import GOGConfig
 
     SaveCallback = Callable[[str, str], Awaitable[bool]]
 logger = logging.getLogger(__name__)

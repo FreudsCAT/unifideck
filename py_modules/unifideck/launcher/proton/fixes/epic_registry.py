@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 import asyncio
 import json
 import logging
@@ -8,6 +9,7 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
+
 logger = logging.getLogger(__name__)
 _UPLAY_ID_RE = re.compile(r"-UplayId=\s*(\d+)")
 @dataclass(frozen=True)
@@ -61,11 +63,8 @@ def _load_installed_json(
     try:
         with installed_json.open() as f:
             data = json.load(f)
-    except (OSError, json.JSONDecodeError) as e:
-        logger.error(
-            "[epic_registry] failed to read "
-            "installed.json: %s", e,
-        )
+    except (OSError, json.JSONDecodeError):
+        logger.exception("[epic_registry] failed to read installed.json")
         return None
     app = data.get(game_id)
     if not app:
@@ -163,7 +162,7 @@ async def _run_reg_commands(
                     proc.communicate(), timeout=30,
                 )
             except TimeoutError:
-                logger.error(
+                logger.exception(
                     "[epic_registry] reg add timed out: %s",
                     cmd[3],
                 )
@@ -180,10 +179,8 @@ async def _run_reg_commands(
                     cmd[3],
                     stderr.decode(errors="replace").strip(),
                 )
-        except (OSError, subprocess.SubprocessError) as e:
-            logger.error(
-                "[epic_registry] reg add spawn error: %s", e,
-            )
+        except (OSError, subprocess.SubprocessError):
+            logger.exception("[epic_registry] reg add spawn error")
             continue
     return ok_count
 async def _kill_wineserver(

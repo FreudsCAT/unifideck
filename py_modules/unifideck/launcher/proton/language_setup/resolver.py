@@ -1,8 +1,10 @@
 from __future__ import annotations
+
 import logging
 from typing import TYPE_CHECKING
+
 if TYPE_CHECKING:
-    from ....config import ConfigManager
+    from unifideck.config import ConfigManager
 logger = logging.getLogger(__name__)
 LOCALE_MAP: dict[str, tuple[str, str, str, str]] = {
     "en-US": ("00000409", "ENU", "en-US", "United States"),
@@ -53,7 +55,7 @@ def get_unifideck_language(config: ConfigManager | None = None) -> str:
         )
         return _DEFAULT_LANGUAGE
     try:
-        from ....utils.locale import get_unifideck_locale
+        from unifideck.utils.locale import get_unifideck_locale
         return get_unifideck_locale(config)
     except Exception as err:
         logger.warning(

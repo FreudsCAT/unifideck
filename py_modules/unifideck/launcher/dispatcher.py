@@ -1,13 +1,17 @@
 from __future__ import annotations
+
 import asyncio
 import logging
 import os
 import sys
 from pathlib import Path
-from ..core.types.results import Result
+
+from unifideck.core.types.results import Result
+
 from .types.context import LaunchContext
 from .types.errors import GameNotFoundError, LauncherError
 from .types.exit_codes import ExitCode
+
 logger = logging.getLogger(__name__)
 def _parse_argv(argv: list[str]) -> tuple[str, str]:
     """Parse argv."""
@@ -27,7 +31,7 @@ def _parse_argv(argv: list[str]) -> tuple[str, str]:
     return game_key, raw_options
 def _resolve_plugin_dir() -> Path:
     """Resolve plugin dir."""
-    from ..core.paths import resolve_plugin_dir
+    from unifideck.core.paths import resolve_plugin_dir
     return resolve_plugin_dir(start=Path(__file__))
 async def _build_context(
     argv: list[str],
@@ -81,10 +85,8 @@ def _resolve_bypass_flag(store: str, game_id: str) -> bool:
         "1", "true", "yes",
     )
     try:
-        from ..config.config_manager import ConfigManager
-        from ..services.launch_history import (
-            LaunchHistoryService,
-        )
+        from unifideck.config.config_manager import ConfigManager
+        from unifideck.services.launch_history import LaunchHistoryService
         cfg = ConfigManager(
             str(
                 _resolve_plugin_dir()
@@ -107,8 +109,8 @@ async def _run(argv: list[str]) -> int:
     lid = new_launch_id()
     with launch_id_scope(lid):
         try:
-            from ..config.config_manager import ConfigManager
-            from ..core.paths import resolve_plugin_dir
+            from unifideck.config.config_manager import ConfigManager
+            from unifideck.core.paths import resolve_plugin_dir
             _cfg = ConfigManager(str(
                 resolve_plugin_dir() /
                 "defaults" /
@@ -131,9 +133,9 @@ async def _run_with_id(argv: list[str]) -> int:
             "[launcher.dispatcher] request received: %s", game_key,
         )
     except LauncherError as err:
-        logger.error(
+        logger.exception(
             "[launcher.dispatcher] argv parse failed: %s",
-            err.to_log_dict,
+            err.to_log_dict(),
         )
         return int(err.exit_code)
     try:
@@ -144,18 +146,18 @@ async def _run_with_id(argv: list[str]) -> int:
     try:
         ctx = await _build_context(argv, launcher_service._shortcut_svc)
     except LauncherError as err:
-        logger.error(
+        logger.exception(
             "[launcher.dispatcher] context build failed: %s",
-            err.to_log_dict,
+            err.to_log_dict(),
         )
         return int(err.exit_code)
     try:
         await launcher_service.start()
         result = await launcher_service.launch(ctx)
     except LauncherError as err:
-        logger.error(
+        logger.exception(
             "[launcher.dispatcher] launch raised: %s",
-            err.to_log_dict,
+            err.to_log_dict(),
         )
         return int(err.exit_code)
     finally:

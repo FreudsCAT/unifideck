@@ -14,6 +14,7 @@ its files exist on disk (typically a leftover from a failed install).
 """
 
 from __future__ import annotations
+
 import asyncio
 import logging
 from pathlib import Path
@@ -21,9 +22,10 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from collections.abc import Callable
-    from ..config import UbisoftConfig
-    from ..parser import GameConfig
-    from ..paths import UbisoftPrefixPaths
+
+    from unifideck.stores.ubisoft.config import UbisoftConfig
+    from unifideck.stores.ubisoft.parser import GameConfig
+    from unifideck.stores.ubisoft.paths import UbisoftPrefixPaths
 
     ParseConfigurationsFn = Callable[[str], list[GameConfig]]
     ParseOwnershipFn = Callable[[str], list[int]]

@@ -109,9 +109,7 @@ def validate_i18n_schema(
         try:
             load_from_dict(merged)
         except LocaleConfigError as e:
-            logger.error(
-                "[config_schema] i18n schema validation failed: %s", e,
-            )
+            logger.exception("[config_schema] i18n schema validation failed")
             raise ConfigSchemaError(
                 f"i18n schema violation: {e}",
             ) from e

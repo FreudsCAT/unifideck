@@ -55,7 +55,7 @@ def flatpak_remote_names(
             env=clean_env_fn(),
             check=False,
         )
-    except Exception:  # noqa: BLE001, S110 — flatpak may be missing
+    except Exception:
         # Intentional: flatpak may be missing (non-Deck), or the
         # scope unsupported. An empty set is a "no remotes" signal
         # and is fine for callers.
@@ -111,14 +111,15 @@ def _try_flatpak_app(
                 ["flatpak", "info", flag, app_id],
                 capture_output=True, timeout=5,
                 env=clean_env_fn(),
+                check=False,  # rc is read manually below
             )
             if result.returncode == 0:
                 return ["flatpak", "run", app_id]
-    except Exception:  # noqa: BLE001, S110 — fall through
+    except Exception as e:
         # Flatpak probe can raise many things (subprocess
         # timeout, OSError from missing binary after race).
         # Fall through to the next app_id / native fallback.
-        pass
+        logger.debug("[Edge] flatpak probe failed for %s: %s", app_id, e)
     return None
 
 

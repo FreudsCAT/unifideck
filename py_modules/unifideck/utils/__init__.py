@@ -6,7 +6,7 @@ config-aware `get_all_game_directories(config)`. Legacy names
 `GAMES_MAP_PATH` and `DEFAULT_PATHS` are preserved as expanded
 constants in paths.py for backward compatibility.
 """
-from .paths import (  # noqa: F401
+from .paths import (
     # New constants
     DEFAULT_GAMES_MAP,
     DEFAULT_INSTALL_DIRS,

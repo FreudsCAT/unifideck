@@ -25,16 +25,20 @@ Sub-modules used : ``planner`` (mode determination), ``progress``
 """
 
 from __future__ import annotations
+
 import asyncio
 import logging
 import os
 import shutil
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, cast
-from ....core.types import InstallResult, Result
-from ..config import GOGConfig
-from ..tokens import GOGTokenManager
+
+from unifideck.core.types import InstallResult, Result
+from unifideck.stores.gog.config import GOGConfig
+from unifideck.stores.gog.tokens import GOGTokenManager
+
 from .helpers import _InstallHelpers
 from .marker import _PostInstallMarker
 from .planner import GOGInstallPlanner
@@ -269,7 +273,7 @@ class GOGInstaller:
         ) = await self._helpers.probe_game_info(ctx.game_id)
         ctx.existing_dirs = self._snapshot_dirs(ctx.base_path)
         ctx.support_dir = os.path.join(
-            os.path.expanduser(self._config.gogdl_config_dir),
+            await asyncio.to_thread(lambda: str(Path(self._config.gogdl_config_dir).expanduser())),
             "gog-support",
             ctx.game_id,
         )

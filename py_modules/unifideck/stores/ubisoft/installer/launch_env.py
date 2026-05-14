@@ -15,6 +15,7 @@ separate avoids leaking installer-only overrides into game launches.
 """
 
 from __future__ import annotations
+
 from dataclasses import dataclass
 
 

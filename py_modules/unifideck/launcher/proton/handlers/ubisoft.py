@@ -1,14 +1,18 @@
 from __future__ import annotations
+
+import asyncio
 import logging
 import os
 from pathlib import Path
-from ...types.errors import GameFailedError, UmuRuntimeError
-from ..infrastructure.core import ProtonLaunchPlan
-from ..infrastructure.umu_runtime import run_umu_with_retry
+
+from unifideck.launcher.proton.infrastructure.core import ProtonLaunchPlan
+from unifideck.launcher.proton.infrastructure.umu_runtime import run_umu_with_retry
+from unifideck.launcher.types.errors import GameFailedError, UmuRuntimeError
+
 logger = logging.getLogger(__name__)
 async def _apply_epic_wrapper_fix(plan: ProtonLaunchPlan) -> None:
     """Apply EPIC wrapper fix."""
-    from ..fixes.epic_prefix_fix import apply_epic_launcher_fix
+    from unifideck.launcher.proton.fixes.epic_prefix_fix import apply_epic_launcher_fix
     bundled_wrapper = (
     plan.context.plugin_dir / "bin" / "EpicGamesLauncher.exe"
    )
@@ -33,8 +37,8 @@ async def _apply_epic_wrapper_fix(plan: ProtonLaunchPlan) -> None:
         )
 async def _inject_registry_keys(plan: ProtonLaunchPlan) -> bool:
     """Inject registry keys."""
-    from ..fixes.epic_registry import setup_registry
-    legendary_config = Path("~/.config/legendary").expanduser()
+    from unifideck.launcher.proton.fixes.epic_registry import setup_registry
+    legendary_config = await asyncio.to_thread(lambda: Path("~/.config/legendary").expanduser())
     try:
         result = await setup_registry(
             game_id=plan.context.game_id,
@@ -121,8 +125,8 @@ def _apply_language_setup(plan: ProtonLaunchPlan) -> None:
 
     """Apply language setup."""
     try:
-        from ....config.config_manager import ConfigManager
-        from ..language_setup import apply_ubisoft_language
+        from unifideck.config.config_manager import ConfigManager
+        from unifideck.launcher.proton.language_setup import apply_ubisoft_language
         _cfg = ConfigManager(
             str(plan.context.plugin_dir / "defaults" / "config.json"),
         )
@@ -145,22 +149,12 @@ def _build_legendary_fallback_argv(
         "C:\\windows\\command\\EpicGamesLauncher.exe"
     )
     legendary_bin = os.environ.get("LEGENDARY_BIN", "legendary")
-    argv = plan.state.wrappers + [
-        legendary_bin,
-        "launch",
-        plan.context.game_id,
-        "--no-wine",
-        "--skip-version-check",
-        "--wrapper",
-        f"{plan.python_bin} {plan.umu_wrapper}",
-        "--language",
-        os.environ.get("EPIC_LANG", "en"),
-    ]
+    argv = [*plan.state.wrappers, legendary_bin, "launch", plan.context.game_id, "--no-wine", "--skip-version-check", "--wrapper", f"{plan.python_bin} {plan.umu_wrapper}", "--language", os.environ.get("EPIC_LANG", "en")]
     if plan.state.game_args:
         argv.append("--")
         argv.extend(plan.state.game_args)
     try:
-        from ..fixes.auth_args_stripper import strip_epic_auth_args
+        from unifideck.launcher.proton.fixes.auth_args_stripper import strip_epic_auth_args
         argv, _stripped = strip_epic_auth_args(argv)
     except Exception as err:
         logger.warning(

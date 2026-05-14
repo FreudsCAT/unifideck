@@ -14,12 +14,14 @@ calls during the "probe & prepare" phase :
 """
 
 from __future__ import annotations
+
 import asyncio
 import json
 import logging
 from typing import (
     TYPE_CHECKING,
 )
+
 from .languages import smart_match_language
 
 if TYPE_CHECKING:
@@ -103,8 +105,8 @@ class _InstallHelpers:
         """Parse info output."""
         folder_name: str | None = None
         languages: list[str] = []
-        for line in reversed(stdout.splitlines()):
-            line = line.strip()
+        for raw_line in reversed(stdout.splitlines()):
+            line = raw_line.strip()
             if not line:
                 continue
             try:

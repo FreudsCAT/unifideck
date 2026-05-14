@@ -64,7 +64,7 @@ class EdgeCDPClient:
                 data = json.loads(r.read().decode())
                 ws_url = data.get("webSocketDebuggerUrl")
                 return ws_url if ws_url else None
-        except Exception:  # noqa: BLE001 — probe must never raise
+        except Exception:
             return None
 
     def probe_cdp(self) -> bool:
@@ -76,7 +76,7 @@ class EdgeCDPClient:
                 timeout=1,
             ):
                 return True
-        except Exception:  # noqa: BLE001 — probe must never raise
+        except Exception:
             return False
 
     def list_targets(self) -> list[dict[str, Any]]:
@@ -89,15 +89,15 @@ class EdgeCDPClient:
             ) as r:
                 data = json.loads(r.read().decode())
                 return data if isinstance(data, list) else []
-        except Exception:  # noqa: BLE001 — probe must never raise
+        except Exception:
             return []
 
     # ── Navigation ───────────────────────────────────────────────────
 
-    async def navigate_tab(  # noqa: PLR0911 — intentional: one return per error code / routing branch
+    async def navigate_tab(
         self,
         url: str,
-        timeout: float = 15.0,  # noqa: ASYNC109 — navigation deadline
+        timeout: float = 15.0,
     ) -> bool:
         """Navigate the first page target to *url* via CDP and wait for load.
 
@@ -150,59 +150,98 @@ class EdgeCDPClient:
                 return await _await_navigation_result(
                     ws, deadline, url,
                 )
-        except Exception as exc:  # noqa: BLE001 — navigation boundary
+        except Exception as exc:
             logger.warning("[Edge] navigate_tab failed: %s", exc)
             return False
 
     # ── Close all targets ────────────────────────────────────────────
 
     async def close_all_targets(self, *, log_prefix: str) -> bool:
-        """Close all live targets exposed on this browser's CDP port."""
+        """Close all live targets exposed on this browser's CDP port.
+
+        Uses the DevTools HTTP ``/json/close`` endpoint (rather
+        than per-target WebSocket Page.close) because we want to
+        slam the door even if a target's WebSocket is stuck.
+        After successful closures we briefly poll for the browser
+        WebSocket URL to drop, which is the cheapest "browser is
+        gone" signal Chromium gives us. Returns True if at least
+        one target was closed.
+        """
         targets = self.list_targets()
         if not targets:
             return False
-        import urllib.error as _err
-        import urllib.request as _req
-
-        def _close_target(target_id: str) -> None:
-            """Blocking helper: one HTTP close call."""
-            with _req.urlopen(
-                f"http://127.0.0.1:{self.cdp_port}"
-                f"/json/close/{target_id}",
-                timeout=2,
-            ) as r:
-                r.read()
 
         closed_any = False
         for target in targets:
             target_id = target.get("id")
             if not target_id:
                 continue
-            try:
-                await asyncio.to_thread(_close_target, target_id)
+            if await self._close_one_target(target_id, log_prefix):
                 closed_any = True
-            except _err.HTTPError as e:
-                if e.code != 404:
-                    logger.warning(
-                        "[Edge] Could not close %s target %s: %s",
-                        log_prefix, target_id, e,
-                    )
-            except Exception as e:  # noqa: BLE001 — best-effort close loop
-                logger.warning(
-                    "[Edge] Could not close %s target %s: %s",
-                    log_prefix, target_id, e,
-                )
+
         if closed_any:
-            for _ in range(20):
-                await asyncio.sleep(0.25)
-                if not self.get_browser_ws_url():
-                    break
+            await self._await_browser_ws_gone()
             logger.info(
-                "[Edge] Closed %s browser targets via "
-                "DevTools HTTP",
+                "[Edge] Closed %s browser targets via DevTools HTTP",
                 log_prefix,
             )
         return closed_any
+
+    async def _close_one_target(self, target_id: str, log_prefix: str) -> bool:
+        """Issue one ``/json/close/<id>`` HTTP request, return True on success.
+
+        404 is treated as "already gone" (success of a sort) and
+        logged at debug level only; other HTTP errors and
+        unexpected exceptions are warned about so ops can spot a
+        truly stuck browser. Network I/O is dispatched via
+        :func:`asyncio.to_thread` to keep the event loop free.
+        """
+        import urllib.error as _err
+        import urllib.request as _req
+
+        def _close_blocking() -> None:
+            with _req.urlopen(
+                f"http://127.0.0.1:{self.cdp_port}/json/close/{target_id}",
+                timeout=2,
+            ) as r:
+                r.read()
+
+        try:
+            await asyncio.to_thread(_close_blocking)
+            return True
+        except _err.HTTPError as e:
+            if e.code == 404:
+                logger.debug(
+                    "[Edge] %s target %s already gone",
+                    log_prefix, target_id,
+                )
+                return False
+            logger.warning(
+                "[Edge] Could not close %s target %s: %s",
+                log_prefix, target_id, e,
+            )
+            return False
+        except Exception as e:
+            logger.warning(
+                "[Edge] Could not close %s target %s: %s",
+                log_prefix, target_id, e,
+            )
+            return False
+
+    async def _await_browser_ws_gone(self) -> None:
+        """Poll the browser WebSocket URL until it disappears (5 s budget).
+
+        The browser usually drops within a second or two after all
+        targets are closed; we wait up to 20 × 250 ms before giving
+        up. Returning anyway is safe because the caller's intent is
+        already satisfied — this is only a courtesy delay so the
+        next launch doesn't race against the previous Chromium's
+        shutdown.
+        """
+        for _ in range(20):
+            await asyncio.sleep(0.25)
+            if not self.get_browser_ws_url():
+                return
 
 
 async def _await_navigation_result(

@@ -21,17 +21,20 @@ Returns the detected install path or ``None`` on timeout.
 """
 
 from __future__ import annotations
+
 import asyncio
 import logging
 import os
 from collections.abc import Awaitable, Callable
 from typing import Any
-from ....core.types import InstallResult
-from ..config import UbisoftConfig
-from ..id_map import UbisoftIdMap
-from ..library import UbisoftLibrary
-from ..library.detection_helpers import looks_like_game_install
-from ..session import UbisoftSession
+
+from unifideck.core.types import InstallResult
+from unifideck.stores.ubisoft.config import UbisoftConfig
+from unifideck.stores.ubisoft.id_map import UbisoftIdMap
+from unifideck.stores.ubisoft.library import UbisoftLibrary
+from unifideck.stores.ubisoft.library.detection_helpers import looks_like_game_install
+from unifideck.stores.ubisoft.session import UbisoftSession
+
 from . import registry as _reg
 
 logger = logging.getLogger(__name__)
