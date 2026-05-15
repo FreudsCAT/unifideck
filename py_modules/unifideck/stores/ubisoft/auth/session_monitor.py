@@ -52,7 +52,7 @@ class _AuthSessionMonitor:
                 await self._monitor_task
             except asyncio.CancelledError:
                 pass
-            except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
+            except Exception as e:
                 logger.debug(
                     "[UbisoftAuth] old monitor task error on cancel: %s",
                     e,

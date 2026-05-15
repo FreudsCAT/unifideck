@@ -125,7 +125,7 @@ def _do_probe_http(
             ok=False,
             error="timeout" if isinstance(e, TimeoutError) else "network",
         )
-    except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
+    except Exception as e:
         logger.warning(
             "[SubscriptionProbe] unexpected error: %s", e,
         )

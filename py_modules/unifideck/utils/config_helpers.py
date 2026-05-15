@@ -88,7 +88,7 @@ def get_cfg(
         return default
     try:
         return config.get(key, default)
-    except Exception:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
+    except Exception:
         # Duck-typed config objects in tests may raise anything.
         return default
 

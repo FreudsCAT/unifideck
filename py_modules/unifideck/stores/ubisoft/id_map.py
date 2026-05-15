@@ -211,7 +211,7 @@ class UbisoftIdMap:
             return set()
         try:
             raw_names = get_steam_library_names()
-        except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
+        except Exception as e:
             logger.debug(
                 "[UbisoftIdMap] Steam library scan failed: %s",
                 e,

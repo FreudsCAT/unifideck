@@ -65,7 +65,7 @@ class EdgeCDPClient:
                 data = json.loads(r.read().decode())
                 ws_url = data.get("webSocketDebuggerUrl")
                 return ws_url if ws_url else None
-        except Exception:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
+        except Exception:
             return None
 
     def probe_cdp(self) -> bool:
@@ -77,7 +77,7 @@ class EdgeCDPClient:
                 timeout=1,
             ):
                 return True
-        except Exception:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
+        except Exception:
             return False
 
     def list_targets(self) -> list[dict[str, Any]]:
@@ -90,7 +90,7 @@ class EdgeCDPClient:
             ) as r:
                 data = json.loads(r.read().decode())
                 return data if isinstance(data, list) else []
-        except Exception:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
+        except Exception:
             return []
 
     # ── Navigation ───────────────────────────────────────────────────
@@ -147,7 +147,7 @@ class EdgeCDPClient:
                 return await _await_navigation_result(
                     ws, deadline, url,
                 )
-        except Exception as exc:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
+        except Exception as exc:
             logger.warning("[Edge] navigate_tab failed: %s", exc)
             return False
 
@@ -218,7 +218,7 @@ class EdgeCDPClient:
                 log_prefix, target_id, e,
             )
             return False
-        except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
+        except Exception as e:
             logger.warning(
                 "[Edge] Could not close %s target %s: %s",
                 log_prefix, target_id, e,

@@ -60,7 +60,7 @@ class _CredentialPropagator:
                     source,
                     prefix_path,
                 )
-            except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
+            except Exception as e:
                 logger.warning(
                     "[UbisoftSession] credential propagation failed for %s: %s",
                     Path(prefix_path).name,
@@ -85,7 +85,7 @@ class _CredentialPropagator:
                     source,
                     prefix_path,
                 )
-            except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
+            except Exception as e:
                 logger.warning(
                     "[UbisoftSession] artifact propagation failed for %s: %s",
                     Path(prefix_path).name,
@@ -133,7 +133,7 @@ class _CredentialPropagator:
                     artifact_synced,
                 )
                 credentials_synced = True
-        except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
+        except Exception as e:
             logger.warning(
                 "[UbisoftSession] inject auth sync failed: %s",
                 e,
@@ -156,7 +156,7 @@ class _CredentialPropagator:
             try:
                 if self.inject_into_prefix(prefix_path):
                     ensured += 1
-            except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
+            except Exception as e:
                 logger.warning(
                     "[UbisoftSession] ensure auth state failed for %s: %s",
                     Path(prefix_path).name,

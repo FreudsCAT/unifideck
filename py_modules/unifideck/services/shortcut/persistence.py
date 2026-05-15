@@ -39,7 +39,7 @@ async def read_vdf(shortcuts_path: str) -> dict[str, Any]:
         try:
             with Path(shortcuts_path).open("rb") as f:
                 return vdf.binary_loads(f.read())
-        except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
+        except Exception as e:
             logger.warning("[ShortcutPersistence] failed to read shortcuts.vdf: %s", e)
             return {"shortcuts": {}}
 
@@ -92,7 +92,7 @@ async def read_games_map(games_map_path: str) -> dict[str, GameMapEntry]:
 
             content = await asyncio.to_thread(_read_sync)
             return parse_games_map(content)
-        except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
+        except Exception as e:
             if attempt < _GAMES_MAP_READ_ATTEMPTS:
                 logger.debug(
                     "[ShortcutPersistence] games.map read failed (attempt %d/%d): %s. Retrying...",

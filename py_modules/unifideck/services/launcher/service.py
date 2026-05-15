@@ -66,7 +66,7 @@ class LauncherService:
             if self._active_subprocess:
                 try:
                     self._active_subprocess.terminate()
-                except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
+                except Exception as e:
                     logger.debug("[LauncherService] terminate failed: %s", e)
 
         try:
@@ -75,7 +75,7 @@ class LauncherService:
         except ValueError:
             # We might not be in the main thread
             pass
-        except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
+        except Exception as e:
             logger.debug("[LauncherService] signal install failed: %s", e)
 
     async def stop(self) -> None:
@@ -110,7 +110,7 @@ class LauncherService:
             # Enrich with elapsed time
             res.elapsed = self._elapsed_since_launch()
             return res
-        except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
+        except Exception as e:
             return await self._handle_launcher_error(ctx, e)
 
     async def _launch_xcloud(self, ctx: LaunchContext) -> Result:

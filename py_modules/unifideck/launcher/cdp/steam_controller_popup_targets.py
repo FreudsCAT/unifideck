@@ -54,7 +54,7 @@ async def wait_for_popup_root_ready(
             )
             if value is True:
                 return True
-        except Exception as exc:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
+        except Exception as exc:
             logger.debug("[popup] root poll failed: %s", exc)
         await asyncio.sleep(0.25)
     return False

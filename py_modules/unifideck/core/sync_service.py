@@ -338,7 +338,7 @@ class SyncService(_SyncQueriesMixin):
             return default
         try:
             value = self._config.get("dedup.tracked_stores", list(default))
-        except Exception:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
+        except Exception:
             return default
         if not isinstance(value, (list, tuple)):
             logger.warning(

@@ -84,7 +84,7 @@ async def _emit_audit(bus: Any, event_name: str, **kwargs: Any) -> None:
         from unifideck.core.types.events import Events
         event = getattr(Events, event_name)
         await bus.emit(event, **kwargs)
-    except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
+    except Exception as e:
         logger.debug(
             "[audit_decorators] failed to emit %s: %s",
             event_name, e,

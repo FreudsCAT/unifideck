@@ -52,7 +52,7 @@ async def emit_launcher_error_toast(
             params={"game_key": game_key, "error_code": err_code},
             actions=actions,
         )
-    except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
+    except Exception as e:
         logger.warning("[ErrorToasts] Failed to emit error toast: %s", e)
 
 
@@ -79,7 +79,7 @@ async def handle_launcher_error(
                 "launcher_error",
                 err_code
             )
-        except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
+        except Exception as e:
             logger.debug("[ErrorToasts] Failed to record failure: %s", e)
 
     await emit_launcher_error_toast(svc, ctx, err_code)

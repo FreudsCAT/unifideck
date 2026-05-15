@@ -65,7 +65,7 @@ def validate_path(path: str) -> Result:
 
         if free_gb < _MIN_FREE_GB:
             return Result(success=False, error=f"low_space:{free_gb:.1f}GB")
-    except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
+    except Exception as e:
         # Best-effort skip: statvfs unsupported (Windows path?),
         # permission denied, or path missing. Treat as "no info"
         # rather than blocking the install.

@@ -159,7 +159,7 @@ async def _invoke_post_bounce_hook(on_complete: _PostBounceHook) -> None:
         result = on_complete()
         if asyncio.iscoroutine(result):
             await result
-    except Exception as exc:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
+    except Exception as exc:
         logger.debug("[popup] on_complete hook failed: %s", exc)
 async def refresh_steam_controller_layout(
     steam_port: int,

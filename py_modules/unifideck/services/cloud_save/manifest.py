@@ -43,7 +43,7 @@ async def read_manifest(directory: str) -> dict[str, float]:
 
             # Ensure all values are floats
             return {k: float(v) for k, v in data.items()}
-        except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
+        except Exception as e:
             logger.warning("[CloudSaveManifest] failed to read %s: %s", manifest_path, e)
             return {}
 
@@ -71,7 +71,7 @@ async def write_manifest(directory: str, manifest: dict[str, float]) -> None:
                 os.fsync(f.fileno())
 
             Path(tmp_path).replace(manifest_path)
-        except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
+        except Exception as e:
             logger.warning("[CloudSaveManifest] failed to write %s: %s", manifest_path, e)
             if Path(tmp_path).exists():
                 with contextlib.suppress(OSError):

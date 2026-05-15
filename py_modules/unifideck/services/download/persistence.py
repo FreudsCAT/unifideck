@@ -55,7 +55,7 @@ async def load_queue(queue_file: str) -> list[DownloadItem]:
         except json.JSONDecodeError as e:
             logger.warning("[DownloadPersistence] malformed JSON in queue file: %s", e)
             return []
-        except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
+        except Exception as e:
             logger.warning("[DownloadPersistence] failed to parse queue file: %s", e)
             return []
 
@@ -110,7 +110,7 @@ async def save_queue(
         try:
             data = [item.to_dict() for item in queue]
             _atomic_json_write(queue_file, data)
-        except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
+        except Exception as e:
             logger.warning(
                 "[DownloadPersistence] failed to save queue: %s", e,
             )

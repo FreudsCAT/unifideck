@@ -151,7 +151,7 @@ class MicrosoftCatalogReader:
                     None, lambda: http_get(url, headers),
                 )
             )
-        except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
+        except Exception as e:
             logger.warning(
                 "[MicrosoftCatalog] title batch failed: %s",
                 e,

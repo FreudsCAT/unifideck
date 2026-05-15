@@ -96,7 +96,7 @@ def _safe_emit(bus: EventBus, event_name: str, **kwargs: Any) -> None:
         )
         _background_tasks.add(task)
         task.add_done_callback(_background_tasks.discard)
-    except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
+    except Exception as e:
         logger.debug(
             "[audit_emitter] failed to emit %s: %s",
             event_name, e,

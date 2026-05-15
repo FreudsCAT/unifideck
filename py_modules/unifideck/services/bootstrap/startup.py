@@ -52,7 +52,7 @@ async def start_async_services(container: ServiceContainer) -> None:
         try:
             await start_method()
             logger.info("[Startup] started %s", service_name)
-        except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
+        except Exception as e:
             logger.warning(
                 "[Startup] failed to start %s: %s",
                 service_name, e,
@@ -94,5 +94,5 @@ def _self_heal_executable_bits() -> None:
                     # bundled helpers to run after unzip strips +x.
                     Path(path).chmod(st.st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
                     logger.info("[Startup] restored +x on %s", path)
-    except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
+    except Exception as e:
         logger.warning("[Startup] failed to self-heal executable bits: %s", e)

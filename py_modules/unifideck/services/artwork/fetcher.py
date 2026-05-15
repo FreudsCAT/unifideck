@@ -146,7 +146,7 @@ async def find_artwork_url(
             if not game_id:
                 return None
             return await _sgdb_pick_artwork_url(session, base_url, game_id, kind)
-    except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
+    except Exception as e:
         logger.debug(
             "[ArtworkFetcher] find_artwork_url failed for %s (%s): %s",
             title, kind, e,
@@ -271,7 +271,7 @@ async def download_and_save(
     except asyncio.TimeoutError:
         logger.debug("[ArtworkFetcher] download timed out: %s", url)
         return False
-    except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
+    except Exception as e:
         logger.debug("[ArtworkFetcher] download failed %s: %s", url, e)
         return False
     finally:

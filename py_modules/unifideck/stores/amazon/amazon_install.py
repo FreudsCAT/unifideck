@@ -177,7 +177,7 @@ class AmazonInstaller:
                 game_id,
                 progress_cb,
             )
-        except BaseException as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
+        except BaseException as e:
             drain_exc = e
         rc = await self._wait_with_timeout(proc)
         if drain_exc is not None:
@@ -234,7 +234,7 @@ class AmazonInstaller:
         if progress_cb is not None:
             try:
                 await progress_cb(pct)
-            except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
+            except Exception as e:
                 logger.debug(
                     "[amazon_install] progress_cb raised: %s",
                     e,

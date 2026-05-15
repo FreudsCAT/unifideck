@@ -99,7 +99,7 @@ class CompatLibrary:
             ttl = int(get_cfg(config, "cache_ttl.compat", 604800))
             try:
                 cache.register(CACHE_NAMESPACE, ttl_seconds=ttl)
-            except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
+            except Exception as e:
                 # Already registered or cache backend misconfigured;
                 # lookups will still work, just without our preferred TTL.
                 logger.debug("[CompatLibrary] cache.register failed: %s", e)
@@ -161,7 +161,7 @@ class CompatLibrary:
                 return parse_protondb_response(
                     await resp.json(),
                 )
-        except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
+        except Exception as e:
             logger.debug(
                 "[compat] protondb(%d) failed: %s", appid, e,
             )
@@ -189,7 +189,7 @@ class CompatLibrary:
                 return parse_deck_verified_response(
                     await resp.json(),
                 )
-        except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
+        except Exception as e:
             logger.debug(
                 "[compat] deck(%d) failed: %s", appid, e,
             )
@@ -200,7 +200,7 @@ class CompatLibrary:
             return None
         try:
             return self._cache.get(CACHE_NAMESPACE, key)
-        except Exception:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
+        except Exception:
             return None
     def _cache_set(
         self, key: str, value: dict[str, Any],
@@ -210,7 +210,7 @@ class CompatLibrary:
             return
         try:
             self._cache.set(CACHE_NAMESPACE, key, value)
-        except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
+        except Exception as e:
             # Cache write failures are non-fatal: the rating was
             # computed successfully, we just won't re-use it.
             logger.debug("[CompatLibrary] cache.set %r failed: %s", key, e)

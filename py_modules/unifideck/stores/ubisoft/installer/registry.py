@@ -144,7 +144,7 @@ def inject_install_registry(
             "[UbisoftInstaller] install registry injected for %s",
             install_id,
         )
-    except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
+    except Exception as e:
         logger.warning(
             "[UbisoftInstaller] registry injection failed: %s",
             e,
@@ -185,7 +185,7 @@ def clean_install_registry(
             "[UbisoftInstaller] cleaned registry for %s",
             install_id,
         )
-    except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
+    except Exception as e:
         logger.warning(
             "[UbisoftInstaller] registry cleanup failed: %s",
             e,

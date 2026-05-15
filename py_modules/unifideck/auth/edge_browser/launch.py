@@ -99,8 +99,8 @@ def _spawn_edge_process(
         # to ``subprocess.Popen`` below and must outlive this
         # scope. We close it explicitly in the ``finally`` clause
         # of the Popen try-block.
-        stderr_fh = Path(LOG_FILE).open(log_mode)  # noqa: SIM115 — fd handed off to Popen, closed in subprocess finally clause
-    except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
+        stderr_fh = Path(LOG_FILE).open(log_mode)
+    except Exception as e:
         # The log file is a convenience (not essential).
         # Proceed with DEVNULL if we can't open it.
         logger.debug("[Edge] stderr log open failed: %s", e)

@@ -139,7 +139,7 @@ def _scan_steam_process_env(
                         result.get("WAYLAND_DISPLAY"),
                     )
                     return
-    except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
+    except Exception as e:
         # pgrep missing, scheduling glitch — not fatal, caller
         # falls through to hardcoded fallbacks.
         logger.debug(

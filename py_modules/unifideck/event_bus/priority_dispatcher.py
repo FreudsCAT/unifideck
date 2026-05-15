@@ -435,7 +435,7 @@ class PriorityDispatcher:
                 if item.dropped:
                     continue
                 await self._dispatch_one(item)
-            except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
+            except Exception as e:
                 self._handle_dispatch_error(item, e)
             finally:
                 self._queue.task_done()

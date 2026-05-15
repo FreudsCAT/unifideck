@@ -62,7 +62,7 @@ def emit_security_event(
         # callback ensures the entry is freed when the task finishes.
         _BACKGROUND_TASKS.add(task)
         task.add_done_callback(_BACKGROUND_TASKS.discard)
-    except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
+    except Exception as e:
         logger.debug(
             "[bus_emitter] emit %s failed: %s",
             event_name, e,

@@ -145,7 +145,7 @@ class _PrefixHelpers:
                 None,
             )
             self.try_inject_auth_state([template_dir])
-        except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
+        except Exception as e:
             logger.warning(
                 "[UbisoftPrefixManager] template creation from game prefix failed: %s",
                 e,
@@ -326,7 +326,7 @@ class _PrefixHelpers:
             return
         try:
             self._parent._inject_auth_state(prefix_paths)
-        except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
+        except Exception as e:
             logger.warning(
                 "[UbisoftPrefixManager] auth state injection failed: %s",
                 e,

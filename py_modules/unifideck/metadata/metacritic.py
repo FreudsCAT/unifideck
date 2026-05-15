@@ -177,7 +177,7 @@ async def _fetch_composer(slug: str, url_template: str, timeout: int) -> dict | 
             if resp.status != 200:
                 return None
             return cast("dict[Any, Any] | None", await resp.json())
-    except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
+    except Exception as e:
         logger.debug(
             "[metacritic] fetch(%s) failed: %s", slug, e,
         )

@@ -117,7 +117,7 @@ class ProtonService:
                 return Result(success=True)
             await asyncio.to_thread(_write_atomic, new_content)
             return Result(success=True)
-        except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
+        except Exception as e:
             logger.warning("[ProtonService] Failed to set compat tool: %s", e)
             return Result(success=False, error=str(e))
 

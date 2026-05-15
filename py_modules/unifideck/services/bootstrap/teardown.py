@@ -66,7 +66,7 @@ async def stop_all_services(container: ServiceContainer) -> None:
             continue
         try:
             await stop_fn()
-        except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
+        except Exception as e:
             logger.warning(
                 "[bootstrap] %s.%s raised: %s",
                 attr,

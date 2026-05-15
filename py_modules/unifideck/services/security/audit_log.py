@@ -64,7 +64,7 @@ class AuditLog:
             self._counters[event_name] = (
                 self._counters.get(event_name, 0) + 1
             )
-        except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
+        except Exception as e:
             logger.debug(
                 "[AuditLog] record failed: %s", e,
             )

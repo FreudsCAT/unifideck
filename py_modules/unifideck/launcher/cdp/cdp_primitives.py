@@ -28,7 +28,7 @@ async def wait_for_titled_target(
                     return dict(target)
         except asyncio.CancelledError:
             raise
-        except Exception as exc:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
+        except Exception as exc:
             logger.debug("[cdp] waiting for target failed: %s", exc)
         await asyncio.sleep(poll_delay)
     return None

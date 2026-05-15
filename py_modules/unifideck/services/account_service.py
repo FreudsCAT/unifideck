@@ -80,7 +80,7 @@ class AccountService:
                 await self._check_once()
             except asyncio.CancelledError:
                 raise
-            except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
+            except Exception as e:
                 logger.warning("[AccountService] Error in poll loop: %s", e)
 
     async def _check_once(self) -> bool:
@@ -105,7 +105,7 @@ class AccountService:
                 )
                 return True
 
-        except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
+        except Exception as e:
             logger.warning("[AccountService] Check once failed: %s", e)
 
         return False
@@ -122,7 +122,7 @@ class AccountService:
 
             content = await asyncio.to_thread(read_file)
             return self._extract_most_recent(content)
-        except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
+        except Exception as e:
             logger.debug("[AccountService] Failed to read loginusers: %s", e)
             return None
 

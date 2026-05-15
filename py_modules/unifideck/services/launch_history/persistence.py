@@ -34,7 +34,7 @@ def load_history(path: Path) -> dict[str, Any]:
     except json.JSONDecodeError as e:
         logger.warning("[LaunchHistory] Malformed JSON in %s: %s", path, e)
         return {}
-    except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
+    except Exception as e:
         logger.warning("[LaunchHistory] Failed to load %s: %s", path, e)
         return {}
 

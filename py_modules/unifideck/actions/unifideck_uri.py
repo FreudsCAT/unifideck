@@ -101,7 +101,7 @@ def parse_unifideck_uri(uri: str) -> ParsedAction:
         return ParsedAction(valid=False, error="empty_uri")
     try:
         parsed = urlparse(uri)
-    except Exception as err:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
+    except Exception as err:
         return ParsedAction(valid=False, error=f"parse_error:{err}")
 
     if parsed.scheme != "unifideck":

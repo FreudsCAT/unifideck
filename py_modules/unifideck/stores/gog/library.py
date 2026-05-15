@@ -120,7 +120,7 @@ class GOGLibrary:
                     return cast("int", response.status)
             except urllib.request.HTTPError as e:
                 return e.code
-            except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
+            except Exception as e:
                 logger.debug(
                     "[GOGLibrary] probe error: %s",
                     e,
@@ -317,7 +317,7 @@ class GOGLibrary:
             return None
         try:
             return self._find_exe(install_path)
-        except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
+        except Exception as e:
             logger.warning(
                 "[GOGLibrary] exe resolution failed: %s",
                 e,

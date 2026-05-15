@@ -69,7 +69,7 @@ async def fetch_json_get(
                     )
                     return None
                 return json.loads(response.read().decode())
-        except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
+        except Exception as e:
             _logger.warning(
                 "%s GET %s failed: %s",
                 log_prefix,

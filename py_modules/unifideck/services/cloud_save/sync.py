@@ -106,10 +106,12 @@ def _mtimes_diverge(
     """
     if set(current.keys()) != set(manifest.keys()):
         return True
-    for rel, mtime in current.items():
-        if abs(mtime - manifest.get(rel, 0.0)) > tolerance:
-            return True
-    return False
+    # Use ``any`` to short-circuit on the first drift — same
+    # semantics as the previous for-loop but lints cleaner.
+    return any(
+        abs(mtime - manifest.get(rel, 0.0)) > tolerance
+        for rel, mtime in current.items()
+    )
 
 
 class _SyncMixin:

@@ -28,7 +28,7 @@ class _CacheMixin:
             if chain is not None:
                 xuid = chain.xuid
                 self._last_standard_chain = chain
-        except Exception:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
+        except Exception:
             logger.debug(
                 "[MSSubSvc] could not build chain for key resolution",
                 exc_info=True,

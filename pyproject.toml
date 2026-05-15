@@ -298,13 +298,13 @@ ignore = [
 # flags any of them whose value contains "token" / "secret" / "key"
 # as if it were a hardcoded password, but every entry is just an
 # identifier — no credentials are stored here.
-"core/types/events.py" = ["S105"]
+"**/core/types/events.py" = ["S105"]
 # Store config modules name a ``_DEFAULT_TOKEN_FILE`` constant
 # whose value is a file path (~/.config/unifideck/<store>_token.json),
 # not a password. S105 matches on the "_TOKEN_" substring of the
 # variable name and has no way to tell the two apart.
-"stores/gog/config.py" = ["S105"]
-"stores/microsoft/microsoft_config.py" = ["S105"]
+"**/stores/gog/config.py" = ["S105"]
+"**/stores/microsoft/microsoft_config.py" = ["S105"]
 
 [tool.ruff.lint.isort]
 # Treat ``unifideck`` as the first-party namespace so its imports

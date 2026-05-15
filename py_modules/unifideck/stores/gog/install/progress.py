@@ -179,7 +179,7 @@ class _GogdlProgressMonitor:
             return
         try:
             await progress_cb(dict(progress))
-        except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
+        except Exception as e:
             logger.debug(
                 "[GOGInstaller] progress_cb: %s",
                 e,
@@ -326,7 +326,7 @@ class _GogdlProgressMonitor:
                     )
             finally:
                 await _gogdl_cleanup()
-        except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
+        except Exception as e:
             logger.warning(
                 "[GOGInstaller] repair pipeline failed: %s",
                 e,

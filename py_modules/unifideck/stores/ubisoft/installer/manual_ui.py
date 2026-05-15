@@ -227,7 +227,7 @@ class _ManualUiInstaller:
         )
         try:
             await self._id_map.refresh_from_configurations()
-        except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
+        except Exception as e:
             logger.debug(
                 "[UbisoftInstaller] id_map refresh after install failed: %s",
                 e,

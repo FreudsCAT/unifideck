@@ -95,7 +95,7 @@ def _resolve_bypass_flag(store: str, game_id: str) -> bool:
         )
         lh = LaunchHistoryService(cfg)
         bypass_flag = lh.consume_bypass(f"{store}:{game_id}")
-    except Exception:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
+    except Exception:
         bypass_flag = False
     return bypass_env or bypass_flag
 async def _run(argv: list[str]) -> int:
@@ -115,7 +115,7 @@ async def _run(argv: list[str]) -> int:
                 resolve_plugin_dir() /
                 "defaults" /
                 "config.json"))
-        except Exception:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
+        except Exception:
             _cfg = None
         prune_old_launches(_cfg)
         _archive_handler = attach_launch_handler(lid, _cfg)

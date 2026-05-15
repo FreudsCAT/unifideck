@@ -166,7 +166,7 @@ class MicrosoftStore(StoreBase):
                 self._edge.kill()
                 self._edge.clear_cookies()
                 EdgeBrowser.clear_profile_data()
-            except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
+            except Exception as e:
                 logger.warning(
                     "[MicrosoftStore] Edge cleanup error: "
                     "%s", e,
@@ -219,7 +219,7 @@ class MicrosoftStore(StoreBase):
             tier = await self._subscription_service.get_tier(
                 self._tokens,
             )
-        except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
+        except Exception as e:
             logger.warning(
                 "[MicrosoftStore] subscription check raised: "
                 "%s — skipping sync", e,

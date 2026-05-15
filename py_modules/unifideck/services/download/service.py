@@ -166,7 +166,7 @@ class DownloadService(_WorkerMixin):
         """Replace in-memory queue with the persisted file."""
         try:
             self._queue = await load_queue(self._queue_file)
-        except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
+        except Exception as e:
             logger.warning("[DownloadService] failed to load queue, starting fresh: %s", e)
             self._queue = []
 
@@ -176,5 +176,5 @@ class DownloadService(_WorkerMixin):
             # Note: We only persist pending items, not running ones, because
             # a restart interrupts running installs anyway.
             await save_queue(self._queue_file, self._queue)
-        except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
+        except Exception as e:
             logger.warning("[DownloadService] failed to save queue: %s", e)

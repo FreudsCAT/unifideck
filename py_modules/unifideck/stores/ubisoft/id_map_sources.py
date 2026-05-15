@@ -205,7 +205,7 @@ class _IdMapSources:
                 parser_fn,
                 config_path,
             )
-        except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
+        except Exception as e:
             logger.warning(
                 "[UbisoftIdMap] parser failed for %s: %s",
                 label,
@@ -250,7 +250,7 @@ class _IdMapSources:
             logger.info(
                 "[UbisoftIdMap] game ID database downloaded",
             )
-        except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
+        except Exception as e:
             logger.warning(
                 "[UbisoftIdMap] game ID database download failed: %s",
                 e,
@@ -271,7 +271,7 @@ class _IdMapSources:
             return None
         try:
             db_entries = await self.fetch_game_id_database()
-        except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
+        except Exception as e:
             logger.debug(
                 "[UbisoftIdMap] fetch failed for name lookup: %s",
                 e,

@@ -34,5 +34,5 @@ def should_strip_for_launch_context(ctx: LaunchContext) -> bool:
         return (
             store == "ubisoft" and "UplayLaunch" in exe_path
         )
-    except Exception:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
+    except Exception:
         return False

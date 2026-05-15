@@ -86,7 +86,7 @@ class _FailuresMixin:
 
             return [f for f in failures if now - f.get("timestamp", 0) <= window]
 
-        except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
+        except Exception as e:
             logger.debug("[LaunchHistory] get_recent_failures failed for %s: %s", game_key, e)
             return []
 
@@ -123,7 +123,7 @@ class _FailuresMixin:
             )
             if hasattr(self, "_emit_state"):
                 self._emit_state(game_key, f"record_failure_{kind}")
-        except Exception as err:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
+        except Exception as err:
             logger.warning(
                 "[LaunchHistory] Failed to record failure for %s: %s",
                 game_key, err,
@@ -145,7 +145,7 @@ class _FailuresMixin:
             if hasattr(self, "_emit_state"):
                 self._emit_state(game_key, "clear_failures")
 
-        except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
+        except Exception as e:
             logger.warning("[LaunchHistory] Failed to clear failures for %s: %s", game_key, e)
 
     def record_success(self, game_key: str) -> None:
@@ -164,5 +164,5 @@ class _FailuresMixin:
             if hasattr(self, "_emit_state"):
                 self._emit_state(game_key, "closed")
 
-        except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
+        except Exception as e:
             logger.warning("[LaunchHistory] Failed to record success for %s: %s", game_key, e)

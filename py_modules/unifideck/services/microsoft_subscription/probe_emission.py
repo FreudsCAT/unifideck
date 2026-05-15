@@ -56,7 +56,7 @@ class _ProbeEmissionMixin:
                 "stores.microsoft.subscription_check_url",
             )
             return str(raw) if raw else _DEFAULT_PROBE_URL
-        except Exception:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
+        except Exception:
             return _DEFAULT_PROBE_URL
 
     async def _emit_state_change(

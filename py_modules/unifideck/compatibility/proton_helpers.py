@@ -163,7 +163,7 @@ class ProtonToolsManager:
             return default
         try:
             return self._config.get(key, default)
-        except Exception:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
+        except Exception:
             return default
     def get_for_app(self, appid: int) -> CompatToolResult:
         """Get for app."""

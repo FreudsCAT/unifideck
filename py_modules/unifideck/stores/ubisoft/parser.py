@@ -60,7 +60,7 @@ def _parse_config_header(header: bytes, second_eight: bool = False) -> tuple:
                 offset + tmp_size + 1,
             )
         return 0, 0, 0, 10
-    except Exception:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
+    except Exception:
         return 0, 0, 0, 10
 
 
@@ -166,7 +166,7 @@ def _extract_config_chunk(
         parsed = yaml.safe_load(
             stream.replace("\t", " "),
         )
-    except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
+    except Exception as e:
         logger.debug(
             "[UbiParser] YAML parse error at offset %d: %s",
             global_offset,
@@ -328,7 +328,7 @@ def check_install_state(state_file: str) -> bool:
         with Path(state_file).open("rb") as f:
             first_byte = f.read(1)
             return first_byte == b"\x0a"
-    except Exception:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
+    except Exception:
         return False
 
 

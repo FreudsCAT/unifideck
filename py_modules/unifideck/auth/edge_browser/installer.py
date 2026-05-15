@@ -128,7 +128,7 @@ class EdgeInstaller:
                 "[Edge] Edge udev override failed: %s", stderr,
             )
             return False
-        except Exception as exc:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
+        except Exception as exc:
             logger.warning(
                 "[Edge] Edge udev override error: %s", exc,
             )
@@ -179,7 +179,7 @@ class EdgeInstaller:
                     check=False,
                 ),
             )
-        except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
+        except Exception as e:
             # Intentional: subprocess failure here can't be classified
             # (network, missing binary, timeout). Log and surface as
             # False so the install wizard displays a retry option.
@@ -214,7 +214,7 @@ class EdgeInstaller:
             )
             if result.returncode == 0 and result.stdout.strip():
                 return result.stdout.strip()
-        except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
+        except Exception as e:
             # ``xdg-settings`` may be missing on minimal Decks or
             # fail under non-interactive sessions. Either way the
             # caller treats a ``None`` snapshot as "skip restore".
@@ -246,7 +246,7 @@ class EdgeInstaller:
                     "[Edge] Restored default browser to %s",
                     original,
                 )
-        except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
+        except Exception as e:
             # Intentional: xdg-settings failure is non-fatal (e.g.
             # missing on non-desktop distros). Worst case the user
             # has to manually reset their browser.
@@ -318,7 +318,7 @@ class EdgeInstaller:
                 "success": False,
                 "error": "microsoft.edgeInstallTimeout",
             }
-        except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
+        except Exception as e:
             logger.warning(
                 "[Edge] Microsoft Edge install error: %s", e,
             )

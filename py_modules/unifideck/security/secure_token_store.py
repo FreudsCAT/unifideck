@@ -389,7 +389,7 @@ class SecureTokenStore:
             task = loop.create_task(self._bus.emit(event, **kwargs))
             self._background_tasks.add(task)
             task.add_done_callback(self._background_tasks.discard)
-        except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
+        except Exception as e:
             logger.debug(
                 "[SecureTokenStore] failed to emit %s: %s",
                 event_name, e,

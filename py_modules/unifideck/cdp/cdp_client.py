@@ -101,7 +101,7 @@ class CDPClient:
                 session.get(url, timeout=5) as resp,
             ):
                 return cast("bool", resp.status == 200)
-        except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
+        except Exception as e:
             logger.debug(
                 "[CDPClient] close_target failed: %s", e,
             )
@@ -145,7 +145,7 @@ class CDPClient:
                 if resp.status != 200:
                     return []
                 return cast("list[dict[str, Any]]", await resp.json())
-        except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
+        except Exception as e:
             logger.debug(
                 "[CDPClient] list targets failed: %s", e,
             )
@@ -208,5 +208,5 @@ class CDPClient:
                         msg.get("result"))
         except asyncio.CancelledError:
             raise
-        except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
+        except Exception as e:
             logger.warning("[CDPClient] recv loop error: %s", e)
