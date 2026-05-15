@@ -134,6 +134,115 @@ def _cfg(config: ConfigManager | None, key: str, default: Any) -> Any:
     return get_cfg(config, key, default)
 
 
+# OAuth-related URL keywords used to gate which targets are
+# worth full inspection. Tuple (not set) because order of
+# checks doesn't matter and a tuple is the natural literal for
+# a fixed sentinel list — also slightly faster for tiny N.
+_OAUTH_URL_KEYWORDS: tuple[str, ...] = (
+    "auth", "login", "code=", "epiclogin",
+    "on_login_success", "oauth", "authorizationcode",
+    "/id/api/redirect", "oauth20_desktop.srf",
+    "live.com/oauth", "callback", "maplanding",
+)
+
+
+def _is_oauth_relevant_url(url: str) -> bool:
+    """True iff ``url`` contains any known OAuth-related keyword.
+
+    Used to filter the CDP target list down to URLs that
+    deserve full inspection (regex match, code extraction).
+    Skipping unrelated tabs early keeps the polling loop
+    cheap on machines with many open Steam tabs.
+    """
+    lowered = url.lower()
+    return any(kw in lowered for kw in _OAUTH_URL_KEYWORDS)
+
+
+def _build_redirect_capture(
+    url: str, start: float,
+) -> AuthCaptureResult:
+    """Construct a capture result for a strict redirect-URI match.
+
+    Logs the capture with the ``code=...`` query parameter
+    redacted so the auth code never leaks to logs.
+    """
+    elapsed = time.monotonic() - start
+    params = extract_oauth_params(url)
+    safe_url = re.sub(
+        r'(code=[^&\s]+)', 'code=***REDACTED***', url,
+    )
+    logger.info(
+        "[auth/browser] captured redirect "
+        "after %.1fs: %s", elapsed, safe_url,
+    )
+    return AuthCaptureResult(
+        success=True,
+        redirect_url=url,
+        params=params,
+        elapsed_seconds=elapsed,
+    )
+
+
+def _build_url_code_capture(
+    url: str, code: str, start: float,
+) -> AuthCaptureResult:
+    """Construct a capture result for a generic ``?code=`` match.
+
+    Distinct from ``_build_redirect_capture``: this path is
+    taken when the URL doesn't match any prefix in
+    ``allowed_uris`` but still contains a ``code=`` query
+    parameter — typically an intermediate provider redirect.
+    """
+    elapsed = time.monotonic() - start
+    logger.info(
+        "[auth/browser] extracted code from URL "
+        "after %.1fs", elapsed,
+    )
+    return AuthCaptureResult(
+        success=True,
+        redirect_url=url,
+        params={"code": code},
+        elapsed_seconds=elapsed,
+    )
+
+
+def _log_extract(first_attempt: bool, fmt: str, *args: Any) -> None:
+    """Log content-extraction events at INFO on the first attempt, DEBUG after.
+
+    The page body for Epic's ``/id/api/redirect`` mutates
+    during login — first checks always fail (login form,
+    no code yet), so failure on the first attempt is
+    diagnostic. Subsequent retries are routine polling
+    chatter and belong at DEBUG.
+    """
+    level = logger.info if first_attempt else logger.debug
+    level("[auth/browser] " + fmt, *args)
+
+
+def _match_pattern_in_text(
+    text: str,
+    pattern: str,
+    url_snippet: str,
+    first_attempt: bool,
+) -> str | None:
+    """Apply ``pattern`` to ``text``, return the first capture group.
+
+    Logs a miss at INFO/DEBUG (per ``first_attempt``)
+    including the body length so operators can tell
+    "page loaded but no code yet" from "page never
+    loaded at all".
+    """
+    match = re.search(pattern, text)
+    if match:
+        return match.group(1)
+    _log_extract(
+        first_attempt,
+        "pattern not found in page content (%d chars) for %s",
+        len(text), url_snippet,
+    )
+    return None
+
+
 # ══════════════════════════════════════════════════════════════════
 # Monitor class
 # ══════════════════════════════════════════════════════════════════
@@ -199,176 +308,55 @@ class OAuthBrowserMonitor:
         This is used as a fallback for stores (e.g. Epic)
         that embed the authorization code in a JSON blob
         inside the page body rather than a query parameter.
+
+        Refactor history (lot 13a): originally a single
+        method at cognitive complexity 63, decomposed
+        into 4 private helpers — ``_poll_both_endpoints``,
+        ``_log_heartbeat_if_due``, ``_try_capture_target``,
+        ``_try_content_fallback`` — so this orchestrator
+        stays under the CCR=15 gate.
         """
         deadline = time.monotonic() + (
             timeout if timeout is not None
             else self._default_timeout
         )
         start = time.monotonic()
-        monitored_urls: set[str] = set()
-        logged_urls: set[str] = set()
-        content_extract_first_attempt: set[str] = set()
-        last_heartbeat = 0.0
+        # Mutable polling state passed by reference to helpers.
+        # ``monitored_urls`` dedups URL inspection across loop
+        # iterations; ``logged_urls`` dedups the "OAuth page
+        # detected" info log; ``content_extract_first_attempt``
+        # tracks which URLs we've already content-extracted from
+        # at least once (to escalate failure logging from DEBUG
+        # to INFO only on the first attempt per URL).
+        state: dict[str, Any] = {
+            "monitored_urls": set(),
+            "logged_urls": set(),
+            "content_extract_first_attempt": set(),
+            "last_heartbeat": 0.0,
+        }
         while time.monotonic() < deadline:
-            # Collect targets from both CDP endpoints. Steam CEF
-            # (port 8080) and Edge (port 9222) — the OAuth
-            # redirect may land in either browser.
-            cef_targets: list[dict[str, Any]] = []
-            edge_targets: list[dict[str, Any]] = []
-            try:
-                cef_targets = await self._list_targets()
-            except Exception as e:  # noqa: BLE001
-                logger.debug("[auth/browser] CEF target list: %s", e)
-            try:
-                edge_targets = await self._list_edge_targets()
-            except Exception as e:  # noqa: BLE001
-                logger.debug("[auth/browser] Edge target list: %s", e)
+            cef_targets, edge_targets = await self._poll_both_endpoints()
             all_targets = cef_targets + edge_targets
-
-            # Heartbeat: log target counts every 30s so we can
-            # see if the monitor is alive and connected.
-            now = time.monotonic()
-            if now - last_heartbeat >= 30:
-                last_heartbeat = now
-                urls = [t.get("url", "")[:80] for t in all_targets if t.get("url")]
-                logger.info(
-                    "[auth/browser] heartbeat: %d CEF + %d Edge = "
-                    "%d total targets, urls=%s",
-                    len(cef_targets), len(edge_targets),
-                    len(all_targets), urls,
-                )
+            self._log_heartbeat_if_due(
+                state, cef_targets, edge_targets, all_targets,
+            )
 
             for target in all_targets:
-                url = target.get("url", "")
-                if not url or url in monitored_urls:
-                    continue
-
-                # Don't dedup Epic content-extraction URLs — the
-                # page body starts with the login form, then the
-                # ``authorizationCode`` JSON blob appears AFTER
-                # the user signs in. If we skip after one failed
-                # read we'll never catch the code.
-                is_content_page = (
-                    "/id/api/redirect" in url
-                    or "epicgames.com" in url.lower()
+                result = await self._try_capture_target(
+                    target, allowed_uris, state, start,
                 )
-                if not is_content_page:
-                    monitored_urls.add(url)
+                if result is not None:
+                    return result
 
-                # Broad pattern matching (from staging): inspect
-                # ANY URL containing OAuth-related keywords. This
-                # is more reliable than strict redirect-URI prefix
-                # matching — some OAuth providers redirect through
-                # intermediate URLs that don't match the callback
-                # prefix exactly.
-                if not any(p in url.lower() for p in [
-                    "auth", "login", "code=", "epiclogin",
-                    "on_login_success", "oauth", "authorizationcode",
-                    "/id/api/redirect", "oauth20_desktop.srf",
-                    "live.com/oauth", "callback", "maplanding",
-                ]):
-                    continue
+            fallback = await self._try_content_fallback(
+                all_targets, content_trigger_url, content_regex, start,
+            )
+            if fallback is not None:
+                return fallback
 
-                if url not in logged_urls:
-                    logged_urls.add(url)
-                    logger.info(
-                        "[auth/browser] OAuth page detected: %s",
-                        url[:120],
-                    )
-
-                # Content-based extraction for Epic's intermediate
-                # page (``/id/api/redirect`` with JSON blob).
-                # Retried every poll tick because the page content
-                # changes when the user finishes signing in.
-                if is_content_page:
-                    try:
-                        code = await self._extract_code_from_page(
-                            target,
-                            r'"authorizationCode"\s*:\s*"([^"]+)"',
-                            first_attempt=(
-                                url
-                                not in content_extract_first_attempt
-                            ),
-                        )
-                    except Exception:  # noqa: BLE001
-                        code = None
-                    if url not in content_extract_first_attempt:
-                        content_extract_first_attempt.add(url)
-                    if code:
-                        elapsed = time.monotonic() - start
-                        logger.info(
-                            "[auth/browser] extracted Epic code "
-                            "from page content after %.1fs", elapsed,
-                        )
-                        return AuthCaptureResult(
-                            success=True,
-                            redirect_url=url,
-                            params={"code": code},
-                            elapsed_seconds=elapsed,
-                        )
-
-                # Strict redirect-URI check for the standard
-                # OAuth callback (``code=`` in query string).
-                if match_redirect(url, allowed_uris):
-                    elapsed = time.monotonic() - start
-                    params = extract_oauth_params(url)
-                    safe_url = re.sub(
-                        r'(code=[^&\s]+)', 'code=***REDACTED***', url,
-                    )
-                    logger.info(
-                        "[auth/browser] captured redirect "
-                        "after %.1fs: %s", elapsed, safe_url,
-                    )
-                    return AuthCaptureResult(
-                        success=True,
-                        redirect_url=url,
-                        params=params,
-                        elapsed_seconds=elapsed,
-                    )
-
-                # Generic code extraction from any OAuth URL
-                # (catches redirects that don't match the
-                # allowed_uris prefix exactly — staging's
-                # _extract_code pattern).
-                code_from_url = self._extract_code(url)
-                if code_from_url:
-                    elapsed = time.monotonic() - start
-                    logger.info(
-                        "[auth/browser] extracted code from URL "
-                        "after %.1fs", elapsed,
-                    )
-                    return AuthCaptureResult(
-                        success=True,
-                        redirect_url=url,
-                        params={"code": code_from_url},
-                        elapsed_seconds=elapsed,
-                    )
-
-            # Content-based fallback for store-specific patterns.
-            if content_trigger_url and content_regex:
-                for target in all_targets:
-                    if content_trigger_url not in target.get("url", ""):
-                        continue
-                    try:
-                        code = await self._extract_code_from_page(
-                            target, content_regex,
-                        )
-                    except Exception:  # noqa: BLE001
-                        continue
-                    if code:
-                        elapsed = time.monotonic() - start
-                        logger.info(
-                            "[auth/browser] extracted code from page "
-                            "content after %.1fs", elapsed,
-                        )
-                        return AuthCaptureResult(
-                            success=True,
-                            redirect_url=target.get("url"),
-                            params={"code": code},
-                            elapsed_seconds=elapsed,
-                        )
             await asyncio.sleep(self._poll_interval)
-        monitored = len(monitored_urls)
+
+        monitored = len(state["monitored_urls"])
         logger.warning(
             "[auth/browser] timeout after %.1fs — "
             "no code found in %d unique URLs",
@@ -380,39 +368,286 @@ class OAuthBrowserMonitor:
             elapsed_seconds=time.monotonic() - start,
         )
 
-    async def close_oauth_tab(
-        self, url_substring: str,
-    ) -> bool:
-        """Close the first tab whose URL contains `url_substring`.
+    async def _poll_both_endpoints(
+        self,
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        """List CDP targets from both Steam CEF and Edge.
 
-        Searches both Steam CEF and Edge CDP endpoints.
+        Each endpoint is queried independently; failure on
+        one endpoint logs at DEBUG and returns an empty
+        list rather than aborting the whole poll cycle.
+        Returns ``(cef_targets, edge_targets)`` so the
+        caller can both concatenate them and log the
+        per-endpoint counts in the heartbeat.
         """
-        # Try Steam CEF first, then Edge.
-        for list_fn, close_fn, label in (
-            (self._list_targets, self._cdp.close_target, "CEF"),
-            (self._list_edge_targets, self._close_edge_target, "Edge"),
-        ):
+        cef_targets: list[dict[str, Any]] = []
+        edge_targets: list[dict[str, Any]] = []
+        try:
+            cef_targets = await self._list_targets()
+        except Exception as e:  # noqa: BLE001
+            logger.debug("[auth/browser] CEF target list: %s", e)
+        try:
+            edge_targets = await self._list_edge_targets()
+        except Exception as e:  # noqa: BLE001
+            logger.debug("[auth/browser] Edge target list: %s", e)
+        return cef_targets, edge_targets
+
+    @staticmethod
+    def _log_heartbeat_if_due(
+        state: dict[str, Any],
+        cef_targets: list[dict[str, Any]],
+        edge_targets: list[dict[str, Any]],
+        all_targets: list[dict[str, Any]],
+    ) -> None:
+        """Log target counts every 30s so operators see liveness.
+
+        Mutates ``state["last_heartbeat"]`` on each emit.
+        Without this signal a stuck auth flow looks identical
+        in the logs to a flow waiting on a slow user — the
+        periodic heartbeat lets ops tell them apart.
+        """
+        now = time.monotonic()
+        if now - state["last_heartbeat"] < 30:
+            return
+        state["last_heartbeat"] = now
+        urls = [t.get("url", "")[:80] for t in all_targets if t.get("url")]
+        logger.info(
+            "[auth/browser] heartbeat: %d CEF + %d Edge = "
+            "%d total targets, urls=%s",
+            len(cef_targets), len(edge_targets),
+            len(all_targets), urls,
+        )
+
+    async def _try_capture_target(
+        self,
+        target: dict[str, Any],
+        allowed_uris: list[str],
+        state: dict[str, Any],
+        start: float,
+    ) -> AuthCaptureResult | None:
+        """Inspect one CDP target for an OAuth code.
+
+        Returns an ``AuthCaptureResult`` on the first match
+        (strict redirect, generic code-in-URL, or Epic
+        content-extraction), or ``None`` if this target is
+        irrelevant / already monitored / not yet ready.
+
+        Three capture paths, tried in order:
+
+        1. Strict redirect-URI match against ``allowed_uris``.
+           This is the standard OAuth callback path with the
+           code in the query string.
+        2. Generic ``?code=`` extraction from the URL — catches
+           providers that redirect through intermediate URLs
+           that don't match the callback prefix exactly.
+        3. Page content extraction for Epic's intermediate
+           page (``/id/api/redirect`` with the JSON blob
+           containing ``authorizationCode``). Retried every
+           poll tick because the page content changes when
+           the user finishes signing in.
+
+        Returns:
+            ``AuthCaptureResult`` on capture, or ``None``
+            when the target doesn't (yet) yield a code.
+        """
+        url = target.get("url", "")
+        if not url or url in state["monitored_urls"]:
+            return None
+
+        # Epic's content-extraction URLs are never deduped:
+        # the page body starts with the login form, then the
+        # ``authorizationCode`` JSON blob appears AFTER the
+        # user signs in. Dedup'ing after one failed read
+        # would miss the code permanently.
+        is_content_page = (
+            "/id/api/redirect" in url
+            or "epicgames.com" in url.lower()
+        )
+        if not is_content_page:
+            state["monitored_urls"].add(url)
+
+        # Broad pattern matching: inspect ANY URL containing
+        # OAuth-related keywords. More reliable than strict
+        # redirect-URI prefix matching — some providers redirect
+        # through intermediate URLs that don't match the callback
+        # prefix exactly.
+        if not _is_oauth_relevant_url(url):
+            return None
+
+        if url not in state["logged_urls"]:
+            state["logged_urls"].add(url)
+            logger.info(
+                "[auth/browser] OAuth page detected: %s",
+                url[:120],
+            )
+
+        # Epic content-page extraction (priority over URL).
+        if is_content_page:
+            content_result = await self._try_epic_content_capture(
+                target, url, state, start,
+            )
+            if content_result is not None:
+                return content_result
+
+        # Strict redirect-URI check.
+        if match_redirect(url, allowed_uris):
+            return _build_redirect_capture(url, start)
+
+        # Generic code extraction from any OAuth URL.
+        code_from_url = self._extract_code(url)
+        if code_from_url:
+            return _build_url_code_capture(url, code_from_url, start)
+
+        return None
+
+    async def _try_epic_content_capture(
+        self,
+        target: dict[str, Any],
+        url: str,
+        state: dict[str, Any],
+        start: float,
+    ) -> AuthCaptureResult | None:
+        """Run the Epic-specific JSON-blob extraction on a target.
+
+        Updates ``state["content_extract_first_attempt"]``
+        so log verbosity is correctly escalated only on
+        the first attempt per URL. Returns the capture
+        result on success, ``None`` on extraction failure
+        (silent — caller retries next poll tick).
+        """
+        first = url not in state["content_extract_first_attempt"]
+        try:
+            code = await self._extract_code_from_page(
+                target,
+                r'"authorizationCode"\s*:\s*"([^"]+)"',
+                first_attempt=first,
+            )
+        except Exception:  # noqa: BLE001
+            code = None
+        state["content_extract_first_attempt"].add(url)
+        if not code:
+            return None
+        elapsed = time.monotonic() - start
+        logger.info(
+            "[auth/browser] extracted Epic code "
+            "from page content after %.1fs", elapsed,
+        )
+        return AuthCaptureResult(
+            success=True,
+            redirect_url=url,
+            params={"code": code},
+            elapsed_seconds=elapsed,
+        )
+
+    async def _try_content_fallback(
+        self,
+        targets: list[dict[str, Any]],
+        content_trigger_url: str | None,
+        content_regex: str | None,
+        start: float,
+    ) -> AuthCaptureResult | None:
+        """Apply the optional caller-supplied content-extraction pattern.
+
+        Distinct from ``_try_epic_content_capture`` which
+        is hardcoded for Epic's URL + regex. This one is
+        the generic mechanism — used by stores that pass
+        their own ``content_trigger_url`` + ``content_regex``
+        as kwargs to ``wait_for_redirect``.
+        """
+        if not (content_trigger_url and content_regex):
+            return None
+        for target in targets:
+            if content_trigger_url not in target.get("url", ""):
+                continue
             try:
-                targets = await list_fn()
+                code = await self._extract_code_from_page(
+                    target, content_regex,
+                )
             except Exception:  # noqa: BLE001
                 continue
-            for target in targets:
-                if url_substring in target.get("url", ""):
-                    target_id = target.get("id")
-                    if not target_id:
-                        continue
-                    try:
-                        if label == "Edge":
-                            await close_fn(target_id)
-                        else:
-                            await self._cdp.close_target(target_id)
-                        return True
-                    except Exception as e:  # noqa: BLE001
-                        logger.debug(
-                            "[auth/browser] close on %s failed: %s",
-                            label, e,
-                        )
-                        return False
+            if not code:
+                continue
+            elapsed = time.monotonic() - start
+            logger.info(
+                "[auth/browser] extracted code from page "
+                "content after %.1fs", elapsed,
+            )
+            return AuthCaptureResult(
+                success=True,
+                redirect_url=target.get("url"),
+                params={"code": code},
+                elapsed_seconds=elapsed,
+            )
+        return None
+
+    async def close_oauth_tab(self, url_substring: str) -> bool:
+        """Close the first tab whose URL contains ``url_substring``.
+
+        Searches both Steam CEF and Edge CDP endpoints in
+        order; returns on the first close that succeeds.
+
+        Refactor history (lot 13a): the original method
+        had a double-nested ``for endpoint / for target``
+        loop with three failure paths (list, target_id
+        missing, close) at cognitive complexity 21. The
+        per-endpoint logic is now extracted into
+        ``_try_close_in_endpoint``.
+        """
+        endpoints = (
+            (self._list_targets, self._cdp.close_target, "CEF"),
+            (self._list_edge_targets, self._close_edge_target, "Edge"),
+        )
+        for list_fn, close_fn, label in endpoints:
+            if await self._try_close_in_endpoint(
+                list_fn, close_fn, url_substring, label,
+            ):
+                return True
+        return False
+
+    async def _try_close_in_endpoint(
+        self,
+        list_fn: Any,
+        close_fn: Any,
+        url_substring: str,
+        label: str,
+    ) -> bool:
+        """Try to close one target matching ``url_substring`` on one endpoint.
+
+        Returns True on a successful close, False on:
+
+        * Listing the endpoint raised (no tabs visible — try
+          the next endpoint).
+        * No target's URL contains ``url_substring`` (the tab
+          isn't on this endpoint).
+        * The matching target lacks an ``id`` field.
+        * Close itself raised (logged at DEBUG, no retry).
+        """
+        try:
+            targets = await list_fn()
+        except Exception:  # noqa: BLE001
+            return False
+        for target in targets:
+            if url_substring not in target.get("url", ""):
+                continue
+            target_id = target.get("id")
+            if not target_id:
+                continue
+            try:
+                # Edge close goes through its own helper
+                # because the close URL is different
+                # (``/json/close/<id>`` vs CEF's protocol
+                # method). CEF goes through cdp_client.
+                if label == "Edge":
+                    await close_fn(target_id)
+                else:
+                    await self._cdp.close_target(target_id)
+                return True
+            except Exception as e:  # noqa: BLE001
+                logger.debug(
+                    "[auth/browser] close on %s failed: %s",
+                    label, e,
+                )
+                return False
         return False
 
     async def _close_edge_target(self, target_id: str) -> None:
@@ -445,6 +680,15 @@ class OAuthBrowserMonitor:
         with ``document.body.innerText``, and applies
         ``pattern`` to the returned text.
 
+        Refactor history (lot 13a): originally a 90-line
+        method at cognitive complexity 17 with four interleaved
+        log-or-debug branches (timeout, missing socket, empty
+        body, regex miss, generic exception). Decomposed into
+        ``_cdp_eval_inner_text`` for the protocol-level work
+        and ``_match_pattern_in_text`` for the regex side, with
+        ``_log_extract`` centralising the first-attempt vs
+        subsequent-attempt log level rule.
+
         Args:
             target: CDP target dict with ``webSocketDebuggerUrl``.
             pattern: regex whose first capture group is the
@@ -453,72 +697,85 @@ class OAuthBrowserMonitor:
                 so operators can diagnose extraction issues.
         """
         ws_url = target.get("webSocketDebuggerUrl")
-        if not ws_url:
-            (logger.info if first_attempt else logger.debug)(
-                "[auth/browser] content extract skipped: "
-                "no webSocketDebuggerUrl for %s",
-                target.get("url", "")[:80],
-            )
-            return None
-        import json as _json
         url_snippet = target.get("url", "")[:80]
-        try:
-            import websockets as _websockets
-            async with _websockets.connect(
-                ws_url, ping_interval=None,
-            ) as ws:
-                # Send Runtime.evaluate — same expression
-                # staging used successfully with Steam CEF.
-                await ws.send(_json.dumps({
-                    "id": 1,
-                    "method": "Runtime.evaluate",
-                    "params": {
-                        "expression": (
-                            "document.body?."
-                            "innerText || ''"
-                        ),
-                        "returnByValue": True,
-                    },
-                }))
-                try:
-                    raw = await asyncio.wait_for(
-                        ws.recv(), timeout=5,
-                    )
-                except TimeoutError:
-                    (logger.info if first_attempt else logger.debug)(
-                        "[auth/browser] content extract "
-                        "timeout for %s", url_snippet,
-                    )
-                    return None
-                data = _json.loads(raw)
-                # CDP response shape:
-                #  { "id": 1, "result": { "result": { "value": "..." } } }
-                value = (
-                    data.get("result", {})
-                    .get("result", {})
-                    .get("value", "")
-                )
-                if value:
-                    match = re.search(pattern, value)
-                    if match:
-                        return match.group(1)
-                    (logger.info if first_attempt else logger.debug)(
-                        "[auth/browser] pattern not found "
-                        "in page content (%d chars) for %s",
-                        len(value), url_snippet,
-                    )
-                else:
-                    (logger.info if first_attempt else logger.debug)(
-                        "[auth/browser] empty page content "
-                        "for %s", url_snippet,
-                    )
-                return None
-        except Exception as exc:  # noqa: BLE001
-            (logger.info if first_attempt else logger.debug)(
-                "[auth/browser] content extract failed for "
-                "%s: %s", url_snippet, exc,
+        if not ws_url:
+            _log_extract(
+                first_attempt,
+                "content extract skipped: no webSocketDebuggerUrl for %s",
+                url_snippet,
             )
             return None
+        try:
+            text = await self._cdp_eval_inner_text(ws_url, url_snippet, first_attempt)
+        except Exception as exc:  # noqa: BLE001
+            _log_extract(
+                first_attempt,
+                "content extract failed for %s: %s",
+                url_snippet, exc,
+            )
+            return None
+        if text is None:
+            return None
+        return _match_pattern_in_text(text, pattern, url_snippet, first_attempt)
+
+    @staticmethod
+    async def _cdp_eval_inner_text(
+        ws_url: str,
+        url_snippet: str,
+        first_attempt: bool,
+    ) -> str | None:
+        """Send ``Runtime.evaluate(document.body.innerText)`` and parse.
+
+        Returns the evaluated string on success. Returns
+        ``None`` (and logs at the appropriate level) when:
+
+        * The websocket recv times out after 5 s.
+        * The CDP response has no ``result.result.value`` chain.
+
+        Raises on connection / serialisation errors — the
+        caller wraps in a broad except to demote those to
+        DEBUG since they're routine during browser teardown.
+        """
+        import json as _json
+
+        import websockets as _websockets
+
+        async with _websockets.connect(
+            ws_url, ping_interval=None,
+        ) as ws:
+            await ws.send(_json.dumps({
+                "id": 1,
+                "method": "Runtime.evaluate",
+                "params": {
+                    "expression": "document.body?.innerText || ''",
+                    "returnByValue": True,
+                },
+            }))
+            try:
+                raw = await asyncio.wait_for(ws.recv(), timeout=5)
+            except TimeoutError:
+                _log_extract(
+                    first_attempt,
+                    "content extract timeout for %s",
+                    url_snippet,
+                )
+                return None
+        data = _json.loads(raw)
+        # CDP response shape:
+        #  { "id": 1, "result": { "result": { "value": "..." } } }
+        value = (
+            data.get("result", {})
+            .get("result", {})
+            .get("value", "")
+        )
+        if not value:
+            _log_extract(
+                first_attempt,
+                "empty page content for %s",
+                url_snippet,
+            )
+            return None
+        return str(value)
 
     async def clear_store_cookies(self, domain: str) -> bool:
         """Clear all cookies for `domain` via injected JavaScript.

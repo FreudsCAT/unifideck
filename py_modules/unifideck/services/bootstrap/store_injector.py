@@ -16,8 +16,9 @@ a single function at CC=16 — a double ``for store / for mapping``
 loop with three separate failure paths (``registry.get`` raising
 ``KeyError``, raising another exception, or returning ``None``),
 plus another failure path on ``setattr`` (``__slots__`` /
-frozen). Split into two helpers so the main loop reads as
-"for each store, look up, then wire each mapping".
+frozen). Split into three helpers so the main loop reads as
+"for each store, resolve, then wire each mapping, then rebuild
+auth if applicable".
 """
 from __future__ import annotations
 
@@ -71,12 +72,23 @@ def inject_store_dependencies(
     """Inject Layer-5 service refs into already-registered stores.
 
     Called post-``auto_discover`` + post-``bootstrap_services``.
-    Walks ``_STORE_INJECTIONS`` and ``setattr``'s each mapping.
+    Walks ``_STORE_INJECTIONS`` and delegates the actual work to
+    three helpers so this orchestrator stays under the cognitive
+    complexity gate:
 
-    Failures are isolated per-store: ``registry.get`` raising,
-    returning None, missing container slot, or setattr raising
-    (``__slots__`` / frozen dataclass) all leave the other stores
-    unaffected with the feature inactive for that store.
+    * ``_resolve_store`` — look up the store, swallow registry
+      errors (returns None on miss);
+    * ``_inject_one`` — set one attribute, log success / skip /
+      failure cases;
+    * ``_maybe_rebuild_auth`` — invoke the optional
+      ``_rebuild_auth_after_injection`` hook on stores that
+      need to reconstruct their auth orchestrator now that
+      the browser monitor is wired.
+
+    Failures are isolated per-store and per-attribute: any
+    registry miss, missing container slot, setattr failure
+    (``__slots__`` / frozen dataclass), or auth-rebuild
+    exception leaves the rest of the wiring untouched.
 
     ``registry=None`` → silent no-op (test harness).
     """
@@ -92,48 +104,93 @@ def inject_store_dependencies(
                 store_instance, store_id, store_attr,
                 container_attr, container,
             )
-            continue
-        if store is None:
-            continue
-        for store_attr, container_attr in mappings:
-            svc = getattr(container, container_attr, None)
-            if svc is None:
-                logger.info(
-                    "[bootstrap] %s.%s not injected (container.%s is None)",
-                    store_id,
-                    store_attr,
-                    container_attr,
-                )
-                continue
-            try:
-                setattr(store, store_attr, svc)
-                logger.info(
-                    "[bootstrap] injected %s.%s ← container.%s",
-                    store_id,
-                    store_attr,
-                    container_attr,
-                )
-            except Exception as e:
-                logger.warning(
-                    "[bootstrap] failed to inject %s.%s: %s",
-                    store_id,
-                    store_attr,
-                    e,
-                )
-        # Stores may need to (re)build their auth orchestrator
-        # now that the browser monitor is wired. Stores that
-        # implement this hook construct/refresh ``self._auth``
-        # using their newly-set ``_browser_monitor``.
-        rebuild = getattr(store, "_rebuild_auth_after_injection", None)
-        if callable(rebuild):
-            try:
-                rebuild()
-                logger.info(
-                    "[bootstrap] %s auth rebuilt after injection",
-                    store_id,
-                )
-            except Exception as e:
-                logger.warning(
-                    "[bootstrap] %s auth rebuild failed: %s",
-                    store_id, e,
-                )
+        _maybe_rebuild_auth(store_instance, store_id)
+
+
+def _resolve_store(registry: StoreRegistry, store_id: str) -> Any | None:
+    """Look up ``store_id`` on ``registry``, return None on any failure.
+
+    ``StoreRegistry.get`` may raise ``KeyError`` (store not
+    auto-discovered), other exceptions (broken plugin code), or
+    return ``None`` (registered but no instance built). All three
+    map to the same outcome: skip this store, log at INFO.
+    """
+    try:
+        store = registry.get(store_id)
+    except KeyError:
+        logger.info("[bootstrap] store %s not registered — skipping injection", store_id)
+        return None
+    except Exception as e:
+        logger.warning(
+            "[bootstrap] store %s lookup raised %s — skipping injection",
+            store_id, e,
+        )
+        return None
+    if store is None:
+        logger.info("[bootstrap] store %s has no instance — skipping injection", store_id)
+        return None
+    return store
+
+
+def _inject_one(
+    store: Any,
+    store_id: str,
+    store_attr: str,
+    container_attr: str,
+    container: ServiceContainer,
+) -> None:
+    """Set ``store.<store_attr> = container.<container_attr>`` with logging.
+
+    Three outcomes:
+
+    * Container slot is None (service failed to instantiate) →
+      INFO log, store attribute left at its constructor default.
+    * setattr raises (``__slots__`` declared, frozen dataclass,
+      property without setter) → WARNING log, feature disabled
+      for this store but the rest of the wiring continues.
+    * Success → INFO log including both ends of the wire so the
+      DI graph is grep-friendly in plugin logs.
+    """
+    svc = getattr(container, container_attr, None)
+    if svc is None:
+        logger.info(
+            "[bootstrap] %s.%s not injected (container.%s is None)",
+            store_id, store_attr, container_attr,
+        )
+        return
+    try:
+        setattr(store, store_attr, svc)
+    except Exception as e:
+        logger.warning(
+            "[bootstrap] failed to inject %s.%s: %s",
+            store_id, store_attr, e,
+        )
+        return
+    logger.info(
+        "[bootstrap] injected %s.%s ← container.%s",
+        store_id, store_attr, container_attr,
+    )
+
+
+def _maybe_rebuild_auth(store: Any, store_id: str) -> None:
+    """Trigger ``store._rebuild_auth_after_injection()`` when defined.
+
+    Stores that hold an auth orchestrator built lazily on top of
+    the browser monitor expose this hook to reconstruct the
+    orchestrator now that injection has filled
+    ``_browser_monitor``. Stores without the hook (e.g. ubisoft
+    which only needs ``_shortcut_service``) just skip it.
+
+    Exceptions are swallowed with a WARNING — auth rebuild
+    failure should not prevent the rest of the boot from
+    finishing.
+    """
+    rebuild = getattr(store, "_rebuild_auth_after_injection", None)
+    if not callable(rebuild):
+        return
+    try:
+        rebuild()
+    except Exception as e:
+        logger.warning("[bootstrap] %s auth rebuild failed: %s", store_id, e)
+        return
+    logger.info("[bootstrap] %s auth rebuilt after injection", store_id)
