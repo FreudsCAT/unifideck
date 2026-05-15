@@ -26,7 +26,10 @@ from .game_builder import _GameBuilder
 if TYPE_CHECKING:
     from unifideck.stores.ubisoft.config import UbisoftConfig
     from unifideck.stores.ubisoft.id_map import UbisoftIdMap
-    from unifideck.stores.ubisoft.parser import GameConfig
+    # GameConfig is used in the ``ParseConfigurationsFn`` alias just
+    # below as a string forward-ref. flake8 can't see through string
+    # annotations so it flags F401 — silenced explicitly.
+    from unifideck.stores.ubisoft.parser import GameConfig  # noqa: F401
     from unifideck.stores.ubisoft.paths import UbisoftPrefixPaths
 ParseConfigurationsFn = Callable[[str], "list[GameConfig]"]
 ParseOwnershipFn = Callable[[str], list[int]]

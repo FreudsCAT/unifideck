@@ -206,7 +206,7 @@ class _SyncMixin:
         symmetric helper is shared with ``_sync_up_locked``.
         """
         local_dir = self.get_local_save_dir(store, game_id)
-        remote_dir = str(Path(self._cloud_root) / store, game_id)
+        remote_dir = str(Path(self._cloud_root) / store / game_id)
 
         if await self._existing_dir_or_none(remote_dir) is None:
             await self._emit_down("CLOUD_SYNC_DOWN_COMPLETE", store, game_id, synced=False)
@@ -281,7 +281,7 @@ class _SyncMixin:
         so this function's fan-out stays under the 10-callee cap.
         """
         local_dir = self.get_local_save_dir(store, game_id)
-        remote_dir = str(Path(self._cloud_root) / store, game_id)
+        remote_dir = str(Path(self._cloud_root) / store / game_id)
 
         if await self._existing_dir_or_none(local_dir) is None:
             await self._emit_up("CLOUD_SYNC_UP_COMPLETE", store, game_id, synced=False)

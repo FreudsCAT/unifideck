@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from unifideck.core.types.events import Events
-from unifideck.core.types.result import Result
+from unifideck.core.types.results import Result
 from unifideck.event_bus.event_bus_devex import auto_wire, subscribe
 
 if TYPE_CHECKING:
