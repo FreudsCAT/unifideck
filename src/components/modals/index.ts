@@ -1,12 +1,16 @@
 /**
  * Modals — barrel export.
  *
- * Five pieces : AccountSwitchModal (Steam account change
- * prompt), SteamRestartModal (post-shortcut-write reboot
- * prompt), UninstallConfirmModal (delete confirmation),
- * CloudSaveConflictModal (cloud save resolution), and
- * ToastEventListener (event-driven host that displays toasts
- * and opens modals based on backend events).
+ * Pieces exported here :
+ *  - AccountSwitchModal       (Steam account change prompt)
+ *  - SteamRestartModal        (post-shortcut-write reboot prompt)
+ *  - UninstallConfirmModal    (delete confirmation)
+ *  - CloudSaveConflictModal   (cloud save resolution)
+ *  - AuthSuccessModal         (post-auth confirmation)
+ *  - GOGLanguageSelectModal   (multi-language GOG installs)
+ *  - ForceSyncModal           (force-sync artwork picker)
+ *  - StorageBrowserModal      (full-screen path picker)
+ *  - ToastEventListener       (event-driven toast / modal host)
  *
  * Modals receive `closeModal` from `showModal()` and return
  * JSX wrapped in `<ConfirmModal>` from `@decky/ui`. The
@@ -16,4 +20,9 @@ export { AccountSwitchModal } from "./AccountSwitchModal";
 export { SteamRestartModal } from "./SteamRestartModal";
 export { UninstallConfirmModal } from "./UninstallConfirmModal";
 export { CloudSaveConflictModal } from "./CloudSaveConflictModal";
+export { AuthSuccessModal } from "./AuthSuccessModal";
+export { GOGLanguageSelectModal } from "./GOGLanguageSelectModal";
+export { ForceSyncModal } from "./ForceSyncModal";
+export { StorageBrowserModal } from "./StorageBrowserModal";
+export { ChromiumInstallModal } from "./ChromiumInstallModal";
 export { ToastEventListener } from "./ToastEventListener";

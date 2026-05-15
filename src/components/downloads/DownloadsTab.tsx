@@ -26,9 +26,12 @@ export const DownloadsTab: FC = () => {
   const { t } = useTranslation();
   const { queue, loading } = useDownloads();
   if (loading || !queue) return null;
-  const empty = !queue.current
-    && queue.queued.length === 0
-    && queue.finished.length === 0;
+  // Defensive : backend may omit any of these keys on early
+  // boot or partial-failure responses. Treat missing as empty.
+  const current = queue.current ?? null;
+  const queued = queue.queued ?? [];
+  const finished = queue.finished ?? [];
+  const empty = !current && queued.length === 0 && finished.length === 0;
   if (empty) {
     return (
       <PanelSection title={t("downloads.title")}>
@@ -40,21 +43,21 @@ export const DownloadsTab: FC = () => {
   }
   return (
     <>
-      {queue.current && (
+      {current && (
         <PanelSection title={t("downloads.current")}>
-          <DownloadItemRow item={queue.current} variant="current" />
+          <DownloadItemRow item={current} variant="current" />
         </PanelSection>
       )}
-      {queue.queued.length > 0 && (
+      {queued.length > 0 && (
         <PanelSection title={t("downloads.queued")}>
-          {queue.queued.map((item) => (
+          {queued.map((item) => (
             <DownloadItemRow key={item.id} item={item} variant="queued" />
           ))}
         </PanelSection>
       )}
-      {queue.finished.length > 0 && (
+      {finished.length > 0 && (
         <PanelSection title={t("downloads.finished")}>
-          {queue.finished.slice(-5).map((item) => (
+          {finished.slice(-5).map((item) => (
             <DownloadItemRow key={item.id} item={item} variant="finished" />
           ))}
         </PanelSection>

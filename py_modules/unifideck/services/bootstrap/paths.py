@@ -23,6 +23,18 @@ _DEFAULT_STEAM_ROOT = str(Path("~/.steam/steam").expanduser())
 # Currently we hardcode the primary Steam Deck user ID "0".
 _USER_ID = "0"
 
+# Hardcoded fallbacks mirroring ``defaults/config.json``. Used when the
+# defaults file failed to load (corrupt JSON, missing from install,
+# permissions) AND the user's config has no override either. Without
+# these, ``config.get(...)`` returns None and ``Path(None)`` crashes
+# Layer 5 — taking down the whole plugin instead of degrading gracefully.
+# Keep these in sync with defaults/config.json — the JSON is the source
+# of truth, this dict is the resilience net.
+_FALLBACK_PATHS = {
+    "paths.data_dir": "~/.local/share/unifideck",
+    "paths.games_map": "~/.local/share/unifideck/games.map",
+}
+
 
 @dataclass
 class ServicePaths:
@@ -60,7 +72,14 @@ class ServicePaths:
         data_dir = config.get("paths.data_dir", str(Path("~/.config/unifideck").expanduser()))
         steam_root = config.get("paths.steam_root", _DEFAULT_STEAM_ROOT)
 
-        # Ensure data directory exists
+        data_dir = str(
+            Path(
+                config.get(
+                    "paths.data_dir",
+                    _FALLBACK_PATHS["paths.data_dir"],
+                ),
+            ).expanduser(),
+        )
         Path(data_dir).mkdir(parents=True, exist_ok=True)
 
         # Steam userdata paths
@@ -81,13 +100,28 @@ class ServicePaths:
         return cls(
             data_dir=data_dir,
             steam_root=steam_root,
-            shortcuts_path=shortcuts_path,
-            games_map_path=games_map_path,
-            config_vdf_path=config_vdf_path,
-            loginusers_path=loginusers_path,
-            grid_dir=grid_dir,
-            queue_file=queue_file,
-            playtime_db=playtime_db,
-            local_save_root=local_save_root,
-            cloud_root=cloud_root,
+            shortcuts_path=str(
+                steam_root_path / "userdata" / "0" / "config" / "shortcuts.vdf",
+            ),
+            games_map_path=str(
+                Path(
+                    config.get(
+                        "paths.games_map",
+                        _FALLBACK_PATHS["paths.games_map"],
+                    ),
+                ).expanduser(),
+            ),
+            config_vdf_path=str(
+                steam_root_path / "config" / "config.vdf",
+            ),
+            loginusers_path=str(
+                steam_root_path / "config" / "loginusers.vdf",
+            ),
+            grid_dir=str(
+                steam_root_path / "userdata" / "0" / "config" / "grid",
+            ),
+            queue_file=str(data_dir_path / "download_queue.json"),
+            playtime_db=str(data_dir_path / "playtime.db"),
+            local_save_root=str(data_dir_path / "saves"),
+            cloud_root=config.get("cloud.root") or None,
         )

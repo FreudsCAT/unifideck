@@ -40,7 +40,19 @@ DECKY_PLUGIN_DIR = os.environ.get(
     "DECKY_PLUGIN_DIR", str(Path(__file__).parent),
 )
 
-sys.path.insert(0, str(Path(DECKY_PLUGIN_DIR) / "py_modules"))
+# Writable per-plugin runtime location for caches, queues, and any
+# state we need to persist across plugin reloads. Decky guarantees
+# DECKY_PLUGIN_RUNTIME_DIR is writable by the plugin process and
+# survives plugin updates. The fallback is the XDG-compliant data
+# directory used when running outside Decky (tests, dev shells).
+# NEVER write into DECKY_PLUGIN_DIR — that location is install-managed
+# and read-only on normal user installs.
+DECKY_PLUGIN_RUNTIME_DIR = os.environ.get(
+    "DECKY_PLUGIN_RUNTIME_DIR",
+    os.path.expanduser("~/.local/share/unifideck"),
+)
+
+sys.path.insert(0, os.path.join(DECKY_PLUGIN_DIR, "py_modules"))
 
 # E402 noqa on the unifideck imports below: ``sys.path.insert``
 # MUST run before these so Python can resolve the package — Decky
@@ -51,13 +63,16 @@ sys.path.insert(0, str(Path(DECKY_PLUGIN_DIR) / "py_modules"))
 from unifideck.config.user_config_path import resolve_user_config_path  # noqa: E402
 from unifideck.rpc import auto_wrap_rpc_methods  # noqa: E402
 from unifideck.rpc.mixins.action import ActionRPCMixin  # noqa: E402
+from unifideck.rpc.mixins.auth_shortcuts import AuthShortcutsRPCMixin  # noqa: E402
 from unifideck.rpc.mixins.cloud_failure import CloudFailureRPCMixin  # noqa: E402
 from unifideck.rpc.mixins.config_validation import ConfigValidationRPCMixin  # noqa: E402
 from unifideck.rpc.mixins.download import DownloadRPCMixin  # noqa: E402
+from unifideck.rpc.mixins.edge import EdgeRPCMixin  # noqa: E402
 from unifideck.rpc.mixins.launch import LaunchRPCMixin  # noqa: E402
 from unifideck.rpc.mixins.observability import ObservabilityRPCMixin  # noqa: E402
 from unifideck.rpc.mixins.playtime import PlaytimeRPCMixin  # noqa: E402
 from unifideck.rpc.mixins.security import SecurityRPCMixin  # noqa: E402
+from unifideck.rpc.mixins.storage import StorageRPCMixin  # noqa: E402
 from unifideck.rpc.mixins.store import StoreRPCMixin  # noqa: E402
 from unifideck.rpc.mixins.sync import SyncRPCMixin  # noqa: E402
 from unifideck.rpc.mixins.ui import UIRPCMixin  # noqa: E402
@@ -70,8 +85,11 @@ class Plugin(
     ObservabilityRPCMixin,
     SecurityRPCMixin,
     DownloadRPCMixin,
+    StorageRPCMixin,
     LaunchRPCMixin,
     StoreRPCMixin,
+    AuthShortcutsRPCMixin,
+    EdgeRPCMixin,
     SyncRPCMixin,
     UIRPCMixin,
     CloudFailureRPCMixin,
@@ -118,6 +136,7 @@ class Plugin(
         await boot_plugin(
             self,
             decky_plugin_dir=DECKY_PLUGIN_DIR,
+            decky_runtime_dir=DECKY_PLUGIN_RUNTIME_DIR,
             user_config_path_resolver=resolve_user_config_path,
         )
 
@@ -132,13 +151,15 @@ class Plugin(
         warning when the config is partially broken but the plugin
         can still operate).
         """
+        from unifideck.bootstrap.boot import _resolve_defaults_path
         from unifideck.config.startup import validate_config_at_startup
 
-        # Bundled defaults live in ``defaults/config.json`` next to
-        # this module. ``user_config_path`` is a Path that may or
-        # may not exist on first run — ``validate_config_at_startup``
-        # creates it from the defaults if missing.
-        defaults_path = str(Path(DECKY_PLUGIN_DIR) / "defaults" / "config.json")
+        # Bundled defaults live in ``defaults/config.json`` in source,
+        # but the Decky CLI build flattens that to ``config.json`` at
+        # the install root. ``_resolve_defaults_path`` picks whichever
+        # layout this install actually has so we don't go into degraded
+        # mode just because the install was packaged with the CLI.
+        defaults_path = _resolve_defaults_path(DECKY_PLUGIN_DIR)
         (
             self._config_validation_result,
             self._config_degraded,

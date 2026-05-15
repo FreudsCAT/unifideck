@@ -253,6 +253,49 @@ class EdgeProfileManager:
                 "[Edge] Could not clear shared browser cookies: %s", e,
             )
 
+    def clear_cookies_for_domain(self, domain: str) -> None:
+        """Delete cookies for a single domain from the shared profile.
+
+        Opens the Edge profile's ``Default/Cookies`` SQLite DB
+        and runs ``DELETE FROM cookies WHERE host_key LIKE
+        '%<domain>%'``. Called before each OAuth flow so the
+        user always sees a fresh login form (no stale session).
+
+        Args:
+            domain: domain substring to match, e.g.
+                ``"epicgames.com"`` or ``"gog.com"``.
+        """
+        cookie_db = Path(self.profile_dir) / "Default" / "Cookies"
+        if not cookie_db.exists():
+            logger.debug(
+                "[Edge] No cookie DB at %s — skipping domain clear",
+                cookie_db,
+            )
+            return
+        try:
+            conn = sqlite3.connect(str(cookie_db), timeout=5)
+            try:
+                pattern = f"%{domain}%"
+                cursor = conn.execute(
+                    "DELETE FROM cookies WHERE host_key LIKE ?",
+                    (pattern,),
+                )
+                conn.commit()
+                deleted = cursor.rowcount
+                logger.info(
+                    "[Edge] Cleared %d %s cookie(s) from shared profile",
+                    deleted, domain,
+                )
+            except Exception:
+                conn.rollback()
+                raise
+            finally:
+                conn.close()
+        except Exception as e:  # noqa: BLE001 — best-effort
+            logger.debug(
+                "[Edge] Could not clear %s cookies: %s", domain, e,
+            )
+
     # ── Full profile wipe ────────────────────────────────────────────
 
     def clear_profile_data(self) -> None:

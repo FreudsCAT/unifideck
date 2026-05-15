@@ -30,23 +30,103 @@ class LaunchRPCMixin:
         return svc
 
     async def notify_game_launched(
-        self, store: str, game_id: str, **kw: Any,
+        self,
+        app_id: int | None = None,
+        store: str | None = None,
+        game_id: str | None = None,
+        **kw: Any,
     ) -> Any:
-        """Emit GAME_LAUNCHED event to the bus."""
+        """Bridge a frontend-initiated launch onto the bus.
+
+        Two call signatures accepted :
+
+        1. ``notify_game_launched(app_id)`` — what the
+           frontend bootstrap subscriber sends after
+           Steam's ``RegisterForAppLifetimeNotifications``
+           fires (the only info Steam gives us is the
+           AppID). The mixin resolves ``store`` / ``game_id``
+           internally via the sync-service lookup ; if the
+           AppID isn't a Unifideck shortcut, it's a no-op.
+
+        2. ``notify_game_launched(store=…, game_id=…)`` —
+           explicit callers that already know the pair.
+
+        Emitting ``GAME_LAUNCHED`` with partial info would
+        confuse downstream subscribers (playtime, cloud
+        save), so missing args yield a typed skip response
+        rather than a crash.
+
+        Returns:
+            ``{success: True}`` on emit, or
+            ``{success: True, skipped: <reason>}`` when
+            the AppID isn't a Unifideck shortcut.
+        """
+        resolved_store, resolved_game = self._resolve_app_id(
+            app_id, store, game_id,
+        )
+        if resolved_store is None or resolved_game is None:
+            return {"success": True, "skipped": "not_unifideck_app"}
         await self.bus.emit(
-            Events.GAME_LAUNCHED, store=store, game_id=game_id, **kw,
+            Events.GAME_LAUNCHED,
+            store=resolved_store,
+            game_id=resolved_game,
+            app_id=app_id,
+            **kw,
         )
 
     async def notify_game_stopped(
-        self, store: str, game_id: str, exit_code: int = 0,
+        self,
+        app_id: int | None = None,
+        store: str | None = None,
+        game_id: str | None = None,
+        exit_code: int = 0,
     ) -> Any:
-        """Emit GAME_STOPPED event with exit code."""
+        """Bridge a frontend-detected game exit onto the bus.
+
+        Counterpart to ``notify_game_launched`` — accepts
+        the same two-signature contract.
+        """
+        resolved_store, resolved_game = self._resolve_app_id(
+            app_id, store, game_id,
+        )
+        if resolved_store is None or resolved_game is None:
+            return {"success": True, "skipped": "not_unifideck_app"}
         await self.bus.emit(
             Events.GAME_STOPPED,
-            store=store,
-            game_id=game_id,
+            store=resolved_store,
+            game_id=resolved_game,
+            app_id=app_id,
             exit_code=exit_code,
         )
+
+    def _resolve_app_id(
+        self,
+        app_id: int | None,
+        store: str | None,
+        game_id: str | None,
+    ) -> tuple[str | None, str | None]:
+        """Resolve ``(store, game_id)`` from any of the inputs.
+
+        Explicit ``(store, game_id)`` always wins ; otherwise
+        we ask the sync service to find the game whose
+        AppID matches. Returns ``(None, None)`` if the AppID
+        doesn't belong to a known Unifideck shortcut — the
+        caller treats that as a quiet no-op.
+        """
+        if store and game_id:
+            return store, game_id
+        if app_id is None:
+            return None, None
+        sync = getattr(self, "sync_service", None)
+        if sync is None or not hasattr(sync, "get_game_info"):
+            return None, None
+        try:
+            info = sync.get_game_info(app_id)
+        except Exception:
+            return None, None
+        if not isinstance(info, dict):
+            return None, None
+        return info.get("store"), info.get("id") or info.get("game_id")
 
     async def get_launch_failures(self, game_key: str) -> Any:
         """Return recent failures + circuit state for a game.

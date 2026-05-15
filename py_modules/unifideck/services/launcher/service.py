@@ -100,6 +100,23 @@ class LauncherService:
         state = RuntimeState(started_at=float(ctx.env_overrides.get("started_at", "0")))
 
         try:
+            await emit_stage(
+                self._bus,
+                i18n_key="toasts.launcher.launchingGame",
+                game_title=ctx.game_key,
+                priority="low",
+            )
+            if not ctx.is_launch_action:
+                # Ubisoft auth doesn't use a browser — UPC
+                # (Ubisoft Connect) runs in a dedicated Wine
+                # prefix. Delegate to the Ubisoft-specific
+                # handler instead of the generic OAuth flow.
+                if ctx.auth_store == "ubisoft":
+                    return await self._launch_ubisoft_auth(ctx)
+                # OAuth shortcut path — delegate to auth.py
+                from ...launcher.flows.auth import handle_store_auth
+
+                return await handle_store_auth(ctx, self._edge_browser)
             if ctx.is_xcloud:
                 res = await self._launch_xcloud(ctx)
             elif ctx.is_windows_game:

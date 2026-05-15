@@ -7,11 +7,8 @@ import urllib.error
 import urllib.request
 from dataclasses import dataclass
 from typing import Any
-
-from unifideck.core.types import SubscriptionTier
-
-from .microsoft_auth import ssl_ctx_strict
-
+from ...core.types import SubscriptionTier
+from ...core.net import ssl_ctx_permissive as _ssl
 logger = logging.getLogger(__name__)
 _PROBE_TIMEOUT_SECONDS = 10
 _GSSV_CLIENT_HEADER = "XboxComBrowser"
@@ -93,7 +90,7 @@ def _do_probe_http(
         with urllib.request.urlopen(
             req,
             timeout=timeout_seconds,
-            context=ssl_ctx_strict(),
+            context=_ssl("Microsoft subscription — outdated Deck cert store"),
         ) as resp:
             return resp.status, resp.read().decode(
                 "utf-8", errors="replace",

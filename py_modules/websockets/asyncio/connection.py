@@ -7,11 +7,17 @@ import logging
 import random
 import struct
 import sys
-import traceback
 import uuid
-from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Iterable, Mapping
 from types import TracebackType
-from typing import Any, cast
+from typing import (
+    Any,
+    AsyncIterable,
+    AsyncIterator,
+    Awaitable,
+    Iterable,
+    Mapping,
+    cast,
+)
 
 from ..exceptions import (
     ConcurrencyError,
@@ -56,14 +62,14 @@ class Connection(asyncio.Protocol):
         ping_interval: float | None = 20,
         ping_timeout: float | None = 20,
         close_timeout: float | None = 10,
-        max_queue: int | None | tuple[int | None, int | None] = 16,
+        max_queue: int | tuple[int, int | None] = 16,
         write_limit: int | tuple[int, int | None] = 2**15,
     ) -> None:
         self.protocol = protocol
         self.ping_interval = ping_interval
         self.ping_timeout = ping_timeout
         self.close_timeout = close_timeout
-        if isinstance(max_queue, int) or max_queue is None:
+        if isinstance(max_queue, int):
             max_queue = (max_queue, None)
         self.max_queue = max_queue
         if isinstance(write_limit, int):
@@ -185,30 +191,6 @@ class Connection(asyncio.Protocol):
         """
         return self.protocol.subprotocol
 
-    @property
-    def close_code(self) -> int | None:
-        """
-        State of the WebSocket connection, defined in :rfc:`6455`.
-
-        This attribute is provided for completeness. Typical applications
-        shouldn't check its value. Instead, they should inspect attributes
-        of :exc:`~websockets.exceptions.ConnectionClosed` exceptions.
-
-        """
-        return self.protocol.close_code
-
-    @property
-    def close_reason(self) -> str | None:
-        """
-        State of the WebSocket connection, defined in :rfc:`6455`.
-
-        This attribute is provided for completeness. Typical applications
-        shouldn't check its value. Instead, they should inspect attributes
-        of :exc:`~websockets.exceptions.ConnectionClosed` exceptions.
-
-        """
-        return self.protocol.close_reason
-
     # Public methods
 
     async def __aenter__(self) -> Connection:
@@ -276,13 +258,12 @@ class Connection(asyncio.Protocol):
 
             You may override this behavior with the ``decode`` argument:
 
-            * Set ``decode=False`` to disable UTF-8 decoding of Text_ frames and
-              return a bytestring (:class:`bytes`). This improves performance
-              when decoding isn't needed, for example if the message contains
-              JSON and you're using a JSON library that expects a bytestring.
+            * Set ``decode=False`` to disable UTF-8 decoding of Text_ frames
+              and return a bytestring (:class:`bytes`). This may be useful to
+              optimize performance when decoding isn't needed.
             * Set ``decode=True`` to force UTF-8 decoding of Binary_ frames
-              and return a string (:class:`str`). This may be useful for
-              servers that send binary frames instead of text frames.
+              and return a string (:class:`str`). This is useful for servers
+              that send binary frames instead of text frames.
 
         Raises:
             ConnectionClosed: When the connection is closed.
@@ -293,24 +274,14 @@ class Connection(asyncio.Protocol):
         try:
             return await self.recv_messages.get(decode)
         except EOFError:
-            pass
-            # fallthrough
+            # Wait for the protocol state to be CLOSED before accessing close_exc.
+            await asyncio.shield(self.connection_lost_waiter)
+            raise self.protocol.close_exc from self.recv_exc
         except ConcurrencyError:
             raise ConcurrencyError(
                 "cannot call recv while another coroutine "
                 "is already running recv or recv_streaming"
             ) from None
-        except UnicodeDecodeError as exc:
-            async with self.send_context():
-                self.protocol.fail(
-                    CloseCode.INVALID_DATA,
-                    f"{exc.reason} at position {exc.start}",
-                )
-            # fallthrough
-
-        # Wait for the protocol state to be CLOSED before accessing close_exc.
-        await asyncio.shield(self.connection_lost_waiter)
-        raise self.protocol.close_exc from self.recv_exc
 
     async def recv_streaming(self, decode: bool | None = None) -> AsyncIterator[Data]:
         """
@@ -359,32 +330,17 @@ class Connection(asyncio.Protocol):
         try:
             async for frame in self.recv_messages.get_iter(decode):
                 yield frame
-            return
         except EOFError:
-            pass
-            # fallthrough
+            # Wait for the protocol state to be CLOSED before accessing close_exc.
+            await asyncio.shield(self.connection_lost_waiter)
+            raise self.protocol.close_exc from self.recv_exc
         except ConcurrencyError:
             raise ConcurrencyError(
                 "cannot call recv_streaming while another coroutine "
                 "is already running recv or recv_streaming"
             ) from None
-        except UnicodeDecodeError as exc:
-            async with self.send_context():
-                self.protocol.fail(
-                    CloseCode.INVALID_DATA,
-                    f"{exc.reason} at position {exc.start}",
-                )
-            # fallthrough
 
-        # Wait for the protocol state to be CLOSED before accessing close_exc.
-        await asyncio.shield(self.connection_lost_waiter)
-        raise self.protocol.close_exc from self.recv_exc
-
-    async def send(
-        self,
-        message: Data | Iterable[Data] | AsyncIterable[Data],
-        text: bool | None = None,
-    ) -> None:
+    async def send(self, message: Data | Iterable[Data] | AsyncIterable[Data]) -> None:
         """
         Send a message.
 
@@ -394,17 +350,6 @@ class Connection(asyncio.Protocol):
 
         .. _Text: https://datatracker.ietf.org/doc/html/rfc6455#section-5.6
         .. _Binary: https://datatracker.ietf.org/doc/html/rfc6455#section-5.6
-
-        You may override this behavior with the ``text`` argument:
-
-        * Set ``text=True`` to send a bytestring or bytes-like object
-          (:class:`bytes`, :class:`bytearray`, or :class:`memoryview`) as a
-          Text_ frame. This improves performance when the message is already
-          UTF-8 encoded, for example if the message contains JSON and you're
-          using a JSON library that produces a bytestring.
-        * Set ``text=False`` to send a string (:class:`str`) in a Binary_
-          frame. This may be useful for servers that expect binary frames
-          instead of text frames.
 
         :meth:`send` also accepts an iterable or an asynchronous iterable of
         strings, bytestrings, or bytes-like objects to enable fragmentation_.
@@ -456,17 +401,11 @@ class Connection(asyncio.Protocol):
 
         if isinstance(message, str):
             async with self.send_context():
-                if text is False:
-                    self.protocol.send_binary(message.encode())
-                else:
-                    self.protocol.send_text(message.encode())
+                self.protocol.send_text(message.encode())
 
         elif isinstance(message, BytesLike):
             async with self.send_context():
-                if text is True:
-                    self.protocol.send_text(message)
-                else:
-                    self.protocol.send_binary(message)
+                self.protocol.send_binary(message)
 
         # Catch a common mistake -- passing a dict to send().
 
@@ -487,30 +426,36 @@ class Connection(asyncio.Protocol):
             try:
                 # First fragment.
                 if isinstance(chunk, str):
+                    text = True
                     async with self.send_context():
-                        if text is False:
-                            self.protocol.send_binary(chunk.encode(), fin=False)
-                        else:
-                            self.protocol.send_text(chunk.encode(), fin=False)
-                    encode = True
+                        self.protocol.send_text(
+                            chunk.encode(),
+                            fin=False,
+                        )
                 elif isinstance(chunk, BytesLike):
+                    text = False
                     async with self.send_context():
-                        if text is True:
-                            self.protocol.send_text(chunk, fin=False)
-                        else:
-                            self.protocol.send_binary(chunk, fin=False)
-                    encode = False
+                        self.protocol.send_binary(
+                            chunk,
+                            fin=False,
+                        )
                 else:
                     raise TypeError("iterable must contain bytes or str")
 
                 # Other fragments
                 for chunk in chunks:
-                    if isinstance(chunk, str) and encode:
+                    if isinstance(chunk, str) and text:
                         async with self.send_context():
-                            self.protocol.send_continuation(chunk.encode(), fin=False)
-                    elif isinstance(chunk, BytesLike) and not encode:
+                            self.protocol.send_continuation(
+                                chunk.encode(),
+                                fin=False,
+                            )
+                    elif isinstance(chunk, BytesLike) and not text:
                         async with self.send_context():
-                            self.protocol.send_continuation(chunk, fin=False)
+                            self.protocol.send_continuation(
+                                chunk,
+                                fin=False,
+                            )
                     else:
                         raise TypeError("iterable must contain uniform types")
 
@@ -522,10 +467,7 @@ class Connection(asyncio.Protocol):
                 # We're half-way through a fragmented message and we can't
                 # complete it. This makes the connection unusable.
                 async with self.send_context():
-                    self.protocol.fail(
-                        CloseCode.INTERNAL_ERROR,
-                        "error in fragmented message",
-                    )
+                    self.protocol.fail(1011, "error in fragmented message")
                 raise
 
             finally:
@@ -546,32 +488,36 @@ class Connection(asyncio.Protocol):
             try:
                 # First fragment.
                 if isinstance(chunk, str):
-                    if text is False:
-                        async with self.send_context():
-                            self.protocol.send_binary(chunk.encode(), fin=False)
-                    else:
-                        async with self.send_context():
-                            self.protocol.send_text(chunk.encode(), fin=False)
-                    encode = True
+                    text = True
+                    async with self.send_context():
+                        self.protocol.send_text(
+                            chunk.encode(),
+                            fin=False,
+                        )
                 elif isinstance(chunk, BytesLike):
-                    if text is True:
-                        async with self.send_context():
-                            self.protocol.send_text(chunk, fin=False)
-                    else:
-                        async with self.send_context():
-                            self.protocol.send_binary(chunk, fin=False)
-                    encode = False
+                    text = False
+                    async with self.send_context():
+                        self.protocol.send_binary(
+                            chunk,
+                            fin=False,
+                        )
                 else:
                     raise TypeError("async iterable must contain bytes or str")
 
                 # Other fragments
                 async for chunk in achunks:
-                    if isinstance(chunk, str) and encode:
+                    if isinstance(chunk, str) and text:
                         async with self.send_context():
-                            self.protocol.send_continuation(chunk.encode(), fin=False)
-                    elif isinstance(chunk, BytesLike) and not encode:
+                            self.protocol.send_continuation(
+                                chunk.encode(),
+                                fin=False,
+                            )
+                    elif isinstance(chunk, BytesLike) and not text:
                         async with self.send_context():
-                            self.protocol.send_continuation(chunk, fin=False)
+                            self.protocol.send_continuation(
+                                chunk,
+                                fin=False,
+                            )
                     else:
                         raise TypeError("async iterable must contain uniform types")
 
@@ -583,10 +529,7 @@ class Connection(asyncio.Protocol):
                 # We're half-way through a fragmented message and we can't
                 # complete it. This makes the connection unusable.
                 async with self.send_context():
-                    self.protocol.fail(
-                        CloseCode.INTERNAL_ERROR,
-                        "error in fragmented message",
-                    )
+                    self.protocol.fail(1011, "error in fragmented message")
                 raise
 
             finally:
@@ -616,10 +559,7 @@ class Connection(asyncio.Protocol):
             # to terminate after calling a method that sends a close frame.
             async with self.send_context():
                 if self.fragmented_send_waiter is not None:
-                    self.protocol.fail(
-                        CloseCode.INTERNAL_ERROR,
-                        "close during fragmented message",
-                    )
+                    self.protocol.fail(1011, "close during fragmented message")
                 else:
                     self.protocol.send_close(code, reason)
         except ConnectionClosed:
@@ -810,7 +750,7 @@ class Connection(asyncio.Protocol):
                         self.logger.debug("% received keepalive pong")
                     except asyncio.TimeoutError:
                         if self.debug:
-                            self.logger.debug("- timed out waiting for keepalive pong")
+                            self.logger.debug("! timed out waiting for keepalive pong")
                         async with self.send_context():
                             self.protocol.fail(
                                 CloseCode.INTERNAL_ERROR,
@@ -891,7 +831,7 @@ class Connection(asyncio.Protocol):
                     await self.drain()
                 except Exception as exc:
                     if self.debug:
-                        self.logger.debug("! error while sending data", exc_info=True)
+                        self.logger.debug("error while sending data", exc_info=True)
                     # While the only expected exception here is OSError,
                     # other exceptions would be treated identically.
                     wait_for_close = False
@@ -1067,7 +1007,7 @@ class Connection(asyncio.Protocol):
             self.send_data()
         except Exception as exc:
             if self.debug:
-                self.logger.debug("! error while sending data", exc_info=True)
+                self.logger.debug("error while sending data", exc_info=True)
             self.set_recv_exc(exc)
 
         if self.protocol.close_expected():
@@ -1085,21 +1025,12 @@ class Connection(asyncio.Protocol):
         # Feed the end of the data stream to the connection.
         self.protocol.receive_eof()
 
-        # This isn't expected to raise an exception.
-        events = self.protocol.events_received()
+        # This isn't expected to generate events.
+        assert not self.protocol.events_received()
 
         # There is no error handling because send_data() can only write
         # the end of the data stream here and it shouldn't raise errors.
         self.send_data()
-
-        # This code path is triggered when receiving an HTTP response
-        # without a Content-Length header. This is the only case where
-        # reading until EOF generates an event; all other events have
-        # a known length. Ignore for coverage measurement because tests
-        # are in test_client.py rather than test_connection.py.
-        for event in events:  # pragma: no cover
-            # This isn't expected to raise an exception.
-            self.process_event(event)
 
         # The WebSocket protocol has its own closing handshake: endpoints close
         # the TCP or TLS connection after sending and receiving a close frame.
@@ -1205,12 +1136,8 @@ def broadcast(
                 exceptions.append(exception)
             else:
                 connection.logger.warning(
-                    "skipped broadcast: failed to write message: %s",
-                    traceback.format_exception_only(
-                        # Remove first argument when dropping Python 3.9.
-                        type(write_exception),
-                        write_exception,
-                    )[0].strip(),
+                    "skipped broadcast: failed to write message",
+                    exc_info=True,
                 )
 
     if raise_exceptions and exceptions:

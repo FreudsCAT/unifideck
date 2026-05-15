@@ -12,12 +12,13 @@
  * `useHidePlaySection`, the actions are in `useGameActions`.
  * This component just glues them.
  */
-import React, { FC, ReactNode } from "react";
+import React, { FC, ReactNode, useEffect } from "react";
 import { usePlaySection } from "../../hooks/usePlaySection";
 import { useHidePlaySection } from "../../hooks/useHidePlaySection";
 import { NotInstalledButtons } from "./NotInstalledButtons";
 import { DownloadingButtons } from "./DownloadingButtons";
 import { InstalledButtons } from "./InstalledButtons";
+import { injectPlayFocusStyles } from "./play.css";
 
 /**
  * Props of {@link PlaySectionWrapper}. The `appId` is
@@ -40,6 +41,7 @@ export const PlaySectionWrapper: FC<PlaySectionWrapperProps> = ({appId, children
   const state = usePlaySection(appId);
   // Hide Steam's native section if we overriding it
   useHidePlaySection(appId, state.shouldOverride);
+  useEffect(() => { injectPlayFocusStyles(); }, []);
   if (!state.shouldOverride) {
     return <>{children}</>;
   }

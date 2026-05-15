@@ -96,7 +96,31 @@ class StoreBase(ABC):
         """Get game size."""
         ...
     def _find_binary(self, tool: CLITool) -> str | None:
-        """Find binary."""
+        """Find binary.
+
+        The shared :class:`BinaryResolver` Tier-1 lookup requires
+        every entry in ``tool.search_paths`` to be absolute (it
+        rejects relative paths via ``Path.is_absolute()``). Stores
+        idiomatically declare *relative* search paths like
+        ``"bin/legendary"`` so the descriptor stays portable across
+        install layouts. Absolutise them against ``self._plugin_dir``
+        before delegating — otherwise the bundled CLI in
+        ``<plugin>/bin/`` is silently skipped and the resolver
+        falls through to ``PATH`` / ``~/.local/bin`` where the
+        binary doesn't exist.
+        """
+        if self._plugin_dir:
+            absolutised = [
+                p if os.path.isabs(p)
+                else os.path.join(self._plugin_dir, p)
+                for p in tool.search_paths
+            ]
+            tool = CLITool(
+                name=tool.name,
+                search_paths=absolutised,
+                version_flag=tool.version_flag,
+                min_version=tool.min_version,
+            )
         return binary_resolver.resolve(tool)
     def _find_exe(
         self,

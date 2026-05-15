@@ -10,23 +10,25 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from unifideck.cdp.cdp_client import CDPClient
-    from unifideck.core.metrics_collector import MetricsCollector
-    from unifideck.services.account_service import AccountService
-    from unifideck.services.artwork import ArtworkService
-    from unifideck.services.cloud_save import CloudSaveService
-    from unifideck.services.download import DownloadService
-    from unifideck.services.feature_flag_service import FeatureFlagService
-    from unifideck.services.launch_history import LaunchHistoryService
-    from unifideck.services.launch_logs import LaunchLogsService
-    from unifideck.services.launcher import LauncherService
-    from unifideck.services.metadata_service import MetadataService
-    from unifideck.services.microsoft_subscription import MicrosoftSubscriptionService
-    from unifideck.services.playtime import PlaytimeService
-    from unifideck.services.probe_reaction_service import ProbeReactionService
-    from unifideck.services.proton_service import ProtonService
-    from unifideck.services.security import SecurityService
-    from unifideck.services.shortcut import ShortcutService
+    from ...auth.browser import OAuthBrowserMonitor
+    from ...auth.edge_browser import EdgeBrowser
+    from ...cdp.cdp_client import CDPClient
+    from ...core.metrics_collector import MetricsCollector
+    from ..account_service import AccountService
+    from ..artwork import ArtworkService
+    from ..cloud_save import CloudSaveService
+    from ..download import DownloadService
+    from ..feature_flag_service import FeatureFlagService
+    from ..launch_history import LaunchHistoryService
+    from ..metadata_service import MetadataService
+    from ..microsoft_subscription import (
+        MicrosoftSubscriptionService,
+    )
+    from ..playtime import PlaytimeService
+    from ..probe_reaction_service import ProbeReactionService
+    from ..proton_service import ProtonService
+    from ..security import SecurityService
+    from ..shortcut import ShortcutService
 
 
 @dataclass
@@ -49,4 +51,11 @@ class ServiceContainer:
     launch_history: LaunchHistoryService | None = None
     launch_logs: LaunchLogsService | None = None
     microsoft_subscription: MicrosoftSubscriptionService | None = None
-    launcher: LauncherService | None = None
+    # OAuth browser monitor — shared CDP-based redirect watcher
+    # consumed by every store's `AuthOrchestrator`. Injected into
+    # stores via `store_injector._STORE_INJECTIONS`.
+    browser_monitor: OAuthBrowserMonitor | None = None
+    # Edge browser — flatpak installer + CDP launcher used by
+    # the four OAuth stores (Epic / GOG / Amazon / Microsoft).
+    # Constructed once per plugin and shared via the injector.
+    edge_browser: EdgeBrowser | None = None

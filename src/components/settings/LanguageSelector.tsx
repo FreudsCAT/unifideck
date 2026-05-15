@@ -48,7 +48,7 @@ export const LanguageSelector: FC = () => {
     () => [
       {
         data: AUTO_DETECT,
-        label: t("settings.language.auto", { defaultValue: "Auto-detect" }),
+        label: t("settings.languageAuto", { defaultValue: "Auto-detect" }),
       },
       ...SUPPORTED_LANGUAGES.map((tag) => ({
         data: tag,

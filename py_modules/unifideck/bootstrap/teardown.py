@@ -41,9 +41,13 @@ async def unload_plugin(plugin: Any) -> None:
     hook) would log it and still proceed; we preserve that
     contract by letting stop_all_services handle its own errors.
     """
-    await stop_all_services(plugin.services)
+    services = getattr(plugin, "services", None)
+    if services is not None:
+        await stop_all_services(services)
     if hasattr(plugin, "dispatcher") and plugin.dispatcher is not None:
         await plugin.dispatcher.stop()
         logger.info("[Unifideck] PriorityDispatcher stopped")
-    plugin.bus.clear()
+    bus = getattr(plugin, "bus", None)
+    if bus is not None:
+        bus.clear()
     logger.info("[Unifideck] unload complete")

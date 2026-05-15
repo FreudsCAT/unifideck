@@ -107,6 +107,11 @@ class UbisoftStore(StoreBase):
     async def start_auth(self, **kwargs: Any) -> AuthResult:
         """Start auth."""
         await self._auth.ensure_auth_shortcut()
+        # The auth prefix (.upc-auth) must exist before UPC
+        # can launch. First-time setup downloads the UPC
+        # installer and creates the Wine prefix — may take
+        # several minutes. Subsequent calls are a no-op.
+        await self._prefix_mgr.ensure_auth_prefix()
         await self._auth.start_auth_session_monitor()
         return cast("AuthResult", await self._auth.start_auth())
 

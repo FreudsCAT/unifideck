@@ -33,6 +33,32 @@ def _parse_argv(argv: list[str]) -> tuple[str, str]:
         )
     raw_options = " ".join(argv[2:])
     return game_key, raw_options
+
+
+def _promote_env_tokens(raw_options: str) -> None:
+    """Promote ``KEY=value`` tokens from launch options to ``os.environ``.
+
+    Steam passes plugin launch options to the wrapper as argv,
+    not as env vars : a shortcut configured with launch options
+    ``"amazon:amazon-auth UNIFIDECK_AMAZON_ACTION=auth"`` arrives
+    as ``sys.argv[1:] = ["amazon:amazon-auth", "UNIFIDECK_AMAZON_ACTION=auth"]``.
+
+    The auth-detection path (and other downstream code) reads
+    these flags from ``os.environ``, so we promote any
+    bare ``KEY=value`` token in the joined raw options string
+    into the process environment before that code runs.
+    Only tokens starting with ``UNIFIDECK_`` are promoted —
+    don't pollute the env with arbitrary user-supplied args.
+    """
+    for token in raw_options.split():
+        if "=" not in token:
+            continue
+        key, _, value = token.partition("=")
+        if not key.startswith("UNIFIDECK_"):
+            continue
+        # Don't clobber an existing real env var — caller wins
+        # in case Steam ever evolves to pass env vars properly.
+        os.environ.setdefault(key, value)
 def _resolve_plugin_dir() -> Path:
     """Resolve plugin dir."""
     from unifideck.core.paths import resolve_plugin_dir
@@ -44,6 +70,38 @@ async def _build_context(
     """Build context."""
     game_key, raw_options = _parse_argv(argv)
     store, game_id = game_key.split(":", 1)
+
+    # Steam passes launch options as argv, not as env vars —
+    # promote any ``UNIFIDECK_*=value`` tokens so the rest of
+    # the dispatcher (auth detection, downstream services) can
+    # read them from ``os.environ`` as it expects.
+    _promote_env_tokens(raw_options)
+
+    # Auth-shortcut path : the auth shortcut key is
+    # ``<store>:<store>-auth`` and we expect
+    # ``UNIFIDECK_<STORE>_ACTION=auth`` in the launch options.
+    # There's no games.map entry for it (it's not a game) so we
+    # short-circuit the registry lookup and build a context the
+    # auth flow can consume directly.
+    auth_store, is_launch_action = _detect_auth_action()
+    if not is_launch_action:
+        logger.info(
+            "[launcher.dispatcher] auth shortcut detected: "
+            "auth_store=%s game_key=%s",
+            auth_store, game_key,
+        )
+        return LaunchContext(
+            store=store,
+            game_id=game_id,
+            exe_path=Path("/dev/null"),
+            work_dir=_resolve_plugin_dir(),
+            plugin_dir=_resolve_plugin_dir(),
+            raw_options=raw_options,
+            is_launch_action=False,
+            auth_store=auth_store,
+            bypass_circuit_breaker=False,
+        )
+
     entry = await shortcut_svc.get_entry_for_game_key(
         store, game_id,
     )
@@ -54,7 +112,6 @@ async def _build_context(
         )
     exe_path = Path(entry.exe)
     work_dir = Path(entry.work_dir)
-    auth_store, is_launch_action = _detect_auth_action()
     bypass = _resolve_bypass_flag(store, game_id)
     return LaunchContext(
         store=store,
@@ -63,8 +120,8 @@ async def _build_context(
         work_dir=work_dir,
         plugin_dir=_resolve_plugin_dir(),
         raw_options=raw_options,
-        is_launch_action=is_launch_action,
-        auth_store=auth_store,
+        is_launch_action=True,
+        auth_store=None,
         bypass_circuit_breaker=bypass,
     )
 
@@ -72,9 +129,11 @@ def _detect_auth_action() -> tuple[str | None, bool]:
 
     """Detect auth action."""
     auth_env = {
-        "epic": os.environ.get("UNIFIDECK_EPIC_ACTION"),
-        "gog": os.environ.get("UNIFIDECK_GOG_ACTION"),
-        "amazon": os.environ.get("UNIFIDECK_AMAZON_ACTION"),
+        "epic":      os.environ.get("UNIFIDECK_EPIC_ACTION"),
+        "gog":       os.environ.get("UNIFIDECK_GOG_ACTION"),
+        "amazon":    os.environ.get("UNIFIDECK_AMAZON_ACTION"),
+        "microsoft": os.environ.get("UNIFIDECK_MICROSOFT_ACTION"),
+        "ubisoft":   os.environ.get("UNIFIDECK_UBISOFT_ACTION"),
     }
     for candidate_store, action in auth_env.items():
         if action == "auth":

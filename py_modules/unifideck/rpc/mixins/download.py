@@ -1,6 +1,27 @@
 """Download RPC mixin for Plugin class.
 
-OP-26c | rpc/mixins/download.py
+OP-26i | py_modules/unifideck/rpc/mixins/download.py
+
+Mixin merging two slices that the handler groups split apart:
+
+* per-game lifecycle (``install_game`` / ``uninstall_game`` /
+  ``check_game_update``) — these live in ``StoreHandlers`` in
+  the newer API;
+* download-queue management (``cancel_download`` /
+  ``get_download_queue``) — these live in ``DownloadHandlers``.
+
+Storage-location RPCs (``get_storage_locations``,
+``set_default_storage_location``, ``set_custom_install_path``)
+live in a sibling ``StorageRPCMixin`` (OP-26j) so this file
+keeps the 200 LOC ceiling.
+
+Two private helpers centralise the null checks:
+
+* ``_require_store`` — store-not-found errors;
+* ``_require_download`` — download-service-unavailable errors.
+
+``_validate_pair`` validates identifiers at the RPC boundary
+so the rest of the codebase can treat them as already-sanitised.
 """
 from __future__ import annotations
 

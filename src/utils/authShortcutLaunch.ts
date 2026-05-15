@@ -29,6 +29,8 @@ import {
   getShortcutRunGameId,
   isShortcutAppRunning,
 } from "../lib/steam-bridge";
+import { rpcRoutes, type RouteName } from "../api/rpc-routes";
+import { unwrapRpcEnvelope } from "../api/useRPC";
 
 /**
  * Per-store configuration for the auth-shortcut
@@ -43,7 +45,11 @@ export type AuthShortcutConfig = {
   tempStoreIdPrefix: string;
   appName: string;
   actionEnvVar: string;
-  contextRpcMethod: string;
+  /** Backend RPC route returning the auth-shortcut metadata
+   *  ({appid_unsigned, launcher_path, launch_options,
+   *  launch_wait_ms}). Sourced from `rpcRoutes` so a backend
+   *  rename is a one-file change. */
+  contextRpcMethod: RouteName;
 };
 
 /**
@@ -61,7 +67,7 @@ const EPIC_AUTH_CONFIG: AuthShortcutConfig = {
   tempStoreIdPrefix: "epic:epic-auth-temp",
   appName: "Epic Games Sign-In",
   actionEnvVar: "UNIFIDECK_EPIC_ACTION",
-  contextRpcMethod: "get_epic_auth_shortcut_context",
+  contextRpcMethod: rpcRoutes.getEpicAuthShortcutContext,
 };
 
 const GOG_AUTH_CONFIG: AuthShortcutConfig = {
@@ -70,7 +76,7 @@ const GOG_AUTH_CONFIG: AuthShortcutConfig = {
   tempStoreIdPrefix: "gog:gog-auth-temp",
   appName: "GOG Sign-In",
   actionEnvVar: "UNIFIDECK_GOG_ACTION",
-  contextRpcMethod: "get_gog_auth_shortcut_context",
+  contextRpcMethod: rpcRoutes.getGogAuthShortcutContext,
 };
 
 const AMAZON_AUTH_CONFIG: AuthShortcutConfig = {
@@ -79,7 +85,7 @@ const AMAZON_AUTH_CONFIG: AuthShortcutConfig = {
   tempStoreIdPrefix: "amazon:amazon-auth-temp",
   appName: "Amazon Games Sign-In",
   actionEnvVar: "UNIFIDECK_AMAZON_ACTION",
-  contextRpcMethod: "get_amazon_auth_shortcut_context",
+  contextRpcMethod: rpcRoutes.getAmazonAuthShortcutContext,
 };
 
 const MICROSOFT_AUTH_CONFIG: AuthShortcutConfig = {
@@ -88,7 +94,7 @@ const MICROSOFT_AUTH_CONFIG: AuthShortcutConfig = {
   tempStoreIdPrefix: "microsoft:ms-auth-temp",
   appName: "Microsoft Sign-In",
   actionEnvVar: "UNIFIDECK_MICROSOFT_ACTION",
-  contextRpcMethod: "get_microsoft_auth_shortcut_context",
+  contextRpcMethod: rpcRoutes.getMicrosoftAuthShortcutContext,
 };
 
 const SHORTCUT_POLL_DELAY_MS = 250;
@@ -327,9 +333,20 @@ export async function launchAuthViaShortcut(
 ): Promise<AuthShortcutLaunchResult> {
   const tag = logTag(config);
   console.log(`${tag} Starting auth shortcut launch flow`);
-  const ctx = await call<[], AuthShortcutContextRPC>(config.contextRpcMethod);
-  if (!ctx?.success || !ctx.appid_unsigned) {
-    console.error(`${tag} Auth context failed:`, ctx?.error);
+  // `call()` returns the raw `{success, error, data}` envelope ;
+  // unwrap so we see the flat `AuthShortcutContextRPC` shape the
+  // backend mixin emits. `throwing: false` because the caller
+  // wants to inspect a non-success result, not catch.
+  const raw = await call<[], unknown>(config.contextRpcMethod);
+  const ctx = unwrapRpcEnvelope<AuthShortcutContextRPC>(raw, {
+    route: config.contextRpcMethod,
+    throwing: false,
+  });
+  if (!ctx?.appid_unsigned) {
+    console.error(
+      `${tag} Auth context failed — envelope:`, raw,
+      `unwrapped:`, ctx,
+    );
     return {
       success: false,
       error: ctx?.error || "Auth shortcut not available",
@@ -394,10 +411,14 @@ export async function launchAuthViaShortcut(
   }
   const alreadyRunning = isShortcutAppRunning(appId);
   // Fetch current launch options to restore after launch
-  const shortcutContext = await call<[string], ShortcutLaunchContext>(
-    "get_compat_tool_for_game",
+  const shortcutContext = await call<[string], unknown>(
+    rpcRoutes.getCompatToolForGame,
     config.storeId,
-  ).catch(() => ({ success: false }) as ShortcutLaunchContext);
+  )
+    .then((raw) => unwrapRpcEnvelope<ShortcutLaunchContext>(raw, {
+      route: rpcRoutes.getCompatToolForGame, throwing: false,
+    }))
+    .catch(() => ({ success: false }) as ShortcutLaunchContext);
   const originalLaunchOptions =
     getShortcutLaunchOptions(appId) ??
     shortcutContext.current_launch_options ??

@@ -122,7 +122,12 @@ class UbisoftConfig:
         "Default",
         "Default User",
     )
-    filter_steam_linked: bool = True
+    # filter_steam_linked default is False because the underlying
+    # steam_filter.py was removed in commits 6c84e7e / 908d350. The
+    # config flag is kept for forward compatibility — when the filter
+    # returns, flipping this default to True will re-enable the
+    # feature on existing installs without a config migration.
+    filter_steam_linked: bool = False
     steam_library_cross_ref: bool = False
 
     @property
@@ -406,7 +411,7 @@ UbisoftConfig._FIELD_SPECS = (
         UbisoftConfig._parse_tuple,
         ("Public", "All Users", "Default", "Default User"),
     ),
-    ("filter_steam_linked", "filter_steam_linked", UbisoftConfig._parse_bool, True),
+    ("filter_steam_linked", "filter_steam_linked", UbisoftConfig._parse_bool, False),
     (
         "steam_library_cross_ref",
         "steam_library_cross_ref",

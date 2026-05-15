@@ -101,7 +101,7 @@ class EpicStore(StoreBase):
         if epic_cfg is None:
             raise KeyError("config.stores.epic is required")
         self._build_cli_submodules(bus, epic_cfg)
-        self._build_auth_submodule(bus, browser_monitor)
+        self._build_auth_submodule(browser_monitor)
 
     def _build_cli_submodules(self, bus: EventBus, epic_cfg: dict[str, Any]) -> None:
         """Build cli submodules."""
@@ -130,23 +130,39 @@ class EpicStore(StoreBase):
             info_timeout=epic_cfg["info_timeout_seconds"],
         )
 
-    def _build_auth_submodule(self, bus: EventBus, browser_monitor: OAuthBrowserMonitor | None) -> None:
-        """Build auth submodule."""
-        if browser_monitor is None:
-            self._auth: EpicAuthFlow | None = None
+    def _build_auth_submodule(self, browser_monitor: OAuthBrowserMonitor | None) -> None:
+        """Build auth submodule.
+
+        Auth is now late-bound : at boot the ``browser_monitor`` is
+        ``None`` (auto-discovery doesn't have the service container
+        yet). ``store_injector`` sets ``_browser_monitor``
+        post-discovery and calls ``_rebuild_auth_after_injection``
+        so the flow is wired against the just-injected monitor.
+        """
+        self._browser_monitor = browser_monitor
+        self._auth: EpicAuthFlow | None = None
+        self._rebuild_auth_after_injection()
+
+    def _rebuild_auth_after_injection(self) -> None:
+        """(Re-)build the Epic auth flow once a browser monitor is set."""
+        if self._auth is not None:
+            return
+        monitor = getattr(self, "_browser_monitor", None)
+        if monitor is None:
             logger.debug("[EpicStore] no browser_monitor; auth disabled")
             return
         orchestrator = AuthOrchestrator(
-            bus=bus,
-            browser_monitor=browser_monitor,
+            bus=self._bus,
+            browser_monitor=monitor,
             store_name="epic",
         )
         self._auth = EpicAuthFlow(
-            bus=bus,
+            bus=self._bus,
             orchestrator=orchestrator,
             cli_path=self.cli_path,
             cli_timeout_seconds=self._timeouts["auth_check"],
         )
+        logger.info("[EpicStore] auth flow wired")
 
     async def is_available(self) -> bool:
         """Check whether available."""
@@ -201,6 +217,27 @@ class EpicStore(StoreBase):
                 error="auth_not_configured",
                 store="epic",
             )
+        # Edge prerequisite : the launcher subprocess opens
+        # the legendary OAuth URL inside Microsoft Edge.
+        # Returning a structured `edge_not_installed` here
+        # lets the frontend spawn the install modal instead
+        # of letting the launcher subprocess crash with a
+        # generic DependencyMissingError.
+        edge = getattr(self, "_edge", None)
+        if edge is None or not edge.is_installed:
+            logger.info(
+                "[EpicStore] Edge not installed — prompting user",
+            )
+            return AuthResult(
+                success=False,
+                error="edge_not_installed",
+                store="epic",
+            )
+        # Clear Epic session cookies so the user always sees a
+        # fresh login form. Stale browser sessions from a prior
+        # auth attempt would otherwise auto-login and bypass the
+        # OAuth redirect entirely.
+        edge.clear_store_cookies("epicgames.com")
         await self._ensure_auth_shortcut()
         return cast("AuthResult", await self._auth.start_auth())
 

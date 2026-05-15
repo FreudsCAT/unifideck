@@ -35,11 +35,11 @@ import shutil
 from pathlib import Path
 from typing import Any, cast
 
-# Module-level logger defined unconditionally so every function in this
-# module can call it regardless of whether the optional `vdf` import
-# succeeded. Previously this binding lived only inside the
-# `except ImportError` branch below, which caused a NameError in
-# production whenever `vdf` was installed (the normal case).
+# Module logger always lives at module scope. The previous
+# version only defined it inside the `except ImportError` branch
+# below, which meant `logger.info(...)` later in the module
+# raised `NameError: name 'logger' is not defined` whenever the
+# `vdf` import succeeded (the normal case).
 logger = logging.getLogger(__name__)
 
 try:

@@ -113,6 +113,8 @@ class AuthOrchestrator:
         timeout: float | None = None,
         write_url_file: str | None = None,
         background: bool = False,
+        content_trigger_url: str | None = None,
+        content_regex: str | None = None,
     ) -> AuthResult:
         """Execute the CDP OAuth flow (blocking or background).
 
@@ -151,6 +153,14 @@ class AuthOrchestrator:
             return await self._emit_failed(
                 "no_url", "get_url returned empty string",
             )
+        # Emit a sanitised view of the auth URL so operators
+        # can diagnose OAuth config issues without seeing
+        # secrets. Query-string parameters are dropped — the
+        # domain + path is enough to verify the URL is correct.
+        pretty = url.split("?", 1)[0] if "?" in url else url
+        logger.info(
+            "[AuthOrchestrator/%s] auth URL: %s", self._store, pretty,
+        )
         # Step 2: optionally persist the URL for the shell
         # launcher.
         if write_url_file:
@@ -170,12 +180,16 @@ class AuthOrchestrator:
                 allowed_uris=allowed_uris,
                 exchange_code=exchange_code,
                 deadline=deadline,
+                content_trigger_url=content_trigger_url,
+                content_regex=content_regex,
             )
         return await self._await_redirect_and_exchange(
             url=url,
             allowed_uris=allowed_uris,
             exchange_code=exchange_code,
             deadline=deadline,
+            content_trigger_url=content_trigger_url,
+            content_regex=content_regex,
         )
 
     def cancel_background(self) -> bool:
@@ -201,6 +215,9 @@ class AuthOrchestrator:
         allowed_uris: list[str],
         exchange_code: ExchangeCodeCallback,
         deadline: float,
+        *,
+        content_trigger_url: str | None = None,
+        content_regex: str | None = None,
     ) -> AuthResult:
         """Wait for the CDP redirect and exchange the code.
 
@@ -223,6 +240,8 @@ class AuthOrchestrator:
             capture = await self._monitor.wait_for_redirect(
                 allowed_uris=allowed_uris,
                 timeout=deadline,
+                content_trigger_url=content_trigger_url,
+                content_regex=content_regex,
             )
         except asyncio.CancelledError:
             logger.info(
@@ -241,6 +260,19 @@ class AuthOrchestrator:
                 url=url,
             )
         code = capture.code
+        # Mask the code for logging — first and last 4 chars
+        # are enough to correlate with store-side token-exchange
+        # errors without exposing the full secret.
+        if code and len(code) >= 8:
+            logger.info(
+                "[AuthOrchestrator/%s] code captured: %s...%s (len=%d)",
+                self._store, code[:4], code[-4:], len(code),
+            )
+        elif code:
+            logger.info(
+                "[AuthOrchestrator/%s] code captured (len=%d, too short to mask)",
+                self._store, len(code),
+            )
         if not code:
             return await self._emit_failed(
                 "no_code",
@@ -281,7 +313,8 @@ class AuthOrchestrator:
                 Events.STORE_AUTH_COMPLETE, store=self._store,
             )
             logger.info(
-                "[AuthOrchestrator/%s] auth complete", self._store,
+                "[AuthOrchestrator/%s] auth complete (tokens_cached=%s)",
+                self._store, getattr(result, "tokens_cached", "n/a"),
             )
         else:
             await self._bus.emit(
@@ -290,8 +323,11 @@ class AuthOrchestrator:
                 error=result.error or "exchange_returned_failure",
             )
             logger.warning(
-                "[AuthOrchestrator/%s] exchange failed: %s",
-                self._store, result.error,
+                "[AuthOrchestrator/%s] exchange failed: "
+                "error=%s error_code=%s",
+                self._store,
+                result.error or "unknown",
+                getattr(result, "error_code", "n/a"),
             )
         return result
 
@@ -302,6 +338,9 @@ class AuthOrchestrator:
         allowed_uris: list[str],
         exchange_code: ExchangeCodeCallback,
         deadline: float,
+        *,
+        content_trigger_url: str | None = None,
+        content_regex: str | None = None,
     ) -> AuthResult:
         """Create the asyncio task for background mode and return.
 
@@ -321,6 +360,8 @@ class AuthOrchestrator:
                     allowed_uris=allowed_uris,
                     exchange_code=exchange_code,
                     deadline=deadline,
+                    content_trigger_url=content_trigger_url,
+                    content_regex=content_regex,
                 )
             except asyncio.CancelledError:
                 # task cancelled mid-flight; swallow to let shutdown proceed

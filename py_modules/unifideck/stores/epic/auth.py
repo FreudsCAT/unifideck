@@ -38,12 +38,32 @@ from unifideck.security import audit_auth_flow
 
 logger = logging.getLogger(__name__)
 
+# Only the post-login callback URIs — the URLs that legendary's
+# local OAuth redirect server listens on AFTER the user signs in.
+# ``www.epicgames.com/id/api/redirect`` is intentionally NOT listed —
+# it's the initial OAuth authorize endpoint that the browser hits
+# BEFORE the login form even appears; matching it would capture the
+# redirect before the user has a chance to sign in, yielding a URL
+# with no ``code`` parameter and killing the flow prematurely.
 _EPIC_REDIRECT_URIS: list[str] = [
     "https://legendary.epicgames.com/callback",
-    "https://www.epicgames.com/id/api/redirect",
 ]
 
-_AUTH_URL_MARKERS = ("epicgames.com",)
+# legendary's `auth` command emits the OAuth URL using its own
+# short-link domain (``https://legendary.gl/epiclogin``), which
+# redirects to ``epicgames.com``. Accept both so we don't drop
+# the URL on the floor and time out the flow.
+_AUTH_URL_MARKERS = ("epicgames.com", "legendary.gl")
+
+# Lines `legendary auth` prints when the user is already logged
+# in. We detect either marker, terminate the process, and emit
+# STORE_AUTH_COMPLETE without showing a browser. Matching is
+# substring-based so minor wording changes in future legendary
+# versions don't break detection.
+_LEGENDARY_ALREADY_AUTHED_MARKERS = (
+    "Stored credentials are still valid",
+    "Login successful",
+)
 
 
 class EpicAuthFlow:
@@ -71,13 +91,71 @@ class EpicAuthFlow:
                 error="legendary_not_found",
                 store="epic",
             )
+        # Fast path : if legendary already has valid credentials,
+        # skip the entire OAuth dance and emit a success event
+        # so the frontend updates the badge to "Connected" without
+        # opening a browser.
+        if await self._is_already_authed():
+            logger.info(
+                "[epic_auth] credentials still valid — skipping OAuth",
+            )
+            await self._bus.emit(
+                Events.STORE_AUTH_COMPLETE, store="epic",
+            )
+            return AuthResult(success=True, store="epic")
         return await self._orch.run_flow(
             get_url=self._fetch_login_url,
             allowed_uris=_EPIC_REDIRECT_URIS,
             exchange_code=self._register_code,
             background=True,
             write_url_file=("~/.local/share/unifideck/epic_auth_url.txt"),
+            # Content-based fallback: Epic sometimes embeds the
+            # ``authorizationCode`` in a JSON blob inside the
+            # intermediate ``/id/api/redirect`` page body.
+            # If URL-param matching misses the code, this
+            # regex extracts it from ``document.body.innerText``.
+            content_trigger_url="epicgames.com/id/api/redirect",
+            content_regex=r'"authorizationCode"\s*:\s*"([^"]+)"',
         )
+
+    async def _is_already_authed(self) -> bool:
+        """Detect whether ``legendary auth`` would no-op.
+
+        Runs ``legendary auth`` (no args), reads up to a few
+        lines of stdout, and looks for the
+        "credentials still valid" marker. Returns False on any
+        I/O / timeout error so the caller falls back to the
+        normal OAuth flow.
+        """
+        assert self._cli_path is not None
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                self._cli_path,
+                "auth",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+            )
+        except OSError as e:
+            logger.warning("[epic_auth] spawn for auth-check failed: %s", e)
+            return False
+        try:
+            try:
+                stdout_bytes, _ = await asyncio.wait_for(
+                    proc.communicate(),
+                    # legendary's auth-check completes in <1s when
+                    # creds are present ; cap so we never hang.
+                    timeout=min(self._cli_timeout, 5),
+                )
+            except TimeoutError:
+                return False
+            text = stdout_bytes.decode(errors="ignore")
+            return any(
+                marker in text
+                for marker in _LEGENDARY_ALREADY_AUTHED_MARKERS
+            )
+        finally:
+            if proc.returncode is None:
+                await self._terminate_legendary(proc)
 
     async def logout(self) -> Result:
         """Logout."""
@@ -119,7 +197,8 @@ class EpicAuthFlow:
                 "no OAuth URL found in legendary auth output",
                 store="epic",
             )
-        logger.info("[epic_auth] captured URL from legendary")
+        pretty = url.split("?", 1)[0] if "?" in url else url
+        logger.info("[epic_auth] captured URL from legendary: %s", pretty)
         return url
 
     async def _spawn_legendary_auth(self) -> Any:
@@ -160,12 +239,25 @@ class EpicAuthFlow:
     @staticmethod
     async def _terminate_legendary(proc: Any) -> None:
         """Terminate LEGENDARY."""
+        # Legendary crashes fast on EOF (stdin is closed under
+        # the Decky service), so by the time we get here the
+        # process may already be dead. asyncio's
+        # ``Process.terminate()`` raises a bare
+        # ``ProcessLookupError()`` (empty str) in that case ;
+        # left uncaught, it propagates through the ``finally``
+        # in ``_fetch_login_url`` and replaces the real
+        # ``StoreAuthError`` with a useless empty-message log.
         try:
             proc.terminate()
             await asyncio.wait_for(proc.wait(), timeout=2)
         except TimeoutError:
-            proc.kill()
-            await proc.wait()
+            try:
+                proc.kill()
+                await proc.wait()
+            except ProcessLookupError:
+                pass
+        except ProcessLookupError:
+            pass
 
     async def _register_code(self, code: str) -> AuthResult:
         """Register code."""

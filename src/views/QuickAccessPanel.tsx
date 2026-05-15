@@ -5,15 +5,22 @@
  * which mixed sync state, account switch logic, downloads,
  * settings, language selection, and a custom tab switcher.
  * The new panel reads `useSync()` to know whether to show
- * the downloads tab, then maps each section to its
- * dedicated component (StoreConnections, LibrarySync,
+ * the downloads progress badge, then maps each section to
+ * its dedicated component (StoreConnections, LibrarySync,
  * StorageSettings, LanguageSelector, DownloadsTab).
  *
- * The local "active tab" state is the only state this
- * component owns ; everything else flows from contexts.
- * That's the cleanup payoff of the F2 / F3 / F4 work.
+ * Tab state is held in a module-level `persistentActiveTab`
+ * so the last-viewed tab survives Quick-Access dismount /
+ * remount (legacy behaviour from staging index.tsx).
+ *
+ * Tab buttons are bare `DialogButton`s in a flex row (no
+ * `PanelSection` wrapper, no extra `Focusable`). This is what
+ * Steam's gamepad focus needs to land on them — wrapping
+ * `DialogButton` in another `Focusable` swallows the focus
+ * target on this build of Decky.
  */
-import React, { FC, useState } from "react";
+import { FC, useState } from "react";
+import { DialogButton } from "@decky/ui";
 import { useTranslation } from "react-i18next";
 import { useSync } from "../contexts/SyncContext";
 import {
@@ -23,60 +30,53 @@ import { DownloadsTab } from "../components/downloads";
 
 type ActiveTab = "settings" | "downloads";
 
-/** Tab button props. */
-interface TabButtonProps {
-  active: boolean;
-  label: string;
-  onClick: () => void;
-}
-
-/** Tab button. */
-const TabButton: FC<TabButtonProps> = ({ active, label, onClick }) => (
-  <button
-    onClick={onClick}
-    style={{
-      flex: 1,
-      padding: "8px 12px",
-      background: active ? "#2563eb" : "transparent",
-      color: active ? "#fff" : "#94a3b8",
-      border: "none",
-      borderRadius: 4,
-      cursor: "pointer",
-      fontSize: 13,
-    }}
-  >
-    {label}
-  </button>
-);
+/** Last-viewed tab persisted across QAM mount/unmount. */
+let persistentActiveTab: ActiveTab = "settings";
 
 /**
  * Root component of the Decky Loader Quick Access menu.
- * Composes the four tabs (Stores, Library, Downloads,
- * Settings) and lets users swipe between them with the
- * trackpad / R1+L1 controller bindings.
+ * Composes the two tabs (Settings, Downloads) and persists
+ * the active tab across QAM open/close.
  */
 export const QuickAccessPanel: FC = () => {
   const { t } = useTranslation();
   const sync = useSync();
-  const [tab, setTab] = useState<ActiveTab>("settings");
+  const [tab, setTabState] = useState<ActiveTab>(persistentActiveTab);
+
+  const setTab = (next: ActiveTab): void => {
+    persistentActiveTab = next;
+    setTabState(next);
+  };
+
+  const downloadsLabel = sync.isSyncing
+    ? `${t("tabs.downloads")} (${sync.progress?.progress_percent ?? 0}%)`
+    : t("tabs.downloads");
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-      <div style={{ display: "flex", gap: 4, padding: "0 4px" }}>
-        <TabButton
-          active={tab === "settings"}
-          label={t("tabs.settings")}
+    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+      <div style={{ display: "flex", gap: 6, padding: "4px 8px 0" }}>
+        <DialogButton
           onClick={() => setTab("settings")}
-        />
-        <TabButton
-          active={tab === "downloads"}
-          label={
-            sync.isSyncing
-              ? `${t("tabs.downloads")} (${sync.progress?.progress_percent ?? 0}%)`
-              : t("tabs.downloads")
-          }
+          style={{
+            flex: 1,
+            minWidth: 0,
+            fontWeight: tab === "settings" ? 600 : 400,
+            opacity: tab === "settings" ? 1 : 0.7,
+          }}
+        >
+          {t("tabs.settings")}
+        </DialogButton>
+        <DialogButton
           onClick={() => setTab("downloads")}
-        />
+          style={{
+            flex: 1,
+            minWidth: 0,
+            fontWeight: tab === "downloads" ? 600 : 400,
+            opacity: tab === "downloads" ? 1 : 0.7,
+          }}
+        >
+          {downloadsLabel}
+        </DialogButton>
       </div>
       {tab === "settings" && (
         <>

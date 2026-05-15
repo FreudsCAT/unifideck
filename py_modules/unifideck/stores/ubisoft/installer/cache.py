@@ -25,9 +25,8 @@ import logging
 import urllib.request
 from pathlib import Path
 from typing import Any
-
-from unifideck.core.net import ssl_ctx_strict
-from unifideck.stores.ubisoft.config import UbisoftConfig
+from ....core.net import ssl_ctx_permissive
+from ..config import UbisoftConfig
 
 logger = logging.getLogger(__name__)
 _INSTALLER_MIN_SIZE_BYTES = 1000
@@ -90,7 +89,7 @@ class UbisoftInstallerCache:
         """Download sync."""
         tmp_path = dest_path + ".tmp"
         try:
-            ctx = ssl_ctx_strict()
+            ctx = ssl_ctx_permissive("Ubisoft installer — outdated Deck cert store")
             req = urllib.request.Request(
                 url,
                 headers={"User-Agent": "Unifideck/1.0"},

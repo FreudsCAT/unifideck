@@ -12,7 +12,7 @@
  * (single-purpose JSX, no extra components needed).
  */
 import React, { FC } from "react";
-import { Spinner } from "@decky/ui";
+import { Focusable, Spinner } from "@decky/ui";
 import { useTranslation } from "react-i18next";
 import { useGameInfo } from "../../hooks/useGameInfo";
 import { useViewMode } from "../../hooks/useViewMode";
@@ -52,15 +52,19 @@ export const GameInfoPanel: FC<Props> = ({ appId }) => {
   }
   if (!game) return null;
   return (
-    <div style={{
-      display: "flex",
-      flexDirection: "column",
-      gap: mode === "compact" ? 8 : 16,
-      padding: 12,
-    }}>
+    <Focusable
+      flow-children="column"
+      onActivate={() => {}}
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        gap: mode === "compact" ? 8 : 16,
+        padding: 12,
+      }}
+    >
       <GameInfoHeader game={game} mode={mode} />
       <GameInfoMetadata game={game} mode={mode} />
       {mode === "full" && <GameInfoScores game={game} />}
-    </div>
+    </Focusable>
   );
 };

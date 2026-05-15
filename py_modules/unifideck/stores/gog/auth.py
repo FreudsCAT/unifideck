@@ -80,7 +80,14 @@ class GOGBrowserAuth:
         }
         query = urllib.parse.urlencode(params, safe="/: ")
         url = f"{self._config.auth_url}?{query}"
-        logger.info("[GOGBrowserAuth] built OAuth URL")
+        logger.info(
+            "[GOGBrowserAuth] built OAuth URL: %s?client_id=REDACTED"
+            "&redirect_uri=%s&response_type=%s&layout=%s",
+            self._config.auth_url,
+            self._config.redirect_uri,
+            "code",
+            "client2",
+        )
         return url
 
     async def _exchange_code(self, code: str) -> AuthResult:

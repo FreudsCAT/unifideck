@@ -29,36 +29,14 @@ def normalize_title_for_matching(title: str) -> str:
     return title.strip()
 
 def get_first_char_for_bucket(title: str) -> str:
-    """Compute the 2-character index bucket key for a game title.
-
-    Used to partition titles into alphabetical buckets for fast
-    prefix-based lookups in the local cache. The algorithm:
-
-    1. Normalize the title (lowercase, strip punctuation, collapse
-       whitespace) via ``normalize_title_for_matching``.
-    2. Strip a single leading article ("the ", "a ", "an ") so
-       *"The Witcher"* buckets next to *"Witcher"*.
-    3. If the resulting string is empty or starts with a
-       non-alphabetic character, fall back to the digit bucket
-       ``"0_9"``.
-    4. Otherwise return the first two alphanumeric characters; if
-       only one usable character remains, repeat it.
-
-    Args:
-        title: Raw game title.
-
-    Returns:
-        A two-character bucket key (``"aa"`` … ``"zz"``) or the
-        special ``"0_9"`` bucket for digit / empty / non-alpha
-        titles.
-    """
+    """Get first char for bucket."""
     normalized = normalize_title_for_matching(title)
+    if not normalized:
+        return "0_9"
     for article in ("the ", "a ", "an "):
         if normalized.startswith(article):
             normalized = normalized[len(article):]
             break
-    if not normalized:
-        return "0_9"
     first = normalized[0]
     if not first.isalpha():
         return "0_9"

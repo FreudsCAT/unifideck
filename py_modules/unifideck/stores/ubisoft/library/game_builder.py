@@ -21,8 +21,13 @@ from __future__ import annotations
 import logging
 import re
 from typing import TYPE_CHECKING, Any
+from ....core.types import Game
 
-from unifideck.core.types import Game
+# NOTE: ``..steam_filter`` (the Ubisoft Steam dedup filter) was
+# removed in commits 6c84e7e and 908d350 because it caused issues
+# in production. The feature is currently disabled — see
+# ``apply_steam_filter`` below — and will be re-introduced in a
+# future update with a fixed implementation.
 
 if TYPE_CHECKING:
     from unifideck.stores.ubisoft.config import UbisoftConfig
@@ -116,36 +121,21 @@ class _GameBuilder:
         self,
         configs: list[GameConfig],
     ) -> list[GameConfig]:
-        """Steam-linked Ubisoft filter — DEFERRED, returns input unchanged.
+        """No-op passthrough — Steam dedup filter is currently disabled.
 
-        The ``steam_filter`` module (OP-55i) was retired from the
-        project pending a future implementation sprint. The
-        method is kept on the builder API as a no-op so the
-        call site in ``fetch.py`` doesn't need to change when
-        the real filter ships.
-
-        When the real filter returns, this method should:
-
-        * Honour ``self._config.filter_steam_linked`` (skip when
-          False to preserve user opt-in).
-        * Cross-reference against ``self._config.steam_library_cross_ref``
-          and ``self._id_map`` to find Ubisoft games the user
-          already owns on Steam.
-        * Drop those games from ``configs`` and log the count.
-
-        Args:
-            configs: parsed Ubisoft game configurations.
-
-        Returns:
-            ``configs`` unchanged (deferred behaviour).
+        The implementation in ``..steam_filter`` was removed in
+        commits 6c84e7e and 908d350 because it caused production
+        issues. Until it returns, this method preserves the call
+        site (``fetch.py``) without altering the config list.
+        Any ``filter_steam_linked`` config flag the user has set
+        is silently ignored — re-enabling will require restoring
+        ``steam_filter.py`` and reverting this method.
         """
-        # Deferred — log once at debug to keep the absence visible
-        # without spamming when the filter is queried per-sync.
-        logger.debug(
-            "[UbisoftLibrary] steam_filter is deferred — "
-            "%d configs passed through unfiltered",
-            len(configs),
-        )
+        if self._config.filter_steam_linked:
+            logger.debug(
+                "[UbisoftLibrary] filter_steam_linked=True ignored — "
+                "feature disabled pending steam_filter.py restoration",
+            )
         return configs
 
     def build_games_from_configs(

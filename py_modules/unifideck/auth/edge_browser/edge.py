@@ -306,6 +306,16 @@ class EdgeBrowser:
         """Delegate to EdgeProfileManager (one-shot instance)."""
         _make_profile_manager().clear_profile_data()
 
+    def clear_store_cookies(self, domain: str) -> None:
+        """Clear cookies for `domain` from the shared Edge profile.
+
+        Instance method so the profile directory bound at
+        construction is reused — no one-shot factory call.
+        Called before each OAuth flow so stale sessions don't
+        bypass the login form.
+        """
+        self._profile.clear_cookies_for_domain(domain)
+
     # ── CDP helpers ──────────────────────────────────────────────────
 
     async def wait_and_check_crash(self) -> bool:

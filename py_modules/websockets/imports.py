@@ -1,8 +1,7 @@
 from __future__ import annotations
 
 import warnings
-from collections.abc import Iterable
-from typing import Any
+from typing import Any, Iterable
 
 
 __all__ = ["lazy_import"]

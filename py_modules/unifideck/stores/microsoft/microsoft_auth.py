@@ -3,37 +3,34 @@ import logging
 import urllib.error
 import urllib.parse
 import urllib.request
-from typing import Any, cast
-
-from unifideck.core.net import ssl_ctx_strict
-
+from typing import cast
+from ...core.net import ssl_ctx_permissive as _ssl
 logger = logging.getLogger(__name__)
 __all__ = [
     "build_xbl_chain",
     "http_get",
     "http_post",
     "request_xsts_token",
-    "ssl_ctx_strict",
 ]
 def http_post(url: str, data: dict[str, Any], headers: dict[str, Any]) -> dict[str, Any]:
     """Http post."""
     body = urllib.parse.urlencode(data).encode()
     req = urllib.request.Request(
         url, data=body, headers=headers, method="POST")
-    with urllib.request.urlopen(req, timeout=15, context=ssl_ctx_strict()) as r:
-        return cast(dict[str, Any], json.loads(r.read().decode()))
-def http_post_json(url: str, payload: dict[str, Any], headers: dict[str, Any]) -> dict[str, Any]:
+    with urllib.request.urlopen(req, timeout=15, context=_ssl("Microsoft OAuth — outdated Deck cert store")) as r:
+        return cast(dict, json.loads(r.read().decode()))
+def http_post_json(url: str, payload: dict, headers: dict) -> dict:
     """Http post JSON."""
     body = json.dumps(payload).encode()
     req = urllib.request.Request(
         url, data=body, headers=headers, method="POST")
-    with urllib.request.urlopen(req, timeout=20, context=ssl_ctx_strict()) as r:
-        return cast(dict[str, Any], json.loads(r.read().decode()))
-def http_get(url: str, headers: dict[str, Any]) -> dict[str, Any]:
+    with urllib.request.urlopen(req, timeout=20, context=_ssl("Microsoft OAuth — outdated Deck cert store")) as r:
+        return cast(dict, json.loads(r.read().decode()))
+def http_get(url: str, headers: dict) -> dict:
     """Http get."""
     req = urllib.request.Request(url, headers=headers)
-    with urllib.request.urlopen(req, timeout=15, context=ssl_ctx_strict()) as r:
-        return cast(dict[str, Any], json.loads(r.read().decode()))
+    with urllib.request.urlopen(req, timeout=15, context=_ssl("Microsoft OAuth — outdated Deck cert store")) as r:
+        return cast(dict, json.loads(r.read().decode()))
 
 def build_xbl_chain(
     access_token: str,

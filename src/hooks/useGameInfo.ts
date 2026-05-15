@@ -51,12 +51,28 @@ export interface UseGameInfoResult {
  * @returns aggregated info + loading/error flags.
  */
 export function useGameInfo(appId: number | null): UseGameInfoResult {
-  const fetch = useRPC<[number], Game>(rpcRoutes.getGameMetadata);
+  // Backend's `get_game_metadata(store, game_id)` requires a
+  // store/game-id pair we don't have at the appId boundary.
+  // `get_game_info(app_id)` is the right route for "look up
+  // by Steam shortcut appid".
+  const fetch = useRPC<[number], Game>(rpcRoutes.getGameInfo);
+  // Lazy priming : if the module-level cache has ANY entry for
+  // this appId (fresh OR stale), seed the initial state with it
+  // so consumers paint immediately. Stale data still triggers a
+  // background refresh below.
   const [state, setState] = useState<{
     data: Game | null;
     loading: boolean;
     error: Error | null;
-  }>({ data: null, loading: appId != null, error: null });
+  }>(() => {
+    if (appId == null) return { data: null, loading: false, error: null };
+    const cached = cache.get(appId);
+    return {
+      data: cached?.data ?? null,
+      loading: cached?.data == null,
+      error: null,
+    };
+  });
 
   const load = useCallback(
     async (force: boolean): Promise<void> => {
@@ -78,7 +94,13 @@ export function useGameInfo(appId: number | null): UseGameInfoResult {
         return;
       }
 
-      setState((s) => ({ ...s, loading: true, error: null }));
+      // Stale-while-revalidate : if we have ANY cached data,
+      // keep showing it while the background refresh runs.
+      setState((s) => ({
+        data: s.data ?? cached?.data ?? null,
+        loading: s.data == null && cached?.data == null,
+        error: null,
+      }));
       const promise = fetch(appId).then(
         (data) => {
           cache.set(appId, { data, ts: Date.now(), inflight: null });
@@ -119,4 +141,18 @@ export function useGameInfo(appId: number | null): UseGameInfoResult {
  *  exposed via the barrel; imported only by vitest specs. */
 export function _clearGameInfoCache(): void {
   cache.clear();
+}
+
+/** Drop the cache entry for one appId so the next render
+ *  re-fetches. Called after destructive actions (uninstall,
+ *  cancel) where `is_installed` flips. Mirrors the legacy
+ *  `gameInfoCache.delete(appId)` semantics — also drops the
+ *  signed/unsigned variants since Steam shortcuts may be
+ *  represented either way in the cache. */
+export function invalidateGameInfo(appId: number): void {
+  cache.delete(appId);
+  const signed = appId > 0x7FFFFFFF ? appId - 0x100000000 : appId;
+  const unsigned = appId < 0 ? appId + 0x100000000 : appId;
+  if (signed !== appId) cache.delete(signed);
+  if (unsigned !== appId) cache.delete(unsigned);
 }

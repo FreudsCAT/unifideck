@@ -37,14 +37,29 @@ logger = logging.getLogger(__name__)
 # failed to instantiate) leaves the store attribute at its
 # constructor default, disabling the feature with a WARNING.
 _STORE_INJECTIONS: dict[str, tuple[tuple[str, str], ...]] = {
+    "amazon": (
+        ("_browser_monitor", "browser_monitor"),
+        ("_shortcut_service", "shortcut"),
+        ("_edge", "edge_browser"),
+    ),
+    "epic": (
+        ("_browser_monitor", "browser_monitor"),
+        ("_shortcut_service", "shortcut"),
+        ("_edge", "edge_browser"),
+    ),
+    "gog": (
+        ("_browser_monitor", "browser_monitor"),
+        ("_shortcut_service", "shortcut"),
+        ("_edge", "edge_browser"),
+    ),
     "microsoft": (
+        ("_browser_monitor", "browser_monitor"),
+        ("_shortcut_service", "shortcut"),
+        ("_edge", "edge_browser"),
         ("_subscription_service", "microsoft_subscription"),
     ),
     "ubisoft": (
         ("_shortcut_service", "shortcut"),
-    ),
-    "gog": (
-        ("_browser_monitor", "oauth_browser_monitor"),
     ),
 }
 
@@ -77,80 +92,48 @@ def inject_store_dependencies(
                 store_instance, store_id, store_attr,
                 container_attr, container,
             )
-
-
-# ─────────────────────────────────────────────────────────────────
-# Private helpers — extracted from a former single CC=16 function
-# ─────────────────────────────────────────────────────────────────
-
-
-def _resolve_store(registry: StoreRegistry, store_id: str) -> Any | None:
-    """Look up ``store_id`` in the registry, collapsing all
-    "not present" cases to ``None``.
-
-    Three distinct registry behaviours map here to the same
-    result (the caller doesn't care *why* the store is absent):
-
-        * ``KeyError`` — the canonical "unknown id" shape;
-          silent skip (this store simply isn't enabled here).
-        * Any other exception — registry is sick (corrupt
-          state, partial init); WARN and skip so the other
-          stores can still be wired.
-        * Returned ``None`` — registry signals "the store id
-          is known but the instance is unavailable" (e.g. its
-          constructor blew up); silent skip, the constructor
-          path has already logged.
-    """
-    try:
-        instance = registry.get(store_id)
-    except KeyError:
-        return None
-    except Exception as err:
-        logger.warning(
-            "[StoreInjector] failed to retrieve %s from registry: %s",
-            store_id, err,
-        )
-        return None
-    return instance
-
-
-def _inject_one(
-    store_instance: Any,
-    store_id: str,
-    store_attr: str,
-    container_attr: str,
-    container: ServiceContainer,
-) -> None:
-    """Wire one ``(store_attr, container_attr)`` mapping onto a store.
-
-    Two failure paths, each isolated to this one mapping (other
-    mappings for the same store still run):
-
-        * Missing container slot — the corresponding service
-          failed to instantiate during ``bootstrap_services``;
-          the store's constructor default takes over and the
-          feature is silently disabled with a WARN.
-        * ``setattr`` raises — the store class uses ``__slots__``
-          or is a frozen dataclass without an "_injection"
-          escape hatch; WARN and leave the store unchanged.
-    """
-    service_instance = getattr(container, container_attr, None)
-    if service_instance is None:
-        logger.warning(
-            "[StoreInjector] %s missing required service %s "
-            "(feature disabled)",
-            store_id, container_attr,
-        )
-        return
-    try:
-        setattr(store_instance, store_attr, service_instance)
-    except Exception as err:
-        logger.warning(
-            "[StoreInjector] failed to inject %s into %s: %s",
-            container_attr, store_id, err,
-        )
-        return
-    logger.debug(
-        "[StoreInjector] wired %s.%s = %s",
-        store_id, store_attr, container_attr,
-    )
+            continue
+        if store is None:
+            continue
+        for store_attr, container_attr in mappings:
+            svc = getattr(container, container_attr, None)
+            if svc is None:
+                logger.info(
+                    "[bootstrap] %s.%s not injected (container.%s is None)",
+                    store_id,
+                    store_attr,
+                    container_attr,
+                )
+                continue
+            try:
+                setattr(store, store_attr, svc)
+                logger.info(
+                    "[bootstrap] injected %s.%s ← container.%s",
+                    store_id,
+                    store_attr,
+                    container_attr,
+                )
+            except Exception as e:
+                logger.warning(
+                    "[bootstrap] failed to inject %s.%s: %s",
+                    store_id,
+                    store_attr,
+                    e,
+                )
+        # Stores may need to (re)build their auth orchestrator
+        # now that the browser monitor is wired. Stores that
+        # implement this hook construct/refresh ``self._auth``
+        # using their newly-set ``_browser_monitor``.
+        rebuild = getattr(store, "_rebuild_auth_after_injection", None)
+        if callable(rebuild):
+            try:
+                rebuild()
+                logger.info(
+                    "[bootstrap] %s auth rebuilt after injection",
+                    store_id,
+                )
+            except Exception as e:
+                logger.warning(
+                    "[bootstrap] %s auth rebuild failed: %s",
+                    store_id, e,
+                )

@@ -17,6 +17,16 @@ export const rpcRoutes = {
   checkStoreStatus:        "check_store_status",
   getStoreInfos:           "get_store_infos",
   clearStoreAuths:         "clear_store_auths",
+  // Edge prereq (EdgeRPCMixin)
+  isEdgeInstalled:                 "is_edge_installed",
+  installEdge:                     "install_edge",
+  // Auth-shortcut context (AuthShortcutsRPCMixin)
+  getEpicAuthShortcutContext:      "get_epic_auth_shortcut_context",
+  getGogAuthShortcutContext:       "get_gog_auth_shortcut_context",
+  getAmazonAuthShortcutContext:    "get_amazon_auth_shortcut_context",
+  getMicrosoftAuthShortcutContext: "get_microsoft_auth_shortcut_context",
+  getUbisoftAuthShortcutContext:   "get_ubisoft_auth_shortcut_context",
+  getCompatToolForGame:            "get_compat_tool_for_game",
   // Library sync (SyncRPCMixin)
   syncLibraries:           "sync_libraries",
   forceSyncLibraries:      "force_sync_libraries",
@@ -34,6 +44,7 @@ export const rpcRoutes = {
   getGameInfo:             "get_game_info",
   getGameMetadata:         "get_game_metadata",
   getStorageLocations:     "get_storage_locations",
+  getGogGameLanguages:     "get_gog_game_languages",
   // UI helpers (UIRPCMixin)
   injectHideCss:           "inject_hide_css",
   hidePlaySection:         "hide_play_section",
@@ -41,6 +52,7 @@ export const rpcRoutes = {
   setLanguagePreference:   "set_language_preference",
   getLanguagePreference:   "get_language_preference",
   setDefaultStorageLocation: "set_default_storage_location",
+  setCustomInstallPath:      "set_custom_install_path",
   listDirectory:             "list_directory",
   // Playtime (PlaytimeRPCMixin)
   notifyGameLaunched:      "notify_game_launched",

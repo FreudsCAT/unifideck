@@ -3,24 +3,26 @@
  * configuration.
  *
  * Replaces the 623L legacy file. This container loads the
- * location list via RPC, exposes a default-storage selector
- * (calling `set_default_storage_location`), and embeds
+ * location list via `useStorageConfig`, exposes a
+ * default-storage selector (calling
+ * `set_default_storage_location`), and embeds
  * `<StoragePathPicker>` for browsing custom paths via
- * `list_directory`. Both routes are registered in
- * UIRPCMixin (set_default_storage_location, list_directory).
+ * `list_directory`. The custom path picked is persisted via
+ * `set_custom_install_path` then promoted to the default
+ * storage location.
+ *
+ * Per PDF rule : all RPC traffic flows through the
+ * `useStorageConfig` hook ; this file stays presentational.
  */
-import React, { FC, useCallback, useState } from "react";
+import React, { FC } from "react";
 import {
-  PanelSection, PanelSectionRow, ButtonItem, Field, Spinner,
+  PanelSection, PanelSectionRow, ButtonItem, Field, Spinner, showModal,
 } from "@decky/ui";
 import { useTranslation } from "react-i18next";
-import { useRPC, useRPCQuery } from "../../api/useRPC";
-import { rpcRoutes } from "../../api/rpc-routes";
+import { useStorageConfig } from "../../hooks/useStorageConfig";
 import { useToast } from "../../hooks/useToast";
-import { StoragePathPicker } from "./StoragePathPicker";
-import type {
-  StorageLocationsResponse, StorageLocation,
-} from "../../types/downloads";
+import { StorageBrowserModal } from "../modals/StorageBrowserModal";
+import type { StorageLocation } from "../../types/downloads";
 
 /**
  * Storage settings panel : where new installs go (eMMC,
@@ -31,31 +33,29 @@ import type {
 export const StorageSettings: FC = () => {
   const { t } = useTranslation();
   const toast = useToast();
-  const locationsQuery = useRPCQuery<[], StorageLocationsResponse>(
-    rpcRoutes.getStorageLocations, [],
-  );
-  const setDefaultRPC = useRPC<[StorageLocation], { success: boolean }>(
-    rpcRoutes.setDefaultStorageLocation,
-  );
-  const [saving, setSaving] = useState(false);
-  const locations = locationsQuery.data?.locations ?? [];
-  const defaultStorage = locationsQuery.data?.default ?? "internal";
-  const onSetDefault = useCallback(
-    async (id: StorageLocation) => {
-      setSaving(true);
-      try {
-        const r = await setDefaultRPC(id);
-        if (r.success) {
-          await locationsQuery.refetch();
-          toast.success(t("storage.defaultUpdated"));
-        }
-      } finally {
-        setSaving(false);
-      }
-    },
-    [setDefaultRPC, locationsQuery, t, toast],
-  );
-  if (locationsQuery.loading) {
+  const {
+    locations, defaultLocation, loading, setDefault, setCustomPath,
+  } = useStorageConfig();
+
+  const onSetDefault = async (id: StorageLocation): Promise<void> => {
+    if (await setDefault(id)) {
+      toast.success(t("storage.defaultUpdated"));
+    } else {
+      toast.error(t("storage.setDefaultFailed"));
+    }
+  };
+
+  const onConfirmCustom = async (path: string): Promise<void> => {
+    if (!(await setCustomPath(path))) {
+      toast.error(t("storage.customPathFailed"));
+      return;
+    }
+    if (await setDefault("custom")) {
+      toast.success(t("storage.customPathSet", { path }));
+    }
+  };
+
+  if (loading) {
     return (
       <PanelSection title={t("storage.title")}>
         <PanelSectionRow><Spinner /></PanelSectionRow>
@@ -73,10 +73,10 @@ export const StorageSettings: FC = () => {
           >
             <ButtonItem
               layout="below"
-              disabled={!loc.available || saving || defaultStorage === loc.id}
+              disabled={!loc.available || defaultLocation === loc.id}
               onClick={() => onSetDefault(loc.id)}
             >
-              {defaultStorage === loc.id
+              {defaultLocation === loc.id
                 ? t("storage.isDefault")
                 : t("storage.setDefault")}
             </ButtonItem>
@@ -84,11 +84,22 @@ export const StorageSettings: FC = () => {
         </PanelSectionRow>
       ))}
       <PanelSectionRow>
-        <StoragePathPicker
-          startPath={
-            locations.find((l) => l.id === "custom")?.path ?? "/home/deck"
+        <ButtonItem
+          layout="below"
+          onClick={() =>
+            showModal(
+              <StorageBrowserModal
+                startPath={
+                  locations.find((l) => l.id === "custom")?.path ?? "/home/deck"
+                }
+                onConfirm={onConfirmCustom}
+                closeModal={() => {}}
+              />,
+            )
           }
-        />
+        >
+          {t("storageSettings.browseButton")}
+        </ButtonItem>
       </PanelSectionRow>
     </PanelSection>
   );

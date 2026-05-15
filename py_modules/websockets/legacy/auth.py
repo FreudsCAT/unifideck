@@ -3,8 +3,7 @@ from __future__ import annotations
 import functools
 import hmac
 import http
-from collections.abc import Awaitable, Iterable
-from typing import Any, Callable, cast
+from typing import Any, Awaitable, Callable, Iterable, Tuple, cast
 
 from ..datastructures import Headers
 from ..exceptions import InvalidHeader
@@ -14,7 +13,8 @@ from .server import HTTPResponse, WebSocketServerProtocol
 
 __all__ = ["BasicAuthWebSocketServerProtocol", "basic_auth_protocol_factory"]
 
-Credentials = tuple[str, str]
+# Change to tuple[str, str] when dropping Python < 3.9.
+Credentials = Tuple[str, str]
 
 
 def is_credentials(value: Any) -> bool:

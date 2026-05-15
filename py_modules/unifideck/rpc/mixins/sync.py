@@ -21,8 +21,22 @@ class SyncRPCMixin:
         """
         return await self.sync_service.sync_all(**kw)
 
-    async def force_sync_libraries(self, **kw: Any) -> Any:
-        """Like sync_libraries but bypass the in-progress guard."""
+    async def force_sync_libraries(
+        self, resync_artwork: bool = False, **kw: Any,
+    ) -> Any:
+        """Like ``sync_libraries`` but bypasses per-store cache TTLs.
+
+        Used for "force refresh" — when the cache hasn't
+        expired but the library is known to have changed.
+
+        Args:
+            resync_artwork: whether to re-fetch all artwork
+                (passed from the frontend's ForceSyncModal).
+            **kw: forwarded with ``force=True`` added.
+
+        Returns:
+            Sync-outcome dict.
+        """
         return await self.sync_service.sync_all(force=True, **kw)
 
     async def get_sync_status(self) -> Any:
@@ -51,5 +65,18 @@ class SyncRPCMixin:
         return self.sync_service.get_all_games()
 
     async def get_game_info(self, app_id: int) -> Any:
-        """Look up a game's info by its Unifideck app_id (sync method)."""
+        """Return the full record for a single Unifideck AppID.
+
+        Args:
+            app_id: Steam-style AppID (deterministic from
+                store + game_id + title).
+
+        Returns:
+            Game info dict, or empty / None when unknown.
+        """
+        # `sync_service.get_game_info` is a synchronous helper
+        # (linear scan over `_all_games`) — no coroutine, no
+        # await. The previous body had a stray `await` which
+        # raised `TypeError: object NoneType can't be used
+        # in 'await' expression`.
         return self.sync_service.get_game_info(app_id)
