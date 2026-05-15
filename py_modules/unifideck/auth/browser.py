@@ -69,6 +69,55 @@ __all__ = [
 ]
 
 
+def _init_polling_state() -> dict[str, Any]:
+    """Build the mutable state dict passed through the polling loop.
+
+    Four entries:
+
+    * ``monitored_urls`` — dedups URL inspection across loop
+      iterations; non-Epic URLs are added here after first sight.
+    * ``logged_urls`` — dedups the "OAuth page detected" INFO log
+      so a long-lived auth tab doesn't spam the log.
+    * ``content_extract_first_attempt`` — tracks URLs we've
+      already content-extracted from at least once, so failure
+      logging escalates from DEBUG to INFO only on the first
+      attempt per URL.
+    * ``last_heartbeat`` — monotonic timestamp of the last
+      heartbeat emit; the heartbeat helper resets it every 30s.
+    """
+    return {
+        "monitored_urls": set(),
+        "logged_urls": set(),
+        "content_extract_first_attempt": set(),
+        "last_heartbeat": 0.0,
+    }
+
+
+def _make_timeout_result(
+    state: dict[str, Any], start: float,
+) -> AuthCaptureResult:
+    """Build the timeout-failure result + emit the summary warning.
+
+    Called once when ``wait_for_redirect`` hits its deadline
+    without capturing anything. Log includes the count of
+    distinct URLs seen so ops can tell "user abandoned the
+    login" (zero unique URLs) from "user logged in but
+    redirect never fired" (many unique URLs).
+    """
+    elapsed = time.monotonic() - start
+    monitored = len(state["monitored_urls"])
+    logger.warning(
+        "[auth/browser] timeout after %.1fs — "
+        "no code found in %d unique URLs",
+        elapsed, monitored,
+    )
+    return AuthCaptureResult(
+        success=False,
+        error="timeout",
+        elapsed_seconds=elapsed,
+    )
+
+
 class OAuthBrowserMonitor:
     """Watches Steam's embedded browser and Edge for an OAuth redirect.
 
@@ -122,42 +171,17 @@ class OAuthBrowserMonitor:
 
         When ``content_trigger_url`` and ``content_regex`` are
         both set, *also* scans page content for a matching
-        group: if any target's URL contains
-        ``content_trigger_url``, the method connects to that
-        target via CDP, evaluates ``document.body.innerText``,
-        and applies the regex. This is used as a fallback for
-        stores (e.g. Epic) that embed the authorization code in
-        a JSON blob inside the page body rather than a query
-        parameter.
-
-        Refactor history (lot 13a):
-
-        1. Cognitive-complexity refactor: originally a single
-           method at CCR=63, decomposed into private helpers
-           (``_poll_both_endpoints``, ``_log_heartbeat_if_due``,
-           ``_try_capture_target``).
-        2. File-cap split: content extraction and URL helpers
-           moved to sibling modules. This orchestrator stays
-           focused on the polling loop and CDP endpoints.
+        group: connects via CDP, evaluates
+        ``document.body.innerText``, and applies the regex.
+        Used for stores (e.g. Epic) that embed the code in a
+        JSON blob inside the page rather than a query parameter.
         """
         deadline = time.monotonic() + (
             timeout if timeout is not None
             else self._default_timeout
         )
         start = time.monotonic()
-        # Mutable polling state passed by reference to helpers.
-        # ``monitored_urls`` dedups URL inspection across loop
-        # iterations; ``logged_urls`` dedups the "OAuth page
-        # detected" info log; ``content_extract_first_attempt``
-        # tracks which URLs we've already content-extracted from
-        # at least once (to escalate failure logging from DEBUG
-        # to INFO only on the first attempt per URL).
-        state: dict[str, Any] = {
-            "monitored_urls": set(),
-            "logged_urls": set(),
-            "content_extract_first_attempt": set(),
-            "last_heartbeat": 0.0,
-        }
+        state = _init_polling_state()
         while time.monotonic() < deadline:
             cef_targets, edge_targets = await self._poll_both_endpoints()
             all_targets = cef_targets + edge_targets
@@ -180,17 +204,7 @@ class OAuthBrowserMonitor:
 
             await asyncio.sleep(self._poll_interval)
 
-        monitored = len(state["monitored_urls"])
-        logger.warning(
-            "[auth/browser] timeout after %.1fs — "
-            "no code found in %d unique URLs",
-            time.monotonic() - start, monitored,
-        )
-        return AuthCaptureResult(
-            success=False,
-            error="timeout",
-            elapsed_seconds=time.monotonic() - start,
-        )
+        return _make_timeout_result(state, start)
 
     async def close_oauth_tab(self, url_substring: str) -> bool:
         """Close the first tab whose URL contains ``url_substring``.

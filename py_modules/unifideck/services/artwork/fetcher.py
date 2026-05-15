@@ -233,76 +233,25 @@ async def find_artwork_url(
         return None
 
 
-async def download_and_save(
-    grid_dir: str, app_id: int, kind: str, url: str, timeout: int,
-) -> bool:
-    """Download an artwork URL and save it to Steam's grid directory.
+async def _fetch_url_bytes(url: str, timeout: int) -> bytes | None:
+    """Download ``url`` and return its body bytes, or None on failure.
 
-    Pipeline:
+    Pure network slice extracted from ``download_and_save``:
 
-    1. **Suffix resolution** via ``_suffix_for(kind, url)``
-       — this is what makes the saved filename's
-       extension match the actual byte content so Steam's
-       CEF artwork reader doesn't silently reject it;
-    2. **Target path** built from ``grid_dir`` + app_id +
-       resolved suffix;
-    3. **HTTP fetch** via a fresh ``aiohttp.ClientSession``
-       — we don't pool across calls because artwork
-       downloads are infrequent and the session-creation
-       overhead is dwarfed by the actual network latency;
-       the ``async with`` combined statement ensures both
-       the session AND the response are properly closed
-       even on exception;
-    4. **Status check** — non-200 → False with no further
-       work (no logging at WARN level because 404 from
-       SGDB CDN is a routine occurrence during library
-       reindex events);
-    5. **Body read** — ``await resp.read()`` slurps the
-       entire payload into memory; artwork files are
-       small (under 1 MB typically, under 5 MB worst case
-       for 4K heroes) so streaming would only add
-       complexity;
-    6. **Atomic write** via ``async_file_ops.write_bytes``
-       (owned by OP-06a) — that helper handles the
-       tmp-file + ``os.replace`` + fsync dance so we
-       don't have to reimplement it here;
-    7. **Two exception barriers** with different log
-       levels:
-       - HTTP-side exceptions (timeout, DNS, TLS,
-         partial read, connection reset) → DEBUG —
-         transient and retryable next sync;
-       - Filesystem-side exceptions (permission, disk
-         full, read-only mount) → WARN — these usually
-         indicate a real configuration problem the user
-         should see.
+    * Fresh ``aiohttp.ClientSession`` per call — artwork
+      downloads are infrequent enough that pooling overhead
+      isn't worth the lifecycle complexity. The combined
+      ``async with`` closes both session and response even
+      on exception.
+    * Non-200 response → ``None`` with no log (404 from
+      SGDB CDN is routine during reindex events).
+    * Any HTTP-side exception (timeout, DNS, TLS, partial
+      read, reset) → ``None`` at DEBUG level — transient
+      and retryable next sync cycle.
 
-    Artwork is intentionally best-effort: any failure
-    returns False without raising. The next sync cycle
-    will retry the same URL, and if the underlying issue
-    persists, the user sees a missing capsule but the
-    rest of the library still works.
-
-    Args:
-        grid_dir: absolute path to Steam's ``grid/``
-            directory. Must already exist — we don't
-            create it here because the caller (the
-            service) handles directory bootstrap.
-        app_id: Steam application id (unsigned 32-bit).
-        kind: artwork kind for suffix resolution.
-        url: HTTPS URL to download from. Typically an
-            SGDB CDN URL with a signed query string.
-        timeout: total HTTP timeout in seconds — applies
-            to connect + headers + body read combined,
-            not per-phase.
-
-    Returns:
-        True iff the HTTP fetch succeeded with status 200
-        AND the bytes were successfully persisted to disk.
-        False on any failure mode (non-200 HTTP, network
-        error, filesystem error). Never raises.
+    Caller responsibility: distinguishing a fetch failure
+    from an empty body. Both manifest as ``None`` here.
     """
-    suffix = _suffix_for(kind, url)
-    target = str(Path(grid_dir) / f"{app_id}{suffix}")
     try:
         import aiohttp
         client_timeout = aiohttp.ClientTimeout(total=timeout)
@@ -311,12 +260,57 @@ async def download_and_save(
             session.get(url, timeout=client_timeout) as resp,
         ):
             if resp.status != 200:
-                return False
-            data = await resp.read()
+                return None
+            return await resp.read()
     except Exception as e:
         logger.debug("[ArtworkService] download failed: %s", e)
-        return False
+        return None
 
+
+async def download_and_save(
+    grid_dir: str, app_id: int, kind: str, url: str, timeout: int,
+) -> bool:
+    """Download an artwork URL and save it to Steam's grid directory.
+
+    Three-stage pipeline:
+
+    1. **Suffix resolution** via ``_suffix_for(kind, url)``
+       so the saved filename's extension matches the
+       actual byte content — Steam's CEF artwork reader
+       rejects files with mismatched extension + MIME.
+    2. **HTTP fetch** via ``_fetch_url_bytes`` (extracted
+       helper handling status check + HTTP exception
+       barrier at DEBUG level).
+    3. **Atomic write** via ``async_file_ops.write_bytes``
+       which handles the tmp-file + ``os.replace`` +
+       fsync dance. Filesystem exceptions logged at WARN
+       — these typically indicate a real config problem
+       (permission, disk full, RO mount) the user should
+       see in the Decky log.
+
+    Artwork is intentionally best-effort: any failure
+    returns False without raising. The next sync cycle
+    will retry the same URL.
+
+    Args:
+        grid_dir: absolute path to Steam's ``grid/``
+            directory. Must already exist — directory
+            bootstrap is the caller's responsibility.
+        app_id: Steam application id (unsigned 32-bit).
+        kind: artwork kind for suffix resolution.
+        url: HTTPS URL to download from (typically an
+            SGDB CDN URL with a signed query string).
+        timeout: total HTTP timeout in seconds.
+
+    Returns:
+        True iff fetch returned 200 AND bytes persisted to
+        disk. False on any failure mode. Never raises.
+    """
+    suffix = _suffix_for(kind, url)
+    target = str(Path(grid_dir) / f"{app_id}{suffix}")
+    data = await _fetch_url_bytes(url, timeout)
+    if data is None:
+        return False
     from ...core.io import async_file_ops as aio
     try:
         await aio.write_bytes(target, data)

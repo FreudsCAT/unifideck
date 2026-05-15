@@ -45,6 +45,13 @@ def bootstrap_services(
 
     Must be called AFTER ``registry.auto_discover`` — some
     services subscribe to per-store events at construction time.
+
+    Post-loop wiring delegates to ``_wire_browser_monitor`` and
+    ``_wire_edge_browser`` because those services depend on the
+    just-built ``cdp`` slot — service-defs lambdas only see
+    (bus, registry, cache, config, paths, pipeline), with no
+    access to a partial container, so we wire them outside the
+    main loop.
     """
     logger.info("[Bootstrap] resolving service paths from config")
     paths = ServicePaths.from_config(config)
@@ -71,58 +78,80 @@ def bootstrap_services(
                 attr, e,
             )
 
-    # OAuthBrowserMonitor depends on the just-built `cdp` client.
-    # Service-defs lambdas only see (bus, registry, cache, config,
-    # paths, pipeline) — no partial-container access — so we
-    # Edge CDP port — resolved once and shared between the
-    # EdgeBrowser (launcher) and OAuthBrowserMonitor (redirect
-    # capture). The monitor polls this port so it can see the
-    # OAuth tabs that the launcher opens on the same port.
-    cdp_port = 9222
-    try:
-        cdp_port = int(config.get("edge.cdp_port", 9222))
-    except Exception:
-        pass
+    # Post-loop wiring for services that depend on container slots
+    # built during the loop above.
+    cdp_port = _resolve_cdp_port(config)
+    _wire_browser_monitor(container, config, cdp_port)
+    _wire_edge_browser(container, config, cdp_port)
+    return container
 
-    # construct it here in the post-loop step instead of adding a
-    # special case to `_instantiate_service`. Quiet on `None` cdp
-    # so a missing dependency doesn't block the rest of the boot.
+
+def _resolve_cdp_port(config: ConfigManager) -> int:
+    """Read the Edge CDP port from config with a defensive fallback.
+
+    The port is shared between ``EdgeBrowser`` (launcher) and
+    ``OAuthBrowserMonitor`` (redirect capture) so they target
+    the same Edge instance. Misconfigured values fall back to
+    the canonical default (9222) instead of raising, since CDP
+    port misconfig should degrade auth not block plugin boot.
+    """
     try:
-        if container.cdp is not None:
-            from ...auth.browser import OAuthBrowserMonitor
-            container.browser_monitor = OAuthBrowserMonitor(
-                cdp_client=container.cdp, config=config,
-                edge_cdp_port=cdp_port,
-            )
-            logger.debug("[bootstrap] browser_monitor wired")
-        else:
-            logger.info(
-                "[bootstrap] browser_monitor skipped — no cdp client",
-            )
+        return int(config.get("edge.cdp_port", 9222))
+    except Exception:
+        return 9222
+
+
+def _wire_browser_monitor(
+    container: ServiceContainer,
+    config: ConfigManager,
+    cdp_port: int,
+) -> None:
+    """Build OAuthBrowserMonitor on top of ``container.cdp``.
+
+    Quiet on ``cdp is None`` (the cdp client itself failed to
+    instantiate) — leaves ``browser_monitor`` as None so stores
+    that require it skip auth gracefully via the injector layer.
+    """
+    if container.cdp is None:
+        logger.info("[bootstrap] browser_monitor skipped — no cdp client")
+        return
+    try:
+        from ...auth.browser import OAuthBrowserMonitor
+        container.browser_monitor = OAuthBrowserMonitor(
+            cdp_client=container.cdp, config=config,
+            edge_cdp_port=cdp_port,
+        )
+        logger.debug("[bootstrap] browser_monitor wired")
     except Exception as e:
         logger.warning(
             "[bootstrap] failed to wire browser_monitor: %s", e,
         )
 
-    # EdgeBrowser — flatpak install + CDP launcher for OAuth
-    # flows. The PDF spec lists it under ``auth/edge_browser/``
-    # but never wires it into a service ; we instantiate it
-    # here so the injector can hand a single shared instance
-    # to every OAuth store.
+
+def _wire_edge_browser(
+    container: ServiceContainer,
+    config: ConfigManager,
+    cdp_port: int,
+) -> None:
+    """Build the shared EdgeBrowser instance (flatpak install + CDP launcher).
+
+    The PDF spec lists it under ``auth/edge_browser/`` but never
+    wires it into a service ; we instantiate it here so the
+    injector layer can hand a single shared instance to every
+    OAuth store. ``locale_fn`` is a callback (not a value) so
+    config changes are picked up at launch time, not at boot.
+    """
     try:
         from ...auth.edge_browser import EdgeBrowser
         container.edge_browser = EdgeBrowser(
             cdp_port=cdp_port,
-            locale_fn=lambda: str(
-                config.get("ui.locale", "en-US"),
-            ),
+            locale_fn=lambda: str(config.get("ui.locale", "en-US")),
         )
         logger.info("[bootstrap] edge_browser wired")
     except Exception as e:
         logger.warning(
             "[bootstrap] failed to wire edge_browser: %s", e,
         )
-    return container
 
 
 def build_service_subset(

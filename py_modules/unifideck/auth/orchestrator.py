@@ -119,60 +119,40 @@ class AuthOrchestrator:
         """Execute the CDP OAuth flow (blocking or background).
 
         Args:
-        get_url: Coroutine returning the OAuth URL.
-        allowed_uris: Redirect URL prefixes signalling success.
-        exchange_code: Coroutine that takes the captured code
-        and returns the terminal AuthResult.
-        timeout: Optional override for the flow deadline.
-        write_url_file: Optional path where the URL should be
-        written on disk (for the shell launcher to read).
-        The write is atomic (.tmp then rename).
-        background: If True, return early after URL acquisition
-        and run the rest of the flow in a background task.
-        The returned AuthResult has pending=True.
+            get_url: Coroutine returning the OAuth URL.
+            allowed_uris: Redirect URL prefixes signalling success.
+            exchange_code: Coroutine that takes the captured code
+                and returns the terminal AuthResult.
+            timeout: Optional override for the flow deadline.
+            write_url_file: Optional path where the URL should be
+                written on disk (for the shell launcher to read).
+                The write is atomic (.tmp then rename).
+            background: If True, return early after URL acquisition
+                and run the rest of the flow in a background task.
+                The returned AuthResult has pending=True.
 
         Returns:
-        Blocking mode: the terminal AuthResult.
-        Background mode: AuthResult(success=True, pending=True)
-        unless URL acquisition itself failed.
-
+            Blocking mode: the terminal AuthResult.
+            Background mode: AuthResult(success=True, pending=True)
+            unless URL acquisition itself failed.
         """
         deadline = timeout if timeout is not None else self._cfg.timeout
-        # Announce the attempt.
         await self._emit_started()
-        # Step 1: get the URL (store-specific, always synchronous).
 
-        try:
-            url = await get_url()
-        except Exception as e:
-            logger.exception("[AuthOrchestrator/%s] get_url failed", self._store)
-            return await self._emit_failed(
-                "get_url_failed", str(e),
-            )
-        if not url:
-            return await self._emit_failed(
-                "no_url", "get_url returned empty string",
-            )
-        # Emit a sanitised view of the auth URL so operators
-        # can diagnose OAuth config issues without seeing
-        # secrets. Query-string parameters are dropped — the
-        # domain + path is enough to verify the URL is correct.
-        pretty = url.split("?", 1)[0] if "?" in url else url
-        logger.info(
-            "[AuthOrchestrator/%s] auth URL: %s", self._store, pretty,
-        )
-        # Step 2: optionally persist the URL for the shell
-        # launcher.
+        # Step 1: get the URL (store-specific, always synchronous).
+        url_or_failure = await self._acquire_auth_url(get_url)
+        if isinstance(url_or_failure, AuthResult):
+            return url_or_failure
+        url = url_or_failure
+
+        # Step 2: optionally persist the URL for the shell launcher.
         if write_url_file:
-            write_ok = await self._write_url_atomically(
-                write_url_file, url,
+            persist_failure = await self._persist_url_if_needed(
+                url, write_url_file,
             )
-            if not write_ok:
-                return await self._emit_failed(
-                    "url_write_failed",
-                    f"could not write URL to {write_url_file}",
-                    url=url,
-                )
+            if persist_failure is not None:
+                return persist_failure
+
         # Step 3: hand off to blocking or background mode.
         if background:
             return self._spawn_background_task(
@@ -190,6 +170,63 @@ class AuthOrchestrator:
             deadline=deadline,
             content_trigger_url=content_trigger_url,
             content_regex=content_regex,
+        )
+
+    async def _acquire_auth_url(
+        self, get_url: GetUrlCallback,
+    ) -> str | AuthResult:
+        """Call ``get_url`` and validate the result.
+
+        Returns either the URL string on success, or an
+        ``AuthResult`` (failure envelope) on any error so the
+        caller can propagate it unchanged.
+
+        Three failure paths:
+
+        * ``get_url`` raises → ``get_url_failed`` with the
+          exception message (logged at exception level so the
+          stacktrace lands in the Decky log).
+        * ``get_url`` returns an empty string → ``no_url``.
+        * Success → returns the URL after emitting a sanitised
+          (query-stripped) version to INFO for ops diagnostics.
+        """
+        try:
+            url = await get_url()
+        except Exception as e:
+            logger.exception("[AuthOrchestrator/%s] get_url failed", self._store)
+            return await self._emit_failed("get_url_failed", str(e))
+        if not url:
+            return await self._emit_failed(
+                "no_url", "get_url returned empty string",
+            )
+        # Sanitised view: query-string dropped so secrets don't
+        # land in logs while the domain + path still let ops
+        # spot OAuth misconfiguration.
+        pretty = url.split("?", 1)[0] if "?" in url else url
+        logger.info(
+            "[AuthOrchestrator/%s] auth URL: %s", self._store, pretty,
+        )
+        return url
+
+    async def _persist_url_if_needed(
+        self, url: str, write_url_file: str,
+    ) -> AuthResult | None:
+        """Atomically persist ``url`` to disk; return failure result or None.
+
+        Returns ``None`` on success (caller continues), or an
+        ``AuthResult`` carrying the ``url_write_failed`` code
+        when the atomic write itself fails. ``url`` is carried
+        in the failure envelope so the shell launcher can still
+        recover the URL via the bus even if the file write
+        didn't go through.
+        """
+        write_ok = await self._write_url_atomically(write_url_file, url)
+        if write_ok:
+            return None
+        return await self._emit_failed(
+            "url_write_failed",
+            f"could not write URL to {write_url_file}",
+            url=url,
         )
 
     def cancel_background(self) -> bool:
