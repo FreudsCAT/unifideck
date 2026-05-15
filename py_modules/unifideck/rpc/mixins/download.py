@@ -8,8 +8,12 @@ Mixin merging two slices that the handler groups split apart:
   ``check_game_update``) — these live in ``StoreHandlers`` in
   the newer API;
 * download-queue management (``cancel_download`` /
-  ``get_download_queue`` / ``get_storage_locations``) — these
-  live in ``DownloadHandlers``.
+  ``get_download_queue``) — these live in ``DownloadHandlers``.
+
+Storage-location RPCs (``get_storage_locations``,
+``set_default_storage_location``, ``set_custom_install_path``)
+live in a sibling ``StorageRPCMixin`` (OP-26j) so this file
+keeps the 200 LOC ceiling.
 
 Two private helpers centralise the null checks:
 
@@ -128,20 +132,6 @@ class DownloadRPCMixin:
         """
         download = self._require_download()
         return download.get_queue()
-
-    async def get_storage_locations(self) -> Any:
-        """Return the list of available install locations.
-
-        Delegates to ``DownloadService.get_storage_locations``;
-        in v1.3 this typically reports the Steam Deck's
-        internal eMMC + any mounted microSD card.
-
-        Returns:
-            List of location dicts (path + free-space
-            info).
-        """
-        download = self._require_download()
-        return download.get_storage_locations()
 
     def _require_store(self, store: str) -> Any:
         """Return the store from the registry or raise ``store_not_found``.

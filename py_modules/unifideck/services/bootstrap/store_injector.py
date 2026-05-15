@@ -22,7 +22,30 @@ if TYPE_CHECKING:
     from .container import ServiceContainer
 logger = logging.getLogger(__name__)
 _STORE_INJECTIONS: dict[str, tuple[tuple[str, str], ...]] = {
-    "microsoft": (("_subscription_service", "microsoft_subscription"),),
+    "amazon": (
+        ("_browser_monitor", "browser_monitor"),
+        ("_shortcut_service", "shortcut"),
+        ("_edge", "edge_browser"),
+    ),
+    "epic": (
+        ("_browser_monitor", "browser_monitor"),
+        ("_shortcut_service", "shortcut"),
+        ("_edge", "edge_browser"),
+    ),
+    "gog": (
+        ("_browser_monitor", "browser_monitor"),
+        ("_shortcut_service", "shortcut"),
+        ("_edge", "edge_browser"),
+    ),
+    "microsoft": (
+        ("_browser_monitor", "browser_monitor"),
+        ("_shortcut_service", "shortcut"),
+        ("_edge", "edge_browser"),
+        ("_subscription_service", "microsoft_subscription"),
+    ),
+    "ubisoft": (
+        ("_shortcut_service", "shortcut"),
+    ),
 }
 
 
@@ -88,4 +111,21 @@ def inject_store_dependencies(
                     store_id,
                     store_attr,
                     e,
+                )
+        # Stores may need to (re)build their auth orchestrator
+        # now that the browser monitor is wired. Stores that
+        # implement this hook construct/refresh ``self._auth``
+        # using their newly-set ``_browser_monitor``.
+        rebuild = getattr(store, "_rebuild_auth_after_injection", None)
+        if callable(rebuild):
+            try:
+                rebuild()
+                logger.info(
+                    "[bootstrap] %s auth rebuilt after injection",
+                    store_id,
+                )
+            except Exception as e:
+                logger.warning(
+                    "[bootstrap] %s auth rebuild failed: %s",
+                    store_id, e,
                 )

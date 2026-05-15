@@ -3,11 +3,9 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-import traceback
 import urllib.parse
-from collections.abc import AsyncIterator, Generator, Sequence
 from types import TracebackType
-from typing import Any, Callable
+from typing import Any, AsyncIterator, Callable, Generator, Sequence
 
 from ..client import ClientProtocol, backoff
 from ..datastructures import HeadersLike
@@ -46,7 +44,7 @@ class ClientConnection(Connection):
     closed with any other code.
 
     The ``ping_interval``, ``ping_timeout``, ``close_timeout``, ``max_queue``,
-    and ``write_limit`` arguments have the same meaning as in :func:`connect`.
+    and ``write_limit`` arguments the same meaning as in :func:`connect`.
 
     Args:
         protocol: Sans-I/O connection.
@@ -60,7 +58,7 @@ class ClientConnection(Connection):
         ping_interval: float | None = 20,
         ping_timeout: float | None = 20,
         close_timeout: float | None = 10,
-        max_queue: int | None | tuple[int | None, int | None] = 16,
+        max_queue: int | tuple[int, int | None] = 16,
         write_limit: int | tuple[int, int | None] = 2**15,
     ) -> None:
         self.protocol: ClientProtocol
@@ -96,9 +94,9 @@ class ClientConnection(Connection):
             return_when=asyncio.FIRST_COMPLETED,
         )
 
-        # self.protocol.handshake_exc is set when the connection is lost before
-        # receiving a response, when the response cannot be parsed, or when the
-        # response fails the handshake.
+        # self.protocol.handshake_exc is always set when the connection is lost
+        # before receiving a response, when the response cannot be parsed, or
+        # when the response fails the handshake.
 
         if self.protocol.handshake_exc is not None:
             raise self.protocol.handshake_exc
@@ -182,7 +180,7 @@ class connect:
         async for websocket in connect(...):
             try:
                 ...
-            except websockets.exceptions.ConnectionClosed:
+            except websockets.ConnectionClosed:
                 continue
 
     If the connection fails with a transient error, it is retried with
@@ -222,8 +220,7 @@ class connect:
         max_queue: High-water mark of the buffer where frames are received.
             It defaults to 16 frames. The low-water mark defaults to ``max_queue
             // 4``. You may pass a ``(high, low)`` tuple to set the high-water
-            and low-water marks. If you want to disable flow control entirely,
-            you may set it to ``None``, although that's a bad idea.
+            and low-water marks.
         write_limit: High-water mark of write buffer in bytes. It is passed to
             :meth:`~asyncio.WriteTransport.set_write_buffer_limits`. It defaults
             to 32 KiB. You may pass a ``(high, low)`` tuple to set the
@@ -284,7 +281,7 @@ class connect:
         close_timeout: float | None = 10,
         # Limits
         max_size: int | None = 2**20,
-        max_queue: int | None | tuple[int | None, int | None] = 16,
+        max_queue: int | tuple[int, int | None] = 16,
         write_limit: int | tuple[int, int | None] = 2**15,
         # Logging
         logger: LoggerLike | None = None,
@@ -354,10 +351,10 @@ class connect:
             kwargs.setdefault("ssl", True)
             kwargs.setdefault("server_hostname", wsuri.host)
             if kwargs.get("ssl") is None:
-                raise ValueError("ssl=None is incompatible with a wss:// URI")
+                raise TypeError("ssl=None is incompatible with a wss:// URI")
         else:
             if kwargs.get("ssl") is not None:
-                raise ValueError("ssl argument is incompatible with a ws:// URI")
+                raise TypeError("ssl argument is incompatible with a ws:// URI")
 
         if kwargs.pop("unix", False):
             _, connection = await loop.create_unix_connection(factory, **kwargs)
@@ -495,7 +492,7 @@ class connect:
     # async for ... in connect(...):
 
     async def __aiter__(self) -> AsyncIterator[ClientConnection]:
-        delays: Generator[float] | None = None
+        delays: Generator[float, None, None] | None = None
         while True:
             try:
                 async with self as protocol:
@@ -523,10 +520,9 @@ class connect:
                     delays = backoff()
                 delay = next(delays)
                 self.logger.info(
-                    "connect failed; reconnecting in %.1f seconds: %s",
+                    "! connect failed; reconnecting in %.1f seconds",
                     delay,
-                    # Remove first argument when dropping Python 3.9.
-                    traceback.format_exception_only(type(exc), exc)[0].strip(),
+                    exc_info=True,
                 )
                 await asyncio.sleep(delay)
                 continue

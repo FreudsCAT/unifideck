@@ -25,6 +25,7 @@ import { useEventBus, EventBusClient } from "../../api/event-bus-client";
 import { Events, type ToastActionPayload } from "../../types/events";
 import { useToast } from "../../hooks/useToast";
 import { CloudSaveConflictModal } from "./CloudSaveConflictModal";
+import { AuthSuccessModal } from "./AuthSuccessModal";
 
 /**
  * Headless component that subscribes to the backend
@@ -77,6 +78,10 @@ export const ToastEventListener: FC = () => {
     const store = String(payload.store ?? "?");
     const errType = String(payload.error_type ?? "error");
     toast.error(t("toasts.storeError", { store, errType }));
+  });
+  useEventBus(Events.STORE_AUTH_COMPLETE, (payload) => {
+    const store = payload.store ? String(payload.store) : undefined;
+    showModal(<AuthSuccessModal store={store} />);
   });
   return null;
 };

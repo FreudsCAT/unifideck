@@ -4,8 +4,7 @@ import base64
 import binascii
 import ipaddress
 import re
-from collections.abc import Sequence
-from typing import Callable, TypeVar, cast
+from typing import Callable, Sequence, TypeVar, cast
 
 from .exceptions import InvalidHeaderFormat, InvalidHeaderValue
 from .typing import (

@@ -22,6 +22,7 @@
 import { call } from "@decky/api";
 import { useEffect, useRef } from "react";
 import { rpcRoutes } from "./rpc-routes";
+import { unwrapRpcEnvelope } from "./useRPC";
 import type { EventName } from "../types/events";
 
 const POLL_FAST_MS = 250;
@@ -51,6 +52,19 @@ interface EventRecord {
   event: string;
   kwargs: Record<string, unknown>;
   timestamp: number;
+}
+
+/** Extract the records array from whatever the backend sent —
+ *  either a raw list or the `{success, error, data}` envelope.
+ *  Returns `[]` for any unexpected shape so callers don't crash. */
+function extractRecords(raw: unknown): EventRecord[] {
+  // Delegate envelope unwrapping to the shared helper so the
+  // semantics stay aligned with `useRPC` / `AuthDispatcher`.
+  const unwrapped = unwrapRpcEnvelope<unknown>(raw, {
+    route: "subscribe_replay", throwing: false,
+  });
+  if (Array.isArray(unwrapped)) return unwrapped as EventRecord[];
+  return [];
 }
 
 /** Event bus client impl. */
@@ -134,9 +148,14 @@ class EventBusClientImpl {
    */
   private async pollOnce(): Promise<void> {
     try {
-      const records = await call<[string[]], EventRecord[]>(
+      const raw = await call<[string[]], unknown>(
         rpcRoutes.subscribeReplay, WATCHED_EVENTS,
       );
+      // Backend wraps every RPC response in `{success, error, data}`
+      // via `@auto_wrap_rpc_methods`. `useRPC` unwraps it for
+      // component callers, but we call `call()` directly here, so
+      // we have to unwrap manually. Tolerate both shapes.
+      const records: EventRecord[] = extractRecords(raw);
       // Dedup : keep only events strictly newer than the last
       // we processed. Sort ascending so handlers see them in
       // emission order.

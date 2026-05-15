@@ -12,7 +12,7 @@
  * cascading two cancellations.
  */
 import React, { FC, useCallback, useState } from "react";
-import { DialogButton } from "@decky/ui";
+import { DialogButton, Focusable } from "@decky/ui";
 import { useTranslation } from "react-i18next";
 import { useGameActions } from "../../hooks/useGameActions";
 import { useToast } from "../../hooks/useToast";
@@ -57,7 +57,11 @@ export const DownloadingButtons: FC<Props> = ({download, bridge = defaultBridge}
     }
   }, [actions, cancelled, download.id, t, toast]);
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+    <Focusable
+      flow-children="column"
+      onActivate={() => {}}
+      style={{ display: "flex", flexDirection: "column", gap: 6 }}
+    >
       <div style={{ fontSize: 12 }}>
         {download.progress_percent.toFixed(0)}%
         {" · "}
@@ -65,9 +69,13 @@ export const DownloadingButtons: FC<Props> = ({download, bridge = defaultBridge}
         {" · "}
         ETA {formatEta(download.eta_seconds)}
       </div>
-      <DialogButton disabled={cancelled || actions.isWorking} onClick={onCancel}>
+      <DialogButton
+        className="unifideck-cancel-btn"
+        disabled={cancelled || actions.isWorking}
+        onClick={onCancel}
+      >
         {cancelled ? t("play.cancelling") : t("play.cancel")}
       </DialogButton>
-    </div>
+    </Focusable>
   );
 };

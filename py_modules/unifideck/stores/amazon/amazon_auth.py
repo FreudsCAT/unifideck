@@ -34,6 +34,14 @@ _AMAZON_REDIRECT_URIS: list[str] = [
     "https://amazon.com/ap/maplanding",
 ]
 
+# Strings nile prints to stderr when the user is already
+# authenticated. Detected as substrings so minor wording
+# changes across nile versions don't break the fast path.
+_NILE_ALREADY_AUTHED_MARKERS = (
+    "You are already logged in",
+    "already authenticated",
+)
+
 
 class AmazonAuthFlow:
     """Amazon auth flow."""
@@ -64,12 +72,60 @@ class AmazonAuthFlow:
                 store="amazon",
             )
         self._pending_login = None
+        # Fast path : if nile already has valid credentials,
+        # skip the OAuth dance and emit a success event so the
+        # frontend updates the badge to "Connected" without
+        # opening a browser.
+        if await self._is_already_authed():
+            logger.info(
+                "[amazon_auth] already logged in — skipping OAuth",
+            )
+            await self._bus.emit(
+                Events.STORE_AUTH_COMPLETE, store="amazon",
+            )
+            return AuthResult(success=True, store="amazon")
         return await self._orch.run_flow(
             get_url=self._fetch_login_url,
             allowed_uris=_AMAZON_REDIRECT_URIS,
             exchange_code=self._register_code,
             background=True,
             write_url_file="~/.local/share/unifideck/amazon_auth_url.txt",
+        )
+
+    async def _is_already_authed(self) -> bool:
+        """Detect whether ``nile auth --login`` would refuse.
+
+        Runs ``nile auth --login --non-interactive`` and looks
+        for "already logged in" markers in the stderr. Nile
+        returns a non-zero exit code in that case, with an
+        empty stdout — the previous code raised "invalid JSON"
+        because it tried to ``json.loads`` the empty buffer.
+        """
+        assert self._cli_path is not None
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                self._cli_path,
+                "auth",
+                "--login",
+                "--non-interactive",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await asyncio.wait_for(
+                proc.communicate(),
+                timeout=min(self._cli_timeout, 5),
+            )
+        except (TimeoutError, OSError) as e:
+            logger.warning("[amazon_auth] auth-check failed: %s", e)
+            return False
+        combined = (
+            stderr.decode(errors="ignore")
+            + "\n"
+            + stdout.decode(errors="ignore")
+        )
+        return any(
+            marker in combined
+            for marker in _NILE_ALREADY_AUTHED_MARKERS
         )
 
     async def logout(self) -> Result:
@@ -111,7 +167,8 @@ class AmazonAuthFlow:
                 store="amazon",
             )
         self._pending_login = payload
-        logger.info("[amazon_auth] received login URL from nile")
+        pretty = url.split("?", 1)[0] if "?" in url else url
+        logger.info("[amazon_auth] received login URL from nile: %s", pretty)
         return cast("str", url)
 
     async def _run_nile_login_probe(self) -> dict:

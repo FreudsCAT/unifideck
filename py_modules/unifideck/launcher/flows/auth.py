@@ -13,11 +13,13 @@ _AUTH_URL_FILES = {
     "epic": "epic_auth_url.txt",
     "gog": "gog_auth_url.txt",
     "amazon": "amazon_auth_url.txt",
+    "microsoft": "ms_auth_url.txt",
 }
 _AUTH_STORE_LABELS = {
     "epic": "Epic Games",
     "gog": "GOG",
     "amazon": "Amazon Games",
+    "microsoft": "Microsoft",
 }
 _MAX_AUTH_SECONDS = 600
 def _read_config_int(key: str, default: int) -> int:
@@ -66,7 +68,15 @@ async def handle_store_auth(
             "handle_store_auth called without auth_store set",
             context={"game_key": ctx.game_key},
         )
-    label = _AUTH_STORE_LABELS.get(store, store.title)
+    # Ubisoft doesn't use browser-based OAuth — UPC (Ubisoft
+    # Connect) runs in a dedicated Wine prefix. The session
+    # monitor was already started by ``UbisoftAuth.start_auth()``
+    # in the plugin process; the launcher just needs to return
+    # so the session monitor can do its work.
+    if store == "ubisoft":
+        logger.info("[launcher.auth] Ubisoft — session monitor active, exiting")
+        return Result(success=True, store="ubisoft")
+    label = _AUTH_STORE_LABELS.get(store, store.title())
     logger.info(
         "[launcher.auth] launching %s OAuth flow", label,
     )

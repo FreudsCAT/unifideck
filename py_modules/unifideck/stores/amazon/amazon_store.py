@@ -109,23 +109,47 @@ class AmazonStore(StoreBase):
             get_size_timeout=amazon_cfg["get_size_timeout_seconds"],
             default_install_root=amazon_cfg["default_install_root"],
         )
-        if browser_monitor is not None:
-            orchestrator = AuthOrchestrator(
-                bus=bus,
-                browser_monitor=browser_monitor,
-                store_name="amazon",
-            )
-            self._auth: AmazonAuthFlow | None = AmazonAuthFlow(
-                bus=bus,
-                orchestrator=orchestrator,
-                cli_path=self.cli_path,
-                success_markers=amazon_cfg["nile_register_success_markers"],
-            )
-        else:
-            self._auth = None
+        # Auth orchestrator + flow are built lazily : at boot the
+        # `browser_monitor` is `None` (auto-discovery doesn't have
+        # the service container yet). `store_injector` sets
+        # `_browser_monitor` post-discovery and then calls
+        # `_rebuild_auth_after_injection` so the flow is wired
+        # against the just-injected monitor.
+        self._browser_monitor = browser_monitor
+        self._amazon_cfg = amazon_cfg
+        self._bus_ref = bus
+        self._auth: AmazonAuthFlow | None = None
+        self._rebuild_auth_after_injection()
+
+    def _rebuild_auth_after_injection(self) -> None:
+        """Build the ``AmazonAuthFlow`` if a browser monitor is set.
+
+        Idempotent : the injector may call this multiple times, so
+        we early-return if ``_auth`` is already wired against the
+        current ``_browser_monitor``.
+        """
+        if self._auth is not None:
+            return
+        monitor = getattr(self, "_browser_monitor", None)
+        if monitor is None:
             logger.debug(
                 "[AmazonStore] no browser_monitor; auth disabled",
             )
+            return
+        orchestrator = AuthOrchestrator(
+            bus=self._bus_ref,
+            browser_monitor=monitor,
+            store_name="amazon",
+        )
+        self._auth = AmazonAuthFlow(
+            bus=self._bus_ref,
+            orchestrator=orchestrator,
+            cli_path=self.cli_path,
+            success_markers=self._amazon_cfg[
+                "nile_register_success_markers"
+            ],
+        )
+        logger.info("[AmazonStore] auth flow wired")
 
     async def is_available(self) -> bool:
         """Check whether available."""
@@ -172,12 +196,31 @@ class AmazonStore(StoreBase):
 
     async def start_auth(self, **kwargs) -> AuthResult:
         """Start auth."""
+        # Late-bind auth in case injection happened after __init__
+        # without the rebuild hook (defensive).
+        self._rebuild_auth_after_injection()
         if self._auth is None:
             return AuthResult(
                 success=False,
                 error="auth_not_configured",
                 store="amazon",
             )
+        # Edge prerequisite : the launcher subprocess opens
+        # the nile OAuth URL inside Microsoft Edge. Returning
+        # a structured `edge_not_installed` here lets the
+        # frontend spawn the install modal instead of letting
+        # the launcher subprocess crash later.
+        edge = getattr(self, "_edge", None)
+        if edge is None or not edge.is_installed:
+            logger.info(
+                "[AmazonStore] Edge not installed — prompting user",
+            )
+            return AuthResult(
+                success=False,
+                error="edge_not_installed",
+                store="amazon",
+            )
+        edge.clear_store_cookies("amazon.com")
         await self._ensure_auth_shortcut()
         return cast("AuthResult", await self._auth.start_auth())
 

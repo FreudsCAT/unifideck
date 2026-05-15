@@ -10,7 +10,7 @@
  * `<UninstallConfirmModal>` rather than acting immediately.
  */
 import React, { FC, useCallback } from "react";
-import { DialogButton, showModal } from "@decky/ui";
+import { DialogButton, Focusable, showModal } from "@decky/ui";
 import { useTranslation } from "react-i18next";
 import { useGameInfo } from "../../hooks/useGameInfo";
 import { useGameActions } from "../../hooks/useGameActions";
@@ -63,14 +63,25 @@ export const InstalledButtons: FC<Props> = ({appId, bridge = defaultBridge}) => 
     );
   }, [actions, appId, game, t, toast]);
   return (
-    <div style={{ display: "flex", gap: 8 }}>
-      <DialogButton disabled={loading} onClick={onPlay}>
+    <Focusable
+      flow-children="row"
+      onActivate={() => {}}
+      style={{ display: "flex", gap: 8 }}
+    >
+      <DialogButton
+        className="unifideck-play-btn"
+        disabled={loading}
+        onClick={onPlay}
+      >
         {t("play.play")}
       </DialogButton>
-      <DialogButton disabled={loading || actions.isWorking}
-                    onClick={onUninstall}>
+      <DialogButton
+        className="unifideck-stop-btn"
+        disabled={loading || actions.isWorking}
+        onClick={onUninstall}
+      >
         {t("play.uninstall")}
       </DialogButton>
-    </div>
+    </Focusable>
   );
 };

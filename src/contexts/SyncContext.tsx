@@ -32,7 +32,7 @@ interface SyncContextValue {
   isSyncing: boolean;
   isCancelling: boolean;
   startSync: () => Promise<void>;
-  forceSync: () => Promise<void>;
+  forceSync: (resyncArtwork?: boolean) => Promise<void>;
   cancelSync: () => Promise<void>;
 }
 
@@ -55,7 +55,7 @@ export const SyncProvider: FC<{ children: ReactNode }> = ({ children }) => {
     rpcRoutes.syncLibraries,
   );
 
-  const forceMut = useRPCMutation<[], { run_id: number }>(
+  const forceMut = useRPCMutation<[boolean?], { run_id: number }>(
     rpcRoutes.forceSyncLibraries,
   );
 
@@ -96,10 +96,11 @@ export const SyncProvider: FC<{ children: ReactNode }> = ({ children }) => {
     await startMut.mutate();
   }, [isSyncing, startMut]);
 
-  /** Force sync. */
-  const forceSync = useCallback(async () => {
+  /** Force sync. Optionally re-fetches all artwork
+   *  (slow, bandwidth-heavy). Default keeps current artwork. */
+  const forceSync = useCallback(async (resyncArtwork?: boolean) => {
     EventBusClient.bumpToFast();
-    await forceMut.mutate();
+    await forceMut.mutate(resyncArtwork);
   }, [forceMut]);
 
   /** Check whether cel sync. */

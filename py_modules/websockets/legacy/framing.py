@@ -1,8 +1,7 @@
 from __future__ import annotations
 
 import struct
-from collections.abc import Awaitable, Sequence
-from typing import Any, Callable, NamedTuple
+from typing import Any, Awaitable, Callable, NamedTuple, Sequence
 
 from .. import extensions, frames
 from ..exceptions import PayloadTooBig, ProtocolError
@@ -93,7 +92,7 @@ class Frame(NamedTuple):
             data = await reader(8)
             (length,) = struct.unpack("!Q", data)
         if max_size is not None and length > max_size:
-            raise PayloadTooBig(length, max_size)
+            raise PayloadTooBig(f"over size limit ({length} > {max_size} bytes)")
         if mask:
             mask_bits = await reader(4)
 

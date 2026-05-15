@@ -25,6 +25,8 @@ import {
   getShortcutRunGameId,
   isShortcutAppRunning,
 } from "../lib/steam-bridge";
+import { rpcRoutes } from "../api/rpc-routes";
+import { unwrapRpcEnvelope } from "../api/useRPC";
 
 const RESTORE_POLL_DELAY_MS = 250;
 const RESTORE_START_DELAY_MS = 500;
@@ -176,30 +178,66 @@ function scheduleLaunchStateRestore(appId: number, context: ShortcutLaunchContex
  *  the install_id so the launcher knows which UPC entry to
  *  start. */
 export async function launchUbisoftInstallViaShortcut(storeGameId: string, extraEnv: Record<string, string> = {}): Promise<ShortcutLaunchResult> {
-  const ctx = await call<[string], ShortcutLaunchContext>(
-    "get_compat_tool_for_game",
+  const rawCtx = await call<[string], unknown>(
+    rpcRoutes.getCompatToolForGame,
     storeGameId,
   );
+  const ctx = unwrapRpcEnvelope<ShortcutLaunchContext>(rawCtx, {
+    route: rpcRoutes.getCompatToolForGame, throwing: false,
+  });
+  console.log(
+    "[UbisoftShortcutLaunch] getCompatToolForGame raw:", rawCtx,
+  );
+  console.log(
+    "[UbisoftShortcutLaunch] getCompatToolForGame ctx:", ctx,
+  );
 
-  if (!ctx?.success || !ctx.appid_unsigned) {
+  // The RPC envelope strips ``success`` from the data dict
+  // (``_to_envelope`` moves it to the outer layer). Check
+  // ``appid_unsigned`` directly — if the backend returned a
+  // valid AppID the call succeeded regardless of whether a
+  // ``success`` key survived the envelope unwrapping.
+  if (!ctx.appid_unsigned) {
+    console.error(
+      "[UbisoftShortcutLaunch] ctx.appid_unsigned is falsy:",
+      ctx.appid_unsigned, "full ctx:", ctx,
+    );
     return { success: false, error: ctx?.error || "Context unavailable" };
   }
 
   const appId = ctx.appid_unsigned;
+  console.log(
+    "[UbisoftShortcutLaunch] appId=%d, waiting for shortcut registration...",
+    appId,
+  );
   await waitForShortcutRegistration(appId, ctx.launch_wait_ms ?? 0);
+  console.log(
+    "[UbisoftShortcutLaunch] shortcut registered, checking Steam APIs...",
+  );
   const steamApps = window.SteamClient?.Apps;
   if (!steamApps?.RunGame || !steamApps?.SetShortcutLaunchOptions) {
+    console.error(
+      "[UbisoftShortcutLaunch] Steam launch APIs unavailable: "
+      + "RunGame=%s SetShortcutLaunchOptions=%s",
+      typeof steamApps?.RunGame,
+      typeof steamApps?.SetShortcutLaunchOptions,
+    );
     return { success: false, error: "Steam launch APIs unavailable" };
   }
 
   const alreadyRunning = isShortcutAppRunning(appId);
   const originalOptions = ctx.current_launch_options ?? "";
   const tempOptions = buildTemporaryLaunchOptions(ctx, extraEnv, storeGameId);
+  console.log(
+    "[UbisoftShortcutLaunch] RunGame(appId=%d, runGameId=%s, opts=%s)",
+    appId, getShortcutRunGameId(appId), tempOptions,
+  );
 
   try {
     steamApps.SpecifyCompatTool?.(appId, ctx.tool_name ?? "");
     steamApps.SetShortcutLaunchOptions(appId, tempOptions);
     steamApps.RunGame(getShortcutRunGameId(appId), "", -1, 100);
+    console.log("[UbisoftShortcutLaunch] RunGame called successfully");
     scheduleLaunchStateRestore(appId, ctx, originalOptions);
 
     return { success: true, already_running: alreadyRunning };

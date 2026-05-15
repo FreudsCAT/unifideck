@@ -1,20 +1,27 @@
 /**
  * LibrarySync — sync controls + progress display.
  *
- * Two buttons (Sync, Force sync) that drive `useSync`, plus
- * a progress bar that reads `progress` from the same
- * context. The progress is reactive via the EventBus
- * (Phase F2) so no polling is needed.
+ * Three primary actions :
+ *   - Sync now       → `useSync.startSync()`
+ *   - Force resync   → opens `<ForceSyncModal>` (resync artwork
+ *                      vs keep), then dispatches `forceSync(bool)`
+ *   - Cancel         → `useSync.cancelSync()`, shown only while
+ *                      a sync is in flight.
  *
- * Replaces the 245L legacy LibrarySync.tsx. The reduction
- * comes from moving state into SyncContext (Phase F2).
+ * Progress is read from `SyncContext` reactively (no polling).
+ * A cooldown timer (via `useSyncCooldown`) blocks the Sync
+ * button for a short window after each completed run so users
+ * can't hammer the manual button.
  */
 import React, { FC } from "react";
 import {
   PanelSection, PanelSectionRow, ButtonItem, ProgressBarItem,
+  showModal,
 } from "@decky/ui";
 import { useTranslation } from "react-i18next";
 import { useSync } from "../../contexts/SyncContext";
+import { useSyncCooldown } from "../../hooks/useSyncCooldown";
+import { ForceSyncModal } from "../modals/ForceSyncModal";
 
 /**
  * Library sync controls : Sync now, Force resync, and a
@@ -24,25 +31,41 @@ import { useSync } from "../../contexts/SyncContext";
 export const LibrarySync: FC = () => {
   const { t } = useTranslation();
   const sync = useSync();
+  const cooldown = useSyncCooldown();
   const isSyncing = sync.isSyncing;
   const isCancelling = sync.isCancelling;
   const progress = sync.progress;
+
+  const onForceSync = (): void => {
+    showModal(
+      <ForceSyncModal
+        onResyncArtwork={() => void sync.forceSync(true)}
+        onKeepArtwork={() => void sync.forceSync(false)}
+        closeModal={() => {}}
+      />,
+    );
+  };
+
   return (
     <PanelSection title={t("settings.librarySync")}>
       <PanelSectionRow>
         <ButtonItem
           layout="below"
-          disabled={isSyncing}
+          disabled={isSyncing || !cooldown.canSync}
           onClick={() => void sync.startSync()}
         >
-          {isSyncing ? t("sync.syncing") : t("sync.start")}
+          {isSyncing
+            ? t("sync.syncing")
+            : !cooldown.canSync
+              ? t("sync.cooldown", { secs: cooldown.remainingSecs })
+              : t("sync.start")}
         </ButtonItem>
       </PanelSectionRow>
       <PanelSectionRow>
         <ButtonItem
           layout="below"
           disabled={isSyncing}
-          onClick={() => void sync.forceSync()}
+          onClick={onForceSync}
         >
           {t("sync.force")}
         </ButtonItem>
@@ -54,7 +77,12 @@ export const LibrarySync: FC = () => {
               nProgress={progress.progress_percent}
               indeterminate={false}
               description={
-                progress.current_game?.label ?? t("sync.preparing")
+                progress.current_phase === "artwork"
+                  ? t("sync.artworkPhase", {
+                    done: progress.artwork_synced ?? 0,
+                    total: progress.artwork_total ?? 0,
+                  })
+                  : progress.current_game?.label ?? t("sync.preparing")
               }
             />
           </PanelSectionRow>

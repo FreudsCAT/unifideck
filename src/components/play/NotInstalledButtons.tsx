@@ -13,10 +13,10 @@
  * `components/modals/StoragePickerModal.tsx`.
  */
 import React, { FC, useCallback } from "react";
-import { DialogButton } from "@decky/ui";
+import { DialogButton, Focusable } from "@decky/ui";
 import { useTranslation } from "react-i18next";
 import { useGameInfo } from "../../hooks/useGameInfo";
-import { useGameActions } from "../../hooks/useGameActions";
+import { useInstallFlow } from "../../hooks/useInstallFlow";
 import { useToast } from "../../hooks/useToast";
 import { SteamBridge } from "../../lib/steam-bridge";
 
@@ -36,14 +36,15 @@ const defaultBridge = new SteamBridge();
 export const NotInstalledButtons: FC<Props> = ({appId, bridge = defaultBridge}) => {
   const { t } = useTranslation();
   const { data: game, loading } = useGameInfo(appId);
-  const actions = useGameActions(bridge);
+  const installFlow = useInstallFlow(bridge);
   const toast = useToast();
 
   /** On install. */
   const onInstall = useCallback(async () => {
     if (!game) return;
-    const result = await actions.install(game.store, game.id);
-    if (result?.success) {
+    const result = await installFlow.start(game);
+    if (result == null) return; // user cancelled a prompt
+    if (result.success) {
       toast.success(
         t("toasts.downloadQueued"),
         t("toasts.downloadQueuedBody", { title: game.title }),
@@ -51,18 +52,23 @@ export const NotInstalledButtons: FC<Props> = ({appId, bridge = defaultBridge}) 
     } else {
       toast.error(
         t("toasts.downloadFailed"),
-        result?.error ?? t("toasts.downloadFailedUnknown"),
+        result.error ?? t("toasts.downloadFailedUnknown"),
       );
     }
-  }, [actions, game, t, toast]);
+  }, [installFlow, game, t, toast]);
   return (
-    <div style={{ display: "flex", gap: 8 }}>
+    <Focusable
+      flow-children="row"
+      onActivate={() => {}}
+      style={{ display: "flex", gap: 8 }}
+    >
       <DialogButton
-        disabled={loading || actions.isWorking || !game}
+        className="unifideck-install-btn"
+        disabled={loading || installFlow.isWorking || !game}
         onClick={onInstall}
       >
-        {actions.isWorking ? t("play.installing") : t("play.install")}
+        {installFlow.isWorking ? t("play.installing") : t("play.install")}
       </DialogButton>
-    </div>
+    </Focusable>
   );
 };

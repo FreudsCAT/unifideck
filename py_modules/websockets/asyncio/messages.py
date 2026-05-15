@@ -3,8 +3,14 @@ from __future__ import annotations
 import asyncio
 import codecs
 import collections
-from collections.abc import AsyncIterator, Iterable
-from typing import Any, Callable, Generic, TypeVar
+from typing import (
+    Any,
+    AsyncIterator,
+    Callable,
+    Generic,
+    Iterable,
+    TypeVar,
+)
 
 from ..exceptions import ConcurrencyError
 from ..frames import OP_BINARY, OP_CONT, OP_TEXT, Frame
@@ -40,12 +46,11 @@ class SimpleQueue(Generic[T]):
         if self.get_waiter is not None and not self.get_waiter.done():
             self.get_waiter.set_result(None)
 
-    async def get(self, block: bool = True) -> T:
+    async def get(self) -> T:
         """Remove and return an item from the queue, waiting if necessary."""
         if not self.queue:
-            if not block:
-                raise EOFError("stream of frames ended")
-            assert self.get_waiter is None, "cannot call get() concurrently"
+            if self.get_waiter is not None:
+                raise ConcurrencyError("get is already running")
             self.get_waiter = self.loop.create_future()
             try:
                 await self.get_waiter
@@ -61,9 +66,10 @@ class SimpleQueue(Generic[T]):
         self.queue.extend(items)
 
     def abort(self) -> None:
-        """Close the queue, raising EOFError in get() if necessary."""
         if self.get_waiter is not None and not self.get_waiter.done():
             self.get_waiter.set_exception(EOFError("stream of frames ended"))
+        # Clear the queue to avoid storing unnecessary data in memory.
+        self.queue.clear()
 
 
 class Assembler:
@@ -84,27 +90,24 @@ class Assembler:
     # coverage reports incorrectly: "line NN didn't jump to the function exit"
     def __init__(  # pragma: no cover
         self,
-        high: int | None = None,
+        high: int = 16,
         low: int | None = None,
         pause: Callable[[], Any] = lambda: None,
         resume: Callable[[], Any] = lambda: None,
     ) -> None:
-        # Queue of incoming frames.
+        # Queue of incoming messages. Each item is a queue of frames.
         self.frames: SimpleQueue[Frame] = SimpleQueue()
 
         # We cannot put a hard limit on the size of the queue because a single
         # call to Protocol.data_received() could produce thousands of frames,
         # which must be buffered. Instead, we pause reading when the buffer goes
         # above the high limit and we resume when it goes under the low limit.
-        if high is not None and low is None:
+        if low is None:
             low = high // 4
-        if high is None and low is not None:
-            high = low * 4
-        if high is not None and low is not None:
-            if low < 0:
-                raise ValueError("low must be positive or equal to zero")
-            if high < low:
-                raise ValueError("high must be greater than or equal to low")
+        if low < 0:
+            raise ValueError("low must be positive or equal to zero")
+        if high < low:
+            raise ValueError("high must be greater than or equal to low")
         self.high, self.low = high, low
         self.pause = pause
         self.resume = resume
@@ -133,42 +136,46 @@ class Assembler:
 
         Raises:
             EOFError: If the stream of frames has ended.
-            UnicodeDecodeError: If a text frame contains invalid UTF-8.
             ConcurrencyError: If two coroutines run :meth:`get` or
                 :meth:`get_iter` concurrently.
 
         """
+        if self.closed:
+            raise EOFError("stream of frames ended")
+
         if self.get_in_progress:
             raise ConcurrencyError("get() or get_iter() is already running")
+
+        # Locking with get_in_progress ensures only one coroutine can get here.
         self.get_in_progress = True
 
-        # Locking with get_in_progress prevents concurrent execution
-        # until get() fetches a complete message or is cancelled.
-
+        # First frame
         try:
-            # First frame
-            frame = await self.frames.get(not self.closed)
-            self.maybe_resume()
-            assert frame.opcode is OP_TEXT or frame.opcode is OP_BINARY
-            if decode is None:
-                decode = frame.opcode is OP_TEXT
-            frames = [frame]
-
-            # Following frames, for fragmented messages
-            while not frame.fin:
-                try:
-                    frame = await self.frames.get(not self.closed)
-                except asyncio.CancelledError:
-                    # Put frames already received back into the queue
-                    # so that future calls to get() can return them.
-                    self.frames.reset(frames)
-                    raise
-                self.maybe_resume()
-                assert frame.opcode is OP_CONT
-                frames.append(frame)
-
-        finally:
+            frame = await self.frames.get()
+        except asyncio.CancelledError:
             self.get_in_progress = False
+            raise
+        self.maybe_resume()
+        assert frame.opcode is OP_TEXT or frame.opcode is OP_BINARY
+        if decode is None:
+            decode = frame.opcode is OP_TEXT
+        frames = [frame]
+
+        # Following frames, for fragmented messages
+        while not frame.fin:
+            try:
+                frame = await self.frames.get()
+            except asyncio.CancelledError:
+                # Put frames already received back into the queue
+                # so that future calls to get() can return them.
+                self.frames.reset(frames)
+                self.get_in_progress = False
+                raise
+            self.maybe_resume()
+            assert frame.opcode is OP_CONT
+            frames.append(frame)
+
+        self.get_in_progress = False
 
         data = b"".join(frame.data for frame in frames)
         if decode:
@@ -196,24 +203,22 @@ class Assembler:
 
         Raises:
             EOFError: If the stream of frames has ended.
-            UnicodeDecodeError: If a text frame contains invalid UTF-8.
             ConcurrencyError: If two coroutines run :meth:`get` or
                 :meth:`get_iter` concurrently.
 
         """
+        if self.closed:
+            raise EOFError("stream of frames ended")
+
         if self.get_in_progress:
             raise ConcurrencyError("get() or get_iter() is already running")
+
+        # Locking with get_in_progress ensures only one coroutine can get here.
         self.get_in_progress = True
-
-        # Locking with get_in_progress prevents concurrent execution
-        # until get_iter() fetches a complete message or is cancelled.
-
-        # If get_iter() raises an exception e.g. in decoder.decode(),
-        # get_in_progress remains set and the connection becomes unusable.
 
         # First frame
         try:
-            frame = await self.frames.get(not self.closed)
+            frame = await self.frames.get()
         except asyncio.CancelledError:
             self.get_in_progress = False
             raise
@@ -233,7 +238,7 @@ class Assembler:
             # previous fragments — we're streaming them. Canceling get_iter()
             # here will leave the assembler in a stuck state. Future calls to
             # get() or get_iter() will raise ConcurrencyError.
-            frame = await self.frames.get(not self.closed)
+            frame = await self.frames.get()
             self.maybe_resume()
             assert frame.opcode is OP_CONT
             if decode:
@@ -259,10 +264,6 @@ class Assembler:
 
     def maybe_pause(self) -> None:
         """Pause the writer if queue is above the high water mark."""
-        # Skip if flow control is disabled
-        if self.high is None:
-            return
-
         # Check for "> high" to support high = 0
         if len(self.frames) > self.high and not self.paused:
             self.paused = True
@@ -270,10 +271,6 @@ class Assembler:
 
     def maybe_resume(self) -> None:
         """Resume the writer if queue is below the low water mark."""
-        # Skip if flow control is disabled
-        if self.low is None:
-            return
-
         # Check for "<= low" to support low = 0
         if len(self.frames) <= self.low and self.paused:
             self.paused = False

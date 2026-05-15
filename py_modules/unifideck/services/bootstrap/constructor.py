@@ -93,6 +93,58 @@ def bootstrap_services(
                 def_entry[2],
                 e,
             )
+
+    # OAuthBrowserMonitor depends on the just-built `cdp` client.
+    # Service-defs lambdas only see (bus, registry, cache, config,
+    # paths, pipeline) — no partial-container access — so we
+    # Edge CDP port — resolved once and shared between the
+    # EdgeBrowser (launcher) and OAuthBrowserMonitor (redirect
+    # capture). The monitor polls this port so it can see the
+    # OAuth tabs that the launcher opens on the same port.
+    cdp_port = 9222
+    try:
+        cdp_port = int(config.get("edge.cdp_port", 9222))
+    except Exception:
+        pass
+
+    # construct it here in the post-loop step instead of adding a
+    # special case to `_instantiate_service`. Quiet on `None` cdp
+    # so a missing dependency doesn't block the rest of the boot.
+    try:
+        if container.cdp is not None:
+            from ...auth.browser import OAuthBrowserMonitor
+            container.browser_monitor = OAuthBrowserMonitor(
+                cdp_client=container.cdp, config=config,
+                edge_cdp_port=cdp_port,
+            )
+            logger.debug("[bootstrap] browser_monitor wired")
+        else:
+            logger.info(
+                "[bootstrap] browser_monitor skipped — no cdp client",
+            )
+    except Exception as e:
+        logger.warning(
+            "[bootstrap] failed to wire browser_monitor: %s", e,
+        )
+
+    # EdgeBrowser — flatpak install + CDP launcher for OAuth
+    # flows. The PDF spec lists it under ``auth/edge_browser/``
+    # but never wires it into a service ; we instantiate it
+    # here so the injector can hand a single shared instance
+    # to every OAuth store.
+    try:
+        from ...auth.edge_browser import EdgeBrowser
+        container.edge_browser = EdgeBrowser(
+            cdp_port=cdp_port,
+            locale_fn=lambda: str(
+                config.get("ui.locale", "en-US"),
+            ),
+        )
+        logger.info("[bootstrap] edge_browser wired")
+    except Exception as e:
+        logger.warning(
+            "[bootstrap] failed to wire edge_browser: %s", e,
+        )
     return container
 
 

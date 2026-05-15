@@ -1,266 +1,187 @@
-"""Game compatibility ratings via ProtonDB and Steam Deck Verified."""
-
+"""steam/library.py — Steam install discovery + Steam Store search."""
 from __future__ import annotations
 
 import asyncio
 import logging
-from dataclasses import dataclass, field
+import os
+from dataclasses import asdict, dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
-from unifideck.utils.config_helpers import get_cfg
+
+import aiohttp
+
+from ..utils.config_helpers import get_cfg
 
 if TYPE_CHECKING:
-    from unifideck.config import ConfigManager
-    from unifideck.core.cache_manager import CacheManager
-
+    from ..config import ConfigManager
 
 logger = logging.getLogger(__name__)
 
-PROTONDB_TIERS = ("platinum", "gold", "silver", "bronze", "borked")
-DECK_CATEGORIES: dict[int, str] = {
- 0: "unknown",
- 1: "unsupported",
- 2: "playable",
- 3: "verified",
-}
-
-PROTONDB_URL = (
- "https://www.protondb.com/api/v1/reports/summaries/{appid}.json"
+STEAM_PATH_CANDIDATES = (
+    "~/.steam/steam",
+    "~/.local/share/Steam",
+    "~/.var/app/com.valvesoftware.Steam/.steam/steam",
 )
+STEAM_STORE_SEARCH_URL = "https://store.steampowered.com/api/storesearch"
 
-DECK_VERIFIED_URL = (
- "https://store.steampowered.com/saleaction/"
- "ajaxgetdeckappcompatibilityreport?nAppID={appid}"
-)
+_HTTP_OK = 200
+_DEFAULT_TIMEOUT = 10.0
+_RESERVED_USERDATA_DIRS = frozenset({"0", "anonymous", "ac"})
 
-DEFAULT_USER_AGENT = "Unifideck/1.0 (compat-library)"
-CACHE_NAMESPACE = "compat"
 
-# HTTP status code constants — kept here so PLR2004 doesn't flag the magic numbers in the fetch helpers below.
-HTTP_OK = 200
-HTTP_NOT_FOUND = 404
+def _cfg(config: ConfigManager | None, key: str, default: Any) -> Any:
+    """Cfg."""
+    return get_cfg(config, key, default)
+
+
+def find_steam_path(config: ConfigManager | None = None) -> str | None:
+    """Find steam path.
+
+    Honours an optional ``paths.steam_root`` config override; falls back
+    to the standard candidate locations. Returns the directory string
+    on success, or ``None`` when no Steam install is detectable.
+    """
+    if config is not None:
+        override = _cfg(config, "paths.steam_root", None)
+        if override:
+            full = os.path.expanduser(str(override))
+            if os.path.isdir(os.path.join(full, "steamapps")):
+                return full
+    for candidate in STEAM_PATH_CANDIDATES:
+        full_path = os.path.expanduser(candidate)
+        if os.path.isdir(os.path.join(full_path, "steamapps")):
+            return full_path
+    return None
+
+
+def _find_most_recent_user(steam_path: str) -> str | None:
+    """Find most recent user."""
+    userdata = Path(steam_path) / "userdata"
+    if not userdata.is_dir():
+        return None
+    latest: tuple[float, str] | None = None
+    for entry in userdata.iterdir():
+        if not entry.is_dir() or entry.name in _RESERVED_USERDATA_DIRS:
+            continue
+        try:
+            mtime = entry.stat().st_mtime
+        except OSError:
+            continue
+        if latest is None or mtime > latest[0]:
+            latest = (mtime, entry.name)
+    return latest[1] if latest else None
+
+
+def find_grid_path(
+    steam_path: str | None = None,
+    config: ConfigManager | None = None,
+) -> str | None:
+    """Find grid path."""
+    base = steam_path or find_steam_path(config)
+    if base is None:
+        return None
+    user = _find_most_recent_user(base)
+    if user is None:
+        return None
+    return str(Path(base) / "userdata" / user / "config" / "grid")
+
+
+def find_shortcuts_vdf(
+    steam_path: str | None = None,
+    config: ConfigManager | None = None,
+) -> str | None:
+    """Find shortcuts VDF."""
+    base = steam_path or find_steam_path(config)
+    if base is None:
+        return None
+    user = _find_most_recent_user(base)
+    if user is None:
+        return None
+    return str(Path(base) / "userdata" / user / "config" / "shortcuts.vdf")
+
 
 @dataclass
-class CompatRating:
-    """Compat rating."""
+class SteamStoreResult:
+    """Steam store result."""
 
-    appid: int | None = None
-    title: str = ""
-    protondb_tier: str | None = None
-    deck_status: str = "unknown"
-    sources: list[str] = field(default_factory=list)
-    error: str | None = None
+    app_id: int
+    name: str
+    header_image: str
+    price: str
+    release_date: str
 
     def to_dict(self) -> dict[str, Any]:
         """To dict."""
-        return {
-        "appid": self.appid,
-        "title": self.title,
-        "protondb_tier": self.protondb_tier,
-        "deck_status": self.deck_status,
-        "sources": list(self.sources),
-        "error": self.error,
-        }
+        return asdict(self)
 
-def parse_protondb_response(payload: dict[str, Any]) -> str | None:
-    """Parse protondb response."""
-    if not isinstance(payload, dict):
+
+def _format_price(price_block: Any) -> str:
+    """Format the Steam Store price block to a display string."""
+    if not isinstance(price_block, dict):
+        return ""
+    final = price_block.get("final")
+    if not isinstance(final, int):
+        return ""
+    if final == 0:
+        return "Free"
+    currency = price_block.get("currency", "")
+    formatted = f"{final / 100:.2f}"
+    return f"{formatted} {currency}".strip()
+
+
+async def search_store(
+    title: str,
+    config: ConfigManager | None = None,
+) -> dict[str, Any] | None:
+    """Search store.
+
+    Calls the Steam Store ``storesearch`` endpoint and returns the top
+    match as a dict (``app_id``, ``name``, ``header_image``, ``price``,
+    ``release_date``). Returns ``None`` on no hits or any network error.
+    """
+    if not title:
         return None
-    tier = payload.get("tier")
-    if isinstance(tier, str) and tier in PROTONDB_TIERS:
-        return tier
-    return None
-
-def parse_deck_verified_response(payload: dict[str, Any]) -> str:
-    """Parse DECK verified response."""
-    if not isinstance(payload, dict):
-        return "unknown"
-    results = payload.get("results")
-    if not isinstance(results, dict):
-        return "unknown"
-    cat = results.get("resolved_category", 0)
+    timeout_s = float(_cfg(config, "network.steam_store_timeout", _DEFAULT_TIMEOUT))
+    params = {"term": title, "l": "english", "cc": "us"}
     try:
-        return DECK_CATEGORIES.get(int(cat), "unknown")
+        timeout = aiohttp.ClientTimeout(total=timeout_s)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.get(STEAM_STORE_SEARCH_URL, params=params) as response:
+                if response.status != _HTTP_OK:
+                    return None
+                data = await response.json(content_type=None)
+    except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
+        logger.debug("[steam.search_store] %s failed: %s", title, exc)
+        return None
+
+    items = data.get("items") if isinstance(data, dict) else None
+    if not items:
+        return None
+    item = items[0]
+    try:
+        app_id = int(item.get("id", 0))
     except (TypeError, ValueError):
-        return "unknown"
+        return None
+    if app_id <= 0:
+        return None
+    header_image = (
+        f"https://cdn.akamai.steamstatic.com/steam/apps/{app_id}/header.jpg"
+    )
+    return SteamStoreResult(
+        app_id=app_id,
+        name=str(item.get("name", "")),
+        header_image=header_image,
+        price=_format_price(item.get("price")),
+        release_date=str(item.get("released", "")),
+    ).to_dict()
 
-def _cfg(config: ConfigManager | None, key: str, default: Any) -> Any:
 
-    """Cfg."""
-    return get_cfg(config, key, default)
-class CompatLibrary:
-
-    """Compat library."""
-    def __init__(self,gcache: CacheManager | None = None,
-        config: ConfigManager | None = None) -> None:
-        """Initialize the instance."""
-        self._cache = cache
-        self._config = config
-        if cache is not None:
-            ttl = int(get_cfg(config, "cache_ttl.compat", 604800))
-            try:
-                cache.register(CACHE_NAMESPACE, ttl_seconds=ttl)
-            except Exception:
-                pass
-
-    async def get_for_appid(self, appid: int) -> CompatRating:
-        """Get for appid."""
-        cached = self._cache_get(str(appid))
-        if cached is not None:
-            return CompatRating(**cached)
-        result = CompatRating(appid=appid)
-        result.protondb_tier = await self._fetch_protondb(appid)
-        if result.protondb_tier is not None:
-            result.sources.append("protondb")
-        result.deck_status = await self._fetch_deck_verified(appid)
-        if result.deck_status != "unknown":
-            result.sources.append("deck_verified")
-        self._cache_set(str(appid), result.to_dict())
-        return result
-
-    async def get_for_title(self, title: str) -> CompatRating:
-        """Get for title."""
-        from ..steam.library import search_store
-        steam = await search_store(title, config=self._config)
-        if steam is None or "app_id" not in steam:
-            return CompatRating(
-                title=title, error="not_found_on_steam_store",
-            )
-        result = await self.get_for_appid(int(steam["app_id"]))
-        result.title = title
-        return result
-
-    async def bulk_fetch(self, titles: list[str], delay_ms: int = 50) -> dict[str, CompatRating]:
-        """Bulk fetch."""
-        out: dict[str, CompatRating] = {}
-        for title in titles:
-            out[title] = await self.get_for_title(title)
-            if delay_ms > 0:
-                await asyncio.sleep(delay_ms / 1000)
-        return out
-
-    async def _fetch_protondb(self, appid: int) -> str | None:
-        """Fetch protondb."""
-        import aiohttp
-        url = PROTONDB_URL.format(appid=appid)
-        timeout = int(_cfg(
-        self._config, "compat.protondb_timeout_seconds", 30,
-        ))
-        try:
-            async with (
-                aiohttp.ClientSession() as session,
-                session.get(
-                    url,
-                    headers={"User-Agent": DEFAULT_USER_AGENT},
-                    timeout=timeout,
-                ) as resp,
-            ):
-                if resp.status == HTTP_NOT_FOUND:
-                    return None
-                if resp.status != HTTP_OK:
-                    return None
-                return parse_protondb_response(
-                    await resp.json(),
-                )
-        except Exception as e:
-            logger.debug(
-                "[compat] protondb(%d) failed: %s", appid, e,
-            )
-            return None
-
-    async def _fetch_deck_verified(self, appid: int) -> str:
-        """Fetch DECK verified."""
-        import aiohttp
-        url = DECK_VERIFIED_URL.format(appid=appid)
-        timeout = int(_cfg(
-        self._config, "compat.deck_verified_timeout_seconds", 10,
-        ))
-        try:
-            async with (
-                aiohttp.ClientSession() as session,
-                session.get(
-                    url,
-                    headers={"User-Agent": DEFAULT_USER_AGENT},
-                    timeout=timeout,
-                ) as resp,
-            ):
-                if resp.status != HTTP_OK:
-                    return "unknown"
-                return parse_deck_verified_response(
-                    await resp.json(),
-                )
-        except Exception as e:
-            logger.debug(
-                "[compat] deck(%d) failed: %s", appid, e,
-            )
-            return "unknown"
-
-    def _cache_get(self, key: str) -> dict[str, Any] | None:
-        """Cache get."""
-        if self._cache is None:
-            return None
-        try:
-            return self._cache.get(CACHE_NAMESPACE, key)
-        except Exception:
-            return None
-
-    def _cache_set(self, key: str, value: dict[str, Any]) -> None:
-        """Cache set."""
-        if self._cache is None:
-            return
-        try:
-            self._cache.set(CACHE_NAMESPACE, key, value)
-        except Exception:
-            pass
-
-def load_compat_cache():
-    """Load compat cache."""
-    logger.debug("[compat] load_compat_cache called via legacy path")
-    return {}
-
-def save_compat_cache(cache):
-    """Save compat cache."""
-    logger.debug("[compat] save_compat_cache called via legacy path")
-    return True
-
-async def search_steam_store(session=None, title="", **kwargs):
-    """Search steam store."""
-    from ..steam.library import search_store
-    return await search_store(title)
-
-async def fetch_protondb_rating(session=None, appid=0, **kwargs):
-    """Fetch protondb rating."""
-    lib = CompatLibrary()
-    return await lib._fetch_protondb(int(appid))
-
-async def fetch_deck_verified(session=None, appid=0, **kwargs):
-    """Fetch DECK verified."""
-    lib = CompatLibrary()
-    return await lib._fetch_deck_verified(int(appid))
-
-async def get_compat_for_title(session=None, title="", **kwargs):
-    """Get compat for title."""
-    lib = CompatLibrary()
-    rating = await lib.get_for_title(title)
-    status = "ok" if rating.error is None else rating.error
-    return (status, rating.to_dict())
-
-async def prefetch_compat(titles, _batch_size=10, delay_ms=50):
-    """Prefetch compat."""
-    lib = CompatLibrary()
-    return await lib.bulk_fetch(list(titles), delay_ms=delay_ms)
-
-class BackgroundCompatFetcher:
-
-    """Background compat fetcher."""
-    def __init__(self, *args, **kwargs):
-        """Initialize the instance."""
-        self._lib = CompatLibrary()
-    def start(self):
-        """Start."""
-        pass
-    def stop(self):
-        """Stop."""
-        pass
-    async def fetch(self, title):
-        """Fetch."""
-        return await self._lib.get_for_title(title)
+async def batch_search_store(titles: list[str]) -> dict[str, dict[str, Any] | None]:
+    """Batch search store."""
+    if not titles:
+        return {}
+    results = await asyncio.gather(
+        *(search_store(t) for t in titles),
+        return_exceptions=False,
+    )
+    return dict(zip(titles, results, strict=False))

@@ -12,6 +12,12 @@
  * the call returns the directory's immediate child entries
  * with their type (dir/file) and a `path` echo so the
  * picker can update its breadcrumb.
+ *
+ * Resilience : if the backend route is missing (older builds,
+ * partial deployments), the picker degrades to a read-only
+ * "current path" display with a "Use this path" button. The
+ * UI never throws — the user can still confirm whatever the
+ * `startPath` was.
  */
 import React, { FC, useCallback, useEffect, useState } from "react";
 import { ButtonItem, Field } from "@decky/ui";
@@ -46,6 +52,8 @@ export const StoragePathPicker: FC<Props> = ({ startPath, onConfirm }) => {
   const [path, setPath] = useState(startPath);
   const [dirs, setDirs] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
+  const [unsupported, setUnsupported] = useState(false);
+
   /** Refresh. */
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -56,17 +64,25 @@ export const StoragePathPicker: FC<Props> = ({ startPath, onConfirm }) => {
         setPath(r.path);
         setDirs(r.directories);
       }
+    } catch (e) {
+      // Backend may not implement `list_directory` yet.
+      // Degrade to read-only mode instead of crashing the picker.
+      console.warn("[StoragePathPicker] list_directory unavailable:", e);
+      setUnsupported(true);
     } finally {
       setLoading(false);
     }
   }, [list, path]);
+
   useEffect(() => { void refresh(); }, [refresh]);
+
   /** Go up. */
   const goUp = (): void => {
     const parts = path.split("/").filter(Boolean);
     parts.pop();
     setPath("/" + parts.join("/"));
   };
+
   return (
     <div>
       <Field
@@ -74,22 +90,29 @@ export const StoragePathPicker: FC<Props> = ({ startPath, onConfirm }) => {
         description={path}
         childrenContainerWidth="fixed"
       />
-      <div style={{ display: "flex", gap: 8, marginTop: 6 }}>
-        <ButtonItem layout="below" onClick={goUp}>
-          {t("storage.up")}
-        </ButtonItem>
-        <ButtonItem layout="below" onClick={refresh} disabled={loading}>
-          {loading ? t("common.loading") : t("storage.refresh")}
-        </ButtonItem>
-      </div>
-      <div style={{ marginTop: 6, maxHeight: 180, overflowY: "auto" }}>
-        {dirs.map((d) => (
-          <ButtonItem key={d} layout="below"
-                      onClick={() => setPath(`${path}/${d}`)}>
-            {d}
-          </ButtonItem>
-        ))}
-      </div>
+      {!unsupported && (
+        <>
+          <div style={{ display: "flex", gap: 8, marginTop: 6 }}>
+            <ButtonItem layout="below" onClick={goUp}>
+              {t("storage.up")}
+            </ButtonItem>
+            <ButtonItem layout="below" onClick={refresh} disabled={loading}>
+              {loading ? t("common.loading") : t("storage.refresh")}
+            </ButtonItem>
+          </div>
+          <div style={{ marginTop: 6, maxHeight: 180, overflowY: "auto" }}>
+            {dirs.map((d) => (
+              <ButtonItem
+                key={d}
+                layout="below"
+                onClick={() => setPath(`${path}/${d}`)}
+              >
+                {d}
+              </ButtonItem>
+            ))}
+          </div>
+        </>
+      )}
       <ButtonItem layout="below" onClick={() => onConfirm(path)}>
         {t("storage.useThisPath")}
       </ButtonItem>

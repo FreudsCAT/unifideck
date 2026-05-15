@@ -1,7 +1,15 @@
 from __future__ import annotations
 
-from collections.abc import Iterable, Iterator, Mapping, MutableMapping
-from typing import Any, Protocol, Union
+from typing import (
+    Any,
+    Iterable,
+    Iterator,
+    Mapping,
+    MutableMapping,
+    Protocol,
+    Tuple,
+    Union,
+)
 
 
 __all__ = ["Headers", "HeadersLike", "MultipleValuesError"]
@@ -171,7 +179,8 @@ class SupportsKeysAndGetItem(Protocol):  # pragma: no cover
 HeadersLike = Union[
     Headers,
     Mapping[str, str],
-    Iterable[tuple[str, str]],
+    # Change to tuple[str, str] when dropping Python < 3.9.
+    Iterable[Tuple[str, str]],
     SupportsKeysAndGetItem,
 ]
 """

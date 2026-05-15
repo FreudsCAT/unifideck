@@ -3,8 +3,7 @@ from __future__ import annotations
 import enum
 import logging
 import uuid
-from collections.abc import Generator
-from typing import Union
+from typing import Generator, Union
 
 from .exceptions import (
     ConnectionClosed,
@@ -159,12 +158,7 @@ class Protocol:
         """
         State of the WebSocket connection.
 
-        Defined in 4.1_, 4.2_, 7.1.3_, and 7.1.4_ of :rfc:`6455`.
-
-        .. _4.1: https://datatracker.ietf.org/doc/html/rfc6455#section-4.1
-        .. _4.2: https://datatracker.ietf.org/doc/html/rfc6455#section-4.2
-        .. _7.1.3: https://datatracker.ietf.org/doc/html/rfc6455#section-7.1.3
-        .. _7.1.4: https://datatracker.ietf.org/doc/html/rfc6455#section-7.1.4
+        Defined in 4.1, 4.2, 7.1.3, and 7.1.4 of :rfc:`6455`.
 
         """
         return self._state
@@ -178,11 +172,10 @@ class Protocol:
     @property
     def close_code(self) -> int | None:
         """
-        WebSocket close code received from the remote endpoint.
+        `WebSocket close code`_.
 
-        Defined in 7.1.5_ of :rfc:`6455`.
-
-        .. _7.1.5: https://datatracker.ietf.org/doc/html/rfc6455#section-7.1.5
+        .. _WebSocket close code:
+            https://datatracker.ietf.org/doc/html/rfc6455#section-7.1.5
 
         :obj:`None` if the connection isn't closed yet.
 
@@ -197,11 +190,10 @@ class Protocol:
     @property
     def close_reason(self) -> str | None:
         """
-        WebSocket close reason  received from the remote endpoint.
+        `WebSocket close reason`_.
 
-        Defined in 7.1.6_ of :rfc:`6455`.
-
-        .. _7.1.6: https://datatracker.ietf.org/doc/html/rfc6455#section-7.1.6
+        .. _WebSocket close reason:
+            https://datatracker.ietf.org/doc/html/rfc6455#section-7.1.6
 
         :obj:`None` if the connection isn't closed yet.
 
@@ -525,38 +517,19 @@ class Protocol:
             Whether the TCP connection is expected to close soon.
 
         """
-        # During the opening handshake, when our state is CONNECTING, we expect
-        # a TCP close if and only if the hansdake fails. When it does, we start
-        # the TCP closing handshake by sending EOF with send_eof().
-
-        # Once the opening handshake completes successfully, we expect a TCP
-        # close if and only if we sent a close frame, meaning that our state
-        # progressed to CLOSING:
-
+        # We expect a TCP close if and only if we sent a close frame:
         # * Normal closure: once we send a close frame, we expect a TCP close:
         #   server waits for client to complete the TCP closing handshake;
         #   client waits for server to initiate the TCP closing handshake.
-
         # * Abnormal closure: we always send a close frame and the same logic
         #   applies, except on EOFError where we don't send a close frame
         #   because we already received the TCP close, so we don't expect it.
-
-        # If our state is CLOSED, we already received a TCP close so we don't
-        # expect it anymore.
-
-        # Micro-optimization: put the most common case first
-        if self.state is OPEN:
-            return False
-        if self.state is CLOSING:
-            return True
-        if self.state is CLOSED:
-            return False
-        assert self.state is CONNECTING
-        return self.eof_sent
+        # We already got a TCP Close if and only if the state is CLOSED.
+        return self.state is CLOSING or self.handshake_exc is not None
 
     # Private methods for receiving data.
 
-    def parse(self) -> Generator[None]:
+    def parse(self) -> Generator[None, None, None]:
         """
         Parse incoming data into frames.
 
@@ -613,7 +586,6 @@ class Protocol:
             self.parser_exc = exc
 
         except PayloadTooBig as exc:
-            exc.set_current_size(self.cur_size)
             self.fail(CloseCode.MESSAGE_TOO_BIG, str(exc))
             self.parser_exc = exc
 
@@ -628,7 +600,7 @@ class Protocol:
         yield
         raise AssertionError("parse() shouldn't step after error")
 
-    def discard(self) -> Generator[None]:
+    def discard(self) -> Generator[None, None, None]:
         """
         Discard incoming data.
 
@@ -642,14 +614,14 @@ class Protocol:
         # connection in the same circumstances where discard() replaces parse().
         # The client closes it when it receives EOF from the server or times
         # out. (The latter case cannot be handled in this Sans-I/O layer.)
-        assert (self.side is SERVER or self.state is CONNECTING) == (self.eof_sent)
+        assert (self.state == CONNECTING or self.side is SERVER) == (self.eof_sent)
         while not (yield from self.reader.at_eof()):
             self.reader.discard()
         if self.debug:
             self.logger.debug("< EOF")
         # A server closes the TCP connection immediately, while a client
         # waits for the server to close the TCP connection.
-        if self.side is CLIENT and self.state is not CONNECTING:
+        if self.state != CONNECTING and self.side is CLIENT:
             self.send_eof()
         self.state = CLOSED
         # If discard() completes normally, execution ends here.
@@ -666,7 +638,9 @@ class Protocol:
         if frame.opcode is OP_TEXT or frame.opcode is OP_BINARY:
             if self.cur_size is not None:
                 raise ProtocolError("expected a continuation frame")
-            if not frame.fin:
+            if frame.fin:
+                self.cur_size = None
+            else:
                 self.cur_size = len(frame.data)
 
         elif frame.opcode is OP_CONT:

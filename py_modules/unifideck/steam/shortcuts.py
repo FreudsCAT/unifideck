@@ -33,11 +33,17 @@ import os
 import shutil
 from typing import Any, cast
 
+# Module logger always lives at module scope. The previous
+# version only defined it inside the `except ImportError` branch
+# below, which meant `logger.info(...)` later in the module
+# raised `NameError: name 'logger' is not defined` whenever the
+# `vdf` import succeeded (the normal case).
+logger = logging.getLogger(__name__)
+
 try:
     import vdf
 except ImportError:
     vdf = None
-    logger = logging.getLogger(__name__)
 class VDFError(Exception):
     """Raised when VDF parsing or writing fails."""
 def load_shortcuts_vdf(path: str) -> dict[str, Any]:

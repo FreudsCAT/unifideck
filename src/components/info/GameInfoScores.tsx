@@ -8,6 +8,7 @@
  * don't cover.
  */
 import React, { FC, useEffect, useState } from "react";
+import { Focusable } from "@decky/ui";
 import { useTranslation } from "react-i18next";
 import { useRPC } from "../../api/useRPC";
 import { rpcRoutes } from "../../api/rpc-routes";
@@ -59,7 +60,11 @@ export const GameInfoScores: FC<Props> = ({ game }) => {
     return null;
   }
   return (
-    <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
+    <Focusable
+      flow-children="row"
+      onActivate={() => {}}
+      style={{ display: "flex", gap: 16, flexWrap: "wrap" }}
+    >
       {scores.metacritic_score != null && (
         <div>
           <div style={{ fontSize: 11, color: "#94a3b8" }}>
@@ -85,6 +90,6 @@ export const GameInfoScores: FC<Props> = ({ game }) => {
           </div>
         </div>
       )}
-    </div>
+    </Focusable>
   );
 };

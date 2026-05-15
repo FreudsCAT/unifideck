@@ -137,13 +137,23 @@ class UbisoftAuth:
 
     @audit_auth_flow(store="ubisoft", method="wine_installer")
     async def start_auth(self) -> AuthResult:
-        """Start auth."""
+        """Start auth.
+
+        Returns ``pending=True`` so the frontend's
+        AuthDispatcher does NOT fast-path resolve — Ubisoft
+        Connect runs in a dedicated Wine prefix, and the
+        user must sign in through the UPC GUI before any
+        tokens exist. The session monitor emits
+        ``STORE_AUTH_COMPLETE`` when credentials are
+        detected.
+        """
         return AuthResult(
             success=True,
             store="ubisoft",
             metadata={
                 "auth_type": "upc_launch",
                 "message": "Sign in through Ubisoft Connect",
+                "pending": True,
             },
         )
 

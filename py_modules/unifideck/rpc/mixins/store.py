@@ -6,11 +6,19 @@ Mixin form of the auth-related slice of ``StoreHandlers``
 (OP-25g). Where the handler group covers auth + library +
 sync + install, this mixin only covers the auth surface —
 the rest lived in ``SyncRPCMixin`` historically.
+
+Auth-shortcut context RPCs (``get_<store>_auth_shortcut_context``
++ ``get_compat_tool_for_game``) live in a sibling
+``AuthShortcutsRPCMixin`` (OP-26k) to keep this file under the
+200 LOC ceiling.
 """
 
 from __future__ import annotations
 
+import logging
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 
 class StoreRPCMixin:
@@ -34,7 +42,22 @@ class StoreRPCMixin:
         Returns:
             Per-store auth result dict.
         """
-        return await self.registry.auth_action(store, action, **kw)
+        logger.info(
+            "[StoreAuth:%s] action=%s kw=%s", store, action,
+            {k: v for k, v in kw.items() if k != "code"},
+        )
+        result = await self.registry.auth_action(store, action, **kw)
+        success = getattr(result, "success", None)
+        if success is None and isinstance(result, dict):
+            success = result.get("success")
+        error = getattr(result, "error", None)
+        if error is None and isinstance(result, dict):
+            error = result.get("error")
+        logger.info(
+            "[StoreAuth:%s] action=%s success=%s error=%s",
+            store, action, success, error,
+        )
+        return result
 
     async def check_store_status(self) -> Any:
         """Probe every registered store for its current login state.

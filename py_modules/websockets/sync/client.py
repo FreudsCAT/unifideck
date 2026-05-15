@@ -4,8 +4,7 @@ import socket
 import ssl as ssl_module
 import threading
 import warnings
-from collections.abc import Sequence
-from typing import Any
+from typing import Any, Sequence
 
 from ..client import ClientProtocol
 from ..datastructures import HeadersLike
@@ -40,12 +39,10 @@ class ClientConnection(Connection):
     :exc:`~websockets.exceptions.ConnectionClosedError` when the connection is
     closed with any other code.
 
-    The ``close_timeout`` and ``max_queue`` arguments have the same meaning as
-    in :func:`connect`.
-
     Args:
         socket: Socket connected to a WebSocket server.
         protocol: Sans-I/O connection.
+        close_timeout: Timeout for closing the connection in seconds.
 
     """
 
@@ -55,7 +52,6 @@ class ClientConnection(Connection):
         protocol: ClientProtocol,
         *,
         close_timeout: float | None = 10,
-        max_queue: int | None | tuple[int | None, int | None] = 16,
     ) -> None:
         self.protocol: ClientProtocol
         self.response_rcvd = threading.Event()
@@ -63,7 +59,6 @@ class ClientConnection(Connection):
             socket,
             protocol,
             close_timeout=close_timeout,
-            max_queue=max_queue,
         )
 
     def handshake(
@@ -87,9 +82,9 @@ class ClientConnection(Connection):
         if not self.response_rcvd.wait(timeout):
             raise TimeoutError("timed out during handshake")
 
-        # self.protocol.handshake_exc is set when the connection is lost before
-        # receiving a response, when the response cannot be parsed, or when the
-        # response fails the handshake.
+        # self.protocol.handshake_exc is always set when the connection is lost
+        # before receiving a response, when the response cannot be parsed, or
+        # when the response fails the handshake.
 
         if self.protocol.handshake_exc is not None:
             raise self.protocol.handshake_exc
@@ -139,7 +134,6 @@ def connect(
     close_timeout: float | None = 10,
     # Limits
     max_size: int | None = 2**20,
-    max_queue: int | None | tuple[int | None, int | None] = 16,
     # Logging
     logger: LoggerLike | None = None,
     # Escape hatch for advanced customization
@@ -188,11 +182,6 @@ def connect(
             :obj:`None` disables the timeout.
         max_size: Maximum size of incoming messages in bytes.
             :obj:`None` disables the limit.
-        max_queue: High-water mark of the buffer where frames are received.
-            It defaults to 16 frames. The low-water mark defaults to ``max_queue
-            // 4``. You may pass a ``(high, low)`` tuple to set the high-water
-            and low-water marks. If you want to disable flow control entirely,
-            you may set it to ``None``, although that's a bad idea.
         logger: Logger for this client.
             It defaults to ``logging.getLogger("websockets.client")``.
             See the :doc:`logging guide <../../topics/logging>` for details.
@@ -222,7 +211,7 @@ def connect(
 
     wsuri = parse_uri(uri)
     if not wsuri.secure and ssl is not None:
-        raise ValueError("ssl argument is incompatible with a ws:// URI")
+        raise TypeError("ssl argument is incompatible with a ws:// URI")
 
     # Private APIs for unix_connect()
     unix: bool = kwargs.pop("unix", False)
@@ -230,9 +219,9 @@ def connect(
 
     if unix:
         if path is None and sock is None:
-            raise ValueError("missing path argument")
+            raise TypeError("missing path argument")
         elif path is not None and sock is not None:
-            raise ValueError("path and sock arguments are incompatible")
+            raise TypeError("path and sock arguments are incompatible")
 
     if subprotocols is not None:
         validate_subprotocols(subprotocols)
@@ -297,7 +286,6 @@ def connect(
             sock,
             protocol,
             close_timeout=close_timeout,
-            max_queue=max_queue,
         )
     except Exception:
         if sock is not None:

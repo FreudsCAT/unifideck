@@ -5,12 +5,17 @@ import functools
 import logging
 import os
 import random
-import traceback
 import urllib.parse
 import warnings
-from collections.abc import AsyncIterator, Generator, Sequence
 from types import TracebackType
-from typing import Any, Callable, cast
+from typing import (
+    Any,
+    AsyncIterator,
+    Callable,
+    Generator,
+    Sequence,
+    cast,
+)
 
 from ..asyncio.compatibility import asyncio_timeout
 from ..datastructures import Headers, HeadersLike
@@ -349,7 +354,7 @@ class Connect:
         async for websocket in connect(...):
             try:
                 ...
-            except websockets.exceptions.ConnectionClosed:
+            except websockets.ConnectionClosed:
                 continue
 
     The connection is closed automatically after each iteration of the loop.
@@ -598,24 +603,22 @@ class Connect:
             try:
                 async with self as protocol:
                     yield protocol
-            except Exception as exc:
+            except Exception:
                 # Add a random initial delay between 0 and 5 seconds.
                 # See 7.2.3. Recovering from Abnormal Closure in RFC 6455.
                 if backoff_delay == self.BACKOFF_MIN:
                     initial_delay = random.random() * self.BACKOFF_INITIAL
                     self.logger.info(
-                        "connect failed; reconnecting in %.1f seconds: %s",
+                        "! connect failed; reconnecting in %.1f seconds",
                         initial_delay,
-                        # Remove first argument when dropping Python 3.9.
-                        traceback.format_exception_only(type(exc), exc)[0].strip(),
+                        exc_info=True,
                     )
                     await asyncio.sleep(initial_delay)
                 else:
                     self.logger.info(
-                        "connect failed again; retrying in %d seconds: %s",
+                        "! connect failed again; retrying in %d seconds",
                         int(backoff_delay),
-                        # Remove first argument when dropping Python 3.9.
-                        traceback.format_exception_only(type(exc), exc)[0].strip(),
+                        exc_info=True,
                     )
                     await asyncio.sleep(int(backoff_delay))
                 # Increase delay with truncated exponential backoff.
