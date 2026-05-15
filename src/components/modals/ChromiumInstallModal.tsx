@@ -35,8 +35,8 @@ interface Props {
 }
 
 interface InstallEdgeResponse {
-  success: boolean;
-  error?: string;
+  installed: boolean;
+  error?: string | null;
 }
 
 /** Three-state install UI : idle (Install / Cancel), in-flight
@@ -56,7 +56,8 @@ export const ChromiumInstallModal: FC<Props> = ({
       const result = unwrapRpcEnvelope<InstallEdgeResponse>(raw, {
         route: rpcRoutes.installEdge, throwing: false,
       });
-      if (result?.success) {
+      console.log("[ChromiumInstallModal] install_edge result:", result);
+      if (result?.installed) {
         toast.success(t("microsoft.browserInstalled"));
         closeModal?.();
         onInstalled?.();
@@ -68,6 +69,7 @@ export const ChromiumInstallModal: FC<Props> = ({
       }
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
+      console.error("[ChromiumInstallModal] install_edge threw:", e);
       toast.error(t("microsoft.chromiumInstallFailed"), message);
     } finally {
       setInstalling(false);

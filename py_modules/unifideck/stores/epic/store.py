@@ -232,6 +232,11 @@ class EpicStore(StoreBase):
                 error="edge_not_installed",
                 store="epic",
             )
+        # Clear Epic session cookies so the user always sees a
+        # fresh login form. Stale browser sessions from a prior
+        # auth attempt would otherwise auto-login and bypass the
+        # OAuth redirect entirely.
+        edge.clear_store_cookies("epicgames.com")
         await self._ensure_auth_shortcut()
         return cast("AuthResult", await self._auth.start_auth())
 

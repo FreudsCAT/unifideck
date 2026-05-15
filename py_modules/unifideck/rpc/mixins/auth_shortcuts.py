@@ -123,25 +123,46 @@ class AuthShortcutsRPCMixin:
         compat tool around the auth flow. Delegates to the
         existing ``compatibility.proton_helpers`` helper.
 
+        For Ubisoft auth shortcuts, resolves the actual VDF
+        entry's unsigned AppID so the frontend can call
+        ``SteamClient.Apps.RunGame`` with the correct ID.
+        The Ubisoft shortcut is pre-created by
+        ``UbisoftAuth._ensure_auth_shortcut``.
+
         Args:
             store_game_id: the shortcut's ``store:game_id``
                 key as written into LaunchOptions.
 
         Returns:
             ``{success, tool_name, current_launch_options,
-              store_game_id, launcher_path}`` matching the
-            ``ShortcutLaunchContext`` shape the frontend
-            consumes.
+              store_game_id, launcher_path, appid_unsigned}``
+            matching the ``ShortcutLaunchContext`` shape the
+            frontend consumes.
         """
         try:
             from unifideck.compatibility.proton_helpers import (
                 get_compat_tool_for_game as _lookup,
             )
             result = _lookup(store_game_id)
-            if isinstance(result, dict):
-                result.setdefault("success", True)
-                return result
-            return {"success": True, "tool_name": result or ""}
+            if not isinstance(result, dict):
+                result = {"tool_name": result or ""}
+
+            # The generic proton_helpers lookup doesn't know
+            # the steam unsigned AppID. Resolve it from the
+            # shortcuts.vdf by scanning for the entry whose
+            # LaunchOptions contains this store_game_id.
+            if not result.get("appid_unsigned"):
+                resolved = self._resolve_shortcut_appid(store_game_id)
+                logger.info(
+                    "[AuthShortcuts] _resolve_shortcut_appid(%s) = %s",
+                    store_game_id, resolved,
+                )
+                result["appid_unsigned"] = resolved
+            logger.info(
+                "[AuthShortcuts] _get_compat_tool_impl result keys: %s",
+                list(result.keys()),
+            )
+            return result
         except Exception as e:
             logger.warning(
                 "[AuthShortcutsRPCMixin] "
@@ -149,6 +170,45 @@ class AuthShortcutsRPCMixin:
                 store_game_id, e,
             )
             return {"success": False, "error": str(e)}
+
+    @staticmethod
+    def _resolve_shortcut_appid(store_game_id: str) -> int:
+        """Scan shortcuts.vdf for an entry whose LaunchOptions
+        contains ``store_game_id`` and return its AppID."""
+        import re
+        from pathlib import Path
+        vdf = Path(
+            "~/.steam/steam/userdata/0/config/shortcuts.vdf",
+        ).expanduser()
+        if not vdf.is_file():
+            return 0
+        raw = vdf.read_bytes()
+        # VDF stores the appid as a 4-byte little-endian
+        # uint32 right after the \x01appid\x00 tag. Scan for
+        # entries matching store_game_id in LaunchOptions.
+        i = 0
+        while True:
+            i = raw.find(b"LaunchOptions", i)
+            if i == -1:
+                break
+            # Look forward for store_game_id in the options value
+            end = raw.find(b"\x00", i + 20)
+            if end == -1:
+                break
+            opts = raw[i + 14:end]  # after \x01LaunchOptions\x00
+            if store_game_id.encode() in opts:
+                # Scan backward for \x01appid\x00 + 4-byte uint32
+                chunk = raw[max(0, i - 200):i]
+                import struct
+                for m in re.finditer(
+                    b"\\x02appid\\x00(.{4})", chunk, re.DOTALL,
+                ):
+                    try:
+                        return struct.unpack("<I", m.group(1))[0]
+                    except struct.error:
+                        pass
+            i = end
+        return 0
 
 
 # ─── Module-level helpers ─────────────────────────────────────

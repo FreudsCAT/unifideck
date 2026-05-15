@@ -143,6 +143,14 @@ class _AuthShortcut:
         if vdf_found:
             uid = registry[store_id].get("appid_unsigned")
             if uid:
+                # Rewrite the shortcut to VDF so Steam re-discovers
+                # it in its in-memory app store. After a plugin
+                # reload Steam's app store is empty — RunGame
+                # silently no-ops on shortcuts it doesn't know
+                # about, even when they exist in shortcuts.vdf.
+                appid = registry[store_id].get("appid")
+                if appid:
+                    await self.add_shortcut_to_vdf(sm, appid)
                 await self._parent.fetch_auth_shortcut_artwork(
                     uid,
                 )

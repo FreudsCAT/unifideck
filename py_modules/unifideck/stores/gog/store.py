@@ -216,6 +216,7 @@ class GOGStore(StoreBase):
                 error="edge_not_installed",
                 store="gog",
             )
+        self._edge.clear_store_cookies("gog.com")
         await self._ensure_auth_shortcut()
         return cast("AuthResult", await self._auth.start_auth())
 

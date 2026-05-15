@@ -180,7 +180,7 @@ async def _boot_config_and_validate(
 def _boot_layer4_stores(plugin: Any, decky_plugin_dir: str) -> None:
     """Layer 4 — StoreRegistry + SyncService + auto-discovery."""
     plugin.registry = StoreRegistry(plugin.bus)
-    plugin.sync_service = SyncService(plugin.bus, plugin.registry)
+    plugin.sync_service = SyncService(plugin.registry, plugin.bus)
     stores_dir = os.path.join(
         decky_plugin_dir, "py_modules", "unifideck", "stores",
     )

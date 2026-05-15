@@ -44,11 +44,11 @@ class StoreHandlers(RpcHandlerBase):
 
     async def sync_libraries(self, **kw: Any) -> Any:
         """Trigger a full library sync across every store."""
-        return await self._sync.sync(**kw)
+        return await self._sync.sync_all(**kw)
 
     async def force_sync_libraries(self, **kw: Any) -> Any:
         """Like sync_libraries but bypass the in-progress guard."""
-        return await self._sync.sync(force=True, **kw)
+        return await self._sync.sync_all(force=True, **kw)
 
     async def get_sync_status(self) -> Any:
         """Return whether a sync is running + last completion time."""

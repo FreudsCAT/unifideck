@@ -58,8 +58,13 @@ class MicrosoftBrowserAuth:
         query = urllib.parse.urlencode(params, safe="/: ")
         url = f"{self._config.auth_url}?{query}"
         logger.info(
-        "[MicrosoftBrowserAuth] built OAuth URL (locale=%s)",
-        locale,
+            "[MicrosoftBrowserAuth] built OAuth URL: %s"
+            "?client_id=REDACTED&redirect_uri=%s&scope=%s"
+            " (locale=%s)",
+            self._config.auth_url,
+            self._config.redirect_uri,
+            self._config.scope,
+            locale,
         )
         return url
 

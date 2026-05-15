@@ -143,6 +143,8 @@ class MicrosoftStore(StoreBase):
                 metadata={"needs_2fa": False},
             )
         EdgeBrowser.ensure_controller_permissions()
+        self._edge.clear_store_cookies("microsoft.com")
+        self._edge.clear_store_cookies("live.com")
         await self._ensure_auth_shortcut()
         return cast("AuthResult", await self._auth.start_auth())
     async def complete_auth(

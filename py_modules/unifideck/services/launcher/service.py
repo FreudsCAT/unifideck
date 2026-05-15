@@ -170,6 +170,12 @@ class LauncherService:
                 priority="low",
             )
             if not ctx.is_launch_action:
+                # Ubisoft auth doesn't use a browser — UPC
+                # (Ubisoft Connect) runs in a dedicated Wine
+                # prefix. Delegate to the Ubisoft-specific
+                # handler instead of the generic OAuth flow.
+                if ctx.auth_store == "ubisoft":
+                    return await self._launch_ubisoft_auth(ctx)
                 # OAuth shortcut path — delegate to auth.py
                 from ...launcher.flows.auth import handle_store_auth
 

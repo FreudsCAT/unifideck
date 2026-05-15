@@ -37,12 +37,22 @@ from ...security import audit_auth_flow
 
 logger = logging.getLogger(__name__)
 
+# Only the post-login callback URIs — the URLs that legendary's
+# local OAuth redirect server listens on AFTER the user signs in.
+# ``www.epicgames.com/id/api/redirect`` is intentionally NOT listed —
+# it's the initial OAuth authorize endpoint that the browser hits
+# BEFORE the login form even appears; matching it would capture the
+# redirect before the user has a chance to sign in, yielding a URL
+# with no ``code`` parameter and killing the flow prematurely.
 _EPIC_REDIRECT_URIS: list[str] = [
     "https://legendary.epicgames.com/callback",
-    "https://www.epicgames.com/id/api/redirect",
 ]
 
-_AUTH_URL_MARKERS = ("epicgames.com",)
+# legendary's `auth` command emits the OAuth URL using its own
+# short-link domain (``https://legendary.gl/epiclogin``), which
+# redirects to ``epicgames.com``. Accept both so we don't drop
+# the URL on the floor and time out the flow.
+_AUTH_URL_MARKERS = ("epicgames.com", "legendary.gl")
 
 # Lines `legendary auth` prints when the user is already logged
 # in. We detect either marker, terminate the process, and emit
@@ -98,6 +108,13 @@ class EpicAuthFlow:
             exchange_code=self._register_code,
             background=True,
             write_url_file=("~/.local/share/unifideck/epic_auth_url.txt"),
+            # Content-based fallback: Epic sometimes embeds the
+            # ``authorizationCode`` in a JSON blob inside the
+            # intermediate ``/id/api/redirect`` page body.
+            # If URL-param matching misses the code, this
+            # regex extracts it from ``document.body.innerText``.
+            content_trigger_url="epicgames.com/id/api/redirect",
+            content_regex=r'"authorizationCode"\s*:\s*"([^"]+)"',
         )
 
     async def _is_already_authed(self) -> bool:
@@ -179,7 +196,8 @@ class EpicAuthFlow:
                 "no OAuth URL found in legendary auth output",
                 store="epic",
             )
-        logger.info("[epic_auth] captured URL from legendary")
+        pretty = url.split("?", 1)[0] if "?" in url else url
+        logger.info("[epic_auth] captured URL from legendary: %s", pretty)
         return url
 
     async def _spawn_legendary_auth(self) -> Any:
@@ -220,12 +238,25 @@ class EpicAuthFlow:
     @staticmethod
     async def _terminate_legendary(proc: Any) -> None:
         """Terminate LEGENDARY."""
+        # Legendary crashes fast on EOF (stdin is closed under
+        # the Decky service), so by the time we get here the
+        # process may already be dead. asyncio's
+        # ``Process.terminate()`` raises a bare
+        # ``ProcessLookupError()`` (empty str) in that case ;
+        # left uncaught, it propagates through the ``finally``
+        # in ``_fetch_login_url`` and replaces the real
+        # ``StoreAuthError`` with a useless empty-message log.
         try:
             proc.terminate()
             await asyncio.wait_for(proc.wait(), timeout=2)
         except TimeoutError:
-            proc.kill()
-            await proc.wait()
+            try:
+                proc.kill()
+                await proc.wait()
+            except ProcessLookupError:
+                pass
+        except ProcessLookupError:
+            pass
 
     async def _register_code(self, code: str) -> AuthResult:
         """Register code."""

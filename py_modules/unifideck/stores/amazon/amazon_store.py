@@ -220,6 +220,7 @@ class AmazonStore(StoreBase):
                 error="edge_not_installed",
                 store="amazon",
             )
+        edge.clear_store_cookies("amazon.com")
         await self._ensure_auth_shortcut()
         return cast("AuthResult", await self._auth.start_auth())
 

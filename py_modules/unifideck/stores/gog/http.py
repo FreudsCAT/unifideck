@@ -22,14 +22,21 @@ import ssl
 import urllib.request
 from collections.abc import Mapping
 from typing import Any
-from ...core.net import ssl_ctx_strict
+from ...core.net import ssl_ctx_permissive
 
 _logger = logging.getLogger(__name__)
 
 
 def build_ssl_context() -> ssl.SSLContext:
-    """Build ssl context."""
-    return ssl_ctx_strict()
+    """Build ssl context.
+
+    Uses permissive verification because some Steam Deck OS
+    versions ship with an outdated CA cert store that rejects
+    ``auth.gog.com`` despite the cert being valid. Without
+    this, every GOG auth attempt fails at the token-exchange
+    step with ``CERTIFICATE_VERIFY_FAILED``.
+    """
+    return ssl_ctx_permissive("GOG OAuth — outdated Deck cert store")
 
 
 async def fetch_json_get(

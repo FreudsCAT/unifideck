@@ -61,28 +61,25 @@ interface StoreAuthResponse {
 /** Auth dispatcher impl. */
 class AuthDispatcherImpl {
 
-  private inflight: {
-    store: StoreId;
-    promise: Promise<AuthResult>;
-  } | null = null;
+  /** Per-store in-flight auth: allows concurrent auth for
+   *  DIFFERENT stores (e.g. user starts GOG then clicks
+   *  Microsoft — both run in parallel). Only deduplicates
+   *  the SAME store (clicking Connect twice returns the
+   *  existing promise). */
+  private inflight = new Map<StoreId, Promise<AuthResult>>();
 
   /** Start the auth flow for `store`. Resolves when the
    *  backend emits `STORE_AUTH_COMPLETE` / `STORE_AUTH_FAILED`
    *  for that store, or rejects on timeout / shortcut launch
    *  failure. */
   async start(store: StoreId): Promise<AuthResult> {
-    if (this.inflight && this.inflight.store === store) {
-      return this.inflight.promise;
-    }
-
-    if (this.inflight) {
-      throw new Error(`Auth already in flight for ${this.inflight.store}`);
-    }
+    const existing = this.inflight.get(store);
+    if (existing) return existing;
 
     EventBusClient.bumpToFast();
     const promise = this.runFlow(store);
-    this.inflight = { store, promise };
-    promise.finally(() => { this.inflight = null; });
+    this.inflight.set(store, promise);
+    promise.finally(() => { this.inflight.delete(store); });
     return promise;
   }
 
@@ -186,12 +183,28 @@ class AuthDispatcherImpl {
     console.log(
       `[AuthDispatcher:${store}] store_auth returned:`, startResult,
     );
-    if (startResult?.success === true) {
+    if (startResult?.success === true && !(startResult as any)?.metadata?.pending) {
       console.log(
         `[AuthDispatcher:${store}] backend reports already-authed, ` +
         `resolving without shortcut launch`,
       );
       return { success: true, store };
+    }
+    // Backend reported a structured failure (e.g. ``edge_not_installed``)
+    // before any shortcut was needed. Surface it as the resolved
+    // AuthResult so the caller (useStoreAuth) can react — show the
+    // Chromium install modal, surface a toast, etc. — instead of
+    // firing a useless shortcut launch the user can't complete.
+    if (startResult && startResult.success === false && startResult.error) {
+      console.log(
+        `[AuthDispatcher:${store}] backend rejected start: ` +
+        `${startResult.error} — skipping shortcut launch`,
+      );
+      return {
+        success: false,
+        store,
+        error: startResult.error,
+      } as AuthResult;
     }
     console.log(`[AuthDispatcher:${store}] launching shortcut`);
     const launchResult = await this.launchForStore(store);

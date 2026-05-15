@@ -97,6 +97,16 @@ def bootstrap_services(
     # OAuthBrowserMonitor depends on the just-built `cdp` client.
     # Service-defs lambdas only see (bus, registry, cache, config,
     # paths, pipeline) — no partial-container access — so we
+    # Edge CDP port — resolved once and shared between the
+    # EdgeBrowser (launcher) and OAuthBrowserMonitor (redirect
+    # capture). The monitor polls this port so it can see the
+    # OAuth tabs that the launcher opens on the same port.
+    cdp_port = 9222
+    try:
+        cdp_port = int(config.get("edge.cdp_port", 9222))
+    except Exception:
+        pass
+
     # construct it here in the post-loop step instead of adding a
     # special case to `_instantiate_service`. Quiet on `None` cdp
     # so a missing dependency doesn't block the rest of the boot.
@@ -105,6 +115,7 @@ def bootstrap_services(
             from ...auth.browser import OAuthBrowserMonitor
             container.browser_monitor = OAuthBrowserMonitor(
                 cdp_client=container.cdp, config=config,
+                edge_cdp_port=cdp_port,
             )
             logger.debug("[bootstrap] browser_monitor wired")
         else:
@@ -123,11 +134,6 @@ def bootstrap_services(
     # to every OAuth store.
     try:
         from ...auth.edge_browser import EdgeBrowser
-        cdp_port = 9222
-        try:
-            cdp_port = int(config.get("edge.cdp_port", 9222))
-        except Exception:
-            pass
         container.edge_browser = EdgeBrowser(
             cdp_port=cdp_port,
             locale_fn=lambda: str(

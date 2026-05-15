@@ -39,6 +39,10 @@ interface AuthContextValue {
   ) => Promise<AuthResult | null>;
   logout: (store: StoreId) => Promise<void>;
   logoutAll: () => Promise<void>;
+  /** Called by useStoreAuth after AuthDispatcher reports
+   *  success — bypasses EventBus race by setting status
+   *  synchronously. */
+  notifyConnected: (store: StoreId) => void;
 }
 
 const Ctx = createContext<AuthContextValue | null>(null);
@@ -57,7 +61,26 @@ export const AuthProvider: FC<{ children: ReactNode }> = ({ children }) => {
     [],
   );
   React.useEffect(() => {
-    if (initial.data) setStatuses(initial.data);
+    if (initial.data) {
+      // The backend returns a *list* of per-store status
+      // dicts (``[{store_id, available, ...}]``), but the
+      // frontend uses a flat map. Convert on receipt so
+      // ``statuses["epic"] === "connected"`` works.
+      const raw: unknown[] = Array.isArray(initial.data)
+        ? initial.data as unknown[]
+        : [];
+      const map: StatusMap = {};
+      for (const entry of raw) {
+        if (entry && typeof entry === "object") {
+          const e = entry as Record<string, unknown>;
+          const id = e.store_id as StoreId | undefined;
+          if (id) {
+            map[id] = e.available ? "connected" : "disconnected";
+          }
+        }
+      }
+      setStatuses(map);
+    }
   }, [initial.data]);
   // RPC mutations
   const startMut = useRPCMutation<
@@ -116,10 +139,18 @@ export const AuthProvider: FC<{ children: ReactNode }> = ({ children }) => {
     setStatuses({});
   }, [logoutAllMut]);
 
+  const notifyConnected = useCallback(
+    (store: StoreId) => {
+      setStatuses((s) => ({ ...s, [store]: "connected" }));
+    },
+    [],
+  );
+
   const value: AuthContextValue = {
     statuses,
     loading: initial.loading,
     startAuth, completeAuth, logout, logoutAll,
+    notifyConnected,
   };
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;

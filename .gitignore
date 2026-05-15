@@ -125,3 +125,4 @@ docs/UBISOFT_INTEGRATION_FIXES.md
 build-plugin_old-backup.sh
 build-plugin.sh
 build-plugin.sh
+test_ubisoft_launch.py

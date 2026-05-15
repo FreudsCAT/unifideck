@@ -79,6 +79,7 @@ export function useStoreAuth(store: StoreId): UseStoreAuthResult {
         return result;
       }
       if (result.success) {
+        auth.notifyConnected(store);
         toast.success(`${store} connected`);
       } else {
         toast.error(`${store} sign-in failed`, result.error);

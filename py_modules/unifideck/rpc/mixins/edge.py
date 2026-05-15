@@ -69,9 +69,13 @@ class EdgeRPCMixin:
         frontend modal shows a spinner during the call.
 
         Returns:
-            ``{success: bool, error?: str}`` matching the
-            standard ``Result`` envelope. ``error`` is
-            populated on failure (``"edge_browser_not_configured"``,
+            ``{installed: bool, error: str | None}`` as the
+            data payload. Returning a dict that does **not**
+            start with a ``success`` key keeps ``_to_envelope``
+            from treating this as a caller-supplied envelope
+            (which would collapse ``data`` to ``None`` and
+            break frontend unwrapping). ``error`` is populated
+            on failure (``"edge_browser_not_configured"``,
             ``"flatpak_not_found"``, etc).
         """
         store = self.registry.get("microsoft")
@@ -81,7 +85,7 @@ class EdgeRPCMixin:
                 "(microsoft store missing)",
             )
             return {
-                "success": False,
+                "installed": False,
                 "error": "microsoft_store_unavailable",
             }
         logger.info("[EdgeRPC] install_edge: starting flatpak install")
@@ -92,4 +96,4 @@ class EdgeRPCMixin:
             "[EdgeRPC] install_edge result: success=%s error=%s",
             success, error,
         )
-        return {"success": success, "error": error}
+        return {"installed": success, "error": error}

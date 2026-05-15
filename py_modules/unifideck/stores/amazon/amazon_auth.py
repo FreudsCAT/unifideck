@@ -167,7 +167,8 @@ class AmazonAuthFlow:
                 store="amazon",
             )
         self._pending_login = payload
-        logger.info("[amazon_auth] received login URL from nile")
+        pretty = url.split("?", 1)[0] if "?" in url else url
+        logger.info("[amazon_auth] received login URL from nile: %s", pretty)
         return cast("str", url)
 
     async def _run_nile_login_probe(self) -> dict:
