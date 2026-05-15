@@ -103,7 +103,12 @@ def validate_i18n_schema(
         sys.path.insert(0, scripts_str)
         added = True
     try:
-        from locale_config import (
+        # ``locale_config`` lives in ``scripts/`` next to the
+        # package, dynamically injected on sys.path above. Mypy
+        # can't resolve it statically; the import is guarded by
+        # the ``is_file()`` check earlier so a missing file
+        # degrades gracefully.
+        from locale_config import (  # type: ignore[import-not-found]
             LocaleConfigError,
             load_from_dict,
         )

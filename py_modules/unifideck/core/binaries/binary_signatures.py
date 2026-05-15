@@ -1,6 +1,6 @@
-"""core/bin/binary_signatures.py — SHA256 allowlist for bundled CLI tools.
+"""core/binaries/binary_signatures.py — SHA256 allowlist for bundled CLI tools.
 
-Moved from core/ to core/bin/ (colocated with
+Moved from core/ to core/binaries/ (colocated with
 binary_resolver and cli_timeouts). Clean break: no shim in core/.
 
 This module provides a simple allowlist of known-good SHA256

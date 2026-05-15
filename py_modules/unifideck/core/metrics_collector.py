@@ -151,7 +151,7 @@ class MetricsCollector:
         """
         self._counters[name] = self._counters.get(name, 0) + 1
 
-    def _on_auth_start(self, store: str = "", **kwargs) -> None:
+    def _on_auth_start(self, store: str = "", **kwargs: Any) -> None:
         """Stash the monotonic start time for an auth attempt.
 
         Keyed by ``"auth:<store>"`` so concurrent auth
@@ -164,7 +164,7 @@ class MetricsCollector:
         """
         self._pending_timers[f"auth:{store}"] = time.monotonic()
 
-    def _on_auth_complete(self, store: str = "", **kwargs) -> None:
+    def _on_auth_complete(self, store: str = "", **kwargs: Any) -> None:
         """Finalise the auth timer for ``store`` into ``auth_duration_ms``.
 
         Look up the pending start, compute elapsed, store
@@ -178,7 +178,7 @@ class MetricsCollector:
         """
         self._complete_timer(f"auth:{store}", "auth_duration_ms")
 
-    def _on_sync_start(self, **kwargs) -> None:
+    def _on_sync_start(self, **kwargs: Any) -> None:
         """Stash the monotonic start time for a sync.
 
         Single shared timer key (``"sync"``) — only one
@@ -189,7 +189,7 @@ class MetricsCollector:
         """
         self._pending_timers["sync"] = time.monotonic()
 
-    def _on_sync_complete(self, **kwargs) -> None:
+    def _on_sync_complete(self, **kwargs: Any) -> None:
         """Finalise the sync timer into ``sync_duration_ms``.
 
         Args:
@@ -197,7 +197,7 @@ class MetricsCollector:
         """
         self._complete_timer("sync", "sync_duration_ms")
 
-    def _on_download_start(self, store: str = "", game_id: str = "", **kwargs) -> None:
+    def _on_download_start(self, store: str = "", game_id: str = "", **kwargs: Any) -> None:
         """Stash the monotonic start time for a download.
 
         Keyed by ``"dl:<store>:<game_id>"`` so concurrent
@@ -211,7 +211,7 @@ class MetricsCollector:
         self._pending_timers[f"dl:{store}:{game_id}"] = time.monotonic()
 
     def _on_download_complete(
-        self, store: str = "", game_id: str = "", **kwargs
+        self, store: str = "", game_id: str = "", **kwargs: Any,
     ) -> None:
         """Finalise the (store, game_id) download timer.
 
@@ -227,7 +227,12 @@ class MetricsCollector:
             "download_duration_ms",
         )
 
-    def _on_sync_gauge(self, games=None, stores_synced=None, **kw):
+    def _on_sync_gauge(
+        self,
+        games: list[Any] | None = None,
+        stores_synced: list[str] | None = None,
+        **kw: Any,
+    ) -> None:
         """Update the sync gauges from the SYNC_COMPLETE payload.
 
         Two gauges set from the post-sync state:

@@ -98,7 +98,7 @@ def get_cfg(
 _COLD_START_CONFIG_PATH = "~/.local/share/unifideck/config.json"
 
 
-def _read_cold_start_json() -> dict | None:
+def _read_cold_start_json() -> dict[str, Any] | None:
     """Read the cold-start config.json file, returning ``None`` on
     any error (missing file, malformed JSON, OS error).
 

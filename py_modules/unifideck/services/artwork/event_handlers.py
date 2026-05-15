@@ -132,20 +132,26 @@ class _EventHandlersMixin:
         from .fetcher import has_artwork
 
         async def _process_game(game: Game) -> None:
-            if not game.launch_path:
+            if not game.exe_path:
                 return
 
             from unifideck.services.shortcut.games_map import generate_app_id
-            app_id = generate_app_id(game.launch_path, game.title)
+            app_id = generate_app_id(game.exe_path, game.title)
 
             if not getattr(self, "_grid_dir", None):
                 return
 
             has_art = await has_artwork(self._grid_dir, app_id)
             if not has_art:
-                await self.fetch_artwork(app_id, game.store, game.id, game.title)
+                await self.fetch_artwork(app_id, game.store, game.app_id, game.title)
 
         # Launch all fetches. The semaphore inside fetch_artwork controls concurrency.
-        tasks = [_process_game(game) for game in games]
+        tasks: list[Any] = [_process_game(game) for game in games]
         if tasks:
-            _track(asyncio.create_task(asyncio.gather(*tasks, return_exceptions=True)))
+            # asyncio.gather() returns a Future, not a Coroutine — so
+            # ensure_future() is the right wrapper here (it accepts
+            # either and returns a Task). create_task() rejects Futures
+            # under mypy strict.
+            _track(asyncio.ensure_future(
+                asyncio.gather(*tasks, return_exceptions=True),
+            ))

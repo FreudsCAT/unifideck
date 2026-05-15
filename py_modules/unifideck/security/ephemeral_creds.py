@@ -278,13 +278,13 @@ class EphemeralCredentialContext:
         # explicitly so the invariant doesn't depend on
         # platform.
         try:
-            Path(tempdir).chmod(_TEMPDIR_MODE)  # noqa: ASYNC240 — project uses asyncio.to_thread for sync I/O, not trio/anyio
+            Path(tempdir).chmod(_TEMPDIR_MODE)
         except OSError as e:
             # If we can't chmod, abort and remove — we cannot
             # let plaintext live in a dir we don't fully
             # control.
             with contextlib.suppress(OSError):
-                Path(tempdir).rmdir()  # noqa: ASYNC240 — project uses asyncio.to_thread for sync I/O, not trio/anyio
+                Path(tempdir).rmdir()
             raise EphemeralCredentialError(
                 f"cannot chmod tempdir {tempdir}: {e}",
             ) from e
@@ -417,4 +417,17 @@ def _safe_listdir(path: str) -> Iterator[str]:
 # re-export below means every existing
 # ``from security.ephemeral_creds import InPlaceEphemeralFile``
 # import keeps working without churn.
+#
+# Fix (2026-05-15, lot 11e): the re-export was DOCUMENTED but
+# never actually written — ``security/__init__.py`` and any
+# direct importer hit ``ImportError: cannot import name
+# 'InPlaceEphemeralFile'`` at module load. Added the line below
+# to match the documented contract.
+from .ephemeral_creds_inplace import InPlaceEphemeralFile
+
+__all__ = [
+    "EphemeralCredentialContext",
+    "EphemeralCredentialError",
+    "InPlaceEphemeralFile",
+]
 

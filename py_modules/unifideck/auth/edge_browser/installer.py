@@ -60,7 +60,7 @@ class EdgeInstaller:
                 inst.ensure_controller_permissions()
     """
 
-    def __init__(self, clean_env_fn: Callable[[], dict]) -> None:
+    def __init__(self, clean_env_fn: Callable[[], dict[str, Any]]) -> None:
         """Build an installer.
 
         Args:

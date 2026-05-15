@@ -13,8 +13,8 @@ logger = logging.getLogger(__name__)
 def audit_auth_flow(
     store: str,
     method: str = "oauth",
-) -> Callable:
-    def decorator(func: Callable) -> Callable:
+) -> Callable[..., Any]:
+    def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
         @functools.wraps(func)
         async def wrapper(self: Any, *args: Any, **kwargs: Any) -> Any:
             bus = getattr(self, "_bus", None)
@@ -52,8 +52,8 @@ def audit_auth_flow(
 def audit_token_op(
     operation: str,
     store: str,
-) -> Callable:
-    def decorator(func: Callable) -> Callable:
+) -> Callable[..., Any]:
+    def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
         @functools.wraps(func)
         async def wrapper(self: Any, *args: Any, **kwargs: Any) -> Any:
             bus = getattr(self, "_bus", None)

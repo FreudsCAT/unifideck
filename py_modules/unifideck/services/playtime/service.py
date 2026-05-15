@@ -8,7 +8,7 @@ owns event wiring + session lifecycle.
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
 from unifideck.core.types import Events
@@ -82,7 +82,7 @@ class PlaytimeService:
             logger.warning("[PlaytimeService] Session already active for %s", key)
             return
 
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         now_iso = now.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
 
         # Get or create game ID
@@ -95,7 +95,7 @@ class PlaytimeService:
                VALUES (?, ?, 'unknown')""",
             (game_db_id, now_iso),
         )
-        self._db.conn.commit()
+        self._db._require_conn().commit()
         row_id = cursor.lastrowid
 
         self._active[key] = {
@@ -121,7 +121,7 @@ class PlaytimeService:
     @subscribe(Events.SUSPEND)
     async def _on_suspend(self, **kwargs: Any) -> None:
         """Pause the clock for all active sessions."""
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         count = 0
         for session in self._active.values():
             if session["suspended_at"] is None:
@@ -133,7 +133,7 @@ class PlaytimeService:
     @subscribe(Events.RESUME)
     async def _on_resume(self, **kwargs: Any) -> None:
         """Resume the clock for all suspended sessions."""
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         count = 0
         for session in self._active.values():
             if session["suspended_at"] is not None:
@@ -235,7 +235,7 @@ class PlaytimeService:
         if not session:
             return
 
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         now_iso = now.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
 
         # Handle in-flight suspend
@@ -251,7 +251,7 @@ class PlaytimeService:
             logger.debug("[PlaytimeService] Discarding short session (%ds) for %s", duration_secs, session["title"])
             if session["db_row_id"]:
                 self._db.execute("DELETE FROM play_sessions WHERE id = ?", (session["db_row_id"],))
-                self._db.conn.commit()
+                self._db._require_conn().commit()
             return
 
         if session["db_row_id"]:
@@ -270,7 +270,7 @@ class PlaytimeService:
             # Refresh materialized totals and streaks
             self._refresh_game_stats(session["game_db_id"])
 
-            self._db.conn.commit()
+            self._db._require_conn().commit()
 
         logger.info("[PlaytimeService] Session ended: %s (%ds)", session["title"], duration_secs)
 
@@ -372,7 +372,7 @@ class PlaytimeService:
         )
 
     @staticmethod
-    def _parse_daily_stats_dates(rows: list) -> list:
+    def _parse_daily_stats_dates(rows: list[Any]) -> list[Any]:
         """Parse ``YYYY-MM-DD`` strings from daily_stats rows into UTC dates.
 
         The daily_stats schema stores dates as plain strings (see
@@ -382,12 +382,12 @@ class PlaytimeService:
         Malformed rows are silently dropped — partial data is fine
         for a UI display, and we already log on write.
         """
-        from datetime import datetime, timezone
-        dates: list = []
+        from datetime import datetime
+        dates: list[Any] = []
         for r in rows:
             try:
                 parsed = datetime.strptime(r["date"], "%Y-%m-%d").replace(
-                    tzinfo=timezone.utc,
+                    tzinfo=UTC,
                 )
                 dates.append(parsed.date())
             except ValueError:
@@ -395,7 +395,9 @@ class PlaytimeService:
         return dates
 
     @staticmethod
-    def _walk_consecutive_from(dates: list, anchor) -> int:
+    def _walk_consecutive_from(
+        dates: list[Any], anchor: date,
+    ) -> int:
         """Count consecutive days starting from ``anchor`` going backwards.
 
         ``dates`` is assumed sorted descending. Returns the number
@@ -414,15 +416,15 @@ class PlaytimeService:
         return count
 
     @classmethod
-    def _compute_current_streak(cls, dates: list) -> int:
+    def _compute_current_streak(cls, dates: list[Any]) -> int:
         """Compute the current streak ending today (or yesterday).
 
         Tries today first; if there's no entry for today, falls
         back to yesterday so the streak doesn't drop to 0 the
         moment the date rolls over before the user has played.
         """
-        from datetime import datetime, timedelta, timezone
-        today = datetime.now(timezone.utc).date()
+        from datetime import datetime, timedelta
+        today = datetime.now(UTC).date()
 
         current = cls._walk_consecutive_from(dates, today)
         if current > 0:
@@ -436,7 +438,7 @@ class PlaytimeService:
         return 0
 
     @staticmethod
-    def _compute_longest_streak(dates: list) -> int:
+    def _compute_longest_streak(dates: list[Any]) -> int:
         """Compute the longest consecutive run of dates ever seen.
 
         Operates on a sorted-ascending de-duplicated copy of

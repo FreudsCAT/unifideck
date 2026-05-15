@@ -5,12 +5,16 @@ import logging
 import os
 import sys
 from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
 from unifideck.core.types.results import Result
 
 from .types.context import LaunchContext
 from .types.errors import GameNotFoundError, LauncherError
 from .types.exit_codes import ExitCode
+
+if TYPE_CHECKING:
+    from unifideck.services.shortcut import ShortcutService
 
 logger = logging.getLogger(__name__)
 def _parse_argv(argv: list[str]) -> tuple[str, str]:
@@ -35,7 +39,7 @@ def _resolve_plugin_dir() -> Path:
     return resolve_plugin_dir(start=Path(__file__))
 async def _build_context(
     argv: list[str],
-    shortcut_svc,
+    shortcut_svc: ShortcutService,
 ) -> LaunchContext:
     """Build context."""
     game_key, raw_options = _parse_argv(argv)
@@ -184,8 +188,15 @@ def _map_result_to_exitcode(result: Result) -> int:
         except (ValueError, IndexError):
             return int(ExitCode.GAME_FAILED)
     return int(ExitCode.GAME_FAILED)
-def _bootstrap_minimal_services():
-    """Bootstrap minimal services."""
+def _bootstrap_minimal_services() -> Any:
+    """Bootstrap minimal services.
+
+    Returns the ``LauncherService`` built by
+    ``launcher.bootstrap.build_launcher_service``. Typed as
+    ``Any`` to match the source return type (the bootstrap
+    helper itself is intentionally untyped at the call site to
+    avoid circular imports).
+    """
     from .bootstrap import build_launcher_service
     return build_launcher_service()
 

@@ -174,7 +174,7 @@ async def _emit_toast(
 ) -> None:
     """Emit toast."""
     if bus is None:
-        return
+        return  # type: ignore[unreachable]  # fallback for unexpected error shape
     i18n_key = (
         "toasts.launcher.cloudSyncDownFailed"
         if phase == "sync_down"

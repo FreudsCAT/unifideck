@@ -382,7 +382,7 @@ class SyncService(_SyncQueriesMixin):
         await self._emit_progress(store_name, 0, 1)
         games, err = await self._sync_one_store(store)
         if self._all_games is None:
-            self._all_games = {}
+            self._all_games = {}  # type: ignore[unreachable]  # fallback for store registry miss
         self._all_games[store_name] = games
         self._all_games = await self._apply_dedup_and_emit(self._all_games)
         self._last_sync_time = time.time()

@@ -237,7 +237,14 @@ class UbisoftInstaller:
             except OSError:
                 logger.exception("[UbisoftInstaller] kill failed")
         prefix_path = self._paths.get_prefix_path(game_id)
-        if prefix_path and await asyncio.to_thread(lambda: Path(prefix_path).is_dir()):
+        # mypy strict mis-resolves the asyncio.to_thread overload here
+        # against the lambda's bool return — the actual signature is
+        # ``Callable[..., T] -> Awaitable[T]`` and this works fine at
+        # runtime. The combined arg-type + return-value pair is the
+        # overload-resolution noise, not a real type error.
+        if prefix_path and await asyncio.to_thread(
+            lambda: Path(prefix_path).is_dir(),  # type: ignore[arg-type,return-value]
+        ):
             await asyncio.sleep(2)
             captured = self._session.capture(prefix_path)
             if captured:

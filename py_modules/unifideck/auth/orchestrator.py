@@ -35,7 +35,7 @@ import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from unifideck.core.types import AuthResult, Events
 
@@ -101,7 +101,7 @@ class AuthOrchestrator:
         self._cfg = config or OrchestratorConfig()
         # Background task handle — set when running in background
         # mode so logout/cancel can stop a stale flow cleanly.
-        self._bg_task: asyncio.Task | None = None
+        self._bg_task: asyncio.Task[Any] | None = None
         # ─── Public API ────────────────────────────────────────────
 
     async def run_flow(

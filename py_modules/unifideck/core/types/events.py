@@ -222,6 +222,34 @@ class Events(StrEnum):
     #   title (str), is_auth (bool)
     SHORTCUT_CREATED = "shortcut_created"
 
+    # Emitted by ShortcutService when an entry is removed from
+    # games.map (and consequently from shortcuts.vdf on the next
+    # save). Mirrors SHORTCUT_CREATED so interested services
+    # (ArtworkService, MetricsCollector) can react without polling.
+    # Added 2026-05-15 (lot 12c): the emit site in
+    # services/shortcut/games_map_mixin.py:233 has always referenced
+    # ``Events.SHORTCUT_REMOVED`` but the enum member was never
+    # declared — the call was a silent no-op (mypy attr-defined).
+    # Payload fields: app_id (int, signed).
+    SHORTCUT_REMOVED = "shortcut_removed"
+
+    # ── UI toast notification ────────────────────────────────────
+    # Generic frontend toast trigger. Emitted by any service that
+    # needs to surface a user-facing message asynchronously
+    # (launcher error, circuit breaker tripped, sync failed, etc.).
+    # The frontend subscribes via the bus bridge and displays the
+    # toast styled per ``severity``.
+    # Added 2026-05-15 (lot 12c): the emit sites in
+    # services/launcher/{circuit_breaker,error_toasts}.py have
+    # always referenced ``Events.TOAST_NOTIFICATION`` but the enum
+    # member was never declared — both call sites were silent
+    # no-ops, so launcher errors and circuit-breaker trips never
+    # actually reached the UI.
+    # Payload fields: severity ("info" | "warning" | "error"),
+    #   duration_ms (int), i18n_key (str), params (dict[str, Any]),
+    #   actions (list[dict[str, Any]], opt).
+    TOAST_NOTIFICATION = "toast_notification"
+
     # On-demand artwork fetch request. Any caller may emit this to
     # ask ArtworkService to pull covers for a given title from
     # SteamGridDB. ArtworkService deduplicates by app_id (won't

@@ -96,7 +96,7 @@ def _spawn_edge_process(
     stderr_fh = None
     try:
         # Not a ``with`` block: the file descriptor is handed off
-        # to ``subprocess.Popen`` below and must outlive this
+        # to ``subprocess.Popen[bytes]`` below and must outlive this
         # scope. We close it explicitly in the ``finally`` clause
         # of the Popen try-block.
         stderr_fh = Path(LOG_FILE).open(log_mode)
@@ -105,7 +105,7 @@ def _spawn_edge_process(
         # Proceed with DEVNULL if we can't open it.
         logger.debug("[Edge] stderr log open failed: %s", e)
     try:
-        browser.process = subprocess.Popen(
+        browser.process = subprocess.Popen[bytes](
             args,
             stdout=subprocess.DEVNULL,
             stderr=(

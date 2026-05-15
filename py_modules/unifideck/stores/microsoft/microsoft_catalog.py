@@ -74,14 +74,14 @@ class MicrosoftCatalogReader:
         except Exception:
             logger.exception("[MicrosoftCatalog] catalog fetch failed")
             return []
-        if not isinstance(data, list):
+        if not isinstance(data, list):  # type: ignore[unreachable]  # guard 'if not isinstance(data, list)'
             logger.warning(
                 "[MicrosoftCatalog] catalog returned %s, "
                 "not list",
                 type(data).__name__,
             )
             return []
-        ids = [
+        ids = [  # type: ignore[unreachable]  # guard on response shape
             item["id"]
             for item in data
             if isinstance(item, dict)
@@ -199,7 +199,7 @@ class MicrosoftCatalogReader:
 
     @staticmethod
     def _first_localized_title(
-        localized: list,
+        localized: list[Any],
     ) -> str | None:
         """First localized title."""
         for loc in localized:

@@ -18,7 +18,7 @@ button[class*="play_PlayBtn"] {
 def is_steam_ui_tab(page: dict[str, Any]) -> bool:
     """Check whether steam ui tab."""
     if not isinstance(page, dict):
-        return False
+        return False  # type: ignore[unreachable]  # defensive guard on platform detection
     url = page.get("url", "")
     return STEAM_TAB_URL_MARKER in url
 def escape_css_for_template_literal(css: str) -> str:

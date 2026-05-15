@@ -143,7 +143,7 @@ class BatchDispatcher:
         return out
 
     @staticmethod
-    def handler_supports_batch(handler: Callable) -> bool:
+    def handler_supports_batch(handler: Callable[..., Any]) -> bool:
         """Predicate: does ``handler`` opt in to batched delivery?
 
         A handler opts in by exposing two attributes:

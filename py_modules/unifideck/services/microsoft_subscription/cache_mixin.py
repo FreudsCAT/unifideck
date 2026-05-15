@@ -62,4 +62,4 @@ class _CacheMixin:
             detected_at=time.time(),
         )
         self._write_cache(cache_key, entry)
-        await self._emit_state_change(cache_key, tier)
+        await self._emit_state_change(cache_key, tier)  # type: ignore[attr-defined]  # self._emit_state_change provided by sibling mixin _EventHandlersMixin

@@ -163,7 +163,7 @@ class ConfigValidator:
 
         """
         self._bus = bus
-        self._schema: dict | None = None
+        self._schema: dict[str, Any] | None = None
         # Strong references to fire-and-forget event-emit tasks so they
         # aren't garbage-collected mid-flight. See ``_emit_result_event``.
         self._background_tasks: set[asyncio.Task[Any]] = set()
@@ -223,9 +223,9 @@ class ConfigValidator:
         return result
 
     def _validate_defaults(
-        self, defaults_path: str, schema: dict,
+        self, defaults_path: str, schema: dict[str, Any],
         result: ValidationResult,
-    ) -> dict | None:
+    ) -> dict[str, Any] | None:
         """Read + validate the defaults file, update result in place.
 
         Returns the parsed defaults dict on success (even with
@@ -250,11 +250,11 @@ class ConfigValidator:
 
     def _validate_user_overrides(
         self,
-        defaults: dict,
+        defaults: dict[str, Any],
         user_path: str | None,
-        schema: dict,
+        schema: dict[str, Any],
         result: ValidationResult,
-    ) -> dict:
+    ) -> dict[str, Any]:
         """Validate user overrides if present; return merged config.
 
         A missing user file is NOT an error — it just means the user
@@ -325,7 +325,7 @@ class ConfigValidator:
         return schema
 
     def _validate_merged(
-        self, merged: dict, schema: dict,
+        self, merged: dict[str, Any], schema: dict[str, Any],
         result: ValidationResult,
     ) -> None:
         """Final sanity check on the merged config.
@@ -347,7 +347,7 @@ class ConfigValidator:
 
     # ── Private helpers ─────────────────────────────────────────
 
-    def _load_schema(self) -> dict | None:
+    def _load_schema(self) -> dict[str, Any] | None:
         """Load schema.json from disk, cached on first call.
 
         Returns None if the file cannot be read or parsed — the
@@ -365,7 +365,7 @@ class ConfigValidator:
             return None
 
     @staticmethod
-    def _read_json(path: str) -> dict | None:
+    def _read_json(path: str) -> dict[str, Any] | None:
         """Read and parse a JSON file, returning None on any failure.
 
         Failures are logged at warning level. Callers treat None as
@@ -390,7 +390,7 @@ class ConfigValidator:
 
     @staticmethod
     def _validate_against_schema(
-        data: dict, schema: dict, source: str,
+        data: dict[str, Any], schema: dict[str, Any], source: str,
     ) -> list[ValidationError]:
         """Run jsonschema validation and convert errors to our format.
 
@@ -425,7 +425,7 @@ class ConfigValidator:
         return errors
 
     @staticmethod
-    def _deep_merge(base: dict, overrides: dict) -> dict:
+    def _deep_merge(base: dict[str, Any], overrides: dict[str, Any]) -> dict[str, Any]:
         """Recursively merge overrides into base, returning a new dict.
 
         Used to produce the final config that would be seen by

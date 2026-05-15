@@ -90,6 +90,12 @@ class LaunchHistoryService(_FailuresMixin, _BypassMixin):
         """Fire-and-forget ``CIRCUIT_STATE_CHANGED`` on the bus."""
         if not self._bus:
             return
+        # Capture a local reference so mypy narrows it across
+        # the inner ``_emit`` closure. Without this binding, the
+        # closure sees ``self._bus: Any | None`` (mypy doesn't
+        # propagate the outer narrowing into the nested function)
+        # and ``bus.emit`` raises ``Item "None" ... has no attribute``.
+        bus = self._bus
 
         try:
             loop = asyncio.get_running_loop()
@@ -101,7 +107,7 @@ class LaunchHistoryService(_FailuresMixin, _BypassMixin):
                 is_open, count = self.is_circuit_open(game_key)
                 store, game_id = game_key.split(":", 1)
 
-                await self._bus.emit(
+                await bus.emit(
                     Events.CIRCUIT_STATE_CHANGED,
                     store=store,
                     game_id=game_id,

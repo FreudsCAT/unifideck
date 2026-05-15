@@ -53,11 +53,11 @@ class StoreBase(ABC):
         """Check whether available."""
         ...
     @abstractmethod
-    async def start_auth(self, **kwargs) -> AuthResult:
+    async def start_auth(self, **kwargs: Any) -> AuthResult:
         """Start auth."""
         ...
     @abstractmethod
-    async def complete_auth(self, **kwargs) -> AuthResult:
+    async def complete_auth(self, **kwargs: Any) -> AuthResult:
         """Complete auth."""
         ...
     @abstractmethod
@@ -105,8 +105,8 @@ class StoreBase(ABC):
     ) -> str | None:
         """Find exe."""
         return exe_finder.find(install_path, hints)
-    async def _emit(self, event: Events, **kwargs) -> None:
-        """Emit."""
+    async def _emit(self, event: Events, **kwargs: Any) -> None:
+        """Emit a bus event with arbitrary kwargs payload."""
         await self._bus.emit(event, **kwargs)
 
     async def _run_cli(
@@ -129,8 +129,8 @@ class StoreBase(ABC):
             dict(os.environ) if env is None
             else {**os.environ, **env}
         )
-        def _run():
-            """Run."""
+        def _run() -> str:
+            """Run the subprocess synchronously, return stdout."""
             result = subprocess.run(
                 cmd,
                 capture_output=True,

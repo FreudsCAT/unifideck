@@ -215,7 +215,10 @@ class ConfigManager:
             sys.path.insert(0, scripts_str)
             added = True
         try:
-            from locale_config import (
+            # Same dynamic import as in ``i18n_schema.py``; mypy
+            # can't resolve ``scripts/locale_config.py`` because
+            # ``scripts/`` is only injected on sys.path at runtime.
+            from locale_config import (  # type: ignore[import-not-found]
                 LocaleConfigError,
                 load_from_dict,
             )

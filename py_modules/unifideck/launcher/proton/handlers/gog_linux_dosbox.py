@@ -51,8 +51,8 @@ def launch_via_steam_runtime(
             # ``run.sh``; running this through a shell would defeat
             # the purpose of the wrapper (extra PID, signal forwarding,
             # quoting hazards).
-            os.execv(str(run_sh), [str(run_sh), str(start_script), *args])  # noqa: S606 — intentional process exec; arg list is fully controlled internal data
-    os.execv(str(start_script), [str(start_script), *args])  # noqa: S606 — intentional process exec; arg list is fully controlled internal data
+            os.execv(str(run_sh), [str(run_sh), str(start_script), *args])
+    os.execv(str(start_script), [str(start_script), *args])
 def _parse_argv() -> tuple[Path, list[str]]:
     """Parse argv."""
     if len(sys.argv) < 2:
@@ -140,6 +140,6 @@ def main() -> None:
     # the DOSBox binary; bypassing a shell avoids quoting hazards
     # around the per-game ``.conf`` paths and keeps the env exactly
     # as we built it above.
-    os.execvpe(str(binary), command, env)  # noqa: S606 — intentional process exec; arg list is fully controlled internal data
+    os.execvpe(str(binary), command, env)
 if __name__ == "__main__":
     main()

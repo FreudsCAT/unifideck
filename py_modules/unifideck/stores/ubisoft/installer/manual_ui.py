@@ -177,11 +177,11 @@ class _ManualUiInstaller:
     def _snapshot_install_base(
         self,
         install_path: str | None,
-    ) -> tuple[str, set]:
+    ) -> tuple[str, set[Any]]:
         """Snapshot install base."""
         install_base = install_path or self._config.default_install_base_expanded
         Path(install_base).mkdir(parents=True, exist_ok=True)
-        dirs_before: set = set()
+        dirs_before: set[Any] = set()
         with contextlib.suppress(OSError):
             dirs_before = {entry.name for entry in Path(install_base).iterdir()}
         return install_base, dirs_before
@@ -244,14 +244,14 @@ class _ManualUiInstaller:
     @staticmethod
     def _snapshot_upc_game_dirs(
         prefix_path: str,
-    ) -> dict[str, set]:
+    ) -> dict[str, set[Any]]:
         """Snapshot UPC game dirs."""
         upc_games_rel = str(Path("drive_c") / "Program Files (x86)" / "Ubisoft" / "Ubisoft Game Launcher" / "games")
         candidates = (
             str(Path(prefix_path) / upc_games_rel),
             str(Path(prefix_path) / "pfx" / upc_games_rel),
         )
-        snapshots: dict[str, set] = {}
+        snapshots: dict[str, set[Any]] = {}
         for gdir in candidates:
             if Path(gdir).is_dir():
                 with contextlib.suppress(OSError):
@@ -263,8 +263,8 @@ class _ManualUiInstaller:
         *,
         proc: asyncio.subprocess.Process,
         install_base: str,
-        dirs_before: set,
-        upc_dirs_before: dict[str, set],
+        dirs_before: set[Any],
+        upc_dirs_before: dict[str, set[Any]],
         progress_cb: Callable[[dict[str, Any]], Awaitable[None]] | None,
     ) -> str | None:
         """Poll until a new install directory appears or UPC exits.
@@ -318,8 +318,8 @@ class _ManualUiInstaller:
     def _detect_new_install(
         self,
         install_base: str,
-        dirs_before: set,
-        upc_dirs_before: dict[str, set],
+        dirs_before: set[Any],
+        upc_dirs_before: dict[str, set[Any]],
     ) -> str | None:
         """Probe every watched directory for a new install dir.
 
@@ -386,7 +386,7 @@ class _ManualUiInstaller:
     def _check_new_dirs(
         self,
         base: str,
-        before: set,
+        before: set[Any],
     ) -> str | None:
         """Check new dirs."""
         try:

@@ -58,7 +58,7 @@ class UbisoftInstallerCache:
             self._config.installer_url,
         )
         try:
-            Path(cache_dir).mkdir(parents=True, exist_ok=True)  # noqa: ASYNC240 — project uses asyncio.to_thread for sync I/O, not trio/anyio
+            await asyncio.to_thread(lambda: Path(cache_dir).mkdir(parents=True, exist_ok=True))
         except OSError:
             logger.exception("[UbisoftInstallerCache] cache dir creation failed")
             return None

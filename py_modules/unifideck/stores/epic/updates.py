@@ -61,7 +61,7 @@ class EpicUpdateChecker:
         self._list_updates_timeout = list_updates_timeout
         self._size_cache_ttl = size_cache_ttl
         self._info_timeout = info_timeout
-        self._size_cache: dict[str, tuple] = {}
+        self._size_cache: dict[str, tuple[Any, ...]] = {}
 
     async def check_for_updates(self) -> list[str]:
         """Check for updates."""

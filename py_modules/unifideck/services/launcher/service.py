@@ -97,7 +97,7 @@ class LauncherService:
         if await self._check_circuit_breaker(ctx):
             return Result(success=False, error="circuit_open")
 
-        state = RuntimeState(started_at=ctx.env.get("started_at", 0))
+        state = RuntimeState(started_at=float(ctx.env_overrides.get("started_at", "0")))
 
         try:
             if ctx.is_xcloud:
@@ -107,8 +107,14 @@ class LauncherService:
             else:
                 res = await self._launch_native(ctx, state)
 
-            # Enrich with elapsed time
-            res.elapsed = self._elapsed_since_launch()
+            # Enrich with elapsed time. Result has no dedicated
+            # ``elapsed`` field — stuffed into the free-form
+            # ``metadata`` dict per its documented use (store-
+            # specific extras that don't belong on the canonical
+            # surface).
+            if res.metadata is None:
+                res.metadata = {}  # type: ignore[unreachable]  # guard 'if res.metadata is None'
+            res.metadata["elapsed"] = self._elapsed_since_launch()
             return res
         except Exception as e:
             return await self._handle_launcher_error(ctx, e)
@@ -117,15 +123,15 @@ class LauncherService:
         """xCloud streaming path — Edge kiosk mode on the Xbox URL."""
         from unifideck.core.types.events import Events
 
-        store = ctx.game.get("store")
-        game_id = ctx.game.get("game_id")
+        store = ctx.store
+        game_id = ctx.game_id
 
         await self._bus.emit(
             Events.GAME_LAUNCHED,
             store=store,
             game_id=game_id,
-            title=ctx.game.get("title", ""),
-            app_id=ctx.game.get("app_id", 0)
+            title="",  # No title on LaunchContext
+            app_id=0  # No app_id on LaunchContext
         )
 
         # xCloud specific URL
@@ -143,7 +149,7 @@ class LauncherService:
             # be ``0`` only for an int, not a bool).
             #
             # We dispatch through ``asyncio.to_thread`` because
-            # the underlying ``subprocess.Popen`` blocks while
+            # the underlying ``subprocess.Popen[bytes]`` blocks while
             # Edge initializes; without the thread hop the event
             # loop stalls for ~half a second on every launch.
             launched = await asyncio.to_thread(

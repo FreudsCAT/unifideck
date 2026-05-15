@@ -166,7 +166,7 @@ class PriorityDispatcher:
         self._seq = 0
         self._metrics = DispatcherMetrics()
         self._last_drop_warn: float = 0.0
-        self._worker_task: asyncio.Task | None = None
+        self._worker_task: asyncio.Task[Any] | None = None
         self._stopping = False
 
     async def start(self) -> None:
@@ -270,7 +270,7 @@ class PriorityDispatcher:
             The shared ``DispatcherMetrics`` instance.
         """
         pending = {"CRITICAL": 0, "NORMAL": 0, "BACKGROUND": 0}
-        for item in list(self._queue._queue):
+        for item in list(self._queue._queue):  # type: ignore[attr-defined]  # PriorityQueue._queue is used to introspect heap contents
             if item.dropped:
                 continue
             name = EventPriority(item.priority).name
@@ -297,7 +297,7 @@ class PriorityDispatcher:
             return False
         pending_bg = sum(
             not item.dropped and item.priority == int(EventPriority.BACKGROUND)
-            for item in list(self._queue._queue)
+            for item in list(self._queue._queue)  # type: ignore[attr-defined]  # PriorityQueue._queue used to introspect heap contents
         )
         return pending_bg >= self._background_cap
 
@@ -430,8 +430,8 @@ class PriorityDispatcher:
         while not self._stopping:
             item = await self._queue.get()
             try:
-                if self._stopping and item.seq == -1:
-                    return
+                if self._stopping and item.seq == -1:  # type: ignore[unreachable]  # monotonic priority fallback
+                    return  # type: ignore[unreachable]  # monotonic priority fallback
                 if item.dropped:
                     continue
                 await self._dispatch_one(item)

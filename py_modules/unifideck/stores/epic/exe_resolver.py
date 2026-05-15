@@ -71,7 +71,7 @@ class EpicExeResolver:
         )
 
     @staticmethod
-    def _extract_install_path(info: dict | None) -> str | None:
+    def _extract_install_path(info: dict[str, Any] | None) -> str | None:
         """Extract install path."""
         if not info:
             return None
@@ -80,7 +80,7 @@ class EpicExeResolver:
         return path if isinstance(path, str) and path else None
 
     @staticmethod
-    def _extract_title(info: dict | None, game_id: str) -> str:
+    def _extract_title(info: dict[str, Any] | None, game_id: str) -> str:
         """Extract title."""
         if not info:
             return game_id
@@ -88,7 +88,7 @@ class EpicExeResolver:
         title = game.get("title")
         return title if isinstance(title, str) and title else game_id
 
-    def _resolve_executable(self, install_path: str | None, info: dict | None, game_id: str) -> str | None:
+    def _resolve_executable(self, install_path: str | None, info: dict[str, Any] | None, game_id: str) -> str | None:
         """Resolve executable."""
         if not install_path:
             return None

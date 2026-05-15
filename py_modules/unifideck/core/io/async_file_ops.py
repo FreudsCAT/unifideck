@@ -33,7 +33,7 @@ from pathlib import Path
 from typing import Any, cast
 
 logger = logging.getLogger(__name__)
-PathLike = str | os.PathLike
+PathLike = str | os.PathLike[str]
 
 
 async def exists(path: PathLike) -> bool:

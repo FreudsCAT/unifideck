@@ -42,7 +42,7 @@ _USER_LANGUAGE_KEY = "ui.language"
 _LOCALE_CONFIG_MODULE = None
 
 
-def _import_locale_config():
+def _import_locale_config() -> Any | None:
     """Lazy import of scripts/locale_config.py, cached.
 
     Returns the module handle or None if scripts/ can't be
@@ -52,7 +52,7 @@ def _import_locale_config():
     """
     global _LOCALE_CONFIG_MODULE
     if _LOCALE_CONFIG_MODULE is not None:
-        return _LOCALE_CONFIG_MODULE
+        return _LOCALE_CONFIG_MODULE  # type: ignore[unreachable]  # fallback for missing import
     # Walk up from this file to find <repo>/scripts/locale_config.py.
     here = Path(__file__).resolve()
     candidates = [
@@ -67,7 +67,11 @@ def _import_locale_config():
             if scripts_str not in sys.path:
                 sys.path.insert(0, scripts_str)
             try:
-                import locale_config
+                # Dynamic import from ``scripts/`` (injected on
+                # sys.path above). Mypy can't see the module
+                # statically; the ImportError below catches any
+                # failure including the missing-file case.
+                import locale_config  # type: ignore[import-not-found]
                 _LOCALE_CONFIG_MODULE = locale_config
                 return _LOCALE_CONFIG_MODULE
             except ImportError as e:
@@ -84,7 +88,7 @@ def _import_locale_config():
     return None
 
 
-def get_locale_config(config: ConfigManager | None):
+def get_locale_config(config: ConfigManager | None) -> Any | None:
     """Return the parsed i18n.locales section, or None on failure.
 
     The returned object (a LocaleConfig from

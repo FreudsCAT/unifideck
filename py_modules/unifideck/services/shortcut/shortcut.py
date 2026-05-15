@@ -59,7 +59,7 @@ async def build_auth_shortcut(
 
             # Ensure shortcuts is a dict with 'shortcuts' key
             if not isinstance(service._shortcuts, dict):
-                service._shortcuts = {"shortcuts": {}}
+                service._shortcuts = {"shortcuts": {}}  # type: ignore[unreachable]  # guard 'if not isinstance(_shortcuts, dict)'
             elif "shortcuts" not in service._shortcuts:
                 service._shortcuts["shortcuts"] = {}
 
@@ -69,7 +69,12 @@ async def build_auth_shortcut(
             shortcuts_dict[new_key] = entry
             changed = True
 
-            app_id = entry.get("appid")
+            # Re-read the appid from the entry dict. ``entry.get`` is
+            # typed Any | None (entry is a dict[str, Any] from VDF
+            # parsing); coerce to int with a 0 fallback so the bus
+            # payload always has the expected ``int`` field.
+            raw_app_id = entry.get("appid")
+            app_id = int(raw_app_id) if isinstance(raw_app_id, int) else 0
 
             if service._bus:
                 from unifideck.core.types.events import Events

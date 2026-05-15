@@ -3,7 +3,7 @@ import logging
 import urllib.error
 import urllib.parse
 import urllib.request
-from typing import cast
+from typing import Any, cast
 
 from unifideck.core.net import ssl_ctx_strict
 
@@ -15,25 +15,25 @@ __all__ = [
     "request_xsts_token",
     "ssl_ctx_strict",
 ]
-def http_post(url: str, data: dict, headers: dict) -> dict:
+def http_post(url: str, data: dict[str, Any], headers: dict[str, Any]) -> dict[str, Any]:
     """Http post."""
     body = urllib.parse.urlencode(data).encode()
     req = urllib.request.Request(
         url, data=body, headers=headers, method="POST")
     with urllib.request.urlopen(req, timeout=15, context=ssl_ctx_strict()) as r:
-        return cast(dict, json.loads(r.read().decode()))
-def http_post_json(url: str, payload: dict, headers: dict) -> dict:
+        return cast(dict[str, Any], json.loads(r.read().decode()))
+def http_post_json(url: str, payload: dict[str, Any], headers: dict[str, Any]) -> dict[str, Any]:
     """Http post JSON."""
     body = json.dumps(payload).encode()
     req = urllib.request.Request(
         url, data=body, headers=headers, method="POST")
     with urllib.request.urlopen(req, timeout=20, context=ssl_ctx_strict()) as r:
-        return cast(dict, json.loads(r.read().decode()))
-def http_get(url: str, headers: dict) -> dict:
+        return cast(dict[str, Any], json.loads(r.read().decode()))
+def http_get(url: str, headers: dict[str, Any]) -> dict[str, Any]:
     """Http get."""
     req = urllib.request.Request(url, headers=headers)
     with urllib.request.urlopen(req, timeout=15, context=ssl_ctx_strict()) as r:
-        return cast(dict, json.loads(r.read().decode()))
+        return cast(dict[str, Any], json.loads(r.read().decode()))
 
 def build_xbl_chain(
     access_token: str,
@@ -97,7 +97,7 @@ def request_xsts_token(
     locale: str,
     xsts_url: str,
     xbl_user_agent: str,
-) -> dict | None:
+) -> dict[str, Any] | None:
     """Request XSTS token."""
     return _request_xsts_token(
         xbl_token, xsts_rp, locale, xsts_url, xbl_user_agent,
@@ -108,7 +108,7 @@ def _obtain_xbl_user_token(
     locale: str,
     xbl_auth_url: str,
     xbl_user_agent: str,
-) -> dict | None:
+) -> dict[str, Any] | None:
 
     """Obtain XBL user token."""
     candidates = [
@@ -136,7 +136,7 @@ def _try_xbl_request(
     locale: str,
     xbl_auth_url: str,
     xbl_user_agent: str,
-) -> dict | None:
+) -> dict[str, Any] | None:
     """Try XBL request."""
     body = {
         "Properties": {
@@ -169,7 +169,7 @@ def _try_xbl_request(
             contract_v, rps[:2], e,
         )
         return None
-def _extract_user_hash(xbl_resp: dict) -> str | None:
+def _extract_user_hash(xbl_resp: dict[str, Any]) -> str | None:
     """Extract user hash."""
     display_claims = xbl_resp.get("DisplayClaims", {})
     xui = display_claims.get("xui", [{}])
@@ -181,7 +181,7 @@ def _request_xsts_token(
     locale: str,
     xsts_url: str,
     xbl_user_agent: str,
-) -> dict | None:
+) -> dict[str, Any] | None:
 
     """Request XSTS token."""
     headers = {

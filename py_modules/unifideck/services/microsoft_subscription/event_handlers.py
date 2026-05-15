@@ -14,14 +14,14 @@ class _EventHandlersMixin:
         """On logout."""
         if kwargs.get("store") != "microsoft":
             return
-        await self.invalidate()
+        await self.invalidate()  # type: ignore[attr-defined]  # self.invalidate provided by sibling mixin _CacheMixin
     @subscribe(Events.STORE_AUTH_COMPLETE)
     async def _on_auth_complete(self, **kwargs: Any) -> None:
         """On auth complete."""
         if kwargs.get("store") != "microsoft":
             return
-        await self.invalidate()
+        await self.invalidate()  # type: ignore[attr-defined]  # self.invalidate provided by sibling mixin _CacheMixin
     @subscribe(Events.ACCOUNT_SWITCHED)
     async def _on_account_switched(self, **kwargs: Any) -> None:
         """On account switched."""
-        await self.invalidate()
+        await self.invalidate()  # type: ignore[attr-defined]  # self.invalidate provided by sibling mixin _CacheMixin

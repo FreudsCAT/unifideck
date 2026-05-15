@@ -42,7 +42,7 @@ class _PostInstallMarker:
         self._parent = parent
 
     @staticmethod
-    def snapshot_dirs(base_path: str) -> set:
+    def snapshot_dirs(base_path: str) -> set[Any]:
         """Snapshot dirs."""
         try:
             return {entry.name for entry in Path(base_path).iterdir()}
@@ -54,7 +54,7 @@ class _PostInstallMarker:
         game_id: str,
         base_path: str,
         folder_name: str | None,
-        existing_dirs: set,
+        existing_dirs: set[Any],
     ) -> str | None:
         """Locate install."""
         flat_info = self._find_flat_goggame(base_path, game_id)
@@ -74,7 +74,11 @@ class _PostInstallMarker:
                 )
                 return candidate
         try:
-            current = {entry.name for entry in Path(base_path).iterdir()}  # noqa: ASYNC240 — project uses asyncio.to_thread for sync I/O, not trio/anyio
+            # ``Path.iterdir`` is blocking I/O — wrap in to_thread.
+            entries = await asyncio.to_thread(
+                lambda: list(Path(base_path).iterdir()),
+            )
+            current = {entry.name for entry in entries}
         except OSError:
             return None
         new_dirs = current - existing_dirs
@@ -92,7 +96,10 @@ class _PostInstallMarker:
             # at lambda-creation time is both safer and the
             # idiomatic fix for B023.
             if not await asyncio.to_thread(
-                lambda p=item_path: Path(p).is_dir(),
+                # Lambda param ``p`` typed as ``str`` so mypy
+                # can infer the lambda's return type (was
+                # ``Cannot infer type of lambda``).
+                lambda p=item_path: Path(p).is_dir(),  # type: ignore[misc]
             ):
                 continue
             for search_dir in (
@@ -127,7 +134,7 @@ class _PostInstallMarker:
         base_path: str,
         game_id: str,
         folder_name: str | None,
-        existing_dirs: set,
+        existing_dirs: set[Any],
     ) -> str:
         """Reorganise flat install."""
         target = folder_name or f"GOG_{game_id}"

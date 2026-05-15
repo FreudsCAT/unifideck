@@ -22,11 +22,11 @@ class GameProcessRegistry:
     def __init__(self, state: SignalState) -> None:
         """Initialize the instance."""
         self._state = state
-    def track(self, proc: subprocess.Popen) -> None:
+    def track(self, proc: subprocess.Popen[bytes]) -> None:
         """Track."""
         if proc.pid:
             self._state.pending_pids.add(proc.pid)
-    def untrack(self, proc: subprocess.Popen) -> None:
+    def untrack(self, proc: subprocess.Popen[bytes]) -> None:
         """Untrack."""
         self._state.pending_pids.discard(proc.pid)
     def terminate_all(self) -> None:
@@ -41,7 +41,7 @@ class GameProcessRegistry:
                 with contextlib.suppress(ProcessLookupError, PermissionError):
                     os.kill(pid, signal.SIGTERM)
         for pattern in CLEANUP_PATTERNS:
-            with contextlib.suppress((FileNotFoundError, subprocess.TimeoutExpired)):
+            with contextlib.suppress(FileNotFoundError, subprocess.TimeoutExpired):
                 subprocess.run(
                     ["pkill", "-TERM", "-f", pattern],
                     stdout=subprocess.DEVNULL,

@@ -23,7 +23,6 @@ import re
 from typing import TYPE_CHECKING, Any
 
 from unifideck.core.types import Game
-from unifideck.stores.ubisoft.steam_filter import filter_steam_linked_configs
 
 if TYPE_CHECKING:
     from unifideck.stores.ubisoft.config import UbisoftConfig
@@ -40,7 +39,7 @@ _MOJIBAKE_REPLACEMENTS = (
     ("Â®", "®"),
     ("â\u0080¢", "™"),
     ("â\u0084¢", "™"),
-    ("â\u0080\u0099", "’"),  # noqa: RUF001 — Unicode char intentional in mojibake-fix mapping table
+    ("â\u0080\u0099", "’"),  # noqa: RUF001  # intentional: mapping mojibake → correct glyph
     ("Â", ""),
 )
 _SKIP_TITLE_KEYWORDS = re.compile(
@@ -117,29 +116,37 @@ class _GameBuilder:
         self,
         configs: list[GameConfig],
     ) -> list[GameConfig]:
-        """Apply steam filter."""
-        if not self._config.filter_steam_linked:
-            return configs
-        before_count = len(configs)
-        result = self._filter_steam_linked_configs(configs)
-        dropped = before_count - len(result)
-        if dropped:
-            logger.info(
-                "[UbisoftLibrary] filtered %d Steam-linked game(s) from library",
-                dropped,
-            )
-        return result
+        """Steam-linked Ubisoft filter — DEFERRED, returns input unchanged.
 
-    def _filter_steam_linked_configs(
-        self,
-        configs: list[GameConfig],
-    ) -> list[GameConfig]:
-        """Filter steam linked configs."""
-        return filter_steam_linked_configs(
-            configs,
-            self._config.steam_library_cross_ref,
-            self._id_map,
+        The ``steam_filter`` module (OP-55i) was retired from the
+        project pending a future implementation sprint. The
+        method is kept on the builder API as a no-op so the
+        call site in ``fetch.py`` doesn't need to change when
+        the real filter ships.
+
+        When the real filter returns, this method should:
+
+        * Honour ``self._config.filter_steam_linked`` (skip when
+          False to preserve user opt-in).
+        * Cross-reference against ``self._config.steam_library_cross_ref``
+          and ``self._id_map`` to find Ubisoft games the user
+          already owns on Steam.
+        * Drop those games from ``configs`` and log the count.
+
+        Args:
+            configs: parsed Ubisoft game configurations.
+
+        Returns:
+            ``configs`` unchanged (deferred behaviour).
+        """
+        # Deferred — log once at debug to keep the absence visible
+        # without spamming when the filter is queried per-sync.
+        logger.debug(
+            "[UbisoftLibrary] steam_filter is deferred — "
+            "%d configs passed through unfiltered",
+            len(configs),
         )
+        return configs
 
     def build_games_from_configs(
         self,

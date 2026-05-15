@@ -322,7 +322,7 @@ class DebugSnapshot:
         return snapshot
 
     @staticmethod
-    def _safe_call(fn: Callable | None) -> Any:
+    def _safe_call(fn: Callable[..., Any] | None) -> Any:
         """Call ``fn`` if present and isolate its exceptions.
 
         Helper for ``collect`` so a misbehaving collaborator

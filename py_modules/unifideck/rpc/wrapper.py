@@ -40,7 +40,7 @@ import inspect
 import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import asdict, is_dataclass
-from typing import Any, TypeVar
+from typing import Any, TypeVar, cast
 
 from .errors import RpcError
 
@@ -193,5 +193,7 @@ def rpc_wrapper(func: F) -> F:
                 "data": {"detail": repr(err)},
             }
 
-    wrapper.__rpc_wrapped__ = True
-    return wrapper
+    wrapper.__rpc_wrapped__ = True  # type: ignore[attr-defined]  # marker added by the rpc decorator
+    # cast: functools.wraps infers ``_Wrapped[...]`` rather than F;
+    # the runtime contract is in-F-out-F so we restore the type.
+    return cast("F", wrapper)

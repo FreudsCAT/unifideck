@@ -45,6 +45,7 @@ if TYPE_CHECKING:
     from unifideck.steam.steamgriddb import SteamGridDBClient
 
     from .auth import UbisoftAuth
+    from .config import UbisoftConfig
     from .installer import UbisoftInstaller
     from .library import UbisoftLibrary
 logger = logging.getLogger(__name__)
@@ -80,7 +81,12 @@ class UbisoftStore(StoreBase):
             shortcut_service=shortcut_service,
             steamgriddb=steamgriddb,
         )
-        self._config = specialists.config
+        # Drift fix (lot 11g): ``self._config`` is set by
+        # ``super().__init__`` to ``ConfigManager | None``; we
+        # then shadow it with the specialist ``UbisoftConfig``.
+        # Annotate the new shape explicitly so mypy doesn't
+        # report ``Incompatible types in assignment``.
+        self._config: UbisoftConfig = specialists.config  # type: ignore[assignment]
         self._paths = specialists.paths
         self._binaries = specialists.binaries
         self._id_map = specialists.id_map

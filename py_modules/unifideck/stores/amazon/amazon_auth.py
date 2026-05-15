@@ -116,7 +116,7 @@ class AmazonAuthFlow:
         logger.info("[amazon_auth] received login URL from nile")
         return cast("str", url)
 
-    async def _run_nile_login_probe(self) -> dict:
+    async def _run_nile_login_probe(self) -> dict[str, Any]:
         """Run NILE login probe."""
         if self._cli_path is None:
             raise StoreAuthError(

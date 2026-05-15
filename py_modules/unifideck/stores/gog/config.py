@@ -36,7 +36,7 @@ if TYPE_CHECKING:
     from unifideck.config import ConfigManager
 logger = logging.getLogger(__name__)
 _GOG_CONFIG_PREFIX = "stores.gog"
-_DEFAULT_TOKEN_FILE = "~/.config/unifideck/gog_token.json"
+_DEFAULT_TOKEN_FILE = "~/.config/unifideck/gog_token.json"  # noqa: S105  # file path, not a token value
 _DEFAULT_GOGDL_CONFIG_DIR = "~/.config/unifideck/gogdl"
 _DEFAULT_DOWNLOAD_DIR = "~/GOG Games"
 GOG_AUTH_URL_FILE = "~/.local/share/unifideck/gog_auth_url.txt"

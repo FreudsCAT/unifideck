@@ -171,7 +171,7 @@ class _DirectSignIn:
                         timeout=10,
                     )
                 except (TimeoutError, ProcessLookupError):
-                    with contextlib.suppress((TimeoutError, ProcessLookupError)):
+                    with contextlib.suppress(TimeoutError, ProcessLookupError):
                         proc.kill()
                         await asyncio.wait_for(
                             proc.wait(),
@@ -186,7 +186,7 @@ class _DirectSignIn:
             proc.terminate()
             await asyncio.wait_for(proc.wait(), timeout=10)
         except (TimeoutError, ProcessLookupError):
-            with contextlib.suppress((TimeoutError, ProcessLookupError)):
+            with contextlib.suppress(TimeoutError, ProcessLookupError):
                 proc.kill()
                 await asyncio.wait_for(proc.wait(), timeout=5)
         return None

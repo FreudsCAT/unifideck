@@ -354,7 +354,9 @@ class SecureTokenStore:
         )
         return plaintext
 
-    def _emit_security_event(self, event_name: str, **kwargs) -> None:
+    def _emit_security_event(
+        self, event_name: str, **kwargs: Any,
+    ) -> None:
         """Emit a SECURITY_* event on the bus if one is configured.
 
         The event enum is imported lazily to avoid a circular

@@ -119,7 +119,7 @@ class _GogdlProgressMonitor:
             stderr=asyncio.subprocess.STDOUT,
             env=env,
         )
-        proc._unifideck_gogdl_cleanup = cleanup
+        proc._unifideck_gogdl_cleanup = cleanup  # type: ignore[attr-defined]  # Process._unifideck_gogdl_cleanup added at spawn time
         return proc
 
     async def _read_progress_loop(

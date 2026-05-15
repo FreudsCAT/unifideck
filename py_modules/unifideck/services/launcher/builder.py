@@ -49,7 +49,11 @@ def build_standalone() -> LauncherService:
     from unifideck.auth.edge_browser import EdgeBrowser
     from unifideck.event_bus.event_bus import EventBus
     from unifideck.services.cloud_save.service import CloudSaveService
-    from unifideck.services.proton_service.service import ProtonService
+    # Fix (2026-05-15, lot 11e): ``proton_service`` is a module
+    # (``proton_service.py``), not a package — the previous import
+    # path ``proton_service.service`` was broken. Import directly
+    # from the module.
+    from unifideck.services.proton_service import ProtonService
     from unifideck.services.shortcut.service import ShortcutService
 
     bus = EventBus()
@@ -62,13 +66,27 @@ def build_standalone() -> LauncherService:
 
     shortcuts_vdf = _pick_first_shortcuts_vdf(userdata_root)
 
+    # Drift fix (lot 11e): ``ShortcutService.__init__`` expects
+    # ``shortcuts_path`` and ``games_map_path``, not
+    # ``plugin_dir`` and ``shortcuts_vdf_path``. Derive the
+    # games.map location relative to plugin_dir.
+    games_map_path = str(Path(plugin_dir) / "games.map")
     shortcut_svc = ShortcutService(
         bus=bus,
-        plugin_dir=plugin_dir,
-        shortcuts_vdf_path=shortcuts_vdf or "",
+        shortcuts_path=shortcuts_vdf or "",
+        games_map_path=games_map_path,
     )
 
-    proton_svc = ProtonService()
+    # Drift fix (lot 12d): ProtonService.__init__ requires ``bus``
+    # and ``config_vdf_path`` (Steam's ``~/.steam/root/config/config.vdf``
+    # is where CompatToolMapping entries are written). The previous
+    # zero-arg construction raised TypeError at the first launch in
+    # standalone mode.
+    config_vdf_path = str(Path(steam_root) / "config" / "config.vdf")
+    proton_svc = ProtonService(
+        bus=bus,
+        config_vdf_path=config_vdf_path,
+    )
 
     cloud_svc = CloudSaveService(
         bus=bus,

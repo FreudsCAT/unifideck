@@ -19,12 +19,20 @@ class LaunchContext:
     """Immutable description of a single launch request.
     Built once by the dispatcher from argv + games.map + env.
     Passed by value to every downstream module. Never mutated.
+
+    Path fields (``exe_path``, ``work_dir``, ``plugin_dir``) are
+    strict ``Path`` (not ``Path | str``) — the dispatcher wraps
+    incoming strings exactly once at construction time, and
+    every consumer downstream relies on Path-only methods
+    (``.is_file()``, ``.parent``, ``.chmod``, ``.name``). Keeping
+    the union here used to force ``str`` checks in every
+    consumer; tightening to ``Path`` is the cleaner contract.
     """
     store: str
     game_id: str
-    exe_path: Path | str
-    work_dir: Path | str
-    plugin_dir: Path | str
+    exe_path: Path
+    work_dir: Path
+    plugin_dir: Path
     raw_options: str = ""
     env_overrides: dict[str, str] = field(default_factory=dict)
     is_launch_action: bool = True

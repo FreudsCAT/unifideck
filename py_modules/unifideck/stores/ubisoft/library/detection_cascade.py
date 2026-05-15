@@ -76,7 +76,7 @@ class _DetectionCascade:
     def _load_marker_for_space(
         game_dir: str,
         space_id: str,
-    ) -> dict | None:
+    ) -> dict[str, Any] | None:
         """Load marker for space."""
         marker_path = Path(game_dir) / _INSTALL_MARKER_FILENAME
         if not marker_path.is_file():
@@ -94,7 +94,7 @@ class _DetectionCascade:
         known_name: str,
         game_dir: str,
         folder: str,
-        marker_data: dict,
+        marker_data: dict[str, Any],
     ) -> dict[str, Any]:
         """Build marker result."""
         install_path = marker_data.get("install_path") or game_dir
@@ -112,7 +112,7 @@ class _DetectionCascade:
 
     def _resolve_marker_executable(
         self,
-        marker_data: dict,
+        marker_data: dict[str, Any],
         install_path: str,
     ) -> str:
         """Resolve marker executable."""
@@ -224,7 +224,7 @@ class _DetectionCascade:
         return None
 
     @staticmethod
-    def _build_registry_pattern(install_id: str) -> re.Pattern:
+    def _build_registry_pattern(install_id: str) -> re.Pattern[str]:
         """Build registry pattern."""
         return re.compile(
             r"\[Software\\\\(?:Wow6432Node\\\\)?"
@@ -236,7 +236,7 @@ class _DetectionCascade:
     def _try_registry_file(
         self,
         reg_path: str,
-        pattern: re.Pattern,
+        pattern: re.Pattern[str],
         space_id: str,
         install_id: str,
         prefix_path: str,

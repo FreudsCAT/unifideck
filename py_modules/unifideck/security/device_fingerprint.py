@@ -7,6 +7,7 @@ import os
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from .device_identity import DeviceIdentity
 
@@ -95,7 +96,7 @@ class DeviceFingerprint:
             mismatch=False,
         )
 
-    def _load(self) -> dict | None:
+    def _load(self) -> dict[str, Any] | None:
         if not Path(self._path).is_file():
             return None
 
@@ -113,7 +114,7 @@ class DeviceFingerprint:
 
         return data
 
-    def _save(self, payload: dict) -> None:
+    def _save(self, payload: dict[str, Any]) -> None:
         try:
             parent = str(Path(self._path).parent)
             if parent:

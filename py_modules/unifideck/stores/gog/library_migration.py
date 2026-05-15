@@ -131,7 +131,7 @@ class _MarkerMigration:
             info_file = self._find_first_goggame_info(candidate)
             if not info_file:
                 continue
-            with contextlib.suppress((OSError, json.JSONDecodeError)):
+            with contextlib.suppress(OSError, json.JSONDecodeError):
                 with Path(info_file).open(encoding="utf-8") as f:
                     new_data = json.load(f)
                 new_data["game_id"] = old_id

@@ -28,7 +28,7 @@ async def get_launch_id_or_none(svc: LauncherService) -> str | None:
         lid = svc._launch_history.get_launch_id()
         if lid == "-":
             return None
-        return lid
+        return lid  # type: ignore[no-any-return]  # config.get returns Any
     except Exception:
         return None
 
@@ -41,8 +41,8 @@ async def emit_circuit_open_toast(
     """Emit an error toast when the circuit breaker refuses launch."""
     from unifideck.core.types.events import Events
 
-    store = ctx.game.get("store", "unknown")
-    game_id = ctx.game.get("game_id", "unknown")
+    store = ctx.store
+    game_id = ctx.game_id
     game_key = f"{store}:{game_id}"
 
     launch_id = await get_launch_id_or_none(svc)
@@ -75,8 +75,8 @@ async def check_circuit_breaker(
     if not svc._launch_history:
         return None
 
-    store = ctx.game.get("store", "unknown")
-    game_id = ctx.game.get("game_id", "unknown")
+    store = ctx.store
+    game_id = ctx.game_id
     game_key = f"{store}:{game_id}"
 
     try:

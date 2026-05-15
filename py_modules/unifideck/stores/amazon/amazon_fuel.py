@@ -29,6 +29,7 @@ import json
 import logging
 import re
 from pathlib import Path
+from typing import Any
 
 logger = logging.getLogger(__name__)
 _COMMENT_RE = re.compile(r"//.*$", re.MULTILINE)
@@ -58,7 +59,7 @@ def candidate_fuel_dirs(install_path: str) -> list[str]:
     return dirs
 
 
-def parse_fuel_json_content(content: str) -> dict | None:
+def parse_fuel_json_content(content: str) -> dict[str, Any] | None:
     """Parse fuel JSON content."""
     cleaned = _COMMENT_RE.sub("", content)
     try:
@@ -75,7 +76,7 @@ def parse_fuel_json_content(content: str) -> dict | None:
     return data
 
 
-def extract_main_command(fuel_data: dict) -> str | None:
+def extract_main_command(fuel_data: dict[str, Any]) -> str | None:
     """Extract main command."""
     main = fuel_data.get("Main")
     if not isinstance(main, dict):

@@ -93,7 +93,7 @@ def _build_verify_result(
     }
 
 
-def _extract_disk_size_from_size_info(size_info: dict) -> int | None:
+def _extract_disk_size_from_size_info(size_info: dict[str, Any]) -> int | None:
     """Extract disk size from size info."""
     for lang_key in ("en-US", "en", "*"):
         if lang_key in size_info:

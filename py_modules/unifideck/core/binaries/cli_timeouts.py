@@ -1,7 +1,6 @@
-"""core/bin/cli_timeouts.py — Shared CLI timeout configuration.
+"""core/binaries/cli_timeouts.py — Shared CLI timeout configuration.
 
-Moved from core/ to core/bin/ (colocated with
-binary_resolver and binary_signatures). Clean break: no shim.
+Moved from core/ to core/binaries/ (colocated with binary_resolver and binary_signatures). Clean break: no shim.
 
 All stores that wrap a CLI tool (legendary for Epic, nile for
 Amazon, gogdl for GOG) need per-operation timeouts:

@@ -19,9 +19,14 @@ from .cdp_inject import (
 )
 
 try:
-    from .cdp_utils import create_cef_debugging_flag
+    # ``cdp_utils`` is an optional helper module that may not be
+    # present on every environment — the try/except below is the
+    # runtime guard. ``# type: ignore[import-not-found]`` tells
+    # mypy strict that the missing module is intentional, not a
+    # bug.
+    from .cdp_utils import create_cef_debugging_flag  # type: ignore[import-not-found]
 except ImportError:
-    create_cef_debugging_flag = None  # type: ignore[assignment]
+    create_cef_debugging_flag = None
 
 
 __all__ = [

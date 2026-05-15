@@ -39,7 +39,7 @@ logger = logging.getLogger(__name__)
 BLACKLISTED_NAMES = ["gamename", "l1", "l2", "thumbimage", "", "ubisoft game", "name"]
 
 
-def _parse_config_header(header: bytes, second_eight: bool = False) -> tuple:
+def _parse_config_header(header: bytes, second_eight: bool = False) -> tuple[Any, ...]:
     """Parse config header."""
     try:
         offset = 1
@@ -64,7 +64,7 @@ def _parse_config_header(header: bytes, second_eight: bool = False) -> tuple:
         return 0, 0, 0, 10
 
 
-def _get_yaml_field(game_yaml: dict, field: str = "name") -> str:
+def _get_yaml_field(game_yaml: dict[str, Any], field: str = "name") -> str:
     """Get yaml field."""
     root = game_yaml.get("root", {})
     if not isinstance(root, dict):
@@ -80,7 +80,7 @@ def _get_yaml_field(game_yaml: dict, field: str = "name") -> str:
     return value
 
 
-def _yaml_field_installer_fallback(root: dict, current: str) -> str:
+def _yaml_field_installer_fallback(root: dict[str, Any], current: str) -> str:
     """Yaml field installer fallback."""
     installer = root.get("installer", {})
     if isinstance(installer, dict) and "game_identifier" in installer:
@@ -89,7 +89,7 @@ def _yaml_field_installer_fallback(root: dict, current: str) -> str:
 
 
 def _yaml_field_localization_fallback(
-    game_yaml: dict,
+    game_yaml: dict[str, Any],
     current: str,
 ) -> str:
     """Yaml field localization fallback."""
@@ -105,7 +105,7 @@ def _yaml_field_localization_fallback(
 class GameConfig:
     """Game config."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         """Initialize the instance."""
         self.install_id: int = 0
         self.launch_id: int = 0
@@ -226,7 +226,7 @@ def parse_configurations(filepath: str) -> list[GameConfig]:
 
 
 def _build_game_config(
-    parsed: dict, yaml_text: str, install_id: int, launch_id: int
+    parsed: dict[str, Any], yaml_text: str, install_id: int, launch_id: int
 ) -> GameConfig | None:
     """Build game config."""
     config = GameConfig()
@@ -256,7 +256,7 @@ def _build_game_config(
     return None
 
 
-def _extract_third_party_platform(root: dict, installer: Any) -> str:
+def _extract_third_party_platform(root: dict[str, Any], installer: Any) -> str:
     """Extract third party platform."""
     if isinstance(root.get("third_party_platform"), str):
         return cast("str", root["third_party_platform"].strip())

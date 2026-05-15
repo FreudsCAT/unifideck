@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from unifideck.config import ConfigManager
@@ -95,7 +95,7 @@ def detach_launch_handler(handler: logging.Handler | None) -> None:
 def read_launch_logs(
     launch_id: str, config: ConfigManager | None,
     *, max_lines: int = 500,
-) -> dict:
+) -> dict[str, Any]:
     """Read launch logs."""
     archive_dir = _resolve_archive_dir(config)
     path = archive_dir / f"{launch_id}.log"
@@ -129,7 +129,7 @@ def read_launch_logs(
 
 def export_launch_logs(
     launch_id: str, dest_path: str, config: ConfigManager | None,
-) -> dict:
+) -> dict[str, Any]:
 
     """Export launch logs."""
     import shutil

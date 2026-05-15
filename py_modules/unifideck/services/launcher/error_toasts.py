@@ -30,8 +30,8 @@ async def emit_launcher_error_toast(
 
     from .circuit_breaker import get_launch_id_or_none
 
-    store = ctx.game.get("store", "unknown")
-    game_id = ctx.game.get("game_id", "unknown")
+    store = ctx.store
+    game_id = ctx.game_id
     game_key = f"{store}:{game_id}"
 
     launch_id = await get_launch_id_or_none(svc)
@@ -70,8 +70,8 @@ async def handle_launcher_error(
     if not is_cancel and svc._launch_history:
         try:
             # Record failure via FAILURE_KIND_LAUNCHER_ERROR
-            store = ctx.game.get("store", "unknown")
-            game_id = ctx.game.get("game_id", "unknown")
+            store = ctx.store
+            game_id = ctx.game_id
             game_key = f"{store}:{game_id}"
 
             svc._launch_history.record_failure(

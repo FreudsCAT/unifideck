@@ -1,5 +1,6 @@
 import asyncio
 import logging
+from collections.abc import Iterator
 from dataclasses import asdict
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -7,6 +8,7 @@ from typing import TYPE_CHECKING, Any
 from unifideck.core.types import Events, Result, StoreError
 
 if TYPE_CHECKING:
+    from unifideck.config import ConfigManager
     from unifideck.core.cache_manager import CacheManager
     from unifideck.event_bus import EventBus
 
@@ -54,9 +56,9 @@ class StoreRegistry:
         bus: "EventBus",
         cache: "CacheManager",
         plugin_dir: str = "",
-        config=None,
+        config: "ConfigManager | None" = None,
     ) -> int:
-        """Auto discover."""
+        """Auto discover stores under ``stores_dir`` and register them."""
         import importlib
 
         from .store_base import StoreBase as _StoreBase
@@ -145,7 +147,7 @@ class StoreRegistry:
             )
         return real_stores
     @staticmethod
-    def _iter_store_files(real_stores: str):
+    def _iter_store_files(real_stores: str) -> Iterator[tuple[str, str]]:
         """Iter store files.
 
         Yields (module_suffix, full_path) tuples where module_suffix
@@ -191,7 +193,7 @@ class StoreRegistry:
                 yield from StoreRegistry._yield_for_subpackage(entry)
 
     @staticmethod
-    def _yield_for_flat_file(entry: Path):
+    def _yield_for_flat_file(entry: Path) -> Iterator[tuple[str, str]]:
         """Yield the ``(suffix, path)`` tuple for a flat-file store.
 
         Layout: ``stores/<name>_store.py`` (no subpackage). The
@@ -204,7 +206,7 @@ class StoreRegistry:
         yield entry.name[:-3], str(entry)
 
     @staticmethod
-    def _yield_for_subpackage(entry: Path):
+    def _yield_for_subpackage(entry: Path) -> Iterator[tuple[str, str]]:
         """Yield the ``(suffix, path)`` for a subpackage-layout store.
 
         Layout: ``stores/<name>/``. Two candidate filenames
@@ -239,8 +241,8 @@ class StoreRegistry:
         package_name: str,
         module_suffix: str,
         full_path: str,
-        store_base_cls: type,
-    ) -> type | None:
+        store_base_cls: type[Any],
+    ) -> type[Any] | None:
         """Load store class."""
         import importlib
         module_name = f"{package_name}.{module_suffix}"
@@ -291,7 +293,7 @@ class StoreRegistry:
     def has(self, store_id: str) -> bool:
         """Check whether s."""
         return store_id in self._stores
-    def get_store_infos(self) -> list[dict]:
+    def get_store_infos(self) -> list[dict[str, Any]]:
         """Get store infos."""
         infos = []
         for store in self._stores.values():
@@ -303,7 +305,7 @@ class StoreRegistry:
         return infos
 
     async def auth_action(
-        self, store_id: str, action: str, **kwargs,
+        self, store_id: str, action: str, **kwargs: Any,
     ) -> Result:
         """Auth action."""
         try:

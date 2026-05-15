@@ -59,15 +59,19 @@ class _GamesMapMixin:
         await self._load_shortcuts()
         await self._load_games_map()
 
-        key = f"{game.store}:{game.id}"
-        exe = game.launch_path or ""
+        key = f"{game.store}:{game.app_id}"
+        exe = game.exe_path or ""
         app_id = generate_app_id(exe, game.title)
 
         # Update games.map first — even if the shortcuts.vdf write
         # below fails, the canonical record of "what Unifideck owns"
         # is correct.
+        # ``work_dir`` is the directory the launcher cd's into before
+        # starting the exe — for installed games it's the install
+        # directory itself (where the launcher binary sits next to
+        # the game data).
         self._games_map[key] = GameMapEntry(
-            exe=exe, work_dir=game.work_dir or "",
+            exe=exe, work_dir=game.install_path or "",
         )
 
         # Normalise the shortcuts dict shape (tolerates corrupt VDF
@@ -165,7 +169,12 @@ class _GamesMapMixin:
         """Return the full ``GameMapEntry`` (exe + work_dir) or None."""
         await self._load_games_map()
         key = f"{store}:{game_id}"
-        return self._games_map.get(key)
+        # cast: ``self`` is typed Any in the mixin (host provides
+        # _load_games_map), so ``self._games_map.get`` returns Any
+        # even though ``_games_map: dict[str, GameMapEntry]`` is
+        # declared at class scope. Cast to recover the precise type.
+        entry: GameMapEntry | None = self._games_map.get(key)
+        return entry
 
     @staticmethod
     def _drop_shortcut_entries(
@@ -228,7 +237,11 @@ class _GamesMapMixin:
                 from unifideck.core.types.events import Events
                 await self._bus.emit(Events.SHORTCUT_REMOVED, app_id=app_id)
 
-        return removed
+        # bool() cast: ``removed`` is ``bool | Any`` because the
+        # dropped_* helpers are typed bool but ``self: Any`` taints
+        # the dataflow inference. Explicit cast keeps the return
+        # type narrow.
+        return bool(removed)
 
     @staticmethod
     def _ensure_shortcuts_root(shortcuts: Any) -> dict[str, Any]:
@@ -245,7 +258,11 @@ class _GamesMapMixin:
             shortcuts = {"shortcuts": {}}
         elif "shortcuts" not in shortcuts:
             shortcuts["shortcuts"] = {}
-        return shortcuts
+        # cast: ``shortcuts`` is ``Any`` on entry; after the two
+        # branches above it's guaranteed to be a ``dict[str, Any]``
+        # with a "shortcuts" key. The explicit annotation tells mypy.
+        result: dict[str, Any] = shortcuts
+        return result
 
     @staticmethod
     def _find_existing_shortcut_key(
@@ -326,9 +343,15 @@ class _GamesMapMixin:
         await self._load_shortcuts()
         await self._load_games_map()
 
-        valid_keys = {f"{g.store}:{g.id}" for g in games}
+        # Drift fix (lot 12c): ``Game`` doesn't have ``id`` /
+        # ``launch_path`` attributes — the canonical fields are
+        # ``store_game_id`` and ``exe_path``. The previous shape
+        # raised AttributeError at runtime, but the set comprehensions
+        # below were never exercised by the test suite. mypy strict
+        # surfaced the drift.
+        valid_keys = {f"{g.store}:{g.store_game_id}" for g in games}
         valid_app_ids = {
-            generate_app_id(g.launch_path or "", g.title) for g in games
+            generate_app_id(g.exe_path or "", g.title) for g in games
         }
 
         # Phase 1 — prune the games.map entries that no longer
@@ -387,11 +410,11 @@ class _GamesMapMixin:
         added = 0
         kept = 0
         for game in games:
-            key = f"{game.store}:{game.id}"
-            exe = game.launch_path or ""
+            key = f"{game.store}:{game.app_id}"
+            exe = game.exe_path or ""
             app_id = generate_app_id(exe, game.title)
             self._games_map[key] = GameMapEntry(
-                exe=exe, work_dir=game.work_dir or "",
+                exe=exe, work_dir=game.install_path or "",
             )
             if self._find_existing_shortcut_key(shortcuts_dict, app_id) is None:
                 new_key = self._allocate_new_shortcut_key(shortcuts_dict)
@@ -436,8 +459,10 @@ class _GamesMapMixin:
         downstream — no shell-escaping here.
         """
         # Exe should be in quotes for steam
-        exe_path = f'"{game.launch_path}"' if game.launch_path else '""'
-        start_dir = f'"{game.work_dir}"' if game.work_dir else '""'
+        exe_path = f'"{game.exe_path}"' if game.exe_path else '""'
+        # ``start_dir`` is the working directory Steam cd's into
+        # before exec'ing the binary — same as the install dir.
+        start_dir = f'"{game.install_path}"' if game.install_path else '""'
 
         return {
             "appid": app_id,

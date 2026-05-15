@@ -16,6 +16,7 @@ output so the two can be merged by the library facade.
 from __future__ import annotations
 
 import math
+from typing import Any
 
 
 def _convert_data(data: int) -> int:
@@ -83,7 +84,7 @@ def parse_launch_id(header: bytes, offset: int) -> tuple[int, int]:
     return launch_id, offset
 
 
-def parse_ownership_record(chunk: bytes) -> tuple | None:
+def parse_ownership_record(chunk: bytes) -> tuple[Any, ...] | None:
     """Parse ownership record."""
     try:
         pos = 1

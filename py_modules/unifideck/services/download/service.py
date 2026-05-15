@@ -47,7 +47,7 @@ class DownloadService(_WorkerMixin):
         self._queue: list[DownloadItem] = []
         self._running: dict[str, DownloadItem] = {}
         self._lock = asyncio.Lock()
-        self._task: asyncio.Task | None = None
+        self._task: asyncio.Task[Any] | None = None
 
     async def start(self) -> None:
         """Load persisted queue + start the worker loop task."""

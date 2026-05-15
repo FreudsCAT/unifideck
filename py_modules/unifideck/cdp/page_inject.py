@@ -4,6 +4,7 @@ import asyncio
 import contextlib
 import json
 import logging
+from collections.abc import AsyncIterator
 from typing import Any
 
 import aiohttp
@@ -226,6 +227,8 @@ async def _inject_into_matching_targets(
             all_ok = False
     return all_ok, had_success
 @contextlib.asynccontextmanager
-async def _session_timeout(total: float):
-    """Session timeout."""
+async def _session_timeout(
+    total: float,
+) -> AsyncIterator[aiohttp.ClientTimeout]:
+    """Async context manager that yields a ``ClientTimeout``."""
     yield aiohttp.ClientTimeout(total=total)

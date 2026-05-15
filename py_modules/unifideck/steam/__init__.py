@@ -20,6 +20,8 @@ code. It has been removed.
 
 from __future__ import annotations
 
+from typing import Any
+
 from .library import find_steam_path, search_store
 from .steamgriddb import SteamGridDBClient, fetch_all_kinds, search_artwork
 

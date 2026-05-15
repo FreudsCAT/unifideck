@@ -33,7 +33,10 @@ class UIRPCMixin:
         if sync is None:
             raise RpcError("service_unavailable", service="sync_service")
         for game in sync.get_all_games():
-            if game.store == store and game.id == game_id:
+            # ``game_id`` here is the store-native id (the RPC
+            # argument name predates the rename to
+            # ``store_game_id`` on the dataclass).
+            if game.store == store and game.store_game_id == game_id:
                 return await metadata.enrich(game)
         return {}
 

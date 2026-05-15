@@ -75,7 +75,7 @@ def _safe_emit(bus: EventBus, event_name: str, **kwargs: Any) -> None:
     secrets, this is the safety net for human error.
     """
     if bus is None:
-        return
+        return  # type: ignore[unreachable]  # defensive guard on optional bus
     try:
         import asyncio
 
@@ -279,7 +279,7 @@ def emit_external_auth_check_failed(
 
 # ─── Decorator for auth flow instrumentation ───────────────────
 
-def audit_auth_flow(store: str, method: str = "oauth") -> Callable:
+def audit_auth_flow(store: str, method: str = "oauth") -> Callable[..., Any]:
     """Decorator wrapping a store's async start_auth() method.
 
     Emits the full SECURITY_AUTH_FLOW_* lifecycle around the
@@ -309,7 +309,7 @@ def audit_auth_flow(store: str, method: str = "oauth") -> Callable:
     via time.monotonic to be immune to wall-clock adjustments.
 
     """
-    def decorator(target: Callable) -> Callable:
+    def decorator(target: Callable[..., Any]) -> Callable[..., Any]:
         @functools.wraps(target)
         async def wrapper(self: Any, *args: Any, **kwargs: Any) -> Any:
             bus = getattr(self, "_bus", None)

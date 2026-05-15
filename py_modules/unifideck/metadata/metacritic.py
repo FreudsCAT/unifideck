@@ -86,10 +86,10 @@ def get_numeral_variants(title: str) -> list[str]:
         roman = to_roman(m.group(1))
         if roman:
             candidates.append(title[:m.start()] + roman)
-    def _arabic_to_roman(match: re.Match) -> str:
+    def _arabic_to_roman(match: re.Match[str]) -> str:
         """Arabic to roman."""
         return to_roman(match.group(1)) or match.group(0)
-    def _roman_to_arabic(match: re.Match) -> str:
+    def _roman_to_arabic(match: re.Match[str]) -> str:
         """Roman to arabic."""
         return to_arabic(match.group(1)) or match.group(0)
     subbed = re.sub(r"\b([1-5])\b", _arabic_to_roman, title)
@@ -116,7 +116,7 @@ class MetacriticScore:
     user_score: float | None
     description: str
     url: str
-    def to_dict(self) -> dict:
+    def to_dict(self) -> dict[str, Any]:
         """To dict."""
         return {
         "title": self.title,
@@ -165,7 +165,7 @@ def _slug_candidates(title: str) -> list[str]:
             variants.add(alt)
     return [slugify_game_name(v) for v in variants if v.strip()]
 
-async def _fetch_composer(slug: str, url_template: str, timeout: int) -> dict | None:
+async def _fetch_composer(slug: str, url_template: str, timeout: int) -> dict[str, Any] | None:
     """Fetch composer."""
     import aiohttp
     url = url_template.format(slug=slug)
@@ -183,7 +183,7 @@ async def _fetch_composer(slug: str, url_template: str, timeout: int) -> dict | 
         )
         return None
 
-def _parse_composer_response(title: str, slug: str, data: dict) -> MetacriticScore | None:
+def _parse_composer_response(title: str, slug: str, data: dict[str, Any]) -> MetacriticScore | None:
     """Parse composer response."""
     try:
         components = data.get("components", [])

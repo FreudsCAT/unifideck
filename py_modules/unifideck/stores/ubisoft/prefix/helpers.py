@@ -49,7 +49,7 @@ class _PrefixHelpers:
             space_id,
         )
         try:
-            Path(prefix_path).mkdir(parents=True, exist_ok=True)  # noqa: ASYNC240 — project uses asyncio.to_thread for sync I/O, not trio/anyio
+            await asyncio.to_thread(lambda: Path(prefix_path).mkdir(parents=True, exist_ok=True))
             ok = await self.rsync_clone(
                 self._parent._config.template_dir_expanded,
                 prefix_path,
@@ -90,7 +90,7 @@ class _PrefixHelpers:
         if not installer_path:
             return False
         try:
-            Path(prefix_path).mkdir(parents=True, exist_ok=True)  # noqa: ASYNC240 — project uses asyncio.to_thread for sync I/O, not trio/anyio
+            await asyncio.to_thread(lambda: Path(prefix_path).mkdir(parents=True, exist_ok=True))
             success = await self.run_silent_installer(
                 prefix_dir=prefix_path,
                 installer_path=installer_path,
@@ -131,7 +131,7 @@ class _PrefixHelpers:
             "[UbisoftPrefixManager] creating template from first game prefix",
         )
         try:
-            Path(template_dir).mkdir(parents=True, exist_ok=True)  # noqa: ASYNC240 — project uses asyncio.to_thread for sync I/O, not trio/anyio
+            await asyncio.to_thread(lambda: Path(template_dir).mkdir(parents=True, exist_ok=True))
             ok = await self.rsync_clone(
                 game_prefix,
                 template_dir,
@@ -277,7 +277,13 @@ class _PrefixHelpers:
             return
         try:
             current_target = Path(pfx_link).readlink()
-            if current_target in (prefix_dir, "."):
+            # ``readlink()`` returns ``Path`` but the comparison
+            # set mixes ``Path`` (``prefix_dir``) and ``str``
+            # (``"."``). Coerce both sides to ``str`` so mypy
+            # sees overlapping types — and the semantic stays
+            # identical (Path equality goes through ``__fspath__``
+            # which compares the string form anyway).
+            if str(current_target) in (str(prefix_dir), "."):
                 return
             Path(pfx_link).unlink()
             Path(pfx_link).symlink_to(prefix_dir)
@@ -302,7 +308,7 @@ class _PrefixHelpers:
         marker_path = str(Path(prefix_dir) / self._parent._config.bootstrap_marker)
         # UTC keeps the marker comparable across machines and survives
         # DST transitions on the user's locale.
-        created_at = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        created_at = datetime.datetime.now(datetime.UTC).isoformat()
         lines = [source, f"created={created_at}"]
         if space_id:
             lines.insert(1, f"game={space_id}")

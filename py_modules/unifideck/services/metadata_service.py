@@ -82,7 +82,7 @@ class MetadataService:
 
     async def enrich(self, game: Game) -> dict[str, Any]:
         """Return enriched metadata for a single game."""
-        cache_key = f"{game.store}:{game.game_id}"
+        cache_key = f"{game.store}:{game.store_game_id}"
 
         try:
             cached = self._cache.get(CACHE_NAMESPACE, cache_key)
@@ -130,52 +130,85 @@ class MetadataService:
         return merged
 
     async def _fetch_steam_store(self, title: str) -> dict[str, Any]:
-        """Search Steam Store API for the top match."""
+        """Search Steam Store API for the top match.
+
+        Drift fix (2026-05-15): ``library.search_store`` returns
+        ``dict[str, Any] | None`` (the best single match), not a
+        list. The previous body indexed it with ``results[0]``
+        which would either index a dict-by-int (TypeError) or
+        crash. Treating it as a single dict throughout.
+        """
         from unifideck.steam import library
         try:
-            results = await library.search_store(title)
-            if not results:
+            best = await library.search_store(title)
+            if not best:
                 return {}
 
-            # Pick the best match (simplified: first result)
-            best = results[0]
+            # The exact key names depend on the Steam Store API
+            # response shape; we forward what's present and leave
+            # absent fields as ``None`` so downstream callers can
+            # detect missing data instead of seeing wrong values.
             return {
-                "steam_appid": best.appid,
-                "title": best.name,
-                "release_date": best.released,
-                "header_image": best.header_url,
-                "is_free": best.is_free,
+                "steam_appid": best.get("appid"),
+                "title": best.get("name"),
+                "release_date": best.get("released"),
+                "header_image": best.get("header_url"),
+                "is_free": best.get("is_free"),
             }
         except Exception as e:
             logger.debug("[Metadata] Steam fetch failed for %s: %s", title, e)
             return {}
 
     async def _fetch_unifidb(self, game: Game) -> dict[str, Any]:
-        """Query UnifiDB for canonical game info."""
+        """Query UnifiDB for canonical game info.
+
+        Drift fix (2026-05-15): the previous body called
+        ``unifidb.fetch_game(store, id, title)`` and expected a
+        dataclass with attributes ``unifidb_id``, ``description``,
+        ``genres``, ``developer``, ``publisher``, ``release_date``.
+        None of that matches what ``unifidb`` actually exposes —
+        the real entry-point is ``lookup(store, game_id, title)``
+        which returns ``dict[str, Any] | None`` keyed on
+        ``title``, ``description``, ``release_date``, ``publisher``,
+        ``developers`` (plural list), ``genres``.
+
+        Treating ``game`` as a ``Game`` dataclass (attribute
+        access, not ``.get(...)``).
+        """
         from unifideck.metadata import unifidb
         try:
-            store = game.get("store", "")
-            store_id = game.get("game_id", "")
-            title = game.get("title")
-
-            result = await unifidb.fetch_game(store, store_id, title)
+            result = await unifidb.lookup(
+                game.store, game.store_game_id, game.title,
+            )
             if not result:
                 return {}
 
             return {
-                "unifidb_id": result.unifidb_id,
-                "description": result.description,
-                "genres": result.genres,
-                "developer": result.developer,
-                "publisher": result.publisher,
-                "release_date": result.release_date,
+                # Pick whatever the UnifiDB record has; missing
+                # keys land as ``None`` so the downstream cache
+                # doesn't store partial-but-incorrect data.
+                "description": result.get("description"),
+                "genres": result.get("genres", []),
+                # Note: UnifiDB exposes ``developers`` (plural list);
+                # collapse to a comma-joined string for display
+                # parity with other sources.
+                "developer": ", ".join(result.get("developers", [])) or None,
+                "publisher": result.get("publisher"),
+                "release_date": result.get("release_date"),
             }
         except Exception as e:
             logger.debug("[Metadata] UnifiDB fetch failed: %s", e)
             return {}
 
     async def _fetch_metacritic(self, title: str) -> dict[str, Any]:
-        """Fetch Metacritic critic + user score and summary."""
+        """Fetch Metacritic critic + user score and summary.
+
+        Drift fix (2026-05-15): the previous body referenced
+        ``critic_score`` and ``summary`` — neither attribute
+        exists on ``MetacriticScore``. The real attributes are
+        ``metascore`` (the critic score) and ``description``
+        (the editorial blurb).
+        """
         from unifideck.metadata import metacritic
         try:
             result = await metacritic.fetch_score(title)
@@ -183,10 +216,10 @@ class MetadataService:
                 return {}
 
             return {
-                "metacritic_score": result.critic_score,
+                "metacritic_score": result.metascore,
                 "metacritic_user_score": result.user_score,
                 "metacritic_url": result.url,
-                "summary": result.summary,
+                "summary": result.description,
             }
         except Exception as e:
             logger.debug("[Metadata] Metacritic fetch failed for %s: %s", title, e)

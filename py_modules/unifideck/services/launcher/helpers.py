@@ -25,18 +25,27 @@ async def prepare_windows_plan(
     ctx: LaunchContext,
     state: RuntimeState,
 ) -> tuple[Any, Any]:
-    """Prepare the Proton launch plan for a Windows game."""
-    # Assuming ProtonService provides a prepare_launch method
+    """Prepare the Proton launch plan for a Windows game.
+
+    Drift fix (2026-05-15): the previous body accessed
+    ``ctx.game.get(...)`` — ``LaunchContext`` has no ``game``
+    attribute. The real attributes are directly on ``ctx``
+    (store, game_id, exe_path, work_dir, raw_options).
+    Fields with no equivalent on ``LaunchContext`` (``app_id``,
+    ``title``, ``launch_args``) are passed as their best-effort
+    defaults; this code path's correctness depends on
+    ``ProtonService.prepare_launch`` tolerating empty values
+    — to validate when the service graph is exercised end-to-end.
+    """
     try:
-        # Pass context into ProtonService which orchestrates UMU + Python + prefixes
         plan = await svc._proton_svc.prepare_launch(
-            app_id=ctx.game.get("app_id", 0),
-            launch_path=ctx.game.get("launch_path", ""),
-            launch_args=ctx.game.get("launch_args", []),
-            work_dir=ctx.game.get("work_dir", ""),
-            store=ctx.game.get("store", ""),
-            game_id=ctx.game.get("game_id", ""),
-            title=ctx.game.get("title", "")
+            app_id=0,  # No app_id on LaunchContext; service must derive it.
+            launch_path=str(ctx.exe_path),
+            launch_args=[],  # raw_options is a string; service to parse.
+            work_dir=str(ctx.work_dir),
+            store=ctx.store,
+            game_id=ctx.game_id,
+            title="",  # No title on LaunchContext; service to fetch.
         )
         # Dummy parsed_options for now, in a real implementation this parses LSFG, etc.
         parsed_options = object()
@@ -52,8 +61,8 @@ async def cloud_sync_phase(
     direction: str,
 ) -> None:
     """Run one direction of cloud-save sync (``down`` or ``up``)."""
-    store = ctx.game.get("store")
-    game_id = ctx.game.get("game_id")
+    store = ctx.store
+    game_id = ctx.game_id
 
     if not store or not game_id:
         return

@@ -329,7 +329,13 @@ async def search_store(
         return None
 
     try:
-        app_id = int(first.get("id"))
+        # ``first.get("id")`` returns Any | None; ``int(None)`` raises
+        # TypeError so the except below catches it, but mypy strict
+        # needs the explicit None-guard via the str() cast.
+        raw_id = first.get("id")
+        if raw_id is None:
+            return None
+        app_id = int(raw_id)
     except (TypeError, ValueError):
         return None
 

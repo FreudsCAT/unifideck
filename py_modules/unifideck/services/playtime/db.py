@@ -10,6 +10,7 @@ import logging
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -52,9 +53,11 @@ class DailyTotal:
 
 # --- Migrations ---
 def run_migrations(conn: sqlite3.Connection) -> int:
+    """Run schema migrations forward. Returns the version applied."""
     cursor = conn.cursor()
     cursor.execute("PRAGMA user_version")
-    current_version = cursor.fetchone()[0]
+    # ``fetchone()`` returns Any|None; coerce to int.
+    current_version = int(cursor.fetchone()[0])
 
     if current_version < 1:
         cursor.executescript("""
@@ -128,11 +131,29 @@ def run_migrations(conn: sqlite3.Connection) -> int:
 
 # --- Database ---
 class ActivityDatabase:
-    def __init__(self, db_path: str):
+    def __init__(self, db_path: str) -> None:
+        """Initialise paths but defer the connect to ``open()``."""
         self.db_path = db_path
         self.conn: sqlite3.Connection | None = None
 
+    def _require_conn(self) -> sqlite3.Connection:
+        """Return the live connection or raise.
+
+        Helper that narrows ``self.conn`` from ``Connection | None``
+        to ``Connection`` for mypy strict, with a clear runtime
+        error if a caller forgets ``open()``. Without this, every
+        method below would need its own ``if self.conn is None``
+        guard or a ``# type: ignore`` on every ``self.conn.X`` call.
+        """
+        if self.conn is None:
+            raise RuntimeError(
+                "ActivityDatabase used before open() — "
+                "call open() before any query/execute/commit.",
+            )
+        return self.conn
+
     def open(self) -> int:
+        """Open the connection, configure PRAGMAs, run migrations."""
         parent = str(Path(self.db_path).parent)
         if parent:
             Path(parent).mkdir(parents=True, exist_ok=True)
@@ -143,27 +164,64 @@ class ActivityDatabase:
         self.conn.execute("PRAGMA foreign_keys=ON")
         return run_migrations(self.conn)
 
-    def close(self):
+    def close(self) -> None:
+        """Close the connection if open. Idempotent (safe to re-call)."""
         if self.conn:
             self.conn.close()
             self.conn = None
 
-    def execute(self, sql: str, params: tuple = ()) -> sqlite3.Cursor:
-        return self.conn.execute(sql, params)
+    def execute(
+        self, sql: str, params: tuple[Any, ...] = (),
+    ) -> sqlite3.Cursor:
+        """Execute SQL with parameters. Requires ``open()`` first."""
+        return self._require_conn().execute(sql, params)
 
-    def query(self, sql: str, params: tuple = ()) -> list[sqlite3.Row]:
-        return self.conn.execute(sql, params).fetchall()
+    def query(
+        self, sql: str, params: tuple[Any, ...] = (),
+    ) -> list[sqlite3.Row]:
+        """Run a SELECT, return all rows. Requires ``open()`` first."""
+        return self._require_conn().execute(sql, params).fetchall()
 
-    def query_one(self, sql: str, params: tuple = ()) -> sqlite3.Row | None:
-        return self.conn.execute(sql, params).fetchone()
+    def query_one(
+        self, sql: str, params: tuple[Any, ...] = (),
+    ) -> sqlite3.Row | None:
+        """Run a SELECT, return the first row or None."""
+        result = self._require_conn().execute(sql, params).fetchone()
+        # Cast through Any because ``fetchone`` is typed as
+        # ``Any`` by the stubs; we know it's ``Row | None`` here.
+        return result  # type: ignore[no-any-return]
 
-    def get_or_create_game(self, store: str, store_game_id: str, title: str, steam_app_id: int) -> int:
-        row = self.query_one("SELECT id FROM games WHERE store = ? AND store_game_id = ?", (store, store_game_id))
+    def get_or_create_game(
+        self, store: str, store_game_id: str, title: str, steam_app_id: int,
+    ) -> int:
+        """Upsert game record. Returns the game's primary key."""
+        row = self.query_one(
+            "SELECT id FROM games WHERE store = ? AND store_game_id = ?",
+            (store, store_game_id),
+        )
+        conn = self._require_conn()
         if row:
-            self.execute("UPDATE games SET steam_app_id = ? WHERE id = ?", (steam_app_id, row["id"]))
-            self.conn.commit()
-            return row["id"]
+            self.execute(
+                "UPDATE games SET steam_app_id = ? WHERE id = ?",
+                (steam_app_id, row["id"]),
+            )
+            conn.commit()
+            # ``row["id"]`` is typed as ``Any`` by sqlite3 stubs.
+            return int(row["id"])
 
-        cursor = self.execute("INSERT INTO games (store, store_game_id, steam_app_id, title) VALUES (?, ?, ?, ?)", (store, store_game_id, steam_app_id, title))
-        self.conn.commit()
-        return cursor.lastrowid
+        cursor = self.execute(
+            "INSERT INTO games (store, store_game_id, steam_app_id, title) "
+            "VALUES (?, ?, ?, ?)",
+            (store, store_game_id, steam_app_id, title),
+        )
+        conn.commit()
+        # ``lastrowid`` is ``int | None``; ``None`` only when the
+        # last execute wasn't INSERT/UPDATE/DELETE, which can't
+        # happen here.
+        last_id = cursor.lastrowid
+        if last_id is None:
+            raise RuntimeError(
+                "INSERT into games returned no lastrowid — "
+                "should not happen on a successful insert.",
+            )
+        return last_id

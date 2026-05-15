@@ -77,7 +77,7 @@ async def _sgdb_lookup_game_id(
         data = await resp.json()
     if not data.get("success") or not data.get("data"):
         return None
-    return data["data"][0].get("id")
+    return data["data"][0].get("id")  # type: ignore[no-any-return]  # http json field — int | None
 
 
 def _sgdb_kind_params(kind: str) -> dict[str, str]:
@@ -116,7 +116,7 @@ async def _sgdb_pick_artwork_url(
         data = await resp.json()
     if not data.get("success") or not data.get("data"):
         return None
-    return data["data"][0].get("url")
+    return data["data"][0].get("url")  # type: ignore[no-any-return]  # http json field — str | None
 
 
 async def find_artwork_url(
@@ -191,7 +191,11 @@ async def _download_artwork_bytes(
                 url, resp.status,
             )
             return None
-        return await resp.read()
+        # aiohttp stubs aren't installed (see [[tool.mypy.overrides]]
+        # in pyproject), so resp.read() resolves to Any. Cast back to
+        # bytes — the runtime contract is documented in aiohttp docs.
+        body: bytes = await resp.read()
+        return body
 
 
 def _ensure_grid_dir(grid_dir: str) -> None:
@@ -268,7 +272,7 @@ async def download_and_save(
             return False
         await asyncio.to_thread(_atomic_write_artwork, tmp_path, target_path, content)
         return True
-    except asyncio.TimeoutError:
+    except TimeoutError:
         logger.debug("[ArtworkFetcher] download timed out: %s", url)
         return False
     except Exception as e:

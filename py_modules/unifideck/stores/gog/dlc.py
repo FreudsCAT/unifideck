@@ -75,7 +75,7 @@ class GOGDlcManager:
         )
         if not isinstance(product, dict):
             return []
-        dlcs_info = product.get("dlcs", {})
+        dlcs_info = product.get("dlcs", {})  # type: ignore[unreachable]  # defensive guard on subprocess output
         if not isinstance(dlcs_info, dict) or not dlcs_info:
             logger.debug(
                 "[GOGDlcManager] no DLCs for %s",
@@ -277,7 +277,7 @@ class GOGDlcManager:
                 stderr=asyncio.subprocess.STDOUT,
                 env=env,
             )
-            proc._unifideck_gogdl_cleanup = cleanup
+            proc._unifideck_gogdl_cleanup = cleanup  # type: ignore[attr-defined]  # Process._unifideck_gogdl_cleanup added at spawn time
             return proc
         except OSError:
             logger.exception("[GOGDlcManager] gogdl spawn failed")
@@ -362,7 +362,7 @@ class GOGDlcManager:
         data = await self._http_get_json(url)
         if not isinstance(data, dict):
             return None
-        links = data.get("links", {})
+        links = data.get("links", {})  # type: ignore[unreachable]  # defensive guard on subprocess output
         if not isinstance(links, dict):
             return None
         product_card = links.get("product_card")

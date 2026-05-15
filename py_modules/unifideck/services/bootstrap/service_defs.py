@@ -50,7 +50,7 @@ if TYPE_CHECKING:
 # out-of-process via bin/unifideck-launcher → dispatcher.py.
 # LauncherService is constructed on demand inside the dispatcher's
 # own minimal service graph, not here.
-_SERVICE_DEFS: tuple[tuple, ...] = (
+_SERVICE_DEFS: tuple[tuple[Any, ...], ...] = (
     (
         "shortcut", "unifideck.services.shortcut",
         "ShortcutService",
@@ -192,7 +192,7 @@ _SERVICE_DEFS: tuple[tuple, ...] = (
 
 
 def _instantiate_service(
-    def_entry: tuple,
+    def_entry: tuple[Any, ...],
     bus: EventBus,
     registry: StoreRegistry | None,
     cache: CacheManager | None,

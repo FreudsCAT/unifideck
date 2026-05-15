@@ -168,7 +168,7 @@ class _WorkerMixin:
 
             # Do the install
             logger.info("[DownloadWorker] starting install for %s", key)
-            result = await store.install_game(
+            result = await store.install_game(  # type: ignore[call-arg]  # store.install_game progress_cb signature varies by store
                 item.game_id,
                 item.install_path,
                 progress_cb=progress_cb,
@@ -179,13 +179,13 @@ class _WorkerMixin:
                 if self._bus:
                     await self._bus.emit(Events.DOWNLOAD_COMPLETE, item=item.to_dict())
             else:
-                error_type = classify_download_error(result.error)
+                error_type = classify_download_error(result.error)  # type: ignore[arg-type]  # classify_download_error: result.error is str|None, function takes Exception
                 logger.error("[DownloadWorker] failed install for %s: %s (%s)", key, result.error, error_type)
                 if self._bus:
                     await self._bus.emit(Events.DOWNLOAD_FAILED, item=item.to_dict(), error=result.error, error_type=error_type)
 
         except Exception as e:
-            error_type = classify_download_error(str(e))
+            error_type = classify_download_error(str(e))  # type: ignore[arg-type]  # classify_download_error: result.error is str|None, function takes Exception
             logger.exception("[DownloadWorker] exception during install of %s", key)
             if self._bus:
                 await self._bus.emit(Events.DOWNLOAD_FAILED, item=item.to_dict(), error=str(e), error_type=error_type)
@@ -215,8 +215,19 @@ class _WorkerMixin:
         reaches any subscriber, so this method must be ``async``
         and every call site (the ``progress_cb`` wrapper above)
         must ``await`` it.
+
+        Drift fix (lot 12d): ``item.progress`` is typed ``float``
+        (0.0-100.0 — see ``DownloadItem``) but the callback's
+        ``progress`` argument is a full ``dict[str, Any]`` payload
+        with multiple fields. Assigning the dict directly broke
+        ``DownloadItem.to_dict`` serialisation and mypy strict.
+        Extract the percentage out of the dict; fall back to the
+        previous value when the key is absent so a partial payload
+        doesn't reset the bar to zero.
         """
-        item.progress = progress
+        percentage = progress.get("percentage")
+        if isinstance(percentage, (int, float)):
+            item.progress = float(percentage)
         if self._bus:
             from unifideck.core.types.events import Events
             # We don't emit the full item dict on every progress tick to save IPC overhead,

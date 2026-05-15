@@ -104,7 +104,7 @@ class MicrosoftStore(StoreBase):
         self._cached_available = loaded
         return loaded
 
-    async def start_auth(self, **kwargs) -> AuthResult:
+    async def start_auth(self, **kwargs: Any) -> AuthResult:
 
         """Start auth."""
         if self._auth is None:
@@ -129,7 +129,7 @@ class MicrosoftStore(StoreBase):
         await self._ensure_auth_shortcut()
         return cast("AuthResult", await self._auth.start_auth())
     async def complete_auth(
-        self, code: str = "", **kwargs,
+        self, code: str = "", **kwargs: Any,
     ) -> AuthResult:
         """Complete auth."""
         if await self.is_available():

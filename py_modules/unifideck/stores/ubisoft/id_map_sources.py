@@ -147,10 +147,17 @@ class _IdMapSources:
     ) -> bool:
         """Refresh from configurations."""
         try:
-            from unifideck.stores.ubisoft_parser import build_id_map_from_configurations
+            # Fix (2026-05-15, lot 11e): the module is
+            # ``unifideck.stores.ubisoft.parser`` (dotted), not
+            # ``unifideck.stores.ubisoft_parser`` — the previous
+            # path was a typo that mypy strict flagged as
+            # ``import-not-found``. At runtime the same path
+            # would have raised the ImportError caught below,
+            # silently skipping the refresh.
+            from unifideck.stores.ubisoft.parser import build_id_map_from_configurations
         except ImportError as e:
             logger.warning(
-                "[UbisoftIdMap] ubisoft_parser unavailable: %s",
+                "[UbisoftIdMap] ubisoft.parser unavailable: %s",
                 e,
             )
             return False
@@ -235,7 +242,19 @@ class _IdMapSources:
         cache_p = Path(cache_file)
         if await asyncio.to_thread(cache_p.is_file):
             with contextlib.suppress(OSError):
-                age = time.time() - await asyncio.to_thread(cache_p.stat).st_mtime
+                # Bug fix (lot 12c): the previous line read
+                # ``time.time() - await asyncio.to_thread(cache_p.stat).st_mtime``
+                # which Python parses as
+                # ``time.time() - await (to_thread(...).st_mtime)`` —
+                # but ``to_thread()`` returns a *coroutine*, not the
+                # stat_result, so ``.st_mtime`` would raise
+                # ``AttributeError`` at runtime. The OSError suppress
+                # swallowed AttributeError silently (it doesn't — OSError
+                # is unrelated), so the path was effectively dead and
+                # the cache was never read from disk. Parenthesise the
+                # await so the coroutine is resolved first.
+                stat_result = await asyncio.to_thread(cache_p.stat)
+                age = time.time() - stat_result.st_mtime
                 if age < max_age:
                     return await asyncio.to_thread(
                         _parse_game_id_database,

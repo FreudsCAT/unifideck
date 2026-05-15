@@ -49,7 +49,7 @@ def _linux_to_wine_path(linux_path: str) -> str:
 def _load_installed_json(
     legendary_config: Path,
     game_id: str,
-) -> dict | None:
+) -> dict[str, Any] | None:
 
     """Load installed JSON."""
     installed_json = legendary_config / "installed.json"
@@ -143,7 +143,7 @@ def _build_reg_commands(
 
 async def _run_reg_commands(
     commands: list[list[str]],
-    env: dict,
+    env: dict[str, Any],
 ) -> int:
 
     """Run reg commands."""
@@ -189,10 +189,8 @@ async def _kill_wineserver(
         return
     env = dict(os.environ)
     env["WINEPREFIX"] = str(wineprefix)
-    with contextlib.suppress((
-        TimeoutError, OSError,
-        subprocess.SubprocessError,
-    )):
+    with contextlib.suppress(TimeoutError, OSError,
+        subprocess.SubprocessError,):
         proc = await asyncio.create_subprocess_exec(
             str(wineserver), "--kill",
             env=env,

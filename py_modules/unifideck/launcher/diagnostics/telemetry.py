@@ -17,7 +17,7 @@ class PhaseTimer:
         self,
         bus: EventBus,
         phase: str,
-        extra: dict | None = None,
+        extra: dict[str, Any] | None = None,
     ) -> None:
         """Initialize the instance."""
         self._bus = bus

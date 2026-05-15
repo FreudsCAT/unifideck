@@ -99,7 +99,10 @@ async def handle_device_reset(
         # ASYNC240 escape hatch for the blocking ``expanduser`` and
         # ``is_file`` calls below.
         full_path = await asyncio.to_thread(
-            lambda rp=rel_path: Path(rp).expanduser(),
+            # Lambda param ``rp`` capture-by-default — mypy can't
+            # infer its return type without an annotation; the
+            # silence below acknowledges this is by design.
+            lambda rp=rel_path: Path(rp).expanduser(),  # type: ignore[misc]
         )
         full = str(full_path)
         if not await asyncio.to_thread(full_path.is_file):

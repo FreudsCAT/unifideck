@@ -180,7 +180,7 @@ class _SyncMixin:
         lock = _get_lock(self._syncing, key)
         try:
             await asyncio.wait_for(lock.acquire(), timeout=self._sync_wait_timeout)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             error = "sync_wait_timeout"
             emit = self._emit_down if on_timeout_event.startswith("CLOUD_SYNC_DOWN") else self._emit_up
             await emit(on_timeout_event, store, game_id, error=error)
@@ -251,10 +251,16 @@ class _SyncMixin:
             key, "CLOUD_SYNC_DOWN_FAILED", store, game_id,
         )
         if lock is None:
-            return timeout_result  # type: ignore[return-value]
+            # Narrow: when lock is None the helper always returns
+            # a non-None Result (timeout/cancel error). Fallback to
+            # an explicit Result if the contract is somehow broken.
+            return timeout_result if timeout_result is not None else Result(
+                success=False, error="lock_acquire_failed",
+            )
 
         try:
-            return await self._sync_down_locked(store, game_id, key)
+            result: Result = await self._sync_down_locked(store, game_id, key)
+            return result
         except Exception as e:
             logger.exception("[CloudSaveService] sync_down failed for %s", key)
             await self._emit_down("CLOUD_SYNC_DOWN_FAILED", store, game_id, error=str(e))
@@ -346,10 +352,15 @@ class _SyncMixin:
             key, "CLOUD_SYNC_UP_FAILED", store, game_id,
         )
         if lock is None:
-            return timeout_result  # type: ignore[return-value]
+            # Narrow: when lock is None the helper always returns
+            # a non-None Result. Fallback if contract is broken.
+            return timeout_result if timeout_result is not None else Result(
+                success=False, error="lock_acquire_failed",
+            )
 
         try:
-            return await self._sync_up_locked(store, game_id, key)
+            result: Result = await self._sync_up_locked(store, game_id, key)
+            return result
         except Exception as e:
             logger.exception("[CloudSaveService] sync_up failed for %s", key)
             await self._emit_up("CLOUD_SYNC_UP_FAILED", store, game_id, error=str(e))
@@ -377,7 +388,7 @@ class _SyncMixin:
 
         try:
             await asyncio.wait_for(lock.acquire(), timeout=self._sync_wait_timeout)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             return Result(success=False, error="sync_wait_timeout")
 
         try:

@@ -40,8 +40,8 @@ async def launch_windows(
         plan, _parsed_options = await svc._prepare_windows_plan(ctx, state)
 
         from unifideck.core.types.events import Events
-        store = ctx.game.get("store")
-        game_id = ctx.game.get("game_id")
+        store = ctx.store
+        game_id = ctx.game_id
 
         # Phase 2: Cloud Sync Down
         await svc._cloud_sync_phase(ctx, "down")
@@ -51,8 +51,8 @@ async def launch_windows(
             Events.GAME_LAUNCHED,
             store=store,
             game_id=game_id,
-            title=ctx.game.get("title", ""),
-            app_id=ctx.game.get("app_id", 0)
+            title="",  # No title on LaunchContext
+            app_id=0  # No app_id on LaunchContext
         )
 
         # Phase 3: Run Subprocess
@@ -95,8 +95,8 @@ async def launch_native(
     """Native Linux game launch — simpler path."""
     try:
         from unifideck.core.types.events import Events
-        store = ctx.game.get("store")
-        game_id = ctx.game.get("game_id")
+        store = ctx.store
+        game_id = ctx.game_id
 
         # Phase 1: Cloud Sync Down
         await svc._sync_saves_and_track_size(ctx, "sync_down")
@@ -106,8 +106,8 @@ async def launch_native(
             Events.GAME_LAUNCHED,
             store=store,
             game_id=game_id,
-            title=ctx.game.get("title", ""),
-            app_id=ctx.game.get("app_id", 0)
+            title="",  # No title on LaunchContext
+            app_id=0  # No app_id on LaunchContext
         )
 
         # Phase 2: Run Subprocess
@@ -115,14 +115,16 @@ async def launch_native(
             # For native games, we just run the executable directly
             import asyncio
 
-            cmd = [ctx.game.get("launch_path", "")]
-            cmd.extend(ctx.game.get("launch_args", []))
+            cmd = [str(ctx.exe_path)]
+            # No launch_args on LaunchContext; if/when added,
+            # extend ``cmd`` here.
+            cmd.extend([])
 
             logger.info("[Orchestrator] Spawning native launch: %s", cmd)
 
             proc = await asyncio.create_subprocess_exec(
                 *cmd,
-                cwd=ctx.game.get("work_dir", "/"),
+                cwd=str(ctx.work_dir),
             )
             svc._active_subprocess = proc
 

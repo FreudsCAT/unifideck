@@ -139,7 +139,7 @@ def _parse_tier_from_response(
 ) -> SubscriptionTier:
     """Parse tier from response."""
     if not isinstance(payload, dict):
-        return SubscriptionTier.NONE
+        return SubscriptionTier.NONE  # type: ignore[unreachable]  # fallback after exhaustive tier match
     offering = payload.get("offeringSettings")
     if not isinstance(offering, dict):
         return SubscriptionTier.NONE

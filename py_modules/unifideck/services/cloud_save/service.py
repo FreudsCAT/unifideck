@@ -100,17 +100,49 @@ class CloudSaveService(_SyncMixin):
 
         Waits briefly for any in-flight syncs to complete so
         shutdown doesn't leave a half-copied save directory.
+
+        Drift fix (2026-05-15): the previous body iterated
+        ``self._syncing.values()`` as if they were
+        ``asyncio.Event`` (``ev.wait()`` / ``ev.is_set()``),
+        but the dict holds ``asyncio.Lock`` since the
+        Event→Lock migration documented in ``__init__``. The
+        correct way to wait for a held lock to release is to
+        ``acquire()`` it ourselves (with a timeout) and then
+        immediately ``release()``.
         """
         self._bus.unsubscribe_all(self)
 
-        # Collect any active sync events that are not set
-        active_events = [ev.wait() for ev in self._syncing.values() if not ev.is_set()]
-        if active_events:
-            logger.info("[CloudSaveService] waiting for %d in-flight syncs", len(active_events))
-            # Wait up to a few seconds for pending syncs
-            _done, pending = await asyncio.wait(active_events, timeout=5.0)
-            if pending:
-                logger.warning("[CloudSaveService] shut down with %d syncs incomplete", len(pending))
+        # Snapshot the locks that are currently held; we'll
+        # acquire-then-release each one to wait for the in-flight
+        # sync to finish.
+        in_flight = [
+            (key, lock) for key, lock in self._syncing.items()
+            if lock.locked()
+        ]
+        if not in_flight:
+            return
+        logger.info(
+            "[CloudSaveService] waiting for %d in-flight syncs",
+            len(in_flight),
+        )
+
+        async def _drain(lock: asyncio.Lock) -> None:
+            await lock.acquire()
+            lock.release()
+
+        try:
+            await asyncio.wait_for(
+                asyncio.gather(*(_drain(lock) for _key, lock in in_flight)),
+                timeout=5.0,
+            )
+        except TimeoutError:
+            still_held = [
+                key for key, lock in in_flight if lock.locked()
+            ]
+            logger.warning(
+                "[CloudSaveService] shut down with %d syncs incomplete: %s",
+                len(still_held), still_held,
+            )
 
     @subscribe(Events.GAME_LAUNCHED)
     async def _on_game_launched(self, **kwargs: Any) -> None:

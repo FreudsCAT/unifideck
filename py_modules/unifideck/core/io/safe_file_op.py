@@ -73,7 +73,7 @@ def safe_file_op(
     default: Any = None,
     *,
     log_level: int = logging.WARNING,
-) -> Callable[[_Callable], _Callable]:
+) -> Callable[[_Callable[T]], Callable[..., Any]]:
     """Decorator factory that wraps a file op with ``OSError`` handling.
 
     Returns the actual decorator (the factory pattern lets
@@ -103,7 +103,7 @@ def safe_file_op(
         The actual decorator, ready to apply to a function.
     """
 
-    def decorator(fn: _Callable) -> _Callable:
+    def decorator(fn: Callable[..., Any]) -> Callable[..., Any]:
         """Pick async or sync wrapper based on ``fn``'s nature.
 
         ``asyncio.iscoroutinefunction`` is checked at

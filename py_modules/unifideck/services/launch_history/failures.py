@@ -9,7 +9,7 @@ from __future__ import annotations
 import logging
 import time
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from .constants import _VALID_KINDS
 from .persistence import load_history, save_history
@@ -65,10 +65,35 @@ def _append_failure_entry(
 
 
 class _FailuresMixin:
-    """Failures API + circuit predicate for LaunchHistoryService."""
+    """Failures API + circuit predicate for LaunchHistoryService.
+
+    Expects the composing host to provide:
+
+    * ``_path: Path``                  — on-disk history file
+    * ``window_seconds() -> float``    — sliding window length
+    * ``threshold() -> int``           — failure count that
+                                         opens the circuit
+    * ``_emit_state(...)``             — bus emit helper
+
+    The first attribute is annotated here so mypy can see it
+    when the mixin is type-checked in isolation. The method
+    callables (``window_seconds``, ``threshold``) are declared
+    as TYPE_CHECKING-only stubs because they're provided by
+    the host's instance methods at runtime through the MRO.
+    """
 
     # Provided by host class.
     _path: Path
+
+    if TYPE_CHECKING:
+        # Type-only declarations of host-provided methods so
+        # mypy can resolve ``self.window_seconds()`` and
+        # ``self.threshold()`` calls below.
+        def window_seconds(self) -> float: ...
+        def threshold(self) -> int: ...
+        def _emit_state(
+            self, *args: Any, **kwargs: Any,
+        ) -> None: ...
 
     def get_recent_failures(self, game_key: str) -> list[dict[str, Any]]:
         """Return failures for a game within the sliding window."""

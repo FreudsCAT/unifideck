@@ -76,7 +76,7 @@ class ProbeReactionService:
         if config is None or not hasattr(config, "get"):
             return mapping
         try:
-            user_mapping = config.get("probes.probe_to_handlers")  # type: ignore[attr-defined]
+            user_mapping = config.get("probes.probe_to_handlers")
         except Exception as e:
             # User overrides for probes.probe_to_handlers may be
             # malformed or missing; fall back to defaults.

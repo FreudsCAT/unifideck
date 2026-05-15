@@ -157,7 +157,7 @@ async def _kill_wineserver(wine_bin: Path, wineprefix: Path) -> None:
         return
     env = dict(os.environ)
     env["WINEPREFIX"] = str(wineprefix)
-    with contextlib.suppress((TimeoutError, OSError, subprocess.SubprocessError)):
+    with contextlib.suppress(TimeoutError, OSError, subprocess.SubprocessError):
         proc = await asyncio.create_subprocess_exec(
             str(wineserver), "--kill",
             env=env,

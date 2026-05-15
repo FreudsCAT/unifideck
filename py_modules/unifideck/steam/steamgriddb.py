@@ -6,7 +6,6 @@ directory for non-Steam shortcuts.
 """
 from __future__ import annotations
 
-import asyncio
 import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
@@ -118,7 +117,7 @@ async def _search_game(
                 )
                 return None
             payload = await resp.json()
-    except (aiohttp.ClientError, OSError, ValueError, asyncio.TimeoutError) as e:
+    except (TimeoutError, aiohttp.ClientError, OSError, ValueError) as e:
         logger.debug(
             "[sgdb] search(%s) failed: %s", title, e,
         )
@@ -146,7 +145,7 @@ async def _fetch_assets(
             if resp.status != 200:
                 return []
             payload = await resp.json()
-    except (aiohttp.ClientError, OSError, ValueError, asyncio.TimeoutError) as e:
+    except (TimeoutError, aiohttp.ClientError, OSError, ValueError) as e:
         logger.debug(
             "[sgdb] fetch(%d, %s) failed: %s",
             game_id, endpoint, e,
@@ -174,7 +173,7 @@ def _pick_best_asset(
     """Pick best asset."""
     if not assets:
         return None
-    def rank(asset: ArtworkAsset) -> tuple:
+    def rank(asset: ArtworkAsset) -> tuple[Any, ...]:
         """Rank."""
         style_rank = 1 if asset.style == "alternate" else 0
         res = asset.width * asset.height
@@ -183,12 +182,16 @@ def _pick_best_asset(
 class SteamGridDBClient:
     """Steam grid dbclient."""
 
-    def __init__(self, api_key=None):
+    def __init__(self, api_key: str | None = None) -> None:
         """Initialize the instance."""
         self.api_key = api_key
-    async def search_artwork(self, title, kind, **kwargs):
+    async def search_artwork(
+        self, title: str, kind: str, **kwargs: Any,
+    ) -> str | None:
         """Search artwork."""
         return await search_artwork(title, kind, self.api_key)
-    async def fetch_all_kinds(self, title, **kwargs):
+    async def fetch_all_kinds(
+        self, title: str, **kwargs: Any,
+    ) -> dict[str, str | None]:
         """Fetch all kinds."""
         return await fetch_all_kinds(title, self.api_key)

@@ -48,7 +48,16 @@ class _SyncQueriesMixin:
     # Declared here so type-checkers don't complain about the
     # mixin reading state it didn't set itself.
     _all_games: dict[str, list[Game]]
-    _last_sync_time: float
+    # ``_last_sync_time`` is Optional: None marks "no sync has ever
+    # run yet" (fresh install / post-reset) and the frontend status
+    # poller passes it through to the UI as null. The host SyncService
+    # initialises it to None and overwrites with time.time() once
+    # the first sync completes. Lot 12d fix: was typed as ``float``
+    # here, which forced the host to declare its attribute as plain
+    # ``float`` too — but the runtime contract is Optional, so mypy
+    # strict flagged the host's ``float | None`` initialisation as
+    # incompatible-assignment against the mixin's claim.
+    _last_sync_time: float | None
     _current_store: str | None
     _lock: asyncio.Lock
 

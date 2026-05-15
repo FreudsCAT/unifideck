@@ -172,7 +172,7 @@ class AmazonStore(StoreBase):
         extensions = data.get("extensions", {})
         return "customer_info" in extensions
 
-    async def start_auth(self, **kwargs) -> AuthResult:
+    async def start_auth(self, **kwargs: Any) -> AuthResult:
         """Start auth."""
         if self._auth is None:
             return AuthResult(
@@ -183,7 +183,7 @@ class AmazonStore(StoreBase):
         await self._ensure_auth_shortcut()
         return cast("AuthResult", await self._auth.start_auth())
 
-    async def complete_auth(self, code: str = "", **kwargs) -> AuthResult:
+    async def complete_auth(self, code: str = "", **kwargs: Any) -> AuthResult:
         """Complete auth."""
         if await self.is_available():
             return AuthResult(success=True, store="amazon")

@@ -475,7 +475,11 @@ async def _scan_one_root(
                 )
 
 
-async def discover_installed_games(registry=None, bus=None, config=None):
+async def discover_installed_games(
+    registry: Any | None = None,
+    bus: EventBus | None = None,
+    config: ConfigManager | None = None,
+) -> dict[str, Any] | DiscoveryResult:
     """Run ``discover_all`` and return a JSON-friendly dict.
 
     Compatibility wrapper for callers expecting a dict
@@ -497,7 +501,10 @@ async def discover_installed_games(registry=None, bus=None, config=None):
     return result.to_dict() if hasattr(result, "to_dict") else result
 
 
-async def discover_and_log(bus=None, config=None):
+async def discover_and_log(
+    bus: EventBus | None = None,
+    config: ConfigManager | None = None,
+) -> DiscoveryResult:
     """Alias for ``discover_all`` — keeps a verb-style name on the API.
 
     Some legacy call sites use this name; kept exported

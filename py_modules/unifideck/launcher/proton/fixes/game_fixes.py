@@ -64,7 +64,7 @@ _UMU_DATABASE_URL_FORMATS = [
     "https://raw.githubusercontent.com/Open-Wine-Components/"
     "umu-database/main/umu-epic-{game_id}.json",
 ]
-_UMU_CACHE: dict[str, tuple[float, dict | None]] = {}
+_UMU_CACHE: dict[str, tuple[float, dict[str, Any] | None]] = {}
 _CACHE_TTL_SECONDS = 3600
 def get_exe_override(game_id: str) -> str | None:
     """Get exe override."""
@@ -73,7 +73,7 @@ def get_exe_override(game_id: str) -> str | None:
         return None
     return fix.exe_override
 
-async def fetch_umu_protonfixes(game_id: str) -> dict | None:
+async def fetch_umu_protonfixes(game_id: str) -> dict[str, Any] | None:
 
     """Fetch UMU protonfixes."""
     now = time.monotonic()
@@ -111,7 +111,7 @@ async def fetch_umu_protonfixes(game_id: str) -> dict | None:
     return None
 async def _try_umu_url(
     session: Any, url: str,
-) -> dict | None:
+) -> dict[str, Any] | None:
     """Try UMU URL."""
     import aiohttp
     try:

@@ -30,8 +30,8 @@ class CDPClient:
         )
         self._ws = None
         self._request_id = 0
-        self._pending: dict[int, asyncio.Future] = {}
-        self._recv_task: asyncio.Task | None = None
+        self._pending: dict[int, asyncio.Future[Any]] = {}
+        self._recv_task: asyncio.Task[Any] | None = None
     async def connect(self, target_url_substring: str = "") -> bool:
         """Connect."""
         targets = await self._list_targets()
@@ -56,7 +56,7 @@ class CDPClient:
             with contextlib.suppress(asyncio.CancelledError):
                 await self._recv_task
         if self._ws:
-            await self._ws.close()
+            await self._ws.close()  # type: ignore[unreachable]  # defensive guard after self._ws narrowing
             self._ws = None
 
     async def inject_css(self, css: str) -> bool:
@@ -71,7 +71,7 @@ class CDPClient:
         )
         result = await self.evaluate(expression)
         return bool(result and result.get("result", {}).get("value"))
-    async def evaluate(self, expression: str) -> dict | None:
+    async def evaluate(self, expression: str) -> dict[str, Any] | None:
         """Evaluate."""
         return await self._send("Runtime.evaluate", {
             "expression": expression,
@@ -161,18 +161,18 @@ class CDPClient:
                 return t
         return None
     async def _send(self, method: str,
-                    params: dict[str, Any]) -> dict | None:
+                    params: dict[str, Any]) -> dict[str, Any] | None:
         """Send."""
         if not self._ws:
             return None
-        self._request_id += 1
+        self._request_id += 1  # type: ignore[unreachable]  # guard 'if not self._ws: return None' — narrowing fallback
         req_id = self._request_id
         message = {
             "id": req_id,
             "method": method,
             "params": params,
         }
-        future: asyncio.Future = (
+        future: asyncio.Future[Any] = (
             asyncio.get_event_loop().create_future()
         )
         self._pending[req_id] = future
@@ -195,7 +195,7 @@ class CDPClient:
                 "[CDPClient] _recv_loop started before connect()",
             )
             return
-        ws = self._ws
+        ws = self._ws  # type: ignore[unreachable]  # guard 'if not self._ws: return None' — narrowing fallback
         try:
             async for raw in ws:
                 try:

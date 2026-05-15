@@ -59,7 +59,7 @@ class _InstallContext:
     platform: str = ""
     folder_name: str | None = None
     supported_langs: list[str] = field(default_factory=list)
-    existing_dirs: set = field(default_factory=set)
+    existing_dirs: set[Any] = field(default_factory=set)
     support_dir: str = ""
     install_mode: str = ""
     found_path: str = ""
@@ -138,7 +138,7 @@ class GOGInstaller:
             preferred_lang,
         )
 
-    def _snapshot_dirs(self, base_path: str) -> set:
+    def _snapshot_dirs(self, base_path: str) -> set[Any]:
         """Snapshot dirs."""
         return self._marker.snapshot_dirs(base_path)
 
@@ -147,7 +147,7 @@ class GOGInstaller:
         game_id: str,
         base_path: str,
         folder_name: str | None,
-        existing_dirs: set,
+        existing_dirs: set[Any],
     ) -> str | None:
         """Locate install."""
         return await self._marker.locate_install(
@@ -222,7 +222,7 @@ class GOGInstaller:
         base_path: str | None,
         progress_cb: Callable[[dict[str, Any]], Awaitable[None]] | None,
         language: str | None,
-    ) -> tuple:
+    ) -> tuple[Any, ...]:
         """Install preflight."""
         if not Path(self._gogdl_bin).is_file():
             return None, self._install_failed(
@@ -306,7 +306,7 @@ class GOGInstaller:
             lambda: str(Path(self._config.gogdl_config_dir).expanduser()),
         )
         ctx.support_dir = str(Path(gogdl_config_dir) / "gog-support" / ctx.game_id)
-        Path(ctx.support_dir).mkdir(parents=True, exist_ok=True)  # noqa: ASYNC240 — project uses asyncio.to_thread for sync I/O, not trio/anyio
+        await asyncio.to_thread(lambda: Path(ctx.support_dir).mkdir(parents=True, exist_ok=True))
 
     async def _install_run_gogdl_phase(
         self,

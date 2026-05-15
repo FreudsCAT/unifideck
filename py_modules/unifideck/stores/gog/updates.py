@@ -241,7 +241,7 @@ class GOGUpdatesChecker:
         await self._update_drain_output(proc)
         return await self._update_finalize(proc, game_id)
 
-    def _update_resolve_path(self, game_id: str, install_path: str | None) -> tuple:
+    def _update_resolve_path(self, game_id: str, install_path: str | None) -> tuple[Any, ...]:
         """Update resolve path."""
         if install_path:
             return install_path, None
@@ -274,7 +274,7 @@ class GOGUpdatesChecker:
                 stderr=asyncio.subprocess.STDOUT,
                 env=env,
             )
-            proc._unifideck_gogdl_cleanup = cleanup
+            proc._unifideck_gogdl_cleanup = cleanup  # type: ignore[attr-defined]  # Process._unifideck_gogdl_cleanup is added at spawn time by the GOG installer
             return proc
         except OSError:
             logger.exception("[GOGUpdatesChecker] gogdl spawn failed")

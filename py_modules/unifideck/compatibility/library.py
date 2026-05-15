@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass, field
+from collections.abc import Iterable
 from typing import TYPE_CHECKING, Any
 
 from unifideck.utils.config_helpers import get_cfg
@@ -63,7 +64,7 @@ class CompatRating:
 def parse_protondb_response(payload: dict[str, Any]) -> str | None:
     """Parse protondb response."""
     if not isinstance(payload, dict):
-        return None
+        return None  # type: ignore[unreachable]  # fallback after path-type narrowing
     tier = payload.get("tier")
     if isinstance(tier, str) and tier in PROTONDB_TIERS:
         return tier
@@ -71,7 +72,7 @@ def parse_protondb_response(payload: dict[str, Any]) -> str | None:
 def parse_deck_verified_response(payload: dict[str, Any]) -> str:
     """Parse DECK verified response."""
     if not isinstance(payload, dict):
-        return "unknown"
+        return "unknown"  # type: ignore[unreachable]  # fallback after path-type narrowing
     results = payload.get("results")
     if not isinstance(results, dict):
         return "unknown"
@@ -214,51 +215,80 @@ class CompatLibrary:
             # Cache write failures are non-fatal: the rating was
             # computed successfully, we just won't re-use it.
             logger.debug("[CompatLibrary] cache.set %r failed: %s", key, e)
-def load_compat_cache():
-    """Load compat cache."""
+def load_compat_cache() -> dict[str, Any]:
+    """Load compat cache (legacy passthrough — returns empty dict)."""
     logger.debug("[compat] load_compat_cache called via legacy path")
     return {}
-def save_compat_cache(cache):
-    """Save compat cache."""
+
+
+def save_compat_cache(cache: dict[str, Any]) -> bool:
+    """Save compat cache (legacy passthrough — always succeeds)."""
     logger.debug("[compat] save_compat_cache called via legacy path")
     return True
-async def search_steam_store(session=None, title="", **kwargs):
-    """Search steam store."""
+
+
+async def search_steam_store(
+    session: Any | None = None,
+    title: str = "",
+    **kwargs: Any,
+) -> dict[str, Any] | None:
+    """Search Steam store for ``title`` (legacy passthrough)."""
     from unifideck.steam.library import search_store
     return await search_store(title)
-async def fetch_protondb_rating(session=None, appid=0, **kwargs):
-    """Fetch protondb rating."""
+
+
+async def fetch_protondb_rating(
+    session: Any | None = None,
+    appid: int = 0,
+    **kwargs: Any,
+) -> str | None:
+    """Fetch the ProtonDB rating for ``appid`` (legacy passthrough)."""
     lib = CompatLibrary()
     return await lib._fetch_protondb(int(appid))
-async def fetch_deck_verified(session=None, appid=0, **kwargs):
-    """Fetch DECK verified."""
+
+
+async def fetch_deck_verified(
+    session: Any | None = None,
+    appid: int = 0,
+    **kwargs: Any,
+) -> str:
+    """Fetch the Steam Deck verification status for ``appid``."""
     lib = CompatLibrary()
     return await lib._fetch_deck_verified(int(appid))
-async def get_compat_for_title(session=None, title="", **kwargs):
-    """Get compat for title."""
+
+
+async def get_compat_for_title(
+    session: Any | None = None,
+    title: str = "",
+    **kwargs: Any,
+) -> tuple[str, dict[str, Any]]:
+    """Get compat rating for ``title`` (legacy passthrough)."""
     lib = CompatLibrary()
     rating = await lib.get_for_title(title)
     status = "ok" if rating.error is None else rating.error
     return (status, rating.to_dict())
+
+
 async def prefetch_compat(
-    titles,
-    _batch_size=10,
-    delay_ms=50,
-):
-    """Prefetch compat."""
+    titles: Iterable[str],
+    _batch_size: int = 10,
+    delay_ms: int = 50,
+) -> Any:
+    """Prefetch compat ratings for a list of ``titles`` (legacy)."""
     lib = CompatLibrary()
     return await lib.bulk_fetch(list(titles), delay_ms=delay_ms)
+
 
 class BackgroundCompatFetcher:
 
     """Background compat fetcher."""
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
         """Initialize the instance."""
         self._lib = CompatLibrary()
-    def start(self):
-        """Start."""
-    def stop(self):
-        """Stop."""
-    async def fetch(self, title):
-        """Fetch."""
+    def start(self) -> None:
+        """Start the background fetcher (legacy no-op)."""
+    def stop(self) -> None:
+        """Stop the background fetcher (legacy no-op)."""
+    async def fetch(self, title: str) -> Any:
+        """Fetch compat rating for ``title``."""
         return await self._lib.get_for_title(title)

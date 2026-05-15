@@ -12,7 +12,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from unifideck.core.cache_manager import CacheManager
 from unifideck.event_bus.event_bus import EventBus
@@ -71,7 +71,7 @@ class ArtworkService(_EventHandlersMixin):
         self._semaphore = asyncio.Semaphore(max_concurrent)
 
         # Track pending tasks so we can wait for them on shutdown
-        self._pending_tasks: set[asyncio.Task] = set()
+        self._pending_tasks: set[asyncio.Task[Any]] = set()
 
         # ``auto_wire(self, bus)`` walks ``self``'s methods
         # and registers every ``@subscribe(Events.X)``-marked

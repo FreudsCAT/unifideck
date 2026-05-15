@@ -419,6 +419,54 @@ omit = [
     "*/frontend/*",
 ]
 
+# ── Vulture (dead-code finder, Gate 4) ─────────────────────────────
+# ``vulture_whitelist.py`` (root-level, alongside this file) lists
+# symbols that vulture would otherwise flag as unused but are kept
+# alive through reflection, event-bus subscription, RPC auto-wire,
+# Decky entry points, dataclass field magic, etc. Vulture reads it
+# as a second "codebase" alongside ``py_modules/unifideck/`` ;
+# anything referenced there counts as used.
+#
+# ``min_confidence = 80`` was chosen at lot 12b after sweeping
+# vulture findings down to zero at that threshold. Lower values
+# surface false positives (decorator-magic, ABC methods, framework
+# hooks) faster than they catch real dead code; higher values miss
+# subtle cases. 80 is the sweet spot for this codebase.
+#
+# Paths must be listed explicitly here — vulture has no default
+# auto-discovery mode that honours pyproject. The whitelist comes
+# AFTER the source path so vulture parses the project first and
+# then applies whitelist symbols on top.
+[tool.vulture]
+paths = ["py_modules/unifideck", "vulture_whitelist.py"]
+min_confidence = 80
+exclude = [
+    "defaults/python/",
+    "python_modules/",
+    "frontend/",
+    "tests/",
+    "*/__pycache__/",
+]
+ignore_decorators = [
+    # Decky Loader entry points — invoked by name from the JS side.
+    "@auto_wrap_rpc_methods",
+    # Event bus subscribers — invoked reflexively via the bus.
+    "@subscribe",
+    # Pytest collection — fixtures and tests look unused to vulture.
+    "@pytest.fixture",
+]
+# These names look unused but are referenced through metaclass /
+# framework magic. Listed here rather than in the whitelist file
+# so they're discoverable from the config rather than buried.
+ignore_names = [
+    # Decky lifecycle hooks (called by Decky Loader, not by us).
+    "_main",
+    "_unload",
+    "_migration",
+    # Standard dunders that vulture sometimes flags on dataclasses.
+    "__post_init__",
+]
+
 # ──────────────────────────────────────────────────────────────────
 # Tools whose scope is NOT controlled from this file
 # ──────────────────────────────────────────────────────────────────
@@ -462,11 +510,7 @@ omit = [
 #    descending into ``site-packages``/``defaults/python``/
 #    ``python_modules`` when resolving imports.
 #
-# 4. ``vulture`` (dead-code finder, if used in CI) — scope via
-#    ``--exclude defaults/python,frontend,python_modules`` on the
-#    command line, or a ``vulture.toml`` next to ``pyproject.toml``.
-#
-# 5. GitHub Actions workflows — make sure every linter invocation
+# 4. GitHub Actions workflows — make sure every linter invocation
 #    runs ``py_modules/unifideck`` (or the package root) as its
 #    working directory rather than the repo root, OR passes
 #    ``py_modules/unifideck`` as the explicit path argument. With

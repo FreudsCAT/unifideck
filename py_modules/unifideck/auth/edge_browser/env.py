@@ -8,7 +8,7 @@ gamescope-environment files and /proc/<PID>/environ of running
 Steam processes.
 
 The ``clean_env`` entry point returns an environment dict suitable
-for subprocess.Popen when spawning Edge. It strips PluginLoader's
+for subprocess.Popen[bytes] when spawning Edge. It strips PluginLoader's
 LD_LIBRARY_PATH / LD_PRELOAD pollution, fills in session env from
 4-stage discovery, and seeds Steam window env defaults so gaming
 mode can surface the spawned window.
@@ -20,6 +20,7 @@ import logging
 import os
 import subprocess
 from pathlib import Path
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -264,7 +265,7 @@ def _detect_session_env(uid: int, home: str) -> dict[str, str]:
     return result
 
 
-def clean_env() -> dict:
+def clean_env() -> dict[str, Any]:
     """Return a clean environment for launching the auth browser/flatpak.
 
     - Strips ``LD_LIBRARY_PATH`` / ``LD_PRELOAD``.

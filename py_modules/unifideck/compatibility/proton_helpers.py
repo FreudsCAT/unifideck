@@ -265,57 +265,73 @@ class ProtonToolsManager:
         except OSError:
             logger.exception("[proton_helpers] save settings failed")
             return False
-_singleton_pt_mgr = None
-def _pt_mgr():
-    """Pt mgr."""
+_singleton_pt_mgr: ProtonToolsManager | None = None
+
+
+def _pt_mgr() -> ProtonToolsManager:
+    """Return the singleton ProtonToolsManager, creating it on first call."""
     global _singleton_pt_mgr
     if _singleton_pt_mgr is None:
         _singleton_pt_mgr = ProtonToolsManager()
     return _singleton_pt_mgr
-def get_compat_tool_for_app(appid_unsigned):
-    """Get compat tool for app."""
+
+
+def get_compat_tool_for_app(appid_unsigned: int) -> str:
+    """Return the compat tool name registered for ``appid_unsigned``."""
     return (
         _pt_mgr()
         .get_for_app(int(appid_unsigned))
         .tool_name
     )
-def get_compat_tool_for_game(store_game_id):
-    """Get compat tool for game."""
+
+
+def get_compat_tool_for_game(store_game_id: str) -> dict[str, Any]:
+    """Return the empty compat tool descriptor for a store game (legacy stub)."""
     return {
         "tool_name": "",
         "appid": 0,
         "store_game_id": store_game_id,
     }
 
-def temporarily_clear_compat_tool(appid_unsigned):
 
-    """Temporarily clear compat tool."""
+def temporarily_clear_compat_tool(appid_unsigned: int) -> dict[str, Any]:
+    """Clear the compat tool for ``appid_unsigned``, returning previous state."""
     result = _pt_mgr().clear_for_app(int(appid_unsigned))
     return {
         "success": result.success,
         "previous": result.previous,
     }
-def restore_compat_tool(appid_unsigned, tool_name):
-    """Restore compat tool."""
+
+
+def restore_compat_tool(appid_unsigned: int, tool_name: str) -> dict[str, bool]:
+    """Restore the compat tool ``tool_name`` for ``appid_unsigned``."""
     result = _pt_mgr().set_for_app(
         int(appid_unsigned), tool_name,
     )
     return {"success": result.success}
-def save_proton_setting(store_game_id, tool_name):
-    """Save PROTON setting."""
+
+
+def save_proton_setting(
+    store_game_id: str, tool_name: str,
+) -> dict[str, bool]:
+    """Persist the chosen ``tool_name`` for ``store_game_id``."""
     settings = _pt_mgr().load_proton_settings()
     settings.setdefault("games", {})[store_game_id] = tool_name
     return {
         "success": _pt_mgr().save_proton_settings(settings),
     }
-def get_saved_proton_tool(store_game_id):
-    """Get saved PROTON tool."""
-    return (
+
+
+def get_saved_proton_tool(store_game_id: str) -> str:
+    """Return the saved Proton tool for ``store_game_id`` (or empty string)."""
+    return str(
         _pt_mgr()
         .load_proton_settings()
         .get("games", {})
-        .get(store_game_id, "")
+        .get(store_game_id, ""),
     )
-def resolve_proton_path(tool_name):
-    """Resolve PROTON path."""
+
+
+def resolve_proton_path(tool_name: str) -> str:
+    """Resolve a Proton tool path (legacy passthrough — returns name)."""
     return tool_name

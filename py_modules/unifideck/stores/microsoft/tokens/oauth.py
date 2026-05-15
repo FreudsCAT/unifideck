@@ -87,5 +87,5 @@ class OAuthMixin:
         if new_refresh:
             self._ms_refresh_token = new_refresh
         self._token_saved_at = time.time()
-        await self.save()
+        await self.save()  # type: ignore[attr-defined]  # self.save provided by sibling mixin _PersistenceMixin
         return True

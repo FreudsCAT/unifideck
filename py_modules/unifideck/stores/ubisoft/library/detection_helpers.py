@@ -238,7 +238,7 @@ async def write_install_marker(
             # Always serialize timestamps in UTC so the marker is
             # comparable across machines and DST transitions.
             "install_date": (
-                datetime.datetime.now(datetime.timezone.utc).isoformat()
+                datetime.datetime.now(datetime.UTC).isoformat()
             ),
         }
         install_p = Path(install_path)

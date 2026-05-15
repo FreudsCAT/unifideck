@@ -32,7 +32,7 @@ def walk_mtimes(root: str) -> dict[str, float]:
     (file vanished mid-walk) is silently skipped — the caller
     gets a partial map which is still useful for diff.
     """
-    mtimes = {}
+    mtimes: dict[str, float] = {}
     if not Path(root).is_dir():
         return mtimes
 

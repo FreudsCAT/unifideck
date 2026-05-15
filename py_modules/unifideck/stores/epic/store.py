@@ -34,7 +34,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 from unifideck.auth.browser import OAuthBrowserMonitor
 from unifideck.auth.orchestrator import AuthOrchestrator
-from unifideck.core.bin import read_cli_timeouts
+from unifideck.core.binaries import read_cli_timeouts
 from unifideck.core.types import (
     AuthResult,
     CLITool,
@@ -193,7 +193,7 @@ class EpicStore(StoreBase):
             return False
         return "access_token" in data
 
-    async def start_auth(self, **kwargs) -> AuthResult:
+    async def start_auth(self, **kwargs: Any) -> AuthResult:
         """Start auth."""
         if self._auth is None:
             return AuthResult(
@@ -204,7 +204,7 @@ class EpicStore(StoreBase):
         await self._ensure_auth_shortcut()
         return cast("AuthResult", await self._auth.start_auth())
 
-    async def complete_auth(self, code: str = "", **kwargs) -> AuthResult:
+    async def complete_auth(self, code: str = "", **kwargs: Any) -> AuthResult:
         """Complete auth."""
         if await self.is_available():
             return AuthResult(success=True, store="epic")

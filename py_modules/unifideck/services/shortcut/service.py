@@ -22,7 +22,7 @@ from typing import TYPE_CHECKING, Any
 from unifideck.event_bus.event_bus_devex import auto_wire
 
 from .events import EventsMixin
-from .games_map import generate_app_id
+from .games_map import GameMapEntry, generate_app_id
 from .games_map_mixin import UNIFIDECK_TAG, _GamesMapMixin
 from .persistence import read_games_map, read_vdf, write_games_map, write_vdf
 from .vdf_shortcuts import _VdfShortcutsMixin
@@ -54,7 +54,13 @@ class ShortcutService(
         self._games_map_path = games_map_path
 
         self._shortcuts: dict[str, Any] = {}
-        self._games_map: dict[str, dict[str, str]] = {}
+        # Type fix (lot 11g): the source of truth is
+        # ``persistence.read_games_map`` which returns
+        # ``dict[str, GameMapEntry]`` (the NamedTuple). The prior
+        # declaration as ``dict[str, dict[str, str]]`` was a
+        # drift artifact and caused mypy assignment errors at
+        # every load site.
+        self._games_map: dict[str, GameMapEntry] = {}
 
         self._shortcuts_loaded = False
         self._games_map_loaded = False

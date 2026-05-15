@@ -212,7 +212,7 @@ async def _spawn_installer(cmd: list[str], env: dict[str, str]) -> bool:
         stdout, _err = await asyncio.wait_for(
             proc.communicate(), timeout=_INSTALLER_TIMEOUT_S,
         )
-    except asyncio.TimeoutError:
+    except TimeoutError:
         with contextlib.suppress(ProcessLookupError):
             proc.kill()
         logger.warning(

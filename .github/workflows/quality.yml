@@ -99,6 +99,27 @@ jobs:
       - name: import-linter (hard gate)
         run: PYTHONPATH=py_modules lint-imports --config .importlinter
 
+      # ── Gate 4: vulture (HARD) ─────────────────────────────
+      # Dead-code finder. Config lives in pyproject.toml under
+      # [tool.vulture]: min_confidence = 80 (high signal),
+      # ignore_decorators covering @subscribe / @dataclass /
+      # context-manager factories, and ignore_names covering
+      # plugin lifecycle hooks (Decky's _main, _unload, etc.),
+      # bus subscriber handlers (_on_*), and enum members.
+      # Project-specific false positives that don't match a
+      # general pattern live in ``vulture_whitelist.py`` at the
+      # repo root.
+      #
+      # Hard-gates on zero results at 80% confidence; the 60%
+      # confidence pass is for periodic manual review only (run
+      # locally — too noisy for the gate).
+      #
+      # Catches genuine cases like the core/bin vs core/binaries
+      # duplicate that lot 12b removed, plus future drift where
+      # a refactor leaves callers of a removed function dangling.
+      - name: vulture (hard gate)
+        run: vulture py_modules/unifideck vulture_whitelist.py
+
   frontend-quality:
     name: Frontend (tsc)
     runs-on: ubuntu-latest

@@ -75,7 +75,7 @@ _UBI_CONFIG_PREFIX = "stores.ubisoft"
 class UbisoftConfig:
     """Ubisoft config."""
 
-    _FIELD_SPECS: ClassVar[tuple]
+    _FIELD_SPECS: ClassVar[tuple[Any, ...]]
     data_dir: str = _DEFAULT_DATA_DIR
 
     id_map_file: str = _DEFAULT_ID_MAP_FILE
