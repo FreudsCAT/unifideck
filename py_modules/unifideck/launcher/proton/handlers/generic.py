@@ -28,7 +28,7 @@ async def _gog_launch(plan: ProtonLaunchPlan) -> int:
         apply_gog_language(
             plan.context.game_id, str(work_dir), config=_cfg,
         )
-    except Exception as err:
+    except Exception as err:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
         logger.warning(
             "[launcher.proton.generic] GOG language setup failed: %s",
             err,
@@ -39,7 +39,7 @@ async def _gog_launch(plan: ProtonLaunchPlan) -> int:
             str(plan.prefix_path),
             plugin_dir=plan.context.plugin_dir,
         )
-    except Exception as err:
+    except Exception as err:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
         logger.warning(
             "[launcher.proton.generic] Galaxy stub install failed: %s",
             err,
@@ -71,7 +71,7 @@ async def _amazon_launch(plan: ProtonLaunchPlan) -> int:
             str(plan.context.plugin_dir / "defaults" / "config.json"),
         )
         apply_amazon_language(str(plan.prefix_path), config=_cfg)
-    except Exception as err:
+    except Exception as err:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
         logger.warning(
             "[launcher.proton.generic] Amazon language setup failed: %s",
             err,

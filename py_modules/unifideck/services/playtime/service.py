@@ -183,7 +183,7 @@ class PlaytimeService:
     async def get_all_playtimes(self) -> list[dict[str, Any]]:
         """Return cumulative playtime for every tracked game.
 
-        Joins ``games`` × ``game_stats`` so each row carries both
+        Joins ``games`` x ``game_stats`` so each row carries both
         the canonical identity (``store`` + ``store_game_id``) and
         the aggregated stats the frontend needs to render the
         "Most played" list. Returns ``[]`` when the database is

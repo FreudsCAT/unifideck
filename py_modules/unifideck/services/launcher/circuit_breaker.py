@@ -29,7 +29,7 @@ async def get_launch_id_or_none(svc: LauncherService) -> str | None:
         if lid == "-":
             return None
         return lid
-    except Exception:
+    except Exception:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
         return None
 
 
@@ -63,7 +63,7 @@ async def emit_circuit_open_toast(
             params={"game_key": game_key, "count": failure_count},
             actions=actions,
         )
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
         logger.warning("[CircuitBreaker] Failed to emit toast: %s", e)
 
 
@@ -108,7 +108,7 @@ async def check_circuit_breaker(
                 },
             )
 
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
         logger.debug("[CircuitBreaker] Failed to check circuit state: %s", e)
 
     return None

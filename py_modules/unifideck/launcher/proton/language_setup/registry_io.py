@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import contextlib
 import logging
 import os
 import re
 import tempfile
+from pathlib import Path
 
 from .matchers import smart_match_locale
 from .resolver import _DEFAULT_LANGUAGE, LOCALE_MAP
@@ -11,11 +13,13 @@ from .resolver import _DEFAULT_LANGUAGE, LOCALE_MAP
 logger = logging.getLogger(__name__)
 def _resolve_prefix(prefix_path: str) -> str:
     """Resolve prefix."""
-    from unifideck.launcher.proton.infrastructure.prefix_layout import resolve_registry_prefix
+    from unifideck.launcher.proton.infrastructure.prefix_layout import (
+        resolve_registry_prefix,
+    )
     return str(resolve_registry_prefix(prefix_path))
 def _atomic_write_text(path: str, content: str) -> None:
     """Atomic write text."""
-    target_dir = os.path.dirname(path) or "."
+    target_dir = str(Path(path).parent) or "."
     fd, tmp_path = tempfile.mkstemp(
         prefix=".reg.", suffix=".tmp", dir=target_dir,
     )
@@ -24,12 +28,10 @@ def _atomic_write_text(path: str, content: str) -> None:
             fh.write(content)
             fh.flush()
             os.fsync(fh.fileno())
-        os.replace(tmp_path, path)
+        Path(tmp_path).replace(path)
     except Exception:
-        try:
-            os.unlink(tmp_path)
-        except OSError:
-            pass
+        with contextlib.suppress(OSError):
+            Path(tmp_path).unlink()
         raise
 
 def _update_user_reg(
@@ -38,14 +40,14 @@ def _update_user_reg(
 ) -> bool:
 
     """Update user reg."""
-    user_reg = os.path.join(prefix_path, "user.reg")
-    if not os.path.exists(user_reg):
+    user_reg = str(Path(prefix_path) / "user.reg")
+    if not Path(user_reg).exists():
         logger.warning(
             "[language_setup] user.reg missing at %s — prefix not "
             "initialised yet", user_reg,
         )
         return False
-    with open(user_reg, encoding="utf-8", errors="replace") as fh:
+    with Path(user_reg).open(encoding="utf-8", errors="replace") as fh:
         content = fh.read()
     section_header = "[Control Panel\\\\International]"
     new_values = {

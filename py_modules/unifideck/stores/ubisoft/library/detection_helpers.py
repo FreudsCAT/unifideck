@@ -20,8 +20,8 @@ All helpers are stateless and safe to call concurrently.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import datetime
-import glob
 import json
 import logging
 from collections.abc import Iterator
@@ -101,19 +101,20 @@ def find_game_executable(
     if not install_path or not Path(install_path).is_dir():
         return None
     candidates: list[tuple[str, int]] = []
-    for pattern in ("*.exe", "**/*.exe"):
-        for exe_path in glob.glob(
-            str(Path(install_path) / pattern),
-            recursive=True,
-        ):
-            basename = Path(exe_path).name.lower()
-            if any(skip in basename for skip in _EXE_SKIP_PATTERNS):
-                continue
-            try:
-                size = Path(exe_path).stat().st_size
-                candidates.append((exe_path, size))
-            except OSError:
-                continue
+    # Use ``rglob`` which recursively walks subdirectories.
+    # Replaces the previous ``glob.glob`` loop over both the
+    # top-level (``*.exe``) and recursive (``**/*.exe``) patterns
+    # — ``rglob`` covers both cases in a single pass.
+    for exe_path_obj in Path(install_path).rglob("*.exe"):
+        exe_path = str(exe_path_obj)
+        basename = exe_path_obj.name.lower()
+        if any(skip in basename for skip in _EXE_SKIP_PATTERNS):
+            continue
+        try:
+            size = exe_path_obj.stat().st_size
+            candidates.append((exe_path, size))
+        except OSError:
+            continue
     if not candidates:
         logger.warning(
             "[UbisoftLibrary] no executable found in %s",
@@ -177,7 +178,7 @@ def _total_size_exceeds(path: str, threshold: int) -> bool:
     directory) terminates the walk early — partial sum stands.
     """
     total = 0
-    try:
+    with contextlib.suppress(OSError):
         for entry in Path(path).rglob("*"):
             if not entry.is_file():
                 continue
@@ -187,8 +188,6 @@ def _total_size_exceeds(path: str, threshold: int) -> bool:
                 continue
             if total > threshold:
                 return True
-    except OSError:
-        pass
     return False
 
 
@@ -278,13 +277,11 @@ def write_marker_sync(
         "install_path": install_path,
         "game_title": title,
     }
-    try:
+    with contextlib.suppress(OSError):
         marker_path.write_text(
             json.dumps(marker_data),
             encoding="utf-8",
         )
-    except OSError:
-        pass
 
 
 class _DetectionHelpers:
@@ -332,7 +329,7 @@ class _DetectionHelpers:
         media_base = Path("/run/media")
         if not media_base.is_dir():
             return
-        try:
+        with contextlib.suppress(OSError):
             for entry_path in media_base.iterdir():
                 if not entry_path.is_dir():
                     continue
@@ -343,8 +340,6 @@ class _DetectionHelpers:
                     entry_path,
                     roots,
                 )
-        except OSError:
-            pass
 
     @staticmethod
     def _append_sub_mount_roots(
@@ -352,14 +347,12 @@ class _DetectionHelpers:
         roots: list[str],
     ) -> None:
         """Append sub mount roots."""
-        try:
+        with contextlib.suppress(OSError):
             for sub_path in parent.iterdir():
                 if sub_path.is_dir():
                     roots.append(
                         str(sub_path / "Games" / "Ubisoft"),
                     )
-        except OSError:
-            pass
 
     @staticmethod
     def _dedup_roots_by_realpath(

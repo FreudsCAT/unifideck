@@ -343,7 +343,7 @@ class DebugSnapshot:
             return None
         try:
             return fn()
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
             return {"error": str(e)}
 
 

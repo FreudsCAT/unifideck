@@ -6,6 +6,7 @@ import logging
 import os
 import time
 from dataclasses import dataclass
+from pathlib import Path
 
 from .device_identity import DeviceIdentity
 
@@ -29,7 +30,7 @@ class DeviceFingerprint:
         path: str,
         device_identity: DeviceIdentity | None = None,
     ) -> None:
-        self._path = os.path.expanduser(path)
+        self._path = str(Path(path).expanduser())
         self._device_identity = device_identity or DeviceIdentity()
 
     def verify_or_initialize(self) -> FingerprintState:
@@ -95,11 +96,11 @@ class DeviceFingerprint:
         )
 
     def _load(self) -> dict | None:
-        if not os.path.isfile(self._path):
+        if not Path(self._path).is_file():
             return None
 
         try:
-            with open(self._path, encoding="utf-8") as f:
+            with Path(self._path).open(encoding="utf-8") as f:
                 data = json.load(f)
         except (OSError, json.JSONDecodeError) as e:
             logger.warning(
@@ -114,9 +115,9 @@ class DeviceFingerprint:
 
     def _save(self, payload: dict) -> None:
         try:
-            parent = os.path.dirname(self._path)
+            parent = str(Path(self._path).parent)
             if parent:
-                os.makedirs(parent, exist_ok=True)
+                Path(parent).mkdir(parents=True, exist_ok=True)
 
             tmp = self._path + ".tmp"
             fd = os.open(
@@ -127,7 +128,7 @@ class DeviceFingerprint:
             with os.fdopen(fd, "w", encoding="utf-8") as f:
                 json.dump(payload, f, indent=2)
 
-            os.replace(tmp, self._path)
+            Path(tmp).replace(self._path)
         except OSError as e:
             logger.warning(
                 "[DeviceFingerprint] save failed: %s", e,

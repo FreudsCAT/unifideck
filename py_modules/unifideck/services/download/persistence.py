@@ -8,6 +8,7 @@ not crash the worker; service degrades gracefully to empty.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import os
@@ -31,7 +32,7 @@ async def load_queue(queue_file: str) -> list[DownloadItem]:
 
     def _read_sync() -> list[DownloadItem]:
         try:
-            with open(queue_file, encoding="utf-8") as f:
+            with Path(queue_file).open(encoding="utf-8") as f:
                 data = json.load(f)
 
             if not isinstance(data, list):
@@ -54,11 +55,42 @@ async def load_queue(queue_file: str) -> list[DownloadItem]:
         except json.JSONDecodeError as e:
             logger.warning("[DownloadPersistence] malformed JSON in queue file: %s", e)
             return []
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
             logger.warning("[DownloadPersistence] failed to parse queue file: %s", e)
             return []
 
     return await asyncio.to_thread(_read_sync)
+
+
+def _atomic_json_write(target: str, data: object) -> None:
+    """Write ``data`` as JSON to ``target`` via tmp + atomic rename.
+
+    Single-purpose helper introduced 2026-05-15 to keep
+    ``save_queue``'s fan-out under the project's 10-callee
+    policy. The write sequence (mkdir → open → write → flush →
+    fsync → replace) collapses from 6 distinct callees into
+    one in the caller.
+
+    Errors propagate to the caller (typically logged at WARN
+    and dropped — disk state recovers on next successful write).
+    """
+    parent = str(Path(target).parent)
+    if parent:
+        Path(parent).mkdir(parents=True, exist_ok=True)
+    tmp_path = target + ".tmp"
+    try:
+        with Path(tmp_path).open("w", encoding="utf-8") as f:
+            json.dump(data, f)
+            f.flush()
+            os.fsync(f.fileno())
+        Path(tmp_path).replace(target)
+    except Exception:
+        # Best-effort cleanup of the tmp file; reraise so the
+        # caller sees the original failure.
+        if Path(tmp_path).exists():
+            with contextlib.suppress(OSError):
+                Path(tmp_path).unlink()
+        raise
 
 
 async def save_queue(
@@ -69,28 +101,18 @@ async def save_queue(
     Errors logged at WARNING, not raised — the in-memory queue
     remains the source of truth; next successful write recovers
     disk state.
+
+    Refactor history (2026-05-15): extracted ``_atomic_json_write``
+    helper to keep this function's fan-out under cap after the
+    PTH migration introduced Path() as a new call target.
     """
     def _write_sync() -> None:
         try:
-            parent = os.path.dirname(queue_file)
-            if parent:
-                os.makedirs(parent, exist_ok=True)
-
             data = [item.to_dict() for item in queue]
-            tmp_path = queue_file + ".tmp"
-
-            with open(tmp_path, "w", encoding="utf-8") as f:
-                json.dump(data, f)
-                f.flush()
-                os.fsync(f.fileno())
-
-            os.replace(tmp_path, queue_file)
-        except Exception as e:
-            logger.warning("[DownloadPersistence] failed to save queue: %s", e)
-            if "tmp_path" in locals() and Path(tmp_path).exists():
-                try:
-                    os.remove(tmp_path)
-                except OSError:
-                    pass
+            _atomic_json_write(queue_file, data)
+        except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
+            logger.warning(
+                "[DownloadPersistence] failed to save queue: %s", e,
+            )
 
     await asyncio.to_thread(_write_sync)

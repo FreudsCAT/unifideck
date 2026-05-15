@@ -108,7 +108,7 @@ def get_locale_config(config: ConfigManager | None):
         return lc_module.load_from_dict(
             {"i18n": i18n_section},
         )
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
         # Validation failed — log and return None. Runtime
         # code must never crash just because someone edited
         # config.json incorrectly.

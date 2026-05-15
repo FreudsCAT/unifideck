@@ -5,7 +5,10 @@ import re
 import subprocess
 from pathlib import Path
 
-from unifideck.launcher.types.errors import DependencyMissingError, ProtonUnavailableError
+from unifideck.launcher.types.errors import (
+    DependencyMissingError,
+    ProtonUnavailableError,
+)
 
 logger = logging.getLogger(__name__)
 PYTHON_CANDIDATES: list[str] = [

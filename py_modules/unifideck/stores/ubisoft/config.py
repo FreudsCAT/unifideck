@@ -28,9 +28,10 @@ when the user changes settings.
 
 from __future__ import annotations
 
+import contextlib
 import logging
-import os
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar
 
 from unifideck.utils.config_helpers import get_cfg
@@ -102,47 +103,18 @@ class UbisoftConfig:
         "ConnectSecureStorage.dat",
         "user.dat",
     )
-    upc_local_subdir: str = os.path.join(
-        "AppData",
-        "Local",
-        "Ubisoft Game Launcher",
-    )
+    upc_local_subdir: str = str(Path("AppData") / "Local" / "Ubisoft Game Launcher")
     upc_auth_cache_artifacts: tuple[str, ...] = (
         "settings.yaml",
-        os.path.join("cache", "configuration"),
-        os.path.join("cache", "settings"),
-        os.path.join("cache", "ulcf"),
-        os.path.join(
-            "cache",
-            "http2",
-            "Default",
-            "Network",
-        ),
-        os.path.join(
-            "cache",
-            "http2",
-            "Default",
-            "Local Storage",
-        ),
-        os.path.join(
-            "cache",
-            "http2",
-            "Default",
-            "IndexedDB",
-        ),
-        os.path.join(
-            "cache",
-            "http2",
-            "Default",
-            "Preferences",
-        ),
-        os.path.join(
-            "cache",
-            "http2",
-            "Default",
-            "Session Storage",
-        ),
-        os.path.join("cache", "ownership"),
+        str(Path("cache") / "configuration"),
+        str(Path("cache") / "settings"),
+        str(Path("cache") / "ulcf"),
+        str(Path("cache") / "http2" / "Default" / "Network"),
+        str(Path("cache") / "http2" / "Default" / "Local Storage"),
+        str(Path("cache") / "http2" / "Default" / "IndexedDB"),
+        str(Path("cache") / "http2" / "Default" / "Preferences"),
+        str(Path("cache") / "http2" / "Default" / "Session Storage"),
+        str(Path("cache") / "ownership"),
     )
     wine_system_users: tuple[str, ...] = (
         "Public",
@@ -156,74 +128,66 @@ class UbisoftConfig:
     @property
     def data_dir_expanded(self) -> str:
         """Data dir expanded."""
-        return os.path.expanduser(self.data_dir)
+        return str(Path(self.data_dir).expanduser())
 
     @property
     def id_map_file_expanded(self) -> str:
         """Id map file expanded."""
-        return os.path.expanduser(self.id_map_file)
+        return str(Path(self.id_map_file).expanduser())
 
     @property
     def visible_games_file_expanded(self) -> str:
         """Visible games file expanded."""
-        return os.path.expanduser(self.visible_games_file)
+        return str(Path(self.visible_games_file).expanduser())
 
     @property
     def prefixes_dir_expanded(self) -> str:
         """Prefixes dir expanded."""
-        return os.path.expanduser(self.prefixes_dir)
+        return str(Path(self.prefixes_dir).expanduser())
 
     @property
     def template_dir_expanded(self) -> str:
         """Template dir expanded."""
-        return os.path.join(
-            self.prefixes_dir_expanded,
-            self.template_prefix_name,
-        )
+        return str(Path(self.prefixes_dir_expanded) / self.template_prefix_name)
 
     @property
     def auth_prefix_dir_expanded(self) -> str:
         """Auth prefix dir expanded."""
-        return os.path.join(
-            self.prefixes_dir_expanded,
-            self.auth_prefix_name,
-        )
+        return str(Path(self.prefixes_dir_expanded) / self.auth_prefix_name)
 
     @property
     def installer_cache_dir_expanded(self) -> str:
         """Installer cache dir expanded."""
-        return os.path.expanduser(self.installer_cache_dir)
+        return str(Path(self.installer_cache_dir).expanduser())
 
     @property
     def upc_session_file_expanded(self) -> str:
         """Upc session file expanded."""
-        return os.path.expanduser(self.upc_session_file)
+        return str(Path(self.upc_session_file).expanduser())
 
     @property
     def game_id_db_file_expanded(self) -> str:
         """Game ID db file expanded."""
-        return os.path.expanduser(self.game_id_db_file)
+        return str(Path(self.game_id_db_file).expanduser())
 
     @property
     def default_install_base_expanded(self) -> str:
         """Default install base expanded."""
-        return os.path.expanduser(self.default_install_base)
+        return str(Path(self.default_install_base).expanduser())
 
     def iter_game_prefix_paths(self) -> list[str]:
         """Iter game prefix paths."""
         prefixes_dir = self.prefixes_dir_expanded
-        if not os.path.isdir(prefixes_dir):
+        if not Path(prefixes_dir).is_dir():
             return []
         result: list[str] = []
-        try:
-            for entry in os.listdir(prefixes_dir):
+        with contextlib.suppress(OSError):
+            for entry in [entry.name for entry in Path(prefixes_dir).iterdir()]:
                 if entry.startswith("."):
                     continue
-                candidate = os.path.join(prefixes_dir, entry)
-                if os.path.isdir(candidate):
+                candidate = str(Path(prefixes_dir) / entry)
+                if Path(candidate).is_dir():
                     result.append(candidate)
-        except OSError:
-            pass
         return result
 
     @staticmethod

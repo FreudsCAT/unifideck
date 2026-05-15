@@ -83,7 +83,7 @@ class BatchDispatcher:
         2. Time since last flush (or since first add for a fresh
            key) is at or above ``window_ms``.
 
-        Uses ``time.monotonic`` × 1000 for millisecond
+        Uses ``time.monotonic`` x 1000 for millisecond
         comparisons (immune to NTP wall-clock jumps).
 
         Args:

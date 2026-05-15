@@ -41,7 +41,7 @@ class SteamCSSInjector:
         """Connect to steam."""
         try:
             return await self._cdp.connect(STEAM_TAB_URL_MARKER)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
             logger.warning("[cdp_inject] connect failed: %s", e)
             return False
 
@@ -66,7 +66,7 @@ class SteamCSSInjector:
         try:
             result = await self._cdp.eval_js(js)
             return bool(result)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
             logger.warning(
             "[cdp_inject] eval failed for %s: %s", marker, e,
             )
@@ -83,7 +83,7 @@ class SteamCSSInjector:
         """
         try:
             return bool(await self._cdp.eval_js(js))
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
             logger.debug(
             "[cdp_inject] remove failed for %s: %s", marker, e,
             )

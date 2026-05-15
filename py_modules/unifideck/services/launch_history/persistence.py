@@ -7,6 +7,7 @@ see either old or new content, never partial. Free functions
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import os
@@ -22,7 +23,7 @@ def load_history(path: Path) -> dict[str, Any]:
         return {}
 
     try:
-        with open(path, encoding="utf-8") as f:
+        with Path(path).open(encoding="utf-8") as f:
             data = json.load(f)
 
         if not isinstance(data, dict):
@@ -33,7 +34,7 @@ def load_history(path: Path) -> dict[str, Any]:
     except json.JSONDecodeError as e:
         logger.warning("[LaunchHistory] Malformed JSON in %s: %s", path, e)
         return {}
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
         logger.warning("[LaunchHistory] Failed to load %s: %s", path, e)
         return {}
 
@@ -45,16 +46,14 @@ def save_history(path: Path, data: dict[str, Any]) -> None:
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
 
-        with open(tmp_path, "w", encoding="utf-8") as f:
+        with Path(tmp_path).open("w", encoding="utf-8") as f:
             json.dump(data, f)
             f.flush()
             os.fsync(f.fileno())
 
-        os.replace(tmp_path, path)
+        Path(tmp_path).replace(path)
     except Exception:
         logger.exception("[LaunchHistory] Failed to save history to %s", path)
         if tmp_path.exists():
-            try:
+            with contextlib.suppress(OSError):
                 tmp_path.unlink()
-            except OSError:
-                pass

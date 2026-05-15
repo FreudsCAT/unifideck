@@ -8,7 +8,14 @@ from typing import TYPE_CHECKING, Any, cast
 from unifideck.auth.browser import OAuthBrowserMonitor
 from unifideck.auth.edge_browser import EdgeBrowser
 from unifideck.auth.orchestrator import AuthOrchestrator
-from unifideck.core.types import AuthResult, Events, Game, InstallResult, Result, StoreInfo
+from unifideck.core.types import (
+    AuthResult,
+    Events,
+    Game,
+    InstallResult,
+    Result,
+    StoreInfo,
+)
 from unifideck.services.shortcut import ShortcutService
 from unifideck.stores.shared.store_base import StoreBase
 from unifideck.utils.locale import get_unifideck_locale
@@ -159,7 +166,7 @@ class MicrosoftStore(StoreBase):
                 self._edge.kill()
                 self._edge.clear_cookies()
                 EdgeBrowser.clear_profile_data()
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
                 logger.warning(
                     "[MicrosoftStore] Edge cleanup error: "
                     "%s", e,
@@ -212,7 +219,7 @@ class MicrosoftStore(StoreBase):
             tier = await self._subscription_service.get_tier(
                 self._tokens,
             )
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
             logger.warning(
                 "[MicrosoftStore] subscription check raised: "
                 "%s — skipping sync", e,

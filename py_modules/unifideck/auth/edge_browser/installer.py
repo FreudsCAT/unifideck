@@ -17,6 +17,7 @@ existing callers (EdgeBrowser) don't have to change.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import shutil
 import subprocess
@@ -92,8 +93,7 @@ class EdgeInstaller:
         overrides_path = Path(
             f"~/.local/share/flatpak/overrides/{_EDGE_FLATPAK_APP}",
         ).expanduser()
-        # Check if override is already present
-        try:
+        with contextlib.suppress(OSError):
             if overrides_path.is_file():
                 with overrides_path.open() as fh:
                     if "/run/udev" in fh.read():
@@ -101,9 +101,6 @@ class EdgeInstaller:
                             "[Edge] Edge udev override already present",
                         )
                         return True
-        except OSError:
-            # best-effort operation; failure is non-fatal here
-            pass
         logger.info(
             "[Edge] Applying flatpak /run/udev:ro override for "
             "controller support",
@@ -131,7 +128,7 @@ class EdgeInstaller:
                 "[Edge] Edge udev override failed: %s", stderr,
             )
             return False
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
             logger.warning(
                 "[Edge] Edge udev override error: %s", exc,
             )
@@ -182,7 +179,7 @@ class EdgeInstaller:
                     check=False,
                 ),
             )
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
             # Intentional: subprocess failure here can't be classified
             # (network, missing binary, timeout). Log and surface as
             # False so the install wizard displays a retry option.
@@ -217,7 +214,7 @@ class EdgeInstaller:
             )
             if result.returncode == 0 and result.stdout.strip():
                 return result.stdout.strip()
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
             # ``xdg-settings`` may be missing on minimal Decks or
             # fail under non-interactive sessions. Either way the
             # caller treats a ``None`` snapshot as "skip restore".
@@ -249,7 +246,7 @@ class EdgeInstaller:
                     "[Edge] Restored default browser to %s",
                     original,
                 )
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
             # Intentional: xdg-settings failure is non-fatal (e.g.
             # missing on non-desktop distros). Worst case the user
             # has to manually reset their browser.
@@ -321,7 +318,7 @@ class EdgeInstaller:
                 "success": False,
                 "error": "microsoft.edgeInstallTimeout",
             }
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
             logger.warning(
                 "[Edge] Microsoft Edge install error: %s", e,
             )

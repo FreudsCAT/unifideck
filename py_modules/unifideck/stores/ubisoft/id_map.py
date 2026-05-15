@@ -22,8 +22,8 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import re
+from pathlib import Path
 from typing import Any
 
 from .config import UbisoftConfig
@@ -61,10 +61,10 @@ class UbisoftIdMap:
     def _load(self) -> None:
         """Load."""
         path = self._config.id_map_file_expanded
-        if not os.path.isfile(path):
+        if not Path(path).is_file():
             return
         try:
-            with open(path, encoding="utf-8") as f:
+            with Path(path).open(encoding="utf-8") as f:
                 data = json.load(f)
             if isinstance(data, dict):
                 self._cache = data
@@ -83,14 +83,12 @@ class UbisoftIdMap:
         """Save."""
         path = self._config.id_map_file_expanded
         try:
-            os.makedirs(
-                self._config.data_dir_expanded,
-                exist_ok=True,
+            Path(self._config.data_dir_expanded).mkdir(parents=True, exist_ok=True,
             )
             tmp_path = path + ".tmp"
-            with open(tmp_path, "w", encoding="utf-8") as f:
+            with Path(tmp_path).open("w", encoding="utf-8") as f:
                 json.dump(self._cache, f, indent=2)
-                os.replace(tmp_path, path)
+                Path(tmp_path).replace(path)
         except OSError as e:
             logger.warning(
                 "[UbisoftIdMap] could not save cache: %s",
@@ -213,7 +211,7 @@ class UbisoftIdMap:
             return set()
         try:
             raw_names = get_steam_library_names()
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
             logger.debug(
                 "[UbisoftIdMap] Steam library scan failed: %s",
                 e,

@@ -97,18 +97,18 @@ class ProtonService:
 
         def _read_and_inject() -> tuple[str, str]:
             """Blocking read + transform, executed off the event loop."""
-            with open(self._config_vdf_path, encoding="utf-8") as f:
+            with Path(self._config_vdf_path).open(encoding="utf-8") as f:
                 content = f.read()
             return content, self._inject_compat_tool(content, app_id, tool)
 
         def _write_atomic(new_content: str) -> None:
             """Blocking atomic write, executed off the event loop."""
             tmp_path = f"{self._config_vdf_path}.tmp"
-            with open(tmp_path, "w", encoding="utf-8") as f:
+            with Path(tmp_path).open("w", encoding="utf-8") as f:
                 f.write(new_content)
                 f.flush()
                 os.fsync(f.fileno())
-            os.replace(tmp_path, self._config_vdf_path)
+            Path(tmp_path).replace(self._config_vdf_path)
 
         try:
             content, new_content = await asyncio.to_thread(_read_and_inject)
@@ -117,7 +117,7 @@ class ProtonService:
                 return Result(success=True)
             await asyncio.to_thread(_write_atomic, new_content)
             return Result(success=True)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
             logger.warning("[ProtonService] Failed to set compat tool: %s", e)
             return Result(success=False, error=str(e))
 

@@ -25,6 +25,7 @@ the main loop is a flat assignment-and-break read.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 from collections.abc import Iterator
@@ -83,10 +84,8 @@ class _InstallHelpers:
                         trial_platform,
                         game_id,
                     )
-                    try:
+                    with contextlib.suppress(ProcessLookupError):
                         proc.kill()
-                    except ProcessLookupError:
-                        pass
                     await proc.wait()
                     stdout = b""
             finally:

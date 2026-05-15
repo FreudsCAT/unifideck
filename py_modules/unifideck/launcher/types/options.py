@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 import re
 import shlex
 from dataclasses import dataclass, field
@@ -83,7 +82,7 @@ def parse_launch_options(raw: str) -> ParsedOptions:
 
     tokens = _tokenize_options(raw)
     remaining = _split_env_overrides(tokens, result)
-    home = os.path.expanduser("~")
+    home = str(Path("~").expanduser())
     lsfg_filtered = _filter_lsfg_marker(remaining, result, home)
 
     # Env-based LSFG opt-in (``LSFG=1`` or ``ENABLE_LSFG=1``).
@@ -180,7 +179,7 @@ def apply_lsfg_env(
     if not opts.lsfg_requested:
         return {}
     if lsfg_script is None:
-        lsfg_script = Path(os.path.expanduser("~/lsfg"))
+        lsfg_script = Path(str(Path("~/lsfg").expanduser()))
     if not lsfg_script.is_file():
         return {}
     overlay: dict[str, str] = {"ENABLE_LSFG": "1"}

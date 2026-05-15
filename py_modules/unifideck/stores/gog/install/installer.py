@@ -28,7 +28,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 import shutil
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
@@ -225,15 +224,13 @@ class GOGInstaller:
         language: str | None,
     ) -> tuple:
         """Install preflight."""
-        if not os.path.isfile(self._gogdl_bin):
+        if not Path(self._gogdl_bin).is_file():
             return None, self._install_failed(
                 game_id,
                 "gogdl_not_found",
             )
-        resolved_base = base_path or os.path.expanduser(
-            self._config.download_dir,
-        )
-        os.makedirs(resolved_base, exist_ok=True)
+        resolved_base = base_path or str(Path(self._config.download_dir).expanduser())
+        Path(resolved_base).mkdir(parents=True, exist_ok=True)
         preferred_lang = language or self._locale_fn() or "en-US"
         explicit_lang = language is not None
         logger.info(
@@ -281,7 +278,7 @@ class GOGInstaller:
         ctx.existing_dirs = self._snapshot_dirs(ctx.base_path)
         await self._setup_support_dir(ctx)
         target_folder = (
-            os.path.join(ctx.base_path, ctx.folder_name) if ctx.folder_name else None
+            str(Path(ctx.base_path) / ctx.folder_name) if ctx.folder_name else None
         )
         ctx.install_mode = await self._planner.determine_install_mode(
             ctx.game_id,
@@ -308,12 +305,8 @@ class GOGInstaller:
         gogdl_config_dir = await asyncio.to_thread(
             lambda: str(Path(self._config.gogdl_config_dir).expanduser()),
         )
-        ctx.support_dir = os.path.join(
-            gogdl_config_dir,
-            "gog-support",
-            ctx.game_id,
-        )
-        os.makedirs(ctx.support_dir, exist_ok=True)
+        ctx.support_dir = str(Path(gogdl_config_dir) / "gog-support" / ctx.game_id)
+        Path(ctx.support_dir).mkdir(parents=True, exist_ok=True)  # noqa: ASYNC240 — project uses asyncio.to_thread for sync I/O, not trio/anyio
 
     async def _install_run_gogdl_phase(
         self,
@@ -324,7 +317,7 @@ class GOGInstaller:
             ctx.base_path
             if ctx.install_mode == "download"
             else (
-                os.path.join(ctx.base_path, ctx.folder_name)
+                str(Path(ctx.base_path) / ctx.folder_name)
                 if ctx.folder_name
                 else ctx.base_path
             )
@@ -417,35 +410,18 @@ class GOGInstaller:
 
         def _sync() -> None:
             """Sync."""
-            base = os.path.expanduser(
-                self._config.gogdl_config_dir,
-            )
-            parent = os.path.dirname(base)
+            base = str(Path(self._config.gogdl_config_dir).expanduser())
+            parent = str(Path(base).parent)
             locations = [
-                os.path.join(
-                    base,
-                    "heroic_gogdl",
-                    "manifests",
-                    game_id,
-                ),
-                os.path.join(
-                    parent,
-                    "heroic_gogdl",
-                    "manifests",
-                    game_id,
-                ),
-                os.path.join(base, "manifests", game_id),
-                os.path.join(
-                    parent,
-                    "gogdl",
-                    "manifests",
-                    game_id,
-                ),
+                str(Path(base) / "heroic_gogdl" / "manifests" / game_id),
+                str(Path(parent) / "heroic_gogdl" / "manifests" / game_id),
+                str(Path(base) / "manifests" / game_id),
+                str(Path(parent) / "gogdl" / "manifests" / game_id),
             ]
             for path in locations:
-                if os.path.isfile(path):
+                if Path(path).is_file():
                     try:
-                        os.remove(path)
+                        Path(path).unlink()
                         logger.info(
                             "[GOGInstaller] cleared manifest: %s",
                             path,
@@ -463,14 +439,8 @@ class GOGInstaller:
 
         def _sync() -> None:
             """Sync."""
-            support_dir = os.path.join(
-                os.path.expanduser(
-                    self._config.gogdl_config_dir,
-                ),
-                "gog-support",
-                game_id,
-            )
-            if os.path.isdir(support_dir):
+            support_dir = str(Path(str(Path(self._config.gogdl_config_dir).expanduser())) / "gog-support" / game_id)
+            if Path(support_dir).is_dir():
                 try:
                     shutil.rmtree(support_dir)
                     logger.info(
@@ -488,8 +458,8 @@ class GOGInstaller:
         """Cleanup partial."""
         if not folder_name:
             return
-        partial = os.path.join(base_path, folder_name)
-        if os.path.exists(partial):
+        partial = str(Path(base_path) / folder_name)
+        if Path(partial).exists():
             logger.info(
                 "[GOGInstaller] cleanup partial: %s",
                 partial,

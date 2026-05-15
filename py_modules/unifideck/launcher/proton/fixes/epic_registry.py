@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import os
@@ -27,14 +28,12 @@ def _normalize_prefix_root(prefix_path: Path) -> Path:
 def _select_active_wineprefix(prefix_root: Path) -> Path:
     """Select active wineprefix."""
     pfx_path = prefix_root / "pfx"
-    try:
+    with contextlib.suppress(OSError):
         if (
             pfx_path.is_symlink()
             and pfx_path.resolve() == prefix_root.resolve()
         ):
             return prefix_root
-    except OSError:
-        pass
     if (pfx_path / "system.reg").is_file():
         return pfx_path
     if (prefix_root / "system.reg").is_file():
@@ -166,10 +165,8 @@ async def _run_reg_commands(
                     "[epic_registry] reg add timed out: %s",
                     cmd[3],
                 )
-                try:
+                with contextlib.suppress(ProcessLookupError):
                     proc.kill()
-                except ProcessLookupError:
-                    pass
                 continue
             if proc.returncode == 0:
                 ok_count += 1
@@ -192,7 +189,10 @@ async def _kill_wineserver(
         return
     env = dict(os.environ)
     env["WINEPREFIX"] = str(wineprefix)
-    try:
+    with contextlib.suppress((
+        TimeoutError, OSError,
+        subprocess.SubprocessError,
+    )):
         proc = await asyncio.create_subprocess_exec(
             str(wineserver), "--kill",
             env=env,
@@ -204,11 +204,6 @@ async def _kill_wineserver(
             "[epic_registry] killed stale wineserver "
             "after setup",
         )
-    except (
-        TimeoutError, OSError,
-        subprocess.SubprocessError,
-    ):
-        pass
 def _resolve_install_paths(
     app: dict[str, Any],
 ) -> tuple[str, str | None] | None:

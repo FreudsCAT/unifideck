@@ -38,7 +38,7 @@ class _ShortcutRegistryOps:
                     result = await result
                     if isinstance(result, dict):
                         return result
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
             logger.debug(
                 "[UbisoftAuth] registry load failed: %s",
                 e,
@@ -61,7 +61,7 @@ class _ShortcutRegistryOps:
                 )
                 if asyncio.iscoroutine(result):
                     await result
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
             logger.debug(
                 "[UbisoftAuth] shortcut register failed: %s",
                 e,
@@ -78,7 +78,7 @@ class _ShortcutRegistryOps:
                 result = sm._clear_proton_compatibility(appid)
                 if asyncio.iscoroutine(result):
                     await result
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
             logger.debug(
                 "[UbisoftAuth] clear compat failed: %s",
                 e,
@@ -105,7 +105,7 @@ class _ShortcutRegistryOps:
                 logger.info(
                     "[UbisoftAuth] removed legacy .template from shortcuts registry",
                 )
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
             logger.debug(
                 "[UbisoftAuth] legacy registry cleanup failed: %s",
                 e,

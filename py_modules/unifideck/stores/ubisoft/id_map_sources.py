@@ -23,6 +23,7 @@ displays "Ubisoft Game" as a placeholder name.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import re
 import time
@@ -204,7 +205,7 @@ class _IdMapSources:
                 parser_fn,
                 config_path,
             )
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
             logger.warning(
                 "[UbisoftIdMap] parser failed for %s: %s",
                 label,
@@ -233,15 +234,13 @@ class _IdMapSources:
         max_age = config.game_id_db_max_age_seconds
         cache_p = Path(cache_file)
         if await asyncio.to_thread(cache_p.is_file):
-            try:
+            with contextlib.suppress(OSError):
                 age = time.time() - await asyncio.to_thread(cache_p.stat).st_mtime
                 if age < max_age:
                     return await asyncio.to_thread(
                         _parse_game_id_database,
                         cache_file,
                     )
-            except OSError:
-                pass
         try:
             await asyncio.to_thread(
                 _download_game_id_database,
@@ -251,7 +250,7 @@ class _IdMapSources:
             logger.info(
                 "[UbisoftIdMap] game ID database downloaded",
             )
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
             logger.warning(
                 "[UbisoftIdMap] game ID database download failed: %s",
                 e,
@@ -272,7 +271,7 @@ class _IdMapSources:
             return None
         try:
             db_entries = await self.fetch_game_id_database()
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
             logger.debug(
                 "[UbisoftIdMap] fetch failed for name lookup: %s",
                 e,

@@ -9,7 +9,9 @@ if TYPE_CHECKING:
     from unifideck.config import ConfigManager
     from unifideck.core.types import SubscriptionTier
     from unifideck.event_bus.event_bus import EventBus
-    from unifideck.stores.microsoft.microsoft_subscription import SubscriptionProbeResult
+    from unifideck.stores.microsoft.microsoft_subscription import (
+        SubscriptionProbeResult,
+    )
     from unifideck.stores.microsoft.tokens import MicrosoftTokenManager, XBLTokenChain
 logger = logging.getLogger(__name__)
 class _ProbeEmissionMixin:
@@ -54,7 +56,7 @@ class _ProbeEmissionMixin:
                 "stores.microsoft.subscription_check_url",
             )
             return str(raw) if raw else _DEFAULT_PROBE_URL
-        except Exception:
+        except Exception:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
             return _DEFAULT_PROBE_URL
 
     async def _emit_state_change(

@@ -25,7 +25,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
@@ -33,7 +32,14 @@ from typing import TYPE_CHECKING, Any, cast
 from unifideck.auth.browser import OAuthBrowserMonitor
 from unifideck.auth.edge_browser import EdgeBrowser
 from unifideck.auth.orchestrator import AuthOrchestrator
-from unifideck.core.types import AuthResult, Events, Game, InstallResult, Result, StoreInfo
+from unifideck.core.types import (
+    AuthResult,
+    Events,
+    Game,
+    InstallResult,
+    Result,
+    StoreInfo,
+)
 from unifideck.services.shortcut import ShortcutService
 from unifideck.stores.shared.store_base import StoreBase
 from unifideck.utils.locale import get_unifideck_locale
@@ -190,7 +196,7 @@ class GOGStore(StoreBase):
         auth_url_file = await asyncio.to_thread(lambda: str(Path(GOG_AUTH_URL_FILE).expanduser()))
         if await asyncio.to_thread(lambda: Path(auth_url_file).is_file()):
             try:
-                os.remove(auth_url_file)
+                Path(auth_url_file).unlink()  # noqa: ASYNC240 — project uses asyncio.to_thread for sync I/O, not trio/anyio
             except OSError as e:
                 logger.warning(
                     "[GOGStore] could not remove %s: %s",
@@ -305,12 +311,8 @@ class GOGStore(StoreBase):
                 "[GOGStore] no plugin_dir; gogdl path unresolvable",
             )
             return ""
-        path = os.path.join(
-            self._plugin_dir,
-            "bin",
-            "gogdl",
-        )
-        if not os.path.isfile(path):
+        path = str(Path(self._plugin_dir) / "bin" / "gogdl")
+        if not Path(path).is_file():
             logger.warning(
                 "[GOGStore] gogdl binary not found at %s",
                 path,
@@ -329,13 +331,7 @@ class GOGStore(StoreBase):
                 "[GOGStore] no shortcut_service; skipping auth shortcut creation",
             )
             return
-        launcher = os.path.join(
-            self._plugin_dir or "",
-            "py_modules",
-            "unifideck",
-            "launcher",
-            "dispatcher.py",
-        )
+        launcher = str(Path(self._plugin_dir or "") / "py_modules" / "unifideck" / "launcher" / "dispatcher.py")
         if not await asyncio.to_thread(lambda: Path(launcher).is_file()):
             logger.warning(
                 "[GOGStore] launcher dispatcher not found at %s",

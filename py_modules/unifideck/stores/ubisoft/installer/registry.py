@@ -20,6 +20,7 @@ is authoritative for "which games are licensed".
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import os
@@ -105,10 +106,7 @@ def _update_or_append_install_section(
             sec_body,
             flags=re.MULTILINE,
         )
-        if count:
-            sec_body = new_body
-        else:
-            sec_body = sec_body.rstrip("\n") + "\n" + val + "\n"
+        sec_body = new_body if count else sec_body.rstrip("\n") + "\n" + val + "\n"
     return content[: sec_start + len(section)] + sec_body + content[sec_end:]
 
 
@@ -146,7 +144,7 @@ def inject_install_registry(
             "[UbisoftInstaller] install registry injected for %s",
             install_id,
         )
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
         logger.warning(
             "[UbisoftInstaller] registry injection failed: %s",
             e,
@@ -187,7 +185,7 @@ def clean_install_registry(
             "[UbisoftInstaller] cleaned registry for %s",
             install_id,
         )
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
         logger.warning(
             "[UbisoftInstaller] registry cleanup failed: %s",
             e,
@@ -197,15 +195,13 @@ def clean_install_registry(
 def get_directory_size(path: str) -> int:
     """Get directory size."""
     total = 0
-    try:
+    with contextlib.suppress(OSError):
         for dirpath, _dirs, filenames in os.walk(path):
             for f in filenames:
                 try:
                     total += (Path(dirpath) / f).stat().st_size
                 except OSError:
                     continue
-    except OSError:
-        pass
     return total
 
 

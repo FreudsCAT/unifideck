@@ -30,6 +30,7 @@ Reference: Technical Document v1.0 — Section 3.4.10 (i18n pipeline).
 """
 from __future__ import annotations
 
+import contextlib
 import logging
 import sys
 from pathlib import Path
@@ -115,11 +116,8 @@ def validate_i18n_schema(
             ) from e
     finally:
         if added:
-            try:
+            with contextlib.suppress(ValueError):
                 sys.path.remove(scripts_str)
-            except ValueError:
-                # best-effort cleanup; file may already be gone or locked
-                pass
 
 
 # ── Legacy compatibility alias ─────────────────────────────────

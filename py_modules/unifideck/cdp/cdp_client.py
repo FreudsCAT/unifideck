@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 from typing import TYPE_CHECKING, Any, cast
@@ -52,10 +53,8 @@ class CDPClient:
         """Disconnect."""
         if self._recv_task:
             self._recv_task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await self._recv_task
-            except asyncio.CancelledError:
-                pass
         if self._ws:
             await self._ws.close()
             self._ws = None
@@ -102,7 +101,7 @@ class CDPClient:
                 session.get(url, timeout=5) as resp,
             ):
                 return cast("bool", resp.status == 200)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
             logger.debug(
                 "[CDPClient] close_target failed: %s", e,
             )
@@ -146,7 +145,7 @@ class CDPClient:
                 if resp.status != 200:
                     return []
                 return cast("list[dict[str, Any]]", await resp.json())
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
             logger.debug(
                 "[CDPClient] list targets failed: %s", e,
             )
@@ -209,5 +208,5 @@ class CDPClient:
                         msg.get("result"))
         except asyncio.CancelledError:
             raise
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
             logger.warning("[CDPClient] recv loop error: %s", e)

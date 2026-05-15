@@ -24,6 +24,7 @@ Reference: edge_browser.py pre-split, lines 430-598.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 from typing import Any
@@ -64,7 +65,7 @@ class EdgeCDPClient:
                 data = json.loads(r.read().decode())
                 ws_url = data.get("webSocketDebuggerUrl")
                 return ws_url if ws_url else None
-        except Exception:
+        except Exception:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
             return None
 
     def probe_cdp(self) -> bool:
@@ -76,7 +77,7 @@ class EdgeCDPClient:
                 timeout=1,
             ):
                 return True
-        except Exception:
+        except Exception:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
             return False
 
     def list_targets(self) -> list[dict[str, Any]]:
@@ -89,7 +90,7 @@ class EdgeCDPClient:
             ) as r:
                 data = json.loads(r.read().decode())
                 return data if isinstance(data, list) else []
-        except Exception:
+        except Exception:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
             return []
 
     # ── Navigation ───────────────────────────────────────────────────
@@ -134,12 +135,8 @@ class EdgeCDPClient:
                     "method": "Page.enable",
                     "params": {},
                 }))
-                # Wait for Page.enable ack
-                try:
+                with contextlib.suppress(TimeoutError):
                     await asyncio.wait_for(ws.recv(), timeout=3)
-                except TimeoutError:
-                    # timed out; best-effort, fall through
-                    pass
                 # Navigate
                 await ws.send(json.dumps({
                     "id": 2,
@@ -150,7 +147,7 @@ class EdgeCDPClient:
                 return await _await_navigation_result(
                     ws, deadline, url,
                 )
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
             logger.warning("[Edge] navigate_tab failed: %s", exc)
             return False
 
@@ -221,7 +218,7 @@ class EdgeCDPClient:
                 log_prefix, target_id, e,
             )
             return False
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
             logger.warning(
                 "[Edge] Could not close %s target %s: %s",
                 log_prefix, target_id, e,
@@ -232,7 +229,7 @@ class EdgeCDPClient:
         """Poll the browser WebSocket URL until it disappears (5 s budget).
 
         The browser usually drops within a second or two after all
-        targets are closed; we wait up to 20 × 250 ms before giving
+        targets are closed; we wait up to 20 x 250 ms before giving
         up. Returning anyway is safe because the caller's intent is
         already satisfied — this is only a courtesy delay so the
         next launch doesn't race against the previous Chromium's

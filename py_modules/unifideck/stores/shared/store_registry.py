@@ -250,7 +250,7 @@ class StoreRegistry:
         )
         try:
             mod = importlib.import_module(module_name)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
             logger.debug(
                 "[StoreRegistry] Skip %s: %s", module_suffix, e,
             )
@@ -359,7 +359,7 @@ class StoreRegistry:
             try:
                 entry["available"] = await store.is_available()
                 store._cached_available = entry["available"]
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
                 entry["error"] = str(e)
                 logger.warning(
                     "[StoreRegistry] %s availability check "

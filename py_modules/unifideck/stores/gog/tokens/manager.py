@@ -26,8 +26,8 @@ from __future__ import annotations
 
 import contextlib
 import logging
-import os
 import time
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from unifideck.security import SecureTokenStore
@@ -97,11 +97,11 @@ class GOGTokenManager:
 
     def get_token_age_seconds(self) -> float:
         """Get token age seconds."""
-        path = os.path.expanduser(self._config.token_file)
-        if not os.path.isfile(path):
+        path = str(Path(self._config.token_file).expanduser())
+        if not Path(path).is_file():
             return float("inf")
         try:
-            return time.time() - os.path.getmtime(path)
+            return time.time() - Path(path).stat().st_mtime
         except OSError:
             return float("inf")
 

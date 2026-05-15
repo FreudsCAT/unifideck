@@ -22,9 +22,10 @@ specific ``InstallResult`` error code.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
-import os
 from collections.abc import Awaitable, Callable
+from pathlib import Path
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -178,7 +179,7 @@ class _GogdlProgressMonitor:
             return
         try:
             await progress_cb(dict(progress))
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
             logger.debug(
                 "[GOGInstaller] progress_cb: %s",
                 e,
@@ -325,7 +326,7 @@ class _GogdlProgressMonitor:
                     )
             finally:
                 await _gogdl_cleanup()
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
             logger.warning(
                 "[GOGInstaller] repair pipeline failed: %s",
                 e,
@@ -339,21 +340,19 @@ class _GogdlProgressMonitor:
     ) -> str:
         """Resolve repair path."""
         if folder_name:
-            predicted = os.path.join(base_path, folder_name)
-            if os.path.exists(predicted):
+            predicted = str(Path(base_path) / folder_name)
+            if Path(predicted).exists():
                 return predicted
-        try:
-            for name in os.listdir(base_path):
-                candidate = os.path.join(base_path, name)
-                if not os.path.isdir(candidate):
+        with contextlib.suppress(OSError):
+            for name in [entry.name for entry in Path(base_path).iterdir()]:
+                candidate = str(Path(base_path) / name)
+                if not Path(candidate).is_dir():
                     continue
                 if GOGFolderOps.has_goggame_info(
                     candidate,
                     game_id,
                 ):
                     return candidate
-        except OSError:
-            pass
         logger.warning(
             "[GOGInstaller] could not resolve repair path, using base_path",
         )

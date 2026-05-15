@@ -128,10 +128,14 @@ class ArtworkService(_EventHandlersMixin):
         if not force:
             # Check if we recently failed
             last_attempt = self._cache.get(_CACHE_NAMESPACE, cache_key)
-            if last_attempt is not None:
-                if time.time() - float(last_attempt) < self._failure_cooldown:
-                    logger.debug("[ArtworkService] skipping %s: in failure cooldown", title)
-                    return result
+            if (
+                last_attempt is not None
+                and time.time() - float(last_attempt) < self._failure_cooldown
+            ):
+                logger.debug(
+                    "[ArtworkService] skipping %s: in failure cooldown", title,
+                )
+                return result
 
             # Check if we already have the essential art
             if await has_artwork(self._grid_dir, app_id):

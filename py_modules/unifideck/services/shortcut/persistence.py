@@ -8,6 +8,7 @@ testable.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import os
 from pathlib import Path
@@ -19,7 +20,7 @@ from .games_map import GameMapEntry, format_games_map, parse_games_map
 
 logger = logging.getLogger(__name__)
 
-# Games.map read retries — 3 × 100ms worst-case. Cheap enough to
+# Games.map read retries — 3 x 100ms worst-case. Cheap enough to
 # avoid spurious GameNotFoundError when the launcher reads
 # mid-write by a concurrent background sync.
 _GAMES_MAP_READ_ATTEMPTS = 3
@@ -36,9 +37,9 @@ async def read_vdf(shortcuts_path: str) -> dict[str, Any]:
 
     def _read_sync() -> dict[str, Any]:
         try:
-            with open(shortcuts_path, "rb") as f:
+            with Path(shortcuts_path).open("rb") as f:
                 return vdf.binary_loads(f.read())
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
             logger.warning("[ShortcutPersistence] failed to read shortcuts.vdf: %s", e)
             return {"shortcuts": {}}
 
@@ -51,22 +52,20 @@ async def write_vdf(shortcuts_path: str, data: dict[str, Any]) -> None:
     Uses tmpfile + os.replace pattern to prevent corruption on crash.
     """
     def _write_sync() -> None:
-        parent = os.path.dirname(shortcuts_path)
+        parent = str(Path(shortcuts_path).parent)
         if parent:
-            os.makedirs(parent, exist_ok=True)
+            Path(parent).mkdir(parents=True, exist_ok=True)
 
         tmp_path = shortcuts_path + ".tmp"
         try:
-            with open(tmp_path, "wb") as f:
+            with Path(tmp_path).open("wb") as f:
                 f.write(vdf.binary_dumps(data))
-            os.replace(tmp_path, shortcuts_path)
+            Path(tmp_path).replace(shortcuts_path)
         except Exception:
             logger.exception("[ShortcutPersistence] failed to write shortcuts.vdf")
-            if os.path.exists(tmp_path):
-                try:
-                    os.remove(tmp_path)
-                except OSError:
-                    pass
+            if Path(tmp_path).exists():
+                with contextlib.suppress(OSError):
+                    Path(tmp_path).unlink()
 
     await asyncio.to_thread(_write_sync)
 
@@ -88,12 +87,12 @@ async def read_games_map(games_map_path: str) -> dict[str, GameMapEntry]:
     for attempt in range(1, _GAMES_MAP_READ_ATTEMPTS + 1):
         try:
             def _read_sync() -> str:
-                with open(games_map_path, encoding="utf-8") as f:
+                with Path(games_map_path).open(encoding="utf-8") as f:
                     return f.read()
 
             content = await asyncio.to_thread(_read_sync)
             return parse_games_map(content)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
             if attempt < _GAMES_MAP_READ_ATTEMPTS:
                 logger.debug(
                     "[ShortcutPersistence] games.map read failed (attempt %d/%d): %s. Retrying...",
@@ -119,27 +118,25 @@ async def write_games_map(games_map_path: str, games_map: dict[str, GameMapEntry
     truncate and the subsequent writes.
     """
     def _write_sync() -> None:
-        parent = os.path.dirname(games_map_path)
+        parent = str(Path(games_map_path).parent)
         if parent:
-            os.makedirs(parent, exist_ok=True)
+            Path(parent).mkdir(parents=True, exist_ok=True)
 
         content = format_games_map(games_map)
         tmp_path = games_map_path + ".tmp"
 
         try:
-            with open(tmp_path, "w", encoding="utf-8") as f:
+            with Path(tmp_path).open("w", encoding="utf-8") as f:
                 f.write(content)
                 # Ensure it's fully written to disk before rename
                 f.flush()
                 os.fsync(f.fileno())
 
-            os.replace(tmp_path, games_map_path)
+            Path(tmp_path).replace(games_map_path)
         except Exception:
             logger.exception("[ShortcutPersistence] failed to write games.map")
-            if os.path.exists(tmp_path):
-                try:
-                    os.remove(tmp_path)
-                except OSError:
-                    pass
+            if Path(tmp_path).exists():
+                with contextlib.suppress(OSError):
+                    Path(tmp_path).unlink()
 
     await asyncio.to_thread(_write_sync)

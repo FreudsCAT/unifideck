@@ -24,8 +24,8 @@ callers that pass paths directly to ``proton run``.
 from __future__ import annotations
 
 import logging
-import os
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 from .legendary import fetch_info
@@ -97,11 +97,8 @@ class EpicExeResolver:
             launch_exe = manifest.get("launch_exe")
             if isinstance(launch_exe, str) and launch_exe:
                 cleaned = launch_exe.lstrip("/")
-                candidate = os.path.join(
-                    install_path,
-                    cleaned,
-                )
-                if os.path.isfile(candidate):
+                candidate = str(Path(install_path) / cleaned)
+                if Path(candidate).is_file():
                     return candidate
                 logger.warning(
                     "[epic_exe_resolver] manifest launch_exe "

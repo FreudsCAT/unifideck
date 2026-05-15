@@ -21,6 +21,7 @@ or manual user refresh.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import urllib.parse
@@ -119,7 +120,7 @@ class GOGLibrary:
                     return cast("int", response.status)
             except urllib.request.HTTPError as e:
                 return e.code
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
                 logger.debug(
                     "[GOGLibrary] probe error: %s",
                     e,
@@ -285,14 +286,12 @@ class GOGLibrary:
             return None
         if not content:
             return None
-        try:
+        with contextlib.suppress(json.JSONDecodeError):
             data = json.loads(content)
             if isinstance(data, dict):
                 return data.get("game_id") or data.get("gameId")
             if isinstance(data, (str, int)):
                 return str(data)
-        except json.JSONDecodeError:
-            pass
         return content
 
     @staticmethod
@@ -318,7 +317,7 @@ class GOGLibrary:
             return None
         try:
             return self._find_exe(install_path)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
             logger.warning(
                 "[GOGLibrary] exe resolution failed: %s",
                 e,

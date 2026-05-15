@@ -63,7 +63,7 @@ async def cloud_sync_phase(
             await svc._cloud_svc.sync_down(store, game_id)
         elif direction == "up":
             await svc._cloud_svc.sync_up(store, game_id)
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
         logger.warning("[Helpers] Cloud sync %s failed, ignoring: %s", direction, e)
 
 

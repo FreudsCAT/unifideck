@@ -10,6 +10,7 @@ Persists the queue so pending downloads survive plugin restarts.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 from typing import TYPE_CHECKING, Any
 
@@ -73,10 +74,8 @@ class DownloadService(_WorkerMixin):
         """
         if self._task is not None:
             self._task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await self._task
-            except asyncio.CancelledError:
-                pass
             self._task = None
             logger.info("[DownloadService] worker task stopped")
 
@@ -167,7 +166,7 @@ class DownloadService(_WorkerMixin):
         """Replace in-memory queue with the persisted file."""
         try:
             self._queue = await load_queue(self._queue_file)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
             logger.warning("[DownloadService] failed to load queue, starting fresh: %s", e)
             self._queue = []
 
@@ -177,5 +176,5 @@ class DownloadService(_WorkerMixin):
             # Note: We only persist pending items, not running ones, because
             # a restart interrupts running installs anyway.
             await save_queue(self._queue_file, self._queue)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
             logger.warning("[DownloadService] failed to save queue: %s", e)

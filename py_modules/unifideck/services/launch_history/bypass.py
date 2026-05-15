@@ -48,7 +48,7 @@ class _BypassMixin:
             if hasattr(self, "_emit_state"):
                 self._emit_state(game_key, "arm_bypass")
 
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
             logger.warning("[LaunchHistory] Failed to arm bypass for %s: %s", game_key, e)
 
     def consume_bypass(self, game_key: str) -> bool:
@@ -71,6 +71,6 @@ class _BypassMixin:
             logger.debug("[LaunchHistory] Ignored expired bypass for %s", game_key)
             return False
 
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
             logger.warning("[LaunchHistory] Failed to consume bypass for %s: %s", game_key, e)
             return False

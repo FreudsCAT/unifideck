@@ -15,7 +15,7 @@ entries still parse (lazy migration on next write).
 from __future__ import annotations
 
 import binascii
-import os
+from pathlib import Path
 from typing import NamedTuple
 
 
@@ -87,10 +87,7 @@ def parse_games_map(content: str) -> dict[str, GameMapEntry]:
             # Handle v1 format: derive work_dir from exe
             exe = value.strip()
             # Special case for xcloud in v1 format (rare but handled)
-            if exe == "xcloud":
-                work_dir = ""
-            else:
-                work_dir = os.path.dirname(exe)
+            work_dir = "" if exe == "xcloud" else str(Path(exe).parent)
             result[key] = GameMapEntry(exe=exe, work_dir=work_dir)
 
     return result

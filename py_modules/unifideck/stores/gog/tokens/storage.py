@@ -71,7 +71,7 @@ class _TokenStorage:
         def _read_sync() -> bytes | None:
             """Read sync."""
             try:
-                with open(path, "rb") as f:
+                with Path(path).open("rb") as f:
                     return f.read()
             except OSError as e:
                 logger.warning("[GOGTokens] load failed: %s", e)
@@ -137,10 +137,7 @@ class _TokenStorage:
             """Resolve all credential paths synchronously (off the loop)."""
             return [
                 str(Path(self._config.token_file).expanduser()),
-                os.path.join(
-                    str(Path(self._config.gogdl_config_dir).expanduser()),
-                    "gog_credentials.json",
-                ),
+                str(Path(str(Path(self._config.gogdl_config_dir).expanduser())) / "gog_credentials.json"),
             ]
 
         paths_to_remove = await asyncio.to_thread(_resolve_paths)
@@ -148,10 +145,10 @@ class _TokenStorage:
         def _remove_sync() -> None:
             """Remove sync."""
             for path in paths_to_remove:
-                if not os.path.isfile(path):
+                if not Path(path).is_file():
                     continue
                 try:
-                    os.remove(path)
+                    Path(path).unlink()
                     logger.info(
                         "[GOGTokens] removed %s",
                         path,
@@ -169,9 +166,9 @@ class _TokenStorage:
     def _write_token_file_atomic(path: str, blob: bytes) -> bool:
         """Write token file atomic."""
         try:
-            parent = os.path.dirname(path)
+            parent = str(Path(path).parent)
             if parent:
-                os.makedirs(parent, exist_ok=True)
+                Path(parent).mkdir(parents=True, exist_ok=True)
             tmp = path + ".tmp"
             fd = os.open(
                 tmp,
@@ -180,7 +177,7 @@ class _TokenStorage:
             )
             with os.fdopen(fd, "wb") as f:
                 f.write(blob)
-            os.replace(tmp, path)
+            Path(tmp).replace(path)
         except OSError as e:
             logger.warning(
                 "[GOGTokens] save failed: %s",
@@ -195,7 +192,7 @@ class _TokenStorage:
         def _stat_mode() -> int | None:
             """Stat mode."""
             try:
-                st = os.stat(path)
+                st = Path(path).stat()
                 return st.st_mode & 0o7777
             except OSError:
                 return None
@@ -241,17 +238,14 @@ class _TokenStorage:
 
     async def _remove_stale_gogdl_mirror(self) -> None:
         """Remove stale GOGDL mirror."""
-        stale = os.path.join(
-            await asyncio.to_thread(lambda: str(Path(self._config.gogdl_config_dir).expanduser())),
-            "gog_credentials.json",
-        )
+        stale = str(Path(await asyncio.to_thread(lambda: str(Path(self._config.gogdl_config_dir).expanduser()))) / "gog_credentials.json")
 
         def _remove() -> bool:
             """Remove."""
-            if not os.path.isfile(stale):
+            if not Path(stale).is_file():
                 return False
             try:
-                os.remove(stale)
+                Path(stale).unlink()
                 logger.info(
                     "[GOGTokens] removed stale gogdl mirror at %s",
                     stale,

@@ -9,15 +9,15 @@ explicit at boot rather than diffused through every ctor.
 """
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from unifideck.config import ConfigManager
 
 # Default fallback if Steam isn't installed (e.g. dev environment)
-_DEFAULT_STEAM_ROOT = os.path.expanduser("~/.steam/steam")
+_DEFAULT_STEAM_ROOT = str(Path("~/.steam/steam").expanduser())
 
 # TODO: revisit — consider auto-detection via loginusers.vdf (staging approach)
 # Currently we hardcode the primary Steam Deck user ID "0".
@@ -57,25 +57,25 @@ class ServicePaths:
         need Steam must validate it themselves.
         """
         # Base directories
-        data_dir = config.get("paths.data_dir", os.path.expanduser("~/.config/unifideck"))
+        data_dir = config.get("paths.data_dir", str(Path("~/.config/unifideck").expanduser()))
         steam_root = config.get("paths.steam_root", _DEFAULT_STEAM_ROOT)
 
         # Ensure data directory exists
-        os.makedirs(data_dir, exist_ok=True)
+        Path(data_dir).mkdir(parents=True, exist_ok=True)
 
         # Steam userdata paths
-        userdata_dir = os.path.join(steam_root, "userdata", _USER_ID)
-        config_dir = os.path.join(userdata_dir, "config")
-        shortcuts_path = os.path.join(config_dir, "shortcuts.vdf")
-        config_vdf_path = os.path.join(config_dir, "localconfig.vdf")
-        loginusers_path = os.path.join(steam_root, "config", "loginusers.vdf")
-        grid_dir = os.path.join(config_dir, "grid")
+        userdata_dir = str(Path(steam_root) / "userdata" / _USER_ID)
+        config_dir = str(Path(userdata_dir) / "config")
+        shortcuts_path = str(Path(config_dir) / "shortcuts.vdf")
+        config_vdf_path = str(Path(config_dir) / "localconfig.vdf")
+        loginusers_path = str(Path(steam_root) / "config" / "loginusers.vdf")
+        grid_dir = str(Path(config_dir) / "grid")
 
         # Unifideck data files
-        games_map_path = os.path.join(data_dir, "games.map")
-        queue_file = os.path.join(data_dir, "download_queue.json")
-        playtime_db = os.path.join(data_dir, "playtime.db")
-        local_save_root = os.path.join(data_dir, "saves")
+        games_map_path = str(Path(data_dir) / "games.map")
+        queue_file = str(Path(data_dir) / "download_queue.json")
+        playtime_db = str(Path(data_dir) / "playtime.db")
+        local_save_root = str(Path(data_dir) / "saves")
         cloud_root = config.get("cloud_saves.remote_root")
 
         return cls(

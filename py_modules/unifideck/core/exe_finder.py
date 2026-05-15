@@ -25,6 +25,7 @@ Exported as both a class and a module-level singleton
 ``exe_finder``.
 """
 
+import contextlib
 import logging
 import os
 from pathlib import Path
@@ -164,11 +165,9 @@ class ExeFinder:
         if filename.lower() in hint_lower:
             score += 1000
         score += (4 - depth) * 100
-        try:
+        with contextlib.suppress(OSError):
             size_mb = Path(full_path).stat().st_size // (1024 * 1024)
             score += min(size_mb, 500)
-        except OSError:
-            pass
         return score
 
     @staticmethod

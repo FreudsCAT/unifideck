@@ -125,7 +125,7 @@ class _AuthShortcut:
                 sm,
                 store_id,
             )
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
             logger.warning(
                 "[UbisoftAuth] auth shortcut creation failed: %s",
                 e,
@@ -292,7 +292,7 @@ class _AuthShortcut:
                 expected_appid,
             )
             return True
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
             logger.warning(
                 "[UbisoftAuth] auth shortcut validation failed: %s",
                 e,
@@ -346,7 +346,7 @@ class _AuthShortcut:
                 == target
                 for s in shortcuts.values()
             )
-        except Exception:
+        except Exception:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
             return True
 
     async def add_shortcut_to_vdf(

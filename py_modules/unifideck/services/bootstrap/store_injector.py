@@ -105,7 +105,7 @@ def _resolve_store(registry: StoreRegistry, store_id: str) -> Any | None:
         instance = registry.get(store_id)
     except KeyError:
         return None
-    except Exception as err:  # noqa: BLE001 — see docstring
+    except Exception as err:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
         logger.warning(
             "[StoreInjector] failed to retrieve %s from registry: %s",
             store_id, err,
@@ -144,7 +144,7 @@ def _inject_one(
         return
     try:
         setattr(store_instance, store_attr, service_instance)
-    except Exception as err:  # noqa: BLE001 — see docstring
+    except Exception as err:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
         logger.warning(
             "[StoreInjector] failed to inject %s into %s: %s",
             container_attr, store_id, err,

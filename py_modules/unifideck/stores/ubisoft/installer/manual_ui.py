@@ -23,9 +23,10 @@ Returns the detected install path or ``None`` on timeout.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
-import os
 from collections.abc import Awaitable, Callable
+from pathlib import Path
 from typing import Any
 
 from unifideck.core.types import InstallResult
@@ -179,12 +180,10 @@ class _ManualUiInstaller:
     ) -> tuple[str, set]:
         """Snapshot install base."""
         install_base = install_path or self._config.default_install_base_expanded
-        os.makedirs(install_base, exist_ok=True)
+        Path(install_base).mkdir(parents=True, exist_ok=True)
         dirs_before: set = set()
-        try:
-            dirs_before = set(os.listdir(install_base))
-        except OSError:
-            pass
+        with contextlib.suppress(OSError):
+            dirs_before = {entry.name for entry in Path(install_base).iterdir()}
         return install_base, dirs_before
 
     @staticmethod
@@ -202,10 +201,8 @@ class _ManualUiInstaller:
                 timeout=timeout,
             )
         except (TimeoutError, ProcessLookupError):
-            try:
+            with contextlib.suppress(ProcessLookupError):
                 proc.kill()
-            except ProcessLookupError:
-                pass
 
     async def _finalize_manual_install(
         self,
@@ -230,7 +227,7 @@ class _ManualUiInstaller:
         )
         try:
             await self._id_map.refresh_from_configurations()
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
             logger.debug(
                 "[UbisoftInstaller] id_map refresh after install failed: %s",
                 e,
@@ -249,24 +246,16 @@ class _ManualUiInstaller:
         prefix_path: str,
     ) -> dict[str, set]:
         """Snapshot UPC game dirs."""
-        upc_games_rel = os.path.join(
-            "drive_c",
-            "Program Files (x86)",
-            "Ubisoft",
-            "Ubisoft Game Launcher",
-            "games",
-        )
+        upc_games_rel = str(Path("drive_c") / "Program Files (x86)" / "Ubisoft" / "Ubisoft Game Launcher" / "games")
         candidates = (
-            os.path.join(prefix_path, upc_games_rel),
-            os.path.join(prefix_path, "pfx", upc_games_rel),
+            str(Path(prefix_path) / upc_games_rel),
+            str(Path(prefix_path) / "pfx" / upc_games_rel),
         )
         snapshots: dict[str, set] = {}
         for gdir in candidates:
-            if os.path.isdir(gdir):
-                try:
-                    snapshots[gdir] = set(os.listdir(gdir))
-                except OSError:
-                    pass
+            if Path(gdir).is_dir():
+                with contextlib.suppress(OSError):
+                    snapshots[gdir] = {entry.name for entry in Path(gdir).iterdir()}
         return snapshots
 
     async def _poll_for_new_install(
@@ -389,7 +378,7 @@ class _ManualUiInstaller:
         await progress_cb(
             {
                 "status": "installing",
-                "message": (f"Game detected at {os.path.basename(install_dir)}"),
+                "message": (f"Game detected at {Path(install_dir).name}"),
                 "progress": 50,
             }
         )
@@ -401,13 +390,13 @@ class _ManualUiInstaller:
     ) -> str | None:
         """Check new dirs."""
         try:
-            now = set(os.listdir(base))
+            now = {entry.name for entry in Path(base).iterdir()}
         except OSError:
             return None
         new_dirs = now - before
         for d in new_dirs:
-            candidate = os.path.join(base, d)
-            if os.path.isdir(candidate) and looks_like_game_install(candidate):
+            candidate = str(Path(base) / d)
+            if Path(candidate).is_dir() and looks_like_game_install(candidate):
                 return candidate
         return None
 

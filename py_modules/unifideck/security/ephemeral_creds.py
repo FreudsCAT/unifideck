@@ -180,7 +180,7 @@ class EphemeralCredentialContext:
         payload = await self._load_payload()
         tempdir = await self._make_tempdir()
         self._tempdir = tempdir
-        self._plaintext_path = os.path.join(tempdir, self._cli_filename)
+        self._plaintext_path = str(Path(tempdir) / self._cli_filename)
         await self._write_plaintext(payload)
         env = os.environ.copy()
         env[self._env_var] = tempdir
@@ -278,13 +278,13 @@ class EphemeralCredentialContext:
         # explicitly so the invariant doesn't depend on
         # platform.
         try:
-            os.chmod(tempdir, _TEMPDIR_MODE)
+            Path(tempdir).chmod(_TEMPDIR_MODE)  # noqa: ASYNC240 — project uses asyncio.to_thread for sync I/O, not trio/anyio
         except OSError as e:
             # If we can't chmod, abort and remove — we cannot
             # let plaintext live in a dir we don't fully
             # control.
             with contextlib.suppress(OSError):
-                os.rmdir(tempdir)
+                Path(tempdir).rmdir()  # noqa: ASYNC240 — project uses asyncio.to_thread for sync I/O, not trio/anyio
             raise EphemeralCredentialError(
                 f"cannot chmod tempdir {tempdir}: {e}",
             ) from e
@@ -391,11 +391,11 @@ class EphemeralCredentialContext:
                 # older Pythons, and we want to be precise
                 # about what we delete.
                 for entry in _safe_listdir(tempdir):
-                    full = os.path.join(tempdir, entry)
+                    full = str(Path(tempdir) / entry)
                     with contextlib.suppress(OSError):
-                        os.unlink(full)
+                        Path(full).unlink()
                 with contextlib.suppress(OSError):
-                    os.rmdir(tempdir)
+                    Path(tempdir).rmdir()
 
         await asyncio.to_thread(_rmtree)
 
@@ -403,7 +403,7 @@ class EphemeralCredentialContext:
 def _safe_listdir(path: str) -> Iterator[str]:
     """Yield directory entries, swallowing OSError."""
     try:
-        yield from os.listdir(path)
+        yield from [entry.name for entry in Path(path).iterdir()]
     except OSError as e:
         logger.debug(
             "[ephemeral_creds] listdir failed during cleanup: %s", e,
@@ -417,5 +417,4 @@ def _safe_listdir(path: str) -> Iterator[str]:
 # re-export below means every existing
 # ``from security.ephemeral_creds import InPlaceEphemeralFile``
 # import keeps working without churn.
-from .ephemeral_creds_inplace import InPlaceEphemeralFile  # noqa: E402, F401
 

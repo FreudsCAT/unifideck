@@ -22,8 +22,8 @@ the offending entry or escalate.
 """
 
 import logging
-import os
 import re
+from pathlib import Path
 from typing import Any, Optional, cast
 
 import yaml
@@ -60,7 +60,7 @@ def _parse_config_header(header: bytes, second_eight: bool = False) -> tuple:
                 offset + tmp_size + 1,
             )
         return 0, 0, 0, 10
-    except Exception:
+    except Exception:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
         return 0, 0, 0, 10
 
 
@@ -127,14 +127,14 @@ class GameConfig:
 
 def _read_binary_file(filepath: str) -> bytes | None:
     """Read binary file."""
-    if not os.path.isfile(filepath):
+    if not Path(filepath).is_file():
         logger.warning(
             "[UbiParser] Configurations file not found: %s",
             filepath,
         )
         return None
     try:
-        with open(filepath, "rb") as f:
+        with Path(filepath).open("rb") as f:
             return f.read()
     except Exception:
         logger.exception("[UbiParser] Failed to read configurations")
@@ -166,7 +166,7 @@ def _extract_config_chunk(
         parsed = yaml.safe_load(
             stream.replace("\t", " "),
         )
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
         logger.debug(
             "[UbiParser] YAML parse error at offset %d: %s",
             global_offset,
@@ -306,14 +306,14 @@ def parse_ownership(filepath: str) -> list[int]:
 
 def _read_ownership_file(filepath: str) -> bytes | None:
     """Read ownership file."""
-    if not os.path.isfile(filepath):
+    if not Path(filepath).is_file():
         logger.warning(
             "[UbiParser] Ownership file not found: %s",
             filepath,
         )
         return None
     try:
-        with open(filepath, "rb") as f:
+        with Path(filepath).open("rb") as f:
             return f.read()
     except Exception:
         logger.exception("[UbiParser] Failed to read ownership")
@@ -322,13 +322,13 @@ def _read_ownership_file(filepath: str) -> bytes | None:
 
 def check_install_state(state_file: str) -> bool:
     """Check install state."""
-    if not os.path.isfile(state_file):
+    if not Path(state_file).is_file():
         return False
     try:
-        with open(state_file, "rb") as f:
+        with Path(state_file).open("rb") as f:
             first_byte = f.read(1)
             return first_byte == b"\x0a"
-    except Exception:
+    except Exception:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
         return False
 
 

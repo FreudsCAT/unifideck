@@ -173,7 +173,7 @@ class _LauncherInstall:
                     "[UbisoftInstaller] UPC stderr: %s",
                     stderr_text,
                 )
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
             logger.warning(
                 "[UbisoftInstaller] monitor error: %s",
                 e,

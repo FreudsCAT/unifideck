@@ -389,7 +389,7 @@ class AuthOrchestrator:
             if "/" in domain:
                 domain = domain.split("/", 1)[0]
             await self._monitor.close_oauth_tab(domain)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
             logger.debug(
                 "[AuthOrchestrator/%s] close_oauth_tab failed "
                 "(ignored): %s",

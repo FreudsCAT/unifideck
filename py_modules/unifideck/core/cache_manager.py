@@ -23,6 +23,7 @@ Files are written with ``chmod 0600`` so cache contents
 owner-readable.
 """
 
+import contextlib
 import json
 import logging
 import time
@@ -242,10 +243,8 @@ class CacheStore:
         except OSError:
             logger.exception("[CacheManager] write failed for %s", self.name)
             if tmp.exists():
-                try:
+                with contextlib.suppress(OSError):
                     tmp.unlink()
-                except OSError:
-                    pass
 
 
 class CacheManager:

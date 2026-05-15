@@ -10,6 +10,7 @@ library/shortcuts since they belong to the previous account.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import re
 from pathlib import Path
@@ -59,10 +60,8 @@ class AccountService:
         """Cancel the polling loop and await its exit."""
         if self._poll_task:
             self._poll_task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await self._poll_task
-            except asyncio.CancelledError:
-                pass
             self._poll_task = None
 
     def get_current_user(self) -> str | None:
@@ -81,7 +80,7 @@ class AccountService:
                 await self._check_once()
             except asyncio.CancelledError:
                 raise
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
                 logger.warning("[AccountService] Error in poll loop: %s", e)
 
     async def _check_once(self) -> bool:
@@ -106,7 +105,7 @@ class AccountService:
                 )
                 return True
 
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
             logger.warning("[AccountService] Check once failed: %s", e)
 
         return False
@@ -118,12 +117,12 @@ class AccountService:
 
         try:
             def read_file() -> str:
-                with open(self._loginusers_path, encoding="utf-8") as f:
+                with Path(self._loginusers_path).open(encoding="utf-8") as f:
                     return f.read()
 
             content = await asyncio.to_thread(read_file)
             return self._extract_most_recent(content)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
             logger.debug("[AccountService] Failed to read loginusers: %s", e)
             return None
 

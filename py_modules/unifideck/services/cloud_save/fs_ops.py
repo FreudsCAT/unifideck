@@ -14,9 +14,11 @@ helpers so the outer loop is a flat read.
 """
 from __future__ import annotations
 
+import contextlib
 import logging
 import os
 import shutil
+from pathlib import Path
 
 from .constants import MANIFEST_FILE
 
@@ -31,7 +33,7 @@ def walk_mtimes(root: str) -> dict[str, float]:
     gets a partial map which is still useful for diff.
     """
     mtimes = {}
-    if not os.path.isdir(root):
+    if not Path(root).is_dir():
         return mtimes
 
     for dirpath, _, files in os.walk(root):
@@ -39,12 +41,10 @@ def walk_mtimes(root: str) -> dict[str, float]:
             if f.startswith(".") or f == MANIFEST_FILE:
                 continue
 
-            path = os.path.join(dirpath, f)
+            path = str(Path(dirpath) / f)
             rel = os.path.relpath(path, root)
-            try:
-                mtimes[rel] = os.path.getmtime(path)
-            except OSError:
-                pass
+            with contextlib.suppress(OSError):
+                mtimes[rel] = Path(path).stat().st_mtime
 
     return mtimes
 
@@ -63,15 +63,15 @@ def copy_tree(
     copied forward with stale mtimes. Skips dot-files. Per-file
     OSError logged at DEBUG, copy continues.
     """
-    if not os.path.isdir(src):
+    if not Path(src).is_dir():
         return
 
-    os.makedirs(dst, exist_ok=True)
+    Path(dst).mkdir(parents=True, exist_ok=True)
 
     for dirpath, _dirnames, files in os.walk(src):
         rel_dir = os.path.relpath(dirpath, src)
-        dst_dir = os.path.join(dst, rel_dir) if rel_dir != "." else dst
-        os.makedirs(dst_dir, exist_ok=True)
+        dst_dir = str(Path(dst) / rel_dir) if rel_dir != "." else dst
+        Path(dst_dir).mkdir(parents=True, exist_ok=True)
         for f in files:
             if _should_skip_file(f, skip_manifest):
                 continue
@@ -95,9 +95,7 @@ def _should_skip_file(name: str, skip_manifest: bool) -> bool:
     """
     if name.startswith("."):
         return True
-    if skip_manifest and name == MANIFEST_FILE:
-        return True
-    return False
+    return bool(skip_manifest and name == MANIFEST_FILE)
 
 
 def _copy_one_file(src_dir: str, dst_dir: str, name: str) -> None:
@@ -109,8 +107,8 @@ def _copy_one_file(src_dir: str, dst_dir: str, name: str) -> None:
     swallowed at DEBUG : a cloud save with a few unreadable
     files is still worth syncing for the rest.
     """
-    src_file = os.path.join(src_dir, name)
-    dst_file = os.path.join(dst_dir, name)
+    src_file = str(Path(src_dir) / name)
+    dst_file = str(Path(dst_dir) / name)
     try:
         shutil.copy2(src_file, dst_file)
     except OSError as err:
@@ -121,17 +119,17 @@ def _copy_one_file(src_dir: str, dst_dir: str, name: str) -> None:
 
 def read_text(path: str) -> str:
     """Read ``path`` as UTF-8 text. Raises OSError on missing file."""
-    with open(path, encoding="utf-8") as f:
+    with Path(path).open(encoding="utf-8") as f:
         return f.read()
 
 
 def write_text(path: str, content: str) -> None:
     """Write ``content`` to ``path`` as UTF-8 text (overwrite)."""
-    parent = os.path.dirname(path)
+    parent = str(Path(path).parent)
     if parent:
-        os.makedirs(parent, exist_ok=True)
+        Path(parent).mkdir(parents=True, exist_ok=True)
 
-    with open(path, "w", encoding="utf-8") as f:
+    with Path(path).open("w", encoding="utf-8") as f:
         f.write(content)
         f.flush()
         os.fsync(f.fileno())

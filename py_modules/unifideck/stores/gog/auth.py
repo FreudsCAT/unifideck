@@ -110,7 +110,7 @@ class GOGBrowserAuth:
                     "[GOGBrowserAuth] cleared cookies for %s",
                     _GOG_COOKIE_DOMAIN,
                 )
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
                 logger.warning(
                     "[GOGBrowserAuth] cookie clear failed: %s",
                     e,

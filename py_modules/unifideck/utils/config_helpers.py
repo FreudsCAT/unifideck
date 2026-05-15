@@ -88,7 +88,7 @@ def get_cfg(
         return default
     try:
         return config.get(key, default)
-    except Exception:
+    except Exception:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
         # Duck-typed config objects in tests may raise anything.
         return default
 
@@ -96,6 +96,35 @@ def get_cfg(
 # Cold-start config path — used before ConfigManager is ready.
 # Must stay constant and not depend on any DI.
 _COLD_START_CONFIG_PATH = "~/.local/share/unifideck/config.json"
+
+
+def _read_cold_start_json() -> dict | None:
+    """Read the cold-start config.json file, returning ``None`` on
+    any error (missing file, malformed JSON, OS error).
+
+    Single-purpose helper extracted from
+    ``read_config_int_cold_start`` so the imports live in one
+    place — ``json`` and ``pathlib`` are loaded lazily here to
+    keep the launcher cold-start import graph minimal (no
+    ``config/`` subpackage dependency).
+
+    Returns the parsed top-level dict, or ``None`` to signal
+    "use default" to the caller. We deliberately don't
+    distinguish "file missing" from "malformed JSON" — both
+    funnel to the same fallback path in the caller.
+    """
+    import json
+    from pathlib import Path
+
+    config_path = Path(_COLD_START_CONFIG_PATH).expanduser()
+    if not config_path.is_file():
+        return None
+    try:
+        with config_path.open() as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return None
+    return data if isinstance(data, dict) else None
 
 
 def read_config_int_cold_start(key: str, default: int) -> int:
@@ -116,21 +145,17 @@ def read_config_int_cold_start(key: str, default: int) -> int:
     ``ConfigManager.get_int(key, default)`` once the registry is
     up, as it picks up in-memory overrides, defaults layering,
     and migration rewrites.
-    """
-    import json
-    from pathlib import (
-        Path as _P,  # noqa: N814 — short alias kept for the hot-path read function below
-    )
 
-    config_path = _P(_COLD_START_CONFIG_PATH).expanduser()
-    if not config_path.is_file():
+    Refactor history (2026-05-15): the I/O concern was extracted
+    to ``_read_cold_start_json`` so this function reads as
+    pure dotted-key traversal + validation, with the
+    "did we fail to load?" decision collapsed into a single
+    ``is None`` check.
+    """
+    data = _read_cold_start_json()
+    if data is None:
         return default
-    try:
-        with config_path.open() as f:
-            data = json.load(f)
-    except (OSError, ValueError):
-        return default
-    node = data
+    node: object = data
     for part in key.split("."):
         if not isinstance(node, dict) or part not in node:
             return default

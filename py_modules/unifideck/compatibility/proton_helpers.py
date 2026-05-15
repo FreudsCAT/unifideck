@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import os
@@ -162,7 +163,7 @@ class ProtonToolsManager:
             return default
         try:
             return self._config.get(key, default)
-        except Exception:
+        except Exception:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
             return default
     def get_for_app(self, appid: int) -> CompatToolResult:
         """Get for app."""
@@ -234,14 +235,12 @@ class ProtonToolsManager:
                 f.write(content)
                 f.flush()
                 os.fsync(f.fileno())
-            os.replace(tmp, self._config_vdf_path)
+            Path(tmp).replace(self._config_vdf_path)
             return True
         except OSError:
             logger.exception("[proton_helpers] write failed")
-            try:
+            with contextlib.suppress(OSError):
                 tmp.unlink()
-            except OSError:
-                pass
             return False
     def load_proton_settings(self) -> dict[str, Any]:
         """Load PROTON settings."""
@@ -261,7 +260,7 @@ class ProtonToolsManager:
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
             tmp.write_text(json.dumps(data, indent=2))
-            os.replace(tmp, path)
+            Path(tmp).replace(path)
             return True
         except OSError:
             logger.exception("[proton_helpers] save settings failed")

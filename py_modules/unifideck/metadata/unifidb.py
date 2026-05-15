@@ -200,7 +200,7 @@ async def _fetch_bucket(
             if isinstance(data, list):
                 return data
             return []
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
         logger.debug(
             "[unifidb] fetch(%s) failed: %s", url, e,
         )

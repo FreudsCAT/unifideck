@@ -24,6 +24,7 @@ delegate — keeps the async surface readable.
 """
 
 import asyncio
+import contextlib
 import json
 import logging
 import os
@@ -321,10 +322,8 @@ def _write_text_sync(path: PathLike, content: str, encoding: str, mode: int) -> 
     except OSError:
         logger.exception("[AsyncFileOps] write_text(%s) failed", path)
         if tmp.exists():
-            try:
+            with contextlib.suppress(OSError):
                 tmp.unlink()
-            except OSError:
-                pass
         return False
 
 
@@ -368,11 +367,9 @@ def _write_bytes_sync(path: PathLike, data: bytes) -> bool:
         tmp.replace(p)
         return True
     except OSError:
-        try:
+        with contextlib.suppress(OSError):
             if tmp.exists():
                 tmp.unlink()
-        except OSError:
-            pass
         return False
 
 
@@ -487,8 +484,6 @@ def _write_json_sync(path: PathLike, data: Any, indent: int, mode: int = 0o644) 
     except (OSError, TypeError, ValueError):
         logger.exception("[AsyncFileOps] write_json(%s) failed", path)
         if tmp.exists():
-            try:
+            with contextlib.suppress(OSError):
                 tmp.unlink()
-            except OSError:
-                pass
         return False

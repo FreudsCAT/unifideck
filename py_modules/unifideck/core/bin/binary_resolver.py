@@ -21,6 +21,7 @@ don't need per-instance config; for those that do, they
 build their own).
 """
 
+import contextlib
 import logging
 import shutil
 import stat
@@ -83,12 +84,10 @@ class BinaryResolver:
         """
         self._version_timeout = 10
         if config is not None:
-            try:
+            with contextlib.suppress(TypeError, ValueError):
                 self._version_timeout = int(
                     config.get("binary_resolver.version_check_timeout_seconds")
                 )
-            except (TypeError, ValueError):
-                pass
 
     def resolve(self, tool: CLITool) -> str | None:
         """Find the path to ``tool``'s binary, or ``None`` if not located.

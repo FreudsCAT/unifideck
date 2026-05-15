@@ -75,7 +75,7 @@ class _WorkerMixin:
                 await asyncio.sleep(_POLL_INTERVAL_SEC)
             except asyncio.CancelledError:
                 break
-            except Exception:  # noqa: BLE001
+            except Exception:
                 # Any unexpected error: log with full traceback,
                 # back off harder than the regular poll so we
                 # don't burn CPU if the cause is persistent.

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import functools
 import logging
 import time
@@ -83,7 +84,7 @@ async def _emit_audit(bus: Any, event_name: str, **kwargs: Any) -> None:
         from unifideck.core.types.events import Events
         event = getattr(Events, event_name)
         await bus.emit(event, **kwargs)
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
         logger.debug(
             "[audit_decorators] failed to emit %s: %s",
             event_name, e,
@@ -111,7 +112,5 @@ async def _maybe_emit_migration(
         store=store, new_path=result_path,
     )
 
-    try:
+    with contextlib.suppress(AttributeError):
         instance._migration_occurred = False
-    except AttributeError:
-        pass

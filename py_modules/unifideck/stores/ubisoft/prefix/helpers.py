@@ -19,9 +19,10 @@ high-level construction logic.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import datetime
 import logging
-import os
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -48,7 +49,7 @@ class _PrefixHelpers:
             space_id,
         )
         try:
-            os.makedirs(prefix_path, exist_ok=True)
+            Path(prefix_path).mkdir(parents=True, exist_ok=True)  # noqa: ASYNC240 — project uses asyncio.to_thread for sync I/O, not trio/anyio
             ok = await self.rsync_clone(
                 self._parent._config.template_dir_expanded,
                 prefix_path,
@@ -89,7 +90,7 @@ class _PrefixHelpers:
         if not installer_path:
             return False
         try:
-            os.makedirs(prefix_path, exist_ok=True)
+            Path(prefix_path).mkdir(parents=True, exist_ok=True)  # noqa: ASYNC240 — project uses asyncio.to_thread for sync I/O, not trio/anyio
             success = await self.run_silent_installer(
                 prefix_dir=prefix_path,
                 installer_path=installer_path,
@@ -130,7 +131,7 @@ class _PrefixHelpers:
             "[UbisoftPrefixManager] creating template from first game prefix",
         )
         try:
-            os.makedirs(template_dir, exist_ok=True)
+            Path(template_dir).mkdir(parents=True, exist_ok=True)  # noqa: ASYNC240 — project uses asyncio.to_thread for sync I/O, not trio/anyio
             ok = await self.rsync_clone(
                 game_prefix,
                 template_dir,
@@ -144,7 +145,7 @@ class _PrefixHelpers:
                 None,
             )
             self.try_inject_auth_state([template_dir])
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
             logger.warning(
                 "[UbisoftPrefixManager] template creation from game prefix failed: %s",
                 e,
@@ -205,10 +206,8 @@ class _PrefixHelpers:
             logger.exception(
                 "[UbisoftPrefixManager] installer timed out after 15 min — killing",
             )
-            try:
+            with contextlib.suppress(ProcessLookupError):
                 proc.kill()
-            except ProcessLookupError:
-                pass
             await proc.wait()
             return False
         if proc.returncode != 0:
@@ -257,10 +256,8 @@ class _PrefixHelpers:
             logger.exception(
                 "[UbisoftPrefixManager] rsync timed out — killing",
             )
-            try:
+            with contextlib.suppress(ProcessLookupError):
                 proc.kill()
-            except ProcessLookupError:
-                pass
             await proc.wait()
             return False
         if proc.returncode != 0:
@@ -275,15 +272,15 @@ class _PrefixHelpers:
     @staticmethod
     def fix_pfx_symlink(prefix_dir: str) -> None:
         """Fix pfx symlink."""
-        pfx_link = os.path.join(prefix_dir, "pfx")
-        if not os.path.islink(pfx_link):
+        pfx_link = str(Path(prefix_dir) / "pfx")
+        if not Path(pfx_link).is_symlink():
             return
         try:
-            current_target = os.readlink(pfx_link)
+            current_target = Path(pfx_link).readlink()
             if current_target in (prefix_dir, "."):
                 return
-            os.remove(pfx_link)
-            os.symlink(prefix_dir, pfx_link)
+            Path(pfx_link).unlink()
+            Path(pfx_link).symlink_to(prefix_dir)
             logger.info(
                 "[UbisoftPrefixManager] fixed pfx symlink: %s → %s",
                 current_target,
@@ -302,10 +299,7 @@ class _PrefixHelpers:
         space_id: str | None,
     ) -> None:
         """Write bootstrap marker."""
-        marker_path = os.path.join(
-            prefix_dir,
-            self._parent._config.bootstrap_marker,
-        )
+        marker_path = str(Path(prefix_dir) / self._parent._config.bootstrap_marker)
         # UTC keeps the marker comparable across machines and survives
         # DST transitions on the user's locale.
         created_at = datetime.datetime.now(datetime.timezone.utc).isoformat()
@@ -313,9 +307,7 @@ class _PrefixHelpers:
         if space_id:
             lines.insert(1, f"game={space_id}")
             try:
-                with open(
-                    marker_path,
-                    "w",
+                with Path(marker_path).open("w",
                     encoding="utf-8",
                 ) as f:
                     f.write("\n".join(lines) + "\n")
@@ -334,7 +326,7 @@ class _PrefixHelpers:
             return
         try:
             self._parent._inject_auth_state(prefix_paths)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
             logger.warning(
                 "[UbisoftPrefixManager] auth state injection failed: %s",
                 e,

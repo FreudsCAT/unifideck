@@ -18,10 +18,9 @@ Module-level helpers (``parse_size_string``,
 
 from __future__ import annotations
 
-import glob
+import contextlib
 import json
 import logging
-import os
 from pathlib import Path
 from typing import Any
 
@@ -183,7 +182,7 @@ class GOGExeResolver:
             if not Path(directory).is_dir():
                 continue
             try:
-                for item in os.listdir(directory):
+                for item in [entry.name for entry in Path(directory).iterdir()]:
                     if item.startswith("goggame-") and item.endswith(".info"):
                         return (
                             str(Path(directory) / item),
@@ -235,15 +234,13 @@ class GOGExeResolver:
     @staticmethod
     def _has_root_data_files(install_path: str) -> bool:
         """Has root data files."""
-        try:
-            for name in os.listdir(install_path):
+        with contextlib.suppress(OSError):
+            for name in [entry.name for entry in Path(install_path).iterdir()]:
                 full = Path(install_path) / name
                 if not full.is_file():
                     continue
                 if any(name.endswith(ext) for ext in _ROOT_DATA_EXTENSIONS):
                     return True
-        except OSError:
-            pass
         return False
 
     @staticmethod
@@ -301,19 +298,22 @@ class GOGExeResolver:
         out of the candidate set.
         """
         candidates: list[tuple[str, int]] = []
-        for pattern in ("*.exe", "**/*.exe"):
-            for exe_path in glob.glob(
-                str(Path(directory) / pattern),
-                recursive=True,
-            ):
-                basename = Path(exe_path).name.lower()
-                if any(skip in basename for skip in _SKIP_EXE_PATTERNS):
-                    continue
-                try:
-                    size = Path(exe_path).stat().st_size
-                except OSError:
-                    continue
-                candidates.append((exe_path, size))
+        # Use ``rglob`` which recursively walks subdirectories.
+        # Replaces the previous ``glob.glob`` loop over both the
+        # top-level (``*.exe``) and recursive (``**/*.exe``)
+        # patterns — ``rglob`` covers both cases in a single pass.
+        # De-duplicates implicitly: each file appears once in the
+        # iteration regardless of nesting depth.
+        for exe_path_obj in Path(directory).rglob("*.exe"):
+            exe_path = str(exe_path_obj)
+            basename = exe_path_obj.name.lower()
+            if any(skip in basename for skip in _SKIP_EXE_PATTERNS):
+                continue
+            try:
+                size = exe_path_obj.stat().st_size
+            except OSError:
+                continue
+            candidates.append((exe_path, size))
         return candidates
 
 

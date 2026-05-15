@@ -10,6 +10,7 @@ with a deadline before Decky kills the process.
 """
 
 from __future__ import annotations
+
 import logging
 from typing import TYPE_CHECKING
 
@@ -65,7 +66,7 @@ async def stop_all_services(container: ServiceContainer) -> None:
             continue
         try:
             await stop_fn()
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
             logger.warning(
                 "[bootstrap] %s.%s raised: %s",
                 attr,

@@ -185,7 +185,7 @@ class OAuthBrowserMonitor:
         while time.monotonic() < deadline:
             try:
                 targets = await self._list_targets()
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
                 # Intentional: a transient CDP error must not
                 # abort the whole capture — we just wait and
                 # retry on the next poll.
@@ -222,7 +222,7 @@ class OAuthBrowserMonitor:
         """Close the first tab whose URL contains `url_substring`."""
         try:
             targets = await self._list_targets()
-        except Exception:
+        except Exception:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
             return False
         for target in targets:
             if url_substring in target.get("url", ""):
@@ -232,7 +232,7 @@ class OAuthBrowserMonitor:
                 try:
                     await self._cdp.close_target(target_id)
                     return True
-                except Exception as e:
+                except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
                     # Intentional: close failures are
                     # logged but not fatal — the capture
                     # already succeeded.
@@ -268,7 +268,7 @@ class OAuthBrowserMonitor:
                 f"path=/;domain={domain}'));",
             )
             return True
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
             logger.debug(
                 "[auth/browser] cookie clear failed: %s", e,
             )
@@ -278,7 +278,7 @@ class OAuthBrowserMonitor:
         """Wrapper around the CDP client's public target listing."""
         try:
             return await self._cdp.list_targets()
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
             logger.debug(
                 "[auth/browser] list_targets failed: %s", e,
             )

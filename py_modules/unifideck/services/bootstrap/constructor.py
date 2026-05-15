@@ -65,7 +65,7 @@ def bootstrap_services(
                 pipeline=pipeline,
             )
             setattr(container, attr, instance)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
             logger.warning(
                 "[Bootstrap] failed to instantiate service '%s': %s",
                 attr, e,
@@ -112,7 +112,7 @@ def build_service_subset(
                 pipeline=None,
             )
             setattr(container, name, instance)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
             logger.warning(
                 "[BootstrapSubset] failed to instantiate service '%s': %s",
                 name, e,

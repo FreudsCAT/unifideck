@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import logging
 import os
 import signal
@@ -37,12 +38,10 @@ class GameProcessRegistry:
             except (ProcessLookupError, PermissionError):
                 pass
             except OSError:
-                try:
+                with contextlib.suppress(ProcessLookupError, PermissionError):
                     os.kill(pid, signal.SIGTERM)
-                except (ProcessLookupError, PermissionError):
-                    pass
         for pattern in CLEANUP_PATTERNS:
-            try:
+            with contextlib.suppress((FileNotFoundError, subprocess.TimeoutExpired)):
                 subprocess.run(
                     ["pkill", "-TERM", "-f", pattern],
                     stdout=subprocess.DEVNULL,
@@ -50,8 +49,6 @@ class GameProcessRegistry:
                     timeout=2,
                     check=False,  # pkill rc=1 on "no match" is expected
                 )
-            except (FileNotFoundError, subprocess.TimeoutExpired):
-                pass
 
 def install_signal_handlers(
     registry: GameProcessRegistry,

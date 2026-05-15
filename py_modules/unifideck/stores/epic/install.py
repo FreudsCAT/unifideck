@@ -26,10 +26,12 @@ orphaned files on disk.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import os
 import re
 from collections.abc import Awaitable, Callable
+from pathlib import Path
 from typing import Any
 
 from unifideck.core.manifest import write_manifest
@@ -69,7 +71,7 @@ class EpicInstaller:
         self._cli_path = cli_path
         self._library = library
         self._exe_resolver = exe_resolver
-        self._default_install_root = os.path.expanduser(default_install_root)
+        self._default_install_root = str(Path(default_install_root).expanduser())
         self._install_timeout = install_timeout_seconds
         self._uninstall_timeout = uninstall_timeout_seconds
 
@@ -89,7 +91,7 @@ class EpicInstaller:
             )
         base = base_path or self._default_install_root
         try:
-            os.makedirs(base, exist_ok=True)
+            Path(base).mkdir(parents=True, exist_ok=True)  # noqa: ASYNC240 — project uses asyncio.to_thread for sync I/O, not trio/anyio
         except OSError as e:
             return InstallResult(
                 success=False,
@@ -130,7 +132,7 @@ class EpicInstaller:
         drain_exc: BaseException | None = None
         try:
             await self._drain_install_output(proc, game_id, progress_cb)
-        except BaseException as e:
+        except BaseException as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
             drain_exc = e
         rc = await self._wait_with_timeout(proc)
         if drain_exc is not None:
@@ -180,7 +182,7 @@ class EpicInstaller:
         if progress_cb is not None:
             try:
                 await progress_cb(pct)
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
                 logger.debug(
                     "[epic_install] progress_cb raised: %s",
                     e,
@@ -201,16 +203,14 @@ class EpicInstaller:
         if install_path:
             exe_relative = ""
             if exe:
-                try:
+                with contextlib.suppress(ValueError):
                     # ``os.path.relpath`` is pure string manipulation —
                     # no filesystem access — so the ASYNC240 rule
                     # gives a false positive here.
-                    exe_relative = os.path.relpath(  # noqa: ASYNC240
+                    exe_relative = os.path.relpath(  # noqa: ASYNC240 — project uses asyncio.to_thread for sync I/O, not trio/anyio
                         exe,
                         install_path,
                     )
-                except ValueError:
-                    pass
             await write_manifest(
                 install_dir=install_path,
                 store="epic",
@@ -230,10 +230,7 @@ class EpicInstaller:
             store="epic",
             game_id=game_id,
             install_path=install_path
-            or os.path.join(
-                base,
-                game_id,
-            ),
+            or str(Path(base) / game_id),
         )
 
     async def uninstall_game(self, game_id: str) -> Result:

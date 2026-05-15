@@ -19,6 +19,7 @@ in PATH.
 Reference: Technical Document v1.0 — Section 3.4.2 (BinaryResolver +
 ExeFinder), Figure 12.
 """
+import contextlib
 import logging
 import shutil
 import stat
@@ -60,12 +61,9 @@ class BinaryResolver:
         # on every resolve() call.
         self._version_timeout = 10
         if config is not None:
-            try:
+            with contextlib.suppress((TypeError, ValueError)):
                 self._version_timeout = int(config.get(
                     "binary_resolver.version_check_timeout_seconds"))
-            except (TypeError, ValueError):
-                # best-effort operation; failure is non-fatal here
-                pass
 
     def resolve(self, tool: CLITool) -> str | None:
         """Locate the binary for a CLI tool.

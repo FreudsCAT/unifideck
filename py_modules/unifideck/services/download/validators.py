@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 import os
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from unifideck.core.types import Result
@@ -49,7 +50,7 @@ def validate_path(path: str) -> Result:
         return Result(success=False, error="empty_path")
 
     try:
-        os.makedirs(path, exist_ok=True)
+        Path(path).mkdir(parents=True, exist_ok=True)
     except OSError:
         return Result(success=False, error="mkdir_failed")
 
@@ -64,7 +65,7 @@ def validate_path(path: str) -> Result:
 
         if free_gb < _MIN_FREE_GB:
             return Result(success=False, error=f"low_space:{free_gb:.1f}GB")
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
         # Best-effort skip: statvfs unsupported (Windows path?),
         # permission denied, or path missing. Treat as "no info"
         # rather than blocking the install.

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-import os
 import stat
 from collections.abc import Iterable
 from pathlib import Path
@@ -37,7 +36,7 @@ def ensure_executable_files(
             continue
         new_mode = current_mode | _EXEC_MASK
         try:
-            os.chmod(target, new_mode)
+            Path(target).chmod(new_mode)
             logger.info(
                 "[packaging] fixed executable bit on %s "
                 "(mode %#o → %#o)",

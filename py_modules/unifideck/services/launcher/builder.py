@@ -13,8 +13,7 @@ doesn't need feature flags or UI locale; 50 ms boot cost saved.
 """
 from __future__ import annotations
 
-import glob
-import os
+from pathlib import Path
 
 from .service import LauncherService
 
@@ -27,8 +26,9 @@ def _pick_first_shortcuts_vdf(userdata_root: str) -> str | None:
     boot so both processes read the same file. Returns None if
     no Steam profiles exist (fresh install, missing SteamOS).
     """
-    pattern = os.path.join(userdata_root, "*", "config", "shortcuts.vdf")
-    matches = glob.glob(pattern)
+    matches = [
+        str(p) for p in Path(userdata_root).glob("*/config/shortcuts.vdf")
+    ]
     if matches:
         return matches[0]
     return None
@@ -55,10 +55,10 @@ def build_standalone() -> LauncherService:
     bus = EventBus()
 
     # Standalone paths
-    steam_root = os.path.expanduser("~/.steam/root")
-    userdata_root = os.path.join(steam_root, "userdata")
-    plugin_dir = os.path.expanduser("~/homebrew/plugins/unifideck")
-    local_saves_root = os.path.expanduser("~/.local/share/unifideck/saves")
+    steam_root = str(Path("~/.steam/root").expanduser())
+    userdata_root = str(Path(steam_root) / "userdata")
+    plugin_dir = str(Path("~/homebrew/plugins/unifideck").expanduser())
+    local_saves_root = str(Path("~/.local/share/unifideck/saves").expanduser())
 
     shortcuts_vdf = _pick_first_shortcuts_vdf(userdata_root)
 

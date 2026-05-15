@@ -135,7 +135,7 @@ def _apply_language_setup(plan: ProtonLaunchPlan) -> None:
             space_id=plan.context.game_id,
             config=_cfg,
         )
-    except Exception as err:
+    except Exception as err:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
         logger.warning(
             "[launcher.proton.ubisoft] language setup failed: %s",
             err,
@@ -154,9 +154,11 @@ def _build_legendary_fallback_argv(
         argv.append("--")
         argv.extend(plan.state.game_args)
     try:
-        from unifideck.launcher.proton.fixes.auth_args_stripper import strip_epic_auth_args
+        from unifideck.launcher.proton.fixes.auth_args_stripper import (
+            strip_epic_auth_args,
+        )
         argv, _stripped = strip_epic_auth_args(argv)
-    except Exception as err:
+    except Exception as err:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
         logger.warning(
             "[launcher.proton.ubisoft] auth args strip failed: %s",
             err,

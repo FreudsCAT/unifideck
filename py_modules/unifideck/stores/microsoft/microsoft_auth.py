@@ -163,7 +163,7 @@ def _try_xbl_request(
             contract_v, rps[:2], e.code, body_text[:500],
         )
         return None
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
         logger.debug(
             "[MS] XBL failed (v%s, %r): %s",
             contract_v, rps[:2], e,
@@ -213,7 +213,7 @@ def _request_xsts_token(
             xsts_rp, e.code, body_text[:500],
         )
         return None
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
         logger.warning(
             "[MS] XSTS failed (RP=%r): %s", xsts_rp, e,
         )
@@ -233,5 +233,5 @@ def _read_http_error_body(err: urllib.error.HTTPError) -> str:
     """Read http error body."""
     try:
         return err.read().decode("utf-8", errors="replace")
-    except Exception:
+    except Exception:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
         return ""

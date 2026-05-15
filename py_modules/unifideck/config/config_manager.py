@@ -22,6 +22,7 @@ Features:
 Reference: Technical Document v1.0 — Section 3.9 (Configuration
 service), Figure 30.
 """
+import contextlib
 import json
 import logging
 from pathlib import Path
@@ -294,12 +295,8 @@ class ConfigManager:
         except OSError:
             logger.exception("[ConfigManager] failed to persist %s", key)
             if tmp.exists():
-                try:
+                with contextlib.suppress(OSError):
                     tmp.unlink()
-                except OSError:
-                    # best-effort cleanup; file may already be gone or locked
-                    pass
-                                # -------- derived paths --------
 
     @property
     def data_dir(self) -> str:

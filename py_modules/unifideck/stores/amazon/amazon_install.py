@@ -25,6 +25,7 @@ installs are cleaned up to avoid leaving orphaned files on disk.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import os
 import re
@@ -67,7 +68,7 @@ class AmazonInstaller:
         self._cli_path = cli_path
         self._library = library
         self._find_exe = find_exe
-        self._default_install_root = os.path.expanduser(default_install_root)
+        self._default_install_root = str(Path(default_install_root).expanduser())
         self._install_timeout = install_timeout_seconds
         self._uninstall_timeout = uninstall_timeout_seconds
 
@@ -87,7 +88,7 @@ class AmazonInstaller:
             )
         base = base_path or self._default_install_root
         try:
-            os.makedirs(base, exist_ok=True)
+            Path(base).mkdir(parents=True, exist_ok=True)  # noqa: ASYNC240 — project uses asyncio.to_thread for sync I/O, not trio/anyio
         except OSError as e:
             return InstallResult(
                 success=False,
@@ -127,16 +128,14 @@ class AmazonInstaller:
         if install_path:
             exe_relative = ""
             if exe:
-                try:
+                with contextlib.suppress(ValueError):
                     # ``os.path.relpath`` is pure string manipulation —
                     # no filesystem access — so the ASYNC240 rule
                     # gives a false positive here.
-                    exe_relative = os.path.relpath(  # noqa: ASYNC240
+                    exe_relative = os.path.relpath(  # noqa: ASYNC240 — project uses asyncio.to_thread for sync I/O, not trio/anyio
                         exe,
                         install_path,
                     )
-                except ValueError:
-                    pass
             await write_manifest(
                 install_dir=install_path,
                 store="amazon",
@@ -178,7 +177,7 @@ class AmazonInstaller:
                 game_id,
                 progress_cb,
             )
-        except BaseException as e:
+        except BaseException as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
             drain_exc = e
         rc = await self._wait_with_timeout(proc)
         if drain_exc is not None:
@@ -235,7 +234,7 @@ class AmazonInstaller:
         if progress_cb is not None:
             try:
                 await progress_cb(pct)
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
                 logger.debug(
                     "[amazon_install] progress_cb raised: %s",
                     e,
@@ -253,7 +252,7 @@ class AmazonInstaller:
         info = installed.get(game_id)
         if info and info.get("path"):
             return cast("str | None", info["path"])
-        default = os.path.join(base, game_id)
+        default = str(Path(base) / game_id)
         if await asyncio.to_thread(lambda: Path(default).is_dir()):
             return default
         return None

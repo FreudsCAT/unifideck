@@ -140,7 +140,7 @@ class UbisoftSession:
                     prefix_path,
                     target,
                 )
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
                 logger.warning(
                     "[UbisoftSession] capture sync to %s failed: %s",
                     Path(target).name,

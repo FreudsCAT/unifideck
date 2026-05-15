@@ -84,7 +84,7 @@ class FeatureFlagService:
             return mapping
         try:
             user_mapping = config.get("probes.probe_to_features")  # type: ignore[attr-defined]
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
             # User overrides for probes.probe_to_features may be
             # malformed or missing; fall back to defaults.
             logger.debug("[FeatureFlags] user probe-mapping load failed: %s", e)

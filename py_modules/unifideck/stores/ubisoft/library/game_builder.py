@@ -40,7 +40,7 @@ _MOJIBAKE_REPLACEMENTS = (
     ("Â®", "®"),
     ("â\u0080¢", "™"),
     ("â\u0084¢", "™"),
-    ("â\u0080\u0099", "’"),  # noqa: RUF001 — typographic apostrophe is the canonical target
+    ("â\u0080\u0099", "’"),  # noqa: RUF001 — Unicode char intentional in mojibake-fix mapping table
     ("Â", ""),
 )
 _SKIP_TITLE_KEYWORDS = re.compile(

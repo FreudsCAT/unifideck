@@ -259,7 +259,7 @@ class UbisoftBinaryResolver:
                             proc_name,
                         )
                         return True
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
             logger.debug(
                 "[UbisoftBinaryResolver] display env detection: %s",
                 e,

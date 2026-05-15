@@ -6,7 +6,10 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from unifideck.stores.microsoft.microsoft_auth import build_xbl_chain, request_xsts_token
+from unifideck.stores.microsoft.microsoft_auth import (
+    build_xbl_chain,
+    request_xsts_token,
+)
 
 if TYPE_CHECKING:
     from unifideck.stores.microsoft.microsoft_config import MicrosoftConfig

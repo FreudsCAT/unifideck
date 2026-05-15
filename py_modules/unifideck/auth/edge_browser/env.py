@@ -15,6 +15,7 @@ mode can surface the spawned window.
 """
 from __future__ import annotations
 
+import contextlib
 import logging
 import os
 import subprocess
@@ -58,25 +59,23 @@ def _read_gamescope_env_file(
     gamescope_env = Path(runtime_dir) / "gamescope-environment"
     if not gamescope_env.exists():
         return
-    try:
-        with gamescope_env.open(
+    with (
+        contextlib.suppress(OSError),
+        gamescope_env.open(
             encoding="utf-8", errors="replace",
-        ) as f:
-            for raw_line in f:
-                line = raw_line.strip()
-                if not line or "=" not in line:
-                    continue
-                key, value = line.split("=", 1)
-                if (
-                    key in _SESSION_ENV_KEYS
-                    and key not in result
-                    and value
-                ):
-                    result[key] = value
-    except OSError:
-        # File vanished between exists() and open() —
-        # caller will fall through to the PID scan.
-        pass
+        ) as f,
+    ):
+        for raw_line in f:
+            line = raw_line.strip()
+            if not line or "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            if (
+                key in _SESSION_ENV_KEYS
+                and key not in result
+                and value
+            ):
+                result[key] = value
 
 
 def _parse_proc_environ(
@@ -140,7 +139,7 @@ def _scan_steam_process_env(
                         result.get("WAYLAND_DISPLAY"),
                     )
                     return
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
         # pgrep missing, scheduling glitch — not fatal, caller
         # falls through to hardcoded fallbacks.
         logger.debug(

@@ -8,6 +8,7 @@ local mtimes drifted vs the last-known-good from either side.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import os
@@ -26,14 +27,14 @@ async def read_manifest(directory: str) -> dict[str, float]:
     manifest" identically (forces a full remote compare).
     Offloaded via ``to_thread`` since read is sync.
     """
-    manifest_path = os.path.join(directory, _MANIFEST_NAME)
+    manifest_path = str(Path(directory) / _MANIFEST_NAME)
 
     if not await asyncio.to_thread(lambda: Path(manifest_path).is_file()):
         return {}
 
     def _read_sync() -> dict[str, float]:
         try:
-            with open(manifest_path, encoding="utf-8") as f:
+            with Path(manifest_path).open(encoding="utf-8") as f:
                 data = json.load(f)
 
             if not isinstance(data, dict):
@@ -42,7 +43,7 @@ async def read_manifest(directory: str) -> dict[str, float]:
 
             # Ensure all values are floats
             return {k: float(v) for k, v in data.items()}
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
             logger.warning("[CloudSaveManifest] failed to read %s: %s", manifest_path, e)
             return {}
 
@@ -56,26 +57,24 @@ async def write_manifest(directory: str, manifest: dict[str, float]) -> None:
     never observe a half-written manifest. OSError logged at
     WARNING but not raised.
     """
-    manifest_path = os.path.join(directory, _MANIFEST_NAME)
+    manifest_path = str(Path(directory) / _MANIFEST_NAME)
     tmp_path = manifest_path + ".tmp"
 
     def _write_sync() -> None:
         try:
-            if not os.path.isdir(directory):
-                os.makedirs(directory, exist_ok=True)
+            if not Path(directory).is_dir():
+                Path(directory).mkdir(parents=True, exist_ok=True)
 
-            with open(tmp_path, "w", encoding="utf-8") as f:
+            with Path(tmp_path).open("w", encoding="utf-8") as f:
                 json.dump(manifest, f)
                 f.flush()
                 os.fsync(f.fileno())
 
-            os.replace(tmp_path, manifest_path)
-        except Exception as e:
+            Path(tmp_path).replace(manifest_path)
+        except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
             logger.warning("[CloudSaveManifest] failed to write %s: %s", manifest_path, e)
-            if os.path.exists(tmp_path):
-                try:
-                    os.remove(tmp_path)
-                except OSError:
-                    pass
+            if Path(tmp_path).exists():
+                with contextlib.suppress(OSError):
+                    Path(tmp_path).unlink()
 
     await asyncio.to_thread(_write_sync)

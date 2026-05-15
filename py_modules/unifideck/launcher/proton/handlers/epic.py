@@ -163,7 +163,9 @@ def _resolve_exe_override(plan: ProtonLaunchPlan) -> Path | None:
 
 async def _run_epic_prerequisites(plan: ProtonLaunchPlan) -> None:
     """Run epic prerequisites."""
-    from unifideck.launcher.proton.fixes.epic_prerequisites import apply_epic_prerequisites
+    from unifideck.launcher.proton.fixes.epic_prerequisites import (
+        apply_epic_prerequisites,
+    )
     try:
         await apply_epic_prerequisites(plan)
     except Exception:

@@ -13,10 +13,10 @@ zero-cost.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import hashlib
 import json
 import logging
-import os
 from pathlib import Path
 from typing import Any
 
@@ -116,7 +116,7 @@ def _get_prereq_info(game_id: str) -> dict[str, Any] | None:
         )
         return None
     try:
-        with open(installed_json, encoding="utf-8") as f:
+        with Path(installed_json).open(encoding="utf-8") as f:
             data = json.load(f)
     except (OSError, json.JSONDecodeError) as e:
         logger.warning(
@@ -213,10 +213,8 @@ async def _spawn_installer(cmd: list[str], env: dict[str, str]) -> bool:
             proc.communicate(), timeout=_INSTALLER_TIMEOUT_S,
         )
     except asyncio.TimeoutError:
-        try:
+        with contextlib.suppress(ProcessLookupError):
             proc.kill()
-        except ProcessLookupError:
-            pass
         logger.warning(
             "[epic_prerequisites] installer timed out after %ds",
             _INSTALLER_TIMEOUT_S,
@@ -251,7 +249,5 @@ def _cleanup_legacy_marker(legacy_marker: Path) -> None:
     """Cleanup legacy marker."""
     if not legacy_marker.is_file():
         return
-    try:
-        os.unlink(legacy_marker)
-    except OSError:
-        pass
+    with contextlib.suppress(OSError):
+        Path(legacy_marker).unlink()

@@ -7,9 +7,9 @@ the dataset stays tiny.
 from __future__ import annotations
 
 import logging
-import os
 import sqlite3
 from dataclasses import dataclass
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -133,9 +133,9 @@ class ActivityDatabase:
         self.conn: sqlite3.Connection | None = None
 
     def open(self) -> int:
-        parent = os.path.dirname(self.db_path)
+        parent = str(Path(self.db_path).parent)
         if parent:
-            os.makedirs(parent, exist_ok=True)
+            Path(parent).mkdir(parents=True, exist_ok=True)
         self.conn = sqlite3.connect(self.db_path, timeout=10)
         self.conn.row_factory = sqlite3.Row
         self.conn.execute("PRAGMA journal_mode=WAL")

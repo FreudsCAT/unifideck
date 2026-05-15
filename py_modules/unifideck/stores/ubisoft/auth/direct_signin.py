@@ -16,6 +16,7 @@ This makes "sign in" effectively instant for returning users.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 from typing import Any
 
@@ -170,14 +171,12 @@ class _DirectSignIn:
                         timeout=10,
                     )
                 except (TimeoutError, ProcessLookupError):
-                    try:
+                    with contextlib.suppress((TimeoutError, ProcessLookupError)):
                         proc.kill()
                         await asyncio.wait_for(
                             proc.wait(),
                             timeout=5,
                         )
-                    except (TimeoutError, ProcessLookupError):
-                        pass
                 return captured
             await asyncio.sleep(2)
         logger.warning(
@@ -187,9 +186,7 @@ class _DirectSignIn:
             proc.terminate()
             await asyncio.wait_for(proc.wait(), timeout=10)
         except (TimeoutError, ProcessLookupError):
-            try:
+            with contextlib.suppress((TimeoutError, ProcessLookupError)):
                 proc.kill()
                 await asyncio.wait_for(proc.wait(), timeout=5)
-            except (TimeoutError, ProcessLookupError):
-                pass
         return None

@@ -8,8 +8,8 @@ the +x bit on launcher entry points.
 from __future__ import annotations
 
 import logging
-import os
 import stat
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -52,7 +52,7 @@ async def start_async_services(container: ServiceContainer) -> None:
         try:
             await start_method()
             logger.info("[Startup] started %s", service_name)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
             logger.warning(
                 "[Startup] failed to start %s: %s",
                 service_name, e,
@@ -76,26 +76,23 @@ def _self_heal_executable_bits() -> None:
     try:
         # Get path to the bin directory relative to this file
         # This file is at py_modules/unifideck/services/bootstrap/startup.py
-        base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__)))))
-        bin_dir = os.path.join(base_dir, "bin")
+        base_dir = str(Path(str(Path(str(Path(str(Path(str(Path(__file__).parent)).parent)).parent)).parent)).parent)
+        bin_dir = str(Path(base_dir) / "bin")
 
-        if not os.path.isdir(bin_dir):
+        if not Path(bin_dir).is_dir():
             return
 
-        for filename in os.listdir(bin_dir):
-            path = os.path.join(bin_dir, filename)
-            if os.path.isfile(path):
-                st = os.stat(path)
+        for filename in [entry.name for entry in Path(bin_dir).iterdir()]:
+            path = str(Path(bin_dir) / filename)
+            if Path(path).is_file():
+                st = Path(path).stat()
                 # Add executable bit for owner/group/others if not present
                 if not (st.st_mode & stat.S_IXUSR):
                     # Adds the +x bit for owner/group/others on shipped
                     # tools. The mask preserves all existing bits and
                     # only adds executability — required for the
                     # bundled helpers to run after unzip strips +x.
-                    os.chmod(
-                        path,
-                        st.st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH,  # noqa: S103
-                    )
+                    Path(path).chmod(st.st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
                     logger.info("[Startup] restored +x on %s", path)
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
         logger.warning("[Startup] failed to self-heal executable bits: %s", e)

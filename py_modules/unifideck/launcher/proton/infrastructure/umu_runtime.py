@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import os
 import shutil
@@ -21,10 +22,8 @@ def cleanup_umu_runtime_cache() -> None:
         if target.is_dir():
             shutil.rmtree(target, ignore_errors=True)
         elif target.exists():
-            try:
+            with contextlib.suppress(OSError):
                 target.unlink()
-            except OSError:
-                pass
     logger.info("[launcher.umu] cache cleaned: %s", UMU_CACHE_DIR)
 def ensure_umu_runtime_ready() -> None:
     """Ensure UMU runtime ready."""

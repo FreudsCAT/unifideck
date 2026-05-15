@@ -11,8 +11,8 @@ match the previous Event-based contract.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
-import os
 import shutil
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -80,10 +80,8 @@ def _walk_mtimes_sync(directory: str) -> dict[str, float]:
         if entry.name == _MANIFEST_FILENAME:
             continue
         rel = str(entry.relative_to(root_p))
-        try:
+        with contextlib.suppress(OSError):
             mtimes[rel] = entry.stat().st_mtime
-        except OSError:
-            pass
     return mtimes
 
 
@@ -382,7 +380,7 @@ class _SyncMixin:
 
         try:
             local_dir = self.get_local_save_dir(store, game_id)
-            remote_dir = os.path.join(self._cloud_root, store, game_id)
+            remote_dir = str(Path(self._cloud_root) / store / game_id)
 
             if choice == "local":
                 # Push local to remote
@@ -437,30 +435,30 @@ class _SyncMixin:
     async def _copy_tree(self, src: str, dst: str) -> None:
         """Copy src directory to dst atomically (via tmp)."""
         def _copy_sync() -> None:
-            if not os.path.exists(src):
+            if not Path(src).exists():
                 return
 
-            parent = os.path.dirname(dst)
+            parent = str(Path(dst).parent)
             if parent:
-                os.makedirs(parent, exist_ok=True)
+                Path(parent).mkdir(parents=True, exist_ok=True)
 
             tmp_dst = dst + ".tmp"
-            if os.path.exists(tmp_dst):
+            if Path(tmp_dst).exists():
                 shutil.rmtree(tmp_dst)
 
             shutil.copytree(src, tmp_dst, dirs_exist_ok=True)
 
             # Atomic swap
-            if os.path.exists(dst):
+            if Path(dst).exists():
                 # os.replace requires destination to be empty if it's a directory
                 # But we can just remove the old one first, or move it away.
                 backup_dst = dst + ".bak"
-                if os.path.exists(backup_dst):
+                if Path(backup_dst).exists():
                     shutil.rmtree(backup_dst)
-                os.rename(dst, backup_dst)
-                os.rename(tmp_dst, dst)
+                Path(dst).rename(backup_dst)
+                Path(tmp_dst).rename(dst)
                 shutil.rmtree(backup_dst)
             else:
-                os.rename(tmp_dst, dst)
+                Path(tmp_dst).rename(dst)
 
         await asyncio.to_thread(_copy_sync)

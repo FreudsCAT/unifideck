@@ -57,7 +57,7 @@ def get_unifideck_language(config: ConfigManager | None = None) -> str:
     try:
         from unifideck.utils.locale import get_unifideck_locale
         return get_unifideck_locale(config)
-    except Exception as err:
+    except Exception as err:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
         logger.warning(
             "[language_setup] locale resolver failed: %s, "
             "falling back to %s", err, _DEFAULT_LANGUAGE,

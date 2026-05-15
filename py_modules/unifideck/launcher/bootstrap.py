@@ -56,9 +56,7 @@ def _load_standalone_config() -> Any:
     """Load standalone config."""
     from unifideck.config.config_manager import ConfigManager
     plugin_dir = _resolve_plugin_dir()
-    defaults_path = os.path.join(
-        plugin_dir, "defaults", "config.json",
-    )
+    defaults_path = str(Path(plugin_dir) / "defaults" / "config.json")
     user_path = _user_config_path()
     return ConfigManager(
         defaults_path=defaults_path,

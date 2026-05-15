@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import logging
 import os
 import shutil
@@ -8,10 +9,7 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 _STUB_RELATIVE_PATH = "bin/stubs/GalaxyCommunication.exe"
-_TARGET_SUBPATH = os.path.join(
-    "ProgramData", "GOG.com", "Galaxy", "redists",
-    "GalaxyCommunication.exe",
-)
+_TARGET_SUBPATH = str(Path("ProgramData") / "GOG.com" / "Galaxy" / "redists" / "GalaxyCommunication.exe")
 def _resolve_drive_c(prefix_path: str) -> str | None:
     """Resolve drive c."""
     from unifideck.launcher.proton.infrastructure.prefix_layout import resolve_drive_c
@@ -19,24 +17,22 @@ def _resolve_drive_c(prefix_path: str) -> str | None:
     return str(result) if result is not None else None
 def _atomic_copy_file(src: Path | str, dst: str) -> None:
     """Atomic copy file."""
-    target_dir = os.path.dirname(dst)
-    os.makedirs(target_dir, exist_ok=True)
+    target_dir = str(Path(dst).parent)
+    Path(target_dir).mkdir(parents=True, exist_ok=True)
     fd, tmp_path = tempfile.mkstemp(
         prefix=".GalaxyCommunication.", suffix=".tmp",
         dir=target_dir,
     )
     try:
         with os.fdopen(fd, "wb") as tmp_fh, \
-                open(str(src), "rb") as src_fh:
+                Path(str(src)).open("rb") as src_fh:
             shutil.copyfileobj(src_fh, tmp_fh)
             tmp_fh.flush()
             os.fsync(tmp_fh.fileno())
-        os.replace(tmp_path, dst)
+        Path(tmp_path).replace(dst)
     except Exception:
-        try:
-            os.unlink(tmp_path)
-        except OSError:
-            pass
+        with contextlib.suppress(OSError):
+            Path(tmp_path).unlink()
         raise
 
 def install_galaxy_stub(
@@ -62,8 +58,8 @@ def install_galaxy_stub(
             "not yet initialised", prefix_path,
         )
         return False
-    target_file = os.path.join(drive_c, _TARGET_SUBPATH)
-    if os.path.exists(target_file):
+    target_file = str(Path(drive_c) / _TARGET_SUBPATH)
+    if Path(target_file).exists():
         logger.debug(
             "[galaxy_stub] stub already installed at %s", target_file,
         )

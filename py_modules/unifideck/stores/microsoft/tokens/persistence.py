@@ -179,7 +179,7 @@ def _write_atomic_0600(path: str, blob: bytes) -> bool:
             if fd >= 0:
                 os.close(fd)
             raise
-        os.replace(tmp, path)
+        Path(tmp).replace(path)
         return True
     except OSError as e:
         logger.warning(

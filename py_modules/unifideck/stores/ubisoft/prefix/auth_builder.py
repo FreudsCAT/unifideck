@@ -19,7 +19,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 import shutil
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -180,7 +179,7 @@ class _AuthPrefixBuilder:
         if not Path(prefixes_dir).is_dir():
             return (None, "")
         try:
-            entries = sorted(os.listdir(prefixes_dir))
+            entries = sorted([entry.name for entry in Path(prefixes_dir).iterdir()])
         except OSError:
             return (None, "")
         for entry in entries:

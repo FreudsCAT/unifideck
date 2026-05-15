@@ -23,6 +23,7 @@ Reference: Technical Document v1.0 — Section 3.4.4 (ConfigManager).
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import os
@@ -68,6 +69,32 @@ def load_json_layer(path: Path) -> dict[str, Any]:
     return {k: v for k, v in data.items() if not k.startswith("_")}
 
 
+def _write_payload_and_publish(
+    fd: int, tmp_path: str, target: Path, data: dict[str, Any], mode: int,
+) -> None:
+    """Write JSON to the temp fd, chmod it, then atomic-rename to ``target``.
+
+    Single-purpose helper extracted from ``atomic_write_json`` to
+    keep that function's fan-out under the 10-callee policy. Groups
+    the post-mkstemp sequence (fdopen / dump / flush / fsync /
+    chmod / replace) into one orchestrated step.
+
+    The caller still owns the failure-cleanup (unlinking the
+    leftover tmp file) since that logic is intertwined with the
+    bookkeeping ``tmp_path`` var that signals "rename succeeded".
+    """
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2, sort_keys=True)
+        f.flush()
+        os.fsync(f.fileno())
+    # Apply the requested mode BEFORE the rename so the
+    # published file never exists with default (0o644+) mode.
+    Path(tmp_path).chmod(mode)
+    # Atomic swap. If this raises, the caller's old config is
+    # still intact on disk, unmodified.
+    Path(tmp_path).replace(target)
+
+
 def atomic_write_json(
     path: Path,
     data: dict[str, Any],
@@ -89,6 +116,10 @@ def atomic_write_json(
       OSError: if the parent directory cannot be created, or the
         temp file cannot be renamed. Callers should catch and log.
 
+    Refactor history (2026-05-15): extracted
+    ``_write_payload_and_publish`` to bring this function's fan-out
+    under the 10-callee policy after the SIM105 pass introduced
+    ``contextlib.suppress`` as a new call target.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -101,31 +132,11 @@ def atomic_write_json(
     )
     tmp_path: str | None = tmp_path_init
     try:
-        # Write the JSON payload via the file descriptor so we can
-        # close it before the rename (Windows requires closed handle
-        # for rename, and this also flushes any OS buffer).
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2, sort_keys=True)
-            f.flush()
-            os.fsync(f.fileno())
-
-        # Apply the requested mode BEFORE the rename so the
-        # published file never exists with default (0o644+) mode.
-        # tmp_path_init is the original `str` from mkstemp — using
-        # it directly avoids re-narrowing through the Optional
-        # `tmp_path` bookkeeping var.
-        Path(tmp_path_init).chmod(mode)
-
-        # Atomic swap. If this raises, the caller's old config is
-        # still intact on disk, unmodified.
-        Path(tmp_path_init).replace(path)
+        _write_payload_and_publish(fd, tmp_path_init, path, data, mode)
         tmp_path = None  # successfully renamed, nothing to clean
     finally:
         # Defence in depth: if anything above raised before the
         # rename, the temp file still exists and must be removed.
         if tmp_path is not None:
-            try:
+            with contextlib.suppress(OSError):
                 Path(tmp_path).unlink()
-            except OSError:
-                # best-effort cleanup; file may already be gone or locked
-                pass

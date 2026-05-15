@@ -77,7 +77,7 @@ class ProbeReactionService:
             return mapping
         try:
             user_mapping = config.get("probes.probe_to_handlers")  # type: ignore[attr-defined]
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
             # User overrides for probes.probe_to_handlers may be
             # malformed or missing; fall back to defaults.
             logger.debug("[ProbeReaction] user handler-mapping load failed: %s", e)

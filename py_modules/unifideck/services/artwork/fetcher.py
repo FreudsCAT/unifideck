@@ -50,9 +50,9 @@ async def has_artwork(grid_dir: str, app_id: int) -> bool:
     async file ops so the check runs off the event loop.
     """
     def _check() -> bool:
-        grid_path = os.path.join(grid_dir, f"{app_id}{_KIND_SUFFIX['grid']}")
-        hero_path = os.path.join(grid_dir, f"{app_id}{_KIND_SUFFIX['hero']}")
-        return os.path.isfile(grid_path) and os.path.isfile(hero_path)
+        grid_path = str(Path(grid_dir) / f"{app_id}{_KIND_SUFFIX['grid']}")
+        hero_path = str(Path(grid_dir) / f"{app_id}{_KIND_SUFFIX['hero']}")
+        return Path(grid_path).is_file() and Path(hero_path).is_file()
 
     return await asyncio.to_thread(_check)
 
@@ -146,7 +146,7 @@ async def find_artwork_url(
             if not game_id:
                 return None
             return await _sgdb_pick_artwork_url(session, base_url, game_id, kind)
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
         logger.debug(
             "[ArtworkFetcher] find_artwork_url failed for %s (%s): %s",
             title, kind, e,
@@ -181,15 +181,17 @@ async def _download_artwork_bytes(
     None — they're not exceptional, SGDB CDN occasionally 403s.
     """
     client_timeout = aiohttp.ClientTimeout(total=timeout)
-    async with aiohttp.ClientSession(timeout=client_timeout) as session:
-        async with session.get(url) as resp:
-            if resp.status != 200:
-                logger.debug(
-                    "[ArtworkFetcher] download failed %s: HTTP %s",
-                    url, resp.status,
-                )
-                return None
-            return await resp.read()
+    async with (
+        aiohttp.ClientSession(timeout=client_timeout) as session,
+        session.get(url) as resp,
+    ):
+        if resp.status != 200:
+            logger.debug(
+                "[ArtworkFetcher] download failed %s: HTTP %s",
+                url, resp.status,
+            )
+            return None
+        return await resp.read()
 
 
 def _ensure_grid_dir(grid_dir: str) -> None:
@@ -212,11 +214,11 @@ def _atomic_write_artwork(tmp_path: str, target_path: str, content: bytes) -> No
     half-rendered image. The fsync + os.replace combo makes the
     swap atomic at the OS level on every filesystem we target.
     """
-    with open(tmp_path, "wb") as f:
+    with Path(tmp_path).open("wb") as f:
         f.write(content)
         f.flush()
         os.fsync(f.fileno())
-    os.replace(tmp_path, target_path)
+    Path(tmp_path).replace(target_path)
 
 
 def _cleanup_artwork_tmp(tmp_path: str) -> None:
@@ -256,7 +258,7 @@ async def download_and_save(
         return False
 
     suffix = _adjust_artwork_suffix(_KIND_SUFFIX[kind], url, kind)
-    target_path = os.path.join(grid_dir, f"{app_id}{suffix}")
+    target_path = str(Path(grid_dir) / f"{app_id}{suffix}")
     tmp_path = target_path + ".tmp"
 
     try:
@@ -269,7 +271,7 @@ async def download_and_save(
     except asyncio.TimeoutError:
         logger.debug("[ArtworkFetcher] download timed out: %s", url)
         return False
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
         logger.debug("[ArtworkFetcher] download failed %s: %s", url, e)
         return False
     finally:

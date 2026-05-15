@@ -32,7 +32,7 @@ Mutates the plugin in place. Never raises.
 from __future__ import annotations
 
 import logging
-import os
+from pathlib import Path
 from typing import Any
 
 from unifideck.bootstrap.cache_registry import register_default_caches
@@ -95,7 +95,7 @@ async def _boot_layer2_core(plugin: Any, decky_plugin_dir: str) -> Any:
     plugin.bus = EventBus()
     pipeline = await build_eventbus_pipeline(plugin)
     plugin.cache = CacheManager(
-        os.path.join(decky_plugin_dir, "data", "cache"),
+        str(Path(decky_plugin_dir) / "data" / "cache"),
     )
     register_default_caches(plugin.cache)
     return pipeline
@@ -123,9 +123,7 @@ async def _boot_config_and_validate(
     to defaults + hardcoded values.
     """
     plugin._user_config_path = user_config_path_resolver()
-    defaults_path = os.path.join(
-        decky_plugin_dir, "defaults", "config.json",
-    )
+    defaults_path = str(Path(decky_plugin_dir) / "defaults" / "config.json")
     plugin.config = ConfigManager(
         defaults_path=defaults_path,
         user_path=plugin._user_config_path,
@@ -145,9 +143,7 @@ def _boot_layer4_stores(plugin: Any, decky_plugin_dir: str) -> None:
     """Layer 4 — StoreRegistry + SyncService + auto-discovery."""
     plugin.registry = StoreRegistry(plugin.bus)
     plugin.sync_service = SyncService(plugin.bus, plugin.registry)
-    stores_dir = os.path.join(
-        decky_plugin_dir, "py_modules", "unifideck", "stores",
-    )
+    stores_dir = str(Path(decky_plugin_dir) / "py_modules" / "unifideck" / "stores")
     plugin.registry.auto_discover(
         stores_dir,
         plugin_dir=decky_plugin_dir,

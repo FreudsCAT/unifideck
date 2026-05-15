@@ -109,7 +109,7 @@ class LaunchHistoryService(_FailuresMixin, _BypassMixin):
                     failure_count=count,
                     trigger=trigger,
                 )
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
                 logger.warning("[LaunchHistory] Failed to emit circuit state: %s", e)
 
         _task = loop.create_task(_emit())

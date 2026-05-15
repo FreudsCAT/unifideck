@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import os
 from pathlib import Path
@@ -26,7 +27,7 @@ def _restore_steam_env(env: dict[str, str]) -> None:
     steam_env = Path("~/.steam/steam.env").expanduser()
     if not steam_env.is_file():
         return
-    try:
+    with contextlib.suppress(OSError):
         for raw_line in steam_env.read_text(
             encoding="utf-8", errors="replace",
         ).splitlines():
@@ -38,8 +39,6 @@ def _restore_steam_env(env: dict[str, str]) -> None:
             key, _, value = line.partition("=")
             if key in ("STEAM_OVERLAY", "STEAM_INPUT"):
                 env[key] = value
-    except OSError:
-        pass
 def _is_gog_dosbox_wrapper(ctx: LaunchContext) -> bool:
     """Is GOG dosbox wrapper."""
     return (

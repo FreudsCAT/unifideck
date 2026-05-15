@@ -77,7 +77,7 @@ class MetadataService:
             try:
                 # Fire and forget enrichment task for each game so one slow API doesn't block
                 await self.enrich(game)
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
                 logger.warning("[MetadataService] Enrichment failed for %s: %s", game.title, e)
 
     async def enrich(self, game: Game) -> dict[str, Any]:
@@ -90,7 +90,7 @@ class MetadataService:
                 # Simple TTL check could be implemented if cache returns timestamps
                 # Assuming CacheManager handles TTL or we trust it for now
                 return cached
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
             logger.debug("[MetadataService] Cache read failed for %s: %s", cache_key, e)
 
         # Cache miss — fetch
@@ -124,7 +124,7 @@ class MetadataService:
                 # ``TypeError: set() got an unexpected keyword
                 # argument 'ttl'`` on every cache write.
                 self._cache.set(CACHE_NAMESPACE, cache_key, merged)
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
                 logger.warning("[MetadataService] Failed to cache metadata for %s: %s", cache_key, e)
 
         return merged
@@ -146,7 +146,7 @@ class MetadataService:
                 "header_image": best.header_url,
                 "is_free": best.is_free,
             }
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
             logger.debug("[Metadata] Steam fetch failed for %s: %s", title, e)
             return {}
 
@@ -170,7 +170,7 @@ class MetadataService:
                 "publisher": result.publisher,
                 "release_date": result.release_date,
             }
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
             logger.debug("[Metadata] UnifiDB fetch failed: %s", e)
             return {}
 
@@ -188,6 +188,6 @@ class MetadataService:
                 "metacritic_url": result.url,
                 "summary": result.summary,
             }
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
             logger.debug("[Metadata] Metacritic fetch failed for %s: %s", title, e)
             return {}

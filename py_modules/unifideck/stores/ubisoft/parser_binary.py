@@ -113,5 +113,5 @@ def parse_ownership_record(chunk: bytes) -> tuple | None:
             pos += 1
         lid2 = _convert_data(lid2)
         return rec_size, tmp_size, lid1, lid2
-    except Exception:
+    except Exception:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
         return None

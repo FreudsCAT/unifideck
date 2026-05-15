@@ -34,6 +34,7 @@ The async surface is unchanged.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import os
 from pathlib import Path
@@ -73,10 +74,8 @@ def _rmdir_quietly(path: Path) -> None:
     just stays on disk ; the caller's overall result is "best
     effort" rather than "all-or-nothing".
     """
-    try:
+    with contextlib.suppress(OSError):
         path.rmdir()
-    except OSError:
-        pass
 
 
 def _iter_bottom_up(root: Path) -> list[Path]:
@@ -109,35 +108,29 @@ class GOGFolderOps:
     def folder_size(path: str) -> int:
         """Folder size."""
         total = 0
-        try:
+        with contextlib.suppress(OSError):
             for root, _dirs, files in os.walk(path):
                 for name in files:
                     try:
-                        total += os.path.getsize(
-                            os.path.join(root, name),
-                        )
+                        total += Path(str(Path(root) / name)).stat().st_size
                     except OSError:
                         continue
-        except OSError:
-            pass
         return total
 
     @staticmethod
     def count_files(path: str) -> int:
         """Count files."""
         count = 0
-        try:
+        with contextlib.suppress(OSError):
             for _root, _dirs, files in os.walk(path):
                 count += len(files)
-        except OSError:
-            pass
         return count
 
     @staticmethod
     def has_goggame_info(path: str, game_id: str = "") -> bool:
         """Check whether goggame info."""
-        try:
-            for name in os.listdir(path):
+        with contextlib.suppress(OSError):
+            for name in [entry.name for entry in Path(path).iterdir()]:
                 if not name.startswith("goggame-"):
                     continue
                 if not name.endswith(".info"):
@@ -146,8 +139,6 @@ class GOGFolderOps:
                     return True
                 if name == f"goggame-{game_id}.info":
                     return True
-        except OSError:
-            pass
         return False
 
     @staticmethod

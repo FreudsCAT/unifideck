@@ -29,14 +29,21 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import os
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
 from unifideck.auth.browser import OAuthBrowserMonitor
 from unifideck.auth.orchestrator import AuthOrchestrator
 from unifideck.core.bin import read_cli_timeouts
-from unifideck.core.types import AuthResult, CLITool, Events, Game, InstallResult, Result, StoreInfo
+from unifideck.core.types import (
+    AuthResult,
+    CLITool,
+    Events,
+    Game,
+    InstallResult,
+    Result,
+    StoreInfo,
+)
 from unifideck.security import emit_external_auth_check_failed
 from unifideck.services.shortcut import ShortcutService
 from unifideck.stores.shared.store_base import StoreBase
@@ -157,17 +164,15 @@ class EpicStore(StoreBase):
                 "legendary binary missing from search paths",
             )
             return False
-        user_file = os.path.expanduser(
-            get_cfg(
+        user_file = str(Path(get_cfg(
                 self._config,
                 "stores.epic.user_file",
                 "~/.config/legendary/user.json",
-            ),
-        )
-        if not os.path.isfile(user_file):
+            )).expanduser())
+        if not Path(user_file).is_file():
             return False
         try:
-            with open(user_file, encoding="utf-8") as f:
+            with Path(user_file).open(encoding="utf-8") as f:
                 data = json.load(f)
         except (OSError, json.JSONDecodeError) as e:
             logger.debug("[EpicStore] user.json invalid: %s", e)
@@ -267,13 +272,7 @@ class EpicStore(StoreBase):
         if self._shortcut_service is None:
             logger.debug("[EpicStore] no shortcut_service injected; skipping auth shortcut creation")
             return
-        launcher = os.path.join(
-            self._plugin_dir or "",
-            "py_modules",
-            "unifideck",
-            "launcher",
-            "dispatcher.py",
-        )
+        launcher = str(Path(self._plugin_dir or "") / "py_modules" / "unifideck" / "launcher" / "dispatcher.py")
         if not await asyncio.to_thread(lambda: Path(launcher).is_file()):
             logger.warning("[EpicStore] launcher dispatcher not found at %s", launcher)
             return

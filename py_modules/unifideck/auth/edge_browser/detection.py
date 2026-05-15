@@ -55,7 +55,7 @@ def flatpak_remote_names(
             env=clean_env_fn(),
             check=False,
         )
-    except Exception:
+    except Exception:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
         # Intentional: flatpak may be missing (non-Deck), or the
         # scope unsupported. An empty set is a "no remotes" signal
         # and is fine for callers.
@@ -115,7 +115,7 @@ def _try_flatpak_app(
             )
             if result.returncode == 0:
                 return ["flatpak", "run", app_id]
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
         # Flatpak probe can raise many things (subprocess
         # timeout, OSError from missing binary after race).
         # Fall through to the next app_id / native fallback.

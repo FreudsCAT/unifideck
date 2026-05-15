@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import logging
 import os
+from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -66,7 +67,7 @@ def inspect_save_folder(
         "truncated_count": 0,
         "truncated_size": 0,
     }
-    if not os.path.isdir(root):
+    if not Path(root).is_dir():
         return result
 
     result["exists"] = True
@@ -131,7 +132,7 @@ def _entries_in_dir(
     """
     out: list[dict[str, Any]] = []
     for name in filenames:
-        full = os.path.join(dirpath, name)
+        full = str(Path(dirpath) / name)
         rel_norm = os.path.relpath(full, root).replace(os.sep, "/")
         if substr and substr not in rel_norm.lower():
             continue
@@ -152,7 +153,7 @@ def _stat_entry(full: str, rel_norm: str) -> dict[str, Any] | None:
     ``_collect_file_entries``.
     """
     try:
-        st = os.stat(full)
+        st = Path(full).stat()
     except OSError:
         return None
     return {

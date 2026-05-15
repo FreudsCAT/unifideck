@@ -21,7 +21,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -94,10 +93,7 @@ class UbisoftLibrary:
                 )
             if local_games:
                 template_dir = self._config.template_dir_expanded
-                template_marker = os.path.join(
-                    template_dir,
-                    self._config.bootstrap_marker,
-                )
+                template_marker = str(Path(template_dir) / self._config.bootstrap_marker)
                 if not await asyncio.to_thread(lambda: Path(template_marker).is_file()):
                     self._queue_template_creation()
             return local_games

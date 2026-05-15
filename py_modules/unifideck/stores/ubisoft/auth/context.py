@@ -84,7 +84,7 @@ class _AuthContext:
                 only_types=only_types,
                 sgdb_game_id=_SGDB_UBISOFT_CONNECT_ID,
             )
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — project pattern: catch-log-continue for runtime resilience
             logger.warning(
                 "[UbisoftAuth] auth shortcut artwork fetch failed: %s",
                 e,

@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from unifideck.core.types import Events
@@ -151,5 +152,4 @@ class CloudSaveService(_SyncMixin):
         the cloud sync orchestrator to know where to pull from.
         Returns the absolute path under ``_local_root``.
         """
-        import os
-        return os.path.join(self._local_root, store, game_id)
+        return str(Path(self._local_root) / store / game_id)
