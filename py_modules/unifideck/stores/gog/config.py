@@ -24,16 +24,19 @@ through a new ``GOGConfig`` instance.
 """
 
 from __future__ import annotations
+
 import logging
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import TYPE_CHECKING
+
 from unifideck.utils.config_helpers import get_cfg
 
 if TYPE_CHECKING:
-    from ...config import ConfigManager
+    from unifideck.config import ConfigManager
 logger = logging.getLogger(__name__)
 _GOG_CONFIG_PREFIX = "stores.gog"
-_DEFAULT_TOKEN_FILE = "~/.config/unifideck/gog_token.json"
+_DEFAULT_TOKEN_FILE = "~/.config/unifideck/gog_token.json"  # file path, not a token value  # noqa: S105 — filename constant, not a credential
 _DEFAULT_GOGDL_CONFIG_DIR = "~/.config/unifideck/gogdl"
 _DEFAULT_DOWNLOAD_DIR = "~/GOG Games"
 GOG_AUTH_URL_FILE = "~/.local/share/unifideck/gog_auth_url.txt"
@@ -161,12 +164,8 @@ class GOGConfig:
     @property
     def auth_config_path(self) -> str:
         """Auth config path."""
-        import os
 
-        return os.path.join(
-            os.path.expanduser(self.gogdl_config_dir),
-            "gog_credentials.json",
-        )
+        return str(Path(str(Path(self.gogdl_config_dir).expanduser())) / "gog_credentials.json")
 
     def describe(self) -> str:
         """Describe."""

@@ -22,6 +22,7 @@ Features:
 Reference: Technical Document v1.0 — Section 3.9 (Configuration
 service), Figure 30.
 """
+import contextlib
 import json
 import logging
 from pathlib import Path
@@ -214,16 +215,17 @@ class ConfigManager:
             sys.path.insert(0, scripts_str)
             added = True
         try:
-            from locale_config import (
+            # Same dynamic import as in ``i18n_schema.py``; mypy
+            # can't resolve ``scripts/locale_config.py`` because
+            # ``scripts/`` is only injected on sys.path at runtime.
+            from locale_config import (  # type: ignore[import-not-found]
                 LocaleConfigError,
                 load_from_dict,
             )
             try:
                 load_from_dict(self._merged)
-            except LocaleConfigError as e:
-                logger.error(
-                    "[ConfigManager] i18n schema validation failed: %s", e,
-                )
+            except LocaleConfigError:
+                logger.exception("[ConfigManager] i18n schema validation failed")
                 raise
         finally:
             if added:
@@ -238,18 +240,18 @@ class ConfigManager:
         except KeyError:
             return default
 
-    def get_str(self, key: str, default: str = "") -> str:  # noqa: D102 — documentation pending (Sprint D)
+    def get_str(self, key: str, default: str = "") -> str:
         v = self.get(key, default)
         return str(v) if v is not None else default
 
-    def get_int(self, key: str, default: int = 0) -> int:  # noqa: D102 — documentation pending (Sprint D)
+    def get_int(self, key: str, default: int = 0) -> int:
         v = self.get(key, default)
         try:
             return int(v)
         except (TypeError, ValueError):
             return default
 
-    def get_bool(self, key: str, default: bool = False) -> bool:  # noqa: D102 — documentation pending (Sprint D)
+    def get_bool(self, key: str, default: bool = False) -> bool:
         v = self.get(key, default)
         if isinstance(v, bool):
             return v
@@ -293,18 +295,11 @@ class ConfigManager:
                 encoding="utf-8",
             )
             tmp.replace(self._user_path)
-        except OSError as e:
-            logger.error(
-                "[ConfigManager] failed to persist %s: %s",
-                key, e,
-            )
+        except OSError:
+            logger.exception("[ConfigManager] failed to persist %s", key)
             if tmp.exists():
-                try:
+                with contextlib.suppress(OSError):
                     tmp.unlink()
-                except OSError:
-                    # best-effort cleanup; file may already be gone or locked
-                    pass
-                                # -------- derived paths --------
 
     @property
     def data_dir(self) -> str:

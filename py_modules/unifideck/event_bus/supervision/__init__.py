@@ -12,6 +12,7 @@ self-healing (quarantine slow/hung handlers).
 """
 
 from __future__ import annotations
+
 from .metrics_handler import HandlerLatencyCollector
 from .watchdog_handler import HandlerWatchdog
 

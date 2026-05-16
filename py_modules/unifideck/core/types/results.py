@@ -10,6 +10,7 @@ Reference: Technical Document v1.0 — Section 3.4.5 (Result types).
 """
 
 from __future__ import annotations
+
 from dataclasses import dataclass, field
 from typing import Any
 

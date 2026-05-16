@@ -55,6 +55,7 @@ software that happens to derive keys from the same machine-id.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -135,6 +136,11 @@ class SecureTokenStore:
         self._device_identity = device_identity or DeviceIdentity()
         self._bus = bus
         self._key: bytes | None = None
+        # Strong refs to in-flight ``bus.emit`` coroutines so the
+        # event loop doesn't GC them mid-delivery (which would log
+        # "Task was destroyed but it is pending"). Populated and
+        # auto-pruned by ``_emit_security_event``.
+        self._background_tasks: set[asyncio.Task[Any]] = set()
 
     # ── Public API ──────────────────────────────────────────────
 
@@ -348,7 +354,9 @@ class SecureTokenStore:
         )
         return plaintext
 
-    def _emit_security_event(self, event_name: str, **kwargs) -> None:
+    def _emit_security_event(
+        self, event_name: str, **kwargs: Any,
+    ) -> None:
         """Emit a SECURITY_* event on the bus if one is configured.
 
         The event enum is imported lazily to avoid a circular
@@ -356,14 +364,34 @@ class SecureTokenStore:
         Failures to emit (bus down, handler raised) are caught and
         logged at debug level — security audit must NEVER block
         the actual crypto operation.
+
+        ``EventBus.emit`` is ``async`` but ``_encrypt``/``_decrypt``
+        are sync (their crypto primitives are sync), so we can't
+        ``await`` it. Instead we schedule it on the running event
+        loop with ``loop.create_task`` and keep a strong reference
+        in ``_background_tasks`` until delivery completes — without
+        the strong ref the task is GC'd and the event silently
+        vanishes. When no event loop is running (CLI utilities,
+        sync tests) we drop the emission rather than synthesise
+        one with ``asyncio.run``, since blocking the caller for
+        the duration of every subscriber would re-introduce the
+        "never block the crypto operation" hazard the docstring
+        warns about.
         """
         if self._bus is None:
             return
         try:
-            from ..core.types.events import Events
+            from unifideck.core.types.events import Events
             event = getattr(Events, event_name)
-            self._bus.emit(event, **kwargs)
-        except Exception as e:  # noqa: BLE001 — intentional: defensive catch logged below
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                # No running loop — drop the emission.
+                return
+            task = loop.create_task(self._bus.emit(event, **kwargs))
+            self._background_tasks.add(task)
+            task.add_done_callback(self._background_tasks.discard)
+        except Exception as e:
             logger.debug(
                 "[SecureTokenStore] failed to emit %s: %s",
                 event_name, e,

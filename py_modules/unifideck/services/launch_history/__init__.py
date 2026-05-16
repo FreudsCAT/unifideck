@@ -9,6 +9,7 @@ when something is wrong.
 """
 
 from __future__ import annotations
+
 from .constants import FAILURE_KIND_FAST_BOOT, FAILURE_KIND_LAUNCHER_ERROR
 from .service import LaunchHistoryService
 

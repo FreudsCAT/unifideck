@@ -1,10 +1,34 @@
+"""steam — Steam install and Store integrations.
+
+Public re-exports of the helpers most callers need:
+
+* :func:`find_steam_path` / :func:`search_store` from
+  :mod:`unifideck.steam.library`.
+* :class:`SteamGridDBClient` and its convenience helpers from
+  :mod:`unifideck.steam.steamgriddb`.
+
+Anything else (``steam.shortcuts``, ``steam.owned_games``) stays
+behind the submodule import so the public surface here remains
+small and stable.
+
+The previous version of this file had a stale ``try: import
+steam_utils`` branch left over from a refactor — the module
+``steam_utils`` doesn't exist anywhere in the repo and nothing
+imports the names it claimed to expose, so the branch was dead
+code. It has been removed.
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
 from .library import find_steam_path, search_store
 from .steamgriddb import SteamGridDBClient, fetch_all_kinds, search_artwork
 
-try:
-    from .steam_utils import (
-        get_logged_in_steam_user,
-        migrate_user0_to_logged_in_user,
-    )
-except ImportError:
-    pass
+__all__ = [
+    "SteamGridDBClient",
+    "fetch_all_kinds",
+    "find_steam_path",
+    "search_artwork",
+    "search_store",
+]

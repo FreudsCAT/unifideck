@@ -1,15 +1,25 @@
-"""Security service — audit log + brute-force detection + token surveillance.
+"""services.security — Reactive security audit + policy enforcement.
 
-OP-19 | py_modules/unifideck/services/security/__init__.py
+Previously a flat 620 LOC module ``services/security_service.py``;
+split on 2026-04-18 during the volumetry refactor into a
+subpackage of focused files:
 
-The security sub-package groups every security-related concern of
-the plugin : credential storage permissions, audit-log emission,
-brute-force detection on auth attempts, device-reset detection.
+  - ``service``        : ``SecurityService`` facade class
+  - ``audit_log``      : ``AuditLog`` (bounded deque + counters)
+  - ``bruteforce``     : ``BruteForceDetector`` (Policy 1)
+  - ``device_reset``   : machine-id mismatch handler (Policy 3)
+  - ``config_readers`` : defensive ConfigManager readers
+  - ``bus_emitter``    : fire-and-forget ``Events.SECURITY_*`` emit
+  - ``mixins/``        : 4 thematic ``@subscribe`` handler mixins
+                         (tokens, permissions, auth, config)
 
-This package is referenced by ``ServiceContainer`` as ``security``.
+Public API preserved via re-export: callers continue to use
+``from unifideck.services.security import SecurityService``
+(or ``.security_service`` — kept as a shim during the migration
+window; see ``services/service_bootstrap.py``).
 """
-
 from __future__ import annotations
+
 from .service import SecurityService
 
 __all__ = ["SecurityService"]

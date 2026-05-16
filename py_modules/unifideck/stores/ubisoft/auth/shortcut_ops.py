@@ -10,13 +10,14 @@ the auth facade ignorant of the underlying shortcut-service API surface.
 """
 
 from __future__ import annotations
+
 import asyncio
 import logging
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from ....services.shortcut import ShortcutService
-    from ..config import UbisoftConfig
+    from unifideck.services.shortcut import ShortcutService
+    from unifideck.stores.ubisoft.config import UbisoftConfig
 _LEGACY_AUTH_SHORTCUT_STORE_ID = "ubisoft:.template"
 logger = logging.getLogger(__name__)
 

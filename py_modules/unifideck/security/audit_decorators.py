@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import functools
 import logging
 import time
@@ -12,14 +13,14 @@ logger = logging.getLogger(__name__)
 def audit_auth_flow(
     store: str,
     method: str = "oauth",
-) -> Callable:
-    def decorator(func: Callable) -> Callable:
+) -> Callable[..., Any]:
+    def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
         @functools.wraps(func)
         async def wrapper(self: Any, *args: Any, **kwargs: Any) -> Any:
             bus = getattr(self, "_bus", None)
             started_at = time.time()
 
-            _emit_audit(
+            await _emit_audit(
                 bus, "SECURITY_AUTH_FLOW_STARTED",
                 store=store, method=method,
             )
@@ -28,7 +29,7 @@ def audit_auth_flow(
                 result = await func(self, *args, **kwargs)
             except Exception as exc:
                 duration_ms = int((time.time() - started_at) * 1000)
-                _emit_audit(
+                await _emit_audit(
                     bus, "SECURITY_AUTH_FLOW_FAILED",
                     store=store, method=method,
                     reason=type(exc).__name__,
@@ -37,7 +38,7 @@ def audit_auth_flow(
                 raise
 
             duration_ms = int((time.time() - started_at) * 1000)
-            _emit_audit(
+            await _emit_audit(
                 bus, "SECURITY_AUTH_FLOW_COMPLETED",
                 store=store, method=method,
                 duration_ms=duration_ms,
@@ -51,29 +52,38 @@ def audit_auth_flow(
 def audit_token_op(
     operation: str,
     store: str,
-) -> Callable:
-    def decorator(func: Callable) -> Callable:
+) -> Callable[..., Any]:
+    def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
         @functools.wraps(func)
         async def wrapper(self: Any, *args: Any, **kwargs: Any) -> Any:
             bus = getattr(self, "_bus", None)
             result = await func(self, *args, **kwargs)
 
             if operation == "migrate" and isinstance(result, str):
-                _maybe_emit_migration(bus, self, store, result)
+                await _maybe_emit_migration(bus, self, store, result)
 
             return result
         return wrapper
     return decorator
 
 
-def _emit_audit(bus: Any, event_name: str, **kwargs: Any) -> None:
+async def _emit_audit(bus: Any, event_name: str, **kwargs: Any) -> None:
+    """Emit a SECURITY_* audit event on ``bus`` if one is set.
+
+    ``EventBus.emit`` is ``async``; an earlier version of this
+    helper was sync and returned the coroutine to the caller's
+    GC, so none of the audit events actually fired. Every caller
+    here lives inside an ``async def`` wrapper, so making this
+    helper ``async`` and ``await``-ing it at each site is the
+    minimal correctness fix.
+    """
     if bus is None:
         return
 
     try:
-        from ..core.types.events import Events
+        from unifideck.core.types.events import Events
         event = getattr(Events, event_name)
-        bus.emit(event, **kwargs)
+        await bus.emit(event, **kwargs)
     except Exception as e:
         logger.debug(
             "[audit_decorators] failed to emit %s: %s",
@@ -81,9 +91,15 @@ def _emit_audit(bus: Any, event_name: str, **kwargs: Any) -> None:
         )
 
 
-def _maybe_emit_migration(
+async def _maybe_emit_migration(
     bus: Any, instance: Any, store: str, result_path: str,
 ) -> None:
+    """Emit the migration audit event if the instance flagged it.
+
+    Async because :func:`_emit_audit` is async (see its docstring
+    for why). The pair must stay coherent — making one async
+    without the other re-introduces the dropped-coroutine bug.
+    """
     if bus is None:
         return
 
@@ -91,12 +107,10 @@ def _maybe_emit_migration(
     if not flag:
         return
 
-    _emit_audit(
+    await _emit_audit(
         bus, "SECURITY_TOKEN_FILE_MIGRATED",
         store=store, new_path=result_path,
     )
 
-    try:
+    with contextlib.suppress(AttributeError):
         instance._migration_occurred = False
-    except AttributeError:
-        pass

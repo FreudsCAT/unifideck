@@ -40,9 +40,17 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from ..event_bus.event_bus import EventBus
+    import asyncio as _asyncio_typ
+
+    from unifideck.event_bus.event_bus import EventBus
 
 logger = logging.getLogger(__name__)
+
+
+# Strong references to fire-and-forget audit-emit tasks so they aren't
+# GC'd before the bus delivers the event. Each task removes itself
+# via the discard callback below.
+_background_tasks: set[_asyncio_typ.Task[Any]] = set()
 
 
 # ─── Helper functions for inline emission ──────────────────────
@@ -67,11 +75,12 @@ def _safe_emit(bus: EventBus, event_name: str, **kwargs: Any) -> None:
     secrets, this is the safety net for human error.
     """
     if bus is None:
-        return
+        return  # type: ignore[unreachable]  # defensive guard on optional bus
     try:
         import asyncio
 
-        from ..core.types.events import Events
+        from unifideck.core.types.events import Events
+
         from .redaction import redact_for_audit
         event = getattr(Events, event_name)
         try:
@@ -81,11 +90,13 @@ def _safe_emit(bus: EventBus, event_name: str, **kwargs: Any) -> None:
             # plugin, possible in tests). Drop the event.
             return
         sanitized = redact_for_audit(kwargs)
-        loop.create_task(
+        task = loop.create_task(
             bus.emit(event, **sanitized),
             name=f"audit-emit-{event_name}",
         )
-    except Exception as e:  # noqa: BLE001 — intentional: defensive catch logged below
+        _background_tasks.add(task)
+        task.add_done_callback(_background_tasks.discard)
+    except Exception as e:
         logger.debug(
             "[audit_emitter] failed to emit %s: %s",
             event_name, e,
@@ -268,7 +279,7 @@ def emit_external_auth_check_failed(
 
 # ─── Decorator for auth flow instrumentation ───────────────────
 
-def audit_auth_flow(store: str, method: str = "oauth") -> Callable:
+def audit_auth_flow(store: str, method: str = "oauth") -> Callable[..., Any]:
     """Decorator wrapping a store's async start_auth() method.
 
     Emits the full SECURITY_AUTH_FLOW_* lifecycle around the
@@ -298,7 +309,7 @@ def audit_auth_flow(store: str, method: str = "oauth") -> Callable:
     via time.monotonic to be immune to wall-clock adjustments.
 
     """
-    def decorator(target: Callable) -> Callable:
+    def decorator(target: Callable[..., Any]) -> Callable[..., Any]:
         @functools.wraps(target)
         async def wrapper(self: Any, *args: Any, **kwargs: Any) -> Any:
             bus = getattr(self, "_bus", None)

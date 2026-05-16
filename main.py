@@ -30,13 +30,14 @@ from __future__ import annotations
 import logging
 import os
 import sys
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from unifideck.event_bus.bus_pipeline import BusPipeline
 
 DECKY_PLUGIN_DIR = os.environ.get(
-    "DECKY_PLUGIN_DIR", os.path.dirname(__file__),
+    "DECKY_PLUGIN_DIR", str(Path(__file__).parent),
 )
 
 # Writable per-plugin runtime location for caches, queues, and any
@@ -48,27 +49,33 @@ DECKY_PLUGIN_DIR = os.environ.get(
 # and read-only on normal user installs.
 DECKY_PLUGIN_RUNTIME_DIR = os.environ.get(
     "DECKY_PLUGIN_RUNTIME_DIR",
-    os.path.expanduser("~/.local/share/unifideck"),
+    str(Path("~/.local/share/unifideck").expanduser()),
 )
 
-sys.path.insert(0, os.path.join(DECKY_PLUGIN_DIR, "py_modules"))
+sys.path.insert(0, str(Path(DECKY_PLUGIN_DIR) / "py_modules"))
 
-from unifideck.config.user_config_path import resolve_user_config_path
-from unifideck.rpc import auto_wrap_rpc_methods
-from unifideck.rpc.mixins.action import ActionRPCMixin
-from unifideck.rpc.mixins.auth_shortcuts import AuthShortcutsRPCMixin
-from unifideck.rpc.mixins.cloud_failure import CloudFailureRPCMixin
-from unifideck.rpc.mixins.config_validation import ConfigValidationRPCMixin
-from unifideck.rpc.mixins.download import DownloadRPCMixin
-from unifideck.rpc.mixins.edge import EdgeRPCMixin
-from unifideck.rpc.mixins.launch import LaunchRPCMixin
-from unifideck.rpc.mixins.observability import ObservabilityRPCMixin
-from unifideck.rpc.mixins.playtime import PlaytimeRPCMixin
-from unifideck.rpc.mixins.security import SecurityRPCMixin
-from unifideck.rpc.mixins.storage import StorageRPCMixin
-from unifideck.rpc.mixins.store import StoreRPCMixin
-from unifideck.rpc.mixins.sync import SyncRPCMixin
-from unifideck.rpc.mixins.ui import UIRPCMixin
+# E402 noqa on the unifideck imports below: ``sys.path.insert``
+# MUST run before these so Python can resolve the package — Decky
+# Loader injects the plugin's ``py_modules`` directory on sys.path
+# at load time, but only AFTER this module is imported. Moving the
+# imports above ``sys.path.insert`` would raise ImportError on
+# every plugin boot. The pattern is canonical for Decky plugins.
+from unifideck.config.user_config_path import resolve_user_config_path  # noqa: E402
+from unifideck.rpc import auto_wrap_rpc_methods  # noqa: E402
+from unifideck.rpc.mixins.action import ActionRPCMixin  # noqa: E402
+from unifideck.rpc.mixins.auth_shortcuts import AuthShortcutsRPCMixin  # noqa: E402
+from unifideck.rpc.mixins.cloud_failure import CloudFailureRPCMixin  # noqa: E402
+from unifideck.rpc.mixins.config_validation import ConfigValidationRPCMixin  # noqa: E402
+from unifideck.rpc.mixins.download import DownloadRPCMixin  # noqa: E402
+from unifideck.rpc.mixins.edge import EdgeRPCMixin  # noqa: E402
+from unifideck.rpc.mixins.launch import LaunchRPCMixin  # noqa: E402
+from unifideck.rpc.mixins.observability import ObservabilityRPCMixin  # noqa: E402
+from unifideck.rpc.mixins.playtime import PlaytimeRPCMixin  # noqa: E402
+from unifideck.rpc.mixins.security import SecurityRPCMixin  # noqa: E402
+from unifideck.rpc.mixins.storage import StorageRPCMixin  # noqa: E402
+from unifideck.rpc.mixins.store import StoreRPCMixin  # noqa: E402
+from unifideck.rpc.mixins.sync import SyncRPCMixin  # noqa: E402
+from unifideck.rpc.mixins.ui import UIRPCMixin  # noqa: E402
 
 logger = logging.getLogger(__name__)
 

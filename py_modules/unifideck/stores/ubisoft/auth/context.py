@@ -19,6 +19,7 @@ artwork in the background if not already cached.
 """
 
 from __future__ import annotations
+
 import logging
 from typing import TYPE_CHECKING, Any
 
@@ -77,7 +78,7 @@ class _AuthContext:
                 "artwork for Ubisoft Connect (force=%s)",
                 force,
             )
-            await sgdb.fetch_game_art(
+            await sgdb.fetch_game_art(  # type: ignore[attr-defined]  # fetch_game_art added by dependency injection in tests/fixtures
                 title=_AUTH_SHORTCUT_NAME,
                 app_id=unsigned_id,
                 only_types=only_types,

@@ -36,14 +36,31 @@ from dataclasses import dataclass
 from typing import (
     TYPE_CHECKING,
     Any,
+    ParamSpec,
+    TypeVar,
 )
 
 if TYPE_CHECKING:
-    from ..core.types import Events
+    from unifideck.core.types import Events
+
     from .event_bus import EventBus
     from .supervision.watchdog_handler import HandlerWatchdog
 
 logger = logging.getLogger(__name__)
+
+# Type variables used by the ``subscribe`` decorator to preserve
+# the decorated handler's signature through the decoration pass.
+# Without these, mypy --strict reports
+# ``Untyped decorator makes function "X" untyped`` on every
+# ``@subscribe(...)`` site (~30 occurrences).
+#
+# ``_P`` captures the handler's parameter list (positional + kw)
+# and ``_R`` its return type — either an awaitable result for
+# async handlers or whatever the sync handler returns. The
+# decorator returns ``Callable[_P, _R]`` so the original
+# signature flows through unchanged at call sites.
+_P = ParamSpec("_P")
+_R = TypeVar("_R")
 
 
 @dataclass
@@ -63,7 +80,7 @@ class _Subscription:
     """
 
     event: str
-    handler: Callable
+    handler: Callable[..., Any]
     priority: int | None = None
     timeout: float | None = None
     scope: str | None = None
@@ -148,6 +165,35 @@ class SubscriptionRegistry:
 default_registry = SubscriptionRegistry()
 
 
+def _build_subscription(
+    fn: Callable[_P, _R],
+    event: str | Events,
+    *,
+    priority: int | None,
+    timeout: float | None,
+    scope: str | None,
+) -> _Subscription:
+    """Construct a ``_Subscription`` record from a handler.
+
+    Extracted from the ``subscribe`` decorator so the
+    decorator stays under the function-length cap. The
+    ``event`` argument is coerced to its string form
+    (enum members are unwrapped via ``.value``).
+    """
+    event_key = getattr(event, "value", event)
+    return _Subscription(
+        event=str(event_key),
+        # ``handler`` on ``_Subscription`` is typed as
+        # ``Callable[..., Any]``; we keep ``fn``'s precise
+        # signature for the caller but the registry only
+        # needs an invokable, so silence the variance here.
+        handler=fn,
+        priority=priority,
+        timeout=timeout,
+        scope=scope,
+    )
+
+
 def subscribe(
     event: str | Events,
     *,
@@ -155,68 +201,53 @@ def subscribe(
     timeout: float | None = None,
     scope: str | None = None,
     registry: SubscriptionRegistry | None = None,
-):
+) -> Callable[[Callable[_P, _R]], Callable[_P, _R]]:
     """Decorator factory that marks a function as a bus subscriber.
 
     Two registration paths:
 
     * **Free function** — appended directly to the registry
-      (the ``default_registry`` if no explicit one was given).
+      (``default_registry`` if no explicit one was given).
     * **Instance method** — detected via
-      ``_looks_like_instance_method`` (first parameter is
-      ``self`` or ``cls``); the decorator only stamps
-      ``__subscribe_meta__`` onto the function but does **not**
-      register immediately, because there's no instance to
-      bind to. The host service calls ``auto_wire(self, bus)``
-      later to do the real registration.
+      ``_looks_like_instance_method``; the decorator only
+      stamps ``__subscribe_meta__`` and defers registration
+      to ``auto_wire(self, bus)`` once an instance exists.
+
+    The return type ``Callable[[Callable[_P, _R]], Callable[_P, _R]]``
+    preserves the decorated function's signature through the
+    pass so mypy --strict doesn't downgrade callers to ``Any``.
 
     Args:
-        event: event identifier (``Events`` enum value or
-            string). Coerced to its string form for storage.
+        event: event identifier (``Events`` or string).
         priority: optional dispatcher priority hint.
         timeout: optional watchdog timeout override.
         scope: optional diagnostic tag.
-        registry: optional registry to register into; defaults
-            to ``default_registry``.
-
-    Returns:
-        The actual decorator that consumes the function being
-        decorated.
+        registry: optional registry; defaults to ``default_registry``.
     """
 
-    def decorator(fn: Callable) -> Callable:
-        """Apply the metadata stamp and conditional registration.
-
-        Stores a ``_Subscription`` on the function as
-        ``__subscribe_meta__`` regardless of path so
-        ``auto_wire`` can find it later.
-
-        Args:
-            fn: the decorated callable.
-
-        Returns:
-            The same callable (decoration is a metadata stamp,
-            not a wrap).
-        """
-        event_key = getattr(event, "value", event)
-        meta = _Subscription(
-            event=str(event_key),
-            handler=fn,
+    def decorator(fn: Callable[_P, _R]) -> Callable[_P, _R]:
+        """Stamp ``fn`` with subscription metadata and register if free."""
+        meta = _build_subscription(
+            fn,
+            event,
             priority=priority,
             timeout=timeout,
             scope=scope,
         )
-        setattr(fn, "__subscribe_meta__", meta)
+        # ``__subscribe_meta__`` is a runtime attribute used by
+        # ``auto_wire`` to discover decorated methods. Callable
+        # types don't formally allow attribute assignment.
+        fn.__subscribe_meta__ = meta  # type: ignore[attr-defined]
         if _looks_like_instance_method(fn):
             return fn
         reg = registry or default_registry
-        reg.add(getattr(fn, "__subscribe_meta__"))
+        reg.add(meta)
         return fn
 
     return decorator
 
 
-def _looks_like_instance_method(fn: Callable) -> bool:
+def _looks_like_instance_method(fn: Callable[..., Any]) -> bool:
     """Heuristic: does ``fn``'s first parameter look like ``self`` / ``cls``?
 
     Inspects the function signature and checks the first
@@ -286,7 +317,11 @@ def auto_wire(
         if attr_name.startswith("__"):
             continue
         attr, meta = _resolve_subscribe_target(instance, attr_name)
-        if meta is None:
+        if meta is None or attr is None:
+            # ``meta is None`` covers the "not a subscriber" case;
+            # ``attr is None`` is paranoid (shouldn't happen when
+            # meta is present) but the explicit guard narrows the
+            # type from ``Any | None`` to ``Any`` for mypy strict.
             continue
         if not hasattr(bus, "on"):
             continue
@@ -307,7 +342,9 @@ def auto_wire(
     return count
 
 
-def _resolve_subscribe_target(instance: Any, attr_name: str):
+def _resolve_subscribe_target(
+    instance: Any, attr_name: str,
+) -> tuple[Any | None, _Subscription | None]:
     """Fetch an attribute and its ``__subscribe_meta__`` stamp.
 
     Two-layer lookup:

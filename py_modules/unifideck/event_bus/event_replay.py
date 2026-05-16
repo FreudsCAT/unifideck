@@ -41,7 +41,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any
 
-from ..core.types import Events
+from unifideck.core.types import Events
 
 MAX_SNAPSHOT_ENTRIES = 500
 _DEFAULT_CAPS: dict[Events, int] = {
@@ -236,7 +236,7 @@ class EventReplayBuffer:
             return self._fallback_cap
 
     @staticmethod
-    def _resolve_wanted_set(events: Iterable[Events | str] | None) -> set | None:
+    def _resolve_wanted_set(events: Iterable[Events | str] | None) -> set[Any] | None:
         """Normalise the optional filter iterable into a set of strings.
 
         Used by ``snapshot`` to convert the per-call filter into
@@ -252,7 +252,7 @@ class EventReplayBuffer:
         """
         if events is None:
             return None
-        out: set = set()
+        out: set[Any] = set()
         for e in events:
             out.add(e.value if isinstance(e, Events) else str(e))
         return out

@@ -1,17 +1,21 @@
 from __future__ import annotations
+
 import asyncio
 import contextlib
 import json
 import logging
 from typing import Any, cast
+
 import aiohttp
+
 from unifideck.cdp.page_inject import list_page_targets
+
 logger = logging.getLogger(__name__)
 async def wait_for_titled_target(
     cdp_port: int,
     title_substring: str,
     *,
-    timeout: float = 15.0,
+    timeout: float = 15.0,  # noqa: ASYNC109 — timeout is API value passed to underlying lib (urllib/aiohttp/subprocess), not an asyncio.timeout() wrapper
     poll_delay: float = 0.25,
 ) -> dict[str, Any] | None:
     """Wait for titled target."""

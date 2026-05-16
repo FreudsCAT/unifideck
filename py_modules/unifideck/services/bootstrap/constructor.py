@@ -1,34 +1,31 @@
-"""Plugin bootstrap orchestrator — single entry-point called from ``main.py``.
+"""services/bootstrap/constructor.py — Public service-construction entry points.
 
-OP-13d | py_modules/unifideck/services/bootstrap/constructor.py
-
-``bootstrap_services(plugin)`` is the function called by
-``Plugin._main`` to wire up the entire Layer-5 graph. It :
-
-1. builds the ``ServicePaths``;
-2. iterates the service-definition table from ``service_defs``;
-3. constructs each service in order (resolving dependencies from
-   the partially-built container);
-4. returns the populated ``ServiceContainer``.
-
-``build_service_subset`` is the variant used by tests : it constructs
-only a named subset of services to keep test boot time minimal.
+Two functions walking ``_SERVICE_DEFS`` via ``_instantiate_service``,
+differing in **scope** and **dependency availability**:
+- ``bootstrap_services()`` — full plugin path. Every service in
+  the table attempted; each failure isolated on the container.
+- ``build_service_subset()`` — reduced path for the out-of-process
+  launcher. Only a named subset attempted; registry/cache/pipeline
+  passed as None.
 """
-
 from __future__ import annotations
+
 import logging
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
+
 from .container import ServiceContainer
 from .paths import ServicePaths
 from .service_defs import _SERVICE_DEFS, _instantiate_service
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
-    from ...config import ConfigManager
-    from ...core.cache_manager import CacheManager
-    from ...event_bus.bus_pipeline import BusPipeline
-    from ...event_bus.event_bus import EventBus
-    from ...stores import StoreRegistry
+
+    from unifideck.config import ConfigManager
+    from unifideck.core.cache_manager import CacheManager
+    from unifideck.event_bus.bus_pipeline import BusPipeline
+    from unifideck.event_bus.event_bus import EventBus
+    from unifideck.stores import StoreRegistry
+
 logger = logging.getLogger(__name__)
 
 
@@ -39,175 +36,166 @@ def bootstrap_services(
     config: ConfigManager,
     pipeline: BusPipeline,
 ) -> ServiceContainer:
-    """Construct every Layer-5 service and return a populated container.
+    """Instantiate every Layer-5 service into a ServiceContainer.
 
-    Walks ``_SERVICE_DEFS`` in declared order. For each entry it
-    calls ``_instantiate_service`` to build the service and sets it
-    on the container under the entry's attribute name.
+    Each service created in an isolated try/except — one failure
+    leaves that slot as None without aborting plugin boot
+    (degraded mode). Failures logged at WARNING so production
+    deployments see them in the Decky log.
 
-    Per-service construction failures are caught and logged at WARN
-    level rather than propagated — a single broken service must not
-    block the entire plugin from booting. The corresponding
-    container slot stays at ``None`` and downstream consumers are
-    responsible for ``None``-checks (or graceful degradation).
+    Must be called AFTER ``registry.auto_discover`` — some
+    services subscribe to per-store events at construction time.
 
-    Args:
-        bus: live event bus from the pipeline.
-        registry: store registry (already populated by
-            ``StoreRegistry.auto_discover``).
-        cache: shared cache manager.
-        config: live config manager.
-        pipeline: composed bus pipeline (replay, watchdog, etc.).
-
-    Returns:
-        A ``ServiceContainer`` with one slot per ``_SERVICE_DEFS``
-        entry, populated with the constructed service or ``None``
-        on construction failure.
+    Post-loop wiring delegates to ``_wire_browser_monitor`` and
+    ``_wire_edge_browser`` because those services depend on the
+    just-built ``cdp`` slot — service-defs lambdas only see
+    (bus, registry, cache, config, paths, pipeline), with no
+    access to a partial container, so we wire them outside the
+    main loop.
     """
+    logger.info("[Bootstrap] resolving service paths from config")
     paths = ServicePaths.from_config(config)
+
     container = ServiceContainer()
+    logger.info("[Bootstrap] instantiating %d Layer-5 services", len(_SERVICE_DEFS))
+
     for def_entry in _SERVICE_DEFS:
         attr = def_entry[0]
         try:
             instance = _instantiate_service(
                 def_entry,
-                bus,
-                registry,
-                cache,
-                config,
-                paths,
-                pipeline,
+                bus=bus,
+                registry=registry,
+                cache=cache,
+                config=config,
+                paths=paths,
+                pipeline=pipeline,
             )
             setattr(container, attr, instance)
-            logger.debug(
-                "[bootstrap] %s wired: %s.%s",
-                attr,
-                def_entry[1],
-                def_entry[2],
-            )
         except Exception as e:
             logger.warning(
-                "[bootstrap] failed to wire %s (%s.%s): %s",
-                attr,
-                def_entry[1],
-                def_entry[2],
-                e,
+                "[Bootstrap] failed to instantiate service '%s': %s",
+                attr, e,
             )
 
-    # OAuthBrowserMonitor depends on the just-built `cdp` client.
-    # Service-defs lambdas only see (bus, registry, cache, config,
-    # paths, pipeline) — no partial-container access — so we
-    # Edge CDP port — resolved once and shared between the
-    # EdgeBrowser (launcher) and OAuthBrowserMonitor (redirect
-    # capture). The monitor polls this port so it can see the
-    # OAuth tabs that the launcher opens on the same port.
-    cdp_port = 9222
+    # Post-loop wiring for services that depend on container slots
+    # built during the loop above.
+    cdp_port = _resolve_cdp_port(config)
+    _wire_browser_monitor(container, config, cdp_port)
+    _wire_edge_browser(container, config, cdp_port)
+    return container
+
+
+def _resolve_cdp_port(config: ConfigManager) -> int:
+    """Read the Edge CDP port from config with a defensive fallback.
+
+    The port is shared between ``EdgeBrowser`` (launcher) and
+    ``OAuthBrowserMonitor`` (redirect capture) so they target
+    the same Edge instance. Misconfigured values fall back to
+    the canonical default (9222) instead of raising, since CDP
+    port misconfig should degrade auth not block plugin boot.
+    """
     try:
-        cdp_port = int(config.get("edge.cdp_port", 9222))
+        return int(config.get("edge.cdp_port", 9222))
     except Exception:
-        pass
+        return 9222
 
-    # construct it here in the post-loop step instead of adding a
-    # special case to `_instantiate_service`. Quiet on `None` cdp
-    # so a missing dependency doesn't block the rest of the boot.
+
+def _wire_browser_monitor(
+    container: ServiceContainer,
+    config: ConfigManager,
+    cdp_port: int,
+) -> None:
+    """Build OAuthBrowserMonitor on top of ``container.cdp``.
+
+    Quiet on ``cdp is None`` (the cdp client itself failed to
+    instantiate) — leaves ``browser_monitor`` as None so stores
+    that require it skip auth gracefully via the injector layer.
+    """
+    if container.cdp is None:
+        logger.info("[bootstrap] browser_monitor skipped — no cdp client")
+        return
     try:
-        if container.cdp is not None:
-            from ...auth.browser import OAuthBrowserMonitor
-            container.browser_monitor = OAuthBrowserMonitor(
-                cdp_client=container.cdp, config=config,
-                edge_cdp_port=cdp_port,
-            )
-            logger.debug("[bootstrap] browser_monitor wired")
-        else:
-            logger.info(
-                "[bootstrap] browser_monitor skipped — no cdp client",
-            )
+        from unifideck.auth.browser import OAuthBrowserMonitor
+        container.browser_monitor = OAuthBrowserMonitor(
+            cdp_client=container.cdp, config=config,
+            edge_cdp_port=cdp_port,
+        )
+        logger.debug("[bootstrap] browser_monitor wired")
     except Exception as e:
         logger.warning(
             "[bootstrap] failed to wire browser_monitor: %s", e,
         )
 
-    # EdgeBrowser — flatpak install + CDP launcher for OAuth
-    # flows. The PDF spec lists it under ``auth/edge_browser/``
-    # but never wires it into a service ; we instantiate it
-    # here so the injector can hand a single shared instance
-    # to every OAuth store.
+
+def _wire_edge_browser(
+    container: ServiceContainer,
+    config: ConfigManager,
+    cdp_port: int,
+) -> None:
+    """Build the shared EdgeBrowser instance (flatpak install + CDP launcher).
+
+    The PDF spec lists it under ``auth/edge_browser/`` but never
+    wires it into a service ; we instantiate it here so the
+    injector layer can hand a single shared instance to every
+    OAuth store. ``locale_fn`` is a callback (not a value) so
+    config changes are picked up at launch time, not at boot.
+    """
     try:
-        from ...auth.edge_browser import EdgeBrowser
+        from unifideck.auth.edge_browser import EdgeBrowser
         container.edge_browser = EdgeBrowser(
             cdp_port=cdp_port,
-            locale_fn=lambda: str(
-                config.get("ui.locale", "en-US"),
-            ),
+            locale_fn=lambda: str(config.get("ui.locale", "en-US")),
         )
         logger.info("[bootstrap] edge_browser wired")
     except Exception as e:
         logger.warning(
             "[bootstrap] failed to wire edge_browser: %s", e,
         )
-    return container
 
 
 def build_service_subset(
     bus: EventBus,
     config: ConfigManager,
-    paths: ServicePaths,
-    attrs: Iterable[str],
-) -> dict[str, Any]:
-    """Build a named subset of services for testing.
+    services: Iterable[str],
+) -> ServiceContainer:
+    """Construct a named subset of Layer-5 services.
 
-    Iterates ``_SERVICE_DEFS`` but only constructs entries whose
-    attribute names appear in ``attrs``. Unlike ``bootstrap_services``
-    this variant skips the registry, cache and pipeline (passes
-    ``None`` for each), so it can only build services that don't
-    depend on those — typically the leaf services with minimal
-    wiring.
+    Used by ``launcher/bootstrap.py`` for the out-of-process
+    launcher's reduced graph (shortcut, proton, cloudsave,
+    launch_history typically). Registry / cache / pipeline passed
+    as None to ``_instantiate_service``; services whose lambdas
+    dereference those components will fail — caller's
+    responsibility to only request compatible services.
 
-    Failures are caught and recorded as ``None`` slots in the
-    returned dict (rather than raising), matching the production
-    bootstrap's tolerance policy.
-
-    Args:
-        bus: stub or real event bus for the test.
-        config: stub or real config manager.
-        paths: pre-built ``ServicePaths`` (the subset variant
-            doesn't derive paths from config).
-        attrs: iterable of service-attribute names to build (e.g.
-            ``["metadata", "proton"]``).
-
-    Returns:
-        Mapping ``attr → service_instance | None`` for every
-        requested attribute, in iteration order.
+    Unknown service names are logged + skipped.
     """
-    selected = set(attrs)
-    services: dict[str, Any] = {}
-    for def_entry in _SERVICE_DEFS:
-        attr = def_entry[0]
-        if attr not in selected:
+    paths = ServicePaths.from_config(config)
+    container = ServiceContainer()
+
+    # Map requested names to their definition row
+    def_map = {row[0]: row for row in _SERVICE_DEFS}
+
+    for name in services:
+        if name not in def_map:
+            logger.warning("[BootstrapSubset] unknown service requested: %s", name)
             continue
+
         try:
-            services[attr] = _instantiate_service(
-                def_entry,
-                bus,
-                None,
-                None,
-                config,
-                paths,
-                None,
+            instance = _instantiate_service(
+                def_map[name],
+                bus=bus,
+                registry=None,
+                cache=None,
+                config=config,
+                paths=paths,
+                pipeline=None,
             )
-            logger.debug(
-                "[subset] %s wired: %s.%s",
-                attr,
-                def_entry[1],
-                def_entry[2],
-            )
+            setattr(container, name, instance)
         except Exception as e:
             logger.warning(
-                "[subset] failed to wire %s (%s.%s): %s",
-                attr,
-                def_entry[1],
-                def_entry[2],
-                e,
+                "[BootstrapSubset] failed to instantiate service '%s': %s",
+                name, e,
             )
-            services[attr] = None
-    return services
+
+    return container

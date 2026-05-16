@@ -26,14 +26,16 @@ appropriate sub-component.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
-import os
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
-from ...auth.browser import OAuthBrowserMonitor
-from ...auth.orchestrator import AuthOrchestrator
-from ...core.bin import read_cli_timeouts
-from ...core.types import (
+
+from unifideck.auth.browser import OAuthBrowserMonitor
+from unifideck.auth.orchestrator import AuthOrchestrator
+from unifideck.core.binaries import read_cli_timeouts
+from unifideck.core.types import (
     AuthResult,
     CLITool,
     Events,
@@ -42,10 +44,11 @@ from ...core.types import (
     Result,
     StoreInfo,
 )
-from ...security import emit_external_auth_check_failed
-from ...services.shortcut import ShortcutService
-from ...utils.config_helpers import get_cfg
-from ..shared.store_base import StoreBase
+from unifideck.security import emit_external_auth_check_failed
+from unifideck.services.shortcut import ShortcutService
+from unifideck.stores.shared.store_base import StoreBase
+from unifideck.utils.config_helpers import get_cfg
+
 from .auth import EpicAuthFlow
 from .exe_resolver import EpicExeResolver
 from .install import EpicInstaller, ProgressCallback
@@ -53,9 +56,9 @@ from .library import EpicLibraryReader, merge_install_status
 from .updates import EpicUpdateChecker
 
 if TYPE_CHECKING:
-    from ...config import ConfigManager
-    from ...core.cache_manager import CacheManager
-    from ...event_bus.event_bus import EventBus
+    from unifideck.config import ConfigManager
+    from unifideck.core.cache_manager import CacheManager
+    from unifideck.event_bus.event_bus import EventBus
 
 logger = logging.getLogger(__name__)
 
@@ -177,17 +180,15 @@ class EpicStore(StoreBase):
                 "legendary binary missing from search paths",
             )
             return False
-        user_file = os.path.expanduser(
-            get_cfg(
+        user_file = str(Path(get_cfg(
                 self._config,
                 "stores.epic.user_file",
                 "~/.config/legendary/user.json",
-            ),
-        )
-        if not os.path.isfile(user_file):
+            )).expanduser())
+        if not Path(user_file).is_file():
             return False
         try:
-            with open(user_file, encoding="utf-8") as f:
+            with Path(user_file).open(encoding="utf-8") as f:
                 data = json.load(f)
         except (OSError, json.JSONDecodeError) as e:
             logger.debug("[EpicStore] user.json invalid: %s", e)
@@ -208,7 +209,7 @@ class EpicStore(StoreBase):
             return False
         return "access_token" in data
 
-    async def start_auth(self, **kwargs) -> AuthResult:
+    async def start_auth(self, **kwargs: Any) -> AuthResult:
         """Start auth."""
         if self._auth is None:
             return AuthResult(
@@ -240,7 +241,7 @@ class EpicStore(StoreBase):
         await self._ensure_auth_shortcut()
         return cast("AuthResult", await self._auth.start_auth())
 
-    async def complete_auth(self, code: str = "", **kwargs) -> AuthResult:
+    async def complete_auth(self, code: str = "", **kwargs: Any) -> AuthResult:
         """Complete auth."""
         if await self.is_available():
             return AuthResult(success=True, store="epic")
@@ -265,8 +266,8 @@ class EpicStore(StoreBase):
             owned = await self._library.read_owned_games()
             installed = await self._library.read_installed_map()
             return merge_install_status(owned, installed)
-        except Exception as e:
-            logger.error("[EpicStore] get_library failed: %s", e)
+        except Exception:
+            logger.exception("[EpicStore] get_library failed")
             return []
 
     async def install_game(self, game_id: str, base_path: str | None = None,
@@ -308,14 +309,8 @@ class EpicStore(StoreBase):
         if self._shortcut_service is None:
             logger.debug("[EpicStore] no shortcut_service injected; skipping auth shortcut creation")
             return
-        launcher = os.path.join(
-            self._plugin_dir or "",
-            "py_modules",
-            "unifideck",
-            "launcher",
-            "dispatcher.py",
-        )
-        if not os.path.isfile(launcher):
+        launcher = str(Path(self._plugin_dir or "") / "py_modules" / "unifideck" / "launcher" / "dispatcher.py")
+        if not await asyncio.to_thread(lambda: Path(launcher).is_file()):
             logger.warning("[EpicStore] launcher dispatcher not found at %s", launcher)
             return
         result = await self._shortcut_service.add_auth_shortcut(

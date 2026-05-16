@@ -1,41 +1,40 @@
-"""Security config readers — typed parsers from the user config.
+"""services.security.config_readers — Defensive ConfigManager readers.
 
-OP-19d | py_modules/unifideck/services/security/config_readers.py
+Four free functions that read typed values out of a
+``ConfigManager`` with a graceful fallback when the config is
+absent, malformed, or the caller is running in a test harness
+that passed ``None``.
 
-Three pure functions to read security tunables from the user config
-with strict typing :
+Extracted from ``security_service.py`` on 2026-04-18. The four
+functions were originally methods of ``SecurityService`` but
+they never touched ``self`` beyond reading ``self._config``, so
+making them module-level with an explicit ``config`` parameter
+reads more cleanly and is trivially testable.
 
-* ``read_int(config, key, default)``   — integer with fallback;
-* ``read_float(config, key, default)`` — float with fallback;
-* ``read_str(config, key, default)``   — string with fallback.
-
-Used by the security service constructor to read its tunables in
-one place.
+Why ``config`` can be ``None``
+------------------------------
+SecurityService accepts ``config=None`` for unit tests and for
+the subset-bootstrap path used by the standalone launcher CLI.
+All four functions treat None as "fall through to default".
 """
-
 from __future__ import annotations
+
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from ...config import ConfigManager
+    from unifideck.config import ConfigManager
 
 
-def read_int(config: ConfigManager | None, key: str, default: int) -> int:
-    """Read an integer from the config with a fallback default.
+def read_int(
+    config: ConfigManager | None, key: str, default: int,
+) -> int:
+    """Read an int config key with fallback.
 
-    Three failure modes all return ``default``:
-
-    * config is ``None`` or doesn't expose ``get``;
-    * the key is absent or the value is falsy (None/0/"");
-    * the value can't be coerced to ``int``.
-
-    Args:
-        config: optional config manager.
-        key: dotted config path.
-        default: value returned on any failure.
-
-    Returns:
-        Parsed integer, or ``default``.
+    Returns ``default`` if:
+      - config is None
+      - config has no ``get`` method
+      - the value is empty/falsy
+      - the value can't be cast to int
     """
     if config is None or not hasattr(config, "get"):
         return default
@@ -46,18 +45,12 @@ def read_int(config: ConfigManager | None, key: str, default: int) -> int:
         return default
 
 
-def read_float(config: ConfigManager | None, key: str, default: float) -> float:
-    """Read a float from the config with a fallback default.
+def read_float(
+    config: ConfigManager | None, key: str, default: float,
+) -> float:
+    """Read a float config key with fallback.
 
-    Same failure semantics as ``read_int``.
-
-    Args:
-        config: optional config manager.
-        key: dotted config path.
-        default: value returned on any failure.
-
-    Returns:
-        Parsed float, or ``default``.
+    Same semantics as ``read_int`` but for float values.
     """
     if config is None or not hasattr(config, "get"):
         return default
@@ -68,19 +61,13 @@ def read_float(config: ConfigManager | None, key: str, default: float) -> float:
         return default
 
 
-def read_str(config: ConfigManager | None, key: str, default: str) -> str:
-    """Read a string from the config with a fallback default.
+def read_str(
+    config: ConfigManager | None, key: str, default: str,
+) -> str:
+    """Read a string config key with fallback.
 
-    Coerces non-string truthy values via ``str()``. Empty
-    strings + ``None`` fall back to ``default``.
-
-    Args:
-        config: optional config manager.
-        key: dotted config path.
-        default: value returned on absence or empty string.
-
-    Returns:
-        String value or ``default``.
+    Returns ``default`` if config is None or the value is empty.
+    Never raises: stringifies whatever the config returns.
     """
     if config is None or not hasattr(config, "get"):
         return default
@@ -88,20 +75,13 @@ def read_str(config: ConfigManager | None, key: str, default: str) -> str:
     return str(val) if val else default
 
 
-def read_list(config: ConfigManager | None, key: str) -> list[str]:
-    """Read a list-of-strings from the config.
+def read_list(
+    config: ConfigManager | None, key: str,
+) -> list[str]:
+    """Read a list[str] config key, returns [] on absence.
 
-    Defensive parsing — anything that isn't actually a list, or
-    contains non-string / empty entries, is filtered out. Returns
-    an empty list rather than ``None`` on absence, so callers can
-    iterate unconditionally.
-
-    Args:
-        config: optional config manager.
-        key: dotted config path.
-
-    Returns:
-        List of non-empty strings; empty if absent or malformed.
+    Filters out non-string and empty-string entries — the caller
+    (``_handle_device_reset``) expects absolute-ish file paths.
     """
     if config is None or not hasattr(config, "get"):
         return []

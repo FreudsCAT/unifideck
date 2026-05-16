@@ -1,6 +1,6 @@
-"""core/bin/binary_resolver.py — Generic CLI tool locator.
+"""core/binaries/binary_resolver.py — Generic CLI tool locator.
 
-Moved from core/ to the new core/bin/
+Moved from core/ to core/binaries/
 subpackage, grouped with binary_signatures.py (trust) and
 cli_timeouts.py (run). The three form the complete lifecycle
 of an external CLI tool: find it, verify it, invoke it safely.
@@ -19,13 +19,15 @@ in PATH.
 Reference: Technical Document v1.0 — Section 3.4.2 (BinaryResolver +
 ExeFinder), Figure 12.
 """
+import contextlib
 import logging
 import shutil
 import stat
 import subprocess
 from pathlib import Path
+from typing import Any
 
-from ..types.domain import CLITool
+from unifideck.core.types.domain import CLITool
 
 logger = logging.getLogger(__name__)
 
@@ -54,18 +56,19 @@ class BinaryResolver:
             version = resolver.check_version(tool, path)
     """
 
-    def __init__(self, config=None) -> None:  # noqa: D107 — class docstring documents the constructor's contract
+    def __init__(self, config: Any | None = None) -> None:
         # The version-check timeout is the only tunable knob;
         # loaded once at init so we don't pay the config lookup
-        # on every resolve() call.
+        # on every resolve() call. ``config`` is duck-typed —
+        # any object with a ``.get(str) -> str | int`` method
+        # works; we use ``Any`` rather than constraining to
+        # ConfigManager to keep this module free of upstream
+        # dependencies for testing.
         self._version_timeout = 10
         if config is not None:
-            try:
+            with contextlib.suppress(TypeError, ValueError):
                 self._version_timeout = int(config.get(
                     "binary_resolver.version_check_timeout_seconds"))
-            except (TypeError, ValueError):
-                # best-effort operation; failure is non-fatal here
-                pass
 
     def resolve(self, tool: CLITool) -> str | None:
         """Locate the binary for a CLI tool.

@@ -24,6 +24,7 @@ the resolver without monkey-patching module globals on ``main``.
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 
 def resolve_user_config_path() -> str:
@@ -35,8 +36,8 @@ def resolve_user_config_path() -> str:
     """
     env = os.environ.get("UNIFIDECK_USER_CONFIG")
     if env:
-        return os.path.expanduser(env)
+        return str(Path(env).expanduser())
     xdg = os.environ.get("XDG_CONFIG_HOME")
     if xdg:
-        return os.path.join(xdg, "unifideck", "config.json")
-    return os.path.expanduser("~/.config/unifideck/config.json")
+        return str(Path(xdg) / "unifideck" / "config.json")
+    return str(Path("~/.config/unifideck/config.json").expanduser())

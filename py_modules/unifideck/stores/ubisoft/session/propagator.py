@@ -17,12 +17,14 @@ games.
 """
 
 from __future__ import annotations
+
 import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from ..config import UbisoftConfig
+    from unifideck.stores.ubisoft.config import UbisoftConfig
+
     from .payload import _PayloadSync
     from .reader import _CredentialReader
 logger = logging.getLogger(__name__)
@@ -191,8 +193,5 @@ class _CredentialPropagator:
                 "token_propagated": token_count > 0,
             }
         except Exception as e:
-            logger.error(
-                "[UbisoftSession] retroactive sync failed: %s",
-                e,
-            )
+            logger.exception("[UbisoftSession] retroactive sync failed")
             return {"success": False, "error": str(e)}

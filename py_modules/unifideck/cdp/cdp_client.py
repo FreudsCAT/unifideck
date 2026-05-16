@@ -1,12 +1,16 @@
 from __future__ import annotations
+
 import asyncio
+import contextlib
 import json
 import logging
 from typing import TYPE_CHECKING, Any, cast
+
 from unifideck.utils.config_helpers import get_cfg
+
 logger = logging.getLogger(__name__)
 if TYPE_CHECKING:
-    from ..config import ConfigManager
+    from unifideck.config import ConfigManager
 class CDPClient:
     """Cdpclient."""
     def __init__(
@@ -24,10 +28,10 @@ class CDPClient:
         self._response_timeout = float(
             get_cfg(config, "cdp.response_timeout_seconds", 10)
         )
-        self._ws = None
+        self._ws: Any = None  # WebSocketClientProtocol | None (annotated Any to avoid eager websockets import)
         self._request_id = 0
-        self._pending: dict[int, asyncio.Future] = {}
-        self._recv_task: asyncio.Task | None = None
+        self._pending: dict[int, asyncio.Future[Any]] = {}
+        self._recv_task: asyncio.Task[Any] | None = None
     async def connect(self, target_url_substring: str = "") -> bool:
         """Connect."""
         targets = await self._list_targets()
@@ -40,8 +44,8 @@ class CDPClient:
                 target["webSocketDebuggerUrl"],
                 max_size=None,
             )
-        except Exception as e:
-            logger.error("[CDPClient] ws connect failed: %s", e)
+        except Exception:
+            logger.exception("[CDPClient] ws connect failed")
             return False
         self._recv_task = asyncio.create_task(self._recv_loop())
         return True
@@ -49,10 +53,8 @@ class CDPClient:
         """Disconnect."""
         if self._recv_task:
             self._recv_task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await self._recv_task
-            except asyncio.CancelledError:
-                pass
         if self._ws:
             await self._ws.close()
             self._ws = None
@@ -69,7 +71,7 @@ class CDPClient:
         )
         result = await self.evaluate(expression)
         return bool(result and result.get("result", {}).get("value"))
-    async def evaluate(self, expression: str) -> dict | None:
+    async def evaluate(self, expression: str) -> dict[str, Any] | None:
         """Evaluate."""
         return await self._send("Runtime.evaluate", {
             "expression": expression,
@@ -96,9 +98,9 @@ class CDPClient:
         try:
             async with (
                 aiohttp.ClientSession() as session,
-                session.get(url, timeout=5) as resp,
+                session.get(url, timeout=aiohttp.ClientTimeout(total=5)) as resp,
             ):
-                return cast("bool", resp.status == 200)
+                return resp.status == 200
         except Exception as e:
             logger.debug(
                 "[CDPClient] close_target failed: %s", e,
@@ -109,7 +111,7 @@ class CDPClient:
         result = await self._send("Page.navigate", {"url": url})
         return result is not None
     async def wait_for_url(self, substring: str,
-                           timeout: float | None = None) -> str | None:
+                           timeout: float | None = None) -> str | None:  # noqa: ASYNC109 — timeout is API value passed to underlying lib (urllib/aiohttp/subprocess), not an asyncio.timeout() wrapper
         """Wait for URL."""
         deadline = asyncio.get_event_loop().time() + (
             timeout
@@ -138,7 +140,7 @@ class CDPClient:
         try:
             async with (
                 aiohttp.ClientSession() as session,
-                session.get(url, timeout=5) as resp,
+                session.get(url, timeout=aiohttp.ClientTimeout(total=5)) as resp,
             ):
                 if resp.status != 200:
                     return []
@@ -159,7 +161,7 @@ class CDPClient:
                 return t
         return None
     async def _send(self, method: str,
-                    params: dict[str, Any]) -> dict | None:
+                    params: dict[str, Any]) -> dict[str, Any] | None:
         """Send."""
         if not self._ws:
             return None
@@ -170,7 +172,7 @@ class CDPClient:
             "method": method,
             "params": params,
         }
-        future: asyncio.Future = (
+        future: asyncio.Future[Any] = (
             asyncio.get_event_loop().create_future()
         )
         self._pending[req_id] = future

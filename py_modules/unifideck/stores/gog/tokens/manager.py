@@ -23,12 +23,15 @@ testable.
 """
 
 from __future__ import annotations
+
 import contextlib
 import logging
-import os
 import time
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
-from ....security import SecureTokenStore
+
+from unifideck.security import SecureTokenStore
+
 from .gogdl_credentials import _GogdlCreds
 from .oauth import _TokenOAuth
 from .storage import _TokenStorage
@@ -36,7 +39,8 @@ from .user_info import GOGUserInfo
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
-    from ..config import GOGConfig
+
+    from unifideck.stores.gog.config import GOGConfig
 logger = logging.getLogger(__name__)
 
 
@@ -93,11 +97,11 @@ class GOGTokenManager:
 
     def get_token_age_seconds(self) -> float:
         """Get token age seconds."""
-        path = os.path.expanduser(self._config.token_file)
-        if not os.path.isfile(path):
+        path = str(Path(self._config.token_file).expanduser())
+        if not Path(path).is_file():
             return float("inf")
         try:
-            return time.time() - os.path.getmtime(path)
+            return time.time() - Path(path).stat().st_mtime
         except OSError:
             return float("inf")
 

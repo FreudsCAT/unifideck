@@ -18,11 +18,12 @@ All helpers are stateless and safe to call concurrently.
 """
 
 from __future__ import annotations
+
+import asyncio
+import contextlib
 import datetime
-import glob
 import json
 import logging
-import os
 from collections.abc import Iterator
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -100,19 +101,20 @@ def find_game_executable(
     if not install_path or not Path(install_path).is_dir():
         return None
     candidates: list[tuple[str, int]] = []
-    for pattern in ("*.exe", "**/*.exe"):
-        for exe_path in glob.glob(
-            str(Path(install_path) / pattern),
-            recursive=True,
-        ):
-            basename = Path(exe_path).name.lower()
-            if any(skip in basename for skip in _EXE_SKIP_PATTERNS):
-                continue
-            try:
-                size = Path(exe_path).stat().st_size
-                candidates.append((exe_path, size))
-            except OSError:
-                continue
+    # Use ``rglob`` which recursively walks subdirectories.
+    # Replaces the previous ``glob.glob`` loop over both the
+    # top-level (``*.exe``) and recursive (``**/*.exe``) patterns
+    # — ``rglob`` covers both cases in a single pass.
+    for exe_path_obj in Path(install_path).rglob("*.exe"):
+        exe_path = str(exe_path_obj)
+        basename = exe_path_obj.name.lower()
+        if any(skip in basename for skip in _EXE_SKIP_PATTERNS):
+            continue
+        try:
+            size = exe_path_obj.stat().st_size
+            candidates.append((exe_path, size))
+        except OSError:
+            continue
     if not candidates:
         logger.warning(
             "[UbisoftLibrary] no executable found in %s",
@@ -129,28 +131,95 @@ def find_game_executable(
     return result
 
 
-def looks_like_game_install(path: str) -> bool:
-    """Looks like game install."""
+def _has_exe_within_depth(path: str, max_depth: int) -> bool:
+    """Return True if any ``.exe`` exists within ``max_depth`` of ``path``.
+
+    Recursive walk bounded by ``max_depth`` — bails out as soon
+    as the first ``.exe`` is found. Used by
+    ``looks_like_game_install`` as the cheap first check before
+    the more expensive total-size sweep. ``OSError`` during
+    walk is swallowed — partial result counts as "no exe found".
+    """
+    return _scan_for_exe(Path(path), max_depth)
+
+
+def _scan_for_exe(directory: Path, remaining_depth: int) -> bool:
+    """Recursive helper for :func:`_has_exe_within_depth`.
+
+    Visits every direct entry of ``directory``: returns True
+    immediately on the first ``.exe`` file, otherwise descends
+    into subdirectories while ``remaining_depth > 0``. A single
+    ``iterdir`` call per level keeps the syscall count tight ;
+    ``OSError`` on a single level just terminates that branch
+    (missing dir, permission denied) and lets siblings continue.
+    """
     try:
-        for root, _dirs, files in os.walk(path):
-            for f in files:
-                if f.lower().endswith(".exe"):
-                    return True
-            depth = root[len(path) :].count(os.sep)
-            if depth >= 2:
-                break
-        total = 0
-        for root, _dirs, files in os.walk(path):
-            for f in files:
-                try:
-                    total += (Path(root) / f).stat().st_size
-                except OSError:
-                    continue
-                if total > _GAME_INSTALL_MIN_SIZE:
-                    return True
+        subdirs: list[Path] = []
+        for entry in directory.iterdir():
+            if entry.is_file() and entry.suffix.lower() == ".exe":
+                return True
+            if entry.is_dir():
+                subdirs.append(entry)
     except OSError:
-        pass
+        return False
+    if remaining_depth <= 0:
+        return False
+    return any(_scan_for_exe(d, remaining_depth - 1) for d in subdirs)
+
+
+def _total_size_exceeds(path: str, threshold: int) -> bool:
+    """Return True as soon as the cumulative file size under
+    ``path`` exceeds ``threshold`` bytes.
+
+    Streaming check — bails out the moment the threshold is
+    crossed, so the walk doesn't need to visit every file on a
+    multi-GB tree. Per-file ``stat`` failure is skipped silently
+    (broken symlink). Outer ``OSError`` (permission on a
+    directory) terminates the walk early — partial sum stands.
+    """
+    total = 0
+    with contextlib.suppress(OSError):
+        for entry in Path(path).rglob("*"):
+            if not entry.is_file():
+                continue
+            try:
+                total += entry.stat().st_size
+            except OSError:
+                continue
+            if total > threshold:
+                return True
     return False
+
+
+def looks_like_game_install(path: str) -> bool:
+    """Heuristic: does ``path`` look like a real game install?
+
+    Two cheap signals checked in priority order :
+
+        1. Any ``.exe`` within depth 2 — most installs ship an
+           executable at the root or one level down.
+        2. Cumulative file size above ``_GAME_INSTALL_MIN_SIZE`` —
+           covers data-only games (configs, assets, no exe at
+           the top) without false-positive on a few stray temp
+           files.
+
+    Either signal alone is enough to return True. Returns False
+    if neither is hit before the walk completes or errors out.
+
+    Refactor history (2026-05-14):
+        * Was a single function at CC=18 — the two phases (exe
+          scan + size sweep) shared the same try/except envelope
+          which made the nesting hit four levels deep on the
+          size branch. Split into two helpers so this function
+          is now a flat ``return A or B``.
+        * Helpers use ``pathlib.Path`` (depth-bounded
+          ``iterdir`` recursion for the exe scan, ``rglob`` for
+          the size sweep) to align with the broader pathlib
+          migration on ``stores/``.
+    """
+    return _has_exe_within_depth(path, max_depth=2) or _total_size_exceeds(
+        path, _GAME_INSTALL_MIN_SIZE,
+    )
 
 
 async def write_install_marker(
@@ -166,14 +235,18 @@ async def write_install_marker(
             "game_title": game_title,
             "install_path": install_path,
             "executable": executable,
-            "install_date": (datetime.datetime.now().isoformat()),
+            # Always serialize timestamps in UTC so the marker is
+            # comparable across machines and DST transitions.
+            "install_date": (
+                datetime.datetime.now(datetime.UTC).isoformat()
+            ),
         }
         install_p = Path(install_path)
         marker_path = install_p / _INSTALL_MARKER_FILENAME
         tmp_path = marker_path.with_suffix(
             marker_path.suffix + ".tmp",
         )
-        install_p.mkdir(parents=True, exist_ok=True)
+        await asyncio.to_thread(lambda: install_p.mkdir(parents=True, exist_ok=True))
         tmp_path.write_text(
             json.dumps(marker_data, indent=2),
             encoding="utf-8",
@@ -204,13 +277,11 @@ def write_marker_sync(
         "install_path": install_path,
         "game_title": title,
     }
-    try:
+    with contextlib.suppress(OSError):
         marker_path.write_text(
             json.dumps(marker_data),
             encoding="utf-8",
         )
-    except OSError:
-        pass
 
 
 class _DetectionHelpers:
@@ -258,7 +329,7 @@ class _DetectionHelpers:
         media_base = Path("/run/media")
         if not media_base.is_dir():
             return
-        try:
+        with contextlib.suppress(OSError):
             for entry_path in media_base.iterdir():
                 if not entry_path.is_dir():
                     continue
@@ -269,8 +340,6 @@ class _DetectionHelpers:
                     entry_path,
                     roots,
                 )
-        except OSError:
-            pass
 
     @staticmethod
     def _append_sub_mount_roots(
@@ -278,14 +347,12 @@ class _DetectionHelpers:
         roots: list[str],
     ) -> None:
         """Append sub mount roots."""
-        try:
+        with contextlib.suppress(OSError):
             for sub_path in parent.iterdir():
                 if sub_path.is_dir():
                     roots.append(
                         str(sub_path / "Games" / "Ubisoft"),
                     )
-        except OSError:
-            pass
 
     @staticmethod
     def _dedup_roots_by_realpath(

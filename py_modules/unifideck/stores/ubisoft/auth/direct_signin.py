@@ -14,13 +14,16 @@ This makes "sign in" effectively instant for returning users.
 """
 
 from __future__ import annotations
+
 import asyncio
+import contextlib
 import logging
 from typing import Any
-from ....security import emit_external_auth_check_failed
-from ..binaries import UbisoftBinaryResolver
-from ..paths import UbisoftPrefixPaths
-from ..session import UbisoftSession
+
+from unifideck.security import emit_external_auth_check_failed
+from unifideck.stores.ubisoft.binaries import UbisoftBinaryResolver
+from unifideck.stores.ubisoft.paths import UbisoftPrefixPaths
+from unifideck.stores.ubisoft.session import UbisoftSession
 
 logger = logging.getLogger(__name__)
 
@@ -168,14 +171,12 @@ class _DirectSignIn:
                         timeout=10,
                     )
                 except (TimeoutError, ProcessLookupError):
-                    try:
+                    with contextlib.suppress(TimeoutError, ProcessLookupError):
                         proc.kill()
                         await asyncio.wait_for(
                             proc.wait(),
                             timeout=5,
                         )
-                    except (TimeoutError, ProcessLookupError):
-                        pass
                 return captured
             await asyncio.sleep(2)
         logger.warning(
@@ -185,9 +186,7 @@ class _DirectSignIn:
             proc.terminate()
             await asyncio.wait_for(proc.wait(), timeout=10)
         except (TimeoutError, ProcessLookupError):
-            try:
+            with contextlib.suppress(TimeoutError, ProcessLookupError):
                 proc.kill()
                 await asyncio.wait_for(proc.wait(), timeout=5)
-            except (TimeoutError, ProcessLookupError):
-                pass
         return None

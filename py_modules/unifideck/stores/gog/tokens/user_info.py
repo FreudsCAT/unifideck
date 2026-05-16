@@ -9,6 +9,7 @@ display after restart without needing to query GOG.com.
 """
 
 from __future__ import annotations
+
 from dataclasses import dataclass
 
 

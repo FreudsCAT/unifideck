@@ -23,6 +23,7 @@ FakeDeviceIdentity("aabbccdd...").read().
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -75,7 +76,7 @@ class DeviceIdentity:
             return self._cached
 
         try:
-            with open(self._path, encoding="utf-8") as f:
+            with Path(self._path).open(encoding="utf-8") as f:
                 raw = f.read().strip()
         except OSError as e:
             raise DeviceIdentityError(

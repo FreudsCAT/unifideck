@@ -15,6 +15,7 @@ about from it.
 """
 
 from __future__ import annotations
+
 from typing import TYPE_CHECKING, NamedTuple
 
 if TYPE_CHECKING:

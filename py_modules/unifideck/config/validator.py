@@ -68,7 +68,9 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from ..event_bus.event_bus import EventBus
+    import asyncio
+
+    from unifideck.event_bus.event_bus import EventBus
 
 logger = logging.getLogger(__name__)
 
@@ -161,7 +163,10 @@ class ConfigValidator:
 
         """
         self._bus = bus
-        self._schema: dict | None = None
+        self._schema: dict[str, Any] | None = None
+        # Strong references to fire-and-forget event-emit tasks so they
+        # aren't garbage-collected mid-flight. See ``_emit_result_event``.
+        self._background_tasks: set[asyncio.Task[Any]] = set()
 
     # ── Public API ──────────────────────────────────────────────
 
@@ -218,9 +223,9 @@ class ConfigValidator:
         return result
 
     def _validate_defaults(
-        self, defaults_path: str, schema: dict,
+        self, defaults_path: str, schema: dict[str, Any],
         result: ValidationResult,
-    ) -> dict | None:
+    ) -> dict[str, Any] | None:
         """Read + validate the defaults file, update result in place.
 
         Returns the parsed defaults dict on success (even with
@@ -245,11 +250,11 @@ class ConfigValidator:
 
     def _validate_user_overrides(
         self,
-        defaults: dict,
+        defaults: dict[str, Any],
         user_path: str | None,
-        schema: dict,
+        schema: dict[str, Any],
         result: ValidationResult,
-    ) -> dict:
+    ) -> dict[str, Any]:
         """Validate user overrides if present; return merged config.
 
         A missing user file is NOT an error — it just means the user
@@ -320,7 +325,7 @@ class ConfigValidator:
         return schema
 
     def _validate_merged(
-        self, merged: dict, schema: dict,
+        self, merged: dict[str, Any], schema: dict[str, Any],
         result: ValidationResult,
     ) -> None:
         """Final sanity check on the merged config.
@@ -342,7 +347,7 @@ class ConfigValidator:
 
     # ── Private helpers ─────────────────────────────────────────
 
-    def _load_schema(self) -> dict | None:
+    def _load_schema(self) -> dict[str, Any] | None:
         """Load schema.json from disk, cached on first call.
 
         Returns None if the file cannot be read or parsed — the
@@ -355,15 +360,12 @@ class ConfigValidator:
             with Path(_SCHEMA_PATH).open(encoding="utf-8") as f:
                 self._schema = json.load(f)
             return self._schema
-        except (OSError, json.JSONDecodeError) as e:
-            logger.error(
-                "[ConfigValidator] cannot load schema at %s: %s",
-                _SCHEMA_PATH, e,
-            )
+        except (OSError, json.JSONDecodeError):
+            logger.exception("[ConfigValidator] cannot load schema at %s", _SCHEMA_PATH)
             return None
 
     @staticmethod
-    def _read_json(path: str) -> dict | None:
+    def _read_json(path: str) -> dict[str, Any] | None:
         """Read and parse a JSON file, returning None on any failure.
 
         Failures are logged at warning level. Callers treat None as
@@ -388,7 +390,7 @@ class ConfigValidator:
 
     @staticmethod
     def _validate_against_schema(
-        data: dict, schema: dict, source: str,
+        data: dict[str, Any], schema: dict[str, Any], source: str,
     ) -> list[ValidationError]:
         """Run jsonschema validation and convert errors to our format.
 
@@ -402,7 +404,7 @@ class ConfigValidator:
         try:
             import jsonschema
         except ImportError:
-            logger.error(
+            logger.exception(
                 "[ConfigValidator] jsonschema not installed — "
                 "validation skipped",
             )
@@ -423,7 +425,7 @@ class ConfigValidator:
         return errors
 
     @staticmethod
-    def _deep_merge(base: dict, overrides: dict) -> dict:
+    def _deep_merge(base: dict[str, Any], overrides: dict[str, Any]) -> dict[str, Any]:
         """Recursively merge overrides into base, returning a new dict.
 
         Used to produce the final config that would be seen by
@@ -457,20 +459,23 @@ class ConfigValidator:
         try:
             import asyncio
 
-            from ..core.types.events import Events
+            from unifideck.core.types.events import Events
             try:
                 loop = asyncio.get_running_loop()
             except RuntimeError:
                 # No running loop — drop the emission.
                 return
             if result.success:
-                loop.create_task(self._bus.emit(
+                # Track task so it isn't GC'd before the bus delivers the event.
+                task = loop.create_task(self._bus.emit(
                     Events.CONFIG_VALIDATION_COMPLETED,
                     defaults_validated=result.defaults_validated,
                     user_overrides_present=result.user_overrides_present,
                 ))
+                self._background_tasks.add(task)
+                task.add_done_callback(self._background_tasks.discard)
             else:
-                loop.create_task(self._bus.emit(
+                task = loop.create_task(self._bus.emit(
                     Events.CONFIG_VALIDATION_FAILED,
                     error_count=len(result.errors),
                     defaults_validated=result.defaults_validated,
@@ -482,6 +487,8 @@ class ConfigValidator:
                         result.errors[0].path if result.errors else ""
                     ),
                 ))
+                self._background_tasks.add(task)
+                task.add_done_callback(self._background_tasks.discard)
         except (RuntimeError, asyncio.CancelledError) as e:
             logger.debug(
                 "[ConfigValidator] event emit failed: %s", e,

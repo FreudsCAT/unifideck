@@ -17,7 +17,7 @@ import logging
 import time
 from typing import TYPE_CHECKING, Any
 
-from ...core.types import Result
+from unifideck.core.types import Result
 
 if TYPE_CHECKING:
     from .service import ShortcutService
@@ -59,7 +59,7 @@ async def build_auth_shortcut(
 
             # Ensure shortcuts is a dict with 'shortcuts' key
             if not isinstance(service._shortcuts, dict):
-                service._shortcuts = {"shortcuts": {}}
+                service._shortcuts = {"shortcuts": {}}  # type: ignore[unreachable]  # guard 'if not isinstance(_shortcuts, dict)'
             elif "shortcuts" not in service._shortcuts:
                 service._shortcuts["shortcuts"] = {}
 
@@ -69,11 +69,16 @@ async def build_auth_shortcut(
             shortcuts_dict[new_key] = entry
             changed = True
 
-            app_id = entry.get("appid")
+            # Re-read the appid from the entry dict. ``entry.get`` is
+            # typed Any | None (entry is a dict[str, Any] from VDF
+            # parsing); coerce to int with a 0 fallback so the bus
+            # payload always has the expected ``int`` field.
+            raw_app_id = entry.get("appid")
+            app_id = int(raw_app_id) if isinstance(raw_app_id, int) else 0
 
             if service._bus:
-                from ...core.types.events import Events
-                service._bus.emit(
+                from unifideck.core.types.events import Events
+                await service._bus.emit(
                     Events.SHORTCUT_CREATED,
                     store=store,
                     app_id=app_id,
@@ -87,7 +92,7 @@ async def build_auth_shortcut(
         return Result(success=True)
 
     except Exception as e:
-        logger.error("[AuthShortcut] failed to build shortcut for %s: %s", store, e)
+        logger.exception("[AuthShortcut] failed to build shortcut for %s", store)
         return Result(success=False, error=str(e))
 
 
@@ -102,6 +107,14 @@ def _prune_malformed_duplicates(
     ``(canonical, changed)`` — canonical is the matching entry
     (or None if nothing matched); changed signals whether any
     malformed duplicates were removed (caller must persist).
+
+    Refactor history (2026-05-14): was a single function at
+    CC=20 — the entry-classification logic (is it an auth entry
+    for this store? is it correctly shaped?) was inlined inside
+    the loop with three guard layers plus the two ``any(...)``
+    expressions for tag detection. Pulled the classifications
+    into ``_is_auth_entry_for_store`` and ``_is_canonical_shape``
+    so the loop body reads as ``if auth_entry: keep or delete``.
     """
     if not isinstance(service._shortcuts, dict) or "shortcuts" not in service._shortcuts:
         return None, False
@@ -110,41 +123,69 @@ def _prune_malformed_duplicates(
     if not isinstance(shortcuts_dict, dict):
         return None, False
 
-    canonical_entry = None
-    keys_to_delete = []
-    changed = False
+    canonical_entry: dict[str, Any] | None = None
+    keys_to_delete: list[str] = []
     auth_tag = f"auth-{store}"
 
     for key, entry in shortcuts_dict.items():
-        if not isinstance(entry, dict):
+        if not _is_auth_entry_for_store(entry, auth_tag):
             continue
+        # First well-shaped match wins ; everything else is a
+        # duplicate or malformed copy and gets queued for delete.
+        if canonical_entry is None and _is_canonical_shape(
+            entry, launcher_path, store,
+        ):
+            canonical_entry = entry
+        else:
+            keys_to_delete.append(key)
 
-        tags = entry.get("tags", {})
-        if not isinstance(tags, dict):
-            continue
-
-        # Check if it has our tags
-        has_tags = any(t == _UNIFIDECK_TAG for t in tags.values()) and \
-                   any(t == auth_tag for t in tags.values())
-
-        if has_tags:
-            # Check shape
-            is_valid = entry.get("Exe") == launcher_path and \
-                       entry.get("LaunchOptions") == f"auth {store}"
-
-            if is_valid and canonical_entry is None:
-                # Keep the first valid one we find
-                canonical_entry = entry
-            else:
-                # Mark duplicates or malformed ones for deletion
-                keys_to_delete.append(key)
-
-    if keys_to_delete:
-        changed = True
-        for key in keys_to_delete:
-            del shortcuts_dict[key]
+    changed = bool(keys_to_delete)
+    for key in keys_to_delete:
+        del shortcuts_dict[key]
 
     return canonical_entry, changed
+
+
+def _is_auth_entry_for_store(entry: Any, auth_tag: str) -> bool:
+    """Whether ``entry`` is tagged as an auth-shortcut for our store.
+
+    Filters out :
+
+        * Non-dict entries (corrupt VDF).
+        * Entries with no ``tags`` dict (user-created shortcuts).
+        * Entries that don't carry BOTH ``_UNIFIDECK_TAG`` and
+          the store-specific ``auth-<store>`` tag — we don't
+          want to touch other stores' auth entries or regular
+          game shortcuts.
+    """
+    if not isinstance(entry, dict):
+        return False
+    tags = entry.get("tags", {})
+    if not isinstance(tags, dict):
+        return False
+    tag_values = list(tags.values())
+    has_unifideck_tag = any(t == _UNIFIDECK_TAG for t in tag_values)
+    has_auth_tag = any(t == auth_tag for t in tag_values)
+    return has_unifideck_tag and has_auth_tag
+
+
+def _is_canonical_shape(
+    entry: dict[str, Any], launcher_path: str, store: str,
+) -> bool:
+    """Whether the auth entry has the expected ``Exe`` and ``LaunchOptions``.
+
+    A canonical Unifideck auth shortcut points at the bundled
+    launcher with ``auth <store>`` as launch options. A drift
+    on either field means the entry is stale (e.g. launcher
+    path changed between releases) and the caller will replace
+    it. We don't validate ``IsHidden`` or tags here — those are
+    checked by ``_is_auth_entry_for_store`` upstream or rebuilt
+    wholesale by ``_build_auth_entry`` if needed.
+    """
+    return (
+        entry.get("Exe") == launcher_path
+        and entry.get("LaunchOptions") == f"auth {store}"
+    )
 
 
 def _build_auth_entry(

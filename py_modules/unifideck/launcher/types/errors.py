@@ -1,6 +1,10 @@
 from __future__ import annotations
+
 from typing import Any
+
 from .exit_codes import ExitCode
+
+
 class LauncherError(Exception):
     """Launcher error."""
     exit_code: ExitCode = ExitCode.GENERIC_ERROR

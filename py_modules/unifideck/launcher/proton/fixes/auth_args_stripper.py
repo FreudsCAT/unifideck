@@ -1,8 +1,10 @@
 from __future__ import annotations
+
 import logging
 from typing import TYPE_CHECKING
+
 if TYPE_CHECKING:
-    from ...types.context import LaunchContext
+    from unifideck.launcher.types.context import LaunchContext
 logger = logging.getLogger(__name__)
 _STRIP_PREFIXES: tuple[str, ...] = (
     "-AUTH_TYPE=",

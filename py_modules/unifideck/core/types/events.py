@@ -117,10 +117,10 @@ class Events(StrEnum):
     # security package + token managers + auth flows. Consumed
     # by SecurityService for audit logging, counters, and
     # centralised policy enforcement.
-    SECURITY_TOKEN_ENCRYPTED = "security_token_encrypted"
-    SECURITY_TOKEN_DECRYPTED = "security_token_decrypted"
+    SECURITY_TOKEN_ENCRYPTED = "security_token_encrypted"  # noqa: S105 — event name constant, not a credential
+    SECURITY_TOKEN_DECRYPTED = "security_token_decrypted"  # noqa: S105 — event name constant, not a credential
     SECURITY_DECRYPT_FAILED = "security_decrypt_failed"
-    SECURITY_TOKEN_FILE_MIGRATED = "security_token_file_migrated"
+    SECURITY_TOKEN_FILE_MIGRATED = "security_token_file_migrated"  # noqa: S105 — event name constant, not a credential
     SECURITY_LEGACY_PLAINTEXT_DETECTED = "security_legacy_plaintext_detected"
     SECURITY_AUTH_FLOW_STARTED = "security_auth_flow_started"
     SECURITY_AUTH_FLOW_COMPLETED = "security_auth_flow_completed"
@@ -132,7 +132,7 @@ class Events(StrEnum):
     # event is surfaced to the audit log + counters so operators
     # can correlate "user kicked out" with the policy decision
     # rather than guessing it was a server-side revocation.
-    SECURITY_TOKEN_AGE_EXCEEDED = "security_token_age_exceeded"
+    SECURITY_TOKEN_AGE_EXCEEDED = "security_token_age_exceeded"  # noqa: S105 — event name constant, not a credential
 
     # active policy events. Emitted either by
     # token managers (permissions check at each save) or by
@@ -222,6 +222,34 @@ class Events(StrEnum):
     #   title (str), is_auth (bool)
     SHORTCUT_CREATED = "shortcut_created"
 
+    # Emitted by ShortcutService when an entry is removed from
+    # games.map (and consequently from shortcuts.vdf on the next
+    # save). Mirrors SHORTCUT_CREATED so interested services
+    # (ArtworkService, MetricsCollector) can react without polling.
+    # Added 2026-05-15 (lot 12c): the emit site in
+    # services/shortcut/games_map_mixin.py:233 has always referenced
+    # ``Events.SHORTCUT_REMOVED`` but the enum member was never
+    # declared — the call was a silent no-op (mypy attr-defined).
+    # Payload fields: app_id (int, signed).
+    SHORTCUT_REMOVED = "shortcut_removed"
+
+    # ── UI toast notification ────────────────────────────────────
+    # Generic frontend toast trigger. Emitted by any service that
+    # needs to surface a user-facing message asynchronously
+    # (launcher error, circuit breaker tripped, sync failed, etc.).
+    # The frontend subscribes via the bus bridge and displays the
+    # toast styled per ``severity``.
+    # Added 2026-05-15 (lot 12c): the emit sites in
+    # services/launcher/{circuit_breaker,error_toasts}.py have
+    # always referenced ``Events.TOAST_NOTIFICATION`` but the enum
+    # member was never declared — both call sites were silent
+    # no-ops, so launcher errors and circuit-breaker trips never
+    # actually reached the UI.
+    # Payload fields: severity ("info" | "warning" | "error"),
+    #   duration_ms (int), i18n_key (str), params (dict[str, Any]),
+    #   actions (list[dict[str, Any]], opt).
+    TOAST_NOTIFICATION = "toast_notification"
+
     # On-demand artwork fetch request. Any caller may emit this to
     # ask ArtworkService to pull covers for a given title from
     # SteamGridDB. ArtworkService deduplicates by app_id (won't
@@ -229,6 +257,21 @@ class Events(StrEnum):
     # Payload fields: app_id (int), title (str), store (str, opt),
     #   game_id (str, opt), force (bool, opt, default False)
     ARTWORK_REQUEST = "artwork_request"
+    # ── Cloud-save sync lifecycle ────────────────────────────────
+    # Emitted by ``CloudSaveService`` to surface per-game save
+    # transfer outcomes to the UI. The DOWN events fire on the
+    # game→local pull (pre-launch); the UP events fire on the
+    # local→cloud push (post-exit). ``COMPLETE`` carries
+    # ``synced: bool`` so the UI can distinguish "ran the sync
+    # but had no changes" from "skipped entirely"; ``FAILED``
+    # carries an ``error`` string for the toast text.
+    # Common payload fields: store (str), game_id (str).
+    # COMPLETE adds: synced (bool).
+    # FAILED adds: error (str).
+    CLOUD_SYNC_DOWN_COMPLETE = "cloud_sync_down_complete"
+    CLOUD_SYNC_DOWN_FAILED = "cloud_sync_down_failed"
+    CLOUD_SYNC_UP_COMPLETE = "cloud_sync_up_complete"
+    CLOUD_SYNC_UP_FAILED = "cloud_sync_up_failed"
 
 
 class StoreStatus(StrEnum):
@@ -282,7 +325,7 @@ class ErrorCode(StrEnum):
     """
 
     NOT_AUTHENTICATED = "not_authenticated"
-    TOKEN_EXPIRED = "token_expired"
+    TOKEN_EXPIRED = "token_expired"  # noqa: S105 — event name constant, not a credential
     NETWORK_ERROR = "network_error"
     NOT_FOUND = "not_found"
     PERMISSION_DENIED = "permission_denied"

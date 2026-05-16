@@ -29,7 +29,7 @@ from __future__ import annotations
 
 from enum import IntEnum
 
-from ..core.types import Events
+from unifideck.core.types import Events
 
 
 class EventPriority(IntEnum):

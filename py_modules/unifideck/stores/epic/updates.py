@@ -29,11 +29,13 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 import time
+from pathlib import Path
 from typing import Any, cast
-from ...core.types import InstallResult
-from ...event_bus.event_bus import EventBus
+
+from unifideck.core.types import InstallResult
+from unifideck.event_bus.event_bus import EventBus
+
 from .legendary import fetch_info
 from .library import EpicLibraryReader
 
@@ -59,7 +61,7 @@ class EpicUpdateChecker:
         self._list_updates_timeout = list_updates_timeout
         self._size_cache_ttl = size_cache_ttl
         self._info_timeout = info_timeout
-        self._size_cache: dict[str, tuple] = {}
+        self._size_cache: dict[str, tuple[Any, ...]] = {}
 
     async def check_for_updates(self) -> list[str]:
         """Check for updates."""
@@ -123,7 +125,7 @@ class EpicUpdateChecker:
             )
         install_data = entry.get("install") or {}
         current_path = install_data.get("install_path", "")
-        base_path = os.path.dirname(current_path) if current_path else None
+        base_path = str(Path(current_path).parent) if current_path else None
         result = await installer.install_game(
             game_id,
             base_path=base_path,

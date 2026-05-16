@@ -3,12 +3,12 @@
 Five subcommands drive the complexity.yml workflow:
 
     python3 tools/volumetry_check.py files
-        Scan every *.py under py_modules/ plus main.py. Fail
-        if any file exceeds the cap (550 LOC, 800 for main.py)
-        UNLESS that file is listed in FILES_ALLOWLIST with a
-        current-size baseline. If a listed file has shrunk
-        below the cap, fail with a cleanup reminder — the
-        allowlist can only ever contract.
+        Scan every *.py under py_modules/unifideck/ plus main.py
+        at repo root. Fail if any file exceeds the cap (550 LOC,
+        800 for main.py) UNLESS that file is listed in
+        FILES_ALLOWLIST with a current-size baseline. If a
+        listed file has shrunk below the cap, fail with a
+        cleanup reminder — the allowlist can only ever contract.
 
     python3 tools/volumetry_check.py functions
         Fail on any function over 80 lines not in
@@ -38,13 +38,54 @@ the measured size at snapshot time so future tightening passes
 (e.g. "drop cap from 550 to 400") can use the same pattern.
 
 Tracked in technical doc §7.8 for incremental refactoring.
+
+── Scope filter (2026-05-14) ──────────────────────────────────────
+Before this revision, ``_iter_py_files`` walked ``py_modules/``
+as a whole — including the vendored libs (``pip/``, ``urllib3/``,
+``charset_normalizer/``, ``websockets/``, …). On a real CI run
+this produced ~88 file-size violations on third-party code that
+we don't own.
+
+The flake8 steps in ``.github/workflows/complexity.yml`` had
+already been fixed (in May 2026) to scope to
+``py_modules/unifideck/`` explicitly; this script is being
+brought in line with that policy.
+
+Defence in depth: even if a vendor directory ever leaks into
+``unifideck/`` (a real risk during package surgery), the walk
+filters out any path component listed in ``_VENDOR_DIRS`` so the
+gate stays focused on first-party code.
+
+The same pass migrated the module to ``pathlib.Path`` to align
+with the project-wide PTH cascade policy.
 """
 from __future__ import annotations
 
 import ast
-import os
 import sys
+from pathlib import Path
 from typing import Dict, Tuple
+
+# ────────────────────────────────────────────────────────────
+# Scope
+# ────────────────────────────────────────────────────────────
+
+# Repo-relative root containing every first-party Python file.
+# Vendored libraries live elsewhere under ``py_modules/`` and are
+# explicitly out of scope of every gate below — see the module
+# docstring for the rationale.
+SCOPE_ROOT = "py_modules/unifideck"
+
+# Defence in depth: directory names that must NEVER be scanned,
+# even if they somehow end up under SCOPE_ROOT (e.g. accidental
+# ``cp -r`` during package surgery). Mirrors ``.flake8``'s
+# ``extend-exclude`` list — keep both in sync if you add new
+# vendors.
+_VENDOR_DIRS = frozenset({
+    "pip", "urllib3", "charset_normalizer", "websockets",
+    "idna", "certifi", "requests", "_vendor",
+    "__pycache__",
+})
 
 # ────────────────────────────────────────────────────────────
 # Caps
@@ -140,7 +181,11 @@ FILES_ALLOWLIST: Dict[str, int] = {
 # Baseline snapshot 2026-04-18 (post-docstring-autofix): 38
 # functions over 80L cap.
 FUNCTIONS_ALLOWLIST: Dict[str, int] = {
-    "py_modules/unifideck/stores/gog/store.py::__init__": 87,
+    # ``stores/gog/store.py::__init__`` graduated on 2026-05-14:
+    # the function shrank to 67 lines (down from baseline 87)
+    # after extracting helper construction into module-level
+    # builders. Removed per allowlist contract — grandfathered
+    # entries must stay above the cap or be cleaned up.
 }
 
 # Key = "<path>::<function_name>". Value = baseline count.
@@ -156,15 +201,39 @@ FANOUT_ALLOWLIST: Dict[str, int] = {
 
 
 def _iter_py_files() -> list[str]:
-    """Enumerate the Python files under scope: py_modules/
-    subtree plus main.py at repo root."""
-    files = ["main.py"] if os.path.exists("main.py") else []
-    for dp, _, fns in os.walk("py_modules"):
-        if "__pycache__" in dp:
+    """Enumerate the Python files under scope.
+
+    Scope is :py:data:`SCOPE_ROOT` (the first-party ``unifideck``
+    package) plus ``main.py`` at repo root. Vendored libraries
+    elsewhere under ``py_modules/`` are intentionally excluded —
+    we don't own them, their size and complexity are not our
+    problem.
+
+    Defence in depth: any path that traverses a directory whose
+    name is in :py:data:`_VENDOR_DIRS` is filtered out, so a
+    vendor that ever leaks into ``unifideck/`` (e.g. accidental
+    ``cp -r`` during package surgery) is still skipped.
+
+    Returns ``list[str]`` rather than ``list[Path]`` so the
+    allowlist lookups (keyed by string repo-relative path) work
+    unchanged.
+    """
+    files: list[str] = ["main.py"] if Path("main.py").exists() else []
+    root = Path(SCOPE_ROOT)
+    if not root.is_dir():
+        # Defensive fallback: caller invoked from the wrong cwd
+        # or the scope root doesn't exist yet. Don't crash — the
+        # downstream check will report no violations.
+        return files
+    for path in root.rglob("*.py"):
+        # ``rglob`` materialises descendants without exposing
+        # an in-place pruning hook, so we filter on the path
+        # parts after the fact. For unifideck/ (a few hundred
+        # files) this is essentially free, and if a vendor ever
+        # lands here it's filtered cleanly.
+        if any(part in _VENDOR_DIRS for part in path.parts):
             continue
-        for fn in fns:
-            if fn.endswith(".py"):
-                files.append(os.path.join(dp, fn))
+        files.append(str(path))
     return files
 
 

@@ -19,7 +19,9 @@ or manual user refresh.
 """
 
 from __future__ import annotations
+
 import asyncio
+import contextlib
 import json
 import logging
 import urllib.parse
@@ -27,7 +29,9 @@ import urllib.request
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any, cast
-from ...core.types import Game
+
+from unifideck.core.types import Game
+
 from .config import GOGConfig
 from .http import build_ssl_context, fetch_json_get
 from .library_migration import _MarkerMigration
@@ -220,11 +224,8 @@ class GOGLibrary:
                 game_id = self._read_marker(str(entry))
                 if game_id:
                     installed.append(game_id)
-        except OSError as e:
-            logger.error(
-                "[GOGLibrary] get_installed scan failed: %s",
-                e,
-            )
+        except OSError:
+            logger.exception("[GOGLibrary] get_installed scan failed")
             return []
         logger.info(
             "[GOGLibrary] found %d installed games",
@@ -263,11 +264,8 @@ class GOGLibrary:
                         "install_path": game_dir,
                         "executable": self._resolve_exe(game_dir),
                     }
-        except OSError as e:
-            logger.error(
-                "[GOGLibrary] get_installed_game_info: %s",
-                e,
-            )
+        except OSError:
+            logger.exception("[GOGLibrary] get_installed_game_info")
         return None
 
     @staticmethod
@@ -288,14 +286,12 @@ class GOGLibrary:
             return None
         if not content:
             return None
-        try:
+        with contextlib.suppress(json.JSONDecodeError):
             data = json.loads(content)
             if isinstance(data, dict):
                 return data.get("game_id") or data.get("gameId")
             if isinstance(data, (str, int)):
                 return str(data)
-        except json.JSONDecodeError:
-            pass
         return content
 
     @staticmethod

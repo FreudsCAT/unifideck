@@ -1,20 +1,23 @@
 from __future__ import annotations
+
 import logging
 import time
 from typing import TYPE_CHECKING, Any
+
 if TYPE_CHECKING:
-    from ...event_bus.event_bus import EventBus
+    from unifideck.event_bus.event_bus import EventBus
 from .correlation import get_launch_id
+
 logger = logging.getLogger(__name__)
 LAUNCH_PHASE_TIMING_EVENT = "LAUNCH_PHASE_TIMING"
 class PhaseTimer:
     """Phase timer."""
-    __slots__ = ("_bus", "_phase", "_extra", "_t0")
+    __slots__ = ("_bus", "_extra", "_phase", "_t0")
     def __init__(
         self,
         bus: EventBus,
         phase: str,
-        extra: dict | None = None,
+        extra: dict[str, Any] | None = None,
     ) -> None:
         """Initialize the instance."""
         self._bus = bus

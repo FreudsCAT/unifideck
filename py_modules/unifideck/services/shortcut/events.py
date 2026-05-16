@@ -1,64 +1,67 @@
-"""Shortcut events mixin — bus emission on shortcut lifecycle.
-
-OP-14b | py_modules/unifideck/services/shortcut/events.py
-
-``EventsMixin`` exposes the helpers used by other mixins to emit bus
-events when a shortcut is created, updated, or removed. Centralised
-in one mixin so the bus-event schema is owned in a single place.
-"""
+"""services/shortcut/events.py — Event handlers for shortcut lifecycle."""
 
 from __future__ import annotations
+
 from typing import TYPE_CHECKING, Any
-from ...core.types import Events, Game
-from ...event_bus.event_bus_devex import subscribe
+
+from unifideck.core.types import Events, Game
+from unifideck.event_bus.event_bus_devex import subscribe
 
 if TYPE_CHECKING:
-    pass
+    # This is a mixin; `self` will be the ShortcutService facade
+    # at runtime. The facade provides ``add_game``, ``remove_game``
+    # and ``reconcile`` via ``_GamesMapMixin``. Mypy doesn't see
+    # the multiple-inheritance composition here (this file is
+    # imported standalone), so we declare the protocol of methods
+    # we rely on as TYPE_CHECKING-only forward refs.
+    from collections.abc import Sequence
 
 
 class EventsMixin:
-    """Bus subscriptions glued onto ``ShortcutService``."""
+    """Event subscriptions for ShortcutService.
+
+    Expects the composing class to provide the methods listed
+    in the ``if TYPE_CHECKING`` block below. Each handler reads
+    its payload from the bus and delegates to the facade.
+    """
+
+    if TYPE_CHECKING:
+        # Type-only declarations — implementations come from
+        # ``_GamesMapMixin`` at runtime through the MRO. These
+        # stubs exist purely so mypy knows the methods exist on
+        # ``self`` when this module is type-checked in isolation.
+        #
+        # Signatures match ``_GamesMapMixin`` exactly: ``async def
+        # foo(...) -> T`` (not ``def foo(...) -> Awaitable[T]``).
+        # Lot 12d fix: previously the stubs returned ``Awaitable[T]``
+        # which is semantically equivalent but mypy strict considered
+        # them incompatible with the ``async def`` definitions in
+        # ``_GamesMapMixin`` — surfaced as 3× ``[misc]`` "incompatible
+        # definition in base class" errors on the facade class
+        # body in service.py.
+        async def add_game(self, game: Game) -> int: ...
+        async def remove_game(self, app_id: int) -> bool: ...
+        async def reconcile(
+            self, games: Sequence[Game],
+        ) -> dict[str, int]: ...
 
     @subscribe(Events.DOWNLOAD_COMPLETE)
     async def _on_download_complete(self, **kwargs: Any) -> None:
-        """Create a Steam shortcut for a freshly-downloaded game.
-
-        Reads the ``game`` payload (a ``Game`` dataclass instance)
-        and delegates to ``add_game`` which creates the
-        ``shortcuts.vdf`` entry, generates the AppID, and updates
-        the games map.
-
-        Silently no-ops on a malformed payload (missing ``game``
-        or wrong type) — an incomplete download event from a
-        misbehaving emitter shouldn't crash the service.
-        """
+        """Add shortcut when a download finishes successfully."""
         game = kwargs.get("game")
         if isinstance(game, Game):
             await self.add_game(game)
 
     @subscribe(Events.GAME_UNINSTALLED)
     async def _on_game_uninstalled(self, **kwargs: Any) -> None:
-        """Remove the Steam shortcut for an uninstalled game.
-
-        Reads the ``app_id`` (Steam-side AppID) from the payload
-        and delegates to ``remove_game`` which deletes both the
-        ``shortcuts.vdf`` entry and the games-map row.
-        """
+        """Remove shortcut when a game is uninstalled."""
         app_id = kwargs.get("app_id")
         if isinstance(app_id, int):
             await self.remove_game(app_id)
 
     @subscribe(Events.SYNC_COMPLETE)
     async def _on_sync_complete(self, **kwargs: Any) -> None:
-        """Reconcile shortcuts after a full library sync.
-
-        After a sync, some games may have been added by other
-        store-side tools (the user installing through the store
-        client directly) and others removed. ``reconcile`` walks
-        the new game list and adds/removes shortcuts to match,
-        keeping the Steam library coherent with what the store
-        reports.
-        """
+        """Reconcile shortcuts against the new library state."""
         games = kwargs.get("games", [])
         if games:
             await self.reconcile(games)

@@ -20,14 +20,17 @@ specific ``InstallResult`` error code.
 """
 
 from __future__ import annotations
+
 import asyncio
+import contextlib
 import logging
-import os
 from collections.abc import Awaitable, Callable
+from pathlib import Path
 from typing import (
     TYPE_CHECKING,
     Any,
 )
+
 from .primitives import GOGFolderOps
 
 if TYPE_CHECKING:
@@ -116,7 +119,7 @@ class _GogdlProgressMonitor:
             stderr=asyncio.subprocess.STDOUT,
             env=env,
         )
-        proc._unifideck_gogdl_cleanup = cleanup
+        proc._unifideck_gogdl_cleanup = cleanup  # type: ignore[attr-defined]  # Process._unifideck_gogdl_cleanup added at spawn time
         return proc
 
     async def _read_progress_loop(
@@ -259,11 +262,8 @@ class _GogdlProgressMonitor:
             await asyncio.sleep(1)
             if proc.returncode is None:
                 proc.kill()
-        except Exception as e:
-            logger.error(
-                "[GOGInstaller] terminate failed: %s",
-                e,
-            )
+        except Exception:
+            logger.exception("[GOGInstaller] terminate failed")
 
     async def run_gogdl_repair_pass(
         self,
@@ -340,21 +340,19 @@ class _GogdlProgressMonitor:
     ) -> str:
         """Resolve repair path."""
         if folder_name:
-            predicted = os.path.join(base_path, folder_name)
-            if os.path.exists(predicted):
+            predicted = str(Path(base_path) / folder_name)
+            if Path(predicted).exists():
                 return predicted
-        try:
-            for name in os.listdir(base_path):
-                candidate = os.path.join(base_path, name)
-                if not os.path.isdir(candidate):
+        with contextlib.suppress(OSError):
+            for name in [entry.name for entry in Path(base_path).iterdir()]:
+                candidate = str(Path(base_path) / name)
+                if not Path(candidate).is_dir():
                     continue
                 if GOGFolderOps.has_goggame_info(
                     candidate,
                     game_id,
                 ):
                     return candidate
-        except OSError:
-            pass
         logger.warning(
             "[GOGInstaller] could not resolve repair path, using base_path",
         )

@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 import asyncio
 import json
 import logging
@@ -6,8 +7,10 @@ import urllib.error
 import urllib.request
 from dataclasses import dataclass
 from typing import Any
-from ...core.types import SubscriptionTier
-from ...core.net import ssl_ctx_permissive as _ssl
+
+from unifideck.core.net import ssl_ctx_permissive as _ssl
+from unifideck.core.types import SubscriptionTier
+
 logger = logging.getLogger(__name__)
 _PROBE_TIMEOUT_SECONDS = 10
 _GSSV_CLIENT_HEADER = "XboxComBrowser"
@@ -135,7 +138,7 @@ def _parse_tier_from_response(
 ) -> SubscriptionTier:
     """Parse tier from response."""
     if not isinstance(payload, dict):
-        return SubscriptionTier.NONE
+        return SubscriptionTier.NONE  # type: ignore[unreachable]  # fallback after exhaustive tier match
     offering = payload.get("offeringSettings")
     if not isinstance(offering, dict):
         return SubscriptionTier.NONE

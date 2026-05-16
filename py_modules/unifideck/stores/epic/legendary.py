@@ -30,7 +30,7 @@ from typing import Any, cast
 _logger = logging.getLogger(__name__)
 
 
-async def fetch_info(cli_path: str, game_id: str, *, timeout: float, log_prefix: str = "[epic_legendary]") -> dict[str, Any] | None:
+async def fetch_info(cli_path: str, game_id: str, *, timeout: float, log_prefix: str = "[epic_legendary]") -> dict[str, Any] | None:  # noqa: ASYNC109 — timeout is API value passed to underlying lib (urllib/aiohttp/subprocess), not an asyncio.timeout() wrapper
     """Fetch info."""
     if not cli_path:
         return None

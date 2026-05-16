@@ -17,10 +17,12 @@ high-level construction logic.
 """
 
 from __future__ import annotations
+
 import asyncio
+import contextlib
 import datetime
 import logging
-import os
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -47,7 +49,7 @@ class _PrefixHelpers:
             space_id,
         )
         try:
-            os.makedirs(prefix_path, exist_ok=True)
+            await asyncio.to_thread(lambda: Path(prefix_path).mkdir(parents=True, exist_ok=True))
             ok = await self.rsync_clone(
                 self._parent._config.template_dir_expanded,
                 prefix_path,
@@ -70,11 +72,8 @@ class _PrefixHelpers:
                 space_id,
             )
             return True
-        except Exception as e:
-            logger.error(
-                "[UbisoftPrefixManager] clone failed: %s",
-                e,
-            )
+        except Exception:
+            logger.exception("[UbisoftPrefixManager] clone failed")
             return False
 
     async def create_prefix_from_fresh_install(
@@ -91,7 +90,7 @@ class _PrefixHelpers:
         if not installer_path:
             return False
         try:
-            os.makedirs(prefix_path, exist_ok=True)
+            await asyncio.to_thread(lambda: Path(prefix_path).mkdir(parents=True, exist_ok=True))
             success = await self.run_silent_installer(
                 prefix_dir=prefix_path,
                 installer_path=installer_path,
@@ -118,12 +117,8 @@ class _PrefixHelpers:
                     prefix_path,
                 )
             return True
-        except Exception as e:
-            logger.exception(
-                "[UbisoftPrefixManager] fresh install failed for %s: %s",
-                space_id,
-                e,
-            )
+        except Exception:
+            logger.exception("[UbisoftPrefixManager] fresh install failed for %s", space_id)
             return False
 
     async def create_template_from_game_prefix(
@@ -136,7 +131,7 @@ class _PrefixHelpers:
             "[UbisoftPrefixManager] creating template from first game prefix",
         )
         try:
-            os.makedirs(template_dir, exist_ok=True)
+            await asyncio.to_thread(lambda: Path(template_dir).mkdir(parents=True, exist_ok=True))
             ok = await self.rsync_clone(
                 game_prefix,
                 template_dir,
@@ -192,11 +187,8 @@ class _PrefixHelpers:
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
-        except OSError as e:
-            logger.error(
-                "[UbisoftPrefixManager] subprocess spawn failed: %s",
-                e,
-            )
+        except OSError:
+            logger.exception("[UbisoftPrefixManager] subprocess spawn failed")
             return False
         return await self._await_installer_completion(proc)
 
@@ -211,13 +203,11 @@ class _PrefixHelpers:
                 timeout=15 * 60,
             )
         except TimeoutError:
-            logger.error(
+            logger.exception(
                 "[UbisoftPrefixManager] installer timed out after 15 min — killing",
             )
-            try:
+            with contextlib.suppress(ProcessLookupError):
                 proc.kill()
-            except ProcessLookupError:
-                pass
             await proc.wait()
             return False
         if proc.returncode != 0:
@@ -254,11 +244,8 @@ class _PrefixHelpers:
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
-        except OSError as e:
-            logger.error(
-                "[UbisoftPrefixManager] rsync spawn failed: %s",
-                e,
-            )
+        except OSError:
+            logger.exception("[UbisoftPrefixManager] rsync spawn failed")
             return False
         try:
             _stdout, stderr = await asyncio.wait_for(
@@ -266,13 +253,11 @@ class _PrefixHelpers:
                 timeout=30 * 60,
             )
         except TimeoutError:
-            logger.error(
+            logger.exception(
                 "[UbisoftPrefixManager] rsync timed out — killing",
             )
-            try:
+            with contextlib.suppress(ProcessLookupError):
                 proc.kill()
-            except ProcessLookupError:
-                pass
             await proc.wait()
             return False
         if proc.returncode != 0:
@@ -287,15 +272,21 @@ class _PrefixHelpers:
     @staticmethod
     def fix_pfx_symlink(prefix_dir: str) -> None:
         """Fix pfx symlink."""
-        pfx_link = os.path.join(prefix_dir, "pfx")
-        if not os.path.islink(pfx_link):
+        pfx_link = str(Path(prefix_dir) / "pfx")
+        if not Path(pfx_link).is_symlink():
             return
         try:
-            current_target = os.readlink(pfx_link)
-            if current_target in (prefix_dir, "."):
+            current_target = Path(pfx_link).readlink()
+            # ``readlink()`` returns ``Path`` but the comparison
+            # set mixes ``Path`` (``prefix_dir``) and ``str``
+            # (``"."``). Coerce both sides to ``str`` so mypy
+            # sees overlapping types — and the semantic stays
+            # identical (Path equality goes through ``__fspath__``
+            # which compares the string form anyway).
+            if str(current_target) in (str(prefix_dir), "."):
                 return
-            os.remove(pfx_link)
-            os.symlink(prefix_dir, pfx_link)
+            Path(pfx_link).unlink()
+            Path(pfx_link).symlink_to(prefix_dir)
             logger.info(
                 "[UbisoftPrefixManager] fixed pfx symlink: %s → %s",
                 current_target,
@@ -314,18 +305,15 @@ class _PrefixHelpers:
         space_id: str | None,
     ) -> None:
         """Write bootstrap marker."""
-        marker_path = os.path.join(
-            prefix_dir,
-            self._parent._config.bootstrap_marker,
-        )
-        created_at = datetime.datetime.now().isoformat()
+        marker_path = str(Path(prefix_dir) / self._parent._config.bootstrap_marker)
+        # UTC keeps the marker comparable across machines and survives
+        # DST transitions on the user's locale.
+        created_at = datetime.datetime.now(datetime.UTC).isoformat()
         lines = [source, f"created={created_at}"]
         if space_id:
             lines.insert(1, f"game={space_id}")
             try:
-                with open(
-                    marker_path,
-                    "w",
+                with Path(marker_path).open("w",
                     encoding="utf-8",
                 ) as f:
                     f.write("\n".join(lines) + "\n")

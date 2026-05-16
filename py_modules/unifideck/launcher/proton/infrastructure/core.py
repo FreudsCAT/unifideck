@@ -8,8 +8,8 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-from ...types.context import LaunchContext, RuntimeState
-from ...types.errors import DependencyMissingError
+from unifideck.launcher.types.context import LaunchContext, RuntimeState
+from unifideck.launcher.types.errors import DependencyMissingError
 
 logger = logging.getLogger(__name__)
 

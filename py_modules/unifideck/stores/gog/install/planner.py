@@ -17,6 +17,7 @@ by gogdl into bytes.
 """
 
 from __future__ import annotations
+
 import asyncio
 import json
 import logging
@@ -24,8 +25,10 @@ import shutil
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
-from ..config import GOGConfig
-from ..tokens import GOGTokenManager
+
+from unifideck.stores.gog.config import GOGConfig
+from unifideck.stores.gog.tokens import GOGTokenManager
+
 from .primitives import GOGFolderOps
 
 logger = logging.getLogger(__name__)
@@ -33,7 +36,64 @@ _CORRUPT_INSTALL_SIZE_THRESHOLD = 100 * 1024 * 1024
 _MIN_SIZE_RATIO = 0.8
 
 
-def _extract_disk_size_from_size_info(size_info: dict) -> int | None:
+def _build_verify_result(
+    *,
+    actual: int,
+    expected: int,
+    files: int,
+    has_info: bool,
+    has_exe: bool,
+    size_ratio: float,
+) -> dict[str, Any]:
+    """Build the dict returned by ``verify_installation``.
+
+    Centralises the four outcome shapes (incomplete-by-size,
+    missing-info, missing-exe, success) so the caller stays a
+    flat read of "collect metrics, log, return result". Keeping
+    them here also makes it obvious that the dict keys vary by
+    outcome — a fact that was easy to miss when the branches
+    were inlined.
+    """
+    if expected > 0 and size_ratio < _MIN_SIZE_RATIO:
+        return {
+            "complete": False,
+            "issue": (
+                f"Installation may be incomplete: "
+                f"only {size_ratio * 100:.0f}% of expected size"
+            ),
+            "actual_size": actual,
+            "expected_size": expected,
+            "has_info": has_info,
+            "has_exe": has_exe,
+        }
+    if not has_info:
+        return {
+            "complete": False,
+            "issue": "Missing goggame.info file",
+            "actual_size": actual,
+            "actual_files": files,
+            "has_exe": has_exe,
+        }
+    if not has_exe:
+        return {
+            "complete": False,
+            "issue": "Could not find game executable",
+            "actual_size": actual,
+            "actual_files": files,
+            "has_info": has_info,
+        }
+    return {
+        "complete": True,
+        "actual_size": actual,
+        "expected_size": expected,
+        "actual_files": files,
+        "size_ratio": size_ratio,
+        "has_info": has_info,
+        "has_exe": has_exe,
+    }
+
+
+def _extract_disk_size_from_size_info(size_info: dict[str, Any]) -> int | None:
     """Extract disk size from size info."""
     for lang_key in ("en-US", "en", "*"):
         if lang_key in size_info:
@@ -62,7 +122,7 @@ class GOGInstallPlanner:
         target_folder: str | None,
     ) -> str:
         """Determine install mode."""
-        if not target_folder or not Path(target_folder).exists():
+        if not target_folder or not await asyncio.to_thread(lambda: Path(target_folder).exists()):
             logger.info(
                 "[GOGInstallPlanner] folder missing → download",
             )
@@ -115,7 +175,14 @@ class GOGInstallPlanner:
         platform: str,
         exe_finder: Callable[[str], str | None],
     ) -> dict[str, Any]:
-        """Verify installation."""
+        """Verify installation.
+
+        Refactor history (2026-05-14): the dict-construction
+        for the four outcome shapes (incomplete-by-size, missing-
+        info, missing-exe, success) was inlined, pushing the
+        function over the 80-line cap. Pulled into the module-
+        level ``_build_verify_result`` helper.
+        """
         try:
             expected = await self.get_expected_disk_size(
                 game_id,
@@ -123,8 +190,17 @@ class GOGInstallPlanner:
             )
             actual = GOGFolderOps.folder_size(install_path)
             files = GOGFolderOps.count_files(install_path)
+            # ``has_goggame_info(path, game_id="")`` falls back to
+            # "is *any* ``goggame-*.info`` file present?" when the
+            # ``game_id`` arg is empty. For a correctness check
+            # that verifies THIS specific game's install, we MUST
+            # supply ``game_id`` — otherwise an orphaned info file
+            # from a previous install in the same folder yields a
+            # false positive and the planner concludes the install
+            # is complete when it isn't.
             has_info = GOGFolderOps.has_goggame_info(
                 install_path,
+                game_id,
             )
             has_exe = exe_finder(install_path) is not None
             size_ratio = (actual / expected) if expected > 0 else 1.0
@@ -138,49 +214,16 @@ class GOGInstallPlanner:
                 has_info,
                 has_exe,
             )
-            if expected > 0 and size_ratio < _MIN_SIZE_RATIO:
-                return {
-                    "complete": False,
-                    "issue": (
-                        f"Installation may be incomplete: "
-                        f"only {size_ratio * 100:.0f}% of "
-                        f"expected size"
-                    ),
-                    "actual_size": actual,
-                    "expected_size": expected,
-                    "has_info": has_info,
-                    "has_exe": has_exe,
-                }
-            if not has_info:
-                return {
-                    "complete": False,
-                    "issue": "Missing goggame.info file",
-                    "actual_size": actual,
-                    "actual_files": files,
-                    "has_exe": has_exe,
-                }
-            if not has_exe:
-                return {
-                    "complete": False,
-                    "issue": "Could not find game executable",
-                    "actual_size": actual,
-                    "actual_files": files,
-                    "has_info": has_info,
-                }
-            return {
-                "complete": True,
-                "actual_size": actual,
-                "expected_size": expected,
-                "actual_files": files,
-                "size_ratio": size_ratio,
-                "has_info": has_info,
-                "has_exe": has_exe,
-            }
-        except Exception as e:
-            logger.error(
-                "[GOGInstallPlanner] verify error: %s",
-                e,
+            return _build_verify_result(
+                actual=actual,
+                expected=expected,
+                files=files,
+                has_info=has_info,
+                has_exe=has_exe,
+                size_ratio=size_ratio,
             )
+        except Exception as e:
+            logger.exception("[GOGInstallPlanner] verify error")
             return {
                 "complete": False,
                 "issue": f"Verification failed: {e}",
@@ -273,12 +316,8 @@ class GOGInstallPlanner:
                     "[GOGInstallPlanner] removed %s",
                     target_folder,
                 )
-            except OSError as e:
-                logger.error(
-                    "[GOGInstallPlanner] corrupt cleanup failed for %s: %s",
-                    target_folder,
-                    e,
-                )
+            except OSError:
+                logger.exception("[GOGInstallPlanner] corrupt cleanup failed for %s", target_folder)
             support_dir = (
                 Path(self._config.gogdl_config_dir).expanduser()
                 / "gog-support"
@@ -314,11 +353,8 @@ class GOGInstallPlanner:
                     "[GOGInstallPlanner] removed orphan %s",
                     target_folder,
                 )
-            except OSError as e:
-                logger.error(
-                    "[GOGInstallPlanner] orphan cleanup failed: %s",
-                    e,
-                )
+            except OSError:
+                logger.exception("[GOGInstallPlanner] orphan cleanup failed")
             for manifest_path in self._manifest_locations(
                 game_id,
             ):

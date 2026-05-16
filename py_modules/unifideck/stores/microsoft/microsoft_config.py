@@ -1,13 +1,16 @@
 from __future__ import annotations
+
 import logging
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
+
 from unifideck.utils.config_helpers import get_cfg
+
 if TYPE_CHECKING:
-    from ...config import ConfigManager
+    from unifideck.config import ConfigManager
 logger = logging.getLogger(__name__)
 _MS_CONFIG_PREFIX = "stores.microsoft"
-_DEFAULT_TOKEN_FILE = "~/.local/share/unifideck/microsoft_tokens.json"
+_DEFAULT_TOKEN_FILE = "~/.local/share/unifideck/microsoft_tokens.json"  # file path, not a token value  # noqa: S105 — filename constant, not a credential
 @dataclass(frozen=True)
 class MicrosoftConfig:
     """Microsoft config."""

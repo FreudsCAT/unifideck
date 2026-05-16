@@ -1,32 +1,34 @@
 from __future__ import annotations
-import glob
+
 import json
 import logging
-import os
+from pathlib import Path
 from typing import TYPE_CHECKING
+
 from .matchers import smart_match_gog_language
 from .registry_io import _atomic_write_text
 from .resolver import GOG_DISPLAY_NAMES, get_unifideck_language
+
 if TYPE_CHECKING:
-    from ....config import ConfigManager
+    from unifideck.config import ConfigManager
 logger = logging.getLogger(__name__)
 def _find_goggame_info(game_id: str, install_dir: str) -> str | None:
     """Find goggame info."""
     search_dir = install_dir
     for _ in range(4):
-        candidate = os.path.join(search_dir, f"goggame-{game_id}.info")
-        if os.path.exists(candidate):
+        candidate = str(Path(search_dir) / f"goggame-{game_id}.info")
+        if Path(candidate).exists():
             return candidate
-        candidates = glob.glob(
-            os.path.join(search_dir, "goggame-*.info"),
-        )
+        candidates = [
+            str(p) for p in Path(search_dir).glob("goggame-*.info")
+        ]
         matching = [
             c for c in candidates
-            if os.path.basename(c).startswith(f"goggame-{game_id}")
+            if Path(c).name.startswith(f"goggame-{game_id}")
         ]
         if matching:
             return matching[0]
-        parent = os.path.dirname(search_dir)
+        parent = str(Path(search_dir).parent)
         if parent == search_dir:
             break
         search_dir = parent
@@ -50,7 +52,7 @@ def apply_gog_language(
         )
         return False
     try:
-        with open(info_path, encoding="utf-8") as fh:
+        with Path(info_path).open(encoding="utf-8") as fh:
             info = json.load(fh)
     except (OSError, json.JSONDecodeError) as err:
         logger.warning(

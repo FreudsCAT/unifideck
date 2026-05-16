@@ -1,11 +1,15 @@
 from __future__ import annotations
+
 import asyncio
+import contextlib
 import logging
 import os
 from pathlib import Path
-from ...core.types import Result
-from ..types.context import LaunchContext, RuntimeState
-from ..types.errors import DependencyMissingError, GameFailedError
+
+from unifideck.core.types import Result
+from unifideck.launcher.types.context import LaunchContext, RuntimeState
+from unifideck.launcher.types.errors import DependencyMissingError, GameFailedError
+
 logger = logging.getLogger(__name__)
 STEAM_RUNTIME_CANDIDATES = [
     "~/.steam/steam/ubuntu12_32/steam-runtime/run.sh",
@@ -23,11 +27,11 @@ def _restore_steam_env(env: dict[str, str]) -> None:
     steam_env = Path("~/.steam/steam.env").expanduser()
     if not steam_env.is_file():
         return
-    try:
-        for line in steam_env.read_text(
+    with contextlib.suppress(OSError):
+        for raw_line in steam_env.read_text(
             encoding="utf-8", errors="replace",
         ).splitlines():
-            line = line.strip()
+            line = raw_line.strip()
             if not line or line.startswith("#"):
                 continue
             if "=" not in line:
@@ -35,8 +39,6 @@ def _restore_steam_env(env: dict[str, str]) -> None:
             key, _, value = line.partition("=")
             if key in ("STEAM_OVERLAY", "STEAM_INPUT"):
                 env[key] = value
-    except OSError:
-        pass
 def _is_gog_dosbox_wrapper(ctx: LaunchContext) -> bool:
     """Is GOG dosbox wrapper."""
     return (
@@ -57,9 +59,20 @@ async def native_launch(
             context={"exe": str(exe_path), "store": ctx.store},
         )
     try:
-        os.chmod(exe_path, 0o755)
-    except OSError:
-        pass
+        # 0o755 (rwxr-xr-x) is the standard Linux mode for an
+        # executable file; we expect the game binary to be world-
+        # executable so the user (and any group) can launch it.
+        # ``exe_path`` is already a ``Path`` (from ``ctx.exe_path``)
+        # so we don't re-wrap. ``chmod`` is sync I/O — dispatch it
+        # off the event loop with ``asyncio.to_thread`` to avoid
+        # blocking other coroutines on a slow filesystem (NFS,
+        # external drive). The S103 noqa we used to carry on
+        # ``os.chmod`` is no longer needed: bandit's S103 rule only
+        # flags ``os.chmod``, not ``Path.chmod``, so silencing it
+        # would now be a stale comment.
+        await asyncio.to_thread(exe_path.chmod, 0o755)
+    except OSError as e:
+        logger.debug("[native] chmod 755 failed on %s: %s", exe_path, e)
     env = _prepare_launch_env(ctx)
     argv = _build_launch_argv(ctx, state, exe_path)
     cwd = ctx.work_dir if ctx.work_dir.is_dir() else exe_path.parent

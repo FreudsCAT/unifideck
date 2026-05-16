@@ -1,13 +1,16 @@
 from __future__ import annotations
+
 import asyncio
 import logging
 from pathlib import Path
 from typing import TYPE_CHECKING
-from ...core.types import Result
-from ..types.context import LaunchContext
-from ..types.errors import DependencyMissingError, GameNotFoundError
+
+from unifideck.core.types import Result
+from unifideck.launcher.types.context import LaunchContext
+from unifideck.launcher.types.errors import DependencyMissingError, GameNotFoundError
+
 if TYPE_CHECKING:
-    from ...auth.edge_browser import EdgeBrowser
+    from unifideck.auth.edge_browser import EdgeBrowser
 logger = logging.getLogger(__name__)
 _AUTH_URL_FILES = {
     "epic": "epic_auth_url.txt",
@@ -24,7 +27,7 @@ _AUTH_STORE_LABELS = {
 _MAX_AUTH_SECONDS = 600
 def _read_config_int(key: str, default: int) -> int:
     """Read config int."""
-    from ...utils.config_helpers import read_config_int_cold_start
+    from unifideck.utils.config_helpers import read_config_int_cold_start
     return read_config_int_cold_start(key, default)
 def _read_auth_url(store: str) -> str:
     """Read auth URL."""

@@ -30,6 +30,7 @@ Reference: Technical Document v1.0 — Section 3.6.1 (games.map),
 """
 from __future__ import annotations
 
+import contextlib
 import logging
 import os
 from pathlib import Path
@@ -38,7 +39,7 @@ from typing import TYPE_CHECKING, Any
 from .config_helpers import get_cfg
 
 if TYPE_CHECKING:
-    from ..config import ConfigManager
+    from unifideck.config import ConfigManager
 
 logger = logging.getLogger(__name__)
 
@@ -183,7 +184,7 @@ def _scan_level2(level1_path: Path) -> list[str]:
     listings, permissions trouble).
     """
     found: list[str] = []
-    try:
+    with contextlib.suppress(OSError):
         for level2_path in level1_path.iterdir():
             if (
                 not level2_path.is_dir()
@@ -191,9 +192,6 @@ def _scan_level2(level1_path: Path) -> list[str]:
             ):
                 continue
             found.extend(_collect_game_dirs(level2_path))
-    except OSError:
-        # best-effort operation; failure is non-fatal here
-        pass
     return found
 
 

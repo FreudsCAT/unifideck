@@ -15,13 +15,16 @@ parent install in place.
 """
 
 from __future__ import annotations
+
 import asyncio
 import json
 import logging
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any, cast
-from ...core.types import Result
+
+from unifideck.core.types import Result
+
 from .config import GOGConfig
 from .http import fetch_json_get
 from .tokens import GOGTokenManager
@@ -72,7 +75,7 @@ class GOGDlcManager:
         )
         if not isinstance(product, dict):
             return []
-        dlcs_info = product.get("dlcs", {})
+        dlcs_info = product.get("dlcs", {})  # type: ignore[unreachable]  # defensive guard on subprocess output
         if not isinstance(dlcs_info, dict) or not dlcs_info:
             logger.debug(
                 "[GOGDlcManager] no DLCs for %s",
@@ -126,7 +129,7 @@ class GOGDlcManager:
         """Spawn lang probe."""
         if not await self._tokens.refresh_if_stale():
             return None
-        if not Path(self._gogdl_bin).is_file():
+        if not await asyncio.to_thread(lambda: Path(self._gogdl_bin).is_file()):
             return None
         cmd = [
             self._gogdl_bin,
@@ -223,7 +226,7 @@ class GOGDlcManager:
 
     async def _dlc_preflight(self) -> Result | None:
         """Dlc preflight."""
-        if not Path(self._gogdl_bin).is_file():
+        if not await asyncio.to_thread(lambda: Path(self._gogdl_bin).is_file()):
             return Result(
                 success=False,
                 error="gogdl_not_found",
@@ -274,13 +277,10 @@ class GOGDlcManager:
                 stderr=asyncio.subprocess.STDOUT,
                 env=env,
             )
-            proc._unifideck_gogdl_cleanup = cleanup
+            proc._unifideck_gogdl_cleanup = cleanup  # type: ignore[attr-defined]  # Process._unifideck_gogdl_cleanup added at spawn time
             return proc
-        except OSError as e:
-            logger.error(
-                "[GOGDlcManager] gogdl spawn failed: %s",
-                e,
-            )
+        except OSError:
+            logger.exception("[GOGDlcManager] gogdl spawn failed")
             return None
 
     async def _dlc_read_loop(
@@ -362,7 +362,7 @@ class GOGDlcManager:
         data = await self._http_get_json(url)
         if not isinstance(data, dict):
             return None
-        links = data.get("links", {})
+        links = data.get("links", {})  # type: ignore[unreachable]  # defensive guard on subprocess output
         if not isinstance(links, dict):
             return None
         product_card = links.get("product_card")

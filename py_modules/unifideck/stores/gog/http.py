@@ -15,6 +15,7 @@ Kept module-level (no class) because there's no state to encapsulate.
 """
 
 from __future__ import annotations
+
 import asyncio
 import json
 import logging
@@ -22,7 +23,8 @@ import ssl
 import urllib.request
 from collections.abc import Mapping
 from typing import Any
-from ...core.net import ssl_ctx_permissive
+
+from unifideck.core.net import ssl_ctx_permissive
 
 _logger = logging.getLogger(__name__)
 
@@ -44,7 +46,7 @@ async def fetch_json_get(
     *,
     bearer: str | None = None,
     user_agent: str,
-    timeout: float = 15.0,
+    timeout: float = 15.0,  # noqa: ASYNC109 — timeout is API value passed to underlying lib (urllib/aiohttp/subprocess), not an asyncio.timeout() wrapper
     extra_headers: Mapping[str, str] | None = None,
     log_prefix: str = "[GOGHttp]",
 ) -> Any | None:

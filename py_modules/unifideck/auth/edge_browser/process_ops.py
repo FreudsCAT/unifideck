@@ -62,7 +62,7 @@ def graceful_kill(proc: subprocess.Popen[bytes] | None) -> None:
         logger.info("[Edge] Auth browser closed (cookies flushed)")
     except subprocess.TimeoutExpired:
         _force_kill(proc)
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         logger.debug("[Edge] Auth browser kill error (non-fatal): %s", e)
 
 
@@ -96,7 +96,7 @@ def _safe_getpgid(pid: int) -> int | None:
     """
     try:
         return os.getpgid(pid)
-    except Exception:  # noqa: BLE001
+    except Exception:
         # process already reaped, no permission, namespace quirk
         return None
 
@@ -113,9 +113,10 @@ def _force_kill(proc: subprocess.Popen[bytes]) -> None:
     try:
         _signal_group_or_single(proc, signal.SIGKILL)
         proc.wait(timeout=_KILL_TIMEOUT_S)
-    except Exception:  # noqa: BLE001, S110 — kill is best-effort
-        # process stuck in D state, or race; nothing more to do
-        pass
+    except Exception as e:
+        # Process may be stuck in D state, or we may have lost
+        # the race against natural exit; nothing more to do.
+        logger.debug("[Edge] SIGKILL/wait failed: %s", e)
 
 
 async def wait_and_check_crash(
@@ -163,9 +164,10 @@ def _log_crash_tail(log_file: str) -> None:
     try:
         with Path(log_file).open() as f:
             err = f.read()[:_CRASH_LOG_TAIL_CHARS]
-    except Exception:  # noqa: BLE001, S110 — log peek is optional
-        # log file missing/unreadable on Edge profile teardown
-        pass
+    except Exception as e:
+        # Log file missing / unreadable on Edge profile teardown.
+        # We still want to report the crash even without a tail.
+        logger.debug("[Edge] crash log read failed: %s", e)
     logger.error(
         "[Edge] Auth browser crashed before CDP. stderr: %s", err,
     )

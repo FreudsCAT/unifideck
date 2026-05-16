@@ -22,11 +22,13 @@ that pass paths directly to ``proton run``.
 """
 
 from __future__ import annotations
+
 import logging
 import os
 import shutil
 import subprocess
 from pathlib import Path
+
 from .config import UbisoftConfig
 
 logger = logging.getLogger(__name__)

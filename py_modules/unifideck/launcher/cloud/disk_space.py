@@ -1,11 +1,14 @@
 from __future__ import annotations
+
+import contextlib
 import logging
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
+
 if TYPE_CHECKING:
-    from ...config import ConfigManager
+    from unifideck.config import ConfigManager
 logger = logging.getLogger(__name__)
 _DEFAULT_MIN_FREE_BYTES = 1024 * 1024 * 1024
 @dataclass(frozen=True)
@@ -70,15 +73,13 @@ def assert_enough_space(
     """Assert enough space."""
     required = get_min_free_bytes(config)
     if store and game_id:
-        try:
+        with contextlib.suppress(ImportError):
             from .save_size_cache import get_observed_size
             cached = get_observed_size(config, store, game_id)
             if cached is not None and not cached.stale:
                 multiplier = _get_multiplier(config)
                 refined = int(cached.size_bytes * multiplier)
                 required = max(required, refined)
-        except ImportError:
-            pass
     check = check_disk_space(path, required)
     if not check.has_space:
         raise LowDiskSpaceError(

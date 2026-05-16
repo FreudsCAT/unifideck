@@ -1,12 +1,18 @@
 from __future__ import annotations
+
 import asyncio
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
-from ..microsoft_auth import build_xbl_chain, request_xsts_token
+
+from unifideck.stores.microsoft.microsoft_auth import (
+    build_xbl_chain,
+    request_xsts_token,
+)
+
 if TYPE_CHECKING:
-    from ..microsoft_config import MicrosoftConfig
+    from unifideck.stores.microsoft.microsoft_config import MicrosoftConfig
 logger = logging.getLogger(__name__)
 @dataclass
 class XBLTokenChain:
@@ -40,10 +46,8 @@ class XBLChainMixin:
                     ),
                 )
             )
-        except Exception as e:
-            logger.error(
-                "[MicrosoftTokens] XBL chain error: %s", e,
-            )
+        except Exception:
+            logger.exception("[MicrosoftTokens] XBL chain error")
             return None
         if not result:
             return None
@@ -82,10 +86,8 @@ class XBLChainMixin:
                     xbl_user_agent=self._config.xbl_user_agent,
                 ),
             )
-        except Exception as e:
-            logger.error(
-                "[MicrosoftTokens] GSSV XSTS error: %s", e,
-            )
+        except Exception:
+            logger.exception("[MicrosoftTokens] GSSV XSTS error")
             return None
         if not resp or "XErr" in resp:
             return None
@@ -125,10 +127,8 @@ class XBLChainMixin:
                     ),
                 )
             )
-        except Exception as e:
-            logger.error(
-                "[MicrosoftTokens] GSSV chain error: %s", e,
-            )
+        except Exception:
+            logger.exception("[MicrosoftTokens] GSSV chain error")
             return None
         if not result:
             return None

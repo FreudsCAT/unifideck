@@ -19,13 +19,16 @@ is authoritative for "which games are licensed".
 """
 
 from __future__ import annotations
+
+import contextlib
 import json
 import logging
 import os
 import re
 from pathlib import Path
 from typing import Any
-from ..config import UbisoftConfig
+
+from unifideck.stores.ubisoft.config import UbisoftConfig
 
 logger = logging.getLogger(__name__)
 _INSTALLS_REG_SECTION_FMT = (
@@ -103,10 +106,7 @@ def _update_or_append_install_section(
             sec_body,
             flags=re.MULTILINE,
         )
-        if count:
-            sec_body = new_body
-        else:
-            sec_body = sec_body.rstrip("\n") + "\n" + val + "\n"
+        sec_body = new_body if count else sec_body.rstrip("\n") + "\n" + val + "\n"
     return content[: sec_start + len(section)] + sec_body + content[sec_end:]
 
 
@@ -195,15 +195,13 @@ def clean_install_registry(
 def get_directory_size(path: str) -> int:
     """Get directory size."""
     total = 0
-    try:
+    with contextlib.suppress(OSError):
         for dirpath, _dirs, filenames in os.walk(path):
             for f in filenames:
                 try:
                     total += (Path(dirpath) / f).stat().st_size
                 except OSError:
                     continue
-    except OSError:
-        pass
     return total
 
 

@@ -21,10 +21,13 @@ one-time re-sync.
 """
 
 from __future__ import annotations
+
+import contextlib
 import hashlib
 import logging
 import os
 import shutil
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -61,12 +64,9 @@ class _PayloadSync:
             return 0
         synced = 0
         for _root, user_home in self._parent._paths.iter_user_homes(target_prefix):
-            target_root = os.path.join(
-                user_home,
-                self._parent._config.upc_local_subdir,
-            )
+            target_root = str(Path(user_home) / self._parent._config.upc_local_subdir)
             for rel_path, src_path in payload_sources.items():
-                dst_path = os.path.join(target_root, rel_path)
+                dst_path = str(Path(target_root) / rel_path)
                 if self.copy_payload_entry(
                     src_path,
                     dst_path,
@@ -117,7 +117,7 @@ class _PayloadSync:
         rel_path: str,
     ) -> bool:
         """Copy payload entry."""
-        if os.path.exists(dst_path):
+        if Path(dst_path).exists():
             try:
                 same = self.hash_artifact(src_path) == self.hash_artifact(dst_path)
             except OSError:
@@ -125,18 +125,18 @@ class _PayloadSync:
             if same:
                 return False
         try:
-            parent = os.path.dirname(dst_path)
+            parent = str(Path(dst_path).parent)
             if parent:
-                os.makedirs(parent, exist_ok=True)
+                Path(parent).mkdir(parents=True, exist_ok=True)
             if handle_directories:
-                if os.path.isdir(dst_path):
+                if Path(dst_path).is_dir():
                     shutil.rmtree(
                         dst_path,
                         ignore_errors=True,
                     )
-                elif os.path.exists(dst_path):
-                    os.remove(dst_path)
-                if os.path.isdir(src_path):
+                elif Path(dst_path).exists():
+                    Path(dst_path).unlink()
+                if Path(src_path).is_dir():
                     shutil.copytree(src_path, dst_path)
                 else:
                     shutil.copy2(src_path, dst_path)
@@ -182,11 +182,7 @@ class _PayloadSync:
             for fname in self._parent._config.upc_credential_files:
                 if fname in source_files:
                     continue
-                src = os.path.join(
-                    user_home,
-                    self._parent._config.upc_local_subdir,
-                    fname,
-                )
+                src = str(Path(user_home) / self._parent._config.upc_local_subdir / fname)
                 if self._parent._is_valid_css(
                     src,
                     _CSS_MIN_SOURCE_SIZE,
@@ -221,18 +217,12 @@ class _PayloadSync:
             source_prefix,
             pfx_first=True,
         ):
-            local_root = os.path.join(
-                user_home,
-                self._parent._config.upc_local_subdir,
-            )
+            local_root = str(Path(user_home) / self._parent._config.upc_local_subdir)
             for rel_path in self._parent._config.upc_auth_cache_artifacts:
                 if rel_path in artifacts:
                     continue
-                candidate = os.path.join(
-                    local_root,
-                    rel_path,
-                )
-                if os.path.isfile(candidate) or os.path.isdir(candidate):
+                candidate = str(Path(local_root) / rel_path)
+                if Path(candidate).is_file() or Path(candidate).is_dir():
                     artifacts[rel_path] = candidate
         return artifacts
 
@@ -240,9 +230,9 @@ class _PayloadSync:
     def hash_artifact(path: str) -> str:
         """Check whether artifact."""
         digest = hashlib.sha256()
-        if os.path.isdir(path):
+        if Path(path).is_dir():
             _PayloadSync._hash_directory_into(digest, path)
-        elif os.path.isfile(path):
+        elif Path(path).is_file():
             _PayloadSync._hash_file_into(digest, path)
         return digest.hexdigest()
 
@@ -252,7 +242,7 @@ class _PayloadSync:
         for root, _dirs, files in os.walk(path):
             files.sort()
             for name in files:
-                file_path = os.path.join(root, name)
+                file_path = str(Path(root) / name)
                 rel_path = os.path.relpath(file_path, path)
                 digest.update(rel_path.encode("utf-8"))
                 _PayloadSync._hash_file_into(digest, file_path)
@@ -260,12 +250,12 @@ class _PayloadSync:
     @staticmethod
     def _hash_file_into(digest: hashlib._Hash, path: str) -> None:
         """Hash file into."""
-        try:
-            with open(path, "rb") as f:
-                for chunk in iter(
-                    lambda: f.read(_HASH_CHUNK_SIZE),
-                    b"",
-                ):
-                    digest.update(chunk)
-        except OSError:
-            pass
+        with (
+            contextlib.suppress(OSError),
+            Path(path).open("rb") as f,
+        ):
+            for chunk in iter(
+                lambda: f.read(_HASH_CHUNK_SIZE),
+                b"",
+            ):
+                digest.update(chunk)

@@ -16,11 +16,12 @@ double-wrapping when an override shadows a base method.
 from __future__ import annotations
 
 import inspect
+from typing import Any
 
 from .wrapper import rpc_wrapper
 
 
-def auto_wrap_rpc_methods(cls: type) -> type:
+def auto_wrap_rpc_methods(cls: type[Any]) -> type[Any]:
     """Wrap every public async method on ``cls`` (incl. inherited) with rpc_wrapper.
 
     Iteration order: the full MRO so methods defined on

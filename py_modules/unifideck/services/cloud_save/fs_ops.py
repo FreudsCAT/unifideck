@@ -1,144 +1,135 @@
-"""Filesystem operations for cloud save sync.
+"""services/cloud_save/fs_ops.py — Filesystem primitives for cloud save sync.
 
-OP-17d | py_modules/unifideck/services/cloud_save/fs_ops.py
+Pure sync functions — the service runs them via
+``asyncio.to_thread`` to avoid blocking the event loop. Kept
+separate so ``service.py`` stays focused on orchestration
+(manifest compare, conflict routing) rather than I/O mechanics.
 
-Pure helpers shared by ``sync`` and ``manifest`` :
-
-* ``walk_mtimes(directory)`` — recursive (file, mtime) listing;
-* ``copy_tree(src, dst)`` — wrapper over ``shutil.copytree`` with
-  same-tree merge semantics;
-* ``read_text(path)`` / ``write_text(path, data)`` — atomic
-  text I/O via temp + rename.
-
-Centralising fs ops here keeps the sync logic focused on policy
-(what to copy, when) rather than on filesystem mechanics.
+Refactor history (2026-05-14): ``copy_tree`` was a single
+function at CC=17. The inner ``for file in files`` body had
+three stacked ``if`` branches (dot-file check, manifest check,
+copy with try/except) which all added to the parent nesting
+score. Pulled the skip decision and the per-file copy out into
+helpers so the outer loop is a flat read.
 """
-
 from __future__ import annotations
+
+import contextlib
 import logging
 import os
 import shutil
 from pathlib import Path
+
 from .constants import MANIFEST_FILE
 
 logger = logging.getLogger(__name__)
 
 
 def walk_mtimes(root: str) -> dict[str, float]:
-    """Walk a directory and collect every file's mtime.
+    """Return a flat ``{relpath: mtime}`` map for files under ``root``.
 
-    Skips hidden files (anything starting with ``.``) and the
-    manifest file itself, so the manifest's own mtime doesn't
-    pollute the comparison against the previous manifest.
-
-    Per-file ``stat`` errors (broken symlinks, race-on-delete) are
-    tolerated: the offending entry is simply omitted from the
-    result rather than aborting the whole walk.
-
-    Args:
-        root: absolute path of the directory to walk.
-
-    Returns:
-        Mapping ``"relative/path/from/root" → posix_mtime``.
+    Skips dot-files and the manifest itself. Per-file OSError
+    (file vanished mid-walk) is silently skipped — the caller
+    gets a partial map which is still useful for diff.
     """
-    result: dict[str, float] = {}
-    root_path = Path(root)
+    mtimes: dict[str, float] = {}
+    if not Path(root).is_dir():
+        return mtimes
+
     for dirpath, _, files in os.walk(root):
-        for name in files:
-            if name.startswith(".") or name == MANIFEST_FILE:
+        for f in files:
+            if f.startswith(".") or f == MANIFEST_FILE:
                 continue
-            full = Path(dirpath) / name
-            rel = str(full.relative_to(root_path))
-            try:
-                result[rel] = full.stat().st_mtime
-            except OSError:
-                continue
-    return result
+
+            path = str(Path(dirpath) / f)
+            rel = os.path.relpath(path, root)
+            with contextlib.suppress(OSError):
+                mtimes[rel] = Path(path).stat().st_mtime
+
+    return mtimes
 
 
-def copy_tree(src: str, dst: str, skip_manifest: bool = False) -> None:
-    """Copy a directory tree with merge semantics and metadata.
+def copy_tree(
+    src: str,
+    dst: str,
+    skip_manifest: bool = False,
+) -> None:
+    """Recursively copy ``src`` → ``dst`` preserving mtimes.
 
-    Unlike ``shutil.copytree`` (which refuses to copy into an
-    existing directory), this helper merges into ``dst`` — every
-    source file overwrites its counterpart in the destination, but
-    files only present in ``dst`` are preserved.
-
-    Uses ``shutil.copy2`` per file to preserve mtimes — essential
-    for the sync algorithm, which relies on those mtimes to decide
-    which side is fresher.
-
-    Hidden files (``.foo``) are always skipped. The manifest file
-    is also skipped when ``skip_manifest=True`` (the caller writes
-    the manifest separately after the copy completes).
-
-    Per-file copy failures are tolerated (logged at DEBUG) so a
-    single bad file doesn't abort the whole sync.
-
-    Args:
-        src: source directory.
-        dst: destination directory (created if absent).
-        skip_manifest: whether to skip the manifest file during
-            the copy. Defaults to ``False``.
+    Unlike ``shutil.copytree``, merges into an existing
+    directory instead of failing. ``skip_manifest=True``
+    excludes the manifest file — callers refresh it separately
+    via ``write_manifest`` so the old manifest never gets
+    copied forward with stale mtimes. Skips dot-files. Per-file
+    OSError logged at DEBUG, copy continues.
     """
-    src_path = Path(src)
-    dst_path = Path(dst)
-    if not src_path.is_dir():
+    if not Path(src).is_dir():
         return
-    dst_path.mkdir(parents=True, exist_ok=True)
-    for dirpath, _dirs, files in os.walk(src):
-        dirpath_p = Path(dirpath)
-        rel = dirpath_p.relative_to(src_path)
-        target_dir = dst_path / rel if str(rel) != "." else dst_path
-        target_dir.mkdir(parents=True, exist_ok=True)
-        for name in files:
-            if skip_manifest and name == MANIFEST_FILE:
+
+    Path(dst).mkdir(parents=True, exist_ok=True)
+
+    for dirpath, _dirnames, files in os.walk(src):
+        rel_dir = os.path.relpath(dirpath, src)
+        dst_dir = str(Path(dst) / rel_dir) if rel_dir != "." else dst
+        Path(dst_dir).mkdir(parents=True, exist_ok=True)
+        for f in files:
+            if _should_skip_file(f, skip_manifest):
                 continue
-            if name.startswith("."):
-                continue
-            src_file = dirpath_p / name
-            dst_file = target_dir / name
-            try:
-                shutil.copy2(src_file, dst_file)
-            except OSError as e:
-                logger.debug(
-                    "[CloudSaveService] copy %s failed: %s",
-                    src_file,
-                    e,
-                )
+            _copy_one_file(dirpath, dst_dir, f)
+
+
+# ─────────────────────────────────────────────────────────────────
+# Private helpers — extracted from a former single CC=17 function
+# ─────────────────────────────────────────────────────────────────
+
+
+def _should_skip_file(name: str, skip_manifest: bool) -> bool:
+    """Decide whether a file name should be skipped by ``copy_tree``.
+
+    The spec is "always skip dot-files". The ``skip_manifest``
+    flag adds the manifest to the skip set (manifest is
+    dot-prefixed in current layout, so it's *already* skipped
+    by the dot-rule — the explicit branch is kept for a future
+    where the manifest file name changes; right now the second
+    ``return`` is the always-taken path for dot-prefixed names).
+    """
+    if name.startswith("."):
+        return True
+    return bool(skip_manifest and name == MANIFEST_FILE)
+
+
+def _copy_one_file(src_dir: str, dst_dir: str, name: str) -> None:
+    """Copy one file from ``src_dir`` into ``dst_dir`` preserving mtime.
+
+    Uses ``shutil.copy2`` which preserves metadata (mtime,
+    permissions) — mtime preservation is what makes the next
+    ``walk_mtimes`` comparison reliable. Per-file OSError is
+    swallowed at DEBUG : a cloud save with a few unreadable
+    files is still worth syncing for the rest.
+    """
+    src_file = str(Path(src_dir) / name)
+    dst_file = str(Path(dst_dir) / name)
+    try:
+        shutil.copy2(src_file, dst_file)
+    except OSError as err:
+        logger.debug(
+            "[CloudSaveFsOps] failed to copy %s: %s", src_file, err,
+        )
 
 
 def read_text(path: str) -> str:
-    """Read a UTF-8 text file (sync).
-
-    Thin wrapper kept for symmetry with ``write_text`` and so the
-    cloud-save module has a single I/O surface (rather than each
-    caller importing ``pathlib`` individually).
-
-    Args:
-        path: absolute path of the file to read.
-
-    Returns:
-        File content as a string.
-
-    Raises:
-        OSError: passed through from ``Path.read_text``.
-    """
-    return Path(path).read_text(encoding="utf-8")
+    """Read ``path`` as UTF-8 text. Raises OSError on missing file."""
+    with Path(path).open(encoding="utf-8") as f:
+        return f.read()
 
 
 def write_text(path: str, content: str) -> None:
-    """Write a UTF-8 text file (sync, **not** atomic).
+    """Write ``content`` to ``path`` as UTF-8 text (overwrite)."""
+    parent = str(Path(path).parent)
+    if parent:
+        Path(parent).mkdir(parents=True, exist_ok=True)
 
-    Direct overwrite — atomicity is the caller's responsibility
-    (see ``manifest.write_manifest`` which wraps this with a temp
-    + rename).
-
-    Args:
-        path: absolute path of the file to write.
-        content: text to write.
-
-    Raises:
-        OSError: passed through from ``Path.write_text``.
-    """
-    Path(path).write_text(content, encoding="utf-8")
+    with Path(path).open("w", encoding="utf-8") as f:
+        f.write(content)
+        f.flush()
+        os.fsync(f.fileno())

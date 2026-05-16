@@ -19,14 +19,18 @@ is known) by walking the local install directory and looking for
 """
 
 from __future__ import annotations
+
 import json
 import logging
-import os
 import re
+from pathlib import Path
 from typing import Any
+
 from .config import UbisoftConfig
 from .id_map_sources import (
     _IdMapSources,
+)
+from .id_map_sources import (
     extract_game_id_from_registry as _extract_game_id_from_registry,
 )
 from .paths import UbisoftPrefixPaths
@@ -57,10 +61,10 @@ class UbisoftIdMap:
     def _load(self) -> None:
         """Load."""
         path = self._config.id_map_file_expanded
-        if not os.path.isfile(path):
+        if not Path(path).is_file():
             return
         try:
-            with open(path, encoding="utf-8") as f:
+            with Path(path).open(encoding="utf-8") as f:
                 data = json.load(f)
             if isinstance(data, dict):
                 self._cache = data
@@ -79,14 +83,12 @@ class UbisoftIdMap:
         """Save."""
         path = self._config.id_map_file_expanded
         try:
-            os.makedirs(
-                self._config.data_dir_expanded,
-                exist_ok=True,
+            Path(self._config.data_dir_expanded).mkdir(parents=True, exist_ok=True,
             )
             tmp_path = path + ".tmp"
-            with open(tmp_path, "w", encoding="utf-8") as f:
+            with Path(tmp_path).open("w", encoding="utf-8") as f:
                 json.dump(self._cache, f, indent=2)
-                os.replace(tmp_path, path)
+                Path(tmp_path).replace(path)
         except OSError as e:
             logger.warning(
                 "[UbisoftIdMap] could not save cache: %s",
@@ -201,7 +203,14 @@ class UbisoftIdMap:
     def get_steam_library_titles() -> set[str]:
         """Get steam library titles."""
         try:
-            from ...steam.library import get_steam_library_names
+            # ``get_steam_library_names`` is optional — it may
+            # have been removed in a steam/library refactor. The
+            # ImportError fallback below covers that at runtime;
+            # ignore the static missing-attr warning so mypy
+            # doesn't fail on the optional import.
+            from unifideck.steam.library import (  # type: ignore[attr-defined]
+                get_steam_library_names,
+            )
         except ImportError:
             logger.debug(
                 "[UbisoftIdMap] Steam library module not available",

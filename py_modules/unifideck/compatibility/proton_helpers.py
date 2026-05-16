@@ -1,4 +1,6 @@
 from __future__ import annotations
+
+import contextlib
 import json
 import logging
 import os
@@ -6,8 +8,9 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
+
 if TYPE_CHECKING:
-    from ..config import ConfigManager
+    from unifideck.config import ConfigManager
 logger = logging.getLogger(__name__)
 LINUX_RUNTIME_PREFIXES = (
     "steamlinuxruntime",
@@ -129,7 +132,7 @@ class ProtonToolsManager:
     def _resolve_config_vdf(self) -> Path:
 
         """Resolve config VDF."""
-        from ..steam.library import find_steam_path
+        from unifideck.steam.library import find_steam_path
         steam = find_steam_path(self._config)
         if steam is None:
             return (
@@ -220,11 +223,8 @@ class ProtonToolsManager:
             return self._config_vdf_path.read_text(
                 encoding="utf-8", errors="ignore",
             )
-        except OSError as e:
-            logger.error(
-                "[proton_helpers] read %s failed: %s",
-                self._config_vdf_path, e,
-            )
+        except OSError:
+            logger.exception("[proton_helpers] read %s failed", self._config_vdf_path)
             return ""
     def _write_config_vdf(self, content: str) -> bool:
         """Write config VDF."""
@@ -235,16 +235,12 @@ class ProtonToolsManager:
                 f.write(content)
                 f.flush()
                 os.fsync(f.fileno())
-            os.replace(tmp, self._config_vdf_path)
+            Path(tmp).replace(self._config_vdf_path)
             return True
-        except OSError as e:
-            logger.error(
-                "[proton_helpers] write failed: %s", e,
-            )
-            try:
+        except OSError:
+            logger.exception("[proton_helpers] write failed")
+            with contextlib.suppress(OSError):
                 tmp.unlink()
-            except OSError:
-                pass
             return False
     def load_proton_settings(self) -> dict[str, Any]:
         """Load PROTON settings."""
@@ -264,65 +260,78 @@ class ProtonToolsManager:
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
             tmp.write_text(json.dumps(data, indent=2))
-            os.replace(tmp, path)
+            Path(tmp).replace(path)
             return True
-        except OSError as e:
-            logger.error(
-                "[proton_helpers] save settings failed: %s",
-                e,
-            )
+        except OSError:
+            logger.exception("[proton_helpers] save settings failed")
             return False
-_singleton_pt_mgr = None
-def _pt_mgr():
-    """Pt mgr."""
+_singleton_pt_mgr: ProtonToolsManager | None = None
+
+
+def _pt_mgr() -> ProtonToolsManager:
+    """Return the singleton ProtonToolsManager, creating it on first call."""
     global _singleton_pt_mgr
     if _singleton_pt_mgr is None:
         _singleton_pt_mgr = ProtonToolsManager()
     return _singleton_pt_mgr
-def get_compat_tool_for_app(appid_unsigned):
-    """Get compat tool for app."""
+
+
+def get_compat_tool_for_app(appid_unsigned: int) -> str:
+    """Return the compat tool name registered for ``appid_unsigned``."""
     return (
         _pt_mgr()
         .get_for_app(int(appid_unsigned))
         .tool_name
     )
-def get_compat_tool_for_game(store_game_id):
-    """Get compat tool for game."""
+
+
+def get_compat_tool_for_game(store_game_id: str) -> dict[str, Any]:
+    """Return the empty compat tool descriptor for a store game (legacy stub)."""
     return {
         "tool_name": "",
         "appid": 0,
         "store_game_id": store_game_id,
     }
 
-def temporarily_clear_compat_tool(appid_unsigned):
 
-    """Temporarily clear compat tool."""
+def temporarily_clear_compat_tool(appid_unsigned: int) -> dict[str, Any]:
+    """Clear the compat tool for ``appid_unsigned``, returning previous state."""
     result = _pt_mgr().clear_for_app(int(appid_unsigned))
     return {
         "success": result.success,
         "previous": result.previous,
     }
-def restore_compat_tool(appid_unsigned, tool_name):
-    """Restore compat tool."""
+
+
+def restore_compat_tool(appid_unsigned: int, tool_name: str) -> dict[str, bool]:
+    """Restore the compat tool ``tool_name`` for ``appid_unsigned``."""
     result = _pt_mgr().set_for_app(
         int(appid_unsigned), tool_name,
     )
     return {"success": result.success}
-def save_proton_setting(store_game_id, tool_name):
-    """Save PROTON setting."""
+
+
+def save_proton_setting(
+    store_game_id: str, tool_name: str,
+) -> dict[str, bool]:
+    """Persist the chosen ``tool_name`` for ``store_game_id``."""
     settings = _pt_mgr().load_proton_settings()
     settings.setdefault("games", {})[store_game_id] = tool_name
     return {
         "success": _pt_mgr().save_proton_settings(settings),
     }
-def get_saved_proton_tool(store_game_id):
-    """Get saved PROTON tool."""
-    return (
+
+
+def get_saved_proton_tool(store_game_id: str) -> str:
+    """Return the saved Proton tool for ``store_game_id`` (or empty string)."""
+    return str(
         _pt_mgr()
         .load_proton_settings()
         .get("games", {})
-        .get(store_game_id, "")
+        .get(store_game_id, ""),
     )
-def resolve_proton_path(tool_name):
-    """Resolve PROTON path."""
+
+
+def resolve_proton_path(tool_name: str) -> str:
+    """Resolve a Proton tool path (legacy passthrough — returns name)."""
     return tool_name

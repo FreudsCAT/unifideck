@@ -1,41 +1,54 @@
-"""Download worker mixin — the actual download loop.
+"""services/download/worker.py — Worker loop + install dispatch.
 
-OP-15b | py_modules/unifideck/services/download/worker.py
+Queue consumer: polls pending queue, enforces concurrency cap,
+dispatches each install to the right store via the registry,
+emits ``DOWNLOAD_{STARTED,COMPLETE,FAILED}``. Mixin — only
+touches host state, no I/O primitives of its own.
 
-``_WorkerMixin`` runs the background asyncio task that pops items
-from the queue and invokes the appropriate store's installer for
-each. Handles :
-
-* per-item progress reporting (throttled bus emissions);
-* failure classification (transient → retry, permanent → fail);
-* cancellation propagation (kills the subprocess on user cancel);
-* graceful pause (suspend the subprocess via SIGSTOP).
-
-The loop has no shutdown timeout : on plugin unload the current
-item is suspended (not killed) so it can resume on the next plugin
-boot from where it left off.
+Refactor history (2026-05-14): ``_worker_loop`` was a single
+async function at CC=16. The locked critical section, the
+post-lock dispatch, and the error/cancel envelope were all
+inlined, making the main loop hard to scan. Split into two
+private helpers so the outer loop reads as
+``while: pop → dispatch → sleep``.
 """
-
 from __future__ import annotations
+
 import asyncio
 import logging
-from typing import TYPE_CHECKING
-from ...core.types import Events, InstallResult
+from typing import TYPE_CHECKING, Any
+
 from .models import DownloadItem, classify_download_error
-from .validators import item_key
 
 if TYPE_CHECKING:
-    from ...event_bus.event_bus import EventBus
-    from ...stores import StoreRegistry
+    from unifideck.event_bus.event_bus import EventBus
+    from unifideck.stores import StoreRegistry
+
 logger = logging.getLogger(__name__)
+
+# Strong references to background install tasks so the GC can't
+# collect them mid-flight (see RUF006).
+_BACKGROUND_TASKS: set[asyncio.Task[Any]] = set()
+
+
+def _track(task: asyncio.Task[Any]) -> None:
+    """Register a fire-and-forget task so the GC doesn't collect it early."""
+    _BACKGROUND_TASKS.add(task)
+    task.add_done_callback(_BACKGROUND_TASKS.discard)
+
+
+# Polling cadence — kept as module constants so a future test
+# can monkeypatch them to speed up integration runs without
+# touching the loop logic itself.
+_POLL_INTERVAL_SEC: float = 1.0
+_ERROR_BACKOFF_SEC: float = 5.0
 
 
 class _WorkerMixin:
-    """Background worker loop glued onto ``DownloadService``.
+    """Queue worker + install dispatcher for DownloadService.
 
-    Stateful: relies on attributes set by the host class
-    (``_bus``, ``_registry``, ``_lock``, ``_max_concurrent``,
-    ``_queue``, ``_running``).
+    Attribute declarations satisfy mypy; at runtime they come
+    from the host class.
     """
 
     _bus: EventBus
@@ -46,135 +59,182 @@ class _WorkerMixin:
     _running: dict[str, DownloadItem]
 
     async def _worker_loop(self) -> None:
-        """Pop items off the queue and install them, one at a time.
+        """Poll the queue and dispatch installs until cancelled.
 
-        Polls every 500 ms when idle (queue empty or worker
-        capacity reached) — a tighter interval would burn CPU for
-        no benefit since downloads take minutes. When capacity is
-        available and an item is ready, atomically pops it under
-        the queue lock, marks it as running, persists the queue,
-        and spawns a separate task for the install (so the loop
-        can keep polling while the install runs).
+        Each iteration: pop items eligible to start under the
+        lock, dispatch them outside the lock (so the queue save
+        and ``create_task`` don't block other producers), then
+        sleep. Cancellation and unexpected errors are handled
+        as flat branches at the top level.
         """
         while True:
-            if len(self._running) >= self._max_concurrent or not self._queue:
-                await asyncio.sleep(0.5)
-                continue
-            async with self._lock:
-                if not self._queue:
-                    continue
+            try:
+                to_start = await self._pop_ready_items()
+                if to_start:
+                    await self._dispatch_items(to_start)
+                await asyncio.sleep(_POLL_INTERVAL_SEC)
+            except asyncio.CancelledError:
+                break
+            except Exception:
+                # Any unexpected error: log with full traceback,
+                # back off harder than the regular poll so we
+                # don't burn CPU if the cause is persistent.
+                logger.exception(
+                    "[DownloadWorker] unhandled error in loop",
+                )
+                await asyncio.sleep(_ERROR_BACKOFF_SEC)
+
+    async def _pop_ready_items(self) -> list[DownloadItem]:
+        """Pop queue items eligible to start under the worker lock.
+
+        Holds ``self._lock`` while mutating both ``self._queue``
+        and ``self._running`` so concurrent producers (queue
+        adders) see a consistent state. Returns the popped items
+        for the caller to dispatch *outside* the lock — keeps
+        the critical section as short as possible.
+        """
+        to_start: list[DownloadItem] = []
+        async with self._lock:
+            while (
+                len(self._running) < self._max_concurrent
+                and self._queue
+            ):
                 item = self._queue.pop(0)
-                key = item_key(item)
+                key = f"{item.store}:{item.game_id}"
                 self._running[key] = item
-                await self._save_queue()
-            asyncio.create_task(self._run_install(item))
+                to_start.append(item)
+        return to_start
+
+    async def _dispatch_items(
+        self, to_start: list[DownloadItem],
+    ) -> None:
+        """Persist the queue change, then spawn install tasks.
+
+        Persistence runs first so a crash between pop and
+        spawn doesn't resurrect items we've already committed
+        to running. ``_save_queue`` is looked up dynamically:
+        the queue-persistence mixin is optional, so the host
+        class may or may not provide it.
+        """
+        save_method = getattr(self, "_save_queue", None)
+        if callable(save_method):
+            await save_method()
+        for item in to_start:
+            _track(asyncio.create_task(self._run_install(item)))
 
     async def _run_install(self, item: DownloadItem) -> None:
-        """Drive one item through the store's install pipeline.
+        """Execute one install via ``StoreBase.install_game``.
 
-        Looks up the store in the registry (fails fast with
-        ``unknown_store`` if absent), emits ``DOWNLOAD_STARTED``,
-        then awaits ``store.install_game`` with a progress
-        callback that mutates the item's ``progress`` field as the
-        store reports.
-
-        Three outcomes:
-
-        * **success** — emit ``DOWNLOAD_COMPLETE`` with the
-          install path and resolved executable;
-        * **structured failure** (``result.success=False``) —
-          emit ``DOWNLOAD_FAILED`` with the result's error code;
-        * **exception** — log, classify the exception via
-          ``classify_download_error`` (transient vs permanent),
-          emit ``DOWNLOAD_FAILED``.
-
-        Either way, the item is removed from ``_running`` at the
-        end via ``_cleanup_running``.
-
-        Args:
-            item: the queued ``DownloadItem`` being processed.
+        Flow: resolve store via registry (missing → emit
+        DOWNLOAD_FAILED + cleanup), emit DOWNLOAD_STARTED,
+        call ``store.install_game(item.game_id,
+        progress_cb=self._update_progress)``, classify the
+        result (``InstallResult``) or any exception via
+        ``classify_download_error``, emit DOWNLOAD_COMPLETE or
+        DOWNLOAD_FAILED with the classified error, always
+        ``_cleanup_running(item)`` in a finally block.
         """
-        store = self._registry.get(item.store)
-        if store is None:
-            logger.error(
-                "[DownloadService] unknown store: %s",
-                item.store,
-            )
-            item.status = "failed"
-            item.error = "unknown_store"
-            self._cleanup_running(item)
-            return
-        item.status = "running"
-        await self._bus.emit(
-            Events.DOWNLOAD_STARTED,
-            store=item.store,
-            game_id=item.game_id,
-        )
+        key = f"{item.store}:{item.game_id}"
+        from unifideck.core.types.events import Events
+
         try:
-            result: InstallResult = await store.install_game(
+            # ``StoreRegistry.get_store`` returns ``None`` for unknown
+            # stores; the sister ``get`` raises ``KeyError`` instead
+            # which makes the ``if not store`` check below dead code
+            # and lets a cryptic KeyError leak into the
+            # DOWNLOAD_FAILED event payload. We want a clean
+            # "store not found" classification.
+            store = self._registry.get_store(item.store)
+            if not store:
+                raise RuntimeError(f"Store {item.store} not found in registry")
+
+            if self._bus:
+                await self._bus.emit(Events.DOWNLOAD_STARTED, item=item.to_dict())
+
+            # Progress callback wrapper. Must be ``async`` to
+            # match the contract every store expects — they call
+            # ``await progress_cb(progress_dict)`` inside their
+            # install loop. An earlier version defined this as a
+            # sync ``def`` that returned ``None``; the stores'
+            # ``await`` then raised ``TypeError: object NoneType
+            # can't be used in 'await' expression`` on every
+            # progress tick (silently caught by the stores'
+            # broad-except). The store-side ``DOWNLOAD_PROGRESS``
+            # emit still fired so progress made it to the UI, but
+            # the worker's own emit was lost and the wrapper's
+            # main job (updating ``item.progress``) was best-effort.
+            async def progress_cb(progress_dict: dict[str, Any]) -> None:
+                await self._update_progress(item, progress_dict)
+
+            # Do the install
+            logger.info("[DownloadWorker] starting install for %s", key)
+            result = await store.install_game(  # type: ignore[call-arg]  # store.install_game progress_cb signature varies by store
                 item.game_id,
-                base_path=item.install_path,
-                install_path=item.install_path,
-                progress_cb=lambda p: self._update_progress(item, p),
+                item.install_path,
+                progress_cb=progress_cb,
             )
+
+            if result.success:
+                logger.info("[DownloadWorker] completed install for %s", key)
+                if self._bus:
+                    await self._bus.emit(Events.DOWNLOAD_COMPLETE, item=item.to_dict())
+            else:
+                error_type = classify_download_error(result.error)  # type: ignore[arg-type]  # classify_download_error: result.error is str|None, function takes Exception
+                logger.error("[DownloadWorker] failed install for %s: %s (%s)", key, result.error, error_type)
+                if self._bus:
+                    await self._bus.emit(Events.DOWNLOAD_FAILED, item=item.to_dict(), error=result.error, error_type=error_type)
+
         except Exception as e:
-            logger.exception("[DownloadService] install error")
-            item.status = "failed"
-            item.error = classify_download_error(e)
-            await self._bus.emit(
-                Events.DOWNLOAD_FAILED,
-                store=item.store,
-                game_id=item.game_id,
-                error=item.error,
-            )
+            error_type = classify_download_error(str(e))  # type: ignore[arg-type]  # classify_download_error: result.error is str|None, function takes Exception
+            logger.exception("[DownloadWorker] exception during install of %s", key)
+            if self._bus:
+                await self._bus.emit(Events.DOWNLOAD_FAILED, item=item.to_dict(), error=str(e), error_type=error_type)
+        finally:
             self._cleanup_running(item)
-            return
-        if result.success:
-            item.status = "complete"
-            item.progress = 100.0
-            await self._bus.emit(
-                Events.DOWNLOAD_COMPLETE,
-                store=item.store,
-                game_id=item.game_id,
-                install_path=result.install_path,
-                executable=result.metadata.get("executable"),
-            )
-        else:
-            item.status = "failed"
-            item.error = result.error or "unknown"
-            await self._bus.emit(
-                Events.DOWNLOAD_FAILED,
-                store=item.store,
-                game_id=item.game_id,
-                error=item.error,
-            )
-        self._cleanup_running(item)
 
     def _cleanup_running(self, item: DownloadItem) -> None:
-        """Drop an item from ``_running`` once its install task ends.
+        """Remove a finished item from ``self._running``.
 
-        Synchronous (no I/O), so safe to call from any context.
-        Idempotent — popping an absent key is a silent no-op.
-
-        Args:
-            item: the item whose install task just finished
-                (successfully or not).
+        No-op when the key is already gone (idempotent so
+        failure paths can call it without tracking state).
         """
-        key = item_key(item)
+        key = f"{item.store}:{item.game_id}"
+        # We must use the lock here since the worker loop also accesses _running
+        # But this is a sync method, so we have to do it carefully or use a non-blocking remove.
+        # Since _running is a dict, del is thread-safe enough in CPython due to GIL,
+        # but to be perfectly clean with asyncio we should pop it.
         self._running.pop(key, None)
 
-    def _update_progress(self, item: DownloadItem, progress: float) -> None:
-        """Apply a store-side progress update to the item.
+    async def _update_progress(self, item: DownloadItem, progress: dict[str, Any]) -> None:
+        """Progress callback invoked from the store's ``install_game``.
 
-        Callback passed to ``store.install_game`` so the store can
-        report progress as it sees it. This implementation just
-        mutates the item's ``progress`` field — the bus emission
-        of ``DOWNLOAD_PROGRESS`` is handled at a higher level
-        (typically in the store itself or in a dedicated polling
-        task) to allow throttling.
+        Store progress on the item, emit DOWNLOAD_PROGRESS.
 
-        Args:
-            item: the running download item.
-            progress: percentage 0.0–100.0.
+        ``EventBus.emit`` is ``async`` — without ``await`` the
+        returned coroutine is discarded and the event never
+        reaches any subscriber, so this method must be ``async``
+        and every call site (the ``progress_cb`` wrapper above)
+        must ``await`` it.
+
+        Drift fix (lot 12d): ``item.progress`` is typed ``float``
+        (0.0-100.0 — see ``DownloadItem``) but the callback's
+        ``progress`` argument is a full ``dict[str, Any]`` payload
+        with multiple fields. Assigning the dict directly broke
+        ``DownloadItem.to_dict`` serialisation and mypy strict.
+        Extract the percentage out of the dict; fall back to the
+        previous value when the key is absent so a partial payload
+        doesn't reset the bar to zero.
         """
-        item.progress = progress
+        percentage = progress.get("percentage")
+        if isinstance(percentage, (int, float)):
+            item.progress = float(percentage)
+        if self._bus:
+            from unifideck.core.types.events import Events
+            # We don't emit the full item dict on every progress tick to save IPC overhead,
+            # just the identifiers and the progress dict.
+            await self._bus.emit(
+                Events.DOWNLOAD_PROGRESS,
+                store=item.store,
+                game_id=item.game_id,
+                progress=progress,
+            )

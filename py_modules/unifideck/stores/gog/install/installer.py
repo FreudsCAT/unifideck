@@ -25,16 +25,19 @@ Sub-modules used : ``planner`` (mode determination), ``progress``
 """
 
 from __future__ import annotations
+
 import asyncio
 import logging
-import os
 import shutil
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, cast
-from ....core.types import InstallResult, Result
-from ..config import GOGConfig
-from ..tokens import GOGTokenManager
+
+from unifideck.core.types import InstallResult, Result
+from unifideck.stores.gog.config import GOGConfig
+from unifideck.stores.gog.tokens import GOGTokenManager
+
 from .helpers import _InstallHelpers
 from .marker import _PostInstallMarker
 from .planner import GOGInstallPlanner
@@ -56,7 +59,7 @@ class _InstallContext:
     platform: str = ""
     folder_name: str | None = None
     supported_langs: list[str] = field(default_factory=list)
-    existing_dirs: set = field(default_factory=set)
+    existing_dirs: set[Any] = field(default_factory=set)
     support_dir: str = ""
     install_mode: str = ""
     found_path: str = ""
@@ -135,7 +138,7 @@ class GOGInstaller:
             preferred_lang,
         )
 
-    def _snapshot_dirs(self, base_path: str) -> set:
+    def _snapshot_dirs(self, base_path: str) -> set[Any]:
         """Snapshot dirs."""
         return self._marker.snapshot_dirs(base_path)
 
@@ -144,7 +147,7 @@ class GOGInstaller:
         game_id: str,
         base_path: str,
         folder_name: str | None,
-        existing_dirs: set,
+        existing_dirs: set[Any],
     ) -> str | None:
         """Locate install."""
         return await self._marker.locate_install(
@@ -219,17 +222,15 @@ class GOGInstaller:
         base_path: str | None,
         progress_cb: Callable[[dict[str, Any]], Awaitable[None]] | None,
         language: str | None,
-    ) -> tuple:
+    ) -> tuple[Any, ...]:
         """Install preflight."""
-        if not os.path.isfile(self._gogdl_bin):
+        if not Path(self._gogdl_bin).is_file():
             return None, self._install_failed(
                 game_id,
                 "gogdl_not_found",
             )
-        resolved_base = base_path or os.path.expanduser(
-            self._config.download_dir,
-        )
-        os.makedirs(resolved_base, exist_ok=True)
+        resolved_base = base_path or str(Path(self._config.download_dir).expanduser())
+        Path(resolved_base).mkdir(parents=True, exist_ok=True)
         preferred_lang = language or self._locale_fn() or "en-US"
         explicit_lang = language is not None
         logger.info(
@@ -252,7 +253,14 @@ class GOGInstaller:
         self,
         ctx: _InstallContext,
     ) -> InstallResult | None:
-        """Install probe and prepare."""
+        """Install probe and prepare.
+
+        Refactor history (2026-05-14): extracted
+        ``_setup_support_dir`` to bring the fan-out under the
+        10-callee cap (was 12). The filesystem-prep concerns
+        (Path/expanduser/to_thread/makedirs) collapse cleanly
+        into one helper since they're a single semantic step.
+        """
         if not self._tokens.has_tokens:
             await self._tokens.load()
         if not await self._tokens.refresh_if_stale():
@@ -268,14 +276,9 @@ class GOGInstaller:
             ctx.supported_langs,
         ) = await self._helpers.probe_game_info(ctx.game_id)
         ctx.existing_dirs = self._snapshot_dirs(ctx.base_path)
-        ctx.support_dir = os.path.join(
-            os.path.expanduser(self._config.gogdl_config_dir),
-            "gog-support",
-            ctx.game_id,
-        )
-        os.makedirs(ctx.support_dir, exist_ok=True)
+        await self._setup_support_dir(ctx)
         target_folder = (
-            os.path.join(ctx.base_path, ctx.folder_name) if ctx.folder_name else None
+            str(Path(ctx.base_path) / ctx.folder_name) if ctx.folder_name else None
         )
         ctx.install_mode = await self._planner.determine_install_mode(
             ctx.game_id,
@@ -283,6 +286,27 @@ class GOGInstaller:
         )
         await self._wipe_manifests(ctx.game_id)
         return None
+
+    async def _setup_support_dir(self, ctx: _InstallContext) -> None:
+        """Compute ``ctx.support_dir`` and ``mkdir -p`` it.
+
+        Pulled out of ``_install_probe_and_prepare`` to keep
+        that function under the 10-callee fan-out cap. Groups
+        the four filesystem primitives (Path / expanduser /
+        to_thread / makedirs) into one semantic step:
+        "ensure the gog-support directory for this game
+        exists on disk".
+
+        The ``asyncio.to_thread`` indirection is there because
+        ``Path.expanduser`` can do I/O on some platforms
+        (pwd database lookups on POSIX) — pushing it off the
+        event loop is cheap and avoids the rare blocking call.
+        """
+        gogdl_config_dir = await asyncio.to_thread(
+            lambda: str(Path(self._config.gogdl_config_dir).expanduser()),
+        )
+        ctx.support_dir = str(Path(gogdl_config_dir) / "gog-support" / ctx.game_id)
+        await asyncio.to_thread(lambda: Path(ctx.support_dir).mkdir(parents=True, exist_ok=True))
 
     async def _install_run_gogdl_phase(
         self,
@@ -293,7 +317,7 @@ class GOGInstaller:
             ctx.base_path
             if ctx.install_mode == "download"
             else (
-                os.path.join(ctx.base_path, ctx.folder_name)
+                str(Path(ctx.base_path) / ctx.folder_name)
                 if ctx.folder_name
                 else ctx.base_path
             )
@@ -386,35 +410,18 @@ class GOGInstaller:
 
         def _sync() -> None:
             """Sync."""
-            base = os.path.expanduser(
-                self._config.gogdl_config_dir,
-            )
-            parent = os.path.dirname(base)
+            base = str(Path(self._config.gogdl_config_dir).expanduser())
+            parent = str(Path(base).parent)
             locations = [
-                os.path.join(
-                    base,
-                    "heroic_gogdl",
-                    "manifests",
-                    game_id,
-                ),
-                os.path.join(
-                    parent,
-                    "heroic_gogdl",
-                    "manifests",
-                    game_id,
-                ),
-                os.path.join(base, "manifests", game_id),
-                os.path.join(
-                    parent,
-                    "gogdl",
-                    "manifests",
-                    game_id,
-                ),
+                str(Path(base) / "heroic_gogdl" / "manifests" / game_id),
+                str(Path(parent) / "heroic_gogdl" / "manifests" / game_id),
+                str(Path(base) / "manifests" / game_id),
+                str(Path(parent) / "gogdl" / "manifests" / game_id),
             ]
             for path in locations:
-                if os.path.isfile(path):
+                if Path(path).is_file():
                     try:
-                        os.remove(path)
+                        Path(path).unlink()
                         logger.info(
                             "[GOGInstaller] cleared manifest: %s",
                             path,
@@ -432,14 +439,8 @@ class GOGInstaller:
 
         def _sync() -> None:
             """Sync."""
-            support_dir = os.path.join(
-                os.path.expanduser(
-                    self._config.gogdl_config_dir,
-                ),
-                "gog-support",
-                game_id,
-            )
-            if os.path.isdir(support_dir):
+            support_dir = str(Path(str(Path(self._config.gogdl_config_dir).expanduser())) / "gog-support" / game_id)
+            if Path(support_dir).is_dir():
                 try:
                     shutil.rmtree(support_dir)
                     logger.info(
@@ -457,8 +458,8 @@ class GOGInstaller:
         """Cleanup partial."""
         if not folder_name:
             return
-        partial = os.path.join(base_path, folder_name)
-        if os.path.exists(partial):
+        partial = str(Path(base_path) / folder_name)
+        if Path(partial).exists():
             logger.info(
                 "[GOGInstaller] cleanup partial: %s",
                 partial,

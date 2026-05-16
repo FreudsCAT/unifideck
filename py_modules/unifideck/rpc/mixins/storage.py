@@ -18,11 +18,16 @@ and classifies each path via the module-level helpers below.
 
 from __future__ import annotations
 
+import asyncio
+import logging
 import os
 import shutil
+from pathlib import Path
 from typing import Any
 
 from unifideck.rpc import RpcError
+
+logger = logging.getLogger(__name__)
 
 
 class StorageRPCMixin:
@@ -67,8 +72,10 @@ class StorageRPCMixin:
                 default = config.get(
                     "download.default_location", "internal",
                 )
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(
+                    "[storage] reading download.default_location failed: %s", e,
+                )
         return {
             "success": True,
             "locations": locations,
@@ -104,19 +111,25 @@ class StorageRPCMixin:
         before saving — the download service relies on this
         path being usable, so we want to fail fast at
         save-time rather than silently break the install
-        later.
+        later. Filesystem checks (``realpath``, ``is_dir``,
+        ``os.access``) are wrapped in ``asyncio.to_thread``
+        so the event loop is never blocked on a slow mount.
         """
         config = getattr(self, "config", None)
         if config is None:
             raise RpcError("service_unavailable", service="config")
-        resolved = os.path.realpath(os.path.expanduser(path or ""))
-        if not resolved or not os.path.isdir(resolved):
+        resolved = await asyncio.to_thread(
+            lambda: str(Path(path or "").expanduser().resolve()),
+        )
+        is_dir = await asyncio.to_thread(Path(resolved).is_dir)
+        if not resolved or not is_dir:
             return {
                 "success": False,
                 "error": "path_not_a_directory",
                 "path": resolved,
             }
-        if not os.access(resolved, os.W_OK):
+        writable = await asyncio.to_thread(os.access, resolved, os.W_OK)
+        if not writable:
             return {
                 "success": False,
                 "error": "path_not_writable",
@@ -145,7 +158,7 @@ def _classify_storage_location(
     """
     if custom_path and path.rstrip("/") == custom_path.rstrip("/"):
         return "custom"
-    if path.startswith("/run/media/") or path.startswith("/mnt/"):
+    if path.startswith(("/run/media/", "/mnt/")):
         return "sdcard"
     return "internal"
 

@@ -1,4 +1,5 @@
 import logging
+
 logger = logging.getLogger(__name__)
 _DLC_SUPPORTED_STORES = {"epic", "gog"}
 def get_dlc_flags(store: str) -> list[str]:

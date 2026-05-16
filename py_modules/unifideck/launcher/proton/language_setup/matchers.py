@@ -1,5 +1,8 @@
 from __future__ import annotations
+
 from .resolver import LOCALE_MAP
+
+
 def smart_match_locale(
     target: str,
 ) -> tuple[str, str, str, str] | None:

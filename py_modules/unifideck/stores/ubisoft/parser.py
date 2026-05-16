@@ -22,10 +22,12 @@ the offending entry or escalate.
 """
 
 import logging
-import os
 import re
+from pathlib import Path
 from typing import Any, Optional, cast
+
 import yaml
+
 from .parser_binary import (
     parse_install_id,
     parse_launch_id,
@@ -37,7 +39,7 @@ logger = logging.getLogger(__name__)
 BLACKLISTED_NAMES = ["gamename", "l1", "l2", "thumbimage", "", "ubisoft game", "name"]
 
 
-def _parse_config_header(header: bytes, second_eight: bool = False) -> tuple:
+def _parse_config_header(header: bytes, second_eight: bool = False) -> tuple[Any, ...]:
     """Parse config header."""
     try:
         offset = 1
@@ -62,7 +64,7 @@ def _parse_config_header(header: bytes, second_eight: bool = False) -> tuple:
         return 0, 0, 0, 10
 
 
-def _get_yaml_field(game_yaml: dict, field: str = "name") -> str:
+def _get_yaml_field(game_yaml: dict[str, Any], field: str = "name") -> str:
     """Get yaml field."""
     root = game_yaml.get("root", {})
     if not isinstance(root, dict):
@@ -78,7 +80,7 @@ def _get_yaml_field(game_yaml: dict, field: str = "name") -> str:
     return value
 
 
-def _yaml_field_installer_fallback(root: dict, current: str) -> str:
+def _yaml_field_installer_fallback(root: dict[str, Any], current: str) -> str:
     """Yaml field installer fallback."""
     installer = root.get("installer", {})
     if isinstance(installer, dict) and "game_identifier" in installer:
@@ -87,7 +89,7 @@ def _yaml_field_installer_fallback(root: dict, current: str) -> str:
 
 
 def _yaml_field_localization_fallback(
-    game_yaml: dict,
+    game_yaml: dict[str, Any],
     current: str,
 ) -> str:
     """Yaml field localization fallback."""
@@ -103,7 +105,7 @@ def _yaml_field_localization_fallback(
 class GameConfig:
     """Game config."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         """Initialize the instance."""
         self.install_id: int = 0
         self.launch_id: int = 0
@@ -125,20 +127,17 @@ class GameConfig:
 
 def _read_binary_file(filepath: str) -> bytes | None:
     """Read binary file."""
-    if not os.path.isfile(filepath):
+    if not Path(filepath).is_file():
         logger.warning(
             "[UbiParser] Configurations file not found: %s",
             filepath,
         )
         return None
     try:
-        with open(filepath, "rb") as f:
+        with Path(filepath).open("rb") as f:
             return f.read()
-    except Exception as e:
-        logger.error(
-            "[UbiParser] Failed to read configurations: %s",
-            e,
-        )
+    except Exception:
+        logger.exception("[UbiParser] Failed to read configurations")
         return None
 
 
@@ -227,7 +226,7 @@ def parse_configurations(filepath: str) -> list[GameConfig]:
 
 
 def _build_game_config(
-    parsed: dict, yaml_text: str, install_id: int, launch_id: int
+    parsed: dict[str, Any], yaml_text: str, install_id: int, launch_id: int
 ) -> GameConfig | None:
     """Build game config."""
     config = GameConfig()
@@ -257,7 +256,7 @@ def _build_game_config(
     return None
 
 
-def _extract_third_party_platform(root: dict, installer: Any) -> str:
+def _extract_third_party_platform(root: dict[str, Any], installer: Any) -> str:
     """Extract third party platform."""
     if isinstance(root.get("third_party_platform"), str):
         return cast("str", root["third_party_platform"].strip())
@@ -307,29 +306,26 @@ def parse_ownership(filepath: str) -> list[int]:
 
 def _read_ownership_file(filepath: str) -> bytes | None:
     """Read ownership file."""
-    if not os.path.isfile(filepath):
+    if not Path(filepath).is_file():
         logger.warning(
             "[UbiParser] Ownership file not found: %s",
             filepath,
         )
         return None
     try:
-        with open(filepath, "rb") as f:
+        with Path(filepath).open("rb") as f:
             return f.read()
-    except Exception as e:
-        logger.error(
-            "[UbiParser] Failed to read ownership: %s",
-            e,
-        )
+    except Exception:
+        logger.exception("[UbiParser] Failed to read ownership")
         return None
 
 
 def check_install_state(state_file: str) -> bool:
     """Check install state."""
-    if not os.path.isfile(state_file):
+    if not Path(state_file).is_file():
         return False
     try:
-        with open(state_file, "rb") as f:
+        with Path(state_file).open("rb") as f:
             first_byte = f.read(1)
             return first_byte == b"\x0a"
     except Exception:

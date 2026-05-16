@@ -16,17 +16,27 @@ renamed dirs, etc.).
 """
 
 from __future__ import annotations
+
+import asyncio
 import logging
 from pathlib import Path
 from typing import Any
-from ..config import UbisoftConfig
-from ..id_map import UbisoftIdMap
+
+from unifideck.stores.ubisoft.config import UbisoftConfig
+from unifideck.stores.ubisoft.id_map import UbisoftIdMap
+
 from .detection_cascade import _DetectionCascade
 from .detection_helpers import (
     _DetectionHelpers,
-    find_game_executable as _find_game_executable_impl,
     in_prefix_game_roots,
+)
+from .detection_helpers import (
+    find_game_executable as _find_game_executable_impl,
+)
+from .detection_helpers import (
     load_json_file_safe as _load_json_file_safe_impl,
+)
+from .detection_helpers import (
     write_install_marker as _write_install_marker_impl,
 )
 
@@ -83,10 +93,10 @@ class _InstallDetector:
         """Get installed."""
         installed: dict[str, Any] = {}
         prefixes_dir = Path(self._config.prefixes_dir_expanded)
-        if not prefixes_dir.is_dir():
+        if not await asyncio.to_thread(prefixes_dir.is_dir):
             return installed
         try:
-            entries = list(prefixes_dir.iterdir())
+            entries = list(await asyncio.to_thread(prefixes_dir.iterdir))
         except OSError as e:
             logger.warning(
                 "[UbisoftLibrary] prefixes_dir scan failed: %s",
@@ -211,7 +221,7 @@ class _InstallDetector:
     ) -> dict[str, Any] | None:
         """Detect installed game."""
         try:
-            from ..parser import check_install_state
+            from unifideck.stores.ubisoft.parser import check_install_state
         except ImportError as e:
             logger.debug(
                 "[UbisoftLibrary] ubisoft_parser unavailable: %s",

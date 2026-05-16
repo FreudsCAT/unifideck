@@ -1,12 +1,16 @@
 from __future__ import annotations
+
 import asyncio
 import logging
+
 import aiohttp
+
 from .cdp_primitives import (
     cdp_command,
     evaluate_in_target,
     wait_for_titled_target,
 )
+
 logger = logging.getLogger(__name__)
 _STEAM_SHARED_CONTEXT_TITLE = "SharedJSContext"
 async def open_controller_popup(steam_port: int, appid: int) -> None:

@@ -38,23 +38,32 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
-from ..event_bus import EventBus
-from ..steam.owned_games import get_owned_titles as _steam_owned_titles
-from ..stores import StoreRegistry
+from unifideck.event_bus import EventBus
+from unifideck.steam.owned_games import get_owned_titles as _steam_owned_titles
+from unifideck.stores import StoreRegistry
+
 from .cross_store_dedup import deduplicate_libraries
+from .sync_queries_mixin import _SyncQueriesMixin
 from .types import Events, Game, SyncResult
 
 if TYPE_CHECKING:
-    from ..config import ConfigManager
-    from ..stores.shared.store_base import StoreBase
+    from unifideck.config import ConfigManager
+    from unifideck.stores.shared.store_base import StoreBase
 
 logger = logging.getLogger(__name__)
 
 
-class SyncService:
-    """Single-flight multi-store library sync orchestrator."""
+class SyncService(_SyncQueriesMixin):
+    """Single-flight multi-store library sync orchestrator.
+
+    Inherits read-only query methods (``get_status``,
+    ``get_all_games``, ``get_games_by_store``, ``get_game_info``,
+    ``_flatten``) from :class:`_SyncQueriesMixin`. The split is
+    purely about file size — externally this class still
+    exposes the same API surface it always did.
+    """
 
     def __init__(
         self,
@@ -131,47 +140,26 @@ class SyncService:
         Returns:
             ``SyncResult`` with the merged games list +
             timing.
+
+        Refactor history (2026-05-14): pulled
+        ``_sync_no_stores_shortcircuit`` and
+        ``_sync_cancelled_result`` to bring this function
+        under the 80-line cap. Then ``_setup_sync`` and
+        ``_finalize_sync`` were extracted to bring fan-out
+        under the 10-callee cap — this function is now a
+        flat read of the orchestration skeleton, with each
+        phase delegated to a focused helper.
         """
-        self._cancel_event.clear()
-        started = time.monotonic()
-        available_stores = self._registry.available()
+        started, available_stores = await self._setup_sync()
         total = len(available_stores)
-        store_names = [s.store_name for s in available_stores]
-        await self._bus.emit(
-            Events.SYNC_STARTED,
-            stores=store_names,
-            scope="all",
-        )
-        logger.info("[SyncService] sync starting (%d stores)", total)
+        if total == 0:
+            return await self._sync_no_stores_shortcircuit()
         libraries: dict[str, list[Game]] = {}
         errors: dict[str, str] = {}
-        if total == 0:
-            logger.warning(
-                "[SyncService] no available stores — nothing to sync",
-            )
-            await self._bus.emit(
-                Events.SYNC_COMPLETE,
-                games=[],
-                stores_synced=[],
-            )
-            return SyncResult(
-                success=True,
-                games=[],
-                count=0,
-                duration_ms=0,
-            )
         for idx, store in enumerate(available_stores):
             if self._cancel_event.is_set():
-                logger.info(
-                    "[SyncService] sync cancelled at store %d/%d",
-                    idx,
-                    total,
-                )
-                await self._bus.emit(Events.SYNC_CANCELLED)
-                return SyncResult(
-                    success=False,
-                    error="cancelled",
-                    games=self._flatten(libraries),
+                return await self._sync_cancelled_result(
+                    idx, total, libraries,
                 )
             self._current_store = store.store_name
             await self._emit_progress(store.store_name, idx, total)
@@ -180,6 +168,52 @@ class SyncService:
             if err is not None:
                 errors[store.store_name] = err
         self._current_store = None
+        return await self._finalize_sync(libraries, errors, total, started)
+
+    async def _setup_sync(self) -> tuple[float, list[StoreBase]]:
+        """Reset cancel flag, snapshot the registry, emit SYNC_STARTED.
+
+        Pulled out of ``_run_sync`` so the orchestration loop
+        doesn't carry the setup phase's call targets. Pairs
+        with ``_finalize_sync`` to keep the fan-out under cap.
+
+        Returns:
+            ``(started, available_stores)`` — monotonic start
+            marker (consumed by ``_finalize_sync``) and the
+            store snapshot used as the progress denominator.
+        """
+        self._cancel_event.clear()
+        started = time.monotonic()
+        available_stores = self._registry.available()
+        store_names = [s.store_name for s in available_stores]
+        await self._bus.emit(
+            Events.SYNC_STARTED,
+            stores=store_names,
+            scope="all",
+        )
+        logger.info(
+            "[SyncService] sync starting (%d stores)", len(available_stores),
+        )
+        return started, available_stores
+
+    async def _finalize_sync(
+        self,
+        libraries: dict[str, list[Game]],
+        errors: dict[str, str],
+        total: int,
+        started: float,
+    ) -> SyncResult:
+        """Compute duration, dedup, persist state, emit SYNC_COMPLETE.
+
+        Pulled out of ``_run_sync`` so the orchestration
+        function doesn't carry the post-loop call targets
+        (``monotonic`` again, ``_apply_dedup_and_emit``,
+        ``time``, ``_aggregate_results``, ``emit``-for-complete).
+        Pairs with ``_setup_sync``.
+
+        Side effects: updates ``self._all_games`` and
+        ``self._last_sync_time``.
+        """
         duration_ms = int((time.monotonic() - started) * 1000)
         libraries = await self._apply_dedup_and_emit(libraries)
         self._all_games = libraries
@@ -198,6 +232,53 @@ class SyncService:
             duration_ms=duration_ms,
         )
         return result
+
+    async def _sync_no_stores_shortcircuit(self) -> SyncResult:
+        """Emit SYNC_COMPLETE with an empty payload and return.
+
+        Used when the registry exposes zero available stores —
+        a legitimate state (e.g. all stores in offline mode),
+        not an error. The empty SYNC_COMPLETE keeps any UI
+        listener in sync with backend reality.
+        """
+        logger.warning(
+            "[SyncService] no available stores — nothing to sync",
+        )
+        await self._bus.emit(
+            Events.SYNC_COMPLETE,
+            games=[],
+            stores_synced=[],
+        )
+        return SyncResult(
+            success=True,
+            games=[],
+            count=0,
+            duration_ms=0,
+        )
+
+    async def _sync_cancelled_result(
+        self,
+        idx: int,
+        total: int,
+        libraries: dict[str, list[Game]],
+    ) -> SyncResult:
+        """Emit SYNC_CANCELLED and return the partial result.
+
+        The result carries any games already fetched so the
+        caller can decide what to do with them (typically:
+        keep showing the previously-synced state).
+        """
+        logger.info(
+            "[SyncService] sync cancelled at store %d/%d",
+            idx,
+            total,
+        )
+        await self._bus.emit(Events.SYNC_CANCELLED)
+        return SyncResult(
+            success=False,
+            error="cancelled",
+            games=self._flatten(libraries),
+        )
 
     async def _apply_dedup_and_emit(
         self,
@@ -301,7 +382,7 @@ class SyncService:
         await self._emit_progress(store_name, 0, 1)
         games, err = await self._sync_one_store(store)
         if self._all_games is None:
-            self._all_games = {}
+            self._all_games = {}  # type: ignore[unreachable]  # fallback for store registry miss
         self._all_games[store_name] = games
         self._all_games = await self._apply_dedup_and_emit(self._all_games)
         self._last_sync_time = time.time()
@@ -346,11 +427,7 @@ class SyncService:
             )
             return games, None
         except Exception as e:
-            logger.exception(
-                "[SyncService] %s sync failed: %s",
-                store.store_name,
-                e,
-            )
+            logger.exception("[SyncService] %s sync failed", store.store_name)
             await self._bus.emit(
                 Events.SYNC_FAILED,
                 store=store.store_name,
@@ -455,93 +532,6 @@ class SyncService:
         logger.info("[SyncService] cancel requested")
         return True
 
-    def get_status(self) -> dict[str, Any]:
-        """Return a JSON-friendly status snapshot.
-
-        Used by the frontend's status poller. Cheap —
-        all four fields are O(1) reads + one sum.
-
-        Returns:
-            Dict with ``syncing``, ``current_store``,
-            ``last_sync_time``, ``total_games``.
-        """
-        return {
-            "syncing": self._lock.locked(),
-            "current_store": self._current_store,
-            "last_sync_time": self._last_sync_time,
-            "total_games": sum(len(g) for g in self._all_games.values()),
-        }
-
-    def get_all_games(self) -> list[Game]:
-        """Return the merged unified library (flattened across stores).
-
-        Snapshot copy via ``_flatten`` — caller can
-        iterate without worrying about ``_all_games``
-        being mutated by a concurrent sync.
-
-        Returns:
-            List of ``Game`` instances.
-        """
-        return self._flatten(self._all_games)
-
-    def get_games_by_store(self, store: str) -> list[Game]:
-        """Return the games list for one store (shallow copy).
-
-        Empty list when the store has no games or
-        doesn't exist — callers don't need to handle a
-        ``None`` return.
-
-        Args:
-            store: store identifier.
-
-        Returns:
-            List of games (shallow copy).
-        """
-        return list(self._all_games.get(store, []))
-
-    def get_game_info(self, app_id: int) -> dict[str, Any] | None:
-        """Find a game by AppID and return its dict form.
-
-        Linear scan across every store's list — O(N) on
-        total library size. Acceptable because callers
-        are interactive (single game per call from RPC),
-        not bulk loops.
-
-        ``dataclasses.asdict`` is imported lazily inside
-        the hit branch to keep the cold path zero-cost
-        (no import unless something matches).
-
-        Args:
-            app_id: Steam-style AppID.
-
-        Returns:
-            Dict form of the game, or ``None`` if not
-            found.
-        """
-        for games in self._all_games.values():
-            for game in games:
-                if game.app_id == app_id:
-                    from dataclasses import asdict
-
-                    return asdict(game)
-        return None
-
-    @staticmethod
-    def _flatten(libraries: dict[str, list[Game]]) -> list[Game]:
-        """Merge per-store lists into one flat list.
-
-        Order: dict-iteration order over stores (insertion
-        order on CPython 3.7+), then per-store insertion
-        order. Stable across calls so the UI's game
-        ordering doesn't shuffle between syncs.
-
-        Args:
-            libraries: per-store mapping.
-
-        Returns:
-            Single flat list of games.
-        """
-        merged: list[Game] = []
-        for games in libraries.values():
-            merged.extend(games)
-        return merged
+    # Read-only query API (get_status / get_all_games /
+    # get_games_by_store / get_game_info / _flatten) lives in
+    # ``_SyncQueriesMixin`` — see ``sync_queries_mixin.py``.

@@ -21,17 +21,21 @@ Returns the detected install path or ``None`` on timeout.
 """
 
 from __future__ import annotations
+
 import asyncio
+import contextlib
 import logging
-import os
 from collections.abc import Awaitable, Callable
+from pathlib import Path
 from typing import Any
-from ....core.types import InstallResult
-from ..config import UbisoftConfig
-from ..id_map import UbisoftIdMap
-from ..library import UbisoftLibrary
-from ..library.detection_helpers import looks_like_game_install
-from ..session import UbisoftSession
+
+from unifideck.core.types import InstallResult
+from unifideck.stores.ubisoft.config import UbisoftConfig
+from unifideck.stores.ubisoft.id_map import UbisoftIdMap
+from unifideck.stores.ubisoft.library import UbisoftLibrary
+from unifideck.stores.ubisoft.library.detection_helpers import looks_like_game_install
+from unifideck.stores.ubisoft.session import UbisoftSession
+
 from . import registry as _reg
 
 logger = logging.getLogger(__name__)
@@ -173,21 +177,19 @@ class _ManualUiInstaller:
     def _snapshot_install_base(
         self,
         install_path: str | None,
-    ) -> tuple[str, set]:
+    ) -> tuple[str, set[Any]]:
         """Snapshot install base."""
         install_base = install_path or self._config.default_install_base_expanded
-        os.makedirs(install_base, exist_ok=True)
-        dirs_before: set = set()
-        try:
-            dirs_before = set(os.listdir(install_base))
-        except OSError:
-            pass
+        Path(install_base).mkdir(parents=True, exist_ok=True)
+        dirs_before: set[Any] = set()
+        with contextlib.suppress(OSError):
+            dirs_before = {entry.name for entry in Path(install_base).iterdir()}
         return install_base, dirs_before
 
     @staticmethod
     async def _terminate_upc_gracefully(
         proc: asyncio.subprocess.Process,
-        timeout: float = 15.0,
+        timeout: float = 15.0,  # noqa: ASYNC109 — timeout is API value passed to underlying lib (urllib/aiohttp/subprocess), not an asyncio.timeout() wrapper
     ) -> None:
         """Terminate UPC gracefully."""
         if proc.returncode is not None:
@@ -199,10 +201,8 @@ class _ManualUiInstaller:
                 timeout=timeout,
             )
         except (TimeoutError, ProcessLookupError):
-            try:
+            with contextlib.suppress(ProcessLookupError):
                 proc.kill()
-            except ProcessLookupError:
-                pass
 
     async def _finalize_manual_install(
         self,
@@ -244,26 +244,18 @@ class _ManualUiInstaller:
     @staticmethod
     def _snapshot_upc_game_dirs(
         prefix_path: str,
-    ) -> dict[str, set]:
+    ) -> dict[str, set[Any]]:
         """Snapshot UPC game dirs."""
-        upc_games_rel = os.path.join(
-            "drive_c",
-            "Program Files (x86)",
-            "Ubisoft",
-            "Ubisoft Game Launcher",
-            "games",
-        )
+        upc_games_rel = str(Path("drive_c") / "Program Files (x86)" / "Ubisoft" / "Ubisoft Game Launcher" / "games")
         candidates = (
-            os.path.join(prefix_path, upc_games_rel),
-            os.path.join(prefix_path, "pfx", upc_games_rel),
+            str(Path(prefix_path) / upc_games_rel),
+            str(Path(prefix_path) / "pfx" / upc_games_rel),
         )
-        snapshots: dict[str, set] = {}
+        snapshots: dict[str, set[Any]] = {}
         for gdir in candidates:
-            if os.path.isdir(gdir):
-                try:
-                    snapshots[gdir] = set(os.listdir(gdir))
-                except OSError:
-                    pass
+            if Path(gdir).is_dir():
+                with contextlib.suppress(OSError):
+                    snapshots[gdir] = {entry.name for entry in Path(gdir).iterdir()}
         return snapshots
 
     async def _poll_for_new_install(
@@ -271,11 +263,20 @@ class _ManualUiInstaller:
         *,
         proc: asyncio.subprocess.Process,
         install_base: str,
-        dirs_before: set,
-        upc_dirs_before: dict[str, set],
+        dirs_before: set[Any],
+        upc_dirs_before: dict[str, set[Any]],
         progress_cb: Callable[[dict[str, Any]], Awaitable[None]] | None,
     ) -> str | None:
-        """Poll for new install."""
+        """Poll until a new install directory appears or UPC exits.
+
+        Refactor history (2026-05-14): the original implementation
+        nested the "is there a new dir anywhere" check three
+        levels deep (main install_base → UPC fallback loop → match
+        test) and inlined the periodic-progress emit at the same
+        level as the exit-detection branch. CC was 17. Pulled the
+        detection sweep and the progress tick into helpers so the
+        loop body reads as a flat ``detect → react → tick``.
+        """
         install_dir: str | None = None
         max_polls = int(
             _MANUAL_INSTALL_TIMEOUT_S / _MANUAL_INSTALL_POLL_INTERVAL_S,
@@ -284,16 +285,9 @@ class _ManualUiInstaller:
             await asyncio.sleep(
                 _MANUAL_INSTALL_POLL_INTERVAL_S,
             )
-            install_dir = self._check_new_dirs(
-                install_base,
-                dirs_before,
+            install_dir = self._detect_new_install(
+                install_base, dirs_before, upc_dirs_before,
             )
-            if not install_dir:
-                for gdir, before in upc_dirs_before.items():
-                    found = self._check_new_dirs(gdir, before)
-                    if found:
-                        install_dir = found
-                        break
             if install_dir:
                 logger.info(
                     "[UbisoftInstaller] detected install at %s",
@@ -314,17 +308,64 @@ class _ManualUiInstaller:
                     proc.returncode,
                 )
                 return None
-            if progress_cb and iteration % 6 == 0:
-                await progress_cb(
-                    {
-                        "status": "waiting",
-                        "message": (
-                            "Waiting for game installation in Ubisoft Connect…"
-                        ),
-                        "progress": 0,
-                    }
-                )
+            await self._maybe_emit_waiting_tick(progress_cb, iteration)
         return None
+
+    # ─────────────────────────────────────────────────────────────
+    # Helpers extracted from the former CC=17 _poll_for_new_install
+    # ─────────────────────────────────────────────────────────────
+
+    def _detect_new_install(
+        self,
+        install_base: str,
+        dirs_before: set[Any],
+        upc_dirs_before: dict[str, set[Any]],
+    ) -> str | None:
+        """Probe every watched directory for a new install dir.
+
+        Two locations are watched in priority order :
+
+            1. The user-configured ``install_base`` (the path
+               we asked UPC to use).
+            2. UPC's per-prefix ``games`` directories — fallback
+               for the case where UPC overrides ``install_base``
+               and drops the game in its default folder anyway.
+
+        Returns the *first* match found (priority preserved) or
+        ``None`` if nothing showed up since the snapshot.
+        """
+        install_dir = self._check_new_dirs(install_base, dirs_before)
+        if install_dir:
+            return install_dir
+        for gdir, before in upc_dirs_before.items():
+            found = self._check_new_dirs(gdir, before)
+            if found:
+                return found
+        return None
+
+    @staticmethod
+    async def _maybe_emit_waiting_tick(
+        progress_cb: Callable[[dict[str, Any]], Awaitable[None]] | None,
+        iteration: int,
+    ) -> None:
+        """Emit a "still waiting" progress tick every 6 iterations.
+
+        At ``_MANUAL_INSTALL_POLL_INTERVAL_S = 10s``, every 6
+        iterations is ~1 minute — enough to keep the UI alive
+        without spamming the bus on every poll. Silent no-op
+        when no progress callback is wired.
+        """
+        if not progress_cb or iteration % 6 != 0:
+            return
+        await progress_cb(
+            {
+                "status": "waiting",
+                "message": (
+                    "Waiting for game installation in Ubisoft Connect…"
+                ),
+                "progress": 0,
+            }
+        )
 
     @staticmethod
     async def _notify_install_detected(
@@ -337,7 +378,7 @@ class _ManualUiInstaller:
         await progress_cb(
             {
                 "status": "installing",
-                "message": (f"Game detected at {os.path.basename(install_dir)}"),
+                "message": (f"Game detected at {Path(install_dir).name}"),
                 "progress": 50,
             }
         )
@@ -345,17 +386,17 @@ class _ManualUiInstaller:
     def _check_new_dirs(
         self,
         base: str,
-        before: set,
+        before: set[Any],
     ) -> str | None:
         """Check new dirs."""
         try:
-            now = set(os.listdir(base))
+            now = {entry.name for entry in Path(base).iterdir()}
         except OSError:
             return None
         new_dirs = now - before
         for d in new_dirs:
-            candidate = os.path.join(base, d)
-            if os.path.isdir(candidate) and looks_like_game_install(candidate):
+            candidate = str(Path(base) / d)
+            if Path(candidate).is_dir() and looks_like_game_install(candidate):
                 return candidate
         return None
 

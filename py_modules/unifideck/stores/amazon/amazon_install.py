@@ -23,24 +23,25 @@ installs are cleaned up to avoid leaving orphaned files on disk.
 """
 
 from __future__ import annotations
+
 import asyncio
+import contextlib
 import logging
 import os
 import re
 from collections.abc import Awaitable, Callable
+from pathlib import Path
 from typing import Any, cast
-from ...core.manifest import write_manifest
-from ...core.types import (
-    Events,
-    InstallResult,
-    Result,
-)
-from ...event_bus.event_bus import EventBus
-from ..shared.cli_install_helpers import (
+
+from unifideck.core.manifest import write_manifest
+from unifideck.core.types import Events, InstallResult, Result
+from unifideck.event_bus.event_bus import EventBus
+from unifideck.stores.shared.cli_install_helpers import (
     drain_install_output,
     parse_progress_line,
     wait_with_timeout,
 )
+
 from . import amazon_fuel
 from .amazon_library import AmazonLibraryReader
 
@@ -67,7 +68,7 @@ class AmazonInstaller:
         self._cli_path = cli_path
         self._library = library
         self._find_exe = find_exe
-        self._default_install_root = os.path.expanduser(default_install_root)
+        self._default_install_root = str(Path(default_install_root).expanduser())
         self._install_timeout = install_timeout_seconds
         self._uninstall_timeout = uninstall_timeout_seconds
 
@@ -87,7 +88,7 @@ class AmazonInstaller:
             )
         base = base_path or self._default_install_root
         try:
-            os.makedirs(base, exist_ok=True)
+            await asyncio.to_thread(lambda: Path(base).mkdir(parents=True, exist_ok=True))
         except OSError as e:
             return InstallResult(
                 success=False,
@@ -127,13 +128,14 @@ class AmazonInstaller:
         if install_path:
             exe_relative = ""
             if exe:
-                try:
-                    exe_relative = os.path.relpath(
+                with contextlib.suppress(ValueError):
+                    # ``os.path.relpath`` is pure string manipulation —
+                    # no filesystem access — so the ASYNC240 rule
+                    # gives a false positive here.
+                    exe_relative = os.path.relpath(  # noqa: ASYNC240 — pure string op, no I/O
                         exe,
                         install_path,
                     )
-                except ValueError:
-                    pass
             await write_manifest(
                 install_dir=install_path,
                 store="amazon",
@@ -250,8 +252,8 @@ class AmazonInstaller:
         info = installed.get(game_id)
         if info and info.get("path"):
             return cast("str | None", info["path"])
-        default = os.path.join(base, game_id)
-        if os.path.isdir(default):
+        default = str(Path(base) / game_id)
+        if await asyncio.to_thread(lambda: Path(default).is_dir()):
             return default
         return None
 
@@ -292,7 +294,7 @@ class AmazonInstaller:
             stderr=asyncio.subprocess.PIPE,
         )
         try:
-            stdout, stderr = await asyncio.wait_for(
+            _stdout, stderr = await asyncio.wait_for(
                 proc.communicate(),
                 timeout=self._uninstall_timeout,
             )

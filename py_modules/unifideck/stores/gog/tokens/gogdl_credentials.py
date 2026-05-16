@@ -17,17 +17,20 @@ Used by ``install/progress.py`` (OP-51f) and ``install/marker.py``
 """
 
 from __future__ import annotations
+
 import asyncio
 import json
 import logging
 import os
 import tempfile
 import time
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
-    from ..config import GOGConfig
+
+    from unifideck.stores.gog.config import GOGConfig
 
     CleanupFn = Callable[[], Awaitable[None]]
 logger = logging.getLogger(__name__)
@@ -50,10 +53,7 @@ class _GogdlCreds:
             tempfile.mkdtemp,
             "unifideck-gogdl-",
         )
-        creds_path = os.path.join(
-            tmpdir,
-            "gog_credentials.json",
-        )
+        creds_path = str(Path(tmpdir) / "gog_credentials.json")
         gogdl_data = self._build_gogdl_data(
             access_token,
             refresh_token,
@@ -111,10 +111,10 @@ class _GogdlCreds:
             def _remove() -> None:
                 """Remove."""
                 try:
-                    if os.path.isfile(creds_path):
-                        os.remove(creds_path)
-                    if os.path.isdir(tmpdir):
-                        os.rmdir(tmpdir)
+                    if Path(creds_path).is_file():
+                        Path(creds_path).unlink()
+                    if Path(tmpdir).is_dir():
+                        Path(tmpdir).rmdir()
                 except OSError as e:
                     logger.warning(
                         "[GOGTokens] gogdl temp cleanup failed: %s",

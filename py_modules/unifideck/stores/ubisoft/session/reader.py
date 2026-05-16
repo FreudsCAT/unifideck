@@ -16,14 +16,16 @@ can be propagated to multiple target prefixes without re-reading.
 """
 
 from __future__ import annotations
+
 import logging
 from pathlib import Path
 from typing import TYPE_CHECKING
+
 from .payload import _CSS_MIN_SOURCE_SIZE
 
 if TYPE_CHECKING:
-    from ..config import UbisoftConfig
-    from ..paths import UbisoftPrefixPaths
+    from unifideck.stores.ubisoft.config import UbisoftConfig
+    from unifideck.stores.ubisoft.paths import UbisoftPrefixPaths
 _CSS_MIN_VALID_SIZE = 100
 logger = logging.getLogger(__name__)
 

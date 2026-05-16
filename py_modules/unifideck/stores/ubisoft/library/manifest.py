@@ -16,15 +16,17 @@ forwarding chain).
 """
 
 from __future__ import annotations
+
 import hashlib
 import logging
-import os
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
-from ....core.types import Game
-from ..config import UbisoftConfig
-from ..id_map import UbisoftIdMap
+
+from unifideck.core.types import Game
+from unifideck.stores.ubisoft.config import UbisoftConfig
+from unifideck.stores.ubisoft.id_map import UbisoftIdMap
 
 logger = logging.getLogger(__name__)
 
@@ -82,7 +84,7 @@ class _VisibleManifestProcessor:
     def load_manifest(self) -> list[dict[str, Any]]:
         """Load manifest."""
         manifest_file = self._config.visible_games_file_expanded
-        if not os.path.isfile(manifest_file):
+        if not Path(manifest_file).is_file():
             return []
         payload = self._load_json_file_safe(manifest_file)
         if payload is None:
@@ -90,10 +92,7 @@ class _VisibleManifestProcessor:
                 "[UbisoftLibrary] visible manifest load failed",
             )
             return []
-        if isinstance(payload, dict):
-            raw_games = payload.get("games", [])
-        else:
-            raw_games = payload
+        raw_games = payload.get("games", []) if isinstance(payload, dict) else payload
         if not isinstance(raw_games, list):
             return []
         manifest: list[dict[str, Any]] = []

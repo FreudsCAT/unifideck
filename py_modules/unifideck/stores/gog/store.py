@@ -22,14 +22,17 @@ etc. — every method is delegated to the appropriate sub-component.
 """
 
 from __future__ import annotations
+
+import asyncio
 import logging
-import os
 from collections.abc import Awaitable, Callable
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
-from ...auth.browser import OAuthBrowserMonitor
-from ...auth.edge_browser import EdgeBrowser
-from ...auth.orchestrator import AuthOrchestrator
-from ...core.types import (
+
+from unifideck.auth.browser import OAuthBrowserMonitor
+from unifideck.auth.edge_browser import EdgeBrowser
+from unifideck.auth.orchestrator import AuthOrchestrator
+from unifideck.core.types import (
     AuthResult,
     Events,
     Game,
@@ -37,9 +40,10 @@ from ...core.types import (
     Result,
     StoreInfo,
 )
-from ...services.shortcut import ShortcutService
-from ...utils.locale import get_unifideck_locale
-from ..shared.store_base import StoreBase
+from unifideck.services.shortcut import ShortcutService
+from unifideck.stores.shared.store_base import StoreBase
+from unifideck.utils.locale import get_unifideck_locale
+
 from .auth import GOGBrowserAuth
 from .config import GOG_AUTH_URL_FILE, GOGConfig
 from .dlc import GOGDlcManager
@@ -50,9 +54,9 @@ from .tokens import GOGTokenManager
 from .updates import GOGUpdatesChecker
 
 if TYPE_CHECKING:
-    from ...config import ConfigManager
-    from ...core.cache_manager import CacheManager
-    from ...event_bus.event_bus import EventBus
+    from unifideck.config import ConfigManager
+    from unifideck.core.cache_manager import CacheManager
+    from unifideck.event_bus.event_bus import EventBus
 logger = logging.getLogger(__name__)
 
 
@@ -199,7 +203,7 @@ class GOGStore(StoreBase):
         self._cached_available = available
         return available
 
-    async def start_auth(self, **kwargs) -> AuthResult:
+    async def start_auth(self, **kwargs: Any) -> AuthResult:
         """Start auth."""
         if self._auth is None:
             return AuthResult(
@@ -220,7 +224,7 @@ class GOGStore(StoreBase):
         await self._ensure_auth_shortcut()
         return cast("AuthResult", await self._auth.start_auth())
 
-    async def complete_auth(self, code: str = "", **kwargs) -> AuthResult:
+    async def complete_auth(self, code: str = "", **kwargs: Any) -> AuthResult:
         """Complete auth."""
         if await self.is_available():
             return AuthResult(success=True, store="gog")
@@ -243,10 +247,11 @@ class GOGStore(StoreBase):
                 store="gog",
             )
             result = Result(success=True)
-        auth_url_file = os.path.expanduser(GOG_AUTH_URL_FILE)
-        if os.path.isfile(auth_url_file):
+        auth_url_file = await asyncio.to_thread(lambda: str(Path(GOG_AUTH_URL_FILE).expanduser()))
+        if await asyncio.to_thread(lambda: Path(auth_url_file).is_file()):
             try:
-                os.remove(auth_url_file)
+                # ``Path.unlink`` is blocking I/O — wrap in to_thread.
+                await asyncio.to_thread(lambda: Path(auth_url_file).unlink())
             except OSError as e:
                 logger.warning(
                     "[GOGStore] could not remove %s: %s",
@@ -265,7 +270,7 @@ class GOGStore(StoreBase):
         base_path: str | None = None,
         progress_cb: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
         language: str | None = None,
-        **kwargs,
+        **kwargs: Any,
     ) -> InstallResult:
         """Install game."""
         return await self._installer.install_game(
@@ -288,7 +293,7 @@ class GOGStore(StoreBase):
         self,
         game_id: str,
         progress_cb: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
-        **kwargs,
+        **kwargs: Any,
     ) -> InstallResult:
         """Update game."""
         result = await self._updates.update_game(game_id)
@@ -361,12 +366,8 @@ class GOGStore(StoreBase):
                 "[GOGStore] no plugin_dir; gogdl path unresolvable",
             )
             return ""
-        path = os.path.join(
-            self._plugin_dir,
-            "bin",
-            "gogdl",
-        )
-        if not os.path.isfile(path):
+        path = str(Path(self._plugin_dir) / "bin" / "gogdl")
+        if not Path(path).is_file():
             logger.warning(
                 "[GOGStore] gogdl binary not found at %s",
                 path,
@@ -385,14 +386,8 @@ class GOGStore(StoreBase):
                 "[GOGStore] no shortcut_service; skipping auth shortcut creation",
             )
             return
-        launcher = os.path.join(
-            self._plugin_dir or "",
-            "py_modules",
-            "unifideck",
-            "launcher",
-            "dispatcher.py",
-        )
-        if not os.path.isfile(launcher):
+        launcher = str(Path(self._plugin_dir or "") / "py_modules" / "unifideck" / "launcher" / "dispatcher.py")
+        if not await asyncio.to_thread(lambda: Path(launcher).is_file()):
             logger.warning(
                 "[GOGStore] launcher dispatcher not found at %s",
                 launcher,

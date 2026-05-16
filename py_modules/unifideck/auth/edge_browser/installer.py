@@ -17,6 +17,7 @@ existing callers (EdgeBrowser) don't have to change.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import shutil
 import subprocess
@@ -59,7 +60,7 @@ class EdgeInstaller:
                 inst.ensure_controller_permissions()
     """
 
-    def __init__(self, clean_env_fn: Callable[[], dict]) -> None:
+    def __init__(self, clean_env_fn: Callable[[], dict[str, Any]]) -> None:
         """Build an installer.
 
         Args:
@@ -92,8 +93,7 @@ class EdgeInstaller:
         overrides_path = Path(
             f"~/.local/share/flatpak/overrides/{_EDGE_FLATPAK_APP}",
         ).expanduser()
-        # Check if override is already present
-        try:
+        with contextlib.suppress(OSError):
             if overrides_path.is_file():
                 with overrides_path.open() as fh:
                     if "/run/udev" in fh.read():
@@ -101,9 +101,6 @@ class EdgeInstaller:
                             "[Edge] Edge udev override already present",
                         )
                         return True
-        except OSError:
-            # best-effort operation; failure is non-fatal here
-            pass
         logger.info(
             "[Edge] Applying flatpak /run/udev:ro override for "
             "controller support",
@@ -131,7 +128,7 @@ class EdgeInstaller:
                 "[Edge] Edge udev override failed: %s", stderr,
             )
             return False
-        except Exception as exc:  # noqa: BLE001 — best-effort override
+        except Exception as exc:
             logger.warning(
                 "[Edge] Edge udev override error: %s", exc,
             )
@@ -182,7 +179,7 @@ class EdgeInstaller:
                     check=False,
                 ),
             )
-        except Exception as e:  # noqa: BLE001 — best-effort, surface as False
+        except Exception as e:
             # Intentional: subprocess failure here can't be classified
             # (network, missing binary, timeout). Log and surface as
             # False so the install wizard displays a retry option.
@@ -213,11 +210,15 @@ class EdgeInstaller:
                 ["xdg-settings", "get", "default-web-browser"],
                 capture_output=True, text=True, timeout=5,
                 env=self._clean_env(),
+                check=False,  # rc is read manually below
             )
             if result.returncode == 0 and result.stdout.strip():
                 return result.stdout.strip()
-        except Exception:  # noqa: BLE001, S110 — optional probe
-            pass
+        except Exception as e:
+            # ``xdg-settings`` may be missing on minimal Decks or
+            # fail under non-interactive sessions. Either way the
+            # caller treats a ``None`` snapshot as "skip restore".
+            logger.debug("[Edge] xdg-settings probe failed: %s", e)
         return None
 
     def _restore_default_browser(self, original: str | None) -> None:
@@ -245,7 +246,7 @@ class EdgeInstaller:
                     "[Edge] Restored default browser to %s",
                     original,
                 )
-        except Exception as e:  # noqa: BLE001 — non-fatal restore
+        except Exception as e:
             # Intentional: xdg-settings failure is non-fatal (e.g.
             # missing on non-desktop distros). Worst case the user
             # has to manually reset their browser.
@@ -255,7 +256,7 @@ class EdgeInstaller:
 
     # ── Install ──────────────────────────────────────────────────────
 
-    async def install(self) -> dict[str, Any]:  # noqa: PLR0911 — intentional: one return per error code / routing branch
+    async def install(self) -> dict[str, Any]:
         """Install Microsoft Edge via Flatpak in the user installation.
 
         Ensures the user Flathub remote exists first so this works on
@@ -317,7 +318,7 @@ class EdgeInstaller:
                 "success": False,
                 "error": "microsoft.edgeInstallTimeout",
             }
-        except Exception as e:  # noqa: BLE001 — install boundary
+        except Exception as e:
             logger.warning(
                 "[Edge] Microsoft Edge install error: %s", e,
             )

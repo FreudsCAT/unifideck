@@ -1,11 +1,14 @@
 from __future__ import annotations
+
+import asyncio
 import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
-from ...auth.browser import OAuthBrowserMonitor
-from ...auth.edge_browser import EdgeBrowser
-from ...auth.orchestrator import AuthOrchestrator
-from ...core.types import (
+
+from unifideck.auth.browser import OAuthBrowserMonitor
+from unifideck.auth.edge_browser import EdgeBrowser
+from unifideck.auth.orchestrator import AuthOrchestrator
+from unifideck.core.types import (
     AuthResult,
     Events,
     Game,
@@ -13,20 +16,20 @@ from ...core.types import (
     Result,
     StoreInfo,
 )
-from ...services.shortcut import ShortcutService
-from ...utils.locale import get_unifideck_locale
-from ..shared.store_base import StoreBase
+from unifideck.services.shortcut import ShortcutService
+from unifideck.stores.shared.store_base import StoreBase
+from unifideck.utils.locale import get_unifideck_locale
+
 from .microsoft_browser_auth import MicrosoftBrowserAuth
 from .microsoft_catalog import MicrosoftCatalogReader
 from .microsoft_config import MicrosoftConfig
 from .tokens import MicrosoftTokenManager
+
 if TYPE_CHECKING:
-    from ...config import ConfigManager
-    from ...core.cache_manager import CacheManager
-    from ...event_bus.event_bus import EventBus
-    from ...services.microsoft_subscription import (
-        MicrosoftSubscriptionService,
-    )
+    from unifideck.config import ConfigManager
+    from unifideck.core.cache_manager import CacheManager
+    from unifideck.event_bus.event_bus import EventBus
+    from unifideck.services.microsoft_subscription import MicrosoftSubscriptionService
 logger = logging.getLogger(__name__)
 class MicrosoftStore(StoreBase):
     """Microsoft store."""
@@ -121,7 +124,7 @@ class MicrosoftStore(StoreBase):
         self._cached_available = loaded
         return loaded
 
-    async def start_auth(self, **kwargs) -> AuthResult:
+    async def start_auth(self, **kwargs: Any) -> AuthResult:
 
         """Start auth."""
         if self._auth is None:
@@ -148,7 +151,7 @@ class MicrosoftStore(StoreBase):
         await self._ensure_auth_shortcut()
         return cast("AuthResult", await self._auth.start_auth())
     async def complete_auth(
-        self, code: str = "", **kwargs,
+        self, code: str = "", **kwargs: Any,
     ) -> AuthResult:
         """Complete auth."""
         if await self.is_available():
@@ -168,11 +171,10 @@ class MicrosoftStore(StoreBase):
                 Events.STORE_LOGOUT, store="microsoft",
             )
             result = Result(success=True)
-        auth_url_file = (
-            Path("~/.local/share/unifideck/ms_auth_url.txt")
-            .expanduser()
+        auth_url_file = await asyncio.to_thread(
+            lambda: Path("~/.local/share/unifideck/ms_auth_url.txt").expanduser(),
         )
-        if auth_url_file.is_file():
+        if await asyncio.to_thread(auth_url_file.is_file):
             try:
                 auth_url_file.unlink()
             except OSError as e:
@@ -220,10 +222,8 @@ class MicrosoftStore(StoreBase):
             )
         try:
             return await self._catalog.fetch_games()
-        except Exception as e:
-            logger.error(
-                "[MicrosoftStore] get_library failed: %s", e,
-            )
+        except Exception:
+            logger.exception("[MicrosoftStore] get_library failed")
             return []
 
     async def _check_subscription_gate(self) -> bool:
@@ -236,7 +236,7 @@ class MicrosoftStore(StoreBase):
                 "behaviour)",
             )
             return True
-        from ...core.types import SubscriptionTier
+        from unifideck.core.types import SubscriptionTier
         try:
             tier = await self._subscription_service.get_tier(
                 self._tokens,
@@ -353,7 +353,7 @@ class MicrosoftStore(StoreBase):
             / "py_modules" / "unifideck" / "launcher"
             / "dispatcher.py",
         )
-        if not Path(launcher).is_file():
+        if not await asyncio.to_thread(lambda: Path(launcher).is_file()):
             logger.warning(
                 "[MicrosoftStore] launcher dispatcher not "
                 "found at %s",

@@ -25,10 +25,12 @@ Exported as both a class and a module-level singleton
 ``exe_finder``.
 """
 
+import contextlib
 import logging
 import os
+from collections.abc import Iterator
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 logger = logging.getLogger(__name__)
 
@@ -81,6 +83,10 @@ class ExeFinder:
         hint_lower = {h.lower() for h in hints} if hints else set()
         candidates = [
             (
+                # Both ``_walk_exe_candidates`` (yield) and
+                # ``_score_candidate`` (param) now agree on ``str``
+                # for the path — see lot 12d alignment fix on
+                # ``_walk_exe_candidates``'s Iterator type.
                 self._score_candidate(
                     path,
                     depth,
@@ -93,7 +99,9 @@ class ExeFinder:
         ]
         return self._rank_candidates(candidates, install_path)
 
-    def _walk_exe_candidates(self, install_path: str):
+    def _walk_exe_candidates(
+        self, install_path: str,
+    ) -> Iterator[tuple[str, int, str]]:
         """Yield ``(path, depth, filename)`` for every viable .exe under root.
 
         Walk policy:
@@ -133,7 +141,7 @@ class ExeFinder:
         full_path: str,
         depth: int,
         filename: str,
-        hint_lower: set,
+        hint_lower: set[Any],
     ) -> int:
         """Compute the heuristic score for one candidate.
 
@@ -164,15 +172,13 @@ class ExeFinder:
         if filename.lower() in hint_lower:
             score += 1000
         score += (4 - depth) * 100
-        try:
+        with contextlib.suppress(OSError):
             size_mb = Path(full_path).stat().st_size // (1024 * 1024)
             score += min(size_mb, 500)
-        except OSError:
-            pass
         return score
 
     @staticmethod
-    def _rank_candidates(candidates: list[tuple], install_path: str) -> str | None:
+    def _rank_candidates(candidates: list[tuple[Any, ...]], install_path: str) -> str | None:
         """Sort candidates by score descending and return the best path.
 
         Empty list logs at DEBUG (common case for

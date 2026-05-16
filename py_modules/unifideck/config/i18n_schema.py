@@ -30,6 +30,7 @@ Reference: Technical Document v1.0 — Section 3.4.10 (i18n pipeline).
 """
 from __future__ import annotations
 
+import contextlib
 import logging
 import sys
 from pathlib import Path
@@ -102,26 +103,26 @@ def validate_i18n_schema(
         sys.path.insert(0, scripts_str)
         added = True
     try:
-        from locale_config import (
+        # ``locale_config`` lives in ``scripts/`` next to the
+        # package, dynamically injected on sys.path above. Mypy
+        # can't resolve it statically; the import is guarded by
+        # the ``is_file()`` check earlier so a missing file
+        # degrades gracefully.
+        from locale_config import (  # type: ignore[import-not-found]
             LocaleConfigError,
             load_from_dict,
         )
         try:
             load_from_dict(merged)
         except LocaleConfigError as e:
-            logger.error(
-                "[config_schema] i18n schema validation failed: %s", e,
-            )
+            logger.exception("[config_schema] i18n schema validation failed")
             raise ConfigSchemaError(
                 f"i18n schema violation: {e}",
             ) from e
     finally:
         if added:
-            try:
+            with contextlib.suppress(ValueError):
                 sys.path.remove(scripts_str)
-            except ValueError:
-                # best-effort cleanup; file may already be gone or locked
-                pass
 
 
 # ── Legacy compatibility alias ─────────────────────────────────

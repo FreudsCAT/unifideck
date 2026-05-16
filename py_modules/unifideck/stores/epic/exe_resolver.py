@@ -24,9 +24,10 @@ callers that pass paths directly to ``proton run``.
 from __future__ import annotations
 
 import logging
-import os
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
+
 from .legendary import fetch_info
 
 logger = logging.getLogger(__name__)
@@ -70,7 +71,7 @@ class EpicExeResolver:
         )
 
     @staticmethod
-    def _extract_install_path(info: dict | None) -> str | None:
+    def _extract_install_path(info: dict[str, Any] | None) -> str | None:
         """Extract install path."""
         if not info:
             return None
@@ -79,7 +80,7 @@ class EpicExeResolver:
         return path if isinstance(path, str) and path else None
 
     @staticmethod
-    def _extract_title(info: dict | None, game_id: str) -> str:
+    def _extract_title(info: dict[str, Any] | None, game_id: str) -> str:
         """Extract title."""
         if not info:
             return game_id
@@ -87,7 +88,7 @@ class EpicExeResolver:
         title = game.get("title")
         return title if isinstance(title, str) and title else game_id
 
-    def _resolve_executable(self, install_path: str | None, info: dict | None, game_id: str) -> str | None:
+    def _resolve_executable(self, install_path: str | None, info: dict[str, Any] | None, game_id: str) -> str | None:
         """Resolve executable."""
         if not install_path:
             return None
@@ -96,11 +97,8 @@ class EpicExeResolver:
             launch_exe = manifest.get("launch_exe")
             if isinstance(launch_exe, str) and launch_exe:
                 cleaned = launch_exe.lstrip("/")
-                candidate = os.path.join(
-                    install_path,
-                    cleaned,
-                )
-                if os.path.isfile(candidate):
+                candidate = str(Path(install_path) / cleaned)
+                if Path(candidate).is_file():
                     return candidate
                 logger.warning(
                     "[epic_exe_resolver] manifest launch_exe "

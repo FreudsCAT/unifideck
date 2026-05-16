@@ -17,10 +17,12 @@ and assigns each record a stable display order.
 """
 
 from __future__ import annotations
+
 import logging
 import re
 from typing import TYPE_CHECKING, Any
-from ....core.types import Game
+
+from unifideck.core.types import Game
 
 # NOTE: ``..steam_filter`` (the Ubisoft Steam dedup filter) was
 # removed in commits 6c84e7e and 908d350 because it caused issues
@@ -29,15 +31,21 @@ from ....core.types import Game
 # future update with a fixed implementation.
 
 if TYPE_CHECKING:
-    from ..config import UbisoftConfig
-    from ..id_map import UbisoftIdMap
-    from ..parser import GameConfig
+    from unifideck.stores.ubisoft.config import UbisoftConfig
+    from unifideck.stores.ubisoft.id_map import UbisoftIdMap
+    from unifideck.stores.ubisoft.parser import GameConfig
 logger = logging.getLogger(__name__)
 _MOJIBAKE_REPLACEMENTS = (
+    # The replacement strings on the right-hand side intentionally
+    # contain "ambiguous" Unicode characters (typographic apostrophe
+    # U+2019, trade mark U+2122, registered U+00AE) because the
+    # whole purpose of this table is to map mojibake byte sequences
+    # back to their correct Unicode glyphs. RUF001 has no signal
+    # here.
     ("Â®", "®"),
     ("â\u0080¢", "™"),
     ("â\u0084¢", "™"),
-    ("â\u0080\u0099", "’"),
+    ("â\u0080\u0099", "’"),  # noqa: RUF001 — intentional: mapping mojibake → correct glyph
     ("Â", ""),
 )
 _SKIP_TITLE_KEYWORDS = re.compile(

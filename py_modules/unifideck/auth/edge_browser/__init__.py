@@ -19,4 +19,6 @@ Public API preserved via re-export: callers continue to use
 """
 from __future__ import annotations
 
-from .edge import EdgeBrowser  # noqa: F401
+from .edge import EdgeBrowser
+
+__all__ = ["EdgeBrowser"]

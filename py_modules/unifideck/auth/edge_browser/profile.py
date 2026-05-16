@@ -22,6 +22,7 @@ Reference: edge_browser.py pre-split, lines 324-432 + 738-816.
 """
 from __future__ import annotations
 
+import contextlib
 import logging
 import shutil
 import sqlite3
@@ -135,11 +136,8 @@ class EdgeProfileManager:
             Path(self.legacy_log_file).is_file()
             and not Path(self.log_file).is_file()
         ):
-            try:
+            with contextlib.suppress(OSError):
                 shutil.move(self.legacy_log_file, self.log_file)
-            except OSError:
-                # filesystem op failed (perm/race); skip — legacy file tolerated
-                pass
 
     # ── Singleton lock artifacts ─────────────────────────────────────
 
@@ -220,7 +218,7 @@ class EdgeProfileManager:
                 return cast("bool", count > 0)
             finally:
                 conn.close()
-        except Exception as e:  # noqa: BLE001 — defensive read
+        except Exception as e:
             logger.debug("[Edge] Could not read cookie DB: %s", e)
             return True
         finally:
@@ -250,7 +248,7 @@ class EdgeProfileManager:
                 raise
             finally:
                 conn.close()
-        except Exception as e:  # noqa: BLE001 — defensive write
+        except Exception as e:
             logger.debug(
                 "[Edge] Could not clear shared browser cookies: %s", e,
             )
@@ -293,7 +291,7 @@ class EdgeProfileManager:
                 raise
             finally:
                 conn.close()
-        except Exception as e:  # noqa: BLE001 — best-effort
+        except Exception as e:
             logger.debug(
                 "[Edge] Could not clear %s cookies: %s", domain, e,
             )
@@ -313,7 +311,7 @@ class EdgeProfileManager:
                 else:
                     path_obj.unlink()
                 removed.append(path_obj.name)
-            except Exception as e:  # noqa: BLE001 — best-effort wipe
+            except Exception as e:
                 logger.warning(
                     "[Edge] Could not clear auth profile path %s: %s",
                     path, e,

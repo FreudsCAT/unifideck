@@ -1,11 +1,12 @@
 from __future__ import annotations
+
 import logging
-import os
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
+
 if TYPE_CHECKING:
-    from ...config import ConfigManager
+    from unifideck.config import ConfigManager
 logger = logging.getLogger(__name__)
 def _resolve_archive_dir(config: ConfigManager | None) -> Path:
     """Resolve archive dir."""
@@ -16,7 +17,7 @@ def _resolve_archive_dir(config: ConfigManager | None) -> Path:
             "logs.archive_path",
             "~/.local/share/unifideck/launches",
         )
-    path = Path(os.path.expanduser(raw))
+    path = Path(str(Path(raw).expanduser()))
     try:
         path.mkdir(parents=True, exist_ok=True)
     except OSError as err:
@@ -94,7 +95,7 @@ def detach_launch_handler(handler: logging.Handler | None) -> None:
 def read_launch_logs(
     launch_id: str, config: ConfigManager | None,
     *, max_lines: int = 500,
-) -> dict:
+) -> dict[str, Any]:
     """Read launch logs."""
     archive_dir = _resolve_archive_dir(config)
     path = archive_dir / f"{launch_id}.log"
@@ -128,7 +129,7 @@ def read_launch_logs(
 
 def export_launch_logs(
     launch_id: str, dest_path: str, config: ConfigManager | None,
-) -> dict:
+) -> dict[str, Any]:
 
     """Export launch logs."""
     import shutil
@@ -140,7 +141,7 @@ def export_launch_logs(
             "error": "source_missing",
             "dest_path": None,
         }
-    dst = Path(os.path.expanduser(dest_path))
+    dst = Path(str(Path(dest_path).expanduser()))
     if not dst.is_absolute():
         dst = Path.home() / dst
     try:

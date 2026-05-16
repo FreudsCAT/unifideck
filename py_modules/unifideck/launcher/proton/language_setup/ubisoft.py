@@ -1,27 +1,28 @@
 from __future__ import annotations
+
 import json
 import logging
-import os
 import re
+from pathlib import Path
 from typing import TYPE_CHECKING
+
 from .registry_io import (
     _apply_windows_locale,
     _atomic_write_text,
     _resolve_prefix,
 )
 from .resolver import UBISOFT_LANG_MAP, get_unifideck_language
+
 if TYPE_CHECKING:
-    from ....config import ConfigManager
+    from unifideck.config import ConfigManager
 logger = logging.getLogger(__name__)
 def _load_ubisoft_install_id(space_id: str) -> str | None:
     """Load UBISOFT install ID."""
-    id_map_path = os.path.expanduser(
-        "~/.local/share/unifideck/ubisoft_id_map.json",
-    )
-    if not os.path.isfile(id_map_path):
+    id_map_path = str(Path("~/.local/share/unifideck/ubisoft_id_map.json").expanduser())
+    if not Path(id_map_path).is_file():
         return None
     try:
-        with open(id_map_path, encoding="utf-8") as fh:
+        with Path(id_map_path).open(encoding="utf-8") as fh:
             id_map = json.load(fh)
     except (OSError, json.JSONDecodeError):
         return None
@@ -71,14 +72,14 @@ def _apply_ubisoft_upc_language(
             "skipping UPC language", space_id,
         )
         return False
-    system_reg = os.path.join(prefix_path, "system.reg")
-    if not os.path.isfile(system_reg):
+    system_reg = str(Path(prefix_path) / "system.reg")
+    if not Path(system_reg).is_file():
         logger.info(
             "[language_setup.ubisoft] system.reg missing at %s, "
             "skipping UPC language", system_reg,
         )
         return False
-    with open(system_reg, encoding="utf-8", errors="replace") as fh:
+    with Path(system_reg).open(encoding="utf-8", errors="replace") as fh:
         content = fh.read()
     ubi_lang = UBISOFT_LANG_MAP.get(
         language, language.split("-", maxsplit=1)[0],

@@ -10,6 +10,7 @@ with a deadline before Decky kills the process.
 """
 
 from __future__ import annotations
+
 import logging
 from typing import TYPE_CHECKING
 

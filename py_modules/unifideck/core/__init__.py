@@ -10,7 +10,7 @@ rpc, event_bus) depends on:
   family, ``Events`` enum, etc.);
 * ``io/``              — async file I/O helpers + atomic
   write primitive;
-* ``bin/``             — bundled-CLI resolver + version
+* ``binaries/``             — bundled-CLI resolver + version
   signature checks;
 * ``net/``             — TLS / SSL helpers;
 * ``cache_manager``    — TTL-keyed cache with persistent

@@ -1,84 +1,59 @@
-"""Launch history persistence.
+"""services/launch_history/persistence.py — Atomic JSON load/save.
 
-OP-21e | py_modules/unifideck/services/launch_history/persistence.py
-
-Two functions for serialising the launch history to disk :
-
-* ``load_history`` — read the JSON file on boot;
-* ``save_history`` — atomic write after every state change.
-
-The history is stored as a per-game list of ``(timestamp, code)``
-tuples, capped at the configured retention size.
+Same pattern as games.map: write to sibling ``.tmp``, flush,
+``os.replace`` into final position. POSIX guarantees readers
+see either old or new content, never partial. Free functions
+(no ``self``) — path passed explicitly so tests isolate state.
 """
-
 from __future__ import annotations
+
+import contextlib
 import json
 import logging
+import os
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
 
 def load_history(path: Path) -> dict[str, Any]:
-    """Load the persisted launch history from disk.
-
-    Returns an empty dict when the file is absent (first boot) or
-    when the JSON is malformed (logged at WARN). A corrupt file
-    is recoverable — the user just loses the failure history for
-    the games involved, but their circuit breakers reset and
-    everything keeps working.
-
-    Args:
-        path: absolute path of the history JSON file.
-
-    Returns:
-        Mapping ``"game_key" → {failures: [...], bypass_armed: ts}``.
-    """
-    if not path.exists():
+    """Read + parse the JSON file. Returns ``{}`` on any error."""
+    if not path.is_file():
         return {}
+
     try:
-        return cast(
-            "dict[str, Any]",
-            json.loads(path.read_text() or "{}"),
-        )
-    except (json.JSONDecodeError, OSError) as err:
-        logger.warning(
-            "[LaunchHistory] could not read %s: %s — starting fresh",
-            path,
-            err,
-        )
+        with Path(path).open(encoding="utf-8") as f:
+            data = json.load(f)
+
+        if not isinstance(data, dict):
+            logger.warning("[LaunchHistory] %s is not a dictionary", path)
+            return {}
+
+        return data
+    except json.JSONDecodeError as e:
+        logger.warning("[LaunchHistory] Malformed JSON in %s: %s", path, e)
+        return {}
+    except Exception as e:
+        logger.warning("[LaunchHistory] Failed to load %s: %s", path, e)
         return {}
 
 
 def save_history(path: Path, data: dict[str, Any]) -> None:
-    """Persist the launch history to disk atomically.
+    """Write the JSON file atomically (tmp + replace)."""
+    tmp_path = path.with_suffix(".json.tmp")
 
-    Creates the parent directory if absent, writes to ``<path>.tmp``,
-    then ``replace`` to swap the temp file over the target.
-    ``replace`` is atomic on every supported filesystem.
-
-    On failure, the temp file is cleaned up so a partial write
-    can't accumulate. The save error itself is logged at ERROR
-    (not WARN) because losing the launch history means the
-    circuit breaker decisions will be wrong for a while.
-
-    Args:
-        path: absolute path of the history JSON file.
-        data: the mapping to serialise.
-    """
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
     try:
-        tmp.write_text(json.dumps(data, indent=2))
-        tmp.replace(path)
-    except OSError as err:
-        logger.error(
-            "[LaunchHistory] save failed for %s: %s",
-            path,
-            err,
-        )
-        try:
-            tmp.unlink(missing_ok=True)
-        except OSError:
-            pass
+        path.parent.mkdir(parents=True, exist_ok=True)
+
+        with Path(tmp_path).open("w", encoding="utf-8") as f:
+            json.dump(data, f)
+            f.flush()
+            os.fsync(f.fileno())
+
+        Path(tmp_path).replace(path)
+    except Exception:
+        logger.exception("[LaunchHistory] Failed to save history to %s", path)
+        if tmp_path.exists():
+            with contextlib.suppress(OSError):
+                tmp_path.unlink()

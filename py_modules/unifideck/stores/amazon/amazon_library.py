@@ -20,12 +20,14 @@ produce the final ``GameRecord`` shape the UI consumes.
 """
 
 from __future__ import annotations
+
 import json
 import logging
 from pathlib import Path
 from typing import Any
-from ...core.io import async_file_ops as aio
-from ...core.types import Game
+
+from unifideck.core.io import async_file_ops as aio
+from unifideck.core.types import Game
 
 logger = logging.getLogger(__name__)
 

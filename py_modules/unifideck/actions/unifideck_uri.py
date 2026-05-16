@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 import logging
 from dataclasses import dataclass, field
 from urllib.parse import parse_qs, urlparse
@@ -71,30 +72,53 @@ def list_supported_verbs() -> list[str]:
     """List supported verbs."""
     return sorted(_VERB_REGISTRY.keys())
 
+def _parse_args_tuple(raw_path: str) -> tuple[str, ...]:
+    """Split the trimmed path of a unifideck URI into args tuple.
+
+    ``urlparse('unifideck://verb/a/b/c').path`` is ``/a/b/c`` ;
+    we lstrip the leading slash, split, and drop any empty
+    segments that ``//`` collapses produce.
+    """
+    stripped = raw_path.lstrip("/")
+    if not stripped:
+        return ()
+    return tuple(p for p in stripped.split("/") if p)
+
+
 def parse_unifideck_uri(uri: str) -> ParsedAction:
-    """Parse unifideck URI."""
+    """Parse a ``unifideck://verb/arg1/arg2?k=v`` URI.
+
+    Returns a :class:`ParsedAction` with ``valid=True`` and the
+    extracted verb/scope/args/query on success, or with
+    ``valid=False`` and an ``error`` code on any rejection.
+
+    Refactor history (2026-05-14): the original implementation
+    inlined six cascading ``if not valid → return ParsedAction(...)``
+    branches (CC=13). The helpers below isolate each validation
+    layer so this function reads as a linear pipeline.
+    """
     if not uri:
         return ParsedAction(valid=False, error="empty_uri")
     try:
         parsed = urlparse(uri)
     except Exception as err:
         return ParsedAction(valid=False, error=f"parse_error:{err}")
+
     if parsed.scheme != "unifideck":
         return ParsedAction(
-            valid=False,
-            error=f"wrong_scheme:{parsed.scheme}"
+            valid=False, error=f"wrong_scheme:{parsed.scheme}",
         )
+
     verb = parsed.netloc
     if not verb:
         return ParsedAction(valid=False, error="missing_verb")
     if verb not in _VERB_REGISTRY:
         return ParsedAction(
-            valid=False, verb=verb,
-            error=f"unknown_verb:{verb}",
+            valid=False, verb=verb, error=f"unknown_verb:{verb}",
         )
+
     scope, min_args, max_args, _doc = _VERB_REGISTRY[verb]
-    raw_path = parsed.path.lstrip("/")
-    args = tuple(p for p in raw_path.split("/") if p) if raw_path else ()
+    args = _parse_args_tuple(parsed.path)
     if not (min_args <= len(args) <= max_args):
         return ParsedAction(
             valid=False, verb=verb, scope=scope,
@@ -103,6 +127,7 @@ def parse_unifideck_uri(uri: str) -> ParsedAction:
                 f"expected_{min_args}_to_{max_args}"
             ),
         )
+
     raw_query = parse_qs(parsed.query) if parsed.query else {}
     query = {k: v[0] for k, v in raw_query.items() if v}
     return ParsedAction(

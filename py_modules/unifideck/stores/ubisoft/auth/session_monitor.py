@@ -14,11 +14,13 @@ sign-in flows.
 """
 
 from __future__ import annotations
+
 import asyncio
 import logging
 from collections.abc import Callable
 from typing import Any
-from ....core.types import Result
+
+from unifideck.core.types import Result
 
 _AUTH_MONITOR_TIMEOUT_S = 30 * 60
 _AUTH_MONITOR_POLL_INTERVAL_S = 2.0

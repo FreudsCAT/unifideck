@@ -1,4 +1,4 @@
-"""py_modules/unifideck/core/bin/ — External CLI tool lifecycle.
+"""py_modules/unifideck/core/binaries/ — External CLI tool lifecycle.
 
 Consolidated. This subpackage owns the complete
 lifecycle management of the external CLI helpers Unifideck
@@ -47,7 +47,7 @@ are on a pre-17f checkout.
 
 Typical usage::
 
-    from unifideck.core.bin import (
+    from unifideck.core.binaries import (
         binary_resolver, # singleton
         read_cli_timeouts, # config reader
         verify_bundled_binary, # integrity check
@@ -69,7 +69,7 @@ __all__ = [
     "binary_resolver",
     # binary_signatures.py
     "compute_sha256",
-    "verify_bundled_binary",
     # cli_timeouts.py
     "read_cli_timeouts",
+    "verify_bundled_binary",
 ]

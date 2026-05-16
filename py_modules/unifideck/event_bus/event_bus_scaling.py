@@ -83,7 +83,7 @@ class BatchDispatcher:
         2. Time since last flush (or since first add for a fresh
            key) is at or above ``window_ms``.
 
-        Uses ``time.monotonic`` × 1000 for millisecond
+        Uses ``time.monotonic`` x 1000 for millisecond
         comparisons (immune to NTP wall-clock jumps).
 
         Args:
@@ -143,7 +143,7 @@ class BatchDispatcher:
         return out
 
     @staticmethod
-    def handler_supports_batch(handler: Callable) -> bool:
+    def handler_supports_batch(handler: Callable[..., Any]) -> bool:
         """Predicate: does ``handler`` opt in to batched delivery?
 
         A handler opts in by exposing two attributes:

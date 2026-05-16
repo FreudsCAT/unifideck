@@ -8,17 +8,19 @@ gamescope-environment files and /proc/<PID>/environ of running
 Steam processes.
 
 The ``clean_env`` entry point returns an environment dict suitable
-for subprocess.Popen when spawning Edge. It strips PluginLoader's
+for subprocess.Popen[bytes] when spawning Edge. It strips PluginLoader's
 LD_LIBRARY_PATH / LD_PRELOAD pollution, fills in session env from
 4-stage discovery, and seeds Steam window env defaults so gaming
 mode can surface the spawned window.
 """
 from __future__ import annotations
 
+import contextlib
 import logging
 import os
 import subprocess
 from pathlib import Path
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -58,25 +60,23 @@ def _read_gamescope_env_file(
     gamescope_env = Path(runtime_dir) / "gamescope-environment"
     if not gamescope_env.exists():
         return
-    try:
-        with gamescope_env.open(
+    with (
+        contextlib.suppress(OSError),
+        gamescope_env.open(
             encoding="utf-8", errors="replace",
-        ) as f:
-            for raw_line in f:
-                line = raw_line.strip()
-                if not line or "=" not in line:
-                    continue
-                key, value = line.split("=", 1)
-                if (
-                    key in _SESSION_ENV_KEYS
-                    and key not in result
-                    and value
-                ):
-                    result[key] = value
-    except OSError:
-        # File vanished between exists() and open() —
-        # caller will fall through to the PID scan.
-        pass
+        ) as f,
+    ):
+        for raw_line in f:
+            line = raw_line.strip()
+            if not line or "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            if (
+                key in _SESSION_ENV_KEYS
+                and key not in result
+                and value
+            ):
+                result[key] = value
 
 
 def _parse_proc_environ(
@@ -124,6 +124,7 @@ def _scan_steam_process_env(
                 capture_output=True,
                 text=True,
                 timeout=5,
+                check=False,  # pgrep rc=1 on "no match" is expected
             ).stdout.strip().split("\n")
             for raw_pid in pids:
                 pid = raw_pid.strip()
@@ -135,16 +136,89 @@ def _scan_steam_process_env(
                         "PID %s (%s): DISPLAY=%s "
                         "WAYLAND_DISPLAY=%s",
                         pid, proc_name,
-                        result.get('DISPLAY'),
-                        result.get('WAYLAND_DISPLAY'),
+                        result.get("DISPLAY"),
+                        result.get("WAYLAND_DISPLAY"),
                     )
                     return
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         # pgrep missing, scheduling glitch — not fatal, caller
         # falls through to hardcoded fallbacks.
         logger.debug(
             "[Edge] Session env detection error: %s", e,
         )
+
+
+def _fallback_display(result: dict[str, str]) -> None:
+    """Default DISPLAY to ``:0`` when neither X nor Wayland is set."""
+    if not result.get("DISPLAY") and not result.get("WAYLAND_DISPLAY"):
+        result["DISPLAY"] = ":0"
+
+
+def _fallback_runtime_dir(result: dict[str, str], runtime_dir: str) -> None:
+    """Default XDG_RUNTIME_DIR to the standard ``/run/user/<uid>`` path."""
+    if not result.get("XDG_RUNTIME_DIR"):
+        result["XDG_RUNTIME_DIR"] = runtime_dir
+
+
+def _fallback_dbus(result: dict[str, str], runtime_dir: str) -> None:
+    """Point DBUS_SESSION_BUS_ADDRESS at the standard runtime-dir socket.
+
+    Only sets when the socket actually exists on disk — gamescope
+    sessions sometimes start before user-mode dbus is up.
+    """
+    if (
+        "DBUS_SESSION_BUS_ADDRESS" not in result
+        and Path(f"{runtime_dir}/bus").exists()
+    ):
+        result["DBUS_SESSION_BUS_ADDRESS"] = f"unix:path={runtime_dir}/bus"
+
+
+def _fallback_xauthority(
+    result: dict[str, str], home: str, runtime_dir: str,
+) -> None:
+    """Find an XAUTHORITY file, runtime-dir first then home.
+
+    Steam's gaming-mode injects per-session files under
+    ``/run/user/<uid>/xauth_*`` ; if none exist we fall back to
+    the user's ``~/.Xauthority``.
+    """
+    if "XAUTHORITY" in result:
+        return
+    xauth_files = [str(p) for p in Path(runtime_dir).glob("xauth_*")]
+    if xauth_files:
+        result["XAUTHORITY"] = xauth_files[0]
+        return
+    home_xauth = Path(home) / ".Xauthority"
+    if home_xauth.exists():
+        result["XAUTHORITY"] = str(home_xauth)
+
+
+def _fallback_wayland_from_gamescope(result: dict[str, str]) -> None:
+    """Promote GAMESCOPE_WAYLAND_DISPLAY to WAYLAND_DISPLAY when usable.
+
+    Only when WAYLAND_DISPLAY isn't already set, the gamescope-
+    specific variant is set, the runtime dir is known, AND the
+    socket actually exists. The exists check guards against
+    stale env from a previous session.
+    """
+    if (
+        result.get("WAYLAND_DISPLAY")
+        or not result.get("GAMESCOPE_WAYLAND_DISPLAY")
+        or not result.get("XDG_RUNTIME_DIR")
+    ):
+        return
+    socket = (
+        Path(result["XDG_RUNTIME_DIR"])
+        / result["GAMESCOPE_WAYLAND_DISPLAY"]
+    )
+    if socket.exists():
+        result["WAYLAND_DISPLAY"] = result["GAMESCOPE_WAYLAND_DISPLAY"]
+
+
+def _fallback_xmodifiers(result: dict[str, str]) -> None:
+    """Mirror Steam IM module into XMODIFIERS so IBus/fcitx pick it up."""
+    if result.get("GTK_IM_MODULE") == "Steam" and not result.get("XMODIFIERS"):
+        result["XMODIFIERS"] = "@im=Steam"
 
 
 def _apply_fallbacks(
@@ -153,48 +227,21 @@ def _apply_fallbacks(
     """Step 4: fill remaining gaps with hardcoded fallbacks.
 
     Handles gamescope sessions that don't expose env through any
-    of the previous discovery mechanisms.
+    of the previous discovery mechanisms. Each individual
+    fallback is its own private helper so adding/removing one
+    is a one-line change and the cognitive complexity of this
+    function stays flat (a list of calls).
+
+    Order matters: ``_fallback_runtime_dir`` runs before
+    ``_fallback_dbus`` and ``_fallback_xauthority`` because
+    those two depend on the runtime dir being set.
     """
-    if (
-        not result.get("DISPLAY")
-        and not result.get("WAYLAND_DISPLAY")
-    ):
-        result["DISPLAY"] = ":0"
-    if not result.get("XDG_RUNTIME_DIR"):
-        result["XDG_RUNTIME_DIR"] = runtime_dir
-    if (
-        "DBUS_SESSION_BUS_ADDRESS" not in result
-        and Path(f"{runtime_dir}/bus").exists()
-    ):
-        result["DBUS_SESSION_BUS_ADDRESS"] = (
-            f"unix:path={runtime_dir}/bus"
-        )
-    if "XAUTHORITY" not in result:
-        xauth_files = [
-            str(p) for p in Path(runtime_dir).glob("xauth_*")
-        ]
-        if xauth_files:
-            result["XAUTHORITY"] = xauth_files[0]
-        elif (Path(home) / ".Xauthority").exists():
-            result["XAUTHORITY"] = str(Path(home) / ".Xauthority")
-    if (
-        not result.get("WAYLAND_DISPLAY")
-        and result.get("GAMESCOPE_WAYLAND_DISPLAY")
-        and result.get("XDG_RUNTIME_DIR")
-    ):
-        gamescope_socket = (
-            Path(result["XDG_RUNTIME_DIR"])
-            / result["GAMESCOPE_WAYLAND_DISPLAY"]
-        )
-        if gamescope_socket.exists():
-            result["WAYLAND_DISPLAY"] = (
-                result["GAMESCOPE_WAYLAND_DISPLAY"]
-            )
-    if (
-        result.get("GTK_IM_MODULE") == "Steam"
-        and not result.get("XMODIFIERS")
-    ):
-        result["XMODIFIERS"] = "@im=Steam"
+    _fallback_display(result)
+    _fallback_runtime_dir(result, runtime_dir)
+    _fallback_dbus(result, runtime_dir)
+    _fallback_xauthority(result, home, runtime_dir)
+    _fallback_wayland_from_gamescope(result)
+    _fallback_xmodifiers(result)
 
 
 def _detect_session_env(uid: int, home: str) -> dict[str, str]:
@@ -218,7 +265,7 @@ def _detect_session_env(uid: int, home: str) -> dict[str, str]:
     return result
 
 
-def clean_env() -> dict:
+def clean_env() -> dict[str, Any]:
     """Return a clean environment for launching the auth browser/flatpak.
 
     - Strips ``LD_LIBRARY_PATH`` / ``LD_PRELOAD``.

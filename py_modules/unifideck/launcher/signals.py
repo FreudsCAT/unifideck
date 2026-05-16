@@ -1,9 +1,12 @@
 from __future__ import annotations
+
+import contextlib
 import logging
 import os
 import signal
 import subprocess
 from dataclasses import dataclass, field
+
 logger = logging.getLogger(__name__)
 CLEANUP_PATTERNS = (
     "steam-runtime-launch-client",
@@ -19,11 +22,11 @@ class GameProcessRegistry:
     def __init__(self, state: SignalState) -> None:
         """Initialize the instance."""
         self._state = state
-    def track(self, proc: subprocess.Popen) -> None:
+    def track(self, proc: subprocess.Popen[bytes]) -> None:
         """Track."""
         if proc.pid:
             self._state.pending_pids.add(proc.pid)
-    def untrack(self, proc: subprocess.Popen) -> None:
+    def untrack(self, proc: subprocess.Popen[bytes]) -> None:
         """Untrack."""
         self._state.pending_pids.discard(proc.pid)
     def terminate_all(self) -> None:
@@ -35,20 +38,17 @@ class GameProcessRegistry:
             except (ProcessLookupError, PermissionError):
                 pass
             except OSError:
-                try:
+                with contextlib.suppress(ProcessLookupError, PermissionError):
                     os.kill(pid, signal.SIGTERM)
-                except (ProcessLookupError, PermissionError):
-                    pass
         for pattern in CLEANUP_PATTERNS:
-            try:
+            with contextlib.suppress(FileNotFoundError, subprocess.TimeoutExpired):
                 subprocess.run(
                     ["pkill", "-TERM", "-f", pattern],
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
                     timeout=2,
+                    check=False,  # pkill rc=1 on "no match" is expected
                 )
-            except (FileNotFoundError, subprocess.TimeoutExpired):
-                pass
 
 def install_signal_handlers(
     registry: GameProcessRegistry,

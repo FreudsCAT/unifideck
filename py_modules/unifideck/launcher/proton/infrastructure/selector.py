@@ -1,9 +1,15 @@
 from __future__ import annotations
+
 import logging
 import re
 import subprocess
 from pathlib import Path
-from ...types.errors import DependencyMissingError, ProtonUnavailableError
+
+from unifideck.launcher.types.errors import (
+    DependencyMissingError,
+    ProtonUnavailableError,
+)
+
 logger = logging.getLogger(__name__)
 PYTHON_CANDIDATES: list[str] = [
     "/usr/bin/python3.13",

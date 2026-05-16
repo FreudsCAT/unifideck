@@ -1,35 +1,25 @@
-"""Launch sub-routines — Windows and native launch paths.
+"""services/launcher/orchestrator.py — Per-platform launch entry points.
 
-OP-20d | py_modules/unifideck/services/launcher/orchestrator.py
-
-Two functions, one per launch type :
-
-* ``launch_windows`` — Proton-based path : compose the
-  ``proton run`` command, set up the Wine prefix env vars, etc.
-* ``launch_native``  — direct binary invocation for Linux-native
-  games (rare on the Decky-targeted store set).
-
-Both return a ``LaunchPlan`` consumed by the service's main loop.
+2 public orchestrators:
+- ``launch_windows`` — Proton-wrapped pipeline (prepare plan,
+  sync down, run subprocess, sync up).
+- ``launch_native`` — native Linux, simpler: cloud sync wraps
+  a direct subprocess, no Proton/umu/prefix setup.
+``LauncherService.launch`` dispatches between them based on
+``ctx.is_windows_game``. Heavy lifting in ``helpers.py``.
 """
-
 from __future__ import annotations
+
 import logging
 from typing import TYPE_CHECKING
-from ...core.types import Result
-from ...launcher.rpc import emit_game_launched, emit_game_stopped
-from ...launcher.types.errors import LauncherError
-from .helpers import (
-    cloud_sync_phase,
-    elapsed_since_launch,
-    prepare_windows_plan,
-    resolve_exit_code,
-    run_game_subprocess,
-    sync_saves_and_track_size,
-)
+
+from unifideck.core.types import Result
 
 if TYPE_CHECKING:
-    from ...launcher.types.context import LaunchContext, RuntimeState
+    from unifideck.launcher.types.context import LaunchContext, RuntimeState
+
     from .service import LauncherService
+
 logger = logging.getLogger(__name__)
 
 
@@ -38,54 +28,63 @@ async def launch_windows(
     ctx: LaunchContext,
     state: RuntimeState,
 ) -> Result:
-    """Drive the full Windows-game launch pipeline.
+    """Windows game launch — 4-phase pipeline.
 
-    Pipeline:
-
-    1. **Plan build** — compose the Proton command (env, prefix,
-       compat tool, argv) into a ``ProtonLaunchPlan``.
-    2. **Cloud sync down** — pull remote saves before launch so
-       the user picks up where they left off.
-    3. **Emit GAME_LAUNCHED** — fires playtime tracking + other
-       launch-aware services.
-    4. **Run subprocess** — spawn Proton, await its exit, capture
-       the return code.
-    5. **Cloud sync up** — push fresh saves after exit so they
-       survive across devices.
-    6. **Wrap as Result** — non-zero exit → ``Result.error_code =
-       "exit_<N>"`` (consumed by launch-history for circuit
-       breaker classification).
-
-    ``LauncherError`` is re-raised intact so the service's
-    top-level handler can transform it into a typed toast.
-
-    Args:
-        svc: the launcher service.
-        ctx: launch context.
-        state: mutable runtime state.
-
-    Returns:
-        ``Result`` with success/failure based on the subprocess
-        exit code.
+    1. ``prepare_windows_plan`` — options + runtime + umu + proton_prepare
+    2. ``cloud_sync_phase("down")``
+    3. ``run_game_subprocess`` — the actual game
+    4. ``cloud_sync_phase("up")``
     """
-    plan, _parsed = await prepare_windows_plan(svc, ctx, state)
-    await cloud_sync_phase(svc, ctx, direction="down")
-    await emit_game_launched(
-        svc._bus,
-        store=ctx.store,
-        game_id=ctx.game_id,
-    )
     try:
-        rc = await run_game_subprocess(svc, plan, ctx, state)
-        await cloud_sync_phase(svc, ctx, direction="up")
-        return Result(
-            success=(rc == 0),
-            error=None if rc == 0 else f"game exited with code {rc}",
-            error_code=None if rc == 0 else f"exit_{rc}",
-            store=ctx.store,
+        # Phase 1: Prepare
+        plan, _parsed_options = await svc._prepare_windows_plan(ctx, state)
+
+        from unifideck.core.types.events import Events
+        store = ctx.store
+        game_id = ctx.game_id
+
+        # Phase 2: Cloud Sync Down
+        await svc._cloud_sync_phase(ctx, "down")
+
+        # Pre-launch event
+        await svc._bus.emit(
+            Events.GAME_LAUNCHED,
+            store=store,
+            game_id=game_id,
+            title="",  # No title on LaunchContext
+            app_id=0  # No app_id on LaunchContext
         )
-    except LauncherError:
-        raise
+
+        # Phase 3: Run Subprocess
+        try:
+            rc = await svc._run_game_subprocess(plan, ctx, state)
+            state.rc = rc
+        finally:
+            # Emit GAME_STOPPED here so playtime records accurate duration
+            await svc._bus.emit(Events.GAME_STOPPED, store=store, game_id=game_id)
+
+        # Phase 4: Cloud Sync Up
+        await svc._cloud_sync_phase(ctx, "up")
+
+        exit_code = svc._resolve_exit_code(state)
+        # ``Result`` has no ``rc`` field — its public surface is
+        # ``success``, ``error``, ``error_code``, ``store``,
+        # ``metadata``. The dispatcher's ``_map_result_to_exitcode``
+        # parses ``error_code`` and extracts the integer from any
+        # ``exit_<N>`` prefix; encoding the exit code there is the
+        # documented round-trip channel for subprocess return codes.
+        # The earlier ``rc=exit_code`` form raised
+        # ``TypeError: Result.__init__() got an unexpected keyword
+        # argument 'rc'`` on every launch — Windows games could
+        # never report their exit code back to the launcher.
+        return Result(
+            success=(exit_code == 0),
+            error_code=None if exit_code == 0 else f"exit_{exit_code}",
+        )
+
+    except Exception:
+        logger.exception("[Orchestrator] Windows launch failed")
+        raise  # Let the outer _handle_launcher_error catch and toast it
 
 
 async def launch_native(
@@ -93,52 +92,62 @@ async def launch_native(
     ctx: LaunchContext,
     state: RuntimeState,
 ) -> Result:
-    """Drive the native-Linux launch pipeline.
-
-    Mirrors ``launch_windows`` but skips the Proton plan and
-    delegates the actual ``exec`` to
-    ``launcher.flows.native.native_launch``. The launch options
-    parser extracts wrappers (``gamemoderun``, ``mangohud``…),
-    game args, and LSFG (latency-sensitive feature gate) flag
-    from the raw options string.
-
-    The GAME_STOPPED emission lives in a ``finally`` so playtime
-    tracking gets a stop event even when ``native_launch``
-    throws.
-
-    Args:
-        svc: the launcher service.
-        ctx: launch context.
-        state: mutable runtime state.
-
-    Returns:
-        ``Result`` from ``native_launch``.
-    """
-    from ...launcher.flows.native import native_launch
-    from ...launcher.types.options import parse_launch_options
-
-    parsed = parse_launch_options(ctx.raw_options)
-    state.wrappers = list(parsed.wrappers)
-    state.game_args = list(parsed.game_args)
-    state.lsfg_requested = parsed.lsfg_requested
-    await sync_saves_and_track_size(svc, ctx, phase="sync_down")
-    await emit_game_launched(
-        svc._bus,
-        store=ctx.store,
-        game_id=ctx.game_id,
-    )
+    """Native Linux game launch — simpler path."""
     try:
-        result = await native_launch(ctx, state)
-    finally:
-        exit_code = resolve_exit_code(svc, state)
-        elapsed = elapsed_since_launch(svc)
-        await emit_game_stopped(
-            svc._bus,
-            store=ctx.store,
-            game_id=ctx.game_id,
-            exit_code=exit_code,
-            elapsed_seconds=elapsed,
-            terminated_by_signal=(svc._signal_state.terminated_by_signal),
+        from unifideck.core.types.events import Events
+        store = ctx.store
+        game_id = ctx.game_id
+
+        # Phase 1: Cloud Sync Down
+        await svc._sync_saves_and_track_size(ctx, "sync_down")
+
+        # Pre-launch event
+        await svc._bus.emit(
+            Events.GAME_LAUNCHED,
+            store=store,
+            game_id=game_id,
+            title="",  # No title on LaunchContext
+            app_id=0  # No app_id on LaunchContext
         )
-    await sync_saves_and_track_size(svc, ctx, phase="sync_up")
-    return result
+
+        # Phase 2: Run Subprocess
+        try:
+            # For native games, we just run the executable directly
+            import asyncio
+
+            cmd = [str(ctx.exe_path)]
+            # No launch_args on LaunchContext; if/when added,
+            # extend ``cmd`` here.
+            cmd.extend([])
+
+            logger.info("[Orchestrator] Spawning native launch: %s", cmd)
+
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                cwd=str(ctx.work_dir),
+            )
+            svc._active_subprocess = proc
+
+            rc = await proc.wait()
+            state.rc = rc
+            svc._active_subprocess = None
+
+        finally:
+            await svc._bus.emit(Events.GAME_STOPPED, store=store, game_id=game_id)
+
+        # Phase 3: Cloud Sync Up
+        await svc._sync_saves_and_track_size(ctx, "sync_up")
+
+        exit_code = svc._resolve_exit_code(state)
+        # See the launch_windows path for the rationale — Result has
+        # no ``rc`` field, exit codes round-trip via ``error_code``
+        # (``exit_<N>`` prefix). The earlier ``rc=`` form raised
+        # ``TypeError`` on every native-Linux launch.
+        return Result(
+            success=(exit_code == 0),
+            error_code=None if exit_code == 0 else f"exit_{exit_code}",
+        )
+
+    except Exception:
+        logger.exception("[Orchestrator] Native launch failed")
+        raise

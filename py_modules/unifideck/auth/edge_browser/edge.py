@@ -48,7 +48,8 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from . import launch as _launch, process_ops
+from . import launch as _launch
+from . import process_ops
 from .cdp_client import EdgeCDPClient
 from .env import clean_env
 from .installer import EdgeInstaller
@@ -128,19 +129,19 @@ class EdgeBrowser:
         xCloud kiosk mode uses 9223 via port+1.
       locale_fn: Callable returning the BCP-47 locale string.
         Used to pass --lang to the browser.
-      process: The subprocess.Popen handle, or None when the browser
+      process: The subprocess.Popen[bytes] handle, or None when the browser
         isn't running.
 
     """
 
-    def __init__(  # noqa: D107 — class docstring documents the constructor's contract
+    def __init__(
         self,
         cdp_port: int = 9222,
         locale_fn: Callable[[], str] | None = None,
     ):
         self.cdp_port = cdp_port
         self.locale_fn = locale_fn or (lambda: "en-US")
-        self.process: subprocess.Popen | None = None
+        self.process: subprocess.Popen[bytes] | None = None
         # Composed installer — owns detection + flatpak install
         # + default-browser snapshot + controller permissions.
         # Extracted from this class to keep each concern cohesive.
@@ -193,7 +194,7 @@ class EdgeBrowser:
     async def navigate_tab(
         self,
         url: str,
-        timeout: float = 15.0,  # noqa: ASYNC109 — delegated deadline
+        timeout: float = 15.0,  # noqa: ASYNC109 — timeout is API value passed to underlying lib (urllib/aiohttp/subprocess), not an asyncio.timeout() wrapper
     ) -> bool:
         """Delegate to EdgeCDPClient."""
         return await self._cdp.navigate_tab(url, timeout=timeout)

@@ -1,13 +1,21 @@
 from __future__ import annotations
+
 import asyncio
 import logging
 import os
 import sys
 from pathlib import Path
-from ..core.types.results import Result
+from typing import TYPE_CHECKING, Any
+
+from unifideck.core.types.results import Result
+
 from .types.context import LaunchContext
 from .types.errors import GameNotFoundError, LauncherError
 from .types.exit_codes import ExitCode
+
+if TYPE_CHECKING:
+    from unifideck.services.shortcut import ShortcutService
+
 logger = logging.getLogger(__name__)
 def _parse_argv(argv: list[str]) -> tuple[str, str]:
     """Parse argv."""
@@ -53,11 +61,11 @@ def _promote_env_tokens(raw_options: str) -> None:
         os.environ.setdefault(key, value)
 def _resolve_plugin_dir() -> Path:
     """Resolve plugin dir."""
-    from ..core.paths import resolve_plugin_dir
+    from unifideck.core.paths import resolve_plugin_dir
     return resolve_plugin_dir(start=Path(__file__))
 async def _build_context(
     argv: list[str],
-    shortcut_svc,
+    shortcut_svc: ShortcutService,
 ) -> LaunchContext:
     """Build context."""
     game_key, raw_options = _parse_argv(argv)
@@ -140,10 +148,8 @@ def _resolve_bypass_flag(store: str, game_id: str) -> bool:
         "1", "true", "yes",
     )
     try:
-        from ..config.config_manager import ConfigManager
-        from ..services.launch_history import (
-            LaunchHistoryService,
-        )
+        from unifideck.config.config_manager import ConfigManager
+        from unifideck.services.launch_history import LaunchHistoryService
         cfg = ConfigManager(
             str(
                 _resolve_plugin_dir()
@@ -166,8 +172,8 @@ async def _run(argv: list[str]) -> int:
     lid = new_launch_id()
     with launch_id_scope(lid):
         try:
-            from ..config.config_manager import ConfigManager
-            from ..core.paths import resolve_plugin_dir
+            from unifideck.config.config_manager import ConfigManager
+            from unifideck.core.paths import resolve_plugin_dir
             _cfg = ConfigManager(str(
                 resolve_plugin_dir() /
                 "defaults" /
@@ -190,9 +196,9 @@ async def _run_with_id(argv: list[str]) -> int:
             "[launcher.dispatcher] request received: %s", game_key,
         )
     except LauncherError as err:
-        logger.error(
+        logger.exception(
             "[launcher.dispatcher] argv parse failed: %s",
-            err.to_log_dict,
+            err.to_log_dict(),
         )
         return int(err.exit_code)
     try:
@@ -203,18 +209,18 @@ async def _run_with_id(argv: list[str]) -> int:
     try:
         ctx = await _build_context(argv, launcher_service._shortcut_svc)
     except LauncherError as err:
-        logger.error(
+        logger.exception(
             "[launcher.dispatcher] context build failed: %s",
-            err.to_log_dict,
+            err.to_log_dict(),
         )
         return int(err.exit_code)
     try:
         await launcher_service.start()
         result = await launcher_service.launch(ctx)
     except LauncherError as err:
-        logger.error(
+        logger.exception(
             "[launcher.dispatcher] launch raised: %s",
-            err.to_log_dict,
+            err.to_log_dict(),
         )
         return int(err.exit_code)
     finally:
@@ -241,8 +247,15 @@ def _map_result_to_exitcode(result: Result) -> int:
         except (ValueError, IndexError):
             return int(ExitCode.GAME_FAILED)
     return int(ExitCode.GAME_FAILED)
-def _bootstrap_minimal_services():
-    """Bootstrap minimal services."""
+def _bootstrap_minimal_services() -> Any:
+    """Bootstrap minimal services.
+
+    Returns the ``LauncherService`` built by
+    ``launcher.bootstrap.build_launcher_service``. Typed as
+    ``Any`` to match the source return type (the bootstrap
+    helper itself is intentionally untyped at the call site to
+    avoid circular imports).
+    """
     from .bootstrap import build_launcher_service
     return build_launcher_service()
 

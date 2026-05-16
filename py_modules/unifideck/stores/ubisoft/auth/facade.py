@@ -21,20 +21,22 @@ binaries, callbacks); Services are "external system handles"
 """
 
 from __future__ import annotations
+
+import asyncio
 import logging
-import os
 import shutil
 from collections.abc import Callable
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
-from ....core.types import AuthResult, Events, Result
-from ....security import (
-    audit_auth_flow,
-)
-from ..binaries import UbisoftBinaryResolver
-from ..config import UbisoftConfig
-from ..paths import UbisoftPrefixPaths
-from ..session import UbisoftSession
+
+from unifideck.core.types import AuthResult, Events, Result
+from unifideck.security import audit_auth_flow
+from unifideck.stores.ubisoft.binaries import UbisoftBinaryResolver
+from unifideck.stores.ubisoft.config import UbisoftConfig
+from unifideck.stores.ubisoft.paths import UbisoftPrefixPaths
+from unifideck.stores.ubisoft.session import UbisoftSession
+
 from .context import _AuthContext
 from .direct_signin import _DirectSignIn
 from .session_monitor import _AuthSessionMonitor
@@ -42,9 +44,9 @@ from .shortcut import _AuthShortcut
 from .shortcut_ops import _ShortcutRegistryOps
 
 if TYPE_CHECKING:
-    from ....event_bus.event_bus import EventBus
-    from ....services.shortcut import ShortcutService
-    from ....steam.steamgriddb import SteamGridDBClient
+    from unifideck.event_bus.event_bus import EventBus
+    from unifideck.services.shortcut import ShortcutService
+    from unifideck.steam.steamgriddb import SteamGridDBClient
 logger = logging.getLogger(__name__)
 
 
@@ -178,17 +180,14 @@ class UbisoftAuth:
         """Logout."""
         self._session.clear_session_file()
         auth_dir = self._config.auth_prefix_dir_expanded
-        if os.path.isdir(auth_dir):
+        if await asyncio.to_thread(lambda: Path(auth_dir).is_dir()):
             try:
                 shutil.rmtree(auth_dir)
                 logger.info(
                     "[UbisoftAuth] removed auth prefix directory",
                 )
-            except OSError as e:
-                logger.error(
-                    "[UbisoftAuth] could not remove auth prefix: %s",
-                    e,
-                )
+            except OSError:
+                logger.exception("[UbisoftAuth] could not remove auth prefix")
         await self._bus.emit(
             Events.STORE_LOGOUT,
             store="ubisoft",

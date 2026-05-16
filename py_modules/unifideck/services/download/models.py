@@ -13,6 +13,7 @@ typed enum value the UI can render.
 """
 
 from __future__ import annotations
+
 from dataclasses import dataclass
 from typing import Any
 
@@ -33,7 +34,7 @@ class DownloadItem:
         game_id: store-specific game id.
         install_path: target install directory on disk.
         title: human-readable game name (used by the UI).
-        progress: percentage 0.0–100.0 (mutated by the worker).
+        progress: percentage 0.0-100.0 (mutated by the worker).
         status: one of ``"queued"`` / ``"running"`` /
             ``"complete"`` / ``"failed"``.
         error: failure code (empty string when status isn't

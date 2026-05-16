@@ -20,7 +20,7 @@ from __future__ import annotations
 import logging
 import shutil
 import subprocess
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -37,7 +37,7 @@ _NATIVE_BINS = ("microsoft-edge", "microsoft-edge-stable")
 
 
 def flatpak_remote_names(
-    clean_env_fn: Callable[[], dict], scope: str,
+    clean_env_fn: Callable[[], dict[str, Any]], scope: str,
 ) -> set[str]:
     """Return configured flatpak remote names for the given scope.
 
@@ -55,7 +55,7 @@ def flatpak_remote_names(
             env=clean_env_fn(),
             check=False,
         )
-    except Exception:  # noqa: BLE001, S110 — flatpak may be missing
+    except Exception:
         # Intentional: flatpak may be missing (non-Deck), or the
         # scope unsupported. An empty set is a "no remotes" signal
         # and is fine for callers.
@@ -72,7 +72,7 @@ def flatpak_remote_names(
 
 
 def find_edge_cmd(
-    clean_env_fn: Callable[[], dict],
+    clean_env_fn: Callable[[], dict[str, Any]],
 ) -> list[str] | None:
     """Find an available Microsoft Edge browser command.
 
@@ -95,7 +95,7 @@ def find_edge_cmd(
 
 
 def _try_flatpak_app(
-    app_id: str, clean_env_fn: Callable[[], dict],
+    app_id: str, clean_env_fn: Callable[[], dict[str, Any]],
 ) -> list[str] | None:
     """Probe ``flatpak info`` for ``app_id`` in user and system scopes.
 
@@ -111,17 +111,18 @@ def _try_flatpak_app(
                 ["flatpak", "info", flag, app_id],
                 capture_output=True, timeout=5,
                 env=clean_env_fn(),
+                check=False,  # rc is read manually below
             )
             if result.returncode == 0:
                 return ["flatpak", "run", app_id]
-    except Exception:  # noqa: BLE001, S110 — fall through
+    except Exception as e:
         # Flatpak probe can raise many things (subprocess
         # timeout, OSError from missing binary after race).
         # Fall through to the next app_id / native fallback.
-        pass
+        logger.debug("[Edge] flatpak probe failed for %s: %s", app_id, e)
     return None
 
 
-def is_edge_installed(clean_env_fn: Callable[[], dict]) -> bool:
+def is_edge_installed(clean_env_fn: Callable[[], dict[str, Any]]) -> bool:
     """Return True if Microsoft Edge is available (flatpak or native)."""
     return find_edge_cmd(clean_env_fn) is not None

@@ -23,13 +23,16 @@ appropriate sub-component.
 """
 
 from __future__ import annotations
+
+import asyncio
 import json
 import logging
-import os
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
-from ...auth.browser import OAuthBrowserMonitor
-from ...auth.orchestrator import AuthOrchestrator
-from ...core.types import (
+
+from unifideck.auth.browser import OAuthBrowserMonitor
+from unifideck.auth.orchestrator import AuthOrchestrator
+from unifideck.core.types import (
     AuthResult,
     CLITool,
     Events,
@@ -38,19 +41,20 @@ from ...core.types import (
     Result,
     StoreInfo,
 )
-from ...security import emit_external_auth_check_failed
-from ...services.shortcut import ShortcutService
-from ...utils.config_helpers import get_cfg
-from ..shared.store_base import StoreBase
+from unifideck.security import emit_external_auth_check_failed
+from unifideck.services.shortcut import ShortcutService
+from unifideck.stores.shared.store_base import StoreBase
+from unifideck.utils.config_helpers import get_cfg
+
 from .amazon_auth import AmazonAuthFlow
 from .amazon_install import AmazonInstaller, ProgressCallback
 from .amazon_library import AmazonLibraryReader, merge_install_status
 from .amazon_updates import AmazonUpdateChecker
 
 if TYPE_CHECKING:
-    from ...config import ConfigManager
-    from ...core.cache_manager import CacheManager
-    from ...event_bus.event_bus import EventBus
+    from unifideck.config import ConfigManager
+    from unifideck.core.cache_manager import CacheManager
+    from unifideck.event_bus.event_bus import EventBus
 logger = logging.getLogger(__name__)
 
 
@@ -167,17 +171,15 @@ class AmazonStore(StoreBase):
                 "nile binary missing from search paths",
             )
             return False
-        user_file = os.path.expanduser(
-            get_cfg(
+        user_file = str(Path(get_cfg(
                 self._config,
                 "stores.amazon.user_file",
                 "~/.config/nile/user.json",
-            ),
-        )
-        if not os.path.isfile(user_file):
+            )).expanduser())
+        if not Path(user_file).is_file():
             return False
         try:
-            with open(user_file, encoding="utf-8") as f:
+            with Path(user_file).open(encoding="utf-8") as f:
                 data = json.load(f)
         except (OSError, json.JSONDecodeError) as e:
             logger.debug(
@@ -194,7 +196,7 @@ class AmazonStore(StoreBase):
         extensions = data.get("extensions", {})
         return "customer_info" in extensions
 
-    async def start_auth(self, **kwargs) -> AuthResult:
+    async def start_auth(self, **kwargs: Any) -> AuthResult:
         """Start auth."""
         # Late-bind auth in case injection happened after __init__
         # without the rebuild hook (defensive).
@@ -224,7 +226,7 @@ class AmazonStore(StoreBase):
         await self._ensure_auth_shortcut()
         return cast("AuthResult", await self._auth.start_auth())
 
-    async def complete_auth(self, code: str = "", **kwargs) -> AuthResult:
+    async def complete_auth(self, code: str = "", **kwargs: Any) -> AuthResult:
         """Complete auth."""
         if await self.is_available():
             return AuthResult(success=True, store="amazon")
@@ -252,11 +254,8 @@ class AmazonStore(StoreBase):
             owned = await self._library.read_owned_games()
             installed = await self._library.read_installed_ids()
             return merge_install_status(owned, installed)
-        except Exception as e:
-            logger.error(
-                "[AmazonStore] get_library failed: %s",
-                e,
-            )
+        except Exception:
+            logger.exception("[AmazonStore] get_library failed")
             return []
 
     async def install_game(
@@ -311,14 +310,8 @@ class AmazonStore(StoreBase):
                 "injected; skipping auth shortcut creation",
             )
             return
-        launcher = os.path.join(
-            self._plugin_dir or "",
-            "py_modules",
-            "unifideck",
-            "launcher",
-            "dispatcher.py",
-        )
-        if not os.path.isfile(launcher):
+        launcher = str(Path(self._plugin_dir or "") / "py_modules" / "unifideck" / "launcher" / "dispatcher.py")
+        if not await asyncio.to_thread(lambda: Path(launcher).is_file()):
             logger.warning(
                 "[AmazonStore] launcher dispatcher not found at %s",
                 launcher,

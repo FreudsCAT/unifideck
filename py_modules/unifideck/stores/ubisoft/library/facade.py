@@ -21,14 +21,18 @@ auth state change, install/uninstall, manual user refresh.
 """
 
 from __future__ import annotations
+
+import asyncio
 import logging
-import os
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
-from ....core.types import Game
-from ..config import UbisoftConfig
-from ..id_map import UbisoftIdMap
-from ..paths import UbisoftPrefixPaths
+
+from unifideck.core.types import Game
+from unifideck.stores.ubisoft.config import UbisoftConfig
+from unifideck.stores.ubisoft.id_map import UbisoftIdMap
+from unifideck.stores.ubisoft.paths import UbisoftPrefixPaths
+
 from .detection import _InstallDetector
 from .fetch import _LibraryFetcher
 from .manifest import _VisibleManifestProcessor
@@ -92,18 +96,12 @@ class UbisoftLibrary:
                 )
             if local_games:
                 template_dir = self._config.template_dir_expanded
-                template_marker = os.path.join(
-                    template_dir,
-                    self._config.bootstrap_marker,
-                )
-                if not os.path.isfile(template_marker):
+                template_marker = str(Path(template_dir) / self._config.bootstrap_marker)
+                if not await asyncio.to_thread(lambda: Path(template_marker).is_file()):
                     self._queue_template_creation()
             return local_games
-        except Exception as e:
-            logger.exception(
-                "[UbisoftLibrary] error fetching library: %s",
-                e,
-            )
+        except Exception:
+            logger.exception("[UbisoftLibrary] error fetching library")
             return []
 
     async def get_installed(self) -> dict[str, Any]:

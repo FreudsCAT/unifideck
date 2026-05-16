@@ -18,13 +18,16 @@ recovered on the next run.
 """
 
 from __future__ import annotations
+
 import asyncio
+import contextlib
 import logging
-import os
 import urllib.request
+from pathlib import Path
 from typing import Any
-from ....core.net import ssl_ctx_permissive
-from ..config import UbisoftConfig
+
+from unifideck.core.net import ssl_ctx_permissive
+from unifideck.stores.ubisoft.config import UbisoftConfig
 
 logger = logging.getLogger(__name__)
 _INSTALLER_MIN_SIZE_BYTES = 1000
@@ -44,7 +47,7 @@ class UbisoftInstallerCache:
         """Ensure cached."""
         cache_dir = self._config.installer_cache_dir_expanded
         filename = self._config.installer_filename
-        cached_path = os.path.join(cache_dir, filename)
+        cached_path = str(Path(cache_dir) / filename)
         if self._is_cached_valid(cached_path):
             logger.info(
                 "[UbisoftInstallerCache] using cached installer",
@@ -55,12 +58,9 @@ class UbisoftInstallerCache:
             self._config.installer_url,
         )
         try:
-            os.makedirs(cache_dir, exist_ok=True)
-        except OSError as e:
-            logger.error(
-                "[UbisoftInstallerCache] cache dir creation failed: %s",
-                e,
-            )
+            await asyncio.to_thread(lambda: Path(cache_dir).mkdir(parents=True, exist_ok=True))
+        except OSError:
+            logger.exception("[UbisoftInstallerCache] cache dir creation failed")
             return None
         success = await asyncio.to_thread(
             self._download_sync,
@@ -74,12 +74,12 @@ class UbisoftInstallerCache:
     @staticmethod
     def _is_cached_valid(cached_path: str) -> bool:
         """Is cached valid."""
-        if not os.path.isfile(cached_path):
+        if not Path(cached_path).is_file():
             return False
         try:
-            if os.path.getsize(cached_path) < _INSTALLER_MIN_SIZE_BYTES:
+            if Path(cached_path).stat().st_size < _INSTALLER_MIN_SIZE_BYTES:
                 return False
-            with open(cached_path, "rb") as f:
+            with Path(cached_path).open("rb") as f:
                 header = f.read(2)
             return header == _PE_MAGIC
         except OSError:
@@ -107,29 +107,24 @@ class UbisoftInstallerCache:
                     )
                     return False
                 total = _stream_to_file(response, tmp_path)
-            os.replace(tmp_path, dest_path)
+            Path(tmp_path).replace(dest_path)
             logger.info(
                 "[UbisoftInstallerCache] downloaded %.1f MB",
                 total / (1024 * 1024),
             )
             return True
-        except Exception as e:
-            logger.error(
-                "[UbisoftInstallerCache] download failed: %s",
-                e,
-            )
-            if os.path.isfile(tmp_path):
-                try:
-                    os.remove(tmp_path)
-                except OSError:
-                    pass
+        except Exception:
+            logger.exception("[UbisoftInstallerCache] download failed")
+            if Path(tmp_path).is_file():
+                with contextlib.suppress(OSError):
+                    Path(tmp_path).unlink()
             return False
 
 
 def _stream_to_file(response: Any, path: str) -> int:
     """Stream to file."""
     total = 0
-    with open(path, "wb") as f:
+    with Path(path).open("wb") as f:
         while True:
             chunk = response.read(_DOWNLOAD_CHUNK_SIZE)
             if not chunk:

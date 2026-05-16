@@ -1,15 +1,19 @@
 from __future__ import annotations
+
 import logging
 import shutil
 import subprocess
 import time
 from urllib.parse import urlparse
+
 from unifideck.cdp.page_inject import inject_scripts
 from unifideck.cdp.xcloud_browser_shims import (
     get_xcloud_browser_shims_js,
     get_xcloud_navigation_js,
 )
+
 from .steam_controller_popup import refresh_steam_controller_layout
+
 logger = logging.getLogger(__name__)
 def _build_launch_matches(launch_url: str) -> list[str]:
     """Build launch matches."""
@@ -86,7 +90,7 @@ async def run_cdp_inject(
     *,
     port: int,
     launch_url: str,
-    timeout: float = 45.0,
+    timeout: float = 45.0,  # noqa: ASYNC109 — timeout is API value passed to underlying lib (urllib/aiohttp/subprocess), not an asyncio.timeout() wrapper
     initial_matches: list[str] | None = None,
     steam_port: int = 8080,
     steam_controller_appid: int = 0,
@@ -118,7 +122,7 @@ async def run_cdp_inject(
 
 async def _run_inject_phases(
     port: int,
-    timeout: float,
+    timeout: float,  # noqa: ASYNC109 — timeout is API value passed to underlying lib (urllib/aiohttp/subprocess), not an asyncio.timeout() wrapper
     *,
     shims_js: str,
     navigation_js: str,

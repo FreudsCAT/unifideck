@@ -26,20 +26,24 @@ orphaned files on disk.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import os
 import re
 from collections.abc import Awaitable, Callable
+from pathlib import Path
 from typing import Any
-from ...core.manifest import write_manifest
-from ...core.types import Events, InstallResult, Result
-from ...event_bus.event_bus import EventBus
-from ..shared import dlc
-from ..shared.cli_install_helpers import (
+
+from unifideck.core.manifest import write_manifest
+from unifideck.core.types import Events, InstallResult, Result
+from unifideck.event_bus.event_bus import EventBus
+from unifideck.stores.shared import dlc
+from unifideck.stores.shared.cli_install_helpers import (
     drain_install_output,
     parse_progress_line,
     wait_with_timeout,
 )
+
 from .exe_resolver import EpicExeResolver
 from .library import EpicLibraryReader
 
@@ -67,7 +71,7 @@ class EpicInstaller:
         self._cli_path = cli_path
         self._library = library
         self._exe_resolver = exe_resolver
-        self._default_install_root = os.path.expanduser(default_install_root)
+        self._default_install_root = str(Path(default_install_root).expanduser())
         self._install_timeout = install_timeout_seconds
         self._uninstall_timeout = uninstall_timeout_seconds
 
@@ -87,7 +91,7 @@ class EpicInstaller:
             )
         base = base_path or self._default_install_root
         try:
-            os.makedirs(base, exist_ok=True)
+            await asyncio.to_thread(lambda: Path(base).mkdir(parents=True, exist_ok=True))
         except OSError as e:
             return InstallResult(
                 success=False,
@@ -199,13 +203,14 @@ class EpicInstaller:
         if install_path:
             exe_relative = ""
             if exe:
-                try:
-                    exe_relative = os.path.relpath(
+                with contextlib.suppress(ValueError):
+                    # ``os.path.relpath`` is pure string manipulation —
+                    # no filesystem access — so the ASYNC240 rule
+                    # gives a false positive here.
+                    exe_relative = os.path.relpath(  # noqa: ASYNC240 — pure string op, no I/O
                         exe,
                         install_path,
                     )
-                except ValueError:
-                    pass
             await write_manifest(
                 install_dir=install_path,
                 store="epic",
@@ -225,10 +230,7 @@ class EpicInstaller:
             store="epic",
             game_id=game_id,
             install_path=install_path
-            or os.path.join(
-                base,
-                game_id,
-            ),
+            or str(Path(base) / game_id),
         )
 
     async def uninstall_game(self, game_id: str) -> Result:
@@ -247,7 +249,7 @@ class EpicInstaller:
             stderr=asyncio.subprocess.PIPE,
         )
         try:
-            stdout, stderr = await asyncio.wait_for(
+            _stdout, stderr = await asyncio.wait_for(
                 proc.communicate(),
                 timeout=self._uninstall_timeout,
             )

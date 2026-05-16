@@ -119,7 +119,7 @@ def redact_for_audit(payload: dict[str, Any]) -> dict[str, Any]:
         truncated per the policy above.
     """
     if not isinstance(payload, dict):
-        return {"<malformed_payload>": _REDACTED_SENTINEL}
+        return {"<malformed_payload>": _REDACTED_SENTINEL}  # type: ignore[unreachable]  # defensive fallback for unexpected payload shape
     result: dict[str, Any] = {}
     for key, value in payload.items():
         result[key] = _redact_value(key, value)
@@ -154,7 +154,7 @@ def _is_sensitive_key(key: Any) -> bool:
     """
     try:
         normalised = str(key).lower()
-    except Exception:  # noqa: BLE001 — intentional: __str__ raised
+    except Exception:
         # A pathological key whose str() raises is itself
         # suspicious — treat as sensitive to be safe.
         return True

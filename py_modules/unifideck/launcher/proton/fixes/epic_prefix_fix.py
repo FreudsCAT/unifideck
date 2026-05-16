@@ -1,10 +1,13 @@
 from __future__ import annotations
+
 import asyncio
+import contextlib
 import logging
 import os
 import shutil
 import subprocess
 from pathlib import Path
+
 logger = logging.getLogger(__name__)
 _PROTON_FALLBACK_WINE_PATHS: list[str] = [
     "~/.steam/steam/steamapps/common/Proton - Experimental/files/bin/wine",
@@ -40,10 +43,8 @@ def _copy_wrapper_to_drive_c(
         epic_dir.mkdir(parents=True, exist_ok=True)
         epic_target = epic_dir / "EpicGamesLauncher.exe"
         if epic_target.exists():
-            try:
+            with contextlib.suppress(OSError):
                 epic_target.unlink()
-            except OSError:
-                pass
         shutil.copy2(bundled_wrapper, epic_target)
         logger.info(
             "[epic_prefix_fix] copied wrapper to Epic dir (%s)",
@@ -61,10 +62,8 @@ def _copy_wrapper_to_drive_c(
         win_command_dir.mkdir(parents=True, exist_ok=True)
         win_target = win_command_dir / "EpicGamesLauncher.exe"
         if win_target.exists():
-            try:
+            with contextlib.suppress(OSError):
                 win_target.unlink()
-            except OSError:
-                pass
         shutil.copy2(bundled_wrapper, win_target)
         logger.info(
             "[epic_prefix_fix] copied wrapper to "
@@ -103,11 +102,9 @@ def _select_registry_prefix(
     pfx_candidate = prefix_root / "pfx"
     if not pfx_candidate.exists():
         return prefix_root
-    try:
+    with contextlib.suppress(OSError):
         if pfx_candidate.is_symlink() and pfx_candidate.resolve() == prefix_root.resolve():
             return prefix_root
-    except OSError:
-        pass
     drive_c = pfx_candidate / "drive_c"
     if drive_c.is_dir():
         return pfx_candidate
@@ -136,10 +133,8 @@ async def _run_registry_inject(
                 "[epic_prefix_fix] wine reg add timed out, "
                 "killing",
             )
-            try:
+            with contextlib.suppress(ProcessLookupError):
                 proc.kill()
-            except ProcessLookupError:
-                pass
             return False
         if rc == 0:
             logger.info(
@@ -162,7 +157,7 @@ async def _kill_wineserver(wine_bin: Path, wineprefix: Path) -> None:
         return
     env = dict(os.environ)
     env["WINEPREFIX"] = str(wineprefix)
-    try:
+    with contextlib.suppress(TimeoutError, OSError, subprocess.SubprocessError):
         proc = await asyncio.create_subprocess_exec(
             str(wineserver), "--kill",
             env=env,
@@ -173,8 +168,6 @@ async def _kill_wineserver(wine_bin: Path, wineprefix: Path) -> None:
         logger.info(
             "[epic_prefix_fix] killed stale wineserver",
         )
-    except (TimeoutError, OSError, subprocess.SubprocessError):
-        pass
 
 async def apply_epic_launcher_fix(
     prefix_path: Path,

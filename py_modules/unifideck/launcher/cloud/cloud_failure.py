@@ -1,50 +1,131 @@
 from __future__ import annotations
+
 import logging
 from typing import TYPE_CHECKING, Any
-from ...core.types.events import Events
+
+from unifideck.core.types.events import Events
+
 if TYPE_CHECKING:
-    from ...config import ConfigManager
-    from ...event_bus.event_bus import EventBus
+    from unifideck.config import ConfigManager
+    from unifideck.event_bus.event_bus import EventBus
 logger = logging.getLogger(__name__)
-def classify_cloud_error(err: BaseException) -> str:
-    """Classify cloud error."""
+def _classify_aiohttp_error(err: BaseException) -> str | None:
+    """Classify a network error from the ``aiohttp`` family.
+
+    Returns one of the canonical codes (``network_unreachable``,
+    ``auth_expired``, ``forbidden``, ``quota_exceeded``,
+    ``server_error``, ``timed_out``) or ``None`` if the error is
+    not from ``aiohttp`` — the caller should then try the next
+    classifier.
+
+    The ``aiohttp`` import is lazy so the module loads even on
+    minimal installs where ``aiohttp`` is unavailable; in that
+    case we always return ``None`` and let other classifiers
+    handle the error.
+    """
     try:
         import aiohttp
     except ImportError:
-        aiohttp = None
-    if aiohttp is not None:
-        if isinstance(err, aiohttp.ClientConnectionError):
-            return "network_unreachable"
-        if isinstance(err, aiohttp.ClientResponseError):
-            status = getattr(err, "status", 0)
-            if status == 401:
-                return "auth_expired"
-            if status == 403:
-                return "forbidden"
-            if status == 413:
-                return "quota_exceeded"
-            if 500 <= status < 600:
-                return "server_error"
-        if isinstance(err, aiohttp.ClientTimeout):
-            return "timed_out"
-    if isinstance(err, OSError):
-        import errno
-        if err.errno == errno.ENOSPC:
-            return "disk_full"
-        if err.errno in (errno.EACCES, errno.EPERM):
-            return "permission_denied"
+        return None
+
+    if isinstance(err, aiohttp.ClientConnectionError):
+        return "network_unreachable"
+
+    if isinstance(err, aiohttp.ClientResponseError):
+        status = getattr(err, "status", 0)
+        if status == 401:
+            return "auth_expired"
+        if status == 403:
+            return "forbidden"
+        if status == 413:
+            return "quota_exceeded"
+        if 500 <= status < 600:
+            return "server_error"
+
+    # ``aiohttp.ClientTimeout`` is a configuration dataclass, NOT
+    # an exception type — an earlier version of this function
+    # checked ``isinstance(err, aiohttp.ClientTimeout)`` which
+    # was always False, so every timed-out sync silently fell
+    # through to "unknown". The actual exceptions raised on
+    # timeout are ``aiohttp.ServerTimeoutError`` (which inherits
+    # from ``asyncio.TimeoutError``) and the bare
+    # ``asyncio.TimeoutError`` raised from ``async with timeout``.
+    if isinstance(err, (aiohttp.ServerTimeoutError, TimeoutError)):
+        return "timed_out"
+
+    return None
+
+
+def _classify_os_error(err: BaseException) -> str | None:
+    """Classify a filesystem ``OSError`` by its ``errno``.
+
+    Returns ``disk_full`` for ``ENOSPC`` and ``permission_denied``
+    for ``EACCES``/``EPERM``. Other ``OSError`` codes fall through
+    to ``None`` so the caller can try the next classifier (e.g.
+    the ``LowDiskSpaceError`` heuristic).
+    """
+    if not isinstance(err, OSError):
+        return None
+    import errno
+    if err.errno == errno.ENOSPC:
+        return "disk_full"
+    if err.errno in (errno.EACCES, errno.EPERM):
+        return "permission_denied"
+    return None
+
+
+def _classify_disk_space_error(err: BaseException) -> str | None:
+    """Classify our own ``LowDiskSpaceError`` if it's importable.
+
+    This is split out so unit tests can swap in their own error
+    types without monkey-patching the main classifier. The import
+    is wrapped in ``try``/``except ImportError`` because the
+    ``disk_space`` module may not be available in stripped builds.
+    """
     try:
         from .disk_space import LowDiskSpaceError
-        if isinstance(err, LowDiskSpaceError):
-            return "disk_space_low"
     except ImportError:
-        pass
-    try:
-        import asyncio
-        if isinstance(err, asyncio.CancelledError):
-            return "cancelled"
-    except ImportError:
-        pass
+        return None
+    if isinstance(err, LowDiskSpaceError):
+        return "disk_space_low"
+    return None
+
+
+def _classify_cancellation(err: BaseException) -> str | None:
+    """Classify ``asyncio.CancelledError`` as ``cancelled``.
+
+    Always-available; ``asyncio`` is part of stdlib. Wrapped in
+    the same shape as the other classifiers for consistency.
+    """
+    import asyncio
+    if isinstance(err, asyncio.CancelledError):
+        return "cancelled"
+    return None
+
+
+# Ordered chain of classifiers. The first non-``None`` result wins;
+# if none match, the caller returns ``"unknown"``. Order matters —
+# network errors must be tried first because OSError is a parent of
+# ``aiohttp.ClientOSError`` and would shadow it otherwise.
+_CLASSIFIERS = (
+    _classify_aiohttp_error,
+    _classify_os_error,
+    _classify_disk_space_error,
+    _classify_cancellation,
+)
+
+
+def classify_cloud_error(err: BaseException) -> str:
+    """Map a raised exception to a stable cloud-failure code.
+
+    Walks ``_CLASSIFIERS`` in order and returns the first match.
+    Falls back to ``"unknown"`` so callers can always rely on a
+    string code (no None handling at the call site).
+    """
+    for classifier in _CLASSIFIERS:
+        code = classifier(err)
+        if code is not None:
+            return code
     return "unknown"
 
 _DEFAULT_BEHAVIOR = "toast"
@@ -93,7 +174,7 @@ async def _emit_toast(
 ) -> None:
     """Emit toast."""
     if bus is None:
-        return
+        return  # type: ignore[unreachable]  # fallback for unexpected error shape
     i18n_key = (
         "toasts.launcher.cloudSyncDownFailed"
         if phase == "sync_down"

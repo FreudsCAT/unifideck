@@ -1,117 +1,152 @@
-"""UIRPCMixin — Steam-UI manipulation + locale RPC (subset of UIHandlers).
+"""UI RPC mixin for Plugin class.
 
-OP-26g | py_modules/unifideck/rpc/mixins/ui.py
-
-Mixin form of a subset of ``UIHandlers`` (OP-25h):
-
-* metadata read;
-* CDP-driven Steam UI manipulation (hide/unhide play section,
-  inject CSS);
-* locale read/write.
-
-The CDP methods here go through a dedicated ``services.cdp``
-facade rather than reaching for ``get_cdp_client`` directly —
-the older composition pattern.
+OP-26g | rpc/mixins/ui.py
 """
-
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
+from pathlib import Path
 from typing import Any
+
+from unifideck.rpc.errors import RpcError
 
 logger = logging.getLogger(__name__)
 
 
+def _resolve_user_path(path: str) -> str:
+    """Expand ``~`` and resolve symlinks. Blocking — wrap with to_thread.
+
+    Returns the canonical absolute path. Empty/None input
+    falls back to ``/`` so the caller always gets a real path
+    to test for ``is_dir``.
+    """
+    return str(Path(path or "/").expanduser().resolve())
+
+
+def _collect_subdirs(
+    resolved: str, show_hidden: bool, sort_by: str,
+) -> list[str]:
+    """Return the immediate subdirectory names of ``resolved``.
+
+    Pure synchronous I/O helper extracted from
+    ``list_directory`` to:
+
+    * keep the async method under the nesting=4 gate (the
+      scandir-loop-isdir branch was nesting=5);
+    * make the blocking work atomic so a single
+      ``asyncio.to_thread`` call wraps all the filesystem
+      touches at once, rather than scattering ``to_thread``
+      calls over each ``is_dir`` check.
+
+    Skips dotfiles unless ``show_hidden`` is True. Each
+    entry's ``is_dir`` is guarded against transient OSError
+    (broken symlink, race with concurrent rm) — that entry
+    is dropped silently. Caller handles directory-level
+    OSError / PermissionError.
+    """
+    entries: list[str] = []
+    with os.scandir(resolved) as it:
+        for entry in it:
+            if not show_hidden and entry.name.startswith("."):
+                continue
+            if _is_dir_safe(entry):
+                entries.append(entry.name)
+    if sort_by == "name":
+        entries.sort(key=str.lower)
+    return entries
+
+
+def _is_dir_safe(entry: os.DirEntry[str]) -> bool:
+    """Return True iff ``entry`` is a directory; False on any OSError.
+
+    Tiny wrapper that swallows transient errors (broken
+    symlink, race with rm) so the caller's loop doesn't
+    need its own try/except — which kept the nesting depth
+    of ``list_directory`` past the gate.
+    """
+    try:
+        return entry.is_dir(follow_symlinks=False)
+    except OSError:
+        return False
+
+
 class UIRPCMixin:
-    """UI-side RPC: metadata, CDP manipulation, locale preference."""
+    """CDP injection, game metadata, and language preferences."""
 
     config: Any
     services: Any
+    sync_service: Any  # Required for the metadata.enrich(game) lookup
 
     async def get_game_metadata(self, store: str, game_id: str) -> Any:
-        """Return enriched metadata for one game.
+        """Return merged metadata for a game from the sync cache.
 
-        Delegates to ``services.metadata.get`` — older API
-        than the handler-group version which does a manual
-        sync-service lookup + enrich.
-
-        Args:
-            store: store identifier.
-            game_id: store-specific game id.
-
-        Returns:
-            Metadata dict from the metadata service.
+        :class:`MetadataService` does not expose ``get(store, id)``
+        — its real public method is :meth:`enrich(game)` which
+        takes a ``Game`` object. We resolve the game via the sync
+        cache then enrich. An earlier version called
+        ``metadata.get(...)`` and the RPC always raised
+        ``AttributeError``.
         """
-        return await self.services.metadata.get(store, game_id)
+        metadata = getattr(self.services, "metadata", None)
+        if metadata is None:
+            raise RpcError("service_unavailable", service="metadata")
+        sync = getattr(self, "sync_service", None)
+        if sync is None:
+            raise RpcError("service_unavailable", service="sync_service")
+        for game in sync.get_all_games():
+            # ``game_id`` here is the store-native id (the RPC
+            # argument name predates the rename to
+            # ``store_game_id`` on the dataclass).
+            if game.store == store and game.store_game_id == game_id:
+                return await metadata.enrich(game)
+        return {}
 
     async def hide_play_section(self, app_id: int) -> Any:
-        """Hide the "Play" section of a Steam game tile via CDP injection.
+        """Inject CSS hiding a game's Play button in Steam UI.
 
-        Used for games where Unifideck wants to replace
-        Steam's native "Play" button. Delegates to the CDP
-        facade.
-
-        Args:
-            app_id: Steam AppID.
-
-        Returns:
-            Whatever the CDP facade returns (typically a
-            bool or status dict).
+        Routes through the :class:`SteamCSSInjector` singleton
+        (see :mod:`unifideck.cdp.cdp_inject`) — ``self.services.cdp``
+        is the low-level ``CDPClient`` and has no
+        ``hide_play_section`` method, so the previous version
+        raised ``AttributeError`` on every "Hide" button click.
         """
-        return await self.services.cdp.hide_play_section(app_id)
+        from unifideck.cdp import get_cdp_client
+        injector = await get_cdp_client()
+        return await injector.hide_play_section(app_id)
 
     async def unhide_play_section(self, app_id: int) -> Any:
-        """Restore Steam's native "Play" section after a hide.
+        """Remove the hide-play-section CSS injection.
 
-        Args:
-            app_id: Steam AppID.
-
-        Returns:
-            Whatever the CDP facade returns.
+        Real method on the injector is :meth:`show_play_section`
+        (matching the inject/show pair). Previous ``unhide_*``
+        call didn't exist on either CDPClient or SteamCSSInjector.
         """
-        return await self.services.cdp.unhide_play_section(app_id)
+        from unifideck.cdp import get_cdp_client
+        injector = await get_cdp_client()
+        return await injector.show_play_section(app_id)
 
     async def inject_hide_css(self, app_id: int, css: str) -> Any:
-        """Inject custom CSS for an app via the CDP facade.
+        """Inject arbitrary CSS keyed by app_id.
 
-        Args:
-            app_id: Steam AppID (passed as a key for the
-                CDP layer to dedupe/replace prior
-                injections).
-            css: raw CSS string.
-
-        Returns:
-            Whatever the CDP facade returns.
+        :meth:`SteamCSSInjector.inject_css` takes
+        ``(css, marker)``. An earlier version passed
+        ``(app_id, css)`` so the CSS string was discarded and
+        ``app_id`` was treated as the CSS source.
         """
-        return await self.services.cdp.inject_css(app_id, css)
+        from unifideck.cdp import get_cdp_client
+        from unifideck.cdp.cdp_inject import build_marker_id
+        injector = await get_cdp_client()
+        marker = build_marker_id(f"app_{app_id}")
+        return await injector.inject_css(css, marker)
 
     async def get_language_preference(self) -> Any:
-        """Return the currently-configured UI locale (default ``"en-US"``).
-
-        Differs from ``UIHandlers.get_language_preference``
-        only in providing a fallback default — the handler
-        group returns whatever the config returns (possibly
-        ``None``).
-
-        Returns:
-            ``{locale: <str>}``.
-        """
+        """Return the current UI locale config value."""
         return {"locale": self.config.get("ui.locale", "en-US")}
 
     async def set_language_preference(self, locale: str) -> Any:
-        """Persist a new UI locale to the config.
-
-        No validation against a list of known locales —
-        the frontend is canonical on what locales exist.
-
-        Args:
-            locale: locale code (e.g. ``"en-US"``,
-                ``"fr-FR"``).
-
-        Returns:
-            ``{success: True, locale}``.
-        """
+        """Persist the UI locale via config."""
         self.config.set("ui.locale", locale)
         return {"success": True, "locale": locale}
 
@@ -128,6 +163,12 @@ class UIRPCMixin:
         click) so we never have to ship a tree of the whole
         filesystem.
 
+        Filesystem work (path resolution + scandir) is
+        offloaded to ``asyncio.to_thread`` via two helpers
+        — ``_resolve_user_path`` and ``_collect_subdirs`` —
+        so the event loop is never blocked on slow mounts
+        (network shares, SD card, etc.).
+
         Args:
             path: absolute path to enumerate. ``~`` is
                 expanded.
@@ -141,26 +182,18 @@ class UIRPCMixin:
             handle exceptions.
         """
         try:
-            resolved = os.path.realpath(os.path.expanduser(path or "/"))
-            if not os.path.isdir(resolved):
+            resolved = await asyncio.to_thread(_resolve_user_path, path)
+            is_dir = await asyncio.to_thread(Path(resolved).is_dir)
+            if not is_dir:
                 return {
                     "success": False,
                     "error": "not_a_directory",
                     "path": resolved,
                     "directories": [],
                 }
-            entries: list[str] = []
-            with os.scandir(resolved) as it:
-                for entry in it:
-                    if not show_hidden and entry.name.startswith("."):
-                        continue
-                    try:
-                        if entry.is_dir(follow_symlinks=False):
-                            entries.append(entry.name)
-                    except OSError:
-                        continue
-            if sort_by == "name":
-                entries.sort(key=str.lower)
+            entries = await asyncio.to_thread(
+                _collect_subdirs, resolved, show_hidden, sort_by,
+            )
             return {
                 "success": True,
                 "path": resolved,

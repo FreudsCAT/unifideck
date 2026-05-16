@@ -1,13 +1,12 @@
-"""Cloud save service — Steam Cloud + native cloud sync.
+"""services/cloud_save — Cloud-save sync service.
 
-OP-17 | py_modules/unifideck/services/cloud_save/__init__.py
-
-Re-exports ``CloudSaveService``. The service handles game-save
-synchronisation between the local Steam Deck and Steam Cloud /
-store-specific cloud (GOG Galaxy cloud, Epic cloud, etc.).
+Re-exports ``CloudSaveService`` so callers can write
+``from unifideck.services.cloud_save import CloudSaveService``
+rather than reaching into the private ``service`` submodule.
 """
 
 from __future__ import annotations
+
 from .service import CloudSaveService
 
 __all__ = ["CloudSaveService"]

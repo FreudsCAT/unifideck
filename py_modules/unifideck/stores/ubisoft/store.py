@@ -27,26 +27,25 @@ etc. — every method is delegated to the appropriate sub-component.
 """
 
 from __future__ import annotations
+
 import logging
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any, cast
-from ...core.types import (
-    AuthResult,
-    Game,
-    InstallResult,
-    Result,
-    StoreInfo,
-)
-from ..shared.store_base import StoreBase
+
+from unifideck.core.types import AuthResult, Game, InstallResult, Result, StoreInfo
+from unifideck.stores.shared.store_base import StoreBase
+
 from .specialists import build_ubisoft_specialists
 
 if TYPE_CHECKING:
-    from ...config import ConfigManager
-    from ...core.cache_manager import CacheManager
-    from ...event_bus.event_bus import EventBus
-    from ...services.shortcut import ShortcutService
-    from ...steam.steamgriddb import SteamGridDBClient
+    from unifideck.config import ConfigManager
+    from unifideck.core.cache_manager import CacheManager
+    from unifideck.event_bus.event_bus import EventBus
+    from unifideck.services.shortcut import ShortcutService
+    from unifideck.steam.steamgriddb import SteamGridDBClient
+
     from .auth import UbisoftAuth
+    from .config import UbisoftConfig
     from .installer import UbisoftInstaller
     from .library import UbisoftLibrary
 logger = logging.getLogger(__name__)
@@ -82,7 +81,12 @@ class UbisoftStore(StoreBase):
             shortcut_service=shortcut_service,
             steamgriddb=steamgriddb,
         )
-        self._config = specialists.config
+        # Drift fix (lot 11g): ``self._config`` is set by
+        # ``super().__init__`` to ``ConfigManager | None``; we
+        # then shadow it with the specialist ``UbisoftConfig``.
+        # Annotate the new shape explicitly so mypy doesn't
+        # report ``Incompatible types in assignment``.
+        self._config: UbisoftConfig = specialists.config  # type: ignore[assignment]
         self._paths = specialists.paths
         self._binaries = specialists.binaries
         self._id_map = specialists.id_map

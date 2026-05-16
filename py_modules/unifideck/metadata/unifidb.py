@@ -7,10 +7,11 @@ import re
 import string
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
-from ..utils.config_helpers import get_cfg
+
+from unifideck.utils.config_helpers import get_cfg
 
 if TYPE_CHECKING:
-    from ..config import ConfigManager
+    from unifideck.config import ConfigManager
 
 logger = logging.getLogger(__name__)
 
@@ -160,7 +161,7 @@ async def lookup(
     return None
 
 async def _fetch_bucket(
-    bucket: str, cdn_base: str, timeout: int,
+    bucket: str, cdn_base: str, timeout: int,  # noqa: ASYNC109 — timeout is API value passed to underlying lib (urllib/aiohttp/subprocess), not an asyncio.timeout() wrapper
 ) -> list[dict[str, Any]]:
     """Fetch bucket."""
     import aiohttp
@@ -169,7 +170,7 @@ async def _fetch_bucket(
     try:
         async with (
             aiohttp.ClientSession() as session,
-            session.get(url, timeout=timeout) as resp,
+            session.get(url, timeout=aiohttp.ClientTimeout(total=timeout)) as resp,
         ):
             if resp.status != 200:
                 return []

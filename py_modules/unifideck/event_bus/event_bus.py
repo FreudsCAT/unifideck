@@ -48,7 +48,7 @@ import time
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-from ..core.types import Events
+from unifideck.core.types import Events
 
 logger = logging.getLogger(__name__)
 Handler = Callable[..., Awaitable[Any]] | Callable[..., Any]
@@ -154,6 +154,61 @@ class EventBus:
             self._handlers.pop(key, None)
             self._once.pop(key, None)
             logger.debug("[EventBus] cleared %s", key)
+
+    def unsubscribe_all(self, owner: object) -> int:
+        """Remove every handler bound to ``owner``.
+
+        Walks the full handler table and drops any handler whose
+        ``__self__`` is the given object — i.e. every bound method
+        of ``owner`` that was registered via :py:meth:`on` or
+        :py:meth:`once`. Useful when a service shuts down and
+        wants to detach from the bus without listing each
+        ``off()`` call manually.
+
+        The match is identity-based on ``__self__``; free
+        functions and lambdas (no ``__self__``) are never
+        matched. ``owner`` itself doesn't need to be the
+        service class — any object whose bound methods were
+        subscribed will be cleaned up.
+
+        Args:
+            owner: the object whose subscriptions to remove.
+
+        Returns:
+            The number of handlers removed across every event.
+            Safe to call when ``owner`` has no subscriptions
+            (returns 0).
+        """
+        removed = 0
+        # Iterate over a snapshot of keys so we can mutate the
+        # underlying dicts during iteration (deleting entries that
+        # become empty after the sweep).
+        for key in list(self._handlers.keys()):
+            survivors = [
+                h for h in self._handlers[key]
+                if getattr(h, "__self__", None) is not owner
+            ]
+            removed += len(self._handlers[key]) - len(survivors)
+            if survivors:
+                self._handlers[key] = survivors
+            else:
+                del self._handlers[key]
+            # Mirror the cleanup on the ``_once`` shadow table.
+            once_list = self._once.get(key)
+            if once_list is not None:
+                survivors_once = [
+                    h for h in once_list
+                    if getattr(h, "__self__", None) is not owner
+                ]
+                if survivors_once:
+                    self._once[key] = survivors_once
+                else:
+                    self._once.pop(key, None)
+        logger.debug(
+            "[EventBus] unsubscribe_all(%s) → %d handlers removed",
+            type(owner).__name__, removed,
+        )
+        return removed
 
     def handler_count(self, event: Events | str) -> int:
         """Return the number of subscribers currently registered for ``event``.
@@ -275,5 +330,8 @@ class EventBus:
             The canonical string form used as the dict key.
         """
         if isinstance(event, Events):
-            return event.value
+            # Cast through ``str`` to anchor the return type — StrEnum's
+            # ``.value`` is typed as the enum's underlying type which
+            # mypy widens to Any in some import paths.
+            return str(event.value)
         return str(event)

@@ -28,7 +28,9 @@ import json
 import logging
 import time
 from typing import Any
-from ...core.types import Game
+
+from unifideck.core.types import Game
+
 from .filter import should_filter_epic_item
 
 logger = logging.getLogger(__name__)
@@ -145,8 +147,8 @@ class EpicLibraryReader:
             return None
         try:
             return json.loads(stdout.decode(errors="ignore"))
-        except json.JSONDecodeError as e:
-            logger.error("[epic_library] JSON parse error: %s", e)
+        except json.JSONDecodeError:
+            logger.exception("[epic_library] JSON parse error")
             return None
 
 

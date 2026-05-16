@@ -1,5 +1,8 @@
 from __future__ import annotations
+
 from enum import IntEnum
+
+
 class ExitCode(IntEnum):
     """Exit code."""
     SUCCESS = 0

@@ -180,7 +180,7 @@ class EphemeralCredentialContext:
         payload = await self._load_payload()
         tempdir = await self._make_tempdir()
         self._tempdir = tempdir
-        self._plaintext_path = os.path.join(tempdir, self._cli_filename)
+        self._plaintext_path = str(Path(tempdir) / self._cli_filename)
         await self._write_plaintext(payload)
         env = os.environ.copy()
         env[self._env_var] = tempdir
@@ -231,7 +231,7 @@ class EphemeralCredentialContext:
         as ``EphemeralCredentialError`` so the caller can
         surface "re-auth needed" to the user.
         """
-        if not Path(self._ciphertext_path).is_file():
+        if not await asyncio.to_thread(lambda: Path(self._ciphertext_path).is_file()):
             # First-time use: nothing to expose, the CLI will
             # do its own auth flow inside the tempdir and we
             # capture the result on exit.
@@ -278,13 +278,13 @@ class EphemeralCredentialContext:
         # explicitly so the invariant doesn't depend on
         # platform.
         try:
-            os.chmod(tempdir, _TEMPDIR_MODE)
+            await asyncio.to_thread(Path(tempdir).chmod, _TEMPDIR_MODE)
         except OSError as e:
             # If we can't chmod, abort and remove — we cannot
             # let plaintext live in a dir we don't fully
             # control.
             with contextlib.suppress(OSError):
-                os.rmdir(tempdir)
+                await asyncio.to_thread(Path(tempdir).rmdir)
             raise EphemeralCredentialError(
                 f"cannot chmod tempdir {tempdir}: {e}",
             ) from e
@@ -301,7 +301,7 @@ class EphemeralCredentialContext:
         plaintext window.
         """
         assert self._plaintext_path is not None
-        import json  # noqa: PLC0415 — stdlib, lazy
+        import json
 
         # Empty payload still writes a valid JSON object so the
         # CLI does not see EOF and can populate the file as
@@ -340,7 +340,7 @@ class EphemeralCredentialContext:
             )
             return
         try:
-            import json  # noqa: PLC0415 — stdlib, lazy
+            import json
             payload = json.loads(plaintext.decode("utf-8"))
         except (ValueError, UnicodeDecodeError) as e:
             logger.warning(
@@ -360,11 +360,11 @@ class EphemeralCredentialContext:
             await asyncio.to_thread(
                 secure_write_atomic, self._ciphertext_path, blob,
             )
-        except SecureIOError as e:
-            logger.error(
+        except SecureIOError:
+            logger.exception(
                 "[ephemeral_creds] cannot persist rotated "
-                "ciphertext: %s — next invocation will use "
-                "the stale value", e,
+                "ciphertext — next invocation will use "
+                "the stale value",
             )
 
     async def _wipe_tempdir(self) -> None:
@@ -391,11 +391,11 @@ class EphemeralCredentialContext:
                 # older Pythons, and we want to be precise
                 # about what we delete.
                 for entry in _safe_listdir(tempdir):
-                    full = os.path.join(tempdir, entry)
+                    full = str(Path(tempdir) / entry)
                     with contextlib.suppress(OSError):
-                        os.unlink(full)
+                        Path(full).unlink()
                 with contextlib.suppress(OSError):
-                    os.rmdir(tempdir)
+                    Path(tempdir).rmdir()
 
         await asyncio.to_thread(_rmtree)
 
@@ -403,274 +403,33 @@ class EphemeralCredentialContext:
 def _safe_listdir(path: str) -> Iterator[str]:
     """Yield directory entries, swallowing OSError."""
     try:
-        yield from os.listdir(path)
+        yield from [entry.name for entry in Path(path).iterdir()]
     except OSError as e:
         logger.debug(
             "[ephemeral_creds] listdir failed during cleanup: %s", e,
         )
 
 
-class InPlaceEphemeralFile:
-    """Decrypt ciphertext at a fixed plaintext path; re-encrypt on exit.
 
-    Sibling primitive to ``EphemeralCredentialContext`` for CLIs
-    whose config directory holds other persistent state besides
-    credentials (legendary's ``installed.json`` + ``metadata/``,
-    nile's library cache, etc.). Overriding the entire config
-    dir to a fresh tempdir would erase that state for the
-    duration of the call; instead this primitive only touches
-    the single credentials file the CLI authenticates with.
+# ── Re-export for backward compatibility ───────────────────────
+# ``InPlaceEphemeralFile`` was split into ``ephemeral_creds_inplace``
+# to keep this module under the 550-LOC volumetry gate. The
+# re-export below means every existing
+# ``from security.ephemeral_creds import InPlaceEphemeralFile``
+# import keeps working without churn.
+#
+# Fix (2026-05-15, lot 11e): the re-export was DOCUMENTED but
+# never actually written — ``security/__init__.py`` and any
+# direct importer hit ``ImportError: cannot import name
+# 'InPlaceEphemeralFile'`` at module load. Added the line below
+# to match the documented contract.
+from unifideck.security.ephemeral_creds_inplace import (  # noqa: E402 — late re-export to break a cycle with ephemeral_creds_inplace which imports back from this module
+    InPlaceEphemeralFile,
+)
 
-    Lifecycle:
+__all__ = [
+    "EphemeralCredentialContext",
+    "EphemeralCredentialError",
+    "InPlaceEphemeralFile",
+]
 
-      1. **First-time migration**: if the plaintext file exists
-         already (legacy install) and no ciphertext yet, the
-         existing plaintext is encrypted into the ciphertext and
-         left in place — the CLI keeps working through the
-         transition.
-      2. **Steady state**: on enter, decrypt ciphertext to the
-         plaintext path (mode 0o600 via ``secure_write_atomic``).
-         On exit (success), read plaintext back, encrypt to
-         ciphertext, remove plaintext from disk. The plaintext
-         only exists between enter and exit.
-      3. **On exception**: plaintext is wiped from disk
-         unconditionally. Ciphertext is NOT touched, preserving
-         the last-known-good state.
-
-    Threat model
-    ------------
-    Same as ``EphemeralCredentialContext`` for the encryption
-    properties: defends against accidental exfiltration of the
-    file at rest (cloud backups, bug-report archives, syncthing).
-    The exposure window during which plaintext exists at the
-    canonical path is unavoidable — the CLI needs to read its
-    credentials at some point — but the window is tens of
-    milliseconds for typical operations and the file is mode
-    0o600 throughout.
-
-    Usage::
-
-        ctx = InPlaceEphemeralFile(
-            secure_store=secure_store,
-            ciphertext_path="~/.config/unifideck/epic_tokens.bin",
-            plaintext_path="~/.config/legendary/user.json",
-        )
-        async with ctx:
-            await asyncio.create_subprocess_exec(legendary, "info", "x")
-        # plaintext wiped, ciphertext refreshed if rotated
-    """
-
-    def __init__(
-        self,
-        *,
-        secure_store: SecureTokenStore,
-        ciphertext_path: str,
-        plaintext_path: str,
-    ) -> None:
-        """Wire the dependencies for this CLI's credentials file.
-
-        Args:
-            secure_store: SecureTokenStore wrapping our key
-                derivation. Same instance the parent token
-                manager already owns.
-            ciphertext_path: Absolute path to our UFD1 file.
-            plaintext_path: Absolute path the CLI reads from
-                (e.g. ``~/.config/legendary/user.json``).
-        """
-        self._store = secure_store
-        self._ciphertext_path = ciphertext_path
-        self._plaintext_path = plaintext_path
-        self._wrote_plaintext = False
-
-    async def __aenter__(self) -> None:
-        """Decrypt ciphertext to plaintext path; migrate if needed.
-
-        Three branches:
-
-          - **Both ciphertext and plaintext absent**: nothing to
-            do. The CLI will run its own auth flow which writes
-            plaintext; ``__aexit__`` will encrypt it.
-          - **Plaintext exists, no ciphertext**: legacy migration.
-            Read plaintext, encrypt to ciphertext, leave
-            plaintext alone (the CLI will keep using it during
-            the call; ``__aexit__`` re-encrypts and wipes).
-          - **Ciphertext exists**: normal case. Decrypt and
-            write plaintext via ``secure_write_atomic``.
-        """
-        ciphertext_exists = Path(self._ciphertext_path).is_file()
-        plaintext_exists = Path(self._plaintext_path).is_file()
-        if not ciphertext_exists and plaintext_exists:
-            # Migration: legacy install where the CLI already has
-            # plaintext. Encrypt it once, then proceed normally.
-            await self._migrate_legacy_plaintext()
-            return
-        if not ciphertext_exists:
-            # Fresh install. Nothing to expose; CLI will populate
-            # plaintext on its own (e.g. during OAuth).
-            return
-        # Normal path: decrypt → write plaintext.
-        try:
-            blob = await asyncio.to_thread(
-                secure_read_bytes, self._ciphertext_path,
-            )
-        except SecureIOError as e:
-            raise EphemeralCredentialError(
-                f"cannot read ciphertext at "
-                f"{self._ciphertext_path}: {e}",
-            ) from e
-        payload = self._store.decrypt_payload(blob)
-        await self._write_plaintext(payload)
-        self._wrote_plaintext = True
-        return
-
-    async def __aexit__(
-        self,
-        exc_type: type[BaseException] | None,
-        exc: BaseException | None,
-        tb: Any,
-    ) -> None:
-        """Re-encrypt rotated plaintext (success); wipe in all cases.
-
-        On clean exit: read plaintext, encrypt, save to ciphertext.
-        Then wipe the plaintext file regardless. On exception:
-        skip the encryption (preserves last-known-good ciphertext)
-        and just wipe.
-        """
-        try:
-            if exc_type is None:
-                await self._capture_and_encrypt()
-        finally:
-            await self._wipe_plaintext()
-
-    # ─── Internal helpers ──────────────────────────────────────
-
-    async def _migrate_legacy_plaintext(self) -> None:
-        """Encrypt an existing plaintext into ciphertext (one-shot).
-
-        Called when the CLI has its plaintext but we don't have
-        a ciphertext yet — typically a user upgrading from a
-        Unifideck version that didn't encrypt this CLI's tokens.
-        We read, encrypt, and save; the plaintext stays in place
-        so the CLI keeps working through this same call.
-        """
-        try:
-            plaintext_bytes = await asyncio.to_thread(
-                secure_read_bytes, self._plaintext_path,
-            )
-        except SecureIOError as e:
-            logger.warning(
-                "[ephemeral_creds] migration: cannot read "
-                "%s: %s", self._plaintext_path, e,
-            )
-            return
-        try:
-            import json  # noqa: PLC0415 — stdlib, lazy
-            payload = json.loads(plaintext_bytes.decode("utf-8"))
-        except (ValueError, UnicodeDecodeError) as e:
-            logger.warning(
-                "[ephemeral_creds] migration: %s is not JSON, "
-                "skipping: %s", self._plaintext_path, e,
-            )
-            return
-        if not isinstance(payload, dict):
-            logger.warning(
-                "[ephemeral_creds] migration: %s is not a JSON "
-                "object, skipping", self._plaintext_path,
-            )
-            return
-        blob = self._store.encrypt_payload(payload)
-        try:
-            await asyncio.to_thread(
-                secure_write_atomic, self._ciphertext_path, blob,
-            )
-        except SecureIOError as e:
-            logger.error(
-                "[ephemeral_creds] migration: cannot write "
-                "ciphertext: %s", e,
-            )
-            return
-        logger.info(
-            "[ephemeral_creds] migrated legacy plaintext at %s "
-            "to encrypted store at %s",
-            self._plaintext_path, self._ciphertext_path,
-        )
-
-    async def _write_plaintext(self, payload: dict[str, Any]) -> None:
-        """Serialise + write the decrypted payload to plaintext path."""
-        import json  # noqa: PLC0415 — stdlib, lazy
-
-        body = json.dumps(payload).encode("utf-8")
-        try:
-            await asyncio.to_thread(
-                secure_write_atomic, self._plaintext_path, body,
-            )
-        except SecureIOError as e:
-            raise EphemeralCredentialError(
-                f"cannot write plaintext at "
-                f"{self._plaintext_path}: {e}",
-            ) from e
-
-    async def _capture_and_encrypt(self) -> None:
-        """Read plaintext, encrypt to ciphertext path on clean exit."""
-        if not Path(self._plaintext_path).is_file():
-            # CLI deleted the file (logout?). Don't touch
-            # ciphertext; the parent manager will detect the
-            # logged-out state on next probe.
-            return
-        try:
-            plaintext = await asyncio.to_thread(
-                secure_read_bytes, self._plaintext_path,
-            )
-        except SecureIOError as e:
-            logger.warning(
-                "[ephemeral_creds] capture: cannot read "
-                "%s: %s", self._plaintext_path, e,
-            )
-            return
-        try:
-            import json  # noqa: PLC0415 — stdlib, lazy
-            payload = json.loads(plaintext.decode("utf-8"))
-        except (ValueError, UnicodeDecodeError) as e:
-            logger.warning(
-                "[ephemeral_creds] capture: CLI wrote unparseable "
-                "JSON, keeping previous ciphertext: %s", e,
-            )
-            return
-        if not isinstance(payload, dict):
-            logger.warning(
-                "[ephemeral_creds] capture: CLI wrote non-dict "
-                "JSON, keeping previous ciphertext",
-            )
-            return
-        blob = self._store.encrypt_payload(payload)
-        try:
-            await asyncio.to_thread(
-                secure_write_atomic, self._ciphertext_path, blob,
-            )
-        except SecureIOError as e:
-            logger.error(
-                "[ephemeral_creds] capture: cannot persist "
-                "ciphertext: %s — next invocation will use "
-                "stale value", e,
-            )
-
-    async def _wipe_plaintext(self) -> None:
-        """Best-effort removal of the plaintext file.
-
-        Always called from ``__aexit__`` so plaintext does not
-        outlive the context, even on exception. Failures are
-        logged at debug level; we cannot raise from a finally
-        path without masking the original exception (if any).
-        """
-
-        def _remove() -> None:
-            try:
-                if Path(self._plaintext_path).is_file():
-                    os.unlink(self._plaintext_path)
-            except OSError as e:
-                logger.debug(
-                    "[ephemeral_creds] wipe failed for %s: %s",
-                    self._plaintext_path, e,
-                )
-
-        await asyncio.to_thread(_remove)

@@ -3,10 +3,12 @@ import logging
 import os
 import subprocess
 from abc import ABC, abstractmethod
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
-from ...core.binaries import binary_resolver
-from ...core.exe_finder import exe_finder
-from ...core.types import (
+
+from unifideck.core.binaries import binary_resolver
+from unifideck.core.exe_finder import exe_finder
+from unifideck.core.types import (
     AuthResult,
     CLITool,
     Events,
@@ -16,10 +18,11 @@ from ...core.types import (
     StoreError,
     StoreInfo,
 )
+
 if TYPE_CHECKING:
-    from ...config import ConfigManager
-    from ...core.cache_manager import CacheManager
-    from ...event_bus import EventBus
+    from unifideck.config import ConfigManager
+    from unifideck.core.cache_manager import CacheManager
+    from unifideck.event_bus import EventBus
 logger = logging.getLogger(__name__)
 class StoreBase(ABC):
     """Store base."""
@@ -51,11 +54,11 @@ class StoreBase(ABC):
         """Check whether available."""
         ...
     @abstractmethod
-    async def start_auth(self, **kwargs) -> AuthResult:
+    async def start_auth(self, **kwargs: Any) -> AuthResult:
         """Start auth."""
         ...
     @abstractmethod
-    async def complete_auth(self, **kwargs) -> AuthResult:
+    async def complete_auth(self, **kwargs: Any) -> AuthResult:
         """Complete auth."""
         ...
     @abstractmethod
@@ -109,8 +112,8 @@ class StoreBase(ABC):
         """
         if self._plugin_dir:
             absolutised = [
-                p if os.path.isabs(p)
-                else os.path.join(self._plugin_dir, p)
+                p if Path(p).is_absolute()
+                else str(Path(self._plugin_dir) / p)
                 for p in tool.search_paths
             ]
             tool = CLITool(
@@ -127,15 +130,15 @@ class StoreBase(ABC):
     ) -> str | None:
         """Find exe."""
         return exe_finder.find(install_path, hints)
-    async def _emit(self, event: Events, **kwargs) -> None:
-        """Emit."""
+    async def _emit(self, event: Events, **kwargs: Any) -> None:
+        """Emit a bus event with arbitrary kwargs payload."""
         await self._bus.emit(event, **kwargs)
 
     async def _run_cli(
         self,
         args: list[str],
         binary_path: str | None = None,
-        timeout: int = 300,
+        timeout: int = 300,  # noqa: ASYNC109 — timeout is API value passed to underlying lib (urllib/aiohttp/subprocess), not an asyncio.timeout() wrapper
         env: dict[str, str] | None = None,
     ) -> str:
 
@@ -146,19 +149,20 @@ class StoreBase(ABC):
                 "CLI binary not found",
                 store=self.store_name,
             )
-        cmd = [bin_path] + args
+        cmd = [bin_path, *args]
         process_env = (
             dict(os.environ) if env is None
             else {**os.environ, **env}
         )
-        def _run():
-            """Run."""
+        def _run() -> str:
+            """Run the subprocess synchronously, return stdout."""
             result = subprocess.run(
                 cmd,
                 capture_output=True,
                 text=True,
                 timeout=timeout,
                 env=process_env,
+                check=False,  # rc read manually below to raise StoreError
             )
             if result.returncode != 0:
                 raise StoreError(

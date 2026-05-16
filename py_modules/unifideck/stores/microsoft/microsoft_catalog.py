@@ -1,15 +1,16 @@
 from __future__ import annotations
+
 import asyncio
 import logging
 from typing import Any
 from urllib.parse import urlencode
-from ...core.types import Game, GameTag
-from ...utils.locale import (
-    get_unifideck_locale,
-    get_unifideck_market,
-)
+
+from unifideck.core.types import Game, GameTag
+from unifideck.utils.locale import get_unifideck_locale, get_unifideck_market
+
 from .microsoft_auth import http_get
 from .microsoft_config import MicrosoftConfig
+
 logger = logging.getLogger(__name__)
 _TITLE_BATCH_SIZE = 20
 class MicrosoftCatalogReader:
@@ -70,20 +71,17 @@ class MicrosoftCatalogReader:
                     None, lambda: http_get(url, headers),
                 )
             )
-        except Exception as e:
-            logger.error(
-                "[MicrosoftCatalog] catalog fetch failed: "
-                "%s", e,
-            )
+        except Exception:
+            logger.exception("[MicrosoftCatalog] catalog fetch failed")
             return []
-        if not isinstance(data, list):
+        if not isinstance(data, list):  # type: ignore[unreachable]  # guard 'if not isinstance(data, list)'
             logger.warning(
                 "[MicrosoftCatalog] catalog returned %s, "
                 "not list",
                 type(data).__name__,
             )
             return []
-        ids = [
+        ids = [  # type: ignore[unreachable]  # guard on response shape
             item["id"]
             for item in data
             if isinstance(item, dict)
@@ -201,7 +199,7 @@ class MicrosoftCatalogReader:
 
     @staticmethod
     def _first_localized_title(
-        localized: list,
+        localized: list[Any],
     ) -> str | None:
         """First localized title."""
         for loc in localized:

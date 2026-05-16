@@ -1,4 +1,5 @@
 import json
+
 _XCLOUD_BROWSER_SHIMS_JS = r"""
 (function() {
  'use strict';

@@ -24,6 +24,7 @@ delegate — keeps the async surface readable.
 """
 
 import asyncio
+import contextlib
 import json
 import logging
 import os
@@ -32,7 +33,7 @@ from pathlib import Path
 from typing import Any, cast
 
 logger = logging.getLogger(__name__)
-PathLike = str | os.PathLike
+PathLike = str | os.PathLike[str]
 
 
 async def exists(path: PathLike) -> bool:
@@ -156,12 +157,8 @@ async def makedirs(path: PathLike, mode: int = 0o755, exist_ok: bool = True) -> 
             ),
         )
         return True
-    except OSError as e:
-        logger.error(
-            "[AsyncFileOps] makedirs(%s) failed: %s",
-            path,
-            e,
-        )
+    except OSError:
+        logger.exception("[AsyncFileOps] makedirs(%s) failed", path)
         return False
 
 
@@ -195,13 +192,8 @@ async def copy(src: PathLike, dst: PathLike) -> bool:
     try:
         await asyncio.to_thread(shutil.copy2, src, dst)
         return True
-    except (OSError, shutil.Error) as e:
-        logger.error(
-            "[AsyncFileOps] copy(%s -> %s) failed: %s",
-            src,
-            dst,
-            e,
-        )
+    except (OSError, shutil.Error):
+        logger.exception("[AsyncFileOps] copy(%s -> %s) failed", src, dst)
         return False
 
 
@@ -223,13 +215,8 @@ async def move(src: PathLike, dst: PathLike) -> bool:
     try:
         await asyncio.to_thread(shutil.move, str(src), str(dst))
         return True
-    except (OSError, shutil.Error) as e:
-        logger.error(
-            "[AsyncFileOps] move(%s -> %s) failed: %s",
-            src,
-            dst,
-            e,
-        )
+    except (OSError, shutil.Error):
+        logger.exception("[AsyncFileOps] move(%s -> %s) failed", src, dst)
         return False
 
 
@@ -252,12 +239,8 @@ async def remove(path: PathLike) -> bool:
             lambda: Path(path).unlink(missing_ok=True),
         )
         return True
-    except OSError as e:
-        logger.error(
-            "[AsyncFileOps] remove(%s) failed: %s",
-            path,
-            e,
-        )
+    except OSError:
+        logger.exception("[AsyncFileOps] remove(%s) failed", path)
         return False
 
 
@@ -336,17 +319,11 @@ def _write_text_sync(path: PathLike, content: str, encoding: str, mode: int) -> 
         if mode != 0o644:
             p.chmod(mode)
         return True
-    except OSError as e:
-        logger.error(
-            "[AsyncFileOps] write_text(%s) failed: %s",
-            path,
-            e,
-        )
+    except OSError:
+        logger.exception("[AsyncFileOps] write_text(%s) failed", path)
         if tmp.exists():
-            try:
+            with contextlib.suppress(OSError):
                 tmp.unlink()
-            except OSError:
-                pass
         return False
 
 
@@ -390,11 +367,9 @@ def _write_bytes_sync(path: PathLike, data: bytes) -> bool:
         tmp.replace(p)
         return True
     except OSError:
-        try:
+        with contextlib.suppress(OSError):
             if tmp.exists():
                 tmp.unlink()
-        except OSError:
-            pass
         return False
 
 
@@ -506,15 +481,9 @@ def _write_json_sync(path: PathLike, data: Any, indent: int, mode: int = 0o644) 
         if mode != 0o644:
             p.chmod(mode)
         return True
-    except (OSError, TypeError, ValueError) as e:
-        logger.error(
-            "[AsyncFileOps] write_json(%s) failed: %s",
-            path,
-            e,
-        )
+    except (OSError, TypeError, ValueError):
+        logger.exception("[AsyncFileOps] write_json(%s) failed", path)
         if tmp.exists():
-            try:
+            with contextlib.suppress(OSError):
                 tmp.unlink()
-            except OSError:
-                pass
         return False

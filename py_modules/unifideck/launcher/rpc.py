@@ -1,9 +1,12 @@
 from __future__ import annotations
+
 import logging
 from typing import TYPE_CHECKING
-from ..core.types import Events
+
+from unifideck.core.types import Events
+
 if TYPE_CHECKING:
-    from ..event_bus import EventBus
+    from unifideck.event_bus import EventBus
 logger = logging.getLogger(__name__)
 async def emit_game_launched(
  bus: EventBus,

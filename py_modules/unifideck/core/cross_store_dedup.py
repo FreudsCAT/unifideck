@@ -39,7 +39,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
-from ..metadata.unifidb import normalize_title_for_matching
+from unifideck.metadata.unifidb import normalize_title_for_matching
 
 if TYPE_CHECKING:
     from .types import Game
@@ -132,7 +132,7 @@ class _ClaimedEntry:
             (drives the "installed wins" eviction rule).
     """
 
-    __slots__ = ("store", "installed")
+    __slots__ = ("installed", "store")
 
     def __init__(self, *, store: str, installed: bool) -> None:
         """Initialise the bookkeeping record.

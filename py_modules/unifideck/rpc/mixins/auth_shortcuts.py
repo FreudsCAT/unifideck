@@ -30,7 +30,8 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Any
+from pathlib import Path
+from typing import Any, cast
 
 logger = logging.getLogger(__name__)
 
@@ -103,7 +104,7 @@ class AuthShortcutsRPCMixin:
         )
         return result
 
-    async def get_compat_tool_for_game(self, store_game_id: str) -> Any:  # noqa: D401 — see below
+    async def get_compat_tool_for_game(self, store_game_id: str) -> Any:
         """See full doc on the body — logging-wrapped variant."""
         logger.info(
             "[AuthShortcuts] get_compat_tool_for_game(%s)",
@@ -145,7 +146,11 @@ class AuthShortcutsRPCMixin:
             )
             result = _lookup(store_game_id)
             if not isinstance(result, dict):
-                result = {"tool_name": result or ""}
+                # Defensive: ``get_compat_tool_for_game`` is typed
+                # as returning dict but historically returned a
+                # plain string in some code paths. Keep the
+                # normaliser; mypy thinks it's unreachable now.
+                result = {"tool_name": result or ""}  # type: ignore[unreachable]
 
             # The generic proton_helpers lookup doesn't know
             # the steam unsigned AppID. Resolve it from the
@@ -204,7 +209,9 @@ class AuthShortcutsRPCMixin:
                     b"\\x02appid\\x00(.{4})", chunk, re.DOTALL,
                 ):
                     try:
-                        return struct.unpack("<I", m.group(1))[0]
+                        # struct.unpack returns tuple[Any, ...] so [0] is Any;
+                        # we know "<I" produces a single uint32 → int.
+                        return cast(int, struct.unpack("<I", m.group(1))[0])
                     except struct.error:
                         pass
             i = end
@@ -260,13 +267,10 @@ def _build_auth_shortcut_context(store: str) -> dict[str, Any]:
         "DECKY_PLUGIN_DIR",
         "/home/deck/homebrew/plugins/Unifideck",
     )
-    dispatcher_path = os.path.join(
-        plugin_dir, "py_modules", "unifideck", "launcher",
-        "dispatcher.py",
+    dispatcher_path = str(
+        Path(plugin_dir) / "py_modules" / "unifideck" / "launcher" / "dispatcher.py",
     )
-    wrapper_path = os.path.join(
-        plugin_dir, "bin", "unifideck-launcher",
-    )
+    wrapper_path = str(Path(plugin_dir) / "bin" / "unifideck-launcher")
     try:
         from unifideck.services.shortcut.games_map import (
             generate_app_id,
