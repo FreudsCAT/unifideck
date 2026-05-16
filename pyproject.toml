@@ -471,3 +471,51 @@ omit = [
 #    flake8 (no force-exclude) and mypy honour their own
 #    ``exclude`` only during directory walking, so the same care
 #    applies.
+
+
+# ─── vulture ────────────────────────────────────────────────────
+# Dead-code finder. Run via ``vulture py_modules/unifideck/``.
+#
+# ``min_confidence = 80`` filters out the noisy 60%-confidence
+# class-method/attribute/property reports. The remaining
+# 80%-100% reports flag functions/variables/imports that are
+# genuinely unreferenced statically.
+#
+# WHY 60% IS NOISY HERE: this codebase relies on three patterns
+# vulture cannot resolve statically:
+#
+# 1. RPC methods on ``*RPCMixin`` classes are invoked from JS by
+#    the Decky bridge (no Python caller). Every public coroutine
+#    on a mixin looks "unused" to vulture.
+#
+# 2. Event-handler methods named ``_on_<event>`` are subscribed
+#    dynamically via ``bus.subscribe(handler.method)`` rather
+#    than called by name. They look unused even though every
+#    one fires on its corresponding event.
+#
+# 3. Dataclass attributes (``Result.metadata``, ``Game.appid``,
+#    ``SyncStats.bytes_transferred`` etc.) are read from
+#    serialised JSON on the JS side or from SQL row factories,
+#    again invisible to vulture's static walk.
+#
+# Together these account for 200+ of the 220 60%-confidence
+# reports. Raising the threshold catches the real dead code
+# (the single 100%-confidence ``resync_artwork`` parameter
+# triaged in lot-vulture) without drowning in noise.
+[tool.vulture]
+min_confidence = 80
+paths = ["py_modules/unifideck"]
+exclude = [
+    "defaults/python/",
+    "python_modules/",
+    "frontend/",
+    "node_modules/",
+    "**/__pycache__/",
+]
+# Pattern-level ignores for symbols vulture sees as orphan but
+# that the framework / RPC bridge / event bus invoke dynamically.
+# Patterns use glob-style matching (``*`` matches any substring).
+ignore_names = [
+    "_on_*",          # event handlers subscribed via bus
+    "_*RPCMixin*",    # RPC mixin classes invoked from JS
+]

@@ -4,7 +4,10 @@ OP-26f | rpc/mixins/sync.py
 """
 from __future__ import annotations
 
+import logging
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 
 class SyncRPCMixin:
@@ -37,6 +40,17 @@ class SyncRPCMixin:
         Returns:
             Sync-outcome dict.
         """
+        # ``resync_artwork`` is part of the frontend ForceSyncModal
+        # contract but the wire-through to the artwork service is
+        # not yet implemented in ``SyncService.sync_all`` (it only
+        # accepts ``force``). Log it so the choice is observable
+        # in the bus / log stream and vulture sees the param as
+        # used. TODO: forward to artwork invalidator once the
+        # service grows a ``resync_artwork`` parameter.
+        logger.debug(
+            "[sync] force_sync_libraries(resync_artwork=%s)",
+            resync_artwork,
+        )
         return await self.sync_service.sync_all(force=True, **kw)
 
     async def get_sync_status(self) -> Any:
