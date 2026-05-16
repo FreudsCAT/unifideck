@@ -4,23 +4,15 @@
  * Shown at plugin startup when the backend detects that the
  * current Steam user differs from the user that owns the
  * existing Unifideck registry/auth tokens. Offers three
- * actions :
- *  - Migrate : copy shortcuts + artwork to the new user
- *              (calls `migrate_account_data` then prompts
- *              for a Steam restart so the new shortcuts.vdf
- *              becomes visible).
- *  - Clear   : wipe stored auth tokens (`clear_store_auths`)
- *              — safer for shared devices.
- *  - Skip    : keep the legacy user's data as-is.
+ * actions : Migrate, Fresh-Start (clear auths), Skip.
  *
- * Driven by the bootstrap-tasks `checkAccountSwitch` flow
- * which calls `check_account_switch` once at plugin load.
+ * Driven by the bootstrap-tasks `checkAccountSwitch` flow.
  */
 import React, { FC } from "react";
-import { ConfirmModal } from "@decky/ui";
+import { ConfirmModal, DialogButton } from "@decky/ui";
 import { useTranslation } from "react-i18next";
+import { FaExchangeAlt, FaForward, FaTrashAlt } from "react-icons/fa";
 
-/** Props. */
 interface Props {
   hasRegistry: boolean;
   hasAuthTokens: boolean;
@@ -30,45 +22,64 @@ interface Props {
   closeModal: () => void;
 }
 
-/**
- * Modal shown when bootstrap detects that the active
- * Steam user has changed since the last run. Offers
- * Continue (clear caches) or Stay-logged-out paths.
- */
 export const AccountSwitchModal: FC<Props> = ({
-  hasAuthTokens, onMigrate, onClearAuths, onSkip, closeModal,
+  hasRegistry, hasAuthTokens, onMigrate, onClearAuths, onSkip, closeModal,
 }) => {
   const { t } = useTranslation();
   return (
-    <ConfirmModal
-      strTitle={t("accountSwitch.title")}
-      strDescription={
-        hasAuthTokens
-          ? t("accountSwitch.bodyWithTokens")
-          : t("accountSwitch.bodyNoTokens")
-      }
-      strOKButtonText={t("accountSwitch.migrate")}
-      strCancelButtonText={t("accountSwitch.skip")}
-      strMiddleButtonText={
-        hasAuthTokens ? t("accountSwitch.clearAuths") : undefined
-      }
-      bAlertDialog={false}
-      onOK={async () => {
-        await onMigrate();
-        closeModal();
-      }}
-      onMiddleButton={
-        hasAuthTokens
-          ? async () => {
-              await onClearAuths();
-              closeModal();
-            }
-          : undefined
-      }
-      onCancel={() => {
-        onSkip();
-        closeModal();
-      }}
-    />
+    <>
+      <style>{`
+        .unifideck-account-switch + div { display: none !important; }
+        .DialogFooter { display: none !important; }
+      `}</style>
+      <ConfirmModal
+        strTitle={t("accountSwitch.title")}
+        strDescription=""
+        bHideCloseIcon={false}
+        onOK={closeModal}
+        onCancel={closeModal}
+      >
+        <div className="unifideck-account-switch" style={{ padding: "10px 0" }}>
+          <div style={{
+            marginBottom: 20, color: "#ccc", fontSize: 14, lineHeight: 1.5,
+          }}>
+            {t("accountSwitch.description")}
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+            {hasRegistry && (
+              <DialogButton
+                onClick={async () => { closeModal(); await onMigrate(); }}
+                style={{
+                  display: "flex", alignItems: "center",
+                  justifyContent: "center", gap: 8,
+                }}
+              >
+                <FaExchangeAlt /> {t("accountSwitch.migrate")}
+              </DialogButton>
+            )}
+            {hasAuthTokens && (
+              <DialogButton
+                onClick={async () => { closeModal(); await onClearAuths(); }}
+                style={{
+                  display: "flex", alignItems: "center",
+                  justifyContent: "center", gap: 8, color: "#ef4444",
+                }}
+              >
+                <FaTrashAlt /> {t("accountSwitch.freshStart")}
+              </DialogButton>
+            )}
+            <DialogButton
+              onClick={() => { closeModal(); onSkip(); }}
+              style={{
+                display: "flex", alignItems: "center",
+                justifyContent: "center", gap: 8, opacity: 0.7,
+              }}
+            >
+              <FaForward /> {t("accountSwitch.skip")}
+            </DialogButton>
+          </div>
+        </div>
+      </ConfirmModal>
+    </>
   );
 };

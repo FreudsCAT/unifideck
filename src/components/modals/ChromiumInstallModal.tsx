@@ -48,28 +48,32 @@ export const ChromiumInstallModal: FC<Props> = ({
   const { t } = useTranslation();
   const toast = useToast();
   const [installing, setInstalling] = useState(false);
+  const [installed, setInstalled] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const handleInstall = async (): Promise<void> => {
     setInstalling(true);
+    setError(null);
     try {
       const raw = await call<[], unknown>(rpcRoutes.installEdge);
       const result = unwrapRpcEnvelope<InstallEdgeResponse>(raw, {
         route: rpcRoutes.installEdge, throwing: false,
       });
-      console.log("[ChromiumInstallModal] install_edge result:", result);
       if (result?.installed) {
+        setInstalled(true);
         toast.success(t("microsoft.browserInstalled"));
-        closeModal?.();
-        onInstalled?.();
+        setTimeout(() => {
+          closeModal?.();
+          onInstalled?.();
+        }, 1500);
       } else {
-        toast.error(
-          t("microsoft.chromiumInstallFailed"),
-          result?.error ?? "",
-        );
+        const msg = result?.error ?? t("microsoft.chromiumInstallFailed");
+        setError(msg);
+        toast.error(t("microsoft.chromiumInstallFailed"), msg);
       }
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
-      console.error("[ChromiumInstallModal] install_edge threw:", e);
+      setError(message);
       toast.error(t("microsoft.chromiumInstallFailed"), message);
     } finally {
       setInstalling(false);
@@ -79,31 +83,44 @@ export const ChromiumInstallModal: FC<Props> = ({
   return (
     <ConfirmModal
       strTitle={t("microsoft.chromiumRequired")}
-      strDescription={t("microsoft.chromiumRequiredMessage")}
       strOKButtonText={
-        installing
-          ? t("microsoft.chromiumInstalling")
-          : t("microsoft.chromiumInstallButton")
+        installed
+          ? t("microsoft.chromiumInstalled")
+          : installing
+            ? t("microsoft.chromiumInstalling")
+            : t("microsoft.chromiumInstallButton")
       }
       strCancelButtonText={t("common.cancel")}
-      onOK={installing ? () => {} : handleInstall}
-      onCancel={installing ? () => {} : closeModal}
+      onOK={installed ? closeModal : handleInstall}
+      onCancel={closeModal}
+      bOKDisabled={installing}
       bHideCloseIcon={installing}
     >
-      {installing && (
-        <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: 12,
-            padding: 12,
-            color: "#cbd5e1",
-          }}
-        >
-          <Spinner />
-          <span>{t("microsoft.chromiumInstalling")}</span>
-        </div>
-      )}
+      <div style={{ padding: "8px 0" }}>
+        {!installing && !installed && !error && (
+          <p style={{ fontSize: 14, lineHeight: 1.5 }}>
+            {t("microsoft.chromiumRequiredMessage")}
+          </p>
+        )}
+        {installing && (
+          <div style={{
+            display: "flex", alignItems: "center", gap: 12, padding: "16px 0",
+          }}>
+            <Spinner width={24} height={24} />
+            <span style={{ fontSize: 14 }}>
+              {t("microsoft.chromiumInstalling")}
+            </span>
+          </div>
+        )}
+        {installed && (
+          <p style={{ fontSize: 14, color: "#4ade80" }}>
+            {t("microsoft.chromiumInstalled")}
+          </p>
+        )}
+        {error && (
+          <p style={{ fontSize: 14, color: "#ef4444" }}>{error}</p>
+        )}
+      </div>
     </ConfirmModal>
   );
 };

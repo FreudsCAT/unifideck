@@ -93,3 +93,29 @@ class StoreRPCMixin:
             Per-store outcome dict.
         """
         return await self.registry.logout_all()
+
+    cache: Any
+
+    async def get_protondb_cache(self) -> dict[str, Any]:
+        """Return every cached ProtonDB / Deck-Verified entry.
+
+        Used by the frontend ``protondb-cache`` module to populate the
+        in-memory rating lookup that drives compat badges and the
+        ``deckCompat`` library-tab filter. Reads the ``compat`` cache
+        namespace populated by :class:`CompatLibrary` — never triggers
+        a fresh network fetch from here.
+
+        Returns:
+            Mapping of ``str(app_id)`` →
+            ``{"protondb_tier": str | None, "deck_status": str,
+              "title": str, "sources": list[str]}``.
+            Empty dict when the cache is cold or unregistered.
+        """
+        stores = getattr(self.cache, "_stores", None)
+        if not isinstance(stores, dict):
+            return {}
+        compat_store = stores.get("compat")
+        data = getattr(compat_store, "_data", None)
+        if not isinstance(data, dict):
+            return {}
+        return dict(data)

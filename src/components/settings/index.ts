@@ -12,3 +12,6 @@ export { StoragePathPicker } from "./StoragePathPicker";
 export { StoreConnections } from "./StoreConnections";
 export { LibrarySync } from "./LibrarySync";
 export { LanguageSelector } from "./LanguageSelector";
+export { GameDetailsViewModeToggle } from "./GameDetailsViewModeToggle";
+export { CleanupSection } from "./CleanupSection";
+export { StoreAuthButton } from "./StoreAuthButton";

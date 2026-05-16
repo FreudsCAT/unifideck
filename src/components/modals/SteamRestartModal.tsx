@@ -14,6 +14,8 @@ import { useTranslation } from "react-i18next";
 /** Props. */
 interface Props {
   closeModal?: () => void;
+  store?: string;
+  reason?: "sync" | "cleanup";
 }
 
 /**
@@ -21,13 +23,24 @@ interface Props {
  * restart for changes to apply (shortcut creation, VDF
  * mutation). Offers a Restart-now button that calls
  * `SteamClient.User.StartRestart`.
+ *
+ * Title + description are derived from `reason`/`store` so a
+ * single component covers sync, cleanup, and per-store flows.
  */
-export const SteamRestartModal: FC<Props> = ({ closeModal }) => {
+export const SteamRestartModal: FC<Props> = ({ closeModal, store, reason }) => {
   const { t } = useTranslation();
+  const title = reason === "cleanup"
+    ? t("confirmModals.steamRestartCleanupTitle")
+    : t("restart.title");
+  const description = reason === "cleanup"
+    ? t("confirmModals.steamRestartCleanupDescription")
+    : store
+      ? t("confirmModals.steamRestartDescriptionStore", { store })
+      : t("restart.body");
   return (
     <ConfirmModal
-      strTitle={t("restart.title")}
-      strDescription={t("restart.body")}
+      strTitle={title}
+      strDescription={description}
       strOKButtonText={t("restart.confirm")}
       strCancelButtonText={t("restart.later")}
       onOK={() => {

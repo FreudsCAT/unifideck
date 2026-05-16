@@ -25,6 +25,7 @@ import { useTranslation } from "react-i18next";
 import { useSync } from "../contexts/SyncContext";
 import {
   StoreConnections, LibrarySync, StorageSettings, LanguageSelector,
+  GameDetailsViewModeToggle, CleanupSection,
 } from "../components/settings";
 import { DownloadsTab } from "../components/downloads";
 
@@ -82,11 +83,17 @@ export const QuickAccessPanel: FC = () => {
         <>
           <StoreConnections />
           <LibrarySync />
-          <StorageSettings />
           <LanguageSelector />
+          <GameDetailsViewModeToggle />
+          <CleanupSection />
         </>
       )}
-      {tab === "downloads" && <DownloadsTab />}
+      {tab === "downloads" && (
+        <>
+          <DownloadsTab />
+          <StorageSettings />
+        </>
+      )}
     </div>
   );
 };

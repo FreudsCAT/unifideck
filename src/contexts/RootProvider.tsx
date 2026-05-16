@@ -22,6 +22,7 @@
 import React, { FC, ReactNode } from "react";
 import { LocaleProvider } from "./LocaleContext";
 import { StoreProvider } from "./StoreContext";
+import { LibraryProvider } from "./LibraryContext";
 import { AuthProvider } from "./AuthContext";
 import { SyncProvider } from "./SyncContext";
 import { DownloadProvider } from "./DownloadContext";
@@ -37,14 +38,16 @@ export const RootProvider: FC<{ children: ReactNode }> = ({ children }) => {
   return (
     <LocaleProvider>
       <StoreProvider>
-        <AuthProvider>
-          <SyncProvider>
-            <DownloadProvider>
-              {children}
-              <ToastEventListener />
-            </DownloadProvider>
-          </SyncProvider>
-        </AuthProvider>
+        <LibraryProvider>
+          <AuthProvider>
+            <SyncProvider>
+              <DownloadProvider>
+                {children}
+                <ToastEventListener />
+              </DownloadProvider>
+            </SyncProvider>
+          </AuthProvider>
+        </LibraryProvider>
       </StoreProvider>
     </LocaleProvider>
   );

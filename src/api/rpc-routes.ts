@@ -45,6 +45,9 @@ export const rpcRoutes = {
   getGameMetadata:         "get_game_metadata",
   getStorageLocations:     "get_storage_locations",
   getGogGameLanguages:     "get_gog_game_languages",
+  getProtondbCache:        "get_protondb_cache",
+  // Library cleanup (SyncRPCMixin)
+  performFullCleanup:      "perform_full_cleanup",
   // UI helpers (UIRPCMixin)
   injectHideCss:           "inject_hide_css",
   hidePlaySection:         "hide_play_section",

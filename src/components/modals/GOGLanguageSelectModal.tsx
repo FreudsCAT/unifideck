@@ -35,6 +35,14 @@ const LANGUAGE_NAMES: Record<string, string> = {
   "nl-NL": "Nederlands (Dutch)",
   "tr-TR": "Türkçe (Turkish)",
   "uk-UA": "Українська (Ukrainian)",
+  "cs-CZ": "Čeština (Czech)",
+  "hu-HU": "Magyar (Hungarian)",
+  "sv-SE": "Svenska (Swedish)",
+  "da-DK": "Dansk (Danish)",
+  "fi-FI": "Suomi (Finnish)",
+  "no-NO": "Norsk (Norwegian)",
+  "ar-SA": "العربية (Arabic)",
+  "th-TH": "ไทย (Thai)",
 };
 
 interface Props {

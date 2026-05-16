@@ -1,26 +1,31 @@
 /**
- * GameInfoScores — Metacritic + ProtonDB scores block.
+ * GameInfoScores — Metacritic + ProtonDB + Deck Verified.
  *
- * Fetches scores via `get_game_metadata` (extension fields
- * `metacritic_score`, `protondb_tier`). Renders nothing if
- * neither score is available — keeps the panel uncluttered
- * for indie games and obscure titles that score sources
- * don't cover.
+ * Three score sources rendered side-by-side. ProtonDB tier and Deck
+ * Verified status are sourced first from the in-memory compat cache
+ * (populated by `LibraryContext` from `get_protondb_cache`) so the
+ * pills appear synchronously when navigating to a game's details
+ * page. Falls back to `get_game_metadata` if the cache is cold.
  */
 import React, { FC, useEffect, useState } from "react";
 import { Focusable } from "@decky/ui";
 import { useTranslation } from "react-i18next";
 import { useRPC } from "../../api/useRPC";
 import { rpcRoutes } from "../../api/rpc-routes";
+import {
+  getCachedCompatByTitle,
+  getCachedRating,
+  type DeckVerifiedStatus,
+  type ProtonDBTier,
+} from "../../lib/protondb-cache";
 import type { Game } from "../../types/api";
 
-/** Scores payload. */
 interface ScoresPayload {
   metacritic_score?: number;
-  protondb_tier?: "platinum" | "gold" | "silver" | "bronze" | "borked";
+  protondb_tier?: ProtonDBTier;
+  deck_status?: DeckVerifiedStatus;
 }
 
-/** Props. */
 interface Props {
   game: Game;
 }
@@ -31,34 +36,51 @@ const PROTON_TIER_COLOR: Record<string, string> = {
   silver: "#cbd5e1",
   bronze: "#a16207",
   borked: "#dc2626",
+  native: "#86efac",
+  pending: "#94a3b8",
 };
 
-/**
- * Scores block of the game-info panel : Metacritic,
- * ProtonDB rating, Deck Verified status. Each score is
- * resolved lazily and skipped if the source is offline.
- */
+const DECK_STATUS_COLOR: Record<DeckVerifiedStatus, string> = {
+  verified: "#86efac",
+  playable: "#fbbf24",
+  unsupported: "#f87171",
+  unknown: "#94a3b8",
+};
+
+function readFromCache(game: Game): ScoresPayload {
+  const tier = game.app_id != null ? getCachedRating(game.app_id) : null;
+  const byTitle = game.title ? getCachedCompatByTitle(game.title) : null;
+  return {
+    protondb_tier: (tier ?? byTitle?.tier ?? undefined) as ProtonDBTier | undefined,
+    deck_status: byTitle?.deckVerified,
+  };
+}
+
 export const GameInfoScores: FC<Props> = ({ game }) => {
   const { t } = useTranslation();
   const fetchMeta = useRPC<[number], Game & ScoresPayload>(
     rpcRoutes.getGameMetadata,
   );
-  const [scores, setScores] = useState<ScoresPayload | null>(null);
+  const [scores, setScores] = useState<ScoresPayload | null>(() => readFromCache(game));
+
   useEffect(() => {
+    setScores(readFromCache(game));
     if (game.app_id == null) return;
     fetchMeta(game.app_id).then(
-      (full) => {
-        setScores({
-          metacritic_score: full.metacritic_score,
-          protondb_tier: full.protondb_tier,
-        });
-      },
-      () => setScores(null),
+      (full) => setScores((prev) => ({
+        metacritic_score: full.metacritic_score,
+        protondb_tier: full.protondb_tier ?? prev?.protondb_tier,
+        deck_status: full.deck_status ?? prev?.deck_status,
+      })),
+      () => { /* keep the cached fallback */ },
     );
-  }, [fetchMeta, game.app_id]);
-  if (!scores || (!scores.metacritic_score && !scores.protondb_tier)) {
+  }, [fetchMeta, game.app_id, game.title]);
+
+  if (!scores
+    || (!scores.metacritic_score && !scores.protondb_tier && !scores.deck_status)) {
     return null;
   }
+
   return (
     <Focusable
       flow-children="row"
@@ -82,11 +104,26 @@ export const GameInfoScores: FC<Props> = ({ game }) => {
           </div>
           <div style={{
             fontSize: 14, padding: "4px 10px", borderRadius: 4,
-            background: PROTON_TIER_COLOR[scores.protondb_tier],
+            background: PROTON_TIER_COLOR[scores.protondb_tier] ?? "#94a3b8",
             color: "#0f172a", fontWeight: 600,
             textTransform: "uppercase",
           }}>
             {scores.protondb_tier}
+          </div>
+        </div>
+      )}
+      {scores.deck_status && scores.deck_status !== "unknown" && (
+        <div>
+          <div style={{ fontSize: 11, color: "#94a3b8" }}>
+            {t("info.deckVerified")}
+          </div>
+          <div style={{
+            fontSize: 14, padding: "4px 10px", borderRadius: 4,
+            background: DECK_STATUS_COLOR[scores.deck_status],
+            color: "#0f172a", fontWeight: 600,
+            textTransform: "uppercase",
+          }}>
+            {scores.deck_status}
           </div>
         </div>
       )}

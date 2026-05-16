@@ -46,7 +46,7 @@ export const AuthSuccessModal: FC<Props> = ({ store, closeModal }) => {
           : t("authSuccess.title")
       }
       strDescription={t("authSuccess.subtitle")}
-      strOKButtonText={t("common.ok")}
+      strOKButtonText={t("authSuccess.title")}
       onOK={handleClose}
       onCancel={handleClose}
       bHideCloseIcon={true}

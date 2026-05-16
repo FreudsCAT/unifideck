@@ -1,0 +1,170 @@
+/**
+ * UnifiedLibraryView — content for a single Unifideck library tab.
+ *
+ * Replaces staging's `src/views/UnifiedLibraryView.tsx`. Wired to the
+ * RPC layer + LibraryContext rather than to global functions on
+ * `useUnifideckGames`. Receives a `filter` prop matching the staging
+ * shape so the library-patch hook can render it the same way per tab.
+ */
+import { Component, ErrorInfo, FC, ReactNode, useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
+import { useRPCQuery } from "../api/useRPC";
+import { rpcRoutes } from "../api/rpc-routes";
+import { GameGrid } from "../components/shared/GameGrid";
+import { getCachedCompatByTitle, getCachedRating } from "../lib/protondb-cache";
+import type { Game, StoreId } from "../types/api";
+
+export type LibraryFilter = "all" | "installed" | "great-on-deck";
+
+interface UnifiedLibraryViewProps {
+  filter: LibraryFilter;
+  onSelect?: (game: Game) => void;
+}
+
+interface ErrorBoundaryState { hasError: boolean; error?: Error }
+
+class ErrorBoundary extends Component<{ children: ReactNode }, ErrorBoundaryState> {
+  constructor(props: { children: ReactNode }) {
+    super(props);
+    this.state = { hasError: false };
+  }
+  static getDerivedStateFromError(error: Error): ErrorBoundaryState {
+    return { hasError: true, error };
+  }
+  componentDidCatch(error: Error, info: ErrorInfo): void {
+    console.error("[Unifideck] UnifiedLibraryView error:", error, info);
+  }
+  render(): ReactNode {
+    if (!this.state.hasError) return this.props.children;
+    return (
+      <div style={{ padding: 20, color: "#ff6b6b" }}>
+        <h3>Error loading library</h3>
+        <pre style={{ fontSize: 11, opacity: 0.7 }}>
+          {this.state.error?.message}
+        </pre>
+      </div>
+    );
+  }
+}
+
+function isGreatOnDeck(game: Game): boolean {
+  if (game.app_id != null) {
+    const tier = getCachedRating(game.app_id);
+    if (tier === "platinum" || tier === "native") return true;
+  }
+  if (game.title) {
+    const compat = getCachedCompatByTitle(game.title);
+    if (compat?.deckVerified === "verified" || compat?.deckVerified === "playable") {
+      return true;
+    }
+    if (compat?.tier === "platinum" || compat?.tier === "native") return true;
+  }
+  return false;
+}
+
+const UnifiedLibraryViewInner: FC<UnifiedLibraryViewProps> = ({ filter, onSelect }) => {
+  const { t } = useTranslation();
+  const { data, error, loading } = useRPCQuery<[], Game[]>(
+    rpcRoutes.getAllUnifideckGames, [],
+  );
+  const [storeFilter, setStoreFilter] = useState<StoreId | "all">("all");
+  const [searchQuery, setSearchQuery] = useState("");
+
+  const filteredGames = useMemo(() => {
+    let games = data ?? [];
+    if (filter === "installed") {
+      games = games.filter((g) => g.is_installed);
+    } else if (filter === "great-on-deck") {
+      games = games.filter(isGreatOnDeck);
+    }
+    if (storeFilter !== "all") {
+      games = games.filter((g) => g.store === storeFilter);
+    }
+    const q = searchQuery.trim().toLowerCase();
+    if (q) games = games.filter((g) => g.title.toLowerCase().includes(q));
+    return [...games].sort((a, b) => a.title.localeCompare(b.title));
+  }, [data, filter, storeFilter, searchQuery]);
+
+  if (error) {
+    return (
+      <div style={{ padding: 20, color: "#ff6b6b" }}>
+        <div style={{ marginBottom: 10, fontSize: 16 }}>
+          {t("unifiedLibrary.errorLoadingGames")}
+        </div>
+        <div style={{ fontSize: 12, opacity: 0.7 }}>{error.message}</div>
+      </div>
+    );
+  }
+
+  const title = filter === "installed"
+    ? t("deckTabs.installed")
+    : filter === "great-on-deck"
+      ? t("deckTabs.greatOnDeck")
+      : t("deckTabs.allGames");
+
+  return (
+    <div style={{ height: "100%", display: "flex", flexDirection: "column" }}>
+      <div style={{
+        padding: "15px 20px",
+        background: "rgba(0,0,0,0.3)",
+        borderBottom: "1px solid rgba(255,255,255,0.1)",
+      }}>
+        <div style={{ display: "flex", gap: 15, alignItems: "center", flexWrap: "wrap" }}>
+          <div style={{ fontSize: 18, fontWeight: "bold" }}>{title}</div>
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <span style={{ fontSize: 12, opacity: 0.7 }}>
+              {t("unifiedLibrary.storeLabel")}
+            </span>
+            <select
+              value={storeFilter}
+              onChange={(e) => setStoreFilter(e.target.value as StoreId | "all")}
+              style={{
+                background: "rgba(255,255,255,0.1)",
+                border: "1px solid rgba(255,255,255,0.2)",
+                borderRadius: 4,
+                padding: "4px 8px",
+                color: "white",
+                fontSize: 12,
+              }}
+            >
+              <option value="all">{t("unifiedLibrary.allStores")}</option>
+              <option value="steam">{t("deckTabs.steam")}</option>
+              <option value="epic">{t("deckTabs.epic")}</option>
+              <option value="gog">{t("deckTabs.gog")}</option>
+              <option value="amazon">{t("deckTabs.amazon")}</option>
+              <option value="ubisoft">{t("deckTabs.ubisoft")}</option>
+              <option value="microsoft">{t("deckTabs.microsoft")}</option>
+            </select>
+          </div>
+          <input
+            type="text"
+            placeholder={t("unifiedLibrary.searchPlaceholder")}
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            style={{
+              background: "rgba(255,255,255,0.1)",
+              border: "1px solid rgba(255,255,255,0.2)",
+              borderRadius: 4,
+              padding: "6px 12px",
+              color: "white",
+              fontSize: 12,
+              flex: 1,
+              minWidth: 200,
+            }}
+          />
+        </div>
+      </div>
+      <div style={{ flex: 1, overflow: "auto" }}>
+        {loading
+          ? <div style={{ padding: 20, opacity: 0.7 }}>{t("common.loading")}</div>
+          : <GameGrid games={filteredGames} onSelect={onSelect ?? (() => {})} />}
+      </div>
+    </div>
+  );
+};
+
+export const UnifiedLibraryView: FC<UnifiedLibraryViewProps> = (props) => (
+  <ErrorBoundary>
+    <UnifiedLibraryViewInner {...props} />
+  </ErrorBoundary>
+);

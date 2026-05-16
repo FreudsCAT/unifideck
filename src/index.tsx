@@ -29,6 +29,8 @@ import { SteamBridge } from "./lib/steam-bridge";
 import { RootProvider } from "./contexts/RootProvider";
 import { QuickAccessPanel } from "./views/QuickAccessPanel";
 import { applyAppDetailsPatch } from "./views/AppDetailsPatch";
+import { applyLibraryPatch } from "./lib/steam-bridge/library-patch";
+import { startCollectionManager } from "./lib/steam-bridge/collection-manager";
 import { runBootstrapTasks } from "./bootstrap-tasks";
 import { runTeardown, type TeardownHandles } from "./teardown";
 // Eager translation load — Decky's UI mounts before any
@@ -50,6 +52,19 @@ export default definePlugin(() => {
     handles.routerPatch = applyAppDetailsPatch(bridge);
   } catch (e) {
     console.error("[Unifideck] router patch failed:", e);
+  }
+  // Inject the custom Unifideck tabs into Steam's library.
+  try {
+    handles.libraryPatch = applyLibraryPatch(bridge);
+  } catch (e) {
+    console.error("[Unifideck] library patch failed:", e);
+  }
+  // Auto-generate [Unifideck] Steam Collections + keep them
+  // in sync with the tab filters on every library sync.
+  try {
+    handles.collectionManager = startCollectionManager();
+  } catch (e) {
+    console.error("[Unifideck] collection manager start failed:", e);
   }
   // Bootstrap tasks (language, account switch, lifetime
   // listener) run async ; the lifetime listener handle is
