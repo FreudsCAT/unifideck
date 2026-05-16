@@ -161,7 +161,7 @@ async def lookup(
     return None
 
 async def _fetch_bucket(
-    bucket: str, cdn_base: str, timeout: int,
+    bucket: str, cdn_base: str, timeout: int,  # noqa: ASYNC109 — timeout is API value passed to underlying lib (urllib/aiohttp/subprocess), not an asyncio.timeout() wrapper
 ) -> list[dict[str, Any]]:
     """Fetch bucket."""
     import aiohttp

@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 async def list_page_targets(
     port: int,
     *,
-    timeout: float = 3.0,
+    timeout: float = 3.0,  # noqa: ASYNC109 — timeout is API value passed to underlying lib (urllib/aiohttp/subprocess), not an asyncio.timeout() wrapper
 ) -> list[dict[str, Any]]:
     """List page targets."""
     url = f"http://127.0.0.1:{port}/json"
@@ -120,7 +120,7 @@ async def inject_scripts(
     sources: list[str],
     *,
     url_patterns: list[str],
-    timeout: float = 45.0,
+    timeout: float = 45.0,  # noqa: ASYNC109 — timeout is API value passed to underlying lib (urllib/aiohttp/subprocess), not an asyncio.timeout() wrapper
     logger_prefix: str = "cdp-inject",
     poll_delay: float = 0.5,
 ) -> bool:
@@ -168,7 +168,7 @@ async def _attempt_inject_cycle(
     port: int,
     sources: list[str],
     url_patterns: list[str],
-    timeout: float,
+    timeout: float,  # noqa: ASYNC109 — timeout is API value passed to underlying lib (urllib/aiohttp/subprocess), not an asyncio.timeout() wrapper
     logger_prefix: str,
 ) -> tuple[bool, bool]:
     """One poll iteration : list targets, filter, inject, return flags.
@@ -207,7 +207,7 @@ async def _attempt_inject_cycle(
 async def _inject_into_matching_targets(
     page_targets: list[dict[str, Any]],
     sources: list[str],
-    timeout: float,
+    timeout: float,  # noqa: ASYNC109 — timeout is API value passed to underlying lib (urllib/aiohttp/subprocess), not an asyncio.timeout() wrapper
     logger_prefix: str,
 ) -> tuple[bool, bool]:
     """Inject into matching targets."""

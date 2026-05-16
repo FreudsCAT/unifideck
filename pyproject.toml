@@ -294,17 +294,13 @@ ignore = [
 [tool.ruff.lint.per-file-ignores]
 # Type re-export modules: F401 is the expected pattern.
 "**/__init__.py" = ["F401"]
-# The ``Events`` enum is a long list of snake-case event names. S105
-# flags any of them whose value contains "token" / "secret" / "key"
-# as if it were a hardcoded password, but every entry is just an
-# identifier — no credentials are stored here.
-"core/types/events.py" = ["S105"]
-# Store config modules name a ``_DEFAULT_TOKEN_FILE`` constant
-# whose value is a file path (~/.config/unifideck/<store>_token.json),
-# not a password. S105 matches on the "_TOKEN_" substring of the
-# variable name and has no way to tell the two apart.
-"stores/gog/config.py" = ["S105"]
-"stores/microsoft/microsoft_config.py" = ["S105"]
+# S105 false-positives (event-name constants and _DEFAULT_TOKEN_FILE
+# paths matching the "_TOKEN_" substring) are handled by inline
+# ``# noqa: S105`` directives in the affected files (events.py +
+# stores/{gog,microsoft}/config.py). Per-file-ignores were removed
+# in lot-async109 because some CI configurations bypass them, which
+# would let S105 fire on the CI side while silencing it locally —
+# inline noqa converges both paths.
 
 [tool.ruff.lint.isort]
 # Treat ``unifideck`` as the first-party namespace so its imports

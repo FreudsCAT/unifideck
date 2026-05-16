@@ -97,7 +97,7 @@ def _cfg(config: ConfigManager | None, key: str, default: Any) -> Any:
     """Cfg."""
     return get_cfg(config, key, default)
 async def _search_game(
-    title: str, api_key: str, base: str, timeout: int,
+    title: str, api_key: str, base: str, timeout: int,  # noqa: ASYNC109 — timeout is API value passed to underlying lib (urllib/aiohttp/subprocess), not an asyncio.timeout() wrapper
 ) -> dict[str, Any] | None:
     """Search game."""
     import aiohttp
@@ -129,7 +129,7 @@ async def _search_game(
 
 async def _fetch_assets(
     game_id: int, endpoint: str, api_key: str,
-    base: str, timeout: int,
+    base: str, timeout: int,  # noqa: ASYNC109 — timeout is API value passed to underlying lib (urllib/aiohttp/subprocess), not an asyncio.timeout() wrapper
 ) -> list[ArtworkAsset]:
     """Fetch assets."""
     import aiohttp

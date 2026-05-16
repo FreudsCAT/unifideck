@@ -157,7 +157,7 @@ class OAuthBrowserMonitor:
     async def wait_for_redirect(
         self,
         allowed_uris: list[str],
-        timeout: float | None = None,
+        timeout: float | None = None,  # noqa: ASYNC109 — timeout is API value passed to underlying lib (urllib/aiohttp/subprocess), not an asyncio.timeout() wrapper
         *,
         content_trigger_url: str | None = None,
         content_regex: str | None = None,

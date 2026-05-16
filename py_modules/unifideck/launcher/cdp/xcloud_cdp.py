@@ -90,7 +90,7 @@ async def run_cdp_inject(
     *,
     port: int,
     launch_url: str,
-    timeout: float = 45.0,
+    timeout: float = 45.0,  # noqa: ASYNC109 — timeout is API value passed to underlying lib (urllib/aiohttp/subprocess), not an asyncio.timeout() wrapper
     initial_matches: list[str] | None = None,
     steam_port: int = 8080,
     steam_controller_appid: int = 0,
@@ -122,7 +122,7 @@ async def run_cdp_inject(
 
 async def _run_inject_phases(
     port: int,
-    timeout: float,
+    timeout: float,  # noqa: ASYNC109 — timeout is API value passed to underlying lib (urllib/aiohttp/subprocess), not an asyncio.timeout() wrapper
     *,
     shims_js: str,
     navigation_js: str,

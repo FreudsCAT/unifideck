@@ -111,7 +111,7 @@ class CDPClient:
         result = await self._send("Page.navigate", {"url": url})
         return result is not None
     async def wait_for_url(self, substring: str,
-                           timeout: float | None = None) -> str | None:
+                           timeout: float | None = None) -> str | None:  # noqa: ASYNC109 — timeout is API value passed to underlying lib (urllib/aiohttp/subprocess), not an asyncio.timeout() wrapper
         """Wait for URL."""
         deadline = asyncio.get_event_loop().time() + (
             timeout

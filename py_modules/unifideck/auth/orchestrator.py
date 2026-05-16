@@ -110,7 +110,7 @@ class AuthOrchestrator:
         allowed_uris: list[str],
         exchange_code: ExchangeCodeCallback,
         *,
-        timeout: float | None = None,
+        timeout: float | None = None,  # noqa: ASYNC109 — timeout is API value passed to underlying lib (urllib/aiohttp/subprocess), not an asyncio.timeout() wrapper
         write_url_file: str | None = None,
         background: bool = False,
         content_trigger_url: str | None = None,

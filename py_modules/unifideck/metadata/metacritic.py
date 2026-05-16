@@ -165,7 +165,7 @@ def _slug_candidates(title: str) -> list[str]:
             variants.add(alt)
     return [slugify_game_name(v) for v in variants if v.strip()]
 
-async def _fetch_composer(slug: str, url_template: str, timeout: int) -> dict[str, Any] | None:
+async def _fetch_composer(slug: str, url_template: str, timeout: int) -> dict[str, Any] | None:  # noqa: ASYNC109 — timeout is API value passed to underlying lib (urllib/aiohttp/subprocess), not an asyncio.timeout() wrapper
     """Fetch composer."""
     import aiohttp
     url = url_template.format(slug=slug)

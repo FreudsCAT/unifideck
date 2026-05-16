@@ -46,7 +46,7 @@ async def fetch_json_get(
     *,
     bearer: str | None = None,
     user_agent: str,
-    timeout: float = 15.0,
+    timeout: float = 15.0,  # noqa: ASYNC109 — timeout is API value passed to underlying lib (urllib/aiohttp/subprocess), not an asyncio.timeout() wrapper
     extra_headers: Mapping[str, str] | None = None,
     log_prefix: str = "[GOGHttp]",
 ) -> Any | None:

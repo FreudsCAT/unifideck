@@ -98,7 +98,7 @@ class EdgeCDPClient:
     async def navigate_tab(
         self,
         url: str,
-        timeout: float = 15.0,
+        timeout: float = 15.0,  # noqa: ASYNC109 — timeout is API value passed to underlying lib (urllib/aiohttp/subprocess), not an asyncio.timeout() wrapper
     ) -> bool:
         """Navigate the first page target to *url* via CDP and wait for load.
 

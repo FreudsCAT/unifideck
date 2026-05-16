@@ -138,7 +138,7 @@ class StoreBase(ABC):
         self,
         args: list[str],
         binary_path: str | None = None,
-        timeout: int = 300,
+        timeout: int = 300,  # noqa: ASYNC109 — timeout is API value passed to underlying lib (urllib/aiohttp/subprocess), not an asyncio.timeout() wrapper
         env: dict[str, str] | None = None,
     ) -> str:
 

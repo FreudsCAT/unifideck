@@ -233,7 +233,7 @@ async def find_artwork_url(
         return None
 
 
-async def _fetch_url_bytes(url: str, timeout: int) -> bytes | None:
+async def _fetch_url_bytes(url: str, timeout: int) -> bytes | None:  # noqa: ASYNC109 — timeout is API value passed to underlying lib (urllib/aiohttp/subprocess), not an asyncio.timeout() wrapper
     """Download ``url`` and return its body bytes, or None on failure.
 
     Pure network slice extracted from ``download_and_save``:
@@ -268,7 +268,7 @@ async def _fetch_url_bytes(url: str, timeout: int) -> bytes | None:
 
 
 async def download_and_save(
-    grid_dir: str, app_id: int, kind: str, url: str, timeout: int,
+    grid_dir: str, app_id: int, kind: str, url: str, timeout: int,  # noqa: ASYNC109 — timeout is API value passed to underlying lib (urllib/aiohttp/subprocess), not an asyncio.timeout() wrapper
 ) -> bool:
     """Download an artwork URL and save it to Steam's grid directory.
 

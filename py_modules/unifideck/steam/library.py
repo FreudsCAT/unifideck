@@ -149,7 +149,7 @@ async def search_store(
                 if response.status != _HTTP_OK:
                     return None
                 data = await response.json(content_type=None)
-    except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
+    except (aiohttp.ClientError, TimeoutError) as exc:
         logger.debug("[steam.search_store] %s failed: %s", title, exc)
         return None
 

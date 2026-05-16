@@ -189,7 +189,7 @@ class _ManualUiInstaller:
     @staticmethod
     async def _terminate_upc_gracefully(
         proc: asyncio.subprocess.Process,
-        timeout: float = 15.0,
+        timeout: float = 15.0,  # noqa: ASYNC109 — timeout is API value passed to underlying lib (urllib/aiohttp/subprocess), not an asyncio.timeout() wrapper
     ) -> None:
         """Terminate UPC gracefully."""
         if proc.returncode is not None:
