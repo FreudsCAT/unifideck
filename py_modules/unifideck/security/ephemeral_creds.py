@@ -193,8 +193,13 @@ class EphemeralCredentialContext:
     async def __aexit__(
         self,
         exc_type: type[BaseException] | None,
-        exc: BaseException | None,
-        tb: Any,
+        # ``_exc`` and ``_tb`` are part of the async
+        # context-manager protocol signature but are not used
+        # here (only ``exc_type`` is inspected); the leading
+        # underscores mark them intentionally unused so static
+        # analysers (vulture) don't flag them.
+        _exc: BaseException | None,
+        _tb: Any,
     ) -> None:
         """Re-encrypt rotated plaintext (on success) + wipe tempdir.
 
