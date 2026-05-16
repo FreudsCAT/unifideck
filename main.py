@@ -49,10 +49,10 @@ DECKY_PLUGIN_DIR = os.environ.get(
 # and read-only on normal user installs.
 DECKY_PLUGIN_RUNTIME_DIR = os.environ.get(
     "DECKY_PLUGIN_RUNTIME_DIR",
-    os.path.expanduser("~/.local/share/unifideck"),
+    str(Path("~/.local/share/unifideck").expanduser()),
 )
 
-sys.path.insert(0, os.path.join(DECKY_PLUGIN_DIR, "py_modules"))
+sys.path.insert(0, str(Path(DECKY_PLUGIN_DIR) / "py_modules"))
 
 # E402 noqa on the unifideck imports below: ``sys.path.insert``
 # MUST run before these so Python can resolve the package — Decky
