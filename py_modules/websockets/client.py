@@ -3,13 +3,15 @@ from __future__ import annotations
 import os
 import random
 import warnings
-from typing import Any, Generator, Sequence
+from collections.abc import Generator, Sequence
+from typing import Any
 
 from .datastructures import Headers, MultipleValuesError
 from .exceptions import (
     InvalidHandshake,
     InvalidHeader,
     InvalidHeaderValue,
+    InvalidMessage,
     InvalidStatus,
     InvalidUpgrade,
     NegotiationError,
@@ -26,6 +28,7 @@ from .headers import (
     parse_upgrade,
 )
 from .http11 import Request, Response
+from .imports import lazy_import
 from .protocol import CLIENT, CONNECTING, OPEN, Protocol, State
 from .typing import (
     ConnectionOption,
@@ -39,13 +42,7 @@ from .uri import WebSocketURI
 from .utils import accept_key, generate_key
 
 
-# See #940 for why lazy_import isn't used here for backwards compatibility.
-# See #1400 for why listing compatibility imports in __all__ helps PyCharm.
-from .legacy.client import *  # isort:skip  # noqa: I001
-from .legacy.client import __all__ as legacy__all__
-
-
-__all__ = ["ClientProtocol"] + legacy__all__
+__all__ = ["ClientProtocol"]
 
 
 class ClientProtocol(Protocol):
@@ -53,7 +50,7 @@ class ClientProtocol(Protocol):
     Sans-I/O implementation of a WebSocket client connection.
 
     Args:
-        wsuri: URI of the WebSocket server, parsed
+        uri: URI of the WebSocket server, parsed
             with :func:`~websockets.uri.parse_uri`.
         origin: Value of the ``Origin`` header. This is useful when connecting
             to a server that validates the ``Origin`` header to defend against
@@ -63,8 +60,10 @@ class ClientProtocol(Protocol):
         subprotocols: List of supported subprotocols, in order of decreasing
             preference.
         state: Initial state of the WebSocket connection.
-        max_size: Maximum size of incoming messages in bytes;
-            :obj:`None` disables the limit.
+        max_size: Maximum size of incoming messages in bytes.
+            :obj:`None` disables the limit. You may pass a ``(max_message_size,
+            max_fragment_size)`` tuple to set different limits for messages and
+            fragments when you expect long messages sent in short fragments.
         logger: Logger for this connection;
             defaults to ``logging.getLogger("websockets.client")``;
             see the :doc:`logging guide <../../topics/logging>` for details.
@@ -73,13 +72,13 @@ class ClientProtocol(Protocol):
 
     def __init__(
         self,
-        wsuri: WebSocketURI,
+        uri: WebSocketURI,
         *,
         origin: Origin | None = None,
         extensions: Sequence[ClientExtensionFactory] | None = None,
         subprotocols: Sequence[Subprotocol] | None = None,
         state: State = CONNECTING,
-        max_size: int | None = 2**20,
+        max_size: int | None | tuple[int | None, int | None] = 2**20,
         logger: LoggerLike | None = None,
     ) -> None:
         super().__init__(
@@ -88,7 +87,7 @@ class ClientProtocol(Protocol):
             max_size=max_size,
             logger=logger,
         )
-        self.wsuri = wsuri
+        self.uri = uri
         self.origin = origin
         self.available_extensions = extensions
         self.available_subprotocols = subprotocols
@@ -107,36 +106,27 @@ class ClientProtocol(Protocol):
 
         """
         headers = Headers()
-
-        headers["Host"] = build_host(
-            self.wsuri.host, self.wsuri.port, self.wsuri.secure
-        )
-
-        if self.wsuri.user_info:
-            headers["Authorization"] = build_authorization_basic(*self.wsuri.user_info)
-
+        headers["Host"] = build_host(self.uri.host, self.uri.port, self.uri.secure)
+        if self.uri.user_info:
+            headers["Authorization"] = build_authorization_basic(*self.uri.user_info)
         if self.origin is not None:
             headers["Origin"] = self.origin
-
         headers["Upgrade"] = "websocket"
         headers["Connection"] = "Upgrade"
         headers["Sec-WebSocket-Key"] = self.key
         headers["Sec-WebSocket-Version"] = "13"
-
         if self.available_extensions is not None:
-            extensions_header = build_extension(
+            headers["Sec-WebSocket-Extensions"] = build_extension(
                 [
                     (extension_factory.name, extension_factory.get_request_params())
                     for extension_factory in self.available_extensions
                 ]
             )
-            headers["Sec-WebSocket-Extensions"] = extensions_header
-
         if self.available_subprotocols is not None:
-            protocol_header = build_subprotocol(self.available_subprotocols)
-            headers["Sec-WebSocket-Protocol"] = protocol_header
-
-        return Request(self.wsuri.resource_name, headers)
+            headers["Sec-WebSocket-Protocol"] = build_subprotocol(
+                self.available_subprotocols
+            )
+        return Request(self.uri.resource_name, headers)
 
     def process_response(self, response: Response) -> None:
         """
@@ -158,7 +148,6 @@ class ClientProtocol(Protocol):
         connection: list[ConnectionOption] = sum(
             [parse_connection(value) for value in headers.get_all("Connection")], []
         )
-
         if not any(value.lower() == "upgrade" for value in connection):
             raise InvalidUpgrade(
                 "Connection", ", ".join(connection) if connection else None
@@ -167,7 +156,6 @@ class ClientProtocol(Protocol):
         upgrade: list[UpgradeProtocol] = sum(
             [parse_upgrade(value) for value in headers.get_all("Upgrade")], []
         )
-
         # For compatibility with non-strict implementations, ignore case when
         # checking the Upgrade header. It's supposed to be 'WebSocket'.
         if not (len(upgrade) == 1 and upgrade[0].lower() == "websocket"):
@@ -179,12 +167,10 @@ class ClientProtocol(Protocol):
             raise InvalidHeader("Sec-WebSocket-Accept") from None
         except MultipleValuesError:
             raise InvalidHeader("Sec-WebSocket-Accept", "multiple values") from None
-
         if s_w_accept != accept_key(self.key):
             raise InvalidHeaderValue("Sec-WebSocket-Accept", s_w_accept)
 
         self.extensions = self.process_extensions(headers)
-
         self.subprotocol = self.process_subprotocol(headers)
 
     def process_extensions(self, headers: Headers) -> list[Extension]:
@@ -284,7 +270,6 @@ class ClientProtocol(Protocol):
             parsed_subprotocols: Sequence[Subprotocol] = sum(
                 [parse_subprotocol(header_value) for header_value in subprotocols], []
             )
-
             if len(parsed_subprotocols) > 1:
                 raise InvalidHeader(
                     "Sec-WebSocket-Protocol",
@@ -292,7 +277,6 @@ class ClientProtocol(Protocol):
                 )
 
             subprotocol = parsed_subprotocols[0]
-
             if subprotocol not in self.available_subprotocols:
                 raise NegotiationError(f"unsupported subprotocol: {subprotocol}")
 
@@ -313,7 +297,7 @@ class ClientProtocol(Protocol):
 
         self.writes.append(request.serialize())
 
-    def parse(self) -> Generator[None, None, None]:
+    def parse(self) -> Generator[None]:
         if self.state is CONNECTING:
             try:
                 response = yield from Response.parse(
@@ -322,7 +306,10 @@ class ClientProtocol(Protocol):
                     self.reader.read_to_eof,
                 )
             except Exception as exc:
-                self.handshake_exc = exc
+                self.handshake_exc = InvalidMessage(
+                    "did not receive a valid HTTP response"
+                )
+                self.handshake_exc.__cause__ = exc
                 self.send_eof()
                 self.parser = self.discard()
                 next(self.parser)  # start coroutine
@@ -333,7 +320,7 @@ class ClientProtocol(Protocol):
                 self.logger.debug("< HTTP/1.1 %d %s", code, phrase)
                 for key, value in response.headers.raw_items():
                     self.logger.debug("< %s: %s", key, value)
-                if response.body is not None:
+                if response.body:
                     self.logger.debug("< [body] (%d bytes)", len(response.body))
 
             try:
@@ -374,7 +361,7 @@ def backoff(
     min_delay: float = BACKOFF_MIN_DELAY,
     max_delay: float = BACKOFF_MAX_DELAY,
     factor: float = BACKOFF_FACTOR,
-) -> Generator[float, None, None]:
+) -> Generator[float]:
     """
     Generate a series of backoff delays between reconnection attempts.
 
@@ -391,3 +378,14 @@ def backoff(
         delay *= factor
     while True:
         yield max_delay
+
+
+lazy_import(
+    globals(),
+    deprecated_aliases={
+        # deprecated in 14.0 - 2024-11-09
+        "WebSocketClientProtocol": ".legacy.client",
+        "connect": ".legacy.client",
+        "unix_connect": ".legacy.client",
+    },
+)

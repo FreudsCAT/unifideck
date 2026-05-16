@@ -6,9 +6,11 @@ import io
 import os
 import secrets
 import struct
-from typing import Callable, Generator, Sequence
+from collections.abc import Generator, Sequence
+from typing import Callable
 
 from .exceptions import PayloadTooBig, ProtocolError
+from .typing import BytesLike
 
 
 try:
@@ -27,6 +29,7 @@ __all__ = [
     "OP_PONG",
     "DATA_OPCODES",
     "CTRL_OPCODES",
+    "CloseCode",
     "Frame",
     "Close",
 ]
@@ -116,9 +119,6 @@ OK_CLOSE_CODES = {
 }
 
 
-BytesLike = bytes, bytearray, memoryview
-
-
 @dataclasses.dataclass
 class Frame:
     """
@@ -138,7 +138,7 @@ class Frame:
     """
 
     opcode: Opcode
-    data: bytes
+    data: BytesLike
     fin: bool = True
     rsv1: bool = False
     rsv2: bool = False
@@ -159,7 +159,7 @@ class Frame:
         if self.opcode is OP_TEXT:
             # Decoding only the beginning and the end is needlessly hard.
             # Decode the entire payload then elide later if necessary.
-            data = repr(self.data.decode())
+            data = repr(bytes(self.data).decode())
         elif self.opcode is OP_BINARY:
             # We'll show at most the first 16 bytes and the last 8 bytes.
             # Encode just what we need, plus two dummy bytes to elide later.
@@ -177,7 +177,7 @@ class Frame:
             # binary. If self.data is a memoryview, it has no decode() method,
             # which raises AttributeError.
             try:
-                data = repr(self.data.decode())
+                data = repr(bytes(self.data).decode())
                 coding = "text"
             except (UnicodeDecodeError, AttributeError):
                 binary = self.data
@@ -200,7 +200,7 @@ class Frame:
     @classmethod
     def parse(
         cls,
-        read_exact: Callable[[int], Generator[None, None, bytes]],
+        read_exact: Callable[[int], Generator[None, None, bytes | bytearray]],
         *,
         mask: bool,
         max_size: int | None = None,
@@ -221,7 +221,6 @@ class Frame:
 
         Raises:
             EOFError: If the connection is closed without a full WebSocket frame.
-            UnicodeDecodeError: If the frame contains invalid UTF-8.
             PayloadTooBig: If the frame's payload size exceeds ``max_size``.
             ProtocolError: If the frame contains incorrect values.
 
@@ -252,7 +251,7 @@ class Frame:
             data = yield from read_exact(8)
             (length,) = struct.unpack("!Q", data)
         if max_size is not None and length > max_size:
-            raise PayloadTooBig(f"over size limit ({length} > {max_size} bytes)")
+            raise PayloadTooBig(length, max_size)
         if mask:
             mask_bytes = yield from read_exact(4)
 
@@ -323,6 +322,7 @@ class Frame:
             output.write(mask_bytes)
 
         # Prepare the data.
+        data: BytesLike
         if mask:
             data = apply_mask(self.data, mask_bytes)
         else:
@@ -360,7 +360,7 @@ class Close:
 
     """
 
-    code: int
+    code: CloseCode | int
     reason: str
 
     def __str__(self) -> str:
@@ -382,7 +382,7 @@ class Close:
         return result
 
     @classmethod
-    def parse(cls, data: bytes) -> Close:
+    def parse(cls, data: BytesLike) -> Close:
         """
         Parse the payload of a close frame.
 
@@ -394,6 +394,8 @@ class Close:
             UnicodeDecodeError: If the reason isn't valid UTF-8.
 
         """
+        if isinstance(data, memoryview):
+            raise AssertionError("only compressed outgoing frames use memoryview")
         if len(data) >= 2:
             (code,) = struct.unpack("!H", data[:2])
             reason = data[2:].decode()

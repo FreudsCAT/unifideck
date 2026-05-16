@@ -3,18 +3,31 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import socket
+import ssl as ssl_module
+import traceback
 import urllib.parse
+from collections.abc import AsyncIterator, Generator, Sequence
 from types import TracebackType
-from typing import Any, AsyncIterator, Callable, Generator, Sequence
+from typing import Any, Callable, Literal, cast
 
 from ..client import ClientProtocol, backoff
 from ..datastructures import HeadersLike
-from ..exceptions import InvalidStatus, SecurityError
+from ..exceptions import (
+    InvalidMessage,
+    InvalidProxyMessage,
+    InvalidProxyStatus,
+    InvalidStatus,
+    ProxyError,
+    SecurityError,
+)
 from ..extensions.base import ClientExtensionFactory
 from ..extensions.permessage_deflate import enable_client_permessage_deflate
 from ..headers import validate_subprotocols
 from ..http11 import USER_AGENT, Response
 from ..protocol import CONNECTING, Event
+from ..proxy import Proxy, get_proxy, parse_proxy, prepare_connect_request
+from ..streams import StreamReader
 from ..typing import LoggerLike, Origin, Subprotocol
 from ..uri import WebSocketURI, parse_uri
 from .compatibility import TimeoutError, asyncio_timeout
@@ -38,13 +51,13 @@ class ClientConnection(Connection):
         async for message in websocket:
             await process(message)
 
-    The iterator exits normally when the connection is closed with close code
+    The iterator exits normally when the connection is closed with code
     1000 (OK) or 1001 (going away) or without a close code. It raises a
     :exc:`~websockets.exceptions.ConnectionClosedError` when the connection is
     closed with any other code.
 
     The ``ping_interval``, ``ping_timeout``, ``close_timeout``, ``max_queue``,
-    and ``write_limit`` arguments the same meaning as in :func:`connect`.
+    and ``write_limit`` arguments have the same meaning as in :func:`connect`.
 
     Args:
         protocol: Sans-I/O connection.
@@ -58,7 +71,7 @@ class ClientConnection(Connection):
         ping_interval: float | None = 20,
         ping_timeout: float | None = 20,
         close_timeout: float | None = 10,
-        max_queue: int | tuple[int, int | None] = 16,
+        max_queue: int | None | tuple[int | None, int | None] = 16,
         write_limit: int | tuple[int, int | None] = 2**15,
     ) -> None:
         self.protocol: ClientProtocol
@@ -85,8 +98,8 @@ class ClientConnection(Connection):
             self.request = self.protocol.connect()
             if additional_headers is not None:
                 self.request.headers.update(additional_headers)
-            if user_agent_header:
-                self.request.headers["User-Agent"] = user_agent_header
+            if user_agent_header is not None:
+                self.request.headers.setdefault("User-Agent", user_agent_header)
             self.protocol.send_request(self.request)
 
         await asyncio.wait(
@@ -94,9 +107,9 @@ class ClientConnection(Connection):
             return_when=asyncio.FIRST_COMPLETED,
         )
 
-        # self.protocol.handshake_exc is always set when the connection is lost
-        # before receiving a response, when the response cannot be parsed, or
-        # when the response fails the handshake.
+        # self.protocol.handshake_exc is set when the connection is lost before
+        # receiving a response, when the response cannot be parsed, or when the
+        # response fails the handshake.
 
         if self.protocol.handshake_exc is not None:
             raise self.protocol.handshake_exc
@@ -145,7 +158,11 @@ def process_exception(exc: Exception) -> Exception | None:
     That exception will be raised, breaking out of the retry loop.
 
     """
-    if isinstance(exc, (EOFError, OSError, asyncio.TimeoutError)):
+    # This catches python-socks' ProxyConnectionError and ProxyTimeoutError.
+    # Remove asyncio.TimeoutError when dropping Python < 3.11.
+    if isinstance(exc, (OSError, TimeoutError, asyncio.TimeoutError)):
+        return None
+    if isinstance(exc, InvalidMessage) and isinstance(exc.__cause__, EOFError):
         return None
     if isinstance(exc, InvalidStatus) and exc.response.status_code in [
         500,  # Internal Server Error
@@ -180,7 +197,7 @@ class connect:
         async for websocket in connect(...):
             try:
                 ...
-            except websockets.ConnectionClosed:
+            except websockets.exceptions.ConnectionClosed:
                 continue
 
     If the connection fails with a transient error, it is retried with
@@ -196,14 +213,18 @@ class connect:
             should be negotiated and run.
         subprotocols: List of supported subprotocols, in order of decreasing
             preference.
+        compression: The "permessage-deflate" extension is enabled by default.
+            Set ``compression`` to :obj:`None` to disable it. See the
+            :doc:`compression guide <../../topics/compression>` for details.
         additional_headers (HeadersLike | None): Arbitrary HTTP headers to add
             to the handshake request.
         user_agent_header: Value of  the ``User-Agent`` request header.
             It defaults to ``"Python/x.y.z websockets/X.Y"``.
             Setting it to :obj:`None` removes the header.
-        compression: The "permessage-deflate" extension is enabled by default.
-            Set ``compression`` to :obj:`None` to disable it. See the
-            :doc:`compression guide <../../topics/compression>` for details.
+        proxy: If a proxy is configured, it is used by default. Set ``proxy``
+            to :obj:`None` to disable the proxy or to the address of a proxy
+            to override the system configuration. See the :doc:`proxy docs
+            <../../topics/proxies>` for details.
         process_exception: When reconnecting automatically, tell whether an
             error is transient or fatal. The default behavior is defined by
             :func:`process_exception`. Refer to its documentation for details.
@@ -216,11 +237,14 @@ class connect:
         close_timeout: Timeout for closing the connection in seconds.
             :obj:`None` disables the timeout.
         max_size: Maximum size of incoming messages in bytes.
-            :obj:`None` disables the limit.
+            :obj:`None` disables the limit. You may pass a ``(max_message_size,
+            max_fragment_size)`` tuple to set different limits for messages and
+            fragments when you expect long messages sent in short fragments.
         max_queue: High-water mark of the buffer where frames are received.
             It defaults to 16 frames. The low-water mark defaults to ``max_queue
             // 4``. You may pass a ``(high, low)`` tuple to set the high-water
-            and low-water marks.
+            and low-water marks. If you want to disable flow control entirely,
+            you may set it to ``None``, although that's a bad idea.
         write_limit: High-water mark of write buffer in bytes. It is passed to
             :meth:`~asyncio.WriteTransport.set_write_buffer_limits`. It defaults
             to 32 KiB. You may pass a ``(high, low)`` tuple to set the
@@ -254,8 +278,19 @@ class connect:
       :meth:`~asyncio.loop.create_connection` method) to create a suitable
       client socket and customize it.
 
+    When using a proxy:
+
+    * Prefix keyword arguments with ``proxy_`` for configuring TLS between the
+      client and an HTTPS proxy: ``proxy_ssl``, ``proxy_server_hostname``,
+      ``proxy_ssl_handshake_timeout``, and ``proxy_ssl_shutdown_timeout``.
+    * Use the standard keyword arguments for configuring TLS between the proxy
+      and the WebSocket server: ``ssl``, ``server_hostname``,
+      ``ssl_handshake_timeout``, and ``ssl_shutdown_timeout``.
+    * Other keyword arguments are used only for connecting to the proxy.
+
     Raises:
         InvalidURI: If ``uri`` isn't a valid WebSocket URI.
+        InvalidProxy: If ``proxy`` isn't a valid proxy.
         OSError: If the TCP connection fails.
         InvalidHandshake: If the opening handshake fails.
         TimeoutError: If the opening handshake times out.
@@ -270,9 +305,11 @@ class connect:
         origin: Origin | None = None,
         extensions: Sequence[ClientExtensionFactory] | None = None,
         subprotocols: Sequence[Subprotocol] | None = None,
+        compression: str | None = "deflate",
+        # HTTP
         additional_headers: HeadersLike | None = None,
         user_agent_header: str | None = USER_AGENT,
-        compression: str | None = "deflate",
+        proxy: str | Literal[True] | None = True,
         process_exception: Callable[[Exception], Exception | None] = process_exception,
         # Timeouts
         open_timeout: float | None = 10,
@@ -280,8 +317,8 @@ class connect:
         ping_timeout: float | None = 20,
         close_timeout: float | None = 10,
         # Limits
-        max_size: int | None = 2**20,
-        max_queue: int | tuple[int, int | None] = 16,
+        max_size: int | None | tuple[int | None, int | None] = 2**20,
+        max_queue: int | None | tuple[int | None, int | None] = 16,
         write_limit: int | tuple[int, int | None] = 2**15,
         # Logging
         logger: LoggerLike | None = None,
@@ -306,10 +343,10 @@ class connect:
         if create_connection is None:
             create_connection = ClientConnection
 
-        def protocol_factory(wsuri: WebSocketURI) -> ClientConnection:
+        def protocol_factory(uri: WebSocketURI) -> ClientConnection:
             # This is a protocol in the Sans-I/O implementation of websockets.
             protocol = ClientProtocol(
-                wsuri,
+                uri,
                 origin=origin,
                 extensions=extensions,
                 subprotocols=subprotocols,
@@ -327,11 +364,10 @@ class connect:
             )
             return connection
 
+        self.proxy = proxy
         self.protocol_factory = protocol_factory
-        self.handshake_args = (
-            additional_headers,
-            user_agent_header,
-        )
+        self.additional_headers = additional_headers
+        self.user_agent_header = user_agent_header
         self.process_exception = process_exception
         self.open_timeout = open_timeout
         self.logger = logger
@@ -340,28 +376,97 @@ class connect:
     async def create_connection(self) -> ClientConnection:
         """Create TCP or Unix connection."""
         loop = asyncio.get_running_loop()
-
-        wsuri = parse_uri(self.uri)
         kwargs = self.connection_kwargs.copy()
 
-        def factory() -> ClientConnection:
-            return self.protocol_factory(wsuri)
+        ws_uri = parse_uri(self.uri)
 
-        if wsuri.secure:
+        proxy = self.proxy
+        if kwargs.get("unix", False):
+            proxy = None
+        if kwargs.get("sock") is not None:
+            proxy = None
+        if proxy is True:
+            proxy = get_proxy(ws_uri)
+
+        def factory() -> ClientConnection:
+            return self.protocol_factory(ws_uri)
+
+        if ws_uri.secure:
             kwargs.setdefault("ssl", True)
-            kwargs.setdefault("server_hostname", wsuri.host)
+            kwargs.setdefault("server_hostname", ws_uri.host)
             if kwargs.get("ssl") is None:
-                raise TypeError("ssl=None is incompatible with a wss:// URI")
+                raise ValueError("ssl=None is incompatible with a wss:// URI")
         else:
             if kwargs.get("ssl") is not None:
-                raise TypeError("ssl argument is incompatible with a ws:// URI")
+                raise ValueError("ssl argument is incompatible with a ws:// URI")
 
         if kwargs.pop("unix", False):
             _, connection = await loop.create_unix_connection(factory, **kwargs)
+        elif proxy is not None:
+            proxy_parsed = parse_proxy(proxy)
+            if proxy_parsed.scheme[:5] == "socks":
+                # Connect to the server through the proxy.
+                sock = await connect_socks_proxy(
+                    proxy_parsed,
+                    ws_uri,
+                    local_addr=kwargs.pop("local_addr", None),
+                )
+                # Initialize WebSocket connection via the proxy.
+                _, connection = await loop.create_connection(
+                    factory,
+                    sock=sock,
+                    **kwargs,
+                )
+            elif proxy_parsed.scheme[:4] == "http":
+                # Split keyword arguments between the proxy and the server.
+                all_kwargs, proxy_kwargs, kwargs = kwargs, {}, {}
+                for key, value in all_kwargs.items():
+                    if key.startswith("ssl") or key == "server_hostname":
+                        kwargs[key] = value
+                    elif key.startswith("proxy_"):
+                        proxy_kwargs[key[6:]] = value
+                    else:
+                        proxy_kwargs[key] = value
+                # Validate the proxy_ssl argument.
+                if proxy_parsed.scheme == "https":
+                    proxy_kwargs.setdefault("ssl", True)
+                    if proxy_kwargs.get("ssl") is None:
+                        raise ValueError(
+                            "proxy_ssl=None is incompatible with an https:// proxy"
+                        )
+                else:
+                    if proxy_kwargs.get("ssl") is not None:
+                        raise ValueError(
+                            "proxy_ssl argument is incompatible with an http:// proxy"
+                        )
+                # Connect to the server through the proxy.
+                transport = await connect_http_proxy(
+                    proxy_parsed,
+                    ws_uri,
+                    user_agent_header=self.user_agent_header,
+                    **proxy_kwargs,
+                )
+                # Initialize WebSocket connection via the proxy.
+                connection = factory()
+                transport.set_protocol(connection)
+                ssl = kwargs.pop("ssl", None)
+                if ssl is True:
+                    ssl = ssl_module.create_default_context()
+                if ssl is not None:
+                    new_transport = await loop.start_tls(
+                        transport, connection, ssl, **kwargs
+                    )
+                    assert new_transport is not None  # help mypy
+                    transport = new_transport
+                connection.connection_made(transport)
+            else:
+                raise AssertionError("unsupported proxy")
         else:
+            # Connect to the server directly.
             if kwargs.get("sock") is None:
-                kwargs.setdefault("host", wsuri.host)
-                kwargs.setdefault("port", wsuri.port)
+                kwargs.setdefault("host", ws_uri.host)
+                kwargs.setdefault("port", ws_uri.port)
+            # Initialize WebSocket connection.
             _, connection = await loop.create_connection(factory, **kwargs)
         return connection
 
@@ -387,9 +492,9 @@ class connect:
         ):
             return exc
 
-        old_wsuri = parse_uri(self.uri)
+        old_ws_uri = parse_uri(self.uri)
         new_uri = urllib.parse.urljoin(self.uri, exc.response.headers["Location"])
-        new_wsuri = parse_uri(new_uri)
+        new_ws_uri = parse_uri(new_uri)
 
         # If connect() received a socket, it is closed and cannot be reused.
         if self.connection_kwargs.get("sock") is not None:
@@ -398,14 +503,14 @@ class connect:
             )
 
         # TLS downgrade is forbidden.
-        if old_wsuri.secure and not new_wsuri.secure:
+        if old_ws_uri.secure and not new_ws_uri.secure:
             return SecurityError(f"cannot follow redirect to non-secure URI {new_uri}")
 
         # Apply restrictions to cross-origin redirects.
         if (
-            old_wsuri.secure != new_wsuri.secure
-            or old_wsuri.host != new_wsuri.host
-            or old_wsuri.port != new_wsuri.port
+            old_ws_uri.secure != new_ws_uri.secure
+            or old_ws_uri.host != new_ws_uri.host
+            or old_ws_uri.port != new_ws_uri.port
         ):
             # Cross-origin redirects on Unix sockets don't quite make sense.
             if self.connection_kwargs.get("unix", False):
@@ -438,9 +543,12 @@ class connect:
                 for _ in range(MAX_REDIRECTS):
                     self.connection = await self.create_connection()
                     try:
-                        await self.connection.handshake(*self.handshake_args)
+                        await self.connection.handshake(
+                            self.additional_headers,
+                            self.user_agent_header,
+                        )
                     except asyncio.CancelledError:
-                        self.connection.close_transport()
+                        self.connection.transport.abort()
                         raise
                     except Exception as exc:
                         # Always close the connection even though keep-alive is
@@ -449,7 +557,7 @@ class connect:
                         # protocol. In the current design of connect(), there is
                         # no easy way to reuse the network connection that works
                         # in every case nor to reinitialize the protocol.
-                        self.connection.close_transport()
+                        self.connection.transport.abort()
 
                         uri_or_exc = self.process_redirect(exc)
                         # Response is a valid redirect; follow it.
@@ -468,11 +576,11 @@ class connect:
                 else:
                     raise SecurityError(f"more than {MAX_REDIRECTS} redirects")
 
-        except TimeoutError:
+        except TimeoutError as exc:
             # Re-raise exception with an informative error message.
-            raise TimeoutError("timed out during handshake") from None
+            raise TimeoutError("timed out during opening handshake") from exc
 
-    # ... = yield from connect(...) - remove when dropping Python < 3.10
+    # ... = yield from connect(...) - remove when dropping Python < 3.11
 
     __iter__ = __await__
 
@@ -492,7 +600,7 @@ class connect:
     # async for ... in connect(...):
 
     async def __aiter__(self) -> AsyncIterator[ClientConnection]:
-        delays: Generator[float, None, None] | None = None
+        delays: Generator[float] | None = None
         while True:
             try:
                 async with self as protocol:
@@ -520,9 +628,9 @@ class connect:
                     delays = backoff()
                 delay = next(delays)
                 self.logger.info(
-                    "! connect failed; reconnecting in %.1f seconds",
+                    "connect failed; reconnecting in %.1f seconds: %s",
                     delay,
-                    exc_info=True,
+                    traceback.format_exception_only(exc)[0].strip(),
                 )
                 await asyncio.sleep(delay)
                 continue
@@ -559,3 +667,138 @@ def unix_connect(
         else:
             uri = "wss://localhost/"
     return connect(uri=uri, unix=True, path=path, **kwargs)
+
+
+try:
+    from python_socks import ProxyType
+    from python_socks.async_.asyncio import Proxy as SocksProxy
+
+except ImportError:
+
+    async def connect_socks_proxy(
+        proxy: Proxy,
+        ws_uri: WebSocketURI,
+        **kwargs: Any,
+    ) -> socket.socket:
+        raise ImportError("connecting through a SOCKS proxy requires python-socks")
+
+else:
+    SOCKS_PROXY_TYPES = {
+        "socks5h": ProxyType.SOCKS5,
+        "socks5": ProxyType.SOCKS5,
+        "socks4a": ProxyType.SOCKS4,
+        "socks4": ProxyType.SOCKS4,
+    }
+
+    SOCKS_PROXY_RDNS = {
+        "socks5h": True,
+        "socks5": False,
+        "socks4a": True,
+        "socks4": False,
+    }
+
+    async def connect_socks_proxy(
+        proxy: Proxy,
+        ws_uri: WebSocketURI,
+        **kwargs: Any,
+    ) -> socket.socket:
+        """Connect via a SOCKS proxy and return the socket."""
+        socks_proxy = SocksProxy(
+            SOCKS_PROXY_TYPES[proxy.scheme],
+            proxy.host,
+            proxy.port,
+            proxy.username,
+            proxy.password,
+            SOCKS_PROXY_RDNS[proxy.scheme],
+        )
+        # connect() is documented to raise OSError.
+        # socks_proxy.connect() doesn't raise TimeoutError; it gets canceled.
+        # Wrap other exceptions in ProxyError, a subclass of InvalidHandshake.
+        try:
+            return await socks_proxy.connect(ws_uri.host, ws_uri.port, **kwargs)
+        except OSError:
+            raise
+        except Exception as exc:
+            raise ProxyError("failed to connect to SOCKS proxy") from exc
+
+
+class HTTPProxyConnection(asyncio.Protocol):
+    def __init__(
+        self,
+        ws_uri: WebSocketURI,
+        proxy: Proxy,
+        user_agent_header: str | None = None,
+    ):
+        self.ws_uri = ws_uri
+        self.proxy = proxy
+        self.user_agent_header = user_agent_header
+
+        self.reader = StreamReader()
+        self.parser = Response.parse(
+            self.reader.read_line,
+            self.reader.read_exact,
+            self.reader.read_to_eof,
+            proxy=True,
+        )
+
+        loop = asyncio.get_running_loop()
+        self.response: asyncio.Future[Response] = loop.create_future()
+
+    def run_parser(self) -> None:
+        try:
+            next(self.parser)
+        except StopIteration as exc:
+            response = exc.value
+            if 200 <= response.status_code < 300:
+                self.response.set_result(response)
+            else:
+                self.response.set_exception(InvalidProxyStatus(response))
+        except Exception as exc:
+            proxy_exc = InvalidProxyMessage(
+                "did not receive a valid HTTP response from proxy"
+            )
+            proxy_exc.__cause__ = exc
+            self.response.set_exception(proxy_exc)
+
+    def connection_made(self, transport: asyncio.BaseTransport) -> None:
+        transport = cast(asyncio.Transport, transport)
+        self.transport = transport
+        self.transport.write(
+            prepare_connect_request(self.proxy, self.ws_uri, self.user_agent_header)
+        )
+
+    def data_received(self, data: bytes) -> None:
+        self.reader.feed_data(data)
+        self.run_parser()
+
+    def eof_received(self) -> None:
+        self.reader.feed_eof()
+        self.run_parser()
+
+    def connection_lost(self, exc: Exception | None) -> None:
+        self.reader.feed_eof()
+        if exc is not None:
+            self.response.set_exception(exc)
+
+
+async def connect_http_proxy(
+    proxy: Proxy,
+    ws_uri: WebSocketURI,
+    user_agent_header: str | None = None,
+    **kwargs: Any,
+) -> asyncio.Transport:
+    transport, protocol = await asyncio.get_running_loop().create_connection(
+        lambda: HTTPProxyConnection(ws_uri, proxy, user_agent_header),
+        proxy.host,
+        proxy.port,
+        **kwargs,
+    )
+
+    try:
+        # This raises exceptions if the connection to the proxy fails.
+        await protocol.response
+    except Exception:
+        transport.close()
+        raise
+
+    return transport

@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 import struct
-from typing import Any, Awaitable, Callable, NamedTuple, Sequence
+from collections.abc import Awaitable, Sequence
+from typing import Any, Callable, NamedTuple
 
 from .. import extensions, frames
 from ..exceptions import PayloadTooBig, ProtocolError
-from ..frames import BytesLike
-from ..typing import Data
+from ..typing import BytesLike, DataLike
 
 
 try:
@@ -18,7 +18,7 @@ except ImportError:
 class Frame(NamedTuple):
     fin: bool
     opcode: frames.Opcode
-    data: bytes
+    data: BytesLike
     rsv1: bool = False
     rsv2: bool = False
     rsv3: bool = False
@@ -92,7 +92,7 @@ class Frame(NamedTuple):
             data = await reader(8)
             (length,) = struct.unpack("!Q", data)
         if max_size is not None and length > max_size:
-            raise PayloadTooBig(f"over size limit ({length} > {max_size} bytes)")
+            raise PayloadTooBig(length, max_size)
         if mask:
             mask_bits = await reader(4)
 
@@ -146,7 +146,7 @@ class Frame(NamedTuple):
         write(self.new_frame.serialize(mask=mask, extensions=extensions))
 
 
-def prepare_data(data: Data) -> tuple[int, bytes]:
+def prepare_data(data: DataLike) -> tuple[int, BytesLike]:
     """
     Convert a string or byte-like object to an opcode and a bytes-like object.
 
@@ -170,7 +170,7 @@ def prepare_data(data: Data) -> tuple[int, bytes]:
         raise TypeError("data must be str or bytes-like")
 
 
-def prepare_ctrl(data: Data) -> bytes:
+def prepare_ctrl(data: DataLike) -> bytes:
     """
     Convert a string or byte-like object to bytes.
 

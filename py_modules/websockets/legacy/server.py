@@ -8,24 +8,16 @@ import inspect
 import logging
 import socket
 import warnings
+from collections.abc import Awaitable, Generator, Iterable, Sequence
 from types import TracebackType
-from typing import (
-    Any,
-    Awaitable,
-    Callable,
-    Generator,
-    Iterable,
-    Sequence,
-    Tuple,
-    Union,
-    cast,
-)
+from typing import Any, Callable, cast
 
 from ..asyncio.compatibility import asyncio_timeout
 from ..datastructures import Headers, HeadersLike, MultipleValuesError
 from ..exceptions import (
     InvalidHandshake,
     InvalidHeader,
+    InvalidMessage,
     InvalidOrigin,
     InvalidUpgrade,
     NegotiationError,
@@ -41,7 +33,7 @@ from ..headers import (
 from ..http11 import SERVER
 from ..protocol import State
 from ..typing import ExtensionHeader, LoggerLike, Origin, StatusLike, Subprotocol
-from .exceptions import AbortHandshake, InvalidMessage
+from .exceptions import AbortHandshake
 from .handshake import build_response, check_request
 from .http import read_request
 from .protocol import WebSocketCommonProtocol, broadcast
@@ -56,11 +48,9 @@ __all__ = [
 ]
 
 
-# Change to HeadersLike | ... when dropping Python < 3.10.
-HeadersLikeOrCallable = Union[HeadersLike, Callable[[str, Headers], HeadersLike]]
+HeadersLikeOrCallable = HeadersLike | Callable[[str, Headers], HeadersLike]
 
-# Change to tuple[...] when dropping Python < 3.9.
-HTTPResponse = Tuple[StatusLike, HeadersLike, bytes]
+HTTPResponse = tuple[StatusLike, HeadersLike, bytes]
 
 
 class WebSocketServerProtocol(WebSocketCommonProtocol):
@@ -715,7 +705,8 @@ class WebSocketServer:
             self.logger.info("server listening on %s", name)
 
         # Initialized here because we need a reference to the event loop.
-        # This should be moved back to __init__ when dropping Python < 3.10.
+        # This could be moved back to __init__ now that Python < 3.10 isn't
+        # supported anymore, but I'm not taking that risk in legacy code.
         self.closed_waiter = server.get_loop().create_future()
 
     def register(self, protocol: WebSocketServerProtocol) -> None:
@@ -1133,7 +1124,7 @@ class Serve:
         self.ws_server.wrap(server)
         return self.ws_server
 
-    # yield from serve(...) - remove when dropping Python < 3.10
+    # yield from serve(...) - remove when dropping Python < 3.11
 
     __iter__ = __await__
 
