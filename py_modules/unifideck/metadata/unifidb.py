@@ -170,7 +170,7 @@ async def _fetch_bucket(
     try:
         async with (
             aiohttp.ClientSession() as session,
-            session.get(url, timeout=timeout) as resp,
+            session.get(url, timeout=aiohttp.ClientTimeout(total=timeout)) as resp,
         ):
             if resp.status != 200:
                 return []

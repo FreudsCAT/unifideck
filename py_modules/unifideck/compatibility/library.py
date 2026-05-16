@@ -152,7 +152,7 @@ class CompatLibrary:
                 session.get(
                     url,
                     headers={"User-Agent": DEFAULT_USER_AGENT},
-                    timeout=timeout,
+                    timeout=aiohttp.ClientTimeout(total=timeout),
                 ) as resp,
             ):
                 if resp.status == HTTP_NOT_FOUND:
@@ -182,7 +182,7 @@ class CompatLibrary:
                 session.get(
                     url,
                     headers={"User-Agent": DEFAULT_USER_AGENT},
-                    timeout=timeout,
+                    timeout=aiohttp.ClientTimeout(total=timeout),
                 ) as resp,
             ):
                 if resp.status != HTTP_OK:

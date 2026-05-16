@@ -107,7 +107,7 @@ async def _search_game(
         async with (
             aiohttp.ClientSession() as session,
             session.get(
-                url, headers=headers, timeout=timeout,
+                url, headers=headers, timeout=aiohttp.ClientTimeout(total=timeout),
             ) as resp,
         ):
             if resp.status != 200:
@@ -139,7 +139,7 @@ async def _fetch_assets(
         async with (
             aiohttp.ClientSession() as session,
             session.get(
-                url, headers=headers, timeout=timeout,
+                url, headers=headers, timeout=aiohttp.ClientTimeout(total=timeout),
             ) as resp,
         ):
             if resp.status != 200:

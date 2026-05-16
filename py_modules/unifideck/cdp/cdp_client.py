@@ -56,7 +56,7 @@ class CDPClient:
             with contextlib.suppress(asyncio.CancelledError):
                 await self._recv_task
         if self._ws:
-            await self._ws.close()  # type: ignore[unreachable]  # defensive guard after self._ws narrowing
+            await self._ws.close()
             self._ws = None
 
     async def inject_css(self, css: str) -> bool:
@@ -98,7 +98,7 @@ class CDPClient:
         try:
             async with (
                 aiohttp.ClientSession() as session,
-                session.get(url, timeout=5) as resp,
+                session.get(url, timeout=aiohttp.ClientTimeout(total=5)) as resp,
             ):
                 return resp.status == 200
         except Exception as e:
@@ -140,7 +140,7 @@ class CDPClient:
         try:
             async with (
                 aiohttp.ClientSession() as session,
-                session.get(url, timeout=5) as resp,
+                session.get(url, timeout=aiohttp.ClientTimeout(total=5)) as resp,
             ):
                 if resp.status != 200:
                     return []
@@ -165,7 +165,7 @@ class CDPClient:
         """Send."""
         if not self._ws:
             return None
-        self._request_id += 1  # type: ignore[unreachable]  # guard 'if not self._ws: return None' — narrowing fallback
+        self._request_id += 1
         req_id = self._request_id
         message = {
             "id": req_id,
@@ -195,7 +195,7 @@ class CDPClient:
                 "[CDPClient] _recv_loop started before connect()",
             )
             return
-        ws = self._ws  # type: ignore[unreachable]  # guard 'if not self._ws: return None' — narrowing fallback
+        ws = self._ws
         try:
             async for raw in ws:
                 try:
