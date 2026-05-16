@@ -21,7 +21,8 @@ from __future__ import annotations
 import logging
 import re
 from typing import TYPE_CHECKING, Any
-from ....core.types import Game
+
+from unifideck.core.types import Game
 
 # NOTE: ``..steam_filter`` (the Ubisoft Steam dedup filter) was
 # removed in commits 6c84e7e and 908d350 because it caused issues
@@ -44,7 +45,7 @@ _MOJIBAKE_REPLACEMENTS = (
     ("Â®", "®"),
     ("â\u0080¢", "™"),
     ("â\u0084¢", "™"),
-    ("â\u0080\u0099", "’"),  # noqa: RUF001  # intentional: mapping mojibake → correct glyph
+    ("â\u0080\u0099", "’"),  # noqa: RUF001 — intentional: mapping mojibake → correct glyph
     ("Â", ""),
 )
 _SKIP_TITLE_KEYWORDS = re.compile(

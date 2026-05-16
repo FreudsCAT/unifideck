@@ -156,7 +156,7 @@ async def extract_code_from_page(
         return None
     try:
         text = await cdp_eval_inner_text(ws_url, url_snippet, first_attempt)
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         log_extract(
             first_attempt,
             "content extract failed for %s: %s",
@@ -189,7 +189,7 @@ async def try_epic_content_capture(
             r'"authorizationCode"\s*:\s*"([^"]+)"',
             first_attempt=first,
         )
-    except Exception:  # noqa: BLE001
+    except Exception:
         code = None
     state["content_extract_first_attempt"].add(url)
     if not code:
@@ -228,7 +228,11 @@ async def try_content_fallback(
             continue
         try:
             code = await extract_code_from_page(target, content_regex)
-        except Exception:  # noqa: BLE001
+        except Exception as e:
+            logger.debug(
+                "[auth/browser] content extract failed for %s: %s",
+                target.get("url", "")[:80], e,
+            )
             continue
         if not code:
             continue

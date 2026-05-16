@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import logging
 import os
+from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -103,7 +104,7 @@ class AuthShortcutsRPCMixin:
         )
         return result
 
-    async def get_compat_tool_for_game(self, store_game_id: str) -> Any:  # noqa: D401 — see below
+    async def get_compat_tool_for_game(self, store_game_id: str) -> Any:
         """See full doc on the body — logging-wrapped variant."""
         logger.info(
             "[AuthShortcuts] get_compat_tool_for_game(%s)",
@@ -260,13 +261,10 @@ def _build_auth_shortcut_context(store: str) -> dict[str, Any]:
         "DECKY_PLUGIN_DIR",
         "/home/deck/homebrew/plugins/Unifideck",
     )
-    dispatcher_path = os.path.join(
-        plugin_dir, "py_modules", "unifideck", "launcher",
-        "dispatcher.py",
+    dispatcher_path = str(
+        Path(plugin_dir) / "py_modules" / "unifideck" / "launcher" / "dispatcher.py",
     )
-    wrapper_path = os.path.join(
-        plugin_dir, "bin", "unifideck-launcher",
-    )
+    wrapper_path = str(Path(plugin_dir) / "bin" / "unifideck-launcher")
     try:
         from unifideck.services.shortcut.games_map import (
             generate_app_id,

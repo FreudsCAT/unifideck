@@ -68,10 +68,8 @@ class ServicePaths:
         machines without a Steam install; services that actually
         need Steam must validate it themselves.
         """
-        # Base directories
-        data_dir = config.get("paths.data_dir", str(Path("~/.config/unifideck").expanduser()))
-        steam_root = config.get("paths.steam_root", _DEFAULT_STEAM_ROOT)
-
+        # Base directories — both expanded via Path.expanduser so
+        # the config can use ``~`` and we still get an absolute path.
         data_dir = str(
             Path(
                 config.get(
@@ -80,29 +78,23 @@ class ServicePaths:
                 ),
             ).expanduser(),
         )
+        steam_root = str(
+            Path(
+                config.get("paths.steam_root", _DEFAULT_STEAM_ROOT),
+            ).expanduser(),
+        )
         Path(data_dir).mkdir(parents=True, exist_ok=True)
 
-        # Steam userdata paths
-        userdata_dir = str(Path(steam_root) / "userdata" / _USER_ID)
-        config_dir = str(Path(userdata_dir) / "config")
-        shortcuts_path = str(Path(config_dir) / "shortcuts.vdf")
-        config_vdf_path = str(Path(config_dir) / "localconfig.vdf")
-        loginusers_path = str(Path(steam_root) / "config" / "loginusers.vdf")
-        grid_dir = str(Path(config_dir) / "grid")
-
-        # Unifideck data files
-        games_map_path = str(Path(data_dir) / "games.map")
-        queue_file = str(Path(data_dir) / "download_queue.json")
-        playtime_db = str(Path(data_dir) / "playtime.db")
-        local_save_root = str(Path(data_dir) / "saves")
-        cloud_root = config.get("cloud_saves.remote_root")
+        # Cache Path versions for the multi-segment joins below.
+        steam_root_path = Path(steam_root)
+        data_dir_path = Path(data_dir)
+        userdata_dir = steam_root_path / "userdata" / _USER_ID
+        config_dir = userdata_dir / "config"
 
         return cls(
             data_dir=data_dir,
             steam_root=steam_root,
-            shortcuts_path=str(
-                steam_root_path / "userdata" / "0" / "config" / "shortcuts.vdf",
-            ),
+            shortcuts_path=str(config_dir / "shortcuts.vdf"),
             games_map_path=str(
                 Path(
                     config.get(
@@ -111,17 +103,13 @@ class ServicePaths:
                     ),
                 ).expanduser(),
             ),
-            config_vdf_path=str(
-                steam_root_path / "config" / "config.vdf",
-            ),
+            config_vdf_path=str(config_dir / "localconfig.vdf"),
             loginusers_path=str(
                 steam_root_path / "config" / "loginusers.vdf",
             ),
-            grid_dir=str(
-                steam_root_path / "userdata" / "0" / "config" / "grid",
-            ),
+            grid_dir=str(config_dir / "grid"),
             queue_file=str(data_dir_path / "download_queue.json"),
             playtime_db=str(data_dir_path / "playtime.db"),
             local_save_root=str(data_dir_path / "saves"),
-            cloud_root=config.get("cloud.root") or None,
+            cloud_root=config.get("cloud_saves.remote_root") or None,
         )

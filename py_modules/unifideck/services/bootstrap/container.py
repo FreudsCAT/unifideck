@@ -10,25 +10,24 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from ...auth.browser import OAuthBrowserMonitor
-    from ...auth.edge_browser import EdgeBrowser
-    from ...cdp.cdp_client import CDPClient
-    from ...core.metrics_collector import MetricsCollector
-    from ..account_service import AccountService
-    from ..artwork import ArtworkService
-    from ..cloud_save import CloudSaveService
-    from ..download import DownloadService
-    from ..feature_flag_service import FeatureFlagService
-    from ..launch_history import LaunchHistoryService
-    from ..metadata_service import MetadataService
-    from ..microsoft_subscription import (
-        MicrosoftSubscriptionService,
-    )
-    from ..playtime import PlaytimeService
-    from ..probe_reaction_service import ProbeReactionService
-    from ..proton_service import ProtonService
-    from ..security import SecurityService
-    from ..shortcut import ShortcutService
+    from unifideck.auth.browser import OAuthBrowserMonitor
+    from unifideck.auth.edge_browser import EdgeBrowser
+    from unifideck.cdp.cdp_client import CDPClient
+    from unifideck.core.metrics_collector import MetricsCollector
+    from unifideck.services.account_service import AccountService
+    from unifideck.services.artwork import ArtworkService
+    from unifideck.services.cloud_save import CloudSaveService
+    from unifideck.services.download import DownloadService
+    from unifideck.services.feature_flag_service import FeatureFlagService
+    from unifideck.services.launch_history import LaunchHistoryService
+    from unifideck.services.launch_logs import LaunchLogsService
+    from unifideck.services.metadata_service import MetadataService
+    from unifideck.services.microsoft_subscription import MicrosoftSubscriptionService
+    from unifideck.services.playtime import PlaytimeService
+    from unifideck.services.probe_reaction_service import ProbeReactionService
+    from unifideck.services.proton_service import ProtonService
+    from unifideck.services.security import SecurityService
+    from unifideck.services.shortcut import ShortcutService
 
 
 @dataclass

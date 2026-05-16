@@ -59,10 +59,10 @@ DEFAULT_OAUTH_TIMEOUT = 300  # seconds
 # Public re-exports — keep the module's import surface stable
 # even though the implementation has moved into siblings.
 __all__ = [
-    "AuthCaptureResult",
-    "CDPOAuthMonitor",
     "DEFAULT_OAUTH_TIMEOUT",
     "DEFAULT_POLL_INTERVAL",
+    "AuthCaptureResult",
+    "CDPOAuthMonitor",
     "OAuthBrowserMonitor",
     "extract_oauth_params",
     "match_redirect",
@@ -157,7 +157,7 @@ class OAuthBrowserMonitor:
     async def wait_for_redirect(
         self,
         allowed_uris: list[str],
-        timeout: float | None = None,  # noqa: ASYNC109 — internal polling deadline
+        timeout: float | None = None,
         *,
         content_trigger_url: str | None = None,
         content_regex: str | None = None,
@@ -267,11 +267,11 @@ class OAuthBrowserMonitor:
         edge_targets: list[dict[str, Any]] = []
         try:
             cef_targets = await self._list_targets()
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.debug("[auth/browser] CEF target list: %s", e)
         try:
             edge_targets = await self._list_edge_targets()
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.debug("[auth/browser] Edge target list: %s", e)
         return cef_targets, edge_targets
 
@@ -393,7 +393,7 @@ class OAuthBrowserMonitor:
         """
         try:
             targets = await list_fn()
-        except Exception:  # noqa: BLE001
+        except Exception:
             return False
         for target in targets:
             if url_substring not in target.get("url", ""):
@@ -411,7 +411,7 @@ class OAuthBrowserMonitor:
                 else:
                     await self._cdp.close_target(target_id)
                 return True
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 logger.debug(
                     "[auth/browser] close on %s failed: %s",
                     label, e,
@@ -461,7 +461,7 @@ class OAuthBrowserMonitor:
                 ) as resp:
                     data = await resp.json()
                     return data if isinstance(data, list) else []
-        except Exception as e:  # noqa: BLE001 — probe must never raise
+        except Exception as e:
             logger.debug(
                 "[auth/browser] Edge CDP not reachable (port %s): %s",
                 self._edge_cdp_port, e,

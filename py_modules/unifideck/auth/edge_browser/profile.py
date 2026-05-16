@@ -291,7 +291,7 @@ class EdgeProfileManager:
                 raise
             finally:
                 conn.close()
-        except Exception as e:  # noqa: BLE001 — best-effort
+        except Exception as e:
             logger.debug(
                 "[Edge] Could not clear %s cookies: %s", domain, e,
             )

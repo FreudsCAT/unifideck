@@ -15,6 +15,7 @@ import signal
 from typing import TYPE_CHECKING, Any
 
 from unifideck.core.types import Result
+from unifideck.launcher.rpc import emit_stage
 from unifideck.launcher.types.context import LaunchContext, RuntimeState
 
 if TYPE_CHECKING:
@@ -114,7 +115,7 @@ class LauncherService:
                 if ctx.auth_store == "ubisoft":
                     return await self._launch_ubisoft_auth(ctx)
                 # OAuth shortcut path — delegate to auth.py
-                from ...launcher.flows.auth import handle_store_auth
+                from unifideck.launcher.flows.auth import handle_store_auth
 
                 return await handle_store_auth(ctx, self._edge_browser)
             if ctx.is_xcloud:

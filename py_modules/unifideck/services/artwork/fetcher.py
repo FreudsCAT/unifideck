@@ -20,7 +20,7 @@ from typing import TYPE_CHECKING
 from urllib.parse import urlparse
 
 if TYPE_CHECKING:
-    from ...config import ConfigManager
+    from unifideck.config import ConfigManager
 logger = logging.getLogger(__name__)
 
 # Steam-preferred suffix per artwork kind. Used as the
@@ -164,7 +164,7 @@ async def has_artwork(grid_dir: str, app_id: int) -> bool:
         directory itself is unreadable (``aio.is_file``
         returns False on OSError).
     """
-    from ...core.io import async_file_ops as aio
+    from unifideck.core.io import async_file_ops as aio
 
     grid_path = Path(grid_dir)
     grid_jpg = str(grid_path / f"{app_id}p.jpg")
@@ -226,7 +226,7 @@ async def find_artwork_url(
         response, etc).
     """
     try:
-        from ...steam import steamgriddb
+        from unifideck.steam import steamgriddb
         return await steamgriddb.search_artwork(title, kind, api_key, config=config)
     except Exception as e:
         logger.debug("[ArtworkService] search failed (%s/%s): %s", title, kind, e)
@@ -311,7 +311,7 @@ async def download_and_save(
     data = await _fetch_url_bytes(url, timeout)
     if data is None:
         return False
-    from ...core.io import async_file_ops as aio
+    from unifideck.core.io import async_file_ops as aio
     try:
         await aio.write_bytes(target, data)
         return True

@@ -23,7 +23,8 @@ import ssl
 import urllib.request
 from collections.abc import Mapping
 from typing import Any
-from ...core.net import ssl_ctx_permissive
+
+from unifideck.core.net import ssl_ctx_permissive
 
 _logger = logging.getLogger(__name__)
 

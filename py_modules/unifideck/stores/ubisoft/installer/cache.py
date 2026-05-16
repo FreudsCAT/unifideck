@@ -25,8 +25,9 @@ import logging
 import urllib.request
 from pathlib import Path
 from typing import Any
-from ....core.net import ssl_ctx_permissive
-from ..config import UbisoftConfig
+
+from unifideck.core.net import ssl_ctx_permissive
+from unifideck.stores.ubisoft.config import UbisoftConfig
 
 logger = logging.getLogger(__name__)
 _INSTALLER_MIN_SIZE_BYTES = 1000

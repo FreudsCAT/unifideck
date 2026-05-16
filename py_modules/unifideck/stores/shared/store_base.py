@@ -3,6 +3,7 @@ import logging
 import os
 import subprocess
 from abc import ABC, abstractmethod
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
 
 from unifideck.core.binaries import binary_resolver
@@ -111,8 +112,8 @@ class StoreBase(ABC):
         """
         if self._plugin_dir:
             absolutised = [
-                p if os.path.isabs(p)
-                else os.path.join(self._plugin_dir, p)
+                p if Path(p).is_absolute()
+                else str(Path(self._plugin_dir) / p)
                 for p in tool.search_paths
             ]
             tool = CLITool(

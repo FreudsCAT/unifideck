@@ -278,13 +278,13 @@ class EphemeralCredentialContext:
         # explicitly so the invariant doesn't depend on
         # platform.
         try:
-            Path(tempdir).chmod(_TEMPDIR_MODE)
+            await asyncio.to_thread(Path(tempdir).chmod, _TEMPDIR_MODE)
         except OSError as e:
             # If we can't chmod, abort and remove — we cannot
             # let plaintext live in a dir we don't fully
             # control.
             with contextlib.suppress(OSError):
-                Path(tempdir).rmdir()
+                await asyncio.to_thread(Path(tempdir).rmdir)
             raise EphemeralCredentialError(
                 f"cannot chmod tempdir {tempdir}: {e}",
             ) from e
@@ -423,7 +423,9 @@ def _safe_listdir(path: str) -> Iterator[str]:
 # direct importer hit ``ImportError: cannot import name
 # 'InPlaceEphemeralFile'`` at module load. Added the line below
 # to match the documented contract.
-from .ephemeral_creds_inplace import InPlaceEphemeralFile
+from unifideck.security.ephemeral_creds_inplace import (  # noqa: E402 — late re-export to break a cycle with ephemeral_creds_inplace which imports back from this module
+    InPlaceEphemeralFile,
+)
 
 __all__ = [
     "EphemeralCredentialContext",

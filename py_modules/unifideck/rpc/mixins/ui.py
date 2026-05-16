@@ -4,13 +4,72 @@ OP-26g | rpc/mixins/ui.py
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
+from pathlib import Path
 from typing import Any
 
 from unifideck.rpc.errors import RpcError
 
 logger = logging.getLogger(__name__)
+
+
+def _resolve_user_path(path: str) -> str:
+    """Expand ``~`` and resolve symlinks. Blocking — wrap with to_thread.
+
+    Returns the canonical absolute path. Empty/None input
+    falls back to ``/`` so the caller always gets a real path
+    to test for ``is_dir``.
+    """
+    return str(Path(path or "/").expanduser().resolve())
+
+
+def _collect_subdirs(
+    resolved: str, show_hidden: bool, sort_by: str,
+) -> list[str]:
+    """Return the immediate subdirectory names of ``resolved``.
+
+    Pure synchronous I/O helper extracted from
+    ``list_directory`` to:
+
+    * keep the async method under the nesting=4 gate (the
+      scandir-loop-isdir branch was nesting=5);
+    * make the blocking work atomic so a single
+      ``asyncio.to_thread`` call wraps all the filesystem
+      touches at once, rather than scattering ``to_thread``
+      calls over each ``is_dir`` check.
+
+    Skips dotfiles unless ``show_hidden`` is True. Each
+    entry's ``is_dir`` is guarded against transient OSError
+    (broken symlink, race with concurrent rm) — that entry
+    is dropped silently. Caller handles directory-level
+    OSError / PermissionError.
+    """
+    entries: list[str] = []
+    with os.scandir(resolved) as it:
+        for entry in it:
+            if not show_hidden and entry.name.startswith("."):
+                continue
+            if _is_dir_safe(entry):
+                entries.append(entry.name)
+    if sort_by == "name":
+        entries.sort(key=str.lower)
+    return entries
+
+
+def _is_dir_safe(entry: os.DirEntry[str]) -> bool:
+    """Return True iff ``entry`` is a directory; False on any OSError.
+
+    Tiny wrapper that swallows transient errors (broken
+    symlink, race with rm) so the caller's loop doesn't
+    need its own try/except — which kept the nesting depth
+    of ``list_directory`` past the gate.
+    """
+    try:
+        return entry.is_dir(follow_symlinks=False)
+    except OSError:
+        return False
 
 
 class UIRPCMixin:
@@ -104,6 +163,12 @@ class UIRPCMixin:
         click) so we never have to ship a tree of the whole
         filesystem.
 
+        Filesystem work (path resolution + scandir) is
+        offloaded to ``asyncio.to_thread`` via two helpers
+        — ``_resolve_user_path`` and ``_collect_subdirs`` —
+        so the event loop is never blocked on slow mounts
+        (network shares, SD card, etc.).
+
         Args:
             path: absolute path to enumerate. ``~`` is
                 expanded.
@@ -117,26 +182,18 @@ class UIRPCMixin:
             handle exceptions.
         """
         try:
-            resolved = os.path.realpath(os.path.expanduser(path or "/"))
-            if not os.path.isdir(resolved):
+            resolved = await asyncio.to_thread(_resolve_user_path, path)
+            is_dir = await asyncio.to_thread(Path(resolved).is_dir)
+            if not is_dir:
                 return {
                     "success": False,
                     "error": "not_a_directory",
                     "path": resolved,
                     "directories": [],
                 }
-            entries: list[str] = []
-            with os.scandir(resolved) as it:
-                for entry in it:
-                    if not show_hidden and entry.name.startswith("."):
-                        continue
-                    try:
-                        if entry.is_dir(follow_symlinks=False):
-                            entries.append(entry.name)
-                    except OSError:
-                        continue
-            if sort_by == "name":
-                entries.sort(key=str.lower)
+            entries = await asyncio.to_thread(
+                _collect_subdirs, resolved, show_hidden, sort_by,
+            )
             return {
                 "success": True,
                 "path": resolved,

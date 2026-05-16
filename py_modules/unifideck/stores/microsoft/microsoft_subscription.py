@@ -7,8 +7,10 @@ import urllib.error
 import urllib.request
 from dataclasses import dataclass
 from typing import Any
-from ...core.types import SubscriptionTier
-from ...core.net import ssl_ctx_permissive as _ssl
+
+from unifideck.core.net import ssl_ctx_permissive as _ssl
+from unifideck.core.types import SubscriptionTier
+
 logger = logging.getLogger(__name__)
 _PROBE_TIMEOUT_SECONDS = 10
 _GSSV_CLIENT_HEADER = "XboxComBrowser"

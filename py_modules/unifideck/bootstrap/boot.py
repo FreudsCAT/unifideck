@@ -104,7 +104,7 @@ async def _boot_layer2_core(plugin: Any, decky_runtime_dir: str) -> Any:
     plugin.bus = EventBus()
     pipeline = await build_eventbus_pipeline(plugin)
     plugin.cache = CacheManager(
-        os.path.join(decky_runtime_dir, "cache"),
+        str(Path(decky_runtime_dir) / "cache"),
     )
     register_default_caches(plugin.cache)
     return pipeline
@@ -130,11 +130,11 @@ def _resolve_defaults_path(decky_plugin_dir: str) -> str:
     defaults" by logging a warning and entering degraded mode, and
     paths.py has fallback defaults so boot still completes.
     """
-    nested = os.path.join(decky_plugin_dir, "defaults", "config.json")
-    if os.path.isfile(nested):
+    nested = str(Path(decky_plugin_dir) / "defaults" / "config.json")
+    if Path(nested).is_file():
         return nested
-    flattened = os.path.join(decky_plugin_dir, "config.json")
-    if os.path.isfile(flattened):
+    flattened = str(Path(decky_plugin_dir) / "config.json")
+    if Path(flattened).is_file():
         return flattened
     return nested
 
@@ -181,8 +181,8 @@ def _boot_layer4_stores(plugin: Any, decky_plugin_dir: str) -> None:
     """Layer 4 — StoreRegistry + SyncService + auto-discovery."""
     plugin.registry = StoreRegistry(plugin.bus)
     plugin.sync_service = SyncService(plugin.registry, plugin.bus)
-    stores_dir = os.path.join(
-        decky_plugin_dir, "py_modules", "unifideck", "stores",
+    stores_dir = str(
+        Path(decky_plugin_dir) / "py_modules" / "unifideck" / "stores",
     )
     plugin.registry.auto_discover(
         stores_dir,

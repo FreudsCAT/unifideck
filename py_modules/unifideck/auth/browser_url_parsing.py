@@ -119,7 +119,7 @@ def build_redirect_capture(url: str, start: float) -> AuthCaptureResult:
     elapsed = time.monotonic() - start
     params = extract_oauth_params(url)
     safe_url = re.sub(
-        r'(code=[^&\s]+)', 'code=***REDACTED***', url,
+        r"(code=[^&\s]+)", "code=***REDACTED***", url,
     )
     logger.info(
         "[auth/browser] captured redirect after %.1fs: %s",

@@ -1,19 +1,18 @@
 """steam/library.py — Steam install discovery + Steam Store search."""
 from __future__ import annotations
 
-import json
+import asyncio
 import logging
-import os
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import aiohttp
 
-from ..utils.config_helpers import get_cfg
+from unifideck.utils.config_helpers import get_cfg
 
 if TYPE_CHECKING:
-    from ..config import ConfigManager
+    from unifideck.config import ConfigManager
 
 logger = logging.getLogger(__name__)
 
@@ -44,12 +43,12 @@ def find_steam_path(config: ConfigManager | None = None) -> str | None:
     if config is not None:
         override = _cfg(config, "paths.steam_root", None)
         if override:
-            full = os.path.expanduser(str(override))
-            if os.path.isdir(os.path.join(full, "steamapps")):
+            full = str(Path(str(override)).expanduser())
+            if (Path(full) / "steamapps").is_dir():
                 return full
     for candidate in STEAM_PATH_CANDIDATES:
-        full_path = os.path.expanduser(candidate)
-        if os.path.isdir(os.path.join(full_path, "steamapps")):
+        full_path = str(Path(candidate).expanduser())
+        if (Path(full_path) / "steamapps").is_dir():
             return full_path
     return None
 

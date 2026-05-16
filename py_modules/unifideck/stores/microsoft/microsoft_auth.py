@@ -3,8 +3,10 @@ import logging
 import urllib.error
 import urllib.parse
 import urllib.request
-from typing import cast
-from ...core.net import ssl_ctx_permissive as _ssl
+from typing import Any, cast
+
+from unifideck.core.net import ssl_ctx_permissive as _ssl
+
 logger = logging.getLogger(__name__)
 __all__ = [
     "build_xbl_chain",

@@ -207,7 +207,7 @@ class EpicInstaller:
                     # ``os.path.relpath`` is pure string manipulation —
                     # no filesystem access — so the ASYNC240 rule
                     # gives a false positive here.
-                    exe_relative = os.path.relpath(  # noqa: ASYNC240  # pure string op, no I/O
+                    exe_relative = os.path.relpath(  # noqa: ASYNC240 — pure string op, no I/O
                         exe,
                         install_path,
                     )

@@ -49,6 +49,7 @@ def build_standalone() -> LauncherService:
     from unifideck.auth.edge_browser import EdgeBrowser
     from unifideck.event_bus.event_bus import EventBus
     from unifideck.services.cloud_save.service import CloudSaveService
+
     # Fix (2026-05-15, lot 11e): ``proton_service`` is a module
     # (``proton_service.py``), not a package — the previous import
     # path ``proton_service.service`` was broken. Import directly

@@ -116,7 +116,7 @@ def _wire_browser_monitor(
         logger.info("[bootstrap] browser_monitor skipped — no cdp client")
         return
     try:
-        from ...auth.browser import OAuthBrowserMonitor
+        from unifideck.auth.browser import OAuthBrowserMonitor
         container.browser_monitor = OAuthBrowserMonitor(
             cdp_client=container.cdp, config=config,
             edge_cdp_port=cdp_port,
@@ -142,7 +142,7 @@ def _wire_edge_browser(
     config changes are picked up at launch time, not at boot.
     """
     try:
-        from ...auth.edge_browser import EdgeBrowser
+        from unifideck.auth.edge_browser import EdgeBrowser
         container.edge_browser = EdgeBrowser(
             cdp_port=cdp_port,
             locale_fn=lambda: str(config.get("ui.locale", "en-US")),

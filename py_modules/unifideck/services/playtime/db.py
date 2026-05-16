@@ -186,10 +186,9 @@ class ActivityDatabase:
         self, sql: str, params: tuple[Any, ...] = (),
     ) -> sqlite3.Row | None:
         """Run a SELECT, return the first row or None."""
-        result = self._require_conn().execute(sql, params).fetchone()
         # Cast through Any because ``fetchone`` is typed as
         # ``Any`` by the stubs; we know it's ``Row | None`` here.
-        return result  # type: ignore[no-any-return]
+        return self._require_conn().execute(sql, params).fetchone()  # type: ignore[no-any-return]
 
     def get_or_create_game(
         self, store: str, store_game_id: str, title: str, steam_app_id: int,

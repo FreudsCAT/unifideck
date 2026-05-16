@@ -73,6 +73,7 @@ class LaunchRPCMixin:
             app_id=app_id,
             **kw,
         )
+        return {"success": True}
 
     async def notify_game_stopped(
         self,
@@ -98,6 +99,7 @@ class LaunchRPCMixin:
             app_id=app_id,
             exit_code=exit_code,
         )
+        return {"success": True}
 
     def _resolve_app_id(
         self,
