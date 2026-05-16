@@ -127,7 +127,12 @@ def _resolve_store(registry: StoreRegistry, store_id: str) -> Any | None:
         )
         return None
     if store is None:
-        logger.info("[bootstrap] store %s has no instance — skipping injection", store_id)
+        # Defensive: ``registry.get`` is typed as returning a
+        # ``Store`` but legacy code paths could return None for a
+        # registered-but-not-built entry. Keep the guard; mypy
+        # flags it as unreachable but removing it would crash
+        # the bootstrap on edge cases.
+        logger.info("[bootstrap] store %s has no instance — skipping injection", store_id)  # type: ignore[unreachable]
         return None
     return store
 

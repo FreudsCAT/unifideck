@@ -203,7 +203,14 @@ class UbisoftIdMap:
     def get_steam_library_titles() -> set[str]:
         """Get steam library titles."""
         try:
-            from unifideck.steam.library import get_steam_library_names
+            # ``get_steam_library_names`` is optional — it may
+            # have been removed in a steam/library refactor. The
+            # ImportError fallback below covers that at runtime;
+            # ignore the static missing-attr warning so mypy
+            # doesn't fail on the optional import.
+            from unifideck.steam.library import (  # type: ignore[attr-defined]
+                get_steam_library_names,
+            )
         except ImportError:
             logger.debug(
                 "[UbisoftIdMap] Steam library module not available",

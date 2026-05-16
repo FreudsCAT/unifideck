@@ -176,23 +176,17 @@ class LauncherService:
         )
 
     async def _handle_auth_path(self, ctx: LaunchContext) -> Result:
-        """Route a non-launch context to the right auth handler.
+        """Route a non-launch context to the shared auth handler.
 
-        Two paths:
+        ``handle_store_auth`` is the canonical entry for all four
+        OAuth stores AND Ubisoft — UPC (Ubisoft Connect) runs in
+        a dedicated Wine prefix and the handler dispatches that
+        path internally, so we don't need a separate Ubisoft branch
+        here.
 
-        * **Ubisoft** — UPC (Ubisoft Connect) runs in its own
-          dedicated Wine prefix and doesn't use a browser, so it
-          gets a Ubisoft-specific handler rather than the generic
-          OAuth flow.
-        * **Other OAuth stores** (Epic/GOG/Amazon/Microsoft) —
-          delegated to the shared ``handle_store_auth`` which
-          launches Edge in a CDP-instrumented session.
-
-        Extracted from ``launch`` (lot 13a) to keep that
-        method's fan-out under the gate.
+        Extracted from ``launch`` (lot 13a) to keep that method's
+        fan-out under the gate.
         """
-        if ctx.auth_store == "ubisoft":
-            return await self._launch_ubisoft_auth(ctx)
         # OAuth shortcut path — delegate to auth.py
         from unifideck.launcher.flows.auth import handle_store_auth
         return await handle_store_auth(ctx, self._edge_browser)

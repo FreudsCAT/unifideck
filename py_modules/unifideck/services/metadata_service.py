@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from unifideck.core.types import Game
 from unifideck.core.types.events import Events
@@ -89,7 +89,10 @@ class MetadataService:
             if cached and isinstance(cached, dict):
                 # Simple TTL check could be implemented if cache returns timestamps
                 # Assuming CacheManager handles TTL or we trust it for now
-                return cached
+                # ``cache.get`` is typed Any — the isinstance narrowing
+                # makes this a real dict at runtime, anchor the type
+                # for mypy via cast.
+                return cast("dict[str, Any]", cached)
         except Exception as e:
             logger.debug("[MetadataService] Cache read failed for %s: %s", cache_key, e)
 

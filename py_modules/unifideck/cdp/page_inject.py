@@ -83,7 +83,11 @@ async def _inject_into_target(
             ws_url,
             heartbeat=10,
             autoping=True,
-            timeout=aiohttp.ClientTimeout(total=ws_timeout),
+            # aiohttp 3.10 introduced ClientWSTimeout for ws_connect; older
+            # releases accepted ClientTimeout. The runtime accepts both, but
+            # mypy uses the latest stub. ignore the arg-type to keep the call
+            # compatible across aiohttp versions.
+            timeout=aiohttp.ClientTimeout(total=ws_timeout),  # type: ignore[arg-type]
         ) as websocket:
             for source in sources:
                 if not source:

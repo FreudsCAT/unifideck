@@ -330,5 +330,8 @@ class EventBus:
             The canonical string form used as the dict key.
         """
         if isinstance(event, Events):
-            return event.value
+            # Cast through ``str`` to anchor the return type — StrEnum's
+            # ``.value`` is typed as the enum's underlying type which
+            # mypy widens to Any in some import paths.
+            return str(event.value)
         return str(event)

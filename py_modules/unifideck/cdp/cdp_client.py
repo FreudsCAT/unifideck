@@ -28,7 +28,7 @@ class CDPClient:
         self._response_timeout = float(
             get_cfg(config, "cdp.response_timeout_seconds", 10)
         )
-        self._ws = None
+        self._ws: Any = None  # WebSocketClientProtocol | None (annotated Any to avoid eager websockets import)
         self._request_id = 0
         self._pending: dict[int, asyncio.Future[Any]] = {}
         self._recv_task: asyncio.Task[Any] | None = None
@@ -100,7 +100,7 @@ class CDPClient:
                 aiohttp.ClientSession() as session,
                 session.get(url, timeout=5) as resp,
             ):
-                return cast("bool", resp.status == 200)
+                return resp.status == 200
         except Exception as e:
             logger.debug(
                 "[CDPClient] close_target failed: %s", e,

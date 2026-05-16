@@ -38,7 +38,7 @@ async def read_vdf(shortcuts_path: str) -> dict[str, Any]:
     def _read_sync() -> dict[str, Any]:
         try:
             with Path(shortcuts_path).open("rb") as f:
-                return vdf.binary_loads(f.read())  # type: ignore[no-any-return]  # vdf.binary_loads returns Any
+                return vdf.binary_loads(f.read())  # type: ignore[no-any-return,no-untyped-call]  # vdf.binary_loads is untyped + returns Any
         except Exception as e:
             logger.warning("[ShortcutPersistence] failed to read shortcuts.vdf: %s", e)
             return {"shortcuts": {}}
@@ -59,7 +59,7 @@ async def write_vdf(shortcuts_path: str, data: dict[str, Any]) -> None:
         tmp_path = shortcuts_path + ".tmp"
         try:
             with Path(tmp_path).open("wb") as f:
-                f.write(vdf.binary_dumps(data))
+                f.write(vdf.binary_dumps(data))  # type: ignore[no-untyped-call]
             Path(tmp_path).replace(shortcuts_path)
         except Exception:
             logger.exception("[ShortcutPersistence] failed to write shortcuts.vdf")

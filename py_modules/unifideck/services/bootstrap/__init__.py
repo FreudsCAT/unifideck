@@ -17,12 +17,14 @@ from __future__ import annotations
 from .constructor import bootstrap_services, build_service_subset
 from .paths import ServicePaths
 from .startup import start_async_services
+from .store_injector import inject_store_dependencies
 from .teardown import stop_all_services
 
 __all__ = [
     "ServicePaths",
     "bootstrap_services",
     "build_service_subset",
+    "inject_store_dependencies",
     "start_async_services",
     "stop_all_services",
 ]

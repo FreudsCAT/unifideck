@@ -42,10 +42,14 @@ from typing import Any, cast
 # `vdf` import succeeded (the normal case).
 logger = logging.getLogger(__name__)
 
+# vdf is loaded conditionally so the plugin can boot when the
+# library is missing (vendored under defaults/python at install
+# time). The Optional annotation tells mypy that None is a valid
+# fallback; call sites guard with ``if vdf is None`` before using.
 try:
     import vdf
 except ImportError:
-    vdf = None
+    vdf = None  # type: ignore[assignment]
 class VDFError(Exception):
     """Raised when VDF parsing or writing fails."""
 def load_shortcuts_vdf(path: str) -> dict[str, Any]:
@@ -61,7 +65,7 @@ def load_shortcuts_vdf(path: str) -> dict[str, Any]:
         return {"shortcuts": {}}
     try:
         with Path(path).open("rb") as f:
-            return cast("dict[str, Any]", vdf.binary_loads(f.read()))
+            return cast("dict[str, Any]", vdf.binary_loads(f.read()))  # type: ignore[no-untyped-call]
     except Exception as e:
         raise VDFError(f"failed to parse {path}: {e}") from e
 
@@ -93,7 +97,7 @@ def _atomic_write_tmp(tmp_path: str, data: dict[str, Any]) -> None:
     """
     try:
         with Path(tmp_path).open("wb") as f:
-            f.write(vdf.binary_dumps(data))
+            f.write(vdf.binary_dumps(data))  # type: ignore[no-untyped-call]
             f.flush()
             os.fsync(f.fileno())
     except Exception as e:

@@ -20,19 +20,19 @@ def http_post(url: str, data: dict[str, Any], headers: dict[str, Any]) -> dict[s
     req = urllib.request.Request(
         url, data=body, headers=headers, method="POST")
     with urllib.request.urlopen(req, timeout=15, context=_ssl("Microsoft OAuth — outdated Deck cert store")) as r:
-        return cast(dict, json.loads(r.read().decode()))
-def http_post_json(url: str, payload: dict, headers: dict) -> dict:
+        return cast(dict[str, Any], json.loads(r.read().decode()))
+def http_post_json(url: str, payload: dict[str, Any], headers: dict[str, Any]) -> dict[str, Any]:
     """Http post JSON."""
     body = json.dumps(payload).encode()
     req = urllib.request.Request(
         url, data=body, headers=headers, method="POST")
     with urllib.request.urlopen(req, timeout=20, context=_ssl("Microsoft OAuth — outdated Deck cert store")) as r:
-        return cast(dict, json.loads(r.read().decode()))
-def http_get(url: str, headers: dict) -> dict:
+        return cast(dict[str, Any], json.loads(r.read().decode()))
+def http_get(url: str, headers: dict[str, Any]) -> dict[str, Any]:
     """Http get."""
     req = urllib.request.Request(url, headers=headers)
     with urllib.request.urlopen(req, timeout=15, context=_ssl("Microsoft OAuth — outdated Deck cert store")) as r:
-        return cast(dict, json.loads(r.read().decode()))
+        return cast(dict[str, Any], json.loads(r.read().decode()))
 
 def build_xbl_chain(
     access_token: str,
