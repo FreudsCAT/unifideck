@@ -38,7 +38,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from unifideck.event_bus import EventBus
 from unifideck.steam.owned_games import get_owned_titles as _steam_owned_titles
@@ -70,6 +70,7 @@ class SyncService(_SyncQueriesMixin):
         registry: StoreRegistry,
         bus: EventBus,
         config: ConfigManager | None = None,
+        launcher_path: str = "",
     ) -> None:
         """Initialise with the store registry + event bus + optional config.
 
@@ -87,11 +88,31 @@ class SyncService(_SyncQueriesMixin):
         self._registry = registry
         self._bus = bus
         self._config = config
+        # Absolute path to ``bin/unifideck-launcher``. Combined
+        # with the game title to produce a stable Steam-shortcut
+        # AppID via ``generate_app_id``. The launcher path never
+        # changes once the plugin is installed, so the AppID is
+        # invariant across install / uninstall transitions — that
+        # invariant is load-bearing for ShortcutService.reconcile
+        # (which keys on app_id to detect orphans) and for
+        # ArtworkService.fetch_artwork (which writes covers to
+        # ``{grid_dir}/{app_id}p.jpg``).
+        self._launcher_path = launcher_path
         self._lock = asyncio.Lock()
         self._cancel_event = asyncio.Event()
         self._all_games: dict[str, list[Game]] = {}
         self._last_sync_time: float | None = None
         self._current_store: str | None = None
+        # Per-sync-run progress tracker, consumed by the frontend's
+        # 500ms polling loop via ``get_sync_progress → to_dict()``.
+        # Ported from staging's ``SyncProgress`` class (phase-range
+        # allocation, per-phase sub-counters, i18n labels).
+        from unifideck.core.sync_progress import SyncProgress
+        self._progress = SyncProgress()
+        self._post_sync_pending: set[str] = set()
+        self._bus.on(
+            Events.POST_SYNC_PHASE_CHANGED, self._on_post_sync_phase,
+        )
 
     async def sync_all(self, *, force: bool = False) -> SyncResult:
         """Run a full multi-store sync, rejecting concurrent calls by default.
@@ -186,6 +207,8 @@ class SyncService(_SyncQueriesMixin):
         started = time.monotonic()
         available_stores = self._registry.available()
         store_names = [s.store_name for s in available_stores]
+        self._progress.start_fetching(len(available_stores))
+        self._bus.set_sync_progress(self._progress)
         await self._bus.emit(
             Events.SYNC_STARTED,
             stores=store_names,
@@ -216,7 +239,22 @@ class SyncService(_SyncQueriesMixin):
         """
         duration_ms = int((time.monotonic() - started) * 1000)
         libraries = await self._apply_dedup_and_emit(libraries)
+        self._populate_app_ids(libraries)
         self._all_games = libraries
+        total_games = sum(len(g) for g in libraries.values())
+        self._progress.set_library_totals(total_games)
+        # Signal the artwork phase BEFORE emitting SYNC_COMPLETE so
+        # the frontend's polling loop sees the phase transition when
+        # the bus event fires — the progress bar advances to 60%
+        # immediately and ticks up as ArtworkService calls
+        # increment_artwork() via bus.get_sync_progress().
+        self._progress.start_artwork(total_games, "sync.checkingArtwork")
+        # Both artwork and metadata report completion independently
+        # via POST_SYNC_PHASE_CHANGED(active=False). Track which
+        # phases are still pending — only mark_complete when BOTH
+        # are done (prevents premature 100% if metadata finishes
+        # before artwork, which can happen on any Deck).
+        self._post_sync_pending = {"artwork", "metadata"}
         self._last_sync_time = time.time()
         result = self._aggregate_results(
             libraries,
@@ -232,6 +270,46 @@ class SyncService(_SyncQueriesMixin):
             duration_ms=duration_ms,
         )
         return result
+
+    def _populate_app_ids(
+        self, libraries: dict[str, list[Game]],
+    ) -> None:
+        """Assign every ``Game`` a stable Steam-shortcut AppID.
+
+        Per-store sync methods construct ``Game`` records with
+        ``app_id=0`` (the dataclass default) because the AppID
+        depends on plugin-install state they don't know about.
+        We fill it in here, once, so every downstream consumer
+        (ShortcutService.reconcile, ArtworkService.fetch_artwork,
+        MetadataService.fetch_appdetails_for_game, the frontend
+        SteamStorePatcher) sees a populated id.
+
+        The AppID is ``crc32(launcher_path + title) | 0x80000000``
+        — see :func:`generate_app_id`. Anchoring on the launcher
+        path (not the per-game ``exe_path``) keeps the id stable
+        when the user installs or uninstalls the game.
+        """
+        if not self._launcher_path:
+            logger.warning(
+                "[SyncService] launcher_path unset — game.app_id "
+                "will not be populated, shortcuts cannot be created",
+            )
+            return
+        from unifideck.services.shortcut.games_map import generate_app_id
+
+        filled = 0
+        for games in libraries.values():
+            for game in games:
+                if game.app_id:
+                    continue
+                game.app_id = generate_app_id(
+                    self._launcher_path, game.title,
+                )
+                filled += 1
+        if filled:
+            logger.info(
+                "[SyncService] populated app_id for %d games", filled,
+            )
 
     async def _sync_no_stores_shortcircuit(self) -> SyncResult:
         """Emit SYNC_COMPLETE with an empty payload and return.
@@ -450,24 +528,44 @@ class SyncService(_SyncQueriesMixin):
             )
             return [], str(e)
 
-    async def _emit_progress(self, store_name: str, idx: int, total: int) -> None:
-        """Emit ``SYNC_PROGRESS`` with the i/N progress payload.
+    def _on_post_sync_phase(self, **kwargs: Any) -> None:
+        """Handle POST_SYNC_PHASE_CHANGED (completion only).
 
-        Progress is integer percent (0-100); guards
-        against division-by-zero when ``total`` is 0
-        (yields ``progress=0``).
-
-        Args:
-            store_name: store currently being processed.
-            idx: zero-based index in the store list.
-            total: total store count.
+        Phase starts are triggered by SyncService directly.
+        Completions are tracked in ``_post_sync_pending`` —
+        only when BOTH artwork and metadata report done do we
+        mark_complete(). This prevents a race where metadata
+        finishes before artwork (both tasks are spawned
+        concurrently at SYNC_COMPLETE time).
         """
+        phase = kwargs.get("phase")
+        active = bool(kwargs.get("active", True))
+        if active:
+            return
+        total = kwargs.get("total", 0)
+        if phase == "artwork":
+            self._progress.artwork_synced = total
+            self._progress.start_metadata(total, "sync.extractingMetadata")
+        elif phase == "metadata":
+            self._progress.metadata_synced = total
+        pending = getattr(self, "_post_sync_pending", set())
+        pending.discard(phase)
+        if not pending:
+            self._progress.mark_complete()
+            self._bus.set_sync_progress(None)
+
+    async def _emit_progress(self, store_name: str, idx: int, total: int) -> None:
+        """Emit ``SYNC_PROGRESS`` — updates the phase tracker + fires event."""
+        total_games = sum(len(g) for g in self._all_games.values())
+        self._progress.start_store_sync(store_name, idx, total)
         await self._bus.emit(
             Events.SYNC_PROGRESS,
             store=store_name,
-            progress=int((idx / total) * 100) if total else 0,
-            current=idx + 1,
-            total=total,
+            progress_percent=self._progress.progress_percent,
+            total_games=total_games,
+            synced_games=total_games,
+            current_game=self._progress.current_game,
+            status=self._progress.status,
         )
 
     def _aggregate_results(

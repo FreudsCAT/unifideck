@@ -40,6 +40,11 @@ class Events(StrEnum):
     SYNC_COMPLETE = "sync_complete"
     SYNC_FAILED = "sync_failed"
     SYNC_CANCELLED = "sync_cancelled"
+    # Post-sync enrichment phases — emitted by ArtworkService and
+    # MetadataService so the frontend progress bar stays alive
+    # through artwork downloads + metadata extraction. Payload:
+    #  { phase: "artwork"|"metadata", active: bool, total: int|None, done: int|None }
+    POST_SYNC_PHASE_CHANGED = "post_sync_phase_changed"
 
     # Store auth lifecycle
     STORE_AUTH_STARTED = "store_auth_started"
@@ -232,6 +237,15 @@ class Events(StrEnum):
     # declared — the call was a silent no-op (mypy attr-defined).
     # Payload fields: app_id (int, signed).
     SHORTCUT_REMOVED = "shortcut_removed"
+
+    # Emitted by ShortcutService once a bulk reconcile (post-sync)
+    # finishes. Carries the per-batch counters so the frontend can
+    # decide whether to prompt the user for a Steam restart (any
+    # ``added`` > 0 or ``removed`` > 0 invalidates Steam's in-memory
+    # copy of shortcuts.vdf — without a restart, Steam overwrites
+    # our changes on its next shutdown). Payload fields:
+    #   added (int), removed (int), kept (int), total (int)
+    SHORTCUT_RECONCILE_COMPLETE = "shortcut_reconcile_complete"
 
     # ── UI toast notification ────────────────────────────────────
     # Generic frontend toast trigger. Emitted by any service that

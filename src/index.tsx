@@ -31,6 +31,7 @@ import { QuickAccessPanel } from "./views/QuickAccessPanel";
 import { applyAppDetailsPatch } from "./views/AppDetailsPatch";
 import { applyLibraryPatch } from "./lib/steam-bridge/library-patch";
 import { startCollectionManager } from "./lib/steam-bridge/collection-manager";
+import { applyAppStorePatch } from "./lib/steam-bridge/app-store-patcher";
 import { runBootstrapTasks } from "./bootstrap-tasks";
 import { runTeardown, type TeardownHandles } from "./teardown";
 // Eager translation load — Decky's UI mounts before any
@@ -66,6 +67,16 @@ export default definePlugin(() => {
   } catch (e) {
     console.error("[Unifideck] collection manager start failed:", e);
   }
+  // Spoof non-Steam Unifideck shortcuts as Steam Store games so
+  // Steam's own UI surfaces (library tile, AppDetails page,
+  // friend presence) render real cover art + descriptions instead
+  // of the bare shortcut skeleton. Async — needs to fetch the
+  // mappings + appdetails caches from the backend before patching.
+  void applyAppStorePatch().then((handle) => {
+    handles.appStorePatch = handle;
+  }).catch((e) => {
+    console.error("[Unifideck] app-store patch failed:", e);
+  });
   // Bootstrap tasks (language, account switch, lifetime
   // listener) run async ; the lifetime listener handle is
   // captured for teardown when its promise resolves.

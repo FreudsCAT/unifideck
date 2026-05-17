@@ -298,24 +298,54 @@ class _GamesMapMixin:
     def _is_stale_managed_shortcut(
         entry: Any,
         valid_app_ids: set[int],
+        valid_stores: set[str] | None = None,
     ) -> bool:
-        """True if ``entry`` is a Unifideck-managed shortcut that no
-        longer corresponds to any game in the current library.
+        """True if ``entry`` is a Unifideck-managed shortcut no longer needed.
 
-        Filters out non-dict entries (corrupt VDF), entries without
-        a ``tags`` dict (user-created), entries tagged ``auth-*``
-        (used by the OAuth flows and never reconciled here), and
-        entries whose ``appid`` is still in ``valid_app_ids``.
+        Identification is **LaunchOptions-based** (regex on
+        ``"<store>:<game_id>"``) rather than tag-based — Steam
+        can strip our ``UNIFIDECK_TAG`` on update / by user
+        edit, but it preserves ``LaunchOptions`` reliably. Tag
+        check is kept as a secondary signal for very old entries
+        that predate the LaunchOptions convention.
+
+        Auth shortcuts (``ubisoft:upc-auth`` and any
+        ``auth-*``-tagged entry) are explicitly preserved —
+        their lifecycle is owned by ``services/shortcut/shortcut.py``.
+
+        When ``valid_stores`` is supplied, only sweep shortcuts
+        whose store prefix is in that set — this is how staging
+        avoided nuking the user's Epic shortcuts after they
+        logged out of Epic.
         """
+        from .launch_options import get_full_id, get_store_prefix
+
         if not isinstance(entry, dict):
             return False
+        launch = entry.get("LaunchOptions", "") or ""
+        full_id = get_full_id(launch) if isinstance(launch, str) else None
+        # Auth shortcut sentinel — never delete.
+        if full_id == "ubisoft:upc-auth":
+            return False
         tags = entry.get("tags", {})
-        if not isinstance(tags, dict):
+        tags_dict = tags if isinstance(tags, dict) else {}
+        is_auth_tag = any(
+            str(t).startswith("auth-") for t in tags_dict.values()
+        )
+        if is_auth_tag:
             return False
-        is_managed = any(t == UNIFIDECK_TAG for t in tags.values())
-        is_auth = any(str(t).startswith("auth-") for t in tags.values())
-        if not is_managed or is_auth:
+        is_managed_by_options = full_id is not None
+        is_managed_by_tag = any(
+            t == UNIFIDECK_TAG for t in tags_dict.values()
+        )
+        if not (is_managed_by_options or is_managed_by_tag):
             return False
+        # When ``valid_stores`` is specified, leave shortcuts for
+        # offline / disabled stores untouched.
+        if valid_stores is not None and full_id is not None:
+            store = get_store_prefix(launch)
+            if store and store not in valid_stores:
+                return False
         return entry.get("appid") not in valid_app_ids
 
     async def reconcile(self: Any, games: list[Game]) -> dict[str, int]:
@@ -349,10 +379,28 @@ class _GamesMapMixin:
         # raised AttributeError at runtime, but the set comprehensions
         # below were never exercised by the test suite. mypy strict
         # surfaced the drift.
+        from .registry import load_registry, save_registry
+
         valid_keys = {f"{g.store}:{g.store_game_id}" for g in games}
+        # AppID is keyed on the *launcher* path, not the per-game
+        # exe — anchoring on the launcher keeps the id stable
+        # across install / uninstall transitions. Falls back to
+        # ``g.app_id`` (populated by ``SyncService._populate_app_ids``)
+        # so we never miss an entry.
+        launcher = getattr(self, "_launcher_path", "") or ""
         valid_app_ids = {
-            generate_app_id(g.exe_path or "", g.title) for g in games
+            g.app_id or generate_app_id(launcher, g.title) for g in games
         }
+        # Only sweep shortcuts whose store prefix is present in
+        # ``games``. If the user is logged out of Epic this run,
+        # the games list won't contain any epic: entries, so we
+        # leave Epic shortcuts untouched (staging behaviour).
+        valid_stores = {g.store for g in games}
+
+        # Load the persistent registry once for the whole sweep —
+        # passed into phase 2 for reclamation, written back after.
+        registry = load_registry()
+        registry_dirty = False
 
         # Phase 1 — prune the games.map entries that no longer
         # correspond to a game in the new library.
@@ -362,22 +410,34 @@ class _GamesMapMixin:
         # entry and a shortcuts.vdf entry.
         self._shortcuts = self._ensure_shortcuts_root(self._shortcuts)
         shortcuts_dict = self._shortcuts["shortcuts"]
-        added, kept = self._reconcile_phase_sync_games(
-            games, shortcuts_dict,
+        added, kept, reclaimed = self._reconcile_phase_sync_games(
+            games, shortcuts_dict, registry,
         )
+        if added > 0 or reclaimed > 0:
+            registry_dirty = True
 
-        # Phase 3 — drop shortcuts.vdf entries that are tagged
-        # as Unifideck-managed but whose app_id is no longer in
-        # the current library (e.g. game uninstalled outside
-        # Unifideck's knowledge).
+        # Phase 3 — drop shortcuts.vdf entries that look
+        # Unifideck-managed (by LaunchOptions or legacy tag) but
+        # whose app_id is no longer in the current library.
+        # Scoped to ``valid_stores`` so we never touch shortcuts
+        # belonging to currently-offline stores.
         removed += self._reconcile_phase_drop_stale(
-            shortcuts_dict, valid_app_ids,
+            shortcuts_dict, valid_app_ids, valid_stores,
         )
 
-        if added > 0 or removed > 0:
+        if added > 0 or removed > 0 or reclaimed > 0:
             await self._save_all()
+        if registry_dirty:
+            save_registry(registry)
 
-        return {"added": added, "removed": removed, "kept": kept}
+        logger.info(
+            "[ShortcutService] reconcile: %d games → added=%d kept=%d removed=%d reclaimed=%d",
+            len(games), added, kept, removed, reclaimed,
+        )
+        return {
+            "added": added, "removed": removed,
+            "kept": kept, "reclaimed": reclaimed,
+        }
 
     # ─────────────────────────────────────────────────────────────
     # Reconcile phases — extracted to flatten the CC of reconcile.
@@ -399,24 +459,60 @@ class _GamesMapMixin:
         self: Any,
         games: list[Game],
         shortcuts_dict: dict[str, Any],
-    ) -> tuple[int, int]:
+        registry: dict[str, Any],
+    ) -> tuple[int, int, int]:
         """Phase 2: ensure each game has both a map entry and a VDF entry.
 
-        Returns ``(added, kept)`` — number of new shortcuts
-        appended vs left in place. The ``games.map`` is rewritten
-        unconditionally so a metadata-only refresh (e.g. work_dir
-        moved) propagates without churning the VDF.
+        Returns ``(added, kept, reclaimed)`` — number of new
+        shortcuts appended, left in place, and rescued from a
+        previously-orphaned ``shortcuts.vdf`` row (Steam mangled
+        the LaunchOptions, but we recognised the AppID from the
+        persistent registry).  The ``games.map`` is rewritten
+        unconditionally so a metadata-only refresh (e.g.
+        ``work_dir`` moved) propagates without churning the VDF.
         """
+        from .registry import get_registered_appid, register
+
         added = 0
         kept = 0
+        reclaimed = 0
+        launcher = getattr(self, "_launcher_path", "") or ""
         for game in games:
-            key = f"{game.store}:{game.app_id}"
+            # ``store_game_id`` is the store-native id; index the
+            # games.map by ``store:store_game_id`` so the launcher
+            # can look up the install dir / exe at runtime.
+            key = f"{game.store}:{game.store_game_id}"
+            launch_options = key
             exe = game.exe_path or ""
-            app_id = generate_app_id(exe, game.title)
+            # Prefer the AppID populated by SyncService (stable
+            # across install state). Fall back to deriving one
+            # from launcher_path + title so the mixin still works
+            # if used without SyncService.
+            app_id = game.app_id or generate_app_id(launcher, game.title)
             self._games_map[key] = GameMapEntry(
                 exe=exe, work_dir=game.install_path or "",
             )
-            if self._find_existing_shortcut_key(shortcuts_dict, app_id) is None:
+            # Reclamation: if we have a registered AppID for this
+            # game from a prior install and that AppID exists in
+            # shortcuts.vdf as an orphan (Steam wiped its tags or
+            # LaunchOptions), rewrite the orphan in-place. Keeps
+            # the AppID stable so Steam's cached artwork lines up.
+            registered = get_registered_appid(registry, launch_options)
+            if registered is not None:
+                ord_key = self._find_existing_shortcut_key(
+                    shortcuts_dict, registered,
+                )
+                if ord_key is not None:
+                    self._reclaim_orphan(
+                        shortcuts_dict[ord_key], game, registered,
+                    )
+                    reclaimed += 1
+                    register(registry, launch_options, registered, game.title)
+                    continue
+            existing_key = self._find_existing_shortcut_key(
+                shortcuts_dict, app_id,
+            )
+            if existing_key is None:
                 new_key = self._allocate_new_shortcut_key(shortcuts_dict)
                 shortcuts_dict[new_key] = self._build_shortcut_entry(
                     game, app_id,
@@ -424,12 +520,49 @@ class _GamesMapMixin:
                 added += 1
             else:
                 kept += 1
-        return added, kept
+            register(registry, launch_options, app_id, game.title)
+        return added, kept, reclaimed
+
+    def _reclaim_orphan(
+        self: Any, entry: dict[str, Any], game: Game, app_id: int,
+    ) -> None:
+        """Rewrite ``entry`` in place so it points at ``game`` again.
+
+        Preserves the existing ``appid`` (so Steam's cached
+        artwork survives) while restoring the canonical
+        Unifideck shape: launcher Exe, ``store:game_id`` launch
+        options, Unifideck tags, current title.
+
+        Any user-appended LaunchOptions params (``LSFG=1``,
+        ``%command%``, MangoHud, …) get stitched back in via
+        :func:`preserve_user_params`.
+        """
+        from .launch_options import preserve_user_params
+
+        launcher = getattr(self, "_launcher_path", "") or ""
+        current_options = entry.get("LaunchOptions", "")
+        target = f"{game.store}:{game.store_game_id}"
+        preserved = preserve_user_params(
+            current_options if isinstance(current_options, str) else "",
+            target,
+        )
+        entry["appid"] = app_id
+        entry["AppName"] = game.title
+        if launcher:
+            entry["Exe"] = f'"{launcher}"'
+        entry["LaunchOptions"] = preserved
+        entry["icon"] = game.icon_url or entry.get("icon", "") or ""
+        entry["tags"] = {
+            "0": UNIFIDECK_TAG,
+            "1": game.store,
+            "2": "" if game.installed else "Not Installed",
+        }
 
     def _reconcile_phase_drop_stale(
         self: Any,
         shortcuts_dict: dict[str, Any],
         valid_app_ids: set[int],
+        valid_stores: set[str] | None = None,
     ) -> int:
         """Phase 3: delete Unifideck-managed shortcuts no longer needed.
 
@@ -444,7 +577,9 @@ class _GamesMapMixin:
         """
         keys_to_delete = [
             vdf_key for vdf_key, entry in shortcuts_dict.items()
-            if self._is_stale_managed_shortcut(entry, valid_app_ids)
+            if self._is_stale_managed_shortcut(
+                entry, valid_app_ids, valid_stores,
+            )
         ]
         for key in keys_to_delete:
             del shortcuts_dict[key]
@@ -453,25 +588,38 @@ class _GamesMapMixin:
     def _build_shortcut_entry(self: Any, game: Game, app_id: int) -> dict[str, Any]:
         """Construct a shortcuts.vdf entry dict for ``game``.
 
-        Populates ``appid``, ``AppName``, ``Exe``, ``StartDir``,
-        ``tags`` (including ``UNIFIDECK_TAG``). Arguments that
-        land in shortcuts.vdf are quoted/escaped by the serialiser
-        downstream — no shell-escaping here.
-        """
-        # Exe should be in quotes for steam
-        exe_path = f'"{game.exe_path}"' if game.exe_path else '""'
-        # ``start_dir`` is the working directory Steam cd's into
-        # before exec'ing the binary — same as the install dir.
-        start_dir = f'"{game.install_path}"' if game.install_path else '""'
+        Every Unifideck-managed shortcut points its ``Exe`` at the
+        plugin's ``bin/unifideck-launcher`` script and stores the
+        ``"<store>:<store_game_id>"`` token in ``LaunchOptions``.
+        When the user clicks the Steam tile, the launcher reads
+        ``LaunchOptions``, looks up the install dir in
+        ``games.map``, and either runs the game (installed) or
+        kicks off the install flow (not installed). Per staging
+        UX — shortcuts exist for the user's entire library, not
+        just installed games.
 
+        Anchoring on the launcher (not on the per-game exe) is
+        what makes the shortcut AppID stable across install /
+        uninstall transitions — Steam keys covers, playtime,
+        compat tool settings, etc. on the AppID, and changing
+        the AppID throws all of that away.
+        """
+        launcher = getattr(self, "_launcher_path", "") or ""
+        exe_quoted = f'"{launcher}"' if launcher else '""'
+        # StartDir is the working directory Steam cd's into
+        # before exec'ing. The launcher doesn't care so the
+        # install_path is a fine default; empty when unknown.
+        start_dir = f'"{game.install_path}"' if game.install_path else '""'
+        launch_options = f"{game.store}:{game.store_game_id}"
+        cover_icon = game.icon_url or ""
         return {
             "appid": app_id,
             "AppName": game.title,
-            "Exe": exe_path,
+            "Exe": exe_quoted,
             "StartDir": start_dir,
-            "icon": "",
+            "icon": cover_icon,
             "ShortcutPath": "",
-            "LaunchOptions": "",
+            "LaunchOptions": launch_options,
             "IsHidden": 0,
             "AllowDesktopConfig": 1,
             "AllowOverlay": 1,
@@ -484,5 +632,9 @@ class _GamesMapMixin:
             "tags": {
                 "0": UNIFIDECK_TAG,
                 "1": game.store,
+                # Staging tagged uninstalled games "Not Installed"
+                # so users can filter on it. Empty string for
+                # installed games keeps the tag dict shape stable.
+                "2": "" if game.installed else "Not Installed",
             },
         }

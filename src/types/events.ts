@@ -23,6 +23,10 @@ export const Events = {
   SYNC_FAILED: "sync_failed",
   SYNC_CANCELLED: "sync_cancelled",
   SYNC_SKIPPED: "sync_skipped",
+  // Emitted by ShortcutService once reconcile finishes; payload
+  // carries {added, removed, kept, total} so the UI can decide
+  // whether to prompt for a Steam restart.
+  SHORTCUT_RECONCILE_COMPLETE: "shortcut_reconcile_complete",
   // Downloads
   DOWNLOAD_QUEUED: "download_queued",
   DOWNLOAD_STARTED: "download_started",

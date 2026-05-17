@@ -38,6 +38,7 @@ import {
 import { SteamBridge, type RouterPatchHandle } from "../lib/steam-bridge";
 import { findInReactTree } from "../lib/steam-bridge/react-tree";
 import { getGameStateVersion } from "../lib/game-state-version";
+import { injectGameToAppinfo } from "../lib/steam-bridge/app-store-patcher";
 import { InjectedSubtreeProvider } from "../contexts/InjectedSubtreeProvider";
 import { PlaySectionWrapper } from "../components/play";
 import { GameInfoPanel } from "../components/info";
@@ -101,6 +102,12 @@ function injectIntoTree(ret: unknown): void {
 
   // Only override non-Steam shortcuts (appId > 2 billion).
   if (!(appId > 2_000_000_000)) return;
+
+  // Trigger Steam-Store metadata spoofing for this shortcut so
+  // Steam's own UI (capsule image, tile, presence) renders the
+  // matched Steam game. Fire-and-forget — the patcher reads from
+  // its in-memory cache; the backend RPC is a no-op stub.
+  void injectGameToAppinfo(appId);
 
   const innerContainer = findInReactTree<NodeWithChildren>(
     ret,

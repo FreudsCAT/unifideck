@@ -27,15 +27,16 @@ logger = logging.getLogger(__name__)
 # fallback when the URL gives no format hint, and as the
 # "must-have" anchor for logos (where PNG is mandatory).
 _KIND_SUFFIX = {
-    "grid": "p.jpg",
-    "hero": "_hero.jpg",
-    "logo": "_logo.png",
-    "icon": "_icon.jpg",
+    "grid": "p.jpg",        # portrait box art (600x900)
+    "grid_l": ".jpg",       # landscape header (920x430)
+    "hero": "_hero.jpg",    # widescreen banner
+    "logo": "_logo.png",    # transparent logo
+    "icon": "_icon.jpg",    # small square icon
 }
 
 # Kinds for which Steam Deck accepts both .jpg and .png.
 # Logo is excluded: Steam needs PNG (alpha overlay).
-_FORMAT_FLEXIBLE_KINDS = frozenset({"grid", "hero", "icon"})
+_FORMAT_FLEXIBLE_KINDS = frozenset({"grid", "grid_l", "hero", "icon"})
 
 
 def _url_extension(url: str) -> str:
@@ -166,11 +167,15 @@ async def has_artwork(grid_dir: str, app_id: int) -> bool:
     """
     from unifideck.core.io import async_file_ops as aio
 
+    # Steam stores shortcuts under their *unsigned* 32-bit AppID.
+    # ``app_id`` arrives signed; convert before resolving filenames
+    # so we don't miss covers that were saved under the unsigned key.
+    unsigned = app_id if app_id >= 0 else app_id + 0x100000000
     grid_path = Path(grid_dir)
-    grid_jpg = str(grid_path / f"{app_id}p.jpg")
-    grid_png = str(grid_path / f"{app_id}p.png")
-    hero_jpg = str(grid_path / f"{app_id}_hero.jpg")
-    hero_png = str(grid_path / f"{app_id}_hero.png")
+    grid_jpg = str(grid_path / f"{unsigned}p.jpg")
+    grid_png = str(grid_path / f"{unsigned}p.png")
+    hero_jpg = str(grid_path / f"{unsigned}_hero.jpg")
+    hero_png = str(grid_path / f"{unsigned}_hero.png")
     grid_ok = (await aio.is_file(grid_jpg) or await aio.is_file(grid_png))
     hero_ok = (await aio.is_file(hero_jpg) or await aio.is_file(hero_png))
 
@@ -254,9 +259,15 @@ async def _fetch_url_bytes(url: str, timeout: int) -> bytes | None:  # noqa: ASY
     """
     try:
         import aiohttp
+        # Per staging: the Deck's cert store is regularly out
+        # of date and HTTPS downloads fail on TLS verification
+        # if we don't explicitly opt out. Every image-fetch path
+        # in staging (``download_image``, all store_metadata
+        # helpers) uses ``ssl=False`` for this reason.
+        connector = aiohttp.TCPConnector(ssl=False)
         client_timeout = aiohttp.ClientTimeout(total=timeout)
         async with (
-            aiohttp.ClientSession() as session,
+            aiohttp.ClientSession(connector=connector, timeout=client_timeout) as session,
             session.get(url, timeout=client_timeout) as resp,
         ):
             if resp.status != 200:
@@ -307,7 +318,15 @@ async def download_and_save(
         disk. False on any failure mode. Never raises.
     """
     suffix = _suffix_for(kind, url)
-    target = str(Path(grid_dir) / f"{app_id}{suffix}")
+    # Steam stores grid filenames under the *unsigned* 32-bit
+    # AppID. Convert here so callers can pass either signed
+    # (``Game.app_id`` as produced by ``generate_app_id``) or
+    # unsigned interchangeably — and so the filenames match what
+    # ``has_artwork`` checks for. Mismatch caused every cover to
+    # be re-fetched on every sync and Steam's UI to find none of
+    # them on disk.
+    unsigned = app_id if app_id >= 0 else app_id + 0x100000000
+    target = str(Path(grid_dir) / f"{unsigned}{suffix}")
     data = await _fetch_url_bytes(url, timeout)
     if data is None:
         return False

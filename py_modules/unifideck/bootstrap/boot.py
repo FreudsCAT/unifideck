@@ -91,7 +91,7 @@ async def boot_plugin(
         plugin, decky_plugin_dir, user_config_path_resolver,
     )
     _boot_layer4_stores(plugin, decky_plugin_dir)
-    await _boot_layer5_services(plugin, pipeline)
+    await _boot_layer5_services(plugin, pipeline, decky_plugin_dir)
     logger.info("[Unifideck] plugin loaded")
 
 
@@ -180,7 +180,20 @@ async def _boot_config_and_validate(
 def _boot_layer4_stores(plugin: Any, decky_plugin_dir: str) -> None:
     """Layer 4 — StoreRegistry + SyncService + auto-discovery."""
     plugin.registry = StoreRegistry(plugin.bus)
-    plugin.sync_service = SyncService(plugin.registry, plugin.bus)
+    # SyncService needs the launcher path so it can assign each
+    # game a stable Steam-shortcut AppID (deterministic from
+    # ``crc32(launcher_path + title)`` — survives install /
+    # uninstall transitions). Without this, every game's
+    # ``app_id`` stays at the per-store-default ``0`` and
+    # downstream ShortcutService.reconcile + ArtworkService can't
+    # key on it.
+    launcher_path = str(
+        Path(decky_plugin_dir) / "bin" / "unifideck-launcher",
+    )
+    plugin.sync_service = SyncService(
+        plugin.registry, plugin.bus, launcher_path=launcher_path,
+        config=plugin.config,
+    )
     stores_dir = str(
         Path(decky_plugin_dir) / "py_modules" / "unifideck" / "stores",
     )
@@ -193,7 +206,9 @@ def _boot_layer4_stores(plugin: Any, decky_plugin_dir: str) -> None:
     )
 
 
-async def _boot_layer5_services(plugin: Any, pipeline: Any) -> None:
+async def _boot_layer5_services(
+    plugin: Any, pipeline: Any, decky_plugin_dir: str,
+) -> None:
     """Layer 5 — infrastructure services + async workers.
 
     Three phases :
@@ -211,7 +226,7 @@ async def _boot_layer5_services(plugin: Any, pipeline: Any) -> None:
     """
     plugin.services = bootstrap_services(
         plugin.bus, plugin.registry, plugin.cache, plugin.config,
-        pipeline,
+        pipeline, plugin_dir=decky_plugin_dir,
     )
     inject_store_dependencies(plugin.registry, plugin.services)
     await start_async_services(plugin.services)

@@ -46,6 +46,10 @@ export const rpcRoutes = {
   getStorageLocations:     "get_storage_locations",
   getGogGameLanguages:     "get_gog_game_languages",
   getProtondbCache:        "get_protondb_cache",
+  // Steam Store spoofing (StoreRPCMixin)
+  getRealSteamAppidMappings: "get_real_steam_appid_mappings",
+  getSteamMetadataCache:     "get_steam_metadata_cache",
+  injectGameToAppinfo:       "inject_game_to_appinfo",
   // Library cleanup (SyncRPCMixin)
   performFullCleanup:      "perform_full_cleanup",
   // UI helpers (UIRPCMixin)

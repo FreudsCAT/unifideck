@@ -58,15 +58,17 @@ function readFromCache(game: Game): ScoresPayload {
 
 export const GameInfoScores: FC<Props> = ({ game }) => {
   const { t } = useTranslation();
-  const fetchMeta = useRPC<[number], Game & ScoresPayload>(
+  // Backend signature is (store: str, store_game_id: str) — the
+  // dataclass field name predates the TS rename to `id`.
+  const fetchMeta = useRPC<[string, string], Game & ScoresPayload>(
     rpcRoutes.getGameMetadata,
   );
   const [scores, setScores] = useState<ScoresPayload | null>(() => readFromCache(game));
 
   useEffect(() => {
     setScores(readFromCache(game));
-    if (game.app_id == null) return;
-    fetchMeta(game.app_id).then(
+    if (!game.store || !game.id) return;
+    fetchMeta(game.store, game.id).then(
       (full) => setScores((prev) => ({
         metacritic_score: full.metacritic_score,
         protondb_tier: full.protondb_tier ?? prev?.protondb_tier,
@@ -74,7 +76,7 @@ export const GameInfoScores: FC<Props> = ({ game }) => {
       })),
       () => { /* keep the cached fallback */ },
     );
-  }, [fetchMeta, game.app_id, game.title]);
+  }, [fetchMeta, game.store, game.id, game.title]);
 
   if (!scores
     || (!scores.metacritic_score && !scores.protondb_tier && !scores.deck_status)) {

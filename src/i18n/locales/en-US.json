@@ -147,7 +147,8 @@
     "cancelSync": "Cancel Sync",
     "retryStatusCheck": "Retry Status Check",
     "gamesSynced": "{{synced}} / {{total}} games synced",
-    "artworkDownloaded": "{{synced}} / {{total}} artwork downloaded",
+    "artworkDownloaded": "{{synced}} / {{total}} artwork covers downloaded",
+    "metadataExtracted": "{{synced}} / {{total}} metadata records extracted",
     "steamMetadataDownloaded": "Steam metadata: {{synced}} / {{total}}",
     "unifidbMetadataDownloaded": "unifiDB metadata: {{synced}} / {{total}}",
     "metacriticMetadataDownloaded": "Metacritic data: {{synced}} / {{total}}",
@@ -386,7 +387,7 @@
     "retryingMissingArtwork": "Retrying {{synced}} / {{total}} games with missing artwork...",
     "savingShortcuts": "Saving shortcuts...",
     "completed": "Sync completed! Added {{added}}, Art {{artwork}}.",
-    "fetchingStore": "Fetching {{store}}...",
+    "extractingMetadata": "Extracting metadata for {{game}}...",
     "cooldown": "Wait {{secs}}s",
     "artworkPhase": "Artwork {{done}} / {{total}}"
   },

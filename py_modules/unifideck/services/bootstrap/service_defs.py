@@ -54,7 +54,9 @@ _SERVICE_DEFS: tuple[tuple[Any, ...], ...] = (
     (
         "shortcut", "unifideck.services.shortcut",
         "ShortcutService",
-        lambda b, r, c, cfg, p, pl: (b, p.shortcuts_path, p.games_map_path),
+        lambda b, r, c, cfg, p, pl: (
+            b, p.shortcuts_path, p.games_map_path, p.launcher_path,
+        ),
         lambda b, r, c, cfg, p, pl: {},
     ),
     (

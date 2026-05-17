@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING, Any
 
 from unifideck.core.types import Events, Game
 from unifideck.event_bus.event_bus_devex import subscribe
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     # This is a mixin; `self` will be the ShortcutService facade
@@ -61,7 +64,33 @@ class EventsMixin:
 
     @subscribe(Events.SYNC_COMPLETE)
     async def _on_sync_complete(self, **kwargs: Any) -> None:
-        """Reconcile shortcuts against the new library state."""
+        """Reconcile shortcuts against the new library state.
+
+        After reconciling, emit ``SHORTCUT_RECONCILE_COMPLETE``
+        with the per-batch counters so the frontend can prompt
+        the user for a Steam restart when any shortcuts were
+        added or removed (Steam holds shortcuts.vdf in memory and
+        overwrites our writes on its next shutdown otherwise).
+        """
         games = kwargs.get("games", [])
-        if games:
-            await self.reconcile(games)
+        if not games:
+            return
+        logger.info(
+            "[ShortcutService] SYNC_COMPLETE → reconciling %d games",
+            len(games),
+        )
+        result = await self.reconcile(games)
+        added = result.get("added", 0)
+        removed = result.get("removed", 0)
+        kept = result.get("kept", 0)
+        # ``self._bus`` is provided by the host (ShortcutService
+        # facade); silently skip the emit if for some reason it's
+        # unavailable so a missing bus never breaks reconcile.
+        bus = getattr(self, "_bus", None)
+        if bus is None:
+            return
+        await bus.emit(
+            Events.SHORTCUT_RECONCILE_COMPLETE,
+            added=added, removed=removed, kept=kept,
+            total=len(games),
+        )

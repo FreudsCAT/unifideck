@@ -24,6 +24,7 @@ export interface TeardownHandles {
   routerPatch?: RouterPatchHandle | null;
   libraryPatch?: RouterPatchHandle | null;
   collectionManager?: CollectionManagerHandle | null;
+  appStorePatch?: { remove: () => void } | null;
   lifetimeListener?: Unregisterable | null;
 }
 /**
@@ -41,6 +42,13 @@ export function runTeardown(handles: TeardownHandles): void {
       handles.lifetimeListener.unregister();
     } catch (e) {
       console.warn("[Teardown] lifetime listener unregister failed:", e);
+    }
+  }
+  if (handles.appStorePatch) {
+    try {
+      handles.appStorePatch.remove();
+    } catch (e) {
+      console.warn("[Teardown] app-store patch remove failed:", e);
     }
   }
   if (handles.collectionManager) {

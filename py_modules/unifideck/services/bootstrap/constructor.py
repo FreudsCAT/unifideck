@@ -35,6 +35,7 @@ def bootstrap_services(
     cache: CacheManager,
     config: ConfigManager,
     pipeline: BusPipeline,
+    plugin_dir: str | None = None,
 ) -> ServiceContainer:
     """Instantiate every Layer-5 service into a ServiceContainer.
 
@@ -54,7 +55,7 @@ def bootstrap_services(
     main loop.
     """
     logger.info("[Bootstrap] resolving service paths from config")
-    paths = ServicePaths.from_config(config)
+    paths = ServicePaths.from_config(config, plugin_dir)
 
     container = ServiceContainer()
     logger.info("[Bootstrap] instantiating %d Layer-5 services", len(_SERVICE_DEFS))
