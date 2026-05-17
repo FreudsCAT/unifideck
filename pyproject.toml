@@ -350,6 +350,7 @@ exclude = '''(?x)(
     | /steamgrid/
     | /yaml/
     | /frontend/
+    | typing_extensions\.py
 )'''
 # Strict mode (matches the project's mypy invariant).
 strict = true

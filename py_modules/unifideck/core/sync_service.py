@@ -41,10 +41,9 @@ import time
 from typing import TYPE_CHECKING, Any
 
 from unifideck.event_bus import EventBus
-from unifideck.steam.owned_games import get_owned_titles as _steam_owned_titles
 from unifideck.stores import StoreRegistry
 
-from .cross_store_dedup import deduplicate_libraries
+from .sync_dedup_mixin import _SyncDedupMixin
 from .sync_queries_mixin import _SyncQueriesMixin
 from .types import Events, Game, SyncResult
 
@@ -55,7 +54,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-class SyncService(_SyncQueriesMixin):
+class SyncService(_SyncQueriesMixin, _SyncDedupMixin):
     """Single-flight multi-store library sync orchestrator.
 
     Inherits read-only query methods (``get_status``,
@@ -358,74 +357,6 @@ class SyncService(_SyncQueriesMixin):
             games=self._flatten(libraries),
         )
 
-    async def _apply_dedup_and_emit(
-        self,
-        libraries: dict[str, list[Game]],
-    ) -> dict[str, list[Game]]:
-        """Run cross-store dedup, emitting ``SYNC_DEDUP`` if anything was dropped.
-
-        Delegates to
-        ``cross_store_dedup.deduplicate_libraries``
-        passing the configured tracked-stores list and
-        the Steam-owned title set. Emits the dedup event
-        only if at least one duplicate was actually
-        dropped — keeps the event channel quiet for
-        no-op sync cycles.
-
-        Args:
-            libraries: raw per-store library mapping.
-
-        Returns:
-            Deduplicated mapping (same shape).
-        """
-        tracked = self._tracked_stores()
-        steam_owned = _steam_owned_titles(self._config)
-        deduped, dropped_per_store = deduplicate_libraries(
-            libraries,
-            tracked_stores=tracked,
-            steam_owned_titles=steam_owned,
-        )
-        total_dropped = sum(dropped_per_store.values())
-        if total_dropped:
-            await self._bus.emit(
-                Events.SYNC_DEDUP,
-                total_removed=total_dropped,
-                per_store=dict(dropped_per_store),
-            )
-        return deduped
-
-    def _tracked_stores(self) -> tuple[str, ...]:
-        """Resolve the tracked-stores list for dedup priority.
-
-        Reads ``dedup.tracked_stores`` from config; falls
-        back to the four-store hardcoded default
-        (``("epic", "gog", "amazon", "ubisoft")``) on:
-
-        * No config supplied;
-        * Config raises during ``get``;
-        * Value isn't a list / tuple.
-
-        Wrong-type values log at WARN so misconfigurations
-        are visible.
-
-        Returns:
-            Tuple of store names, ordered by priority.
-        """
-        default = ("epic", "gog", "amazon", "ubisoft")
-        if self._config is None:
-            return default
-        try:
-            value = self._config.get("dedup.tracked_stores", list(default))
-        except Exception:
-            return default
-        if not isinstance(value, (list, tuple)):
-            logger.warning(
-                "[SyncService] dedup.tracked_stores has wrong type "
-                "(%s); falling back to defaults",
-                type(value).__name__,
-            )
-            return default
-        return tuple(value)
 
     async def sync_single_store(self, store_name: str) -> tuple[bool, str | None]:
         """Sync just one store and merge its result into the running library.
@@ -566,49 +497,6 @@ class SyncService(_SyncQueriesMixin):
             synced_games=total_games,
             current_game=self._progress.current_game,
             status=self._progress.status,
-        )
-
-    def _aggregate_results(
-        self,
-        libraries: dict[str, list[Game]],
-        errors: dict[str, str],
-        duration_ms: int,
-        total_stores: int,
-    ) -> SyncResult:
-        """Build the final ``SyncResult`` + log the summary line.
-
-        Partial-success heuristic: ``success=True`` if
-        at least one store contributed (i.e.
-        ``len(errors) < total_stores``). Surfacing
-        partial failures via the error string lets the
-        frontend show a per-store badge while still
-        treating the overall sync as usable.
-
-        Args:
-            libraries: per-store deduplicated mapping.
-            errors: per-store error strings.
-            duration_ms: total elapsed time.
-            total_stores: enumerable-store count from the
-                registry (used in the success heuristic).
-
-        Returns:
-            ``SyncResult`` with merged games + counts.
-        """
-        merged = self._flatten(libraries)
-        logger.info(
-            "[SyncService] sync complete — %d games across %d stores "
-            "in %dms (%d errors)",
-            len(merged),
-            len(libraries),
-            duration_ms,
-            len(errors),
-        )
-        return SyncResult(
-            success=len(errors) < total_stores,
-            games=merged,
-            count=len(merged),
-            duration_ms=duration_ms,
-            error=None if not errors else f"{len(errors)}_stores_failed",
         )
 
     async def cancel(self) -> bool:
