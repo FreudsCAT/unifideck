@@ -53,6 +53,15 @@ DECKY_PLUGIN_RUNTIME_DIR = os.environ.get(
 )
 
 sys.path.insert(0, str(Path(DECKY_PLUGIN_DIR) / "py_modules"))
+# ``py_modules/_vendor/`` holds vendored modules whose names would
+# shadow stdlib/library modules at the top of ``py_modules``.
+# Currently only ``typing_extensions.py`` lives there — mypy 1.10+
+# refuses to handle a top-level user module shadowing the
+# ``typing_extensions`` PyPI package, so we hide it under a subdir
+# and place that subdir on sys.path so vendored consumers
+# (``urllib3``, ``packaging``, ``attrs``, …) still resolve their
+# ``from typing_extensions import …`` imports correctly.
+sys.path.insert(0, str(Path(DECKY_PLUGIN_DIR) / "py_modules" / "_vendor"))
 
 # E402 noqa on the unifideck imports below: ``sys.path.insert``
 # MUST run before these so Python can resolve the package — Decky

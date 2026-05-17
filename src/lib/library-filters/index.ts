@@ -12,6 +12,8 @@
  * Steam library-patch hook call `runFilters` from a non-component
  * context without prop-drilling.
  */
+import { call } from "@decky/api";
+import { unwrapRpcEnvelope } from "../../api/useRPC";
 import {
   getCachedCompatByTitle,
   getCachedRating,
@@ -114,19 +116,23 @@ export function updateSingleGameStatus(g: UnifideckGameInput): void {
   };
   for (const id of variantIds(g.appId)) unifideckGameCache.set(id, entry);
   if (
-    existing
-    && existing.isInstalled === g.isInstalled
-    && existing.store === g.store
-  ) return;
+    existing &&
+    existing.isInstalled === g.isInstalled &&
+    existing.store === g.store
+  )
+    return;
   const next = (gameStateVersion.get(g.appId) ?? 0) + 1;
   for (const id of variantIds(g.appId)) gameStateVersion.set(id, next);
   if (forceRefreshCallback) {
     void forceRefreshCallback(g.appId).catch((e) =>
-      console.error("[Unifideck] force-refresh callback failed", e));
+      console.error("[Unifideck] force-refresh callback failed", e),
+    );
   }
-  window.dispatchEvent(new CustomEvent("unifideck-game-state-changed", {
-    detail: { appId: g.appId, isInstalled: g.isInstalled, store: g.store },
-  }));
+  window.dispatchEvent(
+    new CustomEvent("unifideck-game-state-changed", {
+      detail: { appId: g.appId, isInstalled: g.isInstalled, store: g.store },
+    }),
+  );
 }
 
 export function updateValidThirdPartyCache(appIds: number[]): void {
@@ -141,7 +147,8 @@ export function isUnifideckGame(appId: number): boolean {
 }
 
 export function getStoreForApp(
-  appId: number, appType: number,
+  appId: number,
+  appType: number,
 ): StoreSlug | null {
   const cached = unifideckGameCache.get(appId);
   if (cached) return cached.store;
@@ -150,13 +157,16 @@ export function getStoreForApp(
 }
 
 export function getInstalledStatus(
-  appId: number, _appType: number, steamInstalledFlag: boolean,
+  appId: number,
+  _appType: number,
+  steamInstalledFlag: boolean,
 ): boolean {
   return unifideckGameCache.get(appId)?.isInstalled ?? steamInstalledFlag;
 }
 
 type FilterFn<K extends FilterType> = (
-  params: FilterParams[K], app: SteamAppOverview,
+  params: FilterParams[K],
+  app: SteamAppOverview,
 ) => boolean;
 
 const filterFunctions: { [K in FilterType]: FilterFn<K> } = {
@@ -165,11 +175,18 @@ const filterFunctions: { [K in FilterType]: FilterFn<K> } = {
     return isUnifideckGame(app.appid);
   },
   installed: (params, app) => {
-    const isInstalled = getInstalledStatus(app.appid, app.app_type, app.installed);
+    const isInstalled = getInstalledStatus(
+      app.appid,
+      app.app_type,
+      app.installed,
+    );
     const match = params.installed ? isInstalled : !isInstalled;
     if (params.installed && app.app_type === NON_STEAM_APP_TYPE) {
       if (unifideckGameCache.has(app.appid)) return match;
-      if (validThirdPartyCache.size > 0 && !validThirdPartyCache.has(app.appid)) {
+      if (
+        validThirdPartyCache.size > 0 &&
+        !validThirdPartyCache.has(app.appid)
+      ) {
         return false;
       }
     }
@@ -206,13 +223,15 @@ const filterFunctions: { [K in FilterType]: FilterFn<K> } = {
 
 function getHiddenAppIds(): Set<number> {
   try {
-    const cs = (window as unknown as {
-      collectionStore?: {
-        GetCollection?: (
-          id: string,
-        ) => { allApps?: Array<{ appid: number }> } | null;
-      };
-    }).collectionStore;
+    const cs = (
+      window as unknown as {
+        collectionStore?: {
+          GetCollection?: (
+            id: string,
+          ) => { allApps?: Array<{ appid: number }> } | null;
+        };
+      }
+    ).collectionStore;
     const hidden = cs?.GetCollection?.("hidden");
     if (hidden?.allApps) return new Set(hidden.allApps.map((a) => a.appid));
   } catch (e) {
@@ -226,7 +245,8 @@ export function isGameHidden(appId: number): boolean {
 }
 
 export function runFilter<T extends FilterType>(
-  filter: TabFilter<T>, app: SteamAppOverview,
+  filter: TabFilter<T>,
+  app: SteamAppOverview,
 ): boolean {
   const fn = filterFunctions[filter.type] as FilterFn<T> | undefined;
   if (!fn) return true;
@@ -234,8 +254,92 @@ export function runFilter<T extends FilterType>(
 }
 
 export function runFilters(
-  filters: TabFilter[], app: SteamAppOverview,
+  filters: TabFilter[],
+  app: SteamAppOverview,
 ): boolean {
   if (isGameHidden(app.appid)) return false;
   return filters.every((f) => runFilter(f, app));
+}
+
+// Shape of one row from the ``get_all_unifideck_games`` RPC —
+// matches Python's ``asdict(Game)``. The frontend ``Game``
+// interface in ``types/api.ts`` is misaligned (it expects
+// ``is_installed`` / ``executable``); ignore it and trust the
+// actual serialised field names from the backend.
+interface RpcGameRow {
+  app_id?: number | null;
+  store?: StoreSlug;
+  store_game_id?: string;
+  installed?: boolean;
+  metadata?: Record<string, unknown>;
+}
+
+type StoreCounts = Partial<Record<Exclude<StoreSlug, "steam">, number>>;
+type StoreCountSink = (counts: StoreCounts) => void;
+
+let storeCountSink: StoreCountSink | null = null;
+let cacheLoadStarted = false;
+
+/** Register a callback to receive per-store game counts. The
+ *  tab manager uses this to drive ``shouldShowTab``. */
+export function setStoreCountSink(sink: StoreCountSink | null): void {
+  storeCountSink = sink;
+}
+
+function isNonSteamStore(
+  s: StoreSlug | undefined,
+): s is Exclude<StoreSlug, "steam"> {
+  return s !== undefined && s !== "steam";
+}
+
+/** Fetch the unified game list from the backend and populate
+ *  ``unifideckGameCache``. Idempotent — safe to call from both
+ *  the eager plugin-init path and the QAM-mount path. */
+export async function loadUnifideckCache(): Promise<void> {
+  try {
+    const raw = await call<[], unknown>("get_all_unifideck_games");
+    // Backend wraps every response in ``{success, error, data}``
+    // — unwrap so we end up with the actual list of games.
+    const games = unwrapRpcEnvelope<RpcGameRow[] | null | undefined>(raw, {
+      route: "get_all_unifideck_games",
+    });
+    const inputs: UnifideckGameInput[] = [];
+    const counts: Record<Exclude<StoreSlug, "steam">, number> = {
+      epic: 0,
+      gog: 0,
+      amazon: 0,
+      ubisoft: 0,
+      microsoft: 0,
+    };
+    for (const g of games ?? []) {
+      if (g.app_id == null) continue;
+      if (!isNonSteamStore(g.store)) continue;
+      const steamAppId =
+        typeof g.metadata?.steam_app_id === "number"
+          ? (g.metadata.steam_app_id as number)
+          : undefined;
+      inputs.push({
+        appId: g.app_id,
+        store: g.store,
+        isInstalled: Boolean(g.installed),
+        steamAppId,
+      });
+      counts[g.store] += 1;
+    }
+    updateUnifideckCache(inputs);
+    storeCountSink?.(counts);
+  } catch (e) {
+    console.error("[Unifideck] loadUnifideckCache failed", e);
+  }
+}
+
+/** Kick off the eager load + subscribe to sync-completed events
+ *  for refresh. Idempotent — calls after the first are no-ops. */
+export function startUnifideckCacheAutoload(): void {
+  if (cacheLoadStarted) return;
+  cacheLoadStarted = true;
+  void loadUnifideckCache();
+  window.addEventListener("unifideck-sync-completed", () => {
+    void loadUnifideckCache();
+  });
 }

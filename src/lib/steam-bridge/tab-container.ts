@@ -11,7 +11,11 @@
 import React, { ReactElement } from "react";
 import { gamepadTabbedPageClasses } from "@decky/ui";
 import i18n from "i18next";
-import { runFilters, type TabFilter } from "../library-filters";
+import {
+  runFilters,
+  setStoreCountSink,
+  type TabFilter,
+} from "../library-filters";
 import type { SteamAppOverview } from "../../types/steam";
 
 const t = (key: string): string => i18n.t(key);
@@ -26,33 +30,97 @@ export interface UnifideckTab {
 
 export function getUnifideckTabs(): UnifideckTab[] {
   return [
-    { id: "unifideck-deck",      title: t("deckTabs.greatOnDeck"), position: 0, filters: [{ type: "deckCompat", params: {} }] },
-    { id: "unifideck-all",       title: t("deckTabs.allGames"),    position: 1, filters: [{ type: "all", params: {} }] },
-    { id: "unifideck-installed", title: t("deckTabs.installed"),   position: 2, filters: [{ type: "installed", params: { installed: true } }] },
-    { id: "unifideck-steam",     title: t("deckTabs.steam"),       position: 3, filters: [{ type: "store", params: { store: "steam" } }] },
-    { id: "unifideck-epic",      title: t("deckTabs.epic"),        position: 4, filters: [{ type: "store", params: { store: "epic" } }] },
-    { id: "unifideck-gog",       title: t("deckTabs.gog"),         position: 5, filters: [{ type: "store", params: { store: "gog" } }] },
-    { id: "unifideck-amazon",    title: t("deckTabs.amazon"),      position: 6, filters: [{ type: "store", params: { store: "amazon" } }] },
-    { id: "unifideck-ubisoft",   title: t("deckTabs.ubisoft"),     position: 7, filters: [{ type: "store", params: { store: "ubisoft" } }] },
-    { id: "unifideck-microsoft", title: t("deckTabs.microsoft"),   position: 8, filters: [{ type: "store", params: { store: "microsoft" } }] },
-    { id: "unifideck-nonsteam",  title: t("deckTabs.nonSteam"),    position: 9, filters: [{ type: "nonSteam", params: {} }] },
+    {
+      id: "unifideck-deck",
+      title: t("deckTabs.greatOnDeck"),
+      position: 0,
+      filters: [{ type: "deckCompat", params: {} }],
+    },
+    {
+      id: "unifideck-all",
+      title: t("deckTabs.allGames"),
+      position: 1,
+      filters: [{ type: "all", params: {} }],
+    },
+    {
+      id: "unifideck-installed",
+      title: t("deckTabs.installed"),
+      position: 2,
+      filters: [{ type: "installed", params: { installed: true } }],
+    },
+    {
+      id: "unifideck-steam",
+      title: t("deckTabs.steam"),
+      position: 3,
+      filters: [{ type: "store", params: { store: "steam" } }],
+    },
+    {
+      id: "unifideck-epic",
+      title: t("deckTabs.epic"),
+      position: 4,
+      filters: [{ type: "store", params: { store: "epic" } }],
+    },
+    {
+      id: "unifideck-gog",
+      title: t("deckTabs.gog"),
+      position: 5,
+      filters: [{ type: "store", params: { store: "gog" } }],
+    },
+    {
+      id: "unifideck-amazon",
+      title: t("deckTabs.amazon"),
+      position: 6,
+      filters: [{ type: "store", params: { store: "amazon" } }],
+    },
+    {
+      id: "unifideck-ubisoft",
+      title: t("deckTabs.ubisoft"),
+      position: 7,
+      filters: [{ type: "store", params: { store: "ubisoft" } }],
+    },
+    {
+      id: "unifideck-microsoft",
+      title: t("deckTabs.microsoft"),
+      position: 8,
+      filters: [{ type: "store", params: { store: "microsoft" } }],
+    },
+    {
+      id: "unifideck-nonsteam",
+      title: t("deckTabs.nonSteam"),
+      position: 9,
+      filters: [{ type: "nonSteam", params: {} }],
+    },
   ];
 }
 
-const DEFAULT_TABS_TO_HIDE = ["GreatOnDeck", "AllGames", "Installed", "DesktopApps"];
+const DEFAULT_TABS_TO_HIDE = [
+  "GreatOnDeck",
+  "AllGames",
+  "Installed",
+  "DesktopApps",
+];
 
 export function isTabMasterInstalled(): boolean {
   try {
-    const plugins = (window as unknown as {
-      DeckyPluginLoader?: { plugins?: Array<{ name?: string }> };
-    }).DeckyPluginLoader?.plugins ?? [];
-    return plugins.some((p) => p.name === "TabMaster" || p.name === "Tab Master");
-  } catch { return false; }
+    const plugins =
+      (
+        window as unknown as {
+          DeckyPluginLoader?: { plugins?: Array<{ name?: string }> };
+        }
+      ).DeckyPluginLoader?.plugins ?? [];
+    return plugins.some(
+      (p) => p.name === "TabMaster" || p.name === "Tab Master",
+    );
+  } catch {
+    return false;
+  }
 }
 
 export function getHiddenDefaultTabs(): string[] {
   if (isTabMasterInstalled()) {
-    console.log("[Unifideck] TabMaster detected — keeping default tabs visible");
+    console.log(
+      "[Unifideck] TabMaster detected — keeping default tabs visible",
+    );
     return [];
   }
   return DEFAULT_TABS_TO_HIDE;
@@ -64,9 +132,9 @@ interface SteamCollectionLike {
   AsDeletableCollection: () => null;
   AsDragDropCollection: () => null;
   AsEditableCollection: () => null;
-  GetAppCountWithToolsFilter: (
-    appFilter: { Matches: (a: SteamAppOverview) => boolean },
-  ) => number;
+  GetAppCountWithToolsFilter: (appFilter: {
+    Matches: (a: SteamAppOverview) => boolean;
+  }) => number;
   bAllowsDragAndDrop: boolean;
   bIsDeletable: boolean;
   bIsDynamic: boolean;
@@ -78,10 +146,19 @@ interface SteamCollectionLike {
   apps: Map<number, SteamAppOverview>;
 }
 
+interface SteamGamesCollection {
+  allApps?: SteamAppOverview[];
+}
+
 interface CollectionStoreLike {
-  GetCollection: (id: string) => {
-    allApps?: SteamAppOverview[];
-  } | null;
+  // ``GetCollection("type-games")`` is the documented path but
+  // its inner MobX chain throws when the store is half-hydrated
+  // at plugin-init time. ``appTypeCollectionMap`` is a raw
+  // ``Map<string, Collection>`` that's populated earlier in the
+  // hydration sequence and doesn't go through the failing
+  // getter — same source TabMaster uses.
+  GetCollection: (id: string) => SteamGamesCollection | null;
+  appTypeCollectionMap?: Map<string, SteamGamesCollection>;
 }
 
 /** Steam tab shape consumed by the library-patch hook. */
@@ -106,7 +183,11 @@ export class UnifideckTabContainer {
     this.position = tab.position;
     this.filters = tab.filters;
     this.collection = this.makeEmptyCollection();
-    this.buildCollection();
+    // Don't call buildCollection here — at plugin-init time the
+    // collectionStore is half-hydrated and its MobX-computed
+    // getters throw. ``getActualTab`` calls ``buildCollection``
+    // at render time when the store is fully ready, which is
+    // when it actually matters.
   }
 
   private makeEmptyCollection(): SteamCollectionLike {
@@ -130,11 +211,20 @@ export class UnifideckTabContainer {
 
   buildCollection(): void {
     try {
-      const cs = (window as unknown as { collectionStore?: CollectionStoreLike }).collectionStore;
-      const all = cs?.GetCollection("type-games");
+      const cs = (
+        window as unknown as { collectionStore?: CollectionStoreLike }
+      ).collectionStore;
+      // Prefer the raw appTypeCollectionMap (TabMaster's path) —
+      // direct Map access doesn't go through MobX-computed
+      // getters that may throw on half-hydrated stores. Fall back
+      // to GetCollection if the raw map is unavailable.
+      const all =
+        cs?.appTypeCollectionMap?.get("type-games") ??
+        cs?.GetCollection("type-games");
       if (!all) return;
       const filtered = (all.allApps ?? []).filter((app) =>
-        runFilters(this.filters, app));
+        runFilters(this.filters, app),
+      );
       this.collection.allApps = filtered;
       this.collection.visibleApps = [...filtered];
       const map = new Map<number, SteamAppOverview>();
@@ -150,6 +240,7 @@ export class UnifideckTabContainer {
     TabContext: React.Context<{ label: string }> | null,
     sortingProps: Record<string, unknown>,
     collectionAppFilter: { Matches: (a: SteamAppOverview) => boolean },
+    templateFooter?: Record<string, unknown>,
   ): SteamTab | null {
     this.buildCollection();
     const inner = React.createElement(TabAppGrid, {
@@ -157,18 +248,27 @@ export class UnifideckTabContainer {
       ...sortingProps,
     });
     const content = TabContext
-      ? React.createElement(TabContext.Provider, { value: { label: this.title } }, inner)
+      ? React.createElement(
+          TabContext.Provider,
+          { value: { label: this.title } },
+          inner,
+        )
       : inner;
     return {
       title: this.title,
       id: this.id,
-      footer: {},
+      // Inherit the AllGames template's footer (keybinding hints,
+      // menu callbacks). Steam's gamepad tab renderer expects
+      // these fields populated; an empty ``{}`` makes tabs render
+      // as no-op entries that are skipped in the nav strip.
+      footer: { ...(templateFooter ?? {}) },
       content,
-      renderTabAddon: () => React.createElement(
-        "span",
-        { className: gamepadTabbedPageClasses?.TabCount ?? "" },
-        this.collection.GetAppCountWithToolsFilter(collectionAppFilter),
-      ),
+      renderTabAddon: () =>
+        React.createElement(
+          "span",
+          { className: gamepadTabbedPageClasses?.TabCount ?? "" },
+          this.collection.GetAppCountWithToolsFilter(collectionAppFilter),
+        ),
     };
   }
 }
@@ -180,7 +280,11 @@ class TabManager {
   private initialized = false;
   private connectedStores = new Set<ConnectableStore>();
   private storeCounts: Record<ConnectableStore, number> = {
-    epic: 0, gog: 0, amazon: 0, ubisoft: 0, microsoft: 0,
+    epic: 0,
+    gog: 0,
+    amazon: 0,
+    ubisoft: 0,
+    microsoft: 0,
   };
 
   initialize(): void {
@@ -197,11 +301,15 @@ class TabManager {
     this.storeCounts = { ...this.storeCounts, ...counts };
   }
 
-  setConnectedStores(statuses: Partial<Record<ConnectableStore, string>>): void {
+  setConnectedStores(
+    statuses: Partial<Record<ConnectableStore, string>>,
+  ): void {
     const next = new Set<ConnectableStore>();
-    (["epic", "gog", "amazon", "ubisoft", "microsoft"] as const).forEach((s) => {
-      if (statuses[s] === "connected") next.add(s);
-    });
+    (["epic", "gog", "amazon", "ubisoft", "microsoft"] as const).forEach(
+      (s) => {
+        if (statuses[s] === "connected") next.add(s);
+      },
+    );
     this.connectedStores = next;
     if (this.initialized) this.rebuildTabs();
   }
@@ -219,7 +327,9 @@ class TabManager {
     return this.storeCounts[store] > 0 || this.connectedStores.has(store);
   }
 
-  isInitialized(): boolean { return this.initialized; }
+  isInitialized(): boolean {
+    return this.initialized;
+  }
 
   rebuildTabs(): void {
     this.tabs = getUnifideckTabs().map((tab) => new UnifideckTabContainer(tab));
@@ -227,3 +337,12 @@ class TabManager {
 }
 
 export const tabManager = new TabManager();
+
+// Wire the cache loader → tab manager so per-store counts drive
+// ``shouldShowTab`` automatically. The sink is module-level state
+// on ``library-filters`` so a single registration covers every
+// future ``loadUnifideckCache`` invocation.
+setStoreCountSink((counts) => {
+  tabManager.setStoreCounts(counts);
+  if (tabManager.isInitialized()) tabManager.rebuildTabs();
+});

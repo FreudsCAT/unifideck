@@ -15,8 +15,7 @@ import logging
 import time
 from typing import TYPE_CHECKING, Any
 
-from .games_map import GameMapEntry, generate_app_id
-from .games_map_mixin import UNIFIDECK_TAG
+from .games_map import UNIFIDECK_TAG, GameMapEntry, generate_app_id
 
 if TYPE_CHECKING:
     from unifideck.core.types import Game
@@ -161,9 +160,15 @@ class _ReconcilePhasesMixin:
             launch_options = key
             exe = game.exe_path or ""
             app_id = game.app_id or generate_app_id(launcher, game.title)
-            self._games_map[key] = GameMapEntry(
-                exe=exe, work_dir=game.install_path or "",
-            )
+            # games.map is the launcher's exe-path lookup. Only installed
+            # games are launchable, so only they belong here. Uninstalled
+            # games drop their entry (covers reinstall → uninstall).
+            if game.installed and exe:
+                self._games_map[key] = GameMapEntry(
+                    exe=exe, work_dir=game.install_path or "",
+                )
+            else:
+                self._games_map.pop(key, None)
             registered = get_registered_appid(registry, launch_options)
             if registered is not None:
                 ord_key = self._find_existing_shortcut_key(

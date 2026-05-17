@@ -43,16 +43,19 @@ interface ReactHooks {
 }
 
 function getReactHooks(): ReactHooks | null {
-  const reactInternals = (window as unknown as {
-    SP_REACT?: {
-      __SECRET_INTERNALS_DO_NOT_USE_OR_YOU_WILL_BE_FIRED?: {
-        ReactCurrentDispatcher?: { current?: ReactHooks };
+  const reactInternals = (
+    window as unknown as {
+      SP_REACT?: {
+        __SECRET_INTERNALS_DO_NOT_USE_OR_YOU_WILL_BE_FIRED?: {
+          ReactCurrentDispatcher?: { current?: ReactHooks };
+        };
+        __CLIENT_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE?: Record<
+          string,
+          ReactHooks | undefined
+        >;
       };
-      __CLIENT_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE?: Record<
-        string, ReactHooks | undefined
-      >;
-    };
-  }).SP_REACT;
+    }
+  ).SP_REACT;
   const current =
     reactInternals?.__SECRET_INTERNALS_DO_NOT_USE_OR_YOU_WILL_BE_FIRED
       ?.ReactCurrentDispatcher?.current;
@@ -75,12 +78,16 @@ interface TabsTupleShape {
 
 function detectTabsShape(result: unknown[]): TabsTupleShape | null {
   if (
-    result.length >= 2
-    && Array.isArray(result[0])
-    && (result[0] as SteamTab[])[0]?.id
-    && (result[0] as SteamTab[])[0]?.content
+    result.length >= 2 &&
+    Array.isArray(result[0]) &&
+    (result[0] as SteamTab[])[0]?.id &&
+    (result[0] as SteamTab[])[0]?.content
   ) {
-    return { isTuple: true, tabs: result[0] as SteamTab[], rest: result.slice(1) };
+    return {
+      isTuple: true,
+      tabs: result[0] as SteamTab[],
+      rest: result.slice(1),
+    };
   }
   const first = result[0] as SteamTab | undefined;
   if (first?.id && first.content) {
@@ -89,17 +96,37 @@ function detectTabsShape(result: unknown[]): TabsTupleShape | null {
   return null;
 }
 
-function spliceTabs(
-  result: unknown,
-  deps: unknown[],
-): unknown {
-  if (!Array.isArray(result)) return result;
+// One-shot diagnostic logger — when something bails, log once
+// per reason so the console isn't spammed every render.
+const loggedBailReasons = new Set<string>();
+function logBailOnce(reason: string, extra?: unknown): void {
+  if (loggedBailReasons.has(reason)) return;
+  loggedBailReasons.add(reason);
+  console.warn(`[Unifideck Library] spliceTabs bailed: ${reason}`, extra ?? "");
+}
+
+function spliceTabs(result: unknown, deps: unknown[]): unknown {
+  if (!Array.isArray(result)) {
+    logBailOnce("result is not an array", result);
+    return result;
+  }
   const shape = detectTabsShape(result);
-  if (!shape) return result;
-  if (!tabManager.isInitialized()) return result;
+  if (!shape) {
+    logBailOnce("detectTabsShape returned null", result);
+    return result;
+  }
+  // Idempotency — re-renders of the same route would otherwise
+  // splice multiple times and duplicate our tabs.
+  if (shape.tabs.some((t) => t.id?.startsWith("unifideck-"))) return result;
+  if (!tabManager.isInitialized()) {
+    logBailOnce("tabManager not initialized");
+    return result;
+  }
 
   const [eSortBy, setSortBy, showSortingContextMenu] = deps as [
-    unknown, unknown, unknown,
+    unknown,
+    unknown,
+    unknown,
   ];
   const sortingProps = { eSortBy, setSortBy, showSortingContextMenu };
   const collectionsAppFilterGamepad = deps[6] as Parameters<
@@ -107,23 +134,48 @@ function spliceTabs(
   >[3];
 
   const template = shape.tabs.find((t) => t.id === "AllGames");
-  if (!template) return result;
+  if (!template) {
+    logBailOnce(
+      "no AllGames template tab in",
+      shape.tabs.map((t) => t.id),
+    );
+    return result;
+  }
 
-  const TabAppGrid = cachedTabAppGrid ?? (
-    findInReactTree(template.content, (elt) =>
-      Boolean(elt?.type?.toString?.().includes("Library_FilteredByHeader"))
-    ) as { type?: React.ComponentType<Record<string, unknown>> } | null
-  )?.type;
-  if (!TabAppGrid) return result;
+  const TabAppGrid =
+    cachedTabAppGrid ??
+    (
+      findInReactTree(template.content, (elt) =>
+        Boolean(elt?.type?.toString?.().includes("Library_FilteredByHeader")),
+      ) as { type?: React.ComponentType<Record<string, unknown>> } | null
+    )?.type;
+  if (!TabAppGrid) {
+    logBailOnce(
+      "Library_FilteredByHeader component not found in AllGames template",
+    );
+    return result;
+  }
   cachedTabAppGrid = TabAppGrid;
 
-  const TabContext = (template.content as ReactComponentWithType).type?._context
-    ?? null;
+  const TabContext =
+    (template.content as ReactComponentWithType).type?._context ?? null;
 
-  const customTabs = tabManager.getTabs()
+  const templateFooter = (template.footer ?? {}) as Record<string, unknown>;
+  const customTabs = tabManager
+    .getTabs()
     .map((c) =>
-      c.getActualTab(TabAppGrid, TabContext, sortingProps, collectionsAppFilterGamepad))
+      c.getActualTab(
+        TabAppGrid,
+        TabContext,
+        sortingProps,
+        collectionsAppFilterGamepad,
+        templateFooter,
+      ),
+    )
     .filter((t): t is SteamTab => t !== null);
+  console.log(
+    `[Unifideck Library] splicing ${customTabs.length} custom tabs into Steam library`,
+  );
 
   const hidden = getHiddenDefaultTabs();
   const filteredDefaults = shape.tabs.filter((t) => !hidden.includes(t.id));
@@ -133,7 +185,9 @@ function spliceTabs(
   return merged;
 }
 
-/** Patches the `/library` route to inject Unifideck tabs. */
+/** Patches the `/library` route to inject Unifideck tabs.
+ *  Same pattern as TabMaster — proven to work in both Desktop
+ *  and Gaming Mode. */
 export function applyLibraryPatch(bridge: SteamBridge): RouterPatchHandle {
   tabManager.initialize();
   return bridge.addRouterPatch("/library", (rawProps: unknown) => {
@@ -148,33 +202,44 @@ export function applyLibraryPatch(bridge: SteamBridge): RouterPatchHandle {
         let innerPatch: Patch | undefined;
         let memoCache: unknown;
 
-        useEffect(() => () => { innerPatch?.unpatch(); });
-
-        afterPatch(ret1 as never, "type", (_2: unknown[], ret2: ReactElement) => {
-          if (!ret2?.type) return ret2;
-          const ret2t = ret2 as ReactComponentWithType;
-          if (memoCache) {
-            ret2t.type = memoCache as ReactComponentWithType["type"];
-            return ret2;
-          }
-          const origMemoComponent = ret2t.type.type as
-            (...args: unknown[]) => unknown;
-          wrapReactType(ret2 as never);
-          innerPatch = replacePatch(ret2t.type as never, "type", (args: unknown[]) => {
-            const hooks = getReactHooks();
-            if (!hooks?.useMemo) return origMemoComponent(...args);
-            const realUseMemo = hooks.useMemo;
-            hooks.useMemo = <T,>(fn: () => T, deps: unknown[]): T =>
-              realUseMemo(() => spliceTabs(fn(), deps) as T, deps);
-            try {
-              return origMemoComponent(...args);
-            } finally {
-              hooks.useMemo = realUseMemo;
-            }
-          });
-          memoCache = ret2t.type;
-          return ret2;
+        useEffect(() => () => {
+          innerPatch?.unpatch();
         });
+
+        afterPatch(
+          ret1 as never,
+          "type",
+          (_2: unknown[], ret2: ReactElement) => {
+            if (!ret2?.type) return ret2;
+            const ret2t = ret2 as ReactComponentWithType;
+            if (memoCache) {
+              ret2t.type = memoCache as ReactComponentWithType["type"];
+              return ret2;
+            }
+            const origMemoComponent = ret2t.type.type as (
+              ...args: unknown[]
+            ) => unknown;
+            wrapReactType(ret2 as never);
+            innerPatch = replacePatch(
+              ret2t.type as never,
+              "type",
+              (args: unknown[]) => {
+                const hooks = getReactHooks();
+                if (!hooks?.useMemo) return origMemoComponent(...args);
+                const realUseMemo = hooks.useMemo;
+                hooks.useMemo = <T>(fn: () => T, deps: unknown[]): T =>
+                  realUseMemo(() => spliceTabs(fn(), deps) as T, deps);
+                try {
+                  return origMemoComponent(...args);
+                } finally {
+                  hooks.useMemo = realUseMemo;
+                }
+              },
+            );
+            memoCache = ret2t.type;
+            return ret2;
+          },
+        );
         return ret1;
       },
     );

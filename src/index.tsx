@@ -30,6 +30,7 @@ import { RootProvider } from "./contexts/RootProvider";
 import { QuickAccessPanel } from "./views/QuickAccessPanel";
 import { applyAppDetailsPatch } from "./views/AppDetailsPatch";
 import { applyLibraryPatch } from "./lib/steam-bridge/library-patch";
+import { startUnifideckCacheAutoload } from "./lib/library-filters";
 import { startCollectionManager } from "./lib/steam-bridge/collection-manager";
 import { applyAppStorePatch } from "./lib/steam-bridge/app-store-patcher";
 import { runBootstrapTasks } from "./bootstrap-tasks";
@@ -54,7 +55,17 @@ export default definePlugin(() => {
   } catch (e) {
     console.error("[Unifideck] router patch failed:", e);
   }
-  // Inject the custom Unifideck tabs into Steam's library.
+  // Populate the unifideck game cache before patching tabs so
+  // filters have data on first render — independent of whether
+  // the user ever opens the Decky QAM panel.
+  try {
+    startUnifideckCacheAutoload();
+  } catch (e) {
+    console.error("[Unifideck] cache autoload start failed:", e);
+  }
+  // Inject the custom Unifideck tabs into Steam's library via
+  // the ``/library`` route patch — same primitive TabMaster uses
+  // (works in both Desktop and Gaming Mode).
   try {
     handles.libraryPatch = applyLibraryPatch(bridge);
   } catch (e) {
@@ -72,11 +83,13 @@ export default definePlugin(() => {
   // friend presence) render real cover art + descriptions instead
   // of the bare shortcut skeleton. Async — needs to fetch the
   // mappings + appdetails caches from the backend before patching.
-  void applyAppStorePatch().then((handle) => {
-    handles.appStorePatch = handle;
-  }).catch((e) => {
-    console.error("[Unifideck] app-store patch failed:", e);
-  });
+  void applyAppStorePatch()
+    .then((handle) => {
+      handles.appStorePatch = handle;
+    })
+    .catch((e) => {
+      console.error("[Unifideck] app-store patch failed:", e);
+    });
   // Bootstrap tasks (language, account switch, lifetime
   // listener) run async ; the lifetime listener handle is
   // captured for teardown when its promise resolves.

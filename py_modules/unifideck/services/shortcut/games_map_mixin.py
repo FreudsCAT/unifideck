@@ -19,7 +19,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any
 
-from .games_map import GameMapEntry, generate_app_id
+from .games_map import UNIFIDECK_TAG, GameMapEntry, generate_app_id
 from .reconcile_phases import _ReconcilePhasesMixin
 
 if TYPE_CHECKING:
@@ -29,10 +29,10 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Signature tag written into shortcuts.vdf ``tags`` field so we
-# can identify Unifideck-managed shortcuts and never touch
-# user-created ones during cleanup.
-UNIFIDECK_TAG = "Unifideck"
+# Re-exported from ``games_map`` so callers can still write
+# ``from .games_map_mixin import UNIFIDECK_TAG`` without forming
+# a cycle with ``reconcile_phases``.
+__all__ = ["UNIFIDECK_TAG"]
 
 
 class _GamesMapMixin(_ReconcilePhasesMixin):
