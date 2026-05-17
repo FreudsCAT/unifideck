@@ -6,7 +6,7 @@
  * no value are omitted (so a non-installed game shows just
  * the deck rating, not "Install path: —").
  */
-import React, { FC } from "react";
+import { FC } from "react";
 import { Focusable } from "@decky/ui";
 import { useTranslation } from "react-i18next";
 import type { Game, DeckRating } from "../../types/api";

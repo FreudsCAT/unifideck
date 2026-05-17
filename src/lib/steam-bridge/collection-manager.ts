@@ -41,7 +41,7 @@ interface CollectionStore {
     filter: unknown,
     overviews: AppStoreOverview[],
   ) => Collection | undefined;
-  userCollections: Collection[];
+  userCollections: Map<string, Collection>;
 }
 
 interface AppStore {
@@ -74,11 +74,11 @@ async function deleteCollection(c: Collection): Promise<void> {
 async function cleanupStaleCollections(): Promise<void> {
   const cs = getCollectionStore();
   if (!cs) return;
-  let userCollections: Collection[] = [];
-  try { userCollections = cs.userCollections ?? []; } catch { return; }
-  if (!Array.isArray(userCollections)) return;
+  let collections: Map<string, Collection> | undefined;
+  try { collections = cs.userCollections; } catch { return; }
+  if (!collections || typeof collections.values !== "function") return;
   const valid = validCollectionNames();
-  for (const c of userCollections) {
+  for (const c of collections.values()) {
     if (c?.displayName?.startsWith(COLLECTION_PREFIX) && !valid.has(c.displayName)) {
       await deleteCollection(c);
     }
@@ -130,6 +130,7 @@ async function syncTab(tab: UnifideckTab, allApps: SteamAppOverview[]): Promise<
 
 /** Sync every `[Unifideck]` collection to current tab filters. */
 export async function syncUnifideckCollections(): Promise<void> {
+  if (!isCollectionsAvailable()) return;
   await cleanupStaleCollections();
   const cs = getCollectionStore();
   if (!cs) return;
@@ -146,26 +147,46 @@ export async function syncUnifideckCollections(): Promise<void> {
 export async function deleteAllUnifideckCollections(): Promise<void> {
   const cs = getCollectionStore();
   if (!cs) return;
-  let userCollections: Collection[] = [];
-  try { userCollections = cs.userCollections ?? []; } catch { return; }
-  for (const c of userCollections) {
+  let collections: Map<string, Collection> | undefined;
+  try { collections = cs.userCollections; } catch { return; }
+  if (!collections || typeof collections.values !== "function") return;
+  for (const c of collections.values()) {
     if (c?.displayName?.startsWith(COLLECTION_PREFIX)) await deleteCollection(c);
   }
 }
 
 export function isCollectionsAvailable(): boolean {
   const s = getCollectionStore();
-  return Boolean(
-    s
-    && typeof s.GetCollectionIDByUserTag === "function"
-    && typeof s.NewUnsavedCollection === "function",
-  );
+  if (!s
+    || typeof s.GetCollectionIDByUserTag !== "function"
+    || typeof s.NewUnsavedCollection !== "function") return false;
+  try {
+    // Touching the MobX-computed userCollections getter on a half-
+    // hydrated store throws TypeError inside Steam's own code and
+    // surfaces as a Library render error. If the getter resolves
+    // here, the Library route can read it safely too.
+    const c = s.userCollections;
+    if (!c || typeof c.values !== "function") return false;
+    const games = s.GetCollection("type-games");
+    return Boolean(games && Array.isArray(games.allApps));
+  } catch {
+    return false;
+  }
 }
 
 /** Manager handle returned by `startCollectionManager`. */
 export interface CollectionManagerHandle {
   resync(): Promise<void>;
   remove(): void;
+}
+
+async function waitForCollections(timeoutMs = 30_000): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (isCollectionsAvailable()) return true;
+    await new Promise((r) => setTimeout(r, 500));
+  }
+  return false;
 }
 
 /**
@@ -179,8 +200,13 @@ export function startCollectionManager(): CollectionManagerHandle {
       console.error("[Unifideck Collections] resync failed", e));
   };
   window.addEventListener("unifideck-sync-completed", onSync);
-  void syncUnifideckCollections().catch((e) =>
-    console.error("[Unifideck Collections] initial sync failed", e));
+  void waitForCollections().then((ready) => {
+    if (!ready) {
+      console.warn("[Unifideck Collections] store never became ready — skipping initial sync");
+      return;
+    }
+    return syncUnifideckCollections();
+  }).catch((e) => console.error("[Unifideck Collections] initial sync failed", e));
   return {
     resync: syncUnifideckCollections,
     remove: () => window.removeEventListener("unifideck-sync-completed", onSync),

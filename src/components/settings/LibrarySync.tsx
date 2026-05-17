@@ -10,7 +10,7 @@
  * Progress is read from `SyncContext` reactively — the 500ms polling
  * loop inside the provider feeds ``sync.progress``.
  */
-import React, { FC } from "react";
+import { FC } from "react";
 import { PanelSection, PanelSectionRow, ButtonItem, showModal } from "@decky/ui";
 import { useTranslation } from "react-i18next";
 import { FaSync } from "react-icons/fa";

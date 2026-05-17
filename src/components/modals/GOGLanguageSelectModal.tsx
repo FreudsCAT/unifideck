@@ -11,7 +11,7 @@
  * Pure presentational : the actual install RPC is the caller's
  * responsibility — this component only collects the choice.
  */
-import React, { FC, useState } from "react";
+import { FC, useState } from "react";
 import { ConfirmModal, Dropdown, DropdownOption } from "@decky/ui";
 import { useTranslation } from "react-i18next";
 

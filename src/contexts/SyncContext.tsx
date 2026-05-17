@@ -12,7 +12,7 @@
  * current run id), so duplicate Sync button presses can't
  * stack.
  */
-import React, {
+import {
   createContext,
   FC,
   ReactNode,

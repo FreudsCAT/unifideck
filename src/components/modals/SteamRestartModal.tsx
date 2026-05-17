@@ -7,7 +7,7 @@
  * SteamClient.User.StartShutdown call (Steam's own restart
  * path). Restart-on-demand: never restart automatically.
  */
-import React, { FC } from "react";
+import { FC } from "react";
 import { ConfirmModal } from "@decky/ui";
 import { useTranslation } from "react-i18next";
 

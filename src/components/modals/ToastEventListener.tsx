@@ -18,7 +18,7 @@
  * should subscribe to LAUNCHER_STAGE directly — they go
  * through the toast/modal here.
  */
-import React, { FC } from "react";
+import { FC } from "react";
 import { showModal } from "@decky/ui";
 import { useTranslation } from "react-i18next";
 import { useEventBus, EventBusClient } from "../../api/event-bus-client";
@@ -50,16 +50,16 @@ export const ToastEventListener: FC = () => {
           gameTitle={String(payload.game_title ?? gameId)}
           local={(payload.local_snapshot ?? {}) as never}
           remote={(payload.remote_snapshot ?? {}) as never}
-          onKeepLocal={() =>
-            EventBusClient.dispatchAction(
+          onKeepLocal={() => {
+            void EventBusClient.dispatchAction(
               "retry-sync", store, gameId, "sync_up",
-            )
-          }
-          onKeepRemote={() =>
-            EventBusClient.dispatchAction(
+            );
+          }}
+          onKeepRemote={() => {
+            void EventBusClient.dispatchAction(
               "retry-sync", store, gameId, phase,
-            )
-          }
+            );
+          }}
           onCancel={() => {}}
           closeModal={() => {}}
         />,

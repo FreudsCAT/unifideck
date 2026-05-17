@@ -19,7 +19,7 @@
  * payloads — this is the canonical bidirectional bridge for
  * backend → user → backend round-trips.
  */
-import React, { FC, ReactNode } from "react";
+import { FC, ReactNode } from "react";
 import { LocaleProvider } from "./LocaleContext";
 import { StoreProvider } from "./StoreContext";
 import { LibraryProvider } from "./LibraryContext";

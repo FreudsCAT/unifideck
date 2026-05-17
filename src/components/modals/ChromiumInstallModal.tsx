@@ -19,7 +19,7 @@
  * Restored from the staging branch (`src893/staging`) where it
  * lived before the F1-F8 refactor erroneously dropped it.
  */
-import React, { FC, useState } from "react";
+import { FC, useState } from "react";
 import { ConfirmModal, Spinner } from "@decky/ui";
 import { useTranslation } from "react-i18next";
 import { call } from "@decky/api";

@@ -12,7 +12,7 @@
  * Confirm/Cancel button row is hidden via inline CSS so the
  * modal feels like a passive notification, not an action prompt.
  */
-import React, { FC } from "react";
+import { FC } from "react";
 import { ConfirmModal, Navigation } from "@decky/ui";
 import { useTranslation } from "react-i18next";
 

@@ -12,7 +12,7 @@
  */
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { SteamBridge } from "../lib/steam-bridge";
-import type { ControllerInfo, SteamApp } from "../types/steam";
+import type { SteamApp } from "../types/steam";
 
 /**
  * Frontend projection of an Unifideck-managed shortcut. Holds

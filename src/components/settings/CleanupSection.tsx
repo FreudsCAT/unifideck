@@ -8,7 +8,7 @@
  * `SteamClient.Apps.RemoveShortcut` for each deleted app_id so
  * Steam's in-memory state catches up.
  */
-import React, { FC, useState } from "react";
+import { FC, useState } from "react";
 import {
   PanelSection,
   PanelSectionRow,

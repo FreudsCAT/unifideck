@@ -3,7 +3,7 @@
  * compact / full game-details preference. Reads/writes via
  * `useViewMode` so every consumer (GameInfoPanel, etc.) stays in sync.
  */
-import React, { FC } from "react";
+import { FC } from "react";
 import { PanelSection, PanelSectionRow, ToggleField } from "@decky/ui";
 import { useTranslation } from "react-i18next";
 import { useViewMode } from "../../hooks/useViewMode";

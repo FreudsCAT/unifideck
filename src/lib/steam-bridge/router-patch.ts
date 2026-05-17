@@ -7,6 +7,7 @@
  * leak across plugin reloads and accumulate.
  */
 import { routerHook } from "@decky/api";
+import type { RoutePatch } from "@decky/api/dist/types";
 
 /**
  * Handle returned by `patchRouter`. Its `dispose()` must
@@ -23,10 +24,12 @@ export interface RouterPatchHandle {
  *  (possibly modified) node. */
 export function addRouterPatch(path: string, patch: (node: unknown) => unknown): RouterPatchHandle {
   let removed = false;
-  let unpatch: (() => void) | undefined;
+  let token: RoutePatch | undefined;
 
   try {
-    unpatch = routerHook.addPatch(path, patch as never);
+    // addPatch returns a RoutePatch token that must be passed
+    // back to removePatch to undo — not an unpatch function.
+    token = routerHook.addPatch(path, patch as unknown as RoutePatch);
   } catch (e) {
     console.error("[SteamBridge] addRouterPatch failed:", e);
     return { remove: () => {} };
@@ -34,10 +37,10 @@ export function addRouterPatch(path: string, patch: (node: unknown) => unknown):
 
   return {
     remove: () => {
-      if (removed) return;
+      if (removed || !token) return;
       removed = true;
       try {
-        unpatch?.();
+        routerHook.removePatch(path, token);
       } catch (e) {
         console.warn("[SteamBridge] router unpatch failed:", e);
       }

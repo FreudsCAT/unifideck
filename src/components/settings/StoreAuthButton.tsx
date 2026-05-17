@@ -10,7 +10,7 @@
  *
  * Ported from `staging:src/components/settings/StoreAuthButton.tsx`.
  */
-import React, { FC } from "react";
+import { FC } from "react";
 import { DialogButton } from "@decky/ui";
 import { useTranslation } from "react-i18next";
 import { FiLogOut } from "react-icons/fi";

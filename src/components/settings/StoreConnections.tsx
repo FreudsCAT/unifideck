@@ -8,7 +8,7 @@
  * `useStoreAuth`) come from the current architecture so the data
  * plane is unchanged.
  */
-import React, { FC } from "react";
+import { FC } from "react";
 import { PanelSection, PanelSectionRow, Field } from "@decky/ui";
 import { useTranslation } from "react-i18next";
 import { useStores } from "../../contexts/StoreContext";

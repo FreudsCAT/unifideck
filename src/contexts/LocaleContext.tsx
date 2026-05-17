@@ -10,7 +10,7 @@
  * on success, so the UI re-renders immediately while the
  * RPC completes in the background.
  */
-import React, {
+import {
   createContext,
   FC,
   ReactNode,

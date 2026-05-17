@@ -7,7 +7,7 @@
  * pills appear synchronously when navigating to a game's details
  * page. Falls back to `get_game_metadata` if the cache is cold.
  */
-import React, { FC, useEffect, useState } from "react";
+import { FC, useEffect, useState } from "react";
 import { Focusable } from "@decky/ui";
 import { useTranslation } from "react-i18next";
 import { useRPC } from "../../api/useRPC";

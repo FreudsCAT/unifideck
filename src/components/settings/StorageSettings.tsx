@@ -14,7 +14,7 @@
  * Per PDF rule : all RPC traffic flows through the
  * `useStorageConfig` hook ; this file stays presentational.
  */
-import React, { FC } from "react";
+import { FC } from "react";
 import {
   PanelSection, PanelSectionRow, ButtonItem, Field, Spinner, showModal,
 } from "@decky/ui";

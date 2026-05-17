@@ -8,7 +8,7 @@
  *
  * Driven by the bootstrap-tasks `checkAccountSwitch` flow.
  */
-import React, { FC } from "react";
+import { FC } from "react";
 import { ConfirmModal, DialogButton } from "@decky/ui";
 import { useTranslation } from "react-i18next";
 import { FaExchangeAlt, FaForward, FaTrashAlt } from "react-icons/fa";

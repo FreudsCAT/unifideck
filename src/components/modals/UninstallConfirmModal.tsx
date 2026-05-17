@@ -8,7 +8,7 @@
  * (Cancel + red Uninstall with trash icon). The parent receives
  * the toggle state via `onConfirm(deletePrefix)`.
  */
-import React, { FC, useState } from "react";
+import { FC, useState } from "react";
 import { ConfirmModal, DialogButton, ToggleField } from "@decky/ui";
 import { useTranslation } from "react-i18next";
 import { FaExclamationTriangle, FaTrash } from "react-icons/fa";

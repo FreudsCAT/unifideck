@@ -8,7 +8,7 @@
  * with desktop/cloud icons + timestamps + "newer" highlight,
  * and two prominent DialogButtons.
  */
-import React, { FC } from "react";
+import { FC } from "react";
 import { ConfirmModal, DialogButton } from "@decky/ui";
 import { useTranslation } from "react-i18next";
 import { FaCloud, FaDesktop, FaExclamationTriangle } from "react-icons/fa";

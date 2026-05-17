@@ -11,7 +11,7 @@
  * responsibility — this modal only collects the user's choice
  * between two button actions.
  */
-import React, { FC } from "react";
+import { FC } from "react";
 import { ConfirmModal, DialogButton } from "@decky/ui";
 import { useTranslation } from "react-i18next";
 import { FaImage, FaSync } from "react-icons/fa";
