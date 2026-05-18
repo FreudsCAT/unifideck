@@ -26,6 +26,7 @@ from .domain import (
     CLITool,
     Game,
     StoreInfo,
+    SyncRequest,
 )
 from .events import (
     ErrorCode,
@@ -77,5 +78,6 @@ __all__ = [
     "StoreStatus",
     "StoreSyncError",
     "SubscriptionTier",
+    "SyncRequest",
     "SyncResult",
 ]

@@ -192,7 +192,7 @@ def _boot_layer4_stores(plugin: Any, decky_plugin_dir: str) -> None:
     )
     plugin.sync_service = SyncService(
         plugin.registry, plugin.bus, launcher_path=launcher_path,
-        config=plugin.config,
+        config=plugin.config, cache=plugin.cache,
     )
     stores_dir = str(
         Path(decky_plugin_dir) / "py_modules" / "unifideck" / "stores",
@@ -229,4 +229,12 @@ async def _boot_layer5_services(
         pipeline, plugin_dir=decky_plugin_dir,
     )
     inject_store_dependencies(plugin.registry, plugin.services)
+    # Post-bootstrap wiring: SyncService lives on ``plugin``, not on
+    # the service container, so services that need to register
+    # post-sync phases (currently CompatibilityService) get their
+    # reference here. Without this call, ``mark_complete`` would
+    # fire before the compat fetch finished.
+    compat = getattr(plugin.services, "compatibility", None)
+    if compat is not None:
+        compat.wire_sync_service(plugin.sync_service)
     await start_async_services(plugin.services)

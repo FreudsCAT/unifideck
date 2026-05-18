@@ -16,6 +16,7 @@ import time
 from typing import TYPE_CHECKING, Any
 
 from .games_map import UNIFIDECK_TAG, GameMapEntry, generate_app_id
+from .launch_options import get_full_id
 
 if TYPE_CHECKING:
     from unifideck.core.types import Game
@@ -57,12 +58,16 @@ class _ReconcilePhasesMixin:
         logged out of Epic.
         """
         from .launch_options import get_full_id, get_store_prefix
+        from .protected import is_protected
 
         if not isinstance(entry, dict):
             return False
         launch = entry.get("LaunchOptions", "") or ""
         full_id = get_full_id(launch) if isinstance(launch, str) else None
-        if full_id == "ubisoft:upc-auth":
+        # Centralised protected-set check — replaces the previous
+        # hardcoded ``ubisoft:upc-auth`` literal so new stores can
+        # register their auth shortcuts in one place.
+        if is_protected(full_id):
             return False
         tags = entry.get("tags", {})
         tags_dict = tags if isinstance(tags, dict) else {}
@@ -83,14 +88,21 @@ class _ReconcilePhasesMixin:
                 return False
         return entry.get("appid") not in valid_app_ids
 
-    async def reconcile(self: Any, games: list[Game]) -> dict[str, int]:
+    async def reconcile(
+        self: Any, games: list[Game], *, force: bool = False,
+    ) -> dict[str, int]:
         """Bulk-sync all shortcuts from a list of Games.
 
-        Computes the set-diff against current ``_games_map``:
-        add missing, remove stale (only Unifideck-tagged ones
-        to preserve user shortcuts). Single atomic ``_save_all``
-        at the end. Returns ``{added, removed, kept, reclaimed}``
-        counts.
+        Regular sync (``force=False``): **additive** — new
+        ``store:game_id`` pairs get a shortcut; already-existing
+        entries are left untouched. Mirrors staging's
+        ``add_games_batch`` behavior.
+
+        Force sync (``force=True``): **overwriting** — existing
+        entries have their ``AppName``, ``exe``, ``tags``, and
+        ``icon`` fields updated to match current metadata, while
+        preserving their ``appid`` so artwork and playtime survive
+        the rewrite. Mirrors staging's ``force_update_games_batch``.
         """
         await self._load_shortcuts()
         await self._load_games_map()
@@ -110,13 +122,23 @@ class _ReconcilePhasesMixin:
         self._shortcuts = self._ensure_shortcuts_root(self._shortcuts)
         shortcuts_dict = self._shortcuts["shortcuts"]
         added, kept, reclaimed = self._reconcile_phase_sync_games(
-            games, shortcuts_dict, registry,
+            games, shortcuts_dict, registry, force=force,
         )
         if added > 0 or reclaimed > 0:
             registry_dirty = True
         removed += self._reconcile_phase_drop_stale(
             shortcuts_dict, valid_app_ids, valid_stores,
         )
+        # Dedup pass — Steam occasionally creates duplicate VDF
+        # entries with the same launch-options (in-memory desync,
+        # crash recovery). Score by metadata richness, drop losers.
+        # Runs AFTER add/drop so reclaimed orphans count toward the
+        # winners' scores.
+        from .dedup import find_duplicate_losers
+        dedup_losers = find_duplicate_losers(shortcuts_dict)
+        for loser_key in dedup_losers:
+            shortcuts_dict.pop(loser_key, None)
+        removed += len(dedup_losers)
         if added > 0 or removed > 0 or reclaimed > 0:
             await self._save_all()
         if registry_dirty:
@@ -126,6 +148,22 @@ class _ReconcilePhasesMixin:
             "added=%d kept=%d removed=%d reclaimed=%d",
             len(games), added, kept, removed, reclaimed,
         )
+        # Diagnostic banner — when reading ``~/homebrew/logs/`` to
+        # debug "my new games aren't showing up", the most common
+        # answer is "restart Steam". Staging printed this verbatim;
+        # the frontend modal handles the user-facing prompt but
+        # the log banner keeps the diagnostic obvious in tailed logs.
+        if added > 0 or removed > 0:
+            for line in (
+                "=" * 60,
+                "IMPORTANT: Steam restart required to see "
+                "shortcut changes!",
+                f"  (added={added} removed={removed} reclaimed={reclaimed})",
+                "Please EXIT Steam completely and restart for the "
+                "shortcuts.vdf changes to take effect.",
+                "=" * 60,
+            ):
+                logger.warning("[ShortcutService] %s", line)
         return {
             "added": added, "removed": removed,
             "kept": kept, "reclaimed": reclaimed,
@@ -147,9 +185,51 @@ class _ReconcilePhasesMixin:
         games: list[Game],
         shortcuts_dict: dict[str, Any],
         registry: dict[str, Any],
+        *,
+        force: bool = False,
     ) -> tuple[int, int, int]:
-        """Phase 2: ensure each game has a map entry and a VDF entry."""
+        """Phase 2: ensure each game has a map entry and a VDF entry.
+
+        Matching (both staging behaviours):
+
+        * **LaunchOptions** — ``store:game_id`` from the shortcut's
+          ``LaunchOptions`` field. Stable across title changes; the
+          primary match key. When found, we KNOW this game already
+          has a shortcut even if the app_id has drifted.
+        * **AppID** — the integer stored in ``shortcut["appid"]``.
+          Falls back when LaunchOptions is missing or corrupted.
+
+        Regular sync (``force=False``): matches existing shortcuts
+        and **keeps** them — ``added`` only ticks for truly new
+        ``store:game_id`` pairs. Moves ``kept`` for existing matches.
+        Mirrors staging's ``add_games_batch(skip if exists)``.
+
+        Force sync (``force=True``): matches existing shortcuts and
+        **updates** their ``AppName``, ``exe``, ``tags``, and
+        ``icon`` fields to match current metadata, while preserving
+        the ``appid`` so artwork and playtime carry through the
+        rewrite. Mirrors staging's ``force_update_games_batch``.
+        """
         from .registry import get_registered_appid, register
+
+        # Build a lookup of LaunchOptions → (shortcut_key, appid)
+        # BEFORE iterating games — one O(N) pass across shortcuts,
+        # then O(1) per-game. Mirrors staging's approach at
+        # shortcuts_manager.py line 1708-1713.
+        launch_to_key: dict[str, str] = {}
+        launch_to_appid: dict[str, int] = {}
+        for vdf_key, entry in shortcuts_dict.items():
+            if not isinstance(entry, dict):
+                continue
+            launch = entry.get("LaunchOptions", "")
+            if not isinstance(launch, str) or not launch:
+                continue
+            full_id = get_full_id(launch)
+            if full_id:
+                launch_to_key[full_id] = vdf_key
+                appid = entry.get("appid")
+                if isinstance(appid, int):
+                    launch_to_appid[full_id] = appid
 
         added = 0
         kept = 0
@@ -169,6 +249,7 @@ class _ReconcilePhasesMixin:
                 )
             else:
                 self._games_map.pop(key, None)
+            # ── Reclaim orphan by registry ──────────────────────
             registered = get_registered_appid(registry, launch_options)
             if registered is not None:
                 ord_key = self._find_existing_shortcut_key(
@@ -181,19 +262,63 @@ class _ReconcilePhasesMixin:
                     reclaimed += 1
                     register(registry, launch_options, registered, game.title)
                     continue
+            # ── Match by LaunchOptions (primary — staging behaviour)
+            existing_key = launch_to_key.get(launch_options)
+            if existing_key is not None:
+                if force:
+                    self._update_existing_shortcut(
+                        shortcuts_dict[existing_key], game, app_id, launcher,
+                    )
+                    register(registry, launch_options, app_id, game.title)
+                    kept += 1
+                else:
+                    kept += 1
+                continue
+            # ── Match by AppID (fallback — LaunchOptions missing)
             existing_key = self._find_existing_shortcut_key(
                 shortcuts_dict, app_id,
             )
-            if existing_key is None:
+            if existing_key is not None:
+                if force:
+                    self._update_existing_shortcut(
+                        shortcuts_dict[existing_key], game, app_id, launcher,
+                    )
+                kept += 1
+            else:
                 new_key = self._allocate_new_shortcut_key(shortcuts_dict)
                 shortcuts_dict[new_key] = self._build_shortcut_entry(
                     game, app_id,
                 )
                 added += 1
-            else:
-                kept += 1
             register(registry, launch_options, app_id, game.title)
         return added, kept, reclaimed
+
+    def _update_existing_shortcut(
+        self: Any,
+        entry: dict[str, Any],
+        game: Game,
+        app_id: int,
+        launcher: str,
+    ) -> None:
+        """Force-update an existing shortcut in-place — preserves ``appid``.
+
+        Only called during force sync (``force=True``).
+        Updates ``AppName``, ``Exe``, ``tags``, and ``LaunchOptions``
+        while leaving ``appid`` unchanged so artwork files and Steam's
+        playtime tracking survive the rewrite. The ``icon`` field is
+        set from ``game.icon_url`` when available (the artwork phase
+        populates it from on-disk grid files).
+        """
+        exe_quoted = f'"{launcher}"' if launcher else '""'
+        entry["AppName"] = game.title
+        entry["Exe"] = exe_quoted
+        entry["LaunchOptions"] = f"{game.store}:{game.store_game_id}"
+        if game.icon_url:
+            entry["icon"] = game.icon_url
+        tags_dict = entry.get("tags", {})
+        if isinstance(tags_dict, dict):
+            tags_dict["0"] = game.store
+            tags_dict["2"] = "" if game.installed else "Not Installed"
 
     def _reclaim_orphan(
         self: Any, entry: dict[str, Any], game: Game, app_id: int,

@@ -75,11 +75,13 @@ class EventsMixin:
         games = kwargs.get("games", [])
         if not games:
             return
+        is_force = bool(kwargs.get("is_force", False))
         logger.info(
-            "[ShortcutService] SYNC_COMPLETE → reconciling %d games",
-            len(games),
+            "[ShortcutService] SYNC_COMPLETE → reconciling %d games "
+            "(force=%s)",
+            len(games), is_force,
         )
-        result = await self.reconcile(games)
+        result = await self.reconcile(games, force=is_force)
         added = result.get("added", 0)
         removed = result.get("removed", 0)
         kept = result.get("kept", 0)

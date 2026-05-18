@@ -23,6 +23,18 @@ export const Events = {
   SYNC_FAILED: "sync_failed",
   SYNC_CANCELLED: "sync_cancelled",
   SYNC_SKIPPED: "sync_skipped",
+  // Durable activity-log events for the "recent syncs" panel.
+  // Persisted to ``runtime_dir/sync_activity.log`` by
+  // ActivityLogService; the frontend can also subscribe directly
+  // if it wants live updates.
+  LIBRARY_SYNC_STARTED: "library_sync_started",
+  LIBRARY_SYNC_COMPLETED: "library_sync_completed",
+  LIBRARY_SYNC_CANCELLED: "library_sync_cancelled",
+  // Post-sync phase signal. Emitted by ArtworkService and
+  // MetadataService when their background work finishes (active=false).
+  // Payload: {phase: "artwork"|"metadata", active: bool, total, done}.
+  // The frontend clears `isSyncing` when both phases report done.
+  POST_SYNC_PHASE_CHANGED: "post_sync_phase_changed",
   // Emitted by ShortcutService once reconcile finishes; payload
   // carries {added, removed, kept, total} so the UI can decide
   // whether to prompt for a Steam restart.

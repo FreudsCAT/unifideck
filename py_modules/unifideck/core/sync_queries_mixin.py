@@ -86,6 +86,9 @@ class _SyncQueriesMixin:
         result["syncing"] = in_flight or self._lock.locked()
         result["current_store"] = self._current_store
         result["last_sync_time"] = self._last_sync_time
+        # read the cooldown from the host; fall back to 5 seconds
+        cooldown = getattr(self, "_cooldown_ms", 5000)
+        result["cooldown_ms"] = cooldown if isinstance(cooldown, int) else 5000
         return result
 
     def get_all_games(self) -> list[Game]:

@@ -19,7 +19,7 @@ from unifideck.event_bus.event_bus import EventBus
 from unifideck.event_bus.event_bus_devex import auto_wire
 
 from .event_handlers import _EventHandlersMixin
-from .fetcher import download_and_save, find_artwork_url, has_artwork
+from .fetcher import download_and_save, has_artwork
 from .store_metadata import (
     fetch_store_urls,
     steam_cdn_urls,
@@ -235,22 +235,29 @@ class ArtworkService(_EventHandlersMixin):
         result: dict[str, bool],
         sources: dict[str, str],
     ) -> None:
-        """Phase 2: per-kind SGDB lookup for anything still missing."""
+        """Phase 2: batched SGDB lookup for everything still missing.
+
+        Calls ``steamgriddb.fetch_all_kinds`` once per game — one
+        title→game_id search followed by parallel asset fetches
+        for every kind. Previous per-kind loop did 5 separate
+        searches per game, blowing through the SGDB free-tier rate
+        limit on large libraries. The new package also resolves
+        ``grid_l`` natively with the landscape-dimension filter
+        (the old single-kind helper had no way to distinguish
+        portrait from landscape).
+        """
+        try:
+            from unifideck.steam import steamgriddb
+            urls = await steamgriddb.fetch_all_kinds(
+                title, self._api_key, config=self._config,
+            )
+        except Exception as e:
+            logger.debug("[ArtworkService] sgdb fetch failed (%s): %s", title, e)
+            return
         for kind in _ARTWORK_KINDS:
             if result.get(kind):
                 continue
-            # The current SGDB helper only knows the four legacy
-            # kinds; ``grid_l`` maps to a landscape grid query
-            # that requires the dimension-filter path. For now,
-            # forward the four supported kinds — ``grid_l`` falls
-            # through to the Steam CDN below (header.jpg).
-            sgdb_kind = "grid" if kind == "grid_l" else kind
-            try:
-                url = await find_artwork_url(
-                    title, sgdb_kind, self._api_key, self._config,
-                )
-            except Exception:
-                url = None
+            url = urls.get(kind)
             if not url:
                 continue
             ok = await download_and_save(

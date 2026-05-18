@@ -93,74 +93,125 @@ class MetadataService:
         enrichment quietly progresses in the background.
         """
         games = kwargs.get("games", [])
-        if not games:
-            return
-        # ``asyncio.create_task`` schedules the coroutine on the
-        # current event loop and returns at once. We keep the
-        # task reference so it isn't garbage-collected (Python
-        # warns about "task was destroyed but it is pending").
+        # Schedule unconditionally — even with games=[] the task
+        # must run so its ``finally`` clause fires the phase-done
+        # event. SyncService gates ``mark_complete`` on receiving
+        # one POST_SYNC_PHASE_CHANGED per pending phase; a missing
+        # signal strands ``_post_sync_pending`` and the progress
+        # bar never reaches 100%.
         self._enrichment_task = asyncio.create_task(
             self._run_enrichment(games),
             name="metadata-enrichment",
         )
 
     async def _run_enrichment(self, games: list[Game]) -> None:
-        """Background enrichment loop — see ``_on_sync_complete`` above."""
+        """Background enrichment loop. ``finally`` always emits
+        ``POST_SYNC_PHASE_CHANGED(active=False)`` so the sync's
+        post-phase tracker advances on success, exception, or
+        cancellation. Without the guard, an empty game list or
+        any uncaught error left the progress bar stuck.
+        """
         total = len(games)
-        done = 0
-        logger.info(
-            "[MetadataService] background enrichment started for %d games",
-            total,
-        )
-        every = max(1, min(50, total // 5))
-        for done, game in enumerate(games, start=1):
-            try:
-                await self.enrich(game)
-            except Exception as e:
-                logger.warning(
-                    "[MetadataService] enrichment failed for %s: %s",
-                    game.title, e,
-                )
-            if game.store != "steam":
-                try:
-                    await self.fetch_appdetails_for_game(game)
-                except Exception as e:
-                    logger.debug(
-                        "[MetadataService] appdetails failed for %s: %s",
-                        game.title, e,
-                    )
-            # Tick the shared progress bar — SyncService puts the
-            # tracker on the bus during _setup_sync.
+        try:
+            if not games:
+                return
+            # Own the metadata phase total. Previously
+            # ``_on_post_sync_phase`` in SyncService set this
+            # using the *artwork* count, which is wrong — the
+            # metadata loop walks every game, not just games
+            # that needed artwork. ``start_metadata`` also sets
+            # ``steam_total``, ``unifidb_total``, ``metacritic_total``
+            # to ``total`` so the three per-source progress rows
+            # have a real denominator.
             progress = self._bus.get_sync_progress() if hasattr(self._bus, "get_sync_progress") else None
             if progress is not None:
-                await progress.increment_metadata(game.title)
-            if done % every == 0:
-                logger.info(
-                    "[MetadataService] progress: %d/%d enriched",
-                    done, total,
-                )
-        await self._bus.emit(
-            Events.POST_SYNC_PHASE_CHANGED,
-            phase="metadata", active=False, total=total, done=total,
-        )
-        logger.info(
-            "[MetadataService] background enrichment finished (%d games)",
-            total,
-        )
+                progress.start_metadata(total)
+            logger.info(
+                "[MetadataService] background enrichment started for %d games",
+                total,
+            )
+            every = max(1, min(50, total // 5))
+            for done, game in enumerate(games, start=1):
+                # Cancel checkpoint — SyncService.cancel() flips
+                # progress.status to "cancelled"; bail out to the
+                # ``finally`` so POST_SYNC_PHASE_CHANGED still fires
+                # and ``_post_sync_pending`` clears (without it the
+                # bar would stall at the metadata phase indefinitely).
+                if progress is not None and progress.status == "cancelled":
+                    logger.info(
+                        "[MetadataService] cancel detected at %d/%d — aborting",
+                        done, total,
+                    )
+                    break
+                try:
+                    await self.enrich(game)
+                except Exception as e:
+                    logger.warning(
+                        "[MetadataService] enrichment failed for %s: %s",
+                        game.title, e,
+                    )
+                if game.store != "steam":
+                    try:
+                        await self.fetch_appdetails_for_game(game)
+                    except Exception as e:
+                        logger.debug(
+                            "[MetadataService] appdetails failed for %s: %s",
+                            game.title, e,
+                        )
+                # Tick each per-source counter once per game. The
+                # three sources run in parallel inside ``enrich``
+                # via ``asyncio.gather`` — at this point all three
+                # have either succeeded or failed for this game,
+                # so the increment represents "attempt complete"
+                # rather than "data fetched". The frontend renders
+                # one row per source.
+                progress = self._bus.get_sync_progress() if hasattr(self._bus, "get_sync_progress") else None
+                if progress is not None:
+                    await progress.increment_steam(game.title)
+                    await progress.increment_unifidb(game.title)
+                    await progress.increment_metacritic(game.title)
+                if done % every == 0:
+                    logger.info(
+                        "[MetadataService] progress: %d/%d enriched",
+                        done, total,
+                    )
+        finally:
+            await self._bus.emit(
+                Events.POST_SYNC_PHASE_CHANGED,
+                phase="metadata", active=False, total=total, done=total,
+            )
+            logger.info(
+                "[MetadataService] background enrichment finished (%d games)",
+                total,
+            )
 
     async def enrich(self, game: Game) -> dict[str, Any]:
-        """Return enriched metadata for a single game."""
+        """Return enriched metadata for a single game.
+
+        Caches both positive and negative results — a previous miss
+        is stored with the ``{"_negative": True}`` sentinel so the
+        next sync skips the three API calls for known-not-found
+        titles. Without negative caching, every sync re-queries
+        Steam Store + UnifiDB + Metacritic for the same niche games
+        that none of them have, wasting bandwidth and tripping rate
+        limits on large libraries.
+        """
         cache_key = f"{game.store}:{game.store_game_id}"
 
         try:
             cached = self._cache.get(CACHE_NAMESPACE, cache_key)
-            if cached and isinstance(cached, dict):
-                # Simple TTL check could be implemented if cache returns timestamps
-                # Assuming CacheManager handles TTL or we trust it for now
-                # ``cache.get`` is typed Any — the isinstance narrowing
-                # makes this a real dict at runtime, anchor the type
-                # for mypy via cast.
-                return cast("dict[str, Any]", cached)
+            if isinstance(cached, dict):
+                # Negative sentinel: previously confirmed no source
+                # had data for this game. Return empty so callers
+                # behave as if no metadata is available, without
+                # re-hitting the network.
+                if cached.get("_negative"):
+                    return {}
+                if cached:
+                    # ``cache.get`` is typed Any — the isinstance
+                    # narrowing makes this a real dict at runtime;
+                    # anchor the type for mypy via cast.
+                    return cast("dict[str, Any]", cached)
         except Exception as e:
             logger.debug("[MetadataService] Cache read failed for %s: %s", cache_key, e)
 
@@ -180,23 +231,29 @@ class MetadataService:
         metacritic_data = results[2] if isinstance(results[2], dict) else {}
 
         # Merge (Steam > UnifiDB > Metacritic)
-        merged = {}
+        merged: dict[str, Any] = {}
         merged.update(metacritic_data)
         merged.update(unifidb_data)
         merged.update(steam_data)
 
-        if merged:
-            try:
-                # TTL is configured at register time in
-                # ``bootstrap/cache_registry.py`` (7 days for the
-                # ``"metadata"`` slot). ``CacheManager.set`` takes
-                # only ``(cache, key, value)`` — earlier this site
-                # also passed ``ttl=self._ttl`` and silently raised
-                # ``TypeError: set() got an unexpected keyword
-                # argument 'ttl'`` on every cache write.
-                self._cache.set(CACHE_NAMESPACE, cache_key, merged)
-            except Exception as e:
-                logger.warning("[MetadataService] Failed to cache metadata for %s: %s", cache_key, e)
+        try:
+            # TTL is configured at register time in
+            # ``bootstrap/cache_registry.py`` (7 days for the
+            # ``"metadata"`` slot). ``CacheManager.set`` takes
+            # only ``(cache, key, value)`` — earlier this site
+            # also passed ``ttl=self._ttl`` and silently raised
+            # ``TypeError: set() got an unexpected keyword
+            # argument 'ttl'`` on every cache write.
+            #
+            # Empty result → store negative sentinel so the next
+            # sync skips the three API calls. Sharing the same TTL
+            # as positive entries is fine — a game that didn't have
+            # metadata last week probably still doesn't, and if it
+            # does the TTL expiry kicks in eventually.
+            payload = merged if merged else {"_negative": True}
+            self._cache.set(CACHE_NAMESPACE, cache_key, payload)
+        except Exception as e:
+            logger.warning("[MetadataService] Failed to cache metadata for %s: %s", cache_key, e)
 
         return merged
 

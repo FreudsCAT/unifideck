@@ -15,14 +15,23 @@ class SyncRPCMixin:
 
     sync_service: Any
 
-    async def sync_libraries(self, **kw: Any) -> Any:
+    async def sync_libraries(
+        self, fetch_artwork: bool = True, **kw: Any,
+    ) -> Any:
         """Trigger a full library sync across every store.
+
+        Args:
+            fetch_artwork: when ``False``, skip the artwork
+                download phase entirely. Used by background /
+                scheduled syncs that only need a fresh game list.
 
         The underlying service method is ``sync_all`` (an earlier
         version called ``sync`` which doesn't exist on
         :class:`SyncService` — the RPC raised ``AttributeError``).
         """
-        return await self.sync_service.sync_all(**kw)
+        return await self.sync_service.sync_all(
+            fetch_artwork=fetch_artwork, **kw,
+        )
 
     async def force_sync_libraries(
         self, resync_artwork: bool = False, **kw: Any,
@@ -33,25 +42,19 @@ class SyncRPCMixin:
         expired but the library is known to have changed.
 
         Args:
-            resync_artwork: whether to re-fetch all artwork
-                (passed from the frontend's ForceSyncModal).
+            resync_artwork: when ``True``, ArtworkService clears
+                its SGDB failure-cooldown cache and bypasses the
+                ``has_artwork`` on-disk skip so every game gets a
+                fresh download. Wired end-to-end via the
+                SYNC_COMPLETE event payload.
             **kw: forwarded with ``force=True`` added.
 
         Returns:
             Sync-outcome dict.
         """
-        # ``resync_artwork`` is part of the frontend ForceSyncModal
-        # contract but the wire-through to the artwork service is
-        # not yet implemented in ``SyncService.sync_all`` (it only
-        # accepts ``force``). Log it so the choice is observable
-        # in the bus / log stream and vulture sees the param as
-        # used. TODO: forward to artwork invalidator once the
-        # service grows a ``resync_artwork`` parameter.
-        logger.debug(
-            "[sync] force_sync_libraries(resync_artwork=%s)",
-            resync_artwork,
+        return await self.sync_service.sync_all(
+            force=True, resync_artwork=resync_artwork, **kw,
         )
-        return await self.sync_service.sync_all(force=True, **kw)
 
     async def get_sync_status(self) -> Any:
         """Return whether a sync is running + last completion time."""
@@ -65,9 +68,32 @@ class SyncRPCMixin:
         """
         return self.sync_service.get_status()
 
+    async def refresh_store(self, store_name: str) -> Any:
+        """Sync a single store — used by the per-store refresh button.
+
+        Calls ``sync_single_store`` on ``SyncService`` (no single-flight
+        lock — the caller is responsible for not racing a full sync).
+        Returns ``{"success": bool, "error": str | None}`` so the
+        frontend can show a brief toast for each refresh.
+        """
+        ok, err = await self.sync_service.sync_single_store(store_name)
+        return {"success": ok, "error": err}
+
     async def cancel_sync(self) -> Any:
         """Cancel an in-flight sync."""
         return await self.sync_service.cancel()
+
+    async def request_auth_sync(self, store: str) -> Any:
+        """Frontend-callable trigger for post-login refresh.
+
+        Called by AuthDispatcher after a store login completes
+        (e.g. Ubisoft, which has no browser-callback auth). If a
+        sync is already running, the request is queued behind it
+        via ``SyncService._enqueue``; the response carries
+        ``restart_pending=True`` so the frontend knows to re-listen
+        for ``SYNC_STARTED``.
+        """
+        return await self.sync_service.request_auth_sync(store)
 
     async def get_all_unifideck_games(self) -> Any:
         """Return every known game across every store.

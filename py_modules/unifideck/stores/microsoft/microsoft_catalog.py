@@ -1,20 +1,59 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
-from typing import Any
-from urllib.parse import urlencode
+import time
+import urllib.error
+import urllib.request
+from typing import TYPE_CHECKING, Any
 
+from unifideck.core.net import ssl_ctx_permissive as _ssl
 from unifideck.core.types import Game, GameTag
-from unifideck.utils.locale import get_unifideck_locale, get_unifideck_market
+from unifideck.utils.locale import get_unifideck_locale
 
-from .microsoft_auth import http_get
 from .microsoft_config import MicrosoftConfig
 
+if TYPE_CHECKING:
+    from .microsoft_subscription import SubscriptionProbeResult
+
 logger = logging.getLogger(__name__)
-_TITLE_BATCH_SIZE = 20
+
+# Batch size for displaycatalog.mp.microsoft.com GET. 50 productIds
+# per query stays well under the 4096-char URL limit.
+_TITLE_BATCH_SIZE = 50
+# displaycatalog is a public CDN tier — safe for higher concurrency
+# than the gamepass origin.
+_TITLE_BATCH_CONCURRENCY = 6
+
+# Browser-shaped UA — required by Azure App Gateway in front of
+# gssv-play-prod.xboxlive.com.
+_BROWSER_UA = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/120.0.0.0 Safari/537.36 Edg/120.0.0.0"
+)
+
+
 class MicrosoftCatalogReader:
-    """Microsoft catalog reader."""
+    """xCloud / Game Pass catalog reader.
+
+    Pulls the user's account-scoped library from the regional GSSV
+    ``/v2/titles`` endpoint (returns 2000+ cloud-streamable titles
+    with per-title ``hasEntitlement`` flags), filters to entitled
+    titles only — that's "Game Pass + Play Anywhere games the user
+    owns" — then resolves display names via
+    ``catalog.gamepass.com/v3/products``.
+
+    Tier-tagging (Premium/Standard/Ultimate badges) is intentionally
+    NOT done here. ``hasEntitlement`` already encodes tier access
+    server-side: a Standard-tier account would see fewer entitled
+    titles than an Ultimate one. If a per-tier UI filter is wanted
+    later, cross-reference each entitled productId with the public
+    ``sigls/v2`` channels (PC GP / Standard / Premium / Cloud) for
+    pure display metadata — would not affect this sync.
+    """
+
     def __init__(
         self,
         config: MicrosoftConfig,
@@ -23,189 +62,326 @@ class MicrosoftCatalogReader:
         """Initialize the instance."""
         self._config = config
         self._config_manager = config_manager
-    async def fetch_games(self) -> list[Game]:
-        """Fetch games."""
-        product_ids = await self._fetch_catalog_ids()
-        if not product_ids:
+
+    async def fetch_games(
+        self,
+        session: SubscriptionProbeResult,
+    ) -> list[Game]:
+        """Fetch entitled games using the active xCloud session."""
+        if not session.gs_token or not session.regions:
             logger.warning(
-                "[MicrosoftCatalog] catalog is empty or "
-                "unreachable",
+                "[MicrosoftCatalog] session has no gs_token/regions",
             )
             return []
-        titles = await self._batch_get_titles(product_ids)
-        games: list[Game] = [
+        base_uri = _pick_region_base_uri(session.regions)
+        if base_uri is None:
+            logger.warning(
+                "[MicrosoftCatalog] no usable region baseUri "
+                "in session",
+            )
+            return []
+        market = session.market or "US"
+        lang = get_unifideck_locale(self._config_manager) or "en-US"
+
+        logger.info(
+            "[MicrosoftCatalog] fetching /v2/titles from %s "
+            "(market=%s, lang=%s)", base_uri, market, lang,
+        )
+        t0 = time.time()
+        titles = await self._fetch_xcloud_titles(
+            base_uri, session.gs_token,
+        )
+        logger.info(
+            "[MicrosoftCatalog] /v2/titles returned %d titles in %.1fs",
+            len(titles), time.time() - t0,
+        )
+        if not titles:
+            logger.warning(
+                "[MicrosoftCatalog] /v2/titles returned 0 titles",
+            )
+            return []
+        entitled = [
+            t for t in titles
+            if isinstance(t, dict)
+            and isinstance(t.get("details"), dict)
+            and t["details"].get("hasEntitlement") is True
+        ]
+        logger.info(
+            "[MicrosoftCatalog] %d total visible, %d entitled",
+            len(titles), len(entitled),
+        )
+        if not entitled:
+            return []
+
+        product_ids = _unique_product_ids(entitled)
+        if not product_ids:
+            logger.warning(
+                "[MicrosoftCatalog] entitled titles had no "
+                "productIds",
+            )
+            return []
+        t1 = time.time()
+        title_map = await self._batch_resolve_titles(
+            product_ids, market,
+        )
+        logger.info(
+            "[MicrosoftCatalog] resolved %d/%d titles in %.1fs "
+            "(total fetch_games: %.1fs)",
+            len(title_map), len(product_ids),
+            time.time() - t1, time.time() - t0,
+        )
+        return [
             Game(
                 app_id=0,
                 store="microsoft",
                 store_game_id=pid,
-                title=titles.get(pid, pid),
+                title=_title_for(title_map, pid, fallback_title),
                 installed=False,
                 tags=[GameTag.XCLOUD],
             )
-            for pid in product_ids
-        ]
-        logger.info(
-            "[MicrosoftCatalog] built %d games (%d titles "
-            "resolved)",
-            len(games), len(titles),
-        )
-        return games
-
-    async def _fetch_catalog_ids(self) -> list[str]:
-
-        """Fetch catalog ids."""
-        locale = get_unifideck_locale(self._config_manager)
-        market = get_unifideck_market(self._config_manager)
-        base_url = self._config.xcloud_catalog_url
-        separator = "&" if "?" in base_url else "?"
-        url = (
-            f"{base_url}{separator}"
-            f"{urlencode({'language': locale, 'market': market})}"
-        )
-        headers = {
-            "User-Agent": self._config.catalog_user_agent,
-        }
-        try:
-            data = await (
-                asyncio.get_event_loop().run_in_executor(
-                    None, lambda: http_get(url, headers),
+            for pid, fallback_title in (
+                (
+                    (t.get("details") or {}).get("productId") or "",
+                    t.get("titleId", ""),
                 )
+                for t in entitled
             )
-        except Exception:
-            logger.exception("[MicrosoftCatalog] catalog fetch failed")
-            return []
-        if not isinstance(data, list):  # type: ignore[unreachable]  # guard 'if not isinstance(data, list)'
-            logger.warning(
-                "[MicrosoftCatalog] catalog returned %s, "
-                "not list",
-                type(data).__name__,
-            )
-            return []
-        ids = [  # type: ignore[unreachable]  # guard on response shape
-            item["id"]
-            for item in data
-            if isinstance(item, dict)
-            and isinstance(item.get("id"), str)
-            and item["id"]
+            if pid
         ]
-        logger.info(
-            "[MicrosoftCatalog] %d IDs from catalog",
-            len(ids),
-        )
-        return ids
-    async def _batch_get_titles(
-        self, product_ids: list[str],
-    ) -> dict[str, str]:
-        """Batch get titles."""
-        if not product_ids:
-            return {}
-        locale = get_unifideck_locale(self._config_manager)
-        market = get_unifideck_market(self._config_manager)
-        base_url = self._config.xcloud_titles_url
-        ua = self._config.catalog_user_agent
-        result: dict[str, str] = {}
-        total_batches = (
-            (len(product_ids) + _TITLE_BATCH_SIZE - 1)
-            // _TITLE_BATCH_SIZE
-        )
-        for i in range(0, len(product_ids), _TITLE_BATCH_SIZE):
-            batch = product_ids[i: i + _TITLE_BATCH_SIZE]
-            batch_result = await self._fetch_one_title_batch(
-                batch, base_url, locale, market, ua,
-            )
-            result.update(batch_result)
-        logger.info(
-            "[MicrosoftCatalog] resolved %d/%d titles across "
-            "%d batches",
-            len(result), len(product_ids), total_batches,
-        )
-        return result
 
-    async def _fetch_one_title_batch(
-        self,
-        batch: list[str],
-        base_url: str,
-        locale: str,
-        market: str,
-        user_agent: str,
-    ) -> dict[str, str]:
-
-        """Fetch one title batch."""
-        ids_param = ",".join(batch)
-        separator = "&" if "?" in base_url else "?"
-        params = {
-            "bigIds": ids_param,
-            "market": market,
-            "languages": locale,
-            "fieldsTemplate": "Browse",
-        }
-        url = f"{base_url}{separator}{urlencode(params)}"
+    async def _fetch_xcloud_titles(
+        self, base_uri: str, gs_token: str,
+    ) -> list[dict[str, Any]]:
+        """GET ``{base}/v2/titles`` with Bearer gsToken."""
+        url = base_uri.rstrip("/") + "/v2/titles"
         headers = {
+            "Authorization": f"Bearer {gs_token}",
             "Accept": "application/json",
-            "User-Agent": user_agent,
-            "MS-CV": "unifideck.xcloud",
+            "Accept-Language": "en-US",
+            "User-Agent": _BROWSER_UA,
+            "x-gssv-client": "XboxComBrowser",
         }
-        try:
-            data = await (
-                asyncio.get_event_loop().run_in_executor(
-                    None, lambda: http_get(url, headers),
-                )
-            )
-        except Exception as e:
-            logger.warning(
-                "[MicrosoftCatalog] title batch failed: %s",
-                e,
-            )
-            return {}
-        return self._extract_titles(data)
-    @staticmethod
-    def _extract_titles(data: Any) -> dict[str, str]:
-        """Extract titles."""
-        if not isinstance(data, dict):
-            return {}
-        products = data.get("Products")
-        if not isinstance(products, list):
-            return {}
-        result: dict[str, str] = {}
-        for product in products:
-            entry = (
-                MicrosoftCatalogReader
-                ._extract_one_product_title(product)
-            )
-            if entry is not None:
-                pid, title = entry
-                result[pid] = title
-        return result
-    @staticmethod
-    def _extract_one_product_title(
-        product: Any,
-    ) -> tuple[str, str] | None:
-        """Extract one product title."""
-        if not isinstance(product, dict):
-            return None
-        pid = product.get("ProductId")
-        if not isinstance(pid, str) or not pid:
-            return None
-        localized = product.get("LocalizedProperties")
-        if not isinstance(localized, list):
-            return None
-        title = (
-            MicrosoftCatalogReader
-            ._first_localized_title(localized)
+        result = await asyncio.get_event_loop().run_in_executor(
+            None, lambda: _xcloud_titles_sync(url, headers),
         )
-        if title is None:
-            return None
-        return pid, title
+        return result or []
 
-    @staticmethod
-    def _first_localized_title(
-        localized: list[Any],
-    ) -> str | None:
-        """First localized title."""
-        for loc in localized:
-            if not isinstance(loc, dict):
-                continue
-            title = loc.get("ProductTitle")
-            if isinstance(title, str) and title:
-                return title
-        return None
+    async def _batch_resolve_titles(
+        self, product_ids: list[str], market: str,
+    ) -> dict[str, str]:
+        """Resolve productIds → display titles via displaycatalog MP.
+
+        displaycatalog.mp.microsoft.com is a public CDN endpoint with
+        no auth requirement — faster and more reliable than
+        catalog.gamepass.com/v3, which requires undisclosed
+        calling-app-name headers and routinely 500s under even
+        modest concurrency. Same ProductTitle content.
+
+        Batches of ``_TITLE_BATCH_SIZE`` run concurrently with a
+        semaphore-bounded concurrency of ``_TITLE_BATCH_CONCURRENCY``.
+        """
+        batches: list[list[str]] = [
+            product_ids[i: i + _TITLE_BATCH_SIZE]
+            for i in range(0, len(product_ids), _TITLE_BATCH_SIZE)
+        ]
+        total_batches = len(batches)
+        logger.info(
+            "[MicrosoftCatalog] resolving %d titles in %d batches "
+            "(size=%d, concurrency=%d) via displaycatalog.mp.ms",
+            len(product_ids), total_batches,
+            _TITLE_BATCH_SIZE, _TITLE_BATCH_CONCURRENCY,
+        )
+        sem = asyncio.Semaphore(_TITLE_BATCH_CONCURRENCY)
+        loop = asyncio.get_event_loop()
+        out: dict[str, str] = {}
+        completed = 0
+
+        async def run_one(idx: int, batch: list[str]) -> dict[str, str]:
+            nonlocal completed
+            async with sem:
+                t0 = time.time()
+                result: dict[str, str] = await loop.run_in_executor(
+                    None,
+                    _resolve_batch_displaycatalog, batch, market,
+                )
+            completed += 1
+            logger.debug(
+                "[MicrosoftCatalog] batch %d/%d done in %.1fs "
+                "(%d/%d resolved)",
+                idx + 1, total_batches, time.time() - t0,
+                len(result), len(batch),
+            )
+            if (
+                completed % max(1, total_batches // 4) == 0
+                or completed == total_batches
+            ):
+                logger.info(
+                    "[MicrosoftCatalog] title resolution: "
+                    "%d/%d batches done",
+                    completed, total_batches,
+                )
+            return result
+
+        results = await asyncio.gather(
+            *(run_one(i, b) for i, b in enumerate(batches)),
+        )
+        for r in results:
+            out.update(r)
+        return out
+
+
+def _pick_region_base_uri(
+    regions: list[dict[str, Any]],
+) -> str | None:
+    """Pick the default region's baseUri, else the first available."""
+    for r in regions:
+        base = r.get("baseUri")
+        if r.get("isDefault") and isinstance(base, str):
+            return base
+    for r in regions:
+        base = r.get("baseUri")
+        if isinstance(base, str):
+            return base
+    return None
+
+
+def _unique_product_ids(entitled: list[dict[str, Any]]) -> list[str]:
+    """Extract unique productIds preserving first-seen order."""
+    seen: dict[str, None] = {}
+    for t in entitled:
+        pid = (t.get("details") or {}).get("productId")
+        if isinstance(pid, str) and pid and pid not in seen:
+            seen[pid] = None
+    return list(seen)
+
+
+def _title_for(
+    title_map: dict[str, str], product_id: str, fallback: str,
+) -> str:
+    """Best display name: v3 ProductTitle, or titleId, or product_id."""
+    name = title_map.get(product_id)
+    if isinstance(name, str) and name:
+        return name
+    if fallback:
+        return fallback
+    return product_id
+
+
+def _xcloud_titles_sync(
+    url: str, headers: dict[str, str],
+) -> list[dict[str, Any]]:
+    """Synchronous GET for /v2/titles. Returns ``results`` list."""
+    req = urllib.request.Request(url, headers=headers)
+    try:
+        with urllib.request.urlopen(
+            req, timeout=30,
+            context=_ssl(
+                "Microsoft xCloud /v2/titles — "
+                "outdated Deck cert store",
+            ),
+        ) as r:
+            raw = r.read().decode("utf-8", errors="replace")
+    except urllib.error.HTTPError as e:
+        logger.exception(
+            "[MicrosoftCatalog] /v2/titles HTTPError %d (reason=%s)",
+            e.code, e.reason,
+        )
+        return []
+    except urllib.error.URLError as e:
+        logger.exception(
+            "[MicrosoftCatalog] /v2/titles URLError (reason=%r)",
+            e.reason,
+        )
+        return []
+    except Exception as e:
+        logger.exception(
+            "[MicrosoftCatalog] /v2/titles unexpected %s",
+            type(e).__name__,
+        )
+        return []
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        logger.exception(
+            "[MicrosoftCatalog] /v2/titles returned non-JSON "
+            "(len=%d, first=%.200s)",
+            len(raw), raw,
+        )
+        return []
+    if not isinstance(data, dict):
+        return []
+    results = data.get("results")
+    return results if isinstance(results, list) else []
+
+
+def _resolve_batch_displaycatalog(
+    batch: list[str], market: str,
+) -> dict[str, str]:
+    """GET displaycatalog.mp.microsoft.com for one batch of productIds."""
+    from urllib.parse import urlencode as _uenc
+    qs = _uenc({
+        "bigIds": ",".join(batch),
+        "market": market, "languages": "en-US",
+    })
+    url = (
+        "https://displaycatalog.mp.microsoft.com/v7.0/products?" + qs
+    )
+    req = urllib.request.Request(url, headers={
+        "User-Agent": _BROWSER_UA, "Accept": "application/json",
+    })
+    raw: str | None = None
+    try:
+        with urllib.request.urlopen(
+            req, timeout=30,
+            context=_ssl(
+                "Microsoft displaycatalog — "
+                "outdated Deck cert store",
+            ),
+        ) as r:
+            raw = r.read().decode("utf-8", errors="replace")
+    except urllib.error.HTTPError as e:
+        logger.warning(
+            "[MicrosoftCatalog] displaycatalog HTTPError %d "
+            "(batch size %d)",
+            e.code, len(batch),
+        )
+        return {}
+    except Exception as e:
+        logger.warning(
+            "[MicrosoftCatalog] displaycatalog %s (batch size %d)",
+            type(e).__name__, len(batch),
+        )
+        return {}
+    return _parse_displaycatalog(raw)
+
+
+def _parse_displaycatalog(raw: str) -> dict[str, str]:
+    """Parse displaycatalog response → {productId: ProductTitle}."""
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        logger.warning(
+            "[MicrosoftCatalog] displaycatalog non-JSON "
+            "(len=%d, first=%.200s)",
+            len(raw), raw,
+        )
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    products = data.get("Products")
+    if not isinstance(products, list):
+        return {}
+    out: dict[str, str] = {}
+    for p in products:
+        if not isinstance(p, dict):
+            continue
+        pid = p.get("ProductId")
+        if not isinstance(pid, str) or not pid:
+            continue
+        loc = p.get("LocalizedProperties")
+        if not isinstance(loc, list) or not loc:
+            continue
+        title = loc[0].get("ProductTitle")
+        if isinstance(title, str) and title:
+            out[pid] = title
+    return out

@@ -79,6 +79,16 @@ class SyncResult(Result):
     games: list[Any] = field(default_factory=list)
     count: int = 0
     duration_ms: int = 0
+    # True when a sync request was queued behind an in-flight sync
+    # (per ``SyncService._enqueue`` merging). The frontend uses this
+    # flag to auto-listen for the next SYNC_STARTED so the post-auth
+    # refresh feels seamless without a polling loop.
+    restart_pending: bool = False
+    # Provenance of the request — propagated from ``SyncRequest.source``
+    # ("manual" | "auth:<store>" | "background" | "scheduled"). Lets
+    # callers and logs distinguish user-initiated syncs from
+    # auto-triggered ones.
+    source: str = "manual"
 
 
 @dataclass

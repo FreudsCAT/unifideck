@@ -19,8 +19,15 @@ from .time_utils import _fmt_ts
 if TYPE_CHECKING:
     from unifideck.config import ConfigManager
     from unifideck.core.cache_manager import CacheManager
+    from unifideck.stores.microsoft.microsoft_subscription import (
+        SubscriptionProbeResult,
+    )
     from unifideck.stores.microsoft.tokens import MicrosoftTokenManager, XBLTokenChain
 logger = logging.getLogger(__name__)
+
+# gsToken JWTs are issued with ~4h expiry. Reuse a probe result within
+# this window to avoid hitting the login service every sync.
+_PROBE_SESSION_TTL_SECONDS = 60 * 50
 class MicrosoftSubscriptionService(
     _CacheMixin, _ProbeEmissionMixin, _EventHandlersMixin,
 ):
@@ -45,6 +52,11 @@ class MicrosoftSubscriptionService(
         self._lock = asyncio.Lock()
         self._last_emitted: dict[str, SubscriptionTier] = {}
         self._last_standard_chain: XBLTokenChain | None = None
+        # In-memory probe session: holds the most recent SubscriptionProbeResult
+        # (gsToken + regions + market) so downstream consumers (catalog reader)
+        # can reuse it within the JWT's lifetime without re-probing.
+        self._last_probe: SubscriptionProbeResult | None = None
+        self._last_probe_at: float = 0.0
         auto_wire(self, self._bus)
         logger.info(
             "[MSSubSvc] initialized (endpoint=%s)",
@@ -71,6 +83,10 @@ class MicrosoftSubscriptionService(
                 return cached.tier
             probe_result = await self._run_probe(token_manager)
             if probe_result.ok:
+                # Persist session artefacts (gsToken/regions/market) for
+                # the catalog reader to reuse within the JWT lifetime.
+                self._last_probe = probe_result
+                self._last_probe_at = time.time()
                 await self._store_tier_result(
                     cache_key, probe_result.tier,
                 )
@@ -103,6 +119,36 @@ class MicrosoftSubscriptionService(
         """Check whether active subscription."""
         tier = await self.get_tier(token_manager)
         return tier != SubscriptionTier.NONE
+
+    async def get_session(
+        self,
+        token_manager: MicrosoftTokenManager,
+    ) -> SubscriptionProbeResult | None:
+        """Return a fresh-enough probe result for downstream use.
+
+        The xCloud catalog reader needs the ``gsToken`` and ``regions``
+        from the login response to call the regional ``/v2/titles``
+        endpoint. We reuse the last probe result while still valid,
+        otherwise re-probe and return that.
+
+        Returns None if no successful probe is available (e.g.
+        subscription gate has rejected the account).
+        """
+        now = time.time()
+        if (
+            self._last_probe is not None
+            and self._last_probe.gs_token
+            and now - self._last_probe_at < _PROBE_SESSION_TTL_SECONDS
+        ):
+            return self._last_probe
+        # Force a fresh probe — get_tier handles capture into _last_probe
+        await self.get_tier(token_manager)
+        if (
+            self._last_probe is not None
+            and self._last_probe.gs_token
+        ):
+            return self._last_probe
+        return None
     async def invalidate(self) -> None:
         """Invalidate."""
         try:

@@ -46,6 +46,19 @@ class Events(StrEnum):
     #  { phase: "artwork"|"metadata", active: bool, total: int|None, done: int|None }
     POST_SYNC_PHASE_CHANGED = "post_sync_phase_changed"
 
+    # Durable activity-log events — captured by ActivityLogService
+    # into a JSONL file (``runtime_dir/sync_activity.log``) so the
+    # frontend can show "last 10 syncs" with timestamps, durations,
+    # and per-store counts. Distinct from SYNC_STARTED /
+    # SYNC_COMPLETE which are ephemeral UI signals; these carry the
+    # data worth persisting.
+    #   started   payload: { source, stores, started_at_ms }
+    #   completed payload: { source, duration_ms, game_count, errors }
+    #   cancelled payload: { source, duration_ms }
+    LIBRARY_SYNC_STARTED = "library_sync_started"
+    LIBRARY_SYNC_COMPLETED = "library_sync_completed"
+    LIBRARY_SYNC_CANCELLED = "library_sync_cancelled"
+
     # Store auth lifecycle
     STORE_AUTH_STARTED = "store_auth_started"
     STORE_AUTH_COMPLETE = "store_auth_complete"

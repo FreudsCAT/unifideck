@@ -9,6 +9,14 @@ object's ``to_dict()`` every 500 ms.
 Phase transitions are triggered by the synchronous pass-through
 methods so callers (SyncService itself, ArtworkService,
 MetadataService) never set internal fields directly.
+
+Metadata sub-counters: staging's flow was sequential
+(steam_metadata → unifidb_lookup → metacritic), each with its own
+counter ticking. Current MetadataService fans the three sources
+out in parallel via ``asyncio.gather`` (faster), so the counters
+move in lockstep — but they're exposed independently so the
+frontend can render one row per source. UnifiDB / Metacritic
+rows were missing in for-pr-0.7; this restores them.
 """
 
 from __future__ import annotations
@@ -28,7 +36,12 @@ PHASE_RANGES: dict[str, tuple[int, int]] = {
     "unifidb_lookup": (50, 55),
     "sgdb_lookup": (55, 60),
     "artwork": (60, 90),
-    "metadata": (90, 98),
+    "metadata": (90, 95),
+    # Background ProtonDB / Deck-Verified fetch — happens after
+    # metadata enrichment via CompatibilityService. Narrow band
+    # (95-98) because individual lookups are fast (~50ms) and the
+    # phase shouldn't dominate the bar visually.
+    "proton_setup": (95, 98),
     "complete": (100, 100),
     "error": (100, 100),
     "cancelled": (100, 100),
@@ -45,13 +58,17 @@ class SyncProgress:
         self.status: str = "idle"
         self.error: str | None = None
         self.progress_percent: int = 0
-        # Per-phase sub-counters.
+        # Per-phase sub-counters. The metadata phase has three
+        # parallel sources, each tracked independently so the
+        # frontend can render per-source progress rows.
         self.artwork_total: int = 0
         self.artwork_synced: int = 0
         self.steam_total: int = 0
         self.steam_synced: int = 0
-        self.metadata_total: int = 0
-        self.metadata_synced: int = 0
+        self.unifidb_total: int = 0
+        self.unifidb_synced: int = 0
+        self.metacritic_total: int = 0
+        self.metacritic_synced: int = 0
         self._lock: asyncio.Lock = asyncio.Lock()
 
     # ── Phase-entry helpers ────────────────────────────────────
@@ -76,7 +93,7 @@ class SyncProgress:
         self.synced_games = total_games
 
     def start_artwork(
-        self, total: int, label: str = "artwork.checking",
+        self, total: int, label: str = "sync.checkingExistingArtwork",
     ) -> None:
         self.status = "artwork"
         self.artwork_total = total
@@ -87,11 +104,24 @@ class SyncProgress:
         }
 
     def start_metadata(
-        self, total: int, label: str = "sync.extractingMetadata",
+        self, total: int, label: str = "sync.fetchingEnhancedMetadata",
     ) -> None:
+        """Enter the metadata enrichment phase.
+
+        Sets *all three* source totals to ``total`` because
+        ``MetadataService._run_enrichment`` attempts each source
+        once per game (Steam Store + UnifiDB + Metacritic in
+        parallel). The three counters tick in lockstep but are
+        exposed independently so the frontend can render one row
+        per source.
+        """
         self.status = "metadata"
-        self.metadata_total = total
-        self.metadata_synced = 0
+        self.steam_total = total
+        self.steam_synced = 0
+        self.unifidb_total = total
+        self.unifidb_synced = 0
+        self.metacritic_total = total
+        self.metacritic_synced = 0
         self.current_game = {
             "label": label,
             "values": {"synced": 0, "total": total},
@@ -127,20 +157,6 @@ class SyncProgress:
             self._recalc()
             return self.artwork_synced
 
-    async def increment_metadata(self, title: str) -> int:
-        async with self._lock:
-            self.metadata_synced += 1
-            self.current_game = {
-                "label": "sync.extractingMetadata",
-                "values": {
-                    "synced": self.metadata_synced,
-                    "total": self.metadata_total,
-                    "game": title,
-                },
-            }
-            self._recalc()
-            return self.metadata_synced
-
     async def increment_steam(self, title: str) -> int:
         async with self._lock:
             self.steam_synced += 1
@@ -155,19 +171,69 @@ class SyncProgress:
             self._recalc()
             return self.steam_synced
 
+    async def increment_unifidb(self, title: str) -> int:
+        async with self._lock:
+            self.unifidb_synced += 1
+            self.current_game = {
+                "label": "sync.lookingUpUnifiDB",
+                "values": {
+                    "synced": self.unifidb_synced,
+                    "total": self.unifidb_total,
+                    "game": title,
+                },
+            }
+            self._recalc()
+            return self.unifidb_synced
+
+    async def increment_metacritic(self, title: str) -> int:
+        async with self._lock:
+            self.metacritic_synced += 1
+            self.current_game = {
+                "label": "sync.fetchingMetacriticData",
+                "values": {
+                    "synced": self.metacritic_synced,
+                    "total": self.metacritic_total,
+                    "game": title,
+                },
+            }
+            self._recalc()
+            return self.metacritic_synced
+
     # ── Internal ──────────────────────────────────────────────
 
     def _recalc(self) -> None:
-        """Compute progress_percent from the current phase + sub-counter."""
+        """Compute progress_percent from the current phase + sub-counter.
+
+        Metadata phase: three sources tick in lockstep, so any
+        of them is a valid driver. Pick the *minimum* — most
+        pessimistic, prevents the bar from racing ahead if one
+        source fails fast and the others lag.
+        """
         start_pct, end_pct = PHASE_RANGES.get(self.status, (0, 0))
         span = end_pct - start_pct
 
         if self.status == "artwork" and self.artwork_total > 0:
             sub = self.artwork_synced / self.artwork_total
             self.progress_percent = int(start_pct + span * sub)
-        elif self.status == "metadata" and self.metadata_total > 0:
-            sub = self.metadata_synced / self.metadata_total
-            self.progress_percent = int(start_pct + span * sub)
+        elif self.status == "metadata":
+            # All three totals are set identically by start_metadata;
+            # use whichever is non-zero (defensive).
+            denom = max(
+                self.steam_total,
+                self.unifidb_total,
+                self.metacritic_total,
+            )
+            if denom > 0:
+                slowest = min(
+                    self.steam_synced,
+                    self.unifidb_synced,
+                    self.metacritic_synced,
+                )
+                self.progress_percent = int(
+                    start_pct + span * (slowest / denom),
+                )
+            else:
+                self.progress_percent = start_pct
         elif self.status == "syncing" and self.total_games > 0:
             sub = self.synced_games / self.total_games
             self.progress_percent = int(start_pct + span * sub)
@@ -188,8 +254,8 @@ class SyncProgress:
             "artwork_synced": self.artwork_synced,
             "steam_total": self.steam_total,
             "steam_synced": self.steam_synced,
-            "unifidb_total": 0,
-            "unifidb_synced": 0,
-            "metacritic_total": self.metadata_total,
-            "metacritic_synced": self.metadata_synced,
+            "unifidb_total": self.unifidb_total,
+            "unifidb_synced": self.unifidb_synced,
+            "metacritic_total": self.metacritic_total,
+            "metacritic_synced": self.metacritic_synced,
         }

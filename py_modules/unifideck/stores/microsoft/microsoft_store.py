@@ -197,7 +197,19 @@ class MicrosoftStore(StoreBase):
 
     async def get_library(self) -> list[Game] | None:
 
-        """Get library."""
+        """Get library.
+
+        Flow:
+          1. Tokens must be loaded + not stale.
+          2. Subscription gate must report an active tier — this
+             also captures the xCloud session (gsToken + regions)
+             into the service for catalog reuse.
+          3. Catalog fetches ``/v2/titles`` from the regional core
+             endpoint using the session and returns only entitled
+             titles (Game Pass + owned Play Anywhere). ``hasEntitlement``
+             encodes tier access server-side, so no additional tier
+             filter is needed here.
+        """
         if not await self.is_available():
             logger.info(
                 "[MicrosoftStore] not authenticated; "
@@ -214,14 +226,23 @@ class MicrosoftStore(StoreBase):
             return []
         if not await self._check_subscription_gate():
             return []
-        chain = await self._tokens.build_chain()
-        if chain is None:
+        if self._subscription_service is None:
             logger.warning(
-                "[MicrosoftStore] XBL chain build failed — "
-                "proceeding with catalog fetch anyway",
+                "[MicrosoftStore] no subscription_service injected "
+                "— cannot get xCloud session; returning empty",
             )
+            return []
+        session = await self._subscription_service.get_session(
+            self._tokens,
+        )
+        if session is None or not session.gs_token:
+            logger.warning(
+                "[MicrosoftStore] no usable xCloud session "
+                "(no gsToken); returning empty",
+            )
+            return []
         try:
-            return await self._catalog.fetch_games()
+            return await self._catalog.fetch_games(session)
         except Exception:
             logger.exception("[MicrosoftStore] get_library failed")
             return []

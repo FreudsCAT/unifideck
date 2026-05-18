@@ -77,6 +77,26 @@ _SERVICE_DEFS: tuple[tuple[Any, ...], ...] = (
         lambda b, r, c, cfg, p, pl: (b, c, p.grid_dir),
         lambda b, r, c, cfg, p, pl: {"config": cfg},
     ),
+    # CompatibilityService — post-sync ProtonDB + Deck-Verified
+    # fetcher. Wired to ``SyncService.register_post_sync_phase``
+    # via :func:`wire_sync_service` after ``bootstrap_services``
+    # returns (sync_service lives on plugin, not the container).
+    (
+        "compatibility", "unifideck.services.compatibility",
+        "CompatibilityService",
+        lambda b, r, c, cfg, p, pl: (b, c),
+        lambda b, r, c, cfg, p, pl: {"config": cfg},
+    ),
+    # ActivityLogService — persists LIBRARY_SYNC_* events to a
+    # rotating JSONL file. Independent of PlaytimeService (which is
+    # per-game session tracking, not sync history). Consumed by the
+    # RPC handler for the "recent syncs" panel.
+    (
+        "activity_log", "unifideck.services.activity_log",
+        "ActivityLogService",
+        lambda b, r, c, cfg, p, pl: (b, p.activity_log),
+        lambda b, r, c, cfg, p, pl: {},
+    ),
     (
         "proton", "unifideck.services.proton_service",
         "ProtonService",

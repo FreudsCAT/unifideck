@@ -31,9 +31,11 @@ export const rpcRoutes = {
   syncLibraries:           "sync_libraries",
   forceSyncLibraries:      "force_sync_libraries",
   cancelSync:              "cancel_sync",
+  requestAuthSync:         "request_auth_sync",
   getSyncStatus:           "get_sync_status",
   getSyncProgress:         "get_sync_progress",
   getAllUnifideckGames:    "get_all_unifideck_games",
+  refreshStore:            "refresh_store",
   // Downloads (DownloadRPCMixin)
   installGame:             "install_game",
   uninstallGame:           "uninstall_game",

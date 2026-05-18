@@ -38,6 +38,7 @@ const WATCHED_EVENTS: EventName[] = [
   "store_logout", "store_registered",
   "sync_started", "sync_progress", "sync_complete",
   "sync_failed", "sync_cancelled", "sync_skipped",
+  "post_sync_phase_changed",
   "shortcut_reconcile_complete",
   "download_queued", "download_started", "download_progress",
   "download_complete", "download_failed", "download_cancelled",

@@ -112,41 +112,49 @@ export const LibrarySync: FC = () => {
             }} />
           </div>
           <div style={{ marginTop: 5, opacity: 0.7 }}>
-            {isArtwork ? (
-              <>
-                <div>
-                  {t("librarySync.artworkDownloaded", {
-                    synced: progress.artwork_synced ?? 0,
-                    total: progress.artwork_total ?? 0,
-                  })}
-                </div>
-              </>
-            ) : progress.status === "metadata" ? (
-              <>
-                <div>
-                  {t("librarySync.metadataExtracted", {
-                    synced: progress.metacritic_synced ?? 0,
-                    total: progress.metacritic_total ?? 0,
-                  })}
-                </div>
-              </>
-            ) : (
-              <>
-                <div>
-                  {t("librarySync.gamesSynced", {
-                    synced: progress.synced_games ?? 0,
-                    total: progress.total_games ?? 0,
-                  })}
-                </div>
-                {(progress.steam_total ?? 0) > 0 && (
-                  <div>
-                    {t("librarySync.steamMetadataDownloaded", {
-                      synced: progress.steam_synced ?? 0,
-                      total: progress.steam_total ?? 0,
-                    })}
-                  </div>
-                )}
-              </>
+            {/* Per-counter visibility driven by ``*_total > 0`` so
+               each row appears only once its phase has set a real
+               denominator. Mirrors staging's progress display where
+               steam, unifidb and metacritic each tick independently. */}
+            {(progress.total_games ?? 0) > 0 && (
+              <div>
+                {t("librarySync.gamesSynced", {
+                  synced: progress.synced_games ?? 0,
+                  total: progress.total_games ?? 0,
+                })}
+              </div>
+            )}
+            {(progress.artwork_total ?? 0) > 0 && (
+              <div>
+                {t("librarySync.artworkDownloaded", {
+                  synced: progress.artwork_synced ?? 0,
+                  total: progress.artwork_total ?? 0,
+                })}
+              </div>
+            )}
+            {(progress.steam_total ?? 0) > 0 && (
+              <div>
+                {t("librarySync.steamMetadataDownloaded", {
+                  synced: progress.steam_synced ?? 0,
+                  total: progress.steam_total ?? 0,
+                })}
+              </div>
+            )}
+            {(progress.unifidb_total ?? 0) > 0 && (
+              <div>
+                {t("librarySync.unifidbMetadataDownloaded", {
+                  synced: progress.unifidb_synced ?? 0,
+                  total: progress.unifidb_total ?? 0,
+                })}
+              </div>
+            )}
+            {(progress.metacritic_total ?? 0) > 0 && (
+              <div>
+                {t("librarySync.metacriticMetadataDownloaded", {
+                  synced: progress.metacritic_synced ?? 0,
+                  total: progress.metacritic_total ?? 0,
+                })}
+              </div>
             )}
           </div>
           {progress.error && (

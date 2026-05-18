@@ -28,6 +28,7 @@ import { useRPCMutation } from "../api/useRPC";
 import { rpcRoutes } from "../api/rpc-routes";
 import { unwrapRpcEnvelope } from "../api/useRPC";
 import { useEventBus, EventBusClient } from "../api/event-bus-client";
+import { setSyncCooldownMs } from "../hooks/useSyncCooldown";
 import { Events } from "../types/events";
 import type { SyncProgress } from "../types/syncProgress";
 import { SteamRestartModal } from "../components/modals/SteamRestartModal";
@@ -71,10 +72,17 @@ export const SyncProvider: FC<{ children: ReactNode }> = ({ children }) => {
     rpcRoutes.cancelSync,
   );
 
+  // Tracks which post-sync phases the backend still owes us. Reset
+  // on SYNC_STARTED; cleared via POST_SYNC_PHASE_CHANGED. When this
+  // becomes empty after sync, we know the bar can come down even
+  // if the 500ms poll hasn't caught up yet.
+  const pendingPhasesRef = useRef<Set<string>>(new Set());
+
   // Wire EventBus
   useEventBus(Events.SYNC_STARTED, () => {
     setSyncing(true);
     setCancelling(false);
+    pendingPhasesRef.current = new Set(["artwork", "metadata", "proton_setup"]);
     EventBusClient.bumpToFast();
   });
 
@@ -87,37 +95,68 @@ export const SyncProvider: FC<{ children: ReactNode }> = ({ children }) => {
     // Do NOT setSyncing(false) here — metadata and artwork
     // enrichment phases start after the library fetch completes
     // and the progress bar must stay alive through them. The
-    // 500ms polling loop will naturally stop when
-    // `get_sync_progress` reports `syncing=false` (all phases
-    // finished). Bridge to non-React listeners —
-    // CollectionManager and LibraryContext re-fetch their caches
-    // on this signal.
+    // POST_SYNC_PHASE_CHANGED listener below clears it once both
+    // phases report done. The 500ms polling loop is a fallback.
+    // Bridge to non-React listeners — CollectionManager and
+    // LibraryContext re-fetch their caches on this signal.
     window.dispatchEvent(new CustomEvent("unifideck-sync-completed"));
+  });
+
+  // Definitive post-sync completion signal. Without this, the
+  // only path to `isSyncing=false` was the 500ms poll detecting
+  // `syncing=false` from `get_sync_progress` — which races with
+  // the lock release and routinely left the bar mid-progress.
+  useEventBus(Events.POST_SYNC_PHASE_CHANGED, (payload) => {
+    const phase = String((payload as Record<string, unknown>)?.phase ?? "");
+    const active = Boolean(
+      (payload as Record<string, unknown>)?.active ?? false,
+    );
+    if (active || !phase) return;
+    pendingPhasesRef.current.delete(phase);
+    if (pendingPhasesRef.current.size === 0) {
+      setSyncing(false);
+      setCancelling(false);
+      // All post-sync phases done — now is the right time to
+      // prompt for a Steam restart. The progress bar is at 100%,
+      // artwork + metadata + compat enrichment are finished, and
+      // the user can make an informed decision.
+      if (pendingRestartRef.current) {
+        pendingRestartRef.current = false;
+        try {
+          showModal(<SteamRestartModal reason="sync" closeModal={() => {}} />);
+        } catch (e) {
+          console.error("[SyncContext] showModal(SteamRestartModal) failed", e);
+        }
+      }
+    }
   });
 
   useEventBus(Events.SYNC_FAILED, () => {
     setSyncing(false);
     setCancelling(false);
+    pendingPhasesRef.current.clear();
   });
 
   useEventBus(Events.SYNC_CANCELLED, () => {
     setSyncing(false);
     setCancelling(false);
+    pendingPhasesRef.current.clear();
   });
 
   // Reconcile result — when ShortcutService finishes writing
-  // shortcuts.vdf, prompt for a Steam restart if any entries
-  // changed. Without restarting Steam, the in-memory shortcuts
-  // list is stale and on shutdown Steam overwrites our writes.
+  // shortcuts.vdf, we STAGE the restart modal but DO NOT show it
+  // yet. The shortcut-write fires the moment _finalize_sync returns,
+  // which is before artwork / metadata / compat enrichment are done.
+  // If we show the modal immediately the user sees "restart Steam"
+  // while the progress bar still says "60% — downloading artwork".
+  // Instead, defer to POST_SYNC_PHASE_CHANGED below, which fires
+  // when the LAST phase finishes → bar at 100% → then prompt.
+  const pendingRestartRef = useRef(false);
   useEventBus(Events.SHORTCUT_RECONCILE_COMPLETE, (payload) => {
     const added = Number(payload?.added ?? 0);
     const removed = Number(payload?.removed ?? 0);
     if (added > 0 || removed > 0) {
-      try {
-        showModal(<SteamRestartModal reason="sync" closeModal={() => {}} />);
-      } catch (e) {
-        console.error("[SyncContext] showModal(SteamRestartModal) failed", e);
-      }
+      pendingRestartRef.current = true;
     }
   });
 
@@ -130,13 +169,22 @@ export const SyncProvider: FC<{ children: ReactNode }> = ({ children }) => {
   const pollOnce = useCallback(async () => {
     try {
       const raw = await call<[], unknown>(rpcRoutes.getSyncProgress);
-      const data = unwrapRpcEnvelope<SyncProgress & { syncing?: boolean }>(
-        raw, { route: rpcRoutes.getSyncProgress, throwing: false },
-      );
+      const data = unwrapRpcEnvelope<
+        SyncProgress & { syncing?: boolean; cooldown_ms?: number }
+      >(raw, { route: rpcRoutes.getSyncProgress, throwing: false });
       if (!data) return;
       if (typeof data.syncing === "boolean") {
         setSyncing(data.syncing);
         if (!data.syncing) setCancelling(false);
+      }
+      // Read backend-configured cooldown on mount (first poll).
+      // ``get_sync_progress`` → ``get_status`` now carries
+      // ``cooldown_ms`` from ``SyncService._cooldown_ms``, read
+      // from ``sync.cooldown_seconds`` in user config at boot.
+      // Subsequent polls re-read the same value (stable across a
+      // session), so it's a cheap write that won't perturb React.
+      if (typeof data.cooldown_ms === "number" && data.cooldown_ms >= 0) {
+        setSyncCooldownMs(data.cooldown_ms);
       }
       setProgress(data);
     } catch (e) {

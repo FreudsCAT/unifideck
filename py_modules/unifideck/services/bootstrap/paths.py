@@ -65,6 +65,9 @@ class ServicePaths:
     playtime_db: str
     local_save_root: str
     cloud_root: str | None
+    # Rotating JSONL log of recent library syncs (started /
+    # completed / cancelled). Consumed by ActivityLogService.
+    activity_log: str
 
     @classmethod
     def from_config(
@@ -147,4 +150,5 @@ class ServicePaths:
             playtime_db=str(data_dir_path / "playtime.db"),
             local_save_root=str(data_dir_path / "saves"),
             cloud_root=config.get("cloud_saves.remote_root") or None,
+            activity_log=str(data_dir_path / "sync_activity.log"),
         )

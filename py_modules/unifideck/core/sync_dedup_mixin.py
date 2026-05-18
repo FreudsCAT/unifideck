@@ -18,8 +18,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
-from .cross_store_dedup import deduplicate_libraries
-from .types import Events, Game, SyncResult
+from .types import Game, SyncResult
 
 if TYPE_CHECKING:
     from unifideck.config import ConfigManager
@@ -41,33 +40,15 @@ class _SyncDedupMixin:
         self,
         libraries: dict[str, list[Game]],
     ) -> dict[str, list[Game]]:
-        """Run cross-store dedup, emitting ``SYNC_DEDUP`` if anything was dropped.
+        """Dedup disabled — returns libraries unchanged.
 
-        Delegates to ``cross_store_dedup.deduplicate_libraries``
-        passing the configured tracked-stores list and the
-        Steam-owned title set. Emits the dedup event only if at
-        least one duplicate was actually dropped — keeps the
-        event channel quiet for no-op sync cycles.
+        Previously ran ``cross_store_dedup.deduplicate_libraries``
+        (cross-store match + Steam-owned filter) and emitted
+        ``SYNC_DEDUP``. Disabled per user request: duplicates
+        across stores are now shown. Re-enable by restoring
+        the original body from git history.
         """
-        from unifideck.steam.owned_games import (
-            get_owned_titles as _steam_owned_titles,
-        )
-
-        tracked = self._tracked_stores()
-        steam_owned = _steam_owned_titles(self._config)
-        deduped, dropped_per_store = deduplicate_libraries(
-            libraries,
-            tracked_stores=tracked,
-            steam_owned_titles=steam_owned,
-        )
-        total_dropped = sum(dropped_per_store.values())
-        if total_dropped:
-            await self._bus.emit(
-                Events.SYNC_DEDUP,
-                total_removed=total_dropped,
-                per_store=dict(dropped_per_store),
-            )
-        return deduped
+        return libraries
 
     def _tracked_stores(self) -> tuple[str, ...]:
         """Resolve the tracked-stores list for dedup priority.
