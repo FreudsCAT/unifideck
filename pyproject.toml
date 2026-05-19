@@ -388,6 +388,17 @@ follow_imports = "silent"
 [tool.pytest.ini_options]
 minversion = "8.0"
 testpaths = ["tests"]
+# The plugin package lives in ``py_modules/unifideck/`` (a
+# non-src, non-installed layout dictated by Decky Loader). It
+# is never ``pip install``-ed, so without help ``import
+# unifideck`` fails under CI — locally it only worked because
+# PYTHONPATH was exported by hand. ``pythonpath`` (pytest >= 7,
+# guaranteed by ``minversion = 8.0``) prepends this dir to
+# ``sys.path`` at collection time, making the package importable
+# everywhere pytest runs (CI, local, pre-commit, IDE) with no
+# external env var or editable install. This is the canonical
+# fix for non-src layouts and replaces the manual PYTHONPATH.
+pythonpath = ["py_modules"]
 # Strict markers/config keep test scaffolding honest : a typo
 # in a marker name fails the suite instead of silently being a
 # no-op. ``no:cacheprovider`` disables the .pytest_cache dir
