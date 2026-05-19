@@ -33,7 +33,6 @@ threshold assertions are strict.
 from __future__ import annotations
 
 import configparser
-import os
 from pathlib import Path
 
 import pytest
@@ -47,43 +46,19 @@ _EXPECTED_MAX_COGNITIVE_COMPLEXITY = 15
 _EXPECTED_MAX_LINE_LENGTH = 100
 
 
-def _candidate_roots() -> list[Path]:
-    roots: list[Path] = []
-
-    env = os.environ.get("UNIFIDECK_REPO_ROOT")
-    if env:
-        roots.append(Path(env))
-
-    # Walk up from the installed unifideck package: the repo
-    # layout is <root>/py_modules/unifideck/, so the .flake8
-    # lives two levels above the package directory.
-    try:
-        import unifideck
-
-        pkg_dir = Path(unifideck.__file__).resolve().parent
-        for parent in (pkg_dir, *pkg_dir.parents):
-            roots.append(parent)
-    except Exception:  # pragma: no cover - import-environment only
-        pass
-
-    # Well-known checkout locations used by the harness.
-    roots.extend([
-        Path("/home/claude/new_arch3"),
-        Path.cwd(),
-        Path(__file__).resolve().parents[3],
-    ])
-    return roots
-
-
 def _find_flake8_config() -> Path | None:
-    for root in _candidate_roots():
-        try:
-            candidate = root / ".flake8"
-            if candidate.is_file():
-                return candidate
-        except OSError:  # pragma: no cover - defensive
-            continue
-    return None
+    """Locate the repository ``.flake8`` via the shared,
+    structurally-resolved repo root.
+
+    Delegating to ``tests.unit._repo_root`` keeps this test
+    independent of its own location in the tree (it can live
+    in ``tests/unit/`` or ``tests/unit/_tooling/`` without a
+    fragile ``parents[N]``) and removes the previously
+    hard-coded absolute fallback path.
+    """
+    from tests.unit._repo_root import find_repo_file
+
+    return find_repo_file(".flake8")
 
 
 @pytest.fixture(scope="module")
