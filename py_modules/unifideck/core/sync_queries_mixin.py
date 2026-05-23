@@ -126,20 +126,35 @@ class _SyncQueriesMixin:
         are interactive (single game per call from RPC),
         not bulk loops.
 
+        Accepts either the signed or unsigned 32-bit form of the
+        shortcut AppID. The sync layer stores
+        :attr:`Game.app_id` as signed (matches how Steam
+        serialises it — see ``services/shortcut/games_map.py``)
+        but Steam's frontend hands plugins the unsigned form via
+        ``overview.appid``, so the RPC's wire value is whichever
+        form the caller has on hand. Normalising here means
+        callers don't have to know the convention.
+
         ``dataclasses.asdict`` is imported lazily inside
         the hit branch to keep the cold path zero-cost
         (no import unless something matches).
 
         Args:
-            app_id: Steam-style AppID.
+            app_id: Steam-style AppID (signed or unsigned).
 
         Returns:
             Dict form of the game, or ``None`` if not
             found.
         """
+        # Both representations of the same 32-bit integer.
+        candidates = {app_id}
+        if app_id > 0x7FFFFFFF:
+            candidates.add(app_id - 0x100000000)
+        elif app_id < 0:
+            candidates.add(app_id + 0x100000000)
         for games in self._all_games.values():
             for game in games:
-                if game.app_id == app_id:
+                if game.app_id in candidates:
                     from dataclasses import asdict
 
                     return asdict(game)

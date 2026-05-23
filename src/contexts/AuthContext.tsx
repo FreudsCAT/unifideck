@@ -25,6 +25,7 @@ import { rpcRoutes } from "../api/rpc-routes";
 import { useEventBus } from "../api/event-bus-client";
 import { Events } from "../types/events";
 import type { AuthResult, Result, StoreId, StoreStatus } from "../types/api";
+import { tabManager } from "../lib/steam-bridge/tab-container";
 
 type StatusMap = Partial<Record<StoreId, StoreStatus>>;
 
@@ -82,6 +83,11 @@ export const AuthProvider: FC<{ children: ReactNode }> = ({ children }) => {
       setStatuses(map);
     }
   }, [initial.data]);
+
+  React.useEffect(() => {
+    tabManager.setConnectedStores(statuses);
+  }, [statuses]);
+
   // RPC mutations
   const startMut = useRPCMutation<
     [StoreId, "start"], AuthResult

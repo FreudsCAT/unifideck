@@ -88,19 +88,42 @@ def _read_cache_store(cache: Any, namespace: str) -> dict[str, Any]:
     return data if isinstance(data, dict) else {}
 
 
+def _appid_candidates(app_id: int) -> list[str]:
+    """Return the signed + unsigned 32-bit string forms of an AppID.
+
+    Sync stores ``Game.app_id`` as signed (matches Steam's on-disk
+    representation), but Steam's frontend hands plugins the
+    unsigned form via ``overview.appid``. Caches keyed off
+    ``str(game.app_id)`` are therefore reachable only via the
+    signed string. This helper returns both so callers don't
+    have to know which side wrote the cache.
+    """
+    forms: list[str] = [str(app_id)]
+    if app_id > 0x7FFFFFFF:
+        forms.append(str(app_id - 0x100000000))
+    elif app_id < 0:
+        forms.append(str(app_id + 0x100000000))
+    return forms
+
+
 def _read_steam_real_appid(cache: Any, shortcut_app_id: int) -> int:
     """Resolve the shortcut → real-Steam-AppID mapping.
 
     Populated by :meth:`MetadataService.fetch_appdetails_for_game`
     during sync. ``0`` when the shortcut hasn't been mapped (no
-    Steam Store match found or sync hasn't run yet).
+    Steam Store match found or sync hasn't run yet). Tries both
+    signed and unsigned AppID forms (see :func:`_appid_candidates`).
     """
     data = _read_cache_store(cache, "steam_real_appid")
-    raw = data.get(str(shortcut_app_id))
-    try:
-        return int(raw) if raw is not None else 0
-    except (TypeError, ValueError):
-        return 0
+    for key in _appid_candidates(shortcut_app_id):
+        raw = data.get(key)
+        if raw is None:
+            continue
+        try:
+            return int(raw)
+        except (TypeError, ValueError):
+            return 0
+    return 0
 
 
 def _read_steam_metadata(cache: Any, steam_app_id: int) -> dict[str, Any]:
@@ -122,10 +145,14 @@ def _read_compat_entry(cache: Any, shortcut_app_id: int) -> dict[str, Any]:
 
     Populated by :class:`CompatLibrary`. The entry shape is
     ``{"protondb_tier": ..., "deck_status": ..., "title": ...}``.
+    Tries both signed and unsigned AppID forms.
     """
     data = _read_cache_store(cache, "compat")
-    entry = data.get(str(shortcut_app_id))
-    return entry if isinstance(entry, dict) else {}
+    for key in _appid_candidates(shortcut_app_id):
+        entry = data.get(key)
+        if isinstance(entry, dict):
+            return entry
+    return {}
 
 
 def _has_steam_store_page(
