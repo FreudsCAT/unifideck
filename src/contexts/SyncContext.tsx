@@ -78,8 +78,18 @@ export const SyncProvider: FC<{ children: ReactNode }> = ({ children }) => {
   // if the 500ms poll hasn't caught up yet.
   const pendingPhasesRef = useRef<Set<string>>(new Set());
 
+  // True only after SYNC_STARTED fires in this JS session. Guards
+  // the Steam-restart modal against the event-bus replay path: when
+  // the plugin reloads (Steam/Decky restart), the backend's event
+  // buffer replays SHORTCUT_RECONCILE_COMPLETE + POST_SYNC_PHASE_CHANGED
+  // from the prior session. Without this guard the modal pops every
+  // time the QAM mounts after a plugin reload, even though Steam
+  // has already restarted and the prompt is obsolete.
+  const observedActiveSyncRef = useRef(false);
+
   // Wire EventBus
   useEventBus(Events.SYNC_STARTED, () => {
+    observedActiveSyncRef.current = true;
     setSyncing(true);
     setCancelling(false);
     pendingPhasesRef.current = new Set(["artwork", "metadata", "proton_setup"]);
@@ -120,13 +130,18 @@ export const SyncProvider: FC<{ children: ReactNode }> = ({ children }) => {
       // prompt for a Steam restart. The progress bar is at 100%,
       // artwork + metadata + compat enrichment are finished, and
       // the user can make an informed decision.
-      if (pendingRestartRef.current) {
+      if (pendingRestartRef.current && observedActiveSyncRef.current) {
         pendingRestartRef.current = false;
         try {
           showModal(<SteamRestartModal reason="sync" closeModal={() => {}} />);
         } catch (e) {
           console.error("[SyncContext] showModal(SteamRestartModal) failed", e);
         }
+      } else if (pendingRestartRef.current) {
+        // Replay path: events are from a sync that ran before this
+        // JS module loaded. Clear the flag so a later in-session
+        // SHORTCUT_RECONCILE_COMPLETE can re-arm it cleanly.
+        pendingRestartRef.current = false;
       }
     }
   });

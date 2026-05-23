@@ -7,10 +7,14 @@ or consume the ``games.map`` manifest. No I/O, no class state —
 Serialisation:
 - v1: ``store:game_id=/path/to/exe``
 - v2: ``store:game_id=/path/to/exe\t/path/to/workdir``
+- v3: ``store:game_id=/path/to/exe\t/path/to/workdir\t<signed_app_id>``
 
 v2 adds explicit ``work_dir`` so the dispatcher doesn't have to
-derive it from ``dirname(exe)`` + xCloud special casing. v1
-entries still parse (lazy migration on next write).
+derive it from ``dirname(exe)`` + xCloud special casing. v3 adds
+the canonical Steam app_id so cleanup can locate entries to drop
+without recomputing the hash with the wrong title. Older entries
+still parse — ``app_id`` defaults to ``0`` and is backfilled by
+the shortcut service on next save.
 """
 from __future__ import annotations
 
@@ -26,18 +30,22 @@ UNIFIDECK_TAG = "Unifideck"
 
 
 class GameMapEntry(NamedTuple):
-    r"""One entry in games.map (v2 format).
+    r"""One entry in games.map (v3 format).
 
     Rules:
     - Tab separator because ``=`` can appear in exe paths;
       tabs are never legal in Linux/Windows paths.
-    - v1 entries (no tab) are still valid input — the parser
-      falls back to ``dirname(exe)`` as ``work_dir``.
+    - v1 entries (no tab) and v2 entries (one tab) are still
+      valid input — the parser fills ``work_dir`` from
+      ``dirname(exe)`` and ``app_id`` from ``0`` respectively.
     - xCloud sentinel: ``exe="xcloud"`` + URL in ``work_dir``
       signals the streaming trigger to the dispatcher.
+    - ``app_id`` is the signed 32-bit value Steam stores in
+      ``shortcuts.vdf``; ``0`` means "not yet backfilled".
     """
     exe: str
     work_dir: str
+    app_id: int = 0
 
 
 def generate_app_id(exe: str, title: str) -> int:
@@ -65,11 +73,12 @@ def generate_app_id(exe: str, title: str) -> int:
 def parse_games_map(content: str) -> dict[str, GameMapEntry]:
     r"""Parse games.map content into ``{key: GameMapEntry}``.
 
-    Accepts both v1 (``key=exe``) and v2
-    (``key=exe\twork_dir``) — v1 entries get ``work_dir``
-    derived from ``dirname(exe)`` as best-effort fallback.
-    Malformed lines (no ``=``, empty values) and comments
-    (``#`` prefix) / blank lines are silently skipped.
+    Accepts v1 (``key=exe``), v2 (``key=exe\twork_dir``), and
+    v3 (``key=exe\twork_dir\tapp_id``). v1 derives ``work_dir``
+    from ``dirname(exe)``; v1 and v2 default ``app_id`` to ``0``
+    so the shortcut service can backfill on next save. Malformed
+    lines (no ``=``, empty values) and comments / blank lines
+    are silently skipped.
     """
     result: dict[str, GameMapEntry] = {}
 
@@ -85,38 +94,43 @@ def parse_games_map(content: str) -> dict[str, GameMapEntry]:
         key, value = parts
         key = key.strip()
 
-        # Handle v2 format with explicit work_dir
         if "\t" in value:
-            exe, work_dir = value.split("\t", 1)
-            result[key] = GameMapEntry(exe=exe.strip(), work_dir=work_dir.strip())
+            segments = value.split("\t")
+            exe = segments[0].strip()
+            work_dir = segments[1].strip()
+            app_id = 0
+            if len(segments) >= 3:
+                try:
+                    app_id = int(segments[2].strip())
+                except ValueError:
+                    app_id = 0
+            result[key] = GameMapEntry(exe=exe, work_dir=work_dir, app_id=app_id)
         else:
-            # Handle v1 format: derive work_dir from exe
             exe = value.strip()
-            # Special case for xcloud in v1 format (rare but handled)
             work_dir = "" if exe == "xcloud" else str(Path(exe).parent)
-            result[key] = GameMapEntry(exe=exe, work_dir=work_dir)
+            result[key] = GameMapEntry(exe=exe, work_dir=work_dir, app_id=0)
 
     return result
 
 
 def format_games_map(mapping: dict[str, GameMapEntry]) -> str:
-    r"""Serialize ``{key: GameMapEntry}`` to games.map v2 text.
+    r"""Serialize ``{key: GameMapEntry}`` to games.map v3 text.
 
-    Always writes v2 format (``exe\twork_dir``), even when
-    ``work_dir == dirname(exe)`` — makes the file
-    self-describing so readers can tell v1 fallbacks from
-    explicit work_dir by checking for the tab character.
-    Sorted by key for reproducible output.
+    Always writes v3 format (``exe\twork_dir\tapp_id``). Sorted
+    by key for reproducible output. Entries with ``app_id == 0``
+    are written as ``0`` — readers treat that as "unknown, may
+    need backfill" rather than a real id.
     """
     lines = [
         "# Unifideck non-Steam shortcut manifest (games.map)",
-        "# Format: store:game_id=exe_path\\twork_dir",
+        "# Format: store:game_id=exe_path\\twork_dir\\tapp_id",
         "# DO NOT EDIT manually. Managed by unifideck-decky.",
     ]
 
     for key in sorted(mapping.keys()):
         entry = mapping[key]
-        lines.append(f"{key}={entry.exe}\t{entry.work_dir}")
+        lines.append(
+            f"{key}={entry.exe}\t{entry.work_dir}\t{entry.app_id}",
+        )
 
-    # Add trailing newline
     return "\n".join(lines) + "\n"

@@ -71,7 +71,7 @@ class _GamesMapMixin(_ReconcilePhasesMixin):
         # directory itself (where the launcher binary sits next to
         # the game data).
         self._games_map[key] = GameMapEntry(
-            exe=exe, work_dir=game.install_path or "",
+            exe=exe, work_dir=game.install_path or "", app_id=app_id,
         )
 
         # Normalise the shortcuts dict shape (tolerates corrupt VDF
@@ -201,18 +201,36 @@ class _GamesMapMixin(_ReconcilePhasesMixin):
         return bool(keys_to_delete)
 
     def _drop_games_map_entries(self: Any, app_id: int) -> bool:
-        """Delete every ``games.map`` entry whose derived app_id matches.
+        """Delete every ``games.map`` entry whose stored app_id matches.
 
-        ``games.map`` is keyed by ``"<store>:<game_id>"`` so we
-        can't look the app_id up directly — we recompute it for
-        every entry and compare. The number of entries is small
-        enough (low hundreds at most) that this O(n) sweep is
-        fine. Returns True if at least one entry was deleted.
+        v3 entries store ``app_id`` directly. Legacy v1/v2 rows
+        carry ``app_id == 0`` and are matched by cross-referencing
+        the loaded ``shortcuts.vdf``: if any VDF entry with the
+        target ``app_id`` has the same ``Exe`` as the games.map
+        row, treat it as a match (covers the orphan-backfill case
+        before the next ``_save_all`` writes the v3 row).
+        Returns True if at least one entry was deleted.
         """
-        keys_to_delete = [
-            key for key, entry in self._games_map.items()
-            if generate_app_id(entry.exe, key.split(":", 1)[1]) == app_id
-        ]
+        legacy_exes: set[str] = set()
+        shortcuts_root = self._shortcuts.get("shortcuts") if isinstance(
+            self._shortcuts, dict,
+        ) else None
+        if isinstance(shortcuts_root, dict):
+            for entry in shortcuts_root.values():
+                if not isinstance(entry, dict):
+                    continue
+                if entry.get("appid") == app_id:
+                    exe = entry.get("Exe") or entry.get("exe") or ""
+                    if isinstance(exe, str):
+                        legacy_exes.add(exe.strip('"'))
+
+        keys_to_delete: list[str] = []
+        for key, entry in self._games_map.items():
+            if entry.app_id == app_id:
+                keys_to_delete.append(key)
+                continue
+            if entry.app_id == 0 and entry.exe in legacy_exes:
+                keys_to_delete.append(key)
         for key in keys_to_delete:
             del self._games_map[key]
         return bool(keys_to_delete)

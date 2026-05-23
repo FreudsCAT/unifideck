@@ -245,7 +245,7 @@ class _ReconcilePhasesMixin:
             # games drop their entry (covers reinstall → uninstall).
             if game.installed and exe:
                 self._games_map[key] = GameMapEntry(
-                    exe=exe, work_dir=game.install_path or "",
+                    exe=exe, work_dir=game.install_path or "", app_id=app_id,
                 )
             else:
                 self._games_map.pop(key, None)

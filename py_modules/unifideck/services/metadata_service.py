@@ -51,6 +51,13 @@ class MetadataService:
         self._bus = bus
         self._cache = cache
         self._config = config
+        # Background enrichment task. Held so that a new
+        # SYNC_COMPLETE can cancel the prior run before
+        # starting its own — otherwise overlapping tasks both
+        # increment ``SyncProgress.*_synced`` against the same
+        # tracker, producing inflated numerators (the "1089/563"
+        # symptom).
+        self._enrichment_task: asyncio.Task[None] | None = None
 
         # NOTE: the cache TTL is owned by the registry, not the
         # service — see the ``"metadata"`` entry in
@@ -93,6 +100,21 @@ class MetadataService:
         enrichment quietly progresses in the background.
         """
         games = kwargs.get("games", [])
+        # Cancel any prior enrichment still running. Two syncs
+        # back-to-back (or a sync that was cancelled mid-enrich)
+        # would otherwise leave the old task ticking
+        # ``SyncProgress.*_synced`` on the same tracker the new
+        # run just reset to 0 — the user sees a numerator larger
+        # than the library size (e.g. "1089 / 563" with 563
+        # games actually synced). Cancel is fire-and-forget: we
+        # must NOT await it here (this handler runs inside
+        # ``bus.emit(SYNC_COMPLETE)`` which is awaited by
+        # ``SyncService._finalize_sync`` while holding the sync
+        # lock; awaiting would re-introduce the multi-minute
+        # lock-up that the fire-and-forget pattern fixed).
+        prior = self._enrichment_task
+        if prior is not None and not prior.done():
+            prior.cancel()
         # Schedule unconditionally — even with games=[] the task
         # must run so its ``finally`` clause fires the phase-done
         # event. SyncService gates ``mark_complete`` on receiving
@@ -105,13 +127,22 @@ class MetadataService:
         )
 
     async def _run_enrichment(self, games: list[Game]) -> None:
-        """Background enrichment loop. ``finally`` always emits
+        """Background enrichment loop. ``finally`` emits
         ``POST_SYNC_PHASE_CHANGED(active=False)`` so the sync's
         post-phase tracker advances on success, exception, or
-        cancellation. Without the guard, an empty game list or
-        any uncaught error left the progress bar stuck.
+        user-initiated sync cancellation. Without the guard, an
+        empty game list or any uncaught error left the progress
+        bar stuck.
+
+        Exception: when the task is cancelled by a newer
+        ``SYNC_COMPLETE`` handler (because another sync started
+        before this enrichment finished), the emit is skipped —
+        the new run owns the metadata phase and emitting here
+        would mark it done before the new run has actually
+        processed any games.
         """
         total = len(games)
+        cancelled_by_replace = False
         try:
             if not games:
                 return
@@ -175,11 +206,19 @@ class MetadataService:
                         "[MetadataService] progress: %d/%d enriched",
                         done, total,
                     )
-        finally:
-            await self._bus.emit(
-                Events.POST_SYNC_PHASE_CHANGED,
-                phase="metadata", active=False, total=total, done=total,
+        except asyncio.CancelledError:
+            cancelled_by_replace = True
+            logger.info(
+                "[MetadataService] enrichment cancelled — newer sync took over",
             )
+            raise
+        finally:
+            if not cancelled_by_replace:
+                await self._bus.emit(
+                    Events.POST_SYNC_PHASE_CHANGED,
+                    phase="metadata", active=False,
+                    total=total, done=total,
+                )
             logger.info(
                 "[MetadataService] background enrichment finished (%d games)",
                 total,

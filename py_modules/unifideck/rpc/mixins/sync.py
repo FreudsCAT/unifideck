@@ -123,30 +123,7 @@ class SyncRPCMixin:
 
     services: Any
     cache: Any
-
-    async def _resolve_install_dir(
-        self, shortcut_svc: Any, game: Any,
-    ) -> str | None:
-        """Look up the install directory for a Unifideck game."""
-        if shortcut_svc is None:
-            return None
-        store = (
-            game.get("store") if isinstance(game, dict)
-            else getattr(game, "store", None)
-        )
-        game_id = (
-            game.get("game_id") if isinstance(game, dict)
-            else getattr(game, "game_id", None)
-        )
-        if not store or not game_id:
-            return None
-        try:
-            entry = await shortcut_svc.get_entry_for_game_key(
-                str(store), str(game_id),
-            )
-        except Exception:
-            return None
-        return getattr(entry, "work_dir", None)
+    registry: Any
 
     async def _delete_install_dir(
         self, install_dir: str, home: str, safe_roots: tuple[str, ...],
@@ -173,33 +150,74 @@ class SyncRPCMixin:
             return False
         return True
 
-    async def _cleanup_one_game(
+    @staticmethod
+    def _collect_unifideck_app_ids(shortcut_svc: Any) -> list[int]:
+        """Union of app_ids from shortcuts.vdf (tagged) and games.map.
+
+        Pulls the canonical Unifideck-owned app_id set from the
+        persisted shortcut state — not the volatile sync cache —
+        so cleanup works even when no sync has run this session.
+        """
+        from unifideck.services.shortcut.games_map import UNIFIDECK_TAG
+
+        ids: set[int] = set()
+        shortcuts = getattr(shortcut_svc, "_shortcuts", None) or {}
+        root = shortcuts.get("shortcuts") if isinstance(shortcuts, dict) else None
+        if isinstance(root, dict):
+            for entry in root.values():
+                if not isinstance(entry, dict):
+                    continue
+                tags = entry.get("tags")
+                tag_values: list[Any] = []
+                if isinstance(tags, dict):
+                    tag_values = list(tags.values())
+                elif isinstance(tags, list):
+                    tag_values = list(tags)
+                if not any(
+                    isinstance(v, str) and v == UNIFIDECK_TAG
+                    for v in tag_values
+                ):
+                    continue
+                app_id = entry.get("appid")
+                if isinstance(app_id, int):
+                    ids.add(app_id)
+
+        games_map = getattr(shortcut_svc, "_games_map", None) or {}
+        if isinstance(games_map, dict):
+            for entry in games_map.values():
+                app_id = getattr(entry, "app_id", 0)
+                if isinstance(app_id, int) and app_id != 0:
+                    ids.add(app_id)
+
+        return sorted(ids)
+
+    async def _cleanup_one_app_id(
         self,
-        game: Any,
+        app_id: int,
         delete_files: bool,
         shortcut_svc: Any,
         home: str,
         safe_roots: tuple[str, ...],
     ) -> tuple[int | None, bool]:
-        """Per-game cleanup: returns (removed_app_id_or_None, files_deleted)."""
-        app_id = (
-            game.get("app_id") if isinstance(game, dict)
-            else getattr(game, "app_id", None)
-        )
-        if app_id is None:
-            return None, False
+        """Per-app_id cleanup: returns (removed_app_id_or_None, files_deleted)."""
         install_dir: str | None = None
         if delete_files:
-            install_dir = await self._resolve_install_dir(shortcut_svc, game)
+            games_map = getattr(shortcut_svc, "_games_map", None) or {}
+            if isinstance(games_map, dict):
+                for entry in games_map.values():
+                    if getattr(entry, "app_id", 0) == app_id:
+                        install_dir = getattr(entry, "work_dir", None)
+                        break
+
         removed_id: int | None = None
-        if shortcut_svc is not None:
-            try:
-                if await shortcut_svc.remove_game(int(app_id)):
-                    removed_id = int(app_id)
-            except Exception:
-                logger.exception(
-                    "[cleanup] remove_game(%s) failed", app_id,
-                )
+        try:
+            if await shortcut_svc.remove_game(app_id):
+                removed_id = app_id
+        except Exception:
+            logger.exception(
+                "[cleanup] remove_game(%s) failed", app_id,
+            )
+
         files_deleted = False
         if delete_files and install_dir:
             files_deleted = await self._delete_install_dir(
@@ -207,68 +225,169 @@ class SyncRPCMixin:
             )
         return removed_id, files_deleted
 
-    async def perform_full_cleanup(
-        self, delete_files: bool = False,
-    ) -> dict[str, Any]:
-        """Wipe every Unifideck-managed shortcut, cache, and (optionally) install dir.
+    async def _delete_artwork_for_app_ids(self, app_ids: list[int]) -> int:
+        """Delete Steam grid artwork files for each given app_id.
 
-        Used by the Quick-Access "Cleanup" section. Walks
-        ``sync_service.get_all_games()`` for the canonical Unifideck
-        AppID set, then for each AppID:
-
-        1. Records the install directory (if known via shortcut service).
-        2. Removes the shortcut via ``shortcut.remove_game`` — which
-           drops both ``shortcuts.vdf`` and ``games.map`` entries and
-           emits ``SHORTCUT_REMOVED``.
-        3. If ``delete_files=True`` and the install dir is inside a
-           known-safe parent ("Games", "Epic", "GOG", "unifideck", or
-           the user's configured custom install path), rm -rf it.
-
-        Finally clears every registered cache namespace so the next
-        sync rebuilds from upstream and the in-memory ProtonDB cache
-        is wiped on the frontend.
-
-        Args:
-            delete_files: when True, also delete the on-disk install
-                directories. Defaults to False (shortcuts-only).
-
-        Returns:
-            ``{"success": bool, "deleted_games": int,
-              "deleted_files_count": int, "deleted_app_ids": list[int],
-              "error": str | None}``. The frontend uses
-            ``deleted_app_ids`` to call ``SteamClient.Apps.RemoveShortcut``
-            for each so Steam's in-memory state catches up to the VDF.
+        Files are written by :mod:`unifideck.services.artwork.fetcher`
+        as ``<grid_dir>/<unsigned><suffix>``. Every Unifideck app_id
+        has bit ``0x80000000`` set, so the unsigned form is always
+        ≥ 2³¹ — no collision with real Steam appids living in the
+        same dir.
         """
         import asyncio
         from pathlib import Path
 
+        if not app_ids:
+            return 0
+        artwork = getattr(self.services, "artwork", None)
+        grid_dir = getattr(artwork, "grid_dir", None) if artwork else None
+        if not grid_dir:
+            logger.warning(
+                "[cleanup] artwork service unavailable; skipping grid wipe",
+            )
+            return 0
+
+        def _sweep() -> int:
+            base = Path(grid_dir)
+            if not base.is_dir():
+                return 0
+            count = 0
+            for app_id in app_ids:
+                unsigned = app_id if app_id >= 0 else app_id + 0x100000000
+                for match in base.glob(f"{unsigned}*"):
+                    if not match.is_file():
+                        continue
+                    try:
+                        match.unlink(missing_ok=True)
+                        count += 1
+                    except OSError:
+                        logger.exception(
+                            "[cleanup] unlink(%s) failed", match,
+                        )
+            return count
+
+        return await asyncio.to_thread(_sweep)
+
+    async def _logout_all_stores(self) -> int:
+        """Sign out of every store via the registry's logout flow.
+
+        Reuses :meth:`StoreRegistry.logout_all` — the same code path
+        the per-store "Sign out" buttons use. Returns the count of
+        stores that reported a successful logout.
+        """
+        registry = getattr(self, "registry", None)
+        if registry is None:
+            return 0
+        try:
+            results = await registry.logout_all()
+        except Exception:
+            logger.exception("[cleanup] registry.logout_all failed")
+            return 0
+        if not isinstance(results, dict):
+            return 0
+        return sum(1 for ok in results.values() if ok)
+
+    async def _delete_stray_auth_files(self) -> int:
+        """Delete leftover auth-URL temp files under unifideck data dir."""
+        import asyncio
+        from pathlib import Path
+
+        candidates = (
+            "~/.local/share/unifideck/gog_auth_url.txt",
+            "~/.local/share/unifideck/ms_auth_url.txt",
+            "~/.local/share/unifideck/epic_auth_url.txt",
+            "~/.local/share/unifideck/amazon_auth_url.txt",
+            "~/.local/share/unifideck/ubisoft_upc_session.txt",
+        )
+
+        def _sweep() -> int:
+            count = 0
+            for raw in candidates:
+                p = Path(raw).expanduser()
+                try:
+                    if p.is_file():
+                        p.unlink(missing_ok=True)
+                        count += 1
+                except OSError:
+                    logger.exception(
+                        "[cleanup] unlink(%s) failed", p,
+                    )
+            return count
+
+        return await asyncio.to_thread(_sweep)
+
+    async def perform_full_cleanup(
+        self, delete_files: bool = False,
+    ) -> dict[str, Any]:
+        """Wipe every Unifideck-managed shortcut, artwork, auth, and cache.
+
+        Pulls the Unifideck app_id set from the persisted shortcut
+        state (``shortcuts.vdf`` + ``games.map``) — not the volatile
+        sync cache — so cleanup works even when no sync has run in
+        the current process.
+
+        Steps:
+
+        1. Load shortcut state from disk if not already loaded.
+        2. Build the candidate app_id set from tagged VDF entries
+           and stored ``games.map`` app_ids.
+        3. For each app_id: remove via ``shortcut.remove_game``
+           (drops both VDF + games.map rows, emits ``SHORTCUT_REMOVED``).
+           If ``delete_files=True`` and the install dir sits under a
+           safe root, rm -rf it.
+        4. Delete Steam grid artwork files keyed to the deleted app_ids.
+        5. Sign out of every store via ``registry.logout_all``.
+        6. Sweep stray auth-URL temp files.
+        7. Clear every registered cache namespace.
+
+        Returns the result data only (no ``success``/``error`` keys);
+        the RPC wrapper adds the envelope. On failure, raises
+        ``RuntimeError`` and the wrapper converts it to a typed
+        ``internal_error`` envelope.
+        """
+        import asyncio
+        from pathlib import Path
+
+        logger.info(
+            "[cleanup] starting (delete_files=%s)", delete_files,
+        )
         deleted_app_ids: list[int] = []
         deleted_files_count = 0
-        try:
-            games = self.sync_service.get_all_games() or []
-        except Exception as e:
-            logger.exception("[cleanup] get_all_games failed")
-            return {
-                "success": False,
-                "deleted_games": 0,
-                "deleted_files_count": 0,
-                "deleted_app_ids": [],
-                "error": str(e),
-            }
-
         shortcut_svc = getattr(self.services, "shortcut", None)
+        if shortcut_svc is None:
+            raise RuntimeError("shortcut service unavailable")
+
+        await shortcut_svc._load_shortcuts()
+        await shortcut_svc._load_games_map()
+
+        app_ids = self._collect_unifideck_app_ids(shortcut_svc)
+        logger.info("[cleanup] %d candidate app_ids", len(app_ids))
         safe_roots = ("/Games/", "/Epic", "/GOG", "/Amazon", "unifideck")
         home = await asyncio.to_thread(
             lambda: str(Path("~").expanduser()),
         )
-        for game in games:
-            removed_id, files_deleted = await self._cleanup_one_game(
-                game, delete_files, shortcut_svc, home, safe_roots,
+        for app_id in app_ids:
+            removed_id, files_deleted = await self._cleanup_one_app_id(
+                app_id, delete_files, shortcut_svc, home, safe_roots,
             )
             if removed_id is not None:
                 deleted_app_ids.append(removed_id)
             if files_deleted:
                 deleted_files_count += 1
+        logger.info(
+            "[cleanup] removed %d shortcuts, %d install dirs",
+            len(deleted_app_ids), deleted_files_count,
+        )
+
+        deleted_artwork_count = await self._delete_artwork_for_app_ids(
+            deleted_app_ids or app_ids,
+        )
+        logged_out_count = await self._logout_all_stores()
+        deleted_stray_files_count = await self._delete_stray_auth_files()
+        logger.info(
+            "[cleanup] artwork=%d logged_out=%d stray=%d",
+            deleted_artwork_count, logged_out_count, deleted_stray_files_count,
+        )
 
         for name in list(getattr(self.cache, "_stores", {}).keys()):
             try:
@@ -278,10 +397,12 @@ class SyncRPCMixin:
                     "[cleanup] cache.clear(%s) failed", name,
                 )
 
+        logger.info("[cleanup] complete")
         return {
-            "success": True,
             "deleted_games": len(deleted_app_ids),
             "deleted_files_count": deleted_files_count,
+            "deleted_artwork_count": deleted_artwork_count,
+            "logged_out_count": logged_out_count,
+            "deleted_stray_files_count": deleted_stray_files_count,
             "deleted_app_ids": deleted_app_ids,
-            "error": None,
         }

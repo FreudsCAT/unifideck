@@ -115,6 +115,10 @@ class ArtworkService(_EventHandlersMixin):
         # subscription was lost (caught and silenced upstream).
         auto_wire(self, self._bus)
 
+    @property
+    def grid_dir(self) -> str:
+        return self._grid_dir
+
     async def stop(self) -> None:
         """Wait for any in-flight downloads to complete, release the semaphore."""
         self._bus.unsubscribe_all(self)
