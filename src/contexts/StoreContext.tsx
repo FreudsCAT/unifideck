@@ -12,7 +12,7 @@
  * more often and merging the two would cause spurious
  * re-renders.
  */
-import React, { createContext, FC, ReactNode, useContext } from "react";
+import { createContext, FC, ReactNode, useContext } from "react";
 import { useRPCQuery } from "../api/useRPC";
 import { rpcRoutes } from "../api/rpc-routes";
 import type { StoreInfo } from "../types/api";

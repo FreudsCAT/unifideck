@@ -12,7 +12,7 @@
  * `useHidePlaySection`, the actions are in `useGameActions`.
  * This component just glues them.
  */
-import React, { FC, ReactNode, useEffect } from "react";
+import { FC, ReactNode, useEffect } from "react";
 import { usePlaySection } from "../../hooks/usePlaySection";
 import { useHidePlaySection } from "../../hooks/useHidePlaySection";
 import { NotInstalledButtons } from "./NotInstalledButtons";

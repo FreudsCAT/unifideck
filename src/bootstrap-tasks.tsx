@@ -23,7 +23,6 @@
 import { call } from "@decky/api";
 import { showModal } from "@decky/ui";
 import i18n from "i18next";
-import React from "react";
 import { rpcRoutes } from "./api/rpc-routes";
 import { AccountSwitchModal, SteamRestartModal } from "./components/modals";
 import type { Unregisterable } from "./types/steam";

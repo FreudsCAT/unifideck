@@ -12,7 +12,7 @@
  * the full snapshot — re-rendering a 5-item list per tick
  * is cheaper than orchestrating 5 selectors.
  */
-import React, {
+import {
   createContext,
   FC,
   ReactNode,

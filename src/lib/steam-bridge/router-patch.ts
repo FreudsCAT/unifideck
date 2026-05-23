@@ -7,6 +7,7 @@
  * leak across plugin reloads and accumulate.
  */
 import { routerHook } from "@decky/api";
+import type { RoutePatch } from "@decky/api/dist/types";
 
 /**
  * Handle returned by `patchRouter`. Its `dispose()` must
@@ -18,15 +19,59 @@ export interface RouterPatchHandle {
   remove(): void;
 }
 
+interface DeckyLoaderShape {
+  routerHook?: {
+    routerState?: {
+      _routePatches?: Map<string, RoutePatch[]>;
+    };
+  };
+}
+
+/** Best-effort cleanup of stale duplicate patches for ``path``
+ *  whose ``.toString()`` matches our new ``patch``. Decky's
+ *  spam-loading during plugin install can leave dangling
+ *  references behind; without this, the old (stale) patch wins
+ *  and our latest code never runs. Pattern mirrors TabMaster's
+ *  ``addPatch`` helper. */
+function purgeDuplicatePatches(path: string, patch: RoutePatch): void {
+  try {
+    const loader = (
+      window as unknown as { DeckyPluginLoader?: DeckyLoaderShape }
+    ).DeckyPluginLoader;
+    const patches = loader?.routerHook?.routerState?._routePatches?.get(path);
+    if (!patches) return;
+    const newSrc = patch.toString();
+    for (const existing of [...patches]) {
+      if (existing.toString() === newSrc) {
+        try {
+          routerHook.removePatch(path, existing);
+        } catch (e) {
+          console.warn("[SteamBridge] purge duplicate patch failed:", e);
+        }
+      }
+    }
+  } catch (e) {
+    console.warn("[SteamBridge] purgeDuplicatePatches inspect failed:", e);
+  }
+}
+
 /** Patch a router route. The `patch` function receives the
  *  rendered React node for the route and must return a
  *  (possibly modified) node. */
-export function addRouterPatch(path: string, patch: (node: unknown) => unknown): RouterPatchHandle {
+export function addRouterPatch(
+  path: string,
+  patch: (node: unknown) => unknown,
+): RouterPatchHandle {
   let removed = false;
-  let unpatch: (() => void) | undefined;
+  let token: RoutePatch | undefined;
+  const typedPatch = patch as unknown as RoutePatch;
+
+  purgeDuplicatePatches(path, typedPatch);
 
   try {
-    unpatch = routerHook.addPatch(path, patch as never);
+    // addPatch returns a RoutePatch token that must be passed
+    // back to removePatch to undo — not an unpatch function.
+    token = routerHook.addPatch(path, typedPatch);
   } catch (e) {
     console.error("[SteamBridge] addRouterPatch failed:", e);
     return { remove: () => {} };
@@ -34,10 +79,10 @@ export function addRouterPatch(path: string, patch: (node: unknown) => unknown):
 
   return {
     remove: () => {
-      if (removed) return;
+      if (removed || !token) return;
       removed = true;
       try {
-        unpatch?.();
+        routerHook.removePatch(path, token);
       } catch (e) {
         console.warn("[SteamBridge] router unpatch failed:", e);
       }

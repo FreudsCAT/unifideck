@@ -19,7 +19,7 @@
  * UI never throws — the user can still confirm whatever the
  * `startPath` was.
  */
-import React, { FC, useCallback, useEffect, useState } from "react";
+import { FC, useCallback, useEffect, useState } from "react";
 import { ButtonItem, Field } from "@decky/ui";
 import { useTranslation } from "react-i18next";
 import { useRPC } from "../../api/useRPC";

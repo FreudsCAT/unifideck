@@ -71,7 +71,12 @@ _DEFAULT_PRIORITY: dict[Events, EventPriority] = {
     Events.STORE_ERROR: EventPriority.BACKGROUND,
 }
 COALESCE_KEY: dict[Events, str] = {
-    Events.SYNC_PROGRESS: "store",
+    # SYNC_PROGRESS is intentionally NOT coalesced — when it is,
+    # the dispatcher re-emits as ``sync_progress_batch`` and the
+    # frontend (which only subscribes to ``sync_progress``) sees
+    # no progress events at all. The volume is low enough
+    # (one per store, ~4-10 emissions per run) that the original
+    # coalescing benefit doesn't apply.
     Events.DOWNLOAD_PROGRESS: "download_id",
 }
 

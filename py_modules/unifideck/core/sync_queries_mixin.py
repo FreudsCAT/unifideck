@@ -60,23 +60,36 @@ class _SyncQueriesMixin:
     _last_sync_time: float | None
     _current_store: str | None
     _lock: asyncio.Lock
+    # The per-sync-run progress tracker (owned by SyncService).
+    # ``get_status`` delegates its ``to_dict()`` directly.
+    _progress: Any  # :class:`unifideck.core.sync_progress.SyncProgress`
 
     def get_status(self) -> dict[str, Any]:
-        """Return a JSON-friendly status snapshot.
+        """Return the ``SyncProgress.to_dict()`` enriched with status fields.
 
-        Used by the frontend's status poller. Cheap —
-        all four fields are O(1) reads + one sum.
-
-        Returns:
-            Dict with ``syncing``, ``current_store``,
-            ``last_sync_time``, ``total_games``.
+        The ``syncing`` flag is derived from the progress tracker's
+        ``status``: any phase other than ``complete`` / ``error`` /
+        ``cancelled`` / ``idle`` is considered in-flight. This
+        keeps the frontend's 500ms polling loop alive through
+        post-sync enrichment.
         """
-        return {
-            "syncing": self._lock.locked(),
-            "current_store": self._current_store,
-            "last_sync_time": self._last_sync_time,
-            "total_games": sum(len(g) for g in self._all_games.values()),
-        }
+        progress = getattr(self, "_progress", None)
+        if progress is None:
+            return {
+                "syncing": False,
+                "last_sync_time": self._last_sync_time,
+            }
+        result = progress.to_dict()
+        in_flight = result.get("status") not in (
+            "complete", "error", "cancelled", "idle",
+        )
+        result["syncing"] = in_flight or self._lock.locked()
+        result["current_store"] = self._current_store
+        result["last_sync_time"] = self._last_sync_time
+        # read the cooldown from the host; fall back to 5 seconds
+        cooldown = getattr(self, "_cooldown_ms", 5000)
+        result["cooldown_ms"] = cooldown if isinstance(cooldown, int) else 5000
+        return result
 
     def get_all_games(self) -> list[Game]:
         """Return the merged unified library (flattened across stores).

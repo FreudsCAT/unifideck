@@ -1,5 +1,4 @@
 {
- "_comment": "ESLint configuration for the Unifideck Decky Loader plugin. Uses @typescript-eslint for TS-aware rules, eslint-plugi
  "root": true,
  "parser": "@typescript-eslint/parser",
  "parserOptions": {

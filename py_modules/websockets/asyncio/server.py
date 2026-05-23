@@ -4,19 +4,12 @@ import asyncio
 import hmac
 import http
 import logging
+import re
 import socket
 import sys
+from collections.abc import Awaitable, Generator, Iterable, Sequence
 from types import TracebackType
-from typing import (
-    Any,
-    Awaitable,
-    Callable,
-    Generator,
-    Iterable,
-    Sequence,
-    Tuple,
-    cast,
-)
+from typing import Any, Callable, Mapping, cast
 
 from ..exceptions import InvalidHeader
 from ..extensions.base import ServerExtensionFactory
@@ -57,13 +50,13 @@ class ServerConnection(Connection):
         async for message in websocket:
             await process(message)
 
-    The iterator exits normally when the connection is closed with close code
+    The iterator exits normally when the connection is closed with code
     1000 (OK) or 1001 (going away) or without a close code. It raises a
     :exc:`~websockets.exceptions.ConnectionClosedError` when the connection is
     closed with any other code.
 
     The ``ping_interval``, ``ping_timeout``, ``close_timeout``, ``max_queue``,
-    and ``write_limit`` arguments the same meaning as in :func:`serve`.
+    and ``write_limit`` arguments have the same meaning as in :func:`serve`.
 
     Args:
         protocol: Sans-I/O connection.
@@ -79,7 +72,7 @@ class ServerConnection(Connection):
         ping_interval: float | None = 20,
         ping_timeout: float | None = 20,
         close_timeout: float | None = 10,
-        max_queue: int | tuple[int, int | None] = 16,
+        max_queue: int | None | tuple[int | None, int | None] = 16,
         write_limit: int | tuple[int, int | None] = 2**15,
     ) -> None:
         self.protocol: ServerProtocol
@@ -94,6 +87,8 @@ class ServerConnection(Connection):
         self.server = server
         self.request_rcvd: asyncio.Future[None] = self.loop.create_future()
         self.username: str  # see basic_auth()
+        self.handler: Callable[[ServerConnection], Awaitable[None]]  # see route()
+        self.handler_kwargs: Mapping[str, Any]  # see route()
 
     def respond(self, status: StatusLike, text: str) -> Response:
         """
@@ -200,10 +195,13 @@ class ServerConnection(Connection):
 
                 self.protocol.send_response(self.response)
 
-        # self.protocol.handshake_exc is always set when the connection is lost
-        # before receiving a request, when the request cannot be parsed, when
-        # the handshake encounters an error, or when process_request or
-        # process_response sends an HTTP response that rejects the handshake.
+        # self.protocol.handshake_exc is set when the connection is lost before
+        # receiving a request, when the request cannot be parsed, or when the
+        # handshake fails, including when process_request or process_response
+        # raises an exception.
+
+        # It isn't set when process_request or process_response sends an HTTP
+        # response that rejects the handshake.
 
         if self.protocol.handshake_exc is not None:
             raise self.protocol.handshake_exc
@@ -361,14 +359,18 @@ class Server:
                         self.server_header,
                     )
                 except asyncio.CancelledError:
-                    connection.close_transport()
+                    connection.transport.abort()
                     raise
                 except Exception:
                     connection.logger.error("opening handshake failed", exc_info=True)
-                    connection.close_transport()
+                    connection.transport.abort()
                     return
 
-            assert connection.protocol.state is OPEN
+            if connection.protocol.state is not OPEN:
+                # process_request or process_response rejected the handshake.
+                connection.transport.abort()
+                return
+
             try:
                 connection.start_keepalive()
                 await self.handler(connection)
@@ -403,18 +405,25 @@ class Server:
         # but before it starts executing.
         self.handlers[connection] = self.loop.create_task(self.conn_handler(connection))
 
-    def close(self, close_connections: bool = True) -> None:
+    def close(
+        self,
+        close_connections: bool = True,
+        code: CloseCode | int = CloseCode.GOING_AWAY,
+        reason: str = "",
+    ) -> None:
         """
         Close the server.
 
         * Close the underlying :class:`asyncio.Server`.
-        * When ``close_connections`` is :obj:`True`, which is the default,
-          close existing connections. Specifically:
+        * When ``close_connections`` is :obj:`True`, which is the default, close
+          existing connections. Specifically:
 
           * Reject opening WebSocket connections with an HTTP 503 (service
             unavailable) error. This happens when the server accepted the TCP
             connection but didn't complete the opening handshake before closing.
-          * Close open WebSocket connections with close code 1001 (going away).
+          * Close open WebSocket connections with code 1001 (going away).
+            ``code`` and ``reason`` can be customized, for example to use code
+            1012 (service restart).
 
         * Wait until all connection handlers terminate.
 
@@ -423,16 +432,21 @@ class Server:
         """
         if self.close_task is None:
             self.close_task = self.get_loop().create_task(
-                self._close(close_connections)
+                self._close(close_connections, code, reason)
             )
 
-    async def _close(self, close_connections: bool) -> None:
+    async def _close(
+        self,
+        close_connections: bool = True,
+        code: CloseCode | int = CloseCode.GOING_AWAY,
+        reason: str = "",
+    ) -> None:
         """
         Implementation of :meth:`close`.
 
         This calls :meth:`~asyncio.Server.close` on the underlying
         :class:`asyncio.Server` object to stop accepting new connections and
-        then closes open connections with close code 1001.
+        then closes open connections.
 
         """
         self.logger.info("server closing")
@@ -445,11 +459,13 @@ class Server:
         # details. This workaround can be removed when dropping Python < 3.11.
         await asyncio.sleep(0)
 
+        # After server.close(), handshake() closes OPENING connections with an
+        # HTTP 503 error.
+
         if close_connections:
-            # Close OPEN connections with close code 1001. After server.close(),
-            # handshake() closes OPENING connections with an HTTP 503 error.
+            # Close OPEN connections with code 1001 by default.
             close_tasks = [
-                asyncio.create_task(connection.close(1001))
+                asyncio.create_task(connection.close(code, reason))
                 for connection in self.handlers
                 if connection.protocol.state is not CONNECTING
             ]
@@ -538,7 +554,7 @@ class Server:
         await self.server.serve_forever()
 
     @property
-    def sockets(self) -> Iterable[socket.socket]:
+    def sockets(self) -> tuple[socket.socket, ...]:
         """
         See :attr:`asyncio.Server.sockets`.
 
@@ -601,8 +617,10 @@ class serve:
         port: TCP port the server listens on.
             See :meth:`~asyncio.loop.create_server` for details.
         origins: Acceptable values of the ``Origin`` header, for defending
-            against Cross-Site WebSocket Hijacking attacks. Include :obj:`None`
-            in the list if the lack of an origin is acceptable.
+            against Cross-Site WebSocket Hijacking attacks. Values can be
+            :class:`str` to test for an exact match or regular expressions
+            compiled by :func:`re.compile` to test against a pattern. Include
+            :obj:`None` in the list if the lack of an origin is acceptable.
         extensions: List of supported extensions, in order in which they
             should be negotiated and run.
         subprotocols: List of supported subprotocols, in order of decreasing
@@ -615,6 +633,9 @@ class serve:
             it has the same behavior as the
             :meth:`ServerProtocol.select_subprotocol
             <websockets.server.ServerProtocol.select_subprotocol>` method.
+        compression: The "permessage-deflate" extension is enabled by default.
+            Set ``compression`` to :obj:`None` to disable it. See the
+            :doc:`compression guide <../../topics/compression>` for details.
         process_request: Intercept the request during the opening handshake.
             Return an HTTP response to force the response or :obj:`None` to
             continue normally. When you force an HTTP 101 Continue response, the
@@ -628,9 +649,6 @@ class serve:
         server_header: Value of  the ``Server`` response header.
             It defaults to ``"Python/x.y.z websockets/X.Y"``. Setting it to
             :obj:`None` removes the header.
-        compression: The "permessage-deflate" extension is enabled by default.
-            Set ``compression`` to :obj:`None` to disable it. See the
-            :doc:`compression guide <../../topics/compression>` for details.
         open_timeout: Timeout for opening connections in seconds.
             :obj:`None` disables the timeout.
         ping_interval: Interval between keepalive pings in seconds.
@@ -640,11 +658,14 @@ class serve:
         close_timeout: Timeout for closing connections in seconds.
             :obj:`None` disables the timeout.
         max_size: Maximum size of incoming messages in bytes.
-            :obj:`None` disables the limit.
+            :obj:`None` disables the limit. You may pass a ``(max_message_size,
+            max_fragment_size)`` tuple to set different limits for messages and
+            fragments when you expect long messages sent in short fragments.
         max_queue: High-water mark of the buffer where frames are received.
             It defaults to 16 frames. The low-water mark defaults to ``max_queue
             // 4``. You may pass a ``(high, low)`` tuple to set the high-water
-            and low-water marks.
+            and low-water marks. If you want to disable flow control entirely,
+            you may set it to ``None``, although that's a bad idea.
         write_limit: High-water mark of write buffer in bytes. It is passed to
             :meth:`~asyncio.WriteTransport.set_write_buffer_limits`. It defaults
             to 32 KiB. You may pass a ``(high, low)`` tuple to set the
@@ -681,7 +702,7 @@ class serve:
         port: int | None = None,
         *,
         # WebSocket
-        origins: Sequence[Origin | None] | None = None,
+        origins: Sequence[Origin | re.Pattern[str] | None] | None = None,
         extensions: Sequence[ServerExtensionFactory] | None = None,
         subprotocols: Sequence[Subprotocol] | None = None,
         select_subprotocol: (
@@ -691,6 +712,8 @@ class serve:
             ]
             | None
         ) = None,
+        compression: str | None = "deflate",
+        # HTTP
         process_request: (
             Callable[
                 [ServerConnection, Request],
@@ -706,15 +729,14 @@ class serve:
             | None
         ) = None,
         server_header: str | None = SERVER,
-        compression: str | None = "deflate",
         # Timeouts
         open_timeout: float | None = 10,
         ping_interval: float | None = 20,
         ping_timeout: float | None = 20,
         close_timeout: float | None = 10,
         # Limits
-        max_size: int | None = 2**20,
-        max_queue: int | tuple[int, int | None] = 16,
+        max_size: int | None | tuple[int | None, int | None] = 2**20,
+        max_queue: int | None | tuple[int | None, int | None] = 16,
         write_limit: int | tuple[int, int | None] = 2**15,
         # Logging
         logger: LoggerLike | None = None,
@@ -826,7 +848,7 @@ class serve:
         self.server.wrap(server)
         return self.server
 
-    # ... = yield from serve(...) - remove when dropping Python < 3.10
+    # ... = yield from serve(...) - remove when dropping Python < 3.11
 
     __iter__ = __await__
 
@@ -898,16 +920,18 @@ def basic_auth(
             whether they're valid.
     Raises:
         TypeError: If ``credentials`` or ``check_credentials`` is wrong.
+        ValueError: If ``credentials`` and ``check_credentials`` are both
+            provided or both not provided.
 
     """
     if (credentials is None) == (check_credentials is None):
-        raise TypeError("provide either credentials or check_credentials")
+        raise ValueError("provide either credentials or check_credentials")
 
     if credentials is not None:
         if is_credentials(credentials):
-            credentials_list = [cast(Tuple[str, str], credentials)]
+            credentials_list = [cast(tuple[str, str], credentials)]
         elif isinstance(credentials, Iterable):
-            credentials_list = list(cast(Iterable[Tuple[str, str]], credentials))
+            credentials_list = list(cast(Iterable[tuple[str, str]], credentials))
             if not all(is_credentials(item) for item in credentials_list):
                 raise TypeError(f"invalid credentials argument: {credentials}")
         else:

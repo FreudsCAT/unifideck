@@ -12,7 +12,7 @@
  * `useStorageConfig` in the parent ; this modal is only the
  * UI shell.
  */
-import React, { FC, useState } from "react";
+import { FC, useState } from "react";
 import { ConfirmModal } from "@decky/ui";
 import { useTranslation } from "react-i18next";
 import { StoragePathPicker } from "../settings/StoragePathPicker";

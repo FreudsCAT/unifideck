@@ -17,10 +17,10 @@ that were already defined for ``reconcile``.
 from __future__ import annotations
 
 import logging
-import time
 from typing import TYPE_CHECKING, Any
 
-from .games_map import GameMapEntry, generate_app_id
+from .games_map import UNIFIDECK_TAG, GameMapEntry, generate_app_id
+from .reconcile_phases import _ReconcilePhasesMixin
 
 if TYPE_CHECKING:
     from unifideck.core.types import Game
@@ -29,13 +29,13 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Signature tag written into shortcuts.vdf ``tags`` field so we
-# can identify Unifideck-managed shortcuts and never touch
-# user-created ones during cleanup.
-UNIFIDECK_TAG = "Unifideck"
+# Re-exported from ``games_map`` so callers can still write
+# ``from .games_map_mixin import UNIFIDECK_TAG`` without forming
+# a cycle with ``reconcile_phases``.
+__all__ = ["UNIFIDECK_TAG"]
 
 
-class _GamesMapMixin:
+class _GamesMapMixin(_ReconcilePhasesMixin):
     """Games-map mutations + queries for ShortcutService."""
 
     # These are provided by the ShortcutService facade at runtime
@@ -293,196 +293,3 @@ class _GamesMapMixin:
         while new_key in shortcuts_dict:
             new_key = str(int(new_key) + 1)
         return new_key
-
-    @staticmethod
-    def _is_stale_managed_shortcut(
-        entry: Any,
-        valid_app_ids: set[int],
-    ) -> bool:
-        """True if ``entry`` is a Unifideck-managed shortcut that no
-        longer corresponds to any game in the current library.
-
-        Filters out non-dict entries (corrupt VDF), entries without
-        a ``tags`` dict (user-created), entries tagged ``auth-*``
-        (used by the OAuth flows and never reconciled here), and
-        entries whose ``appid`` is still in ``valid_app_ids``.
-        """
-        if not isinstance(entry, dict):
-            return False
-        tags = entry.get("tags", {})
-        if not isinstance(tags, dict):
-            return False
-        is_managed = any(t == UNIFIDECK_TAG for t in tags.values())
-        is_auth = any(str(t).startswith("auth-") for t in tags.values())
-        if not is_managed or is_auth:
-            return False
-        return entry.get("appid") not in valid_app_ids
-
-    async def reconcile(self: Any, games: list[Game]) -> dict[str, int]:
-        """Bulk-sync all shortcuts from a list of Games.
-
-        Computes the set-diff against current ``_games_map``:
-        add missing, remove stale (only Unifideck-tagged ones
-        to preserve user shortcuts). Single atomic ``_save_all``
-        at the end. Returns ``{added, removed, kept}`` counts.
-
-        Implementation breakdown:
-          1. Drop ``games.map`` keys not in the new library.
-          2. For each game: create-or-keep the ``shortcuts.vdf``
-             entry, refresh ``games.map``.
-          3. Drop ``shortcuts.vdf`` entries tagged as Unifideck-
-             managed but absent from the new library.
-
-        Refactor history (2026-05-14): was at McCabe CC=16 — the
-        three phases were inlined with their own loops, set
-        builds and counter increments. Pulled each phase into a
-        dedicated helper so this top-level method now reads as a
-        manifest of the algorithm itself: phase 1, phase 2,
-        phase 3, save.
-        """
-        await self._load_shortcuts()
-        await self._load_games_map()
-
-        # Drift fix (lot 12c): ``Game`` doesn't have ``id`` /
-        # ``launch_path`` attributes — the canonical fields are
-        # ``store_game_id`` and ``exe_path``. The previous shape
-        # raised AttributeError at runtime, but the set comprehensions
-        # below were never exercised by the test suite. mypy strict
-        # surfaced the drift.
-        valid_keys = {f"{g.store}:{g.store_game_id}" for g in games}
-        valid_app_ids = {
-            generate_app_id(g.exe_path or "", g.title) for g in games
-        }
-
-        # Phase 1 — prune the games.map entries that no longer
-        # correspond to a game in the new library.
-        removed = self._reconcile_phase_prune_map(valid_keys)
-
-        # Phase 2 — ensure each current game has both a games.map
-        # entry and a shortcuts.vdf entry.
-        self._shortcuts = self._ensure_shortcuts_root(self._shortcuts)
-        shortcuts_dict = self._shortcuts["shortcuts"]
-        added, kept = self._reconcile_phase_sync_games(
-            games, shortcuts_dict,
-        )
-
-        # Phase 3 — drop shortcuts.vdf entries that are tagged
-        # as Unifideck-managed but whose app_id is no longer in
-        # the current library (e.g. game uninstalled outside
-        # Unifideck's knowledge).
-        removed += self._reconcile_phase_drop_stale(
-            shortcuts_dict, valid_app_ids,
-        )
-
-        if added > 0 or removed > 0:
-            await self._save_all()
-
-        return {"added": added, "removed": removed, "kept": kept}
-
-    # ─────────────────────────────────────────────────────────────
-    # Reconcile phases — extracted to flatten the CC of reconcile.
-    # ─────────────────────────────────────────────────────────────
-
-    def _reconcile_phase_prune_map(
-        self: Any, valid_keys: set[str],
-    ) -> int:
-        """Phase 1: drop ``_games_map`` keys absent from ``valid_keys``.
-
-        Returns the number of entries removed.
-        """
-        stale_keys = [k for k in self._games_map if k not in valid_keys]
-        for key in stale_keys:
-            del self._games_map[key]
-        return len(stale_keys)
-
-    def _reconcile_phase_sync_games(
-        self: Any,
-        games: list[Game],
-        shortcuts_dict: dict[str, Any],
-    ) -> tuple[int, int]:
-        """Phase 2: ensure each game has both a map entry and a VDF entry.
-
-        Returns ``(added, kept)`` — number of new shortcuts
-        appended vs left in place. The ``games.map`` is rewritten
-        unconditionally so a metadata-only refresh (e.g. work_dir
-        moved) propagates without churning the VDF.
-        """
-        added = 0
-        kept = 0
-        for game in games:
-            key = f"{game.store}:{game.app_id}"
-            exe = game.exe_path or ""
-            app_id = generate_app_id(exe, game.title)
-            self._games_map[key] = GameMapEntry(
-                exe=exe, work_dir=game.install_path or "",
-            )
-            if self._find_existing_shortcut_key(shortcuts_dict, app_id) is None:
-                new_key = self._allocate_new_shortcut_key(shortcuts_dict)
-                shortcuts_dict[new_key] = self._build_shortcut_entry(
-                    game, app_id,
-                )
-                added += 1
-            else:
-                kept += 1
-        return added, kept
-
-    def _reconcile_phase_drop_stale(
-        self: Any,
-        shortcuts_dict: dict[str, Any],
-        valid_app_ids: set[int],
-    ) -> int:
-        """Phase 3: delete Unifideck-managed shortcuts no longer needed.
-
-        Only entries with our tag get deleted — user-created
-        shortcuts are preserved even if they happen to share an
-        appid (very unlikely, but the symmetry with ``add_game``
-        and ``remove_game`` matters). Auth shortcuts (tagged
-        ``auth-*``) are also preserved here ; their lifecycle is
-        managed by ``services/shortcut/shortcut.py``.
-
-        Returns the number of entries dropped.
-        """
-        keys_to_delete = [
-            vdf_key for vdf_key, entry in shortcuts_dict.items()
-            if self._is_stale_managed_shortcut(entry, valid_app_ids)
-        ]
-        for key in keys_to_delete:
-            del shortcuts_dict[key]
-        return len(keys_to_delete)
-
-    def _build_shortcut_entry(self: Any, game: Game, app_id: int) -> dict[str, Any]:
-        """Construct a shortcuts.vdf entry dict for ``game``.
-
-        Populates ``appid``, ``AppName``, ``Exe``, ``StartDir``,
-        ``tags`` (including ``UNIFIDECK_TAG``). Arguments that
-        land in shortcuts.vdf are quoted/escaped by the serialiser
-        downstream — no shell-escaping here.
-        """
-        # Exe should be in quotes for steam
-        exe_path = f'"{game.exe_path}"' if game.exe_path else '""'
-        # ``start_dir`` is the working directory Steam cd's into
-        # before exec'ing the binary — same as the install dir.
-        start_dir = f'"{game.install_path}"' if game.install_path else '""'
-
-        return {
-            "appid": app_id,
-            "AppName": game.title,
-            "Exe": exe_path,
-            "StartDir": start_dir,
-            "icon": "",
-            "ShortcutPath": "",
-            "LaunchOptions": "",
-            "IsHidden": 0,
-            "AllowDesktopConfig": 1,
-            "AllowOverlay": 1,
-            "OpenVR": 0,
-            "Devkit": 0,
-            "DevkitGameID": "",
-            "DevkitOverrideAppID": 0,
-            "LastPlayTime": int(time.time()),
-            "FlatpakAppID": "",
-            "tags": {
-                "0": UNIFIDECK_TAG,
-                "1": game.store,
-            },
-        }

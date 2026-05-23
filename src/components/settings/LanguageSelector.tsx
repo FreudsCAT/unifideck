@@ -18,7 +18,7 @@
  * translated through i18next as `settings.language.auto`.
  */
 
-import React, { FC, useMemo } from "react";
+import { FC, useMemo } from "react";
 import { PanelSection, PanelSectionRow, Dropdown } from "@decky/ui";
 import { useTranslation } from "react-i18next";
 

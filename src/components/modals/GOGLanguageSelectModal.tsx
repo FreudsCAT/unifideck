@@ -11,7 +11,7 @@
  * Pure presentational : the actual install RPC is the caller's
  * responsibility — this component only collects the choice.
  */
-import React, { FC, useState } from "react";
+import { FC, useState } from "react";
 import { ConfirmModal, Dropdown, DropdownOption } from "@decky/ui";
 import { useTranslation } from "react-i18next";
 
@@ -35,6 +35,14 @@ const LANGUAGE_NAMES: Record<string, string> = {
   "nl-NL": "Nederlands (Dutch)",
   "tr-TR": "Türkçe (Turkish)",
   "uk-UA": "Українська (Ukrainian)",
+  "cs-CZ": "Čeština (Czech)",
+  "hu-HU": "Magyar (Hungarian)",
+  "sv-SE": "Svenska (Swedish)",
+  "da-DK": "Dansk (Danish)",
+  "fi-FI": "Suomi (Finnish)",
+  "no-NO": "Norsk (Norwegian)",
+  "ar-SA": "العربية (Arabic)",
+  "th-TH": "ไทย (Thai)",
 };
 
 interface Props {

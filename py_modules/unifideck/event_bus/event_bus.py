@@ -69,6 +69,46 @@ class EventBus:
         """
         self._handlers: dict[str, list[Handler]] = {}
         self._once: dict[str, list[Handler]] = {}
+        # Optional post-emit hook: when set, every ``emit`` call
+        # also writes the event to the replay buffer so the
+        # frontend's ``subscribe_replay`` polling sees it. Wired
+        # by the bootstrap (after the replay buffer is built).
+        # Direct injection (rather than going through the
+        # PriorityDispatcher's enqueue) because every emitter in
+        # the codebase calls ``bus.emit`` directly — the
+        # dispatcher's queue was never fed.
+        self._replay_recorder: Callable[[Any, dict[str, Any]], None] | None = None
+        # Per-sync-run progress tracker, set by SyncService during
+        # ``_setup_sync`` and cleared on completion. Services that
+        # need to report per-game progress (ArtworkService,
+        # MetadataService) read it via ``get_sync_progress()`` and
+        # call its ``increment_*`` methods — no direct coupling to
+        # SyncService needed.
+        self._sync_progress: Any = None
+
+    def set_sync_progress(self, progress: Any) -> None:
+        """Store the active ``SyncProgress`` instance (or ``None``)."""
+        self._sync_progress = progress
+
+    def get_sync_progress(self) -> Any:
+        """Return the current ``SyncProgress`` instance, or ``None``."""
+        return self._sync_progress
+
+    def set_replay_recorder(
+        self, recorder: Callable[[Any, dict[str, Any]], None] | None,
+    ) -> None:
+        """Wire a post-emit hook that copies events to the replay buffer.
+
+        Called once at boot from the pipeline factory with
+        ``replay_buffer.record`` as the recorder. ``None`` clears
+        the wiring (test teardown).
+
+        Args:
+            recorder: callable accepting ``(event, kwargs)`` — the
+                same signature as ``EventReplayBuffer.record``.
+                Set to ``None`` to disable.
+        """
+        self._replay_recorder = recorder
 
     def on(self, event: Events | str, handler: Handler) -> None:
         """Register a persistent handler for ``event``.
@@ -253,6 +293,16 @@ class EventBus:
             order. Empty list if no subscribers.
         """
         key = self._key(event)
+        # Always record into the replay buffer (when wired), even
+        # if no handlers are registered — the frontend may poll
+        # for events before its components have mounted their
+        # subscriptions. Recording is best-effort; a failing
+        # recorder must never break emission.
+        if self._replay_recorder is not None:
+            try:
+                self._replay_recorder(event, dict(payload))
+            except Exception:
+                logger.exception("[EventBus] replay recorder failed")
         handlers = list(self._handlers.get(key, []))
         if not handlers:
             logger.debug("[DIAG] event=%s handlers=0", key)

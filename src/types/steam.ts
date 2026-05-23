@@ -52,6 +52,8 @@ export interface SteamAppOverview extends SteamApp {
   icon_hash: string;
   review_score: number;
   review_percentage: number;
+  steam_deck_compat_category?: number;
+  visible_in_game_list?: boolean;
   GameID(): string;
   GetCapsuleImageURL(): string;
   GetHeaderImageURL(): string;

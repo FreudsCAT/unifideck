@@ -4,14 +4,16 @@ import hmac
 import http
 import logging
 import os
+import re
 import selectors
 import socket
 import ssl as ssl_module
 import sys
 import threading
 import warnings
+from collections.abc import Iterable, Sequence
 from types import TracebackType
-from typing import Any, Callable, Iterable, Sequence, Tuple, cast
+from typing import Any, Callable, Mapping, cast
 
 from ..exceptions import InvalidHeader
 from ..extensions.base import ServerExtensionFactory
@@ -45,15 +47,17 @@ class ServerConnection(Connection):
         for message in websocket:
             process(message)
 
-    The iterator exits normally when the connection is closed with close code
+    The iterator exits normally when the connection is closed with code
     1000 (OK) or 1001 (going away) or without a close code. It raises a
     :exc:`~websockets.exceptions.ConnectionClosedError` when the connection is
     closed with any other code.
 
+    The ``ping_interval``, ``ping_timeout``, ``close_timeout``, and
+    ``max_queue`` arguments have the same meaning as in :func:`serve`.
+
     Args:
         socket: Socket connected to a WebSocket client.
         protocol: Sans-I/O connection.
-        close_timeout: Timeout for closing the connection in seconds.
 
     """
 
@@ -62,16 +66,24 @@ class ServerConnection(Connection):
         socket: socket.socket,
         protocol: ServerProtocol,
         *,
+        ping_interval: float | None = 20,
+        ping_timeout: float | None = 20,
         close_timeout: float | None = 10,
+        max_queue: int | None | tuple[int | None, int | None] = 16,
     ) -> None:
         self.protocol: ServerProtocol
         self.request_rcvd = threading.Event()
         super().__init__(
             socket,
             protocol,
+            ping_interval=ping_interval,
+            ping_timeout=ping_timeout,
             close_timeout=close_timeout,
+            max_queue=max_queue,
         )
         self.username: str  # see basic_auth()
+        self.handler: Callable[[ServerConnection], None]  # see route()
+        self.handler_kwargs: Mapping[str, Any]  # see route()
 
     def respond(self, status: StatusLike, text: str) -> Response:
         """
@@ -118,7 +130,7 @@ class ServerConnection(Connection):
 
         """
         if not self.request_rcvd.wait(timeout):
-            raise TimeoutError("timed out during handshake")
+            raise TimeoutError("timed out while waiting for handshake request")
 
         if self.request is not None:
             with self.send_context(expected_state=CONNECTING):
@@ -165,10 +177,13 @@ class ServerConnection(Connection):
 
                 self.protocol.send_response(self.response)
 
-        # self.protocol.handshake_exc is always set when the connection is lost
-        # before receiving a request, when the request cannot be parsed, when
-        # the handshake encounters an error, or when process_request or
-        # process_response sends an HTTP response that rejects the handshake.
+        # self.protocol.handshake_exc is set when the connection is lost before
+        # receiving a request, when the request cannot be parsed, or when the
+        # handshake fails, including when process_request or process_response
+        # raises an exception.
+
+        # It isn't set when process_request or process_response sends an HTTP
+        # response that rejects the handshake.
 
         if self.protocol.handshake_exc is not None:
             raise self.protocol.handshake_exc
@@ -317,7 +332,7 @@ def serve(
     sock: socket.socket | None = None,
     ssl: ssl_module.SSLContext | None = None,
     # WebSocket
-    origins: Sequence[Origin | None] | None = None,
+    origins: Sequence[Origin | re.Pattern[str] | None] | None = None,
     extensions: Sequence[ServerExtensionFactory] | None = None,
     subprotocols: Sequence[Subprotocol] | None = None,
     select_subprotocol: (
@@ -327,6 +342,8 @@ def serve(
         ]
         | None
     ) = None,
+    compression: str | None = "deflate",
+    # HTTP
     process_request: (
         Callable[
             [ServerConnection, Request],
@@ -342,12 +359,14 @@ def serve(
         | None
     ) = None,
     server_header: str | None = SERVER,
-    compression: str | None = "deflate",
     # Timeouts
     open_timeout: float | None = 10,
+    ping_interval: float | None = 20,
+    ping_timeout: float | None = 20,
     close_timeout: float | None = 10,
     # Limits
-    max_size: int | None = 2**20,
+    max_size: int | None | tuple[int | None, int | None] = 2**20,
+    max_queue: int | None | tuple[int | None, int | None] = 16,
     # Logging
     logger: LoggerLike | None = None,
     # Escape hatch for advanced customization
@@ -391,8 +410,10 @@ def serve(
             socket.
         ssl: Configuration for enabling TLS on the connection.
         origins: Acceptable values of the ``Origin`` header, for defending
-            against Cross-Site WebSocket Hijacking attacks. Include :obj:`None`
-            in the list if the lack of an origin is acceptable.
+            against Cross-Site WebSocket Hijacking attacks. Values can be
+            :class:`str` to test for an exact match or regular expressions
+            compiled by :func:`re.compile` to test against a pattern. Include
+            :obj:`None` in the list if the lack of an origin is acceptable.
         extensions: List of supported extensions, in order in which they
             should be negotiated and run.
         subprotocols: List of supported subprotocols, in order of decreasing
@@ -405,6 +426,9 @@ def serve(
             it has the same behavior as the
             :meth:`ServerProtocol.select_subprotocol
             <websockets.server.ServerProtocol.select_subprotocol>` method.
+        compression: The "permessage-deflate" extension is enabled by default.
+            Set ``compression`` to :obj:`None` to disable it. See the
+            :doc:`compression guide <../../topics/compression>` for details.
         process_request: Intercept the request during the opening handshake.
             Return an HTTP response to force the response. Return :obj:`None` to
             continue normally. When you force an HTTP 101 Continue response, the
@@ -417,15 +441,23 @@ def serve(
         server_header: Value of  the ``Server`` response header.
             It defaults to ``"Python/x.y.z websockets/X.Y"``. Setting it to
             :obj:`None` removes the header.
-        compression: The "permessage-deflate" extension is enabled by default.
-            Set ``compression`` to :obj:`None` to disable it. See the
-            :doc:`compression guide <../../topics/compression>` for details.
         open_timeout: Timeout for opening connections in seconds.
             :obj:`None` disables the timeout.
+        ping_interval: Interval between keepalive pings in seconds.
+            :obj:`None` disables keepalive.
+        ping_timeout: Timeout for keepalive pings in seconds.
+            :obj:`None` disables timeouts.
         close_timeout: Timeout for closing connections in seconds.
             :obj:`None` disables the timeout.
         max_size: Maximum size of incoming messages in bytes.
-            :obj:`None` disables the limit.
+            :obj:`None` disables the limit. You may pass a ``(max_message_size,
+            max_fragment_size)`` tuple to set different limits for messages and
+            fragments when you expect long messages sent in short fragments.
+        max_queue: High-water mark of the buffer where frames are received.
+            It defaults to 16 frames. The low-water mark defaults to ``max_queue
+            // 4``. You may pass a ``(high, low)`` tuple to set the high-water
+            and low-water marks. If you want to disable flow control entirely,
+            you may set it to ``None``, although that's a bad idea.
         logger: Logger for this server.
             It defaults to ``logging.getLogger("websockets.server")``. See the
             :doc:`logging guide <../../topics/logging>` for details.
@@ -467,14 +499,14 @@ def serve(
     if sock is None:
         if unix:
             if path is None:
-                raise TypeError("missing path argument")
+                raise ValueError("missing path argument")
             kwargs.setdefault("family", socket.AF_UNIX)
             sock = socket.create_server(path, **kwargs)
         else:
             sock = socket.create_server((host, port), **kwargs)
     else:
         if path is not None:
-            raise TypeError("path and sock arguments are incompatible")
+            raise ValueError("path and sock arguments are incompatible")
 
     # Initialize TLS wrapper
 
@@ -546,7 +578,10 @@ def serve(
             connection = create_connection(
                 sock,
                 protocol,
+                ping_interval=ping_interval,
+                ping_timeout=ping_timeout,
                 close_timeout=close_timeout,
+                max_queue=max_queue,
             )
         except Exception:
             sock.close()
@@ -572,6 +607,7 @@ def serve(
 
             assert connection.protocol.state is OPEN
             try:
+                connection.start_keepalive()
                 handler(connection)
             except Exception:
                 connection.logger.error("connection handler failed", exc_info=True)
@@ -656,16 +692,18 @@ def basic_auth(
             whether they're valid.
     Raises:
         TypeError: If ``credentials`` or ``check_credentials`` is wrong.
+        ValueError: If ``credentials`` and ``check_credentials`` are both
+            provided or both not provided.
 
     """
     if (credentials is None) == (check_credentials is None):
-        raise TypeError("provide either credentials or check_credentials")
+        raise ValueError("provide either credentials or check_credentials")
 
     if credentials is not None:
         if is_credentials(credentials):
-            credentials_list = [cast(Tuple[str, str], credentials)]
+            credentials_list = [cast(tuple[str, str], credentials)]
         elif isinstance(credentials, Iterable):
-            credentials_list = list(cast(Iterable[Tuple[str, str]], credentials))
+            credentials_list = list(cast(Iterable[tuple[str, str]], credentials))
             if not all(is_credentials(item) for item in credentials_list):
                 raise TypeError(f"invalid credentials argument: {credentials}")
         else:

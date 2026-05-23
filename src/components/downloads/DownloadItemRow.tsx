@@ -11,7 +11,7 @@
  * picks the appropriate rendering. All three variants share
  * the same StoreIcon + title prefix.
  */
-import React, { FC } from "react";
+import { FC } from "react";
 import { ButtonItem, ProgressBarItem } from "@decky/ui";
 import { useTranslation } from "react-i18next";
 import { useGameActions } from "../../hooks/useGameActions";

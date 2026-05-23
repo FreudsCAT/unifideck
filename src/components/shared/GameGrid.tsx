@@ -8,7 +8,7 @@
  * Used by the unified library view and any future grid-
  * style picker (e.g. multi-select for batch operations).
  */
-import React, { FC } from "react";
+import { FC } from "react";
 import { Focusable, DialogButton } from "@decky/ui";
 import { StoreIcon } from "./StoreIcon";
 import type { Game } from "../../types/api";

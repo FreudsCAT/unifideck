@@ -8,7 +8,7 @@
  *
  * The `<StoreIcon>` from shared/ provides the brand badge.
  */
-import React, { FC } from "react";
+import { FC } from "react";
 import { DialogButton, Focusable } from "@decky/ui";
 import { useTranslation } from "react-i18next";
 import { useViewMode } from "../../hooks/useViewMode";

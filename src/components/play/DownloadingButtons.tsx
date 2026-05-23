@@ -11,7 +11,7 @@
  * with a 1-second debounce to prevent double-clicks
  * cascading two cancellations.
  */
-import React, { FC, useCallback, useState } from "react";
+import { FC, useCallback, useState } from "react";
 import { DialogButton, Focusable } from "@decky/ui";
 import { useTranslation } from "react-i18next";
 import { useGameActions } from "../../hooks/useGameActions";

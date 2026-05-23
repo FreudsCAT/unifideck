@@ -12,6 +12,7 @@
  * plugin in a half-loaded state until the next reboot.
  */
 import type { RouterPatchHandle } from "./lib/steam-bridge";
+import type { CollectionManagerHandle } from "./lib/steam-bridge/collection-manager";
 import type { Unregisterable } from "./types/steam";
 /**
  * Handles captured during bootstrap that {@link runTeardown}
@@ -21,6 +22,9 @@ import type { Unregisterable } from "./types/steam";
  */
 export interface TeardownHandles {
   routerPatch?: RouterPatchHandle | null;
+  libraryPatch?: RouterPatchHandle | null;
+  collectionManager?: CollectionManagerHandle | null;
+  appStorePatch?: { remove: () => void } | null;
   lifetimeListener?: Unregisterable | null;
 }
 /**
@@ -38,6 +42,27 @@ export function runTeardown(handles: TeardownHandles): void {
       handles.lifetimeListener.unregister();
     } catch (e) {
       console.warn("[Teardown] lifetime listener unregister failed:", e);
+    }
+  }
+  if (handles.appStorePatch) {
+    try {
+      handles.appStorePatch.remove();
+    } catch (e) {
+      console.warn("[Teardown] app-store patch remove failed:", e);
+    }
+  }
+  if (handles.collectionManager) {
+    try {
+      handles.collectionManager.remove();
+    } catch (e) {
+      console.warn("[Teardown] collection manager remove failed:", e);
+    }
+  }
+  if (handles.libraryPatch) {
+    try {
+      handles.libraryPatch.remove();
+    } catch (e) {
+      console.warn("[Teardown] library patch remove failed:", e);
     }
   }
   if (handles.routerPatch) {

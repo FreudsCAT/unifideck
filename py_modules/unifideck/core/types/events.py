@@ -40,6 +40,24 @@ class Events(StrEnum):
     SYNC_COMPLETE = "sync_complete"
     SYNC_FAILED = "sync_failed"
     SYNC_CANCELLED = "sync_cancelled"
+    # Post-sync enrichment phases — emitted by ArtworkService and
+    # MetadataService so the frontend progress bar stays alive
+    # through artwork downloads + metadata extraction. Payload:
+    #  { phase: "artwork"|"metadata", active: bool, total: int|None, done: int|None }
+    POST_SYNC_PHASE_CHANGED = "post_sync_phase_changed"
+
+    # Durable activity-log events — captured by ActivityLogService
+    # into a JSONL file (``runtime_dir/sync_activity.log``) so the
+    # frontend can show "last 10 syncs" with timestamps, durations,
+    # and per-store counts. Distinct from SYNC_STARTED /
+    # SYNC_COMPLETE which are ephemeral UI signals; these carry the
+    # data worth persisting.
+    #   started   payload: { source, stores, started_at_ms }
+    #   completed payload: { source, duration_ms, game_count, errors }
+    #   cancelled payload: { source, duration_ms }
+    LIBRARY_SYNC_STARTED = "library_sync_started"
+    LIBRARY_SYNC_COMPLETED = "library_sync_completed"
+    LIBRARY_SYNC_CANCELLED = "library_sync_cancelled"
 
     # Store auth lifecycle
     STORE_AUTH_STARTED = "store_auth_started"
@@ -232,6 +250,15 @@ class Events(StrEnum):
     # declared — the call was a silent no-op (mypy attr-defined).
     # Payload fields: app_id (int, signed).
     SHORTCUT_REMOVED = "shortcut_removed"
+
+    # Emitted by ShortcutService once a bulk reconcile (post-sync)
+    # finishes. Carries the per-batch counters so the frontend can
+    # decide whether to prompt the user for a Steam restart (any
+    # ``added`` > 0 or ``removed`` > 0 invalidates Steam's in-memory
+    # copy of shortcuts.vdf — without a restart, Steam overwrites
+    # our changes on its next shutdown). Payload fields:
+    #   added (int), removed (int), kept (int), total (int)
+    SHORTCUT_RECONCILE_COMPLETE = "shortcut_reconcile_complete"
 
     # ── UI toast notification ────────────────────────────────────
     # Generic frontend toast trigger. Emitted by any service that

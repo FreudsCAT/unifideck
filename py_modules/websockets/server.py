@@ -4,16 +4,18 @@ import base64
 import binascii
 import email.utils
 import http
+import re
 import warnings
-from typing import Any, Callable, Generator, Sequence, cast
+from collections.abc import Generator, Sequence
+from typing import Any, Callable, cast
 
 from .datastructures import Headers, MultipleValuesError
 from .exceptions import (
     InvalidHandshake,
     InvalidHeader,
     InvalidHeaderValue,
+    InvalidMessage,
     InvalidOrigin,
-    InvalidStatus,
     InvalidUpgrade,
     NegotiationError,
 )
@@ -26,6 +28,7 @@ from .headers import (
     parse_upgrade,
 )
 from .http11 import Request, Response
+from .imports import lazy_import
 from .protocol import CONNECTING, OPEN, SERVER, Protocol, State
 from .typing import (
     ConnectionOption,
@@ -39,13 +42,7 @@ from .typing import (
 from .utils import accept_key
 
 
-# See #940 for why lazy_import isn't used here for backwards compatibility.
-# See #1400 for why listing compatibility imports in __all__ helps PyCharm.
-from .legacy.server import *  # isort:skip  # noqa: I001
-from .legacy.server import __all__ as legacy__all__
-
-
-__all__ = ["ServerProtocol"] + legacy__all__
+__all__ = ["ServerProtocol"]
 
 
 class ServerProtocol(Protocol):
@@ -53,7 +50,9 @@ class ServerProtocol(Protocol):
     Sans-I/O implementation of a WebSocket server connection.
 
     Args:
-        origins: Acceptable values of the ``Origin`` header; include
+        origins: Acceptable values of the ``Origin`` header. Values can be
+            :class:`str` to test for an exact match or regular expressions
+            compiled by :func:`re.compile` to test against a pattern. Include
             :obj:`None` in the list if the lack of an origin is acceptable.
             This is useful for defending against Cross-Site WebSocket
             Hijacking attacks.
@@ -66,8 +65,10 @@ class ServerProtocol(Protocol):
             signature as the :meth:`select_subprotocol` method, including a
             :class:`ServerProtocol` instance as first argument.
         state: Initial state of the WebSocket connection.
-        max_size: Maximum size of incoming messages in bytes;
-            :obj:`None` disables the limit.
+        max_size: Maximum size of incoming messages in bytes.
+            :obj:`None` disables the limit. You may pass a ``(max_message_size,
+            max_fragment_size)`` tuple to set different limits for messages and
+            fragments when you expect long messages sent in short fragments.
         logger: Logger for this connection;
             defaults to ``logging.getLogger("websockets.server")``;
             see the :doc:`logging guide <../../topics/logging>` for details.
@@ -77,7 +78,7 @@ class ServerProtocol(Protocol):
     def __init__(
         self,
         *,
-        origins: Sequence[Origin | None] | None = None,
+        origins: Sequence[Origin | re.Pattern[str] | None] | None = None,
         extensions: Sequence[ServerExtensionFactory] | None = None,
         subprotocols: Sequence[Subprotocol] | None = None,
         select_subprotocol: (
@@ -88,7 +89,7 @@ class ServerProtocol(Protocol):
             | None
         ) = None,
         state: State = CONNECTING,
-        max_size: int | None = 2**20,
+        max_size: int | None | tuple[int | None, int | None] = 2**20,
         logger: LoggerLike | None = None,
     ) -> None:
         super().__init__(
@@ -191,19 +192,14 @@ class ServerProtocol(Protocol):
             )
 
         headers = Headers()
-
         headers["Date"] = email.utils.formatdate(usegmt=True)
-
         headers["Upgrade"] = "websocket"
         headers["Connection"] = "Upgrade"
         headers["Sec-WebSocket-Accept"] = accept_header
-
         if extensions_header is not None:
             headers["Sec-WebSocket-Extensions"] = extensions_header
-
         if protocol_header is not None:
             headers["Sec-WebSocket-Protocol"] = protocol_header
-
         return Response(101, "Switching Protocols", headers)
 
     def process_request(
@@ -235,7 +231,6 @@ class ServerProtocol(Protocol):
         connection: list[ConnectionOption] = sum(
             [parse_connection(value) for value in headers.get_all("Connection")], []
         )
-
         if not any(value.lower() == "upgrade" for value in connection):
             raise InvalidUpgrade(
                 "Connection", ", ".join(connection) if connection else None
@@ -244,7 +239,6 @@ class ServerProtocol(Protocol):
         upgrade: list[UpgradeProtocol] = sum(
             [parse_upgrade(value) for value in headers.get_all("Upgrade")], []
         )
-
         # For compatibility with non-strict implementations, ignore case when
         # checking the Upgrade header. The RFC always uses "websocket", except
         # in section 11.2. (IANA registration) where it uses "WebSocket".
@@ -257,13 +251,13 @@ class ServerProtocol(Protocol):
             raise InvalidHeader("Sec-WebSocket-Key") from None
         except MultipleValuesError:
             raise InvalidHeader("Sec-WebSocket-Key", "multiple values") from None
-
         try:
             raw_key = base64.b64decode(key.encode(), validate=True)
         except binascii.Error as exc:
             raise InvalidHeaderValue("Sec-WebSocket-Key", key) from exc
         if len(raw_key) != 16:
             raise InvalidHeaderValue("Sec-WebSocket-Key", key)
+        accept_header = accept_key(key)
 
         try:
             version = headers["Sec-WebSocket-Version"]
@@ -271,23 +265,14 @@ class ServerProtocol(Protocol):
             raise InvalidHeader("Sec-WebSocket-Version") from None
         except MultipleValuesError:
             raise InvalidHeader("Sec-WebSocket-Version", "multiple values") from None
-
         if version != "13":
             raise InvalidHeaderValue("Sec-WebSocket-Version", version)
 
-        accept_header = accept_key(key)
-
         self.origin = self.process_origin(headers)
-
         extensions_header, self.extensions = self.process_extensions(headers)
-
         protocol_header = self.subprotocol = self.process_subprotocol(headers)
 
-        return (
-            accept_header,
-            extensions_header,
-            protocol_header,
-        )
+        return (accept_header, extensions_header, protocol_header)
 
     def process_origin(self, headers: Headers) -> Origin | None:
         """
@@ -313,7 +298,14 @@ class ServerProtocol(Protocol):
         if origin is not None:
             origin = cast(Origin, origin)
         if self.origins is not None:
-            if origin not in self.origins:
+            for origin_or_regex in self.origins:
+                if origin_or_regex == origin or (
+                    isinstance(origin_or_regex, re.Pattern)
+                    and origin is not None
+                    and origin_or_regex.fullmatch(origin) is not None
+                ):
+                    break
+            else:
                 raise InvalidOrigin(origin)
         return origin
 
@@ -420,7 +412,6 @@ class ServerProtocol(Protocol):
             ],
             [],
         )
-
         return self.select_subprotocol(subprotocols)
 
     def select_subprotocol(
@@ -529,7 +520,7 @@ class ServerProtocol(Protocol):
             self.logger.debug("> HTTP/1.1 %d %s", code, phrase)
             for key, value in response.headers.raw_items():
                 self.logger.debug("> %s: %s", key, value)
-            if response.body is not None:
+            if response.body:
                 self.logger.debug("> [body] (%d bytes)", len(response.body))
 
         self.writes.append(response.serialize())
@@ -540,11 +531,6 @@ class ServerProtocol(Protocol):
             self.logger.info("connection open")
 
         else:
-            # handshake_exc may be already set if accept() encountered an error.
-            # If the connection isn't open, set handshake_exc to guarantee that
-            # handshake_exc is None if and only if opening handshake succeeded.
-            if self.handshake_exc is None:
-                self.handshake_exc = InvalidStatus(response)
             self.logger.info(
                 "connection rejected (%d %s)",
                 response.status_code,
@@ -555,14 +541,17 @@ class ServerProtocol(Protocol):
             self.parser = self.discard()
             next(self.parser)  # start coroutine
 
-    def parse(self) -> Generator[None, None, None]:
+    def parse(self) -> Generator[None]:
         if self.state is CONNECTING:
             try:
                 request = yield from Request.parse(
                     self.reader.read_line,
                 )
             except Exception as exc:
-                self.handshake_exc = exc
+                self.handshake_exc = InvalidMessage(
+                    "did not receive a valid HTTP request"
+                )
+                self.handshake_exc.__cause__ = exc
                 self.send_eof()
                 self.parser = self.discard()
                 next(self.parser)  # start coroutine
@@ -585,3 +574,16 @@ class ServerConnection(ServerProtocol):
             DeprecationWarning,
         )
         super().__init__(*args, **kwargs)
+
+
+lazy_import(
+    globals(),
+    deprecated_aliases={
+        # deprecated in 14.0 - 2024-11-09
+        "WebSocketServer": ".legacy.server",
+        "WebSocketServerProtocol": ".legacy.server",
+        "broadcast": ".legacy.server",
+        "serve": ".legacy.server",
+        "unix_serve": ".legacy.server",
+    },
+)

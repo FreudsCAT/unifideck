@@ -351,12 +351,28 @@ exclude = '''(?x)(
     | /yaml/
     | /frontend/
 )'''
+
 # Strict mode (matches the project's mypy invariant).
 strict = true
 warn_unused_configs = true
 warn_unreachable = true
 # Don't follow imports into excluded dirs.
 follow_imports = "silent"
+
+# ``attr`` / ``attrs`` / ``rpds`` ship ``.pyi`` stubs that mypy
+# reads transitively when ``jsonschema`` and friends pull them in.
+# Their stubs trigger 13 generic-type-arg and variance errors that
+# originate inside the stubs themselves — nothing actionable from
+# our side. ``ignore_errors = true`` silences them without
+# changing ``follow_imports``, so dependents of these modules
+# (jsonschema, etc.) keep their type info intact. Placed AFTER the
+# strict-mode flags so TOML scoping doesn't pull them into the
+# per-module override (a mistake that previously turned a 13-error
+# fix into a 1300-error regression by losing strict-mode for the
+# entire tree).
+[[tool.mypy.overrides]]
+module = ["attr", "attr.*", "attrs", "attrs.*", "rpds", "rpds.*"]
+ignore_errors = true
 
 # ──────────────────────────────────────────────────────────────────
 # pytest — test suite at the repo root

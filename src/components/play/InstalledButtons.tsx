@@ -9,7 +9,7 @@
  * the game info (cached). Uninstall opens
  * `<UninstallConfirmModal>` rather than acting immediately.
  */
-import React, { FC, useCallback } from "react";
+import { FC, useCallback } from "react";
 import { DialogButton, Focusable, showModal } from "@decky/ui";
 import { useTranslation } from "react-i18next";
 import { useGameInfo } from "../../hooks/useGameInfo";

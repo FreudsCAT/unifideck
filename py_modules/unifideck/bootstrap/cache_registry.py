@@ -37,6 +37,12 @@ _NAMED_CACHES: tuple[tuple[str, int], ...] = (
     ("artwork_attempts", 0),
     ("game_sizes", 3600),
     ("compat", 0),
+    # ``ArtworkService`` uses ``sgdb_fetch`` to record per-game
+    # SGDB failure-cooldown timestamps — once a game totally misses
+    # across all three phases (store + SGDB + Steam CDN), it gets a
+    # 3600 s skip so repeated syncs don't hammer the SGDB API for
+    # titles nobody has art for (delisted, obscure, etc.).
+    ("sgdb_fetch", 3600),
     # ``MetadataService`` caches the merged-and-deduped metadata
     # under the ``"metadata"`` namespace (see ``CACHE_NAMESPACE``
     # in ``services/metadata_service.py``). Earlier this slot was

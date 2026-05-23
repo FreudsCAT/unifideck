@@ -5,14 +5,20 @@ import os
 import re
 import sys
 import warnings
-from typing import Callable, Generator
+from collections.abc import Generator
+from typing import Callable
 
 from .datastructures import Headers
 from .exceptions import SecurityError
 from .version import version as websockets_version
 
 
-__all__ = ["SERVER", "USER_AGENT", "Request", "Response"]
+__all__ = [
+    "SERVER",
+    "USER_AGENT",
+    "Request",
+    "Response",
+]
 
 
 PYTHON_VERSION = "{}.{}".format(*sys.version_info)
@@ -41,7 +47,7 @@ MAX_LINE_LENGTH = int(os.environ.get("WEBSOCKETS_MAX_LINE_LENGTH", "8192"))
 MAX_BODY_SIZE = int(os.environ.get("WEBSOCKETS_MAX_BODY_SIZE", "1_048_576"))  # 1 MiB
 
 
-def d(value: bytes) -> str:
+def d(value: bytes | bytearray) -> str:
     """
     Decode a bytestring for interpolating into an error message.
 
@@ -88,8 +94,7 @@ class Request:
     @property
     def exception(self) -> Exception | None:  # pragma: no cover
         warnings.warn(  # deprecated in 10.3 - 2022-04-17
-            "Request.exception is deprecated; "
-            "use ServerProtocol.handshake_exc instead",
+            "Request.exception is deprecated; use ServerProtocol.handshake_exc instead",
             DeprecationWarning,
         )
         return self._exception
@@ -97,7 +102,7 @@ class Request:
     @classmethod
     def parse(
         cls,
-        read_line: Callable[[int], Generator[None, None, bytes]],
+        read_line: Callable[[int], Generator[None, None, bytes | bytearray]],
     ) -> Generator[None, None, Request]:
         """
         Parse a WebSocket handshake request.
@@ -154,7 +159,10 @@ class Request:
             raise NotImplementedError("transfer codings aren't supported")
 
         if "Content-Length" in headers:
-            raise ValueError("unsupported request body")
+            # Some devices send a Content-Length header with a value of 0.
+            # This raises ValueError if Content-Length isn't an integer too.
+            if int(headers["Content-Length"]) != 0:
+                raise ValueError("unsupported request body")
 
         return cls(path, headers)
 
@@ -179,14 +187,14 @@ class Response:
         status_code: Response code.
         reason_phrase: Response reason.
         headers: Response headers.
-        body: Response body, if any.
+        body: Response body.
 
     """
 
     status_code: int
     reason_phrase: str
     headers: Headers
-    body: bytes | None = None
+    body: bytes | bytearray = b""
 
     _exception: Exception | None = None
 
@@ -202,9 +210,10 @@ class Response:
     @classmethod
     def parse(
         cls,
-        read_line: Callable[[int], Generator[None, None, bytes]],
-        read_exact: Callable[[int], Generator[None, None, bytes]],
-        read_to_eof: Callable[[int], Generator[None, None, bytes]],
+        read_line: Callable[[int], Generator[None, None, bytes | bytearray]],
+        read_exact: Callable[[int], Generator[None, None, bytes | bytearray]],
+        read_to_eof: Callable[[int], Generator[None, None, bytes | bytearray]],
+        proxy: bool = False,
     ) -> Generator[None, None, Response]:
         """
         Parse a WebSocket handshake response.
@@ -240,10 +249,17 @@ class Response:
             protocol, raw_status_code, raw_reason = status_line.split(b" ", 2)
         except ValueError:  # not enough values to unpack (expected 3, got 1-2)
             raise ValueError(f"invalid HTTP status line: {d(status_line)}") from None
-        if protocol != b"HTTP/1.1":
-            raise ValueError(
-                f"unsupported protocol; expected HTTP/1.1: {d(status_line)}"
-            )
+        if proxy:  # some proxies still use HTTP/1.0
+            if protocol not in [b"HTTP/1.1", b"HTTP/1.0"]:
+                raise ValueError(
+                    f"unsupported protocol; expected HTTP/1.1 or HTTP/1.0: "
+                    f"{d(status_line)}"
+                )
+        else:
+            if protocol != b"HTTP/1.1":
+                raise ValueError(
+                    f"unsupported protocol; expected HTTP/1.1: {d(status_line)}"
+                )
         try:
             status_code = int(raw_status_code)
         except ValueError:  # invalid literal for int() with base 10
@@ -260,36 +276,13 @@ class Response:
 
         headers = yield from parse_headers(read_line)
 
-        # https://datatracker.ietf.org/doc/html/rfc7230#section-3.3.3
-
-        if "Transfer-Encoding" in headers:
-            raise NotImplementedError("transfer codings aren't supported")
-
-        # Since websockets only does GET requests (no HEAD, no CONNECT), all
-        # responses except 1xx, 204, and 304 include a message body.
-        if 100 <= status_code < 200 or status_code == 204 or status_code == 304:
-            body = None
+        body: bytes | bytearray
+        if proxy:
+            body = b""
         else:
-            content_length: int | None
-            try:
-                # MultipleValuesError is sufficiently unlikely that we don't
-                # attempt to handle it. Instead we document that its parent
-                # class, LookupError, may be raised.
-                raw_content_length = headers["Content-Length"]
-            except KeyError:
-                content_length = None
-            else:
-                content_length = int(raw_content_length)
-
-            if content_length is None:
-                try:
-                    body = yield from read_to_eof(MAX_BODY_SIZE)
-                except RuntimeError:
-                    raise SecurityError(f"body too large: over {MAX_BODY_SIZE} bytes")
-            elif content_length > MAX_BODY_SIZE:
-                raise SecurityError(f"body too large: {content_length} bytes")
-            else:
-                body = yield from read_exact(content_length)
+            body = yield from read_body(
+                status_code, headers, read_line, read_exact, read_to_eof
+            )
 
         return cls(status_code, reason, headers, body)
 
@@ -302,13 +295,39 @@ class Response:
         # we can keep this simple.
         response = f"HTTP/1.1 {self.status_code} {self.reason_phrase}\r\n".encode()
         response += self.headers.serialize()
-        if self.body is not None:
-            response += self.body
+        response += self.body
         return response
 
 
+def parse_line(
+    read_line: Callable[[int], Generator[None, None, bytes | bytearray]],
+) -> Generator[None, None, bytes | bytearray]:
+    """
+    Parse a single line.
+
+    CRLF is stripped from the return value.
+
+    Args:
+        read_line: Generator-based coroutine that reads a LF-terminated line
+            or raises an exception if there isn't enough data.
+
+    Raises:
+        EOFError: If the connection is closed without a CRLF.
+        SecurityError: If the response exceeds a security limit.
+
+    """
+    try:
+        line = yield from read_line(MAX_LINE_LENGTH)
+    except RuntimeError:
+        raise SecurityError("line too long")
+    # Not mandatory but safe - https://datatracker.ietf.org/doc/html/rfc7230#section-3.5
+    if not line.endswith(b"\r\n"):
+        raise EOFError("line without CRLF")
+    return line[:-2]
+
+
 def parse_headers(
-    read_line: Callable[[int], Generator[None, None, bytes]],
+    read_line: Callable[[int], Generator[None, None, bytes | bytearray]],
 ) -> Generator[None, None, Headers]:
     """
     Parse HTTP headers.
@@ -358,28 +377,62 @@ def parse_headers(
     return headers
 
 
-def parse_line(
-    read_line: Callable[[int], Generator[None, None, bytes]],
-) -> Generator[None, None, bytes]:
-    """
-    Parse a single line.
+def read_body(
+    status_code: int,
+    headers: Headers,
+    read_line: Callable[[int], Generator[None, None, bytes | bytearray]],
+    read_exact: Callable[[int], Generator[None, None, bytes | bytearray]],
+    read_to_eof: Callable[[int], Generator[None, None, bytes | bytearray]],
+) -> Generator[None, None, bytes | bytearray]:
+    # https://datatracker.ietf.org/doc/html/rfc7230#section-3.3.3
 
-    CRLF is stripped from the return value.
+    # Since websockets only does GET requests (no HEAD, no CONNECT), all
+    # responses except 1xx, 204, and 304 include a message body.
+    if 100 <= status_code < 200 or status_code == 204 or status_code == 304:
+        return b""
 
-    Args:
-        read_line: Generator-based coroutine that reads a LF-terminated line
-            or raises an exception if there isn't enough data.
+    # MultipleValuesError is sufficiently unlikely that we don't attempt to
+    # handle it when accessing headers. Instead we document that its parent
+    # class, LookupError, may be raised.
+    # Conversions from str to int are protected by sys.set_int_max_str_digits..
 
-    Raises:
-        EOFError: If the connection is closed without a CRLF.
-        SecurityError: If the response exceeds a security limit.
+    elif (coding := headers.get("Transfer-Encoding")) is not None:
+        if coding != "chunked":
+            raise NotImplementedError(f"transfer coding {coding} isn't supported")
 
-    """
-    try:
-        line = yield from read_line(MAX_LINE_LENGTH)
-    except RuntimeError:
-        raise SecurityError("line too long")
-    # Not mandatory but safe - https://datatracker.ietf.org/doc/html/rfc7230#section-3.5
-    if not line.endswith(b"\r\n"):
-        raise EOFError("line without CRLF")
-    return line[:-2]
+        body = b""
+        while True:
+            chunk_size_line = yield from parse_line(read_line)
+            raw_chunk_size = chunk_size_line.split(b";", 1)[0]
+            # Set a lower limit than default_max_str_digits; 1 EB is plenty.
+            if len(raw_chunk_size) > 15:
+                str_chunk_size = raw_chunk_size.decode(errors="backslashreplace")
+                raise SecurityError(f"chunk too large: 0x{str_chunk_size} bytes")
+            chunk_size = int(raw_chunk_size, 16)
+            if chunk_size == 0:
+                break
+            if len(body) + chunk_size > MAX_BODY_SIZE:
+                raise SecurityError(
+                    f"chunk too large: {chunk_size} bytes after {len(body)} bytes"
+                )
+            body += yield from read_exact(chunk_size)
+            if (yield from read_exact(2)) != b"\r\n":
+                raise ValueError("chunk without CRLF")
+        # Read the trailer.
+        yield from parse_headers(read_line)
+        return body
+
+    elif (raw_content_length := headers.get("Content-Length")) is not None:
+        # Set a lower limit than default_max_str_digits; 1 EiB is plenty.
+        if len(raw_content_length) > 18:
+            raise SecurityError(f"body too large: {raw_content_length} bytes")
+        content_length = int(raw_content_length)
+        if content_length > MAX_BODY_SIZE:
+            raise SecurityError(f"body too large: {content_length} bytes")
+        return (yield from read_exact(content_length))
+
+    else:
+        try:
+            return (yield from read_to_eof(MAX_BODY_SIZE))
+        except RuntimeError:
+            raise SecurityError(f"body too large: over {MAX_BODY_SIZE} bytes")

@@ -19,9 +19,14 @@ if TYPE_CHECKING:
 # Default fallback if Steam isn't installed (e.g. dev environment)
 _DEFAULT_STEAM_ROOT = str(Path("~/.steam/steam").expanduser())
 
-# TODO: revisit — consider auto-detection via loginusers.vdf (staging approach)
-# Currently we hardcode the primary Steam Deck user ID "0".
-_USER_ID = "0"
+# Last-resort fallback if loginusers.vdf can't be parsed AND no real
+# user directory exists under ``userdata/``. NEVER use this for
+# real writes — ``"0"`` is Steam's guest / meta directory and any
+# ``shortcuts.vdf`` we drop there is invisible to the running Steam
+# client. The active-user resolver in ``unifideck.steam.steam_user``
+# fails loudly when it returns this so callers can defer writes
+# until Steam is logged in.
+_USER_ID_GUEST = "0"
 
 # Hardcoded fallbacks mirroring ``defaults/config.json``. Used when the
 # defaults file failed to load (corrupt JSON, missing from install,
@@ -49,6 +54,8 @@ class ServicePaths:
 
     data_dir: str
     steam_root: str
+    plugin_dir: str
+    launcher_path: str
     shortcuts_path: str
     games_map_path: str
     config_vdf_path: str
@@ -58,9 +65,14 @@ class ServicePaths:
     playtime_db: str
     local_save_root: str
     cloud_root: str | None
+    # Rotating JSONL log of recent library syncs (started /
+    # completed / cancelled). Consumed by ActivityLogService.
+    activity_log: str
 
     @classmethod
-    def from_config(cls, config: ConfigManager) -> ServicePaths:
+    def from_config(
+        cls, config: ConfigManager, plugin_dir: str | None = None,
+    ) -> ServicePaths:
         """Resolve every path from ``config``, mkdir ``data_dir``.
 
         ``steam_root`` falls back to ``~/.steam/steam`` when
@@ -85,15 +97,41 @@ class ServicePaths:
         )
         Path(data_dir).mkdir(parents=True, exist_ok=True)
 
+        # Resolve the plugin install directory + the launcher
+        # binary inside it. ``plugin_dir`` is the value Decky
+        # passed to the plugin's ``_main`` (e.g.
+        # ``/home/deck/homebrew/plugins/Unifideck``); falls back
+        # to the parent of this module's package root for dev
+        # runs outside Decky. The launcher must always be
+        # ``<plugin>/bin/unifideck-launcher`` — see ``bin/``.
+        resolved_plugin_dir = (
+            plugin_dir
+            if plugin_dir
+            else str(Path(__file__).resolve().parents[3])
+        )
+        launcher_path = str(
+            Path(resolved_plugin_dir) / "bin" / "unifideck-launcher",
+        )
+
         # Cache Path versions for the multi-segment joins below.
         steam_root_path = Path(steam_root)
         data_dir_path = Path(data_dir)
-        userdata_dir = steam_root_path / "userdata" / _USER_ID
+        # Resolve the active Steam user (NEVER ``"0"`` — that's the
+        # guest / meta directory Steam ignores). Falls back to the
+        # guest dir only if no real user exists yet (fresh Deck);
+        # consumers should treat that case as "Steam not logged in"
+        # and defer writes. See ``unifideck.steam.steam_user`` for
+        # the detection layers (loginusers.vdf MostRecent → mtime).
+        from unifideck.steam.steam_user import get_active_steam_user
+        active_user = get_active_steam_user(steam_root_path) or _USER_ID_GUEST
+        userdata_dir = steam_root_path / "userdata" / active_user
         config_dir = userdata_dir / "config"
 
         return cls(
             data_dir=data_dir,
             steam_root=steam_root,
+            plugin_dir=resolved_plugin_dir,
+            launcher_path=launcher_path,
             shortcuts_path=str(config_dir / "shortcuts.vdf"),
             games_map_path=str(
                 Path(
@@ -112,4 +150,5 @@ class ServicePaths:
             playtime_db=str(data_dir_path / "playtime.db"),
             local_save_root=str(data_dir_path / "saves"),
             cloud_root=config.get("cloud_saves.remote_root") or None,
+            activity_log=str(data_dir_path / "sync_activity.log"),
         )

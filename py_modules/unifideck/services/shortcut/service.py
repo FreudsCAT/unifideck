@@ -47,11 +47,20 @@ class ShortcutService(
         bus: EventBus,
         shortcuts_path: str,
         games_map_path: str,
+        launcher_path: str = "",
     ) -> None:
         """Store refs + paths, init empty state + per-file loaded flags."""
         self._bus = bus
         self._shortcuts_path = shortcuts_path
         self._games_map_path = games_map_path
+        # ``launcher_path`` is the ``Exe`` written into every
+        # generated ``shortcuts.vdf`` entry — Steam launches this
+        # binary when the user clicks the tile, and it then reads
+        # ``LaunchOptions`` (``"<store>:<game_id>"``) to install /
+        # play the game via the right backend. Always set in
+        # production via the service_defs wiring; defaults to ""
+        # only for unit tests that exercise the mixin in isolation.
+        self._launcher_path = launcher_path
 
         self._shortcuts: dict[str, Any] = {}
         # Type fix (lot 11g): the source of truth is

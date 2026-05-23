@@ -62,6 +62,17 @@ async def build_eventbus_pipeline(plugin: Any) -> BusPipeline:
     plugin.latency = HandlerLatencyCollector()
     plugin.replay = EventReplayBuffer()
     plugin.batcher = BatchDispatcher()
+    # Direct wiring of the replay buffer into the bus so every
+    # ``bus.emit`` records to the replay buffer. The
+    # ``PriorityDispatcher`` was designed to be the recording
+    # path but no caller in the codebase invokes its ``enqueue``
+    # method — every emitter goes through ``bus.emit`` directly,
+    # so the dispatcher's queue is always empty and the replay
+    # buffer never sees anything. Without this hook, the
+    # frontend's ``subscribe_replay`` polling always returns an
+    # empty list and Sync / Force Sync appear unresponsive even
+    # though the backend logs them running.
+    plugin.bus.set_replay_recorder(plugin.replay.record)
     plugin.dispatcher = PriorityDispatcher(
         plugin.bus,
         watchdog=plugin.watchdog,

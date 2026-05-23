@@ -31,9 +31,11 @@ export const rpcRoutes = {
   syncLibraries:           "sync_libraries",
   forceSyncLibraries:      "force_sync_libraries",
   cancelSync:              "cancel_sync",
+  requestAuthSync:         "request_auth_sync",
   getSyncStatus:           "get_sync_status",
   getSyncProgress:         "get_sync_progress",
   getAllUnifideckGames:    "get_all_unifideck_games",
+  refreshStore:            "refresh_store",
   // Downloads (DownloadRPCMixin)
   installGame:             "install_game",
   uninstallGame:           "uninstall_game",
@@ -45,6 +47,13 @@ export const rpcRoutes = {
   getGameMetadata:         "get_game_metadata",
   getStorageLocations:     "get_storage_locations",
   getGogGameLanguages:     "get_gog_game_languages",
+  getProtondbCache:        "get_protondb_cache",
+  // Steam Store spoofing (StoreRPCMixin)
+  getRealSteamAppidMappings: "get_real_steam_appid_mappings",
+  getSteamMetadataCache:     "get_steam_metadata_cache",
+  injectGameToAppinfo:       "inject_game_to_appinfo",
+  // Library cleanup (SyncRPCMixin)
+  performFullCleanup:      "perform_full_cleanup",
   // UI helpers (UIRPCMixin)
   injectHideCss:           "inject_hide_css",
   hidePlaySection:         "hide_play_section",

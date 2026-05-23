@@ -26,16 +26,13 @@ export interface SyncProgress {
   // Artwork tracking
   artwork_total?: number;
   artwork_synced?: number;
-  current_phase?: string;
-  // Steam / RAWG metadata tracking
+  // Per-source metadata tracking (incremented in lockstep by
+  // MetadataService._run_enrichment — three sources run in
+  // parallel via asyncio.gather; one row per source on the UI).
   steam_total?: number;
   steam_synced?: number;
-  rawg_total?: number;
-  rawg_synced?: number;
-  // UnifiDB metadata tracking
   unifidb_total?: number;
   unifidb_synced?: number;
-  // Metacritic tracking
   metacritic_total?: number;
   metacritic_synced?: number;
   // Lifecycle flags

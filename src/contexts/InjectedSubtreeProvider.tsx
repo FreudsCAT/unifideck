@@ -25,7 +25,7 @@
  * (`useGameInfo`, `useViewMode`, `gameStateVersion`) are shared,
  * so the two trees stay coherent.
  */
-import React, { FC, ReactNode } from "react";
+import { FC, ReactNode } from "react";
 import { LocaleProvider } from "./LocaleContext";
 import { StoreProvider } from "./StoreContext";
 import { AuthProvider } from "./AuthContext";

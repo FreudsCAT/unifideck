@@ -12,7 +12,7 @@
  * than one storage location. The modal itself lives in
  * `components/modals/StoragePickerModal.tsx`.
  */
-import React, { FC, useCallback } from "react";
+import { FC, useCallback } from "react";
 import { DialogButton, Focusable } from "@decky/ui";
 import { useTranslation } from "react-i18next";
 import { useGameInfo } from "../../hooks/useGameInfo";

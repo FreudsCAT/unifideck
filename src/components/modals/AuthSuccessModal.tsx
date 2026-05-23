@@ -12,7 +12,7 @@
  * Confirm/Cancel button row is hidden via inline CSS so the
  * modal feels like a passive notification, not an action prompt.
  */
-import React, { FC } from "react";
+import { FC } from "react";
 import { ConfirmModal, Navigation } from "@decky/ui";
 import { useTranslation } from "react-i18next";
 
@@ -46,7 +46,7 @@ export const AuthSuccessModal: FC<Props> = ({ store, closeModal }) => {
           : t("authSuccess.title")
       }
       strDescription={t("authSuccess.subtitle")}
-      strOKButtonText={t("common.ok")}
+      strOKButtonText={t("authSuccess.title")}
       onOK={handleClose}
       onCancel={handleClose}
       bHideCloseIcon={true}

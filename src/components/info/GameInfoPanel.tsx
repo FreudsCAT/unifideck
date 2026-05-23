@@ -11,7 +11,7 @@
  * Empty / loading / error states are rendered inline
  * (single-purpose JSX, no extra components needed).
  */
-import React, { FC } from "react";
+import { FC } from "react";
 import { Focusable, Spinner } from "@decky/ui";
 import { useTranslation } from "react-i18next";
 import { useGameInfo } from "../../hooks/useGameInfo";

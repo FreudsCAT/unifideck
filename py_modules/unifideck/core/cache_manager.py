@@ -24,6 +24,7 @@ owner-readable.
 """
 
 import contextlib
+import copy
 import json
 import logging
 import time
@@ -380,3 +381,44 @@ class CacheManager:
             List of cache identifiers.
         """
         return list(self._stores.keys())
+
+    def snapshot(self) -> dict[str, dict[str, Any]]:
+        """Deep-copy every store's in-memory state for cancel-safe restore.
+
+        Returned shape: ``{store_name: {"data": {...}, "_ts": {...}}}``.
+        The deep-copy ensures the caller can mutate caches freely
+        without aliasing back into the snapshot.
+
+        Intended use: capture before a destructive operation (sync),
+        pass to :meth:`restore` on cancel / failure to revert every
+        cache atomically. Without this, a cancelled sync leaves
+        partial writes — e.g. half-populated steam_real_appid + a
+        cleared sgdb_fetch — which the next sync silently reuses.
+        """
+        return {
+            name: {
+                "data": copy.deepcopy(store._data),
+                "_ts": copy.deepcopy(store._ts),
+            }
+            for name, store in self._stores.items()
+        }
+
+    def restore(self, snapshot: dict[str, dict[str, Any]]) -> None:
+        """Roll every named store back to the snapshot + persist.
+
+        Stores present in the snapshot but no longer registered are
+        skipped (no-op for safety). Stores registered now but absent
+        from the snapshot are left as-is — restore only reverts what
+        was captured.
+        """
+        for name, payload in snapshot.items():
+            store = self._stores.get(name)
+            if store is None:
+                continue
+            store._data = copy.deepcopy(payload.get("data", {}))
+            store._ts = copy.deepcopy(payload.get("_ts", {}))
+            store._save()
+        logger.info(
+            "[CacheManager] restored snapshot across %d store(s)",
+            len(snapshot),
+        )

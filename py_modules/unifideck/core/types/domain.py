@@ -120,3 +120,46 @@ class CLITool:
     search_paths: list[str] = field(default_factory=list)
     version_flag: str = "--version"
     min_version: str | None = None
+
+
+@dataclass
+class SyncRequest:
+    """Queued request shape consumed by :meth:`SyncService._enqueue`.
+
+    The request queue is what makes auth-chained syncs work: when a
+    store finishes login while another sync is in flight, we don't
+    drop the post-auth refresh — we queue it and run it as soon as
+    the lock releases.
+
+    Attributes:
+        kind: ``"sync"`` or ``"force"``. When two requests merge,
+            ``"force"`` wins (a force-sync semantically supersedes
+            a normal sync).
+        source: provenance — ``"manual"`` | ``"auth:<store>"`` |
+            ``"background"`` | ``"scheduled"``. Surfaced in logs and
+            in the response so the frontend can distinguish
+            user-initiated from auto-triggered syncs.
+        fetch_artwork: forwarded to ``SyncService.sync_all``. When
+            two requests merge, OR-ed so the wider preference wins
+            (one wants artwork → result wants artwork).
+        resync_artwork: forwarded to ``SyncService.sync_all``.
+            OR-ed on merge for the same reason.
+    """
+
+    kind: str = "sync"
+    source: str = "manual"
+    fetch_artwork: bool = True
+    resync_artwork: bool = False
+
+    def merge(self, other: SyncRequest) -> SyncRequest:
+        """Combine two queued requests; force wins, flags OR together.
+
+        Returns a new request so neither input is mutated — easier
+        to reason about in the queue logic.
+        """
+        return SyncRequest(
+            kind="force" if "force" in (self.kind, other.kind) else "sync",
+            source=other.source or self.source,
+            fetch_artwork=self.fetch_artwork or other.fetch_artwork,
+            resync_artwork=self.resync_artwork or other.resync_artwork,
+        )

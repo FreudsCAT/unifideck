@@ -10,7 +10,7 @@
  * updates from EventBus mean this view re-renders
  * automatically when downloads progress, complete, fail.
  */
-import React, { FC } from "react";
+import { FC } from "react";
 import { PanelSection } from "@decky/ui";
 import { useTranslation } from "react-i18next";
 import { useDownloads } from "../../contexts/DownloadContext";

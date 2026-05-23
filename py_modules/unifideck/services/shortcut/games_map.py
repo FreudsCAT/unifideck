@@ -18,6 +18,12 @@ import binascii
 from pathlib import Path
 from typing import NamedTuple
 
+# Sentinel tag written into Steam's shortcut ``tags`` dict to mark
+# entries owned by Unifideck. Lives here (a leaf module) so both
+# ``games_map_mixin`` and ``reconcile_phases`` can import it without
+# closing the import cycle that previously existed between them.
+UNIFIDECK_TAG = "Unifideck"
+
 
 class GameMapEntry(NamedTuple):
     r"""One entry in games.map (v2 format).

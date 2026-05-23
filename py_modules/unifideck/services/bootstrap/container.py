@@ -15,8 +15,10 @@ if TYPE_CHECKING:
     from unifideck.cdp.cdp_client import CDPClient
     from unifideck.core.metrics_collector import MetricsCollector
     from unifideck.services.account_service import AccountService
+    from unifideck.services.activity_log import ActivityLogService
     from unifideck.services.artwork import ArtworkService
     from unifideck.services.cloud_save import CloudSaveService
+    from unifideck.services.compatibility import CompatibilityService
     from unifideck.services.download import DownloadService
     from unifideck.services.feature_flag_service import FeatureFlagService
     from unifideck.services.launch_history import LaunchHistoryService
@@ -38,6 +40,8 @@ class ServiceContainer:
     download: DownloadService | None = None
     metadata: MetadataService | None = None
     artwork: ArtworkService | None = None
+    compatibility: CompatibilityService | None = None
+    activity_log: ActivityLogService | None = None
     proton: ProtonService | None = None
     cdp: CDPClient | None = None
     cloudsave: CloudSaveService | None = None
