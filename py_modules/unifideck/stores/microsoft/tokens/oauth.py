@@ -76,7 +76,20 @@ class OAuthMixin:
             not isinstance(token_data, dict)
             or "access_token" not in token_data
         ):
-            error = (token_data or {}).get("error", "unknown")
+            # `(token_data or {}).get(...)`
+            # raised an uncaught AttributeError when http_post
+            # returned a truthy non-dict (e.g. a non-empty
+            # string error body): `"str" or {}` evaluates to
+            # the string, which has no `.get`. A falsy non-dict
+            # ("" / None) was handled correctly; only the
+            # truthy non-dict case was the latent bug. Guard on
+            # isinstance so any non-dict degrades to a logged
+            # rejection returning False.
+            error = (
+                token_data.get("error", "unknown")
+                if isinstance(token_data, dict)
+                else "unknown"
+            )
             logger.error(
                 "[MicrosoftTokens] token endpoint rejected "
                 "request: %s", error,

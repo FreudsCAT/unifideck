@@ -11,6 +11,20 @@
 ruff>=0.5,<1.0
 mypy>=1.10,<2.0
 
+# flake8 + the cognitive-complexity plugin. Needed by
+# tests/unit/_tooling/test_lint_scope.py, which audits the
+# .flake8 config by shelling out to the `flake8` executable
+# (subprocess.run(["flake8", "--help"])) and parsing its
+# option list. complexity.yml installs these explicitly for
+# its own gate; listing them here too means the tests gate
+# (tests.yml runs `pytest tests/`, which collects _tooling/)
+# finds the executable instead of FileNotFoundError. The
+# cognitive plugin is paired with flake8 so `flake8 --help`
+# advertises --max-cognitive-complexity, keeping the tooling
+# test's environment identical to complexity.yml's.
+flake8>=7.0,<8.0
+flake8-cognitive-complexity>=0.1,<1.0
+
 # Architectural invariants enforcement (contracts in .importlinter)
 import-linter>=2.0,<3.0
 

@@ -495,6 +495,23 @@ class AuthOrchestrator:
             tmp.replace(expanded)
             return str(expanded)
 
+        # `expanded` was bound only on the
+        # success path (the result of asyncio.to_thread). When
+        # _write_sync raised OSError, the `except` handler
+        # referenced an unbound `expanded`, producing an
+        # UnboundLocalError that masked the real OSError and
+        # propagated to the caller instead of returning False.
+        # Bind a fallback up front so the error path can always
+        # log a meaningful target path.
+        #
+        # The fallback is the raw `path` (no expanduser): the
+        # real expanded path is computed inside _write_sync and
+        # overwrites this on success. Calling Path(...).expanduser()
+        # here would be a blocking pathlib call in an async
+        # function (ASYNC240) for no benefit — the value is only
+        # ever used in the error log, where the un-expanded path
+        # (e.g. "~/.config/...") is just as diagnostic.
+        expanded = path
         try:
             expanded = await asyncio.to_thread(_write_sync)
             logger.debug(

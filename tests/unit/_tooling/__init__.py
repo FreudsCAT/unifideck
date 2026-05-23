@@ -1,13 +1,20 @@
-"""Tests de tooling — audits de la configuration des linters/CI.
+"""Tooling tests — audits of linter / CI configuration.
 
-Ce sous-paquet contient les tests qui auditent les **fichiers de
-configuration** (``.flake8``, hooks pre-commit, scope CI…) plutôt
-que le code source du package ``unifideck``. Le préfixe ``_`` du
-nom de paquet est délibéré : il indique que ce dossier ne mirror
-PAS un sous-paquet du source (cf. convention dans ``tests/unit/``
-qui exige ``tests/unit/<sub_package>/test_<source_file>.py``).
+This subpackage holds the tests that audit **configuration
+files** (``.flake8``, pre-commit hooks, CI scope…) rather than
+the source code of the ``unifideck`` package. The leading ``_``
+in the package name is deliberate: it signals that this folder
+does NOT mirror a source subpackage (cf. the convention in
+``tests/unit/`` which requires
+``tests/unit/<sub_package>/test_<source_file>.py``).
 
-Couverture actuelle :
-    * ``test_lint_scope`` — invariants sur ``.flake8`` et garde
-      contre la fuite des vendors dans le scope flake8.
+Current coverage:
+    * ``test_lint_scope`` — invariants on ``.flake8`` and a
+      guard against vendored files leaking into the flake8
+      scope.
+    * ``test_flake8_config`` — complexity thresholds of
+      ``.flake8`` (max-complexity / max-cognitive-complexity /
+      max-line-length) and their consistency with the CI CLI.
+      Complements ``test_lint_scope`` from the angle of the
+      declared values.
 """
