@@ -72,6 +72,227 @@ def _is_dir_safe(entry: os.DirEntry[str]) -> bool:
         return False
 
 
+def _read_cache_store(cache: Any, namespace: str) -> dict[str, Any]:
+    """Return the raw ``_data`` dict of a cache namespace, or empty.
+
+    Reads the same ``_stores`` attribute that
+    :meth:`StoreRPCMixin.get_steam_metadata_cache` uses, so a
+    cache miss here matches the visible behaviour of that
+    RPC for the same key.
+    """
+    stores = getattr(cache, "_stores", None)
+    if not isinstance(stores, dict):
+        return {}
+    store = stores.get(namespace)
+    data = getattr(store, "_data", None)
+    return data if isinstance(data, dict) else {}
+
+
+def _read_steam_real_appid(cache: Any, shortcut_app_id: int) -> int:
+    """Resolve the shortcut → real-Steam-AppID mapping.
+
+    Populated by :meth:`MetadataService.fetch_appdetails_for_game`
+    during sync. ``0`` when the shortcut hasn't been mapped (no
+    Steam Store match found or sync hasn't run yet).
+    """
+    data = _read_cache_store(cache, "steam_real_appid")
+    raw = data.get(str(shortcut_app_id))
+    try:
+        return int(raw) if raw is not None else 0
+    except (TypeError, ValueError):
+        return 0
+
+
+def _read_steam_metadata(cache: Any, steam_app_id: int) -> dict[str, Any]:
+    """Return the cached Steam ``appdetails`` payload, or empty.
+
+    Keyed by the real Steam AppID (not the shortcut). Returns
+    empty when ``steam_app_id == 0`` or the cache hasn't been
+    populated for this game.
+    """
+    if not steam_app_id:
+        return {}
+    data = _read_cache_store(cache, "steam_metadata")
+    entry = data.get(str(steam_app_id))
+    return entry if isinstance(entry, dict) else {}
+
+
+def _read_compat_entry(cache: Any, shortcut_app_id: int) -> dict[str, Any]:
+    """Return the ``compat`` cache entry for a shortcut, or empty.
+
+    Populated by :class:`CompatLibrary`. The entry shape is
+    ``{"protondb_tier": ..., "deck_status": ..., "title": ...}``.
+    """
+    data = _read_cache_store(cache, "compat")
+    entry = data.get(str(shortcut_app_id))
+    return entry if isinstance(entry, dict) else {}
+
+
+def _has_steam_store_page(
+    steam_meta: dict[str, Any], steam_app_id: int,
+) -> bool:
+    """Validate that ``steam_meta`` corresponds to a real Steam page.
+
+    Mirrors staging's three-field guard: ``type`` is ``"game"``
+    or ``"application"`` (rules out DLC / demos), the embedded
+    ``steam_appid`` agrees with the lookup key, and the entry
+    has a ``name``. Prevents spoofed-only entries from showing
+    DLC / Community / Points / Discussions / Guides buttons that
+    would 404 in the Steam client.
+    """
+    if not steam_app_id or not steam_meta:
+        return False
+    meta_type = str(steam_meta.get("type", "")).lower()
+    try:
+        meta_appid = int(steam_meta.get("steam_appid", 0) or 0)
+    except (TypeError, ValueError):
+        meta_appid = 0
+    meta_name = str(steam_meta.get("name", "")).strip()
+    return (
+        meta_type in ("game", "application")
+        and meta_appid == steam_app_id
+        and bool(meta_name)
+    )
+
+
+def _pick_developer(
+    steam_meta: dict[str, Any], enriched: dict[str, Any],
+) -> str:
+    """Prefer Steam Store ``developers`` list; fall back to UnifiDB."""
+    devs = steam_meta.get("developers") if isinstance(steam_meta, dict) else None
+    if isinstance(devs, list) and devs:
+        return ", ".join(str(d) for d in devs if d)
+    return str(enriched.get("developer") or "")
+
+
+def _pick_publisher(
+    steam_meta: dict[str, Any], enriched: dict[str, Any],
+) -> str:
+    """Prefer Steam Store ``publishers`` list; fall back to UnifiDB."""
+    pubs = steam_meta.get("publishers") if isinstance(steam_meta, dict) else None
+    if isinstance(pubs, list) and pubs:
+        return ", ".join(str(p) for p in pubs if p)
+    return str(enriched.get("publisher") or "")
+
+
+def _pick_description(
+    steam_meta: dict[str, Any], enriched: dict[str, Any],
+) -> str:
+    """Pick the best available synopsis text.
+
+    Priority: Steam short_description → Steam detailed_description
+    → UnifiDB description → Metacritic summary.
+    """
+    if isinstance(steam_meta, dict):
+        short = steam_meta.get("short_description")
+        if isinstance(short, str) and short.strip():
+            return short
+        detailed = steam_meta.get("detailed_description")
+        if isinstance(detailed, str) and detailed.strip():
+            return detailed
+    desc = enriched.get("description")
+    if isinstance(desc, str) and desc.strip():
+        return desc
+    summary = enriched.get("summary")
+    return summary if isinstance(summary, str) else ""
+
+
+def _pick_release_date(
+    steam_meta: dict[str, Any], enriched: dict[str, Any],
+) -> str:
+    """Pick the best available release-date string.
+
+    Steam Store nests it as ``{"date": "Jan 1, 2020", "coming_soon": ...}``;
+    UnifiDB returns it as a flat string.
+    """
+    if isinstance(steam_meta, dict):
+        rd = steam_meta.get("release_date")
+        if isinstance(rd, dict):
+            date = rd.get("date")
+            if isinstance(date, str) and date:
+                return date
+    fallback = enriched.get("release_date")
+    return fallback if isinstance(fallback, str) else ""
+
+
+def _pick_metacritic(
+    steam_meta: dict[str, Any], enriched: dict[str, Any],
+) -> int | None:
+    """Return the Metacritic critic score, or ``None``.
+
+    Steam Store embeds it under ``metacritic.score``; the
+    enrichment merge also carries it under ``metacritic_score``
+    (Metacritic source) or ``score`` (UnifiDB sometimes).
+    """
+    if isinstance(steam_meta, dict):
+        mc = steam_meta.get("metacritic")
+        if isinstance(mc, dict):
+            score = mc.get("score")
+            if isinstance(score, int):
+                return score
+    score = enriched.get("metacritic_score")
+    return score if isinstance(score, int) else None
+
+
+def _pick_genres(
+    steam_meta: dict[str, Any], enriched: dict[str, Any],
+) -> list[str]:
+    """Extract genre labels.
+
+    Steam Store returns ``[{"id": "...", "description": "Action"}]`` —
+    flatten to just the descriptions. UnifiDB returns a flat list of
+    strings already.
+    """
+    if isinstance(steam_meta, dict):
+        raw = steam_meta.get("genres")
+        if isinstance(raw, list):
+            labels = [
+                str(g.get("description", "")).strip()
+                for g in raw
+                if isinstance(g, dict) and g.get("description")
+            ]
+            if labels:
+                return labels
+    fallback = enriched.get("genres")
+    if isinstance(fallback, list):
+        return [str(g).strip() for g in fallback if g]
+    return []
+
+
+def _deck_compat_enum(compat_entry: dict[str, Any]) -> int:
+    """Map ``deck_status`` string → numeric compatibility enum.
+
+    Matches the legacy ``ESteamDeckCompatibilityCategory`` values
+    that drive the panel's badge colour: 3 verified, 2 playable,
+    1 unsupported, 0 unknown.
+    """
+    status = str(compat_entry.get("deck_status", "")).lower()
+    return {"verified": 3, "playable": 2, "unsupported": 1}.get(status, 0)
+
+
+def _store_search_url(store: str, title: str) -> str:
+    """Build a fallback store landing URL for non-Steam stores.
+
+    Used by the "Store Page" button when the shortcut has no
+    real Steam store presence. The URLs match staging's
+    behaviour — search pages because most store ``game_id`` values
+    are internal catalog IDs (not URL slugs).
+    """
+    import urllib.parse
+    encoded = urllib.parse.quote(title or "")
+    if store == "epic":
+        return f"https://store.epicgames.com/en-US/browse?q={encoded}&sortBy=relevancy"
+    if store == "gog":
+        return f"https://www.gog.com/games?query={encoded}"
+    if store == "amazon":
+        return "https://gaming.amazon.com/home"
+    if store == "ubisoft":
+        return f"https://store.ubisoft.com/us/search?q={encoded}"
+    if store == "microsoft":
+        return "https://www.xbox.com/en-US/games"
+    return ""
+
+
 class UIRPCMixin:
     """CDP injection, game metadata, and language preferences."""
 
@@ -102,6 +323,97 @@ class UIRPCMixin:
             if game.store == store and game.store_game_id == game_id:
                 return await metadata.enrich(game)
         return {}
+
+    cache: Any
+
+    async def get_game_metadata_display(
+        self, app_id: int,
+    ) -> dict[str, Any] | None:
+        """Aggregate every metadata source into the panel's display payload.
+
+        Looks up the shortcut's :class:`Game` record via
+        ``sync_service.get_game_info``, enriches it through
+        :class:`MetadataService` (Steam Store + UnifiDB +
+        Metacritic merge), and overlays the rich cached
+        ``steam_metadata`` payload + ``compat`` cache to
+        produce a single dict matching the frontend
+        ``GameMetadata`` interface.
+
+        Returns ``None`` when the shortcut is unknown (game not
+        in the sync cache). All inner cache lookups are
+        defensive — a missing source just contributes empty
+        defaults, never raises.
+        """
+        sync = getattr(self, "sync_service", None)
+        if sync is None:
+            raise RpcError("service_unavailable", service="sync_service")
+        info = sync.get_game_info(app_id)
+        if not info:
+            return None
+
+        from unifideck.core.types import Game
+        # ``sync.get_game_info`` returns the asdict of the
+        # dataclass — reconstruct an instance for ``enrich``
+        # so its cache key matches what the background sync
+        # enrichment populated.
+        game = Game(
+            app_id=info.get("app_id", app_id),
+            store=info.get("store", ""),
+            store_game_id=info.get("store_game_id", ""),
+            title=info.get("title", ""),
+            installed=info.get("installed", False),
+            install_path=info.get("install_path"),
+            exe_path=info.get("exe_path"),
+            size_bytes=info.get("size_bytes", 0),
+            tags=list(info.get("tags") or []),
+            icon_url=info.get("icon_url"),
+            hero_url=info.get("hero_url"),
+            logo_url=info.get("logo_url"),
+            metadata=dict(info.get("metadata") or {}),
+        )
+
+        metadata = getattr(self.services, "metadata", None)
+        enriched: dict[str, Any] = {}
+        if metadata is not None:
+            try:
+                enriched = await metadata.enrich(game) or {}
+            except Exception as exc:
+                logger.debug(
+                    "[MetadataDisplay] enrich failed for %d: %s", app_id, exc,
+                )
+
+        steam_app_id = _read_steam_real_appid(self.cache, app_id)
+        steam_meta = _read_steam_metadata(self.cache, steam_app_id)
+        compat_entry = _read_compat_entry(self.cache, app_id)
+
+        has_steam_store_page = _has_steam_store_page(steam_meta, steam_app_id)
+        developer = _pick_developer(steam_meta, enriched)
+        publisher = _pick_publisher(steam_meta, enriched)
+        description = _pick_description(steam_meta, enriched)
+        release_date = _pick_release_date(steam_meta, enriched)
+        metacritic_score = _pick_metacritic(steam_meta, enriched)
+        genres = _pick_genres(steam_meta, enriched)
+        deck_compat = _deck_compat_enum(compat_entry)
+        homepage = steam_meta.get("website") if isinstance(steam_meta, dict) else None
+
+        return {
+            "steam_app_id": steam_app_id,
+            "has_steam_store_page": has_steam_store_page,
+            "store": game.store,
+            "store_url": _store_search_url(game.store, game.title),
+            "title": game.title,
+            "developer": developer,
+            "publisher": publisher,
+            "release_date": release_date,
+            "metacritic": metacritic_score,
+            "description": description,
+            "deck_compatibility": deck_compat,
+            # No test-result API on this branch yet — empty list is
+            # honoured by the frontend (modal shows "no results").
+            "deck_test_results": [],
+            "genres": genres,
+            "homepage_url": homepage,
+        }
 
     async def hide_play_section(self, app_id: int) -> Any:
         """Inject CSS hiding a game's Play button in Steam UI.

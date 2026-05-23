@@ -11,6 +11,42 @@
  * The contract is enforced by reviewers, not by tooling
  * (TypeScript can't see Python).
  */
+/** A single Steam Deck verification test result row in the
+ *  compatibility details modal. ``passed === true`` renders a
+ *  green checkmark; ``false`` renders a yellow warning. */
+export interface DeckTestResult {
+  text: string;
+  passed: boolean;
+}
+
+/** Rich display metadata for the game info panel — sourced from
+ *  Steam Store appdetails (preferred), UnifiDB, and Metacritic
+ *  (fallback). Returned by ``get_game_metadata_display``. Kept
+ *  separate from {@link Game} so install-state and
+ *  display-metadata can be cached and refreshed independently. */
+export interface GameMetadata {
+  /** Real Steam App ID when the shortcut was resolved to a Steam
+   *  store entry, ``0`` otherwise. Gates the steam:// nav buttons. */
+  steam_app_id: number;
+  /** True when ``steam_app_id`` corresponds to a real Steam Store
+   *  page (validated against the cached appdetails payload). */
+  has_steam_store_page: boolean;
+  store: StoreId;
+  /** Third-party store landing URL — used when no Steam page exists. */
+  store_url: string;
+  title: string;
+  developer: string;
+  publisher: string;
+  release_date: string;
+  metacritic: number | null;
+  description: string;
+  /** ``0`` unknown, ``1`` unsupported, ``2`` playable, ``3`` verified. */
+  deck_compatibility: 0 | 1 | 2 | 3;
+  deck_test_results: DeckTestResult[];
+  genres: string[];
+  homepage_url?: string;
+}
+
 /** Universal `Game` representation aggregated from any store. */
 export interface Game {
   id: string;

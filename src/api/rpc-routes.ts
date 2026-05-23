@@ -45,6 +45,7 @@ export const rpcRoutes = {
   // Game info / metadata (StoreRPCMixin)
   getGameInfo:             "get_game_info",
   getGameMetadata:         "get_game_metadata",
+  getGameMetadataDisplay:  "get_game_metadata_display",
   getStorageLocations:     "get_storage_locations",
   getGogGameLanguages:     "get_gog_game_languages",
   getProtondbCache:        "get_protondb_cache",

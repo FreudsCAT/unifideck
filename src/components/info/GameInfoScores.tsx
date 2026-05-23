@@ -1,11 +1,13 @@
 /**
- * GameInfoScores — Metacritic + ProtonDB + Deck Verified.
+ * GameInfoScores — ProtonDB + Deck Verified pills.
  *
- * Three score sources rendered side-by-side. ProtonDB tier and Deck
+ * Two compat sources rendered side-by-side. ProtonDB tier and Deck
  * Verified status are sourced first from the in-memory compat cache
  * (populated by `LibraryContext` from `get_protondb_cache`) so the
  * pills appear synchronously when navigating to a game's details
  * page. Falls back to `get_game_metadata` if the cache is cold.
+ * (Metacritic score lives in {@link GameInfoInfoRow} now to match
+ * the staging panel's layout.)
  */
 import { FC, useEffect, useState } from "react";
 import { Focusable } from "@decky/ui";
@@ -21,7 +23,6 @@ import {
 import type { Game } from "../../types/api";
 
 interface ScoresPayload {
-  metacritic_score?: number;
   protondb_tier?: ProtonDBTier;
   deck_status?: DeckVerifiedStatus;
 }
@@ -70,7 +71,6 @@ export const GameInfoScores: FC<Props> = ({ game }) => {
     if (!game.store || !game.id) return;
     fetchMeta(game.store, game.id).then(
       (full) => setScores((prev) => ({
-        metacritic_score: full.metacritic_score,
         protondb_tier: full.protondb_tier ?? prev?.protondb_tier,
         deck_status: full.deck_status ?? prev?.deck_status,
       })),
@@ -78,8 +78,7 @@ export const GameInfoScores: FC<Props> = ({ game }) => {
     );
   }, [fetchMeta, game.store, game.id, game.title]);
 
-  if (!scores
-    || (!scores.metacritic_score && !scores.protondb_tier && !scores.deck_status)) {
+  if (!scores || (!scores.protondb_tier && !scores.deck_status)) {
     return null;
   }
 
@@ -89,16 +88,6 @@ export const GameInfoScores: FC<Props> = ({ game }) => {
       onActivate={() => {}}
       style={{ display: "flex", gap: 16, flexWrap: "wrap" }}
     >
-      {scores.metacritic_score != null && (
-        <div>
-          <div style={{ fontSize: 11, color: "#94a3b8" }}>
-            {t("info.metacritic")}
-          </div>
-          <div style={{ fontSize: 22, fontWeight: 600 }}>
-            {scores.metacritic_score}
-          </div>
-        </div>
-      )}
       {scores.protondb_tier && (
         <div>
           <div style={{ fontSize: 11, color: "#94a3b8" }}>
