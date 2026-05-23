@@ -1,0 +1,242 @@
+#!/usr/bin/env python3
+"""scripts/validate_event_schemas.py — CI guard for event kwargs.
+
+Static-analysis gate that keeps every ``bus.emit(Events.X, ...)``
+call site honest. It walks the whole backend, collects the union
+of kwargs passed to each event, and compares that against the
+declared contract in ``CANONICAL_SCHEMA``. Any mismatch
+(unexpected kwarg, or an event emitted but never declared) fails
+the CI.
+
+Usage:
+    python3 scripts/validate_event_schemas.py
+    echo $?   # 0 = clean, 1 = mismatches, 2 = error
+
+Add to .github/workflows/ before the pytest step. When adding a
+new event:
+  1. add it to the ``Events`` enum (core/types/events.py),
+  2. add its kwargs contract to ``CANONICAL_SCHEMA`` below,
+  3. run this script.
+
+──────────────────────────────────────────────────────────────
+Why the schema is validated against the enum
+──────────────────────────────────────────────────────────────
+``SchemaExtractor`` extracts the *event name* from the first
+positional argument of every ``.emit()`` / ``.enqueue()`` call.
+It accepts two shapes (``Events.SOMETHING`` and a string literal)
+and explicitly "can't follow data flow" for anything else.
+
+That last point bites in two ways, both handled here:
+
+  * ``bus.emit(item.event, **item.kwargs)`` in the priority
+    dispatcher is an ``ast.Attribute`` whose ``.attr`` is the
+    literal string ``"event"`` — the extractor cannot tell it
+    apart from ``Events.GAME_STOPPED``. Without filtering it
+    surfaces a phantom event named ``event``.
+  * ``SECURITY_*`` events are emitted through wrappers
+    (``_emit_security_event``, ``audit_emitter``) rather than a
+    direct ``Events.X`` literal, so the extractor never sees
+    them. They are intentionally absent from CANONICAL_SCHEMA:
+    the ``compare`` loop skips events with no observed emit
+    (``seen is None``), so declaring them would be dead weight,
+    and declaring them with guessed kwargs would be worse.
+
+The robust fix for the first problem is to treat the ``Events``
+enum as the source of truth: any extracted name that is not a
+real enum member is extraction noise (a variable, an object
+attribute, a generic re-emit) and is dropped before comparison.
+A start-up check also asserts every CANONICAL_SCHEMA key is a
+real enum member, so a typo / renamed / deleted event fails
+loudly instead of silently never matching.
+"""
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT / "py_modules"))
+
+from unifideck.core.types.events import Events  # noqa: E402
+from unifideck.event_bus.event_bus_devex import (  # noqa: E402
+    SchemaExtractor,
+)
+
+# Every name that is a genuine member of the Events enum. Used
+# both to drop extraction noise and to validate the schema keys.
+VALID_EVENTS: set[str] = {e.name for e in Events}
+
+# The declared kwargs contract per event.
+#
+# Generated from the actual emit sites (the union of kwargs seen
+# across the codebase for each event) and then frozen here as
+# the contract. Only events emitted via a literal
+# ``Events.X`` / ``"name"`` first argument can be statically
+# checked, so events emitted exclusively through wrappers (the
+# SECURITY_* family via audit_emitter / _emit_security_event)
+# are deliberately not listed — the extractor never observes
+# them and ``compare`` skips unobserved events anyway.
+#
+# When an emit site legitimately gains a kwarg, widen the set
+# here in the same change so the contract stays the source of
+# truth rather than drifting behind the code.
+CANONICAL_SCHEMA: dict[str, set[str]] = {
+    "ACCOUNT_SWITCHED":             {"new_user"},
+    "CIRCUIT_STATE_CHANGED":        {"failure_count", "game_id", "is_open", "store", "trigger"},
+    "CONFIG_VALIDATION_COMPLETED":  {"defaults_validated", "user_overrides_present"},
+    "CONFIG_VALIDATION_FAILED":     {"defaults_validated", "error_count", "first_error_path", "first_error_source", "user_overrides_present"},
+    "DOWNLOAD_CANCELLED":           {"item"},
+    "DOWNLOAD_COMPLETE":            {"game_id", "install_path", "item", "store"},
+    "DOWNLOAD_FAILED":              {"error", "error_type", "game_id", "item", "store"},
+    "DOWNLOAD_PROGRESS":            {"game_id", "progress", "store"},
+    "DOWNLOAD_QUEUED":              {"item"},
+    "DOWNLOAD_STARTED":             {"game_id", "item", "store"},
+    "GAME_INSTALLED":               {"executable", "game_id", "install_path", "store", "title"},
+    "GAME_LAUNCHED":                {"app_id", "game_id", "store", "title"},
+    "GAME_STOPPED":                 {"app_id", "elapsed_seconds", "exit_code", "game_id", "store", "terminated_by_signal"},
+    "GAME_UNINSTALLED":             {"game_id", "store"},
+    "LAUNCHER_STAGE":               {"action", "duration_ms", "game_title", "i18n_key", "i18n_params", "priority", "severity", "store"},
+    "PLAYTIME_UPDATED":             {"duration_secs", "game_id", "store"},
+    "RUNTIME_PROBES_REPORTED":      {"probes"},
+    "SHORTCUT_CREATED":             {"app_id", "is_auth", "store", "title"},
+    "SHORTCUT_REMOVED":             {"app_id"},
+    "STORE_AUTH_COMPLETE":          {"store"},
+    "STORE_AUTH_FAILED":            {"error", "store"},
+    "STORE_AUTH_STARTED":           {"store"},
+    "STORE_LOGOUT":                 {"store"},
+    "STORE_REGISTERED":             set(),
+    "SUBSCRIPTION_CHECK_FAILED":    {"reason", "store"},
+    "SUBSCRIPTION_DETECTED":        {"store", "tier"},
+    "SUBSCRIPTION_EXPIRED":         {"store"},
+    "SYNC_CANCELLED":               set(),
+    "SYNC_COMPLETE":                {"duration_ms", "errors", "games", "stores_synced"},
+    "SYNC_DEDUP":                   {"per_store", "total_removed"},
+    "SYNC_FAILED":                  {"error", "store"},
+    "SYNC_PROGRESS":                {"current", "progress", "store", "total"},
+    "SYNC_SKIPPED":                 {"reason", "store"},
+    "SYNC_STARTED":                 {"scope", "stores"},
+    "TOAST_NOTIFICATION":           {"actions", "duration_ms", "i18n_key", "params", "severity"},
+}
+
+
+def validate_schema_keys() -> int:
+    """Assert every CANONICAL_SCHEMA key is a real Events member.
+
+    Catches the failure mode that made the previous schema
+    silently useless: declaring events (``AUTH_STARTED``,
+    ``ARTWORK_READY``, …) that no longer exist in the enum, so
+    the comparison never matched them and never complained.
+
+    Returns the number of phantom keys (0 = all valid).
+    """
+    phantom = sorted(set(CANONICAL_SCHEMA) - VALID_EVENTS)
+    for name in phantom:
+        print(
+            f"  ✗  CANONICAL_SCHEMA key {name!r} is not a "
+            f"member of the Events enum"
+        )
+    return len(phantom)
+
+
+def walk_sources(root: Path) -> dict[str, set[str]]:
+    """Merge SchemaExtractor results across every .py file.
+
+    Extraction noise — any first-arg shape that isn't a literal
+    ``Events.X`` / string the extractor can resolve to a real
+    enum member — is dropped here. In particular the priority
+    dispatcher's ``bus.emit(item.event, ...)`` resolves to the
+    bogus name ``"event"``; filtering on VALID_EVENTS removes it
+    along with any other variable / attribute re-emit.
+    """
+    merged: dict[str, set[str]] = {}
+    for path in root.rglob("*.py"):
+        if "__pycache__" in path.parts:
+            continue
+        try:
+            source = path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        extracted = SchemaExtractor.extract_from_source(source)
+        for event, kwargs in extracted.items():
+            if event not in VALID_EVENTS:
+                # Extraction noise (variable/attribute re-emit
+                # such as priority_dispatcher's item.event).
+                continue
+            merged.setdefault(event, set()).update(kwargs)
+    return merged
+
+
+def compare(
+    actual: dict[str, set[str]],
+    canonical: dict[str, set[str]],
+) -> int:
+    """Print mismatches and return the error count.
+
+    Two failure classes:
+      * a declared event is emitted with a kwarg not in its
+        allowed set (contract too narrow, or a typo at the
+        emit site);
+      * an event is emitted (and is a real enum member, since
+        ``actual`` is already filtered) but has no entry in
+        CANONICAL_SCHEMA.
+
+    The historical ``_batch`` suffix is still skipped: the
+    priority dispatcher synthesises ``"<event>_batch"`` names
+    for coalesced delivery — these are transport-level, not
+    part of the public event contract.
+    """
+    errors = 0
+    for event, allowed in canonical.items():
+        seen = actual.get(event)
+        if seen is None:
+            # Declared but not observed in source (e.g. emitted
+            # only through a wrapper). Nothing to check.
+            continue
+        unexpected = seen - allowed
+        if unexpected:
+            print(
+                f"  ✗  {event}: unexpected kwargs "
+                f"{sorted(unexpected)} (allowed: {sorted(allowed)})"
+            )
+            errors += 1
+    for event in sorted(actual.keys() - canonical.keys()):
+        if event.endswith("_batch"):
+            continue
+        print(
+            f"  ⚠  {event}: emitted but not in CANONICAL_SCHEMA"
+        )
+        errors += 1
+    return errors
+
+
+def main() -> int:
+    target = ROOT / "py_modules" / "unifideck"
+    if not target.is_dir():
+        print(f"✗ source dir not found: {target}")
+        return 2
+
+    # Fail fast on a stale schema before doing any walking.
+    phantom = validate_schema_keys()
+    if phantom:
+        print(
+            f"\n✗ {phantom} CANONICAL_SCHEMA key(s) not in the "
+            f"Events enum — update the schema"
+        )
+        return 1
+
+    print(f"→ walking {target}")
+    actual = walk_sources(target)
+    print(
+        f"→ extracted {len(actual)} distinct events from source "
+        f"(noise filtered against {len(VALID_EVENTS)} enum members)"
+    )
+    errors = compare(actual, CANONICAL_SCHEMA)
+    if errors == 0:
+        print("\n✓ event schemas valid")
+        return 0
+    print(f"\n✗ {errors} schema error(s) found")
+    return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

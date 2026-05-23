@@ -404,14 +404,52 @@ ignore_errors = true
 [tool.pytest.ini_options]
 minversion = "8.0"
 testpaths = ["tests"]
+# The plugin package lives in ``py_modules/unifideck/`` (a
+# non-src, non-installed layout dictated by Decky Loader). It
+# is never ``pip install``-ed, so without help ``import
+# unifideck`` fails under CI — locally it only worked because
+# PYTHONPATH was exported by hand. ``pythonpath`` (pytest >= 7,
+# guaranteed by ``minversion = 8.0``) prepends this dir to
+# ``sys.path`` at collection time, making the package importable
+# everywhere pytest runs (CI, local, pre-commit, IDE) with no
+# external env var or editable install. This is the canonical
+# fix for non-src layouts and replaces the manual PYTHONPATH.
+pythonpath = ["py_modules"]
 # Strict markers/config keep test scaffolding honest : a typo
 # in a marker name fails the suite instead of silently being a
 # no-op. ``no:cacheprovider`` disables the .pytest_cache dir
 # which is pure noise in CI runners.
+#
+# Strict warnings (added 2026-05): the suite must run with
+# **zero warnings**. ``filterwarnings = ["error", ...]``
+# promotes every warning to an error so a Deprecation/Runtime
+# warning introduced by a dependency bump or a sloppy test
+# fails the suite instead of scrolling past unnoticed. Because
+# pytest reads this file everywhere (CI, local, pre-commit,
+# IDE), the rule holds for every contributor, not just CI.
+#
+# ``ignore::ResourceWarning`` is the single, explicit
+# allow-list entry. Those warnings ("unclosed file") originate
+# in application/dependency code (config readers), are out of
+# scope for the test suite, never surface in normal runs, and
+# promoting them would fail CI for reasons unrelated to test
+# correctness. Any test that legitimately needs to assert on a
+# specific warning uses the ``filterwarnings`` marker, which
+# overrides these globals locally.
+#
+# ``-ra`` prints a short summary of every non-pass outcome
+# (skips, xfails) so they stay visible in CI logs — the
+# companion tests.yml turns a non-zero skip count into a hard
+# failure (pytest has no native "error on skip").
 addopts = [
     "--strict-markers",
     "--strict-config",
+    "-ra",
     "-p", "no:cacheprovider",
+]
+filterwarnings = [
+    "error",
+    "ignore::ResourceWarning",
 ]
 asyncio_mode = "auto"
 
