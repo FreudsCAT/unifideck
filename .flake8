@@ -1,99 +1,100 @@
 # .flake8 — Unifideck backend linter scope filter
 # =================================================================
 #
-# flake8 ne lit PAS ``pyproject.toml`` (seuls les outils
-# PEP 621 le font ; flake8 utilise la convention historique
-# ``[flake8]`` dans ``.flake8`` ou ``setup.cfg``). Ce fichier est
-# donc la SEULE source de vérité pour le périmètre et les seuils
-# qu'applique flake8 sur la base de code.
+# flake8 does NOT read ``pyproject.toml`` (only PEP 621 tools do;
+# flake8 uses the historical convention of a ``[flake8]`` section
+# in ``.flake8`` or ``setup.cfg``). This file is therefore the
+# SINGLE source of truth for the scope and thresholds that flake8
+# applies to the codebase.
 #
-# ── Périmètre d'audit ────────────────────────────────────────────
+# ── Audit scope ──────────────────────────────────────────────────
 #
 #   py_modules/
-#       unifideck/        ← code Unifideck (CIBLE de l'audit)
-#       pip/              ← vendored (HORS scope)
+#       unifideck/        ← Unifideck code (AUDIT TARGET)
+#       pip/              ← vendored (OUT of scope)
 #       requests/         ← vendored
 #       urllib3/          ← vendored
 #       websockets/       ← vendored
 #       idna/             ← vendored
 #       charset_normalizer/  ← vendored
-#       …                 ← idem
+#       …                 ← likewise
 #
-# Le workflow ``.github/workflows/complexity.yml`` invoque flake8
-# avec ``py_modules/ main.py`` en argument. Sans ce fichier de
-# config, flake8 retombe sur ses défauts (seuil cognitive=7) et
-# descend dans TOUS les vendors → ~189 erreurs CCR001/C901 sur
-# du code amont qui n'est pas notre territoire.
+# The ``.github/workflows/complexity.yml`` workflow invokes flake8
+# with ``py_modules/ main.py`` as arguments. Without this config
+# file, flake8 falls back to its defaults (cognitive threshold = 7)
+# and descends into ALL vendored packages → ~189 CCR001/C901
+# errors on upstream code that is not our territory.
 #
-# Cause racine vérifiée empiriquement : avec ``.flake8`` chargé
-# → exit 0 ; sans → mêmes 189 erreurs que dans le log CI.
+# Root cause verified empirically: with ``.flake8`` loaded
+# → exit 0; without it → the same 189 errors as in the CI log.
 #
-# ── Sémantique flake8 des exclusions ─────────────────────────────
+# ── flake8 exclusion semantics ───────────────────────────────────
 #
-# flake8 utilise ``fnmatch.fnmatch`` contre :
-#   * le chemin RELATIF complet du fichier/dossier candidat
-#   * son basename
+# flake8 uses ``fnmatch.fnmatch`` against:
+#   * the full RELATIVE path of the candidate file/directory
+#   * its basename
 #
-# Pour exclure ``py_modules/urllib3/`` quand le CI lance
-# ``flake8 py_modules/`` depuis la racine, trois écritures
-# fonctionnent — on liste les trois par défense en profondeur :
+# To exclude ``py_modules/urllib3/`` when CI runs
+# ``flake8 py_modules/`` from the repo root, three spellings
+# work — we list all three as defense in depth:
 #
-#   urllib3              → match le basename (le plus robuste)
-#   py_modules/urllib3   → match le chemin relatif racine
-#   */urllib3            → wildcard générique
+#   urllib3              → matches the basename (most robust)
+#   py_modules/urllib3   → matches the root-relative path
+#   */urllib3            → generic wildcard
 #
-# Source : https://flake8.pycqa.org/en/latest/user/configuration.html
+# Source: https://flake8.pycqa.org/en/latest/user/configuration.html
 #
-# ── Pas de commentaires inline dans les valeurs multi-lignes ────
+# ── No inline comments inside multi-line values ──────────────────
 #
-# Doc flake8, section "Configuring Flake8" :
+# flake8 docs, "Configuring Flake8" section:
 #
 #   "Following the recommended settings for Python's configparser,
 #    Flake8 does not support inline comments for any of the keys."
 #
-# Les ``#`` en début de ligne SONT acceptés (configparser les
-# traite comme commentaires de ligne). Mais on évite par
-# prudence d'en mettre à l'intérieur des blocs ``extend-exclude =``
-# et ``extend-ignore =`` pour rester portable entre versions de
-# configparser et flake8.
+# Leading ``#`` at the start of a line ARE accepted (configparser
+# treats them as line comments). But out of caution we avoid
+# placing any inside the ``extend-exclude =`` and
+# ``extend-ignore =`` blocks, to stay portable across configparser
+# and flake8 versions.
 
 [flake8]
 
-# ── Longueur de ligne ────────────────────────────────────────────
-# Géré par le formatter (ruff format), pas par le linter. On
-# garde ``max-line-length`` à 100 pour cohérence visuelle
-# (pyproject.toml ligne 11), mais E501 est ignoré ci-dessous.
+# ── Line length ──────────────────────────────────────────────────
+# Handled by the formatter (ruff format), not the linter. We keep
+# ``max-line-length`` at 100 for visual consistency
+# (pyproject.toml line 11), but E501 is ignored below.
 max-line-length = 100
 
-# ── Codes ignorés (extension des défauts) ───────────────────────
-# E501 : longueur de ligne (cf. ci-dessus).
-# W503/W504/E203 : conflits formatter, ignorés aussi par ruff
-# (cf. pyproject.toml [tool.ruff.lint] ignore).
+# ── Ignored codes (extending the defaults) ──────────────────────
+# E501: line length (see above).
+# W503/W504/E203: formatter conflicts, also ignored by ruff
+# (see pyproject.toml [tool.ruff.lint] ignore).
 extend-ignore = E501, W503, W504, E203
 
-# ── Seuils de complexité ─────────────────────────────────────────
-# **Alignés sur le workflow ``.github/workflows/complexity.yml``**
-# qui passe ``--max-complexity=15`` et ``--max-cognitive-complexity=15``
-# en CLI. On reprend les mêmes valeurs ici comme source de vérité
-# pour les invocations locales (pre-commit, IDE) afin d'éviter
-# qu'un dev voie 10 en local et 15 en CI (ou inversement).
+# ── Complexity thresholds ────────────────────────────────────────
+# **Aligned with the ``.github/workflows/complexity.yml`` workflow**
+# which passes ``--max-complexity=15`` and
+# ``--max-cognitive-complexity=15`` on the CLI. We mirror the same
+# values here as the source of truth for local invocations
+# (pre-commit, IDE) so a dev does not see 10 locally and 15 in CI
+# (or vice versa).
 #
-# CCR001 vient du plugin ``flake8-cognitive-complexity``.
-# C901 vient de mccabe (intégré à flake8).
+# CCR001 comes from the ``flake8-cognitive-complexity`` plugin.
+# C901 comes from mccabe (bundled with flake8).
 #
-# Valeurs CLI > valeurs ``.flake8`` > valeurs défaut. Si un jour
-# le CI passe à 10, ce fichier devra être mis à jour en miroir
-# (et le test ``test_flake8_config_thresholds_are_set`` qui
-# vérifie l'alignement).
+# CLI values > ``.flake8`` values > default values. If CI ever
+# moves to 10, this file must be updated in mirror (along with the
+# ``test_flake8_config_thresholds_are_set`` test that verifies the
+# alignment).
 max-complexity = 15
 max-cognitive-complexity = 15
 
 # ── Exclusions ──────────────────────────────────────────────────
-# Format : virgules SANS commentaires inline. Une entrée par ligne
-# pour faciliter les diffs git. Trois variantes par dépendance
-# (basename, chemin racine, wildcard) pour défendre contre les
-# variations d'invocation CI (depuis la racine vs depuis
-# py_modules/, vs explicite-paths en pre-commit).
+# Format: commas WITHOUT inline comments. One entry per line to
+# ease git diffs. Three variants per dependency (basename,
+# root path, wildcard) to defend against CI invocation
+# variations (from the repo root vs from py_modules/, vs
+# explicit-paths in pre-commit).
 extend-exclude =
     __pycache__,
     .ruff_cache,
@@ -198,7 +199,7 @@ extend-exclude =
     */*.dist-info
 
 # ── Per-file overrides ──────────────────────────────────────────
-# F401 : re-exports dans __init__.py (pattern explicite intentionnel).
+# F401: re-exports in __init__.py (intentional explicit pattern).
 per-file-ignores =
     __init__.py:F401
     py_modules/unifideck/**/__init__.py:F401
