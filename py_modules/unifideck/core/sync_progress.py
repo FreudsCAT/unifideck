@@ -41,7 +41,7 @@ PHASE_RANGES: dict[str, tuple[int, int]] = {
     # metadata enrichment via CompatibilityService. Narrow band
     # (95-98) because individual lookups are fast (~50ms) and the
     # phase shouldn't dominate the bar visually.
-    "proton_setup": (95, 98),
+    "proton_meta": (95, 98),
     "complete": (100, 100),
     "error": (100, 100),
     "cancelled": (100, 100),

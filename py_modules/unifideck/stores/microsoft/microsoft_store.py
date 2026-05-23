@@ -371,12 +371,11 @@ class MicrosoftStore(StoreBase):
             return
         launcher = str(
             Path(self._plugin_dir or "")
-            / "py_modules" / "unifideck" / "launcher"
-            / "dispatcher.py",
+            / "bin" / "unifideck-launcher",
         )
         if not await asyncio.to_thread(lambda: Path(launcher).is_file()):
             logger.warning(
-                "[MicrosoftStore] launcher dispatcher not "
+                "[MicrosoftStore] launcher not "
                 "found at %s",
                 launcher,
             )

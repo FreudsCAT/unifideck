@@ -56,7 +56,7 @@ class CompatibilityService:
 
         ``sync_service`` is optional so the service can be constructed
         in test contexts without the full bootstrap, but registering
-        the ``proton_setup`` phase is what makes ``mark_complete``
+        the ``proton_meta`` phase is what makes ``mark_complete``
         wait for our done-event — without it the progress bar races
         to 100% before we've ticked.
         """
@@ -66,7 +66,7 @@ class CompatibilityService:
         self._lib = CompatLibrary(cache=cache, config=config)
         self._enrichment_task: asyncio.Task[None] | None = None
         if sync_service is not None:
-            sync_service.register_post_sync_phase("proton_setup")
+            sync_service.register_post_sync_phase("proton_meta")
         auto_wire(self, self._bus)
 
     async def stop(self) -> None:
@@ -85,10 +85,17 @@ class CompatibilityService:
         accepts ``sync_service=None`` so it can be built without
         knowing about the future SyncService instance; this setter
         is called after Layer 5 finishes, registering the
-        ``proton_setup`` phase so ``mark_complete`` waits for our
+        ``proton_meta`` phase so ``mark_complete`` waits for our
         done-event.
         """
-        sync_service.register_post_sync_phase("proton_setup")
+        sync_service.register_post_sync_phase("proton_meta")
+
+    @subscribe(Events.SYNC_CANCELLED)
+    async def _on_sync_cancelled(self, **_kwargs: Any) -> None:
+        """Cancel the in-flight ProtonDB lookup loop on user cancel."""
+        task = self._enrichment_task
+        if task is not None and not task.done():
+            task.cancel()
 
     @subscribe(Events.SYNC_COMPLETE)
     async def _on_sync_complete(self, **kwargs: Any) -> None:
@@ -97,10 +104,13 @@ class CompatibilityService:
         Fire-and-forget so the SYNC_COMPLETE emit returns immediately.
         The task's try/finally guarantees the phase-done event fires
         whether the loop finishes, errors out, or is cancelled —
-        otherwise ``_post_sync_pending`` strands ``proton_setup`` and
+        otherwise ``_post_sync_pending`` strands ``proton_meta`` and
         the bar never reaches 100%.
         """
         games = kwargs.get("games", [])
+        prior = self._enrichment_task
+        if prior is not None and not prior.done():
+            prior.cancel()
         self._enrichment_task = asyncio.create_task(
             self._run_enrichment(games),
             name="compatibility-enrichment",
@@ -115,7 +125,7 @@ class CompatibilityService:
             if not games:
                 return
             if progress is not None:
-                progress.status = "proton_setup"
+                progress.status = "proton_meta"
                 progress.current_game = {
                     "label": "sync.fetchingEnhancedMetadata",
                     "values": {"synced": 0, "total": total},
@@ -143,7 +153,7 @@ class CompatibilityService:
         finally:
             await self._bus.emit(
                 Events.POST_SYNC_PHASE_CHANGED,
-                phase="proton_setup", active=False, total=total, done=total,
+                phase="proton_meta", active=False, total=total, done=total,
             )
             logger.info(
                 "[CompatibilityService] compat fetch finished (%d games)",

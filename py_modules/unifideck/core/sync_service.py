@@ -150,6 +150,12 @@ class SyncService(_SyncQueriesMixin, _SyncDedupMixin):
         # at bootstrap.
         self._registered_phases: set[str] = {"artwork", "metadata"}
         self._watchdog_task: asyncio.Task[None] | None = None
+        # In-flight per-store fetch task, held so :meth:`cancel`
+        # can interrupt a slow ``store.get_library()`` mid-await
+        # without waiting for the await to return normally.
+        self._current_store_task: (
+            asyncio.Task[tuple[list[Game], str | None]] | None
+        ) = None
         # Snapshot of every CacheManager store, captured at
         # ``_setup_sync`` time and consumed on cancel. ``None``
         # outside of an active sync.
@@ -321,7 +327,7 @@ class SyncService(_SyncQueriesMixin, _SyncDedupMixin):
         """Declare that a post-sync service will emit ``phase``-done events.
 
         Called by services at bootstrap (e.g. ``CompatibilityService``
-        calling ``register_post_sync_phase("proton_setup")``). The
+        calling ``register_post_sync_phase("proton_meta")``). The
         registered phase gets added to ``_post_sync_pending`` at the
         start of every sync, so ``mark_complete`` only fires once
         every registered service has reported done.
@@ -390,10 +396,31 @@ class SyncService(_SyncQueriesMixin, _SyncDedupMixin):
                 )
             self._current_store = store.store_name
             await self._emit_progress(store.store_name, idx, total)
-            games, err = await self._sync_one_store(store)
+            # Run the store fetch as a tracked task so :meth:`cancel`
+            # can interrupt it mid-await. Without this, ``cancel()``
+            # only sets ``_cancel_event`` and the loop doesn't notice
+            # until the current ``await store.get_library()`` returns
+            # — which can take 30+ seconds on slow stores. Task
+            # cancellation propagates CancelledError through the
+            # store's HTTP/subprocess awaits, ending the fetch
+            # within milliseconds.
+            self._current_store_task = asyncio.create_task(
+                self._sync_one_store(store),
+                name=f"sync-store-{store.store_name}",
+            )
+            try:
+                games, err = await self._current_store_task
+            except asyncio.CancelledError:
+                games, err = [], "cancelled"
+            finally:
+                self._current_store_task = None
             libraries[store.store_name] = games
             if err is not None:
                 errors[store.store_name] = err
+            if self._cancel_event.is_set():
+                return await self._sync_cancelled_result(
+                    idx + 1, total, libraries,
+                )
         self._current_store = None
         try:
             return await self._finalize_sync(
@@ -890,6 +917,15 @@ class SyncService(_SyncQueriesMixin, _SyncDedupMixin):
         # cancellation mid-post-sync, where the per-store loop
         # has already returned).
         self._progress.mark_cancelled()
+        # Forcefully interrupt the in-flight store fetch so the
+        # loop doesn't have to wait for the current
+        # ``store.get_library()`` to finish. CancelledError
+        # propagates through the store's HTTP/subprocess awaits
+        # and the wrapping ``except asyncio.CancelledError`` in
+        # ``_run_sync`` turns it into a clean cancelled-result.
+        current_task = self._current_store_task
+        if current_task is not None and not current_task.done():
+            current_task.cancel()
         # Broadcast so listeners that don't poll the progress
         # tracker still get notified (frontend SyncContext
         # already listens for SYNC_CANCELLED). Idempotent — if

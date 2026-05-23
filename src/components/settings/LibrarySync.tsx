@@ -18,13 +18,16 @@ import { useSync } from "../../contexts/SyncContext";
 import { useSyncCooldown } from "../../hooks/useSyncCooldown";
 import { ForceSyncModal } from "../modals/ForceSyncModal";
 
-// Statuses during which the progress block is visible. Terminal
-// states (complete / error / cancelled / idle) hide it so the
-// "Sync completed!" details don't linger across QAM remounts and
-// plugin restarts — the user gets a toast on completion, not a
-// stale panel.
-const IN_PROGRESS_STATUSES = new Set([
-  "fetching", "syncing", "artwork", "metadata",
+// The progress block hides only on terminal statuses (sync not
+// running). Allow-listing in-progress phases is fragile because
+// the post-sync services (Metadata, Artwork, Compatibility) all
+// overwrite ``progress.status`` independently — Compatibility
+// sets ``"proton_meta"`` and leaves it there, so the bar would
+// stay hidden during artwork download if we required a specific
+// in-progress value. Inverting the check makes new phases work
+// without needing to add them here.
+const TERMINAL_STATUSES = new Set([
+  "idle", "complete", "error", "cancelled",
 ]);
 
 export const LibrarySync: FC = () => {
@@ -102,7 +105,7 @@ export const LibrarySync: FC = () => {
           </ButtonItem>
         </PanelSectionRow>
       )}
-      {progress && IN_PROGRESS_STATUSES.has(progress.status) && (
+      {progress && !TERMINAL_STATUSES.has(progress.status) && (
         <div style={{ fontSize: 12, width: "100%" }}>
           <div style={{ marginBottom: 5, opacity: 0.9 }}>
             {progress.current_game?.label

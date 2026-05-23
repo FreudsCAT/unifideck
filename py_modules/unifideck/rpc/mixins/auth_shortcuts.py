@@ -254,11 +254,7 @@ def _build_auth_shortcut_context(store: str) -> dict[str, Any]:
     Mirrors what the per-store ``_ensure_auth_shortcut`` method
     passes to ``ShortcutService.add_auth_shortcut`` so the
     appid we return matches what the backend actually wrote to
-    ``shortcuts.vdf``. Returns the ``bin/unifideck-launcher``
-    wrapper as the launcher_path so the frontend's
-    temporary-shortcut fallback uses the actual executable
-    (``dispatcher.py`` lacks the +x bit on purpose — it's
-    imported, not run).
+    ``shortcuts.vdf``.
     """
     meta = _AUTH_SHORTCUT_META.get(store)
     if meta is None:
@@ -267,15 +263,12 @@ def _build_auth_shortcut_context(store: str) -> dict[str, Any]:
         "DECKY_PLUGIN_DIR",
         "/home/deck/homebrew/plugins/Unifideck",
     )
-    dispatcher_path = str(
-        Path(plugin_dir) / "py_modules" / "unifideck" / "launcher" / "dispatcher.py",
-    )
     wrapper_path = str(Path(plugin_dir) / "bin" / "unifideck-launcher")
     try:
         from unifideck.services.shortcut.games_map import (
             generate_app_id,
         )
-        app_id = generate_app_id(dispatcher_path, meta["title"])
+        app_id = generate_app_id(wrapper_path, meta["title"])
     except Exception as e:
         logger.warning(
             "[AuthShortcutsRPCMixin] generate_app_id failed "

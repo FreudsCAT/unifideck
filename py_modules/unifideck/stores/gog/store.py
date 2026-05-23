@@ -386,10 +386,10 @@ class GOGStore(StoreBase):
                 "[GOGStore] no shortcut_service; skipping auth shortcut creation",
             )
             return
-        launcher = str(Path(self._plugin_dir or "") / "py_modules" / "unifideck" / "launcher" / "dispatcher.py")
+        launcher = str(Path(self._plugin_dir or "") / "bin" / "unifideck-launcher")
         if not await asyncio.to_thread(lambda: Path(launcher).is_file()):
             logger.warning(
-                "[GOGStore] launcher dispatcher not found at %s",
+                "[GOGStore] launcher not found at %s",
                 launcher,
             )
             return

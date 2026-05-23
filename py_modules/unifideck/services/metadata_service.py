@@ -78,6 +78,20 @@ class MetadataService:
     async def stop(self) -> None:
         """Lifecycle hook — currently a no-op."""
 
+    @subscribe(Events.SYNC_CANCELLED)
+    async def _on_sync_cancelled(self, **_kwargs: Any) -> None:
+        """Cancel any in-flight metadata enrichment immediately.
+
+        User-initiated cancel must stop the per-game enrichment
+        loop, not just the per-store fetch — otherwise the bar
+        disappears but the 5-15 minutes of HTTP work keeps
+        running in the background, ticking ``SyncProgress``
+        counters that the user thought were dead.
+        """
+        task = self._enrichment_task
+        if task is not None and not task.done():
+            task.cancel()
+
     @subscribe(Events.SYNC_COMPLETE)
     async def _on_sync_complete(self, **kwargs: Any) -> None:
         """Schedule enrichment as a background task and return immediately.

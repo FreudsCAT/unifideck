@@ -249,6 +249,16 @@ class _EventHandlersMixin:
             lambda f: _on_artwork_batch_done(f, bus)
         )
         _track(fut)
+        # Stash on ``self`` so the SYNC_CANCELLED handler can
+        # ``.cancel()`` the whole batch in one shot.
+        self._batch_task = fut
+
+    @subscribe(Events.SYNC_CANCELLED)
+    async def _on_sync_cancelled(self: Any, **_kwargs: Any) -> None:
+        """Cancel the in-flight artwork batch on user cancel."""
+        task = getattr(self, "_batch_task", None)
+        if task is not None and not task.done():
+            task.cancel()
 
     async def _process_one_game(
         self: Any, game: Game, grid_dir: str, bus: Any,

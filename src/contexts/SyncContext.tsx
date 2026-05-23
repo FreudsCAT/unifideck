@@ -92,7 +92,7 @@ export const SyncProvider: FC<{ children: ReactNode }> = ({ children }) => {
     observedActiveSyncRef.current = true;
     setSyncing(true);
     setCancelling(false);
-    pendingPhasesRef.current = new Set(["artwork", "metadata", "proton_setup"]);
+    pendingPhasesRef.current = new Set(["artwork", "metadata", "proton_meta"]);
     EventBusClient.bumpToFast();
   });
 
@@ -155,6 +155,9 @@ export const SyncProvider: FC<{ children: ReactNode }> = ({ children }) => {
   useEventBus(Events.SYNC_CANCELLED, () => {
     setSyncing(false);
     setCancelling(false);
+    // Drop stale progress so the UI doesn't keep showing
+    // "cancelled" details forever; the next sync repopulates it.
+    setProgress(null);
     pendingPhasesRef.current.clear();
   });
 
@@ -240,6 +243,12 @@ export const SyncProvider: FC<{ children: ReactNode }> = ({ children }) => {
   const startSync = useCallback(async () => {
     if (isSyncing) return;
     EventBusClient.bumpToFast();
+    // Clear stale progress so the LibrarySync progress block,
+    // gated on ``IN_PROGRESS_STATUSES``, doesn't stay hidden by a
+    // lingering ``status="complete"`` from the previous run. The
+    // first 500ms poll repopulates it with the new sync's state.
+    setProgress(null);
+    observedActiveSyncRef.current = true;
     setSyncing(true);
     void startMut.mutate().catch((e) =>
       console.warn("[SyncContext] startSync RPC failed", e));
@@ -250,16 +259,22 @@ export const SyncProvider: FC<{ children: ReactNode }> = ({ children }) => {
    *  (slow, bandwidth-heavy). Default keeps current artwork. */
   const forceSync = useCallback(async (resyncArtwork?: boolean) => {
     EventBusClient.bumpToFast();
+    setProgress(null);
+    observedActiveSyncRef.current = true;
     setSyncing(true);
     void forceMut.mutate(resyncArtwork).catch((e) =>
       console.warn("[SyncContext] forceSync RPC failed", e));
     void pollOnce();
   }, [forceMut, pollOnce]);
 
-  /** Check whether cel sync. */
+  /** Cancel an in-flight sync. */
   const cancelSync = useCallback(async () => {
     if (!isSyncing || isCancelling) return;
     setCancelling(true);
+    // Clear stale progress immediately so the bar / counters don't
+    // linger while the backend tears the sync down — visual feedback
+    // that the cancel was received, even before SYNC_CANCELLED fires.
+    setProgress(null);
     await cancelMut.mutate();
   }, [isSyncing, isCancelling, cancelMut]);
 

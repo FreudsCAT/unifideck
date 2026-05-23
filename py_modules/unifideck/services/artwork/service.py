@@ -96,6 +96,12 @@ class ArtworkService(_EventHandlersMixin):
 
         # Track pending tasks so we can wait for them on shutdown
         self._pending_tasks: set[asyncio.Task[Any]] = set()
+        # The post-sync batch gather. Held so a user-initiated
+        # ``SYNC_CANCELLED`` can cancel the whole batch (otherwise
+        # the per-game ``progress.status == "cancelled"`` check
+        # only short-circuits each task at its next checkpoint —
+        # downloads already in flight keep going).
+        self._batch_task: asyncio.Future[list[Any]] | None = None
 
         # We never run without an API key — the staging fallback
         # is bundled. Log the source so users can tell whether

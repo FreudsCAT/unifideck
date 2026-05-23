@@ -92,10 +92,8 @@ class _AuthShortcut:
             )
         return str(
             Path(plugin_dir)
-            / "py_modules"
-            / "unifideck"
-            / "launcher"
-            / "dispatcher.py",
+            / "bin"
+            / "unifideck-launcher",
         )
 
     def build_auth_launch_options(self) -> str:

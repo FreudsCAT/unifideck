@@ -310,10 +310,10 @@ class AmazonStore(StoreBase):
                 "injected; skipping auth shortcut creation",
             )
             return
-        launcher = str(Path(self._plugin_dir or "") / "py_modules" / "unifideck" / "launcher" / "dispatcher.py")
+        launcher = str(Path(self._plugin_dir or "") / "bin" / "unifideck-launcher")
         if not await asyncio.to_thread(lambda: Path(launcher).is_file()):
             logger.warning(
-                "[AmazonStore] launcher dispatcher not found at %s",
+                "[AmazonStore] launcher not found at %s",
                 launcher,
             )
             return

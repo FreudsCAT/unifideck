@@ -309,9 +309,9 @@ class EpicStore(StoreBase):
         if self._shortcut_service is None:
             logger.debug("[EpicStore] no shortcut_service injected; skipping auth shortcut creation")
             return
-        launcher = str(Path(self._plugin_dir or "") / "py_modules" / "unifideck" / "launcher" / "dispatcher.py")
+        launcher = str(Path(self._plugin_dir or "") / "bin" / "unifideck-launcher")
         if not await asyncio.to_thread(lambda: Path(launcher).is_file()):
-            logger.warning("[EpicStore] launcher dispatcher not found at %s", launcher)
+            logger.warning("[EpicStore] launcher not found at %s", launcher)
             return
         result = await self._shortcut_service.add_auth_shortcut(
             store="epic",
