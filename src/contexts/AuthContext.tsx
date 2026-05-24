@@ -18,9 +18,11 @@ import React, {
   ReactNode,
   useCallback,
   useContext,
+  useEffect,
   useState,
 } from "react";
-import { useRPCMutation, useRPCQuery } from "../api/useRPC";
+import { call } from "@decky/api";
+import { useRPCMutation, unwrapRpcEnvelope } from "../api/useRPC";
 import { rpcRoutes } from "../api/rpc-routes";
 import { useEventBus } from "../api/event-bus-client";
 import { Events } from "../types/events";
@@ -28,6 +30,43 @@ import type { AuthResult, Result, StoreId, StoreStatus } from "../types/api";
 import { tabManager } from "../lib/steam-bridge/tab-container";
 
 type StatusMap = Partial<Record<StoreId, StoreStatus>>;
+
+// Started by `prefetchAuthStatus()` — called inside `definePlugin`
+// where Decky's RPC bridge is guaranteed ready. AuthProvider awaits
+// this so statuses are available before the first QAM paint.
+let _prefetchPromise: Promise<StatusMap> | null = null;
+let _prefetchResolve: ((m: StatusMap) => void) | null = null;
+
+function _parseStatuses(raw: unknown): StatusMap {
+  // Unwrap the RPC envelope ({success, data}) — call() returns
+  // the raw envelope, unlike useRPC which unwraps automatically.
+  const data = unwrapRpcEnvelope(raw);
+  const arr: unknown[] = Array.isArray(data) ? data : [];
+  const map: StatusMap = {};
+  for (const entry of arr) {
+    if (entry && typeof entry === "object") {
+      const e = entry as Record<string, unknown>;
+      const id = e.store_id as StoreId | undefined;
+      if (id) {
+        map[id] = e.available ? "connected" : "disconnected";
+      }
+    }
+  }
+  return map;
+}
+
+/** Call inside `definePlugin` to kick off the auth status fetch before
+ *  the QAM is ever opened. Safe to call multiple times — subsequent
+ *  calls are no-ops. */
+export function prefetchAuthStatus(): void {
+  if (_prefetchPromise) return;
+  _prefetchPromise = new Promise<StatusMap>((resolve) => {
+    _prefetchResolve = resolve;
+  });
+  call<[], unknown>(rpcRoutes.checkStoreStatus)
+    .then((raw) => _prefetchResolve!(_parseStatuses(raw)))
+    .catch(() => _prefetchResolve!({}));
+}
 
 /** Auth context value. */
 interface AuthContextValue {
@@ -56,33 +95,26 @@ const Ctx = createContext<AuthContextValue | null>(null);
  */
 export const AuthProvider: FC<{ children: ReactNode }> = ({ children }) => {
   const [statuses, setStatuses] = useState<StatusMap>({});
-  // Initial fetch
-  const initial = useRPCQuery<[], StatusMap>(
-    rpcRoutes.checkStoreStatus,
-    [],
-  );
-  React.useEffect(() => {
-    if (initial.data) {
-      // The backend returns a *list* of per-store status
-      // dicts (``[{store_id, available, ...}]``), but the
-      // frontend uses a flat map. Convert on receipt so
-      // ``statuses["epic"] === "connected"`` works.
-      const raw: unknown[] = Array.isArray(initial.data)
-        ? initial.data as unknown[]
-        : [];
-      const map: StatusMap = {};
-      for (const entry of raw) {
-        if (entry && typeof entry === "object") {
-          const e = entry as Record<string, unknown>;
-          const id = e.store_id as StoreId | undefined;
-          if (id) {
-            map[id] = e.available ? "connected" : "disconnected";
-          }
-        }
-      }
-      setStatuses(map);
+
+  useEffect(() => {
+    let cancelled = false;
+    // Seed immediately from the prefetch (started in definePlugin)
+    // so the UI paints with known status without a 1-2s delay.
+    if (_prefetchPromise) {
+      _prefetchPromise.then((map) => {
+        if (!cancelled) setStatuses(map);
+      });
     }
-  }, [initial.data]);
+    // Always make a fresh call to get the latest status (auth may
+    // have changed since boot). The seed above prevents a flash of
+    // empty/disconnected buttons while this resolves.
+    call<[], unknown>(rpcRoutes.checkStoreStatus)
+      .then((raw) => {
+        if (!cancelled) setStatuses(_parseStatuses(raw));
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
 
   React.useEffect(() => {
     tabManager.setConnectedStores(statuses);
@@ -154,7 +186,7 @@ export const AuthProvider: FC<{ children: ReactNode }> = ({ children }) => {
 
   const value: AuthContextValue = {
     statuses,
-    loading: initial.loading,
+    loading: Object.keys(statuses).length === 0,
     startAuth, completeAuth, logout, logoutAll,
     notifyConnected,
   };

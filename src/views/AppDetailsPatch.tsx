@@ -39,7 +39,7 @@ import { SteamBridge, type RouterPatchHandle } from "../lib/steam-bridge";
 import { findInReactTree } from "../lib/steam-bridge/react-tree";
 import { getGameStateVersion } from "../lib/game-state-version";
 import { injectGameToAppinfo } from "../lib/steam-bridge/app-store-patcher";
-import { InjectedSubtreeProvider } from "../contexts/InjectedSubtreeProvider";
+import { DownloadProvider } from "../contexts/DownloadContext";
 import { PlaySectionWrapper } from "../components/play";
 import { GameInfoPanel } from "../components/info";
 
@@ -151,17 +151,16 @@ function injectPlayWrapper(
 
   if (existingIdx === -1) {
     const idx = findPlaySectionInsertIndex(children);
-    // Wrap in InjectedSubtreeProvider so the contexts the
-    // children read (DownloadContext, AuthContext, ...) are
-    // available — Steam's React tree is rendered outside our
-    // top-level RootProvider so we have to provide a fresh
-    // context stack here.
+    // Wrap in DownloadProvider — the only context the
+    // injected components need (useDownloads in
+    // GameInfoCompatRow and usePlaySection). Steam's React
+    // tree is rendered outside our RootProvider.
     children.splice(
       idx,
       0,
-      <InjectedSubtreeProvider key={`${baseKey}-v${version}`}>
+      <DownloadProvider key={`${baseKey}-v${version}`}>
         <PlaySectionWrapper appId={appId}>{null}</PlaySectionWrapper>
-      </InjectedSubtreeProvider>,
+      </DownloadProvider>,
     );
     return;
   }
@@ -193,17 +192,13 @@ function injectGameInfoPanel(
       wrapperIdx >= 0
         ? wrapperIdx + 1
         : findPlaySectionInsertIndex(children) + 1;
-    // Same wrapping rationale as `injectPlayWrapper`. GameInfoPanel
-    // itself uses module-level caches today but its sub-sections
-    // call `useRPC` / `useTranslation` which work fine standalone ;
-    // we still wrap for symmetry + to future-proof against any
-    // sub-section growing a context dependency.
+    // DownloadProvider needed by GameInfoCompatRow's useDownloads.
     children.splice(
       idx,
       0,
-      <InjectedSubtreeProvider key={`${baseKey}-v${version}`}>
+      <DownloadProvider key={`${baseKey}-v${version}`}>
         <GameInfoPanel appId={appId} />
-      </InjectedSubtreeProvider>,
+      </DownloadProvider>,
     );
     return;
   }

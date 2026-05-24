@@ -33,6 +33,7 @@ import { applyLibraryPatch } from "./lib/steam-bridge/library-patch";
 import { startUnifideckCacheAutoload } from "./lib/library-filters";
 import { startCollectionManager } from "./lib/steam-bridge/collection-manager";
 import { applyAppStorePatch } from "./lib/steam-bridge/app-store-patcher";
+import { prefetchAuthStatus } from "./contexts/AuthContext";
 import { runBootstrapTasks } from "./bootstrap-tasks";
 import { runTeardown, type TeardownHandles } from "./teardown";
 // Eager translation load — Decky's UI mounts before any
@@ -78,6 +79,10 @@ export default definePlugin(() => {
   } catch (e) {
     console.error("[Unifideck] collection manager start failed:", e);
   }
+  // Start auth status check now (in definePlugin, where Decky's
+  // RPC bridge is ready) so the result is cached before the user
+  // opens QAM. Avoids the 1-2s delay on first QAM open.
+  prefetchAuthStatus();
   // Spoof non-Steam Unifideck shortcuts as Steam Store games so
   // Steam's own UI surfaces (library tile, AppDetails page,
   // friend presence) render real cover art + descriptions instead

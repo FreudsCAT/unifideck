@@ -3,12 +3,70 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from unifideck.core.types import Events, Game
 from unifideck.event_bus.event_bus_devex import subscribe
 
 logger = logging.getLogger(__name__)
+
+
+async def _update_icons_from_grid(svc: Any) -> int:
+    """Scan grid dir for icon files and update shortcuts.vdf.
+
+    Called after the artwork phase completes so any newly-
+    downloaded icon files are picked up. Returns the number of
+    shortcuts whose icon field was updated.
+    """
+    shortcuts_path = getattr(svc, "_shortcuts_path", None)
+    if not shortcuts_path:
+        logger.warning("[ShortcutService] no shortcuts_path — cannot update icons")
+        return 0
+
+    grid_dir = str(Path(shortcuts_path).parent / "grid")
+    try:
+        from unifideck.services.shortcut.persistence import read_vdf, write_vdf
+    except Exception:
+        logger.exception("[ShortcutService] failed to import VDF deps")
+        return 0
+
+    data = await read_vdf(shortcuts_path)
+    shortcuts = data.get("shortcuts")
+    if not isinstance(shortcuts, dict):
+        return 0
+
+    updated = 0
+    for entry in shortcuts.values():
+        if not isinstance(entry, dict):
+            continue
+        appid = entry.get("appid")
+        if not isinstance(appid, int):
+            continue
+        # Compute the unsigned app ID used in grid filenames
+        unsigned = (appid & 0xFFFFFFFF) | 0x80000000
+        # Look for icon file on disk
+        icon_path = ""
+        for ext in (".jpg", ".png"):
+            candidate = Path(grid_dir) / f"{unsigned}_icon{ext}"
+            if candidate.exists():
+                icon_path = str(candidate)
+                break
+        if not icon_path:
+            continue
+        current = entry.get("icon", "")
+        if current == icon_path:
+            continue
+        entry["icon"] = icon_path
+        updated += 1
+
+    if updated > 0:
+        await write_vdf(shortcuts_path, data)
+        logger.info(
+            "[ShortcutService] updated icons for %d shortcuts in shortcuts.vdf",
+            updated,
+        )
+    return updated
 
 if TYPE_CHECKING:
     # This is a mixin; `self` will be the ShortcutService facade
@@ -96,3 +154,15 @@ class EventsMixin:
             added=added, removed=removed, kept=kept,
             total=len(games),
         )
+
+    @subscribe(Events.POST_SYNC_PHASE_CHANGED)
+    async def _on_artwork_phase_done(self, **kwargs: Any) -> None:
+        """After artwork download completes, update icon paths in
+        shortcuts.vdf so Steam displays the shortcut icon in the
+        library list and desktop mode."""
+        if kwargs.get("phase") != "artwork":
+            return
+        if kwargs.get("active") is not False:
+            return
+        logger.info("[ShortcutService] artwork phase done — updating icons")
+        await _update_icons_from_grid(self)
