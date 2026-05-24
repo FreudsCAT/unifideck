@@ -4,6 +4,7 @@ import asyncio
 import base64
 import json
 import logging
+import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
@@ -23,6 +24,14 @@ _BROWSER_UA = (
 _DEFAULT_OFFERING_ID = "xgpuweb"
 
 
+# Safety margin subtracted from the JWT ``exp`` claim so we never
+# attempt a catalog fetch with a token that expires mid-request.
+_GS_TOKEN_EXPIRY_MARGIN_SECONDS = 300  # 5 minutes
+
+# Conservative fallback when the gsToken JWT has no ``exp`` claim.
+_GS_TOKEN_DEFAULT_LIFETIME_SECONDS = 3600 * 3  # 3 hours
+
+
 @dataclass(frozen=True)
 class SubscriptionProbeResult:
     """Subscription probe result.
@@ -30,6 +39,10 @@ class SubscriptionProbeResult:
     Includes the downstream artefacts the xCloud catalog reader needs:
     the short-lived ``gs_token`` (Bearer token for the regional core API)
     plus the list of streaming ``regions`` (to pick a baseUri).
+
+    ``expires_at`` is derived from the gsToken JWT's ``exp`` claim
+    (minus a safety margin) so consumers can maximise reuse without
+    risking an expired token mid-catalog-fetch.
 
     Note: ``programs`` from individual title responses is stale (lists
     every program a title was ever in). For tier-tagging in UI later,
@@ -45,6 +58,46 @@ class SubscriptionProbeResult:
     gs_token: str | None = None
     regions: list[dict[str, Any]] = field(default_factory=list)
     market: str | None = None
+    expires_at: float = 0.0
+
+    def is_session_fresh(self, now: float | None = None) -> bool:
+        """Return True if the gsToken is still usable."""
+        return bool(
+            self.gs_token
+            and (now if now is not None else time.time()) < self.expires_at
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialise for CacheManager persistence."""
+        return {
+            "tier": self.tier.value,
+            "ok": self.ok,
+            "error": self.error,
+            "http_status": self.http_status,
+            "gs_token": self.gs_token,
+            "regions": self.regions,
+            "market": self.market,
+            "expires_at": self.expires_at,
+        }
+
+    @classmethod
+    def from_dict(
+        cls, raw: dict[str, Any],
+    ) -> SubscriptionProbeResult | None:
+        """Deserialise from CacheManager. Returns None on bad data."""
+        try:
+            return cls(
+                tier=SubscriptionTier(raw["tier"]),
+                ok=bool(raw.get("ok", False)),
+                error=raw.get("error"),
+                http_status=raw.get("http_status"),
+                gs_token=raw.get("gs_token"),
+                regions=raw.get("regions", []),
+                market=raw.get("market"),
+                expires_at=float(raw.get("expires_at", 0.0)),
+            )
+        except (KeyError, ValueError, TypeError):
+            return None
 
 
 async def probe_subscription(
@@ -123,10 +176,16 @@ def _probe_sync(
             r = offering.get("regions")
             if isinstance(r, list):
                 regions = [x for x in r if isinstance(x, dict)]
+    # Derive session expiry from the gsToken JWT's ``exp`` claim so
+    # downstream consumers can maximise reuse of the session.
+    expires_at = 0.0
+    if isinstance(gs_token, str) and gs_token:
+        expires_at = _extract_gs_token_expiry(gs_token)
     logger.info(
         "[SubscriptionProbe] %s responded %d, tier=%s, regions=%d, "
-        "market=%s",
+        "market=%s, gs_expires_in=%.0fs",
         endpoint_url, status, tier.value, len(regions), market,
+        max(0.0, expires_at - time.time()),
     )
     return SubscriptionProbeResult(
         tier=tier,
@@ -135,6 +194,7 @@ def _probe_sync(
         gs_token=gs_token if isinstance(gs_token, str) else None,
         regions=regions,
         market=market if isinstance(market, str) else None,
+        expires_at=expires_at,
     )
 
 
@@ -218,6 +278,21 @@ def _do_probe_http(
             ok=False,
             error="network",
         )
+
+
+def _extract_gs_token_expiry(gs_token: str) -> float:
+    """Read the ``exp`` claim from a gsToken JWT.
+
+    Returns a wall-clock timestamp (seconds since epoch) with a
+    safety margin subtracted. Falls back to a conservative 3-hour
+    default if the JWT cannot be decoded or has no ``exp`` claim.
+    """
+    claims = _decode_jwt_payload(gs_token)
+    if claims is not None:
+        exp = claims.get("exp")
+        if isinstance(exp, (int, float)) and exp > 0:
+            return float(exp) - _GS_TOKEN_EXPIRY_MARGIN_SECONDS
+    return time.time() + _GS_TOKEN_DEFAULT_LIFETIME_SECONDS
 
 
 def _decode_jwt_payload(jwt: str) -> dict[str, Any] | None:

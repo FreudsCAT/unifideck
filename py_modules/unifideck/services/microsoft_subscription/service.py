@@ -25,9 +25,6 @@ if TYPE_CHECKING:
     from unifideck.stores.microsoft.tokens import MicrosoftTokenManager, XBLTokenChain
 logger = logging.getLogger(__name__)
 
-# gsToken JWTs are issued with ~4h expiry. Reuse a probe result within
-# this window to avoid hitting the login service every sync.
-_PROBE_SESSION_TTL_SECONDS = 60 * 50
 class MicrosoftSubscriptionService(
     _CacheMixin, _ProbeEmissionMixin, _EventHandlersMixin,
 ):
@@ -56,7 +53,6 @@ class MicrosoftSubscriptionService(
         # (gsToken + regions + market) so downstream consumers (catalog reader)
         # can reuse it within the JWT's lifetime without re-probing.
         self._last_probe: SubscriptionProbeResult | None = None
-        self._last_probe_at: float = 0.0
         auto_wire(self, self._bus)
         logger.info(
             "[MSSubSvc] initialized (endpoint=%s)",
@@ -86,10 +82,13 @@ class MicrosoftSubscriptionService(
                 # Persist session artefacts (gsToken/regions/market) for
                 # the catalog reader to reuse within the JWT lifetime.
                 self._last_probe = probe_result
-                self._last_probe_at = time.time()
                 await self._store_tier_result(
                     cache_key, probe_result.tier,
                 )
+                # Persist session so it survives plugin restarts.
+                xuid = self._xuid_from_chain()
+                if probe_result.is_session_fresh():
+                    self._persist_session(xuid, probe_result)
                 result_tier: SubscriptionTier = probe_result.tier
                 return result_tier
             if cached is not None:
@@ -128,27 +127,73 @@ class MicrosoftSubscriptionService(
 
         The xCloud catalog reader needs the ``gsToken`` and ``regions``
         from the login response to call the regional ``/v2/titles``
-        endpoint. We reuse the last probe result while still valid,
-        otherwise re-probe and return that.
+        endpoint. We check in order:
 
-        Returns None if no successful probe is available (e.g.
-        subscription gate has rejected the account).
+        1. **In-memory** ``_last_probe`` — fastest, no I/O.
+        2. **Persisted session** from CacheManager — survives plugin
+           restarts without re-probing.
+        3. **Fresh probe** — runs ``_run_probe()`` directly, bypassing
+           the tier cache that previously caused the gsToken to never
+           be obtained when the tier was cached end-of-month.
+
+        Returns None if no successful probe is available.
         """
-        now = time.time()
-        if (
-            self._last_probe is not None
-            and self._last_probe.gs_token
-            and now - self._last_probe_at < _PROBE_SESSION_TTL_SECONDS
-        ):
+        # 1. In-memory fast path.
+        if self._last_probe is not None and self._last_probe.is_session_fresh():
+            remaining = self._last_probe.expires_at - time.time()
+            logger.debug(
+                "[MSSubSvc] get_session: in-memory session valid "
+                "(expires in %.0fs)", remaining,
+            )
             return self._last_probe
-        # Force a fresh probe — get_tier handles capture into _last_probe
-        await self.get_tier(token_manager)
-        if (
-            self._last_probe is not None
-            and self._last_probe.gs_token
-        ):
-            return self._last_probe
+
+        # 2. Persisted session (survives plugin restart).
+        xuid = self._xuid_from_chain()
+        persisted = self._load_persisted_session(xuid)
+        if persisted is not None:
+            self._last_probe = persisted
+            remaining = persisted.expires_at - time.time()
+            logger.info(
+                "[MSSubSvc] get_session: restored persisted session "
+                "(expires in %.0fs)", remaining,
+            )
+            return persisted
+
+        # 3. Force a fresh probe — bypass get_tier() which may
+        #    return from tier cache without running the probe.
+        logger.info(
+            "[MSSubSvc] get_session: no session available "
+            "— running fresh probe",
+        )
+        # Ensure we have a standard chain for the GSSV probe.
+        cache_key = await self._resolve_cache_key(token_manager)
+        probe_result = await self._run_probe(token_manager)
+        if probe_result.ok and probe_result.is_session_fresh():
+            self._last_probe = probe_result
+            # Side-effect: update the tier cache so get_tier()
+            # benefits from this fresh probe too.
+            await self._store_tier_result(
+                cache_key, probe_result.tier,
+            )
+            self._persist_session(xuid, probe_result)
+            logger.info(
+                "[MSSubSvc] get_session: fresh probe OK "
+                "(gsToken expires in %.0fs)",
+                probe_result.expires_at - time.time(),
+            )
+            return probe_result
+
+        reason = probe_result.error or "no gsToken"
+        logger.warning(
+            "[MSSubSvc] get_session: probe failed — %s", reason,
+        )
         return None
+
+    def _xuid_from_chain(self) -> str:
+        """Extract the XUID from the last standard chain, or 'default'."""
+        if self._last_standard_chain is not None:
+            return self._last_standard_chain.xuid or "default"
+        return "default"
     async def invalidate(self) -> None:
         """Invalidate."""
         try:
@@ -156,4 +201,6 @@ class MicrosoftSubscriptionService(
         except Exception:
             logger.exception("[MSSubSvc] cache clear failed")
         self._last_emitted.clear()
+        self._last_probe = None
+        self._clear_persisted_sessions()
         logger.info("[MSSubSvc] cache invalidated")

@@ -175,16 +175,13 @@ def _is_canonical_shape(
     """Whether the auth entry has the expected ``Exe`` and ``LaunchOptions``.
 
     A canonical Unifideck auth shortcut points at the bundled
-    launcher with ``auth <store>`` as launch options. A drift
-    on either field means the entry is stale (e.g. launcher
-    path changed between releases) and the caller will replace
-    it. We don't validate ``IsHidden`` or tags here — those are
-    checked by ``_is_auth_entry_for_store`` upstream or rebuilt
-    wholesale by ``_build_auth_entry`` if needed.
+    launcher with canonical launch options. A drift on either field means
+    the entry is stale and the caller will replace it.
     """
+    expected_opts = f"{store}:{'ms' if store == 'microsoft' else store}-auth UNIFIDECK_{store.upper()}_ACTION=auth"
     return (
         entry.get("Exe") == launcher_path
-        and entry.get("LaunchOptions") == f"auth {store}"
+        and entry.get("LaunchOptions") == expected_opts
     )
 
 
@@ -197,11 +194,11 @@ def _build_auth_entry(
     """Build the canonical VDF entry dict for an auth shortcut.
 
     Populates ``appid``, ``AppName`` (= ``title``), ``Exe``
-    (launcher path), ``LaunchOptions`` (= ``auth <store>``),
-    ``tags`` including ``_UNIFIDECK_TAG`` and an ``auth-<store>``
-    marker, ``IsHidden=1`` so the shortcut doesn't clutter
-    the library.
+    (launcher path), ``LaunchOptions``, ``tags`` including
+    ``_UNIFIDECK_TAG`` and an ``auth-<store>`` marker, and
+    ``IsHidden=1``.
     """
+    expected_opts = f"{store}:{'ms' if store == 'microsoft' else store}-auth UNIFIDECK_{store.upper()}_ACTION=auth"
     return {
         "appid": app_id,
         "AppName": title,
@@ -209,7 +206,7 @@ def _build_auth_entry(
         "StartDir": "",
         "icon": "",
         "ShortcutPath": "",
-        "LaunchOptions": f"auth {store}",
+        "LaunchOptions": expected_opts,
         "IsHidden": 1,
         "AllowDesktopConfig": 1,
         "AllowOverlay": 1,

@@ -286,6 +286,30 @@ class TabManager {
     ubisoft: 0,
     microsoft: 0,
   };
+  private version = 0;
+  private listeners: (() => void)[] = [];
+
+  getVersion(): number {
+    return this.version;
+  }
+
+  onTabsChanged(listener: () => void): () => void {
+    this.listeners.push(listener);
+    return () => {
+      this.listeners = this.listeners.filter((l) => l !== listener);
+    };
+  }
+
+  private notifyListeners(): void {
+    this.version++;
+    this.listeners.forEach((l) => {
+      try {
+        l();
+      } catch (e) {
+        console.error("[TabManager] Listener failed:", e);
+      }
+    });
+  }
 
   initialize(): void {
     if (this.initialized) return;
@@ -333,6 +357,7 @@ class TabManager {
 
   rebuildTabs(): void {
     this.tabs = getUnifideckTabs().map((tab) => new UnifideckTabContainer(tab));
+    this.notifyListeners();
   }
 }
 

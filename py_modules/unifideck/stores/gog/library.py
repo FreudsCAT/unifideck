@@ -81,6 +81,10 @@ class GOGLibrary:
             if ok:
                 status = await self._probe_userdata()
                 return status == 200
+            logger.warning(
+                "[GOGLibrary] GOG token refresh failed - clearing dead credentials",
+            )
+            await self._tokens.clear()
             return False
         logger.warning(
             "[GOGLibrary] userdata probe returned %s",

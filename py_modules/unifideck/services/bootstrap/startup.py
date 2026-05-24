@@ -58,6 +58,12 @@ async def start_async_services(container: ServiceContainer) -> None:
                 service_name, e,
             )
 
+    if container.shortcut is not None:
+        try:
+            await _self_heal_auth_shortcuts(container.shortcut)
+        except Exception as e:
+            logger.warning("[Startup] failed to run self-heal auth shortcuts: %s", e)
+
     _self_heal_executable_bits()
 
 
@@ -96,3 +102,84 @@ def _self_heal_executable_bits() -> None:
                     logger.info("[Startup] restored +x on %s", path)
     except Exception as e:
         logger.warning("[Startup] failed to self-heal executable bits: %s", e)
+
+
+async def _self_heal_auth_shortcuts(shortcut_svc: Any) -> None:
+    """Scan and upgrade any legacy auth shortcuts in shortcuts.vdf to point at the wrapper.
+
+    Ensures that GOG, Epic, Amazon, and Microsoft auth shortcuts are pointing to the
+    canonical unifideck-launcher wrapper rather than dispatcher.py, and updates
+    their AppID values to reflect the new path so they match Steam's internal CRC32 algorithm.
+    """
+    try:
+        await shortcut_svc._load_shortcuts()
+        if not isinstance(shortcut_svc._shortcuts, dict) or "shortcuts" not in shortcut_svc._shortcuts:
+            return
+
+        shortcuts_dict = shortcut_svc._shortcuts["shortcuts"]
+        if not isinstance(shortcuts_dict, dict):
+            return
+
+        changed = False
+        launcher_path = shortcut_svc._launcher_path
+        if not launcher_path:
+            logger.warning("[Startup] shortcut self-healing skipped: _launcher_path is empty")
+            return
+
+        # Canonical configs for each store's auth shortcut
+        auth_configs = {
+            "gog":       {"title": "GOG Sign-In",          "tag": "auth-gog"},
+            "epic":      {"title": "Epic Games Sign-In",   "tag": "auth-epic"},
+            "amazon":    {"title": "Amazon Games Sign-In", "tag": "auth-amazon"},
+            "microsoft": {"title": "Microsoft Sign-In",    "tag": "auth-microsoft"},
+        }
+
+        for key, entry in list(shortcuts_dict.items()):
+            if not isinstance(entry, dict):
+                continue
+            tags = entry.get("tags", {})
+            if not isinstance(tags, dict):
+                continue
+            tag_values = list(tags.values())
+            has_unifideck_tag = any(t == "Unifideck" for t in tag_values)
+            if not has_unifideck_tag:
+                continue
+
+            for store, cfg in auth_configs.items():
+                if any(t == cfg["tag"] for t in tag_values):
+                    # Check if Exe, LaunchOptions, or AppID need correction
+                    current_exe = entry.get("Exe") or entry.get("exe")
+                    current_opts = entry.get("LaunchOptions")
+                    expected_opts = f"{store}:{'ms' if store == 'microsoft' else store}-auth UNIFIDECK_{store.upper()}_ACTION=auth"
+                    
+                    # We compute the canonical appid based on launcher_path and title
+                    expected_appid = shortcut_svc.generate_app_id(launcher_path, cfg["title"])
+
+                    # Determine if we need to update
+                    needs_update = (
+                        current_exe != launcher_path
+                        or current_opts != expected_opts
+                        or entry.get("appid") != expected_appid
+                        or "Exe" not in entry  # Ensure uppercase key 'Exe' is present
+                    )
+
+                    if needs_update:
+                        logger.info(
+                            "[Startup] Repairing stale/legacy auth shortcut for %s (key=%s): "
+                            "exe=%s -> %s, appid=%s -> %s",
+                            store, key, current_exe, launcher_path, entry.get("appid"), expected_appid
+                        )
+                        # Set canonical values
+                        entry["Exe"] = launcher_path
+                        if "exe" in entry:
+                            del entry["exe"]  # Standardise on uppercase Exe
+                        entry["LaunchOptions"] = expected_opts
+                        entry["appid"] = expected_appid
+                        changed = True
+
+        if changed:
+            await shortcut_svc._save_all()
+            logger.info("[Startup] Stale/legacy auth shortcuts successfully repaired and saved to shortcuts.vdf")
+    except Exception as e:
+        logger.exception("[Startup] Failed to reconcile/repair stale auth shortcuts: %s", e)
+

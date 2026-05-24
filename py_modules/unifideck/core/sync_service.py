@@ -38,6 +38,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from unifideck.event_bus import EventBus
@@ -132,6 +133,7 @@ class SyncService(_SyncQueriesMixin, _SyncDedupMixin):
         self._cancel_event = asyncio.Event()
         self._all_games: dict[str, list[Game]] = {}
         self._last_sync_time: float | None = None
+        self._load_library_cache()
         self._current_store: str | None = None
         # Per-sync-run progress tracker, consumed by the frontend's
         # 500ms polling loop via ``get_sync_progress → to_dict()``.
@@ -574,6 +576,7 @@ class SyncService(_SyncQueriesMixin, _SyncDedupMixin):
             self._post_sync_pending = set(self._registered_phases)
             self._post_sync_pending.discard("artwork")
         self._last_sync_time = time.time()
+        self._save_library_cache()
         # Arm the post-sync watchdog (cancel any prior). The
         # try/finally guards in MetadataService and ArtworkService
         # will normally emit POST_SYNC_PHASE_CHANGED before this
@@ -779,6 +782,7 @@ class SyncService(_SyncQueriesMixin, _SyncDedupMixin):
         self._all_games[store_name] = games
         self._all_games = await self._apply_dedup_and_emit(self._all_games)
         self._last_sync_time = time.time()
+        self._save_library_cache()
         await self._bus.emit(
             Events.SYNC_COMPLETE,
             games=self._flatten(self._all_games),
@@ -934,6 +938,83 @@ class SyncService(_SyncQueriesMixin, _SyncDedupMixin):
         await self._bus.emit(Events.SYNC_CANCELLED)
         logger.info("[SyncService] cancel requested")
         return True
+
+    def _get_library_cache_path(self) -> Path:
+        """Resolve the library_cache.json file path."""
+        from pathlib import Path
+
+        from unifideck.utils.paths import get_games_map_path
+        map_path = get_games_map_path(self._config)
+        return Path(map_path).parent / "library_cache.json"
+
+    def _load_library_cache(self) -> None:
+        """Load synced libraries from disk cache."""
+        try:
+            cache_path = self._get_library_cache_path()
+            if not cache_path.is_file():
+                return
+
+            from unifideck.config.config_persistence import load_json_layer
+            data = load_json_layer(cache_path)
+            if not data:
+                return
+
+            last_sync = data.get("last_sync_time")
+            if isinstance(last_sync, (int, float)):
+                self._last_sync_time = float(last_sync)
+
+            libraries_data = data.get("libraries", {})
+            if not isinstance(libraries_data, dict):
+                return
+
+            from dataclasses import fields
+
+            from unifideck.core.types import Game
+
+            game_fields = {f.name for f in fields(Game)}
+            loaded: dict[str, list[Game]] = {}
+            for store_name, game_dicts in libraries_data.items():
+                if not isinstance(game_dicts, list):
+                    continue
+                games_list = []
+                for gd in game_dicts:
+                    if not isinstance(gd, dict):
+                        continue
+                    kwargs = {k: v for k, v in gd.items() if k in game_fields}
+                    games_list.append(Game(**kwargs))
+                loaded[store_name] = games_list
+
+            self._all_games = loaded
+            logger.info(
+                "[SyncService] Loaded %d cached games from library_cache.json",
+                sum(len(g) for g in loaded.values()),
+            )
+        except Exception as e:
+            logger.warning("[SyncService] Failed to load library cache: %s", e)
+
+    def _save_library_cache(self) -> None:
+        """Save current unified library state to disk cache."""
+        try:
+            cache_path = self._get_library_cache_path()
+            from dataclasses import asdict
+
+            libraries_data = {}
+            for store_name, games in self._all_games.items():
+                libraries_data[store_name] = [asdict(g) for g in games]
+
+            payload = {
+                "last_sync_time": self._last_sync_time,
+                "libraries": libraries_data,
+            }
+
+            from unifideck.config.config_persistence import atomic_write_json
+            atomic_write_json(cache_path, payload)
+            logger.info(
+                "[SyncService] Saved library cache (%d games) to library_cache.json",
+                sum(len(g) for g in self._all_games.values()),
+            )
+        except Exception as e:
+            logger.warning("[SyncService] Failed to save library cache: %s", e)
 
     # Read-only query API (get_status / get_all_games /
     # get_games_by_store / get_game_info / _flatten) lives in

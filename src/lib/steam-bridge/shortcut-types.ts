@@ -69,9 +69,15 @@ export function getShortcutRunGameId(appId: number): string {
   const entry = getAppStoreEntry(appId);
   const gameId = entry?.gameid;
 
-  return typeof gameId === "string" && gameId.length > 0
-    ? gameId
-    : String(appId);
+  if (typeof gameId === "string" && gameId.length > 0) {
+    return gameId;
+  }
+  try {
+    const val = (BigInt(appId) << 32n) | 0x02000000n;
+    return val.toString();
+  } catch {
+    return String(appId);
+  }
 }
 
 /** Read Steam's display_status for a shortcut, with a

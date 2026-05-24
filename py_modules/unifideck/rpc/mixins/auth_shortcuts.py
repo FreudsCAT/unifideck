@@ -163,6 +163,7 @@ class AuthShortcutsRPCMixin:
                     store_game_id, resolved,
                 )
                 result["appid_unsigned"] = resolved
+            result["success"] = True
             logger.info(
                 "[AuthShortcuts] _get_compat_tool_impl result keys: %s",
                 list(result.keys()),
@@ -182,9 +183,10 @@ class AuthShortcutsRPCMixin:
         contains ``store_game_id`` and return its AppID."""
         import re
         from pathlib import Path
-        vdf = Path(
-            "~/.steam/steam/userdata/0/config/shortcuts.vdf",
-        ).expanduser()
+        from unifideck.steam.steam_user import get_active_steam_user
+        steam_root = Path("~/.steam/steam").expanduser()
+        active_user = get_active_steam_user(steam_root) or "0"
+        vdf = steam_root / "userdata" / active_user / "config" / "shortcuts.vdf"
         if not vdf.is_file():
             return 0
         raw = vdf.read_bytes()
@@ -282,7 +284,7 @@ def _build_auth_shortcut_context(store: str) -> dict[str, Any]:
         "appid_unsigned": unsigned,
         "launcher_path": wrapper_path,
         "launch_options": (
-            f"{store}:{store}-auth {meta['env']}=auth"
+            f"{store}:{'ms' if store == 'microsoft' else store}-auth {meta['env']}=auth"
         ),
         "launch_wait_ms": _AUTH_SHORTCUT_LAUNCH_WAIT_MS,
     }
