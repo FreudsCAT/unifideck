@@ -153,7 +153,8 @@
     "steamMetadataDownloaded": "Steam metadata: {{synced}} / {{total}}",
     "unifidbMetadataDownloaded": "unifiDB metadata: {{synced}} / {{total}}",
     "metacriticMetadataDownloaded": "Metacritic data: {{synced}} / {{total}}",
-    "rawgMetadataDownloaded": "RAWG metadata: {{synced}} / {{total}}"
+    "rawgMetadataDownloaded": "RAWG metadata: {{synced}} / {{total}}",
+    "compatChecked": "Compatibility data: {{synced}} / {{total}}"
   },
   "cleanup": {
     "title": "Cleanup",
@@ -387,6 +388,7 @@
     "fetchingEnhancedMetadata": "Fetching enhanced metadata...",
     "lookingUpUnifiDB": "Fetching unifiDB metadata...",
     "fetchingMetacriticData": "Fetching Metacritic metadata...",
+    "fetchingCompatData": "Checking compatibility data...",
     "checkingExistingArtwork": "Checking existing artwork...",
     "cleaningOrphanedArtwork": "Cleaning up orphaned artwork...",
     "retryingMissingArtwork": "Retrying {{synced}} / {{total}} games with missing artwork...",

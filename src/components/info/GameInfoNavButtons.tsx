@@ -47,6 +47,10 @@ const buttonStyle = {
   padding: "4px 12px",
   fontSize: 12,
   minWidth: 0,
+  width: "auto",
+  flex: "0 0 auto",
+  display: "inline-flex",
+  alignItems: "center",
 } as const;
 
 export const GameInfoNavButtons: FC<Props> = ({ meta }) => {
@@ -61,6 +65,9 @@ export const GameInfoNavButtons: FC<Props> = ({ meta }) => {
     <Focusable
       flow-children="row"
       onActivate={() => {}}
+      onFocus={(e: React.FocusEvent<HTMLDivElement>) => {
+        e.currentTarget.scrollIntoView({ behavior: "smooth", block: "center" });
+      }}
       style={{
         display: "flex",
         flexWrap: "wrap",

@@ -94,6 +94,13 @@ export const GameInfoDetailsModal: FC<Props> = ({ meta, closeModal }) => {
         {protonDbUrl && (
           <div style={{ marginTop: 16 }}>
             <DialogButton
+              style={{
+                width: "auto",
+                flex: "0 0 auto",
+                display: "inline-flex",
+                alignItems: "center",
+                minWidth: 0,
+              }}
               onClick={() => {
                 window.open(
                   protonDbUrl, "_blank",

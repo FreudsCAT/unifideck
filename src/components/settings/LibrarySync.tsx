@@ -168,6 +168,14 @@ export const LibrarySync: FC = () => {
                 })}
               </div>
             )}
+            {(progress.compat_total ?? 0) > 0 && (
+              <div>
+                {t("librarySync.compatChecked", {
+                  synced: progress.compat_synced ?? 0,
+                  total: progress.compat_total ?? 0,
+                })}
+              </div>
+            )}
           </div>
           {progress.error && (
             <div style={{ color: "#ff6b6b", marginTop: 5 }}>

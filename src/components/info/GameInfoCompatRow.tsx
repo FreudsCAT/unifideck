@@ -49,6 +49,20 @@ const COMPAT_LABEL_KEY: Record<0 | 1 | 2 | 3, string> = {
   0: "gameInfoPanel.compatibility.unknown",
 };
 
+/** Inline-flex sizing for every DialogButton in the panel.
+ *  @decky/ui's DialogButton defaults to ``width: 100%`` (settings-
+ *  menu styling) — without ``flex: 0 0 auto`` the buttons stretch
+ *  to fill their parent flex line. */
+const buttonStyle = {
+  padding: "4px 12px",
+  fontSize: 12,
+  minWidth: 0,
+  width: "auto",
+  flex: "0 0 auto",
+  display: "inline-flex",
+  alignItems: "center",
+} as const;
+
 const defaultBridge = new SteamBridge();
 
 export const GameInfoCompatRow: FC<Props> = ({
@@ -153,6 +167,9 @@ export const GameInfoCompatRow: FC<Props> = ({
     <Focusable
       flow-children="row"
       onActivate={() => {}}
+      onFocus={(e: React.FocusEvent<HTMLDivElement>) => {
+        e.currentTarget.scrollIntoView({ behavior: "smooth", block: "center" });
+      }}
       style={{
         display: "flex",
         flexDirection: "column",
@@ -174,7 +191,7 @@ export const GameInfoCompatRow: FC<Props> = ({
         </span>
         <DialogButton
           className="unifideck-nav-button"
-          style={{ padding: "4px 12px", fontSize: 12, minWidth: 0 }}
+          style={buttonStyle}
           onClick={onDetails}
         >
           {t("gameInfoPanel.buttons.details")}
@@ -183,9 +200,7 @@ export const GameInfoCompatRow: FC<Props> = ({
           <DialogButton
             className="unifideck-nav-button"
             style={{
-              padding: "4px 12px",
-              fontSize: 12,
-              minWidth: 0,
+              ...buttonStyle,
               ...(synopsisOpen
                 ? { background: "#1a9fff", color: "#ffffff" }
                 : null),
@@ -198,7 +213,7 @@ export const GameInfoCompatRow: FC<Props> = ({
         {showAction && (
           <DialogButton
             className={`unifideck-nav-button unifideck-install-button ${actionState}-state`}
-            style={{ padding: "4px 12px", fontSize: 12, minWidth: 0 }}
+            style={buttonStyle}
             disabled={installFlow.isWorking || actions.isWorking}
             onClick={onAction}
           >

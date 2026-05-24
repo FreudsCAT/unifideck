@@ -67,7 +67,9 @@ export const NotInstalledButtons: FC<Props> = ({appId, bridge = defaultBridge}) 
         disabled={loading || installFlow.isWorking || !game}
         onClick={onInstall}
       >
-        {installFlow.isWorking ? t("play.installing") : t("play.install")}
+        {installFlow.isWorking
+          ? t("playButton.installing")
+          : t("playButton.install")}
       </DialogButton>
     </Focusable>
   );

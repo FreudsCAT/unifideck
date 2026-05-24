@@ -1,16 +1,16 @@
 /**
- * GameInfoInfoRow — inline "size · dev · pub · release · metacritic"
- * strip beneath the compatibility row.
+ * GameInfoInfoRow — inline info card under the compatibility row.
  *
- * Mirrors staging's middle row but drops the title + store icon
- * cells, which the {@link GameInfoHeader} already renders. Each
+ * Renders `[StoreIcon] Title · Size · Developer · Publisher ·
+ * Released · Metacritic` in one wrap-friendly flex row. Each
  * cell is hidden when its value is empty / null, so a non-Steam
- * shortcut with no enrichment data collapses to nothing instead
- * of showing a row of blank labels.
+ * shortcut with no enrichment data collapses to just the store
+ * icon and title.
  */
 import { FC } from "react";
 import { Focusable } from "@decky/ui";
 import { useTranslation } from "react-i18next";
+import { StoreIcon } from "../shared/StoreIcon";
 import type { Game, GameMetadata } from "../../types/api";
 
 interface Props {
@@ -44,12 +44,6 @@ const Cell: FC<{ label: string; children: React.ReactNode }> = (
 export const GameInfoInfoRow: FC<Props> = ({ game, meta }) => {
   const { t } = useTranslation();
   const size = formatSize(game.size_bytes);
-  const hasAny = !!(size
-    || meta.developer
-    || meta.publisher
-    || meta.release_date
-    || meta.metacritic != null);
-  if (!hasAny) return null;
   return (
     <Focusable
       flow-children="row"
@@ -59,6 +53,7 @@ export const GameInfoInfoRow: FC<Props> = ({ game, meta }) => {
       style={{
         display: "flex",
         flexWrap: "wrap",
+        alignItems: "center",
         gap: 16,
         background: "rgba(0, 0, 0, 0.3)",
         borderRadius: 6,
@@ -68,6 +63,12 @@ export const GameInfoInfoRow: FC<Props> = ({ game, meta }) => {
         e.currentTarget.scrollIntoView({ behavior: "smooth", block: "center" });
       }}
     >
+      <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+        <StoreIcon store={game.store} size={20} />
+        <span style={{ fontWeight: 600, color: "#c7d5e0", fontSize: 14 }}>
+          {game.title}
+        </span>
+      </span>
       {size && <Cell label={t("gameInfoPanel.labels.size")}>{size}</Cell>}
       {meta.developer && (
         <Cell label={t("gameInfoPanel.labels.developer")}>{meta.developer}</Cell>

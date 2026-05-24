@@ -37,9 +37,13 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Delay between per-game lookups so we don't hammer ProtonDB /
-# Steam-Verified back to back. Matches staging's pacing.
-DEFAULT_BULK_DELAY_MS = 50
+# Per-game concurrency cap for the compat fetch loop. Empirically
+# tuned via tmp_test_compat_limits.py — ProtonDB + Steam's
+# saleaction endpoint both tolerate 16+ concurrent calls without
+# throttling. 10 gives ~7× speedup over the old sequential+50ms
+# pacing (8 min → ~1 min on a 1130-game library) with comfortable
+# headroom. Overridable via ``compat.max_concurrent`` config.
+DEFAULT_MAX_CONCURRENT = 10
 
 
 class CompatibilityService:
@@ -97,17 +101,30 @@ class CompatibilityService:
         if task is not None and not task.done():
             task.cancel()
 
-    @subscribe(Events.SYNC_COMPLETE)
-    async def _on_sync_complete(self, **kwargs: Any) -> None:
-        """Schedule background compat enrichment.
+    @subscribe(Events.POST_SYNC_PHASE_CHANGED)
+    async def _on_artwork_phase_done(self, **kwargs: Any) -> None:
+        """Schedule background compat enrichment after Artwork finishes.
 
-        Fire-and-forget so the SYNC_COMPLETE emit returns immediately.
-        The task's try/finally guarantees the phase-done event fires
-        whether the loop finishes, errors out, or is cancelled —
-        otherwise ``_post_sync_pending`` strands ``proton_meta`` and
-        the bar never reaches 100%.
+        Previously subscribed directly to ``SYNC_COMPLETE`` and
+        raced ArtworkService + MetadataService for Steam's
+        ``storesearch`` endpoint. Switching to wait for Artwork's
+        phase-done event serialises the chain
+        Metadata → Artwork → Compat, so by the time we start the
+        ``steam_real_appid`` cache is fully populated and every
+        ProtonDB lookup can short-circuit the ``search_store`` call.
+
+        Fires only on the precise ``phase="artwork", active=False``
+        flank to avoid reacting to every phase emit on the bus.
+        Falls back to ``kwargs`` directly if ``sync_kwargs`` isn't
+        present (defensive — supports older emitters that haven't
+        been migrated yet).
         """
-        games = kwargs.get("games", [])
+        if kwargs.get("phase") != "artwork":
+            return
+        if kwargs.get("active") is not False:
+            return
+        sync_kwargs = kwargs.get("sync_kwargs") or {}
+        games = sync_kwargs.get("games") or kwargs.get("games", [])
         prior = self._enrichment_task
         if prior is not None and not prior.done():
             prior.cancel()
@@ -117,39 +134,32 @@ class CompatibilityService:
         )
 
     async def _run_enrichment(self, games: list[Game]) -> None:
-        """Per-game ProtonDB + Deck-Verified lookup loop."""
+        """Per-game ProtonDB + Deck-Verified lookup, concurrent under a semaphore.
+
+        Was sequential with a 50ms inter-game sleep — ~8 minutes
+        for a 1130-game library. The semaphore cap is sized for
+        the empirical ceiling of the slower of the two upstream
+        endpoints; both tolerate 16+ in flight comfortably.
+        """
         total = len(games)
-        delay_ms = self._delay_ms()
+        max_concurrent = self._max_concurrent()
         progress = self._bus.get_sync_progress() if hasattr(self._bus, "get_sync_progress") else None
         try:
             if not games:
                 return
             if progress is not None:
-                progress.status = "proton_meta"
-                progress.current_game = {
-                    "label": "sync.fetchingEnhancedMetadata",
-                    "values": {"synced": 0, "total": total},
-                }
+                progress.start_compat(total)
             logger.info(
-                "[CompatibilityService] compat fetch started for %d games",
-                total,
+                "[CompatibilityService] compat fetch started "
+                "for %d games (concurrency=%d)",
+                total, max_concurrent,
             )
-            for done, game in enumerate(games, start=1):
-                if progress is not None and progress.status == "cancelled":
-                    logger.info(
-                        "[CompatibilityService] cancel detected at %d/%d — aborting",
-                        done, total,
-                    )
-                    break
-                try:
-                    await self._lib.get_for_title(game.title)
-                except Exception as e:
-                    logger.debug(
-                        "[CompatibilityService] compat fetch failed for %s: %s",
-                        game.title, e,
-                    )
-                if delay_ms > 0:
-                    await asyncio.sleep(delay_ms / 1000)
+            sem = asyncio.Semaphore(max_concurrent)
+            tasks = [
+                asyncio.create_task(self._fetch_one(g, sem, progress))
+                for g in games
+            ]
+            await self._drain(tasks, progress, total)
         finally:
             await self._bus.emit(
                 Events.POST_SYNC_PHASE_CHANGED,
@@ -160,15 +170,64 @@ class CompatibilityService:
                 total,
             )
 
-    def _delay_ms(self) -> int:
-        """Read ``compat.bulk_delay_ms`` from config or fall back to 50."""
+    async def _fetch_one(
+        self, game: Game, sem: asyncio.Semaphore, progress: Any | None,
+    ) -> None:
+        """Per-game lookup body — under the semaphore.
+
+        ``increment_compat`` runs unconditionally so the UI counter
+        ticks even when the upstream call raises (failure → "we
+        attempted this game", not a stall).
+        """
+        async with sem:
+            try:
+                # Pass the shortcut AppID so CompatLibrary can reuse
+                # the ``steam_real_appid`` cache populated by
+                # MetadataService — skips a per-game storesearch.
+                await self._lib.get_for_title(
+                    game.title, shortcut_app_id=game.app_id,
+                )
+            except Exception as e:
+                logger.debug(
+                    "[CompatibilityService] compat fetch failed for %s: %s",
+                    game.title, e,
+                )
+            if progress is not None:
+                await progress.increment_compat(game.title)
+
+    async def _drain(
+        self, tasks: list[asyncio.Task[None]], progress: Any | None, total: int,
+    ) -> None:
+        """Await tasks as they finish; honour the cancel-status flank."""
+        done_count = 0
+        for fut in asyncio.as_completed(tasks):
+            if progress is not None and progress.status == "cancelled":
+                logger.info(
+                    "[CompatibilityService] cancel detected at %d/%d — aborting",
+                    done_count, total,
+                )
+                for t in tasks:
+                    if not t.done():
+                        t.cancel()
+                break
+            try:
+                await fut
+            except Exception:  # noqa: BLE001 — per-game failures are best-effort
+                pass
+            done_count += 1
+
+    def _max_concurrent(self) -> int:
+        """Read ``compat.max_concurrent`` from config or fall back to default."""
         if self._config is None:
-            return DEFAULT_BULK_DELAY_MS
+            return DEFAULT_MAX_CONCURRENT
         try:
-            value = self._config.get("compat.bulk_delay_ms", DEFAULT_BULK_DELAY_MS)
+            value = self._config.get(
+                "compat.max_concurrent", DEFAULT_MAX_CONCURRENT,
+            )
         except Exception:
-            return DEFAULT_BULK_DELAY_MS
+            return DEFAULT_MAX_CONCURRENT
         try:
-            return int(value)
+            n = int(value)
         except (TypeError, ValueError):
-            return DEFAULT_BULK_DELAY_MS
+            return DEFAULT_MAX_CONCURRENT
+        return max(1, n)

@@ -35,6 +35,11 @@ export interface SyncProgress {
   unifidb_synced?: number;
   metacritic_total?: number;
   metacritic_synced?: number;
+  // Compatibility phase (proton_meta) — ProtonDB tier +
+  // Deck-Verified status per game. Backend tracks this in
+  // SyncProgress.compat_total / compat_synced.
+  compat_total?: number;
+  compat_synced?: number;
   // Lifecycle flags
   restart_pending?: boolean;
   is_cancelling?: boolean;

@@ -27,6 +27,13 @@ let storeDataCache: Record<number, AppOverview> = {};
 let appDetailsCache: Record<number, AppDetails> = {};
 const patchedOverviews = new Set<number>();
 
+/** Resolves once `loadFromBackend()` has completed (mappings +
+ *  metadata cache populated). `injectGameToAppinfo` awaits this
+ *  so that navigation to a game page before the async init has
+ *  finished still triggers artwork injection as soon as the data
+ *  is ready. */
+let _backendLoadPromise: Promise<void> | null = null;
+
 interface BackendMappingsResponse {
   success: boolean;
   mappings: Record<string, number>;
@@ -294,6 +301,11 @@ export function forceInjectMetadataForShortcut(shortcutAppId: number): boolean {
  *  backend `inject_game_to_appinfo` RPC so the spoofing survives a
  *  Steam restart. The current backend handler is a no-op stub. */
 export async function injectGameToAppinfo(shortcutAppId: number): Promise<void> {
+  // Wait for the async backend load to finish so that
+  // steamAppIdMappings is populated. On first navigation this
+  // may still be in-flight; on subsequent calls the cached
+  // promise resolves immediately.
+  if (_backendLoadPromise) await _backendLoadPromise;
   if (!steamAppIdMappings[shortcutAppId]) return;
   forceInjectMetadataForShortcut(shortcutAppId);
   try {
@@ -315,7 +327,8 @@ interface PatchHandle {
  * after `SteamBridge` is constructed.
  */
 export async function applyAppStorePatch(): Promise<PatchHandle> {
-  await loadFromBackend();
+  _backendLoadPromise = loadFromBackend();
+  await _backendLoadPromise;
   const appStore = getAppStore();
   const appDetailsStore = getAppDetailsStore();
   if (!appStore || !appDetailsStore) {

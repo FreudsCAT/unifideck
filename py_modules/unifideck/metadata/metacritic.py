@@ -170,8 +170,13 @@ async def _fetch_composer(slug: str, url_template: str, timeout: int) -> dict[st
     import aiohttp
     url = url_template.format(slug=slug)
     try:
+        # ssl=False — see library.search_store's comment. SteamOS's
+        # bundled cert store is outdated and default SSL verification
+        # fails inside the Decky plugin process for several
+        # third-party hosts including backend.metacritic.com.
+        connector = aiohttp.TCPConnector(ssl=False)
         async with (
-            aiohttp.ClientSession() as session,
+            aiohttp.ClientSession(connector=connector) as session,
             session.get(url, timeout=aiohttp.ClientTimeout(total=timeout)) as resp,
         ):
             if resp.status != 200:

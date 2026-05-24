@@ -1,35 +1,33 @@
 /**
- * GameInfoPanel — top-level container for the game details
- * view in the App Details page.
+ * GameInfoPanel — top-level container for the game info view.
  *
- * Composes the modular sub-components:
- *  - Header (cover + title + store + view-mode toggle)
- *  - CompatRow (compat badge + Details / Synopsis / Install + genres)
- *  - InfoRow (size · developer · publisher · released · metacritic)
- *  - Metadata (install_path · executable · deck rating)
- *  - SynopsisSection (collapsible description, gated on the toggle)
- *  - NavButtons (Steam navigation + per-store Support)
- *  - Scores (ProtonDB tier + Deck Verified status)
+ * Mirrors staging's three-row layout exactly:
  *
- * Compact view mode renders only the Header, matching the
- * existing settings toggle semantics. Full view mode renders
- * everything, but only the metadata-dependent sections wait
- * for {@link useGameMetadata} — install state via
- * {@link useGameInfo} drives Header / Metadata immediately.
+ *   1. CompatRow — Deck-compat badge · Details / Synopsis /
+ *      Install-Uninstall-Cancel buttons · genre tags.
+ *   2. InfoRow — store icon + title + Size · Developer ·
+ *      Publisher · Released · Metacritic, inline in a dark card.
+ *   3. SynopsisSection — toggled by the Synopsis button.
+ *   4. NavButtons — Store Page / DLC / Community / Points /
+ *      Discussions / Guides / Support.
+ *
+ * No header strip, no cover, no in-panel view-mode toggle: the
+ * native Steam header above the panel already shows the hero
+ * image and title, and the view-mode toggle lives in the QAM
+ * settings tab ({@link GameDetailsViewModeToggle}). When the QAM
+ * toggle is set to `compact`, the panel returns null entirely
+ * (matches staging's "simple" semantics).
  */
-import { FC, useState } from "react";
-import { Focusable, Spinner } from "@decky/ui";
-import { useTranslation } from "react-i18next";
+import { FC, useCallback, useState } from "react";
+import { Focusable } from "@decky/ui";
 import { useGameInfo } from "../../hooks/useGameInfo";
 import { useGameMetadata } from "../../hooks/useGameMetadata";
 import { useViewMode } from "../../hooks/useViewMode";
-import { GameInfoHeader } from "./GameInfoHeader";
+import { injectGameToAppinfo } from "../../lib/steam-bridge/app-store-patcher";
 import { GameInfoCompatRow } from "./GameInfoCompatRow";
 import { GameInfoInfoRow } from "./GameInfoInfoRow";
-import { GameInfoMetadata } from "./GameInfoMetadata";
 import { GameInfoSynopsisSection } from "./GameInfoSynopsisSection";
 import { GameInfoNavButtons } from "./GameInfoNavButtons";
-import { GameInfoScores } from "./GameInfoScores";
 
 interface Props {
   appId: number;
@@ -58,61 +56,47 @@ const PANEL_FOCUS_CSS = `
 `;
 
 export const GameInfoPanel: FC<Props> = ({ appId }) => {
-  const { t } = useTranslation();
-  const { data: game, loading, error } = useGameInfo(appId);
+  const { data: game } = useGameInfo(appId);
   const { data: meta } = useGameMetadata(appId);
   const { mode } = useViewMode();
   const [synopsisOpen, setSynopsisOpen] = useState(false);
 
-  if (loading) {
-    return (
-      <div style={{ padding: 16, textAlign: "center" }}>
-        <Spinner />
-      </div>
-    );
-  }
-  if (error) {
-    return (
-      <div style={{ padding: 16, color: "#f87171" }}>
-        {t("info.error", { message: error.message })}
-      </div>
-    );
-  }
-  if (!game) return null;
+  const onPanelActivate = useCallback(() => {
+    void injectGameToAppinfo(appId);
+  }, [appId]);
+
+  // QAM-driven hide: matches staging's "simple" mode (panel absent).
+  if (mode === "compact") return null;
+
+  // Wait for both fetches before rendering anything — staging's
+  // panel has no transitional / spinner / error UI, and a partial
+  // render would flash the wrong layout.
+  if (!game || !meta) return null;
 
   return (
     <>
       <style>{PANEL_FOCUS_CSS}</style>
       <Focusable
         flow-children="column"
-        onActivate={() => {}}
+        onActivate={onPanelActivate}
         style={{
           display: "flex",
           flexDirection: "column",
-          gap: mode === "compact" ? 8 : 16,
+          gap: 16,
           padding: 12,
         }}
       >
-        <GameInfoHeader game={game} mode={mode} />
-        {mode === "full" && (
-          <>
-            {meta && (
-              <GameInfoCompatRow
-                appId={appId}
-                meta={meta}
-                synopsisOpen={synopsisOpen}
-                onToggleSynopsis={() => setSynopsisOpen((v) => !v)}
-              />
-            )}
-            {meta && <GameInfoInfoRow game={game} meta={meta} />}
-            <GameInfoMetadata game={game} mode={mode} />
-            {synopsisOpen && meta?.description && (
-              <GameInfoSynopsisSection description={meta.description} />
-            )}
-            {meta && <GameInfoNavButtons meta={meta} />}
-            <GameInfoScores game={game} />
-          </>
+        <GameInfoCompatRow
+          appId={appId}
+          meta={meta}
+          synopsisOpen={synopsisOpen}
+          onToggleSynopsis={() => setSynopsisOpen((v) => !v)}
+        />
+        <GameInfoInfoRow game={game} meta={meta} />
+        {synopsisOpen && meta.description && (
+          <GameInfoSynopsisSection description={meta.description} />
         )}
+        <GameInfoNavButtons meta={meta} />
       </Focusable>
     </>
   );

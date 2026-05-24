@@ -58,7 +58,9 @@ def _log_batch_result(
                 )
 
 
-def _emit_artwork_phase_done(bus: Any, total: int) -> None:
+def _emit_artwork_phase_done(
+    bus: Any, total: int, sync_kwargs: dict[str, Any] | None = None,
+) -> None:
     """Fire-and-forget ``POST_SYNC_PHASE_CHANGED(phase='artwork', active=False)``.
 
     Reused from the batch's done-callback (success path) *and*
@@ -66,22 +68,29 @@ def _emit_artwork_phase_done(bus: Any, total: int) -> None:
     paths). Without an emit on skip, ``SyncService._post_sync_pending``
     keeps ``"artwork"`` forever — ``mark_complete()`` never fires
     and the progress bar stalls below 100%.
+
+    Forwards ``sync_kwargs`` so the downstream phase listener
+    (CompatibilityService) keeps access to the original
+    SYNC_COMPLETE payload — same pattern MetadataService uses to
+    hand the kwargs to us.
     """
     if bus is None:
         return
     _track(asyncio.ensure_future(bus.emit(
         Events.POST_SYNC_PHASE_CHANGED,
         phase="artwork", active=False, total=total, done=total,
+        sync_kwargs=sync_kwargs or {},
     )))
 
 
 def _on_artwork_batch_done(
     future: asyncio.Future[list[Any]], bus: Any,
+    sync_kwargs: dict[str, Any] | None = None,
 ) -> None:
     """Done callback: log the batch result + emit POST_SYNC_PHASE_CHANGED."""
     _log_batch_result(future, "[ArtworkService]")
     total = len(future.result() if not future.cancelled() else [])
-    _emit_artwork_phase_done(bus, total)
+    _emit_artwork_phase_done(bus, total, sync_kwargs)
 
 # Store id → SteamGridDB title for auth shortcuts. SGDB has art
 # for "Amazon Games", not for "amazon" or "Amazon Games Sign-In".
@@ -169,48 +178,63 @@ class _EventHandlersMixin:
             self.fetch_artwork(app_id, store, "auth", sgdb_title)
         ))
 
-    @subscribe(Events.SYNC_COMPLETE)
-    async def _on_sync_complete(self: Any, **kwargs: Any) -> None:
-        """Bulk-fetch artwork for every synced game missing art.
+    @subscribe(Events.POST_SYNC_PHASE_CHANGED)
+    async def _on_metadata_phase_done(self: Any, **kwargs: Any) -> None:
+        """Bulk-fetch artwork once MetadataService has finished its phase.
 
-        Fires once per sync, spawns a background batch that runs
-        every game through ``fetch_artwork`` concurrently (rate-
-        limited by the semaphore inside the service). Progress
-        and completion are logged so the Decky log shows forward
-        motion on large libraries.
+        Previously subscribed directly to ``SYNC_COMPLETE``, which
+        meant Artwork, Metadata, and Compatibility all hit Steam's
+        ``storesearch`` endpoint in parallel for every game (3×N
+        calls) and triggered the upstream rate-limit. Steam started
+        returning empty ``items`` for half of them, so
+        ``MetadataService.fetch_appdetails_for_game`` (which needs
+        the real Steam AppID) silently produced ``None`` for every
+        game and wrote nothing to ``steam_metadata_cache``.
 
-        Emits ``POST_SYNC_PHASE_CHANGED`` on completion — even on
-        skip paths (no games / no grid_dir / no tasks / artwork
-        explicitly skipped). Without an emit on skip,
-        ``SyncService._post_sync_pending`` strands ``"artwork"``
-        and ``mark_complete()`` never fires.
+        Switching the trigger to MetadataService's phase-done event
+        serialises the three services: Metadata runs alone (no
+        contention, populates the ``steam_real_appid`` cache), then
+        Artwork starts and reads from that cache for its Phase-3
+        Steam-CDN lookup, then Compat starts and reads from the
+        same cache for its ProtonDB lookup. Total wall-clock is
+        ``T_m + T_a + T_c`` instead of ``max(T_m, T_a, T_c)`` but
+        the *result* is actually correct.
 
-        Payload contract: SyncService forwards two flags from
-        ``SyncService.sync_all`` — ``fetch_artwork`` (False → skip
-        the phase entirely) and ``resync_artwork`` (True → bypass
-        the on-disk ``has_artwork`` skip and clear the SGDB
-        failure-cooldown cache so previously-failed games are
-        retried).
+        The handler filters for the precise phase + ``active=False``
+        flank so it only fires on completion, not on the initial
+        start emit.
+
+        Payload contract: ``sync_kwargs`` carries the original
+        SYNC_COMPLETE payload (``games``, ``fetch_artwork``,
+        ``resync_artwork``) — MetadataService forwards it through
+        its phase emit so we keep the same downstream contract.
+        Falls back to ``kwargs`` directly for compatibility with
+        any code path that hasn't been migrated yet.
         """
-        games = kwargs.get("games", [])
+        if kwargs.get("phase") != "metadata":
+            return
+        if kwargs.get("active") is not False:
+            return
+        sync_kwargs = kwargs.get("sync_kwargs") or {}
+        games = sync_kwargs.get("games") or kwargs.get("games", [])
         bus = getattr(self, "_bus", None)
-        fetch_artwork = bool(kwargs.get("fetch_artwork", True))
-        resync_artwork = bool(kwargs.get("resync_artwork", False))
+        fetch_artwork = bool(sync_kwargs.get("fetch_artwork", True))
+        resync_artwork = bool(sync_kwargs.get("resync_artwork", False))
         if not fetch_artwork:
             logger.info(
                 "[ArtworkService] fetch_artwork=False — skipping phase",
             )
-            _emit_artwork_phase_done(bus, 0)
+            _emit_artwork_phase_done(bus, 0, sync_kwargs)
             return
         if not games:
-            _emit_artwork_phase_done(bus, 0)
+            _emit_artwork_phase_done(bus, 0, sync_kwargs)
             return
         grid_dir = getattr(self, "_grid_dir", None)
         if not grid_dir:
             logger.warning(
                 "[ArtworkService] _grid_dir unset — cannot save covers",
             )
-            _emit_artwork_phase_done(bus, 0)
+            _emit_artwork_phase_done(bus, 0, sync_kwargs)
             return
         # Resync-artwork: clear the failure cooldown cache so
         # previously-failed games aren't silently skipped. The
@@ -231,7 +255,7 @@ class _EventHandlersMixin:
                     )
         total = len(games)
         logger.info(
-            "[ArtworkService] SYNC_COMPLETE → checking artwork "
+            "[ArtworkService] phase=metadata done → checking artwork "
             "for %d games (grid_dir=%s, resync=%s)",
             total, grid_dir, resync_artwork,
         )
@@ -240,13 +264,16 @@ class _EventHandlersMixin:
             for g in games
         ]
         if not tasks:
-            _emit_artwork_phase_done(bus, 0)
+            _emit_artwork_phase_done(bus, 0, sync_kwargs)
             return
         fut = asyncio.ensure_future(
             asyncio.gather(*tasks, return_exceptions=True),
         )
+        # Bind sync_kwargs into the done callback so CompatibilityService
+        # (which now waits on phase="artwork" done) receives the original
+        # SYNC_COMPLETE payload.
         fut.add_done_callback(
-            lambda f: _on_artwork_batch_done(f, bus)
+            lambda f, sk=sync_kwargs: _on_artwork_batch_done(f, bus, sk)
         )
         _track(fut)
         # Stash on ``self`` so the SYNC_CANCELLED handler can
