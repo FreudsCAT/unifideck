@@ -26,7 +26,6 @@ appropriate sub-component.
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 from pathlib import Path
@@ -238,7 +237,6 @@ class EpicStore(StoreBase):
         # auth attempt would otherwise auto-login and bypass the
         # OAuth redirect entirely.
         edge.clear_store_cookies("epicgames.com")
-        await self._ensure_auth_shortcut()
         return cast("AuthResult", await self._auth.start_auth())
 
     async def complete_auth(self, code: str = "", **kwargs: Any) -> AuthResult:
@@ -303,20 +301,3 @@ class EpicStore(StoreBase):
     async def get_game_size(self, game_id: str) -> int | None:
         """Get game size."""
         return await self._updates.get_game_size(game_id)
-
-    async def _ensure_auth_shortcut(self) -> None:
-        """Ensure auth shortcut."""
-        if self._shortcut_service is None:
-            logger.debug("[EpicStore] no shortcut_service injected; skipping auth shortcut creation")
-            return
-        launcher = str(Path(self._plugin_dir or "") / "bin" / "unifideck-launcher")
-        if not await asyncio.to_thread(lambda: Path(launcher).is_file()):
-            logger.warning("[EpicStore] launcher not found at %s", launcher)
-            return
-        result = await self._shortcut_service.add_auth_shortcut(
-            store="epic",
-            launcher_path=launcher,
-            title="Epic Games Sign-In",
-        )
-        if not result.success:
-            logger.warning("[EpicStore] add_auth_shortcut failed: %s", result.error)

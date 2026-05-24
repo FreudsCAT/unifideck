@@ -24,7 +24,6 @@ appropriate sub-component.
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 from pathlib import Path
@@ -223,7 +222,6 @@ class AmazonStore(StoreBase):
                 store="amazon",
             )
         edge.clear_store_cookies("amazon.com")
-        await self._ensure_auth_shortcut()
         return cast("AuthResult", await self._auth.start_auth())
 
     async def complete_auth(self, code: str = "", **kwargs: Any) -> AuthResult:
@@ -301,29 +299,3 @@ class AmazonStore(StoreBase):
     async def get_official_url(self, game_id: str) -> str | None:
         """Get official URL."""
         return await self._library.get_official_url(game_id)
-
-    async def _ensure_auth_shortcut(self) -> None:
-        """Ensure auth shortcut."""
-        if self._shortcut_service is None:
-            logger.debug(
-                "[AmazonStore] no shortcut_service "
-                "injected; skipping auth shortcut creation",
-            )
-            return
-        launcher = str(Path(self._plugin_dir or "") / "bin" / "unifideck-launcher")
-        if not await asyncio.to_thread(lambda: Path(launcher).is_file()):
-            logger.warning(
-                "[AmazonStore] launcher not found at %s",
-                launcher,
-            )
-            return
-        result = await self._shortcut_service.add_auth_shortcut(
-            store="amazon",
-            launcher_path=launcher,
-            title="Amazon Games Sign-In",
-        )
-        if not result.success:
-            logger.warning(
-                "[AmazonStore] add_auth_shortcut failed: %s",
-                result.error,
-            )

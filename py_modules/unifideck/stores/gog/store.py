@@ -221,7 +221,6 @@ class GOGStore(StoreBase):
                 store="gog",
             )
         self._edge.clear_store_cookies("gog.com")
-        await self._ensure_auth_shortcut()
         return cast("AuthResult", await self._auth.start_auth())
 
     async def complete_auth(self, code: str = "", **kwargs: Any) -> AuthResult:
@@ -378,31 +377,6 @@ class GOGStore(StoreBase):
                 path,
             )
         return path
-
-    async def _ensure_auth_shortcut(self) -> None:
-        """Ensure auth shortcut."""
-        if self._shortcut_service is None:
-            logger.debug(
-                "[GOGStore] no shortcut_service; skipping auth shortcut creation",
-            )
-            return
-        launcher = str(Path(self._plugin_dir or "") / "bin" / "unifideck-launcher")
-        if not await asyncio.to_thread(lambda: Path(launcher).is_file()):
-            logger.warning(
-                "[GOGStore] launcher not found at %s",
-                launcher,
-            )
-            return
-        result = await self._shortcut_service.add_auth_shortcut(
-            store="gog",
-            launcher_path=launcher,
-            title="GOG Sign-In",
-        )
-        if not result.success:
-            logger.warning(
-                "[GOGStore] add_auth_shortcut failed: %s",
-                result.error,
-            )
 
     def _browser_monitor_from_auth(self) -> OAuthBrowserMonitor | None:
         """Browser monitor from auth."""

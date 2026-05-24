@@ -105,11 +105,16 @@ def _self_heal_executable_bits() -> None:
 
 
 async def _self_heal_auth_shortcuts(shortcut_svc: Any) -> None:
-    """Scan and upgrade any legacy auth shortcuts in shortcuts.vdf to point at the wrapper.
+    """Delete leftover OAuth auth shortcuts from shortcuts.vdf.
 
-    Ensures that GOG, Epic, Amazon, and Microsoft auth shortcuts are pointing to the
-    canonical unifideck-launcher wrapper rather than dispatcher.py, and updates
-    their AppID values to reflect the new path so they match Steam's internal CRC32 algorithm.
+    GOG / Epic / Amazon / Microsoft no longer keep a persistent
+    auth shortcut — the frontend creates an ephemeral one through
+    ``SteamClient.Apps.AddShortcut`` for each connect, used once,
+    then removed by the 15-second cleanup. Persistent entries from
+    older plugin versions still exist on disk; this sweep removes
+    them on startup so every store routes through the temp-shortcut
+    path uniformly. Ubisoft's ``upc-auth`` row is excluded — its
+    auth flow legitimately reuses a persistent shortcut.
     """
     try:
         await shortcut_svc._load_shortcuts()
@@ -120,66 +125,36 @@ async def _self_heal_auth_shortcuts(shortcut_svc: Any) -> None:
         if not isinstance(shortcuts_dict, dict):
             return
 
-        changed = False
-        launcher_path = shortcut_svc._launcher_path
-        if not launcher_path:
-            logger.warning("[Startup] shortcut self-healing skipped: _launcher_path is empty")
-            return
+        stale_auth_tags = {"auth-gog", "auth-epic", "auth-amazon", "auth-microsoft"}
+        keys_to_delete: list[str] = []
 
-        # Canonical configs for each store's auth shortcut
-        auth_configs = {
-            "gog":       {"title": "GOG Sign-In",          "tag": "auth-gog"},
-            "epic":      {"title": "Epic Games Sign-In",   "tag": "auth-epic"},
-            "amazon":    {"title": "Amazon Games Sign-In", "tag": "auth-amazon"},
-            "microsoft": {"title": "Microsoft Sign-In",    "tag": "auth-microsoft"},
-        }
-
-        for key, entry in list(shortcuts_dict.items()):
+        for key, entry in shortcuts_dict.items():
             if not isinstance(entry, dict):
                 continue
             tags = entry.get("tags", {})
             if not isinstance(tags, dict):
                 continue
             tag_values = list(tags.values())
-            has_unifideck_tag = any(t == "Unifideck" for t in tag_values)
-            if not has_unifideck_tag:
+            matched_tag = next(
+                (t for t in tag_values if t in stale_auth_tags), None,
+            )
+            if matched_tag is None:
                 continue
+            logger.info(
+                "[Startup] Removing leftover auth shortcut %s (key=%s, AppName=%r)",
+                matched_tag, key, entry.get("AppName"),
+            )
+            keys_to_delete.append(key)
 
-            for store, cfg in auth_configs.items():
-                if any(t == cfg["tag"] for t in tag_values):
-                    # Check if Exe, LaunchOptions, or AppID need correction
-                    current_exe = entry.get("Exe") or entry.get("exe")
-                    current_opts = entry.get("LaunchOptions")
-                    expected_opts = f"{store}:{'ms' if store == 'microsoft' else store}-auth UNIFIDECK_{store.upper()}_ACTION=auth"
-                    
-                    # We compute the canonical appid based on launcher_path and title
-                    expected_appid = shortcut_svc.generate_app_id(launcher_path, cfg["title"])
+        for key in keys_to_delete:
+            del shortcuts_dict[key]
 
-                    # Determine if we need to update
-                    needs_update = (
-                        current_exe != launcher_path
-                        or current_opts != expected_opts
-                        or entry.get("appid") != expected_appid
-                        or "Exe" not in entry  # Ensure uppercase key 'Exe' is present
-                    )
-
-                    if needs_update:
-                        logger.info(
-                            "[Startup] Repairing stale/legacy auth shortcut for %s (key=%s): "
-                            "exe=%s -> %s, appid=%s -> %s",
-                            store, key, current_exe, launcher_path, entry.get("appid"), expected_appid
-                        )
-                        # Set canonical values
-                        entry["Exe"] = launcher_path
-                        if "exe" in entry:
-                            del entry["exe"]  # Standardise on uppercase Exe
-                        entry["LaunchOptions"] = expected_opts
-                        entry["appid"] = expected_appid
-                        changed = True
-
-        if changed:
+        if keys_to_delete:
             await shortcut_svc._save_all()
-            logger.info("[Startup] Stale/legacy auth shortcuts successfully repaired and saved to shortcuts.vdf")
+            logger.info(
+                "[Startup] Removed %d leftover auth shortcut(s) from shortcuts.vdf",
+                len(keys_to_delete),
+            )
     except Exception as e:
-        logger.exception("[Startup] Failed to reconcile/repair stale auth shortcuts: %s", e)
+        logger.exception("[Startup] Failed to sweep leftover auth shortcuts: %s", e)
 
