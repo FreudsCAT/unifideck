@@ -765,6 +765,8 @@
   "pickStorage": {
     "title": "Install Location",
     "customOption": "Choose Another Location...",
+    "customLabel": "Custom Location",
+    "change": "Change...",
     "gameSize": "Install Size"
   }
 }

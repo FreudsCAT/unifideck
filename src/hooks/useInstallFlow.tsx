@@ -62,6 +62,7 @@ export function useInstallFlow(bridge: SteamBridgeShape): UseInstallFlowResult {
     async (game: Game): Promise<Result | null> => {
       setWorking(true);
       try {
+        console.log("[useInstallFlow] opening storage picker for", game.title);
         const picked = await pickStorageForInstall(
           game.title,
           game.size_bytes,
@@ -69,21 +70,26 @@ export function useInstallFlow(bridge: SteamBridgeShape): UseInstallFlowResult {
           defaultLocation,
           setCustomPath,
         );
-        if (!picked) return null;
-        const { storage } = picked;
+        if (!picked) {
+          console.log("[useInstallFlow] storage picker cancelled");
+          return null;
+        }
+        const { storage, customPath } = picked;
+        console.log("[useInstallFlow] picked storage=%s customPath=%s", storage, customPath ?? "none");
 
         if (game.store !== "gog") {
-          return await actions.install(game.store, game.id, { storage });
+          console.log("[useInstallFlow] installing %s/%s with storage=%s", game.store, game.store_game_id, storage);
+          return await actions.install(game.store, game.store_game_id, { storage });
         }
         const langs = await getGogLangs(game.id).catch(() => null);
         const list = langs?.languages ?? [];
         if (list.length <= 1) {
           const language = list[0];
-          return await actions.install(game.store, game.id, { language, storage });
+          return await actions.install(game.store, game.store_game_id, { language, storage });
         }
         const language = await pickLanguageViaModal(game.title, list);
         if (!language) return null;
-        return await actions.install(game.store, game.id, { language, storage });
+        return await actions.install(game.store, game.store_game_id, { language, storage });
       } finally {
         setWorking(false);
       }

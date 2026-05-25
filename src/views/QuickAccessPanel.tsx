@@ -24,7 +24,7 @@ import { DialogButton } from "@decky/ui";
 import { useTranslation } from "react-i18next";
 import { useSync } from "../contexts/SyncContext";
 import {
-  StoreConnections, LibrarySync, StorageSettings, LanguageSelector,
+  StoreConnections, LibrarySync, LanguageSelector,
   GameDetailsViewModeToggle, CleanupSection,
 } from "../components/settings";
 import { DownloadsTab } from "../components/downloads";
@@ -89,10 +89,7 @@ export const QuickAccessPanel: FC = () => {
         </>
       )}
       {tab === "downloads" && (
-        <>
-          <DownloadsTab />
-          <StorageSettings />
-        </>
+        <DownloadsTab />
       )}
     </div>
   );

@@ -82,7 +82,10 @@ class EpicInstaller:
         progress_cb: ProgressCallback | None = None,
     ) -> InstallResult:
         """Install game."""
+        logger.info("[EpicInstall] install_game game_id=%s base_path=%s cli_path=%s",
+                     game_id, base_path, self._cli_path)
         if not self._cli_path:
+            logger.error("[EpicInstall] legendary CLI not found at %s", self._cli_path)
             return InstallResult(
                 success=False,
                 error="legendary_not_found",
@@ -93,6 +96,7 @@ class EpicInstaller:
         try:
             await asyncio.to_thread(lambda: Path(base).mkdir(parents=True, exist_ok=True))
         except OSError as e:
+            logger.exception("[EpicInstall] mkdir failed: %s", base)
             return InstallResult(
                 success=False,
                 error=f"mkdir_failed: {e}",
@@ -104,7 +108,9 @@ class EpicInstaller:
             store="epic",
             game_id=game_id,
         )
+        logger.info("[EpicInstall] running legendary install %s -> %s", game_id, base)
         rc = await self._run_install(base, game_id, progress_cb)
+        logger.info("[EpicInstall] legendary exit_code=%d", rc)
         if rc != 0:
             await self._bus.emit(
                 Events.DOWNLOAD_FAILED,
@@ -124,6 +130,7 @@ class EpicInstaller:
     async def _run_install(self, base: str, game_id: str, progress_cb: ProgressCallback | None) -> int:
         """Run install."""
         cmd = self._build_install_cmd(base, game_id)
+        logger.info("[EpicInstall] executing: %s", " ".join(cmd))
         proc = await asyncio.create_subprocess_exec(
             *cmd,
             stdout=asyncio.subprocess.PIPE,

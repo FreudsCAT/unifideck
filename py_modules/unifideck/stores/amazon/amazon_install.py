@@ -79,6 +79,7 @@ class AmazonInstaller:
         progress_cb: ProgressCallback | None = None,
     ) -> InstallResult:
         """Install game."""
+        logger.info("[AmazonInstall] install_game game_id=%s base_path=%s", game_id, base_path)
         if not self._cli_path:
             return InstallResult(
                 success=False,

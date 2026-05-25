@@ -50,6 +50,7 @@ export interface GameMetadata {
 /** Universal `Game` representation aggregated from any store. */
 export interface Game {
   id: string;
+  store_game_id: string;
   title: string;
   store: StoreId;
   is_installed: boolean;

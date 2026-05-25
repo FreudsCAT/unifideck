@@ -210,42 +210,45 @@ class UIRPCMixin:
             sort_by: ``"name"`` (only sort supported today).
 
         Returns:
-            ``{success, path, directories: [str]}``. On any
-            OS-level error the response is non-success with
-            an ``error`` field — callers don't need to
-            handle exceptions.
+            ``{path, directories: [str]}``.
+
+        Raises:
+            RpcError: on any OS-level or permission error.
         """
         try:
             resolved = await asyncio.to_thread(_resolve_user_path, path)
             is_dir = await asyncio.to_thread(Path(resolved).is_dir)
             if not is_dir:
-                return {
-                    "success": False,
-                    "error": "not_a_directory",
-                    "path": resolved,
-                    "directories": [],
-                }
+                raise RpcError("not_a_directory", path=resolved)
             entries = await asyncio.to_thread(
                 _collect_subdirs, resolved, show_hidden, sort_by,
             )
-            return {
-                "success": True,
-                "path": resolved,
-                "directories": entries,
-            }
+            return {"path": resolved, "directories": entries}
         except PermissionError as e:
-            return {
-                "success": False,
-                "error": "permission_denied",
-                "path": path,
-                "directories": [],
-                "detail": str(e),
-            }
+            raise RpcError("permission_denied", path=path, detail=str(e)) from e
         except OSError as e:
-            return {
-                "success": False,
-                "error": "os_error",
-                "path": path,
-                "directories": [],
-                "detail": str(e),
-            }
+            raise RpcError("os_error", path=path, detail=str(e)) from e
+
+    async def create_directory(self, path: str) -> Any:
+        """Create a new directory at ``path``.
+
+        Used by the frontend ``StoragePathPicker`` new-folder
+        feature. Creates parent directories as needed.
+
+        Returns:
+            ``{"path": resolved}``.
+
+        Raises:
+            RpcError: on ``FileExistsError``, ``PermissionError``,
+                or any other ``OSError``.
+        """
+        resolved = await asyncio.to_thread(_resolve_user_path, path)
+        try:
+            await asyncio.to_thread(Path(resolved).mkdir, parents=True, exist_ok=False)
+        except FileExistsError as e:
+            raise RpcError("directory_exists", path=resolved) from e
+        except PermissionError as e:
+            raise RpcError("permission_denied", path=resolved) from e
+        except OSError as e:
+            raise RpcError("os_error", path=resolved, detail=str(e)) from e
+        return {"path": resolved}

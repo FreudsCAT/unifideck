@@ -12,7 +12,6 @@
  */
 import { FC, useCallback, useEffect, useRef, useState } from "react";
 import {
-  ButtonItem,
   DialogButton,
   Dropdown,
   DropdownOption,
@@ -29,7 +28,7 @@ import { rpcRoutes } from "../../api/rpc-routes";
 /** Props. */
 interface Props {
   startPath: string;
-  onConfirm: (path: string) => Promise<void> | void;
+  onConfirm: (path: string, freeSpaceGb: number) => void;
 }
 
 /** get_browseable_devices response item. */
@@ -40,23 +39,20 @@ interface BrowseableDevice {
   free_space_gb: number;
 }
 
-/** get_browseable_devices response envelope. */
+/** get_browseable_devices response envelope (unwrapped by useRPC). */
 interface BrowseableDevicesResponse {
-  success: boolean;
   devices: BrowseableDevice[];
 }
 
-/** list_directory response. */
+/** list_directory response (unwrapped by useRPC). */
 interface ListResponse {
-  success: boolean;
   path: string;
   directories: string[];
 }
 
-/** create_directory response. */
+/** create_directory response (unwrapped by useRPC). */
 interface CreateDirResponse {
-  success: boolean;
-  error?: string;
+  path: string;
 }
 
 /* ---- inline SVG icons ---- */
@@ -139,7 +135,7 @@ export const StoragePathPicker: FC<Props> = ({ startPath, onConfirm }) => {
     (async () => {
       try {
         const r = await getDevices();
-        if (!cancelled && r.success) setDevices(r.devices);
+        if (!cancelled) setDevices(r.devices);
       } catch {
         console.warn("[StoragePathPicker] get_browseable_devices unavailable");
       } finally {
@@ -153,11 +149,9 @@ export const StoragePathPicker: FC<Props> = ({ startPath, onConfirm }) => {
     setLoading(true);
     try {
       const r = await listDir(target, showHiddenRef.current, sortByRef.current);
-      if (r.success) {
-        setPath(r.path);
-        setDirs(r.directories);
-        setUnsupported(false);
-      }
+      setPath(r.path);
+      setDirs(r.directories);
+      setUnsupported(false);
     } catch {
       console.warn("[StoragePathPicker] list_directory unavailable");
       setUnsupported(true);
@@ -184,11 +178,13 @@ export const StoragePathPicker: FC<Props> = ({ startPath, onConfirm }) => {
     const name = newFolderName.trim();
     if (!name) return;
     const fullPath = `${path}/${name}`;
-    const r = await createDir(fullPath);
-    if (r.success) {
+    try {
+      await createDir(fullPath);
       setNewFolderName("");
       setCreatingFolder(false);
       await fetchDirectory(fullPath);
+    } catch {
+      // useRPC surfaces the error — no separate toast needed here.
     }
   };
 
@@ -203,6 +199,10 @@ export const StoragePathPicker: FC<Props> = ({ startPath, onConfirm }) => {
   const currentDevicePath = devices.find(
     (d) => path === d.path || path.startsWith(d.path + "/"),
   )?.path;
+
+  const currentFreeSpace = devices.find(
+    (d) => path === d.path || path.startsWith(d.path + "/"),
+  )?.free_space_gb ?? 0;
 
   /* Sort options with translated labels. */
   const sortOptions: DropdownOption[] = SORT_OPTIONS.map((o) => ({
@@ -322,13 +322,19 @@ export const StoragePathPicker: FC<Props> = ({ startPath, onConfirm }) => {
 
       {/* Action buttons */}
       <Focusable style={{ display: "flex", gap: 8 }}>
-        <ButtonItem layout="below" onClick={() => onConfirm(path)}>
+        <DialogButton
+          onClick={() => onConfirm(path, currentFreeSpace)}
+          style={{ flex: 1, fontSize: 13 }}
+        >
           {t("storageSettings.selectFolder")}
-        </ButtonItem>
+        </DialogButton>
         {!creatingFolder && (
-          <ButtonItem layout="below" onClick={() => setCreatingFolder(true)}>
+          <DialogButton
+            onClick={() => setCreatingFolder(true)}
+            style={{ flex: 1, fontSize: 13 }}
+          >
             {t("storageSettings.newFolder")}
-          </ButtonItem>
+          </DialogButton>
         )}
       </Focusable>
     </div>

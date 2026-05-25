@@ -19,7 +19,6 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-import shutil
 from pathlib import Path
 from typing import Any
 
@@ -44,37 +43,102 @@ class StorageRPCMixin:
     config: Any
 
     async def get_storage_locations(self) -> Any:
-        """Return install locations + the active default."""
-        from unifideck.utils.paths import get_all_game_directories
+        """Return install locations — one entry per physical device.
 
+        Device-level enumeration: reads ``/proc/mounts`` to
+        discover unique writable devices (by ``st_dev``), creates
+        a ``Games/`` subdirectory on each, and returns one entry
+        per device plus an optional custom-path override.
+
+        No per-store subdirectory iteration — the frontend
+        ``PickStorageModal`` shows exactly one row per device.
+        """
+        home = str(Path.home())
+        home_dev = _device_id(home)
         config = getattr(self, "config", None)
+
         custom_path: str | None = None
         if config is not None:
             try:
                 custom_path = config.get("download.custom_path", None)
             except Exception:
                 custom_path = None
+
         locations: list[dict[str, Any]] = []
-        for path in get_all_game_directories(config):
-            try:
-                usage = shutil.disk_usage(path)
-            except OSError:
-                continue
-            loc_id = _classify_storage_location(path, custom_path)
+        seen_devices: set[int] = set()
+
+        # ── Internal storage ──────────────────────────────
+        games_root = str(Path("~/Games").expanduser())
+        _ensure_dir(games_root)
+        locations.append({
+            "id": "internal",
+            "label": "Internal storage",
+            "path": games_root,
+            "available": True,
+            "free_space_gb": _free_gb(games_root),
+        })
+        seen_devices.add(home_dev)
+
+        # ── External storage (/proc/mounts) ───────────────
+        try:
+            with open("/proc/mounts") as f:
+                for line in f:
+                    parts = line.split()
+                    if len(parts) < 3:
+                        continue
+                    mp = parts[1]
+                    fstype = parts[2]
+                    if fstype in _SKIP_FSTYPES:
+                        logger.debug("[storage] skipping mount %s (fstype=%s)", mp, fstype)
+                        continue
+                    if mp.startswith(_VIRTUAL_PREFIXES):
+                        logger.debug("[storage] skipping mount %s (virtual prefix)", mp)
+                        continue
+                    if not os.path.isdir(mp):
+                        continue
+                    dev = _device_id(mp)
+                    if dev == 0 or dev == home_dev or dev in seen_devices:
+                        continue
+                    if not _is_writable(mp):
+                        continue
+                    logger.info("[storage] external mount candidate: %s (fstype=%s dev=%s)", mp, fstype, dev)
+                    # Use <mount>/Games, creating if needed.
+                    games_path = os.path.join(mp, "Games")
+                    if not os.path.isdir(games_path):
+                        try:
+                            os.makedirs(games_path, exist_ok=True)
+                        except OSError:
+                            games_path = mp  # fall back to mount root
+                    name = os.path.basename(mp) or mp
+                    locations.append({
+                        "id": "sdcard",
+                        "label": name,
+                        "path": games_path,
+                        "available": True,
+                        "free_space_gb": _free_gb(mp),
+                    })
+                    seen_devices.add(dev)
+        except OSError as e:
+            logger.debug("[storage] /proc/mounts read failed: %s", e)
+
+        # ── Custom path override ───────────────────────────
+        if custom_path:
             locations.append({
-                "id": loc_id,
-                "label": _storage_label(loc_id, path),
-                "path": path,
+                "id": "custom",
+                "label": custom_path,
+                "path": custom_path,
                 "available": True,
-                "free_space_gb": round(usage.free / (1024 ** 3), 1),
+                "free_space_gb": _free_gb(custom_path),
             })
+
         default = "internal"
         if config is not None:
             try:
                 default = config.get("download.default_location", "internal")
             except Exception as e:
                 logger.debug("[storage] reading default_location failed: %s", e)
-        return {"success": True, "locations": locations, "default": default}
+
+        return {"locations": locations, "default": default}
 
     async def get_browseable_devices(self) -> Any:
         """Return mount-points of every writable storage device.
@@ -124,7 +188,7 @@ class StorageRPCMixin:
         except OSError as e:
             logger.debug("[storage] /proc/mounts read failed: %s", e)
 
-        return {"success": True, "devices": devices}
+        return {"devices": devices}
 
     async def set_default_storage_location(self, loc_id: str) -> Any:
         """Persist the user's preferred default storage location."""
@@ -178,6 +242,11 @@ def _free_gb(path: str) -> float:
         return 0.0
 
 
+def _ensure_dir(path: str) -> None:
+    """Create a directory if it doesn't exist. Idempotent."""
+    Path(path).mkdir(parents=True, exist_ok=True)
+
+
 def _device_id(path: str) -> int:
     """Return the ``st_dev`` of *path*, or 0 on error."""
     try:
@@ -202,19 +271,3 @@ def _mount_id(mp: str) -> str:
 # Two paths on the same physical device share the same ``st_dev``.
 
 
-def _classify_storage_location(path: str, custom_path: str | None) -> str:
-    """Classify a filesystem path as internal / external / custom."""
-    if custom_path and path.rstrip("/") == custom_path.rstrip("/"):
-        return "custom"
-    if _device_id(path) != _device_id(str(Path.home())):
-        return "sdcard"
-    return "internal"
-
-
-def _storage_label(loc_id: str, path: str) -> str:
-    """Default label for a storage location."""
-    if loc_id == "internal":
-        return "Internal storage"
-    if loc_id == "sdcard":
-        return "SD card"
-    return path

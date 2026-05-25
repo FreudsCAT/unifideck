@@ -309,6 +309,7 @@ class MicrosoftStore(StoreBase):
         **kwargs: Any,
     ) -> InstallResult:
         """Install game."""
+        logger.info("[MicrosoftInstall] install_game game_id=%s base_path=%s", game_id, base_path)
         return InstallResult(
             success=True,
             store="microsoft",

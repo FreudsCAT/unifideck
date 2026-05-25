@@ -64,20 +64,6 @@ DEFAULT_GAMES_ROOT = "~/Games"
 DEFAULT_GAMES_MAP = "~/.local/share/unifideck/games.map"
 
 
-# Mount root for SD cards / external drives on the Steam Deck.
-# Kept for backward compatibility — new code uses /proc/mounts.
-DEFAULT_SD_ROOT = "/run/media"
-# ── Legacy compatibility aliases ──────────────────────────────
-# Keep the old constant names working so legacy modules
-# (utils/__init__.py, accounts/account_manager.py, etc.) that
-# ``from .paths import GAMES_MAP_PATH, DEFAULT_PATHS`` continue
-# to import successfully during the migration window. Both forms
-# resolve to the same expanded value.
-GAMES_MAP_PATH = str(Path(DEFAULT_GAMES_MAP).expanduser())
-DEFAULT_PATHS = {
-    store: str(Path(path).expanduser())
-    for store, path in DEFAULT_INSTALL_DIRS.items()
-}
 
 
 # ══════════════════════════════════════════════════════════════
@@ -85,7 +71,7 @@ DEFAULT_PATHS = {
 # ══════════════════════════════════════════════════════════════
 
 
-def expand(path: str) -> str:
+def _expand(path: str) -> str:
     """Expand ``~`` and ``$VAR`` references in a path string.
 
     Pure function — no filesystem I/O. Returns an absolute path
@@ -100,7 +86,7 @@ def expand(path: str) -> str:
     return str(Path(os.path.expandvars(path)).expanduser())
 
 
-def dedupe_paths(paths: list[str]) -> list[str]:
+def _dedupe_paths(paths: list[str]) -> list[str]:
     """Remove duplicate paths preserving order.
 
     Two paths are considered equal if their normalized form
@@ -147,19 +133,19 @@ def get_all_game_directories(config: ConfigManager | None = None) -> list[str]:
 
     # 1. Root games directory — always available as internal storage.
     #    Create it if missing so internal storage is never empty.
-    games_root = expand(DEFAULT_GAMES_ROOT)
+    games_root = _expand(DEFAULT_GAMES_ROOT)
     _ensure_dir(games_root)
     candidates.append(games_root)
 
     # 2. Per-store install dirs
     for store, default in DEFAULT_INSTALL_DIRS.items():
         path = _cfg(config, f"stores.{store}.install_dir", default)
-        candidates.append(expand(path))
+        candidates.append(_expand(path))
 
     # 3. Custom user path
     custom = get_cfg(config, "download.custom_path", "")
     if custom:
-        candidates.append(expand(custom))
+        candidates.append(_expand(custom))
 
     # 4. External drives — scan every writable non-system mount
     #    from /proc/mounts for Game directories.  No hardcoded
@@ -168,7 +154,7 @@ def get_all_game_directories(config: ConfigManager | None = None) -> list[str]:
 
     # Filter to existing dirs and dedupe
     existing = [p for p in candidates if Path(p).is_dir()]
-    return dedupe_paths(existing)
+    return _dedupe_paths(existing)
 
 
 def _collect_game_dirs(parent_path: Path) -> list[str]:
@@ -272,22 +258,4 @@ def get_games_map_path(config: ConfigManager | None = None) -> str:
     and env vars in the configured path are expanded.
     """
     raw = get_cfg(config, "paths.games_map", DEFAULT_GAMES_MAP)
-    return expand(raw)
-
-
-def ensure_games_map_dir(config: ConfigManager | None = None) -> str | None:
-    """Create the parent directory for games.map if missing.
-
-    Returns the directory path on success, None on failure.
-    Idempotent — safe to call on every plugin start.
-    """
-    path = Path(get_games_map_path(config))
-    parent = path.parent
-    try:
-        parent.mkdir(parents=True, exist_ok=True)
-        return str(parent)
-    except OSError as e:
-        logger.warning(
-            "[paths] mkdir %s failed: %s", parent, e,
-        )
-        return None
+    return _expand(raw)

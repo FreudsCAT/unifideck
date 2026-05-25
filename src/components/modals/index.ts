@@ -23,7 +23,7 @@ export { CloudSaveConflictModal } from "./CloudSaveConflictModal";
 export { AuthSuccessModal } from "./AuthSuccessModal";
 export { GOGLanguageSelectModal } from "./GOGLanguageSelectModal";
 export { ForceSyncModal } from "./ForceSyncModal";
-export { StorageBrowserModal } from "./StorageBrowserModal";
 export { ChromiumInstallModal } from "./ChromiumInstallModal";
 export { PickStorageModal, pickStorageForInstall } from "./PickStorageModal";
+export { StoragePathPicker } from "./StoragePathPicker";
 export { ToastEventListener } from "./ToastEventListener";

@@ -1,19 +1,21 @@
 /**
  * PickStorageModal — install-time storage location selector.
  *
- * Replaces the bare "Are you sure?" confirmation with a
- * Steam-like modal listing every writable device the backend
- * reports, plus a "Choose Another Location..." option that
- * expands an inline `StoragePathPicker`.
- *
- * All storage data is fetched by the caller (`useInstallFlow`)
- * and passed as props — the modal itself makes no RPC queries
- * so it works inside `showModal`'s portal.
+ * Lists every writable device the backend reports as a radio-style
+ * row, plus a "Choose Another Location..." option that expands an
+ * inline `StoragePathPicker`. When the user confirms a folder via
+ * "Use This Folder", the picker collapses and the selected path
+ * becomes a persistent radio option.  Clicking the confirmed row
+ * re-opens the picker.
  */
 import { FC, useCallback, useState } from "react";
-import { ConfirmModal, Focusable, showModal } from "@decky/ui";
+import {
+  ConfirmModal,
+  Focusable,
+  showModal,
+} from "@decky/ui";
 import { useTranslation } from "react-i18next";
-import { StoragePathPicker } from "../settings/StoragePathPicker";
+import { StoragePathPicker } from "./StoragePathPicker";
 import type { StorageLocation, StorageLocationInfo } from "../../types/downloads";
 
 /* ---- Props ---- */
@@ -25,7 +27,7 @@ interface Props {
   defaultLocation: StorageLocation;
   setCustomPath: (path: string) => Promise<boolean>;
   onConfirm: (storage: StorageLocation, customPath?: string) => void;
-  closeModal?: () => void;
+  onCancel: () => void;
 }
 
 /* ---- Helpers ---- */
@@ -34,6 +36,57 @@ function formatSize(bytes: number): string {
   const gb = bytes / 1e9;
   return `${gb.toFixed(1)} GB`;
 }
+
+/* ---- Radio row for a storage location ---- */
+
+const LocationRow: FC<{
+  selected: boolean;
+  onSelect: () => void;
+  label: string;
+  path: string;
+  freeGb: number;
+}> = ({ selected, onSelect, label, path, freeGb }) => (
+  <Focusable
+    onActivate={onSelect}
+    style={{
+      display: "flex",
+      alignItems: "flex-start",
+      gap: 10,
+      padding: "10px 12px",
+      cursor: "pointer",
+    }}
+  >
+    <div
+      style={{
+        width: 16,
+        height: 16,
+        borderRadius: "50%",
+        border: `2px solid ${selected ? "#dadedf" : "#8f98a0"}`,
+        background: selected ? "#dadedf" : "transparent",
+        flexShrink: 0,
+        marginTop: 2,
+      }}
+    />
+    <div style={{ flex: 1, minWidth: 0 }}>
+      <div style={{ fontSize: 13, fontWeight: 600 }}>{label}</div>
+      <div
+        style={{
+          fontSize: 11,
+          color: "#8f98a0",
+          wordBreak: "break-all",
+          marginTop: 2,
+        }}
+      >
+        {path}
+      </div>
+      {freeGb > 0 && (
+        <div style={{ fontSize: 11, color: "#8f98a0", marginTop: 1 }}>
+          {freeGb.toFixed(1)} GB free
+        </div>
+      )}
+    </div>
+  </Focusable>
+);
 
 /* ---- Component ---- */
 
@@ -44,38 +97,55 @@ export const PickStorageModal: FC<Props> = ({
   defaultLocation,
   setCustomPath,
   onConfirm,
-  closeModal,
+  onCancel,
 }) => {
   const { t } = useTranslation();
 
   const available = locations.filter((l) => l.available);
   const [selectedId, setSelectedId] = useState<StorageLocation>(defaultLocation);
-  const [customPath, setCustomPathState] = useState<string | null>(null);
+  const [customPathPicked, setCustomPathPicked] = useState<string | null>(null);
+  const [customFreeGb, setCustomFreeGb] = useState<number>(0);
+  const [pickExpanded, setPickExpanded] = useState(false);
   const [saving, setSaving] = useState(false);
 
   const handleInstall = useCallback(async () => {
     setSaving(true);
     try {
-      if (selectedId === "custom" && customPath) {
-        await setCustomPath(customPath);
+      console.log("[PickStorageModal] install: storage=%s customPath=%s", selectedId, customPathPicked ?? "none");
+      if (selectedId === "custom" && customPathPicked) {
+        console.log("[PickStorageModal] persisting custom path:", customPathPicked);
+        await setCustomPath(customPathPicked);
       }
-      closeModal?.();
-      onConfirm(selectedId, customPath ?? undefined);
+      onConfirm(selectedId, customPathPicked ?? undefined);
     } finally {
       setSaving(false);
     }
-  }, [selectedId, customPath, setCustomPath, closeModal, onConfirm]);
+  }, [selectedId, customPathPicked, setCustomPath, onConfirm]);
+
+  const handleCustomPicked = (path: string, freeGb: number) => {
+    setCustomPathPicked(path);
+    setCustomFreeGb(freeGb);
+    setPickExpanded(false);
+    setSelectedId("custom");
+  };
 
   return (
     <ConfirmModal
       strTitle={t("pickStorage.title")}
       strOKButtonText={saving ? t("common.working") : t("playButton.install")}
       strCancelButtonText={t("common.cancel")}
-      bOKDisabled={saving || (selectedId === "custom" && !customPath)}
+      bOKDisabled={saving || (selectedId === "custom" && !customPathPicked)}
       onOK={handleInstall}
-      onCancel={closeModal}
+      onCancel={onCancel}
     >
-      <div style={{ display: "flex", flexDirection: "column", gap: 8, minWidth: 320 }}>
+      <div
+        style={{
+          display: "flex",
+          flexDirection: "column",
+          gap: 8,
+          minWidth: 320,
+        }}
+      >
         {/* Game info header */}
         <div style={{ marginBottom: 4 }}>
           <div style={{ fontWeight: 700, fontSize: 14 }}>{gameTitle}</div>
@@ -86,81 +156,85 @@ export const PickStorageModal: FC<Props> = ({
           )}
         </div>
 
-        {/* Location options */}
+        {/* Predefined locations (internal, sdcard, etc.) */}
         {available.map((loc) => {
-          const selected = selectedId === loc.id;
+          if (loc.id === "custom") return null;
           return (
-            <Focusable
+            <LocationRow
               key={loc.id}
-              onActivate={() => setSelectedId(loc.id)}
-              onClick={() => setSelectedId(loc.id)}
-              style={{
-                display: "flex",
-                alignItems: "flex-start",
-                gap: 10,
-                padding: "10px 12px",
-                borderRadius: 6,
-                cursor: "pointer",
-                borderLeft: `4px solid ${selected ? "#1a9fff" : "transparent"}`,
-                background: selected ? "rgba(26, 159, 255, 0.1)" : "rgba(255,255,255,0.03)",
-                transition: "background 0.15s",
+              selected={selectedId === loc.id}
+              onSelect={() => {
+                setSelectedId(loc.id);
+                setPickExpanded(false);
               }}
-            >
-              <div style={{
-                width: 16, height: 16, borderRadius: "50%",
-                border: `2px solid ${selected ? "#1a9fff" : "#666"}`,
-                background: selected ? "#1a9fff" : "transparent",
-                flexShrink: 0, marginTop: 2,
-              }} />
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontSize: 13, fontWeight: 600 }}>{loc.label}</div>
-                <div style={{ fontSize: 11, color: "#8f98a0", wordBreak: "break-all", marginTop: 2 }}>
-                  {loc.path}
-                </div>
-                <div style={{ fontSize: 11, color: "#8f98a0", marginTop: 1 }}>
-                  {loc.free_space_gb.toFixed(1)} GB {t("common.free")}
-                </div>
-              </div>
-            </Focusable>
+              label={loc.label}
+              path={loc.path}
+              freeGb={loc.free_space_gb}
+            />
           );
         })}
 
-        {/* Custom location option */}
-        <Focusable
-          onActivate={() => setSelectedId("custom")}
-          onClick={() => setSelectedId("custom")}
-          style={{
-            display: "flex",
-            alignItems: "flex-start",
-            gap: 10,
-            padding: "10px 12px",
-            borderRadius: 6,
-            cursor: "pointer",
-            borderLeft: `4px solid ${selectedId === "custom" ? "#1a9fff" : "transparent"}`,
-            background: selectedId === "custom" ? "rgba(26, 159, 255, 0.1)" : "rgba(255,255,255,0.03)",
-          }}
-        >
-          <div style={{
-            width: 16, height: 16, borderRadius: "50%",
-            border: `2px solid ${selectedId === "custom" ? "#1a9fff" : "#666"}`,
-            background: selectedId === "custom" ? "#1a9fff" : "transparent",
-            flexShrink: 0, marginTop: 2,
-          }} />
-          <div style={{ fontSize: 13, fontWeight: 600 }}>
-            {t("pickStorage.customOption")}
-          </div>
-        </Focusable>
+        {/* Confirmed custom path (collapsed) — clicking reopens picker */}
+        {customPathPicked && !pickExpanded && (
+          <LocationRow
+            selected={selectedId === "custom"}
+            onSelect={() => {
+              setSelectedId("custom");
+              setPickExpanded(true);
+              setCustomPathPicked(null);
+            }}
+            label={t("pickStorage.customLabel")}
+            path={customPathPicked}
+            freeGb={customFreeGb}
+          />
+        )}
 
-        {/* Inline file picker for custom */}
-        {selectedId === "custom" && (
-          <div style={{
-            padding: "8px 8px 8px 26px",
-            background: "rgba(0,0,0,0.15)",
-            borderRadius: 6,
-          }}>
+        {/* Choose Another Location… (hidden when custom already confirmed) */}
+        {!customPathPicked && (
+          <Focusable
+            onActivate={() => {
+              setSelectedId("custom");
+              setPickExpanded(true);
+            }}
+            style={{
+              display: "flex",
+              alignItems: "flex-start",
+              gap: 10,
+              padding: "10px 12px",
+              cursor: "pointer",
+            }}
+          >
+            <div
+              style={{
+                width: 16,
+                height: 16,
+                borderRadius: "50%",
+                border: `2px solid ${selectedId === "custom" ? "#dadedf" : "#8f98a0"}`,
+                background: selectedId === "custom" ? "#dadedf" : "transparent",
+                flexShrink: 0,
+                marginTop: 2,
+              }}
+            />
+            <div style={{ fontSize: 13, fontWeight: 600 }}>
+              {t("pickStorage.customOption")}
+            </div>
+          </Focusable>
+        )}
+
+        {/* Inline file picker (expanded) */}
+        {selectedId === "custom" && pickExpanded && (
+          <div
+            style={{
+              padding: "8px 8px 8px 26px",
+              background: "rgba(0,0,0,0.15)",
+              borderRadius: 6,
+            }}
+          >
             <StoragePathPicker
-              startPath={locations.find((l) => l.id === "custom")?.path ?? "/home/deck"}
-              onConfirm={(p) => setCustomPathState(p)}
+              startPath={
+                locations.find((l) => l.id === "custom")?.path ?? "/home/deck"
+              }
+              onConfirm={handleCustomPicked}
             />
           </div>
         )}
@@ -179,6 +253,10 @@ export interface PickStorageResult {
 /**
  * Open the storage picker modal and resolve with the user's
  * choice, or `null` if they cancelled.
+ *
+ * ``onConfirm`` closes the modal and resolves with the pick.
+ * ``onCancel`` (Cancel button / B key) resolves with ``null``.
+ * A ``settled`` guard prevents double-resolution.
  */
 export function pickStorageForInstall(
   gameTitle: string,
@@ -188,7 +266,7 @@ export function pickStorageForInstall(
   setCustomPath: (path: string) => Promise<boolean>,
 ): Promise<PickStorageResult | null> {
   return new Promise((resolve) => {
-    let confirmed = false;
+    let settled = false;
     const handle = showModal(
       <PickStorageModal
         gameTitle={gameTitle}
@@ -197,12 +275,16 @@ export function pickStorageForInstall(
         defaultLocation={defaultLocation}
         setCustomPath={setCustomPath}
         onConfirm={(storage, customPath) => {
-          confirmed = true;
+          if (settled) return;
+          settled = true;
+          handle?.Close();
           resolve({ storage, customPath });
         }}
-        closeModal={() => {
+        onCancel={() => {
+          if (settled) return;
+          settled = true;
           handle?.Close();
-          if (!confirmed) resolve(null);
+          resolve(null);
         }}
       />,
     );
