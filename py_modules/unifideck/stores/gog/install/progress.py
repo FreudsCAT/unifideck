@@ -57,29 +57,35 @@ class _GogdlProgressMonitor:
         progress_cb: Callable[[dict[str, Any]], Awaitable[None]] | None,
     ) -> bool:
         """Run GOGDL with progress."""
-        cmd = self._build_gogdl_cmd(
-            install_mode,
-            game_id,
-            platform,
-            path,
-            support_dir,
-            languages,
-        )
-        proc = await self._spawn_gogdl(cmd)
-        loop_ok = await self._read_progress_loop(proc, progress_cb)
-        if not loop_ok:
-            return False
-        await proc.wait()
-        if proc.returncode != 0:
-            logger.error(
-                "[GOGInstaller] gogdl exited with code %d",
-                proc.returncode,
+        env, creds_path, cleanup = await self._parent._tokens.acquire_gogdl_creds()
+        try:
+            cmd = self._build_gogdl_cmd(
+                creds_path,
+                install_mode,
+                game_id,
+                platform,
+                path,
+                support_dir,
+                languages,
             )
-            return False
-        return True
+            proc = await self._spawn_gogdl(cmd, env)
+            loop_ok = await self._read_progress_loop(proc, progress_cb)
+            if not loop_ok:
+                return False
+            await proc.wait()
+            if proc.returncode != 0:
+                logger.error(
+                    "[GOGInstaller] gogdl exited with code %d",
+                    proc.returncode,
+                )
+                return False
+            return True
+        finally:
+            await cleanup()
 
     def _build_gogdl_cmd(
         self,
+        creds_path: str,
         install_mode: str,
         game_id: str,
         platform: str,
@@ -91,7 +97,7 @@ class _GogdlProgressMonitor:
         cmd = [
             self._parent._gogdl_bin,
             "--auth-config-path",
-            self._parent._config.auth_config_path,
+            creds_path,
             install_mode,
             game_id,
             "--platform",
@@ -106,21 +112,22 @@ class _GogdlProgressMonitor:
             cmd.extend(["--lang", lang])
         return cmd
 
-    async def _spawn_gogdl(self, cmd: list[str]) -> asyncio.subprocess.Process:
+    async def _spawn_gogdl(
+        self,
+        cmd: list[str],
+        env: dict[str, str],
+    ) -> asyncio.subprocess.Process:
         """Spawn GOGDL."""
         logger.info(
             "[GOGInstaller] spawning gogdl: %s",
             " ".join(cmd),
         )
-        env, cleanup = await self._parent._tokens.acquire_gogdl_creds()
-        proc = await asyncio.create_subprocess_exec(
+        return await asyncio.create_subprocess_exec(
             *cmd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
             env=env,
         )
-        proc._unifideck_gogdl_cleanup = cleanup  # type: ignore[attr-defined]  # Process._unifideck_gogdl_cleanup added at spawn time
-        return proc
 
     async def _read_progress_loop(
         self,
@@ -279,22 +286,22 @@ class _GogdlProgressMonitor:
             base_path,
             folder_name,
         )
-        cmd = [
-            self._parent._gogdl_bin,
-            "--auth-config-path",
-            self._parent._config.auth_config_path,
-            "repair",
-            game_id,
-            "--platform",
-            platform,
-            "--path",
-            repair_path,
-            "--lang",
-            preferred_lang,
-            "--with-dlcs",
-        ]
         try:
-            env, _gogdl_cleanup = await self._parent._tokens.acquire_gogdl_creds()
+            env, creds_path, _gogdl_cleanup = await self._parent._tokens.acquire_gogdl_creds()
+            cmd = [
+                self._parent._gogdl_bin,
+                "--auth-config-path",
+                creds_path,
+                "repair",
+                game_id,
+                "--platform",
+                platform,
+                "--path",
+                repair_path,
+                "--lang",
+                preferred_lang,
+                "--with-dlcs",
+            ]
             try:
                 proc = await asyncio.create_subprocess_exec(
                     *cmd,

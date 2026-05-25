@@ -255,19 +255,19 @@ class GOGUpdatesChecker:
 
     async def _update_spawn_gogdl(self, game_id: str, install_path: str) -> Any | None:
         """Update spawn GOGDL."""
-        cmd = [
-            self._gogdl_bin,
-            "--auth-config-path",
-            self._config.auth_config_path,
-            "update",
-            game_id,
-            "--path",
-            install_path,
-            "--platform",
-            "windows",
-        ]
         try:
-            env, cleanup = await self._tokens.acquire_gogdl_creds()
+            env, creds_path, cleanup = await self._tokens.acquire_gogdl_creds()
+            cmd = [
+                self._gogdl_bin,
+                "--auth-config-path",
+                creds_path,
+                "update",
+                game_id,
+                "--path",
+                install_path,
+                "--platform",
+                "windows",
+            ]
             proc = await asyncio.create_subprocess_exec(
                 *cmd,
                 stdout=asyncio.subprocess.PIPE,
