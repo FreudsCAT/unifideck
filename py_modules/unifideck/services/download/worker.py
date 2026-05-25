@@ -17,13 +17,19 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
+
+from unifideck.core.types import Game
+from unifideck.services.shortcut.games_map import generate_app_id
 
 from .models import DownloadItem, classify_download_error
 
 if TYPE_CHECKING:
+    from unifideck.core.types import InstallResult
     from unifideck.event_bus.event_bus import EventBus
     from unifideck.stores import StoreRegistry
+    from unifideck.stores.shared.store_base import StoreBase
 
 logger = logging.getLogger(__name__)
 
@@ -190,8 +196,20 @@ class _WorkerMixin:
                 if getattr(result, "install_path", None):
                     item.install_path = result.install_path
                 logger.info("[DownloadWorker] completed install for %s", key)
+                # Build a Game record so the ShortcutService listener
+                # (events.py:_on_download_complete) can register the
+                # shortcut in shortcuts.vdf + games.map. We do NOT
+                # emit GAME_INSTALLED here: the ArtworkService
+                # already fetches cover art during the post-install
+                # sync pass, and re-emitting causes duplicate
+                # SteamGridDB lookups.
+                game = await self._build_installed_game(item, result, store)
                 if self._bus:
-                    await self._bus.emit(Events.DOWNLOAD_COMPLETE, item=item.to_dict())
+                    await self._bus.emit(
+                        Events.DOWNLOAD_COMPLETE,
+                        item=item.to_dict(),
+                        game=game,
+                    )
                 # Invoke post-install callback (writes marker, registers game)
                 on_complete = getattr(self, "_on_complete_callback", None)
                 if callable(on_complete):
@@ -218,13 +236,85 @@ class _WorkerMixin:
 
         No-op when the key is already gone (idempotent so
         failure paths can call it without tracking state).
+        Also appends to ``self._finished`` (capped) so the
+        Downloads page shows a history entry after a successful
+        completion (or failure / cancel).
         """
         key = f"{item.store}:{item.game_id}"
-        # We must use the lock here since the worker loop also accesses _running
-        # But this is a sync method, so we have to do it carefully or use a non-blocking remove.
-        # Since _running is a dict, del is thread-safe enough in CPython due to GIL,
-        # but to be perfectly clean with asyncio we should pop it.
         self._running.pop(key, None)
+        finished = getattr(self, "_finished", None)
+        if isinstance(finished, list):
+            finished.append(item)
+            # Cap the in-memory history. Frontend only shows a
+            # short list anyway; older entries are dropped FIFO.
+            max_len = 50
+            if len(finished) > max_len:
+                del finished[: len(finished) - max_len]
+
+    async def _build_installed_game(
+        self,
+        item: DownloadItem,
+        result: InstallResult,
+        store: StoreBase,
+    ) -> Game | None:
+        """Compose a Game record for a freshly-installed item.
+
+        The Game is consumed by ``ShortcutService._on_download_complete``
+        (which writes the entry into ``shortcuts.vdf`` + ``games.map``)
+        and by ``ArtworkService._on_game_installed`` (which fetches
+        cover art). Returns ``None`` if we can't even derive an
+        install path — the listeners then no-op safely.
+        """
+        install_path = item.install_path or getattr(result, "install_path", None)
+        if not install_path:
+            logger.warning(
+                "[DownloadWorker] cannot build Game for %s:%s — no install_path",
+                item.store, item.game_id,
+            )
+            return None
+
+        # Resolve exe via store-specific resolver if available, else
+        # fall back to the cross-store ``StoreBase._find_exe`` heuristic.
+        exe_path: str | None = None
+        try:
+            specific = getattr(store, "find_installed_exe", None)
+            if callable(specific):
+                maybe: Any = specific(install_path)
+                if asyncio.iscoroutine(maybe):
+                    maybe = await maybe
+                exe_path = maybe if isinstance(maybe, str) else None
+            elif hasattr(store, "_find_exe"):
+                raw: Any = store._find_exe(install_path)
+                exe_path = raw if isinstance(raw, str) else None
+        except Exception:
+            logger.exception(
+                "[DownloadWorker] exe resolution failed for %s — leaving null",
+                install_path,
+            )
+
+        # Title fallback: stored on item; if missing, derive from
+        # the install folder name so the shortcut tile reads sensibly.
+        title = item.title or Path(install_path).name or item.game_id
+
+        # Determine size (cheap: InstallResult carries it; fall back
+        # to a directory walk only if missing — bounded by install dir).
+        size_bytes = int(getattr(result, "size_bytes", 0) or 0)
+
+        # generate_app_id over (exe, title) — matches the algorithm
+        # ShortcutService re-runs internally; pre-computing keeps the
+        # Game.app_id consistent with what gets written to shortcuts.vdf.
+        app_id = generate_app_id(exe_path or "", title)
+
+        return Game(
+            app_id=app_id,
+            store=item.store,
+            store_game_id=item.game_id,
+            title=title,
+            installed=True,
+            install_path=install_path,
+            exe_path=exe_path,
+            size_bytes=size_bytes,
+        )
 
     async def _update_progress(self, item: DownloadItem, progress: Any) -> None:
         """Progress callback invoked from the store's ``install_game``.

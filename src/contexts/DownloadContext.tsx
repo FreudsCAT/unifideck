@@ -25,8 +25,22 @@ import { useRPCMutation, useRPCQuery } from "../api/useRPC";
 import { rpcRoutes } from "../api/rpc-routes";
 import { useEventBus, EventBusClient } from "../api/event-bus-client";
 import { Events } from "../types/events";
+import { invalidateGameInfo } from "../hooks/useGameInfo";
+import { bumpGameStateVersion } from "../lib/game-state-version";
 import type { DownloadItem, DownloadQueueInfo } from "../types/downloads";
 import type { Result, StoreId } from "../types/api";
+
+/** Pull the appId out of a DOWNLOAD_* event payload. The worker
+ *  emits ``game=Game(...)`` on COMPLETE/FAILED/CANCELLED; the
+ *  bus serialises the dataclass to a dict so we read
+ *  ``payload.game.app_id``. */
+function extractAppId(payload: unknown): number | null {
+  if (!payload || typeof payload !== "object") return null;
+  const game = (payload as { game?: { app_id?: unknown } }).game;
+  if (!game || typeof game !== "object") return null;
+  const id = (game as { app_id?: unknown }).app_id;
+  return typeof id === "number" ? id : null;
+}
 
 /** Wire shape the backend currently returns from
  *  `get_download_queue` — `{queued, running}`. The frontend
@@ -92,7 +106,11 @@ export const DownloadProvider: FC<{ children: ReactNode }> = ({ children }) => {
     rpcRoutes.uninstallGame,
   );
 
-  const cancelMut = useRPCMutation<[string], Result>(
+  // Backend RPC signature is ``cancel_download(store, game_id)``
+  // — two positional args. The frontend's download.id is the
+  // combined form ``"store:game_id"`` so we split before
+  // dispatch (see ``cancelDownload`` below).
+  const cancelMut = useRPCMutation<[string, string], Result>(
     rpcRoutes.cancelDownload,
   );
 
@@ -127,9 +145,24 @@ export const DownloadProvider: FC<{ children: ReactNode }> = ({ children }) => {
     });
   });
 
-  useEventBus(Events.DOWNLOAD_COMPLETE, refetchQueue);
-  useEventBus(Events.DOWNLOAD_FAILED, refetchQueue);
-  useEventBus(Events.DOWNLOAD_CANCELLED, refetchQueue);
+  // On terminal events (complete / failed / cancelled), also
+  // invalidate the per-game info cache and bump the state
+  // version. Otherwise ``useGameInfo`` keeps serving the
+  // pre-install snapshot (``is_installed=false``) for the full
+  // 5 s TTL and the Play section stays on "Install" even
+  // after a successful download.
+  const onDownloadTerminal = useCallback((payload: unknown) => {
+    const appId = extractAppId(payload);
+    if (appId != null) {
+      invalidateGameInfo(appId);
+      bumpGameStateVersion(appId);
+    }
+    refetchQueue();
+  }, [refetchQueue]);
+
+  useEventBus(Events.DOWNLOAD_COMPLETE, onDownloadTerminal);
+  useEventBus(Events.DOWNLOAD_FAILED, onDownloadTerminal);
+  useEventBus(Events.DOWNLOAD_CANCELLED, onDownloadTerminal);
 
   const installGame = useCallback(
     (
@@ -146,7 +179,16 @@ export const DownloadProvider: FC<{ children: ReactNode }> = ({ children }) => {
   );
 
   const cancelDownload = useCallback(
-    (downloadId: string) => cancelMut.mutate(downloadId),
+    (downloadId: string) => {
+      // download.id ≡ "<store>:<game_id>" — split for the
+      // two-arg backend signature. If the wire ever returns a
+      // bare id, fall back to ("", id) so the RPC at least
+      // surfaces a clean ``not_found`` instead of a TypeError.
+      const idx = downloadId.indexOf(":");
+      const store = idx > 0 ? downloadId.slice(0, idx) : "";
+      const gameId = idx > 0 ? downloadId.slice(idx + 1) : downloadId;
+      return cancelMut.mutate(store, gameId);
+    },
     [cancelMut],
   );
 

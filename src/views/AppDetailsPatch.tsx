@@ -151,6 +151,15 @@ function injectPlayWrapper(
 
   if (existingIdx === -1) {
     const idx = findPlaySectionInsertIndex(children);
+    if (idx < 0) {
+      // Anchor not found yet — skip injection this render. The
+      // patcher re-fires on the next Steam render; the action-bar
+      // container usually arrives within one tick. We deliberately
+      // don't fall back to a synthetic "after first child" index
+      // because that lands the wrapper in the top strip (next to
+      // UNSUPPORTED / Details / Synopsis).
+      return;
+    }
     // Wrap in DownloadProvider — the only context the
     // injected components need (useDownloads in
     // GameInfoCompatRow and usePlaySection). Steam's React
@@ -169,6 +178,12 @@ function injectPlayWrapper(
   if (existingIdx > 3) {
     const [el] = children.splice(existingIdx, 1);
     const correctIdx = findPlaySectionInsertIndex(children);
+    if (correctIdx < 0) {
+      // Re-insert at the original index — we lost the anchor
+      // mid-frame ; don't lose the wrapper entirely.
+      children.splice(existingIdx, 0, el);
+      return;
+    }
     children.splice(correctIdx, 0, el);
   }
 }
@@ -188,10 +203,14 @@ function injectGameInfoPanel(
     const wrapperIdx = children.findIndex(
       (c) => keyOf(c).startsWith(wrapperKey),
     );
-    const idx =
-      wrapperIdx >= 0
-        ? wrapperIdx + 1
-        : findPlaySectionInsertIndex(children) + 1;
+    let idx: number;
+    if (wrapperIdx >= 0) {
+      idx = wrapperIdx + 1;
+    } else {
+      const anchor = findPlaySectionInsertIndex(children);
+      if (anchor < 0) return;  // wait for next render — see injectPlayWrapper
+      idx = anchor + 1;
+    }
     // DownloadProvider needed by GameInfoCompatRow's useDownloads.
     children.splice(
       idx,
@@ -220,8 +239,13 @@ function injectGameInfoPanel(
  *  `InnerContainer`'s children array. Tries (in order) :
  *    1. Right after the native PlaySection container.
  *    2. Right after the AppDetails header / TopCapsule.
- *    3. After the first non-Unifideck child (header is index 0).
- *    4. Fallback: index 1.
+ *  Returns `-1` if neither anchor is present — caller skips
+ *  injection this render and retries on the next one. We
+ *  *intentionally* do NOT fall back to a synthetic position
+ *  (e.g. "after first non-Unifideck child") because Steam's
+ *  InnerContainer also holds the top action strip
+ *  (UNSUPPORTED / Details / Synopsis) and the wrong fallback
+ *  plants the wrapper there.
  */
 function findPlaySectionInsertIndex(children: unknown[]): number {
   if (playSectionClasses?.Container) {
@@ -241,12 +265,7 @@ function findPlaySectionInsertIndex(children: unknown[]): number {
   });
   if (headerIdx >= 0) return headerIdx + 1;
 
-  for (let i = 0; i < children.length; i++) {
-    if (keyOf(children[i]).startsWith("unifideck-")) continue;
-    return i + 1;
-  }
-
-  return Math.min(1, children.length);
+  return -1;
 }
 
 function keyOf(node: unknown): string {

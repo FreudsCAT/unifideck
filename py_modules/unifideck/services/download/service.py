@@ -46,6 +46,11 @@ class DownloadService(_WorkerMixin):
 
         self._queue: list[DownloadItem] = []
         self._running: dict[str, DownloadItem] = {}
+        # Recent finished items (capped FIFO). Populated by the
+        # worker's ``_cleanup_running``; surfaced to the frontend
+        # via ``get_queue()["finished"]`` so the Downloads page can
+        # show a history of completed / failed / cancelled installs.
+        self._finished: list[DownloadItem] = []
         self._lock = asyncio.Lock()
         self._task: asyncio.Task[Any] | None = None
         self._on_complete_callback: Any = None
@@ -166,11 +171,14 @@ class DownloadService(_WorkerMixin):
         """
         running_items = list(self._running.values())
         current = running_items[0] if running_items else None
+        # Newest-first: callers typically render the most recent
+        # completion at the top of the Finished section.
+        finished_items = list(reversed(self._finished))
         return {
             "current": current.to_dict() if current else None,
             "queued": [item.to_dict() for item in self._queue],
             "running": [item.to_dict() for item in running_items],
-            "finished": [],
+            "finished": [item.to_dict() for item in finished_items],
             "state": "running" if running_items else "idle",
         }
 
