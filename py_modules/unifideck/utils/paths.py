@@ -63,6 +63,10 @@ DEFAULT_GAMES_ROOT = "~/Games"
 # stable.
 DEFAULT_GAMES_MAP = "~/.local/share/unifideck/games.map"
 
+
+# Mount root for SD cards / external drives on the Steam Deck.
+# Kept for backward compatibility — new code uses /proc/mounts.
+DEFAULT_SD_ROOT = "/run/media"
 # ── Legacy compatibility aliases ──────────────────────────────
 # Keep the old constant names working so legacy modules
 # (utils/__init__.py, accounts/account_manager.py, etc.) that
@@ -170,14 +174,18 @@ def get_all_game_directories(config: ConfigManager | None = None) -> list[str]:
 def _collect_game_dirs(parent_path: Path) -> list[str]:
     """Return ``Games/`` and ``GOG Games/`` subdirs of ``parent_path``.
 
-    Helper for ``_scan_mount_root`` — factored out so the scan
-    loop stays shallow. Symlinks are skipped to avoid loops.
+    Symlinks are skipped to avoid loops.  OSError (including
+    PermissionError on inaccessible mounts like /efi) is
+    caught per-path so one bad mount can't hide another.
     """
     found: list[str] = []
     for sub in ("Games", "GOG Games"):
         p = parent_path / sub
-        if p.is_dir() and not p.is_symlink():
-            found.append(str(p))
+        try:
+            if p.is_dir() and not p.is_symlink():
+                found.append(str(p))
+        except OSError:
+            continue
     return found
 
 
@@ -240,11 +248,14 @@ def _scan_external_mounts() -> list[str]:
     return found
 
 
+_VIRTUAL_PREFIXES = ("/dev/", "/sys/", "/proc/", "/run/user/")
+
 _SKIP_FSTYPES = frozenset({
     "proc", "sysfs", "devtmpfs", "devpts", "tmpfs", "cgroup",
     "cgroup2", "pstore", "bpf", "debugfs", "tracefs", "hugetlbfs",
     "ramfs", "overlay", "squashfs", "fuse.gvfsd-fuse",
     "fuse.portal", "securityfs", "configfs", "efivarfs",
+    "autofs", "mqueue",
 })
 
 

@@ -463,6 +463,7 @@ build_local() {
         "py_modules/unifideck/rpc/mixins/action.py"
         "py_modules/unifideck/rpc/mixins/cloud_failure.py"
         "py_modules/unifideck/rpc/mixins/config_validation.py"
+        "py_modules/unifideck/rpc/mixins/storage.py"
         "py_modules/unifideck/rpc/mixins/ui.py"
 
         # Layer 4 — Store connectors (3rd party API implementations)
@@ -500,7 +501,7 @@ build_local() {
         "py_modules/unifideck/steam/__init__.py"
         "py_modules/unifideck/steam/library.py"
         "py_modules/unifideck/steam/shortcuts.py"
-        "py_modules/unifideck/steam/steamgriddb.py"
+        "py_modules/unifideck/steam/steamgriddb/__init__.py"
         "py_modules/unifideck/cdp/__init__.py"
         "py_modules/unifideck/compatibility/__init__.py"
         "py_modules/unifideck/compatibility/library.py"
