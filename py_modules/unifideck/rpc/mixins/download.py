@@ -89,13 +89,18 @@ class DownloadRPCMixin:
         return svc
 
     async def install_game(self, store: str, game_id: str, options: Any = None, **kw: Any) -> Any:
-        """Install a game via the responsible store connector.
+        """Queue a game install via the download service.
 
         Accepts an optional ``options`` dict as a positional arg
-        (the frontend passes ``{storage, language}`` positionally
-        through the RPC bridge).  Resolves the ``storage`` type
-        (``"internal"|"sdcard"|"custom"``) to a filesystem path
-        and forwards it as ``base_path`` to the store connector.
+        (the frontend passes ``{storage, language, title}``
+        positionally through the RPC bridge). Resolves the
+        ``storage`` type (``"internal"|"sdcard"|"custom"``) to a
+        filesystem path, extracts the game title for the queue UI,
+        and enqueues the install via ``DownloadService.add()``.
+
+        Returns immediately with ``{success: true/false, error: ...}``
+        — the actual install runs asynchronously through the
+        download worker.
         """
         store, game_id = self._validate_pair(store, game_id)
         opts: dict[str, Any] = dict(kw)
@@ -104,19 +109,22 @@ class DownloadRPCMixin:
 
         storage_type = opts.pop("storage", None)
         base_path = _resolve_storage_path(storage_type, getattr(self, "config", None))
-        if base_path:
-            opts["base_path"] = base_path
-            opts["install_path"] = base_path  # Ubisoft uses install_path
+        if not base_path:
+            base_path = str(Path("~/Games").expanduser())
 
-        logger.info("[download] install_game store=%s game_id=%s storage=%s base_path=%s opts=%s",
-                     store, game_id, storage_type, base_path, opts)
-        try:
-            result = await self._require_store(store).install_game(game_id, **opts)
-            logger.info("[download] install_game result: %s", result)
-            return result
-        except Exception as exc:
-            logger.exception("[download] install_game store call failed")
-            raise
+        title: str = opts.pop("title", "") or opts.pop("game_title", "")
+
+        logger.info("[download] install_game store=%s game_id=%s storage=%s base_path=%s title=%s",
+                     store, game_id, storage_type, base_path, title)
+
+        download_svc = self._require_download()
+        result = await download_svc.add(
+            store=store,
+            game_id=game_id,
+            install_path=base_path,
+            title=title,
+        )
+        return {"success": result.success, "error": result.error}
 
     async def uninstall_game(self, store: str, game_id: str) -> Any:
         """Uninstall a game via the responsible store connector.
@@ -158,6 +166,18 @@ class DownloadRPCMixin:
 # ─── Storage type → path resolution ───────────────────────────
 
 
+# Filesystem types to skip when scanning for external mounts.
+# tmpfs (e.g. /dev/shm), devtmpfs, proc, sysfs and other
+# virtual filesystems should never be offered as install targets.
+_SKIP_FSTYPES: frozenset[str] = frozenset({
+    "proc", "sysfs", "devtmpfs", "devpts", "tmpfs", "cgroup",
+    "cgroup2", "pstore", "bpf", "debugfs", "tracefs", "hugetlbfs",
+    "ramfs", "overlay", "squashfs", "fuse.gvfsd-fuse",
+    "fuse.portal", "securityfs", "configfs", "efivarfs",
+    "autofs", "mqueue",
+})
+
+
 def _resolve_storage_path(storage_type: str | None, config: Any) -> str | None:
     """Convert a storage type string to a filesystem path.
 
@@ -180,7 +200,10 @@ def _resolve_storage_path(storage_type: str | None, config: Any) -> str | None:
             with open("/proc/mounts") as f:
                 for line in f:
                     parts = line.split()
-                    if len(parts) < 2:
+                    if len(parts) < 3:
+                        continue
+                    fstype = parts[2]
+                    if fstype in _SKIP_FSTYPES:
                         continue
                     mp = parts[1]
                     try:
@@ -192,7 +215,7 @@ def _resolve_storage_path(storage_type: str | None, config: Any) -> str | None:
                         continue
                     games_path = os.path.join(mp, "Games")
                     os.makedirs(games_path, exist_ok=True)
-                    logger.debug("[download] resolved sdcard → %s", games_path)
+                    logger.debug("[download] resolved sdcard → %s (%s)", games_path, fstype)
                     return games_path
         except OSError as e:
             logger.warning("[download] sdcard resolution failed: %s", e)

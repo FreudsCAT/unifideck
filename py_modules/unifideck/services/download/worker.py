@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from typing import TYPE_CHECKING, Any
 
 from .models import DownloadItem, classify_download_error
@@ -127,65 +128,85 @@ class _WorkerMixin:
 
         Flow: resolve store via registry (missing → emit
         DOWNLOAD_FAILED + cleanup), emit DOWNLOAD_STARTED,
-        call ``store.install_game(item.game_id,
-        progress_cb=self._update_progress)``, classify the
-        result (``InstallResult``) or any exception via
-        ``classify_download_error``, emit DOWNLOAD_COMPLETE or
-        DOWNLOAD_FAILED with the classified error, always
-        ``_cleanup_running(item)`` in a finally block.
+        dispatch to the correct store with per-store argument
+        conventions, classify the result (``InstallResult``) or
+        any exception via ``classify_download_error``, emit
+        DOWNLOAD_COMPLETE or DOWNLOAD_FAILED with the classified
+        error, always ``_cleanup_running(item)`` in a finally
+        block.
         """
         key = f"{item.store}:{item.game_id}"
         from unifideck.core.types.events import Events
 
         try:
-            # ``StoreRegistry.get_store`` returns ``None`` for unknown
-            # stores; the sister ``get`` raises ``KeyError`` instead
-            # which makes the ``if not store`` check below dead code
-            # and lets a cryptic KeyError leak into the
-            # DOWNLOAD_FAILED event payload. We want a clean
-            # "store not found" classification.
             store = self._registry.get_store(item.store)
             if not store:
                 raise RuntimeError(f"Store {item.store} not found in registry")
 
+            # Microsoft/xCloud games are streamed, not downloaded
+            if item.store == "microsoft":
+                logger.warning("[DownloadWorker] Microsoft games are cloud-only, cannot download")
+                if self._bus:
+                    await self._bus.emit(
+                        Events.DOWNLOAD_FAILED,
+                        item=item.to_dict(),
+                        error="Microsoft games are streamed via Xbox Cloud Gaming",
+                        error_type="cloud_only",
+                    )
+                return
+
             if self._bus:
                 await self._bus.emit(Events.DOWNLOAD_STARTED, item=item.to_dict())
 
-            # Progress callback wrapper. Must be ``async`` to
-            # match the contract every store expects — they call
-            # ``await progress_cb(progress_dict)`` inside their
-            # install loop. An earlier version defined this as a
-            # sync ``def`` that returned ``None``; the stores'
-            # ``await`` then raised ``TypeError: object NoneType
-            # can't be used in 'await' expression`` on every
-            # progress tick (silently caught by the stores'
-            # broad-except). The store-side ``DOWNLOAD_PROGRESS``
-            # emit still fired so progress made it to the UI, but
-            # the worker's own emit was lost and the wrapper's
-            # main job (updating ``item.progress``) was best-effort.
-            async def progress_cb(progress_dict: dict[str, Any]) -> None:
-                await self._update_progress(item, progress_dict)
+            # Progress callback wrapper — handles both float (Epic/Amazon
+            # emit bare percentages) and dict (GOG/Ubisoft emit structured
+            # progress payloads).
+            async def progress_cb(progress: Any) -> None:
+                await self._update_progress(item, progress)
 
-            # Do the install
+            # Per-store dispatch — each store has a different signature:
+            #   Epic/Amazon: install_game(game_id, base_path, progress_cb)
+            #   GOG:         install_game(game_id, base_path, progress_cb, language?)
+            #   Ubisoft:     install_game(game_id, *, progress_cb, install_path)
             logger.info("[DownloadWorker] starting install for %s", key)
-            result = await store.install_game(  # type: ignore[call-arg]  # store.install_game progress_cb signature varies by store
-                item.game_id,
-                item.install_path,
-                progress_cb=progress_cb,
-            )
+            if item.store == "ubisoft":
+                result = await store.install_game(  # type: ignore[call-arg]
+                    item.game_id,
+                    progress_cb=progress_cb,
+                    install_path=item.install_path or None,
+                )
+            else:
+                # Epic, Amazon, GOG — all accept base_path as positional #2
+                result = await store.install_game(  # type: ignore[call-arg]
+                    item.game_id,
+                    item.install_path or None,
+                    progress_cb=progress_cb,
+                )
 
             if result.success:
+                item.progress = 100.0
+                item.status = "complete"
+                item.end_time = time.time()
+                if getattr(result, "install_path", None):
+                    item.install_path = result.install_path
                 logger.info("[DownloadWorker] completed install for %s", key)
                 if self._bus:
                     await self._bus.emit(Events.DOWNLOAD_COMPLETE, item=item.to_dict())
+                # Invoke post-install callback (writes marker, registers game)
+                on_complete = getattr(self, "_on_complete_callback", None)
+                if callable(on_complete):
+                    try:
+                        await on_complete(item)
+                    except Exception as exc:
+                        logger.exception("[DownloadWorker] on_complete callback failed: %s", exc)
             else:
-                error_type = classify_download_error(result.error)  # type: ignore[arg-type]  # classify_download_error: result.error is str|None, function takes Exception
+                error_type = classify_download_error(result.error or "")  # type: ignore[arg-type]
                 logger.error("[DownloadWorker] failed install for %s: %s (%s)", key, result.error, error_type)
                 if self._bus:
                     await self._bus.emit(Events.DOWNLOAD_FAILED, item=item.to_dict(), error=result.error, error_type=error_type)
 
         except Exception as e:
-            error_type = classify_download_error(str(e))  # type: ignore[arg-type]  # classify_download_error: result.error is str|None, function takes Exception
+            error_type = classify_download_error(str(e))  # type: ignore[arg-type]
             logger.exception("[DownloadWorker] exception during install of %s", key)
             if self._bus:
                 await self._bus.emit(Events.DOWNLOAD_FAILED, item=item.to_dict(), error=str(e), error_type=error_type)
@@ -205,36 +226,44 @@ class _WorkerMixin:
         # but to be perfectly clean with asyncio we should pop it.
         self._running.pop(key, None)
 
-    async def _update_progress(self, item: DownloadItem, progress: dict[str, Any]) -> None:
+    async def _update_progress(self, item: DownloadItem, progress: Any) -> None:
         """Progress callback invoked from the store's ``install_game``.
 
-        Store progress on the item, emit DOWNLOAD_PROGRESS.
-
-        ``EventBus.emit`` is ``async`` — without ``await`` the
-        returned coroutine is discarded and the event never
-        reaches any subscriber, so this method must be ``async``
-        and every call site (the ``progress_cb`` wrapper above)
-        must ``await`` it.
-
-        Drift fix (lot 12d): ``item.progress`` is typed ``float``
-        (0.0-100.0 — see ``DownloadItem``) but the callback's
-        ``progress`` argument is a full ``dict[str, Any]`` payload
-        with multiple fields. Assigning the dict directly broke
-        ``DownloadItem.to_dict`` serialisation and mypy strict.
-        Extract the percentage out of the dict; fall back to the
-        previous value when the key is absent so a partial payload
-        doesn't reset the bar to zero.
+        Stores emit progress in two shapes:
+        - Epic/Amazon pass a bare ``float`` (0.0-100.0).
+        - GOG/Ubisoft pass a ``dict`` with ``percentage``,
+          ``downloaded_bytes``, ``total_bytes``, ``speed_bps``,
+          ``eta_seconds``, ``phase``, ``phase_message``.
         """
-        percentage = progress.get("percentage")
-        if isinstance(percentage, (int, float)):
-            item.progress = float(percentage)
+        if isinstance(progress, (int, float)):
+            item.progress = float(progress)
+            if item.progress > 0:
+                item.download_phase = "downloading"
+        elif isinstance(progress, dict):
+            pct = progress.get("percentage") or progress.get("progress_percent")
+            if isinstance(pct, (int, float)):
+                item.progress = float(pct)
+            if "downloaded_bytes" in progress:
+                item.downloaded_bytes = int(progress["downloaded_bytes"])
+            if "total_bytes" in progress:
+                item.total_bytes = int(progress["total_bytes"])
+            if "speed_mbps" in progress:
+                item.speed_mbps = float(progress["speed_mbps"])
+            elif "speed_bps" in progress:
+                item.speed_mbps = float(progress["speed_bps"]) / (1024 * 1024)
+            if "eta_seconds" in progress:
+                item.eta_seconds = int(progress["eta_seconds"])
+            if "phase" in progress:
+                item.download_phase = str(progress["phase"])
+            if "phase_message" in progress:
+                item.phase_message = str(progress["phase_message"])
         if self._bus:
             from unifideck.core.types.events import Events
-            # We don't emit the full item dict on every progress tick to save IPC overhead,
-            # just the identifiers and the progress dict.
             await self._bus.emit(
                 Events.DOWNLOAD_PROGRESS,
                 store=item.store,
                 game_id=item.game_id,
-                progress=progress,
+                progress=item.progress,
+                speed_mbps=item.speed_mbps,
+                eta_seconds=item.eta_seconds,
             )

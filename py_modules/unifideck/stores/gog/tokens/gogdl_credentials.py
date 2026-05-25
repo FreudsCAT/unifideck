@@ -65,6 +65,11 @@ class _GogdlCreds:
         )
         env = os.environ.copy()
         env["GOGDL_CONFIG_PATH"] = tmpdir
+        # CRITICAL: Force unbuffered Python output in gogdl.
+        # Without this, gogdl (a Python script) buffers output when
+        # stdout is piped, causing the asyncio output reading loop to
+        # hang/timeout and downloads to fail.
+        env["PYTHONUNBUFFERED"] = "1"
         cleanup = self._make_cleanup(creds_path, tmpdir)
         return env, cleanup
 

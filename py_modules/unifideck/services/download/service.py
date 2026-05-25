@@ -48,6 +48,7 @@ class DownloadService(_WorkerMixin):
         self._running: dict[str, DownloadItem] = {}
         self._lock = asyncio.Lock()
         self._task: asyncio.Task[Any] | None = None
+        self._on_complete_callback: Any = None
 
     async def start(self) -> None:
         """Load persisted queue + start the worker loop task."""
@@ -155,12 +156,33 @@ class DownloadService(_WorkerMixin):
         return Result(success=True)
 
     def get_queue(self) -> dict[str, Any]:
-        """Return current state for the frontend."""
+        """Return current state for the frontend.
+
+        Keys match the frontend ``DownloadQueueInfo`` shape:
+        ``current`` (active download or null), ``queued``
+        (pending items), ``finished`` (history), ``state``
+        (``"idle"`` / ``"running"``). Also keeps ``running``
+        for backward compatibility with any internal consumers.
+        """
+        running_items = list(self._running.values())
+        current = running_items[0] if running_items else None
         return {
-            "pending": [item.to_dict() for item in self._queue],
-            "running": [item.to_dict() for item in self._running.values()],
-            "capacity": self._max_concurrent,
+            "current": current.to_dict() if current else None,
+            "queued": [item.to_dict() for item in self._queue],
+            "running": [item.to_dict() for item in running_items],
+            "finished": [],
+            "state": "running" if running_items else "idle",
         }
+
+    def set_on_complete_callback(self, callback: Any) -> None:
+        """Register a post-install callback invoked by the worker.
+
+        The callback receives the completed ``DownloadItem`` and
+        should handle game registration (write ``.unifideck-id``
+        marker, update ``games.map``, invalidate caches, trigger
+        a sync reconcile, etc.).
+        """
+        self._on_complete_callback = callback
 
     async def _load_queue(self) -> None:
         """Replace in-memory queue with the persisted file."""

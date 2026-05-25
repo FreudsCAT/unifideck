@@ -36,7 +36,7 @@ export interface UseGameActionsResult {
   install: (
     store: StoreId,
     gameId: string,
-    options?: { storage?: string; language?: string },
+    options?: { storage?: string; language?: string; title?: string },
   ) => Promise<Result | null>;
   uninstall: (appId: number) => Promise<Result | null>;
   cancel: (downloadId: string) => Promise<Result | null>;
@@ -61,7 +61,7 @@ export function useGameActions(bridge: SteamBridgeShape): UseGameActionsResult {
   const install = useCallback(
     async (
       store: StoreId, gameId: string,
-      options?: { storage?: string; language?: string },
+      options?: { storage?: string; language?: string; title?: string },
     ) => {
       setWorking(true);
       try {

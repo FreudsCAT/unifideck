@@ -119,24 +119,42 @@ class AmazonInstaller:
         return await self._finalize_install(game_id, base)
 
     async def _finalize_install(self, game_id: str, base: str) -> InstallResult:
-        """Finalize install."""
-        install_path = await self._resolve_install_path(
-            game_id,
-            base,
-        )
+        """Finalize install — locate the installed directory and write manifest.
+
+        Nile may record the install path in its installed.json before
+        the directory is fully materialized, or use a folder name that
+        differs from both the game ID and title. ``_resolve_install_path``
+        verifies the directory exists on disk before returning it.
+        If we still can't locate the install directory after the CLI
+        reported success, the install is incomplete and we report failure.
+        """
+        install_path = await self._resolve_install_path(game_id, base)
+        if not install_path:
+            logger.error(
+                "[AmazonInstall] cannot locate install directory for %s "
+                "under %s — nile reported success but no matching "
+                "directory found on disk",
+                game_id, base,
+            )
+            await self._bus.emit(
+                Events.DOWNLOAD_FAILED,
+                store="amazon",
+                game_id=game_id,
+                error="install_dir_not_found",
+            )
+            return InstallResult(
+                success=False,
+                error="install_dir_not_found",
+                store="amazon",
+                game_id=game_id,
+            )
         exe = await self._resolve_executable(install_path, game_id)
         title = await self._resolve_title(game_id)
-        if install_path:
-            exe_relative = ""
-            if exe:
-                with contextlib.suppress(ValueError):
-                    # ``os.path.relpath`` is pure string manipulation —
-                    # no filesystem access — so the ASYNC240 rule
-                    # gives a false positive here.
-                    exe_relative = os.path.relpath(  # noqa: ASYNC240 — pure string op, no I/O
-                        exe,
-                        install_path,
-                    )
+        exe_relative = ""
+        if exe:
+            with contextlib.suppress(ValueError):
+                exe_relative = os.path.relpath(exe, install_path)  # noqa: ASYNC240
+        try:
             await write_manifest(
                 install_dir=install_path,
                 store="amazon",
@@ -144,6 +162,20 @@ class AmazonInstaller:
                 title=title,
                 executable_relative=exe_relative,
                 platform="windows",
+            )
+        except OSError as exc:
+            logger.exception("[AmazonInstall] write_manifest failed for %s", install_path)
+            await self._bus.emit(
+                Events.DOWNLOAD_FAILED,
+                store="amazon",
+                game_id=game_id,
+                error=f"manifest_write: {exc}",
+            )
+            return InstallResult(
+                success=False,
+                error=f"manifest_write: {exc}",
+                store="amazon",
+                game_id=game_id,
             )
         await self._bus.emit(
             Events.DOWNLOAD_COMPLETE,
@@ -155,7 +187,7 @@ class AmazonInstaller:
             success=True,
             store="amazon",
             game_id=game_id,
-            install_path=install_path or base,
+            install_path=install_path,
         )
 
     async def _run_install(
@@ -248,14 +280,33 @@ class AmazonInstaller:
         )
 
     async def _resolve_install_path(self, game_id: str, base: str) -> str | None:
-        """Resolve install path."""
+        """Resolve install path from nile's installed.json or fallback.
+
+        Nile writes an entry to installed.json before (or during)
+        the download, and the recorded path may not exist on disk
+        yet if nile failed mid-flight or recorded an alternate
+        directory name. Always verify the directory exists before
+        returning a path — a stale entry that points nowhere
+        must fall through to the default-path check.
+        """
         installed = await self._library.read_installed_ids()
         info = installed.get(game_id)
         if info and info.get("path"):
-            return cast("str | None", info["path"])
+            candidate = cast("str | None", info["path"])
+            if candidate and await asyncio.to_thread(lambda: Path(candidate).is_dir()):
+                return candidate
         default = str(Path(base) / game_id)
         if await asyncio.to_thread(lambda: Path(default).is_dir()):
             return default
+        # Nile may create a subdirectory named after the game title
+        # rather than the game_id. Scan the base directory for any
+        # subdirectory that contains a .unifideck-id marker or
+        # matches a known pattern from nile's fuel.json.
+        title = await self._resolve_title(game_id)
+        if title and title != game_id:
+            title_path = str(Path(base) / title)
+            if await asyncio.to_thread(lambda: Path(title_path).is_dir()):
+                return title_path
         return None
 
     async def _resolve_executable(

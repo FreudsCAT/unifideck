@@ -14,7 +14,8 @@ typed enum value the UI can render.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from time import time
 from typing import Any
 
 
@@ -48,24 +49,57 @@ class DownloadItem:
     progress: float = 0.0
     status: str = "queued"
     error: str = ""
+    # Frontend-facing fields
+    downloaded_bytes: int = 0
+    total_bytes: int = 0
+    speed_mbps: float = 0.0
+    eta_seconds: int = 0
+    added_time: float = field(default_factory=time)
+    start_time: float | None = None
+    end_time: float | None = None
+    storage_location: str = "internal"
+    download_phase: str = "downloading"
+    phase_message: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         """Serialise to a JSON-friendly dict.
 
-        Used by ``DownloadService.get_queue`` for the UI payload
-        and by ``persistence.save_queue`` for on-disk persistence.
-
-        Returns:
-            Dict with every public field. No nested objects.
+        Emits dual-key output so both backend-internal consumers
+        (``title``, ``progress``, ``error``) and the frontend
+        (``game_title``, ``progress_percent``, ``error_message``)
+        receive matching keys without field-name translation.
         """
         return {
+            # Identifiers
+            "id": f"{self.store}:{self.game_id}",
             "store": self.store,
             "game_id": self.game_id,
-            "install_path": self.install_path,
+            # Title (both names)
             "title": self.title,
+            "game_title": self.title,
+            # Path
+            "install_path": self.install_path,
+            # Progress (both names)
             "progress": self.progress,
+            "progress_percent": self.progress,
+            # Status
             "status": self.status,
+            # Error (both names)
             "error": self.error,
+            "error_message": self.error,
+            # Stats
+            "downloaded_bytes": self.downloaded_bytes,
+            "total_bytes": self.total_bytes,
+            "speed_mbps": self.speed_mbps,
+            "eta_seconds": self.eta_seconds,
+            # Timing
+            "added_time": self.added_time,
+            "start_time": self.start_time,
+            "end_time": self.end_time,
+            # Misc
+            "storage_location": self.storage_location,
+            "download_phase": self.download_phase,
+            "phase_message": self.phase_message,
         }
 
     @classmethod
