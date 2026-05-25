@@ -2,15 +2,9 @@
  * NotInstalledButtons — Play section for not-yet-installed
  * Unifideck games.
  *
- * Renders an "Install" button that triggers `useGameActions
- * .install()` with the canonical store + game_id pulled
- * from `useGameInfo`. While the install RPC is in flight we
- * disable the button and show a spinner.
- *
- * The "Storage location" picker is NOT inlined here — it is
- * a separate modal opened on click when the user has more
- * than one storage location. The modal itself lives in
- * `components/modals/StoragePickerModal.tsx`.
+ * Renders an "Install" button that triggers `useInstallFlow
+ * .start()`. The storage location picker is handled inside
+ * `useInstallFlow` — this component stays presentational.
  */
 import { FC, useCallback } from "react";
 import { DialogButton, Focusable } from "@decky/ui";

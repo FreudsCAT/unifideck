@@ -1,19 +1,17 @@
-"""StorageRPCMixin — install-location enumeration + mutation RPCs.
+"""
+StorageRPCMixin — install-location enumeration + mutation RPCs.
 
 OP-26j | py_modules/unifideck/rpc/mixins/storage.py
 
-Split out of ``DownloadRPCMixin`` so the download mixin keeps
-its single responsibility (queue + install lifecycle) and this
-file owns everything storage-related :
-
 * ``get_storage_locations``     — list of `(id, label, path, free_space_gb)`
+* ``get_browseable_devices``    — device mount-points for the file picker
 * ``set_default_storage_location`` — persist user pick
 * ``set_custom_install_path``   — persist a custom path
 
-Shape matches the frontend ``StorageLocationsResponse`` contract
-in ``src/types/downloads.ts``. The mixin pulls its filesystem
-enumeration from ``unifideck.utils.paths.get_all_game_directories``
-and classifies each path via the module-level helpers below.
+No path is hardcoded: device roots come from ``/proc/mounts``
+(real mount points), storage classification uses ``st_dev``
+comparison instead of string-prefix heuristics, and ``$HOME``
+is resolved at runtime via ``Path.home()``.
 """
 
 from __future__ import annotations
@@ -29,6 +27,16 @@ from unifideck.rpc import RpcError
 
 logger = logging.getLogger(__name__)
 
+# Filesystem types we skip when scanning /proc/mounts.
+_SKIP_FSTYPES = frozenset({
+    "proc", "sysfs", "devtmpfs", "devpts", "tmpfs", "cgroup",
+    "cgroup2", "pstore", "bpf", "debugfs", "tracefs", "hugetlbfs",
+    "ramfs", "overlay", "squashfs", "fuse.gvfsd-fuse",
+    "fuse.portal", "securityfs", "configfs", "efivarfs", "mqueue",
+})
+
+_VIRTUAL_PREFIXES = ("/dev/", "/sys/", "/proc/", "/run/user/")
+
 
 class StorageRPCMixin:
     """Install-location RPC : enumerate + mutate config."""
@@ -36,13 +44,7 @@ class StorageRPCMixin:
     config: Any
 
     async def get_storage_locations(self) -> Any:
-        """Return install locations + the active default.
-
-        See module docstring for the response shape. Reads
-        ``download.custom_path`` and ``download.default_location``
-        from config to classify each enumerated directory and
-        report which one the user picked as the default.
-        """
+        """Return install locations + the active default."""
         from unifideck.utils.paths import get_all_game_directories
 
         config = getattr(self, "config", None)
@@ -69,33 +71,63 @@ class StorageRPCMixin:
         default = "internal"
         if config is not None:
             try:
-                default = config.get(
-                    "download.default_location", "internal",
-                )
+                default = config.get("download.default_location", "internal")
             except Exception as e:
-                logger.debug(
-                    "[storage] reading download.default_location failed: %s", e,
-                )
-        return {
-            "success": True,
-            "locations": locations,
-            "default": default,
-        }
+                logger.debug("[storage] reading default_location failed: %s", e)
+        return {"success": True, "locations": locations, "default": default}
+
+    async def get_browseable_devices(self) -> Any:
+        """Return mount-points of every writable storage device.
+
+        Reads ``/proc/mounts`` to discover real mount points with
+        no hardcoded paths.  Internal = ``$HOME``; external = every
+        other writable, non-system mount that sits on a different
+        device.
+        """
+        home = str(Path.home())
+        home_dev = _device_id(home)
+
+        devices: list[dict[str, Any]] = [
+            {
+                "id": "internal",
+                "label": "Internal Storage",
+                "path": home,
+                "free_space_gb": _free_gb(home),
+            },
+        ]
+
+        try:
+            with open("/proc/mounts") as f:
+                for line in f:
+                    parts = line.split()
+                    if len(parts) < 3:
+                        continue
+                    mp = parts[1]
+                    fstype = parts[2]
+                    if fstype in _SKIP_FSTYPES:
+                        continue
+                    if mp.startswith(_VIRTUAL_PREFIXES):
+                        continue
+                    if not os.path.isdir(mp):
+                        continue
+                    if _device_id(mp) == home_dev:
+                        continue  # same physical device as $HOME
+                    if not _is_writable(mp):
+                        continue
+                    name = os.path.basename(mp) or mp
+                    devices.append({
+                        "id": _mount_id(mp),
+                        "label": name,
+                        "path": mp,
+                        "free_space_gb": _free_gb(mp),
+                    })
+        except OSError as e:
+            logger.debug("[storage] /proc/mounts read failed: %s", e)
+
+        return {"success": True, "devices": devices}
 
     async def set_default_storage_location(self, loc_id: str) -> Any:
-        """Persist the user's preferred default storage location.
-
-        Args:
-            loc_id: one of ``"internal"`` / ``"sdcard"`` /
-                ``"custom"``.
-
-        Returns:
-            ``{success: True, default: <loc_id>}``.
-
-        Raises:
-            RpcError: ``invalid_location`` for unknown ids,
-                ``service_unavailable`` if config isn't wired.
-        """
+        """Persist the user's preferred default storage location."""
         if loc_id not in ("internal", "sdcard", "custom"):
             raise RpcError("invalid_location", loc_id=loc_id)
         config = getattr(self, "config", None)
@@ -107,13 +139,8 @@ class StorageRPCMixin:
     async def set_custom_install_path(self, path: str) -> Any:
         """Persist a user-picked custom install root.
 
-        Validates that the path exists and is writable
-        before saving — the download service relies on this
-        path being usable, so we want to fail fast at
-        save-time rather than silently break the install
-        later. Filesystem checks (``realpath``, ``is_dir``,
-        ``os.access``) are wrapped in ``asyncio.to_thread``
-        so the event loop is never blocked on a slow mount.
+        Validates that the path exists and is writable before
+        saving so the download service can rely on it.
         """
         config = getattr(self, "config", None)
         if config is None:
@@ -140,37 +167,52 @@ class StorageRPCMixin:
 
 
 # ─── Module-level helpers ─────────────────────────────────────
+
+
+def _free_gb(path: str) -> float:
+    """Free space in GB for the filesystem containing *path*."""
+    try:
+        st = os.statvfs(path)
+        return round((st.f_frsize * st.f_bavail) / (1024 ** 3), 1)
+    except OSError:
+        return 0.0
+
+
+def _device_id(path: str) -> int:
+    """Return the ``st_dev`` of *path*, or 0 on error."""
+    try:
+        return os.stat(path).st_dev
+    except OSError:
+        return 0
+
+
+def _is_writable(path: str) -> bool:
+    return os.access(path, os.W_OK)
+
+
+def _mount_id(mp: str) -> str:
+    """Stable id derived from the mount point name."""
+    name = os.path.basename(mp).replace(" ", "_")
+    return f"ext:{name}" if name else "ext"
+
+
+# ─── Storage-location classification ─────────────────────────
 #
-# Used by `get_storage_locations` to map a filesystem path back
-# to the `StorageLocation` discriminator the frontend expects
-# (`internal` / `sdcard` / `custom`).
+# Uses ``st_dev`` comparison instead of path-prefix heuristics.
+# Two paths on the same physical device share the same ``st_dev``.
 
-def _classify_storage_location(
-    path: str,
-    custom_path: str | None,
-) -> str:
-    """Classify a filesystem path as internal / sdcard / custom.
 
-    Order matters : a configured ``custom_path`` always wins
-    over the path-prefix heuristic so the user-picked path
-    is reported as ``custom`` even if it happens to live
-    under ``/run/media``.
-    """
+def _classify_storage_location(path: str, custom_path: str | None) -> str:
+    """Classify a filesystem path as internal / external / custom."""
     if custom_path and path.rstrip("/") == custom_path.rstrip("/"):
         return "custom"
-    if path.startswith(("/run/media/", "/mnt/")):
+    if _device_id(path) != _device_id(str(Path.home())):
         return "sdcard"
     return "internal"
 
 
 def _storage_label(loc_id: str, path: str) -> str:
-    """Default label for a storage location.
-
-    The frontend renders its own i18n label via
-    ``storageSettings.internalStorage`` etc., but the backend
-    provides a sensible default for unstyled callers (logs,
-    diagnostics, tests).
-    """
+    """Default label for a storage location."""
     if loc_id == "internal":
         return "Internal storage"
     if loc_id == "sdcard":

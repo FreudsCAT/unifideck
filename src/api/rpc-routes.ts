@@ -64,6 +64,8 @@ export const rpcRoutes = {
   setDefaultStorageLocation: "set_default_storage_location",
   setCustomInstallPath:      "set_custom_install_path",
   listDirectory:             "list_directory",
+  createDirectory:           "create_directory",
+  getBrowseableDevices:      "get_browseable_devices",
   // Playtime (PlaytimeRPCMixin)
   notifyGameLaunched:      "notify_game_launched",
   notifyGameStopped:       "notify_game_stopped",

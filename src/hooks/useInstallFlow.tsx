@@ -4,21 +4,20 @@
  * Wraps `useGameActions.install` with the per-store side
  * quests the user may have to walk through before the
  * download is queued :
+ *  - Storage picker: `pickStorageForInstall` always runs first
+ *    so the user chooses where the game lands.
  *  - GOG: fetch `get_gog_game_languages`, prompt the user via
  *    `<GOGLanguageSelectModal>` when more than one is offered.
  *  - Other stores: pass straight through.
- *
- * Keeps decision logic OUT of `NotInstalledButtons.tsx`, which
- * the PDF mandates be pure presentation. The component just
- * calls `installFlow.start(game)` and the hook handles the
- * fork.
  */
 import { useCallback, useState } from "react";
 import { showModal } from "@decky/ui";
 import { useRPC } from "../api/useRPC";
 import { rpcRoutes } from "../api/rpc-routes";
 import { useGameActions } from "./useGameActions";
+import { useStorageConfig } from "./useStorageConfig";
 import { GOGLanguageSelectModal } from "../components/modals/GOGLanguageSelectModal";
+import { pickStorageForInstall } from "../components/modals/PickStorageModal";
 import type { Game, Result } from "../types/api";
 
 /** Steam bridge shape — same minimal surface useGameActions
@@ -56,29 +55,40 @@ export function useInstallFlow(bridge: SteamBridgeShape): UseInstallFlowResult {
   const getGogLangs = useRPC<[string], GogLanguagesResponse>(
     rpcRoutes.getGogGameLanguages,
   );
+  const { locations, defaultLocation, setCustomPath } = useStorageConfig();
   const [working, setWorking] = useState(false);
 
   const start = useCallback(
     async (game: Game): Promise<Result | null> => {
       setWorking(true);
       try {
+        const picked = await pickStorageForInstall(
+          game.title,
+          game.size_bytes,
+          locations,
+          defaultLocation,
+          setCustomPath,
+        );
+        if (!picked) return null;
+        const { storage } = picked;
+
         if (game.store !== "gog") {
-          return await actions.install(game.store, game.id);
+          return await actions.install(game.store, game.id, { storage });
         }
         const langs = await getGogLangs(game.id).catch(() => null);
         const list = langs?.languages ?? [];
         if (list.length <= 1) {
           const language = list[0];
-          return await actions.install(game.store, game.id, { language });
+          return await actions.install(game.store, game.id, { language, storage });
         }
         const language = await pickLanguageViaModal(game.title, list);
         if (!language) return null;
-        return await actions.install(game.store, game.id, { language });
+        return await actions.install(game.store, game.id, { language, storage });
       } finally {
         setWorking(false);
       }
     },
-    [actions, getGogLangs],
+    [actions, getGogLangs, locations, defaultLocation, setCustomPath],
   );
 
   return { isWorking: working || actions.isWorking, start };

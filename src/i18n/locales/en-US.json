@@ -542,7 +542,8 @@
     "ok": "OK",
     "cancel": "Cancel",
     "working": "Working…",
-    "loading": "Loading…"
+    "loading": "Loading…",
+    "free": "free"
   },
   "info": {
     "expandDetails": "Show details",
@@ -760,6 +761,10 @@
         "launcherError": "Launch setup error"
       }
     }
+  },
+  "pickStorage": {
+    "title": "Install Location",
+    "customOption": "Choose Another Location...",
+    "gameSize": "Install Size"
   }
-  
 }

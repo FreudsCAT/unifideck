@@ -1,26 +1,27 @@
 /**
- * StoragePathPicker — directory browser for the custom
- * storage location.
+ * StoragePathPicker — full-featured directory browser.
  *
- * Extracted from the inline `CustomFileBrowser` of the
- * legacy StorageSettings.tsx (623 LOC monolith). Provides
- * a minimal directory navigator : current path display,
- * `list_directory(path, show_hidden, sort_by)` listdir,
- * ".." to go up one level, and a refresh button.
+ * Provides device quick-access dropdown (from `get_browseable_devices`
+ * RPC — actual mount points, not game subdirectories), Up navigation,
+ * show-hidden toggle, 8-option sort dropdown, new-folder creation,
+ * and a scrollable directory listing with folder icons.
  *
- * Backed by `list_directory` registered in UIRPCMixin —
- * the call returns the directory's immediate child entries
- * with their type (dir/file) and a `path` echo so the
- * picker can update its breadcrumb.
- *
- * Resilience : if the backend route is missing (older builds,
- * partial deployments), the picker degrades to a read-only
- * "current path" display with a "Use this path" button. The
- * UI never throws — the user can still confirm whatever the
- * `startPath` was.
+ * Backed by `list_directory`, `create_directory`, and
+ * `get_browseable_devices` RPCs. Device list is fetched internally
+ * so the picker works standalone inside `showModal` portals.
  */
-import { FC, useCallback, useEffect, useState } from "react";
-import { ButtonItem, Field } from "@decky/ui";
+import { FC, useCallback, useEffect, useRef, useState } from "react";
+import {
+  ButtonItem,
+  DialogButton,
+  Dropdown,
+  DropdownOption,
+  Field,
+  Focusable,
+  Spinner,
+  TextField,
+  Toggle,
+} from "@decky/ui";
 import { useTranslation } from "react-i18next";
 import { useRPC } from "../../api/useRPC";
 import { rpcRoutes } from "../../api/rpc-routes";
@@ -31,91 +32,305 @@ interface Props {
   onConfirm: (path: string) => Promise<void> | void;
 }
 
-/** List response. */
+/** get_browseable_devices response item. */
+interface BrowseableDevice {
+  id: string;
+  label: string;
+  path: string;
+  free_space_gb: number;
+}
+
+/** get_browseable_devices response envelope. */
+interface BrowseableDevicesResponse {
+  success: boolean;
+  devices: BrowseableDevice[];
+}
+
+/** list_directory response. */
 interface ListResponse {
   success: boolean;
   path: string;
   directories: string[];
 }
 
+/** create_directory response. */
+interface CreateDirResponse {
+  success: boolean;
+  error?: string;
+}
+
+/* ---- inline SVG icons ---- */
+
+const FolderIcon: FC = () => (
+  <svg viewBox="0 0 24 24" fill="currentColor" width="1em" height="1em"
+    style={{ flexShrink: 0, opacity: 0.7 }}>
+    <path d="M10 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z" />
+  </svg>
+);
+
+const UpArrowIcon: FC = () => (
+  <svg viewBox="0 0 24 24" fill="currentColor" width="1em" height="1em">
+    <path d="M4 12l1.41 1.41L11 7.83V20h2V7.83l5.58 5.59L20 12l-8-8-8 8z" />
+  </svg>
+);
+
+const SORT_OPTIONS: DropdownOption[] = [
+  { data: "name",             label: "" },
+  { data: "name_desc",        label: "" },
+  { data: "modified_newest",  label: "" },
+  { data: "modified_oldest",  label: "" },
+  { data: "created_newest",   label: "" },
+  { data: "created_oldest",   label: "" },
+  { data: "size_largest",     label: "" },
+  { data: "size_smallest",    label: "" },
+];
+
+const SORT_I18N: Record<string, string> = {
+  name:             "storageSettings.sortAZ",
+  name_desc:        "storageSettings.sortZA",
+  modified_newest:  "storageSettings.sortModifiedNewest",
+  modified_oldest:  "storageSettings.sortModifiedOldest",
+  created_newest:   "storageSettings.sortCreatedNewest",
+  created_oldest:   "storageSettings.sortCreatedOldest",
+  size_largest:     "storageSettings.sortSizeLargest",
+  size_smallest:    "storageSettings.sortSizeSmallest",
+};
+
 /**
- * Modal dialog letting the user browse the filesystem and
- * pick an install root. Calls into the backend
- * `list_directory` RPC for each navigation step so the
- * frontend never reads disk directly.
+ * Full-featured directory navigator. Fetches browseable device
+ * mount points internally so the picker works standalone inside
+ * `showModal` portals.
  */
 export const StoragePathPicker: FC<Props> = ({ startPath, onConfirm }) => {
   const { t } = useTranslation();
-  const list = useRPC<[string, boolean, string], ListResponse>(
+
+  const listDir = useRPC<[string, boolean, string], ListResponse>(
     rpcRoutes.listDirectory,
   );
+  const createDir = useRPC<[string], CreateDirResponse>(
+    rpcRoutes.createDirectory,
+  );
+  const getDevices = useRPC<[], BrowseableDevicesResponse>(
+    rpcRoutes.getBrowseableDevices,
+  );
+
   const [path, setPath] = useState(startPath);
   const [dirs, setDirs] = useState<string[]>([]);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [showHidden, setShowHidden] = useState(false);
+  const [sortBy, setSortBy] = useState<string>("name");
+  const [creatingFolder, setCreatingFolder] = useState(false);
+  const [newFolderName, setNewFolderName] = useState("");
   const [unsupported, setUnsupported] = useState(false);
 
-  /** Refresh. */
-  const refresh = useCallback(async () => {
+  /* Browseable devices for the quick-access dropdown. */
+  const [devices, setDevices] = useState<BrowseableDevice[]>([]);
+  const [devicesLoading, setDevicesLoading] = useState(true);
+
+  /* Refs for stable fetchDirectory closure. */
+  const showHiddenRef = useRef(showHidden);
+  const sortByRef = useRef(sortBy);
+  showHiddenRef.current = showHidden;
+  sortByRef.current = sortBy;
+
+  /* Fetch browseable devices once on mount. */
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await getDevices();
+        if (!cancelled && r.success) setDevices(r.devices);
+      } catch {
+        console.warn("[StoragePathPicker] get_browseable_devices unavailable");
+      } finally {
+        if (!cancelled) setDevicesLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [getDevices]);
+
+  const fetchDirectory = useCallback(async (target: string) => {
     setLoading(true);
     try {
-      // (path, show_hidden, sort_by) — legacy contract
-      const r = await list(path, false, "name");
+      const r = await listDir(target, showHiddenRef.current, sortByRef.current);
       if (r.success) {
         setPath(r.path);
         setDirs(r.directories);
+        setUnsupported(false);
       }
-    } catch (e) {
-      // Backend may not implement `list_directory` yet.
-      // Degrade to read-only mode instead of crashing the picker.
-      console.warn("[StoragePathPicker] list_directory unavailable:", e);
+    } catch {
+      console.warn("[StoragePathPicker] list_directory unavailable");
       setUnsupported(true);
     } finally {
       setLoading(false);
     }
-  }, [list, path]);
+  }, [listDir]);
 
-  useEffect(() => { void refresh(); }, [refresh]);
+  /* Initial load + reload on toggle/sort changes. */
+  useEffect(() => { void fetchDirectory(path); }, [fetchDirectory, showHidden, sortBy]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  /** Go up. */
-  const goUp = (): void => {
-    const parts = path.split("/").filter(Boolean);
-    parts.pop();
-    setPath("/" + parts.join("/"));
+  const goUp = () => {
+    if (path === "/") return;
+    const parent = path.substring(0, path.lastIndexOf("/")) || "/";
+    void fetchDirectory(parent);
   };
 
+  const navigateTo = (dir: string) => {
+    const next = path === "/" ? `/${dir}` : `${path}/${dir}`;
+    void fetchDirectory(next);
+  };
+
+  const handleCreateFolder = async () => {
+    const name = newFolderName.trim();
+    if (!name) return;
+    const fullPath = `${path}/${name}`;
+    const r = await createDir(fullPath);
+    if (r.success) {
+      setNewFolderName("");
+      setCreatingFolder(false);
+      await fetchDirectory(fullPath);
+    }
+  };
+
+  /* Device dropdown options — actual mount points from /proc/mounts. */
+  const deviceOptions: DropdownOption[] = devices.map((d) => ({
+    data: d.path,
+    label: d.free_space_gb != null
+      ? t("storageSettings.freeSpaceLabel", { label: d.label, freeSpace: d.free_space_gb })
+      : d.label,
+  }));
+
+  const currentDevicePath = devices.find(
+    (d) => path === d.path || path.startsWith(d.path + "/"),
+  )?.path;
+
+  /* Sort options with translated labels. */
+  const sortOptions: DropdownOption[] = SORT_OPTIONS.map((o) => ({
+    data: o.data,
+    label: t(SORT_I18N[o.data as string] ?? o.data),
+  }));
+
   return (
-    <div>
-      <Field
-        label={t("storage.customPath")}
-        description={path}
-        childrenContainerWidth="fixed"
-      />
-      {!unsupported && (
-        <>
-          <div style={{ display: "flex", gap: 8, marginTop: 6 }}>
-            <ButtonItem layout="below" onClick={goUp}>
-              {t("storage.up")}
-            </ButtonItem>
-            <ButtonItem layout="below" onClick={refresh} disabled={loading}>
-              {loading ? t("common.loading") : t("storage.refresh")}
-            </ButtonItem>
+    <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+      {/* Device quick-access + Up */}
+      <Focusable style={{ display: "flex", gap: 8, alignItems: "center" }}>
+        {devicesLoading ? (
+          <div style={{ flex: 1, minWidth: 0, padding: "6px 0" }}>
+            <Spinner />
           </div>
-          <div style={{ marginTop: 6, maxHeight: 180, overflowY: "auto" }}>
-            {dirs.map((d) => (
-              <ButtonItem
-                key={d}
-                layout="below"
-                onClick={() => setPath(`${path}/${d}`)}
-              >
-                {d}
-              </ButtonItem>
-            ))}
+        ) : deviceOptions.length > 0 ? (
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <Dropdown
+              rgOptions={deviceOptions}
+              selectedOption={currentDevicePath}
+              onChange={(opt) => { void fetchDirectory(opt.data as string); }}
+              strDefaultLabel={t("storageSettings.selectDevice")}
+            />
           </div>
-        </>
+        ) : null}
+        <DialogButton
+          onClick={goUp}
+          disabled={path === "/"}
+          style={{
+            minWidth: 48, width: 48, height: 40, padding: 0,
+            display: "flex", alignItems: "center", justifyContent: "center",
+          }}
+        >
+          <UpArrowIcon />
+        </DialogButton>
+      </Focusable>
+
+      {/* Current path breadcrumb */}
+      <div style={{ fontSize: 12, color: "#b0b0b0", wordBreak: "break-all", padding: "4px 0" }}>
+        {path}
+      </div>
+
+      {/* Toolbar: show hidden + sort */}
+      <Focusable style={{ display: "flex", gap: 8, alignItems: "center" }}>
+        <Focusable
+          onActivate={() => setShowHidden(!showHidden)}
+          onClick={() => setShowHidden(!showHidden)}
+          style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 12px", cursor: "pointer" }}
+        >
+          <Toggle value={showHidden} onChange={(checked) => setShowHidden(checked)} />
+          <span style={{ fontSize: 12, whiteSpace: "nowrap" }}>{t("storageSettings.showHidden")}</span>
+        </Focusable>
+        <div style={{ minWidth: 140, flexShrink: 0 }}>
+          <Dropdown
+            rgOptions={sortOptions}
+            selectedOption={sortBy}
+            onChange={(opt) => setSortBy(opt.data as string)}
+          />
+        </div>
+      </Focusable>
+
+      {/* Directory listing */}
+      <Focusable
+        style={{
+          maxHeight: 280, overflowY: "auto",
+          display: "flex", flexDirection: "column", gap: 2,
+        }}
+      >
+        {loading && dirs.length === 0 && (
+          <div style={{ color: "#666", fontSize: 12, padding: 8 }}>{t("common.loading")}</div>
+        )}
+        {!loading && dirs.length === 0 && !unsupported && (
+          <div style={{ color: "#666", fontSize: 12, padding: 8 }}>{t("storageSettings.emptyDirectory")}</div>
+        )}
+        {unsupported && (
+          <Field label={t("storage.customPath")} description={path} childrenContainerWidth="fixed" />
+        )}
+        {dirs.map((d) => (
+          <DialogButton
+            key={d}
+            onClick={() => navigateTo(d)}
+            style={{ width: "100%", textAlign: "left", fontSize: 13, padding: "8px 12px" }}
+          >
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <FolderIcon />
+              <span>{d}</span>
+            </div>
+          </DialogButton>
+        ))}
+      </Focusable>
+
+      {/* New folder inline input */}
+      {creatingFolder && (
+        <Focusable style={{ display: "flex", gap: 6, alignItems: "center" }}>
+          <div style={{ flex: 1 }}>
+            <TextField
+              value={newFolderName}
+              onChange={(e) => setNewFolderName(e.currentTarget.value)}
+              focusOnMount
+            />
+          </div>
+          <DialogButton
+            onClick={handleCreateFolder}
+            disabled={!newFolderName.trim()}
+            style={{ minWidth: 48, width: 48, height: 40, padding: 0, fontSize: 12 }}
+          >
+            {t("storageSettings.newFolderCreate")}
+          </DialogButton>
+          <DialogButton
+            onClick={() => { setCreatingFolder(false); setNewFolderName(""); }}
+            style={{ minWidth: 48, width: 48, height: 40, padding: 0, fontSize: 12 }}
+          >
+            {t("common.cancel")}
+          </DialogButton>
+        </Focusable>
       )}
-      <ButtonItem layout="below" onClick={() => onConfirm(path)}>
-        {t("storage.useThisPath")}
-      </ButtonItem>
+
+      {/* Action buttons */}
+      <Focusable style={{ display: "flex", gap: 8 }}>
+        <ButtonItem layout="below" onClick={() => onConfirm(path)}>
+          {t("storageSettings.selectFolder")}
+        </ButtonItem>
+        {!creatingFolder && (
+          <ButtonItem layout="below" onClick={() => setCreatingFolder(true)}>
+            {t("storageSettings.newFolder")}
+          </ButtonItem>
+        )}
+      </Focusable>
     </div>
   );
 };

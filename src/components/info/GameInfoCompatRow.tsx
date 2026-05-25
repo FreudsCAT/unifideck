@@ -86,21 +86,11 @@ export const GameInfoCompatRow: FC<Props> = ({
   const isDownloading = activeDownload != null;
   const progress = activeDownload?.progress_percent ?? 0;
 
-  const showInstallConfirm = useCallback(() => {
+  const showInstallConfirm = useCallback(async () => {
     if (!game) return;
-    showModal(
-      <ConfirmModal
-        strTitle={t("confirmModals.installTitle")}
-        strDescription={t("confirmModals.installDescription", { title: game.title })}
-        strOKButtonText={t("confirmModals.yes")}
-        strCancelButtonText={t("confirmModals.no")}
-        onOK={async () => {
-          const r = await installFlow.start(game);
-          if (r?.success) toast.success(t("toasts.downloadStarted"));
-          else if (r) toast.error(t("toasts.downloadFailed"));
-        }}
-      />,
-    );
+    const r = await installFlow.start(game);
+    if (r?.success) toast.success(t("toasts.downloadStarted"));
+    else if (r) toast.error(t("toasts.downloadFailed"));
   }, [game, installFlow, t, toast]);
 
   const showUninstallConfirm = useCallback(() => {

@@ -54,13 +54,14 @@ DEFAULT_INSTALL_DIRS = {
     "ubisoft": "~/Games/Ubisoft",
 }
 
+# Root game directory — always checked so internal storage
+# shows up even before any per-store subdirectories exist.
+DEFAULT_GAMES_ROOT = "~/Games"
+
 # Where the games.map lives by default. Steam Deck never
 # relocates this without explicit user action, so the path is
 # stable.
 DEFAULT_GAMES_MAP = "~/.local/share/unifideck/games.map"
-
-# Mount root for SD cards / external drives on the Steam Deck
-DEFAULT_SD_ROOT = "/run/media"
 
 # ── Legacy compatibility aliases ──────────────────────────────
 # Keep the old constant names working so legacy modules
@@ -140,19 +141,26 @@ def get_all_game_directories(config: ConfigManager | None = None) -> list[str]:
     """
     candidates: list[str] = []
 
-    # 1. Per-store install dirs
+    # 1. Root games directory — always available as internal storage.
+    #    Create it if missing so internal storage is never empty.
+    games_root = expand(DEFAULT_GAMES_ROOT)
+    _ensure_dir(games_root)
+    candidates.append(games_root)
+
+    # 2. Per-store install dirs
     for store, default in DEFAULT_INSTALL_DIRS.items():
         path = _cfg(config, f"stores.{store}.install_dir", default)
         candidates.append(expand(path))
 
-    # 2. Custom user path
+    # 3. Custom user path
     custom = get_cfg(config, "download.custom_path", "")
     if custom:
         candidates.append(expand(custom))
 
-    # 3. SD card / external drive scan
-    media_root = get_cfg(config, "paths.sd_card_root", DEFAULT_SD_ROOT)
-    candidates.extend(_scan_mount_root(media_root))
+    # 4. External drives — scan every writable non-system mount
+    #    from /proc/mounts for Game directories.  No hardcoded
+    #    paths — whatever is mounted and writable gets checked.
+    candidates.extend(_scan_external_mounts())
 
     # Filter to existing dirs and dedupe
     existing = [p for p in candidates if Path(p).is_dir()]
@@ -173,64 +181,71 @@ def _collect_game_dirs(parent_path: Path) -> list[str]:
     return found
 
 
-def _scan_level2(level1_path: Path) -> list[str]:
-    """Scan the level-2 subtree under ``level1_path`` for game dirs.
 
-    Some Decks (LUKS-on-external SSD setups notably) mount
-    game partitions one level deeper than the standard
-    ``/run/media/<user>/<mount>/Games`` layout — this helper
-    handles the ``<mount>/<level2>/Games`` case. Returns an
-    empty list on any I/O error (mount disappeared between
-    listings, permissions trouble).
-    """
-    found: list[str] = []
-    with contextlib.suppress(OSError):
-        for level2_path in level1_path.iterdir():
-            if (
-                not level2_path.is_dir()
-                or level2_path.is_symlink()
-            ):
-                continue
-            found.extend(_collect_game_dirs(level2_path))
-    return found
+def _ensure_dir(path: str) -> None:
+    """Create a directory if it doesn't exist. Idempotent."""
+    Path(path).mkdir(parents=True, exist_ok=True)
 
 
-def _scan_mount_root(root: str) -> list[str]:
-    """Walk ``/run/media/<user>/<mount>/`` looking for game folders.
-
-    Returns paths matching ``<mount>/Games/`` or
-    ``<mount>/GOG Games/`` where they exist. Errors are logged
-    at debug level only — a missing ``/run/media`` on a
-    non-Deck system is normal.
-
-    SECURITY/ROBUSTNESS: symbolic links are skipped at every
-    level. A symlink loop (e.g. ``Games/Other -> Games/``) would
-    otherwise cause the scan to recurse indefinitely or return
-    duplicate paths. The dedupe pass at the caller would mask
-    the duplicates but the wasted CPU on a symlink loop could
-    freeze sync.
-    """
-    root_path = Path(root)
-    if not root_path.is_dir():
-        return []
-
-    found: list[str] = []
+def _device_id(path: str) -> int:
+    """Return st_dev of *path*, or 0 on error."""
     try:
-        for level1_path in root_path.iterdir():
-            if (
-                not level1_path.is_dir()
-                or level1_path.is_symlink()
-            ):
-                continue
-            # /run/media/<level1>/Games or GOG Games
-            found.extend(_collect_game_dirs(level1_path))
-            # /run/media/<level1>/<level2>/Games (some Decks)
-            found.extend(_scan_level2(level1_path))
+        return os.stat(path).st_dev
+    except OSError:
+        return 0
+
+
+def _scan_external_mounts() -> list[str]:
+    """Scan every writable external mount for game directories.
+
+    Reads ``/proc/mounts`` to discover mount points — no hardcoded
+    paths.  Skips the device that contains ``$HOME`` (internal
+    storage) and non-storage filesystem types.  For each remaining
+    mount, looks for ``Games/`` and ``GOG Games/`` subdirectories
+    at the mount root and one level deeper (some setups mount
+    partitions inside a parent directory).
+
+    Symlinks are skipped at every level to avoid loops.
+    """
+    home_dev = _device_id(str(Path.home()))
+    found: list[str] = []
+
+    try:
+        with open("/proc/mounts") as f:
+            for line in f:
+                parts = line.split()
+                if len(parts) < 3:
+                    continue
+                mp = parts[1]
+                fstype = parts[2]
+                if fstype in _SKIP_FSTYPES:
+                    continue
+                if mp.startswith(_VIRTUAL_PREFIXES):
+                    continue
+                mp_path = Path(mp)
+                if not mp_path.is_dir():
+                    continue
+                if _device_id(mp) == home_dev:
+                    continue  # internal — already covered
+                # Direct subdirectories at mount root
+                found.extend(_collect_game_dirs(mp_path))
+                # One level deeper (e.g. /mount/<label>/Games)
+                with contextlib.suppress(OSError):
+                    for child in mp_path.iterdir():
+                        if child.is_dir() and not child.is_symlink():
+                            found.extend(_collect_game_dirs(child))
     except OSError as e:
-        logger.debug(
-            "[paths] mount scan failed on %s: %s", root, e,
-        )
+        logger.debug("[paths] external mount scan failed: %s", e)
+
     return found
+
+
+_SKIP_FSTYPES = frozenset({
+    "proc", "sysfs", "devtmpfs", "devpts", "tmpfs", "cgroup",
+    "cgroup2", "pstore", "bpf", "debugfs", "tracefs", "hugetlbfs",
+    "ramfs", "overlay", "squashfs", "fuse.gvfsd-fuse",
+    "fuse.portal", "securityfs", "configfs", "efivarfs",
+})
 
 
 # ══════════════════════════════════════════════════════════════
