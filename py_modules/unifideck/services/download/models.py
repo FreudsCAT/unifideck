@@ -60,6 +60,11 @@ class DownloadItem:
     storage_location: str = "internal"
     download_phase: str = "downloading"
     phase_message: str = ""
+    # Set by the service at enqueue time when the target install
+    # directory already exists & is non-empty — used by the UI to
+    # render "Update Queued" / "Downloading Update" instead of
+    # "Download Queued" / "Downloading" (mirrors staging UX).
+    was_previously_installed: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         """Serialise to a JSON-friendly dict.
@@ -100,6 +105,7 @@ class DownloadItem:
             "storage_location": self.storage_location,
             "download_phase": self.download_phase,
             "phase_message": self.phase_message,
+            "was_previously_installed": self.was_previously_installed,
         }
 
     @classmethod

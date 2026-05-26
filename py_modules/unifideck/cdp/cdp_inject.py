@@ -22,6 +22,7 @@ Two surfaces:
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import TYPE_CHECKING, Any
 
@@ -103,7 +104,14 @@ _PLAY_BUTTON_TEXT_REGEX = (
 def _hide_play_js(app_id: int) -> str:
     """Build the stateless one-shot hide JS for ``app_id``.
 
-    Verbatim port of staging's ``hide_native_play_section`` JS.
+    Verbatim port of staging's ``hide_native_play_section`` JS,
+    with one robustness tweak: action-verb matching strips
+    leading/trailing non-letter characters before the regex so
+    buttons with embedded icon glyphs (e.g. "▶ Play",
+    "↓INSTALL") still match. Without this, recent Steam UI
+    builds that inline the icon as a text character (rather
+    than an SVG) silently return ``"not_found"``.
+
     Returns ``"hidden"`` / ``"not_found"`` / ``"too_large"`` so
     Python can log the outcome.
     """
@@ -113,6 +121,7 @@ def _hide_play_js(app_id: int) -> str:
         '    var appId = "' + app_id_str + '";\n'
         '    var buttons = document.querySelectorAll(\'button, [class*="Focusable"]\');\n'
         '    var playBtn = null;\n'
+        '    var candidateCount = 0;\n'
         '    for (var i = 0; i < buttons.length; i++) {\n'
         '        var btn = buttons[i];\n'
         '        // Skip buttons inside our wrapper, already-hidden, or modals.\n'
@@ -131,9 +140,28 @@ def _hide_play_js(app_id: int) -> str:
         '        }\n'
         '        if (skip) continue;\n'
         '        \n'
+        '        // Token-based match: split the button text on any non-\n'
+        '        // letter sequence (\\p{L} covers Latin/CJK/Arabic/etc.)\n'
+        '        // and test each token against the action-verb regex.\n'
+        '        // This handles all the real-world button shapes Steam\n'
+        '        // emits without relying on a strict "==" comparison:\n'
+        '        //   "▶ Play"            -> ["Play"]\n'
+        '        //   "↓INSTALL"          -> ["INSTALL"]\n'
+        '        //   "Play (5.2 GB)"     -> ["Play", "GB"]\n'
+        '        //   "INSTALL SPACE …"   -> ["INSTALL", "SPACE", ...]\n'
         '        var txt = btn.textContent.trim();\n'
-        '        if (/^(' + _PLAY_BUTTON_TEXT_REGEX + ')$/i.test(txt)) {\n'
+        '        var tokens = txt.split(/[^\\p{L}]+/u).filter(function(t) { return t.length > 0; });\n'
+        '        var verbRe = /^(' + _PLAY_BUTTON_TEXT_REGEX + ')$/i;\n'
+        '        var matched = false;\n'
+        '        for (var ti = 0; ti < tokens.length; ti++) {\n'
+        '            if (verbRe.test(tokens[ti])) { matched = true; break; }\n'
+        '        }\n'
+        '        if (matched) {\n'
+        '            candidateCount++;\n'
         '            var rect = btn.getBoundingClientRect();\n'
+        '            // Size gate keeps us from grabbing the small "Install"\n'
+        '            // *tab* (next to Details/Synopsis) — primary action\n'
+        '            // buttons in the BPM action bar are always wider.\n'
         '            if (rect.width > 100 && rect.height > 30) {\n'
         '                playBtn = btn;\n'
         '                break;\n'
@@ -141,7 +169,7 @@ def _hide_play_js(app_id: int) -> str:
         '        }\n'
         '    }\n'
         '    if (!playBtn) {\n'
-        '        console.log("[Unifideck CDP] No visible native play button found for app " + appId);\n'
+        '        console.log("[Unifideck CDP] No visible native play button found for app " + appId + " (scanned " + buttons.length + " buttons, " + candidateCount + " text-matched but size-filtered)");\n'
         '        return "not_found";\n'
         '    }\n'
         '    // Walk up to find the full action-bar container without\n'
@@ -265,7 +293,17 @@ class SteamCSSInjector:
         """
         try:
             result = await self._cdp.eval_js(_hide_play_js(app_id))
-            logger.debug("[cdp_inject] hide_play_section(%d) => %r", app_id, result)
+            # _send() returns None when the WS isn't connected — surface
+            # that as an explicit failure so the silent-success regression
+            # we hit on for-pr-0.7 can't recur unnoticed.
+            if result is None:
+                logger.warning(
+                    "[cdp_inject] hide_play_section(%d) got no response — "
+                    "CDP not connected",
+                    app_id,
+                )
+                return {"ok": False, "error": "cdp_not_connected"}
+            logger.info("[cdp_inject] hide_play_section(%d) => %r", app_id, result)
             # Returns "hidden" / "not_found" / "too_large"; expose
             # raw value so the frontend can decide whether to back off.
             return {"ok": True, "outcome": result}
@@ -277,6 +315,13 @@ class SteamCSSInjector:
         """Restore Steam's native PlaySection for ``app_id``."""
         try:
             result = await self._cdp.eval_js(_show_play_js(app_id))
+            if result is None:
+                logger.debug(
+                    "[cdp_inject] show_play_section(%d) got no response — "
+                    "CDP not connected",
+                    app_id,
+                )
+                return {"ok": False, "error": "cdp_not_connected"}
             return {"ok": True, "restored": bool(result)}
         except Exception as e:
             logger.debug("[cdp_inject] show_play_section(%d) failed: %s", app_id, e)
@@ -284,19 +329,64 @@ class SteamCSSInjector:
 
 
 _singleton_injector: SteamCSSInjector | None = None
+_CDP_CONNECT_TIMEOUT_S = 5.0
 
 
-async def get_cdp_client() -> SteamCSSInjector:
-    """Return the process-wide ``SteamCSSInjector`` singleton."""
+async def _build_connected_injector() -> SteamCSSInjector | None:
+    """Construct a fresh ``SteamCSSInjector`` and connect it.
+
+    Returns ``None`` if the connect fails so the caller can avoid
+    caching a dead singleton.
+    """
+    from .cdp_client import CDPClient
+    injector = SteamCSSInjector(CDPClient())
+    try:
+        ok = await asyncio.wait_for(
+            injector.connect_to_steam(),
+            timeout=_CDP_CONNECT_TIMEOUT_S,
+        )
+    except (TimeoutError, Exception) as e:
+        logger.warning("[cdp_inject] connect to Steam UI tab failed: %s", e)
+        return None
+    if not ok:
+        logger.warning(
+            "[cdp_inject] connect to Steam UI tab returned False "
+            "(no '%s' target found?)",
+            STEAM_TAB_URL_MARKER,
+        )
+        return None
+    logger.info(
+        "[cdp_inject] connected to Steam UI tab (marker=%r)",
+        STEAM_TAB_URL_MARKER,
+    )
+    return injector
+
+
+async def get_cdp_client() -> SteamCSSInjector | None:
+    """Return the process-wide ``SteamCSSInjector`` singleton.
+
+    Constructs and connects on first call. If the cached singleton's
+    WebSocket has dropped (Steam restart, CEF reload), reconnects from
+    scratch. Returns ``None`` if connect fails so RPC handlers can
+    surface a clean error instead of caching a dead client.
+    """
     global _singleton_injector
     if _singleton_injector is None:
-        from .cdp_client import CDPClient
-        client = CDPClient()
-        _singleton_injector = SteamCSSInjector(client)
+        _singleton_injector = await _build_connected_injector()
+        return _singleton_injector
+    if not _singleton_injector._cdp.connected:
+        logger.debug("[cdp_inject] singleton present but disconnected; reconnecting")
+        await _singleton_injector._cdp.disconnect()
+        _singleton_injector = await _build_connected_injector()
     return _singleton_injector
 
 
 async def shutdown_cdp_client() -> None:
     """Drop the singleton (called on plugin unload)."""
     global _singleton_injector
+    if _singleton_injector is not None:
+        try:
+            await _singleton_injector._cdp.disconnect()
+        except Exception as e:
+            logger.debug("[cdp_inject] disconnect on shutdown skipped: %s", e)
     _singleton_injector = None

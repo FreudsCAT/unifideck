@@ -9,18 +9,22 @@
 import type { Result, StoreId } from "./api";
 
 /**
- * High-level state of a download item. Drives the badge
- * shown next to the row in DownloadsTab.
+ * High-level state of a download item. Mirrors the values
+ * emitted by ``DownloadItem.status`` in the backend
+ * (``"queued"`` → ``"running"`` → ``"complete"`` / ``"failed"``
+ * / ``"cancelled"``). Keep these strings in lock-step with
+ * the worker — silent mismatches make the UI sit on the
+ * wrong label or hide speed/ETA.
  */
 export type DownloadStatus =
   | "queued"
-  | "downloading"
-  | "completed"
-  | "cancelled"
-  | "error";
+  | "running"
+  | "complete"
+  | "failed"
+  | "cancelled";
 
 /**
- * Sub-status used while `status === "downloading"` to show
+ * Sub-status used while `status === "running"` to show
  * what the underlying CLI is currently doing.
  */
 export type DownloadPhase =
@@ -58,6 +62,7 @@ export interface DownloadItem {
   error_message?: string;
   download_phase?: DownloadPhase;
   phase_message?: string;
+  was_previously_installed?: boolean;
 }
 
 /**

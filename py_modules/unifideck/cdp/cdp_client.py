@@ -32,11 +32,31 @@ class CDPClient:
         self._request_id = 0
         self._pending: dict[int, asyncio.Future[Any]] = {}
         self._recv_task: asyncio.Task[Any] | None = None
+        # Serialise eval calls so concurrent callers can't race on the
+        # message-id <-> response mapping (staging used the same lock).
+        self._send_lock = asyncio.Lock()
+
+    @property
+    def connected(self) -> bool:
+        """Whether a CDP WebSocket connection is currently open.
+
+        Also returns False if the receive loop has exited (which marks the
+        socket dead by clearing ``self._ws``), so callers can rely on this
+        as a "should I reconnect?" check.
+        """
+        return self._ws is not None
+
     async def connect(self, target_url_substring: str = "") -> bool:
         """Connect."""
         targets = await self._list_targets()
         target = self._pick_target(targets, target_url_substring)
         if not target or "webSocketDebuggerUrl" not in target:
+            logger.warning(
+                "[CDPClient] no suitable target among %d pages "
+                "(substring=%r); titles=%s",
+                len(targets), target_url_substring,
+                [t.get("title", "?") for t in targets if t.get("type") == "page"],
+            )
             return False
         try:
             import websockets
@@ -48,6 +68,11 @@ class CDPClient:
             logger.exception("[CDPClient] ws connect failed")
             return False
         self._recv_task = asyncio.create_task(self._recv_loop())
+        logger.info(
+            "[CDPClient] connected to target title=%r url=%s",
+            target.get("title", "?"),
+            target.get("url", "?")[:120],
+        )
         return True
     async def disconnect(self) -> None:
         """Disconnect."""
@@ -73,8 +98,15 @@ class CDPClient:
         return bool(result and result.get("result", {}).get("value"))
     async def evaluate(self, expression: str) -> dict[str, Any] | None:
         """Evaluate."""
+        # ``userGesture`` matches staging — some Steam UI APIs gate on
+        # whether the eval is treated as user-initiated. ``awaitPromise``
+        # is explicitly False because our hide JS is synchronous; setting
+        # it True would make CDP wait on every returned value, including
+        # non-promises, which can stall.
         return await self._send("Runtime.evaluate", {
             "expression": expression,
+            "userGesture": True,
+            "awaitPromise": False,
             "returnByValue": True,
         })
     async def eval_js(self, expression: str) -> Any:
@@ -82,7 +114,21 @@ class CDPClient:
         result = await self.evaluate(expression)
         if not result:
             return None
-        return result.get("result", {}).get("value")
+        # Surface JS exceptions instead of silently returning None — a JS
+        # throw inside the evaluated expression otherwise looks identical
+        # to "no WebSocket response" and we'd never know why a call
+        # silently fails.
+        inner = result.get("result", {})
+        if "exceptionDetails" in result:
+            exc = result["exceptionDetails"]
+            desc = (
+                exc.get("exception", {}).get("description")
+                or exc.get("text")
+                or "unknown JS exception"
+            )
+            logger.warning("[CDPClient] JS exception: %s", desc)
+            return None
+        return inner.get("value")
     async def list_targets(self) -> list[dict[str, Any]]:
         """List targets."""
         return await self._list_targets()
@@ -153,10 +199,45 @@ class CDPClient:
     @staticmethod
     def _pick_target(targets: list[dict[str, Any]],
                      substring: str) -> dict[str, Any] | None:
-        """Pick target."""
-        for t in targets:
-            if t.get("type") != "page":
+        """Pick the Steam library UI tab.
+
+        Multiple CEF page targets share the ``steamloopback.host``
+        URL marker on modern Steam builds (the ``SharedJSContext``
+        helper tab + the actual ``Steam Big Picture Mode`` window).
+        ``SharedJSContext`` does NOT host the visible action-bar DOM
+        — its ``document`` is the helper context and
+        ``querySelectorAll('button')`` returns 0 results there. So we
+        explicitly prefer ``Steam Big Picture Mode`` (or a steamui
+        ``/index.html`` URL with the on-deck flag) before falling
+        back to any ``steamloopback.host`` match. The fallback keeps
+        us alive on older Steam builds where only one tab matched.
+        """
+        pages = [t for t in targets if t.get("type") == "page"]
+
+        # 1st pass: the real BPM/Steam UI window, identified by title.
+        for t in pages:
+            if t.get("title") == "Steam Big Picture Mode":
+                return t
+
+        # 2nd pass: the steamui /index.html URL signature — covers
+        # builds where the title differs but the URL has the
+        # on-deck shared-context query string.
+        for t in pages:
+            url = t.get("url", "")
+            if "steamloopback.host/index.html" in url:
+                return t
+
+        # 3rd pass: anything matching the caller's substring, but
+        # explicitly skip SharedJSContext (it has 0 buttons).
+        for t in pages:
+            if t.get("title") == "SharedJSContext":
                 continue
+            if not substring or substring in t.get("url", ""):
+                return t
+
+        # Last resort: original behaviour. Better to connect
+        # to SharedJSContext than to fail outright.
+        for t in pages:
             if not substring or substring in t.get("url", ""):
                 return t
         return None
@@ -165,31 +246,63 @@ class CDPClient:
         """Send."""
         if not self._ws:
             return None
-        self._request_id += 1
-        req_id = self._request_id
-        message = {
-            "id": req_id,
-            "method": method,
-            "params": params,
-        }
-        future: asyncio.Future[Any] = (
-            asyncio.get_event_loop().create_future()
-        )
-        self._pending[req_id] = future
-        try:
-            await self._ws.send(json.dumps(message))
-            return await asyncio.wait_for(
-                future, timeout=self._response_timeout,
+        async with self._send_lock:
+            if not self._ws:
+                return None
+            self._request_id += 1
+            req_id = self._request_id
+            message = {
+                "id": req_id,
+                "method": method,
+                "params": params,
+            }
+            future: asyncio.Future[Any] = (
+                asyncio.get_event_loop().create_future()
             )
-        except TimeoutError:
-            logger.warning(
-                "[CDPClient] timeout on %s", method,
-            )
-            return None
-        finally:
-            self._pending.pop(req_id, None)
+            self._pending[req_id] = future
+            try:
+                await self._ws.send(json.dumps(message))
+                return await asyncio.wait_for(
+                    future, timeout=self._response_timeout,
+                )
+            except TimeoutError:
+                logger.warning(
+                    "[CDPClient] timeout on %s — marking disconnected",
+                    method,
+                )
+                # Force reconnect on next call (staging parity).
+                self._mark_disconnected()
+                return None
+            except Exception as e:
+                # WS likely dropped mid-send ("no close frame received or
+                # sent"). Drop the dead socket so get_cdp_client() picks
+                # up a fresh one on the next call.
+                logger.warning(
+                    "[CDPClient] send failed on %s: %s — marking disconnected",
+                    method,
+                    e,
+                )
+                self._mark_disconnected()
+                return None
+            finally:
+                self._pending.pop(req_id, None)
+
+    def _mark_disconnected(self) -> None:
+        """Drop the WS handle + fail pending futures so callers retry."""
+        self._ws = None
+        for fut in self._pending.values():
+            if not fut.done():
+                fut.set_exception(ConnectionError("CDP connection lost"))
+        self._pending.clear()
     async def _recv_loop(self) -> None:
-        """Recv loop."""
+        """Recv loop.
+
+        Marks the client disconnected when the loop exits (clean close
+        OR error) so the next get_cdp_client() call reconnects from
+        scratch. Without this, a dropped socket silently stays
+        "connected" forever and every later RPC fails with the same
+        close-frame error.
+        """
         if self._ws is None:
             logger.warning(
                 "[CDPClient] _recv_loop started before connect()",
@@ -210,3 +323,5 @@ class CDPClient:
             raise
         except Exception as e:
             logger.warning("[CDPClient] recv loop error: %s", e)
+        finally:
+            self._mark_disconnected()

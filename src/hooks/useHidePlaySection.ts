@@ -57,7 +57,12 @@ export function useHidePlaySection(appId: number | null, enabled: boolean): void
     const doHide = (): void => {
       appendOp(appId, async () => {
         if (generation.get(appId) !== gen) return;
-        await hide(appId);
+        const result = await hide(appId);
+        // Surface the backend outcome in the CEF console so we can
+        // tell from DevTools alone whether the burst is reaching JS
+        // ("hidden"), missing the button ("not_found"), or silently
+        // no-op'ing because CDP isn't connected ("cdp_not_connected").
+        console.debug(`[useHidePlaySection] hide(${appId}) =>`, result);
       });
     };
 

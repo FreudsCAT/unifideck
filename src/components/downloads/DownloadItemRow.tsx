@@ -12,12 +12,31 @@
  * the same StoreIcon + title prefix.
  */
 import { FC } from "react";
-import { ButtonItem, ProgressBarItem } from "@decky/ui";
+import { ButtonItem } from "@decky/ui";
 import { useTranslation } from "react-i18next";
 import { useGameActions } from "../../hooks/useGameActions";
 import { SteamBridge } from "../../lib/steam-bridge";
 import { StoreIcon } from "../shared/StoreIcon";
-import type { DownloadItem } from "../../types/downloads";
+import type { DownloadItem, DownloadStatus } from "../../types/downloads";
+import { DownloadProgressRow } from "./DownloadProgressRow";
+
+/** Map backend ``DownloadStatus`` to the i18n outcome key
+ *  (kept stable across 14 locale files). Backend says
+ *  ``"complete"``/``"failed"``/``"running"`` while the i18n
+ *  bundle uses ``"completed"``/``"error"``/``"downloading"`` —
+ *  the rename would touch every locale, so we adapt instead. */
+function outcomeKey(status: DownloadStatus): string {
+  if (status === "complete") return "completed";
+  if (status === "failed") return "error";
+  if (status === "running") return "downloading";
+  return status;
+}
+
+function outcomeColor(status: DownloadStatus): string {
+  if (status === "complete") return "#22c55e";
+  if (status === "cancelled") return "#94a3b8";
+  return "#ef4444";
+}
 
 /** Props. */
 interface Props {
@@ -38,31 +57,38 @@ export const DownloadItemRow: FC<Props> = ({ item, variant }) => {
   const actions = useGameActions(bridge);
   return (
     <div style={{
-      display: "flex", flexDirection: "column", gap: 4, padding: 6,
+      display: "flex", flexDirection: "column", gap: 6, padding: 6,
     }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+      {/* Title row — full width, never competes with badges or
+          status text. The QAM panel is narrow, so leaving room
+          for the title to lay out on one or two lines (instead of
+          wrapping around a sidebar badge) is the readability win. */}
+      <div style={{
+        display: "flex", alignItems: "center", gap: 6, minWidth: 0,
+      }}>
         <StoreIcon store={item.store} size={14} />
-        <span style={{ flex: 1, fontWeight: 500 }}>{item.game_title}</span>
-        {variant === "finished" && (
-          <span style={{
-            fontSize: 11, padding: "2px 6px", borderRadius: 3,
-            background: item.status === "completed" ? "#22c55e" :
-                        item.status === "cancelled" ? "#94a3b8" : "#ef4444",
-            color: "#0f172a",
-          }}>
-            {t(`downloads.outcome.${item.status}`)}
-          </span>
-        )}
+        <span style={{
+          flex: 1, fontWeight: 500, minWidth: 0,
+          overflow: "hidden", textOverflow: "ellipsis",
+        }}>
+          {item.game_title}
+        </span>
       </div>
+
+      {variant === "finished" && (
+        <span style={{
+          alignSelf: "flex-start",
+          fontSize: 11, padding: "2px 6px", borderRadius: 3,
+          background: outcomeColor(item.status),
+          color: "#0f172a",
+        }}>
+          {t(`downloads.outcome.${outcomeKey(item.status)}`)}
+        </span>
+      )}
+
       {variant === "current" && (
         <>
-          <ProgressBarItem
-            nProgress={item.progress_percent}
-            indeterminate={false}
-            description={
-              `${item.speed_mbps.toFixed(1)} MB/s · ETA ${item.eta_seconds}s`
-            }
-          />
+          <DownloadProgressRow download={item} />
           <ButtonItem
             layout="below"
             disabled={actions.isWorking}

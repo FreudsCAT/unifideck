@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import os
 from typing import TYPE_CHECKING, Any
 
 from unifideck.core.types import Result
@@ -46,6 +47,12 @@ class DownloadService(_WorkerMixin):
 
         self._queue: list[DownloadItem] = []
         self._running: dict[str, DownloadItem] = {}
+        # Mirror of ``_running`` keyed the same way, pointing at
+        # the asyncio.Task driving each install. Lets ``cancel()``
+        # actually kill a running download instead of returning
+        # ``already_running`` — the worker catches CancelledError,
+        # emits DOWNLOAD_CANCELLED, and runs its own cleanup.
+        self._running_tasks: dict[str, asyncio.Task[Any]] = {}
         # Recent finished items (capped FIFO). Populated by the
         # worker's ``_cleanup_running``; surfaced to the frontend
         # via ``get_queue()["finished"]`` so the Downloads page can
@@ -112,11 +119,22 @@ class DownloadService(_WorkerMixin):
                     return Result(success=False, error="already_queued")
 
             # 3. Add to queue
+            # Treat as an update when the install path already has
+            # content — drives the "Update Queued" / "Downloading
+            # Update" labels in the UI. Cheap stat-only check
+            # (no recursive scan) so we don't slow the enqueue path.
+            was_previously_installed = False
+            try:
+                with os.scandir(install_path) as it:
+                    was_previously_installed = any(True for _ in it)
+            except (FileNotFoundError, NotADirectoryError, PermissionError):
+                was_previously_installed = False
             item = DownloadItem(
                 store=store,
                 game_id=game_id,
                 install_path=install_path,
                 title=title,
+                was_previously_installed=was_previously_installed,
             )
             self._queue.append(item)
 
@@ -134,13 +152,26 @@ class DownloadService(_WorkerMixin):
         store: str,
         game_id: str,
     ) -> Result:
-        """Remove a pending download (does not kill running ones)."""
+        """Cancel a download — pending OR running.
+
+        - Pending (in ``_queue``): remove + emit CANCELLED.
+        - Running (in ``_running_tasks``): cancel the task; the
+          worker's ``_run_install`` catches ``CancelledError``,
+          marks the item, emits CANCELLED, and runs
+          ``_cleanup_running`` in its finally block.
+        """
         key = f"{store}:{game_id}"
 
-        async with self._lock:
-            if key in self._running:
-                return Result(success=False, error="already_running")
+        # Running case first — kill the task outside the lock so
+        # the worker's cleanup (which itself takes locks) can run.
+        running_task = self._running_tasks.get(key)
+        if running_task is not None and not running_task.done():
+            running_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await running_task
+            return Result(success=True)
 
+        async with self._lock:
             found_idx = -1
             for i, item in enumerate(self._queue):
                 if item.store == store and item.game_id == game_id:
@@ -151,6 +182,7 @@ class DownloadService(_WorkerMixin):
                 return Result(success=False, error="not_found")
 
             item = self._queue.pop(found_idx)
+            item.status = "cancelled"
 
         await self._save_queue()
 

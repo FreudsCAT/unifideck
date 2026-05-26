@@ -148,6 +148,8 @@ class UIRPCMixin:
         """
         from unifideck.cdp import get_cdp_client
         injector = await get_cdp_client()
+        if injector is None:
+            return {"ok": False, "error": "cdp_not_connected"}
         return await injector.hide_play_section(app_id)
 
     async def unhide_play_section(self, app_id: int) -> Any:
@@ -159,6 +161,8 @@ class UIRPCMixin:
         """
         from unifideck.cdp import get_cdp_client
         injector = await get_cdp_client()
+        if injector is None:
+            return {"ok": False, "error": "cdp_not_connected"}
         return await injector.show_play_section(app_id)
 
     async def inject_hide_css(self, app_id: int, css: str) -> Any:
@@ -172,6 +176,8 @@ class UIRPCMixin:
         from unifideck.cdp import get_cdp_client
         from unifideck.cdp.cdp_inject import build_marker_id
         injector = await get_cdp_client()
+        if injector is None:
+            return {"ok": False, "error": "cdp_not_connected"}
         marker = build_marker_id(f"app_{app_id}")
         return await injector.inject_css(css, marker)
 

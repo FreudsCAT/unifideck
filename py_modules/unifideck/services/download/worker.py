@@ -126,8 +126,15 @@ class _WorkerMixin:
         save_method = getattr(self, "_save_queue", None)
         if callable(save_method):
             await save_method()
+        running_tasks = getattr(self, "_running_tasks", None)
         for item in to_start:
-            _track(asyncio.create_task(self._run_install(item)))
+            task = asyncio.create_task(self._run_install(item))
+            _track(task)
+            # Register the task so DownloadService.cancel can kill
+            # a running install. The mixin host sets this up;
+            # ``getattr`` keeps the worker mixin standalone-safe.
+            if running_tasks is not None:
+                running_tasks[f"{item.store}:{item.game_id}"] = task
 
     async def _run_install(self, item: DownloadItem) -> None:
         """Execute one install via ``StoreBase.install_game``.
@@ -160,6 +167,13 @@ class _WorkerMixin:
                         error_type="cloud_only",
                     )
                 return
+
+            # Flip from "queued" → "running" so the UI label
+            # progresses ("Update Queued" → "Downloading Update")
+            # and consumers that key on status (cancel paths,
+            # progress visibility) see the right state.
+            item.status = "running"
+            item.start_time = time.time()
 
             if self._bus:
                 await self._bus.emit(Events.DOWNLOAD_STARTED, item=item.to_dict())
@@ -218,12 +232,28 @@ class _WorkerMixin:
                     except Exception as exc:
                         logger.exception("[DownloadWorker] on_complete callback failed: %s", exc)
             else:
+                item.status = "failed"
+                item.error = str(result.error or "")
+                item.end_time = time.time()
                 error_type = classify_download_error(result.error or "")  # type: ignore[arg-type]
                 logger.error("[DownloadWorker] failed install for %s: %s (%s)", key, result.error, error_type)
                 if self._bus:
                     await self._bus.emit(Events.DOWNLOAD_FAILED, item=item.to_dict(), error=result.error, error_type=error_type)
 
+        except asyncio.CancelledError:
+            # Triggered by ``DownloadService.cancel`` killing the
+            # running task. Mark + emit, then re-raise so the task
+            # machinery sees a clean cancellation.
+            item.status = "cancelled"
+            item.end_time = time.time()
+            logger.info("[DownloadWorker] cancelled install for %s", key)
+            if self._bus:
+                await self._bus.emit(Events.DOWNLOAD_CANCELLED, item=item.to_dict())
+            raise
         except Exception as e:
+            item.status = "failed"
+            item.error = str(e)
+            item.end_time = time.time()
             error_type = classify_download_error(str(e))  # type: ignore[arg-type]
             logger.exception("[DownloadWorker] exception during install of %s", key)
             if self._bus:
@@ -242,6 +272,9 @@ class _WorkerMixin:
         """
         key = f"{item.store}:{item.game_id}"
         self._running.pop(key, None)
+        running_tasks = getattr(self, "_running_tasks", None)
+        if running_tasks is not None:
+            running_tasks.pop(key, None)
         finished = getattr(self, "_finished", None)
         if isinstance(finished, list):
             finished.append(item)
