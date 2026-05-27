@@ -20,6 +20,7 @@ import logging
 from typing import TYPE_CHECKING, Any
 
 from .games_map import UNIFIDECK_TAG, GameMapEntry, generate_app_id
+from .launch_options import get_full_id, preserve_user_params
 from .reconcile_phases import _ReconcilePhasesMixin
 
 if TYPE_CHECKING:
@@ -234,6 +235,282 @@ class _GamesMapMixin(_ReconcilePhasesMixin):
         for key in keys_to_delete:
             del self._games_map[key]
         return bool(keys_to_delete)
+
+    async def mark_installed(
+        self: Any,
+        store: str,
+        store_game_id: str,
+        title: str,
+        exe_path: str,
+        install_path: str,
+    ) -> int | None:
+        """Flip an existing shortcut to "installed" without recreating it.
+
+        The shortcut already exists from the prior sync (created by
+        ``_reconcile_phase_sync_games`` with ``tags["2"] = "Not Installed"``).
+        On install we only need to: (a) flip that tag to ``""``,
+        (b) write the games.map entry the launcher uses to resolve
+        the exe, and (c) emit a state-change event so SyncService and
+        the frontend cache update.
+
+        Critically, we read the existing ``appid`` off the shortcut
+        and reuse it for the games.map row. Regenerating with the
+        exe path (the worker's old behaviour) would diverge from the
+        launcher-anchored id sync wrote, leaving every appid-keyed
+        lookup downstream broken.
+
+        Matching has two passes: first by ``LaunchOptions`` (the
+        cheap, exact-store path); then by ``AppName`` + Unifideck
+        tag, which catches the cross-store-dedup case (user owns
+        the title on Epic and GOG; dedup picked one for the
+        shortcut; user installs the other). When the title-fallback
+        hits, we rewrite the matched entry's ``LaunchOptions`` to
+        point at the actually-installed store so the launcher can
+        resolve the exe via games.map.
+
+        Returns the existing app_id, or None if no shortcut matches.
+        """
+        await self._load_shortcuts()
+        await self._load_games_map()
+
+        target_launch = f"{store}:{store_game_id}"
+        shortcuts_root = self._shortcuts.get("shortcuts") if isinstance(
+            self._shortcuts, dict,
+        ) else None
+        if not isinstance(shortcuts_root, dict):
+            logger.warning(
+                "[ShortcutService] mark_installed %s — shortcuts.vdf empty",
+                target_launch,
+            )
+            return None
+
+        located: tuple[int | None, str | None] = (
+            self._locate_installable_shortcut(
+                shortcuts_root, target_launch, title,
+            )
+        )
+        existing_app_id, prev_launch = located
+        if existing_app_id is None:
+            logger.warning(
+                "[ShortcutService] mark_installed %s (title=%r) — no "
+                "shortcut found (sync may not have run yet)",
+                target_launch, title,
+            )
+            return None
+
+        # If the matched shortcut belonged to a different store (the
+        # cross-store-dedup case), drop the old games.map row so a
+        # stale "epic:<id>" entry doesn't keep pointing at a
+        # now-uninstalled binary.
+        if prev_launch and prev_launch != target_launch:
+            self._games_map.pop(prev_launch, None)
+            logger.info(
+                "[ShortcutService] mark_installed re-bound shortcut from "
+                "%s to %s (cross-store install)",
+                prev_launch, target_launch,
+            )
+
+        self._games_map[target_launch] = GameMapEntry(
+            exe=exe_path, work_dir=install_path, app_id=existing_app_id,
+        )
+
+        await self._save_all()
+
+        if self._bus:
+            from unifideck.core.types.events import Events
+            await self._bus.emit(
+                Events.SHORTCUT_INSTALL_STATE_CHANGED,
+                store=store,
+                store_game_id=store_game_id,
+                title=title,
+                app_id=existing_app_id,
+                installed=True,
+                exe_path=exe_path,
+                install_path=install_path,
+                prev_store_game_id=(
+                    prev_launch if prev_launch != target_launch else None
+                ),
+            )
+        logger.info(
+            "[ShortcutService] mark_installed %s → app_id=%d",
+            target_launch, existing_app_id,
+        )
+        return existing_app_id
+
+    def _locate_installable_shortcut(
+        self: Any,
+        shortcuts_root: dict[str, Any],
+        target_launch: str,
+        title: str,
+    ) -> tuple[int | None, str | None]:
+        """Find the shortcut to flip + rewrite LaunchOptions if needed.
+
+        Two-pass match:
+          1. ``LaunchOptions == target_launch`` — exact same store.
+          2. ``AppName == title`` + Unifideck-tagged — the user
+             installed a different store version of the same title.
+             On hit, rewrite the entry's LaunchOptions (preserving
+             user-added params like ``MANGOHUD=1``) so the launcher
+             resolves the new games.map row.
+
+        On either match we flip ``tags["2"]`` to the installed
+        marker and return ``(appid, prev_launch_options)``.
+        ``prev_launch_options`` is the old key needed to clean
+        up the stale games.map row in the caller.
+        """
+        # Pass 1 — exact LaunchOptions match.
+        for entry in shortcuts_root.values():
+            if not isinstance(entry, dict):
+                continue
+            launch = entry.get("LaunchOptions", "")
+            if not isinstance(launch, str):
+                continue
+            if get_full_id(launch) != target_launch:
+                continue
+            appid = entry.get("appid")
+            if not isinstance(appid, int):
+                continue
+            self._mark_entry_installed(entry)
+            return appid, target_launch
+
+        # Pass 2 — AppName + UNIFIDECK_TAG fallback.
+        for entry in shortcuts_root.values():
+            if not isinstance(entry, dict):
+                continue
+            if entry.get("AppName") != title:
+                continue
+            if not _GamesMapMixin._entry_has_unifideck_tag(entry):
+                continue
+            appid = entry.get("appid")
+            if not isinstance(appid, int):
+                continue
+            current_launch = entry.get("LaunchOptions", "")
+            current_launch_str = (
+                current_launch if isinstance(current_launch, str) else ""
+            )
+            entry["LaunchOptions"] = preserve_user_params(
+                current_launch_str, target_launch,
+            )
+            self._mark_entry_installed(entry)
+            return appid, get_full_id(current_launch_str)
+
+        return None, None
+
+    @staticmethod
+    def _mark_entry_installed(entry: dict[str, Any]) -> None:
+        """Set ``tags["2"] = ""`` (the installed marker)."""
+        tags = entry.get("tags")
+        if not isinstance(tags, dict):
+            tags = {}
+            entry["tags"] = tags
+        tags["2"] = ""
+
+    async def mark_uninstalled(
+        self: Any,
+        store: str,
+        store_game_id: str,
+        title: str = "",
+    ) -> int | None:
+        """Symmetric counterpart to :meth:`mark_installed`.
+
+        Flips an existing shortcut back to "not installed" while
+        preserving it in shortcuts.vdf — the user still owns the
+        game, they just removed the bytes. The shortcut keeps its
+        appid so the frontend cache and detail-page UI continue to
+        recognise it. We additionally drop the games.map row since
+        the launcher can no longer resolve an exe.
+
+        ``title`` enables the same title-fallback as
+        :meth:`mark_installed` for the cross-store case (the
+        shortcut's LaunchOptions belong to a different store than
+        the one we're uninstalling).
+
+        Returns the existing app_id, or None if no shortcut matches.
+        """
+        await self._load_shortcuts()
+        await self._load_games_map()
+
+        target_launch = f"{store}:{store_game_id}"
+        shortcuts_root = self._shortcuts.get("shortcuts") if isinstance(
+            self._shortcuts, dict,
+        ) else None
+        if not isinstance(shortcuts_root, dict):
+            logger.warning(
+                "[ShortcutService] mark_uninstalled %s — shortcuts.vdf empty",
+                target_launch,
+            )
+            return None
+
+        existing_app_id: int | None = None
+        for entry in shortcuts_root.values():
+            if not isinstance(entry, dict):
+                continue
+            launch = entry.get("LaunchOptions", "")
+            if not isinstance(launch, str):
+                continue
+            if get_full_id(launch) != target_launch:
+                continue
+            appid = entry.get("appid")
+            if not isinstance(appid, int):
+                continue
+            existing_app_id = appid
+            tags = entry.get("tags")
+            if not isinstance(tags, dict):
+                tags = {}
+                entry["tags"] = tags
+            tags["2"] = "Not Installed"
+            break
+
+        # Title fallback: shortcut belongs to a different store.
+        if existing_app_id is None and title:
+            for entry in shortcuts_root.values():
+                if not isinstance(entry, dict):
+                    continue
+                if entry.get("AppName") != title:
+                    continue
+                if not _GamesMapMixin._entry_has_unifideck_tag(entry):
+                    continue
+                appid = entry.get("appid")
+                if not isinstance(appid, int):
+                    continue
+                existing_app_id = appid
+                tags = entry.get("tags")
+                if not isinstance(tags, dict):
+                    tags = {}
+                    entry["tags"] = tags
+                tags["2"] = "Not Installed"
+                break
+
+        if existing_app_id is None:
+            logger.warning(
+                "[ShortcutService] mark_uninstalled %s (title=%r) — no "
+                "shortcut found",
+                target_launch, title,
+            )
+            return None
+
+        self._games_map.pop(target_launch, None)
+
+        await self._save_all()
+
+        if self._bus:
+            from unifideck.core.types.events import Events
+            await self._bus.emit(
+                Events.SHORTCUT_INSTALL_STATE_CHANGED,
+                store=store,
+                store_game_id=store_game_id,
+                title=title,
+                app_id=existing_app_id,
+                installed=False,
+                exe_path="",
+                install_path="",
+                prev_store_game_id=None,
+            )
+        logger.info(
+            "[ShortcutService] mark_uninstalled %s → app_id=%d",
+            target_launch, existing_app_id,
+        )
+        return existing_app_id
 
     async def remove_game(self: Any, app_id: int) -> bool:
         """Remove a shortcut by ``app_id``.

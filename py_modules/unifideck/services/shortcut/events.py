@@ -102,23 +102,49 @@ class EventsMixin:
         # body in service.py.
         async def add_game(self, game: Game) -> int: ...
         async def remove_game(self, app_id: int) -> bool: ...
+        async def mark_installed(
+            self, store: str, store_game_id: str, title: str,
+            exe_path: str, install_path: str,
+        ) -> int | None: ...
+        async def mark_uninstalled(
+            self, store: str, store_game_id: str, title: str = ...,
+        ) -> int | None: ...
         async def reconcile(
-            self, games: Sequence[Game],
+            self, games: Sequence[Game], *, force: bool = ...,
         ) -> dict[str, int]: ...
 
     @subscribe(Events.DOWNLOAD_COMPLETE)
     async def _on_download_complete(self, **kwargs: Any) -> None:
-        """Add shortcut when a download finishes successfully."""
+        """Flip the existing shortcut's install state to installed.
+
+        The shortcut was created at sync time by reconcile with
+        ``tags["2"] = "Not Installed"``. We do NOT call ``add_game``
+        here: that would mint a fresh app_id off the exe path and
+        diverge from the launcher-anchored id Steam already knows
+        about, breaking every appid-keyed lookup downstream.
+        """
         game = kwargs.get("game")
         if isinstance(game, Game):
-            await self.add_game(game)
+            await self.mark_installed(
+                game.store, game.store_game_id, game.title,
+                game.exe_path or "", game.install_path or "",
+            )
 
     @subscribe(Events.GAME_UNINSTALLED)
     async def _on_game_uninstalled(self, **kwargs: Any) -> None:
-        """Remove shortcut when a game is uninstalled."""
-        app_id = kwargs.get("app_id")
-        if isinstance(app_id, int):
-            await self.remove_game(app_id)
+        """Flip the existing shortcut's install state to not-installed.
+
+        Symmetric with ``_on_download_complete``: the user still
+        owns the game, they just removed the bytes. Keep the
+        shortcut and its appid so the frontend cache and detail-page
+        UI continue to recognise it. The emitters in
+        ``stores/{epic,amazon}/install.py`` pass ``store`` + ``game_id``
+        (not ``app_id``), so we look the shortcut up by those.
+        """
+        store = kwargs.get("store")
+        game_id = kwargs.get("game_id")
+        if isinstance(store, str) and isinstance(game_id, str):
+            await self.mark_uninstalled(store, game_id)
 
     @subscribe(Events.SYNC_COMPLETE)
     async def _on_sync_complete(self, **kwargs: Any) -> None:

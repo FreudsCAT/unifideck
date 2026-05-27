@@ -14,6 +14,8 @@
  */
 import { call } from "@decky/api";
 import { unwrapRpcEnvelope } from "../../api/useRPC";
+import { EventBusClient } from "../../api/event-bus-client";
+import { Events } from "../../types/events";
 import {
   getCachedCompatByTitle,
   getCachedRating,
@@ -341,5 +343,23 @@ export function startUnifideckCacheAutoload(): void {
   void loadUnifideckCache();
   window.addEventListener("unifideck-sync-completed", () => {
     void loadUnifideckCache();
+  });
+  // ShortcutService emits SHORTCUT_INSTALL_STATE_CHANGED on
+  // post-install/uninstall — flip the per-app entry immediately so
+  // the GOG tab and detail-page UI react without waiting for the
+  // next full library reload.
+  EventBusClient.subscribe(Events.SHORTCUT_INSTALL_STATE_CHANGED, (kw) => {
+    const appId = kw.app_id;
+    const store = kw.store;
+    const installed = kw.installed;
+    if (typeof appId !== "number") return;
+    if (typeof store !== "string") return;
+    if (typeof installed !== "boolean") return;
+    if (!isNonSteamStore(store as StoreSlug)) return;
+    updateSingleGameStatus({
+      appId,
+      store: store as Exclude<StoreSlug, "steam">,
+      isInstalled: installed,
+    });
   });
 }

@@ -21,7 +21,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from unifideck.core.types import Game
-from unifideck.services.shortcut.games_map import generate_app_id
 
 from .models import DownloadItem, classify_download_error
 
@@ -190,7 +189,7 @@ class _WorkerMixin:
             #   Ubisoft:     install_game(game_id, *, progress_cb, install_path)
             logger.info("[DownloadWorker] starting install for %s", key)
             if item.store == "ubisoft":
-                result = await store.install_game(  # type: ignore[call-arg]
+                result = await store.install_game(
                     item.game_id,
                     progress_cb=progress_cb,
                     install_path=item.install_path or None,
@@ -207,8 +206,9 @@ class _WorkerMixin:
                 item.progress = 100.0
                 item.status = "complete"
                 item.end_time = time.time()
-                if getattr(result, "install_path", None):
-                    item.install_path = result.install_path
+                result_install_path = getattr(result, "install_path", None)
+                if result_install_path:
+                    item.install_path = result_install_path
                 logger.info("[DownloadWorker] completed install for %s", key)
                 # Build a Game record so the ShortcutService listener
                 # (events.py:_on_download_complete) can register the
@@ -333,13 +333,13 @@ class _WorkerMixin:
         # to a directory walk only if missing — bounded by install dir).
         size_bytes = int(getattr(result, "size_bytes", 0) or 0)
 
-        # generate_app_id over (exe, title) — matches the algorithm
-        # ShortcutService re-runs internally; pre-computing keeps the
-        # Game.app_id consistent with what gets written to shortcuts.vdf.
-        app_id = generate_app_id(exe_path or "", title)
-
+        # Leave app_id=0 (sentinel). The shortcut already exists
+        # from sync with the launcher-anchored app_id; the
+        # mark_installed handler looks it up by (store, store_game_id)
+        # and preserves it. Pre-computing here (with exe_path instead
+        # of launcher) would drift the id and recreate the shortcut.
         return Game(
-            app_id=app_id,
+            app_id=0,
             store=item.store,
             store_game_id=item.game_id,
             title=title,

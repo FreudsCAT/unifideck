@@ -251,6 +251,20 @@ class Events(StrEnum):
     # Payload fields: app_id (int, signed).
     SHORTCUT_REMOVED = "shortcut_removed"
 
+    # Emitted by ShortcutService when an existing shortcut's
+    # install state flips (post-install or post-uninstall) without
+    # the shortcut itself being created or removed. The shortcut
+    # appid stays anchored on (launcher_path, title) across the
+    # transition — see SyncService._backfill_app_ids — so this
+    # event is the canonical channel for "the game at app_id N
+    # just became (un)installed". SyncService updates _all_games
+    # and the frontend refreshes its unifideckGameCache entry.
+    # Payload fields:
+    #   store (str), store_game_id (str), app_id (int, signed),
+    #   installed (bool), exe_path (str, "" on uninstall),
+    #   install_path (str, "" on uninstall).
+    SHORTCUT_INSTALL_STATE_CHANGED = "shortcut_install_state_changed"
+
     # Emitted by ShortcutService once a bulk reconcile (post-sync)
     # finishes. Carries the per-batch counters so the frontend can
     # decide whether to prompt the user for a Steam restart (any

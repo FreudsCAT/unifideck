@@ -40,6 +40,7 @@ const WATCHED_EVENTS: EventName[] = [
   "sync_failed", "sync_cancelled", "sync_skipped",
   "post_sync_phase_changed",
   "shortcut_reconcile_complete",
+  "shortcut_install_state_changed",
   "download_queued", "download_started", "download_progress",
   "download_complete", "download_failed", "download_cancelled",
   "game_installed", "game_uninstalled", "game_update_available",

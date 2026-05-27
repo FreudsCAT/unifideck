@@ -165,6 +165,16 @@ class SyncService(_SyncQueriesMixin, _SyncDedupMixin):
         self._bus.on(
             Events.POST_SYNC_PHASE_CHANGED, self._on_post_sync_phase,
         )
+        # Keep ``_all_games`` in sync with shortcut install-state
+        # flips so the GOG tab and detail-page UI work immediately
+        # after install/uninstall (without waiting for the next
+        # full library sync). The shortcut's appid is preserved by
+        # mark_installed / mark_uninstalled so we only touch the
+        # ``installed`` / ``exe_path`` / ``install_path`` fields.
+        self._bus.on(
+            Events.SHORTCUT_INSTALL_STATE_CHANGED,
+            self._on_shortcut_install_state_changed,
+        )
         # Surface registry/appid drift in logs at boot — operators
         # see it without needing a separate RPC. The audit doesn't
         # mutate anything; fixing drift is a manual / admin action.
@@ -872,7 +882,7 @@ class SyncService(_SyncQueriesMixin, _SyncDedupMixin):
             self._progress.artwork_synced = total
         elif phase == "metadata":
             self._progress.metadata_synced = total
-        pending = getattr(self, "_post_sync_pending", set())
+        pending: set[str] = getattr(self, "_post_sync_pending", set())
         pending.discard(phase)
         if not pending:
             # Preserve a cancelled status — services' try/finally
@@ -882,6 +892,85 @@ class SyncService(_SyncQueriesMixin, _SyncDedupMixin):
             if self._progress.status != "cancelled":
                 self._progress.mark_complete()
             self._bus.set_sync_progress(None)
+
+    async def _on_shortcut_install_state_changed(self, **kwargs: Any) -> None:
+        """Flip the in-memory Game record's installed state.
+
+        Emitted by ShortcutService.mark_installed / mark_uninstalled
+        whenever an existing shortcut's install state flips. We mirror
+        the change into ``_all_games`` (preserving ``app_id`` — the
+        launcher-anchored id stays valid across the transition) and
+        persist so a Decky reload doesn't drop the change.
+
+        Two lookups:
+          1. Strict — find the record by ``(store, store_game_id)``.
+          2. Title fallback — if strict misses, scan every store for
+             a record whose ``title`` matches. Covers the case where
+             the user owns the same title on multiple stores and
+             installs the one whose shortcut didn't win the
+             same-app_id collision at sync time. The matched record
+             stays in its original store list (we don't move it)
+             since the appid is shared and the frontend cache will
+             flip the store via the event payload directly.
+        """
+        store = kwargs.get("store")
+        store_game_id = kwargs.get("store_game_id")
+        installed = kwargs.get("installed")
+        if (
+            not isinstance(store, str)
+            or not isinstance(store_game_id, str)
+            or not isinstance(installed, bool)
+        ):
+            return
+        title = kwargs.get("title", "")
+        title = title if isinstance(title, str) else ""
+        exe_path = kwargs.get("exe_path", "") or ""
+        install_path = kwargs.get("install_path", "") or ""
+
+        async with self._lock:
+            target, matched_via = self._find_target_for_state_change(
+                store, store_game_id, title,
+            )
+            if target is None:
+                logger.warning(
+                    "[SyncService] %s:%s state-change ignored — no "
+                    "matching record in _all_games (title=%r)",
+                    store, store_game_id, title,
+                )
+                return
+            target.installed = installed
+            target.exe_path = exe_path if installed else ""
+            target.install_path = install_path if installed else ""
+            self._save_library_cache()
+        logger.info(
+            "[SyncService] flipped installed=%s for %s:%s "
+            "(app_id=%s, matched_via=%s)",
+            installed, store, store_game_id, target.app_id, matched_via,
+        )
+
+    def _find_target_for_state_change(
+        self,
+        store: str,
+        store_game_id: str,
+        title: str,
+    ) -> tuple[Game | None, str]:
+        """Locate the Game record to flip in ``_all_games``.
+
+        Returns ``(record, matched_via)`` where ``matched_via`` is
+        ``"store_id"`` for the strict path, ``"title"`` for the
+        cross-store fallback, or ``"miss"`` when nothing matches.
+        """
+        store_games = self._all_games.get(store, [])
+        for game in store_games:
+            if game.store_game_id == store_game_id:
+                return game, "store_id"
+        if not title:
+            return None, "miss"
+        for games in self._all_games.values():
+            for game in games:
+                if game.title == title:
+                    return game, "title"
+        return None, "miss"
 
     async def _emit_progress(self, store_name: str, idx: int, total: int) -> None:
         """Emit ``SYNC_PROGRESS`` — updates the phase tracker + fires event."""

@@ -39,6 +39,12 @@ export const Events = {
   // carries {added, removed, kept, total} so the UI can decide
   // whether to prompt for a Steam restart.
   SHORTCUT_RECONCILE_COMPLETE: "shortcut_reconcile_complete",
+  // Emitted by ShortcutService when an existing shortcut's install
+  // state flips (post-install/uninstall, no shortcut recreation).
+  // Payload: { store, store_game_id, app_id, installed,
+  //            exe_path, install_path }. Drives unifideckGameCache
+  //  refresh so the GOG tab and detail-page UI react immediately.
+  SHORTCUT_INSTALL_STATE_CHANGED: "shortcut_install_state_changed",
   // Downloads
   DOWNLOAD_QUEUED: "download_queued",
   DOWNLOAD_STARTED: "download_started",
