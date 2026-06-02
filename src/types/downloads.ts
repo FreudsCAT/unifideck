@@ -62,7 +62,10 @@ export interface DownloadItem {
   error_message?: string;
   download_phase?: DownloadPhase;
   phase_message?: string;
-  was_previously_installed?: boolean;
+  /** True when this entry is an update of an already-installed
+   *  game (enqueued via `update_game`), false for a fresh install.
+   *  Drives the "Downloading Update" / "Update Queued" label. */
+  is_update?: boolean;
 }
 
 /**

@@ -63,6 +63,31 @@ interface CacheEntry {
 const CACHE_TTL = 5000;
 const cache = new Map<number, CacheEntry>();
 
+// Mounted-hook subscribers, keyed by appId. `invalidateGameInfo`
+// notifies these so a live `useGameInfo` refetches immediately
+// (e.g. when a download completes and `is_installed` flips) —
+// clearing the module cache alone doesn't re-run a mounted hook,
+// which is why the Play section used to stay on "Install" until
+// the user reopened the page.
+const subscribers = new Map<number, Set<() => void>>();
+
+function subscribeGameInfo(appId: number, fn: () => void): () => void {
+  let set = subscribers.get(appId);
+  if (!set) {
+    set = new Set();
+    subscribers.set(appId, set);
+  }
+  set.add(fn);
+  return () => {
+    set?.delete(fn);
+    if (set && set.size === 0) subscribers.delete(appId);
+  };
+}
+
+function notifyGameInfo(appId: number): void {
+  subscribers.get(appId)?.forEach((fn) => fn());
+}
+
 /**
  * Aggregated game info returned by {@link useGameInfo} —
  * description, scores, artwork URLs, playtime fragments —
@@ -175,6 +200,15 @@ export function useGameInfo(appId: number | null): UseGameInfoResult {
     void load(false);
   }, [load]);
 
+  // Re-fetch when something invalidates this appId (download
+  // complete / uninstall / cancel). Without this, the mounted
+  // hook keeps its stale state — the Play section stays on the
+  // wrong button until the page is reopened.
+  useEffect(() => {
+    if (appId == null) return;
+    return subscribeGameInfo(appId, () => { void load(true); });
+  }, [appId, load]);
+
   const refresh = useCallback(() => load(true), [load]);
 
   return { ...state, refresh };
@@ -193,9 +227,15 @@ export function _clearGameInfoCache(): void {
  *  signed/unsigned variants since Steam shortcuts may be
  *  represented either way in the cache. */
 export function invalidateGameInfo(appId: number): void {
-  cache.delete(appId);
   const signed = appId > 0x7FFFFFFF ? appId - 0x100000000 : appId;
   const unsigned = appId < 0 ? appId + 0x100000000 : appId;
-  if (signed !== appId) cache.delete(signed);
-  if (unsigned !== appId) cache.delete(unsigned);
+  // Clear the cache for every representation, then notify mounted
+  // hooks so they refetch. The caller may pass either the signed
+  // (backend Game.app_id) or unsigned (Steam shortcut) form, while
+  // the mounted hook is keyed on whichever the page handed it — so
+  // we fan out to both.
+  for (const id of new Set([appId, signed, unsigned])) {
+    cache.delete(id);
+    notifyGameInfo(id);
+  }
 }

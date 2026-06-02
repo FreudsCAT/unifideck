@@ -280,12 +280,13 @@ class AmazonStore(StoreBase):
         progress_cb: ProgressCallback | None = None,
         **kwargs: Any,
     ) -> InstallResult:
-        """Update game."""
+        """Update game via ``nile update`` (in-place patch)."""
         base_path = await self._updates.resolve_current_base_path(game_id)
         return await self._installer.install_game(
             game_id,
             base_path=base_path,
             progress_cb=progress_cb,
+            verb="update",
         )
 
     async def check_for_updates(self) -> list[str]:

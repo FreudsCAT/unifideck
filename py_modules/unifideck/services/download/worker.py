@@ -184,12 +184,25 @@ class _WorkerMixin:
             async def progress_cb(progress: Any) -> None:
                 await self._update_progress(item, progress)
 
-            # Per-store dispatch — each store has a different signature:
+            # Update operations dispatch to the store's genuine update
+            # command (legendary/gogdl/nile `update`) rather than a
+            # fresh install. Ubisoft never enqueues an update (its
+            # check_for_updates returns []), so it's not handled here;
+            # all three update-capable connectors share the same
+            # (game_id, progress_cb) signature.
+            if item.is_update:
+                logger.info("[DownloadWorker] starting update for %s", key)
+                result = await store.update_game(
+                    item.game_id,
+                    progress_cb=progress_cb,
+                )
+            # Per-store install dispatch — each store has a different
+            # signature:
             #   Epic/Amazon: install_game(game_id, base_path, progress_cb)
             #   GOG:         install_game(game_id, base_path, progress_cb, language?)
             #   Ubisoft:     install_game(game_id, *, progress_cb, install_path)
-            logger.info("[DownloadWorker] starting install for %s", key)
-            if item.store == "ubisoft":
+            elif item.store == "ubisoft":
+                logger.info("[DownloadWorker] starting install for %s", key)
                 result = await store.install_game(
                     item.game_id,
                     progress_cb=progress_cb,
@@ -197,6 +210,7 @@ class _WorkerMixin:
                 )
             else:
                 # Epic, Amazon, GOG — all accept base_path as positional #2
+                logger.info("[DownloadWorker] starting install for %s", key)
                 result = await store.install_game(  # type: ignore[call-arg]
                     item.game_id,
                     item.install_path or None,

@@ -60,11 +60,14 @@ class DownloadItem:
     storage_location: str = "internal"
     download_phase: str = "downloading"
     phase_message: str = ""
-    # Set by the service at enqueue time when the target install
-    # directory already exists & is non-empty — used by the UI to
-    # render "Update Queued" / "Downloading Update" instead of
-    # "Download Queued" / "Downloading" (mirrors staging UX).
-    was_previously_installed: bool = False
+    # Operation type, recorded by the enqueue path — NOT inferred.
+    # ``install_game`` enqueues ``False``; ``update_game`` enqueues
+    # ``True``. Drives (a) the UI label ("Update Queued" /
+    # "Downloading Update" vs "Download Queued" / "Downloading"),
+    # (b) worker dispatch to ``store.update_game`` vs
+    # ``store.install_game``, and (c) the cancel guardrail (an
+    # update must not delete the pre-existing install).
+    is_update: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         """Serialise to a JSON-friendly dict.
@@ -105,7 +108,7 @@ class DownloadItem:
             "storage_location": self.storage_location,
             "download_phase": self.download_phase,
             "phase_message": self.phase_message,
-            "was_previously_installed": self.was_previously_installed,
+            "is_update": self.is_update,
         }
 
     @classmethod
@@ -124,6 +127,13 @@ class DownloadItem:
         Returns:
             A fresh ``DownloadItem`` populated from the dict.
         """
+        d = dict(d)
+        # Back-compat: queues persisted by an older build keyed the
+        # operation flag as ``was_previously_installed``. Map it onto
+        # the current ``is_update`` field so an in-flight queue still
+        # loads with the right label after upgrade.
+        if "is_update" not in d and "was_previously_installed" in d:
+            d["is_update"] = d["was_previously_installed"]
         return cls(**{k: v for k, v in d.items() if k in cls.__dataclass_fields__})
 
 

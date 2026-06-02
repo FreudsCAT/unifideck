@@ -63,7 +63,7 @@ export const DownloadProgressRow: FC<Props> = ({ download, marginLeft = 0 }) => 
   useEffect(() => { injectPlayFocusStyles(); }, []);
   const indeterminate = isIndeterminate(download.download_phase);
   const pct = Math.max(0, Math.min(100, download.progress_percent));
-  const prev = Boolean(download.was_previously_installed);
+  const prev = Boolean(download.is_update);
   const label = t(statusLabelKey(download.status, download.download_phase, prev));
 
   return (

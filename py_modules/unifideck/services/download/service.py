@@ -12,7 +12,6 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
-import os
 from typing import TYPE_CHECKING, Any
 
 from unifideck.core.types import Result
@@ -102,8 +101,14 @@ class DownloadService(_WorkerMixin):
         game_id: str,
         install_path: str,
         title: str = "",
+        is_update: bool = False,
     ) -> Result:
-        """Queue a new download request."""
+        """Queue a new download request.
+
+        ``is_update`` is recorded as-is on the item — the caller
+        (the ``install_game`` vs ``update_game`` RPC) knows the
+        operation; the service does not infer it.
+        """
         # 1. Validation
         val_result = validate_path(install_path)
         if not val_result.success:
@@ -121,22 +126,12 @@ class DownloadService(_WorkerMixin):
                     return Result(success=False, error="already_queued")
 
             # 3. Add to queue
-            # Treat as an update when the install path already has
-            # content — drives the "Update Queued" / "Downloading
-            # Update" labels in the UI. Cheap stat-only check
-            # (no recursive scan) so we don't slow the enqueue path.
-            was_previously_installed = False
-            try:
-                with os.scandir(install_path) as it:
-                    was_previously_installed = any(True for _ in it)
-            except (FileNotFoundError, NotADirectoryError, PermissionError):
-                was_previously_installed = False
             item = DownloadItem(
                 store=store,
                 game_id=game_id,
                 install_path=install_path,
                 title=title,
-                was_previously_installed=was_previously_installed,
+                is_update=is_update,
             )
             self._queue.append(item)
 

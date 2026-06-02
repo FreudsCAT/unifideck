@@ -84,9 +84,16 @@ class AmazonInstaller:
         game_id: str,
         base_path: str | None = None,
         progress_cb: ProgressCallback | None = None,
+        verb: str = "install",
     ) -> InstallResult:
-        """Install game."""
-        logger.info("[AmazonInstall] install_game game_id=%s base_path=%s", game_id, base_path)
+        """Install or update a game.
+
+        ``verb="update"`` runs ``nile update`` (the genuine update
+        command — an alias of ``install`` in nile) for an in-place
+        patch; the rest of the pipeline (path resolution, manifest
+        rewrite, events) is identical to a fresh install.
+        """
+        logger.info("[AmazonInstall] %s game_id=%s base_path=%s", verb, game_id, base_path)
         if not self._cli_path:
             return InstallResult(
                 success=False,
@@ -109,7 +116,7 @@ class AmazonInstaller:
             store="amazon",
             game_id=game_id,
         )
-        rc = await self._run_install(base, game_id, progress_cb)
+        rc = await self._run_install(base, game_id, progress_cb, verb)
         if rc != 0:
             await self._bus.emit(
                 Events.DOWNLOAD_FAILED,
@@ -202,8 +209,9 @@ class AmazonInstaller:
         base: str,
         game_id: str,
         progress_cb: ProgressCallback | None,
+        verb: str = "install",
     ) -> int:
-        """Run install."""
+        """Run install or update (``verb``)."""
         self._current_progress = {
             "progress_percent": 0.0,
             "downloaded_bytes": 0,
@@ -211,7 +219,7 @@ class AmazonInstaller:
             "speed_bps": 0.0,
             "eta_seconds": 0,
         }
-        cmd = self._build_install_cmd(base, game_id)
+        cmd = self._build_install_cmd(base, game_id, verb)
         proc = await asyncio.create_subprocess_exec(
             *cmd,
             stdout=asyncio.subprocess.PIPE,
@@ -231,15 +239,21 @@ class AmazonInstaller:
             raise drain_exc
         return rc
 
-    def _build_install_cmd(self, base: str, game_id: str) -> list[str]:
-        """Build install cmd."""
+    def _build_install_cmd(self, base: str, game_id: str, verb: str = "install") -> list[str]:
+        """Build install/update cmd.
+
+        ``verb`` is ``"install"`` for a fresh install or ``"update"``
+        for an in-place update. In nile, ``update`` is an alias of
+        ``install`` (identical args/output) — running it on an
+        already-installed game patches it in place.
+        """
         if self._cli_path is None:
             raise RuntimeError(
                 "nile CLI path is not set; cannot build install cmd",
             )
         return [
             self._cli_path,
-            "install",
+            verb,
             game_id,
             "--base-path",
             base,

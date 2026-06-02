@@ -45,6 +45,7 @@ class DownloadRPCMixin:
 
     registry: Any
     services: Any
+    sync_service: Any
 
     @staticmethod
     def _validate_pair(store: str, game_id: str) -> tuple[str, str]:
@@ -123,6 +124,47 @@ class DownloadRPCMixin:
             game_id=game_id,
             install_path=base_path,
             title=title,
+            is_update=False,
+        )
+        return {"success": result.success, "error": result.error}
+
+    async def update_game(self, app_id: int, **kw: Any) -> Any:
+        """Queue an update for an already-installed game.
+
+        Triggered by the Play→Update button, which only appears
+        when ``check_game_update`` reported an available update.
+        Resolves the Steam ``app_id`` back to its ``(store,
+        game_id, install_path)`` via the sync layer, then enqueues
+        with ``is_update=True`` so the worker dispatches to
+        ``store.update_game`` and the UI labels it an update.
+        """
+        info = self.sync_service.get_game_info(app_id) if self.sync_service else None
+        if not info:
+            return {"success": False, "error": "game_not_found"}
+
+        store, game_id = self._validate_pair(
+            info.get("store", ""), info.get("store_game_id", ""),
+        )
+        title = info.get("title", "") or ""
+        # The connectors re-resolve their own install path on update;
+        # pass the known one when available, else the internal base
+        # (same resolution install_game uses for "internal").
+        install_path = (
+            info.get("install_path")
+            or _resolve_storage_path("internal", getattr(self, "config", None))
+            or ""
+        )
+
+        logger.info("[download] update_game app_id=%s store=%s game_id=%s install_path=%s",
+                     app_id, store, game_id, install_path)
+
+        download_svc = self._require_download()
+        result = await download_svc.add(
+            store=store,
+            game_id=game_id,
+            install_path=install_path,
+            title=title,
+            is_update=True,
         )
         return {"success": result.success, "error": result.error}
 
