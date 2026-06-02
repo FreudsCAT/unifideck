@@ -39,6 +39,10 @@ export const CleanupSection: FC = () => {
   );
 
   const runCleanup = async (deleteFiles: boolean) => {
+    // Immediate feedback on confirm — the backend wipe can take a few
+    // seconds, so surface a "started" toast right away rather than
+    // leaving the user staring at a closed modal until completion.
+    toast.info(t("toasts.cleanupStarted"), t("toasts.cleanupStartedMessage"));
     const result = await mutate(deleteFiles);
     if (!result) {
       toast.error(

@@ -182,6 +182,49 @@ async def has_artwork(grid_dir: str, app_id: int) -> bool:
     return grid_ok and hero_ok
 
 
+async def delete_artwork_files(grid_dir: str, app_id: int) -> int:
+    """Delete every grid artwork file for ``app_id`` — exist or not.
+
+    All five kinds (grid, grid_l, hero, logo, icon) are written as
+    ``<grid_dir>/<unsigned><suffix>`` (see ``_KIND_SUFFIX``), so a single
+    ``<unsigned>*`` glob captures them regardless of which extensions
+    were actually saved. No existence check is needed — the glob simply
+    yields nothing when there's no art. Every Unifideck shortcut appid
+    has bit ``0x80000000`` set, so the unsigned form is ≥ 2³¹ and never
+    collides with a real Steam appid sharing the directory.
+
+    Args:
+        grid_dir: absolute path to Steam's ``grid/`` directory.
+        app_id: shortcut appid (signed or unsigned — normalised here).
+
+    Returns:
+        Count of files unlinked.
+    """
+    import asyncio
+
+    # Steam stores shortcut art under the *unsigned* 32-bit appid.
+    unsigned = app_id if app_id >= 0 else app_id + 0x100000000
+
+    def _sweep() -> int:
+        base = Path(grid_dir)
+        if not base.is_dir():
+            return 0
+        count = 0
+        for match in base.glob(f"{unsigned}*"):
+            if not match.is_file():
+                continue
+            try:
+                match.unlink(missing_ok=True)
+                count += 1
+            except OSError:
+                logger.exception(
+                    "[artwork] unlink(%s) failed", match,
+                )
+        return count
+
+    return await asyncio.to_thread(_sweep)
+
+
 async def find_artwork_url(
     title: str,
     kind: str,

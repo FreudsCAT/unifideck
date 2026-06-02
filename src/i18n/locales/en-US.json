@@ -248,6 +248,8 @@
     "authError": "Authentication Error",
     "authConnected": "{{store}} Connected!",
     "authConnectedMessage": "Successfully authenticated with {{store}}",
+    "cleanupStarted": "Cleanup Started",
+    "cleanupStartedMessage": "Removing shortcuts, artwork, and saved logins. This may take a moment…",
     "cleanupSuccessful": "Cleanup Successful",
     "cleanupSuccessfulMessage": "Removed {{games}} shortcuts, {{artwork}} artwork files, signed out of {{stores}} stores, deleted {{files}} install dirs. Cache cleared.",
     "cleanupNoop": "Nothing to Clean",

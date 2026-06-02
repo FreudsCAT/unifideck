@@ -261,20 +261,50 @@ class SyncRPCMixin:
             )
         return removed_id, files_deleted
 
-    async def _delete_artwork_for_app_ids(self, app_ids: list[int]) -> int:
-        """Delete Steam grid artwork files for each given app_id.
+    @staticmethod
+    def _nonunifideck_unsigned_appids(shortcut_svc: Any) -> set[int]:
+        """Unsigned appids of currently-present *non-Unifideck* shortcuts.
 
-        Files are written by :mod:`unifideck.services.artwork.fetcher`
-        as ``<grid_dir>/<unsigned><suffix>``. Every Unifideck app_id
-        has bit ``0x80000000`` set, so the unsigned form is always
-        ≥ 2³¹ — no collision with real Steam appids living in the
-        same dir.
+        These back other launchers' shortcuts (Heroic, manually-added
+        apps, …) that happen to live in the same ``grid/`` dir. They are
+        the wipe's protected set — everything else with a non-Steam
+        (≥ 2³¹) appid is fair game.
+        """
+        from unifideck.services.shortcut.games_map import UNIFIDECK_TAG
+        from unifideck.services.shortcut.launch_options import (
+            is_unifideck_shortcut,
+        )
+
+        keep: set[int] = set()
+        shortcuts = getattr(shortcut_svc, "_shortcuts", None) or {}
+        root = shortcuts.get("shortcuts") if isinstance(shortcuts, dict) else None
+        if not isinstance(root, dict):
+            return keep
+        for entry in root.values():
+            if not isinstance(entry, dict):
+                continue
+            if _is_unifideck_owned(entry, UNIFIDECK_TAG, is_unifideck_shortcut):
+                continue
+            app_id = entry.get("appid")
+            if isinstance(app_id, int):
+                keep.add(app_id if app_id >= 0 else app_id + 0x100000000)
+        return keep
+
+    async def _delete_nonsteam_artwork(self, keep_appids: set[int]) -> int:
+        """Wipe every non-Steam grid artwork file, except ``keep_appids``.
+
+        "Delete all Unifideck data" should clear artwork outright —
+        including art orphaned by past removals that no longer maps to
+        any shortcut. Files are named ``<grid_dir>/<unsigned><suffix>``;
+        real Steam appids are < 2³¹, so any 10-digit ``≥ 0x80000000``
+        prefix is a non-Steam shortcut's art. We delete all of those
+        whose appid isn't in ``keep_appids`` (currently-present
+        non-Unifideck shortcuts), so other launchers' live art survives.
         """
         import asyncio
+        import re
         from pathlib import Path
 
-        if not app_ids:
-            return 0
         artwork = getattr(self.services, "artwork", None)
         grid_dir = getattr(artwork, "grid_dir", None) if artwork else None
         if not grid_dir:
@@ -283,23 +313,29 @@ class SyncRPCMixin:
             )
             return 0
 
+        prefix_re = re.compile(r"^(\d+)")
+
         def _sweep() -> int:
             base = Path(grid_dir)
             if not base.is_dir():
                 return 0
             count = 0
-            for app_id in app_ids:
-                unsigned = app_id if app_id >= 0 else app_id + 0x100000000
-                for match in base.glob(f"{unsigned}*"):
-                    if not match.is_file():
-                        continue
-                    try:
-                        match.unlink(missing_ok=True)
-                        count += 1
-                    except OSError:
-                        logger.exception(
-                            "[cleanup] unlink(%s) failed", match,
-                        )
+            for match in base.iterdir():
+                if not match.is_file():
+                    continue
+                m = prefix_re.match(match.name)
+                if not m:
+                    continue
+                appid = int(m.group(1))
+                if appid < 0x80000000 or appid in keep_appids:
+                    continue
+                try:
+                    match.unlink(missing_ok=True)
+                    count += 1
+                except OSError:
+                    logger.exception(
+                        "[cleanup] unlink(%s) failed", match,
+                    )
             return count
 
         return await asyncio.to_thread(_sweep)
@@ -321,14 +357,64 @@ class SyncRPCMixin:
             return 0
         if not isinstance(results, dict):
             return 0
-        return sum(1 for ok in results.values() if ok)
+        # ``logout_all`` maps each store to ``{"success", "error"}`` —
+        # count only the entries that actually reported success (a
+        # non-empty dict is always truthy, so ``if v`` would over-count).
+        return sum(
+            1
+            for v in results.values()
+            if isinstance(v, dict) and v.get("success")
+        )
 
-    async def _delete_stray_auth_files(self) -> int:
-        """Delete leftover auth-URL temp files under unifideck data dir."""
+    def _reset_store_availability(self) -> None:
+        """Clear the in-memory ``_cached_available`` flag on every store.
+
+        ``check_store_status`` re-probes live, but ``get_store_infos``
+        and other surfaces read the cached flag — resetting it makes the
+        settings badges reflect signed-out immediately after a wipe,
+        without waiting for the next availability probe.
+        """
+        registry = getattr(self, "registry", None)
+        stores = getattr(registry, "_stores", None)
+        if not isinstance(stores, dict):
+            return
+        for store in stores.values():
+            try:
+                store._cached_available = False
+            except Exception:
+                logger.exception(
+                    "[cleanup] reset _cached_available failed for %s",
+                    getattr(store, "store_name", "?"),
+                )
+
+    async def _delete_auth_data(self) -> int:
+        """Delete every store's persisted auth data + stray temp files.
+
+        Belt-and-suspenders on top of ``registry.logout_all`` — each
+        store's ``logout`` *should* clear its own credentials, but it
+        no-ops when the auth submodule isn't wired yet and its CLI
+        logout (``legendary auth --delete`` / ``nile auth --logout``)
+        swallows timeout/OS errors. Deleting the credential files the
+        ``is_available`` probes read guarantees the stores report
+        signed-out afterward.
+
+        The credential paths mirror each store's config defaults:
+        Epic ``stores.epic.user_file`` / Amazon ``stores.amazon.user_file``
+        (``EpicStore`` / ``AmazonStore``), GOG ``GOGConfig.token_file`` +
+        ``gogdl_config_dir`` and Microsoft ``MicrosoftConfig.token_file``.
+        Ubisoft's session file is cleared by its own ``logout``.
+        """
         import asyncio
         from pathlib import Path
 
         candidates = (
+            # Persisted credentials read by each store's ``is_available``.
+            "~/.config/legendary/user.json",
+            "~/.config/nile/user.json",
+            "~/.config/unifideck/gog_token.json",
+            "~/.config/unifideck/gogdl/gog_credentials.json",
+            "~/.local/share/unifideck/microsoft_tokens.json",
+            # Stray auth-URL temp files left mid-flow.
             "~/.local/share/unifideck/gog_auth_url.txt",
             "~/.local/share/unifideck/ms_auth_url.txt",
             "~/.local/share/unifideck/epic_auth_url.txt",
@@ -371,9 +457,13 @@ class SyncRPCMixin:
            (drops both VDF + games.map rows, emits ``SHORTCUT_REMOVED``).
            If ``delete_files=True`` and the install dir sits under a
            safe root, rm -rf it.
-        4. Delete Steam grid artwork files keyed to the deleted app_ids.
+        4. Wipe every non-Steam grid artwork file (current + orphaned),
+           preserving only currently-present non-Unifideck shortcuts.
         5. Sign out of every store via ``registry.logout_all``.
-        6. Sweep stray auth-URL temp files.
+        6. Delete each store's persisted credential files (+ stray
+           auth-URL temp files) and reset their cached availability
+           flags, so the wipe is authoritative even if a store's
+           ``logout`` no-ops.
         7. Clear every registered cache namespace.
 
         Returns the result data only (no ``success``/``error`` keys);
@@ -402,24 +492,42 @@ class SyncRPCMixin:
         home = await asyncio.to_thread(
             lambda: str(Path("~").expanduser()),
         )
-        for app_id in app_ids:
-            removed_id, files_deleted = await self._cleanup_one_app_id(
-                app_id, delete_files, shortcut_svc, home, safe_roots,
-            )
-            if removed_id is not None:
-                deleted_app_ids.append(removed_id)
-            if files_deleted:
-                deleted_files_count += 1
+        # Suppress the per-removal artwork handler for the duration of
+        # the loop. Each ``remove_game`` emits ``SHORTCUT_REMOVED`` (and
+        # ``emit`` awaits its handlers), which would otherwise make the
+        # artwork service glob-and-delete the grid dir once per game.
+        # The single ``_delete_nonsteam_artwork`` sweep below clears all
+        # of it — current art AND orphans — in one directory pass.
+        artwork_svc = getattr(self.services, "artwork", None)
+        if artwork_svc is not None:
+            artwork_svc._suppress_removal_cleanup = True
+        try:
+            for app_id in app_ids:
+                removed_id, files_deleted = await self._cleanup_one_app_id(
+                    app_id, delete_files, shortcut_svc, home, safe_roots,
+                )
+                if removed_id is not None:
+                    deleted_app_ids.append(removed_id)
+                if files_deleted:
+                    deleted_files_count += 1
+        finally:
+            if artwork_svc is not None:
+                artwork_svc._suppress_removal_cleanup = False
         logger.info(
             "[cleanup] removed %d shortcuts, %d install dirs",
             len(deleted_app_ids), deleted_files_count,
         )
 
-        deleted_artwork_count = await self._delete_artwork_for_app_ids(
-            deleted_app_ids or app_ids,
-        )
+        # Wipe artwork outright — current Unifideck art AND orphans left
+        # by past removals — preserving only currently-present
+        # non-Unifideck shortcuts (other launchers). Shortcut removal
+        # above already dropped our entries from ``_shortcuts``, so the
+        # keep-set is exactly the foreign shortcuts that remain.
+        keep_appids = self._nonunifideck_unsigned_appids(shortcut_svc)
+        deleted_artwork_count = await self._delete_nonsteam_artwork(keep_appids)
         logged_out_count = await self._logout_all_stores()
-        deleted_stray_files_count = await self._delete_stray_auth_files()
+        deleted_stray_files_count = await self._delete_auth_data()
+        self._reset_store_availability()
         logger.info(
             "[cleanup] artwork=%d logged_out=%d stray=%d",
             deleted_artwork_count, logged_out_count, deleted_stray_files_count,

@@ -287,6 +287,38 @@ class _EventHandlersMixin:
         if task is not None and not task.done():
             task.cancel()
 
+    @subscribe(Events.SHORTCUT_REMOVED)
+    async def _on_shortcut_removed(self: Any, **kwargs: Any) -> None:
+        """Delete a game's grid artwork when its shortcut is removed.
+
+        Without this, every game dropped during a normal sync (no
+        longer owned, store signed out, library churn) leaks its
+        artwork forever — the files outlive the shortcut and, because
+        shortcut appids are deterministic, get mistaken for valid
+        "already on disk" art when the same game is later re-synced.
+        Cleaning art at removal keeps the grid dir in lockstep with the
+        live shortcut set.
+        """
+        from .fetcher import delete_artwork_files
+
+        # Bulk "delete all data" sets this flag and does one broad grid
+        # sweep itself — skip the per-game delete so we don't rescan the
+        # grid dir once per removed shortcut.
+        if getattr(self, "_suppress_removal_cleanup", False):
+            return
+        app_id = kwargs.get("app_id")
+        if not isinstance(app_id, int):
+            return
+        grid_dir = getattr(self, "_grid_dir", None)
+        if not grid_dir:
+            return
+        deleted = await delete_artwork_files(grid_dir, app_id)
+        if deleted:
+            logger.info(
+                "[ArtworkService] removed %d artwork file(s) for appid %d",
+                deleted, app_id,
+            )
+
     async def _process_one_game(
         self: Any, game: Game, grid_dir: str, bus: Any,
         *, force: bool = False,
