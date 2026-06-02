@@ -19,13 +19,12 @@
  * through the toast/modal here.
  */
 import { FC } from "react";
-import { showModal } from "@decky/ui";
+import { showModal, Navigation } from "@decky/ui";
 import { useTranslation } from "react-i18next";
 import { useEventBus, EventBusClient } from "../../api/event-bus-client";
 import { Events, type ToastActionPayload } from "../../types/events";
 import { useToast } from "../../hooks/useToast";
 import { CloudSaveConflictModal } from "./CloudSaveConflictModal";
-import { AuthSuccessModal } from "./AuthSuccessModal";
 
 /**
  * Headless component that subscribes to the backend
@@ -79,9 +78,14 @@ export const ToastEventListener: FC = () => {
     const errType = String(payload.error_type ?? "error");
     toast.error(t("toasts.storeError", { store, errType }));
   });
-  useEventBus(Events.STORE_AUTH_COMPLETE, (payload) => {
-    const store = payload.store ? String(payload.store) : undefined;
-    showModal(<AuthSuccessModal store={store} />);
+  useEventBus(Events.STORE_AUTH_COMPLETE, () => {
+    // Auth succeeded — toast confirmation comes from useStoreAuth.
+    // Just route the user back to the library from the auth shortcut.
+    try {
+      Navigation.Navigate("/library/home");
+    } catch (e) {
+      console.error("[ToastEventListener] post-auth navigation failed:", e);
+    }
   });
   return null;
 };

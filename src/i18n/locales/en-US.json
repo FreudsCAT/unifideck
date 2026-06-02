@@ -581,11 +581,6 @@
     "subscriptionCheckFailed": "Could not verify your Xbox Game Pass subscription. xCloud sync skipped. Retry when your connection stabilizes.",
     "subscriptionDetected": "Xbox Game Pass {{tier}} subscription active."
   },
-  "authSuccess": {
-    "title": "Authentication",
-    "titleStore": "{{store}} — Authentication ✓",
-    "subtitle": "Press the B button to close this window"
-  },
   "playButton": {
     "play": "Play",
     "install": "Install",

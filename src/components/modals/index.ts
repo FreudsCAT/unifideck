@@ -6,7 +6,6 @@
  *  - SteamRestartModal        (post-shortcut-write reboot prompt)
  *  - UninstallConfirmModal    (delete confirmation)
  *  - CloudSaveConflictModal   (cloud save resolution)
- *  - AuthSuccessModal         (post-auth confirmation)
  *  - GOGLanguageSelectModal   (multi-language GOG installs)
  *  - ForceSyncModal           (force-sync artwork picker)
  *  - StorageBrowserModal      (full-screen path picker)
@@ -20,7 +19,6 @@ export { AccountSwitchModal } from "./AccountSwitchModal";
 export { SteamRestartModal } from "./SteamRestartModal";
 export { UninstallConfirmModal } from "./UninstallConfirmModal";
 export { CloudSaveConflictModal } from "./CloudSaveConflictModal";
-export { AuthSuccessModal } from "./AuthSuccessModal";
 export { GOGLanguageSelectModal } from "./GOGLanguageSelectModal";
 export { ForceSyncModal } from "./ForceSyncModal";
 export { ChromiumInstallModal } from "./ChromiumInstallModal";
