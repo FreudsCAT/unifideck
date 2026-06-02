@@ -38,12 +38,14 @@ class DownloadService(_WorkerMixin):
         registry: StoreRegistry,
         queue_file: str,
         max_concurrent: int = 1,
+        launcher_path: str = "",
     ) -> None:
         """Store refs + queue path, init empty state."""
         self._bus = bus
         self._registry = registry
         self._queue_file = queue_file
         self._max_concurrent = max_concurrent
+        self._launcher_path = launcher_path
 
         self._queue: list[DownloadItem] = []
         self._running: dict[str, DownloadItem] = {}

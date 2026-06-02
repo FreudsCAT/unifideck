@@ -303,7 +303,10 @@ class SteamCSSInjector:
                     app_id,
                 )
                 return {"ok": False, "error": "cdp_not_connected"}
-            logger.info("[cdp_inject] hide_play_section(%d) => %r", app_id, result)
+            if result == "not_found":
+                logger.debug("[cdp_inject] hide_play_section(%d) => 'not_found'", app_id)
+            else:
+                logger.info("[cdp_inject] hide_play_section(%d) => %r", app_id, result)
             # Returns "hidden" / "not_found" / "too_large"; expose
             # raw value so the frontend can decide whether to back off.
             return {"ok": True, "outcome": result}

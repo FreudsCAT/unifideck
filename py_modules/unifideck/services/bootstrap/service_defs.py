@@ -63,7 +63,7 @@ _SERVICE_DEFS: tuple[tuple[Any, ...], ...] = (
         "download", "unifideck.services.download",
         "DownloadService",
         lambda b, r, c, cfg, p, pl: (b, r, p.queue_file),
-        lambda b, r, c, cfg, p, pl: {},
+        lambda b, r, c, cfg, p, pl: {"launcher_path": p.launcher_path},
     ),
     (
         "metadata", "unifideck.services.metadata_service",

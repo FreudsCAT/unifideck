@@ -63,6 +63,7 @@ class _WorkerMixin:
     _max_concurrent: int
     _queue: list[DownloadItem]
     _running: dict[str, DownloadItem]
+    _launcher_path: str
 
     async def _worker_loop(self) -> None:
         """Poll the queue and dispatch installs until cancelled.
@@ -333,13 +334,22 @@ class _WorkerMixin:
         # to a directory walk only if missing — bounded by install dir).
         size_bytes = int(getattr(result, "size_bytes", 0) or 0)
 
-        # Leave app_id=0 (sentinel). The shortcut already exists
-        # from sync with the launcher-anchored app_id; the
-        # mark_installed handler looks it up by (store, store_game_id)
-        # and preserves it. Pre-computing here (with exe_path instead
-        # of launcher) would drift the id and recreate the shortcut.
+        # Compute the real launcher-anchored app_id so the frontend's
+        # DOWNLOAD_COMPLETE handler can invalidate the right cache entry.
+        # Uses the same (launcher, store:game_id) formula as
+        # SyncService._populate_app_ids — no drift possible.
+        from unifideck.services.shortcut.games_map import generate_app_id
+
+        launcher_path = getattr(self, "_launcher_path", "")
+        if launcher_path:
+            computed_app_id = generate_app_id(
+                launcher_path, f"{item.store}:{item.game_id}",
+            )
+        else:
+            computed_app_id = 0
+
         return Game(
-            app_id=0,
+            app_id=computed_app_id,
             store=item.store,
             store_game_id=item.game_id,
             title=title,

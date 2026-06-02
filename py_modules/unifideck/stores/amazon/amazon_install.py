@@ -46,8 +46,15 @@ from . import amazon_fuel
 from .amazon_library import AmazonLibraryReader
 
 logger = logging.getLogger(__name__)
-_PROGRESS_RE = re.compile(r"\[\s*(\d+)\s*%\s*\]")
-ProgressCallback = Callable[[float], Awaitable[None]]
+# Nile's ProgressBar emits lines like:
+#   = Progress: 42.50 123456789/987654321, Running for: 00:01:30, ETA: ...
+# The old regex (`\[\s*(\d+)\s*%\s*\]`) expected `[ 42% ]` which nile
+# never produces, so zero progress was ever captured.
+# New primary regex matches nile's actual format; the fallback covers
+# any tool that emits `[ NN% ]` brackets (e.g. future CLI updates).
+_PROGRESS_RE = re.compile(r"Progress:\s*([\d.]+)")
+_PROGRESS_RE_BRACKET = re.compile(r"\[\s*([\d.]+)\s*%\s*\]")
+ProgressCallback = Callable[[Any], Awaitable[None]]
 
 
 class AmazonInstaller:
@@ -197,6 +204,13 @@ class AmazonInstaller:
         progress_cb: ProgressCallback | None,
     ) -> int:
         """Run install."""
+        self._current_progress = {
+            "progress_percent": 0.0,
+            "downloaded_bytes": 0,
+            "total_bytes": 0,
+            "speed_bps": 0.0,
+            "eta_seconds": 0,
+        }
         cmd = self._build_install_cmd(base, game_id)
         proc = await asyncio.create_subprocess_exec(
             *cmd,
@@ -260,13 +274,21 @@ class AmazonInstaller:
         progress_cb: ProgressCallback | None,
     ) -> None:
         """Handle install line."""
-        pct = parse_progress_line(line, _PROGRESS_RE)
-        if pct is None:
+        updated = self._parse_progress_line(line, self._current_progress)
+        if not updated:
+            # Fallback to check bracket format
+            pct = parse_progress_line(line, _PROGRESS_RE_BRACKET)
+            if pct is not None:
+                self._current_progress["progress_percent"] = pct
+                updated = True
+
+        if not updated:
             logger.debug("[nile install] %s", line)
             return
+
         if progress_cb is not None:
             try:
-                await progress_cb(pct)
+                await progress_cb(dict(self._current_progress))
             except Exception as e:
                 logger.debug(
                     "[amazon_install] progress_cb raised: %s",
@@ -276,8 +298,74 @@ class AmazonInstaller:
             Events.DOWNLOAD_PROGRESS,
             store="amazon",
             game_id=game_id,
-            progress=pct,
+            progress=self._current_progress.get("progress_percent", 0.0),
+            speed_mbps=self._current_progress.get("speed_bps", 0.0) / (1024 * 1024),
+            eta_seconds=self._current_progress.get("eta_seconds", 0),
         )
+
+    @staticmethod
+    def _parse_eta(line: str) -> int | None:
+        """Parse eta from nile line."""
+        if "ETA:" not in line:
+            return None
+        try:
+            eta_part = line.split("ETA:", 1)[1].strip()
+            if not eta_part:
+                return None
+            eta_time = eta_part.split()[0]
+            parts = eta_time.split(":")
+            if len(parts) == 3:
+                h, m, s = int(parts[0]), int(parts[1]), int(parts[2])
+                return h * 3600 + m * 60 + s
+            if len(parts) == 2:
+                m, s = int(parts[0]), int(parts[1])
+                return m * 60 + s
+        except (ValueError, IndexError):
+            return None
+        return None
+
+    @staticmethod
+    def _parse_speed_mib(line: str) -> float | None:
+        """Parse speed from nile line."""
+        if "Download" not in line or "MiB/s" not in line:
+            return None
+        try:
+            tail = line.split("Download", 1)[1]
+            speed_part = tail.split("MiB/s", 1)[0].strip()
+            speed_part = speed_part.lstrip("-").strip()
+            speed_tokens = speed_part.split()
+            if not speed_tokens:
+                return None
+            return float(speed_tokens[-1]) * 1024 * 1024
+        except (ValueError, IndexError):
+            return None
+
+    def _parse_progress_line(self, line: str, progress: dict[str, Any]) -> bool:
+        """Parse progress percent and bytes from nile line."""
+        speed_bps = self._parse_speed_mib(line)
+        if speed_bps is not None:
+            progress["speed_bps"] = speed_bps
+            return True
+        if "Progress:" not in line:
+            return False
+        try:
+            part = line.split("Progress:", 1)[1].strip()
+            tokens = part.split()
+            if len(tokens) < 2:
+                return False
+            progress["progress_percent"] = float(tokens[0])
+            bytes_part = tokens[1].rstrip(",")
+            if "/" not in bytes_part:
+                return True
+            written, total = bytes_part.split("/", 1)
+            progress["downloaded_bytes"] = int(written)
+            progress["total_bytes"] = int(total)
+            eta = self._parse_eta(line)
+            if eta is not None:
+                progress["eta_seconds"] = eta
+            return True
+        except (ValueError, IndexError):
+            return False
 
     async def _resolve_install_path(self, game_id: str, base: str) -> str | None:
         """Resolve install path from nile's installed.json or fallback.
