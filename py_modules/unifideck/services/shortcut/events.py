@@ -12,6 +12,44 @@ from unifideck.event_bus.event_bus_devex import subscribe
 logger = logging.getLogger(__name__)
 
 
+def _find_icon_for_appid(grid_dir: str, appid: int) -> str:
+    """Return the absolute icon path Steam's grid dir holds for ``appid``.
+
+    Tries the two extensions SteamGridDB exports use, in order.
+    Returns ``""`` when no file is found — caller treats empty
+    as "no update needed".
+    """
+    unsigned = (appid & 0xFFFFFFFF) | 0x80000000
+    for ext in (".jpg", ".png"):
+        candidate = Path(grid_dir) / f"{unsigned}_icon{ext}"
+        if candidate.exists():
+            return str(candidate)
+    return ""
+
+
+def _apply_icon_updates(
+    shortcuts: dict[str, Any], grid_dir: str,
+) -> int:
+    """Walk ``shortcuts`` and update each entry's ``icon`` field in place.
+
+    Returns the count of entries actually mutated (skips entries
+    whose ``icon`` field already points at the on-disk file).
+    """
+    updated = 0
+    for entry in shortcuts.values():
+        if not isinstance(entry, dict):
+            continue
+        appid = entry.get("appid")
+        if not isinstance(appid, int):
+            continue
+        icon_path = _find_icon_for_appid(grid_dir, appid)
+        if not icon_path or entry.get("icon", "") == icon_path:
+            continue
+        entry["icon"] = icon_path
+        updated += 1
+    return updated
+
+
 async def _update_icons_from_grid(svc: Any) -> int:
     """Scan grid dir for icon files and update shortcuts.vdf.
 
@@ -36,30 +74,7 @@ async def _update_icons_from_grid(svc: Any) -> int:
     if not isinstance(shortcuts, dict):
         return 0
 
-    updated = 0
-    for entry in shortcuts.values():
-        if not isinstance(entry, dict):
-            continue
-        appid = entry.get("appid")
-        if not isinstance(appid, int):
-            continue
-        # Compute the unsigned app ID used in grid filenames
-        unsigned = (appid & 0xFFFFFFFF) | 0x80000000
-        # Look for icon file on disk
-        icon_path = ""
-        for ext in (".jpg", ".png"):
-            candidate = Path(grid_dir) / f"{unsigned}_icon{ext}"
-            if candidate.exists():
-                icon_path = str(candidate)
-                break
-        if not icon_path:
-            continue
-        current = entry.get("icon", "")
-        if current == icon_path:
-            continue
-        entry["icon"] = icon_path
-        updated += 1
-
+    updated = _apply_icon_updates(shortcuts, grid_dir)
     if updated > 0:
         await write_vdf(shortcuts_path, data)
         logger.info(
@@ -70,11 +85,12 @@ async def _update_icons_from_grid(svc: Any) -> int:
 
 if TYPE_CHECKING:
     # This is a mixin; `self` will be the ShortcutService facade
-    # at runtime. The facade provides ``add_game``, ``remove_game``
-    # and ``reconcile`` via ``_GamesMapMixin``. Mypy doesn't see
-    # the multiple-inheritance composition here (this file is
-    # imported standalone), so we declare the protocol of methods
-    # we rely on as TYPE_CHECKING-only forward refs.
+    # at runtime. The facade provides ``mark_installed``,
+    # ``mark_uninstalled``, ``remove_game`` and ``reconcile`` via
+    # ``_GamesMapMixin``. Mypy doesn't see the multiple-inheritance
+    # composition here (this file is imported standalone), so we
+    # declare the protocol of methods we rely on as
+    # TYPE_CHECKING-only forward refs.
     from collections.abc import Sequence
 
 
@@ -100,14 +116,13 @@ class EventsMixin:
         # ``_GamesMapMixin`` — surfaced as 3× ``[misc]`` "incompatible
         # definition in base class" errors on the facade class
         # body in service.py.
-        async def add_game(self, game: Game) -> int: ...
         async def remove_game(self, app_id: int) -> bool: ...
         async def mark_installed(
-            self, store: str, store_game_id: str, title: str,
+            self, store: str, store_game_id: str,
             exe_path: str, install_path: str,
         ) -> int | None: ...
         async def mark_uninstalled(
-            self, store: str, store_game_id: str, title: str = ...,
+            self, store: str, store_game_id: str,
         ) -> int | None: ...
         async def reconcile(
             self, games: Sequence[Game], *, force: bool = ...,
@@ -118,15 +133,15 @@ class EventsMixin:
         """Flip the existing shortcut's install state to installed.
 
         The shortcut was created at sync time by reconcile with
-        ``tags["2"] = "Not Installed"``. We do NOT call ``add_game``
-        here: that would mint a fresh app_id off the exe path and
-        diverge from the launcher-anchored id Steam already knows
-        about, breaking every appid-keyed lookup downstream.
+        ``tags["2"] = "Not Installed"`` — we only flip the tag and
+        write the games.map row. The shortcut's appid is preserved
+        so Steam playtime / artwork / categories survive the
+        transition.
         """
         game = kwargs.get("game")
         if isinstance(game, Game):
             await self.mark_installed(
-                game.store, game.store_game_id, game.title,
+                game.store, game.store_game_id,
                 game.exe_path or "", game.install_path or "",
             )
 

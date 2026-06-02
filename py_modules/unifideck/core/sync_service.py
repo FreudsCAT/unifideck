@@ -16,9 +16,7 @@ Lifecycle of one sync:
      stores continue);
    * ``LAUNCHER_STAGE`` — user-facing toast with a retry
      action.
-3. Dedup pass → emits ``SYNC_DEDUP`` if any duplicates were
-   dropped.
-4. ``SYNC_COMPLETE``   — once with the final unified list.
+3. ``SYNC_COMPLETE``   — once with the final unified list.
 
 If cancelled mid-sync (``SYNC_CANCELLED``) the partial result
 is preserved + returned so a follow-up sync resumes cleanly.
@@ -44,8 +42,8 @@ from typing import TYPE_CHECKING, Any
 from unifideck.event_bus import EventBus
 from unifideck.stores import StoreRegistry
 
-from .sync_dedup_mixin import _SyncDedupMixin
 from .sync_queries_mixin import _SyncQueriesMixin
+from .sync_results_mixin import _SyncResultsMixin
 from .types import Events, Game, SyncRequest, SyncResult
 
 if TYPE_CHECKING:
@@ -69,7 +67,7 @@ DEFAULT_COOLDOWN_SECONDS = 5
 DEFAULT_COOLDOWN_MS = DEFAULT_COOLDOWN_SECONDS * 1000
 
 
-class SyncService(_SyncQueriesMixin, _SyncDedupMixin):
+class SyncService(_SyncQueriesMixin, _SyncResultsMixin):
     """Single-flight multi-store library sync orchestrator.
 
     Inherits read-only query methods (``get_status``,
@@ -175,31 +173,6 @@ class SyncService(_SyncQueriesMixin, _SyncDedupMixin):
             Events.SHORTCUT_INSTALL_STATE_CHANGED,
             self._on_shortcut_install_state_changed,
         )
-        # Surface registry/appid drift in logs at boot — operators
-        # see it without needing a separate RPC. The audit doesn't
-        # mutate anything; fixing drift is a manual / admin action.
-        self._audit_appid_drift_on_boot()
-
-    def _audit_appid_drift_on_boot(self) -> None:
-        """Log any shortcut-registry appid drift detected at startup.
-
-        Defensive try/except — a registry-read failure here must
-        not block plugin boot. The drift report is diagnostic;
-        absent or unreadable registry just means "nothing to audit
-        yet" (first run, fresh install).
-        """
-        if not self._launcher_path:
-            return
-        try:
-            from unifideck.services.shortcut.migrations import (
-                audit_appid_drift,
-            )
-            audit_appid_drift(self._launcher_path)
-        except Exception:
-            logger.debug(
-                "[SyncService] appid-drift audit skipped (registry unreadable)",
-                exc_info=True,
-            )
 
     async def sync_all(
         self,
@@ -538,9 +511,8 @@ class SyncService(_SyncQueriesMixin, _SyncDedupMixin):
 
         Pulled out of ``_run_sync`` so the orchestration
         function doesn't carry the post-loop call targets
-        (``monotonic`` again, ``_apply_dedup_and_emit``,
-        ``time``, ``_aggregate_results``, ``emit``-for-complete).
-        Pairs with ``_setup_sync``.
+        (``monotonic`` again, ``time``, ``_aggregate_results``,
+        ``emit``-for-complete). Pairs with ``_setup_sync``.
 
         Args:
             fetch_artwork: when ``False``, mark artwork phase
@@ -558,7 +530,6 @@ class SyncService(_SyncQueriesMixin, _SyncDedupMixin):
         ``self._last_sync_time``.
         """
         duration_ms = int((time.monotonic() - started) * 1000)
-        libraries = await self._apply_dedup_and_emit(libraries)
         self._populate_app_ids(libraries)
         self._all_games = libraries
         total_games = sum(len(g) for g in libraries.values())
@@ -689,8 +660,12 @@ class SyncService(_SyncQueriesMixin, _SyncDedupMixin):
             for game in games:
                 if game.app_id:
                     continue
+                # Identity is "<store>:<store_game_id>" so the same
+                # title across stores gets distinct appids — see
+                # ``generate_app_id`` docstring.
                 game.app_id = generate_app_id(
-                    self._launcher_path, game.title,
+                    self._launcher_path,
+                    f"{game.store}:{game.store_game_id}",
                 )
                 filled += 1
         if filled:
@@ -790,7 +765,6 @@ class SyncService(_SyncQueriesMixin, _SyncDedupMixin):
         if self._all_games is None:
             self._all_games = {}  # type: ignore[unreachable]  # fallback for store registry miss
         self._all_games[store_name] = games
-        self._all_games = await self._apply_dedup_and_emit(self._all_games)
         self._last_sync_time = time.time()
         self._save_library_cache()
         await self._bus.emit(
@@ -902,16 +876,9 @@ class SyncService(_SyncQueriesMixin, _SyncDedupMixin):
         launcher-anchored id stays valid across the transition) and
         persist so a Decky reload doesn't drop the change.
 
-        Two lookups:
-          1. Strict — find the record by ``(store, store_game_id)``.
-          2. Title fallback — if strict misses, scan every store for
-             a record whose ``title`` matches. Covers the case where
-             the user owns the same title on multiple stores and
-             installs the one whose shortcut didn't win the
-             same-app_id collision at sync time. The matched record
-             stays in its original store list (we don't move it)
-             since the appid is shared and the frontend cache will
-             flip the store via the event payload directly.
+        Lookup is strict ``(store, store_game_id)`` only — every Game
+        record is unique to its store now that ``generate_app_id`` is
+        keyed on ``(launcher, store:store_game_id)``.
         """
         store = kwargs.get("store")
         store_game_id = kwargs.get("store_game_id")
@@ -922,20 +889,20 @@ class SyncService(_SyncQueriesMixin, _SyncDedupMixin):
             or not isinstance(installed, bool)
         ):
             return
-        title = kwargs.get("title", "")
-        title = title if isinstance(title, str) else ""
         exe_path = kwargs.get("exe_path", "") or ""
         install_path = kwargs.get("install_path", "") or ""
 
         async with self._lock:
-            target, matched_via = self._find_target_for_state_change(
-                store, store_game_id, title,
-            )
+            target: Game | None = None
+            for game in self._all_games.get(store, []):
+                if game.store_game_id == store_game_id:
+                    target = game
+                    break
             if target is None:
                 logger.warning(
                     "[SyncService] %s:%s state-change ignored — no "
-                    "matching record in _all_games (title=%r)",
-                    store, store_game_id, title,
+                    "matching record in _all_games",
+                    store, store_game_id,
                 )
                 return
             target.installed = installed
@@ -943,34 +910,9 @@ class SyncService(_SyncQueriesMixin, _SyncDedupMixin):
             target.install_path = install_path if installed else ""
             self._save_library_cache()
         logger.info(
-            "[SyncService] flipped installed=%s for %s:%s "
-            "(app_id=%s, matched_via=%s)",
-            installed, store, store_game_id, target.app_id, matched_via,
+            "[SyncService] flipped installed=%s for %s:%s (app_id=%s)",
+            installed, store, store_game_id, target.app_id,
         )
-
-    def _find_target_for_state_change(
-        self,
-        store: str,
-        store_game_id: str,
-        title: str,
-    ) -> tuple[Game | None, str]:
-        """Locate the Game record to flip in ``_all_games``.
-
-        Returns ``(record, matched_via)`` where ``matched_via`` is
-        ``"store_id"`` for the strict path, ``"title"`` for the
-        cross-store fallback, or ``"miss"`` when nothing matches.
-        """
-        store_games = self._all_games.get(store, [])
-        for game in store_games:
-            if game.store_game_id == store_game_id:
-                return game, "store_id"
-        if not title:
-            return None, "miss"
-        for games in self._all_games.values():
-            for game in games:
-                if game.title == title:
-                    return game, "title"
-        return None, "miss"
 
     async def _emit_progress(self, store_name: str, idx: int, total: int) -> None:
         """Emit ``SYNC_PROGRESS`` — updates the phase tracker + fires event."""

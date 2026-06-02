@@ -48,25 +48,40 @@ class GameMapEntry(NamedTuple):
     app_id: int = 0
 
 
-def generate_app_id(exe: str, title: str) -> int:
-    """Compute deterministic 32-bit shortcut ID from exe + title.
+def generate_app_id(launcher: str, identity: str) -> int:
+    """Compute deterministic 32-bit shortcut ID from launcher + identity.
 
-    Matches Steam's internal algorithm: CRC32 of ``exe+title``
-    with the top bit set (marks as non-Steam shortcut). Result
-    returned as signed 32-bit to match how Steam stores it.
-    Argument order matters — ``(exe, title)`` reversed produces
-    a different hash and breaks Steam's matching.
+    Matches Steam's non-Steam-shortcut algorithm: CRC32 of the
+    composed key with the top bit set, returned as signed
+    32-bit. The composed key is ``f"{launcher}|{identity}"``.
+
+    **The ``|`` separator is load-bearing — it must NOT be removed
+    or replaced.** This format is byte-identical to v0.6.1's
+    ``shortcuts_manager.generate_app_id`` (Release-0.6.1, line
+    1211) which is the algorithm every released user's Steam
+    library is keyed on. Changing this format silently re-keys
+    every existing shortcut, losing Steam playtime, categories,
+    hidden flags, and on-disk grid artwork bound to the old
+    appid. The pinning test in this module's test file enforces
+    the exact byte sequence.
+
+    ``identity`` is the caller-controlled stable component:
+
+    * **Game shortcuts** pass ``f"{store}:{store_game_id}"``.
+      Anchoring on the store-scoped pair (not the title) keeps
+      the same title on different stores in separate shortcuts —
+      avoids the cross-store collision where two stores would
+      share one appid and fight over LaunchOptions.
+
+    * **Auth shortcuts** (Ubisoft Connect, Epic Sign-In, etc.)
+      pass their constant display name (``"Ubisoft Connect"``,
+      ``"Epic Games Sign-In"``, ...). They never collide with
+      game shortcuts because no real game uses those strings.
     """
-    # Create the concatenated string Steam uses
-    key = exe + title
-
-    # Calculate CRC32 and apply the Steam shortcut bitmask (0x80000000)
+    key = f"{launcher}|{identity}"
     crc = binascii.crc32(key.encode("utf-8")) | 0x80000000
-
-    # Convert to signed 32-bit integer
     if crc > 0x7FFFFFFF:
         crc -= 0x100000000
-
     return crc
 
 

@@ -24,6 +24,28 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def _build_launch_index(shortcuts_dict: dict[str, Any]) -> dict[str, str]:
+    """Map ``"store:game_id"`` → VDF ordinal key for every shortcut.
+
+    One O(N) pass over ``shortcuts_dict`` so per-game lookups in
+    ``_sync_one_game`` are O(1). Entries with missing or
+    non-string ``LaunchOptions`` and entries whose
+    ``LaunchOptions`` doesn't parse as Unifideck form are
+    skipped silently.
+    """
+    launch_to_key: dict[str, str] = {}
+    for vdf_key, entry in shortcuts_dict.items():
+        if not isinstance(entry, dict):
+            continue
+        launch = entry.get("LaunchOptions", "")
+        if not isinstance(launch, str) or not launch:
+            continue
+        full_id = get_full_id(launch)
+        if full_id:
+            launch_to_key[full_id] = vdf_key
+    return launch_to_key
+
+
 class _ReconcilePhasesMixin:
     """Bulk shortcut reconciliation for :class:`ShortcutService`.
 
@@ -112,7 +134,10 @@ class _ReconcilePhasesMixin:
         valid_keys = {f"{g.store}:{g.store_game_id}" for g in games}
         launcher = getattr(self, "_launcher_path", "") or ""
         valid_app_ids = {
-            g.app_id or generate_app_id(launcher, g.title) for g in games
+            g.app_id or generate_app_id(
+                launcher, f"{g.store}:{g.store_game_id}",
+            )
+            for g in games
         }
         valid_stores = {g.store for g in games}
         registry = load_registry()
@@ -210,88 +235,98 @@ class _ReconcilePhasesMixin:
         the ``appid`` so artwork and playtime carry through the
         rewrite. Mirrors staging's ``force_update_games_batch``.
         """
+        # Build a lookup of LaunchOptions → shortcut_key BEFORE
+        # iterating games — one O(N) pass across shortcuts, then
+        # O(1) per-game. Mirrors staging's approach at
+        # shortcuts_manager.py line 1708-1713.
+        launch_to_key = _build_launch_index(shortcuts_dict)
+        launcher = getattr(self, "_launcher_path", "") or ""
+        added = kept = reclaimed = 0
+        for game in games:
+            outcome = self._sync_one_game(
+                game, shortcuts_dict, registry, launch_to_key,
+                launcher=launcher, force=force,
+            )
+            if outcome == "added":
+                added += 1
+            elif outcome == "reclaimed":
+                reclaimed += 1
+            else:
+                kept += 1
+        return added, kept, reclaimed
+
+    def _sync_one_game(
+        self: Any,
+        game: Game,
+        shortcuts_dict: dict[str, Any],
+        registry: dict[str, Any],
+        launch_to_key: dict[str, str],
+        *,
+        launcher: str,
+        force: bool,
+    ) -> str:
+        """Reconcile a single ``game`` into ``shortcuts_dict``.
+
+        Returns one of ``"added"``, ``"kept"``, ``"reclaimed"`` for
+        the caller's tally. Side effects: updates ``self._games_map``,
+        ``shortcuts_dict``, ``registry``.
+        """
         from .registry import get_registered_appid, register
 
-        # Build a lookup of LaunchOptions → (shortcut_key, appid)
-        # BEFORE iterating games — one O(N) pass across shortcuts,
-        # then O(1) per-game. Mirrors staging's approach at
-        # shortcuts_manager.py line 1708-1713.
-        launch_to_key: dict[str, str] = {}
-        launch_to_appid: dict[str, int] = {}
-        for vdf_key, entry in shortcuts_dict.items():
-            if not isinstance(entry, dict):
-                continue
-            launch = entry.get("LaunchOptions", "")
-            if not isinstance(launch, str) or not launch:
-                continue
-            full_id = get_full_id(launch)
-            if full_id:
-                launch_to_key[full_id] = vdf_key
-                appid = entry.get("appid")
-                if isinstance(appid, int):
-                    launch_to_appid[full_id] = appid
+        key = f"{game.store}:{game.store_game_id}"
+        exe = game.exe_path or ""
+        app_id = game.app_id or generate_app_id(launcher, key)
 
-        added = 0
-        kept = 0
-        reclaimed = 0
-        launcher = getattr(self, "_launcher_path", "") or ""
-        for game in games:
-            key = f"{game.store}:{game.store_game_id}"
-            launch_options = key
-            exe = game.exe_path or ""
-            app_id = game.app_id or generate_app_id(launcher, game.title)
-            # games.map is the launcher's exe-path lookup. Only installed
-            # games are launchable, so only they belong here. Uninstalled
-            # games drop their entry (covers reinstall → uninstall).
-            if game.installed and exe:
-                self._games_map[key] = GameMapEntry(
-                    exe=exe, work_dir=game.install_path or "", app_id=app_id,
-                )
-            else:
-                self._games_map.pop(key, None)
-            # ── Reclaim orphan by registry ──────────────────────
-            registered = get_registered_appid(registry, launch_options)
-            if registered is not None:
-                ord_key = self._find_existing_shortcut_key(
-                    shortcuts_dict, registered,
-                )
-                if ord_key is not None:
-                    self._reclaim_orphan(
-                        shortcuts_dict[ord_key], game, registered,
-                    )
-                    reclaimed += 1
-                    register(registry, launch_options, registered, game.title)
-                    continue
-            # ── Match by LaunchOptions (primary — staging behaviour)
-            existing_key = launch_to_key.get(launch_options)
-            if existing_key is not None:
-                if force:
-                    self._update_existing_shortcut(
-                        shortcuts_dict[existing_key], game, app_id, launcher,
-                    )
-                    register(registry, launch_options, app_id, game.title)
-                    kept += 1
-                else:
-                    kept += 1
-                continue
-            # ── Match by AppID (fallback — LaunchOptions missing)
-            existing_key = self._find_existing_shortcut_key(
-                shortcuts_dict, app_id,
+        # games.map is the launcher's exe-path lookup. Only installed
+        # games are launchable, so only they belong here. Uninstalled
+        # games drop their entry (covers reinstall → uninstall).
+        if game.installed and exe:
+            self._games_map[key] = GameMapEntry(
+                exe=exe, work_dir=game.install_path or "", app_id=app_id,
             )
-            if existing_key is not None:
-                if force:
-                    self._update_existing_shortcut(
-                        shortcuts_dict[existing_key], game, app_id, launcher,
-                    )
-                kept += 1
-            else:
-                new_key = self._allocate_new_shortcut_key(shortcuts_dict)
-                shortcuts_dict[new_key] = self._build_shortcut_entry(
-                    game, app_id,
+        else:
+            self._games_map.pop(key, None)
+
+        # ── Reclaim orphan by registry ──────────────────────
+        registered = get_registered_appid(registry, key)
+        if registered is not None:
+            ord_key = self._find_existing_shortcut_key(
+                shortcuts_dict, registered,
+            )
+            if ord_key is not None:
+                self._reclaim_orphan(
+                    shortcuts_dict[ord_key], game, registered,
                 )
-                added += 1
-            register(registry, launch_options, app_id, game.title)
-        return added, kept, reclaimed
+                register(registry, key, registered, game.title)
+                return "reclaimed"
+
+        # ── Match by LaunchOptions (primary — staging behaviour)
+        existing_key = launch_to_key.get(key)
+        if existing_key is not None:
+            if force:
+                self._update_existing_shortcut(
+                    shortcuts_dict[existing_key], game, app_id, launcher,
+                )
+                register(registry, key, app_id, game.title)
+            return "kept"
+
+        # ── Match by AppID (fallback — LaunchOptions missing)
+        existing_key = self._find_existing_shortcut_key(
+            shortcuts_dict, app_id,
+        )
+        if existing_key is not None:
+            if force:
+                self._update_existing_shortcut(
+                    shortcuts_dict[existing_key], game, app_id, launcher,
+                )
+            register(registry, key, app_id, game.title)
+            return "kept"
+
+        # ── New shortcut
+        new_key = self._allocate_new_shortcut_key(shortcuts_dict)
+        shortcuts_dict[new_key] = self._build_shortcut_entry(game, app_id)
+        register(registry, key, app_id, game.title)
+        return "added"
 
     def _update_existing_shortcut(
         self: Any,
@@ -317,7 +352,8 @@ class _ReconcilePhasesMixin:
             entry["icon"] = game.icon_url
         tags_dict = entry.get("tags", {})
         if isinstance(tags_dict, dict):
-            tags_dict["0"] = game.store
+            tags_dict["0"] = UNIFIDECK_TAG
+            tags_dict["1"] = game.store
             tags_dict["2"] = "" if game.installed else "Not Installed"
 
     def _reclaim_orphan(

@@ -5,9 +5,39 @@ OP-26f | rpc/mixins/sync.py
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from typing import Any
 
 logger = logging.getLogger(__name__)
+
+
+def _is_unifideck_owned(
+    entry: dict[str, Any],
+    unifideck_tag: str,
+    is_unifideck_launch_options: Callable[[str], bool],
+) -> bool:
+    """True iff a VDF shortcut entry is Unifideck-owned.
+
+    Two independent signals so cleanup catches entries even when
+    Steam silently strips one of them:
+
+    * **LaunchOptions pattern** — most reliable, Steam preserves
+      ``LaunchOptions`` across updates.
+    * **UNIFIDECK_TAG** in ``tags`` — secondary signal for old
+      entries that pre-date the LaunchOptions convention.
+    """
+    launch = entry.get("LaunchOptions", "")
+    if isinstance(launch, str) and is_unifideck_launch_options(launch):
+        return True
+    tags = entry.get("tags")
+    tag_values: list[Any] = []
+    if isinstance(tags, dict):
+        tag_values = list(tags.values())
+    elif isinstance(tags, list):
+        tag_values = list(tags)
+    return any(
+        isinstance(v, str) and v == unifideck_tag for v in tag_values
+    )
 
 
 class SyncRPCMixin:
@@ -158,38 +188,44 @@ class SyncRPCMixin:
         persisted shortcut state — not the volatile sync cache —
         so cleanup works even when no sync has run this session.
         """
+        ids: set[int] = set()
+        ids.update(SyncRPCMixin._collect_ids_from_shortcuts_vdf(shortcut_svc))
+        ids.update(SyncRPCMixin._collect_ids_from_games_map(shortcut_svc))
+        return sorted(ids)
+
+    @staticmethod
+    def _collect_ids_from_shortcuts_vdf(shortcut_svc: Any) -> set[int]:
+        """Walk ``shortcuts.vdf`` and return appids of Unifideck-owned entries."""
         from unifideck.services.shortcut.games_map import UNIFIDECK_TAG
+        from unifideck.services.shortcut.launch_options import is_unifideck_shortcut
 
         ids: set[int] = set()
         shortcuts = getattr(shortcut_svc, "_shortcuts", None) or {}
         root = shortcuts.get("shortcuts") if isinstance(shortcuts, dict) else None
-        if isinstance(root, dict):
-            for entry in root.values():
-                if not isinstance(entry, dict):
-                    continue
-                tags = entry.get("tags")
-                tag_values: list[Any] = []
-                if isinstance(tags, dict):
-                    tag_values = list(tags.values())
-                elif isinstance(tags, list):
-                    tag_values = list(tags)
-                if not any(
-                    isinstance(v, str) and v == UNIFIDECK_TAG
-                    for v in tag_values
-                ):
-                    continue
-                app_id = entry.get("appid")
-                if isinstance(app_id, int):
-                    ids.add(app_id)
+        if not isinstance(root, dict):
+            return ids
+        for entry in root.values():
+            if not isinstance(entry, dict):
+                continue
+            if not _is_unifideck_owned(entry, UNIFIDECK_TAG, is_unifideck_shortcut):
+                continue
+            app_id = entry.get("appid")
+            if isinstance(app_id, int):
+                ids.add(app_id)
+        return ids
 
+    @staticmethod
+    def _collect_ids_from_games_map(shortcut_svc: Any) -> set[int]:
+        """Pull non-zero appids out of the games.map manifest."""
+        ids: set[int] = set()
         games_map = getattr(shortcut_svc, "_games_map", None) or {}
-        if isinstance(games_map, dict):
-            for entry in games_map.values():
-                app_id = getattr(entry, "app_id", 0)
-                if isinstance(app_id, int) and app_id != 0:
-                    ids.add(app_id)
-
-        return sorted(ids)
+        if not isinstance(games_map, dict):
+            return ids
+        for entry in games_map.values():
+            app_id = getattr(entry, "app_id", 0)
+            if isinstance(app_id, int) and app_id != 0:
+                ids.add(app_id)
+        return ids
 
     async def _cleanup_one_app_id(
         self,

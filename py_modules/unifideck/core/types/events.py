@@ -209,18 +209,6 @@ class Events(StrEnum):
     # Payload fields: store (str), reason (str)
     SYNC_SKIPPED = "sync_skipped"
 
-    # Cross-store deduplication outcome. Emitted by SyncService
-    # immediately before SYNC_COMPLETE whenever at least one duplicate
-    # was removed. Lets the frontend show a toast ("3 duplicates
-    # skipped across GOG / Amazon") without having to diff two library
-    # snapshots. Microsoft is never in the payload — xCloud / Game
-    # Pass entries don't participate in dedup.
-    # Payload fields:
-    #   total_removed (int)         — sum of all per-store drops
-    #   per_store (dict[str, int])  — {store_name: removed_count}, only
-    #                                 stores that lost at least one
-    SYNC_DEDUP = "sync_dedup"
-
     # Steam account switch detection. Emitted by AccountService when
     # the user signs into a different Steam account (detected by
     # polling loginusers.vdf for a MostRecent user id change).
@@ -254,10 +242,10 @@ class Events(StrEnum):
     # Emitted by ShortcutService when an existing shortcut's
     # install state flips (post-install or post-uninstall) without
     # the shortcut itself being created or removed. The shortcut
-    # appid stays anchored on (launcher_path, title) across the
-    # transition — see SyncService._backfill_app_ids — so this
-    # event is the canonical channel for "the game at app_id N
-    # just became (un)installed". SyncService updates _all_games
+    # appid stays anchored on (launcher_path, "<store>:<store_game_id>")
+    # across the transition — see SyncService._backfill_app_ids —
+    # so this event is the canonical channel for "the game at app_id
+    # N just became (un)installed". SyncService updates _all_games
     # and the frontend refreshes its unifideckGameCache entry.
     # Payload fields:
     #   store (str), store_game_id (str), app_id (int, signed),
