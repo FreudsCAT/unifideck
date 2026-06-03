@@ -125,6 +125,11 @@ def proton_prepare(
     # staging's ``export PROTONPATH``.
     env["PROTONPATH"] = str(proton_path.parent)
     env["STEAM_COMPAT_DATA_PATH"] = str(prefix_path)
+    # Game install dir — some Proton features/protonfixes key off this.
+    env["STEAM_COMPAT_INSTALL_PATH"] = str(ctx.work_dir)
+    # Let DXVK-NVAPI work on non-NVIDIA / mixed driver setups (harmless
+    # on the Deck's AMD GPU; required by some titles' NVAPI probes).
+    env["DXVK_NVAPI_ALLOW_OTHER_DRIVERS"] = "1"
     env["STEAM_COMPAT_CLIENT_INSTALL_PATH"] = str(
     Path("~/.steam/root").expanduser(),
    )
