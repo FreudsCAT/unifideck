@@ -31,7 +31,8 @@ export type PlaySectionState =
   | { kind: "steam-native"; shouldOverride: false }
   | { kind: "not-installed"; shouldOverride: true; installable: true }
   | { kind: "downloading"; shouldOverride: true; download: DownloadItem }
-  | { kind: "installed"; shouldOverride: true; appId: number };
+  | { kind: "installed"; shouldOverride: true; appId: number }
+  | { kind: "xcloud"; shouldOverride: true; appId: number; gameId: string };
 
 /**
  * Hook that resolves the current Play-section state
@@ -56,6 +57,14 @@ export function usePlaySection(appId: number | null): PlaySectionState {
     // Filter out games whose store is plain Steam — we never override those.
     if (game.store === "steam") {
       return { kind: "steam-native", shouldOverride: false };
+    }
+
+    // xCloud (Xbox Cloud Gaming) titles stream in a browser — there's
+    // nothing to install, so they're always "playable". Surface a Play
+    // state regardless of is_installed; the launcher routes the xcloud
+    // games.map sentinel to the Edge kiosk streaming flow.
+    if (game.store_tags?.includes("xcloud")) {
+      return { kind: "xcloud", shouldOverride: true, appId, gameId: game.id };
     }
 
     // Check the live queue first — a download in progress

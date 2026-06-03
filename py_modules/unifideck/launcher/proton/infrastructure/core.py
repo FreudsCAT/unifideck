@@ -109,7 +109,7 @@ def proton_prepare(
     env["STORE"] = umu_store
     env["STEAM_COMPAT_DATA_PATH"] = str(prefix_path)
     env["STEAM_COMPAT_CLIENT_INSTALL_PATH"] = str(
-    Path("~/.steam/root").expanduser,
+    Path("~/.steam/root").expanduser(),
    )
     env["PROTON_VERB"] = "waitforexitandrun"
     env.update(ctx.env_overrides)

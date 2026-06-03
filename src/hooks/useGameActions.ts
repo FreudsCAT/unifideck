@@ -22,7 +22,7 @@ import type { Result, StoreId } from "../types/api";
 
 /** Steam bridge shape. */
 interface SteamBridgeShape {
-  runGame(appId: string, launchOptions: string): void;
+  runGame(appId: number): void;
   terminateApp(appId: string, force?: boolean): void;
 }
 
@@ -40,7 +40,7 @@ export interface UseGameActionsResult {
   ) => Promise<Result | null>;
   uninstall: (appId: number) => Promise<Result | null>;
   cancel: (downloadId: string) => Promise<Result | null>;
-  launch: (appId: number, launchOptions: string) => void;
+  launch: (appId: number) => void;
   terminate: (appId: number, force?: boolean) => void;
 }
 
@@ -103,8 +103,8 @@ export function useGameActions(bridge: SteamBridgeShape): UseGameActionsResult {
   );
 
   const launch = useCallback(
-    (appId: number, launchOptions: string) => {
-      bridge.runGame(String(appId), launchOptions);
+    (appId: number) => {
+      bridge.runGame(appId);
     },
     [bridge],
   );

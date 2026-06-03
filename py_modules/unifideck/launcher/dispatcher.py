@@ -106,6 +106,31 @@ async def _build_context(
         store, game_id,
     )
     if entry is None:
+        # Microsoft titles are Xbox Cloud Gaming (browser-streamed) —
+        # they have no install and need no real games.map row. The
+        # ``exe="xcloud"`` sentinel is normally written by reconcile,
+        # but a Play click must not depend on a prior library sync
+        # having run (the row is absent on a fresh games.map, or after
+        # a rebuild). Synthesize the xCloud context directly so the
+        # dispatch matrix routes to ``_launch_xcloud``. ``_launch_xcloud``
+        # builds the stream URL from ``game_id``, so ``work_dir`` here
+        # is only a non-empty placeholder (Path would mangle a URL).
+        if store == "microsoft":
+            logger.info(
+                "[launcher.dispatcher] microsoft game not in games.map — "
+                "synthesizing xCloud context for %s", game_key,
+            )
+            return LaunchContext(
+                store=store,
+                game_id=game_id,
+                exe_path=Path("xcloud"),
+                work_dir=_resolve_plugin_dir(),
+                plugin_dir=_resolve_plugin_dir(),
+                raw_options=raw_options,
+                is_launch_action=True,
+                auth_store=None,
+                bypass_circuit_breaker=False,
+            )
         raise GameNotFoundError(
             f"game {game_key!r} not found in games.map",
             context={"game_key": game_key},

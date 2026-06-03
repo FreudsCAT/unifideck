@@ -27,6 +27,7 @@ export const rpcRoutes = {
   getMicrosoftAuthShortcutContext: "get_microsoft_auth_shortcut_context",
   getUbisoftAuthShortcutContext:   "get_ubisoft_auth_shortcut_context",
   getCompatToolForGame:            "get_compat_tool_for_game",
+  saveProtonSetting:               "save_proton_setting",
   // Library sync (SyncRPCMixin)
   syncLibraries:           "sync_libraries",
   forceSyncLibraries:      "force_sync_libraries",

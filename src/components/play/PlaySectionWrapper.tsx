@@ -18,6 +18,7 @@ import { useHidePlaySection } from "../../hooks/useHidePlaySection";
 import { NotInstalledButtons } from "./NotInstalledButtons";
 import { DownloadingButtons } from "./DownloadingButtons";
 import { InstalledButtons } from "./InstalledButtons";
+import { XCloudButtons } from "./XCloudButtons";
 import { injectPlayFocusStyles } from "./play.css";
 
 /**
@@ -52,6 +53,8 @@ export const PlaySectionWrapper: FC<PlaySectionWrapperProps> = ({appId, children
       return <DownloadingButtons download={state.download} />;
     case "installed":
       return <InstalledButtons appId={state.appId} />;
+    case "xcloud":
+      return <XCloudButtons appId={state.appId} gameId={state.gameId} />;
     default:
       // Exhaustiveness — TS will flag missing branches
       return <>{children}</>;

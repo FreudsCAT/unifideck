@@ -173,6 +173,17 @@ class _GamesMapMixin(_ReconcilePhasesMixin):
             )
             return None
 
+        if not exe_path:
+            # An empty exe means the store's exe resolver returned
+            # nothing — the launcher dispatcher will have no target to
+            # run and the game silently fails to launch. Write the
+            # entry anyway (work_dir is still useful) but surface the
+            # gap loudly so it's caught in logs instead of at click time.
+            logger.warning(
+                "[ShortcutService] mark_installed %s — empty exe_path; "
+                "launcher will not be able to resolve a target",
+                target_launch,
+            )
         self._games_map[target_launch] = GameMapEntry(
             exe=exe_path, work_dir=install_path, app_id=existing_app_id,
         )

@@ -166,7 +166,10 @@ export type GameTag =
   | "addon"
   | "dlc"
   | "preorder"
-  | "early_access";
+  | "early_access"
+  // Xbox Cloud Gaming title — streamed in a browser, never installed.
+  // Drives the "Play on Cloud" play-section variant.
+  | "xcloud";
 
 /**
  * Steam Deck verification rating, as returned by

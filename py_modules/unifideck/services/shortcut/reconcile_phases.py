@@ -277,13 +277,26 @@ class _ReconcilePhasesMixin:
         exe = game.exe_path or ""
         app_id = game.app_id or generate_app_id(launcher, key)
 
-        # games.map is the launcher's exe-path lookup. Only installed
-        # games are launchable, so only they belong here. Uninstalled
-        # games drop their entry (covers reinstall → uninstall).
+        # games.map is the launcher's exe-path lookup, only for games
+        # that have a local executable. xCloud (Microsoft) titles need
+        # no row — the dispatcher synthesizes their launch context from
+        # ``store == "microsoft"`` (see launcher/dispatcher.py).
+        #
+        # Crucially, library-sourced sync ``Game`` objects do NOT carry
+        # ``exe_path`` (it's resolved once at install time by the
+        # download worker and written via ``mark_installed``). So an
+        # installed game arriving here with an empty ``exe`` must NOT
+        # wipe its existing entry — doing so was the bug that silently
+        # dropped install-time games.map rows on the next sync (e.g.
+        # Amazon vanished after a post-install library sync). Preserve
+        # the existing row; only drop when the game is truly uninstalled.
         if game.installed and exe:
             self._games_map[key] = GameMapEntry(
                 exe=exe, work_dir=game.install_path or "", app_id=app_id,
             )
+        elif game.installed and key in self._games_map:
+            # Keep the install-time entry; this sync just lacks the exe.
+            pass
         else:
             self._games_map.pop(key, None)
 

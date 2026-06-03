@@ -19,6 +19,7 @@ import { call } from "@decky/api";
 import { FaCog, FaGamepad, FaPlay, FaSyncAlt, FaTimes, FaTrash } from "react-icons/fa";
 import { useGameInfo } from "../../hooks/useGameInfo";
 import { useGameActions } from "../../hooks/useGameActions";
+import { useLaunchPrep } from "../../hooks/useLaunchPrep";
 import { useToast } from "../../hooks/useToast";
 import { SteamBridge } from "../../lib/steam-bridge";
 import { UninstallConfirmModal } from "../modals/UninstallConfirmModal";
@@ -57,7 +58,6 @@ function openAppSettings(appId: number): void {
 }
 
 interface UpdateCheckResponse {
-  success: boolean;
   has_update?: boolean;
 }
 
@@ -68,6 +68,11 @@ export const InstalledButtons: FC<Props> = ({ appId, bridge = defaultBridge }) =
   const toast = useToast();
   const [isRunning, setIsRunning] = useState(false);
   const [hasUpdate, setHasUpdate] = useState(false);
+
+  // Clear Steam's Force-Compatibility while this page is open so
+  // RunGame runs our launcher natively (the launcher applies Proton
+  // itself); restored on page-leave. See useLaunchPrep.
+  useLaunchPrep(appId, game);
 
   // Running-state poll (2 s).
   useEffect(() => {
@@ -83,23 +88,27 @@ export const InstalledButtons: FC<Props> = ({ appId, bridge = defaultBridge }) =
     return () => { cancelled = true; window.clearInterval(id); };
   }, [appId]);
 
-  // Update check — one-shot on mount.
+  // Update check — one-shot on mount. The backend RPC takes
+  // (store, game_id) and returns { has_update } — passing the raw
+  // appId (the old call) threw "missing argument: game_id" on every
+  // page load and update detection never worked.
   useEffect(() => {
     if (!game) return;
     let cancelled = false;
-    call<[number], UpdateCheckResponse>("check_game_update", appId)
+    call<[string, string], UpdateCheckResponse>(
+      "check_game_update", game.store, game.id,
+    )
       .then((res) => {
         if (cancelled) return;
-        setHasUpdate(Boolean(res?.success && res?.has_update));
+        setHasUpdate(Boolean(res?.has_update));
       })
       .catch(() => { /* non-critical */ });
     return () => { cancelled = true; };
-  }, [appId, game]);
+  }, [game]);
 
   const onPlay = useCallback(() => {
     if (!game) return;
-    const launchOpts = `${game.store}:${game.id}`;
-    actions.launch(appId, launchOpts);
+    actions.launch(appId);
   }, [actions, appId, game]);
 
   const onStop = useCallback(() => {

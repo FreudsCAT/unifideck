@@ -215,6 +215,17 @@ class LauncherService:
         store = ctx.store
         game_id = ctx.game_id
 
+        # Fail fast with a clear reason when Edge isn't installed —
+        # xCloud streaming requires it. Checked before GAME_LAUNCHED so
+        # we don't emit a launch/stop pair for a no-op.
+        if not self._edge_browser.is_installed:
+            logger.warning(
+                "[LauncherService] xCloud launch aborted — Edge not installed",
+            )
+            return Result(
+                success=False, error="edge_not_installed", store=store,
+            )
+
         await self._bus.emit(
             Events.GAME_LAUNCHED,
             store=store,
@@ -223,33 +234,59 @@ class LauncherService:
             app_id=0  # No app_id on LaunchContext
         )
 
-        # xCloud specific URL
-        url = f"https://www.xbox.com/play/games/{game_id}"
+        # xCloud streaming URL. ``/play/launch/{productId}`` is the
+        # page that *starts the stream* — the old ``/play/games/{id}``
+        # was just a store details page (Edge opened but the game never
+        # started, which is the "launches Edge, not the game" symptom).
+        # Built from the game id directly: the games.map sentinel stores
+        # the URL in ``work_dir``, but the dispatcher wraps that field
+        # in ``Path`` (which collapses ``https://`` → ``https:/``), so
+        # it's not a safe URL source here.
+        url = f"https://www.xbox.com/play/launch/{game_id}"
 
         try:
             # ``EdgeBrowser.launch_xcloud`` is synchronous and
-            # returns ``bool``. An earlier version of this code
-            # awaited it (TypeError: object bool can't be used
-            # in 'await' expression) AND treated the return as
-            # an integer rc, computing ``success = rc == 0`` —
-            # which is always ``False`` whether the bool was
-            # True or False, since ``True == 0`` is ``False``
-            # and ``False == 0`` is also ``False`` (the rc would
-            # be ``0`` only for an int, not a bool).
-            #
-            # We dispatch through ``asyncio.to_thread`` because
-            # the underlying ``subprocess.Popen[bytes]`` blocks while
-            # Edge initializes; without the thread hop the event
-            # loop stalls for ~half a second on every launch.
+            # returns ``bool``. We dispatch through
+            # ``asyncio.to_thread`` because the underlying
+            # ``subprocess.Popen[bytes]`` blocks while Edge
+            # initializes; without the thread hop the event loop
+            # stalls for ~half a second on every launch.
             launched = await asyncio.to_thread(
                 self._edge_browser.launch_xcloud, url,
             )
-            return Result(success=bool(launched))
+            if not launched:
+                return Result(
+                    success=False,
+                    error="edge_launch_failed",
+                    store=store,
+                )
+            # Block until the streaming session ends — exactly like
+            # the native / Windows paths ``await proc.wait()``. Without
+            # this the launcher returned immediately, ``GAME_STOPPED``
+            # fired at once, and Steam showed the game as stopped while
+            # Edge was still streaming (no playtime, stale running
+            # indicator, Stop did nothing). Registering the Edge
+            # process as the active subprocess also lets SIGTERM-based
+            # cancellation (Stop) reach it.
+            self._active_subprocess = self._edge_browser.process
+            await self._wait_for_xcloud_session()
+            return Result(success=True, store=store)
         except Exception as e:
             logger.exception("[LauncherService] xCloud launch failed")
             return Result(success=False, error=str(e))
         finally:
+            self._active_subprocess = None
             await self._bus.emit(Events.GAME_STOPPED, store=store, game_id=game_id)
+
+    async def _wait_for_xcloud_session(self) -> None:
+        """Block until the Edge streaming session ends.
+
+        Reuses the launcher's canonical xCloud session wait (process
+        ``.wait()`` with a max-duration cap + a poll fallback when no
+        process handle is available).
+        """
+        from unifideck.launcher.flows.xcloud import _wait_for_session_end
+        await _wait_for_session_end(self._edge_browser)
 
     async def _get_launch_id_or_none(self) -> str | None:
         """Return the current launch id from ``launch_history`` or None."""

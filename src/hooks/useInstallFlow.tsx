@@ -23,7 +23,7 @@ import type { Game, Result } from "../types/api";
 /** Steam bridge shape — same minimal surface useGameActions
  *  consumes. */
 interface SteamBridgeShape {
-  runGame(appId: string, launchOptions: string): void;
+  runGame(appId: number): void;
   terminateApp(appId: string, force?: boolean): void;
 }
 

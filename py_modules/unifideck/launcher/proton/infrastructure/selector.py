@@ -84,6 +84,32 @@ def get_unifideck_proton_tool() -> str | None:
         return tool or None
     except (OSError, ValueError):
         return None
+def get_saved_proton_tool(store_game_id: str) -> str | None:
+    """Return the per-game Proton tool saved by the frontend.
+
+    When the user sets "Force Compatibility" on a Unifideck
+    shortcut, the game-details page saves that tool into
+    ``proton_settings.json`` (keyed by ``store:game_id``) and
+    clears Force Compatibility from Steam so ``RunGame`` runs
+    this launcher natively instead of wrapping it in Proton.
+    The launcher then applies the saved tool itself — this is
+    the lookup that makes the user's choice authoritative.
+    """
+    if not store_game_id:
+        return None
+    settings_path = Path(
+        "~/.local/share/unifideck/proton_settings.json",
+    ).expanduser()
+    if not settings_path.is_file():
+        return None
+    try:
+        import json
+        with settings_path.open() as f:
+            settings = json.load(f)
+        tool = settings.get("games", {}).get(store_game_id, "")
+        return tool or None
+    except (OSError, ValueError):
+        return None
 _COMPAT_TOOL_RE = re.compile(
     r'"(?P<app_id>\d+)"\s*\{[^}]*?"name"\s*"(?P<name>[^"]+)"',
     re.S,
@@ -126,10 +152,31 @@ def find_any_ge_proton() -> Path | None:
 
 def select_proton_version(
     steam_app_id: str | None = None,
+    store_game_id: str | None = None,
 ) -> tuple[Path, str]:
 
-    """Select PROTON version."""
+    """Select PROTON version.
+
+    Priority order:
+      1. Per-game tool the frontend saved into
+         ``proton_settings.json`` (the user's Force-Compat choice,
+         captured + cleared on the game-details page).
+      2. A live Steam compat override for ``steam_app_id``.
+      3. The Unifideck default from ``config.json``.
+      4. Newest installed GE-Proton as a last resort.
+    """
     tried: list[str] = []
+    if store_game_id:
+        saved_tool = get_saved_proton_tool(store_game_id)
+        if saved_tool:
+            tried.append(f"saved:{saved_tool}")
+            path = resolve_proton_path(saved_tool)
+            if path:
+                logger.info(
+                    "[launcher.proton] selected via saved per-game tool: %s",
+                    saved_tool,
+                )
+                return path, saved_tool
     if steam_app_id:
         steam_tool = get_steam_compat_tool_override(steam_app_id)
         if steam_tool:

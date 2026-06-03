@@ -354,6 +354,20 @@ class GOGStore(StoreBase):
         """Get installed game info."""
         return self._library.get_installed_game_info(game_id)
 
+    def find_installed_exe(self, install_path: str) -> str | None:
+        """Resolve the launchable target for an installed GOG game.
+
+        Used by ``DownloadWorker._build_installed_game`` to populate
+        ``Game.exe_path`` (and thus the ``games.map`` entry the
+        launcher reads). GOG Linux-native games launch via a
+        ``start.sh`` wrapper, which the generic ``StoreBase._find_exe``
+        heuristic (``.exe``-only) misses — delegating to
+        ``GOGExeResolver`` handles start.sh, goggame play tasks, and
+        Windows ``.exe`` targets alike. Without this, GOG games landed
+        in ``games.map`` with an empty exe and silently failed to launch.
+        """
+        return self._exe.find(install_path)
+
     def migrate_old_markers(self) -> dict[str, int]:
         """Migrate old markers."""
         return self._library.migrate_old_markers()

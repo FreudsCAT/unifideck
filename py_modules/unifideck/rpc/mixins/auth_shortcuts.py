@@ -117,58 +117,69 @@ class AuthShortcutsRPCMixin:
         )
         return result
 
-    async def _get_compat_tool_impl(self, store_game_id: str) -> Any:
-        """Look up the current Proton compat tool for a shortcut.
+    async def save_proton_setting(
+        self, store_game_id: str, tool_name: str,
+    ) -> Any:
+        """Persist the per-game Proton tool the launcher should apply.
 
-        Frontend launchers call this to save/restore the
-        compat tool around the auth flow. Delegates to the
-        existing ``compatibility.proton_helpers`` helper.
-
-        For Ubisoft auth shortcuts, resolves the actual VDF
-        entry's unsigned AppID so the frontend can call
-        ``SteamClient.Apps.RunGame`` with the correct ID.
-        The Ubisoft shortcut is pre-created by
-        ``UbisoftAuth._ensure_auth_shortcut``.
-
-        Args:
-            store_game_id: the shortcut's ``store:game_id``
-                key as written into LaunchOptions.
-
-        Returns:
-            ``{success, tool_name, current_launch_options,
-              store_game_id, launcher_path, appid_unsigned}``
-            matching the ``ShortcutLaunchContext`` shape the
-            frontend consumes.
+        Called by the game-details page (``useLaunchPrep``) after it
+        reads Steam's Force-Compatibility selection and before it
+        clears it — so the launcher (which reads
+        ``proton_settings.json``) re-applies the user's chosen tool
+        instead of letting Steam wrap the launcher in Proton.
+        Passing an empty ``tool_name`` clears the saved entry.
         """
         try:
             from unifideck.compatibility.proton_helpers import (
-                get_compat_tool_for_game as _lookup,
+                save_proton_setting as _save,
             )
-            result = _lookup(store_game_id)
-            if not isinstance(result, dict):
-                # Defensive: ``get_compat_tool_for_game`` is typed
-                # as returning dict but historically returned a
-                # plain string in some code paths. Keep the
-                # normaliser; mypy thinks it's unreachable now.
-                result = {"tool_name": result or ""}  # type: ignore[unreachable]
-
-            # The generic proton_helpers lookup doesn't know
-            # the steam unsigned AppID. Resolve it from the
-            # shortcuts.vdf by scanning for the entry whose
-            # LaunchOptions contains this store_game_id.
-            if not result.get("appid_unsigned"):
-                resolved = self._resolve_shortcut_appid(store_game_id)
-                logger.info(
-                    "[AuthShortcuts] _resolve_shortcut_appid(%s) = %s",
-                    store_game_id, resolved,
-                )
-                result["appid_unsigned"] = resolved
-            result["success"] = True
+            result = _save(store_game_id, tool_name)
             logger.info(
-                "[AuthShortcuts] _get_compat_tool_impl result keys: %s",
-                list(result.keys()),
+                "[AuthShortcuts] save_proton_setting(%s, %r) → %s",
+                store_game_id, tool_name, result,
             )
             return result
+        except Exception as e:
+            logger.warning(
+                "[AuthShortcuts] save_proton_setting(%s) failed: %s",
+                store_game_id, e,
+            )
+            return {"success": False, "error": str(e)}
+
+    async def _get_compat_tool_impl(self, store_game_id: str) -> Any:
+        """Return the Steam Force-Compatibility tool for a game shortcut.
+
+        Reads the Proton tool currently set as Force Compatibility
+        (``config.vdf`` CompatToolMapping) for the shortcut, resolved
+        via its appid scanned from ``shortcuts.vdf``. Consumed by the
+        game-details page (``useLaunchPrep``): when a real Proton tool
+        is set it saves the tool to ``proton_settings.json`` and clears
+        Force Compatibility so ``RunGame`` runs the launcher natively
+        (no double-Proton loading screen) — the launcher re-applies the
+        tool itself. ``is_linux_runtime`` lets the frontend skip that
+        dance for Steam-Linux-Runtime entries (not real Proton).
+        """
+        try:
+            from unifideck.compatibility.proton_helpers import (
+                get_compat_tool_for_app,
+                is_linux_runtime,
+            )
+
+            appid_unsigned = self._resolve_shortcut_appid(store_game_id)
+            tool_name = (
+                get_compat_tool_for_app(appid_unsigned)
+                if appid_unsigned
+                else ""
+            )
+            logger.info(
+                "[AuthShortcuts] compat tool for %s: appid=%s tool=%r",
+                store_game_id, appid_unsigned, tool_name,
+            )
+            return {
+                "success": True,
+                "tool_name": tool_name,
+                "is_linux_runtime": is_linux_runtime(tool_name),
+            }
         except Exception as e:
             logger.warning(
                 "[AuthShortcutsRPCMixin] "

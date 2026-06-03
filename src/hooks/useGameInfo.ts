@@ -16,7 +16,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { useRPC } from "../api/useRPC";
 import { rpcRoutes } from "../api/rpc-routes";
-import type { Game, StoreId } from "../types/api";
+import type { Game, GameTag, StoreId } from "../types/api";
 
 /**
  * Adapt the raw ``get_game_info`` RPC response into our
@@ -50,6 +50,12 @@ function adaptGame(raw: unknown): Game | null {
     app_id: typeof r.app_id === "number" ? r.app_id : undefined,
     size_bytes: typeof r.size_bytes === "number" ? r.size_bytes : undefined,
     cover_image: typeof r.cover_image === "string" ? r.cover_image : undefined,
+    // Backend serialises store tags as ``tags`` (e.g. ``["xcloud"]``
+    // for Xbox Cloud games); expose them as ``store_tags`` so the
+    // play-section logic can branch on cloud-streaming titles.
+    store_tags: Array.isArray(r.store_tags)
+      ? (r.store_tags as GameTag[])
+      : (Array.isArray(r.tags) ? (r.tags as GameTag[]) : undefined),
   };
 }
 
