@@ -63,6 +63,65 @@ def _resolve_plugin_dir() -> Path:
     """Resolve plugin dir."""
     from unifideck.core.paths import resolve_plugin_dir
     return resolve_plugin_dir(start=Path(__file__))
+def _install_path_from_cache(store: str, game_id: str) -> str:
+    """Look up an installed game's directory from the library cache.
+
+    Fallback for games whose games.map row is missing entirely (e.g.
+    installed by an older build that never wrote one). Returns ``""``
+    when the cache is absent or the game isn't found.
+    """
+    import json
+    cache = Path(
+        "~/.local/share/unifideck/library_cache.json",
+    ).expanduser()
+    if not cache.is_file():
+        return ""
+    try:
+        data = json.loads(cache.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return ""
+    libraries = data.get("libraries") if isinstance(data, dict) else None
+    games = (libraries or {}).get(store) or []
+    for game in games:
+        if isinstance(game, dict) and game.get("store_game_id") == game_id:
+            return str(game.get("install_path") or "")
+    return ""
+
+
+def _resolve_exe_from_install(store: str, install_path: str) -> str | None:
+    """Re-resolve a launchable target from an install dir.
+
+    Repairs stale/missing games.map rows at launch time. GOG (and
+    other) Linux-native games launch via a root ``start.sh`` wrapper;
+    everything else resolves the best ``.exe`` via the shared
+    ``exe_finder`` heuristic. Best-effort — returns None on failure.
+
+    Deliberately avoids importing any store package (e.g.
+    ``GOGExeResolver``): the store ``__init__`` chains pull in auth →
+    security → ``cryptography`` whose native ``_cffi_backend`` isn't
+    importable in the slim launcher Python, which would crash the
+    whole resolution. ``core.exe_finder`` is dependency-light and safe.
+    """
+    if not install_path:
+        return None
+    try:
+        from unifideck.core.exe_finder import exe_finder
+
+        # Native Linux games (notably GOG) launch via a ``start.sh``
+        # wrapper at the install root — ``exe_finder`` only finds
+        # ``.exe`` files, so check for it explicitly first.
+        start_sh = Path(install_path) / "start.sh"
+        if start_sh.is_file():
+            return str(start_sh)
+        return exe_finder.find(install_path)
+    except Exception:
+        logger.exception(
+            "[launcher.dispatcher] exe re-resolution failed for %s",
+            install_path,
+        )
+        return None
+
+
 async def _build_context(
     argv: list[str],
     shortcut_svc: ShortcutService,
@@ -105,16 +164,34 @@ async def _build_context(
     entry = await shortcut_svc.get_entry_for_game_key(
         store, game_id,
     )
-    if entry is None:
+    exe = (entry.exe if entry else "") or ""
+    work_dir = (entry.work_dir if entry else "") or ""
+
+    # Repair a stale/missing games.map row by re-resolving the exe from
+    # the install dir. Games installed by older builds (or discovered
+    # via manifest) never had an exe resolved, so their row is absent
+    # (e.g. Amazon) or carries an empty exe (e.g. GOG ``start.sh``).
+    # Re-resolving here lets already-installed games launch without a
+    # reinstall. The ``exe="xcloud"`` sentinel is a valid target and
+    # skips this; Microsoft is xCloud-only and is handled below.
+    if not exe and store != "microsoft":
+        if not work_dir:
+            work_dir = _install_path_from_cache(store, game_id)
+        resolved = (
+            _resolve_exe_from_install(store, work_dir) if work_dir else None
+        )
+        if resolved:
+            logger.info(
+                "[launcher.dispatcher] re-resolved exe for %s → %s",
+                game_key, resolved,
+            )
+            exe = resolved
+
+    if not exe:
         # Microsoft titles are Xbox Cloud Gaming (browser-streamed) —
-        # they have no install and need no real games.map row. The
-        # ``exe="xcloud"`` sentinel is normally written by reconcile,
-        # but a Play click must not depend on a prior library sync
-        # having run (the row is absent on a fresh games.map, or after
-        # a rebuild). Synthesize the xCloud context directly so the
-        # dispatch matrix routes to ``_launch_xcloud``. ``_launch_xcloud``
-        # builds the stream URL from ``game_id``, so ``work_dir`` here
-        # is only a non-empty placeholder (Path would mangle a URL).
+        # no install and no games.map row needed. Synthesize the xCloud
+        # context so the dispatch matrix routes to ``_launch_xcloud``
+        # (which builds the stream URL from ``game_id``).
         if store == "microsoft":
             logger.info(
                 "[launcher.dispatcher] microsoft game not in games.map — "
@@ -135,14 +212,13 @@ async def _build_context(
             f"game {game_key!r} not found in games.map",
             context={"game_key": game_key},
         )
-    exe_path = Path(entry.exe)
-    work_dir = Path(entry.work_dir)
+
     bypass = _resolve_bypass_flag(store, game_id)
     return LaunchContext(
         store=store,
         game_id=game_id,
-        exe_path=exe_path,
-        work_dir=work_dir,
+        exe_path=Path(exe),
+        work_dir=Path(work_dir) if work_dir else _resolve_plugin_dir(),
         plugin_dir=_resolve_plugin_dir(),
         raw_options=raw_options,
         is_launch_action=True,

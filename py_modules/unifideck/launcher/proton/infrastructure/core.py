@@ -68,9 +68,17 @@ def _lookup_umu_id(
     except (subprocess.SubprocessError, OSError):
         return None
 
-def _locate_umu_wrapper(proton_path: Path) -> Path:
+def _locate_umu_wrapper(proton_path: Path, plugin_dir: Path) -> Path:
 
-    """Locate UMU wrapper."""
+    """Locate UMU wrapper.
+
+    Priority matches staging's launcher: the plugin-bundled zipapp at
+    ``<plugin>/bin/umu/umu/umu-run`` (the canonical location on Deck
+    installs), then any copy beside Proton, then a system ``umu-run``.
+    """
+    plugin_bundled = plugin_dir / "bin" / "umu" / "umu" / "umu-run"
+    if plugin_bundled.is_file():
+        return plugin_bundled
     bundled = proton_path.parent / "umu-run"
     if bundled.is_file():
         return bundled
@@ -78,9 +86,12 @@ def _locate_umu_wrapper(proton_path: Path) -> Path:
     if system:
         return Path(system)
     raise DependencyMissingError(
-        "umu-run not found (neither bundled with proton "
-        "nor in PATH)",
-        context={"proton_path": str(proton_path)},
+        "umu-run not found (not bundled at "
+        "<plugin>/bin/umu/umu/umu-run, beside proton, nor in PATH)",
+        context={
+            "proton_path": str(proton_path),
+            "plugin_dir": str(plugin_dir),
+        },
     )
 def proton_prepare(
  ctx: LaunchContext,
@@ -96,7 +107,7 @@ def proton_prepare(
     umu_store = STORE_TO_UMU.get(ctx.store, "none")
     prefix_path = _resolve_prefix(ctx)
     umu_id = _lookup_umu_id(ctx, umu_store, ctx.plugin_dir)
-    umu_wrapper = _locate_umu_wrapper(proton_path)
+    umu_wrapper = _locate_umu_wrapper(proton_path, ctx.plugin_dir)
     state.python_bin = python_bin
     state.proton_path = proton_path
     state.proton_tool_id = proton_tool_id
@@ -107,6 +118,12 @@ def proton_prepare(
     env = dict(os.environ)
     env["GAMEID"] = umu_id or "umu-0"
     env["STORE"] = umu_store
+    # PROTONPATH tells umu-run which Proton to use — the *directory*
+    # holding the ``proton`` script (``proton_path`` is that script, so
+    # use its parent). Without this umu falls back to downloading its
+    # own UMU-Proton (or fails), ignoring the tool we selected. Mirrors
+    # staging's ``export PROTONPATH``.
+    env["PROTONPATH"] = str(proton_path.parent)
     env["STEAM_COMPAT_DATA_PATH"] = str(prefix_path)
     env["STEAM_COMPAT_CLIENT_INSTALL_PATH"] = str(
     Path("~/.steam/root").expanduser(),

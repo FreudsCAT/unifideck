@@ -65,4 +65,30 @@ cryptography>=44.0.1,<49.0
 # 4.0–4.16 versions have known parser-correctness bugs around
 # default values and $ref resolution that would silently let
 # malformed config through validation.
-jsonschema>=4.17,<5.0
+#
+# Ceiling capped at <4.24: jsonschema 4.24+ pulls in attrs>=24.1
+# which exports ``attr.Converter`` — a symbol absent from the
+# ``attrs 23.2.0`` that Decky Loader bundles inside its
+# PyInstaller ``_MEI*`` extraction dir. Because Decky's ``attr``
+# lands on ``sys.path`` before our vendored copy, the newer
+# ``attrs`` package fails with ``ImportError: cannot import name
+# 'Converter' from 'attr'``. Pinning <4.24 keeps the entire
+# attrs ↔ jsonschema chain compatible with Decky's 23.2.0.
+jsonschema>=4.17,<4.24
+
+# attrs — dataclass-like declarative classes. Required by
+# jsonschema, referencing, and jsonschema-specifications.
+#
+# Decky Loader (3.x) is a PyInstaller-bundled binary that
+# extracts ``attrs 23.2.0`` into ``/tmp/_MEI*/`` and places it on
+# ``sys.path`` for the plugin Python process. If our vendored
+# ``attrs`` is newer than 23.x, the ``attrs`` package tries to
+# ``from attr import Converter`` — a class added in 24.1.0 — but
+# Python resolves the *Decky-bundled* ``attr`` (23.2.0, no
+# ``Converter``), causing an ImportError that cascades into
+# jsonschema, putting the plugin into degraded mode.
+#
+# Pin to 23.x so our vendored copy is ABI-identical to Decky's
+# and the import succeeds regardless of which ``attr`` Python
+# finds first.
+attrs>=23.2.0,<24.0

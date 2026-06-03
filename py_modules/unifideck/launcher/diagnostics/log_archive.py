@@ -8,6 +8,15 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from unifideck.config import ConfigManager
 logger = logging.getLogger(__name__)
+
+# Root logger whose subtree is captured into the per-launch archive.
+# Must be the whole ``unifideck`` tree, not just ``unifideck.launcher``:
+# the launch pipeline logs under ``unifideck.services.launcher.*``
+# (orchestrator / helpers), ``unifideck.stores.*`` and
+# ``unifideck.compatibility.*`` too, so a failure raised there (e.g.
+# "umu-run not found", DependencyMissingError in helpers) would
+# otherwise never reach the archive — making launches look silent.
+_ARCHIVE_LOGGER_NAME = "unifideck"
 def _resolve_archive_dir(config: ConfigManager | None) -> Path:
     """Resolve archive dir."""
     if config is None or not hasattr(config, "get_str"):
@@ -75,7 +84,7 @@ def attach_launch_handler(
         handler.setFormatter(logging.Formatter(
             "%(asctime)s [%(levelname)s] %(name)s: %(message)s",
         ))
-        logging.getLogger("unifideck.launcher").addHandler(handler)
+        logging.getLogger(_ARCHIVE_LOGGER_NAME).addHandler(handler)
         return handler
     except OSError as err:
         logger.warning(
@@ -88,7 +97,7 @@ def detach_launch_handler(handler: logging.Handler | None) -> None:
     if handler is None:
         return
     try:
-        logging.getLogger("unifideck.launcher").removeHandler(handler)
+        logging.getLogger(_ARCHIVE_LOGGER_NAME).removeHandler(handler)
         handler.close()
     except Exception:
         logger.exception("[log_archive] detach handler failed")

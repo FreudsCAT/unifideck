@@ -187,7 +187,15 @@ async def epic_launch(plan: ProtonLaunchPlan) -> int:
     env["STORE"] = "none"
     env.pop("LEGENDARY_WRAPPER_EXE", None)
     exe_override = _resolve_exe_override(plan)
-    legendary_bin = os.environ.get("LEGENDARY_BIN", "legendary")
+    # Prefer the plugin-bundled legendary (the GOG/Amazon handlers do
+    # the same via _locate_store_cli) — bare "legendary" isn't on PATH
+    # in the launcher's scrubbed env, so the launch would fail to spawn.
+    bundled_legendary = plan.context.plugin_dir / "bin" / "legendary"
+    legendary_bin = os.environ.get("LEGENDARY_BIN") or (
+        str(bundled_legendary)
+        if bundled_legendary.is_file()
+        else "legendary"
+    )
     argv: list[str] = list(plan.state.wrappers)
     argv.extend([
     legendary_bin,
