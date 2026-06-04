@@ -1,0 +1,127 @@
+"""compat/gog_setup/common.py — shared paths, manifest loaders, wine exec.
+
+Standalone helpers for the GOG redistributable-setup port (Heroic's
+``setup.ts``). Deliberately imports nothing from ``unifideck.stores`` —
+this runs in the slim launcher process where the GOG store's import
+chain (auth → security → cryptography) fails. Paths are hardcoded to
+match what gogdl writes (same locations staging used).
+"""
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+import time
+from pathlib import Path
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from unifideck.launcher.proton.infrastructure.core import ProtonLaunchPlan
+
+logger = logging.getLogger(__name__)
+
+_CFG = Path("~/.config/unifideck").expanduser()
+MANIFESTS_DIR = _CFG / "heroic_gogdl" / "manifests"
+REDIST_DIR = _CFG / "gogdl" / "redist"
+SUPPORT_DIR = _CFG / "gogdl" / "gog-support"
+AUTH_CONFIG = _CFG / "gogdl" / "auth.json"
+
+_LANG_MAP = {
+    "en": "english", "de": "german", "fr": "french", "es": "spanish",
+    "it": "italian", "pt": "portuguese", "ru": "russian", "pl": "polish",
+    "zh": "chinese", "ja": "japanese", "ko": "korean", "nl": "dutch",
+    "tr": "turkish",
+}
+
+
+def language_name(lang_code: str) -> str:
+    """Map a locale (``en-US``) to a GOG setup language name (``english``)."""
+    return _LANG_MAP.get(lang_code.split("-")[0], "english")
+
+
+def wait_for_prefix_ready(prefix_path: Path, timeout: int = 30) -> bool:
+    """Block until the Wine/Proton prefix has a ``system.reg``."""
+    candidates = (prefix_path / "pfx" / "system.reg", prefix_path / "system.reg")
+    start = time.time()
+    while not any(c.exists() for c in candidates):
+        if time.time() - start > timeout:
+            logger.warning("[gog_setup] prefix not ready after %ds", timeout)
+            return False
+        time.sleep(1)
+    return True
+
+
+def load_manifest(game_id: str) -> dict[str, Any] | None:
+    """Load gogdl's game manifest, or None."""
+    path = MANIFESTS_DIR / game_id
+    if not path.is_file():
+        logger.info("[gog_setup] no manifest at %s", path)
+        return None
+    try:
+        return cast_dict(json.loads(path.read_text(encoding="utf-8")))
+    except (OSError, ValueError) as e:
+        logger.warning("[gog_setup] manifest parse failed: %s", e)
+        return None
+
+
+def get_dependencies(manifest: dict[str, Any]) -> list[str]:
+    """Extract redistributable dependency IDs from a v1/v2 manifest."""
+    deps: list[str] = []
+    if manifest.get("version") == 1:
+        for depot in manifest.get("product", {}).get("depots", []):
+            redist = depot.get("redist") if isinstance(depot, dict) else None
+            if redist and redist not in deps:
+                deps.append(redist)
+    else:
+        for dep in manifest.get("dependencies", []) or []:
+            if dep not in deps:
+                deps.append(dep)
+    return deps
+
+
+def load_redist_manifest() -> dict[str, Any] | None:
+    """Load gogdl's ``.gogdl-redist-manifest``, or None."""
+    path = REDIST_DIR / ".gogdl-redist-manifest"
+    if not path.is_file():
+        return None
+    try:
+        return cast_dict(json.loads(path.read_text(encoding="utf-8")))
+    except (OSError, ValueError) as e:
+        logger.warning("[gog_setup] redist manifest parse failed: %s", e)
+        return None
+
+
+def cast_dict(value: Any) -> dict[str, Any] | None:
+    """Return ``value`` if it's a dict, else None."""
+    return value if isinstance(value, dict) else None
+
+
+async def run_wine(
+    plan: ProtonLaunchPlan, exe: str, args: list[str],
+) -> bool:
+    """Run a Windows exe in the game's prefix via umu. True on rc 0.
+
+    Reuses the plan's env (PROTONPATH / STEAM_COMPAT_DATA_PATH already
+    set by proton_prepare), overriding GAMEID/STORE/PROTON_VERB for a
+    generic setup invocation. Setup installers often exit non-zero for
+    "already installed", so callers treat failures as non-fatal.
+    """
+    env = dict(plan.env)
+    env["GAMEID"] = "umu-0"
+    env["STORE"] = "gog"
+    env["PROTON_VERB"] = "run"
+    cmd = [str(plan.python_bin), str(plan.umu_wrapper), exe, *args]
+    logger.info("[gog_setup] run: %s %s", Path(exe).name, " ".join(args[:4]))
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd, env=env,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        rc = await proc.wait()
+    except OSError as e:
+        logger.warning("[gog_setup] run failed to spawn: %s", e)
+        return False
+    if rc != 0:
+        logger.warning("[gog_setup] command rc=%d (%s)", rc, Path(exe).name)
+    return rc == 0

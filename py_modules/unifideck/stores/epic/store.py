@@ -268,6 +268,33 @@ class EpicStore(StoreBase):
             logger.exception("[EpicStore] get_library failed")
             return []
 
+    async def find_installed_exe(
+        self, install_path: str, game_id: str | None = None,
+    ) -> str | None:
+        """Resolve the launchable exe for an installed Epic game.
+
+        Used by ``DownloadWorker._build_installed_game`` to populate
+        ``games.map``. Delegates to ``EpicExeResolver``, which reads
+        legendary's manifest ``launch_exe`` (the authoritative target)
+        and falls back to the heuristic ``.exe`` finder — much better
+        than the generic ``StoreBase._find_exe`` the worker would
+        otherwise use. ``game_id`` is required for the manifest lookup.
+        """
+        if game_id:
+            try:
+                result = await self._exe_resolver.resolve(game_id)
+                exe = result.get("executable")
+                if isinstance(exe, str) and exe and Path(exe).is_file():
+                    return exe
+            except Exception:
+                logger.warning(
+                    "[EpicStore] exe resolve failed for %s", game_id,
+                    exc_info=True,
+                )
+        return self._find_exe(
+            install_path, [game_id] if game_id else None,
+        )
+
     async def install_game(self, game_id: str, base_path: str | None = None,
                            progress_cb: ProgressCallback | None = None, **kwargs: Any) -> InstallResult:
         """Install game."""

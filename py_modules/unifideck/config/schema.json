@@ -78,7 +78,8 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "custom_path": { "type": "string" }
+        "custom_path": { "type": "string" },
+        "default_location": { "type": "string" }
       }
     },
     "cli_timeouts": {

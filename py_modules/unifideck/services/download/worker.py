@@ -327,7 +327,10 @@ class _WorkerMixin:
         try:
             specific = getattr(store, "find_installed_exe", None)
             if callable(specific):
-                maybe: Any = specific(install_path)
+                # Pass game_id too — store-specific resolvers (Epic's
+                # legendary-manifest ``launch_exe`` lookup) need it; the
+                # generic ones accept it as an ignored optional arg.
+                maybe: Any = specific(install_path, item.game_id)
                 if asyncio.iscoroutine(maybe):
                     maybe = await maybe
                 exe_path = maybe if isinstance(maybe, str) else None

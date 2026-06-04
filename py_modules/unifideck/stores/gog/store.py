@@ -354,8 +354,14 @@ class GOGStore(StoreBase):
         """Get installed game info."""
         return self._library.get_installed_game_info(game_id)
 
-    def find_installed_exe(self, install_path: str) -> str | None:
+    def find_installed_exe(
+        self, install_path: str, game_id: str | None = None,
+    ) -> str | None:
         """Resolve the launchable target for an installed GOG game.
+
+        ``game_id`` is accepted for a uniform store interface (the
+        download worker passes it) but unused — GOGExeResolver works
+        from the install dir alone.
 
         Used by ``DownloadWorker._build_installed_game`` to populate
         ``Game.exe_path`` (and thus the ``games.map`` entry the

@@ -33,39 +33,15 @@ def _read_amazon_fuel_args(work_dir: Path) -> list[str]:
         )
         return []
 async def _gog_launch(plan: ProtonLaunchPlan) -> int:
-    """Gog launch."""
-    try:
-        from unifideck.config.config_manager import ConfigManager
-        from unifideck.launcher.proton.language_setup import apply_gog_language
-        _cfg = ConfigManager(
-            str(plan.context.plugin_dir / "defaults" / "config.json"),
-        )
-        work_dir = plan.context.work_dir or plan.context.exe_path.parent
-        apply_gog_language(
-            plan.context.game_id, str(work_dir), config=_cfg,
-        )
-    except Exception as err:
-        logger.warning(
-            "[launcher.proton.generic] GOG language setup failed: %s",
-            err,
-        )
-    try:
-        from unifideck.launcher.proton.fixes.galaxy_stub import install_galaxy_stub
-        install_galaxy_stub(
-            str(plan.prefix_path),
-            plugin_dir=plan.context.plugin_dir,
-        )
-    except Exception as err:
-        logger.warning(
-            "[launcher.proton.generic] Galaxy stub install failed: %s",
-            err,
-        )
-    # GOG Windows games launch by running the resolved exe directly
-    # through umu — matching staging (which never uses ``gogdl launch``;
-    # gogdl manages its own wine/manifest and would fail like nile did
-    # for Amazon). GOG *native* games (start.sh) never reach here — they
-    # go through ``launch_native``.
-    return await _raw_exe_launch(plan)
+    """GOG Windows launch — delegated to the GOG compat orchestrator.
+
+    The orchestrator handles language, the Galaxy stub, the GOG
+    redistributable/script setup (``gog_setup``), Comet, NVAPI, and the
+    broken-launcher-stub fallback. GOG *native* games (start.sh) never
+    reach here — they go through ``launch_native``.
+    """
+    from unifideck.launcher.proton.compat.gog import run_gog_launch
+    return await run_gog_launch(plan)
 
 async def _amazon_launch(plan: ProtonLaunchPlan) -> int:
 

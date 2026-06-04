@@ -4,15 +4,15 @@ UE4 launcher stubs call ``MsiQueryProductState`` to verify VC++ is
 installed; winetricks copies the DLLs but doesn't populate the MSI
 product database, and Proton rewrites ``system.reg`` on prefix
 upgrades — erasing text-injected keys. This imports a bundled ``.reg``
-via ``umu-run regedit`` *after* Proton has initialised the prefix. The
-marker is keyed to the Proton tool name so it re-runs when the user
-switches Proton. Generic across stores; best-effort.
+via ``umu-run regedit`` *after* Proton has initialised the prefix
+(winetricks runs first in :mod:`compat`). The marker is keyed to the
+Proton tool name so it re-runs when the user switches Proton. Generic
+across stores; best-effort.
 """
 from __future__ import annotations
 
 import contextlib
 import logging
-import shutil
 from pathlib import Path
 
 from unifideck.launcher.proton.infrastructure.core import ProtonLaunchPlan
@@ -31,12 +31,15 @@ def _prefix_root(plan: ProtonLaunchPlan) -> Path:
     return p
 
 
-def _find_drive_c(prefix_root: Path) -> Path | None:
-    """Locate ``drive_c`` for either prefix layout, or None if absent."""
-    for candidate in (prefix_root / "drive_c", prefix_root / "pfx" / "drive_c"):
-        if candidate.is_dir():
-            return candidate
-    return None
+def _wine_z_path(linux_path: Path) -> str:
+    """Map an absolute Linux path to its Wine ``Z:`` drive path.
+
+    Wine always maps ``Z:\\`` to ``/``, so we can hand regedit the
+    bundled .reg directly — no copy into ``drive_c`` and no guessing
+    which prefix layout umu used for ``C:`` (the bug that produced
+    ``regedit: The file 'C:\\vcruntime_fix.reg' was not found``).
+    """
+    return "Z:" + str(linux_path).replace("/", "\\")
 
 
 async def apply_vcruntime_fix(plan: ProtonLaunchPlan) -> None:
@@ -46,39 +49,30 @@ async def apply_vcruntime_fix(plan: ProtonLaunchPlan) -> None:
         return
     prefix_root = _prefix_root(plan)
     proton_name = plan.state.proton_tool_id or "unknown"
-    marker = prefix_root / f".unifideck_vcreg_{proton_name}.done"
+    # ``.v2`` invalidates markers written by the earlier broken build,
+    # which mistook regedit's "file not found" dialog (rc 0) for a
+    # successful import — the keys were never actually applied.
+    marker = prefix_root / f".unifideck_vcreg_{proton_name}.v2.done"
     if marker.is_file():
-        return
-    drive_c = _find_drive_c(prefix_root)
-    if drive_c is None:
-        # Prefix not initialised yet (first ever launch). The next
-        # launch — after Proton creates drive_c — will apply it.
-        logger.info("[compat.vcruntime] drive_c not ready, deferring")
-        return
-
-    staged = drive_c / "vcruntime_fix.reg"
-    try:
-        shutil.copy2(reg_file, staged)
-    except OSError as e:
-        logger.warning("[compat.vcruntime] staging copy failed: %s", e)
         return
 
     env = dict(plan.env)
     env["GAMEID"] = "umu-0"
+    # ``/S`` imports silently — no GUI dialog on success OR error. The
+    # error dialog (when C: path was wrong) blocked the launch for as
+    # long as it stayed open; the Z: path + /S removes that entirely.
     argv = [
         str(plan.python_bin),
         str(plan.umu_wrapper),
         "regedit",
-        "C:\\vcruntime_fix.reg",
+        "/S",
+        _wine_z_path(reg_file),
     ]
     rc = 1
     try:
         rc = await run_umu_with_retry(argv, env=env)
     except Exception:
         logger.exception("[compat.vcruntime] regedit run failed")
-    finally:
-        with contextlib.suppress(OSError):
-            staged.unlink()
 
     if rc == 0:
         # Drop stale markers from other Proton versions, write current.
