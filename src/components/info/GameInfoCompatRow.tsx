@@ -15,11 +15,10 @@
  * — no per-second polling.
  */
 import { FC, useCallback, useMemo } from "react";
-import { ConfirmModal, DialogButton, Focusable, showModal } from "@decky/ui";
+import { DialogButton, Focusable, showModal } from "@decky/ui";
 import { useTranslation } from "react-i18next";
 import { useGameInfo } from "../../hooks/useGameInfo";
 import { useGameActions } from "../../hooks/useGameActions";
-import { useInstallFlow } from "../../hooks/useInstallFlow";
 import { useDownloads } from "../../contexts/DownloadContext";
 import { useToast } from "../../hooks/useToast";
 import { SteamBridge } from "../../lib/steam-bridge";
@@ -71,7 +70,6 @@ export const GameInfoCompatRow: FC<Props> = ({
   const { t } = useTranslation();
   const { data: game } = useGameInfo(appId);
   const downloads = useDownloads();
-  const installFlow = useInstallFlow(bridge);
   const actions = useGameActions(bridge);
   const toast = useToast();
 
@@ -84,14 +82,6 @@ export const GameInfoCompatRow: FC<Props> = ({
   }, [downloads.queue, game]);
 
   const isDownloading = activeDownload != null;
-  const progress = activeDownload?.progress_percent ?? 0;
-
-  const showInstallConfirm = useCallback(async () => {
-    if (!game) return;
-    const r = await installFlow.start(game);
-    if (r?.success) toast.success(t("toasts.downloadStarted"));
-    else if (r) toast.error(t("toasts.downloadFailed"));
-  }, [game, installFlow, t, toast]);
 
   const showUninstallConfirm = useCallback(() => {
     if (!game) return;
@@ -108,48 +98,21 @@ export const GameInfoCompatRow: FC<Props> = ({
     );
   }, [actions, appId, game, t, toast]);
 
-  const showCancelConfirm = useCallback(() => {
-    if (!activeDownload) return;
-    showModal(
-      <ConfirmModal
-        strTitle={t("confirmModals.cancelTitle")}
-        strDescription={t("confirmModals.cancelDescription", {
-          title: game?.title ?? t("common.thisGame"),
-        })}
-        strOKButtonText={t("confirmModals.yes")}
-        strCancelButtonText={t("confirmModals.no")}
-        onOK={async () => {
-          const r = await actions.cancel(activeDownload.id);
-          if (r?.success) toast.success(t("toasts.downloadCancelled"));
-          else if (r) toast.error(t("toasts.cancelFailed"));
-        }}
-      />,
-    );
-  }, [activeDownload, actions, game, t, toast]);
-
-  const onAction = useCallback(() => {
-    if (isDownloading) showCancelConfirm();
-    else if (game?.is_installed) showUninstallConfirm();
-    else showInstallConfirm();
-  }, [isDownloading, game, showCancelConfirm, showUninstallConfirm, showInstallConfirm]);
-
   const onDetails = useCallback(() => {
     showModal(<GameInfoDetailsModal meta={meta} closeModal={() => {}} />);
   }, [meta]);
 
-  const actionState = isDownloading ? "cancel" : game?.is_installed ? "uninstall" : "install";
-  const actionLabel = isDownloading
-    ? `${t("gameInfoPanel.buttons.cancel")} (${Math.round(progress)}%)`
-    : game?.is_installed
-      ? t("gameInfoPanel.buttons.uninstall")
-      : t("gameInfoPanel.buttons.install");
-
-  // Microsoft games tagged "not_compatible" can't install through us —
-  // hide the button to avoid suggesting they can.
-  const showAction = !!game && !(
-    game.store === "microsoft"
-    && (game.store_tags ?? []).includes("not_compatible" as never)
-  );
+  // The compat row only exposes Uninstall — Install / Cancel are
+  // already covered by the main play section directly above. Show
+  // it only when the game is installed and not mid-(re)download,
+  // preserving the Microsoft "not_compatible" exclusion.
+  const showAction = !!game
+    && Boolean(game.is_installed)
+    && !isDownloading
+    && !(
+      game.store === "microsoft"
+      && (game.store_tags ?? []).includes("not_compatible" as never)
+    );
 
   const compatColors = COMPAT_COLORS[meta.deck_compatibility];
 
@@ -202,12 +165,12 @@ export const GameInfoCompatRow: FC<Props> = ({
         )}
         {showAction && (
           <DialogButton
-            className={`unifideck-nav-button unifideck-install-button ${actionState}-state`}
+            className="unifideck-nav-button unifideck-install-button uninstall-state"
             style={buttonStyle}
-            disabled={installFlow.isWorking || actions.isWorking}
-            onClick={onAction}
+            disabled={actions.isWorking}
+            onClick={showUninstallConfirm}
           >
-            {actionLabel}
+            {t("gameInfoPanel.buttons.uninstall")}
           </DialogButton>
         )}
       </div>

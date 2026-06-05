@@ -11,11 +11,16 @@
  * picks the appropriate rendering. All three variants share
  * the same StoreIcon + title prefix.
  */
-import { FC } from "react";
-import { ButtonItem } from "@decky/ui";
+import { FC, useMemo } from "react";
+import { ButtonItem, DialogButton } from "@decky/ui";
 import { useTranslation } from "react-i18next";
+import { FaPlay } from "react-icons/fa";
 import { useGameActions } from "../../hooks/useGameActions";
 import { SteamBridge } from "../../lib/steam-bridge";
+import {
+  resolveAppIdFromStoreGame,
+  getInstalledStatus,
+} from "../../lib/library-filters";
 import { StoreIcon } from "../shared/StoreIcon";
 import type { DownloadItem, DownloadStatus } from "../../types/downloads";
 import { DownloadProgressRow } from "./DownloadProgressRow";
@@ -55,6 +60,17 @@ const bridge = new SteamBridge();
 export const DownloadItemRow: FC<Props> = ({ item, variant }) => {
   const { t } = useTranslation();
   const actions = useGameActions(bridge);
+
+  // Launchable appId for a finished row — only when the download
+  // completed AND the game still resolves to an installed shortcut.
+  const playAppId = useMemo(() => {
+    if (variant !== "finished" || item.status !== "complete") return null;
+    const id = resolveAppIdFromStoreGame(item.store, item.game_id);
+    // _appType is ignored once the appId is in the cache (which it
+    // is — resolveAppIdFromStoreGame read it from the same cache).
+    return id != null && getInstalledStatus(id, 0, false) ? id : null;
+  }, [variant, item.status, item.store, item.game_id]);
+
   return (
     <div style={{
       display: "flex", flexDirection: "column", gap: 6, padding: 6,
@@ -76,14 +92,28 @@ export const DownloadItemRow: FC<Props> = ({ item, variant }) => {
       </div>
 
       {variant === "finished" && (
-        <span style={{
-          alignSelf: "flex-start",
-          fontSize: 11, padding: "2px 6px", borderRadius: 3,
-          background: outcomeColor(item.status),
-          color: "#0f172a",
-        }}>
-          {t(`downloads.outcome.${outcomeKey(item.status)}`)}
-        </span>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <span style={{
+            fontSize: 11, padding: "2px 6px", borderRadius: 3,
+            background: outcomeColor(item.status),
+            color: "#0f172a",
+          }}>
+            {t(`downloads.outcome.${outcomeKey(item.status)}`)}
+          </span>
+          {playAppId != null && (
+            <DialogButton
+              style={{
+                display: "inline-flex", alignItems: "center",
+                justifyContent: "center", width: "auto", minWidth: 0,
+                flex: "0 0 auto", padding: "2px 10px", fontSize: 12,
+              }}
+              onClick={() => actions.launch(playAppId)}
+              aria-label={t("downloads.play")}
+            >
+              <FaPlay />
+            </DialogButton>
+          )}
+        </div>
       )}
 
       {variant === "current" && (

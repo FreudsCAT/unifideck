@@ -30,10 +30,35 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-_GOG_TOKEN_FILE = Path("~/.config/unifideck/gog_token.json").expanduser()
+# gogdl's auth file is plain JSON, keyed by GOG OAuth client_id →
+# {access_token, refresh_token, ...}. It uses the GOG Galaxy client —
+# the same tokens Comet needs — and unlike the plugin's encrypted
+# ``gog_token.json`` it's readable from the slim launcher process
+# (which can't load the cryptography chain to decrypt the other one).
+_GOGDL_AUTH_FILE = Path("~/.config/unifideck/gogdl/auth.json").expanduser()
 # A launched exe that exits faster than this is treated as a possible
 # broken launcher stub (real launchers/games run far longer).
 EARLY_EXIT_SECONDS = 15
+
+
+def _read_gog_tokens() -> tuple[str, str, str] | None:
+    """Return (access, refresh, user_id) from gogdl's plain auth, or None."""
+    if not _GOGDL_AUTH_FILE.is_file():
+        return None
+    try:
+        data = json.loads(_GOGDL_AUTH_FILE.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    for entry in data.values():
+        if not isinstance(entry, dict):
+            continue
+        access = entry.get("access_token") or ""
+        refresh = entry.get("refresh_token") or ""
+        if access and refresh:
+            return access, refresh, str(entry.get("user_id") or "")
+    return None
 
 
 def start_comet(plan: ProtonLaunchPlan) -> subprocess.Popen[bytes] | None:
@@ -42,26 +67,22 @@ def start_comet(plan: ProtonLaunchPlan) -> subprocess.Popen[bytes] | None:
     Best-effort: missing binary/tokens just means no online features.
     """
     comet = plan.context.plugin_dir / "bin" / "comet"
-    if not comet.is_file() or not _GOG_TOKEN_FILE.is_file():
+    if not comet.is_file():
         return None
-    try:
-        tok = json.loads(_GOG_TOKEN_FILE.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return None
-    access = tok.get("access_token", "")
-    refresh = tok.get("refresh_token", "")
-    if not access or not refresh:
+    tokens = _read_gog_tokens()
+    if tokens is None:
         logger.info("[compat.gog] no GOG tokens — Comet online features off")
         return None
+    access, refresh, user_id = tokens
     args = [
         str(comet),
-        "--username", tok.get("username") or "GOGUser",
+        "--username", "GOGUser",
         "--access-token", access,
         "--refresh-token", refresh,
         "--quit",
     ]
-    if tok.get("user_id"):
-        args += ["--user-id", str(tok["user_id"])]
+    if user_id:
+        args += ["--user-id", user_id]
     try:
         proc = subprocess.Popen(
             args,

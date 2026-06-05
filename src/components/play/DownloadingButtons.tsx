@@ -70,7 +70,9 @@ export const DownloadingButtons: FC<Props> = ({ download, bridge = defaultBridge
         style={actionBtnStyle}
       >
         <FaTimes />
-        {cancelled ? t("play.cancelling") : t("play.cancel")}
+        {cancelled
+          ? t("play.cancelling")
+          : `${t("play.cancel")} (${Math.round(Math.max(0, Math.min(100, download.progress_percent)))}%)`}
       </DialogButton>
       <DownloadProgressRow download={download} marginLeft={20} />
     </PlayShell>

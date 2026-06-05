@@ -133,8 +133,20 @@ def get_steam_compat_tool_override(app_id: str) -> str | None:
             if m.group("app_id") == app_id:
                 return m.group("name")
     return None
+def _ge_version_key(proton_script: Path) -> tuple[int, ...]:
+    """Numeric version tuple from a GE-Proton dir (e.g. (10, 34)).
+
+    MUST be numeric, not lexical: a plain string sort puts
+    ``GE-Proton9-26`` *after* ``GE-Proton10-34`` ('9' > '1'), so the
+    "newest" fallback would pick an OLD Proton — which crashes recent
+    titles (e.g. 2025 Unity games) that need a current Proton.
+    """
+    nums = re.findall(r"\d+", proton_script.parent.name)
+    return tuple(int(n) for n in nums) or (0,)
+
+
 def find_any_ge_proton() -> Path | None:
-    """Find any ge PROTON."""
+    """Find the newest installed GE-Proton (by version, not name)."""
     candidates: list[Path] = []
     for root in STEAM_COMPAT_ROOTS:
         expanded = Path(root).expanduser()
@@ -147,7 +159,7 @@ def find_any_ge_proton() -> Path | None:
                     candidates.append(proton_script)
     if not candidates:
         return None
-    candidates.sort()
+    candidates.sort(key=_ge_version_key)
     return candidates[-1]
 
 def select_proton_version(

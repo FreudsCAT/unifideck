@@ -25,17 +25,31 @@ def launch_id_scope(launch_id: str) -> Iterator[None]:
     finally:
         _LAUNCH_ID.reset(token)
 class LaunchIdFilter(logging.Filter):
-    """Launch ID filter."""
+    """Launch ID filter (legacy — kept for callers/tests)."""
     def filter(self, record: logging.LogRecord) -> bool:
         """Filter."""
         record.launch_id = get_launch_id()
         return True
-def install_launch_id_logging(
-    root_logger: logging.Logger | None = None,
-) -> None:
-    """Install launch ID logging."""
-    logger = root_logger or logging.getLogger()
-    for existing in logger.filters:
-        if isinstance(existing, LaunchIdFilter):
-            return
-    logger.addFilter(LaunchIdFilter())
+def install_launch_id_logging() -> None:
+    """Stamp ``launch_id`` onto every log record via a record factory.
+
+    A logger-level filter (the previous approach) only runs for records
+    logged *directly* to that logger — records propagating up from child
+    loggers (``unifideck.services.launcher.*`` etc.) reach the root's
+    stderr handler, whose formatter uses ``%(launch_id)s``, WITHOUT the
+    attribute → ``ValueError: Formatting field not found: 'launch_id'``
+    on every such record. A ``LogRecordFactory`` runs for ALL records
+    regardless of origin, so the field is always present. Idempotent.
+    """
+    factory = logging.getLogRecordFactory()
+    if getattr(factory, "_unifideck_launch_id", False):
+        return
+
+    def _factory(*args: object, **kwargs: object) -> logging.LogRecord:
+        record = factory(*args, **kwargs)
+        if not hasattr(record, "launch_id"):
+            record.launch_id = get_launch_id()
+        return record
+
+    _factory._unifideck_launch_id = True  # type: ignore[attr-defined]
+    logging.setLogRecordFactory(_factory)

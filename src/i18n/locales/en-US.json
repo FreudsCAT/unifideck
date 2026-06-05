@@ -621,6 +621,7 @@
     "finished": "Recently finished",
     "cancel": "Cancel",
     "removeFromQueue": "Remove",
+    "play": "Play",
     "outcome": {
       "queued": "Queued",
       "downloading": "Downloading",

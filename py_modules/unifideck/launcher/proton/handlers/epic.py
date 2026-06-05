@@ -111,6 +111,13 @@ async def epic_launch(plan: ProtonLaunchPlan) -> int:
     rc = await run_umu_with_retry(
         argv, env=env, on_start=plan.on_process_start,
     )
+    # NOTE: legendary returns the instant it spawns umu (Popen, no
+    # wait), so ``rc`` reflects legendary, not the game — the game runs
+    # in an orphaned umu/Proton tree and survives this process exiting
+    # (this is how Epic launched fine before). We deliberately do NOT
+    # block on a wait-for-container loop here: a broad process match
+    # snags Steam's own ``steam-runtime-launch-client`` in Gaming Mode
+    # and hangs the launcher forever, which is what broke launches.
     plan.state.game_exit_code = rc
     if rc == 0:
         return 0
