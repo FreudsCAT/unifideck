@@ -30,6 +30,7 @@ import os
 from pathlib import Path
 from typing import Any
 
+from unifideck.core.types import Result
 from unifideck.core.types.identifiers import (
     InvalidIdentifierError,
     validate_game_id,
@@ -168,13 +169,42 @@ class DownloadRPCMixin:
         )
         return {"success": result.success, "error": result.error}
 
-    async def uninstall_game(self, store: str, game_id: str) -> Any:
+    async def uninstall_game(self, app_id: int, delete_prefix: bool = False) -> Any:
         """Uninstall a game via the responsible store connector.
 
-        Real method is ``uninstall_game`` — see :meth:`install_game`.
+        The frontend only has the Steam ``app_id`` on hand (the
+        trash button / Uninstall pill live on the app details page),
+        so — like :meth:`update_game` — we resolve it back to its
+        ``(store, game_id)`` via the sync layer and dispatch to the
+        store. ``delete_prefix`` is forwarded so connectors that run
+        games under Proton can also remove the Wine prefix.
+
+        Earlier this method took ``(store, game_id)`` directly, but
+        the frontend sends a single ``app_id``; the numeric value
+        landed in the ``store`` slot and ``game_id`` was missing, so
+        the call raised before anything was uninstalled.
         """
-        store, game_id = self._validate_pair(store, game_id)
-        return await self._require_store(store).uninstall_game(game_id)
+        info = self.sync_service.get_game_info(app_id) if self.sync_service else None
+        if not info:
+            return Result(success=False, error="game_not_found")
+
+        store, game_id = self._validate_pair(
+            info.get("store", ""), info.get("store_game_id", ""),
+        )
+
+        logger.info("[download] uninstall_game app_id=%s store=%s game_id=%s delete_prefix=%s",
+                     app_id, store, game_id, delete_prefix)
+
+        # Return the ``Result`` dataclass (not a plain ``{success, error}``
+        # dict). The RPC envelope folds a dict that already has a top-level
+        # ``success`` key into the envelope and leaves ``data=None`` — the
+        # frontend then receives ``null`` and ``result?.success`` is always
+        # falsy, so ``useGameActions`` never invalidates the game-info cache
+        # and the Play section stays "installed" until a manual reload.
+        # A dataclass return lands in ``data`` as ``{success, error, ...}``.
+        return await self._require_store(store).uninstall_game(
+            game_id, delete_prefix=delete_prefix,
+        )
 
     async def check_game_update(self, store: str, game_id: str) -> Any:
         """Check whether a specific game has an update available.
@@ -187,6 +217,29 @@ class DownloadRPCMixin:
         store, game_id = self._validate_pair(store, game_id)
         updatable = await self._require_store(store).check_for_updates()
         return {"has_update": game_id in (updatable or [])}
+
+    async def get_gog_game_languages(self, game_id: str) -> Any:
+        """Return the install languages available for a GOG game.
+
+        Drives the language-select modal in the GOG install flow
+        (``useInstallFlow``). Wraps ``GOGStore.get_available_languages``;
+        falls back to ``["en-US"]`` so the frontend can still install
+        if the lookup fails. ``game_id`` is the GOG product id
+        (the game's ``store_game_id``), not the unifideck app id.
+
+        Lost in the mixin refactor — the frontend route existed with
+        no handler, so the call errored (swallowed by a ``.catch``)
+        and multi-language GOG titles never prompted.
+        """
+        try:
+            store = self.registry.get_store("gog")
+            if store is None:
+                return {"success": False, "error": "store_not_found", "languages": ["en-US"]}
+            languages = await store.get_available_languages(game_id)
+            return {"success": True, "languages": languages}
+        except Exception as e:
+            logger.error("[download] get_gog_game_languages(%s) failed: %s", game_id, e)
+            return {"success": False, "error": str(e), "languages": ["en-US"]}
 
     async def cancel_download(self, store: str, game_id: str) -> Any:
         """Cancel an in-progress download.

@@ -138,8 +138,8 @@ export const InstalledButtons: FC<Props> = ({ appId, bridge = defaultBridge }) =
       <UninstallConfirmModal
         gameId={appId}
         gameTitle={game.title}
-        onConfirm={async () => {
-          const r = await actions.uninstall(appId);
+        onConfirm={async (deletePrefix) => {
+          const r = await actions.uninstall(appId, deletePrefix);
           if (r?.success) toast.success(t("toasts.uninstallDone"));
         }}
         closeModal={() => {}}

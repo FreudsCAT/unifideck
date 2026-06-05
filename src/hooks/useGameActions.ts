@@ -38,7 +38,7 @@ export interface UseGameActionsResult {
     gameId: string,
     options?: { storage?: string; language?: string; title?: string },
   ) => Promise<Result | null>;
-  uninstall: (appId: number) => Promise<Result | null>;
+  uninstall: (appId: number, deletePrefix?: boolean) => Promise<Result | null>;
   cancel: (downloadId: string) => Promise<Result | null>;
   launch: (appId: number) => void;
   terminate: (appId: number, force?: boolean) => void;
@@ -74,10 +74,10 @@ export function useGameActions(bridge: SteamBridgeShape): UseGameActionsResult {
   );
 
   const uninstall = useCallback(
-    async (appId: number) => {
+    async (appId: number, deletePrefix = false) => {
       setWorking(true);
       try {
-        const result = await downloads.uninstallGame(appId);
+        const result = await downloads.uninstallGame(appId, deletePrefix);
         if (result?.success) {
           invalidateGameInfo(appId);
           bumpGameStateVersion(appId);

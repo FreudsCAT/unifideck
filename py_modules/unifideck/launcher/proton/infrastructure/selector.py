@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import re
 import subprocess
 from pathlib import Path
@@ -155,7 +156,13 @@ def find_any_ge_proton() -> Path | None:
         for entry in expanded.iterdir():
             if entry.name.startswith("GE-Proton"):
                 proton_script = entry / "proton"
-                if proton_script.is_file():
+                # Must be EXECUTABLE — a broken/partial extract (e.g. a
+                # GE-Proton whose `proton` is 0644) would otherwise be
+                # picked as "newest" and die with "Permission denied" on
+                # exec. Skip it so we fall back to the newest WORKING one.
+                if proton_script.is_file() and os.access(
+                    proton_script, os.X_OK,
+                ):
                     candidates.append(proton_script)
     if not candidates:
         return None

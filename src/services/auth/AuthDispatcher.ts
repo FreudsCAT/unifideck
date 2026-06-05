@@ -45,7 +45,6 @@ interface AuthEventPayload {
   store?: string;
   success?: boolean;
   error?: string;
-  needs_2fa?: boolean;
 }
 
 /** Backend `store_auth` envelope (unwrapped by useRPC for hook
@@ -127,7 +126,6 @@ class AuthDispatcherImpl {
             success: false,
             store,
             error: p.error ?? "unknown auth failure",
-            needs_2fa: p.needs_2fa,
           });
         },
       ));

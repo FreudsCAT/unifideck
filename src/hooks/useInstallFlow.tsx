@@ -81,7 +81,7 @@ export function useInstallFlow(bridge: SteamBridgeShape): UseInstallFlowResult {
           console.log("[useInstallFlow] installing %s/%s with storage=%s", game.store, game.store_game_id, storage);
           return await actions.install(game.store, game.store_game_id, { storage, title: game.title });
         }
-        const langs = await getGogLangs(game.id).catch(() => null);
+        const langs = await getGogLangs(game.store_game_id).catch(() => null);
         const list = langs?.languages ?? [];
         if (list.length <= 1) {
           const language = list[0];
@@ -89,7 +89,7 @@ export function useInstallFlow(bridge: SteamBridgeShape): UseInstallFlowResult {
         }
         const language = await pickLanguageViaModal(game.title, list);
         if (!language) return null;
-        return await actions.install(game.store, game.store_game_id, { language, storage });
+        return await actions.install(game.store, game.store_game_id, { language, storage, title: game.title });
       } finally {
         setWorking(false);
       }

@@ -20,6 +20,7 @@ import contextlib
 import json
 import logging
 import os
+import re
 import socket
 import time
 from pathlib import Path
@@ -93,7 +94,12 @@ def detect_offline() -> bool:
     with contextlib.suppress(OSError):
         if login_vdf.is_file():
             text = login_vdf.read_text(encoding="utf-8", errors="replace")
-            if '"WantsOfflineMode"' in text and '"1"' in text:
+            # Match the VALUE, not any "1" in the file: loginusers.vdf is
+            # full of "1"s ("MostRecent" "1", timestamps…), so the old
+            # `'"1"' in text` check reported offline even when
+            # WantsOfflineMode was "0" → Epic launched --offline → EGS
+            # auth skipped → "Failed to connect to the Epic Launcher".
+            if re.search(r'"WantsOfflineMode"\s*"1"', text):
                 logger.info("[compat.epic] Steam offline mode (loginusers)")
                 return True
     try:
@@ -183,13 +189,14 @@ async def apply_eos_overlay(
             legendary_bin, ["eos-overlay", "install", "-y"], config_path,
         )
 
-    # Enable for the prefix — only once it's initialised (has user.reg).
+    # ALWAYS enable for the prefix — never skip. Some titles refuse to
+    # start ("Failed to connect to the Epic Launcher") without the
+    # overlay's EOS IPC. The prefix is created by the earlier
+    # regedit/compat step; if it isn't there yet, ensure the dir exists so
+    # legendary can write the overlay registry keys (it creates user.reg).
     active_prefix = _active_wineprefix(plan)
-    if not (active_prefix / "user.reg").is_file():
-        logger.info(
-            "[compat.epic] prefix not initialised — skipping overlay enable",
-        )
-        return
+    with contextlib.suppress(OSError):
+        active_prefix.mkdir(parents=True, exist_ok=True)
     await _run_legendary(
         legendary_bin,
         ["eos-overlay", "enable", "--prefix", str(active_prefix)],

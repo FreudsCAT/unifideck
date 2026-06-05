@@ -32,7 +32,7 @@ import logging
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any, cast
 
-from unifideck.core.types import AuthResult, Game, InstallResult, Result, StoreInfo
+from unifideck.core.types import AuthResult, Events, Game, InstallResult, Result, StoreInfo
 from unifideck.stores.shared.store_base import StoreBase
 
 from .specialists import build_ubisoft_specialists
@@ -115,13 +115,14 @@ class UbisoftStore(StoreBase):
         await self._auth.start_auth_session_monitor()
         return cast("AuthResult", await self._auth.start_auth())
 
-    async def complete_auth(
-        self,
-        code: str = "",
-        **kwargs: Any,
-    ) -> AuthResult:
-        """Complete auth."""
-        return await self._auth.complete_auth(code, **kwargs)
+    async def complete_auth(self, **kwargs: Any) -> AuthResult:
+        """Complete auth — succeeds once UPC has captured credentials.
+
+        Ubisoft has no code/2FA step: sign-in happens entirely inside
+        the UPC GUI in the auth prefix. This just confirms credentials
+        landed on disk.
+        """
+        return await self._auth.complete_auth(**kwargs)
 
     async def logout(self) -> Result:
         """Logout."""
@@ -154,10 +155,22 @@ class UbisoftStore(StoreBase):
         **kwargs: Any,
     ) -> Result:
         """Uninstall game."""
-        return await self._installer.uninstall_game(
+        result = await self._installer.uninstall_game(
             game_id,
             delete_prefix=delete_prefix,
         )
+        # Emit so the shortcut service flips this game's Steam
+        # shortcut to "Not Installed" and prunes games.map — Epic
+        # and Amazon already do this; Ubisoft previously did not, so
+        # the shortcut stayed marked installed after a successful
+        # uninstall.
+        if result.success:
+            await self._emit(
+                Events.GAME_UNINSTALLED,
+                store="ubisoft",
+                game_id=game_id,
+            )
+        return result
 
     async def update_game(
         self,

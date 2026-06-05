@@ -159,12 +159,14 @@ class UbisoftAuth:
             },
         )
 
-    async def complete_auth(
-        self,
-        code: str = "",
-        **kwargs: Any,
-    ) -> AuthResult:
-        """Complete auth."""
+    async def complete_auth(self, **kwargs: Any) -> AuthResult:
+        """Complete auth — succeeds once UPC has captured credentials.
+
+        Ubisoft has no headless / code / 2FA flow: the user signs in
+        through the UPC GUI in the auth prefix and the session monitor
+        detects the credential files. This just reports whether that
+        capture has happened.
+        """
         if await self.is_available():
             return AuthResult(
                 success=True,

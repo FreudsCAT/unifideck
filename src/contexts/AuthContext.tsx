@@ -5,7 +5,6 @@
  *  - statuses: `Record<StoreId, StoreStatus>` (connected /
  *    disconnected / expired / error)
  *  - startAuth(store) — opens OAuth flow
- *  - completeAuth(store, code) — handles 2FA / code paste
  *  - logout(store) — clears stored credentials
  *  - logoutAll() — wipe every store at once
  *
@@ -72,10 +71,6 @@ interface AuthContextValue {
   statuses: StatusMap;
   loading: boolean;
   startAuth: (store: StoreId) => Promise<AuthResult | null>;
-  completeAuth: (
-    store: StoreId,
-    code: string,
-  ) => Promise<AuthResult | null>;
   logout: (store: StoreId) => Promise<void>;
   logoutAll: () => Promise<void>;
   /** Called by useStoreAuth after AuthDispatcher reports
@@ -119,9 +114,6 @@ export const AuthProvider: FC<{ children: ReactNode }> = ({ children }) => {
   const startMut = useRPCMutation<
     [StoreId, "start"], AuthResult
   >(rpcRoutes.storeAuth);
-  const completeMut = useRPCMutation<
-    [StoreId, "complete", { code: string }], AuthResult
-  >(rpcRoutes.storeAuth);
   const logoutMut = useRPCMutation<
     [StoreId, "logout"], Result
   >(rpcRoutes.storeAuth);
@@ -153,12 +145,6 @@ export const AuthProvider: FC<{ children: ReactNode }> = ({ children }) => {
     [startMut],
   );
 
-  const completeAuth = useCallback(
-    (store: StoreId, code: string) =>
-      completeMut.mutate(store, "complete", { code }),
-    [completeMut],
-  );
-
   const logout = useCallback(
     async (store: StoreId) => {
       await logoutMut.mutate(store, "logout");
@@ -182,7 +168,7 @@ export const AuthProvider: FC<{ children: ReactNode }> = ({ children }) => {
   const value: AuthContextValue = {
     statuses,
     loading: Object.keys(statuses).length === 0,
-    startAuth, completeAuth, logout, logoutAll,
+    startAuth, logout, logoutAll,
     notifyConnected,
   };
 

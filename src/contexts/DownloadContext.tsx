@@ -74,7 +74,7 @@ interface DownloadContextValue {
     gameId: string,
     options?: { storage?: string; language?: string; title?: string },
   ) => Promise<Result | null>;
-  uninstallGame: (appId: number) => Promise<Result | null>;
+  uninstallGame: (appId: number, deletePrefix?: boolean) => Promise<Result | null>;
   cancelDownload: (downloadId: string) => Promise<Result | null>;
   refresh: () => Promise<void>;
 }
@@ -102,7 +102,7 @@ export const DownloadProvider: FC<{ children: ReactNode }> = ({ children }) => {
     Result
   >(rpcRoutes.installGame);
 
-  const uninstallMut = useRPCMutation<[number], Result>(
+  const uninstallMut = useRPCMutation<[number, boolean], Result>(
     rpcRoutes.uninstallGame,
   );
 
@@ -174,7 +174,7 @@ export const DownloadProvider: FC<{ children: ReactNode }> = ({ children }) => {
   );
 
   const uninstallGame = useCallback(
-    (appId: number) => uninstallMut.mutate(appId),
+    (appId: number, deletePrefix = false) => uninstallMut.mutate(appId, deletePrefix),
     [uninstallMut],
   );
 

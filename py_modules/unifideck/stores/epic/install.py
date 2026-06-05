@@ -27,9 +27,11 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import logging
 import os
 import re
+import shutil
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
@@ -51,6 +53,68 @@ logger = logging.getLogger(__name__)
 
 _PROGRESS_RE = re.compile(r"(\d+(?:\.\d+)?)\s*%")
 ProgressCallback = Callable[[float], Awaitable[None]]
+
+
+def _legendary_config_dir() -> Path:
+    """Return legendary's config dir (honours ``LEGENDARY_CONFIG_DIR``)."""
+    env = os.environ.get("LEGENDARY_CONFIG_DIR")
+    return (
+        Path(env).expanduser() if env
+        else Path("~/.config/legendary").expanduser()
+    )
+
+
+def _read_legendary_install_path(game_id: str) -> str | None:
+    """Read a game's ``install_path`` from legendary's ``installed.json``.
+
+    A local file read — no catalog/network call — so it works even when
+    ``legendary uninstall`` 401s on Epic's catalog API and bails out.
+    """
+    path = _legendary_config_dir() / "installed.json"
+    try:
+        with path.open() as f:
+            data = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return None
+    entry = data.get(game_id) if isinstance(data, dict) else None
+    if isinstance(entry, dict):
+        p = entry.get("install_path")
+        return p if isinstance(p, str) and p else None
+    return None
+
+
+def _purge_legendary_install_entry(game_id: str) -> None:
+    """Drop a game from legendary's ``installed.json``.
+
+    ``legendary uninstall`` leaves the entry behind when its catalog
+    lookup fails (HTTP 401), which makes the next library sync re-flag
+    the game installed (the Epic library derives install state from
+    ``legendary list-installed``). Removing the row keeps it honest.
+    """
+    path = _legendary_config_dir() / "installed.json"
+    try:
+        with path.open() as f:
+            data = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return
+    if isinstance(data, dict) and game_id in data:
+        data.pop(game_id, None)
+        try:
+            with path.open("w") as f:
+                json.dump(data, f, indent=2)
+        except OSError as e:
+            logger.warning(
+                "[EpicUninstall] could not rewrite installed.json: %s", e,
+            )
+
+
+def _is_safe_to_delete(p: Path) -> bool:
+    """Guard against ``rmtree`` on the home dir, ``/``, or shallow roots."""
+    resolved = p.resolve()
+    home = Path.home().resolve()
+    if resolved in (home, Path("/")) or len(resolved.parts) < 3:
+        return False
+    return True
 
 
 class EpicInstaller:
@@ -240,42 +304,119 @@ class EpicInstaller:
             or str(Path(base) / game_id),
         )
 
-    async def uninstall_game(self, game_id: str) -> Result:
-        """Uninstall game."""
-        if not self._cli_path:
-            return Result(
-                success=False,
-                error="legendary_not_found",
-            )
-        proc = await asyncio.create_subprocess_exec(
-            self._cli_path,
-            "uninstall",
-            game_id,
-            "--yes",
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
+    async def uninstall_game(
+        self, game_id: str, delete_prefix: bool = False,
+    ) -> Result:
+        """Remove a game's files and clean up legendary's bookkeeping.
+
+        ``legendary uninstall`` cannot be trusted to delete files: its
+        per-game catalog lookup can fail with HTTP 401 (expired Epic
+        auth), after which it **skips the deletion but still exits 0**,
+        printing "please remove <path> manually". The old code only
+        checked the exit code, so it reported success while leaving the
+        full install (often many GiB) on disk.
+
+        So we resolve the install dir from legendary's *local*
+        ``installed.json`` (no network), run ``legendary uninstall`` only
+        as best-effort metadata cleanup, then delete the directory and
+        purge the registry entry ourselves — the latter is essential
+        because a leftover entry makes the next library sync re-flag the
+        game installed.
+        """
+        # Resolve the install dir while legendary's bookkeeping is intact.
+        install_path = await asyncio.to_thread(
+            _read_legendary_install_path, game_id,
         )
-        try:
-            _stdout, stderr = await asyncio.wait_for(
-                proc.communicate(),
-                timeout=self._uninstall_timeout,
-            )
-        except TimeoutError:
-            proc.kill()
-            return Result(
-                success=False,
-                error="uninstall_timeout",
-            )
-        if proc.returncode != 0:
-            err = stderr.decode(errors="ignore")[:200]
-            return Result(
-                success=False,
-                error=f"uninstall_failed: {err}",
-            )
+
+        # Best-effort: lets legendary tidy its own manifest/metadata when
+        # it's online + authed. Never fatal — we delete files ourselves.
+        if self._cli_path:
+            await self._best_effort_legendary_uninstall(game_id)
+
+        removed = await self._delete_install_dir(install_path, game_id)
+
+        # legendary leaves the installed.json row behind when it 401s;
+        # drop it so the next sync doesn't resurrect the game as installed.
+        await asyncio.to_thread(_purge_legendary_install_entry, game_id)
+
+        if delete_prefix:
+            await self._delete_prefix(game_id)
+
         self._library.invalidate_installed_cache()
         await self._bus.emit(
             Events.GAME_UNINSTALLED,
             store="epic",
             game_id=game_id,
         )
+        if not removed:
+            return Result(
+                success=False,
+                error="uninstall_incomplete_files_remain",
+            )
         return Result(success=True)
+
+    async def _best_effort_legendary_uninstall(self, game_id: str) -> None:
+        """Run ``legendary uninstall`` without trusting its outcome."""
+        if not self._cli_path:
+            return
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                self._cli_path,
+                "uninstall",
+                game_id,
+                "--yes",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+        except OSError as e:
+            logger.warning("[EpicUninstall] could not spawn legendary: %s", e)
+            return
+        try:
+            await asyncio.wait_for(
+                proc.communicate(), timeout=self._uninstall_timeout,
+            )
+        except TimeoutError:
+            with contextlib.suppress(ProcessLookupError):
+                proc.kill()
+            logger.warning("[EpicUninstall] legendary uninstall timed out")
+
+    async def _delete_install_dir(
+        self, install_path: str | None, game_id: str,
+    ) -> bool:
+        """``rmtree`` the install dir. Returns True if it's gone after."""
+        if not install_path:
+            logger.warning(
+                "[EpicUninstall] no tracked install path for %s; "
+                "nothing to delete", game_id,
+            )
+            return True
+        p = Path(install_path)
+        if not await asyncio.to_thread(p.exists):
+            return True
+        if not _is_safe_to_delete(p):
+            logger.error(
+                "[EpicUninstall] refusing to delete unsafe path %s", p,
+            )
+            return False
+        try:
+            await asyncio.to_thread(shutil.rmtree, p, ignore_errors=False)
+        except OSError as e:
+            logger.warning("[EpicUninstall] rmtree %s failed: %s", p, e)
+        gone = not await asyncio.to_thread(p.exists)
+        logger.info("[EpicUninstall] deleted %s (gone=%s)", p, gone)
+        return gone
+
+    async def _delete_prefix(self, game_id: str) -> None:
+        """Remove the game's Proton prefix (``delete_prefix`` path)."""
+        prefix = (
+            Path("~/.local/share/unifideck/prefixes").expanduser() / game_id
+        )
+        if not await asyncio.to_thread(prefix.exists):
+            return
+        if not _is_safe_to_delete(prefix):
+            logger.error(
+                "[EpicUninstall] refusing to delete unsafe prefix %s", prefix,
+            )
+            return
+        await asyncio.to_thread(shutil.rmtree, prefix, ignore_errors=True)
+        logger.info("[EpicUninstall] deleted prefix %s", prefix)

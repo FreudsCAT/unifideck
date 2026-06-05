@@ -71,6 +71,7 @@ sys.path.insert(0, str(Path(DECKY_PLUGIN_DIR) / "py_modules" / "_vendor"))
 # every plugin boot. The pattern is canonical for Decky plugins.
 from unifideck.config.user_config_path import resolve_user_config_path  # noqa: E402
 from unifideck.rpc import auto_wrap_rpc_methods  # noqa: E402
+from unifideck.rpc.mixins.account import AccountRPCMixin  # noqa: E402
 from unifideck.rpc.mixins.action import ActionRPCMixin  # noqa: E402
 from unifideck.rpc.mixins.auth_shortcuts import AuthShortcutsRPCMixin  # noqa: E402
 from unifideck.rpc.mixins.cloud_failure import CloudFailureRPCMixin  # noqa: E402
@@ -105,6 +106,7 @@ class Plugin(
     ConfigValidationRPCMixin,
     PlaytimeRPCMixin,
     ActionRPCMixin,
+    AccountRPCMixin,
 ):
     """The Decky Loader plugin class.
 

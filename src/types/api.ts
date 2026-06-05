@@ -74,7 +74,6 @@ export interface Result {
 /** Auth start/complete/logout response. */
 export interface AuthResult extends Result {
   url?: string;
-  needs_2fa?: boolean;
   token?: string;
   store: StoreId;
 }

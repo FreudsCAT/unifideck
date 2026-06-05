@@ -26,27 +26,28 @@ class StoreRPCMixin:
 
     registry: Any
 
-    async def store_auth(self, store: str, action: str, **kw: Any) -> Any:
+    async def store_auth(self, store: str, action: str) -> Any:
         """Run one step of a store's auth flow.
 
-        Forwards directly to ``registry.auth_action`` which
-        knows the per-store wiring. The ``action`` argument
-        is store-defined (typically ``"start"`` /
-        ``"continue"`` / ``"cancel"`` / ``"check"``).
+        Forwards to ``registry.auth_action`` which knows the
+        per-store wiring. Every store now authenticates through the
+        Steam-shortcut / launcher flow (``"start"`` kicks the backend
+        prep; the launcher captures credentials and the session
+        monitor emits ``STORE_AUTH_COMPLETE``), so the only actions
+        the frontend sends are ``"start"`` and ``"logout"``. The old
+        ``"complete"`` + ``{code}`` 2FA path (a relic of Ubisoft's
+        former API login) has been removed — Ubisoft Connect handles
+        its own sign-in inside the UPC prefix now.
 
         Args:
             store: store identifier.
-            action: per-store action name.
-            **kw: extra args forwarded to the auth method.
+            action: per-store action name (``"start"`` / ``"logout"``).
 
         Returns:
             Per-store auth result dict.
         """
-        logger.info(
-            "[StoreAuth:%s] action=%s kw=%s", store, action,
-            {k: v for k, v in kw.items() if k != "code"},
-        )
-        result = await self.registry.auth_action(store, action, **kw)
+        logger.info("[StoreAuth:%s] action=%s", store, action)
+        result = await self.registry.auth_action(store, action)
         success = getattr(result, "success", None)
         if success is None and isinstance(result, dict):
             success = result.get("success")

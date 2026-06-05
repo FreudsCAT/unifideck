@@ -283,10 +283,22 @@ class GOGStore(StoreBase):
         """Uninstall game."""
         info = self._library.get_installed_game_info(game_id)
         install_path = info.get("install_path") if info else None
-        return await self._installer.uninstall_game(
+        result = await self._installer.uninstall_game(
             game_id=game_id,
             install_path=install_path,
         )
+        # Emit so the shortcut service flips this game's Steam
+        # shortcut to "Not Installed" and prunes games.map — Epic
+        # and Amazon already do this; GOG previously did not, so
+        # the shortcut stayed marked installed after a successful
+        # uninstall.
+        if result.success:
+            await self._emit(
+                Events.GAME_UNINSTALLED,
+                store="gog",
+                game_id=game_id,
+            )
+        return result
 
     async def update_game(
         self,
