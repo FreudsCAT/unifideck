@@ -64,7 +64,6 @@ export const GameInfoNavButtons: FC<Props> = ({ meta }) => {
   return (
     <Focusable
       flow-children="row"
-      onActivate={() => {}}
       onFocus={(e: React.FocusEvent<HTMLDivElement>) => {
         e.currentTarget.scrollIntoView({ behavior: "smooth", block: "center" });
       }}

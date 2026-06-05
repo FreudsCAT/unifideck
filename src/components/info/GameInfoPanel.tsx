@@ -18,12 +18,11 @@
  * toggle is set to `compact`, the panel returns null entirely
  * (matches staging's "simple" semantics).
  */
-import { FC, useCallback, useState } from "react";
+import { FC, useState } from "react";
 import { Focusable } from "@decky/ui";
 import { useGameInfo } from "../../hooks/useGameInfo";
 import { useGameMetadata } from "../../hooks/useGameMetadata";
 import { useViewMode } from "../../hooks/useViewMode";
-import { injectGameToAppinfo } from "../../lib/steam-bridge/app-store-patcher";
 import { GameInfoCompatRow } from "./GameInfoCompatRow";
 import { GameInfoInfoRow } from "./GameInfoInfoRow";
 import { GameInfoSynopsisSection } from "./GameInfoSynopsisSection";
@@ -61,10 +60,6 @@ export const GameInfoPanel: FC<Props> = ({ appId }) => {
   const { mode } = useViewMode();
   const [synopsisOpen, setSynopsisOpen] = useState(false);
 
-  const onPanelActivate = useCallback(() => {
-    void injectGameToAppinfo(appId);
-  }, [appId]);
-
   // QAM-driven hide: matches staging's "simple" mode (panel absent).
   if (mode === "compact") return null;
 
@@ -78,7 +73,6 @@ export const GameInfoPanel: FC<Props> = ({ appId }) => {
       <style>{PANEL_FOCUS_CSS}</style>
       <Focusable
         flow-children="column"
-        onActivate={onPanelActivate}
         style={{
           display: "flex",
           flexDirection: "column",
@@ -92,7 +86,7 @@ export const GameInfoPanel: FC<Props> = ({ appId }) => {
           synopsisOpen={synopsisOpen}
           onToggleSynopsis={() => setSynopsisOpen((v) => !v)}
         />
-        <GameInfoInfoRow game={game} meta={meta} />
+        <GameInfoInfoRow appId={appId} game={game} meta={meta} />
         {synopsisOpen && meta.description && (
           <GameInfoSynopsisSection description={meta.description} />
         )}

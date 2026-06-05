@@ -74,7 +74,7 @@ export const NotInstalledButtons: FC<Props> = ({ appId, bridge = defaultBridge }
         {installFlow.isWorking ? t("playButton.installing") : t("playButton.install")}
       </DialogButton>
 
-      <MetaInline sizeBytes={game?.size_bytes} />
+      <MetaInline sizeBytes={game?.size_bytes} showLastPlayed appId={appId} />
 
       <IconGroup>
         <DialogButton

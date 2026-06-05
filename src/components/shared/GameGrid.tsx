@@ -30,7 +30,6 @@ export const GameGrid: FC<Props> = ({games, onSelect, tileWidth = 140}) => {
   return (
     <Focusable
       flow-children="grid"
-      onActivate={() => {}}
       style={{
         display: "grid",
         gridTemplateColumns: `repeat(auto-fill, minmax(${tileWidth}px, 1fr))`,

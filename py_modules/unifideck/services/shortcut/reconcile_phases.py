@@ -12,7 +12,6 @@ reclaims orphaned entries by AppID from the persistent registry.
 from __future__ import annotations
 
 import logging
-import time
 from typing import TYPE_CHECKING, Any
 
 from .games_map import UNIFIDECK_TAG, GameMapEntry, generate_app_id
@@ -442,7 +441,13 @@ class _ReconcilePhasesMixin:
             "Devkit": 0,
             "DevkitGameID": "",
             "DevkitOverrideAppID": 0,
-            "LastPlayTime": int(time.time()),
+            # New shortcuts start with no play history (0 = never played).
+            # Steam stamps the real time on first launch, and
+            # ``_update_existing_shortcut`` preserves it on later syncs.
+            # Hardcoding ``time.time()`` here stamped every game with the
+            # same sync timestamp, so the App-Details "Last Played" row
+            # showed one identical date across the whole library.
+            "LastPlayTime": 0,
             "FlatpakAppID": "",
             "tags": {
                 "0": UNIFIDECK_TAG,

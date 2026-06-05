@@ -4,11 +4,46 @@ OP-26f | rpc/mixins/sync.py
 """
 from __future__ import annotations
 
+import asyncio
 import logging
+import os
 from collections.abc import Callable
 from typing import Any
 
 logger = logging.getLogger(__name__)
+
+# Upper bound for a single not-installed download-size lookup
+# (``store.get_game_size`` shells out to legendary / gogdl). Keeps the
+# ``get_game_size_bytes`` RPC from hanging on a slow or offline store.
+_SIZE_LOOKUP_TIMEOUT_S = 30.0
+
+
+def _dir_size_bytes(path: str) -> int:
+    """Sum the on-disk byte size of every regular file under ``path``.
+
+    Iterative ``os.scandir`` walk (reuses each ``DirEntry``'s cached
+    stat, so it's cheaper than ``os.walk`` + ``os.stat`` on large
+    install trees). Symlinks are not followed — avoids cycles and
+    double-counting. Unreadable entries are skipped: this only feeds
+    the "Space Required" display, so a partial total beats an error.
+    """
+    total = 0
+    stack = [path]
+    while stack:
+        current = stack.pop()
+        try:
+            with os.scandir(current) as it:
+                for entry in it:
+                    try:
+                        if entry.is_dir(follow_symlinks=False):
+                            stack.append(entry.path)
+                        elif entry.is_file(follow_symlinks=False):
+                            total += entry.stat(follow_symlinks=False).st_size
+                    except OSError:
+                        continue
+        except OSError:
+            continue
+    return total
 
 
 def _is_unifideck_owned(
@@ -149,7 +184,64 @@ class SyncRPCMixin:
         # await. The previous body had a stray `await` which
         # raised `TypeError: object NoneType can't be used
         # in 'await' expression`.
-        return self.sync_service.get_game_info(app_id)
+        #
+        # Keep this fast and side-effect-free. The play-section
+        # override and the game-info panel both gate on this call
+        # resolving (see ``usePlaySection`` / ``GameInfoPanel``); any
+        # slow branch here (e.g. a ``legendary info`` / ``gogdl``
+        # subprocess) leaves the whole custom UI showing Steam's native
+        # section while it waits. Size resolution therefore lives in
+        # the separate, non-blocking ``get_game_size_bytes`` RPC, which
+        # the frontend fetches on its own (like Last Played).
+        return self.sync_service.get_game_info(app_id) if self.sync_service else None
+
+    async def get_game_size_bytes(self, app_id: int) -> int:
+        """Resolve the "Space Required" size (bytes) for one AppID.
+
+        Fetched **separately** from :meth:`get_game_info` so the
+        sometimes-slow size lookup never delays the play-section
+        override (see the note in ``get_game_info``).
+
+        * **Installed** (``installed`` + ``install_path``) → on-disk
+          size of the install directory, computed off the event loop.
+        * **Not installed** → the store adapter's ``get_game_size``
+          download-size lookup. Epic / GOG / Amazon implement it
+          (each with its own cache); Ubisoft / Microsoft return
+          ``None``. Bounded by ``_SIZE_LOOKUP_TIMEOUT_S`` so a slow or
+          offline store can't leave the RPC hanging.
+
+        Always returns an int (``0`` when unknown) — never raises.
+        """
+        info = self.sync_service.get_game_info(app_id) if self.sync_service else None
+        if not isinstance(info, dict):
+            return 0
+
+        install_path = info.get("install_path")
+        if info.get("installed") and isinstance(install_path, str) and install_path:
+            try:
+                return await asyncio.to_thread(_dir_size_bytes, install_path)
+            except OSError:
+                return 0
+
+        store = info.get("store")
+        game_id = info.get("store_game_id")
+        if not store or not game_id:
+            return 0
+        adapter = self.registry.get_store(store) if self.registry else None
+        if adapter is None or not hasattr(adapter, "get_game_size"):
+            return 0
+        try:
+            size = await asyncio.wait_for(
+                adapter.get_game_size(game_id),
+                timeout=_SIZE_LOOKUP_TIMEOUT_S,
+            )
+        except Exception:
+            logger.debug(
+                "[sync] get_game_size(%s:%s) failed/timed out",
+                store, game_id, exc_info=True,
+            )
+            return 0
+        return int(size or 0)
 
     services: Any
     cache: Any

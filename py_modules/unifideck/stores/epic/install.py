@@ -42,7 +42,9 @@ from unifideck.event_bus.event_bus import EventBus
 from unifideck.stores.shared import dlc
 from unifideck.stores.shared.cli_install_helpers import (
     drain_install_output,
+    parse_eta_seconds,
     parse_progress_line,
+    parse_speed_bps,
     wait_with_timeout,
 )
 
@@ -52,7 +54,10 @@ from .library import EpicLibraryReader
 logger = logging.getLogger(__name__)
 
 _PROGRESS_RE = re.compile(r"(\d+(?:\.\d+)?)\s*%")
-ProgressCallback = Callable[[float], Awaitable[None]]
+# The worker's progress callback accepts either a bare percentage or a
+# partial dict (``percentage`` / ``speed_bps`` / ``eta_seconds`` / …)
+# and merges dict updates onto the queue item — see DownloadWorker.
+ProgressCallback = Callable[[float | dict[str, Any]], Awaitable[None]]
 
 
 def _legendary_config_dir() -> Path:
@@ -243,27 +248,54 @@ class EpicInstaller:
         )
 
     async def _handle_install_line(self, line: str, game_id: str, progress_cb: ProgressCallback | None) -> None:
-        """Handle install line."""
+        """Parse one line of legendary's install output.
+
+        legendary's DLManager spreads a single progress tick across
+        several lines, e.g.::
+
+            Progress: 50.5% (1234/2444), Running for 00:01:30, ETA: 00:01:28
+             + Download	- 15.50 MiB/s (raw) / 14.00 MiB/s (decompressed)
+
+        The percentage + ETA live on the ``Progress:`` line and the
+        transfer rate on the ``Download`` line, so each line emits a
+        *partial* update; the download worker merges them onto the
+        queue item (keeping the last value for fields a line omits).
+        Earlier only the percentage was parsed, so the UI was stuck at
+        ``0.0 MB/s · ETA --:--`` for the whole install.
+        """
+        # Transfer-rate line — forward speed only.
+        speed_bps = parse_speed_bps(line)
+        if speed_bps is not None:
+            await self._safe_progress(progress_cb, {"speed_bps": speed_bps})
+            return
         if "Progress:" not in line:
             logger.debug("[legendary install] %s", line)
             return
         pct = parse_progress_line(line, _PROGRESS_RE)
         if pct is None:
             return
-        if progress_cb is not None:
-            try:
-                await progress_cb(pct)
-            except Exception as e:
-                logger.debug(
-                    "[epic_install] progress_cb raised: %s",
-                    e,
-                )
+        update: dict[str, Any] = {"percentage": pct}
+        eta = parse_eta_seconds(line)
+        if eta is not None:
+            update["eta_seconds"] = eta
+        await self._safe_progress(progress_cb, update)
         await self._bus.emit(
             Events.DOWNLOAD_PROGRESS,
             store="epic",
             game_id=game_id,
             progress=pct,
         )
+
+    async def _safe_progress(
+        self, progress_cb: ProgressCallback | None, update: dict[str, Any],
+    ) -> None:
+        """Invoke ``progress_cb`` with a partial update, swallowing errors."""
+        if progress_cb is None:
+            return
+        try:
+            await progress_cb(update)
+        except Exception as e:
+            logger.debug("[epic_install] progress_cb raised: %s", e)
 
     async def _finalize_install(self, game_id: str, base: str) -> InstallResult:
         """Finalize install."""

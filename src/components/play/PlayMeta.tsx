@@ -15,6 +15,7 @@
 import { CSSProperties, FC, ReactNode, useEffect, useState } from "react";
 import { Focusable } from "@decky/ui";
 import { useTranslation } from "react-i18next";
+import { useGameSize } from "../../hooks/useGameSize";
 
 /** Inline style shared by every primary action button
  *  (Install / Play / Resume / Update / Cancel). Matches
@@ -62,7 +63,6 @@ export const iconBtnStyle: CSSProperties = {
 export const PlayShell: FC<{ children: ReactNode }> = ({ children }) => (
   <Focusable
     flow-children="row"
-    onActivate={() => {}}
     data-unifideck-play-wrapper="true"
     style={{
       display: "flex",
@@ -156,6 +156,11 @@ interface MetaInlineProps {
 export const MetaInline: FC<MetaInlineProps> = ({ sizeBytes, showLastPlayed = false, appId }) => {
   const { t } = useTranslation();
   const [lastPlayed, setLastPlayed] = useState<number | null>(null);
+  // Size is fetched out-of-band (see useGameSize) so a slow store
+  // lookup never blocks this row from rendering. Prefer the fetched
+  // value; fall back to any size the caller already had.
+  const fetchedSize = useGameSize(appId ?? null);
+  const resolvedSize = fetchedSize && fetchedSize > 0 ? fetchedSize : sizeBytes;
 
   useEffect(() => {
     if (!showLastPlayed || appId == null) return;
@@ -181,7 +186,7 @@ export const MetaInline: FC<MetaInlineProps> = ({ sizeBytes, showLastPlayed = fa
         flex: "0 1 auto",
       }}
     >
-      <MetaItem label={t("playMeta.spaceRequired")} value={formatBytes(sizeBytes)} />
+      <MetaItem label={t("playMeta.spaceRequired")} value={formatBytes(resolvedSize)} />
       {showLastPlayed && (
         <MetaItem label={t("playMeta.lastPlayed")} value={formatLastPlayed(lastPlayed)} />
       )}

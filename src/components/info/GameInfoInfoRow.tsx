@@ -11,9 +11,11 @@ import { FC } from "react";
 import { Focusable } from "@decky/ui";
 import { useTranslation } from "react-i18next";
 import { StoreIcon } from "../shared/StoreIcon";
+import { useGameSize } from "../../hooks/useGameSize";
 import type { Game, GameMetadata } from "../../types/api";
 
 interface Props {
+  appId: number;
   game: Game;
   meta: GameMetadata;
 }
@@ -41,9 +43,12 @@ const Cell: FC<{ label: string; children: React.ReactNode }> = (
   </span>
 );
 
-export const GameInfoInfoRow: FC<Props> = ({ game, meta }) => {
+export const GameInfoInfoRow: FC<Props> = ({ appId, game, meta }) => {
   const { t } = useTranslation();
-  const size = formatSize(game.size_bytes);
+  // Fetched out-of-band so it never blocks the panel; fall back to any
+  // size already on the game record. See useGameSize.
+  const fetchedSize = useGameSize(appId);
+  const size = formatSize(fetchedSize && fetchedSize > 0 ? fetchedSize : game.size_bytes);
   return (
     <Focusable
       flow-children="row"

@@ -57,7 +57,7 @@ export const XCloudButtons: FC<Props> = ({ appId, gameId }) => {
         <FaCloud /> {t("play.playOnCloud", "Play on Cloud")}
       </DialogButton>
 
-      <MetaInline />
+      <MetaInline showLastPlayed appId={appId} />
 
       <IconGroup>
         <DialogButton

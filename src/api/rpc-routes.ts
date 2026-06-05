@@ -36,6 +36,7 @@ export const rpcRoutes = {
   getSyncStatus:           "get_sync_status",
   getSyncProgress:         "get_sync_progress",
   getAllUnifideckGames:    "get_all_unifideck_games",
+  getGameSizeBytes:        "get_game_size_bytes",
   refreshStore:            "refresh_store",
   // Downloads (DownloadRPCMixin)
   installGame:             "install_game",
