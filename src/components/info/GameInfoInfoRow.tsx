@@ -47,7 +47,7 @@ export const GameInfoInfoRow: FC<Props> = ({ appId, game, meta }) => {
   const { t } = useTranslation();
   // Fetched out-of-band so it never blocks the panel; fall back to any
   // size already on the game record. See useGameSize.
-  const fetchedSize = useGameSize(appId);
+  const fetchedSize = useGameSize(appId, Boolean(game.is_installed));
   const size = formatSize(fetchedSize && fetchedSize > 0 ? fetchedSize : game.size_bytes);
   return (
     <Focusable

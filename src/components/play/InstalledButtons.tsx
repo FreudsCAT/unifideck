@@ -197,7 +197,7 @@ export const InstalledButtons: FC<Props> = ({ appId, bridge = defaultBridge }) =
   return (
     <PlayShell>
       {primaryButtons}
-      <MetaInline sizeBytes={game?.size_bytes} showLastPlayed appId={appId} />
+      <MetaInline sizeBytes={game?.size_bytes} showLastPlayed appId={appId} installed />
       <IconGroup>
         <DialogButton
           style={iconBtnStyle}

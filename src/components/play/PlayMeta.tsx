@@ -16,6 +16,7 @@ import { CSSProperties, FC, ReactNode, useEffect, useState } from "react";
 import { Focusable } from "@decky/ui";
 import { useTranslation } from "react-i18next";
 import { useGameSize } from "../../hooks/useGameSize";
+import { PLAY_FOCUS_CSS } from "./play.css";
 
 /** Inline style shared by every primary action button
  *  (Install / Play / Resume / Update / Cancel). Matches
@@ -75,6 +76,11 @@ export const PlayShell: FC<{ children: ReactNode }> = ({ children }) => (
       zIndex: 2,
     }}
   >
+    {/* Render the focus CSS inline so it lands in THIS (App-Details)
+        CEF document — a document.head injection from elsewhere does
+        not reach it. This is what makes Install→blue / Play→green /
+        Cancel→red actually apply on focus (staging's pattern). */}
+    <style>{PLAY_FOCUS_CSS}</style>
     {children}
   </Focusable>
 );
@@ -145,6 +151,10 @@ interface MetaInlineProps {
   showLastPlayed?: boolean;
   /** Steam appId — used to look up rtLastTimePlayed. */
   appId?: number | null;
+  /** True for installed games. Switches the size label to
+   *  "Installed Size" and makes {@link useGameSize} report the
+   *  on-disk size instead of the (stale) pre-install download size. */
+  installed?: boolean;
 }
 
 /**
@@ -153,13 +163,17 @@ interface MetaInlineProps {
  * "Last Played" pairs, with ``marginLeft: 20`` to space it
  * off the action button (matches staging spacing).
  */
-export const MetaInline: FC<MetaInlineProps> = ({ sizeBytes, showLastPlayed = false, appId }) => {
+export const MetaInline: FC<MetaInlineProps> = ({
+  sizeBytes, showLastPlayed = false, appId, installed = false,
+}) => {
   const { t } = useTranslation();
   const [lastPlayed, setLastPlayed] = useState<number | null>(null);
   // Size is fetched out-of-band (see useGameSize) so a slow store
-  // lookup never blocks this row from rendering. Prefer the fetched
-  // value; fall back to any size the caller already had.
-  const fetchedSize = useGameSize(appId ?? null);
+  // lookup never blocks this row from rendering. Keyed on `installed`
+  // so the on-disk size replaces the pre-install download size once
+  // the game finishes installing. Prefer the fetched value; fall back
+  // to any size the caller already had.
+  const fetchedSize = useGameSize(appId ?? null, installed);
   const resolvedSize = fetchedSize && fetchedSize > 0 ? fetchedSize : sizeBytes;
 
   useEffect(() => {
@@ -186,9 +200,15 @@ export const MetaInline: FC<MetaInlineProps> = ({ sizeBytes, showLastPlayed = fa
         flex: "0 1 auto",
       }}
     >
-      <MetaItem label={t("playMeta.spaceRequired")} value={formatBytes(resolvedSize)} />
+      <MetaItem
+        label={installed ? t("playMeta.installedSize") : t("playMeta.spaceRequired")}
+        value={formatBytes(resolvedSize)}
+      />
       {showLastPlayed && (
-        <MetaItem label={t("playMeta.lastPlayed")} value={formatLastPlayed(lastPlayed)} />
+        <MetaItem
+          label={t("playMeta.lastPlayed")}
+          value={lastPlayed ? formatLastPlayed(lastPlayed) : t("playMeta.neverPlayed")}
+        />
       )}
     </div>
   );

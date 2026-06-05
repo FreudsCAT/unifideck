@@ -611,7 +611,9 @@
   },
   "playMeta": {
     "spaceRequired": "Space required",
-    "lastPlayed": "Last played"
+    "installedSize": "Installed size",
+    "lastPlayed": "Last played",
+    "neverPlayed": "Never played"
   },
   "downloads": {
     "title": "Downloads",

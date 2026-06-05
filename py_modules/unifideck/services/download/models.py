@@ -18,6 +18,12 @@ from dataclasses import dataclass, field
 from time import time
 from typing import Any
 
+# How many recently-finished downloads to keep (in memory, on disk,
+# and in the QuickAccess "Recently finished" list). Persisted to
+# ``download_history.json`` so the list survives restarts + plugin
+# reinstalls.
+MAX_FINISHED_HISTORY = 10
+
 
 @dataclass
 class DownloadItem:

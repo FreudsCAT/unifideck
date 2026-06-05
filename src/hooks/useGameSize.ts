@@ -1,5 +1,6 @@
 /**
- * useGameSize — lazy, non-blocking "Space Required" size fetch.
+ * useGameSize — lazy, non-blocking "Space Required" / "Installed
+ * Size" fetch.
  *
  * The size lookup lives in its own RPC (`get_game_size_bytes`)
  * rather than in `get_game_info`, because resolving a download
@@ -11,22 +12,31 @@
  * `MetaInline` already does for Last Played — the row renders
  * immediately and the size fills in a moment later.
  *
- * A module-level cache (keyed by appId) de-dupes the fetch so the
- * play-section `MetaInline` and the info-panel size cell share one
- * round-trip per game.
+ * The cache is keyed by `"<appId>:<installed>"`, NOT `appId` alone:
+ * the backend returns the *download* size while not-installed and
+ * the *on-disk* size once installed, so a game that finishes
+ * installing must refetch instead of showing the stale pre-install
+ * number. Keying on the install state turns that transition into a
+ * natural cache miss (no explicit invalidation needed). The
+ * module-level cache also de-dupes the fetch so the play-section
+ * `MetaInline` and the info-panel size cell share one round-trip.
  */
 import { useEffect, useState } from "react";
 import { call } from "@decky/api";
 import { unwrapRpcEnvelope } from "../api/useRPC";
 import { rpcRoutes } from "../api/rpc-routes";
 
-const cache = new Map<number, number>();
-const inflight = new Map<number, Promise<number>>();
+const cache = new Map<string, number>();
+const inflight = new Map<string, Promise<number>>();
 
-async function fetchSize(appId: number): Promise<number> {
-  const cached = cache.get(appId);
+function cacheKey(appId: number, installed: boolean): string {
+  return `${appId}:${installed ? 1 : 0}`;
+}
+
+async function fetchSize(appId: number, key: string): Promise<number> {
+  const cached = cache.get(key);
   if (cached != null) return cached;
-  const existing = inflight.get(appId);
+  const existing = inflight.get(key);
   if (existing) return existing;
 
   const promise = (async () => {
@@ -36,11 +46,11 @@ async function fetchSize(appId: number): Promise<number> {
       throwing: false,
     });
     const value = typeof bytes === "number" && bytes > 0 ? bytes : 0;
-    cache.set(appId, value);
+    cache.set(key, value);
     return value;
-  })().finally(() => { inflight.delete(appId); });
+  })().finally(() => { inflight.delete(key); });
 
-  inflight.set(appId, promise);
+  inflight.set(key, promise);
   return promise;
 }
 
@@ -50,28 +60,31 @@ async function fetchSize(appId: number): Promise<number> {
  * size is unknown (e.g. Ubisoft / Microsoft, or an offline store).
  *
  * @param appId — Steam shortcut app-id, or null to skip.
+ * @param installed — current install state. Changing it refetches
+ *   (download size → on-disk size) instead of serving a stale value.
  */
-export function useGameSize(appId: number | null): number | undefined {
+export function useGameSize(appId: number | null, installed: boolean): number | undefined {
+  const key = appId != null ? cacheKey(appId, installed) : null;
   const [size, setSize] = useState<number | undefined>(
-    appId != null ? cache.get(appId) : undefined,
+    key != null ? cache.get(key) : undefined,
   );
 
   useEffect(() => {
-    if (appId == null) {
+    if (appId == null || key == null) {
       setSize(undefined);
       return;
     }
-    const cached = cache.get(appId);
+    const cached = cache.get(key);
     if (cached != null) {
       setSize(cached);
       return;
     }
     let cancelled = false;
-    void fetchSize(appId).then((bytes) => {
+    void fetchSize(appId, key).then((bytes) => {
       if (!cancelled) setSize(bytes);
     }).catch(() => { /* size is best-effort — leave undefined */ });
     return () => { cancelled = true; };
-  }, [appId]);
+  }, [appId, key]);
 
   return size;
 }

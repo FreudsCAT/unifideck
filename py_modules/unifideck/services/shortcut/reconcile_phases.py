@@ -11,16 +11,30 @@ reclaims orphaned entries by AppID from the persistent registry.
 
 from __future__ import annotations
 
+import asyncio
 import logging
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from .games_map import UNIFIDECK_TAG, GameMapEntry, generate_app_id
-from .launch_options import get_full_id
+from .launch_options import get_full_id, is_unifideck_shortcut
 
 if TYPE_CHECKING:
     from unifideck.core.types import Game
 
 logger = logging.getLogger(__name__)
+
+
+def _touch_marker(marker: Path) -> None:
+    """Create a one-time migration marker file (best-effort)."""
+    try:
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.write_text("done", encoding="utf-8")
+    except OSError as e:
+        logger.warning(
+            "[ShortcutService] could not write migration marker %s: %s",
+            marker, e,
+        )
 
 
 def _build_launch_index(shortcuts_dict: dict[str, Any]) -> dict[str, str]:
@@ -127,6 +141,7 @@ class _ReconcilePhasesMixin:
         """
         await self._load_shortcuts()
         await self._load_games_map()
+        await self._reset_lastplaytime_once()
 
         from .registry import load_registry, save_registry
 
@@ -192,6 +207,47 @@ class _ReconcilePhasesMixin:
             "added": added, "removed": removed,
             "kept": kept, "reclaimed": reclaimed,
         }
+
+    async def _reset_lastplaytime_once(self: Any) -> None:
+        """One-time migration: clear bogus ``LastPlayTime`` stamps.
+
+        An earlier build wrote ``LastPlayTime = now`` into every new
+        shortcut, so Steam's ``GetPlaytime`` reported the same fake
+        "last played" date for games that were never launched. We zero
+        those values once (guarded by a marker in the data dir) so
+        never-played games read as "Never Played"; Steam re-stamps real
+        plays on launch and ``_update_existing_shortcut`` preserves them
+        afterwards. Only Unifideck-owned entries are touched — the
+        user's own shortcuts keep their real play history.
+        """
+        marker = Path(self._games_map_path).parent / "lastplaytime_reset.done"
+        if await asyncio.to_thread(marker.exists):
+            return
+
+        self._shortcuts = self._ensure_shortcuts_root(self._shortcuts)
+        shortcuts_dict = self._shortcuts["shortcuts"]
+        cleared = 0
+        for entry in shortcuts_dict.values():
+            if not isinstance(entry, dict) or not entry.get("LastPlayTime"):
+                continue
+            launch = entry.get("LaunchOptions", "")
+            owned = isinstance(launch, str) and is_unifideck_shortcut(launch)
+            if not owned:
+                tags = entry.get("tags") or {}
+                owned = isinstance(tags, dict) and UNIFIDECK_TAG in tags.values()
+            if owned:
+                entry["LastPlayTime"] = 0
+                cleared += 1
+
+        if cleared:
+            await self._save_all()
+        # Mark done even when nothing changed, so we don't rescan every
+        # sync; a failed marker write just retries next sync (idempotent).
+        await asyncio.to_thread(_touch_marker, marker)
+        logger.info(
+            "[ShortcutService] LastPlayTime reset migration: cleared %d shortcut(s)",
+            cleared,
+        )
 
     # ── Phase helpers ──────────────────────────────────────
 

@@ -14,7 +14,6 @@
 import { FC, useMemo } from "react";
 import { ButtonItem, DialogButton } from "@decky/ui";
 import { useTranslation } from "react-i18next";
-import { FaPlay } from "react-icons/fa";
 import { useGameActions } from "../../hooks/useGameActions";
 import { SteamBridge } from "../../lib/steam-bridge";
 import {
@@ -38,10 +37,23 @@ function outcomeKey(status: DownloadStatus): string {
 }
 
 function outcomeColor(status: DownloadStatus): string {
-  if (status === "complete") return "#22c55e";
+  // Complete is blue (the Play badge alongside it carries the green
+  // "go" accent); cancelled grey; failed red.
+  if (status === "complete") return "#1a9fff";
   if (status === "cancelled") return "#94a3b8";
   return "#ef4444";
 }
+
+/** Shared badge geometry so the status badge and the Play badge
+ *  read as a matched pair. */
+const BADGE_STYLE = {
+  fontSize: 11,
+  padding: "2px 8px",
+  borderRadius: 3,
+  fontWeight: 600,
+  color: "#0f172a",
+  lineHeight: "1.4",
+} as const;
 
 /** Props. */
 interface Props {
@@ -93,24 +105,24 @@ export const DownloadItemRow: FC<Props> = ({ item, variant }) => {
 
       {variant === "finished" && (
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <span style={{
-            fontSize: 11, padding: "2px 6px", borderRadius: 3,
-            background: outcomeColor(item.status),
-            color: "#0f172a",
-          }}>
+          <span style={{ ...BADGE_STYLE, background: outcomeColor(item.status) }}>
             {t(`downloads.outcome.${outcomeKey(item.status)}`)}
           </span>
           {playAppId != null && (
+            // Focusable green "Play" badge (replaces the old play icon
+            // button) — styled to match the status badge beside it.
             <DialogButton
+              className="unifideck-download-play-btn"
               style={{
+                ...BADGE_STYLE,
                 display: "inline-flex", alignItems: "center",
                 justifyContent: "center", width: "auto", minWidth: 0,
-                flex: "0 0 auto", padding: "2px 10px", fontSize: 12,
+                height: "auto", flex: "0 0 auto", border: "none",
+                background: "#22c55e",
               }}
               onClick={() => actions.launch(playAppId)}
-              aria-label={t("downloads.play")}
             >
-              <FaPlay />
+              {t("downloads.play")}
             </DialogButton>
           )}
         </div>

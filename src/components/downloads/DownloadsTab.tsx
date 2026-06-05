@@ -3,8 +3,9 @@
  * panel.
  *
  * Three sections : "Now downloading" (current item),
- * "Queued" (waiting), "Recently finished" (last 5
- * completed). Empty state shows "No downloads".
+ * "Queued" (waiting), "Recently finished" (last 10
+ * completed, persisted across restarts). Empty state
+ * shows "No downloads".
  *
  * The data comes from `useDownloads()` (Phase F2) ; live
  * updates from EventBus mean this view re-renders
@@ -15,6 +16,7 @@ import { PanelSection } from "@decky/ui";
 import { useTranslation } from "react-i18next";
 import { useDownloads } from "../../contexts/DownloadContext";
 import { DownloadItemRow } from "./DownloadItemRow";
+import { PLAY_FOCUS_CSS } from "../play/play.css";
 
 /**
  * Quick Access Menu tab listing every active and
@@ -43,6 +45,9 @@ export const DownloadsTab: FC = () => {
   }
   return (
     <>
+      {/* Inline so the button/badge focus rules land in the QuickAccess
+          CEF document (separate from the App-Details one). */}
+      <style>{PLAY_FOCUS_CSS}</style>
       {current && (
         <PanelSection title={t("downloads.current")}>
           <DownloadItemRow item={current} variant="current" />
@@ -57,7 +62,9 @@ export const DownloadsTab: FC = () => {
       )}
       {finished.length > 0 && (
         <PanelSection title={t("downloads.finished")}>
-          {finished.slice(-5).map((item) => (
+          {/* Backend returns ``finished`` most-recent-first; show the
+              top 10 (persisted across restarts — see DownloadService). */}
+          {finished.slice(0, 10).map((item) => (
             <DownloadItemRow key={item.id} item={item} variant="finished" />
           ))}
         </PanelSection>

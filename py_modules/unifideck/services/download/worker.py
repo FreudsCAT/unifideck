@@ -22,7 +22,7 @@ from typing import TYPE_CHECKING, Any
 
 from unifideck.core.types import Game
 
-from .models import DownloadItem, classify_download_error
+from .models import MAX_FINISHED_HISTORY, DownloadItem, classify_download_error
 
 if TYPE_CHECKING:
     from unifideck.core.types import InstallResult
@@ -293,11 +293,17 @@ class _WorkerMixin:
         finished = getattr(self, "_finished", None)
         if isinstance(finished, list):
             finished.append(item)
-            # Cap the in-memory history. Frontend only shows a
-            # short list anyway; older entries are dropped FIFO.
-            max_len = 50
-            if len(finished) > max_len:
-                del finished[: len(finished) - max_len]
+            # Cap the in-memory history (FIFO). Matches what we persist
+            # + show in the QAM "Recently finished" list.
+            if len(finished) > MAX_FINISHED_HISTORY:
+                del finished[: len(finished) - MAX_FINISHED_HISTORY]
+            # Persist the updated history (best-effort, fire-and-forget)
+            # so it survives restarts / plugin reinstalls. Looked up
+            # dynamically — the host service provides ``_save_history``;
+            # the worker mixin stays standalone-safe.
+            save_history = getattr(self, "_save_history", None)
+            if callable(save_history):
+                _track(asyncio.create_task(save_history()))  # type: ignore[arg-type]
 
     async def _build_installed_game(
         self,

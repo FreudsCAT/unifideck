@@ -17,7 +17,14 @@
 
 const STYLE_ID = "unifideck-play-focus-styles";
 
-const CSS = `
+/** Focus / hover styling for every Unifideck-rendered button.
+ *  Exported so components can render it inline via `<style>` in
+ *  their own subtree — the reliable way to get the rules into the
+ *  right CEF document (the App-Details patch and the QuickAccess
+ *  panel render in SEPARATE documents, and a `document.head`
+ *  injection from one doesn't reach the other). Matches staging's
+ *  ``<style>{buttonStyles}</style>`` pattern. */
+export const PLAY_FOCUS_CSS = `
 .unifideck-install-btn,
 .unifideck-play-btn,
 .unifideck-resume-btn,
@@ -37,22 +44,36 @@ const CSS = `
 .unifideck-icon-btn { width: 48px; height: 48px; padding: 0 !important; }
 .unifideck-cancel-btn { min-width: 160px; height: 44px; }
 
+/* Focus accent matches Steam: Install / Resume blue, Play green,
+ * Cancel red, Update amber. We match three focus signals so the
+ * colour lands no matter where Steam attaches the focus marker:
+ * the gamepad gpfocus class, native :focus, and :focus-within
+ * (when the focusable node is a child of the element carrying our
+ * class). */
 .unifideck-install-btn:hover,
+.unifideck-install-btn:focus,
+.unifideck-install-btn:focus-within,
 .unifideck-install-btn.gpfocus {
   background: linear-gradient(135deg, #1a9fff 0%, #1570b5 100%) !important;
   box-shadow: 0 0 0 2px rgba(26, 159, 255, 0.55) inset !important;
 }
 .unifideck-cancel-btn:hover,
+.unifideck-cancel-btn:focus,
+.unifideck-cancel-btn:focus-within,
 .unifideck-cancel-btn.gpfocus {
   background: linear-gradient(135deg, #dc3545 0%, #c82333 100%) !important;
   box-shadow: 0 0 0 2px rgba(220, 53, 69, 0.55) inset !important;
 }
 .unifideck-play-btn:hover,
+.unifideck-play-btn:focus,
+.unifideck-play-btn:focus-within,
 .unifideck-play-btn.gpfocus {
   background: linear-gradient(135deg, #59bf40 0%, #459e31 100%) !important;
   box-shadow: 0 0 0 2px rgba(89, 191, 64, 0.55) inset !important;
 }
 .unifideck-resume-btn:hover,
+.unifideck-resume-btn:focus,
+.unifideck-resume-btn:focus-within,
 .unifideck-resume-btn.gpfocus {
   background: linear-gradient(135deg, #1a9fff 0%, #1570b5 100%) !important;
   box-shadow: 0 0 0 2px rgba(26, 159, 255, 0.55) inset !important;
@@ -64,6 +85,8 @@ const CSS = `
   background: rgba(255, 255, 255, 0.22) !important;
 }
 .unifideck-update-btn:hover,
+.unifideck-update-btn:focus,
+.unifideck-update-btn:focus-within,
 .unifideck-update-btn.gpfocus {
   background: linear-gradient(135deg, #f4b400 0%, #d09100 100%) !important;
   box-shadow: 0 0 0 2px rgba(244, 180, 0, 0.55) inset !important;
@@ -169,15 +192,35 @@ const CSS = `
   color: rgba(255, 255, 255, 0.55);
   letter-spacing: 0.02em;
 }
+
+/* QuickAccess "Recently finished" → green Play badge. Solid green
+ * base; brighten + ring on hover / focus / gamepad-focus so it
+ * reads as the active "go" action next to the status badge. */
+.unifideck-download-play-btn {
+  background: #22c55e !important;
+  transition: filter 0.15s ease, box-shadow 0.15s ease !important;
+}
+.unifideck-download-play-btn:hover,
+.unifideck-download-play-btn:focus,
+.unifideck-download-play-btn:focus-within,
+.unifideck-download-play-btn.gpfocus {
+  filter: brightness(1.15) !important;
+  box-shadow: 0 0 0 2px rgba(34, 197, 94, 0.7) !important;
+}
 `;
 
-/** Inject the focus CSS into <head> exactly once. */
+/** Inject the focus CSS into <head> exactly once.
+ *
+ *  Prefer rendering {@link PLAY_FOCUS_CSS} inline via `<style>` in
+ *  the component subtree (see PlayShell / DownloadsTab) — that's
+ *  what reliably lands the rules in the right CEF document. This
+ *  head-injection is kept as a harmless fallback. */
 export function injectPlayFocusStyles(): void {
   if (typeof document === "undefined") return;
   if (document.getElementById(STYLE_ID)) return;
 
   const style = document.createElement("style");
   style.id = STYLE_ID;
-  style.textContent = CSS;
+  style.textContent = PLAY_FOCUS_CSS;
   document.head.appendChild(style);
 }

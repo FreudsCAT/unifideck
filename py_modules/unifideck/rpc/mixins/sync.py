@@ -5,10 +5,14 @@ OP-26f | rpc/mixins/sync.py
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import os
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
+
+from unifideck.services.size_cache import get_size_cache
 
 logger = logging.getLogger(__name__)
 
@@ -227,6 +231,16 @@ class SyncRPCMixin:
         game_id = info.get("store_game_id")
         if not store or not game_id:
             return 0
+
+        # Persistent cache: a not-installed download size is stable, and
+        # the live lookup (legendary/gogdl) takes seconds — so cache it
+        # to disk and serve instantly on every later open, even across
+        # restarts / reinstalls (the file lives in the data dir).
+        cache = get_size_cache(self._size_cache_path())
+        cached = await cache.get(store, game_id)
+        if cached is not None:
+            return cached
+
         adapter = self.registry.get_store(store) if self.registry else None
         if adapter is None or not hasattr(adapter, "get_game_size"):
             return 0
@@ -241,7 +255,23 @@ class SyncRPCMixin:
                 store, game_id, exc_info=True,
             )
             return 0
-        return int(size or 0)
+        size_int = int(size or 0)
+        if size_int > 0:
+            await cache.put(store, game_id, size_int)
+        return size_int
+
+    def _size_cache_path(self) -> str:
+        """Path to the persistent download-size cache (in the data dir)."""
+        data_dir = "~/.local/share/unifideck"
+        cfg = getattr(self, "config", None)
+        if cfg is not None:
+            with contextlib.suppress(Exception):
+                data_dir = (
+                    cfg.get("paths.data_dir", None)
+                    or cfg.get("data_dir", data_dir)
+                    or data_dir
+                )
+        return str(Path(data_dir).expanduser() / "game_sizes.json")
 
     services: Any
     cache: Any

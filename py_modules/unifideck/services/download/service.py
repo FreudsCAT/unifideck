@@ -12,11 +12,12 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from unifideck.core.types import Result
 
-from .models import DownloadItem
+from .models import MAX_FINISHED_HISTORY, DownloadItem
 from .persistence import load_queue, save_queue
 from .validators import validate_path
 from .worker import _WorkerMixin
@@ -43,6 +44,11 @@ class DownloadService(_WorkerMixin):
         self._bus = bus
         self._registry = registry
         self._queue_file = queue_file
+        # Finished-history file — a sibling of the queue file (so it
+        # lives under ~/.local/share/unifideck and survives plugin
+        # reinstalls). Unlike the queue (pending items only), this
+        # persists the "Recently finished" list across restarts.
+        self._history_file = str(Path(queue_file).parent / "download_history.json")
         self._max_concurrent = max_concurrent
         self._launcher_path = launcher_path
 
@@ -69,6 +75,7 @@ class DownloadService(_WorkerMixin):
             return
 
         await self._load_queue()
+        await self._load_history()
 
         # Emit queued event for all items restored from disk
         if self._bus:
@@ -94,6 +101,7 @@ class DownloadService(_WorkerMixin):
             logger.info("[DownloadService] worker task stopped")
 
         await self._save_queue()
+        await self._save_history()
 
     async def add(
         self,
@@ -237,3 +245,24 @@ class DownloadService(_WorkerMixin):
             await save_queue(self._queue_file, self._queue)
         except Exception as e:
             logger.warning("[DownloadService] failed to save queue: %s", e)
+
+    async def _load_history(self) -> None:
+        """Restore the recently-finished history from disk.
+
+        Reuses the queue JSON codec (it's a generic ``list[DownloadItem]``).
+        Capped to the most-recent ``MAX_FINISHED_HISTORY`` so a large
+        on-disk file can't grow the in-memory list unbounded.
+        """
+        try:
+            items = await load_queue(self._history_file)
+            self._finished = items[-MAX_FINISHED_HISTORY:]
+        except Exception as e:
+            logger.warning("[DownloadService] failed to load history, starting empty: %s", e)
+            self._finished = []
+
+    async def _save_history(self) -> None:
+        """Persist the recently-finished history (most-recent N) to disk."""
+        try:
+            await save_queue(self._history_file, self._finished[-MAX_FINISHED_HISTORY:])
+        except Exception as e:
+            logger.warning("[DownloadService] failed to save history: %s", e)
