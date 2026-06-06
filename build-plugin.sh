@@ -465,6 +465,7 @@ build_local() {
         "py_modules/unifideck/rpc/mixins/config_validation.py"
         "py_modules/unifideck/rpc/mixins/storage.py"
         "py_modules/unifideck/rpc/mixins/ui.py"
+        "py_modules/unifideck/rpc/mixins/updater.py"
 
         # Layer 4 — Store connectors (3rd party API implementations)
         "py_modules/unifideck/stores/__init__.py"
@@ -493,6 +494,8 @@ build_local() {
         "py_modules/unifideck/services/metadata_service.py"
         "py_modules/unifideck/services/account_service.py"
         "py_modules/unifideck/services/proton_service.py"
+        "py_modules/unifideck/services/updater/__init__.py"
+        "py_modules/unifideck/services/updater/service.py"
 
         # Support packages
         "py_modules/unifideck/auth/__init__.py"
@@ -773,7 +776,9 @@ main() {
     fi
 
     # Auto-install if requested
-    [[ "$INSTALL_AFTER" == "install" ]] && install_plugin
+    if [[ "$INSTALL_AFTER" == "install" ]]; then
+        install_plugin
+    fi
 }
 
 main "$@"

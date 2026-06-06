@@ -41,6 +41,13 @@ async def unload_plugin(plugin: Any) -> None:
     hook) would log it and still proceed; we preserve that
     contract by letting stop_all_services handle its own errors.
     """
+    # Stop updater background polling first — lightweight, fast.
+    updater = getattr(plugin, "_updater_service", None)
+    if updater is not None:
+        try:
+            await updater.stop_polling()
+        except Exception:
+            logger.warning("[Unifideck] updater stop_polling failed")
     services = getattr(plugin, "services", None)
     if services is not None:
         await stop_all_services(services)

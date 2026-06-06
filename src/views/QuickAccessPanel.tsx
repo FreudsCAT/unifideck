@@ -25,7 +25,7 @@ import { useTranslation } from "react-i18next";
 import { useSync } from "../contexts/SyncContext";
 import {
   StoreConnections, LibrarySync, LanguageSelector,
-  GameDetailsViewModeToggle, CleanupSection,
+  GameDetailsViewModeToggle, CleanupSection, PluginUpdater,
 } from "../components/settings";
 import { DownloadsTab } from "../components/downloads";
 
@@ -85,6 +85,7 @@ export const QuickAccessPanel: FC = () => {
           <LibrarySync />
           <LanguageSelector />
           <GameDetailsViewModeToggle />
+          <PluginUpdater />
           <CleanupSection />
         </>
       )}

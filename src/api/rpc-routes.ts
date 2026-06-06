@@ -86,6 +86,10 @@ export const rpcRoutes = {
   // Account switch + migration (AccountRPCMixin)
   checkAccountSwitch:      "check_account_switch",
   migrateAccountData:      "migrate_account_data",
+  // Plugin self-update (UpdaterRPCMixin)
+  checkPluginUpdate:       "check_plugin_update",
+  getAvailableVersions:    "get_available_versions",
+  getReleaseNotes:         "get_release_notes",
 } as const;
 
 /**

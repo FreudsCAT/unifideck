@@ -92,6 +92,7 @@ async def boot_plugin(
     )
     _boot_layer4_stores(plugin, decky_plugin_dir)
     await _boot_layer5_services(plugin, pipeline, decky_plugin_dir)
+    await _boot_updater(plugin, decky_plugin_dir)
     logger.info("[Unifideck] plugin loaded")
 
 
@@ -238,3 +239,28 @@ async def _boot_layer5_services(
     if compat is not None:
         compat.wire_sync_service(plugin.sync_service)
     await start_async_services(plugin.services)
+
+
+async def _boot_updater(plugin: Any, decky_plugin_dir: str) -> None:
+    """Wire the self-updater service.
+
+    The UpdaterService is lightweight and independent of the
+    ServiceContainer — it only needs the EventBus and the path
+    to ``package.json`` to read the installed version. Constructed
+    separately so a failure here never blocks the rest of boot.
+
+    Starts the 6-hour background polling task so the plugin
+    can notify the frontend when a new version is available.
+    """
+    try:
+        from unifideck.services.updater import UpdaterService
+
+        package_json = str(Path(decky_plugin_dir) / "package.json")
+        svc = UpdaterService(plugin.bus, package_json)
+        plugin._updater_service = svc
+        await svc.start_polling()
+        logger.info("[Updater] service wired (v%s)", svc.get_current_version())
+    except Exception:
+        logger.exception("[Updater] failed to wire — update checking disabled")
+        plugin._updater_service = None
+

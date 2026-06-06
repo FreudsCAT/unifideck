@@ -13,3 +13,4 @@ export { LanguageSelector } from "./LanguageSelector";
 export { GameDetailsViewModeToggle } from "./GameDetailsViewModeToggle";
 export { CleanupSection } from "./CleanupSection";
 export { StoreAuthButton } from "./StoreAuthButton";
+export { PluginUpdater } from "./PluginUpdater";

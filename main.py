@@ -86,6 +86,7 @@ from unifideck.rpc.mixins.storage import StorageRPCMixin  # noqa: E402
 from unifideck.rpc.mixins.store import StoreRPCMixin  # noqa: E402
 from unifideck.rpc.mixins.sync import SyncRPCMixin  # noqa: E402
 from unifideck.rpc.mixins.ui import UIRPCMixin  # noqa: E402
+from unifideck.rpc.mixins.updater import UpdaterRPCMixin  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -107,6 +108,7 @@ class Plugin(
     PlaytimeRPCMixin,
     ActionRPCMixin,
     AccountRPCMixin,
+    UpdaterRPCMixin,
 ):
     """The Decky Loader plugin class.
 
