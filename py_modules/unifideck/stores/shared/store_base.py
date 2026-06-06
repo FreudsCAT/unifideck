@@ -96,6 +96,16 @@ class StoreBase(ABC):
     async def get_game_size(self, game_id: str) -> int | None:
         """Get game size."""
         ...
+
+    async def get_installed_path(self, game_id: str) -> str | None:
+        """Resolve the on-disk install directory for an installed game.
+
+        Used to compute the exact "Installed size" when the sync cache's
+        ``install_path`` is missing or stale. Default ``None`` (unknown);
+        stores that track installs locally override this — e.g. Epic
+        reads legendary's ``installed.json``.
+        """
+        return None
     def _find_binary(self, tool: CLITool) -> str | None:
         """Find binary.
 

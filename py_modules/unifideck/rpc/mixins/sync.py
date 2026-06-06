@@ -7,12 +7,12 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
-import os
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 from unifideck.services.size_cache import get_size_cache
+from unifideck.stores.shared.installed_size import installed_size_bytes
 
 logger = logging.getLogger(__name__)
 
@@ -20,34 +20,6 @@ logger = logging.getLogger(__name__)
 # (``store.get_game_size`` shells out to legendary / gogdl). Keeps the
 # ``get_game_size_bytes`` RPC from hanging on a slow or offline store.
 _SIZE_LOOKUP_TIMEOUT_S = 30.0
-
-
-def _dir_size_bytes(path: str) -> int:
-    """Sum the on-disk byte size of every regular file under ``path``.
-
-    Iterative ``os.scandir`` walk (reuses each ``DirEntry``'s cached
-    stat, so it's cheaper than ``os.walk`` + ``os.stat`` on large
-    install trees). Symlinks are not followed — avoids cycles and
-    double-counting. Unreadable entries are skipped: this only feeds
-    the "Space Required" display, so a partial total beats an error.
-    """
-    total = 0
-    stack = [path]
-    while stack:
-        current = stack.pop()
-        try:
-            with os.scandir(current) as it:
-                for entry in it:
-                    try:
-                        if entry.is_dir(follow_symlinks=False):
-                            stack.append(entry.path)
-                        elif entry.is_file(follow_symlinks=False):
-                            total += entry.stat(follow_symlinks=False).st_size
-                    except OSError:
-                        continue
-        except OSError:
-            continue
-    return total
 
 
 def _is_unifideck_owned(
@@ -220,15 +192,19 @@ class SyncRPCMixin:
         if not isinstance(info, dict):
             return 0
 
-        install_path = info.get("install_path")
-        if info.get("installed") and isinstance(install_path, str) and install_path:
-            try:
-                return await asyncio.to_thread(_dir_size_bytes, install_path)
-            except OSError:
-                return 0
-
         store = info.get("store")
         game_id = info.get("store_game_id")
+        adapter = (
+            self.registry.get_store(store) if (self.registry and store) else None
+        )
+
+        if info.get("installed"):
+            # Exact on-disk size — shared across all stores. See
+            # ``stores/shared/installed_size.py``.
+            return await installed_size_bytes(
+                adapter, info.get("install_path"), game_id,
+            )
+
         if not store or not game_id:
             return 0
 
@@ -241,7 +217,6 @@ class SyncRPCMixin:
         if cached is not None:
             return cached
 
-        adapter = self.registry.get_store(store) if self.registry else None
         if adapter is None or not hasattr(adapter, "get_game_size"):
             return 0
         try:

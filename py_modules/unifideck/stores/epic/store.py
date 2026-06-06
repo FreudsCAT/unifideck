@@ -26,6 +26,7 @@ appropriate sub-component.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from pathlib import Path
@@ -50,7 +51,11 @@ from unifideck.utils.config_helpers import get_cfg
 
 from .auth import EpicAuthFlow
 from .exe_resolver import EpicExeResolver
-from .install import EpicInstaller, ProgressCallback
+from .install import (
+    EpicInstaller,
+    ProgressCallback,
+    _read_legendary_install_path,
+)
 from .library import EpicLibraryReader, merge_install_status
 from .updates import EpicUpdateChecker
 
@@ -330,3 +335,13 @@ class EpicStore(StoreBase):
     async def get_game_size(self, game_id: str) -> int | None:
         """Get game size."""
         return await self._updates.get_game_size(game_id)
+
+    async def get_installed_path(self, game_id: str) -> str | None:
+        """On-disk install dir, read from legendary's ``installed.json``.
+
+        The sync cache often lands Epic installs with ``install_path =
+        None`` (they're detected during sync, not via our worker), so
+        the App-Details "Installed size" needs this to find the real
+        directory and measure it. Local file read, off the event loop.
+        """
+        return await asyncio.to_thread(_read_legendary_install_path, game_id)

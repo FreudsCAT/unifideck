@@ -297,6 +297,17 @@ class AmazonStore(StoreBase):
         """Get game size."""
         return await self._updates.get_game_size(game_id)
 
+    async def get_installed_path(self, game_id: str) -> str | None:
+        """On-disk install dir for an installed Amazon game (nile records).
+
+        Lets the App-Details "Installed size" find the real directory
+        when the sync cache's ``install_path`` is missing/stale.
+        """
+        installed = await self._library.read_installed_ids()
+        info = installed.get(game_id) if isinstance(installed, dict) else None
+        path = info.get("path") if isinstance(info, dict) else None
+        return path if isinstance(path, str) and path else None
+
     async def get_official_url(self, game_id: str) -> str | None:
         """Get official URL."""
         return await self._library.get_official_url(game_id)

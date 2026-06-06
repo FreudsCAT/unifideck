@@ -28,6 +28,7 @@ etc. — every method is delegated to the appropriate sub-component.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any, cast
@@ -190,6 +191,19 @@ class UbisoftStore(StoreBase):
     ) -> int | None:
         """Get game size."""
         return None
+
+    async def get_installed_path(self, game_id: str) -> str | None:
+        """On-disk install dir for an installed Ubisoft game.
+
+        Lets the App-Details "Installed size" find the real directory
+        when the sync cache's ``install_path`` is missing/stale. The
+        prefix/library scan is filesystem I/O, so run it off the loop.
+        """
+        info = await asyncio.to_thread(
+            self._library.get_installed_game_info, game_id,
+        )
+        path = info.get("install_path") if isinstance(info, dict) else None
+        return path if isinstance(path, str) and path else None
 
     async def get_installed(self) -> dict[str, Any]:
         """Get installed."""

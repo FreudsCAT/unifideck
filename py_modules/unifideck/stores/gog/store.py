@@ -327,6 +327,19 @@ class GOGStore(StoreBase):
         )
         return size if size > 0 else None
 
+    async def get_installed_path(self, game_id: str) -> str | None:
+        """On-disk install dir for an installed GOG game.
+
+        Lets the App-Details "Installed size" find the real directory
+        when the sync cache's ``install_path`` is missing/stale. The
+        library scan is filesystem I/O, so run it off the event loop.
+        """
+        info = await asyncio.to_thread(
+            self._library.get_installed_game_info, game_id,
+        )
+        path = info.get("install_path") if isinstance(info, dict) else None
+        return path if isinstance(path, str) and path else None
+
     async def get_game_dlcs(self, game_id: str) -> list[dict[str, Any]]:
         """Get game dlcs."""
         return await self._dlc.get_game_dlcs(game_id)
