@@ -4,9 +4,11 @@ import {
   PanelSectionRow,
   ButtonItem,
   Dropdown,
+  ProgressBarWithInfo,
   showModal,
 } from "@decky/ui";
 import { useTranslation } from "react-i18next";
+import type { TFunction } from "i18next";
 import { call } from "@decky/api";
 import { useRPCQuery } from "../../api/useRPC";
 import { rpcRoutes } from "../../api/rpc-routes";
@@ -14,12 +16,18 @@ import { useToast } from "../../hooks/useToast";
 import { ReleaseNotesModal } from "../modals/ReleaseNotesModal";
 
 interface ReleaseInfo {
+  tag: string;
   version: string;
   prerelease: boolean;
   asset_url: string;
   sha256: string;
   body: string;
 }
+
+// Decky PluginInstallType (backend enums.py / browser.py PluginInstallType)
+const INSTALL_TYPE_REINSTALL = 1;
+const INSTALL_TYPE_UPDATE = 2;
+const INSTALL_TYPE_DOWNGRADE = 3;
 
 const compareVersions = (a: string, b: string) => {
   const parse = (v: string) => v.split(".").map((x) => parseInt(x, 10) || 0);
@@ -34,13 +42,57 @@ const compareVersions = (a: string, b: string) => {
   return 0;
 };
 
+// Map Decky's download_progress_info.* keys to short, human status text.
+const stageLabel = (key: string | undefined, t: TFunction): string => {
+  const suffix = (key ?? "").split(".").pop() ?? "";
+  switch (suffix) {
+    case "start":
+      return t("updater.stageStart", { defaultValue: "Starting…" });
+    case "download_zip":
+    case "increment_count":
+      return t("updater.stageDownload", { defaultValue: "Downloading…" });
+    case "open_zip":
+      return t("updater.stageOpen", { defaultValue: "Reading package…" });
+    case "parse_zip":
+      return t("updater.stageParse", { defaultValue: "Verifying…" });
+    case "uninstalling_previous":
+      return t("updater.stageRemove", { defaultValue: "Removing old version…" });
+    case "installing_plugin":
+      return t("updater.stageInstall", { defaultValue: "Installing…" });
+    case "download_remote":
+      return t("updater.stageFinish", { defaultValue: "Finishing…" });
+    default:
+      return t("updater.stageWorking", { defaultValue: "Installing…" });
+  }
+};
+
+// Best-effort lifecycle logging into the Unifideck log dir (per-session).
+// The backend may be mid-reload near the end of an install, so failures are ignored.
+const logEvent = (stage: string, detail: string) => {
+  void call<[string, string], unknown>(rpcRoutes.logUpdateEvent, stage, detail).catch(() => {});
+};
+
+// Selected release tag, persisted across QAM mount/unmount — the Quick-Access
+// panel dismounts when closed (and when the Dropdown overlay opens), which would
+// otherwise reset the selection back to the default. Mirrors `persistentActiveTab`
+// in QuickAccessPanel.tsx. Cleared naturally when the plugin reloads after install.
+let persistentSelectedTag: string | null = null;
+
 export const PluginUpdater: FC = () => {
   const { t } = useTranslation();
   const toast = useToast();
 
-  const [selectedVersion, setSelectedVersion] = useState<string>("");
+  // The selected release is identified by its unique tag (not the parsed
+  // version, which could collide between a stable and a prerelease).
+  const [selectedTag, setSelectedTag] = useState<string>("");
   const [installing, setInstalling] = useState(false);
   const [checking, setChecking] = useState(false);
+
+  // Live install progress mirrored from Decky's loader events.
+  const [downloadActive, setDownloadActive] = useState(false);
+  const [downloadPercent, setDownloadPercent] = useState(0);
+  const [downloadStatus, setDownloadStatus] = useState("");
+  const downloadActiveRef = useRef(false);
 
   // Fetch updates status
   const { data: updateData, loading: checkingOnMount, refetch: checkUpdate } = useRPCQuery<
@@ -57,20 +109,66 @@ export const PluginUpdater: FC = () => {
   const currentVersion = updateData?.current ?? "0.0.0";
   const initializedRef = useRef(false);
 
-  // Set default selected version when data loads
+  // Seed the selection when data loads. Restore a prior selection (persisted
+  // across QAM remounts) if it still resolves to an available release; otherwise
+  // default to the installed version, then latest, then newest.
   useEffect(() => {
     if (updateData && versionsData && !initializedRef.current) {
-      const hasCurrent = versionsData.some((v) => v.version === currentVersion);
-      if (hasCurrent) {
-        setSelectedVersion(currentVersion);
-      } else if (updateData.latest) {
-        setSelectedVersion(updateData.latest.version);
-      } else if (versionsData.length > 0) {
-        setSelectedVersion(versionsData[0].version);
+      if (persistentSelectedTag && versionsData.some((v) => v.tag === persistentSelectedTag)) {
+        setSelectedTag(persistentSelectedTag);
+      } else {
+        const current = versionsData.find((v) => v.version === currentVersion);
+        const tag = current?.tag ?? updateData.latest?.tag ?? versionsData[0]?.tag ?? "";
+        persistentSelectedTag = tag || null;
+        setSelectedTag(tag);
       }
       initializedRef.current = true;
     }
   }, [updateData, versionsData, currentVersion]);
+
+  // Subscribe to Decky's loader install events to mirror progress in-panel.
+  useEffect(() => {
+    const backend = window.DeckyBackend;
+    if (!backend) return;
+
+    const onStart = (name: string) => {
+      if (name !== "Unifideck") return;
+      downloadActiveRef.current = true;
+      setDownloadActive(true);
+      setDownloadPercent(0);
+      setDownloadStatus(stageLabel("start", t));
+      logEvent("download_start", name);
+    };
+    const onInfo = (percent: number, key?: string) => {
+      if (!downloadActiveRef.current) return;
+      setDownloadPercent(percent);
+      setDownloadStatus(stageLabel(key, t));
+      logEvent("progress", `${percent}% ${key ?? ""}`.trim());
+    };
+    const onFinish = (name: string) => {
+      if (name !== "Unifideck") return;
+      downloadActiveRef.current = false;
+      setDownloadPercent(100);
+      setDownloadActive(false);
+      logEvent("download_finish", name);
+    };
+
+    backend.addEventListener("loader/plugin_download_start", onStart);
+    backend.addEventListener("loader/plugin_download_info", onInfo);
+    backend.addEventListener("loader/plugin_download_finish", onFinish);
+    return () => {
+      backend.removeEventListener("loader/plugin_download_start", onStart);
+      backend.removeEventListener("loader/plugin_download_info", onInfo);
+      backend.removeEventListener("loader/plugin_download_finish", onFinish);
+    };
+  }, [t]);
+
+  const selectedRelease = useMemo(() => {
+    if (!versionsData) return null;
+    return versionsData.find((v) => v.tag === selectedTag) || null;
+  }, [versionsData, selectedTag]);
+
+  const selectedVersion = selectedRelease?.version ?? "";
 
   // Format dropdown options
   const versionOptions = useMemo(() => {
@@ -88,19 +186,16 @@ export const PluginUpdater: FC = () => {
       }
 
       return {
-        data: v.version,
+        data: v.tag,
         label,
       };
     });
   }, [versionsData, currentVersion, updateData, t]);
 
-  const selectedRelease = useMemo(() => {
-    if (!versionsData) return null;
-    return versionsData.find((v) => v.version === selectedVersion) || null;
-  }, [versionsData, selectedVersion]);
-
-  const handleVersionSelect = (opt: any) => {
-    setSelectedVersion(String(opt.data));
+  const handleVersionSelect = (opt: { data: string }) => {
+    const tag = String(opt.data);
+    persistentSelectedTag = tag; // survive the QAM dismount that follows selection
+    setSelectedTag(tag);
   };
 
   const handleCheckUpdate = async () => {
@@ -134,49 +229,66 @@ export const PluginUpdater: FC = () => {
   const handleInstall = async () => {
     if (!selectedRelease) return;
 
+    const backend = window.DeckyBackend;
+    if (!backend) {
+      toast.error(
+        t("updater.installFailedTitle", { defaultValue: "Install Failed" }),
+        t("updater.noBackend", { defaultValue: "Decky backend is unavailable." })
+      );
+      return;
+    }
+
     setInstalling(true);
     try {
       const cmp = compareVersions(selectedVersion, currentVersion);
-      let installType = 2; // UPDATE
+      let installType = INSTALL_TYPE_UPDATE;
       let typeLabel = t("updater.typeUpdate", { defaultValue: "Updating to" });
 
       if (cmp === 0) {
-        installType = 1; // REINSTALL
+        installType = INSTALL_TYPE_REINSTALL;
         typeLabel = t("updater.typeReinstall", { defaultValue: "Reinstalling" });
       } else if (cmp < 0) {
-        installType = 3; // DOWNGRADE
+        installType = INSTALL_TYPE_DOWNGRADE;
         typeLabel = t("updater.typeDowngrade", { defaultValue: "Downgrading to" });
       }
 
+      logEvent(
+        "triggered",
+        `${typeLabel} v${selectedVersion} (type=${installType}) url=${selectedRelease.asset_url}`
+      );
       toast.info(
         t("updater.installingTitle", { defaultValue: "Installing Plugin" }),
         `${typeLabel} v${selectedVersion}...`
       );
 
-      // Trigger Decky's native install helper
-      try {
-        await call<[string, string, string, string | boolean, number], unknown>(
-          "utilities/install_plugin",
-          selectedRelease.asset_url,
-          "Unifideck",
-          selectedRelease.version,
-          selectedRelease.sha256 || false,
-          installType
-        );
-      } catch (e) {
-        // Ignored because reload will drop the websocket connection, throwing an error
-        console.log("[Updater] Connection reset due to plugin reload/install:", e);
-      }
+      // Hand off to Decky Loader's installer via the GLOBAL ws router.
+      // (`call` from @decky/api is plugin-scoped and cannot reach utilities/*.)
+      // This only registers the request and pops Decky's native confirm modal
+      // (which has its own progress bar); it returns immediately. Decky's modal
+      // calls confirm_plugin_install on OK; our listeners mirror the progress.
+      await backend.call(
+        "utilities/install_plugin",
+        selectedRelease.asset_url,
+        "Unifideck",
+        selectedRelease.version,
+        selectedRelease.sha256 || "",
+        installType
+      );
     } catch (e: any) {
+      logEvent("error", e?.message ?? String(e));
       toast.error(
         t("updater.installFailedTitle", { defaultValue: "Install Failed" }),
         e?.message ?? t("errors.unknown")
       );
+    } finally {
+      // The call returns before the install runs; never leave the panel locked.
+      // Decky's confirm modal + the loader progress events own the rest.
       setInstalling(false);
     }
   };
 
   const isLoading = checkingOnMount || loadingVersions;
+  const busy = installing || downloadActive || checking;
 
   // Render header title
   const sectionTitle = useMemo(() => {
@@ -200,21 +312,32 @@ export const PluginUpdater: FC = () => {
             <PanelSectionRow>
               <Dropdown
                 rgOptions={versionOptions}
-                selectedOption={selectedVersion}
+                selectedOption={selectedTag}
                 onChange={handleVersionSelect}
-                disabled={installing || checking}
+                disabled={downloadActive || checking}
               />
             </PanelSectionRow>
           )}
 
-          {selectedVersion && (
+          {downloadActive && (
+            <PanelSectionRow>
+              <ProgressBarWithInfo
+                layout="inline"
+                bottomSeparator="none"
+                nProgress={downloadPercent}
+                sOperationText={downloadStatus}
+              />
+            </PanelSectionRow>
+          )}
+
+          {selectedRelease && (
             <PanelSectionRow>
               <ButtonItem
                 layout="below"
                 onClick={handleInstall}
-                disabled={installing || checking}
+                disabled={busy}
               >
-                {installing
+                {downloadActive
                   ? t("updater.installingButton", { defaultValue: "Installing..." })
                   : selectedVersion === currentVersion
                   ? t("updater.reinstallButton", { defaultValue: `Reinstall v${selectedVersion}` })
@@ -230,7 +353,7 @@ export const PluginUpdater: FC = () => {
               <ButtonItem
                 layout="below"
                 onClick={handleShowReleaseNotes}
-                disabled={installing || checking}
+                disabled={busy}
               >
                 {t("updater.releaseNotesButton", { defaultValue: "Release Notes" })}
               </ButtonItem>
@@ -241,7 +364,7 @@ export const PluginUpdater: FC = () => {
             <ButtonItem
               layout="below"
               onClick={handleCheckUpdate}
-              disabled={installing || checking}
+              disabled={busy}
             >
               {checking
                 ? t("updater.checkingButton", { defaultValue: "Checking..." })

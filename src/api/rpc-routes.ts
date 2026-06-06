@@ -90,6 +90,7 @@ export const rpcRoutes = {
   checkPluginUpdate:       "check_plugin_update",
   getAvailableVersions:    "get_available_versions",
   getReleaseNotes:         "get_release_notes",
+  logUpdateEvent:          "log_update_event",
 } as const;
 
 /**

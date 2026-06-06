@@ -80,3 +80,19 @@ class UpdaterRPCMixin:
         if release is None:
             return ""
         return release.body
+
+    async def log_update_event(self, stage: str, detail: str) -> None:
+        """Record a plugin-install lifecycle event in the Unifideck log.
+
+        The actual download/unzip/reload runs in Decky's loader process
+        (which logs to journald), so the updater UI calls this at each
+        stage — trigger, ``download_start``, progress milestones,
+        ``download_finish``, and errors — to leave a readable install
+        trace in ``/home/deck/homebrew/logs/Unifideck/``.
+
+        Args:
+            stage: short lifecycle marker (e.g. ``"triggered"``,
+                ``"progress"``, ``"download_finish"``, ``"error"``).
+            detail: free-form context (version, asset URL, percent, …).
+        """
+        logger.info("[Updater] install %s — %s", stage, detail)
