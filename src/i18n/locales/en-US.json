@@ -153,7 +153,9 @@
     "unifidbMetadataDownloaded": "unifiDB metadata: {{synced}} / {{total}}",
     "metacriticMetadataDownloaded": "Metacritic data: {{synced}} / {{total}}",
     "rawgMetadataDownloaded": "RAWG metadata: {{synced}} / {{total}}",
-    "compatChecked": "Compatibility data: {{synced}} / {{total}}"
+    "compatChecked": "Compatibility data: {{synced}} / {{total}}",
+    "cancelling": "Cancelling…",
+    "error": "Error"
   },
   "cleanup": {
     "title": "Cleanup",
@@ -308,6 +310,7 @@
     "updateCancelledMessage": "Update for {{title}} was cancelled.",
     "updateFailed": "Update Failed",
     "updateFailedMessage": "Failed to start update.",
+    "storeError": "Failed to communicate with {{store}} ({{errType}})",
     "actions": {
       "_comment": "Action button labels rendered next to toasts when the backend payload includes an ``action`` field. Each one is a one-click remediation for a specific error code. Steam URLs use SteamClient.URL.ExecuteSteamURL; unifideck:// URLs are dispatched through the dispatch_unifideck_action RPC (backend verbs) or handled locally (frontend verbs). See LauncherToastListener.tsx + actions/unifideck_uri.py.",
       "openStorageManager": "Free up space",
@@ -606,7 +609,8 @@
     "cancelConfirmTitle": "Cancel download?",
     "cancelConfirmBody": "Are you sure you want to cancel the download for {{title}}? Partial files will be discarded.",
     "cancelConfirmConfirm": "Cancel download",
-    "cancelConfirmCancel": "Keep downloading"
+    "cancelConfirmCancel": "Keep downloading",
+    "playOnCloud": "Play on Cloud"
   },
   "playMeta": {
     "spaceRequired": "Space required",
@@ -811,5 +815,43 @@
     "customLabel": "Custom Location",
     "change": "Change...",
     "gameSize": "Install Size"
+  },
+  "restart": {
+    "title": "Sync Complete!",
+    "body": "Please Restart Steam to apply your new games and artwork",
+    "confirm": "Restart Now",
+    "later": "Later"
+  },
+  "updater": {
+    "checkButton": "Check for Updates",
+    "checkCompleteMessage": "Successfully fetched latest version info.",
+    "checkCompleteTitle": "Update Check Complete",
+    "checkFailedTitle": "Check Failed",
+    "checkingButton": "Checking...",
+    "currentTitle": "Current",
+    "downgradeButton": "Downgrade to v{{version}}",
+    "installFailedTitle": "Install Failed",
+    "installedLabel": "installed",
+    "installingButton": "Installing...",
+    "installingTitle": "Installing Plugin",
+    "latestLabel": "latest",
+    "modalTitle": "UNIFIDECK v{{version}} — Release Notes",
+    "noBackend": "Decky backend is unavailable.",
+    "noReleaseNotes": "No release notes available.",
+    "reinstallButton": "Reinstall v{{version}}",
+    "releaseNotesButton": "Release Notes",
+    "stageDownload": "Downloading…",
+    "stageFinish": "Finishing…",
+    "stageInstall": "Installing…",
+    "stageOpen": "Reading package…",
+    "stageParse": "Verifying…",
+    "stageRemove": "Removing old version…",
+    "stageStart": "Starting…",
+    "stageWorking": "Installing…",
+    "titleLoading": "Checking version",
+    "typeDowngrade": "Downgrading to",
+    "typeReinstall": "Reinstalling",
+    "typeUpdate": "Updating to",
+    "updateButton": "Update to v{{version}}"
   }
 }

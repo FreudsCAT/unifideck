@@ -168,6 +168,7 @@ export const ReleaseNotesModal: FC<Props> = ({ version, body, closeModal }) => {
   return (
     <ConfirmModal
       strTitle={t("updater.modalTitle", {
+        version,
         defaultValue: `UNIFIDECK v${version} — Release Notes`,
       })}
       strOKButtonText={t("common.ok", { defaultValue: "OK" })}

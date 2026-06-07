@@ -374,13 +374,16 @@ export const PluginUpdater: FC = () => {
                     })
                   : selectedVersion === currentVersion
                   ? t("updater.reinstallButton", {
+                      version: selectedVersion,
                       defaultValue: `Reinstall v${selectedVersion}`,
                     })
                   : compareVersions(selectedVersion, currentVersion) < 0
                   ? t("updater.downgradeButton", {
+                      version: selectedVersion,
                       defaultValue: `Downgrade to v${selectedVersion}`,
                     })
                   : t("updater.updateButton", {
+                      version: selectedVersion,
                       defaultValue: `Update to v${selectedVersion}`,
                     })}
               </ButtonItem>
