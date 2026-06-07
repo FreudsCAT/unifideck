@@ -19,7 +19,7 @@ on:
       - "pyproject.toml"
       - "requirements*.txt"
       - "package.json"
-      - "package-lock.json"
+      - "pnpm-lock.yaml"
       - "tsconfig.json"
       - ".github/workflows/quality.yml"
   push:
@@ -127,30 +127,35 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
           node-version: "20"
-          cache: npm
+          cache: pnpm
 
       - name: Install dependencies
-        run: npm ci
+        run: pnpm install --frozen-lockfile
 
       # ── Gate 5: ESLint (hard) ───────────────────────────
-      # `npm run lint` runs eslint on src/ with the rules from
+      # `pnpm run lint` runs eslint on src/ with the rules from
       # .eslintrc.json. Catches React hook misuse, unused vars,
       # any-typed members, and project-specific rules the
       # Decky frontend relies on. Must be clean.
       - name: eslint (hard gate)
-        run: npm run lint
+        run: pnpm run lint
 
       # ── Gate 6: Prettier --check (hard) ─────────────────
-      # `npm run check:prettier` runs prettier in check-only
+      # `pnpm run check:prettier` runs prettier in check-only
       # mode against .prettierrc. Hard-gates on any formatting
-      # drift. Dev workflow: `npm run fix:prettier` locally
+      # drift. Dev workflow: `pnpm run fix:prettier` locally
       # before pushing.
       - name: prettier --check (hard gate)
-        run: npm run check:prettier
+        run: pnpm run check:prettier
 
       # ── Gate 7: TypeScript strict check ────────────────────
       # `tsc --noEmit` runs the compiler in strict mode from
@@ -158,4 +163,4 @@ jobs:
       # does for Python: signature drift, unreachable paths,
       # wrong union narrowing. Must be clean.
       - name: tsc --noEmit (hard gate)
-        run: npm run typecheck
+        run: pnpm run typecheck

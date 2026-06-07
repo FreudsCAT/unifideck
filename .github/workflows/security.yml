@@ -21,7 +21,7 @@ on:
       - "src/**"
       - "requirements*.txt"
       - "package.json"
-      - "package-lock.json"
+      - "pnpm-lock.yaml"
       - ".github/workflows/security.yml"
   push:
     branches: [new_architecture, staging, main]
