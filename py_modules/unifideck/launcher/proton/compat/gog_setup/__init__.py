@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import contextlib
 import logging
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from .common import (
     get_dependencies,
@@ -34,6 +34,8 @@ from .scripts import (
 )
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
     from unifideck.launcher.proton.infrastructure.core import ProtonLaunchPlan
 
 logger = logging.getLogger(__name__)
@@ -41,7 +43,7 @@ logger = logging.getLogger(__name__)
 _MARKER_NAME = ".unifideck-gog-setup-done"
 
 
-def _prefix_root(plan: ProtonLaunchPlan):
+def _prefix_root(plan: ProtonLaunchPlan) -> Path:
     p = plan.prefix_path.resolve()
     while p.name == "pfx":
         p = p.parent
@@ -67,39 +69,58 @@ async def apply_gog_setup(
     manifest = load_manifest(game_id)
     if manifest is None:
         # Nothing to set up, but apply any registry script the game ships.
-        await apply_script_registry(plan, game_id, install_path)
-        _write_marker(marker)
+        await _finalize_setup(plan, game_id, install_path, marker)
         return
 
     deps = get_dependencies(manifest)
     logger.info("[gog_setup] %s deps: %s", game_id, ", ".join(deps) or "none")
-
     if deps:
         await ensure_redist_downloaded(plan, deps)
-
-    if manifest.get("version") == 2:
-        if manifest.get("scriptInterpreter"):
-            await run_script_interpreter(
-                plan, game_id, manifest, install_path, language,
-            )
-        else:
-            await run_temp_executable(
-                plan, game_id, manifest, install_path, language,
-            )
-
+    await _run_setup_scripts(plan, game_id, manifest, install_path, language)
     if deps:
-        redist_manifest = load_redist_manifest()
-        if redist_manifest is not None:
-            await install_redistributables(plan, deps, redist_manifest)
-        else:
-            logger.warning("[gog_setup] no redist manifest found")
+        await _install_redists(plan, deps)
+    await _finalize_setup(plan, game_id, install_path, marker)
 
+
+async def _run_setup_scripts(
+    plan: ProtonLaunchPlan,
+    game_id: str,
+    manifest: dict[str, Any],
+    install_path: str,
+    language: str,
+) -> None:
+    """Run the v2 scriptInterpreter / temp-executable setup step, if any."""
+    if manifest.get("version") != 2:
+        return
+    if manifest.get("scriptInterpreter"):
+        await run_script_interpreter(
+            plan, game_id, manifest, install_path, language,
+        )
+    else:
+        await run_temp_executable(
+            plan, game_id, manifest, install_path, language,
+        )
+
+
+async def _install_redists(plan: ProtonLaunchPlan, deps: list[str]) -> None:
+    """Install downloaded redistributables from the redist manifest."""
+    redist_manifest = load_redist_manifest()
+    if redist_manifest is None:
+        logger.warning("[gog_setup] no redist manifest found")
+        return
+    await install_redistributables(plan, deps, redist_manifest)
+
+
+async def _finalize_setup(
+    plan: ProtonLaunchPlan, game_id: str, install_path: str, marker: Path,
+) -> None:
+    """Apply the game's registry script and write the done-marker."""
     await apply_script_registry(plan, game_id, install_path)
     _write_marker(marker)
     logger.info("[gog_setup] complete for %s", game_id)
 
 
-def _write_marker(marker) -> None:
+def _write_marker(marker: Path) -> None:
     with contextlib.suppress(OSError):
         marker.parent.mkdir(parents=True, exist_ok=True)
         marker.write_text("done", encoding="utf-8")

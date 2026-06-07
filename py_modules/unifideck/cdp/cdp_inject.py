@@ -89,7 +89,7 @@ _PLAY_BUTTON_TEXT_REGEX = (
     "Stáhnout|Εκκίνηση|Download|Keskeytä|Oppdater|Devam Et|Genoptag|Letöltés|"
     "Descarcă|Continuă|Aggiorna|Instalar|Загрузка|Pauzeren|Reanudar|Sospendi|"
     "Оновити|Scarica|Retomar|ダウンロード中|استئناف|Pobierz|ストリーミング|Opdater|"
-    "Preload|Yayınla|Streama|ติดตั้ง|Пускане|Spielen|Install|Сваляне|Mainkan|"
+    "Preload|Yayınla|Streama|ติดตั้ง|Пускане|Spielen|Install|Сваляне|Mainkan|"  # noqa: RUF001
     "Cài đặt|Pramuat|Päivitä|Szünet|Pausar|インストール|ダウンロード|Spelen|Update|"
     "อัปเดต|Baixar|다운로드 중|Stream|アップデート|Instal|Resume|Asenna|Играть|"
     "Tải về|Yükle|Pausa|미리 받기|Jugar|Spill|Παύση|Pelaa|Joacă|Lataa|تحديث|"
@@ -115,11 +115,16 @@ def _hide_play_js(app_id: int) -> str:
     Returns ``"hidden"`` / ``"not_found"`` / ``"too_large"`` so
     Python can log the outcome.
     """
-    app_id_str = str(app_id)
-    return (
-        '(function() {\n'
-        '    var appId = "' + app_id_str + '";\n'
-        '    var buttons = document.querySelectorAll(\'button, [class*="Focusable"]\');\n'
+    return _HIDE_PLAY_JS.replace("__APP_ID__", str(app_id))
+
+
+# The injected JS is data, not logic — kept as a module-level template
+# (regex inlined at import; per-call ``app_id`` substituted via the
+# ``__APP_ID__`` placeholder) so ``_hide_play_js`` stays a trivial wrapper.
+_HIDE_PLAY_JS = (
+    '(function() {\n'
+    '    var appId = "__APP_ID__";\n'
+    '    var buttons = document.querySelectorAll(\'button, [class*="Focusable"]\');\n'
         '    var playBtn = null;\n'
         '    var candidateCount = 0;\n'
         '    for (var i = 0; i < buttons.length; i++) {\n'

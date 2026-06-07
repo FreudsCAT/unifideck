@@ -18,7 +18,13 @@ import { useGameInfo } from "../../hooks/useGameInfo";
 import { useInstallFlow } from "../../hooks/useInstallFlow";
 import { useToast } from "../../hooks/useToast";
 import { SteamBridge } from "../../lib/steam-bridge";
-import { PlayShell, MetaInline, IconGroup, actionBtnStyle, iconBtnStyle } from "./PlayMeta";
+import {
+  PlayShell,
+  MetaInline,
+  IconGroup,
+  actionBtnStyle,
+  iconBtnStyle,
+} from "./PlayMeta";
 
 interface Props {
   appId: number;
@@ -28,18 +34,29 @@ interface Props {
 const defaultBridge = new SteamBridge();
 
 function openControllerConfig(appId: number): void {
-  (window as unknown as {
-    SteamClient?: { Apps?: { ShowControllerConfigurator?: (id: number) => void } };
-  }).SteamClient?.Apps?.ShowControllerConfigurator?.(appId);
+  (
+    window as unknown as {
+      SteamClient?: {
+        Apps?: { ShowControllerConfigurator?: (id: number) => void };
+      };
+    }
+  ).SteamClient?.Apps?.ShowControllerConfigurator?.(appId);
 }
 
 function openAppSettings(appId: number): void {
-  (window as unknown as {
-    SteamClient?: { Apps?: { OpenAppSettingsDialog?: (id: number, page: string) => void } };
-  }).SteamClient?.Apps?.OpenAppSettingsDialog?.(appId, "general");
+  (
+    window as unknown as {
+      SteamClient?: {
+        Apps?: { OpenAppSettingsDialog?: (id: number, page: string) => void };
+      };
+    }
+  ).SteamClient?.Apps?.OpenAppSettingsDialog?.(appId, "general");
 }
 
-export const NotInstalledButtons: FC<Props> = ({ appId, bridge = defaultBridge }) => {
+export const NotInstalledButtons: FC<Props> = ({
+  appId,
+  bridge = defaultBridge,
+}) => {
   const { t } = useTranslation();
   const { data: game, loading } = useGameInfo(appId);
   const installFlow = useInstallFlow(bridge);
@@ -71,7 +88,9 @@ export const NotInstalledButtons: FC<Props> = ({ appId, bridge = defaultBridge }
         style={actionBtnStyle}
       >
         <FaDownload />
-        {installFlow.isWorking ? t("playButton.installing") : t("playButton.install")}
+        {installFlow.isWorking
+          ? t("playButton.installing")
+          : t("playButton.install")}
       </DialogButton>
 
       <MetaInline sizeBytes={game?.size_bytes} showLastPlayed appId={appId} />

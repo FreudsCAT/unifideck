@@ -19,10 +19,10 @@ import { injectPlayFocusStyles } from "../play/play.css";
 
 interface Props {
   download: DownloadItem;
-  /** Left margin applied to the column — caller-controlled because
-   *  the play-section variant sits next to a Cancel button and
-   *  needs the gap, while the QAM panel doesn't. */
-  marginLeft?: number;
+  /** Inline-start margin applied to the column — caller-controlled
+   *  because the play-section variant sits next to a Cancel button
+   *  and needs the gap, while the QAM panel doesn't. */
+  marginInlineStart?: number;
 }
 
 function formatEta(secs: number): string {
@@ -55,16 +55,23 @@ function statusLabelKey(
     : "downloadsTab.downloadingLabel";
 }
 
-export const DownloadProgressRow: FC<Props> = ({ download, marginLeft = 0 }) => {
+export const DownloadProgressRow: FC<Props> = ({
+  download,
+  marginInlineStart = 0,
+}) => {
   const { t } = useTranslation();
   // The indeterminate slide animation lives in play.css.ts. QAM and the
   // App-Details patch render in different CEF documents, so each one
   // needs its own <style> injection — the helper is idempotent.
-  useEffect(() => { injectPlayFocusStyles(); }, []);
+  useEffect(() => {
+    injectPlayFocusStyles();
+  }, []);
   const indeterminate = isIndeterminate(download.download_phase);
   const pct = Math.max(0, Math.min(100, download.progress_percent));
   const prev = Boolean(download.is_update);
-  const label = t(statusLabelKey(download.status, download.download_phase, prev));
+  const label = t(
+    statusLabelKey(download.status, download.download_phase, prev),
+  );
 
   return (
     <div
@@ -72,7 +79,7 @@ export const DownloadProgressRow: FC<Props> = ({ download, marginLeft = 0 }) => 
         display: "flex",
         flexDirection: "column",
         gap: 6,
-        marginLeft,
+        marginInlineStart,
         flex: "1 1 auto",
         minWidth: 0,
       }}
@@ -125,18 +132,19 @@ export const DownloadProgressRow: FC<Props> = ({ download, marginLeft = 0 }) => 
       >
         {indeterminate ? (
           <span>
-            {download.phase_message ||
-              t("downloadsTab.finalizingInstallation")}
+            {download.phase_message || t("downloadsTab.finalizingInstallation")}
           </span>
         ) : (
           <>
             <span>
               {download.total_bytes > 0
-                ? `${formatBytes(download.downloaded_bytes)} / ${formatBytes(download.total_bytes)}`
+                ? `${formatBytes(download.downloaded_bytes)} / ${formatBytes(
+                    download.total_bytes,
+                  )}`
                 : `${pct.toFixed(1)}%`}
             </span>
             {download.status === "running" && (
-              <span style={{ marginLeft: "auto" }}>
+              <span style={{ marginInlineStart: "auto" }}>
                 {t("downloadsTab.speedMbps", {
                   speed: download.speed_mbps.toFixed(1),
                 })}

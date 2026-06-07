@@ -48,8 +48,7 @@ let cached: AppDetailsClassNames | null = null;
  *   callers should retry on the next animation frame).
  */
 export function getAppDetailsClasses(): AppDetailsClassNames {
-  if (cached)
-    return cached;
+  if (cached) return cached;
 
   cached = {
     details: pickFirstClass(appDetailsClasses),

@@ -37,14 +37,15 @@ const ROW_CONFIG: Partial<Record<StoreId, RowConfig>> = {
 };
 
 const StoreRow: FC<{ storeId: StoreId; displayName: string }> = ({
-  storeId, displayName,
+  storeId,
+  displayName,
 }) => {
   const { t } = useTranslation();
   const { status, busy, connect, disconnect } = useStoreAuth(storeId);
   const isConnected = status === "connected";
   const config = ROW_CONFIG[storeId];
-  const showNotInstalled = config?.notInstalledStatus
-    && status === config.notInstalledStatus;
+  const showNotInstalled =
+    config?.notInstalledStatus && status === config.notInstalledStatus;
   const [refreshing, setRefreshing] = useState(false);
 
   const onRefresh = useCallback(async () => {
@@ -61,10 +62,15 @@ const StoreRow: FC<{ storeId: StoreId; displayName: string }> = ({
 
   return (
     <div>
-      <div style={{
-        display: "flex", alignItems: "center", flexDirection: "row",
-        justifyContent: "space-between", padding: 0,
-      }}>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          flexDirection: "row",
+          justifyContent: "space-between",
+          padding: 0,
+        }}
+      >
         <div style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
           <StoreIcon
             store={storeId}
@@ -74,18 +80,31 @@ const StoreRow: FC<{ storeId: StoreId; displayName: string }> = ({
           <span style={{ fontSize: 14 }}>{displayName}</span>
           {isConnected && (
             <span
-              onClick={(e) => { e.stopPropagation(); void onRefresh(); }}
+              role="button"
+              tabIndex={0}
+              onClick={(e) => {
+                e.stopPropagation();
+                void onRefresh();
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.stopPropagation();
+                  void onRefresh();
+                }
+              }}
               style={{
                 cursor: refreshing ? "default" : "pointer",
                 opacity: refreshing ? 0.4 : 0.6,
-                marginLeft: 4,
+                marginInlineStart: 4,
               }}
               title={t("librarySync.refreshStore", "Refresh this store")}
             >
-              <FaSync style={{
-                fontSize: 11,
-                animation: refreshing ? "spin 1s linear infinite" : "none",
-              }} />
+              <FaSync
+                style={{
+                  fontSize: 11,
+                  animation: refreshing ? "spin 1s linear infinite" : "none",
+                }}
+              />
             </span>
           )}
         </div>

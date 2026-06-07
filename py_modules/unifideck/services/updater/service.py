@@ -121,7 +121,8 @@ class UpdaterService:
         """Read the installed plugin version from package.json."""
         try:
             data = json.loads(Path(self._package_json_path).read_text())
-            return data.get("version", "0.0.0")
+            version = data.get("version", "0.0.0")
+            return version if isinstance(version, str) else "0.0.0"
         except Exception:
             logger.warning("Could not read package.json for version")
             return "0.0.0"

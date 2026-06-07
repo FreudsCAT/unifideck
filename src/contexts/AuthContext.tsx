@@ -107,19 +107,19 @@ export const AuthProvider: FC<{ children: ReactNode }> = ({ children }) => {
         if (!cancelled) setStatuses(_parseStatuses(raw));
       })
       .catch(() => {});
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   // RPC mutations
-  const startMut = useRPCMutation<
-    [StoreId, "start"], AuthResult
-  >(rpcRoutes.storeAuth);
-  const logoutMut = useRPCMutation<
-    [StoreId, "logout"], Result
-  >(rpcRoutes.storeAuth);
-  const logoutAllMut = useRPCMutation<[], Result>(
-    rpcRoutes.clearStoreAuths,
+  const startMut = useRPCMutation<[StoreId, "start"], AuthResult>(
+    rpcRoutes.storeAuth,
   );
+  const logoutMut = useRPCMutation<[StoreId, "logout"], Result>(
+    rpcRoutes.storeAuth,
+  );
+  const logoutAllMut = useRPCMutation<[], Result>(rpcRoutes.clearStoreAuths);
 
   // Bus reactions — use the canonical STORE_* names from
   // `Events`. The legacy AUTH_COMPLETE / AUTH_FAILED /
@@ -158,17 +158,16 @@ export const AuthProvider: FC<{ children: ReactNode }> = ({ children }) => {
     setStatuses({});
   }, [logoutAllMut]);
 
-  const notifyConnected = useCallback(
-    (store: StoreId) => {
-      setStatuses((s) => ({ ...s, [store]: "connected" }));
-    },
-    [],
-  );
+  const notifyConnected = useCallback((store: StoreId) => {
+    setStatuses((s) => ({ ...s, [store]: "connected" }));
+  }, []);
 
   const value: AuthContextValue = {
     statuses,
     loading: Object.keys(statuses).length === 0,
-    startAuth, logout, logoutAll,
+    startAuth,
+    logout,
+    logoutAll,
     notifyConnected,
   };
 

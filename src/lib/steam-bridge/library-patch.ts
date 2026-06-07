@@ -236,7 +236,10 @@ export function applyLibraryPatch(bridge: SteamBridge): RouterPatchHandle {
                 const realUseMemo = hooks.useMemo;
                 hooks.useMemo = <T>(fn: () => T, deps: unknown[]): T => {
                   const enrichedDeps = [...deps, tabManager.getVersion()];
-                  return realUseMemo(() => spliceTabs(fn(), enrichedDeps) as T, enrichedDeps);
+                  return realUseMemo(
+                    () => spliceTabs(fn(), enrichedDeps) as T,
+                    enrichedDeps,
+                  );
                 };
                 try {
                   return origMemoComponent(...args);

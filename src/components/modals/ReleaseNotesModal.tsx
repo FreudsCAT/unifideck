@@ -49,7 +49,7 @@ const parseInline = (text: string) => {
           }}
         >
           {parsedCodeParts}
-        </strong>
+        </strong>,
       );
     } else {
       result.push(...parsedCodeParts);
@@ -63,7 +63,9 @@ const parseMarkdown = (text: string, t: any) => {
   if (!text) {
     return (
       <div style={{ opacity: 0.6, fontStyle: "italic", padding: "10px 0" }}>
-        {t("updater.noReleaseNotes", { defaultValue: "No release notes available." })}
+        {t("updater.noReleaseNotes", {
+          defaultValue: "No release notes available.",
+        })}
       </div>
     );
   }
@@ -129,7 +131,7 @@ const parseMarkdown = (text: string, t: any) => {
         <li
           key={idx}
           style={{
-            marginLeft: "20px",
+            marginInlineStart: "20px",
             marginBottom: "6px",
             listStyleType: "disc",
             lineHeight: "1.4",
@@ -165,7 +167,9 @@ export const ReleaseNotesModal: FC<Props> = ({ version, body, closeModal }) => {
 
   return (
     <ConfirmModal
-      strTitle={t("updater.modalTitle", { defaultValue: `UNIFIDECK v${version} — Release Notes` })}
+      strTitle={t("updater.modalTitle", {
+        defaultValue: `UNIFIDECK v${version} — Release Notes`,
+      })}
       strOKButtonText={t("common.ok", { defaultValue: "OK" })}
       onOK={closeModal}
       onCancel={closeModal}
@@ -181,7 +185,8 @@ export const ReleaseNotesModal: FC<Props> = ({ version, body, closeModal }) => {
           marginTop: "12px",
           fontSize: "13px",
           color: "#e5e7eb",
-          fontFamily: 'system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+          fontFamily:
+            'system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
         }}
       >
         {parseMarkdown(body, t)}

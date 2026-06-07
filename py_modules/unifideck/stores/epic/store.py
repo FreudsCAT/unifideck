@@ -289,7 +289,11 @@ class EpicStore(StoreBase):
             try:
                 result = await self._exe_resolver.resolve(game_id)
                 exe = result.get("executable")
-                if isinstance(exe, str) and exe and Path(exe).is_file():
+                if (
+                    isinstance(exe, str)
+                    and exe
+                    and await asyncio.to_thread(Path(exe).is_file)
+                ):
                     return exe
             except Exception:
                 logger.warning(

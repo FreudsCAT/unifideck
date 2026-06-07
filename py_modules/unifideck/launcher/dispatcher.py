@@ -130,18 +130,15 @@ async def _build_context(
     game_key, raw_options = _parse_argv(argv)
     store, game_id = game_key.split(":", 1)
 
-    # Steam passes launch options as argv, not as env vars —
-    # promote any ``UNIFIDECK_*=value`` tokens so the rest of
-    # the dispatcher (auth detection, downstream services) can
-    # read them from ``os.environ`` as it expects.
+    # Steam passes launch options as argv, not as env vars — promote
+    # any ``UNIFIDECK_*=value`` tokens so the rest of the dispatcher
+    # can read them from ``os.environ`` as it expects.
     _promote_env_tokens(raw_options)
 
-    # Auth-shortcut path : the auth shortcut key is
-    # ``<store>:<store>-auth`` and we expect
-    # ``UNIFIDECK_<STORE>_ACTION=auth`` in the launch options.
-    # There's no games.map entry for it (it's not a game) so we
-    # short-circuit the registry lookup and build a context the
-    # auth flow can consume directly.
+    # Auth-shortcut path: key is ``<store>:<store>-auth`` with
+    # ``UNIFIDECK_<STORE>_ACTION=auth``. No games.map entry exists, so
+    # short-circuit the registry lookup and build a context the auth
+    # flow can consume directly.
     auth_store, is_launch_action = _detect_auth_action()
     if not is_launch_action:
         logger.info(
@@ -149,31 +146,40 @@ async def _build_context(
             "auth_store=%s game_key=%s",
             auth_store, game_key,
         )
-        return LaunchContext(
-            store=store,
-            game_id=game_id,
-            exe_path=Path("/dev/null"),
-            work_dir=_resolve_plugin_dir(),
-            plugin_dir=_resolve_plugin_dir(),
-            raw_options=raw_options,
-            is_launch_action=False,
-            auth_store=auth_store,
-            bypass_circuit_breaker=False,
-        )
+        return _auth_context(store, game_id, raw_options, auth_store)
 
-    entry = await shortcut_svc.get_entry_for_game_key(
-        store, game_id,
+    exe, work_dir = await _resolve_game_exe(
+        shortcut_svc, store, game_id, game_key,
     )
+    if not exe:
+        # Microsoft titles are Xbox Cloud Gaming (browser-streamed) —
+        # no install and no games.map row. Synthesize the xCloud
+        # context so the matrix routes to ``_launch_xcloud``.
+        if store == "microsoft":
+            logger.info(
+                "[launcher.dispatcher] microsoft game not in games.map — "
+                "synthesizing xCloud context for %s", game_key,
+            )
+            return _xcloud_context(store, game_id, raw_options)
+        raise GameNotFoundError(
+            f"game {game_key!r} not found in games.map",
+            context={"game_key": game_key},
+        )
+    return _game_context(store, game_id, exe, work_dir, raw_options)
+
+
+async def _resolve_game_exe(
+    shortcut_svc: ShortcutService, store: str, game_id: str, game_key: str,
+) -> tuple[str, str]:
+    """Resolve ``(exe, work_dir)`` from games.map, repairing a stale row.
+
+    Games installed by older builds (or discovered via manifest) may
+    have an absent row (Amazon) or an empty exe (GOG ``start.sh``); we
+    re-resolve from the install dir so they launch without a reinstall.
+    """
+    entry = await shortcut_svc.get_entry_for_game_key(store, game_id)
     exe = (entry.exe if entry else "") or ""
     work_dir = (entry.work_dir if entry else "") or ""
-
-    # Repair a stale/missing games.map row by re-resolving the exe from
-    # the install dir. Games installed by older builds (or discovered
-    # via manifest) never had an exe resolved, so their row is absent
-    # (e.g. Amazon) or carries an empty exe (e.g. GOG ``start.sh``).
-    # Re-resolving here lets already-installed games launch without a
-    # reinstall. The ``exe="xcloud"`` sentinel is a valid target and
-    # skips this; Microsoft is xCloud-only and is handled below.
     if not exe and store != "microsoft":
         if not work_dir:
             work_dir = _install_path_from_cache(store, game_id)
@@ -186,44 +192,60 @@ async def _build_context(
                 game_key, resolved,
             )
             exe = resolved
+    return exe, work_dir
 
-    if not exe:
-        # Microsoft titles are Xbox Cloud Gaming (browser-streamed) —
-        # no install and no games.map row needed. Synthesize the xCloud
-        # context so the dispatch matrix routes to ``_launch_xcloud``
-        # (which builds the stream URL from ``game_id``).
-        if store == "microsoft":
-            logger.info(
-                "[launcher.dispatcher] microsoft game not in games.map — "
-                "synthesizing xCloud context for %s", game_key,
-            )
-            return LaunchContext(
-                store=store,
-                game_id=game_id,
-                exe_path=Path("xcloud"),
-                work_dir=_resolve_plugin_dir(),
-                plugin_dir=_resolve_plugin_dir(),
-                raw_options=raw_options,
-                is_launch_action=True,
-                auth_store=None,
-                bypass_circuit_breaker=False,
-            )
-        raise GameNotFoundError(
-            f"game {game_key!r} not found in games.map",
-            context={"game_key": game_key},
-        )
 
-    bypass = _resolve_bypass_flag(store, game_id)
+def _auth_context(
+    store: str, game_id: str, raw_options: str, auth_store: str | None,
+) -> LaunchContext:
+    """Context for an auth shortcut (no game target)."""
+    plugin_dir = _resolve_plugin_dir()
+    return LaunchContext(
+        store=store,
+        game_id=game_id,
+        exe_path=Path("/dev/null"),
+        work_dir=plugin_dir,
+        plugin_dir=plugin_dir,
+        raw_options=raw_options,
+        is_launch_action=False,
+        auth_store=auth_store,
+        bypass_circuit_breaker=False,
+    )
+
+
+def _xcloud_context(
+    store: str, game_id: str, raw_options: str,
+) -> LaunchContext:
+    """Synthesized xCloud context for a Microsoft title with no row."""
+    plugin_dir = _resolve_plugin_dir()
+    return LaunchContext(
+        store=store,
+        game_id=game_id,
+        exe_path=Path("xcloud"),
+        work_dir=plugin_dir,
+        plugin_dir=plugin_dir,
+        raw_options=raw_options,
+        is_launch_action=True,
+        auth_store=None,
+        bypass_circuit_breaker=False,
+    )
+
+
+def _game_context(
+    store: str, game_id: str, exe: str, work_dir: str, raw_options: str,
+) -> LaunchContext:
+    """Context for a normal installed game with a resolved exe."""
+    plugin_dir = _resolve_plugin_dir()
     return LaunchContext(
         store=store,
         game_id=game_id,
         exe_path=Path(exe),
-        work_dir=Path(work_dir) if work_dir else _resolve_plugin_dir(),
-        plugin_dir=_resolve_plugin_dir(),
+        work_dir=Path(work_dir) if work_dir else plugin_dir,
+        plugin_dir=plugin_dir,
         raw_options=raw_options,
         is_launch_action=True,
         auth_store=None,
-        bypass_circuit_breaker=bypass,
+        bypass_circuit_breaker=_resolve_bypass_flag(store, game_id),
     )
 
 def _detect_auth_action() -> tuple[str | None, bool]:

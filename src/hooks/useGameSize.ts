@@ -40,7 +40,10 @@ async function fetchSize(appId: number, key: string): Promise<number> {
   if (existing) return existing;
 
   const promise = (async () => {
-    const raw = await call<[number], unknown>(rpcRoutes.getGameSizeBytes, appId);
+    const raw = await call<[number], unknown>(
+      rpcRoutes.getGameSizeBytes,
+      appId,
+    );
     const bytes = unwrapRpcEnvelope<number>(raw, {
       route: rpcRoutes.getGameSizeBytes,
       throwing: false,
@@ -48,7 +51,9 @@ async function fetchSize(appId: number, key: string): Promise<number> {
     const value = typeof bytes === "number" && bytes > 0 ? bytes : 0;
     cache.set(key, value);
     return value;
-  })().finally(() => { inflight.delete(key); });
+  })().finally(() => {
+    inflight.delete(key);
+  });
 
   inflight.set(key, promise);
   return promise;
@@ -63,7 +68,10 @@ async function fetchSize(appId: number, key: string): Promise<number> {
  * @param installed — current install state. Changing it refetches
  *   (download size → on-disk size) instead of serving a stale value.
  */
-export function useGameSize(appId: number | null, installed: boolean): number | undefined {
+export function useGameSize(
+  appId: number | null,
+  installed: boolean,
+): number | undefined {
   const key = appId != null ? cacheKey(appId, installed) : null;
   const [size, setSize] = useState<number | undefined>(
     key != null ? cache.get(key) : undefined,
@@ -80,10 +88,16 @@ export function useGameSize(appId: number | null, installed: boolean): number | 
       return;
     }
     let cancelled = false;
-    void fetchSize(appId, key).then((bytes) => {
-      if (!cancelled) setSize(bytes);
-    }).catch(() => { /* size is best-effort — leave undefined */ });
-    return () => { cancelled = true; };
+    void fetchSize(appId, key)
+      .then((bytes) => {
+        if (!cancelled) setSize(bytes);
+      })
+      .catch(() => {
+        /* size is best-effort — leave undefined */
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [appId, key]);
 
   return size;

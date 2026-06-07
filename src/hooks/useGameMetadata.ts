@@ -123,7 +123,7 @@ export function useGameMetadata(appId: number | null): UseGameMetadataResult {
  *  {@link invalidateGameInfo}. */
 export function invalidateGameMetadata(appId: number): void {
   cache.delete(appId);
-  const signed = appId > 0x7FFFFFFF ? appId - 0x100000000 : appId;
+  const signed = appId > 0x7fffffff ? appId - 0x100000000 : appId;
   const unsigned = appId < 0 ? appId + 0x100000000 : appId;
   if (signed !== appId) cache.delete(signed);
   if (unsigned !== appId) cache.delete(unsigned);

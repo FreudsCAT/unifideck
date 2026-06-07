@@ -67,7 +67,6 @@
     "installed": "Installed",
     "notInstalled": "Not Installed",
     "playtime": "{{hours}}h {{minutes}}m played"
-    
   },
   "downloadsTab": {
     "currentDownload": "CURRENT DOWNLOAD",

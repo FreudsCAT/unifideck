@@ -43,10 +43,14 @@ function adaptGame(raw: unknown): Game | null {
     title: String(r.title ?? ""),
     store: (r.store ?? "unknown") as StoreId,
     is_installed: Boolean(r.installed ?? r.is_installed),
-    install_path: typeof r.install_path === "string" ? r.install_path : undefined,
-    executable: typeof r.exe_path === "string"
-      ? r.exe_path
-      : (typeof r.executable === "string" ? r.executable : undefined),
+    install_path:
+      typeof r.install_path === "string" ? r.install_path : undefined,
+    executable:
+      typeof r.exe_path === "string"
+        ? r.exe_path
+        : typeof r.executable === "string"
+        ? r.executable
+        : undefined,
     app_id: typeof r.app_id === "number" ? r.app_id : undefined,
     size_bytes: typeof r.size_bytes === "number" ? r.size_bytes : undefined,
     cover_image: typeof r.cover_image === "string" ? r.cover_image : undefined,
@@ -55,7 +59,9 @@ function adaptGame(raw: unknown): Game | null {
     // play-section logic can branch on cloud-streaming titles.
     store_tags: Array.isArray(r.store_tags)
       ? (r.store_tags as GameTag[])
-      : (Array.isArray(r.tags) ? (r.tags as GameTag[]) : undefined),
+      : Array.isArray(r.tags)
+      ? (r.tags as GameTag[])
+      : undefined,
   };
 }
 
@@ -212,7 +218,9 @@ export function useGameInfo(appId: number | null): UseGameInfoResult {
   // wrong button until the page is reopened.
   useEffect(() => {
     if (appId == null) return;
-    return subscribeGameInfo(appId, () => { void load(true); });
+    return subscribeGameInfo(appId, () => {
+      void load(true);
+    });
   }, [appId, load]);
 
   const refresh = useCallback(() => load(true), [load]);
@@ -233,7 +241,7 @@ export function _clearGameInfoCache(): void {
  *  signed/unsigned variants since Steam shortcuts may be
  *  represented either way in the cache. */
 export function invalidateGameInfo(appId: number): void {
-  const signed = appId > 0x7FFFFFFF ? appId - 0x100000000 : appId;
+  const signed = appId > 0x7fffffff ? appId - 0x100000000 : appId;
   const unsigned = appId < 0 ? appId + 0x100000000 : appId;
   // Clear the cache for every representation, then notify mounted
   // hooks so they refetch. The caller may pass either the signed

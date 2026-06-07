@@ -31,6 +31,13 @@ def _track(task: asyncio.Task[Any]) -> None:
     task.add_done_callback(_BACKGROUND_TASKS.discard)
 
 
+def _sync_progress(bus: Any) -> Any:
+    """Return the shared ``SyncProgress`` tracker off *bus*, or ``None``."""
+    if bus is None or not hasattr(bus, "get_sync_progress"):
+        return None
+    return bus.get_sync_progress()
+
+
 def _log_batch_result(
     future: asyncio.Future[list[Any]], label: str,
 ) -> None:
@@ -211,56 +218,68 @@ class _EventHandlersMixin:
         Falls back to ``kwargs`` directly for compatibility with
         any code path that hasn't been migrated yet.
         """
-        if kwargs.get("phase") != "metadata":
-            return
-        if kwargs.get("active") is not False:
+        if kwargs.get("phase") != "metadata" or kwargs.get("active") is not False:
             return
         sync_kwargs = kwargs.get("sync_kwargs") or {}
         games = sync_kwargs.get("games") or kwargs.get("games", [])
         bus = getattr(self, "_bus", None)
-        fetch_artwork = bool(sync_kwargs.get("fetch_artwork", True))
-        resync_artwork = bool(sync_kwargs.get("resync_artwork", False))
-        if not fetch_artwork:
-            logger.info(
-                "[ArtworkService] fetch_artwork=False — skipping phase",
-            )
-            _emit_artwork_phase_done(bus, 0, sync_kwargs)
-            return
-        if not games:
-            _emit_artwork_phase_done(bus, 0, sync_kwargs)
-            return
         grid_dir = getattr(self, "_grid_dir", None)
-        if not grid_dir:
-            logger.warning(
-                "[ArtworkService] _grid_dir unset — cannot save covers",
-            )
+        if not bool(sync_kwargs.get("fetch_artwork", True)):
+            logger.info("[ArtworkService] fetch_artwork=False — skipping phase")
             _emit_artwork_phase_done(bus, 0, sync_kwargs)
             return
-        # Resync-artwork: clear the failure cooldown cache so
-        # previously-failed games aren't silently skipped. The
-        # ``force`` arg below also bypasses the ``has_artwork``
-        # on-disk check, so every game gets a fresh fetch.
+        if not games or not grid_dir:
+            if not grid_dir:
+                logger.warning(
+                    "[ArtworkService] _grid_dir unset — cannot save covers",
+                )
+            _emit_artwork_phase_done(bus, 0, sync_kwargs)
+            return
+        resync_artwork = bool(sync_kwargs.get("resync_artwork", False))
         if resync_artwork:
-            cache = getattr(self, "_cache", None)
-            if cache is not None:
-                try:
-                    cache.clear("sgdb_fetch")
-                    logger.info(
-                        "[ArtworkService] resync_artwork=True — "
-                        "cleared sgdb_fetch failure cache",
-                    )
-                except Exception:
-                    logger.exception(
-                        "[ArtworkService] failed to clear sgdb_fetch cache",
-                    )
-        total = len(games)
+            self._clear_resync_cache()
         logger.info(
             "[ArtworkService] phase=metadata done → checking artwork "
             "for %d games (grid_dir=%s, resync=%s)",
-            total, grid_dir, resync_artwork,
+            len(games), grid_dir, resync_artwork,
         )
+        self._dispatch_artwork_batch(
+            games, grid_dir, bus, sync_kwargs, resync=resync_artwork,
+        )
+
+    def _clear_resync_cache(self: Any) -> None:
+        """Clear the SGDB failure-cooldown cache so resync refetches all games.
+
+        Without this, previously-failed games are silently skipped; the
+        ``force`` fetch below also bypasses the ``has_artwork`` on-disk
+        check so every game gets a fresh download.
+        """
+        cache = getattr(self, "_cache", None)
+        if cache is None:
+            return
+        try:
+            cache.clear("sgdb_fetch")
+            logger.info(
+                "[ArtworkService] resync_artwork=True — cleared sgdb_fetch "
+                "failure cache",
+            )
+        except Exception:
+            logger.exception(
+                "[ArtworkService] failed to clear sgdb_fetch cache",
+            )
+
+    def _dispatch_artwork_batch(
+        self: Any,
+        games: list[Any],
+        grid_dir: Any,
+        bus: Any,
+        sync_kwargs: dict[str, Any],
+        *,
+        resync: bool,
+    ) -> None:
+        """Fan out per-game artwork fetches and wire the completion callback."""
         tasks: list[Any] = [
-            self._process_one_game(g, grid_dir, bus, force=resync_artwork)
+            self._process_one_game(g, grid_dir, bus, force=resync)
             for g in games
         ]
         if not tasks:
@@ -270,14 +289,14 @@ class _EventHandlersMixin:
             asyncio.gather(*tasks, return_exceptions=True),
         )
         # Bind sync_kwargs into the done callback so CompatibilityService
-        # (which now waits on phase="artwork" done) receives the original
+        # (which waits on phase="artwork" done) receives the original
         # SYNC_COMPLETE payload.
         fut.add_done_callback(
-            lambda f, sk=sync_kwargs: _on_artwork_batch_done(f, bus, sk)
+            lambda f, sk=sync_kwargs: _on_artwork_batch_done(f, bus, sk),
         )
         _track(fut)
-        # Stash on ``self`` so the SYNC_CANCELLED handler can
-        # ``.cancel()`` the whole batch in one shot.
+        # Stash on ``self`` so the SYNC_CANCELLED handler can cancel the
+        # whole batch in one shot.
         self._batch_task = fut
 
     @subscribe(Events.SYNC_CANCELLED)
@@ -340,16 +359,13 @@ class _EventHandlersMixin:
         """
         from .fetcher import has_artwork
 
-        # Cancel checkpoint — SyncService.cancel() flips
-        # progress.status to "cancelled". Queued tasks waiting on
-        # the semaphore short-circuit here instead of doing network
-        # work the user no longer cares about. The phase-done event
-        # in the batch's finally still fires, so _post_sync_pending
-        # clears cleanly.
-        if bus is not None:
-            progress = bus.get_sync_progress() if hasattr(bus, "get_sync_progress") else None
-            if progress is not None and progress.status == "cancelled":
-                return "cancelled"
+        # Cancel checkpoint — SyncService.cancel() flips progress.status
+        # to "cancelled". Queued tasks short-circuit here instead of doing
+        # network work the user no longer cares about. The phase-done event
+        # in the batch's finally still fires, so _post_sync_pending clears.
+        progress = _sync_progress(bus)
+        if progress is not None and progress.status == "cancelled":
+            return "cancelled"
 
         if not game.app_id or not game.title:
             return "skipped"
@@ -360,10 +376,9 @@ class _EventHandlersMixin:
             game.app_id, game.store, game.store_game_id, game.title,
             extras=extras, force=force,
         )
-        # Tick the progress bar — SyncService puts the tracker
-        # on the bus in _setup_sync and clears it on completion.
-        if bus is not None:
-            progress = bus.get_sync_progress() if hasattr(bus, "get_sync_progress") else None
-            if progress is not None:
-                await progress.increment_artwork(game.title)
+        # Tick the progress bar — SyncService puts the tracker on the bus
+        # in _setup_sync and clears it on completion.
+        progress = _sync_progress(bus)
+        if progress is not None:
+            await progress.increment_artwork(game.title)
         return "cover-saved" if any(result.values()) else "no-cover-found"

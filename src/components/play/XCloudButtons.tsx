@@ -13,7 +13,13 @@ import { DialogButton } from "@decky/ui";
 import { useTranslation } from "react-i18next";
 import { FaCloud, FaGamepad, FaCog } from "react-icons/fa";
 import { launchAppWithConfiguredGamepad } from "../../utils/controllerConfig";
-import { PlayShell, MetaInline, IconGroup, actionBtnStyle, iconBtnStyle } from "./PlayMeta";
+import {
+  PlayShell,
+  MetaInline,
+  IconGroup,
+  actionBtnStyle,
+  iconBtnStyle,
+} from "./PlayMeta";
 
 interface Props {
   appId: number;
@@ -22,15 +28,23 @@ interface Props {
 }
 
 function openControllerConfig(appId: number): void {
-  (window as unknown as {
-    SteamClient?: { Apps?: { ShowControllerConfigurator?: (id: number) => void } };
-  }).SteamClient?.Apps?.ShowControllerConfigurator?.(appId);
+  (
+    window as unknown as {
+      SteamClient?: {
+        Apps?: { ShowControllerConfigurator?: (id: number) => void };
+      };
+    }
+  ).SteamClient?.Apps?.ShowControllerConfigurator?.(appId);
 }
 
 function openAppSettings(appId: number): void {
-  (window as unknown as {
-    SteamClient?: { Apps?: { OpenAppSettingsDialog?: (id: number, page: string) => void } };
-  }).SteamClient?.Apps?.OpenAppSettingsDialog?.(appId, "general");
+  (
+    window as unknown as {
+      SteamClient?: {
+        Apps?: { OpenAppSettingsDialog?: (id: number, page: string) => void };
+      };
+    }
+  ).SteamClient?.Apps?.OpenAppSettingsDialog?.(appId, "general");
 }
 
 export const XCloudButtons: FC<Props> = ({ appId, gameId }) => {

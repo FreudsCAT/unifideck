@@ -48,8 +48,7 @@ function transform(app: SteamApp): UnifideckGame {
   return {
     appId: app.appid,
     title: app.display_name || app.sort_as || "Unknown",
-    store: app.is_shortcuts_app || app.BIsShortcut?.()
-      ? "unknown" : "steam",
+    store: app.is_shortcuts_app || app.BIsShortcut?.() ? "unknown" : "steam",
     isInstalled: !!app.installed,
     isShortcut: !!app.is_shortcuts_app || !!app.BIsShortcut?.(),
     lastPlayed: app.rt_last_time_played || 0,
@@ -92,8 +91,7 @@ export function useSteamLibrary(bridge: SteamBridge): UseSteamLibraryResult {
   }, [load]);
 
   const filterByStore = useCallback(
-    (store: UnifideckGame["store"]) =>
-      games.filter((g) => g.store === store),
+    (store: UnifideckGame["store"]) => games.filter((g) => g.store === store),
     [games],
   );
 
@@ -102,9 +100,15 @@ export function useSteamLibrary(bridge: SteamBridge): UseSteamLibraryResult {
     [games],
   );
 
-  return useMemo(() => ({
-    games, loading, error,
-    refresh: load,
-    filterByStore, filterByInstalled,
-  }), [games, loading, error, load, filterByStore, filterByInstalled]);
+  return useMemo(
+    () => ({
+      games,
+      loading,
+      error,
+      refresh: load,
+      filterByStore,
+      filterByInstalled,
+    }),
+    [games, loading, error, load, filterByStore, filterByInstalled],
+  );
 }

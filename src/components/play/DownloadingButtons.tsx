@@ -32,7 +32,10 @@ interface Props {
 
 const defaultBridge = new SteamBridge();
 
-export const DownloadingButtons: FC<Props> = ({ download, bridge = defaultBridge }) => {
+export const DownloadingButtons: FC<Props> = ({
+  download,
+  bridge = defaultBridge,
+}) => {
   const { t } = useTranslation();
   const actions = useGameActions(bridge);
   const toast = useToast();
@@ -52,11 +55,15 @@ export const DownloadingButtons: FC<Props> = ({ download, bridge = defaultBridge
     showModal(
       <ConfirmModal
         strTitle={t("play.cancelConfirmTitle")}
-        strDescription={t("play.cancelConfirmBody", { title: download.game_title })}
+        strDescription={t("play.cancelConfirmBody", {
+          title: download.game_title,
+        })}
         strOKButtonText={t("play.cancelConfirmConfirm")}
         strCancelButtonText={t("play.cancelConfirmCancel")}
         bDestructiveWarning
-        onOK={() => { void doCancel(); }}
+        onOK={() => {
+          void doCancel();
+        }}
       />,
     );
   }, [cancelled, doCancel, download.game_title, t]);
@@ -72,9 +79,11 @@ export const DownloadingButtons: FC<Props> = ({ download, bridge = defaultBridge
         <FaTimes />
         {cancelled
           ? t("play.cancelling")
-          : `${t("play.cancel")} (${Math.round(Math.max(0, Math.min(100, download.progress_percent)))}%)`}
+          : `${t("play.cancel")} (${Math.round(
+              Math.max(0, Math.min(100, download.progress_percent)),
+            )}%)`}
       </DialogButton>
-      <DownloadProgressRow download={download} marginLeft={20} />
+      <DownloadProgressRow download={download} marginInlineStart={20} />
     </PlayShell>
   );
 };

@@ -29,12 +29,14 @@ interface Props {
  */
 export const SteamRestartModal: FC<Props> = ({ closeModal, store, reason }) => {
   const { t } = useTranslation();
-  const title = reason === "cleanup"
-    ? t("confirmModals.steamRestartCleanupTitle")
-    : t("restart.title");
-  const description = reason === "cleanup"
-    ? t("confirmModals.steamRestartCleanupDescription")
-    : store
+  const title =
+    reason === "cleanup"
+      ? t("confirmModals.steamRestartCleanupTitle")
+      : t("restart.title");
+  const description =
+    reason === "cleanup"
+      ? t("confirmModals.steamRestartCleanupDescription")
+      : store
       ? t("confirmModals.steamRestartDescriptionStore", { store })
       : t("restart.body");
   return (
@@ -45,9 +47,13 @@ export const SteamRestartModal: FC<Props> = ({ closeModal, store, reason }) => {
       strCancelButtonText={t("restart.later")}
       onOK={() => {
         // SteamClient.User.StartShutdown is observed-not-typed
-        const sc = (window as { SteamClient?: {
-          User?: { StartShutdown?: (force: boolean) => void };
-        } }).SteamClient;
+        const sc = (
+          window as {
+            SteamClient?: {
+              User?: { StartShutdown?: (force: boolean) => void };
+            };
+          }
+        ).SteamClient;
         sc?.User?.StartShutdown?.(false);
         closeModal?.();
       }}

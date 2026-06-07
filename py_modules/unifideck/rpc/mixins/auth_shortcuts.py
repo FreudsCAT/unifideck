@@ -192,8 +192,8 @@ class AuthShortcutsRPCMixin:
     def _resolve_shortcut_appid(store_game_id: str) -> int:
         """Scan shortcuts.vdf for an entry whose LaunchOptions
         contains ``store_game_id`` and return its AppID."""
-        import re
         from pathlib import Path
+
         from unifideck.steam.steam_user import get_active_steam_user
         steam_root = Path("~/.steam/steam").expanduser()
         active_user = get_active_steam_user(steam_root) or "0"
@@ -208,30 +208,38 @@ class AuthShortcutsRPCMixin:
         while True:
             i = raw.find(b"LaunchOptions", i)
             if i == -1:
-                break
+                return 0
             # Look forward for store_game_id in the options value
             end = raw.find(b"\x00", i + 20)
             if end == -1:
-                break
+                return 0
             opts = raw[i + 14:end]  # after \x01LaunchOptions\x00
             if store_game_id.encode() in opts:
-                # Scan backward for \x01appid\x00 + 4-byte uint32
-                chunk = raw[max(0, i - 200):i]
-                import struct
-                for m in re.finditer(
-                    b"\\x02appid\\x00(.{4})", chunk, re.DOTALL,
-                ):
-                    try:
-                        # struct.unpack returns tuple[Any, ...] so [0] is Any;
-                        # we know "<I" produces a single uint32 → int.
-                        return cast(int, struct.unpack("<I", m.group(1))[0])
-                    except struct.error:
-                        pass
+                appid = _appid_from_chunk(raw[max(0, i - 200):i])
+                if appid is not None:
+                    return appid
             i = end
-        return 0
 
 
 # ─── Module-level helpers ─────────────────────────────────────
+
+
+def _appid_from_chunk(chunk: bytes) -> int | None:
+    """Extract the uint32 ``appid`` preceding a matched LaunchOptions block.
+
+    VDF stores the appid as a 4-byte little-endian uint32 right after
+    the ``\\x02appid\\x00`` tag. Returns ``None`` if no valid tag is found.
+    """
+    import re
+    import struct
+    for m in re.finditer(b"\\x02appid\\x00(.{4})", chunk, re.DOTALL):
+        try:
+            # struct.unpack returns tuple[Any, ...] so [0] is Any;
+            # "<I" produces a single uint32 → int.
+            return cast(int, struct.unpack("<I", m.group(1))[0])
+        except struct.error:
+            continue
+    return None
 
 
 def _build_and_log(store: str) -> dict[str, Any]:

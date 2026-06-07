@@ -130,24 +130,27 @@ class MicrosoftCatalogReader:
             len(title_map), len(product_ids),
             time.time() - t1, time.time() - t0,
         )
-        return [
-            Game(
+        return self._build_xcloud_games(entitled, title_map)
+
+    @staticmethod
+    def _build_xcloud_games(
+        entitled: list[dict[str, Any]], title_map: dict[str, Any],
+    ) -> list[Game]:
+        """Build xCloud ``Game`` records from entitled titles + names."""
+        games: list[Game] = []
+        for t in entitled:
+            pid = (t.get("details") or {}).get("productId") or ""
+            if not pid:
+                continue
+            games.append(Game(
                 app_id=0,
                 store="microsoft",
                 store_game_id=pid,
-                title=_title_for(title_map, pid, fallback_title),
+                title=_title_for(title_map, pid, t.get("titleId", "")),
                 installed=False,
                 tags=[GameTag.XCLOUD],
-            )
-            for pid, fallback_title in (
-                (
-                    (t.get("details") or {}).get("productId") or "",
-                    t.get("titleId", ""),
-                )
-                for t in entitled
-            )
-            if pid
-        ]
+            ))
+        return games
 
     async def _fetch_xcloud_titles(
         self, base_uri: str, gs_token: str,

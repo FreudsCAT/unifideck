@@ -140,7 +140,7 @@ async def _run_legendary(
             "[compat.epic] legendary %s failed/timed out", args[:2],
         )
         with contextlib.suppress(Exception):
-            proc.kill()  # type: ignore[possibly-undefined]
+            proc.kill()
         return 1
 
 

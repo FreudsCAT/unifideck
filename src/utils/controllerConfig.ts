@@ -25,13 +25,18 @@ const LOG_PREFIX = "[ControllerConfig]";
  *  Game-Mode-safe controller config signal lands, this is
  *  where the per-app config orchestration will be invoked. */
 export async function ensureGamepadConfigForApp(appId: number): Promise<void> {
-  console.log(`${LOG_PREFIX} Skipping automatic controller configuration` + ` for appId=${appId}`);
+  console.log(
+    `${LOG_PREFIX} Skipping automatic controller configuration` +
+      ` for appId=${appId}`,
+  );
 }
 
 /** Launch a Steam shortcut by appId, going through Steam's
  *  RunGame API. Returns false when Steam's Apps surface is
  *  unavailable (test environments, very early plugin boot). */
-export async function launchAppWithConfiguredGamepad(appId: number): Promise<boolean> {
+export async function launchAppWithConfiguredGamepad(
+  appId: number,
+): Promise<boolean> {
   const steamApps = window.SteamClient?.Apps;
   if (!steamApps?.RunGame) {
     return false;
@@ -39,7 +44,10 @@ export async function launchAppWithConfiguredGamepad(appId: number): Promise<boo
 
   await ensureGamepadConfigForApp(appId);
   steamApps.RunGame(getShortcutRunGameId(appId), "", -1, 100);
-  console.log(`${LOG_PREFIX} Launched appId=${appId} ` + `without changing controller layouts`);
+  console.log(
+    `${LOG_PREFIX} Launched appId=${appId} ` +
+      `without changing controller layouts`,
+  );
 
   return true;
 }

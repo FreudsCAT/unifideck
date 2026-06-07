@@ -100,12 +100,12 @@
 
 **Goal:** Ubisoft-specific install confirmation modal and end-to-end auth token propagation from first UPC login through all prefixes.
 
-| #   | Task                                                                                              | Files                                                                       | Status |
-| --- | ------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- | ------ |
-| 4A  | Ubisoft-specific install confirmation modal — "This will load the Ubisoft Connect Launcher..."    | `gameActionInterceptor.ts`, `PlayButtonOverride.tsx`                         | DONE   |
-| 4B  | i18n keys for Ubisoft install modal (ubisoftInstallTitle, ubisoftInstallDescription, etc.)         | `en-US.json`                                                                | DONE   |
-| 4C  | Auth token propagation after install — capture UPC token → template → all existing prefixes       | `ubisoft.py` (`_install_via_upc_ui`, `_capture_upc_session`)                | DONE   |
-| 4D  | Update spec & tracker docs with Phase 4 approach notes                                            | `ubisoft-store-spec.md`, `ubisoft-implementation-tracker.md`                | DONE   |
+| #   | Task                                                                                           | Files                                                        | Status |
+| --- | ---------------------------------------------------------------------------------------------- | ------------------------------------------------------------ | ------ |
+| 4A  | Ubisoft-specific install confirmation modal — "This will load the Ubisoft Connect Launcher..." | `gameActionInterceptor.ts`, `PlayButtonOverride.tsx`         | DONE   |
+| 4B  | i18n keys for Ubisoft install modal (ubisoftInstallTitle, ubisoftInstallDescription, etc.)     | `en-US.json`                                                 | DONE   |
+| 4C  | Auth token propagation after install — capture UPC token → template → all existing prefixes    | `ubisoft.py` (`_install_via_upc_ui`, `_capture_upc_session`) | DONE   |
+| 4D  | Update spec & tracker docs with Phase 4 approach notes                                         | `ubisoft-store-spec.md`, `ubisoft-implementation-tracker.md` | DONE   |
 
 ### Phase 4 Exit Criteria
 
@@ -119,6 +119,7 @@
 ### Phase 4 Approach Notes
 
 **Install Flow (updated):**
+
 1. User clicks Install → Ubisoft-specific ConfirmModal appears (not the generic one)
 2. On confirm → `add_to_download_queue(store="ubisoft")` → `_download_ubisoft()` → `install_game()`
 3. UPC opens visibly in the game's per-game prefix with pre-injected REST API ticket
@@ -127,11 +128,13 @@
 6. On completion: marker written, shortcut registered, cache updated, button → Play
 
 **Auth Token Flow (updated):**
+
 - **First install**: REST API ticket pre-injected → UPC may accept it or prompt manual login → after UPC exits, `_capture_upc_session()` reads UPC's native `restore_session` token → saved to `UPC_SESSION_FILE` → written to `.template/` settings.yml → `_propagate_upc_session_to_all_prefixes()` copies to all existing per-game prefixes
 - **Subsequent installs**: Cloned from template (which has the captured token) → UPC auto-logs in → no manual login needed
 - **Key fix**: `_install_via_upc_ui()` now propagates captured tokens to all existing prefixes (previously only wrote to template + session file but did not propagate)
 
 **Launch Mechanism (unchanged):**
+
 - Both native Ubisoft and Epic-Ubisoft use identical protocol: `upc.exe uplay://launch/{id}/0`
 - Native uses per-game prefix at `~/.local/share/unifideck/prefixes/ubisoft/{space_id}/`
 - Epic-Ubisoft uses Epic's prefix with UPC found therein
@@ -221,14 +224,14 @@
 | 2026-03-09 | 3I    | Proton settings: verified store-agnostic infra works for `ubisoft:{space_id}` — no code needed                                     |
 | 2026-03-09 | 3J    | Spec update: added §11.3.1 download tracking strategy with comparison table + fallback docs                                        |
 | 2026-03-09 | 3J    | Spec update: documented that no API/metadata/3rd-party source provides Ubisoft install sizes; `--` for size/ETA/% on first install |
-| 2026-03-09 | Bug   | Fixed pfx/ path detection for configurations binary + upc.exe (Proton creates pfx/ subdirectory)                                  |
-| 2026-03-09 | Bug   | Fixed os.environ.copy() in install/uninstall/update — replaced with clean env builder (prevents Steam env interference)             |
+| 2026-03-09 | Bug   | Fixed pfx/ path detection for configurations binary + upc.exe (Proton creates pfx/ subdirectory)                                   |
+| 2026-03-09 | Bug   | Fixed os.environ.copy() in install/uninstall/update — replaced with clean env builder (prevents Steam env interference)            |
 | 2026-03-09 | Bug   | Fixed userId key mismatch in bin/ubisoft_setup.py (snake_case → camelCase)                                                         |
-| 2026-03-09 | Bug   | Added DISPLAY/WAYLAND_DISPLAY pass-through to _build_umu_env (UPC needs display to run)                                            |
+| 2026-03-09 | Bug   | Added DISPLAY/WAYLAND_DISPLAY pass-through to \_build_umu_env (UPC needs display to run)                                           |
 | 2026-03-09 | Feat  | Added static game ID database lookup (Tier 2) — resolves ~90% of install_ids without needing UPC to run                            |
-| 2026-03-09 | Feat  | Added manual UPC install fallback (Path B) — launches authenticated UPC when install_id unavailable, monitors FS for new installs   |
-| 2026-03-09 | Docs  | Updated spec §5.4 (3-tier install_id resolution), §6.3 (Path A/B install flows), §16.2 (error handling), §14.1 (data files)       |
-| 2026-03-09 | 4A    | Added Ubisoft-specific install confirmation modal in gameActionInterceptor.ts + PlayButtonOverride.tsx                               |
-| 2026-03-09 | 4B    | Added i18n keys: ubisoftInstallTitle, ubisoftInstallDescription, ubisoftInstallConfirm                                              |
-| 2026-03-09 | 4C    | Fixed auth token propagation: _install_via_upc_ui now propagates captured token to all existing prefixes (was template-only)        |
+| 2026-03-09 | Feat  | Added manual UPC install fallback (Path B) — launches authenticated UPC when install_id unavailable, monitors FS for new installs  |
+| 2026-03-09 | Docs  | Updated spec §5.4 (3-tier install_id resolution), §6.3 (Path A/B install flows), §16.2 (error handling), §14.1 (data files)        |
+| 2026-03-09 | 4A    | Added Ubisoft-specific install confirmation modal in gameActionInterceptor.ts + PlayButtonOverride.tsx                             |
+| 2026-03-09 | 4B    | Added i18n keys: ubisoftInstallTitle, ubisoftInstallDescription, ubisoftInstallConfirm                                             |
+| 2026-03-09 | 4C    | Fixed auth token propagation: \_install_via_upc_ui now propagates captured token to all existing prefixes (was template-only)      |
 | 2026-03-09 | 4D    | Updated spec §6.3 + §7.5 with Ubisoft install modal + auth capture flow; added Phase 4 to tracker                                  |

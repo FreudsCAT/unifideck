@@ -69,9 +69,10 @@ export function usePlaySection(appId: number | null): PlaySectionState {
 
     // Check the live queue first — a download in progress
     // takes precedence over `is_installed` flag staleness.
-    const inQueue = findInQueue(downloads.queue?.current, game.id)
-      ?? downloads.queue?.queued.find((d) => d.game_id === game.id)
-      ?? null;
+    const inQueue =
+      findInQueue(downloads.queue?.current, game.id) ??
+      downloads.queue?.queued.find((d) => d.game_id === game.id) ??
+      null;
     if (inQueue) {
       return { kind: "downloading", shouldOverride: true, download: inQueue };
     }
@@ -83,9 +84,11 @@ export function usePlaySection(appId: number | null): PlaySectionState {
   }, [appId, info.data, downloads.queue]);
 }
 
-function findInQueue(current: DownloadItem | null | undefined, gameId: string): DownloadItem | null {
-  if (!current)
-    return null;
+function findInQueue(
+  current: DownloadItem | null | undefined,
+  gameId: string,
+): DownloadItem | null {
+  if (!current) return null;
 
   return current.game_id === gameId ? current : null;
 }

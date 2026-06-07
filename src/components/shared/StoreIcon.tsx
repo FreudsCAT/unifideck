@@ -31,7 +31,11 @@ interface Props {
   color?: string;
 }
 
-export const StoreIcon: FC<Props> = ({ store, size = 16, color = "inherit" }) => {
+export const StoreIcon: FC<Props> = ({
+  store,
+  size = 16,
+  color = "inherit",
+}) => {
   const Icon = STORE_ICONS[store] ?? FaGamepad;
   return <Icon size={size} color={color} />;
 };

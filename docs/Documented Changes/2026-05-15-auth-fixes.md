@@ -21,7 +21,9 @@ Complete end-to-end fix of the OAuth browser-based authentication flow for all f
 ```typescript
 // [src/services/auth/AuthDispatcher.ts:196-211]
 if (startResult && startResult.success === false && startResult.error) {
-  console.log(`[AuthDispatcher:${store}] backend rejected start: ${startResult.error} — skipping shortcut launch`);
+  console.log(
+    `[AuthDispatcher:${store}] backend rejected start: ${startResult.error} — skipping shortcut launch`,
+  );
   return { success: false, store, error: startResult.error } as AuthResult;
 }
 ```
@@ -39,6 +41,7 @@ if (startResult && startResult.success === false && startResult.error) {
 **Root cause:** The backend `EdgeRPCMixin.install_edge()` returned `{success: True, error: None}`. The RPC wrapper's `_to_envelope()` function treats any dict with a `success` key as a "caller-supplied envelope" — it extracts `success`/`error` as the outer envelope and computes `data` from the remaining keys. Since there were no other keys, `data` collapsed to `null`. The frontend `unwrapRpcEnvelope()` extracted `data` → `null`, so `result?.success` was `undefined`, falling into the error branch.
 
 **Fix:**
+
 - **Backend** ([mixins/edge.py](py_modules/unifideck/rpc/mixins/edge.py#L83-L96)): Changed return shape from `{success, error}` to `{installed, error}` — a plain data dict without a `success` key at the top level. The RPC wrapper treats it as raw data and produces `{success: true, data: {installed: true}}`.
 - **Frontend** ([ChromiumInstallModal.tsx](src/components/modals/ChromiumInstallModal.tsx)): Changed `result?.success` check to `result?.installed`.
 
@@ -76,6 +79,7 @@ if (startResult?.success === true && !(startResult as any)?.metadata?.pending) {
 The edge-auth browser IS launched with `--remote-debugging-port=9222` (confirmed in [launch.py](py_modules/unifideck/auth/edge_browser/launch.py#L145)), but the monitor only checked port 8080.
 
 **Fix:**
+
 - **`OAuthBrowserMonitor`** ([browser.py](py_modules/unifideck/auth/browser.py)): Added `edge_cdp_port` parameter (default 9222). Added `_list_edge_targets()` async method that polls `http://127.0.0.1:9222/json/list`. `wait_for_redirect()` now merges targets from both CEF (port 8080) and Edge (port 9222).
 - **`constructor.py`** ([services/bootstrap/constructor.py](py_modules/unifideck/services/bootstrap/constructor.py)): Extracted `cdp_port` resolution before monitor construction and passed it as `edge_cdp_port`.
 - **`close_oauth_tab()`** also updated to try closing on Edge's CDP endpoint.
@@ -88,9 +92,10 @@ The edge-auth browser IS launched with `--remote-debugging-port=9222` (confirmed
 
 **Severity:** High — monitor captured Epic's intermediate OAuth redirect (before login) and failed with `no_code`, killing the flow before the user could sign in.
 
-**Symptom:** CDP monitor detected `https://www.epicgames.com/id/api/redirect?clientId=...&responseType=code` at 16.6s. This URL matches the `_EPIC_REDIRECT_URIS` list prefix `https://www.epicgames.com/id/api/redirect` but has no `code` parameter — it's Epic's *initial* authorize redirect that happens BEFORE the login form. The orchestrator errored with `no_code` and the flow died.
+**Symptom:** CDP monitor detected `https://www.epicgames.com/id/api/redirect?clientId=...&responseType=code` at 16.6s. This URL matches the `_EPIC_REDIRECT_URIS` list prefix `https://www.epicgames.com/id/api/redirect` but has no `code` parameter — it's Epic's _initial_ authorize redirect that happens BEFORE the login form. The orchestrator errored with `no_code` and the flow died.
 
 **Root cause:** `_EPIC_REDIRECT_URIS` included two entries:
+
 1. `https://legendary.epicgames.com/callback` — the actual post-login callback (correct)
 2. `https://www.epicgames.com/id/api/redirect` — Epic's internal authorize endpoint (incorrect — matches before login)
 
@@ -105,7 +110,7 @@ _EPIC_REDIRECT_URIS: list[str] = [
 
 Only `legendary.epicgames.com/callback` remains — the URL legendary's local server listens on AFTER the user signs in with the `code` parameter.
 
-**Justification:** The removed URL was the OAuth *authorization* endpoint, not the *callback*. Matching it before login yields a URL with `responseType=code` (a request for a code, not a code itself). The actual code-bearing redirect goes to `legendary.epicgames.com/callback?code=...`.
+**Justification:** The removed URL was the OAuth _authorization_ endpoint, not the _callback_. Matching it before login yields a URL with `responseType=code` (a request for a code, not a code itself). The actual code-bearing redirect goes to `legendary.epicgames.com/callback?code=...`.
 
 ---
 
@@ -169,6 +174,7 @@ if not is_content_page:
 **Symptom:** The monitor only checked URLs against the exact `allowed_uris` prefixes. Staging's `_poll_for_code` checks ANY URL containing `auth`, `login`, `code=`, `oauth`, `callback`, etc. for OAuth patterns. Some OAuth providers redirect through intermediate URLs that don't match the callback prefix exactly.
 
 **Fix:** Rewrote `wait_for_redirect()` to adopt staging's broad keyword matching:
+
 - First pass: broad keyword matching (`auth`, `login`, `code=`, `oauth`, `callback`, etc.) triggers inspection
 - Epic content extraction run on any URL containing `/id/api/redirect` or `epicgames.com`
 - Strict `match_redirect()` still checked for the standard OAuth callback URLs
@@ -223,6 +229,7 @@ if not is_content_page:
 **Severity:** Critical — same SSL issue as GOG. Code captured from `login.live.com/oauth20_desktop.srf?code=...` but token exchange POST to `login.live.com` failed with `CERTIFICATE_VERIFY_FAILED`.
 
 **Fix:** Changed ALL Microsoft HTTP calls from `ssl_ctx_strict()` to `ssl_ctx_permissive("Microsoft ... — outdated Deck cert store")` in:
+
 - [microsoft_auth.py](py_modules/unifideck/stores/microsoft/microsoft_auth.py)
 - [microsoft_subscription.py](py_modules/unifideck/stores/microsoft/microsoft_subscription.py)
 
@@ -289,6 +296,7 @@ async start(store: StoreId): Promise<AuthResult> {
 **Symptom:** `sync_libraries` RPC called `self.sync_service.sync(**kw)` but `SyncService` has `sync_all()`, not `sync()`.
 
 **Fix:** Changed `.sync(**kw)` → `.sync_all(**kw)` in:
+
 - [mixins/sync.py](py_modules/unifideck/rpc/mixins/sync.py#L45)
 - [handlers/store.py](py_modules/unifideck/rpc/handlers/store.py#L47)
 
@@ -321,14 +329,14 @@ async def force_sync_libraries(self, resync_artwork: bool = False, **kw: Any) ->
 
 ```typescript
 // [AuthContext.tsx:63-79]
-const raw = Array.isArray(initial.data) ? initial.data as unknown[] : [];
+const raw = Array.isArray(initial.data) ? (initial.data as unknown[]) : [];
 const map: StatusMap = {};
 for (const entry of raw) {
-    if (entry && typeof entry === "object") {
-        const e = entry as Record<string, unknown>;
-        const id = e.store_id as StoreId | undefined;
-        if (id) map[id] = e.available ? "connected" : "disconnected";
-    }
+  if (entry && typeof entry === "object") {
+    const e = entry as Record<string, unknown>;
+    const id = e.store_id as StoreId | undefined;
+    if (id) map[id] = e.available ? "connected" : "disconnected";
+  }
 }
 setStatuses(map);
 ```
@@ -345,11 +353,12 @@ Also added `notifyConnected(store)` to `AuthContext` so `useStoreAuth.connect()`
 
 **Root causes (two layers):**
 
-*Layer 1 — VDF tag type:* The VDF binary format stores the `appid` field with tag type `\x02` (uint32), not `\x01` (string). The regex `\x01appid\x00` never matched. The actual byte sequence was `\x02appid\x00` + 4-byte little-endian uint32 (value: `2626371780`).
+_Layer 1 — VDF tag type:_ The VDF binary format stores the `appid` field with tag type `\x02` (uint32), not `\x01` (string). The regex `\x01appid\x00` never matched. The actual byte sequence was `\x02appid\x00` + 4-byte little-endian uint32 (value: `2626371780`).
 
-*Layer 2 — Envelope stripping:* Even after fixing the VDF regex, `_get_compat_tool_impl` added `result["success"] = True`, which got stripped by `_to_envelope()` (same envelope-stripping behavior as Bug 2). The frontend checked `!ctx?.success` which was `true` (missing), returning "Context unavailable."
+_Layer 2 — Envelope stripping:_ Even after fixing the VDF regex, `_get_compat_tool_impl` added `result["success"] = True`, which got stripped by `_to_envelope()` (same envelope-stripping behavior as Bug 2). The frontend checked `!ctx?.success` which was `true` (missing), returning "Context unavailable."
 
 **Fix:**
+
 - **Backend** ([auth_shortcuts.py](py_modules/unifideck/rpc/mixins/auth_shortcuts.py#L169-L205)): Changed `\x01appid\x00` to `\x02appid\x00` in VDF binary regex. Removed `result.setdefault("success", True)` to avoid envelope stripping.
 - **Frontend** ([ubisoftShortcutLaunch.ts](src/utils/ubisoftShortcutLaunch.ts)): Changed from `!ctx?.success` check to `!ctx.appid_unsigned` check — the valid AppID proves the call succeeded regardless of envelope-stripped `success`.
 - **Shortcut persistence** ([shortcut.py](py_modules/unifideck/stores/ubisoft/auth/shortcut.py)): Always re-write VDF entry on `ensure_auth_shortcut()` so Steam re-discovers it after plugin reload.
@@ -365,6 +374,7 @@ Also added `notifyConnected(store)` to `AuthContext` so `useStoreAuth.connect()`
 **Root cause:** `LauncherService.launch()` at [service.py:172](py_modules/unifideck/services/launcher/service.py#L172) routes ALL `is_launch_action=False` contexts to `handle_store_auth`, which is designed for browser-based OAuth (Epic/GOG/Amazon/Microsoft). Ubisoft uses UPC (Ubisoft Connect) in a Wine prefix.
 
 **Fix:**
+
 - **Launcher routing** ([service.py](py_modules/unifideck/services/launcher/service.py#L172-L178)): Added Ubisoft branch before `handle_store_auth` — when `auth_store == "ubisoft"`, call `_launch_ubisoft_auth()`.
 - **Auth flow** ([auth.py](py_modules/unifideck/launcher/flows/auth.py#L65-L73)): Added Ubisoft early-return in `handle_store_auth` — when store is `"ubisoft"`, log and return `Result(success=True)` immediately. The session monitor (running in the plugin process) handles credential detection.
 
@@ -401,16 +411,19 @@ Also added `notifyConnected(store)` to `AuthContext` so `useStoreAuth.connect()`
 Added INFO-level logs at every step of the auth flow so future failures are self-diagnosing:
 
 **orchestrator.py:**
+
 - Auth URL (domain+path, no query params containing secrets)
 - Code captured (first/last 4 chars with length)
 - Exchange result (error + error_code)
 
 **browser.py:**
+
 - Captured redirect URL with `code=<REDACTED>` substitution
 - 30-second heartbeat showing CEF + Edge target counts
 - Content extraction failure reasons (first attempt at INFO, subsequent at DEBUG)
 
 **Per-store auth files:**
+
 - Epic: `[epic_auth] captured URL from legendary: https://legendary.gl/epiclogin`
 - GOG: `[GOGBrowserAuth] built OAuth URL: https://auth.gog.com/auth?client_id=REDACTED&redirect_uri=...`
 - Amazon: `[amazon_auth] received login URL from nile: https://amazon.com/ap/signin`
@@ -425,10 +438,12 @@ All code parameters are NEVER logged in plain text — redacted to first+last 4 
 Stale browser sessions (persisted in the shared Edge profile at `~/.local/share/unifideck/edge-auth/`) caused the OAuth page to auto-login without showing the login form. Added per-store cookie clearing:
 
 **Infrastructure:**
+
 - `EdgeProfileManager.clear_cookies_for_domain(domain)` in [profile.py](py_modules/unifideck/auth/edge_browser/profile.py) — SQLite DELETE on the Edge profile's `Default/Cookies` database
 - `EdgeBrowser.clear_store_cookies(domain)` in [edge.py](py_modules/unifideck/auth/edge_browser/edge.py) — delegation method
 
 **Store calls (in `start_auth()`, before auth launch):**
+
 - Epic: `clear_store_cookies("epicgames.com")`
 - GOG: `clear_store_cookies("gog.com")`
 - Amazon: `clear_store_cookies("amazon.com")`
@@ -451,43 +466,45 @@ Epic's `legendary auth` command outputs `https://legendary.gl/epiclogin` as the 
 ## Files Modified
 
 ### Frontend (TypeScript/TSX)
-| File | Changes |
-|------|---------|
-| `src/services/auth/AuthDispatcher.ts` | Fast-path `metadata.pending` guard; `edge_not_installed` error branch; per-store mutex |
-| `src/hooks/useStoreAuth.tsx` | `notifyConnected()` call on success |
-| `src/contexts/AuthContext.tsx` | `checkStoreStatus` array→map conversion; `notifyConnected()` method |
-| `src/components/modals/ChromiumInstallModal.tsx` | `result?.installed` check; diagnostic console.log |
-| `src/utils/ubisoftShortcutLaunch.ts` | `!ctx.appid_unsigned` check; diagnostic console.log |
+
+| File                                             | Changes                                                                                |
+| ------------------------------------------------ | -------------------------------------------------------------------------------------- |
+| `src/services/auth/AuthDispatcher.ts`            | Fast-path `metadata.pending` guard; `edge_not_installed` error branch; per-store mutex |
+| `src/hooks/useStoreAuth.tsx`                     | `notifyConnected()` call on success                                                    |
+| `src/contexts/AuthContext.tsx`                   | `checkStoreStatus` array→map conversion; `notifyConnected()` method                    |
+| `src/components/modals/ChromiumInstallModal.tsx` | `result?.installed` check; diagnostic console.log                                      |
+| `src/utils/ubisoftShortcutLaunch.ts`             | `!ctx.appid_unsigned` check; diagnostic console.log                                    |
 
 ### Backend (Python)
-| File | Changes |
-|------|---------|
-| `py_modules/unifideck/auth/orchestrator.py` | OAuth diagnostic logging; content extraction threading; exchange logging |
-| `py_modules/unifideck/auth/browser.py` | Dual-endpoint CDP polling; broad pattern matching; content extraction via websockets; `_extract_code()`; heartbeat logging; no-dedup for content pages |
-| `py_modules/unifideck/auth/edge_browser/launch.py` | Reverted `--app` → kept `--app={url}` (working) |
-| `py_modules/unifideck/auth/edge_browser/profile.py` | `clear_cookies_for_domain()` |
-| `py_modules/unifideck/auth/edge_browser/edge.py` | `clear_store_cookies()` instance method |
-| `py_modules/unifideck/services/bootstrap/constructor.py` | `edge_cdp_port` shared between monitor and EdgeBrowser |
-| `py_modules/unifideck/services/launcher/service.py` | Ubisoft auth routing |
-| `py_modules/unifideck/launcher/flows/auth.py` | Added `"microsoft"` to `_AUTH_URL_FILES`; Ubisoft early-return; `store.title()` fix |
-| `py_modules/unifideck/stores/epic/auth.py` | `legendary.gl` URL marker; `ProcessLookupError` catch; `_EPIC_REDIRECT_URIS` narrowed; content extraction params; auth URL logging |
-| `py_modules/unifideck/stores/gog/auth.py` | Auth URL parameter logging |
-| `py_modules/unifideck/stores/gog/http.py` | `ssl_ctx_permissive` for token exchange |
-| `py_modules/unifideck/stores/amazon/amazon_auth.py` | Auth URL logging |
-| `py_modules/unifideck/stores/amazon/amazon_store.py` | Cookie clearing |
-| `py_modules/unifideck/stores/microsoft/microsoft_auth.py` | `ssl_ctx_permissive` for all HTTP calls |
-| `py_modules/unifideck/stores/microsoft/microsoft_subscription.py` | `ssl_ctx_permissive` |
-| `py_modules/unifideck/stores/microsoft/microsoft_browser_auth.py` | Auth URL parameter logging |
-| `py_modules/unifideck/stores/microsoft/microsoft_store.py` | Cookie clearing |
-| `py_modules/unifideck/stores/ubisoft/auth/facade.py` | `pending: True` in metadata |
-| `py_modules/unifideck/stores/ubisoft/auth/shortcut.py` | VDF rewrite on existing shortcut |
-| `py_modules/unifideck/stores/ubisoft/installer/cache.py` | `ssl_ctx_permissive` for installer download |
-| `py_modules/unifideck/stores/ubisoft/store.py` | `ensure_auth_prefix()` in start_auth; cookie clearing TODO |
-| `py_modules/unifideck/stores/epic/store.py` | Cookie clearing |
-| `py_modules/unifideck/stores/gog/store.py` | Cookie clearing |
-| `py_modules/unifideck/compatibility/proton_helpers.py` | AppID resolution (reverted to simple version) |
-| `py_modules/unifideck/rpc/mixins/auth_shortcuts.py` | VDF `\x02appid\x00` parsing; removed `success` from result; diagnostic logging |
-| `py_modules/unifideck/rpc/mixins/edge.py` | Return `{installed, error}` instead of `{success, error}` |
-| `py_modules/unifideck/rpc/mixins/sync.py` | `.sync()` → `.sync_all()`; `resync_artwork` parameter |
-| `py_modules/unifideck/rpc/handlers/store.py` | `.sync()` → `.sync_all()` |
-| `py_modules/unifideck/bootstrap/boot.py` | `SyncService` arg order swap |
+
+| File                                                              | Changes                                                                                                                                                |
+| ----------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `py_modules/unifideck/auth/orchestrator.py`                       | OAuth diagnostic logging; content extraction threading; exchange logging                                                                               |
+| `py_modules/unifideck/auth/browser.py`                            | Dual-endpoint CDP polling; broad pattern matching; content extraction via websockets; `_extract_code()`; heartbeat logging; no-dedup for content pages |
+| `py_modules/unifideck/auth/edge_browser/launch.py`                | Reverted `--app` → kept `--app={url}` (working)                                                                                                        |
+| `py_modules/unifideck/auth/edge_browser/profile.py`               | `clear_cookies_for_domain()`                                                                                                                           |
+| `py_modules/unifideck/auth/edge_browser/edge.py`                  | `clear_store_cookies()` instance method                                                                                                                |
+| `py_modules/unifideck/services/bootstrap/constructor.py`          | `edge_cdp_port` shared between monitor and EdgeBrowser                                                                                                 |
+| `py_modules/unifideck/services/launcher/service.py`               | Ubisoft auth routing                                                                                                                                   |
+| `py_modules/unifideck/launcher/flows/auth.py`                     | Added `"microsoft"` to `_AUTH_URL_FILES`; Ubisoft early-return; `store.title()` fix                                                                    |
+| `py_modules/unifideck/stores/epic/auth.py`                        | `legendary.gl` URL marker; `ProcessLookupError` catch; `_EPIC_REDIRECT_URIS` narrowed; content extraction params; auth URL logging                     |
+| `py_modules/unifideck/stores/gog/auth.py`                         | Auth URL parameter logging                                                                                                                             |
+| `py_modules/unifideck/stores/gog/http.py`                         | `ssl_ctx_permissive` for token exchange                                                                                                                |
+| `py_modules/unifideck/stores/amazon/amazon_auth.py`               | Auth URL logging                                                                                                                                       |
+| `py_modules/unifideck/stores/amazon/amazon_store.py`              | Cookie clearing                                                                                                                                        |
+| `py_modules/unifideck/stores/microsoft/microsoft_auth.py`         | `ssl_ctx_permissive` for all HTTP calls                                                                                                                |
+| `py_modules/unifideck/stores/microsoft/microsoft_subscription.py` | `ssl_ctx_permissive`                                                                                                                                   |
+| `py_modules/unifideck/stores/microsoft/microsoft_browser_auth.py` | Auth URL parameter logging                                                                                                                             |
+| `py_modules/unifideck/stores/microsoft/microsoft_store.py`        | Cookie clearing                                                                                                                                        |
+| `py_modules/unifideck/stores/ubisoft/auth/facade.py`              | `pending: True` in metadata                                                                                                                            |
+| `py_modules/unifideck/stores/ubisoft/auth/shortcut.py`            | VDF rewrite on existing shortcut                                                                                                                       |
+| `py_modules/unifideck/stores/ubisoft/installer/cache.py`          | `ssl_ctx_permissive` for installer download                                                                                                            |
+| `py_modules/unifideck/stores/ubisoft/store.py`                    | `ensure_auth_prefix()` in start_auth; cookie clearing TODO                                                                                             |
+| `py_modules/unifideck/stores/epic/store.py`                       | Cookie clearing                                                                                                                                        |
+| `py_modules/unifideck/stores/gog/store.py`                        | Cookie clearing                                                                                                                                        |
+| `py_modules/unifideck/compatibility/proton_helpers.py`            | AppID resolution (reverted to simple version)                                                                                                          |
+| `py_modules/unifideck/rpc/mixins/auth_shortcuts.py`               | VDF `\x02appid\x00` parsing; removed `success` from result; diagnostic logging                                                                         |
+| `py_modules/unifideck/rpc/mixins/edge.py`                         | Return `{installed, error}` instead of `{success, error}`                                                                                              |
+| `py_modules/unifideck/rpc/mixins/sync.py`                         | `.sync()` → `.sync_all()`; `resync_artwork` parameter                                                                                                  |
+| `py_modules/unifideck/rpc/handlers/store.py`                      | `.sync()` → `.sync_all()`                                                                                                                              |
+| `py_modules/unifideck/bootstrap/boot.py`                          | `SyncService` arg order swap                                                                                                                           |

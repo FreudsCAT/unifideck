@@ -11,7 +11,12 @@
  * loop inside the provider feeds ``sync.progress``.
  */
 import { FC } from "react";
-import { PanelSection, PanelSectionRow, ButtonItem, showModal } from "@decky/ui";
+import {
+  PanelSection,
+  PanelSectionRow,
+  ButtonItem,
+  showModal,
+} from "@decky/ui";
 import { useTranslation } from "react-i18next";
 import { FaSync } from "react-icons/fa";
 import { useSync } from "../../contexts/SyncContext";
@@ -26,9 +31,7 @@ import { ForceSyncModal } from "../modals/ForceSyncModal";
 // stay hidden during artwork download if we required a specific
 // in-progress value. Inverting the check makes new phases work
 // without needing to add them here.
-const TERMINAL_STATUSES = new Set([
-  "idle", "complete", "error", "cancelled",
-]);
+const TERMINAL_STATUSES = new Set(["idle", "complete", "error", "cancelled"]);
 
 export const LibrarySync: FC = () => {
   const { t } = useTranslation();
@@ -51,9 +54,12 @@ export const LibrarySync: FC = () => {
   const isArtwork = progress?.status === "artwork";
   const isComplete = progress?.status === "complete";
   const isError = progress?.status === "error";
-  const barColor = isError ? "#ff6b6b"
-    : isComplete ? "#4caf50"
-    : isArtwork ? "#ff9800"
+  const barColor = isError
+    ? "#ff6b6b"
+    : isComplete
+    ? "#4caf50"
+    : isArtwork
+    ? "#ff9800"
     : "#1a9fff";
 
   return (
@@ -64,19 +70,25 @@ export const LibrarySync: FC = () => {
           disabled={isSyncing || !cooldown.canSync}
           onClick={() => void sync.startSync()}
         >
-          <div style={{
-            display: "flex", alignItems: "center",
-            gap: 8, justifyContent: "center",
-          }}>
-            <FaSync style={{
-              animation: isSyncing ? "spin 1s linear infinite" : "none",
-              opacity: cooldown.canSync ? 1 : 0.5,
-            }} />
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 8,
+              justifyContent: "center",
+            }}
+          >
+            <FaSync
+              style={{
+                animation: isSyncing ? "spin 1s linear infinite" : "none",
+                opacity: cooldown.canSync ? 1 : 0.5,
+              }}
+            />
             {isSyncing
               ? t("librarySync.syncing")
               : !cooldown.canSync
-                ? `${cooldown.remainingSecs}s`
-                : t("librarySync.syncLibraries")}
+              ? `${cooldown.remainingSecs}s`
+              : t("librarySync.syncLibraries")}
           </div>
         </ButtonItem>
       </PanelSectionRow>
@@ -86,10 +98,14 @@ export const LibrarySync: FC = () => {
           disabled={isSyncing || !cooldown.canSync}
           onClick={onForceSync}
         >
-          <div style={{
-            display: "flex", alignItems: "center",
-            gap: 8, justifyContent: "center",
-          }}>
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 8,
+              justifyContent: "center",
+            }}
+          >
             <FaSync style={{ opacity: cooldown.canSync ? 1 : 0.5 }} />
             {isSyncing ? "…" : t("librarySync.forceSync")}
           </div>
@@ -97,8 +113,11 @@ export const LibrarySync: FC = () => {
       </PanelSectionRow>
       {isSyncing && (
         <PanelSectionRow>
-          <ButtonItem layout="below" onClick={() => void sync.cancelSync()}
-            disabled={isCancelling}>
+          <ButtonItem
+            layout="below"
+            onClick={() => void sync.cancelSync()}
+            disabled={isCancelling}
+          >
             {isCancelling
               ? t("librarySync.cancelling", "Cancelling…")
               : t("librarySync.cancelSync")}
@@ -109,19 +128,29 @@ export const LibrarySync: FC = () => {
         <div style={{ fontSize: 12, width: "100%" }}>
           <div style={{ marginBottom: 5, opacity: 0.9 }}>
             {progress.current_game?.label
-              ? t(progress.current_game.label, progress.current_game.values ?? {})
+              ? t(
+                  progress.current_game.label,
+                  progress.current_game.values ?? {},
+                )
               : "…"}
           </div>
-          <div style={{
-            width: "100%", height: 4,
-            backgroundColor: "#333", borderRadius: 2, overflow: "hidden",
-          }}>
-            <div style={{
-              width: `${progress.progress_percent ?? 0}%`,
-              height: "100%",
-              backgroundColor: barColor,
-              transition: "width 0.3s ease",
-            }} />
+          <div
+            style={{
+              width: "100%",
+              height: 4,
+              backgroundColor: "#333",
+              borderRadius: 2,
+              overflow: "hidden",
+            }}
+          >
+            <div
+              style={{
+                width: `${progress.progress_percent ?? 0}%`,
+                height: "100%",
+                backgroundColor: barColor,
+                transition: "width 0.3s ease",
+              }}
+            />
           </div>
           <div style={{ marginTop: 5, opacity: 0.7 }}>
             {/* Per-counter visibility driven by ``*_total > 0`` so

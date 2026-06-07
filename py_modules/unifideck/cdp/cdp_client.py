@@ -11,6 +11,29 @@ from unifideck.utils.config_helpers import get_cfg
 logger = logging.getLogger(__name__)
 if TYPE_CHECKING:
     from unifideck.config import ConfigManager
+def _pick_target_rank(target: dict[str, Any], substring: str) -> int:
+    """Priority of a CEF page target for the library-UI pick (0 = unusable).
+
+    Multiple page targets share the ``steamloopback.host`` marker on
+    modern Steam builds (the ``SharedJSContext`` helper tab + the real
+    ``Steam Big Picture Mode`` window). ``SharedJSContext`` hosts the
+    helper ``document`` and ``querySelectorAll('button')`` returns 0
+    there, so it is the lowest-priority match.
+
+    4 = BPM window (by title); 3 = steamui ``/index.html`` URL (title
+    may differ); 2 = substring match excluding ``SharedJSContext``;
+    1 = any substring match (last resort — better than failing).
+    """
+    title = target.get("title")
+    if title == "Steam Big Picture Mode":
+        return 4
+    if "steamloopback.host/index.html" in target.get("url", ""):
+        return 3
+    if not substring or substring in target.get("url", ""):
+        return 1 if title == "SharedJSContext" else 2
+    return 0
+
+
 class CDPClient:
     """Cdpclient."""
     def __init__(
@@ -213,34 +236,15 @@ class CDPClient:
         us alive on older Steam builds where only one tab matched.
         """
         pages = [t for t in targets if t.get("type") == "page"]
-
-        # 1st pass: the real BPM/Steam UI window, identified by title.
+        # Highest-priority page wins; ties resolve to the first in
+        # document order. See ``_pick_target_rank`` for the priorities.
+        best: dict[str, Any] | None = None
+        best_rank = 0
         for t in pages:
-            if t.get("title") == "Steam Big Picture Mode":
-                return t
-
-        # 2nd pass: the steamui /index.html URL signature — covers
-        # builds where the title differs but the URL has the
-        # on-deck shared-context query string.
-        for t in pages:
-            url = t.get("url", "")
-            if "steamloopback.host/index.html" in url:
-                return t
-
-        # 3rd pass: anything matching the caller's substring, but
-        # explicitly skip SharedJSContext (it has 0 buttons).
-        for t in pages:
-            if t.get("title") == "SharedJSContext":
-                continue
-            if not substring or substring in t.get("url", ""):
-                return t
-
-        # Last resort: original behaviour. Better to connect
-        # to SharedJSContext than to fail outright.
-        for t in pages:
-            if not substring or substring in t.get("url", ""):
-                return t
-        return None
+            rank = _pick_target_rank(t, substring)
+            if rank > best_rank:
+                best, best_rank = t, rank
+        return best
     async def _send(self, method: str,
                     params: dict[str, Any]) -> dict[str, Any] | None:
         """Send."""

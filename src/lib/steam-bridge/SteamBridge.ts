@@ -11,10 +11,18 @@
  * passed via React context to consumers.
  */
 import { findInReactTree, type ReactTreeMatcher } from "./react-tree";
-import {getAppDetailsClasses, type AppDetailsClassNames} from "./app-details-classes";
+import {
+  getAppDetailsClasses,
+  type AppDetailsClassNames,
+} from "./app-details-classes";
 import { addRouterPatch, type RouterPatchHandle } from "./router-patch";
 import { getShortcutRunGameId } from "./shortcut-types";
-import type {SteamApp, SteamAppOverview, SteamCollection, Unregisterable} from "../../types/steam";
+import type {
+  SteamApp,
+  SteamAppOverview,
+  SteamCollection,
+  Unregisterable,
+} from "../../types/steam";
 export type { AppDetailsClassNames, ReactTreeMatcher, RouterPatchHandle };
 
 type AppLifetimeCallback = (notification: {
@@ -134,7 +142,10 @@ export class SteamBridge {
   /** Patch a router route to mount our React content at the
    *  given path. Returns a handle whose `.remove()` undoes
    *  the patch. */
-  addRouterPatch(path: string, patch: (props: unknown) => unknown): RouterPatchHandle {
+  addRouterPatch(
+    path: string,
+    patch: (props: unknown) => unknown,
+  ): RouterPatchHandle {
     return addRouterPatch(path, patch);
   }
 

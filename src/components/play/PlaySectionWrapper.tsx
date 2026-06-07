@@ -28,7 +28,7 @@ import { injectPlayFocusStyles } from "./play.css";
  */
 export interface PlaySectionWrapperProps {
   appId: number;
-  children: ReactNode;  // Steam's native play section
+  children: ReactNode; // Steam's native play section
 }
 
 /**
@@ -38,11 +38,16 @@ export interface PlaySectionWrapperProps {
  * based on `usePlaySection` and forwards the action
  * callbacks coming from `useGameActions`.
  */
-export const PlaySectionWrapper: FC<PlaySectionWrapperProps> = ({appId, children}) => {
+export const PlaySectionWrapper: FC<PlaySectionWrapperProps> = ({
+  appId,
+  children,
+}) => {
   const state = usePlaySection(appId);
   // Hide Steam's native section if we overriding it
   useHidePlaySection(appId, state.shouldOverride);
-  useEffect(() => { injectPlayFocusStyles(); }, []);
+  useEffect(() => {
+    injectPlayFocusStyles();
+  }, []);
   if (!state.shouldOverride) {
     return <>{children}</>;
   }

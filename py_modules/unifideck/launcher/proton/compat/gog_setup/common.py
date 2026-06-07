@@ -36,7 +36,7 @@ _LANG_MAP = {
 
 def language_name(lang_code: str) -> str:
     """Map a locale (``en-US``) to a GOG setup language name (``english``)."""
-    return _LANG_MAP.get(lang_code.split("-")[0], "english")
+    return _LANG_MAP.get(lang_code.split("-", maxsplit=1)[0], "english")
 
 
 def wait_for_prefix_ready(prefix_path: Path, timeout: int = 30) -> bool:
@@ -66,17 +66,25 @@ def load_manifest(game_id: str) -> dict[str, Any] | None:
 
 def get_dependencies(manifest: dict[str, Any]) -> list[str]:
     """Extract redistributable dependency IDs from a v1/v2 manifest."""
+    raw = (
+        _v1_depot_redists(manifest)
+        if manifest.get("version") == 1
+        else (manifest.get("dependencies", []) or [])
+    )
     deps: list[str] = []
-    if manifest.get("version") == 1:
-        for depot in manifest.get("product", {}).get("depots", []):
-            redist = depot.get("redist") if isinstance(depot, dict) else None
-            if redist and redist not in deps:
-                deps.append(redist)
-    else:
-        for dep in manifest.get("dependencies", []) or []:
-            if dep not in deps:
-                deps.append(dep)
+    for dep in raw:
+        if dep not in deps:
+            deps.append(dep)
     return deps
+
+
+def _v1_depot_redists(manifest: dict[str, Any]) -> list[Any]:
+    """The truthy ``redist`` ids from a v1 manifest's product depots."""
+    return [
+        depot.get("redist")
+        for depot in manifest.get("product", {}).get("depots", [])
+        if isinstance(depot, dict) and depot.get("redist")
+    ]
 
 
 def load_redist_manifest() -> dict[str, Any] | None:

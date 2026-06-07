@@ -185,43 +185,44 @@ def select_proton_version(
       4. Newest installed GE-Proton as a last resort.
     """
     tried: list[str] = []
-    if store_game_id:
-        saved_tool = get_saved_proton_tool(store_game_id)
-        if saved_tool:
-            tried.append(f"saved:{saved_tool}")
-            path = resolve_proton_path(saved_tool)
-            if path:
-                logger.info(
-                    "[launcher.proton] selected via saved per-game tool: %s",
-                    saved_tool,
-                )
-                return path, saved_tool
-    if steam_app_id:
-        steam_tool = get_steam_compat_tool_override(steam_app_id)
-        if steam_tool:
-            tried.append(f"steam:{steam_tool}")
-            path = resolve_proton_path(steam_tool)
-            if path:
-                logger.info(
-                    "[launcher.proton] selected via Steam override: %s",
-                    steam_tool,
-                )
-                return path, steam_tool
+    saved_tool = get_saved_proton_tool(store_game_id) if store_game_id else None
+    if saved_tool:
+        path = _resolve_logged("saved", saved_tool, tried)
+        if path:
+            return path, saved_tool
+    steam_tool = (
+        get_steam_compat_tool_override(steam_app_id) if steam_app_id else None
+    )
+    if steam_tool:
+        path = _resolve_logged("steam", steam_tool, tried)
+        if path:
+            return path, steam_tool
     unifideck_tool = get_unifideck_proton_tool()
     if unifideck_tool:
-        tried.append(f"unifideck:{unifideck_tool}")
-        path = resolve_proton_path(unifideck_tool)
+        path = _resolve_logged("unifideck", unifideck_tool, tried)
         if path:
-            logger.info(
-                "[launcher.proton] selected via Unifideck default: %s",
-                unifideck_tool,
-            )
             return path, unifideck_tool
+    return _proton_fallback(tried)
+
+
+def _resolve_logged(source: str, tool: str, tried: list[str]) -> Path | None:
+    """Record the attempt, resolve the tool to a path, log on success."""
+    tried.append(f"{source}:{tool}")
+    path = resolve_proton_path(tool)
+    if path:
+        logger.info("[launcher.proton] selected via %s tool: %s", source, tool)
+    return path
+
+
+def _proton_fallback(tried: list[str]) -> tuple[Path, str]:
+    """Newest installed GE-Proton as a last resort; raise if none."""
     fallback = find_any_ge_proton()
     if fallback:
         tool_id = fallback.parent.name
         tried.append(f"fallback:{tool_id}")
-        logger.info("[launcher.proton] selected via GE-Proton fallback: %s", tool_id)
+        logger.info(
+            "[launcher.proton] selected via GE-Proton fallback: %s", tool_id,
+        )
         return fallback, tool_id
     raise ProtonUnavailableError(
         "No usable Proton compat tool found",

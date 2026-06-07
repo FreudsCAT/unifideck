@@ -94,29 +94,36 @@ class _GamesMapMixin(_ReconcilePhasesMixin):
         before the next ``_save_all`` writes the v3 row).
         Returns True if at least one entry was deleted.
         """
-        legacy_exes: set[str] = set()
-        shortcuts_root = self._shortcuts.get("shortcuts") if isinstance(
-            self._shortcuts, dict,
-        ) else None
-        if isinstance(shortcuts_root, dict):
-            for entry in shortcuts_root.values():
-                if not isinstance(entry, dict):
-                    continue
-                if entry.get("appid") == app_id:
-                    exe = entry.get("Exe") or entry.get("exe") or ""
-                    if isinstance(exe, str):
-                        legacy_exes.add(exe.strip('"'))
-
-        keys_to_delete: list[str] = []
-        for key, entry in self._games_map.items():
-            if entry.app_id == app_id:
-                keys_to_delete.append(key)
-                continue
-            if entry.app_id == 0 and entry.exe in legacy_exes:
-                keys_to_delete.append(key)
+        legacy_exes = _GamesMapMixin._collect_legacy_exes(
+            self._shortcuts, app_id,
+        )
+        keys_to_delete = [
+            key
+            for key, entry in self._games_map.items()
+            if entry.app_id == app_id
+            or (entry.app_id == 0 and entry.exe in legacy_exes)
+        ]
         for key in keys_to_delete:
             del self._games_map[key]
         return bool(keys_to_delete)
+
+    @staticmethod
+    def _collect_legacy_exes(shortcuts: Any, app_id: int) -> set[str]:
+        """Exe paths of VDF entries matching *app_id*.
+
+        Used to match legacy v1/v2 games.map rows (``app_id == 0``)
+        against the loaded ``shortcuts.vdf`` during deletion.
+        """
+        root = shortcuts.get("shortcuts") if isinstance(shortcuts, dict) else None
+        if not isinstance(root, dict):
+            return set()
+        exes: set[str] = set()
+        for entry in root.values():
+            if isinstance(entry, dict) and entry.get("appid") == app_id:
+                exe = entry.get("Exe") or entry.get("exe") or ""
+                if isinstance(exe, str):
+                    exes.add(exe.strip('"'))
+        return exes
 
     async def mark_installed(
         self: Any,
@@ -152,25 +159,8 @@ class _GamesMapMixin(_ReconcilePhasesMixin):
         await self._load_games_map()
 
         target_launch = f"{store}:{store_game_id}"
-        shortcuts_root = self._shortcuts.get("shortcuts") if isinstance(
-            self._shortcuts, dict,
-        ) else None
-        if not isinstance(shortcuts_root, dict):
-            logger.warning(
-                "[ShortcutService] mark_installed %s — shortcuts.vdf empty",
-                target_launch,
-            )
-            return None
-
-        existing_app_id: int | None = _GamesMapMixin._flip_install_tag(
-            shortcuts_root, target_launch, installed=True,
-        )
+        existing_app_id: int | None = self._flip_existing_install(target_launch)
         if existing_app_id is None:
-            logger.warning(
-                "[ShortcutService] mark_installed %s — no shortcut "
-                "found (sync may not have run yet)",
-                target_launch,
-            )
             return None
 
         if not exe_path:
@@ -189,23 +179,62 @@ class _GamesMapMixin(_ReconcilePhasesMixin):
         )
 
         await self._save_all()
-
-        if self._bus:
-            from unifideck.core.types.events import Events
-            await self._bus.emit(
-                Events.SHORTCUT_INSTALL_STATE_CHANGED,
-                store=store,
-                store_game_id=store_game_id,
-                app_id=existing_app_id,
-                installed=True,
-                exe_path=exe_path,
-                install_path=install_path,
-            )
+        await self._emit_installed(
+            store, store_game_id, existing_app_id, exe_path, install_path,
+        )
         logger.info(
             "[ShortcutService] mark_installed %s → app_id=%d",
             target_launch, existing_app_id,
         )
         return existing_app_id
+
+    def _flip_existing_install(self: Any, target_launch: str) -> int | None:
+        """Flip the matching shortcut's install tag; return its app_id.
+
+        Returns ``None`` (with a warning) when ``shortcuts.vdf`` is
+        empty or no shortcut matches ``target_launch`` yet.
+        """
+        shortcuts_root = self._shortcuts.get("shortcuts") if isinstance(
+            self._shortcuts, dict,
+        ) else None
+        if not isinstance(shortcuts_root, dict):
+            logger.warning(
+                "[ShortcutService] mark_installed %s — shortcuts.vdf empty",
+                target_launch,
+            )
+            return None
+        existing_app_id: int | None = _GamesMapMixin._flip_install_tag(
+            shortcuts_root, target_launch, installed=True,
+        )
+        if existing_app_id is None:
+            logger.warning(
+                "[ShortcutService] mark_installed %s — no shortcut found "
+                "(sync may not have run yet)",
+                target_launch,
+            )
+        return existing_app_id
+
+    async def _emit_installed(
+        self: Any,
+        store: str,
+        store_game_id: str,
+        app_id: int,
+        exe_path: str,
+        install_path: str,
+    ) -> None:
+        """Emit SHORTCUT_INSTALL_STATE_CHANGED for a freshly-installed game."""
+        if not self._bus:
+            return
+        from unifideck.core.types.events import Events
+        await self._bus.emit(
+            Events.SHORTCUT_INSTALL_STATE_CHANGED,
+            store=store,
+            store_game_id=store_game_id,
+            app_id=app_id,
+            installed=True,
+            exe_path=exe_path,
+            install_path=install_path,
+        )
 
     @staticmethod
     def _flip_install_tag(

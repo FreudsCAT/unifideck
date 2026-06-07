@@ -24,7 +24,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import shutil
 from pathlib import Path
 from typing import Any
@@ -34,29 +33,25 @@ from unifideck.steam.steam_user import get_active_steam_user
 
 logger = logging.getLogger(__name__)
 
-SETTINGS_PATH = os.path.expanduser("~/.local/share/unifideck/settings.json")
+SETTINGS_PATH = Path.home() / ".local/share/unifideck/settings.json"
 
 # Auth token file locations (shared across all Steam accounts). Existence
 # of any one means there's a signed-in store worth migrating/clearing.
-AUTH_TOKEN_PATHS: dict[str, str] = {
-    "epic": os.path.expanduser("~/.config/legendary/user.json"),
-    "gog": os.path.expanduser("~/.config/unifideck/gog_token.json"),
-    "gogdl": os.path.expanduser("~/.config/unifideck/gogdl/auth.json"),
-    "amazon": os.path.expanduser("~/.config/nile/user.json"),
-    "amazon_library": os.path.expanduser("~/.config/nile/library.json"),
-    "amazon_installed": os.path.expanduser("~/.config/nile/installed.json"),
-    "ubisoft": os.path.expanduser("~/.local/share/unifideck/ubisoft_token.json"),
-    "ubisoft_session": os.path.expanduser(
-        "~/.local/share/unifideck/ubisoft_upc_session.txt"
-    ),
-    "microsoft": os.path.expanduser("~/.config/unifideck/microsoft_token.json"),
+AUTH_TOKEN_PATHS: dict[str, Path] = {
+    "epic": Path.home() / ".config/legendary/user.json",
+    "gog": Path.home() / ".config/unifideck/gog_token.json",
+    "gogdl": Path.home() / ".config/unifideck/gogdl/auth.json",
+    "amazon": Path.home() / ".config/nile/user.json",
+    "amazon_library": Path.home() / ".config/nile/library.json",
+    "amazon_installed": Path.home() / ".config/nile/installed.json",
+    "ubisoft": Path.home() / ".local/share/unifideck/ubisoft_token.json",
+    "ubisoft_session": Path.home() / ".local/share/unifideck/ubisoft_upc_session.txt",
+    "microsoft": Path.home() / ".config/unifideck/microsoft_token.json",
 }
 
 # Shared Unifideck data file (same path on the new branch —
 # see services/shortcut/registry.py DEFAULT_REGISTRY_PATH).
-REGISTRY_PATH = os.path.expanduser(
-    "~/.local/share/unifideck/shortcuts_registry.json"
-)
+REGISTRY_PATH = Path.home() / ".local/share/unifideck/shortcuts_registry.json"
 
 
 class AccountManager:
@@ -127,7 +122,7 @@ class AccountManager:
     def has_active_auth_tokens(self) -> bool:
         """True if any store auth-token file exists on disk."""
         for store, path in AUTH_TOKEN_PATHS.items():
-            if os.path.exists(path):
+            if path.exists():
                 logger.debug(
                     "[AccountSwitch] Found auth token for %s: %s", store, path
                 )
@@ -137,12 +132,12 @@ class AccountManager:
     def has_registry_entries(self) -> bool:
         """True if ``shortcuts_registry.json`` has any entries."""
         try:
-            if os.path.exists(REGISTRY_PATH):
-                with open(REGISTRY_PATH) as f:
+            if REGISTRY_PATH.exists():
+                with REGISTRY_PATH.open() as f:
                     registry = json.load(f)
                 return len(registry) > 0
-        except Exception as e:
-            logger.error("[AccountSwitch] Error reading registry: %s", e)
+        except Exception:
+            logger.exception("[AccountSwitch] Error reading registry")
         return False
 
     def save_current_user(self) -> None:
@@ -154,20 +149,20 @@ class AccountManager:
         if not self.current_user_id:
             return
         try:
-            os.makedirs(os.path.dirname(SETTINGS_PATH), exist_ok=True)
+            SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
             settings: dict[str, Any] = {}
-            if os.path.exists(SETTINGS_PATH):
-                with open(SETTINGS_PATH) as f:
+            if SETTINGS_PATH.exists():
+                with SETTINGS_PATH.open() as f:
                     settings = json.load(f)
             settings["last_known_user_id"] = self.current_user_id
-            with open(SETTINGS_PATH, "w") as f:
+            with SETTINGS_PATH.open("w") as f:
                 json.dump(settings, f, indent=2)
             logger.info(
                 "[AccountSwitch] Saved current user %s to settings",
                 self.current_user_id,
             )
-        except Exception as e:
-            logger.error("[AccountSwitch] Error saving current user: %s", e)
+        except Exception:
+            logger.exception("[AccountSwitch] Error saving current user")
 
     def migrate_artwork(self) -> dict[str, Any]:
         """Copy grid artwork from the previous user's folder to the current.
@@ -181,34 +176,43 @@ class AccountManager:
             result["errors"].append("Missing user IDs or steam path")
             return result
 
-        source_grid = os.path.join(
-            self.steam_path, "userdata", self.previous_user_id, "config", "grid"
+        source_grid = (
+            Path(self.steam_path)
+            / "userdata"
+            / self.previous_user_id
+            / "config"
+            / "grid"
         )
-        target_grid = os.path.join(
-            self.steam_path, "userdata", self.current_user_id, "config", "grid"
+        target_grid = (
+            Path(self.steam_path)
+            / "userdata"
+            / self.current_user_id
+            / "config"
+            / "grid"
         )
 
-        if not os.path.isdir(source_grid):
+        if not source_grid.is_dir():
             logger.info(
                 "[AccountSwitch] No artwork folder for previous user %s",
                 self.previous_user_id,
             )
             return result
 
-        os.makedirs(target_grid, exist_ok=True)
+        target_grid.mkdir(parents=True, exist_ok=True)
         try:
-            for filename in os.listdir(source_grid):
-                source_file = os.path.join(source_grid, filename)
-                target_file = os.path.join(target_grid, filename)
-                if not os.path.isfile(source_file):
+            for source_file in source_grid.iterdir():
+                target_file = target_grid / source_file.name
+                if not source_file.is_file():
                     continue
-                if os.path.exists(target_file):
+                if target_file.exists():
                     continue
                 try:
                     shutil.copy2(source_file, target_file)
                     result["copied"] += 1
                 except Exception as e:
-                    result["errors"].append(f"Failed to copy {filename}: {e}")
+                    result["errors"].append(
+                        f"Failed to copy {source_file.name}: {e}"
+                    )
             logger.info(
                 "[AccountSwitch] Copied %d artwork files from %s to %s",
                 result["copied"],
@@ -216,7 +220,7 @@ class AccountManager:
                 self.current_user_id,
             )
         except Exception as e:
-            logger.error("[AccountSwitch] Error migrating artwork: %s", e)
+            logger.exception("[AccountSwitch] Error migrating artwork")
             result["errors"].append(str(e))
 
         return result
@@ -224,10 +228,11 @@ class AccountManager:
     def _load_last_known_user(self) -> str | None:
         """Read ``last_known_user_id`` from settings; ``None`` if unset."""
         try:
-            if os.path.exists(SETTINGS_PATH):
-                with open(SETTINGS_PATH) as f:
+            if SETTINGS_PATH.exists():
+                with SETTINGS_PATH.open() as f:
                     settings = json.load(f)
-                return settings.get("last_known_user_id")
-        except Exception as e:
-            logger.error("[AccountSwitch] Error reading settings: %s", e)
+                value = settings.get("last_known_user_id")
+                return value if isinstance(value, str) else None
+        except Exception:
+            logger.exception("[AccountSwitch] Error reading settings")
         return None

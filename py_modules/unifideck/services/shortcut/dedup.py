@@ -50,34 +50,49 @@ def _normalize_launch_options(value: Any) -> str:
 
 def _score_one(entry: dict[str, Any]) -> int:
     """Score a single VDF shortcut entry by metadata richness."""
+    return _score_history(entry) + _score_identity(entry)
+
+
+def _score_history(entry: dict[str, Any]) -> int:
+    """Points for play-history + tag/icon metadata."""
     score = 0
     if entry.get("LastPlayTime"):
         score += 2
-    icon = entry.get("icon") or entry.get("Icon")
-    if isinstance(icon, str) and icon:
+    if _is_nonempty_str(entry.get("icon") or entry.get("Icon")):
         score += 1
     if entry.get("Playtime_Forever") or entry.get("playtime_forever"):
         score += 1
     tags = entry.get("tags") or entry.get("Tags") or {}
-    if isinstance(tags, dict) and any(v for v in tags.values()):
+    if isinstance(tags, dict) and any(tags.values()):
         score += 1
+    return score
+
+
+def _score_identity(entry: dict[str, Any]) -> int:
+    """Points for executable / launch-identity fields."""
+    score = 0
     exe = entry.get("exe") or entry.get("Exe") or ""
-    if isinstance(exe, str) and exe and exe not in ("/", ""):
+    if isinstance(exe, str) and exe and exe != "/":
         score += 2
     if entry.get("StartDir") or entry.get("startdir"):
         score += 1
     appname = entry.get("AppName") or entry.get("appname") or ""
     if isinstance(appname, str) and appname.strip():
         score += 1
-    if (
-        isinstance(exe, str)
-        and isinstance(appname, str)
-        and exe
-        and appname
-        and appname.lower() in exe.lower()
-    ):
+    if _appname_matches_exe(exe, appname):
         score += 1
     return score
+
+
+def _is_nonempty_str(value: Any) -> bool:
+    return isinstance(value, str) and bool(value)
+
+
+def _appname_matches_exe(exe: Any, appname: Any) -> bool:
+    """True when a non-empty AppName appears within the exe path."""
+    if not (isinstance(exe, str) and isinstance(appname, str)):
+        return False
+    return bool(exe) and bool(appname) and appname.lower() in exe.lower()
 
 
 def find_duplicate_losers(

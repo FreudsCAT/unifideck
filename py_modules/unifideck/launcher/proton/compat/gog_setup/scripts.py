@@ -9,10 +9,9 @@ dialog and poisoning the prefix.
 """
 from __future__ import annotations
 
-import glob
+import asyncio
 import json
 import logging
-import os
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -113,25 +112,43 @@ async def _apply_set_registry(
     await run_wine(plan, "reg.exe", reg_args)
 
 
+def _load_script_actions(
+    install_path: str, game_id: str,
+) -> list[tuple[str, list[Any]]]:
+    """Find and parse ``goggame-*.script`` files (blocking I/O).
+
+    Returns ``[(script_name, actions), ...]``. Synchronous so the
+    async caller can do all the filesystem work in a single
+    ``asyncio.to_thread`` hop rather than on the event loop.
+    """
+    base = Path(install_path)
+    scripts = list(base.glob(f"goggame-{game_id}.script")) or list(
+        base.glob("goggame-*.script"),
+    )
+    parsed: list[tuple[str, list[Any]]] = []
+    for script_file in scripts:
+        try:
+            data = json.loads(script_file.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as e:
+            logger.warning(
+                "[gog_setup] script parse failed %s: %s", script_file, e,
+            )
+            continue
+        actions = data.get("actions", []) if isinstance(data, dict) else []
+        parsed.append((script_file.name, actions))
+    return parsed
+
+
 async def apply_script_registry(
     plan: ProtonLaunchPlan, game_id: str, install_path: str,
 ) -> None:
     """Apply ``goggame-*.script`` setRegistry actions to the prefix."""
-    scripts = glob.glob(os.path.join(install_path, f"goggame-{game_id}.script"))
-    if not scripts:
-        scripts = glob.glob(os.path.join(install_path, "goggame-*.script"))
-    if not scripts:
-        return
-    for script_file in scripts:
-        try:
-            data = json.loads(Path(script_file).read_text(encoding="utf-8"))
-        except (OSError, ValueError) as e:
-            logger.warning("[gog_setup] script parse failed %s: %s", script_file, e)
-            continue
-        actions = data.get("actions", []) if isinstance(data, dict) else []
+    parsed = await asyncio.to_thread(
+        _load_script_actions, install_path, game_id,
+    )
+    for script_name, actions in parsed:
         logger.info(
-            "[gog_setup] %s: %d script action(s)",
-            os.path.basename(script_file), len(actions),
+            "[gog_setup] %s: %d script action(s)", script_name, len(actions),
         )
         for action in actions:
             install = action.get("install", {}) if isinstance(action, dict) else {}

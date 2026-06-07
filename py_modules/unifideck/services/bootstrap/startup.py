@@ -10,7 +10,7 @@ from __future__ import annotations
 import logging
 import stat
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from .container import ServiceContainer
@@ -155,6 +155,6 @@ async def _self_heal_auth_shortcuts(shortcut_svc: Any) -> None:
                 "[Startup] Removed %d leftover auth shortcut(s) from shortcuts.vdf",
                 len(keys_to_delete),
             )
-    except Exception as e:
-        logger.exception("[Startup] Failed to sweep leftover auth shortcuts: %s", e)
+    except Exception:
+        logger.exception("[Startup] Failed to sweep leftover auth shortcuts")
 

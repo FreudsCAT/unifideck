@@ -80,8 +80,10 @@ class _GogdlCreds:
         # ``heroic_gogdl/manifests/`` and dependencies-repo cache between
         # runs. Pointing it at the credentials tmpdir caused installs
         # to hang at "[API] Getting Dependencies repository".
+        # ``expanduser`` here is a cheap ``~`` → ``$HOME`` substitution,
+        # not blocking filesystem I/O, so it's safe in this async path.
         env["GOGDL_CONFIG_PATH"] = str(
-            Path(self._config.gogdl_config_dir).expanduser().parent,
+            Path(self._config.gogdl_config_dir).expanduser().parent,  # noqa: ASYNC240
         )
         # CRITICAL: Force unbuffered Python output in gogdl.
         # Without this, gogdl (a Python script) buffers output when

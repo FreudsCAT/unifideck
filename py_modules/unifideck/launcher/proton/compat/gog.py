@@ -12,10 +12,8 @@ Standalone: no ``unifideck.stores`` imports (launcher's slim Python).
 from __future__ import annotations
 
 import contextlib
-import glob
 import json
 import logging
-import os
 import subprocess
 import time
 from pathlib import Path
@@ -114,8 +112,8 @@ def resolve_fallback_exe(install_path: str) -> str | None:
     never bypassed (mirrors staging). Returns the first game-category
     ``FileTask`` exe that exists on disk, or None.
     """
-    for info_file in glob.glob(os.path.join(install_path, "goggame-*.info")):
-        tasks = _load_play_tasks(info_file)
+    for info_file in Path(install_path).glob("goggame-*.info"):
+        tasks = _load_play_tasks(str(info_file))
         primary = next((t for t in tasks if t.get("isPrimary")), None)
         if not primary or str(
             primary.get("category", "")
@@ -127,11 +125,9 @@ def resolve_fallback_exe(install_path: str) -> str | None:
                 and t.get("type") == "FileTask"
                 and t.get("path")
             ):
-                candidate = os.path.join(
-                    install_path, str(t["path"]).replace("\\", "/"),
-                )
-                if os.path.isfile(candidate):
-                    return candidate
+                candidate = Path(install_path) / str(t["path"]).replace("\\", "/")
+                if candidate.is_file():
+                    return str(candidate)
         return None
     return None
 
@@ -164,8 +160,19 @@ async def run_gog_launch(plan: ProtonLaunchPlan) -> int:
     GOG *native* (start.sh) never reaches here — it goes via launch_native.
     """
     work_dir = Path(plan.context.work_dir or plan.context.exe_path.parent)
+    await _apply_gog_prelaunch_setup(plan, work_dir)
+    plan.env["PROTON_ENABLE_NVAPI"] = "1"
+    return await _run_gog_with_fallback(plan, work_dir)
 
-    # Per-game language (goggame-*.info) — best-effort.
+
+async def _apply_gog_prelaunch_setup(
+    plan: ProtonLaunchPlan, work_dir: Path,
+) -> None:
+    """Best-effort first-launch setup: language, Galaxy stub, redistributables.
+
+    Each step is independent and never blocks the launch on failure.
+    """
+    # Per-game language (goggame-*.info).
     try:
         from unifideck.config.config_manager import ConfigManager
         from unifideck.launcher.proton.language_setup import apply_gog_language
@@ -194,14 +201,16 @@ async def run_gog_launch(plan: ProtonLaunchPlan) -> int:
     except Exception:
         logger.exception("[compat.gog] gog_setup failed (non-fatal)")
 
-    plan.env["PROTON_ENABLE_NVAPI"] = "1"
 
+async def _run_gog_with_fallback(
+    plan: ProtonLaunchPlan, work_dir: Path,
+) -> int:
+    """Run via Comet; retry the real game exe if a launcher stub bails early."""
     comet = start_comet(plan)
     try:
         start = time.monotonic()
         rc = await _run_umu_exe(plan, plan.context.exe_path)
         elapsed = time.monotonic() - start
-        # Broken launcher stub? Retry with the real game exe.
         if rc != 0 and elapsed < EARLY_EXIT_SECONDS:
             fallback = resolve_fallback_exe(str(work_dir))
             if fallback and fallback != str(plan.context.exe_path):

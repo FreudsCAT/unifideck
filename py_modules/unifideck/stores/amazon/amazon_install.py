@@ -395,10 +395,11 @@ class AmazonInstaller:
         info = installed.get(game_id)
         if info and info.get("path"):
             candidate = cast("str | None", info["path"])
-            if candidate and await asyncio.to_thread(lambda: Path(candidate).is_dir()):
-                return candidate
+            if candidate:
+                if await asyncio.to_thread(Path(candidate).is_dir):
+                    return candidate
         default = str(Path(base) / game_id)
-        if await asyncio.to_thread(lambda: Path(default).is_dir()):
+        if await asyncio.to_thread(Path(default).is_dir):
             return default
         # Nile may create a subdirectory named after the game title
         # rather than the game_id. Scan the base directory for any

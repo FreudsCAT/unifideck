@@ -56,7 +56,9 @@ const stageLabel = (key: string | undefined, t: TFunction): string => {
     case "parse_zip":
       return t("updater.stageParse", { defaultValue: "Verifying…" });
     case "uninstalling_previous":
-      return t("updater.stageRemove", { defaultValue: "Removing old version…" });
+      return t("updater.stageRemove", {
+        defaultValue: "Removing old version…",
+      });
     case "installing_plugin":
       return t("updater.stageInstall", { defaultValue: "Installing…" });
     case "download_remote":
@@ -69,7 +71,11 @@ const stageLabel = (key: string | undefined, t: TFunction): string => {
 // Best-effort lifecycle logging into the Unifideck log dir (per-session).
 // The backend may be mid-reload near the end of an install, so failures are ignored.
 const logEvent = (stage: string, detail: string) => {
-  void call<[string, string], unknown>(rpcRoutes.logUpdateEvent, stage, detail).catch(() => {});
+  void call<[string, string], unknown>(
+    rpcRoutes.logUpdateEvent,
+    stage,
+    detail,
+  ).catch(() => {});
 };
 
 // Selected release tag, persisted across QAM mount/unmount — the Quick-Access
@@ -95,16 +101,21 @@ export const PluginUpdater: FC = () => {
   const downloadActiveRef = useRef(false);
 
   // Fetch updates status
-  const { data: updateData, loading: checkingOnMount, refetch: checkUpdate } = useRPCQuery<
+  const {
+    data: updateData,
+    loading: checkingOnMount,
+    refetch: checkUpdate,
+  } = useRPCQuery<
     [],
     { available: boolean; current: string; latest: ReleaseInfo | null }
   >(rpcRoutes.checkPluginUpdate, []);
 
   // Fetch available versions
-  const { data: versionsData, loading: loadingVersions, refetch: refetchVersions } = useRPCQuery<
-    [],
-    ReleaseInfo[]
-  >(rpcRoutes.getAvailableVersions, []);
+  const {
+    data: versionsData,
+    loading: loadingVersions,
+    refetch: refetchVersions,
+  } = useRPCQuery<[], ReleaseInfo[]>(rpcRoutes.getAvailableVersions, []);
 
   const currentVersion = updateData?.current ?? "0.0.0";
   const initializedRef = useRef(false);
@@ -114,11 +125,15 @@ export const PluginUpdater: FC = () => {
   // default to the installed version, then latest, then newest.
   useEffect(() => {
     if (updateData && versionsData && !initializedRef.current) {
-      if (persistentSelectedTag && versionsData.some((v) => v.tag === persistentSelectedTag)) {
+      if (
+        persistentSelectedTag &&
+        versionsData.some((v) => v.tag === persistentSelectedTag)
+      ) {
         setSelectedTag(persistentSelectedTag);
       } else {
         const current = versionsData.find((v) => v.version === currentVersion);
-        const tag = current?.tag ?? updateData.latest?.tag ?? versionsData[0]?.tag ?? "";
+        const tag =
+          current?.tag ?? updateData.latest?.tag ?? versionsData[0]?.tag ?? "";
         persistentSelectedTag = tag || null;
         setSelectedTag(tag);
       }
@@ -176,7 +191,9 @@ export const PluginUpdater: FC = () => {
     return versionsData.map((v) => {
       let label = `v${v.version}`;
       if (v.version === currentVersion) {
-        label += ` (${t("updater.installedLabel", { defaultValue: "installed" })})`;
+        label += ` (${t("updater.installedLabel", {
+          defaultValue: "installed",
+        })})`;
       } else if (updateData?.latest?.version === v.version) {
         label += ` (${t("updater.latestLabel", { defaultValue: "latest" })})`;
       }
@@ -203,13 +220,17 @@ export const PluginUpdater: FC = () => {
     try {
       await Promise.all([checkUpdate(), refetchVersions()]);
       toast.success(
-        t("updater.checkCompleteTitle", { defaultValue: "Update Check Complete" }),
-        t("updater.checkCompleteMessage", { defaultValue: "Successfully fetched latest version info." })
+        t("updater.checkCompleteTitle", {
+          defaultValue: "Update Check Complete",
+        }),
+        t("updater.checkCompleteMessage", {
+          defaultValue: "Successfully fetched latest version info.",
+        }),
       );
     } catch (e: any) {
       toast.error(
         t("updater.checkFailedTitle", { defaultValue: "Check Failed" }),
-        e?.message ?? t("errors.unknown")
+        e?.message ?? t("errors.unknown"),
       );
     } finally {
       setChecking(false);
@@ -222,7 +243,7 @@ export const PluginUpdater: FC = () => {
       <ReleaseNotesModal
         version={selectedVersion}
         body={selectedRelease.body}
-      />
+      />,
     );
   };
 
@@ -233,7 +254,9 @@ export const PluginUpdater: FC = () => {
     if (!backend) {
       toast.error(
         t("updater.installFailedTitle", { defaultValue: "Install Failed" }),
-        t("updater.noBackend", { defaultValue: "Decky backend is unavailable." })
+        t("updater.noBackend", {
+          defaultValue: "Decky backend is unavailable.",
+        }),
       );
       return;
     }
@@ -246,19 +269,23 @@ export const PluginUpdater: FC = () => {
 
       if (cmp === 0) {
         installType = INSTALL_TYPE_REINSTALL;
-        typeLabel = t("updater.typeReinstall", { defaultValue: "Reinstalling" });
+        typeLabel = t("updater.typeReinstall", {
+          defaultValue: "Reinstalling",
+        });
       } else if (cmp < 0) {
         installType = INSTALL_TYPE_DOWNGRADE;
-        typeLabel = t("updater.typeDowngrade", { defaultValue: "Downgrading to" });
+        typeLabel = t("updater.typeDowngrade", {
+          defaultValue: "Downgrading to",
+        });
       }
 
       logEvent(
         "triggered",
-        `${typeLabel} v${selectedVersion} (type=${installType}) url=${selectedRelease.asset_url}`
+        `${typeLabel} v${selectedVersion} (type=${installType}) url=${selectedRelease.asset_url}`,
       );
       toast.info(
         t("updater.installingTitle", { defaultValue: "Installing Plugin" }),
-        `${typeLabel} v${selectedVersion}...`
+        `${typeLabel} v${selectedVersion}...`,
       );
 
       // Hand off to Decky Loader's installer via the GLOBAL ws router.
@@ -272,13 +299,13 @@ export const PluginUpdater: FC = () => {
         "Unifideck",
         selectedRelease.version,
         selectedRelease.sha256 || "",
-        installType
+        installType,
       );
     } catch (e: any) {
       logEvent("error", e?.message ?? String(e));
       toast.error(
         t("updater.installFailedTitle", { defaultValue: "Install Failed" }),
-        e?.message ?? t("errors.unknown")
+        e?.message ?? t("errors.unknown"),
       );
     } finally {
       // The call returns before the install runs; never leave the panel locked.
@@ -293,9 +320,13 @@ export const PluginUpdater: FC = () => {
   // Render header title
   const sectionTitle = useMemo(() => {
     if (isLoading) {
-      return `${t("updater.titleLoading", { defaultValue: "Checking version" })}...`;
+      return `${t("updater.titleLoading", {
+        defaultValue: "Checking version",
+      })}...`;
     }
-    return `${t("updater.currentTitle", { defaultValue: "Current" })} - v${currentVersion}`;
+    return `${t("updater.currentTitle", {
+      defaultValue: "Current",
+    })} - v${currentVersion}`;
   }, [currentVersion, isLoading, t]);
 
   return (
@@ -338,12 +369,20 @@ export const PluginUpdater: FC = () => {
                 disabled={busy}
               >
                 {downloadActive
-                  ? t("updater.installingButton", { defaultValue: "Installing..." })
+                  ? t("updater.installingButton", {
+                      defaultValue: "Installing...",
+                    })
                   : selectedVersion === currentVersion
-                  ? t("updater.reinstallButton", { defaultValue: `Reinstall v${selectedVersion}` })
+                  ? t("updater.reinstallButton", {
+                      defaultValue: `Reinstall v${selectedVersion}`,
+                    })
                   : compareVersions(selectedVersion, currentVersion) < 0
-                  ? t("updater.downgradeButton", { defaultValue: `Downgrade to v${selectedVersion}` })
-                  : t("updater.updateButton", { defaultValue: `Update to v${selectedVersion}` })}
+                  ? t("updater.downgradeButton", {
+                      defaultValue: `Downgrade to v${selectedVersion}`,
+                    })
+                  : t("updater.updateButton", {
+                      defaultValue: `Update to v${selectedVersion}`,
+                    })}
               </ButtonItem>
             </PanelSectionRow>
           )}
@@ -355,7 +394,9 @@ export const PluginUpdater: FC = () => {
                 onClick={handleShowReleaseNotes}
                 disabled={busy}
               >
-                {t("updater.releaseNotesButton", { defaultValue: "Release Notes" })}
+                {t("updater.releaseNotesButton", {
+                  defaultValue: "Release Notes",
+                })}
               </ButtonItem>
             </PanelSectionRow>
           )}
@@ -368,7 +409,9 @@ export const PluginUpdater: FC = () => {
             >
               {checking
                 ? t("updater.checkingButton", { defaultValue: "Checking..." })
-                : t("updater.checkButton", { defaultValue: "Check for Updates" })}
+                : t("updater.checkButton", {
+                    defaultValue: "Check for Updates",
+                  })}
             </ButtonItem>
           </PanelSectionRow>
         </>

@@ -177,9 +177,11 @@ export const PLAY_FOCUS_CSS = `
   background: linear-gradient(90deg, transparent 0%, #1a9fff 50%, transparent 100%);
   animation: unifideck-slide 1.5s linear infinite;
 }
+/* Decorative indeterminate shimmer: the sweep direction is purely
+   cosmetic and need not flip for RTL. */
 @keyframes unifideck-slide {
-  0%   { transform: translateX(-100%); }
-  100% { transform: translateX(250%); }
+  0%   { transform: translateX(-100%); } /* rtl-ignore */
+  100% { transform: translateX(250%); } /* rtl-ignore */
 }
 
 .unifideck-status-label {

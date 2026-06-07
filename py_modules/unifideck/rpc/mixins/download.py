@@ -112,7 +112,7 @@ class DownloadRPCMixin:
         storage_type = opts.pop("storage", None)
         base_path = _resolve_storage_path(storage_type, getattr(self, "config", None))
         if not base_path:
-            base_path = str(Path("~/Games").expanduser())
+            base_path = str(Path.home() / "Games")
 
         title: str = opts.pop("title", "") or opts.pop("game_title", "")
 
@@ -238,7 +238,7 @@ class DownloadRPCMixin:
             languages = await store.get_available_languages(game_id)
             return {"success": True, "languages": languages}
         except Exception as e:
-            logger.error("[download] get_gog_game_languages(%s) failed: %s", game_id, e)
+            logger.exception("[download] get_gog_game_languages(%s) failed", game_id)
             return {"success": False, "error": str(e), "languages": ["en-US"]}
 
     async def cancel_download(self, store: str, game_id: str) -> Any:
@@ -285,47 +285,68 @@ def _resolve_storage_path(storage_type: str | None, config: Any) -> str | None:
         return None
 
     if storage_type == "internal":
-        path = str(Path("~/Games").expanduser())
+        path = str(Path.home() / "Games")
         logger.debug("[download] resolved internal → %s", path)
         return path
-
     if storage_type == "sdcard":
-        home_dev = os.stat(str(Path.home())).st_dev
-        try:
-            with open("/proc/mounts") as f:
-                for line in f:
-                    parts = line.split()
-                    if len(parts) < 3:
-                        continue
-                    fstype = parts[2]
-                    if fstype in _SKIP_FSTYPES:
-                        continue
-                    mp = parts[1]
-                    try:
-                        if os.stat(mp).st_dev == home_dev:
-                            continue
-                    except OSError:
-                        continue
-                    if not os.access(mp, os.W_OK):
-                        continue
-                    games_path = os.path.join(mp, "Games")
-                    os.makedirs(games_path, exist_ok=True)
-                    logger.debug("[download] resolved sdcard → %s (%s)", games_path, fstype)
-                    return games_path
-        except OSError as e:
-            logger.warning("[download] sdcard resolution failed: %s", e)
-        return None
-
+        return _first_external_games_path()
     if storage_type == "custom":
-        if config is not None:
-            try:
-                path = config.get("download.custom_path", None)
-                if path:
-                    logger.debug("[download] resolved custom → %s", path)
-                    return path
-            except Exception as e:
-                logger.warning("[download] custom_path lookup failed: %s", e)
-        return None
-
+        return _custom_path(config)
     logger.warning("[download] unknown storage type: %s", storage_type)
+    return None
+
+
+def _stat_dev(p: Path) -> int:
+    """Return the ``st_dev`` of *p*, or -1 on error (never matches)."""
+    try:
+        return p.stat().st_dev
+    except OSError:
+        return -1
+
+
+def _is_external_mount(mp: str, fstype: str, home_dev: int) -> bool:
+    """True if *mp* is a writable mount on a device other than ``$HOME``."""
+    if fstype in _SKIP_FSTYPES:
+        return False
+    dev = _stat_dev(Path(mp))
+    if dev == -1 or dev == home_dev:
+        return False
+    return os.access(mp, os.W_OK)
+
+
+def _first_external_games_path() -> str | None:
+    """The sdcard target: the first external mount's ``Games/`` dir."""
+    home_dev = _stat_dev(Path.home())
+    try:
+        lines = Path("/proc/mounts").read_text().splitlines()
+        for line in lines:
+            parts = line.split()
+            if len(parts) < 3:
+                continue
+            mp, fstype = parts[1], parts[2]
+            if not _is_external_mount(mp, fstype, home_dev):
+                continue
+            games_path = Path(mp) / "Games"
+            games_path.mkdir(parents=True, exist_ok=True)
+            logger.debug(
+                "[download] resolved sdcard → %s (%s)", games_path, fstype,
+            )
+            return str(games_path)
+    except OSError as e:
+        logger.warning("[download] sdcard resolution failed: %s", e)
+    return None
+
+
+def _custom_path(config: Any) -> str | None:
+    """Read ``download.custom_path`` from config; None if unset/invalid."""
+    if config is None:
+        return None
+    try:
+        path = config.get("download.custom_path", None)
+    except Exception as e:
+        logger.warning("[download] custom_path lookup failed: %s", e)
+        return None
+    if isinstance(path, str) and path:
+        logger.debug("[download] resolved custom → %s", path)
+        return path
     return None

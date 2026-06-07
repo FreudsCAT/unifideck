@@ -92,7 +92,7 @@ export const IconGroup: FC<{ children: ReactNode }> = ({ children }) => (
     style={{
       display: "flex",
       gap: 8,
-      marginLeft: "auto",
+      marginInlineStart: "auto",
       flex: "0 0 auto",
     }}
   >
@@ -114,7 +114,9 @@ export function formatBytes(bytes: number | undefined | null): string {
 }
 
 /** Format a Unix timestamp (seconds) as a date string. */
-export function formatLastPlayed(rtLastTimePlayed: number | undefined | null): string {
+export function formatLastPlayed(
+  rtLastTimePlayed: number | undefined | null,
+): string {
   if (!rtLastTimePlayed || rtLastTimePlayed <= 0) return "—";
   const d = new Date(rtLastTimePlayed * 1000);
   return d.toLocaleDateString(undefined, {
@@ -164,7 +166,10 @@ interface MetaInlineProps {
  * off the action button (matches staging spacing).
  */
 export const MetaInline: FC<MetaInlineProps> = ({
-  sizeBytes, showLastPlayed = false, appId, installed = false,
+  sizeBytes,
+  showLastPlayed = false,
+  appId,
+  installed = false,
 }) => {
   const { t } = useTranslation();
   const [lastPlayed, setLastPlayed] = useState<number | null>(null);
@@ -179,15 +184,30 @@ export const MetaInline: FC<MetaInlineProps> = ({
   useEffect(() => {
     if (!showLastPlayed || appId == null) return;
     let cancelled = false;
-    const apps = (window as unknown as {
-      SteamClient?: { Apps?: { GetPlaytime?: (id: number) => Promise<{ rtLastTimePlayed?: number }> } };
-    }).SteamClient?.Apps;
+    const apps = (
+      window as unknown as {
+        SteamClient?: {
+          Apps?: {
+            GetPlaytime?: (
+              id: number,
+            ) => Promise<{ rtLastTimePlayed?: number }>;
+          };
+        };
+      }
+    ).SteamClient?.Apps;
     if (!apps?.GetPlaytime) return;
-    apps.GetPlaytime(appId).then((res) => {
-      if (cancelled) return;
-      setLastPlayed(res?.rtLastTimePlayed ?? null);
-    }).catch(() => { /* ignore */ });
-    return () => { cancelled = true; };
+    apps
+      .GetPlaytime(appId)
+      .then((res) => {
+        if (cancelled) return;
+        setLastPlayed(res?.rtLastTimePlayed ?? null);
+      })
+      .catch(() => {
+        /* ignore */
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [appId, showLastPlayed]);
 
   return (
@@ -196,18 +216,24 @@ export const MetaInline: FC<MetaInlineProps> = ({
         display: "flex",
         alignItems: "center",
         gap: 32,
-        marginLeft: 20,
+        marginInlineStart: 20,
         flex: "0 1 auto",
       }}
     >
       <MetaItem
-        label={installed ? t("playMeta.installedSize") : t("playMeta.spaceRequired")}
+        label={
+          installed ? t("playMeta.installedSize") : t("playMeta.spaceRequired")
+        }
         value={formatBytes(resolvedSize)}
       />
       {showLastPlayed && (
         <MetaItem
           label={t("playMeta.lastPlayed")}
-          value={lastPlayed ? formatLastPlayed(lastPlayed) : t("playMeta.neverPlayed")}
+          value={
+            lastPlayed
+              ? formatLastPlayed(lastPlayed)
+              : t("playMeta.neverPlayed")
+          }
         />
       )}
     </div>

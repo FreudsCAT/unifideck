@@ -57,9 +57,8 @@ interface AppStoreShape {
 
 /** Get app store entry. */
 function getAppStoreEntry(appId: number): AppStoreEntry | undefined {
-  const appStore = (window as unknown as { appStore?: AppStoreShape })
-    .appStore;
-    return appStore?.m_mapApps?.get?.(appId);
+  const appStore = (window as unknown as { appStore?: AppStoreShape }).appStore;
+  return appStore?.m_mapApps?.get?.(appId);
 }
 
 /** Resolve the canonical RunGame id for a Steam shortcut.
@@ -88,12 +87,10 @@ export function getShortcutRunGameId(appId: number): string {
  *  1 = launching, 4 = running. */
 function getShortcutDisplayStatus(appId: number): number | undefined {
   const entry = getAppStoreEntry(appId);
-  if (!entry)
-    return undefined;
+  if (!entry) return undefined;
 
   const local = entry.local_per_client_data?.display_status;
-  if (typeof local === "number")
-    return local;
+  if (typeof local === "number") return local;
 
   const perClient = entry.per_client_data?.[0]?.display_status;
 

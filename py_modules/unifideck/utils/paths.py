@@ -184,7 +184,7 @@ def _ensure_dir(path: str) -> None:
 def _device_id(path: str) -> int:
     """Return st_dev of *path*, or 0 on error."""
     try:
-        return os.stat(path).st_dev
+        return Path(path).stat().st_dev
     except OSError:
         return 0
 
@@ -203,34 +203,47 @@ def _scan_external_mounts() -> list[str]:
     """
     home_dev = _device_id(str(Path.home()))
     found: list[str] = []
-
     try:
-        with open("/proc/mounts") as f:
-            for line in f:
-                parts = line.split()
-                if len(parts) < 3:
-                    continue
-                mp = parts[1]
-                fstype = parts[2]
-                if fstype in _SKIP_FSTYPES:
-                    continue
-                if mp.startswith(_VIRTUAL_PREFIXES):
-                    continue
-                mp_path = Path(mp)
-                if not mp_path.is_dir():
-                    continue
-                if _device_id(mp) == home_dev:
-                    continue  # internal — already covered
-                # Direct subdirectories at mount root
-                found.extend(_collect_game_dirs(mp_path))
-                # One level deeper (e.g. /mount/<label>/Games)
-                with contextlib.suppress(OSError):
-                    for child in mp_path.iterdir():
-                        if child.is_dir() and not child.is_symlink():
-                            found.extend(_collect_game_dirs(child))
+        lines = Path("/proc/mounts").read_text().splitlines()
     except OSError as e:
         logger.debug("[paths] external mount scan failed: %s", e)
+        return found
+    for line in lines:
+        mp_path = _eligible_mount_point(line, home_dev)
+        if mp_path is not None:
+            found.extend(_collect_mount_game_dirs(mp_path))
+    return found
 
+
+def _eligible_mount_point(line: str, home_dev: int) -> Path | None:
+    """Return the mount ``Path`` for a writable external mount, else ``None``.
+
+    Skips short lines, system filesystem types, virtual prefixes,
+    non-directories, and the device hosting ``$HOME``.
+    """
+    parts = line.split()
+    if len(parts) < 3:
+        return None
+    mp, fstype = parts[1], parts[2]
+    if fstype in _SKIP_FSTYPES or mp.startswith(_VIRTUAL_PREFIXES):
+        return None
+    mp_path = Path(mp)
+    if not mp_path.is_dir() or _device_id(mp) == home_dev:
+        return None
+    return mp_path
+
+
+def _collect_mount_game_dirs(mp_path: Path) -> list[str]:
+    """Game dirs at the mount root plus one level deeper.
+
+    Some setups mount partitions inside a parent directory, so we
+    also scan immediate children. Symlinks are skipped to avoid loops.
+    """
+    found = list(_collect_game_dirs(mp_path))
+    with contextlib.suppress(OSError):
+        for child in mp_path.iterdir():
+            if child.is_dir() and not child.is_symlink():
+                found.extend(_collect_game_dirs(child))
     return found
 
 

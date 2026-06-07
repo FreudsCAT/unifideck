@@ -1,8 +1,9 @@
 # Steam UI Patching Reference Guide
 
-*Comprehensive reference for patching Steam Deck UI in Decky plugins*
+_Comprehensive reference for patching Steam Deck UI in Decky plugins_
 
 **Sources:**
+
 - `/home/deck/Downloads/decky-frontend-lib-main` - Decky UI library
 - `/home/deck/homebrew/plugins/SDH-CssLoader/` - CSSLoader CDP implementation
 - `/home/deck/Downloads/CSSLoader-Desktop-main` - CSSLoader desktop app
@@ -27,6 +28,7 @@
 ### Overview
 
 Steam's UI uses **obfuscated Webpack class names** (e.g., `_2a3b4c5d`). Decky's `@decky/ui` library provides:
+
 - Typed exports of class name mappings
 - Stable references that survive Steam updates
 - 1000+ exported class names across multiple modules
@@ -35,12 +37,12 @@ Steam's UI uses **obfuscated Webpack class names** (e.g., `_2a3b4c5d`). Decky's 
 
 ```typescript
 import {
-  playSectionClasses,           // 117 class names - PlaySection area
-  appActionButtonClasses,       // 49 class names - Play/Install buttons
-  appDetailsClasses,            // App details page structure
-  appDetailsHeaderClasses,      // Header-specific classes
-  basicAppDetailsSectionStylerClasses,  // Section styling
-  joinClassNames               // Utility for combining classes
+  playSectionClasses, // 117 class names - PlaySection area
+  appActionButtonClasses, // 49 class names - Play/Install buttons
+  appDetailsClasses, // App details page structure
+  appDetailsHeaderClasses, // Header-specific classes
+  basicAppDetailsSectionStylerClasses, // Section styling
+  joinClassNames, // Utility for combining classes
 } from "@decky/ui";
 ```
 
@@ -51,36 +53,43 @@ import {
 **Key groups (117 total classes):**
 
 **Layout & Containers:**
+
 - `PlayBar` - Main container
 - `Container`, `InnerContainer` - Content wrappers
 - `Row` - Horizontal layout
 - `StatusAndStats`, `StatusNameContainer` - Info sections
 
 **Action Buttons:**
+
 - `ChooseButton`, `ClaimButton`, `ClaimButtonContainer`
 - `ControllerConfigButton`, `FavoriteButton`
 - `MenuButton`, `MenuButtonContainer`, `MenuActive`
 
 **Progress & Status:**
+
 - `DownloadProgressBar`, `DetailsProgressBar`
 - `Downloading`, `DownloadPaused`
 - `CloudStatusIcon`, `CloudStatusLabel`, `CloudStatusRow`
 
 **Game Stats:**
+
 - `GameStat`, `GameStatIcon`, `GameStatRight`
 - `LastPlayed`, `LastPlayedInfo`
 - `Playtime`, `PlaytimeIcon`
 
 **UI States:**
+
 - `Visible`, `FeatureHidden`, `Disabled`
 - `InvalidPlatform`, `OfflineMode`
 - `SharedLibrary`, `ComingSoon`
 
 **Responsive Breakpoints:**
+
 - `BreakNarrow`, `BreakShort`, `BreakTall`, `BreakWide`, `BreakUltraWide`
 - `GamepadUIBreakNarrow`, `GamepadUIBreakWide`
 
 **Animation:**
+
 - `BackgroundAnimation`, `focusAnimation`, `hoverAnimation`
 - `SyncAnim`, `duration-app-launch`
 - `ItemFocusAnim-*` (multiple color variants)
@@ -90,6 +99,7 @@ import {
 **Location in decky-frontend-lib:** `src/utils/static-classes.ts` (lines 902-951)
 
 **Key classes (49 total):**
+
 - `PlayButton`, `PlayButtonContainer` - Main action button
 - `Green` - Green button variant (for Play)
 - `Disabled`, `NoAction` - Button states
@@ -100,6 +110,7 @@ import {
 ### How Class Names Work
 
 **Webpack Module Pattern:**
+
 ```typescript
 // Internal module structure (not directly accessible):
 {
@@ -116,6 +127,7 @@ export const playSectionClasses = findClassModule(
 ```
 
 **Usage in code:**
+
 ```typescript
 // Get obfuscated class name:
 const className = playSectionClasses.PlayBar;  // Returns "_2a3b4c5d" (actual value varies)
@@ -137,6 +149,7 @@ const className = playSectionClasses.PlayBar;  // Returns "_2a3b4c5d" (actual va
 ### Overview
 
 CDP enables **cross-process CSS/JS injection** in Steam's Chromium Embedded Framework (CEF). Required because:
+
 - Decky plugins run in isolated CEF process
 - Direct DOM manipulation doesn't work across processes
 - Must use CDP to reach Steam's UI process
@@ -329,6 +342,7 @@ async def inject_hide_css_cdp(self, appId: int):
 - `Runtime.evaluate` - Execute JavaScript in page
 
 **SessionID usage:**
+
 - Each tab has unique sessionId
 - Required for tab-specific commands
 - Obtained from `Target.attachedToTarget` response
@@ -340,6 +354,7 @@ async def inject_hide_css_cdp(self, appId: int):
 ### Overview
 
 **CEF Process Isolation Requirements:**
+
 - ❌ Direct DOM manipulation doesn't work
 - ❌ `document.querySelector()` finds wrong process
 - ✅ Must use React tree patching via `routerHook.addPatch`
@@ -352,10 +367,10 @@ async def inject_hide_css_cdp(self, appId: int):
 
 ```typescript
 import {
-  createReactTreePatcher,  // Main patching API
-  findInReactTree,        // Tree traversal
-  afterPatch,             // Function wrapper
-  routerHook              // Router patching
+  createReactTreePatcher, // Main patching API
+  findInReactTree, // Tree traversal
+  afterPatch, // Function wrapper
+  routerHook, // Router patching
 } from "@decky/ui";
 ```
 
@@ -384,18 +399,21 @@ routerHook.addPatch("/library/app/:appid", (routeProps: any) => {
 afterPatch(routeProps, "renderFunc", (args, ret) => {
   // Find by class name
   const container = findInReactTree(ret, (x: any) =>
-    x?.props?.className?.includes(appDetailsClasses.InnerContainer)
+    x?.props?.className?.includes(appDetailsClasses.InnerContainer),
   );
 
   // Find by prop structure
-  const overview = findInReactTree(ret, (x: any) =>
-    x?.props?.children?.props?.overview
+  const overview = findInReactTree(
+    ret,
+    (x: any) => x?.props?.children?.props?.overview,
   );
 
   // Find by component type
-  const playSection = findInReactTree(ret, (x: any) =>
-    Array.isArray(x?.props?.children) &&
-    x?.type?.toString().includes("PlaySection")
+  const playSection = findInReactTree(
+    ret,
+    (x: any) =>
+      Array.isArray(x?.props?.children) &&
+      x?.type?.toString().includes("PlaySection"),
   );
 
   return ret;
@@ -407,7 +425,7 @@ afterPatch(routeProps, "renderFunc", (args, ret) => {
 ```typescript
 afterPatch(routeProps, "renderFunc", (args, ret) => {
   const parent = findInReactTree(ret, (x: any) =>
-    x?.props?.className?.includes(appDetailsClasses.InnerContainer)
+    x?.props?.className?.includes(appDetailsClasses.InnerContainer),
   );
 
   if (!parent || !Array.isArray(parent.props.children)) {
@@ -415,17 +433,20 @@ afterPatch(routeProps, "renderFunc", (args, ret) => {
   }
 
   // Insert at specific index
-  parent.props.children.splice(2, 0,
-    React.createElement(MyCustomComponent, { appId })
+  parent.props.children.splice(
+    2,
+    0,
+    React.createElement(MyCustomComponent, { appId }),
   );
 
   // Or replace element
   const playIndex = parent.props.children.findIndex(
-    x => x?.props?.id === "play-section"
+    (x) => x?.props?.id === "play-section",
   );
   if (playIndex >= 0) {
-    parent.props.children[playIndex] =
-      React.createElement(MyPlayButton, { appId });
+    parent.props.children[playIndex] = React.createElement(MyPlayButton, {
+      appId,
+    });
   }
 
   return ret;
@@ -443,41 +464,44 @@ const patchHandler = createReactTreePatcher(
     (tree: any) => {
       const children = findInReactTree(
         tree,
-        (x: any) => x?.props?.children?.props?.overview
+        (x: any) => x?.props?.children?.props?.overview,
       )?.props?.children;
 
       const overview = children.props?.overview;
       const appId = overview?.appid;
       const displayName = overview?.display_name;
 
-      return children;  // Return node to patch
-    }
+      return children; // Return node to patch
+    },
   ],
   // Phase 2: Mutate
   (nodes: Array<any>, ret?: ReactElement) => {
-    const parent = findInReactTree(ret, (x: any) =>
-      Array.isArray(x?.props?.children) &&
-      x?.props?.className?.includes(appDetailsClasses.InnerContainer)
+    const parent = findInReactTree(
+      ret,
+      (x: any) =>
+        Array.isArray(x?.props?.children) &&
+        x?.props?.className?.includes(appDetailsClasses.InnerContainer),
     );
 
     // Smart insertion: find position relative to other elements
     const hltbIndex = parent.props.children.findIndex(
-      x => x.props.id === "hltb-for-deck"
+      (x) => x.props.id === "hltb-for-deck",
     );
     const appPanelIndex = parent.props.children.findIndex(
-      x => x.props.overview
+      (x) => x.props.overview,
     );
 
-    const insertIndex = hltbIndex >= 0
-      ? hltbIndex
-      : (appPanelIndex >= 0 ? appPanelIndex - 1 : -1);
+    const insertIndex =
+      hltbIndex >= 0 ? hltbIndex : appPanelIndex >= 0 ? appPanelIndex - 1 : -1;
 
-    parent.props.children.splice(insertIndex, 0,
-      <MyButton appId={appId} name={displayName} />
+    parent.props.children.splice(
+      insertIndex,
+      0,
+      <MyButton appId={appId} name={displayName} />,
     );
 
     return ret;
-  }
+  },
 );
 
 // Apply the patcher
@@ -531,7 +555,7 @@ useEffect(() => {
 
   observer.observe(topCapsule, {
     attributes: true,
-    attributeFilter: ["class"]
+    attributeFilter: ["class"],
   });
 
   return () => observer.disconnect();
@@ -547,6 +571,7 @@ useEffect(() => {
 **Location:** Rendered in `/library/app/:appid` route
 
 **React Tree Hierarchy:**
+
 ```
 AppDetailsPage
   └─ AppDetailsLayout
@@ -571,10 +596,12 @@ AppDetailsPage
 ### Unifideck PlaySection Strategy
 
 **Files:**
+
 - `src/components/PlayButtonOverride.tsx` - Custom PlaySection component
 - `src/index.tsx` - Patcher that injects component
 
 **Strategy:**
+
 1. **Inject custom component at index 0** (before PlaySection)
 2. **Hide native PlaySection via CDP** when game is uninstalled
 3. **Show native PlaySection** when game is installed (remove CDP CSS)
@@ -587,16 +614,18 @@ routerHook.addPatch("/library/app/:appid", (routeProps: any) => {
     const appId = parseInt(args[0].match.params.appid);
 
     // Find InnerContainer
-    const container = findInReactTree(ret, (x: any) =>
-      Array.isArray(x?.props?.children) &&
-      x?.props?.className?.includes(appDetailsClasses.InnerContainer)
+    const container = findInReactTree(
+      ret,
+      (x: any) =>
+        Array.isArray(x?.props?.children) &&
+        x?.props?.className?.includes(appDetailsClasses.InnerContainer),
     );
 
     if (!container) return ret;
 
     // Check if already injected
     const alreadyHasWrapper = container.props.children.some(
-      (x: any) => x?.props?.['data-unifideck-play-wrapper'] === "true"
+      (x: any) => x?.props?.["data-unifideck-play-wrapper"] === "true",
     );
 
     if (!alreadyHasWrapper) {
@@ -604,11 +633,13 @@ routerHook.addPatch("/library/app/:appid", (routeProps: any) => {
       injectHidePlaySectionCDP(appId);
 
       // Inject wrapper at index 0 (synchronous)
-      container.props.children.splice(0, 0,
+      container.props.children.splice(
+        0,
+        0,
         React.createElement(PlaySectionWrapper, {
           appId,
-          key: `unifideck-play-${appId}`
-        })
+          key: `unifideck-play-${appId}`,
+        }),
       );
     }
 
@@ -627,7 +658,7 @@ export const PlaySectionWrapper: FC<{ appId: number }> = ({ appId }) => {
   const [loading, setLoading] = useState(true);
   const [downloadState, setDownloadState] = useState({
     isDownloading: false,
-    progress: 0
+    progress: 0,
   });
 
   // Determine if we should show custom UI
@@ -639,9 +670,7 @@ export const PlaySectionWrapper: FC<{ appId: number }> = ({ appId }) => {
 
   // Remove hide CSS when game is installed
   useEffect(() => {
-    if (!loading &&
-        gameInfo?.is_installed &&
-        !downloadState.isDownloading) {
+    if (!loading && gameInfo?.is_installed && !downloadState.isDownloading) {
       removeHidePlaySectionCDP(appId);
     }
   }, [loading, gameInfo, downloadState.isDownloading, appId]);
@@ -649,10 +678,7 @@ export const PlaySectionWrapper: FC<{ appId: number }> = ({ appId }) => {
   // Render hidden anchor if not showing custom UI
   if (!shouldShowCustom) {
     return (
-      <div
-        data-unifideck-play-wrapper="true"
-        style={{ display: "none" }}
-      />
+      <div data-unifideck-play-wrapper="true" style={{ display: "none" }} />
     );
   }
 
@@ -664,14 +690,14 @@ export const PlaySectionWrapper: FC<{ appId: number }> = ({ appId }) => {
         display: "flex",
         alignItems: "center",
         padding: "16px 16px 16px 0",
-        gap: "0"
+        gap: "0",
       }}
     >
       <Focusable className={appActionButtonClasses.PlayButtonContainer}>
         <DialogButton
           className={joinClassNames(
             appActionButtonClasses.PlayButton,
-            !downloadState.isDownloading && appActionButtonClasses.Green
+            !downloadState.isDownloading && appActionButtonClasses.Green,
           )}
           onClick={handleClick}
         >
@@ -683,7 +709,13 @@ export const PlaySectionWrapper: FC<{ appId: number }> = ({ appId }) => {
 
       <div style={{ display: "flex", gap: "24px", marginLeft: "24px" }}>
         <div>
-          <div style={{ fontSize: "10px", textTransform: "uppercase", color: "#acb2b8" }}>
+          <div
+            style={{
+              fontSize: "10px",
+              textTransform: "uppercase",
+              color: "#acb2b8",
+            }}
+          >
             LAST PLAYED
           </div>
           <div style={{ color: "#c7d5e0", fontSize: "14px" }}>
@@ -691,7 +723,13 @@ export const PlaySectionWrapper: FC<{ appId: number }> = ({ appId }) => {
           </div>
         </div>
         <div>
-          <div style={{ fontSize: "10px", textTransform: "uppercase", color: "#acb2b8" }}>
+          <div
+            style={{
+              fontSize: "10px",
+              textTransform: "uppercase",
+              color: "#acb2b8",
+            }}
+          >
             PLAY TIME
           </div>
           <div style={{ color: "#c7d5e0", fontSize: "14px" }}>
@@ -727,12 +765,19 @@ async def inject_hide_css_cdp(self, appId: int):
 **CSS selectors target native PlaySection classes:**
 
 ```css
-._3Yf8b2v5oOD8Wqsxu04ar:not([data-unifideck-play-wrapper]) { display: none !important; }
-._2L3s2nzh7yCnNESfI5_dN1:not([data-unifideck-play-wrapper]) { display: none !important; }
-._3scbHORkYB7utTUGfkMCC_:not([data-unifideck-play-wrapper]) { display: none !important; }
+._3Yf8b2v5oOD8Wqsxu04ar:not([data-unifideck-play-wrapper]) {
+  display: none !important;
+}
+._2L3s2nzh7yCnNESfI5_dN1:not([data-unifideck-play-wrapper]) {
+  display: none !important;
+}
+._3scbHORkYB7utTUGfkMCC_:not([data-unifideck-play-wrapper]) {
+  display: none !important;
+}
 ```
 
 **`:not([data-unifideck-play-wrapper])` ensures:**
+
 - Only hides native PlaySection
 - Doesn't hide our custom component (which has the attribute)
 
@@ -743,6 +788,7 @@ async def inject_hide_css_cdp(self, appId: int):
 ### Problem: Steam Updates Change Obfuscated Names
 
 Steam occasionally updates Webpack, changing class hashes like:
+
 - `_3Yf8b2v5oOD8Wqsxu04ar` → `_4Zg9c3w6pPE9XrtywV05bs`
 
 ### Solution 1: Use Decky's Exports (Preferred)
@@ -757,6 +803,7 @@ const className = playSectionClasses.PlayBar;
 ```
 
 **Why this works:**
+
 - Decky scans webpack modules on each load
 - Uses finder functions to locate modules
 - Updates automatically when Steam updates
@@ -766,30 +813,36 @@ const className = playSectionClasses.PlayBar;
 **Manual discovery steps:**
 
 1. **Open Steam DevTools:**
+
    - Ctrl+Shift+I in Gaming Mode
    - Or: Settings → Developer → Enable CEF Remote Debugging
 
 2. **Navigate to game page:**
+
    - Go to `/library/app/:appid`
 
 3. **Inspect PlaySection:**
+
    - Right-click Play button → Inspect
    - Look at parent hierarchy
 
 4. **Example DOM structure:**
+
 ```html
-<div class="_3Yf8b2v5oOD8Wqsxu04ar"> ← PlaySection Container
-  <div class="_2L3s2nzh7yCnNESfI5_dN1"> ← InnerContainer
-    <div class="_3scbHORkYB7utTUGfkMCC_"> ← PlayButtonContainer
-      <button class="_1bB2a3c4d5e6f7g8h9i0 _9i8h7g6f5e4d3c2b1a0">
-        Play
-      </button>
+<div class="_3Yf8b2v5oOD8Wqsxu04ar">
+  ← PlaySection Container
+  <div class="_2L3s2nzh7yCnNESfI5_dN1">
+    ← InnerContainer
+    <div class="_3scbHORkYB7utTUGfkMCC_">
+      ← PlayButtonContainer
+      <button class="_1bB2a3c4d5e6f7g8h9i0 _9i8h7g6f5e4d3c2b1a0">Play</button>
     </div>
   </div>
 </div>
 ```
 
 5. **Update CSS selectors:**
+
 ```typescript
 const css_rules = `
 ._3Yf8b2v5oOD8Wqsxu04ar:not([data-unifideck-play-wrapper]) { display: none !important; }
@@ -806,8 +859,8 @@ const css_rules = `
 import { findClassModule, classMap } from "@decky/ui";
 
 // Find by distinctive property
-const myModule = findClassModule((m) =>
-  m.PlayBarDetailLabel  // Known unique property
+const myModule = findClassModule(
+  (m) => m.PlayBarDetailLabel, // Known unique property
 );
 
 console.log(myModule);
@@ -828,14 +881,16 @@ for (const module of classMap) {
 ```typescript
 function findPlaySectionElement(): Element | null {
   // Use known structure
-  const allDivs = document.querySelectorAll('[class]');
+  const allDivs = document.querySelectorAll("[class]");
 
   for (const div of allDivs) {
     const classes = Array.from(div.classList);
 
     // Look for distinctive patterns
-    if (classes.some(c => c.startsWith('_')) &&
-        div.querySelector('[class*="PlayButton"]')) {
+    if (
+      classes.some((c) => c.startsWith("_")) &&
+      div.querySelector('[class*="PlayButton"]')
+    ) {
       return div;
     }
   }
@@ -857,13 +912,16 @@ if (playSection) {
 
 ```javascript
 // Check if element exists with class
-document.querySelector('._3Yf8b2v5oOD8Wqsxu04ar');
+document.querySelector("._3Yf8b2v5oOD8Wqsxu04ar");
 // null = class is outdated
 // element = class is current
 
 // Check all potential classes
-['_3Yf8b2v5oOD8Wqsxu04ar', '_2L3s2nzh7yCnNESfI5_dN1', '_3scbHORkYB7utTUGfkMCC_']
-  .map(c => ({ class: c, found: !!document.querySelector('.' + c) }));
+[
+  "_3Yf8b2v5oOD8Wqsxu04ar",
+  "_2L3s2nzh7yCnNESfI5_dN1",
+  "_3scbHORkYB7utTUGfkMCC_",
+].map((c) => ({ class: c, found: !!document.querySelector("." + c) }));
 ```
 
 ---
@@ -885,7 +943,7 @@ Intercept Steam's game launch flow to show install modal before launch.
 import { useEffect } from "react";
 
 export function useGameActionInterceptor(
-  callback: (appId: string, cancel: () => void) => void
+  callback: (appId: string, cancel: () => void) => void,
 ) {
   useEffect(() => {
     const unregister = window.SteamClient?.Apps?.RegisterForGameActionStart(
@@ -895,7 +953,7 @@ export function useGameActionInterceptor(
             window.SteamClient?.Apps?.CancelGameAction(gameActionId);
           });
         }
-      }
+      },
     );
 
     return () => unregister?.unregister();
@@ -910,13 +968,13 @@ useGameActionInterceptor((appId, cancel) => {
   const gameInfo = getGameInfo(appId);
 
   if (gameInfo?.store === "epic" && !gameInfo.is_installed) {
-    cancel();  // Prevent launch
+    cancel(); // Prevent launch
 
     showModal(
       <InstallModal
         gameInfo={gameInfo}
         onInstall={() => startInstall(gameInfo)}
-      />
+      />,
     );
   }
 });
@@ -932,9 +990,9 @@ const handleClick = () => {
   // This will be caught by the interceptor
   window.SteamClient?.Apps?.RunGame(
     appId.toString(),
-    "",    // launchOptions
-    -1,    // unknown
-    100    // unknown
+    "", // launchOptions
+    -1, // unknown
+    100, // unknown
   );
 };
 ```
@@ -953,8 +1011,8 @@ declare global {
             gameActionId: number,
             appId: string,
             action: string,
-            unknown: any
-          ) => void
+            unknown: any,
+          ) => void,
         ) => { unregister: () => void };
 
         CancelGameAction: (gameActionId: number) => void;
@@ -963,7 +1021,7 @@ declare global {
           appId: string,
           launchOptions: string,
           unknown1: number,
-          unknown2: number
+          unknown2: number,
         ) => void;
 
         GetAppOverview: (appId: number) => {
@@ -988,12 +1046,14 @@ export {};
 ### 1. Always Use React Tree Patching
 
 **❌ Don't:**
+
 ```typescript
 // Direct DOM manipulation (doesn't work in CEF)
-document.querySelector('.play-button').style.display = 'none';
+document.querySelector(".play-button").style.display = "none";
 ```
 
 **✅ Do:**
+
 ```typescript
 // React tree patching
 routerHook.addPatch("/library/app/:appid", (routeProps) => {
@@ -1009,12 +1069,14 @@ routerHook.addPatch("/library/app/:appid", (routeProps) => {
 ### 2. Use Decky UI Class Exports
 
 **❌ Don't:**
+
 ```typescript
 // Hardcoded obfuscated classes (breaks on Steam updates)
 const className = "_3Yf8b2v5oOD8Wqsxu04ar";
 ```
 
 **✅ Do:**
+
 ```typescript
 // Decky-managed exports (updates automatically)
 import { playSectionClasses } from "@decky/ui";
@@ -1024,6 +1086,7 @@ const className = playSectionClasses.PlayBar;
 ### 3. Handle Async CDP Gracefully
 
 **❌ Don't:**
+
 ```typescript
 // Blocking on CDP
 await injectHidePlaySectionCDP(appId);
@@ -1031,30 +1094,35 @@ container.props.children.splice(0, 0, <Component />);
 ```
 
 **✅ Do:**
+
 ```typescript
 // Non-blocking CDP + sync React patching
-injectHidePlaySectionCDP(appId);  // Async, non-blocking
-container.props.children.splice(0, 0, <Component />);  // Synchronous
+injectHidePlaySectionCDP(appId); // Async, non-blocking
+container.props.children.splice(0, 0, <Component />); // Synchronous
 ```
 
 ### 4. Use Data Attributes for Deduplication
 
 **❌ Don't:**
+
 ```typescript
 // No way to check if already injected
 container.props.children.push(<MyComponent />);
 ```
 
 **✅ Do:**
+
 ```typescript
 // Check for data attribute
 const alreadyHasWrapper = container.props.children.some(
-  x => x?.props?.['data-unifideck-play-wrapper'] === "true"
+  (x) => x?.props?.["data-unifideck-play-wrapper"] === "true",
 );
 
 if (!alreadyHasWrapper) {
-  container.props.children.splice(0, 0,
-    <MyComponent data-unifideck-play-wrapper="true" />
+  container.props.children.splice(
+    0,
+    0,
+    <MyComponent data-unifideck-play-wrapper="true" />,
   );
 }
 ```
@@ -1062,12 +1130,14 @@ if (!alreadyHasWrapper) {
 ### 5. Clean Up Resources on Dismount
 
 **❌ Don't:**
+
 ```typescript
 // No cleanup
 routeManager.init();
 ```
 
 **✅ Do:**
+
 ```typescript
 // In Plugin class
 export default class Plugin {
@@ -1092,12 +1162,14 @@ export default class Plugin {
 ### 6. Index Placement for Compatibility
 
 **❌ Don't:**
+
 ```typescript
 // Index 0 conflicts with ProtonDB
 container.props.children.splice(0, 0, <MyComponent />);
 ```
 
 **✅ Do (if multiple plugins):**
+
 ```typescript
 // Index 2 avoids conflicts (ProtonDB uses 0-1)
 container.props.children.splice(2, 0, <MyComponent />);
@@ -1106,12 +1178,16 @@ container.props.children.splice(2, 0, <MyComponent />);
 ### 7. Use :not() Selectors for CDP CSS
 
 **❌ Don't:**
+
 ```css
 /* Hides everything, including custom components */
-._3Yf8b2v5oOD8Wqsxu04ar { display: none !important; }
+._3Yf8b2v5oOD8Wqsxu04ar {
+  display: none !important;
+}
 ```
 
 **✅ Do:**
+
 ```css
 /* Only hides elements without our data attribute */
 ._3Yf8b2v5oOD8Wqsxu04ar:not([data-unifideck-play-wrapper]) {
@@ -1122,6 +1198,7 @@ container.props.children.splice(2, 0, <MyComponent />);
 ### 8. Reconnect CDP on Errors
 
 **❌ Don't:**
+
 ```python
 # No reconnection logic
 async def inject_hide_css_cdp(self, appId):
@@ -1130,6 +1207,7 @@ async def inject_hide_css_cdp(self, appId):
 ```
 
 **✅ Do:**
+
 ```python
 # Reconnect on transport errors
 async def inject_hide_css_cdp(self, appId):
@@ -1162,7 +1240,7 @@ import {
   DialogButton,
   Focusable,
   showModal,
-  ConfirmModal
+  ConfirmModal,
 } from "@decky/ui";
 
 import { call, toaster } from "@decky/api";
@@ -1171,29 +1249,34 @@ import { call, toaster } from "@decky/api";
 ### Common Patterns
 
 **Patch game details page:**
+
 ```typescript
 routerHook.addPatch("/library/app/:appid", (routeProps) => { ... });
 ```
 
 **Find InnerContainer:**
+
 ```typescript
 const container = findInReactTree(ret, (x) =>
-  x?.props?.className?.includes(appDetailsClasses.InnerContainer)
+  x?.props?.className?.includes(appDetailsClasses.InnerContainer),
 );
 ```
 
 **Insert component:**
+
 ```typescript
 container.props.children.splice(index, 0, <Component />);
 ```
 
 **Inject CDP CSS:**
+
 ```typescript
 injectHidePlaySectionCDP(appId);  // Frontend
 await client.inject_hide_css(appId)  # Backend
 ```
 
 **Intercept game launch:**
+
 ```typescript
 window.SteamClient.Apps.RegisterForGameActionStart((id, appId, action) => {
   if (action === "LaunchApp") {
@@ -1207,22 +1290,27 @@ window.SteamClient.Apps.RegisterForGameActionStart((id, appId, action) => {
 ## Troubleshooting
 
 ### "Cannot write to closing transport"
+
 - **Cause:** CDP websocket closed/timeout
 - **Fix:** Add reconnection logic with `shutdown_cdp_client()` + `get_cdp_client()`
 
 ### Native PlaySection Not Hidden
+
 - **Cause:** CSS class names outdated
 - **Fix:** Inspect DOM, update selectors in `cdp_inject.py`
 
 ### Custom Component Not Appearing
+
 - **Cause:** Not using React tree patching
 - **Fix:** Use `routerHook.addPatch` + `afterPatch`, not DOM manipulation
 
 ### Changes Don't Persist After Navigation
+
 - **Cause:** React re-renders without re-patching
 - **Fix:** Ensure patch is registered on route, not on mount
 
 ### Multiple Components Injected
+
 - **Cause:** No deduplication check
 - **Fix:** Use data attribute to check if already injected
 
@@ -1238,4 +1326,4 @@ window.SteamClient.Apps.RegisterForGameActionStart((id, appId, action) => {
 
 ---
 
-*Last updated: 2026-02-09*
+_Last updated: 2026-02-09_

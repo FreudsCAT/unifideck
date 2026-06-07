@@ -24,13 +24,19 @@ function readMode(): GameDetailsViewMode {
   try {
     const stored = localStorage.getItem(LS_KEY);
     if (stored === "compact" || stored === "full") return stored;
-  } catch { /* CEF may deny access */ }
+  } catch {
+    /* CEF may deny access */
+  }
   return DEFAULT_MODE;
 }
 
 function writeMode(mode: GameDetailsViewMode): void {
   (window as unknown as Record<string, unknown>)[WIN_KEY] = mode;
-  try { localStorage.setItem(LS_KEY, mode); } catch { /* ignore */ }
+  try {
+    localStorage.setItem(LS_KEY, mode);
+  } catch {
+    /* ignore */
+  }
   window.dispatchEvent(new CustomEvent(CHANGE_EVENT, { detail: mode }));
 }
 

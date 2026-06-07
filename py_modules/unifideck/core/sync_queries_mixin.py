@@ -79,7 +79,7 @@ class _SyncQueriesMixin:
                 "syncing": False,
                 "last_sync_time": self._last_sync_time,
             }
-        result = progress.to_dict()
+        result: dict[str, Any] = progress.to_dict()
         in_flight = result.get("status") not in (
             "complete", "error", "cancelled", "idle",
         )

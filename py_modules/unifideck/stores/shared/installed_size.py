@@ -27,20 +27,36 @@ def dir_size_bytes(path: str) -> int:
     total = 0
     stack = [path]
     while stack:
-        current = stack.pop()
-        try:
-            with os.scandir(current) as it:
-                for entry in it:
-                    try:
-                        if entry.is_dir(follow_symlinks=False):
-                            stack.append(entry.path)
-                        elif entry.is_file(follow_symlinks=False):
-                            total += entry.stat(follow_symlinks=False).st_size
-                    except OSError:
-                        continue
-        except OSError:
-            continue
+        subdirs, size = _scan_one_dir(stack.pop())
+        stack.extend(subdirs)
+        total += size
     return total
+
+
+def _scan_one_dir(current: str) -> tuple[list[str], int]:
+    """Return ``(subdir paths, summed file bytes)`` for one directory level."""
+    subdirs: list[str] = []
+    total = 0
+    try:
+        with os.scandir(current) as it:
+            for entry in it:
+                total += _entry_size(entry, subdirs)
+    except OSError:
+        return subdirs, total
+    return subdirs, total
+
+
+def _entry_size(entry: os.DirEntry[str], subdirs: list[str]) -> int:
+    """Queue directories onto *subdirs*; return a file's byte size (else 0)."""
+    try:
+        if entry.is_dir(follow_symlinks=False):
+            subdirs.append(entry.path)
+            return 0
+        if entry.is_file(follow_symlinks=False):
+            return entry.stat(follow_symlinks=False).st_size
+    except OSError:
+        return 0
+    return 0
 
 
 async def installed_size_bytes(

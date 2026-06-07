@@ -75,20 +75,7 @@ async def run_umu_with_retry(
                 attempt, max_attempts, argv[:3],
                 "game.log" if out is not None else "inherited",
             )
-            proc = await asyncio.create_subprocess_exec(
-                *argv,
-                env=env,
-                cwd=str(cwd) if cwd else None,
-                stdout=out,
-                stderr=out,
-                start_new_session=True,
-            )
-            if on_start is not None:
-                try:
-                    on_start(proc)
-                except Exception:
-                    logger.exception("[launcher.umu] on_start callback failed")
-            rc = await proc.wait()
+            rc = await _run_umu_once(argv, env, cwd, out, on_start)
             last_rc = rc
             logger.info("[launcher.umu] attempt %d exit code: %d", attempt, rc)
             if rc == 0:
@@ -106,3 +93,27 @@ async def run_umu_with_retry(
         if game_log is not None:
             with contextlib.suppress(OSError):
                 game_log.close()
+
+
+async def _run_umu_once(
+    argv: list[str],
+    env: dict[str, str] | None,
+    cwd: Path | None,
+    out: Any,
+    on_start: Callable[[object], None] | None,
+) -> int:
+    """Spawn one umu process, fire ``on_start``, await its exit code."""
+    proc = await asyncio.create_subprocess_exec(
+        *argv,
+        env=env,
+        cwd=str(cwd) if cwd else None,
+        stdout=out,
+        stderr=out,
+        start_new_session=True,
+    )
+    if on_start is not None:
+        try:
+            on_start(proc)
+        except Exception:
+            logger.exception("[launcher.umu] on_start callback failed")
+    return await proc.wait()

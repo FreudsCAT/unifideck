@@ -117,9 +117,7 @@ def _is_safe_to_delete(p: Path) -> bool:
     """Guard against ``rmtree`` on the home dir, ``/``, or shallow roots."""
     resolved = p.resolve()
     home = Path.home().resolve()
-    if resolved in (home, Path("/")) or len(resolved.parts) < 3:
-        return False
-    return True
+    return resolved not in (home, Path("/")) and len(resolved.parts) >= 3
 
 
 class EpicInstaller:
@@ -440,9 +438,7 @@ class EpicInstaller:
 
     async def _delete_prefix(self, game_id: str) -> None:
         """Remove the game's Proton prefix (``delete_prefix`` path)."""
-        prefix = (
-            Path("~/.local/share/unifideck/prefixes").expanduser() / game_id
-        )
+        prefix = Path.home() / ".local/share/unifideck/prefixes" / game_id
         if not await asyncio.to_thread(prefix.exists):
             return
         if not _is_safe_to_delete(prefix):

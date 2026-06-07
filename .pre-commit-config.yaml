@@ -44,7 +44,7 @@ repos:
     hooks:
       - id: bandit
         args: [-c, pyproject.toml]
-        additional_dependencies: ['bandit[toml]']
+        additional_dependencies: ["bandit[toml]"]
         files: ^(py_modules/|main\.py$)
 
   - repo: https://github.com/gitleaks/gitleaks
@@ -53,5 +53,5 @@ repos:
       - id: gitleaks
 
 ci:
-  autofix_commit_msg: 'style: pre-commit autofixes'
+  autofix_commit_msg: "style: pre-commit autofixes"
   autoupdate_schedule: monthly

@@ -21,15 +21,17 @@ interface Props {
 }
 
 const SUPPORT_URLS: Record<string, string> = {
-  epic:      "https://www.epicgames.com/help/assistant",
-  gog:       "https://support.gog.com/hc/en-us?product=gog",
-  amazon:    "https://www.amazon.in/gp/help/customer/display.html?nodeId=GA5ZHN5T2JX8UGF7",
-  ubisoft:   "https://www.ubisoft.com/en-us/help",
-  ea:        "https://help.ea.com/en/",
+  epic: "https://www.epicgames.com/help/assistant",
+  gog: "https://support.gog.com/hc/en-us?product=gog",
+  amazon:
+    "https://www.amazon.in/gp/help/customer/display.html?nodeId=GA5ZHN5T2JX8UGF7",
+  ubisoft: "https://www.ubisoft.com/en-us/help",
+  ea: "https://help.ea.com/en/",
   battlenet: "https://us.battle.net/support/en/",
-  itch:      "https://itch.io/support",
-  microsoft: "https://support.xbox.com/en-US/help/games-apps/game-setup-and-play/troubleshoot-pc-games",
-  steam:     "https://help.steampowered.com",
+  itch: "https://itch.io/support",
+  microsoft:
+    "https://support.xbox.com/en-US/help/games-apps/game-setup-and-play/troubleshoot-pc-games",
+  steam: "https://help.steampowered.com",
 };
 
 function openUrl(url: string): void {
@@ -57,9 +59,7 @@ export const GameInfoNavButtons: FC<Props> = ({ meta }) => {
   const { t } = useTranslation();
   const steamId = meta.steam_app_id;
   const hasSteam = meta.has_steam_store_page && steamId > 0;
-  const storePageUrl = hasSteam
-    ? `steam://store/${steamId}`
-    : meta.store_url;
+  const storePageUrl = hasSteam ? `steam://store/${steamId}` : meta.store_url;
 
   return (
     <Focusable
@@ -88,9 +88,11 @@ export const GameInfoNavButtons: FC<Props> = ({ meta }) => {
           <DialogButton
             className="unifideck-nav-button"
             style={buttonStyle}
-            onClick={() => openUrl(
-              `steam://openurl/https://store.steampowered.com/dlc/${steamId}`,
-            )}
+            onClick={() =>
+              openUrl(
+                `steam://openurl/https://store.steampowered.com/dlc/${steamId}`,
+              )
+            }
           >
             {t("gameInfoPanel.buttons.dlc")}
           </DialogButton>
@@ -104,27 +106,33 @@ export const GameInfoNavButtons: FC<Props> = ({ meta }) => {
           <DialogButton
             className="unifideck-nav-button"
             style={buttonStyle}
-            onClick={() => openUrl(
-              `steam://openurl/https://store.steampowered.com/points/shop/app/${steamId}`,
-            )}
+            onClick={() =>
+              openUrl(
+                `steam://openurl/https://store.steampowered.com/points/shop/app/${steamId}`,
+              )
+            }
           >
             {t("gameInfoPanel.buttons.pointsShop")}
           </DialogButton>
           <DialogButton
             className="unifideck-nav-button"
             style={buttonStyle}
-            onClick={() => openUrl(
-              `steam://openurl/https://steamcommunity.com/app/${steamId}/discussions/`,
-            )}
+            onClick={() =>
+              openUrl(
+                `steam://openurl/https://steamcommunity.com/app/${steamId}/discussions/`,
+              )
+            }
           >
             {t("gameInfoPanel.buttons.discussions")}
           </DialogButton>
           <DialogButton
             className="unifideck-nav-button"
             style={buttonStyle}
-            onClick={() => openUrl(
-              `steam://openurl/https://steamcommunity.com/app/${steamId}/guides/`,
-            )}
+            onClick={() =>
+              openUrl(
+                `steam://openurl/https://steamcommunity.com/app/${steamId}/guides/`,
+              )
+            }
           >
             {t("gameInfoPanel.buttons.guides")}
           </DialogButton>

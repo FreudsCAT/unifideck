@@ -33,7 +33,7 @@ import json
 import logging
 import urllib.parse
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import aiohttp
 
@@ -45,6 +45,27 @@ _STEAM_SEARCH_URL = "https://store.steampowered.com/api/storesearch"
 _STEAM_CDN = "https://shared.steamstatic.com/store_item_assets/steam/apps"
 _GAMESDB_URL = "https://gamesdb.gog.com/platforms/{platform}/external_releases/{id}"
 _GOG_PRODUCT_URL = "https://api.gog.com/products/{id}?expand=description"
+
+
+def _steam_title_matches(
+    name: str, search: str, allowed_suffixes: tuple[str, ...],
+) -> bool:
+    """True if a Steam result *name* acceptably matches *search*.
+
+    Exact match, or a prefix relationship whose leftover words are
+    only edition suffixes (rejects sequels like ``Ghostrunner 2``).
+    """
+    if name == search:
+        return True
+    if not (name.startswith(search) or search.startswith(name)):
+        return False
+    remainder = name.replace(search, "").strip()
+    remainder2 = search.replace(name, "").strip()
+    return (
+        remainder == "" or remainder2 == ""
+        or any(s in remainder for s in allowed_suffixes)
+        or any(s in remainder2 for s in allowed_suffixes)
+    )
 
 
 async def steam_search_appid(
@@ -82,21 +103,12 @@ async def steam_search_appid(
         "enhanced", "remastered", "hd", "remake",
     )
     for item in items:
-        name = str(item.get("name", "")).lower().strip()
         steam_id = item.get("id")
         if not isinstance(steam_id, int) or steam_id <= 0:
             continue
-        if name == search:
+        name = str(item.get("name", "")).lower().strip()
+        if _steam_title_matches(name, search, allowed_suffixes):
             return steam_id
-        if name.startswith(search) or search.startswith(name):
-            remainder = name.replace(search, "").strip()
-            remainder2 = search.replace(name, "").strip()
-            if (
-                remainder == "" or remainder2 == ""
-                or any(s in remainder for s in allowed_suffixes)
-                or any(s in remainder2 for s in allowed_suffixes)
-            ):
-                return steam_id
     return None
 
 
@@ -300,12 +312,11 @@ def _pick_epic_image(
     """First-match-wins selector across ``key_images`` for ``type_keys``."""
     for tk in type_keys:
         for img in key_images:
-            if (
-                isinstance(img, dict)
-                and img.get("type") == tk
-                and isinstance(img.get("url"), str)
-            ):
-                return img["url"]
+            if not isinstance(img, dict) or img.get("type") != tk:
+                continue
+            url = img.get("url")
+            if isinstance(url, str):
+                return url
     return None
 
 
@@ -346,8 +357,6 @@ def ubisoft_metadata(extras: dict[str, Any]) -> dict[str, Any]:
     during sync; the keys we want are ``coverUrl`` / ``backgroundUrl``.
     """
     out: dict[str, str] = {}
-    if not isinstance(extras, dict):
-        return {"urls": out}
     cover = extras.get("coverUrl") or extras.get("cover_image")
     bg = extras.get("backgroundUrl") or extras.get("hero_image")
     if isinstance(cover, str):
@@ -369,17 +378,17 @@ async def fetch_store_urls(
     if store == "gog":
         try:
             payload = await gog_metadata(int(store_game_id), timeout)
-            return payload.get("urls", {})
+            return cast("dict[str, str]", payload.get("urls", {}))
         except ValueError:
             return {}
     if store == "amazon":
         payload = await amazon_metadata(store_game_id, timeout)
-        return payload.get("urls", {})
+        return cast("dict[str, str]", payload.get("urls", {}))
     if store == "epic":
         payload = await epic_metadata(store_game_id)
-        return payload.get("urls", {})
+        return cast("dict[str, str]", payload.get("urls", {}))
     if store == "ubisoft":
-        return ubisoft_metadata(extras or {}).get("urls", {})
+        return cast("dict[str, str]", ubisoft_metadata(extras or {}).get("urls", {}))
     return {}
 
 

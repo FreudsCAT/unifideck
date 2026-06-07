@@ -68,9 +68,7 @@ export const SyncProvider: FC<{ children: ReactNode }> = ({ children }) => {
     rpcRoutes.forceSyncLibraries,
   );
 
-  const cancelMut = useRPCMutation<[], { ok: boolean }>(
-    rpcRoutes.cancelSync,
-  );
+  const cancelMut = useRPCMutation<[], { ok: boolean }>(rpcRoutes.cancelSync);
 
   // Tracks which post-sync phases the backend still owes us. Reset
   // on SYNC_STARTED; cleared via POST_SYNC_PHASE_CHANGED. When this
@@ -250,22 +248,27 @@ export const SyncProvider: FC<{ children: ReactNode }> = ({ children }) => {
     setProgress(null);
     observedActiveSyncRef.current = true;
     setSyncing(true);
-    void startMut.mutate().catch((e) =>
-      console.warn("[SyncContext] startSync RPC failed", e));
+    void startMut
+      .mutate()
+      .catch((e) => console.warn("[SyncContext] startSync RPC failed", e));
     void pollOnce();
   }, [isSyncing, startMut, pollOnce]);
 
   /** Force sync. Optionally re-fetches all artwork
    *  (slow, bandwidth-heavy). Default keeps current artwork. */
-  const forceSync = useCallback(async (resyncArtwork?: boolean) => {
-    EventBusClient.bumpToFast();
-    setProgress(null);
-    observedActiveSyncRef.current = true;
-    setSyncing(true);
-    void forceMut.mutate(resyncArtwork).catch((e) =>
-      console.warn("[SyncContext] forceSync RPC failed", e));
-    void pollOnce();
-  }, [forceMut, pollOnce]);
+  const forceSync = useCallback(
+    async (resyncArtwork?: boolean) => {
+      EventBusClient.bumpToFast();
+      setProgress(null);
+      observedActiveSyncRef.current = true;
+      setSyncing(true);
+      void forceMut
+        .mutate(resyncArtwork)
+        .catch((e) => console.warn("[SyncContext] forceSync RPC failed", e));
+      void pollOnce();
+    },
+    [forceMut, pollOnce],
+  );
 
   /** Cancel an in-flight sync. */
   const cancelSync = useCallback(async () => {
@@ -279,8 +282,12 @@ export const SyncProvider: FC<{ children: ReactNode }> = ({ children }) => {
   }, [isSyncing, isCancelling, cancelMut]);
 
   const value: SyncContextValue = {
-    progress, isSyncing, isCancelling,
-    startSync, forceSync, cancelSync,
+    progress,
+    isSyncing,
+    isCancelling,
+    startSync,
+    forceSync,
+    cancelSync,
   };
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;

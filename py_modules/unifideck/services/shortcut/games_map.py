@@ -96,36 +96,46 @@ def parse_games_map(content: str) -> dict[str, GameMapEntry]:
     are silently skipped.
     """
     result: dict[str, GameMapEntry] = {}
-
     for raw_line in content.splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith("#"):
-            continue
-
-        parts = line.split("=", 1)
-        if len(parts) != 2:
-            continue
-
-        key, value = parts
-        key = key.strip()
-
-        if "\t" in value:
-            segments = value.split("\t")
-            exe = segments[0].strip()
-            work_dir = segments[1].strip()
-            app_id = 0
-            if len(segments) >= 3:
-                try:
-                    app_id = int(segments[2].strip())
-                except ValueError:
-                    app_id = 0
-            result[key] = GameMapEntry(exe=exe, work_dir=work_dir, app_id=app_id)
-        else:
-            exe = value.strip()
-            work_dir = "" if exe == "xcloud" else str(Path(exe).parent)
-            result[key] = GameMapEntry(exe=exe, work_dir=work_dir, app_id=0)
-
+        parsed = _parse_map_line(raw_line.strip())
+        if parsed is not None:
+            key, entry = parsed
+            result[key] = entry
     return result
+
+
+def _parse_map_line(line: str) -> tuple[str, GameMapEntry] | None:
+    """Parse one ``key=value`` line; ``None`` for comment/blank/malformed."""
+    if not line or line.startswith("#"):
+        return None
+    parts = line.split("=", 1)
+    if len(parts) != 2:
+        return None
+    key, value = parts
+    return key.strip(), _parse_map_value(value)
+
+
+def _parse_map_value(value: str) -> GameMapEntry:
+    r"""Decode a games.map value: v1 (``exe``) or v2/v3 (tab-separated)."""
+    if "\t" not in value:
+        exe = value.strip()
+        work_dir = "" if exe == "xcloud" else str(Path(exe).parent)
+        return GameMapEntry(exe=exe, work_dir=work_dir, app_id=0)
+    segments = value.split("\t")
+    app_id = _parse_app_id(segments[2]) if len(segments) >= 3 else 0
+    return GameMapEntry(
+        exe=segments[0].strip(),
+        work_dir=segments[1].strip(),
+        app_id=app_id,
+    )
+
+
+def _parse_app_id(raw: str) -> int:
+    """Parse the v3 app_id column; ``0`` (backfill marker) on garbage."""
+    try:
+        return int(raw.strip())
+    except ValueError:
+        return 0
 
 
 def format_games_map(mapping: dict[str, GameMapEntry]) -> str:

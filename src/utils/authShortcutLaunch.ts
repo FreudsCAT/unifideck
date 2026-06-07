@@ -58,7 +58,9 @@ export type AuthShortcutConfig = {
  * `Result<T>` so callers can discriminate timeouts
  * from auth rejections without parsing strings.
  */
-export type AuthShortcutLaunchResult = ShortcutLaunchResult & {appId?: number;};
+export type AuthShortcutLaunchResult = ShortcutLaunchResult & {
+  appId?: number;
+};
 
 const EPIC_AUTH_CONFIG: AuthShortcutConfig = {
   store: "epic",
@@ -259,8 +261,10 @@ export async function launchAuthViaShortcut(
   });
   if (!ctx?.launcher_path) {
     console.error(
-      `${tag} Auth context failed — envelope:`, raw,
-      `unwrapped:`, ctx,
+      `${tag} Auth context failed — envelope:`,
+      raw,
+      `unwrapped:`,
+      ctx,
     );
     return {
       success: false,
@@ -327,9 +331,8 @@ export const launchEpicAuthViaShortcut =
  * GOG prefix path, the OAuth login URL and the
  * GOG-specific session capture file name.
  */
-export const launchGogAuthViaShortcut =
-  (): Promise<AuthShortcutLaunchResult> =>
-    launchAuthViaShortcut(GOG_AUTH_CONFIG);
+export const launchGogAuthViaShortcut = (): Promise<AuthShortcutLaunchResult> =>
+  launchAuthViaShortcut(GOG_AUTH_CONFIG);
 /**
  * Amazon Games specialisation of
  * {@link launchAuthViaShortcut}. Pre-bound with the

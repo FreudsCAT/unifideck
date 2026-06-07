@@ -13,7 +13,7 @@ the install call.
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Any, cast
 
 from unifideck.rpc.errors import RpcError
 
@@ -46,7 +46,7 @@ class UpdaterRPCMixin:
         svc = getattr(self, "_updater_service", None)
         if svc is None:
             raise RpcError("service_unavailable", service="updater")
-        return await svc.check_for_update()
+        return cast("dict[str, Any]", await svc.check_for_update())
 
     async def get_available_versions(self) -> list[dict[str, Any]]:
         """Return all installable versions from GitHub releases.
@@ -79,7 +79,7 @@ class UpdaterRPCMixin:
         release = svc.get_release_for_version(version)
         if release is None:
             return ""
-        return release.body
+        return cast("str", release.body)
 
     async def log_update_event(self, stage: str, detail: str) -> None:
         """Record a plugin-install lifecycle event in the Unifideck log.

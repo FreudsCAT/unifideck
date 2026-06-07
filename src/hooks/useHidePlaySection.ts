@@ -43,7 +43,10 @@ function appendOp(appId: number, op: () => Promise<void>): void {
 
 /** Hide Steam's native play section for `appId` while the
  *  consumer component is mounted. Restores on unmount. */
-export function useHidePlaySection(appId: number | null, enabled: boolean): void {
+export function useHidePlaySection(
+  appId: number | null,
+  enabled: boolean,
+): void {
   const hide = useRPC<[number], HideResult>(rpcRoutes.hidePlaySection);
   const unhide = useRPC<[number], HideResult>(rpcRoutes.unhidePlaySection);
 

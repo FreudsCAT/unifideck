@@ -10,7 +10,7 @@ if TYPE_CHECKING:
     LineHandler = Callable[
         [str, str, "ProgressCallback | None"], Awaitable[None],
     ]
-    ProgressCallback = Callable[[float], Awaitable[None]]
+    ProgressCallback = Callable[[float | dict[str, Any]], Awaitable[None]]
 logger = logging.getLogger(__name__)
 async def drain_install_output(
     proc: Any,

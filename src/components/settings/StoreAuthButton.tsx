@@ -25,7 +25,11 @@ interface Props {
 }
 
 export const StoreAuthButton: FC<Props> = ({
-  store, status, onConnect, onDisconnect, busy,
+  store,
+  status,
+  onConnect,
+  onDisconnect,
+  busy,
 }) => {
   const { t } = useTranslation();
   if (status === "checking" || status === "error") return null;
@@ -45,8 +49,10 @@ export const StoreAuthButton: FC<Props> = ({
       `}</style>
       <DialogButton
         disabled={busy}
-        className={`unifideck-store-auth-button ${isConnected ? "connected" : "disconnected"}`}
-        onClick={() => isConnected ? onDisconnect(store) : onConnect(store)}
+        className={`unifideck-store-auth-button ${
+          isConnected ? "connected" : "disconnected"
+        }`}
+        onClick={() => (isConnected ? onDisconnect(store) : onConnect(store))}
         style={{
           display: "inline-flex",
           alignItems: "center",
@@ -58,7 +64,11 @@ export const StoreAuthButton: FC<Props> = ({
           minWidth: "unset",
         }}
       >
-        {isConnected ? <FiLogOut size={12} /> : t("storeConnections.authenticate")}
+        {isConnected ? (
+          <FiLogOut size={12} />
+        ) : (
+          t("storeConnections.authenticate")
+        )}
       </DialogButton>
     </>
   );

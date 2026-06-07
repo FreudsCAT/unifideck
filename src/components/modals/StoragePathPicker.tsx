@@ -58,8 +58,13 @@ interface CreateDirResponse {
 /* ---- inline SVG icons ---- */
 
 const FolderIcon: FC = () => (
-  <svg viewBox="0 0 24 24" fill="currentColor" width="1em" height="1em"
-    style={{ flexShrink: 0, opacity: 0.7 }}>
+  <svg
+    viewBox="0 0 24 24"
+    fill="currentColor"
+    width="1em"
+    height="1em"
+    style={{ flexShrink: 0, opacity: 0.7 }}
+  >
     <path d="M10 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z" />
   </svg>
 );
@@ -71,25 +76,25 @@ const UpArrowIcon: FC = () => (
 );
 
 const SORT_OPTIONS: DropdownOption[] = [
-  { data: "name",             label: "" },
-  { data: "name_desc",        label: "" },
-  { data: "modified_newest",  label: "" },
-  { data: "modified_oldest",  label: "" },
-  { data: "created_newest",   label: "" },
-  { data: "created_oldest",   label: "" },
-  { data: "size_largest",     label: "" },
-  { data: "size_smallest",    label: "" },
+  { data: "name", label: "" },
+  { data: "name_desc", label: "" },
+  { data: "modified_newest", label: "" },
+  { data: "modified_oldest", label: "" },
+  { data: "created_newest", label: "" },
+  { data: "created_oldest", label: "" },
+  { data: "size_largest", label: "" },
+  { data: "size_smallest", label: "" },
 ];
 
 const SORT_I18N: Record<string, string> = {
-  name:             "storageSettings.sortAZ",
-  name_desc:        "storageSettings.sortZA",
-  modified_newest:  "storageSettings.sortModifiedNewest",
-  modified_oldest:  "storageSettings.sortModifiedOldest",
-  created_newest:   "storageSettings.sortCreatedNewest",
-  created_oldest:   "storageSettings.sortCreatedOldest",
-  size_largest:     "storageSettings.sortSizeLargest",
-  size_smallest:    "storageSettings.sortSizeSmallest",
+  name: "storageSettings.sortAZ",
+  name_desc: "storageSettings.sortZA",
+  modified_newest: "storageSettings.sortModifiedNewest",
+  modified_oldest: "storageSettings.sortModifiedOldest",
+  created_newest: "storageSettings.sortCreatedNewest",
+  created_oldest: "storageSettings.sortCreatedOldest",
+  size_largest: "storageSettings.sortSizeLargest",
+  size_smallest: "storageSettings.sortSizeSmallest",
 };
 
 /**
@@ -142,26 +147,37 @@ export const StoragePathPicker: FC<Props> = ({ startPath, onConfirm }) => {
         if (!cancelled) setDevicesLoading(false);
       }
     })();
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, [getDevices]);
 
-  const fetchDirectory = useCallback(async (target: string) => {
-    setLoading(true);
-    try {
-      const r = await listDir(target, showHiddenRef.current, sortByRef.current);
-      setPath(r.path);
-      setDirs(r.directories);
-      setUnsupported(false);
-    } catch {
-      console.warn("[StoragePathPicker] list_directory unavailable");
-      setUnsupported(true);
-    } finally {
-      setLoading(false);
-    }
-  }, [listDir]);
+  const fetchDirectory = useCallback(
+    async (target: string) => {
+      setLoading(true);
+      try {
+        const r = await listDir(
+          target,
+          showHiddenRef.current,
+          sortByRef.current,
+        );
+        setPath(r.path);
+        setDirs(r.directories);
+        setUnsupported(false);
+      } catch {
+        console.warn("[StoragePathPicker] list_directory unavailable");
+        setUnsupported(true);
+      } finally {
+        setLoading(false);
+      }
+    },
+    [listDir],
+  );
 
   /* Initial load + reload on toggle/sort changes. */
-  useEffect(() => { void fetchDirectory(path); }, [fetchDirectory, showHidden, sortBy]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    void fetchDirectory(path);
+  }, [fetchDirectory, showHidden, sortBy]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const goUp = () => {
     if (path === "/") return;
@@ -191,18 +207,22 @@ export const StoragePathPicker: FC<Props> = ({ startPath, onConfirm }) => {
   /* Device dropdown options — actual mount points from /proc/mounts. */
   const deviceOptions: DropdownOption[] = devices.map((d) => ({
     data: d.path,
-    label: d.free_space_gb != null
-      ? t("storageSettings.freeSpaceLabel", { label: d.label, freeSpace: d.free_space_gb })
-      : d.label,
+    label:
+      d.free_space_gb != null
+        ? t("storageSettings.freeSpaceLabel", {
+            label: d.label,
+            freeSpace: d.free_space_gb,
+          })
+        : d.label,
   }));
 
   const currentDevicePath = devices.find(
     (d) => path === d.path || path.startsWith(d.path + "/"),
   )?.path;
 
-  const currentFreeSpace = devices.find(
-    (d) => path === d.path || path.startsWith(d.path + "/"),
-  )?.free_space_gb ?? 0;
+  const currentFreeSpace =
+    devices.find((d) => path === d.path || path.startsWith(d.path + "/"))
+      ?.free_space_gb ?? 0;
 
   /* Sort options with translated labels. */
   const sortOptions: DropdownOption[] = SORT_OPTIONS.map((o) => ({
@@ -223,7 +243,9 @@ export const StoragePathPicker: FC<Props> = ({ startPath, onConfirm }) => {
             <Dropdown
               rgOptions={deviceOptions}
               selectedOption={currentDevicePath}
-              onChange={(opt) => { void fetchDirectory(opt.data as string); }}
+              onChange={(opt) => {
+                void fetchDirectory(opt.data as string);
+              }}
               strDefaultLabel={t("storageSettings.selectDevice")}
             />
           </div>
@@ -232,8 +254,13 @@ export const StoragePathPicker: FC<Props> = ({ startPath, onConfirm }) => {
           onClick={goUp}
           disabled={path === "/"}
           style={{
-            minWidth: 48, width: 48, height: 40, padding: 0,
-            display: "flex", alignItems: "center", justifyContent: "center",
+            minWidth: 48,
+            width: 48,
+            height: 40,
+            padding: 0,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
           }}
         >
           <UpArrowIcon />
@@ -241,7 +268,14 @@ export const StoragePathPicker: FC<Props> = ({ startPath, onConfirm }) => {
       </Focusable>
 
       {/* Current path breadcrumb */}
-      <div style={{ fontSize: 12, color: "#b0b0b0", wordBreak: "break-all", padding: "4px 0" }}>
+      <div
+        style={{
+          fontSize: 12,
+          color: "#b0b0b0",
+          wordBreak: "break-all",
+          padding: "4px 0",
+        }}
+      >
         {path}
       </div>
 
@@ -250,10 +284,21 @@ export const StoragePathPicker: FC<Props> = ({ startPath, onConfirm }) => {
         <Focusable
           onActivate={() => setShowHidden(!showHidden)}
           onClick={() => setShowHidden(!showHidden)}
-          style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 12px", cursor: "pointer" }}
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+            padding: "6px 12px",
+            cursor: "pointer",
+          }}
         >
-          <Toggle value={showHidden} onChange={(checked) => setShowHidden(checked)} />
-          <span style={{ fontSize: 12, whiteSpace: "nowrap" }}>{t("storageSettings.showHidden")}</span>
+          <Toggle
+            value={showHidden}
+            onChange={(checked) => setShowHidden(checked)}
+          />
+          <span style={{ fontSize: 12, whiteSpace: "nowrap" }}>
+            {t("storageSettings.showHidden")}
+          </span>
         </Focusable>
         <div style={{ minWidth: 140, flexShrink: 0 }}>
           <Dropdown
@@ -267,24 +312,40 @@ export const StoragePathPicker: FC<Props> = ({ startPath, onConfirm }) => {
       {/* Directory listing */}
       <Focusable
         style={{
-          maxHeight: 280, overflowY: "auto",
-          display: "flex", flexDirection: "column", gap: 2,
+          maxHeight: 280,
+          overflowY: "auto",
+          display: "flex",
+          flexDirection: "column",
+          gap: 2,
         }}
       >
         {loading && dirs.length === 0 && (
-          <div style={{ color: "#666", fontSize: 12, padding: 8 }}>{t("common.loading")}</div>
+          <div style={{ color: "#666", fontSize: 12, padding: 8 }}>
+            {t("common.loading")}
+          </div>
         )}
         {!loading && dirs.length === 0 && !unsupported && (
-          <div style={{ color: "#666", fontSize: 12, padding: 8 }}>{t("storageSettings.emptyDirectory")}</div>
+          <div style={{ color: "#666", fontSize: 12, padding: 8 }}>
+            {t("storageSettings.emptyDirectory")}
+          </div>
         )}
         {unsupported && (
-          <Field label={t("storage.customPath")} description={path} childrenContainerWidth="fixed" />
+          <Field
+            label={t("storage.customPath")}
+            description={path}
+            childrenContainerWidth="fixed"
+          />
         )}
         {dirs.map((d) => (
           <DialogButton
             key={d}
             onClick={() => navigateTo(d)}
-            style={{ width: "100%", textAlign: "left", fontSize: 13, padding: "8px 12px" }}
+            style={{
+              width: "100%",
+              textAlign: "left",
+              fontSize: 13,
+              padding: "8px 12px",
+            }}
           >
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
               <FolderIcon />
@@ -307,13 +368,28 @@ export const StoragePathPicker: FC<Props> = ({ startPath, onConfirm }) => {
           <DialogButton
             onClick={handleCreateFolder}
             disabled={!newFolderName.trim()}
-            style={{ minWidth: 48, width: 48, height: 40, padding: 0, fontSize: 12 }}
+            style={{
+              minWidth: 48,
+              width: 48,
+              height: 40,
+              padding: 0,
+              fontSize: 12,
+            }}
           >
             {t("storageSettings.newFolderCreate")}
           </DialogButton>
           <DialogButton
-            onClick={() => { setCreatingFolder(false); setNewFolderName(""); }}
-            style={{ minWidth: 48, width: 48, height: 40, padding: 0, fontSize: 12 }}
+            onClick={() => {
+              setCreatingFolder(false);
+              setNewFolderName("");
+            }}
+            style={{
+              minWidth: 48,
+              width: 48,
+              height: 40,
+              padding: 0,
+              fontSize: 12,
+            }}
           >
             {t("common.cancel")}
           </DialogButton>

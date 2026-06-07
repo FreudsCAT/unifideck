@@ -40,6 +40,12 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# Strong references to fire-and-forget backfill tasks. ``asyncio``
+# keeps only a weak reference to a task, so without this set a
+# running backfill could be garbage-collected mid-flight (RUF006).
+# The done-callback discards the entry once the task settles.
+_BACKGROUND_TASKS: set[asyncio.Task[None]] = set()
+
 # Mirrors ``metadata_service``'s constants — duplicated here rather
 # than imported so a future refactor of the service can rename the
 # namespaces without breaking the backfill. The wire-level cache
@@ -67,10 +73,12 @@ def spawn(service: MetadataService, games: list[Game]) -> None:
     """
     if not games:
         return
-    asyncio.create_task(
+    task = asyncio.create_task(
         _run(service, games),
         name="metacritic-backfill",
     )
+    _BACKGROUND_TASKS.add(task)
+    task.add_done_callback(_BACKGROUND_TASKS.discard)
 
 
 async def _run(service: MetadataService, games: list[Game]) -> None:
@@ -108,12 +116,12 @@ async def _fill_one(
     a game's score, subsequent syncs don't hit the Metacritic
     backend again.
     """
-    cache = service._cache  # noqa: SLF001 — backfill is part of the same logical service
+    cache = service._cache
     if _already_has_metacritic(cache, game):
         return
     async with sem:
         with contextlib.suppress(Exception):
-            data = await service._fetch_metacritic(game.title)  # noqa: SLF001
+            data = await service._fetch_metacritic(game.title)
             if data:
                 _merge_into_metadata_cache(cache, game, data)
 

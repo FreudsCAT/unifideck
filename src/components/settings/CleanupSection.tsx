@@ -52,15 +52,22 @@ export const CleanupSection: FC = () => {
       return;
     }
     if (result.deleted_app_ids?.length) {
-      const apps = (window as unknown as {
-        SteamClient?: { Apps?: { RemoveShortcut: (id: number) => void } };
-      }).SteamClient?.Apps;
+      const apps = (
+        window as unknown as {
+          SteamClient?: { Apps?: { RemoveShortcut: (id: number) => void } };
+        }
+      ).SteamClient?.Apps;
       for (const id of result.deleted_app_ids) {
-        try { apps?.RemoveShortcut(id); } catch { /* best effort */ }
+        try {
+          apps?.RemoveShortcut(id);
+        } catch {
+          /* best effort */
+        }
       }
     }
     await deleteAllUnifideckCollections().catch((e) =>
-      console.error("[Cleanup] delete collections failed", e));
+      console.error("[Cleanup] delete collections failed", e),
+    );
     const totalTouched =
       result.deleted_games +
       result.deleted_artwork_count +
@@ -89,11 +96,7 @@ export const CleanupSection: FC = () => {
   return (
     <PanelSection title={t("cleanup.title")}>
       <PanelSectionRow>
-        <ButtonItem
-          layout="below"
-          onClick={handleClick}
-          disabled={loading}
-        >
+        <ButtonItem layout="below" onClick={handleClick} disabled={loading}>
           {loading ? t("cleanup.deleting") : t("cleanup.deleteAll")}
         </ButtonItem>
       </PanelSectionRow>

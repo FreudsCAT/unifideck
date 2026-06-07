@@ -65,7 +65,11 @@ const buttonStyle = {
 const defaultBridge = new SteamBridge();
 
 export const GameInfoCompatRow: FC<Props> = ({
-  appId, meta, synopsisOpen, onToggleSynopsis, bridge = defaultBridge,
+  appId,
+  meta,
+  synopsisOpen,
+  onToggleSynopsis,
+  bridge = defaultBridge,
 }) => {
   const { t } = useTranslation();
   const { data: game } = useGameInfo(appId);
@@ -76,9 +80,11 @@ export const GameInfoCompatRow: FC<Props> = ({
   const activeDownload = useMemo(() => {
     if (!game || !downloads.queue) return null;
     const all = [downloads.queue.current, ...downloads.queue.queued];
-    return all.find(
-      (d) => d != null && d.store === game.store && d.game_id === game.id,
-    ) ?? null;
+    return (
+      all.find(
+        (d) => d != null && d.store === game.store && d.game_id === game.id,
+      ) ?? null
+    );
   }, [downloads.queue, game]);
 
   const isDownloading = activeDownload != null;
@@ -106,12 +112,13 @@ export const GameInfoCompatRow: FC<Props> = ({
   // already covered by the main play section directly above. Show
   // it only when the game is installed and not mid-(re)download,
   // preserving the Microsoft "not_compatible" exclusion.
-  const showAction = !!game
-    && Boolean(game.is_installed)
-    && !isDownloading
-    && !(
-      game.store === "microsoft"
-      && (game.store_tags ?? []).includes("not_compatible" as never)
+  const showAction =
+    !!game &&
+    Boolean(game.is_installed) &&
+    !isDownloading &&
+    !(
+      game.store === "microsoft" &&
+      (game.store_tags ?? []).includes("not_compatible" as never)
     );
 
   const compatColors = COMPAT_COLORS[meta.deck_compatibility];
@@ -128,17 +135,26 @@ export const GameInfoCompatRow: FC<Props> = ({
         gap: 8,
       }}
     >
-      <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 8 }}>
-        <span style={{
-          padding: "4px 12px",
-          borderRadius: 4,
-          background: compatColors.bg,
-          color: compatColors.fg,
-          fontWeight: 700,
-          fontSize: 12,
-          letterSpacing: 0.5,
-          textTransform: "uppercase",
-        }}>
+      <div
+        style={{
+          display: "flex",
+          flexWrap: "wrap",
+          alignItems: "center",
+          gap: 8,
+        }}
+      >
+        <span
+          style={{
+            padding: "4px 12px",
+            borderRadius: 4,
+            background: compatColors.bg,
+            color: compatColors.fg,
+            fontWeight: 700,
+            fontSize: 12,
+            letterSpacing: 0.5,
+            textTransform: "uppercase",
+          }}
+        >
           {t(COMPAT_LABEL_KEY[meta.deck_compatibility])}
         </span>
         <DialogButton

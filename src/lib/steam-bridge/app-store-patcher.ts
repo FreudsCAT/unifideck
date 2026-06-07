@@ -57,10 +57,10 @@ interface AppDetailsRaw {
   controller_support?: "full" | "partial" | string;
   metacritic?: { score?: number; url?: string };
   recommendations?: { total?: number };
-  categories?: Array<{ id: number; description?: string }>
+  categories?:
+    | Array<{ id: number; description?: string }>
     | Record<string, number>;
-  genres?: Array<{ id: number; description?: string }>
-    | Record<string, number>;
+  genres?: Array<{ id: number; description?: string }> | Record<string, number>;
   screenshots?: Array<{ path_full?: string }>;
   platforms?: { windows?: boolean; mac?: boolean; linux?: boolean };
   supported_languages?: string | Record<string, number>;
@@ -99,8 +99,10 @@ function getAppStore(): AppStoreLike | null {
 }
 
 function getAppDetailsStore(): AppDetailsStoreLike | null {
-  return (window as unknown as { appDetailsStore?: AppDetailsStoreLike })
-    .appDetailsStore ?? null;
+  return (
+    (window as unknown as { appDetailsStore?: AppDetailsStoreLike })
+      .appDetailsStore ?? null
+  );
 }
 
 function toUnsignedAppId(id: number): number {
@@ -116,7 +118,9 @@ function extractIds(
 ): number[] {
   if (!data) return [];
   if (Array.isArray(data)) {
-    return data.map((x) => x.id).filter((id): id is number => typeof id === "number");
+    return data
+      .map((x) => x.id)
+      .filter((id): id is number => typeof id === "number");
   }
   return Object.keys(data)
     .filter((k) => k.startsWith("category_") || k.startsWith("genre_"))
@@ -140,8 +144,12 @@ function buildOverview(steamAppId: number, raw: AppDetailsRaw): AppOverview {
   const rtRelease = raw.release_date?.date
     ? Math.floor(new Date(raw.release_date.date).getTime() / 1000)
     : 0;
-  const controllerSupport = raw.controller_support === "full"
-    ? 2 : raw.controller_support === "partial" ? 1 : 0;
+  const controllerSupport =
+    raw.controller_support === "full"
+      ? 2
+      : raw.controller_support === "partial"
+      ? 1
+      : 0;
   return {
     appid: steamAppId,
     display_name: raw.name ?? "",
@@ -200,10 +208,16 @@ function buildDetails(steamAppId: number, raw: AppDetailsRaw): AppDetails {
       vecHighlight: [],
       vecUnachieved: [],
     },
-    eSteamInputControllerMask: raw.controller_support === "full"
-      ? 2 : raw.controller_support === "partial" ? 1 : 0,
+    eSteamInputControllerMask:
+      raw.controller_support === "full"
+        ? 2
+        : raw.controller_support === "partial"
+        ? 1
+        : 0,
     vecDLC: (raw.dlc ?? []).map((id) => ({
-      appid: id, strName: "", bInstalled: false,
+      appid: id,
+      strName: "",
+      bInstalled: false,
     })),
     nScreenshots: raw.screenshots?.length ?? 0,
     lDiskSpaceRequiredBytes: 0,
@@ -218,8 +232,10 @@ interface OverviewMutable extends AppOverview {
 
 function injectMetadataIntoOverview(overview: OverviewMutable): boolean {
   if (!overview) return false;
-  const rawAppId = typeof overview.appid === "function"
-    ? (overview.appid as () => number)() : overview.appid;
+  const rawAppId =
+    typeof overview.appid === "function"
+      ? (overview.appid as () => number)()
+      : overview.appid;
   if (typeof rawAppId !== "number") return false;
   if (patchedOverviews.has(rawAppId)) return false;
   const signed = toSignedAppId(rawAppId);
@@ -227,13 +243,20 @@ function injectMetadataIntoOverview(overview: OverviewMutable): boolean {
   if (!realId) return false;
   const details = appDetailsCache[realId];
   if (!details) return false;
-  if (typeof details.strDeveloperName === "string" && details.strDeveloperName) {
+  if (
+    typeof details.strDeveloperName === "string" &&
+    details.strDeveloperName
+  ) {
     overview.developer = details.strDeveloperName;
     overview.strDeveloperName = details.strDeveloperName;
   }
-  const publishers = (details.associations as {
-    rgPublishers?: Array<{ strName?: string }>;
-  } | undefined)?.rgPublishers;
+  const publishers = (
+    details.associations as
+      | {
+          rgPublishers?: Array<{ strName?: string }>;
+        }
+      | undefined
+  )?.rgPublishers;
   if (publishers?.[0]?.strName) {
     overview.publisher = publishers[0].strName;
     overview.strPublisherName = publishers[0].strName;
@@ -247,7 +270,11 @@ function injectMetadataIntoOverview(overview: OverviewMutable): boolean {
     overview.rt_steam_release_date = details.rtReleaseDate;
   }
   patchedOverviews.add(rawAppId);
-  try { overview.TriggerChange?.(); } catch { /* ignore */ }
+  try {
+    overview.TriggerChange?.();
+  } catch {
+    /* ignore */
+  }
   return true;
 }
 
@@ -300,7 +327,9 @@ export function forceInjectMetadataForShortcut(shortcutAppId: number): boolean {
 /** Fire-and-forget : also persist the spoofed metadata via the
  *  backend `inject_game_to_appinfo` RPC so the spoofing survives a
  *  Steam restart. The current backend handler is a no-op stub. */
-export async function injectGameToAppinfo(shortcutAppId: number): Promise<void> {
+export async function injectGameToAppinfo(
+  shortcutAppId: number,
+): Promise<void> {
   // Wait for the async backend load to finish so that
   // steamAppIdMappings is populated. On first navigation this
   // may still be in-flight; on subsequent calls the cached
@@ -309,9 +338,7 @@ export async function injectGameToAppinfo(shortcutAppId: number): Promise<void> 
   if (!steamAppIdMappings[shortcutAppId]) return;
   forceInjectMetadataForShortcut(shortcutAppId);
   try {
-    await call<[number], unknown>(
-      rpcRoutes.injectGameToAppinfo, shortcutAppId,
-    );
+    await call<[number], unknown>(rpcRoutes.injectGameToAppinfo, shortcutAppId);
   } catch (e) {
     console.error("[Unifideck Store Patch] inject_game_to_appinfo failed:", e);
   }
@@ -332,7 +359,9 @@ export async function applyAppStorePatch(): Promise<PatchHandle> {
   const appStore = getAppStore();
   const appDetailsStore = getAppDetailsStore();
   if (!appStore || !appDetailsStore) {
-    console.warn("[Unifideck Store Patch] appStore / appDetailsStore unavailable");
+    console.warn(
+      "[Unifideck Store Patch] appStore / appDetailsStore unavailable",
+    );
     return { remove: () => {} };
   }
   const origGetOverview = appStore.GetAppOverviewByAppID.bind(appStore);
@@ -368,7 +397,9 @@ export async function applyAppStorePatch(): Promise<PatchHandle> {
   }
 
   console.log(
-    `[Unifideck Store Patch] active — ${Object.keys(steamAppIdMappings).length} mappings, ${Object.keys(appDetailsCache).length} metadata entries`,
+    `[Unifideck Store Patch] active — ${
+      Object.keys(steamAppIdMappings).length
+    } mappings, ${Object.keys(appDetailsCache).length} metadata entries`,
   );
 
   return {

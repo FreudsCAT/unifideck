@@ -249,9 +249,14 @@ class MetadataService:
                 break
             try:
                 await fut
-            except Exception:  # noqa: BLE001 — per-game errors are best-effort
-                pass
-            done_count += 1
+            except Exception:
+                logger.debug(
+                    "[MetadataService] enrichment task raised", exc_info=True,
+                )
+            # ``done_count`` is read both before processing (cancel
+            # flank) and after (progress cadence), so enumerate can't
+            # replace it.
+            done_count += 1  # noqa: SIM113
             if done_count % every == 0:
                 logger.info(
                     "[MetadataService] progress: %d/%d enriched",
@@ -423,8 +428,6 @@ class MetadataService:
         behaviour for callers outside the sync loop.
         """
         from unifideck.steam.appdetails import fetch_appdetails
-        if game.app_id is None:
-            return None
         steam_id = await self._resolve_steam_id(game, hint_steam_id)
         if steam_id is None:
             return None
@@ -436,7 +439,9 @@ class MetadataService:
             if isinstance(existing, dict):
                 return cast("dict[str, Any]", existing)
         except Exception:
-            pass
+            logger.debug(
+                "[MetadataService] metadata cache read failed", exc_info=True,
+            )
         data = await fetch_appdetails(steam_id, config=self._config)
         if data is None:
             return None

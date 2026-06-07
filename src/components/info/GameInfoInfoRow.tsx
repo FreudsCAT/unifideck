@@ -22,9 +22,9 @@ interface Props {
 
 function formatSize(bytes?: number): string | null {
   if (!bytes) return null;
-  const gb = bytes / (1024 ** 3);
+  const gb = bytes / 1024 ** 3;
   if (gb >= 1) return `${gb.toFixed(1)} GB`;
-  const mb = bytes / (1024 ** 2);
+  const mb = bytes / 1024 ** 2;
   return `${mb.toFixed(0)} MB`;
 }
 
@@ -34,10 +34,18 @@ function metacriticColor(score: number): string {
   return "#ff0000";
 }
 
-const Cell: FC<{ label: string; children: React.ReactNode }> = (
-  { label, children },
-) => (
-  <span style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 13 }}>
+const Cell: FC<{ label: string; children: React.ReactNode }> = ({
+  label,
+  children,
+}) => (
+  <span
+    style={{
+      display: "inline-flex",
+      alignItems: "center",
+      gap: 6,
+      fontSize: 13,
+    }}
+  >
     <strong style={{ color: "#8f98a0", fontWeight: 600 }}>{label}</strong>
     <span style={{ color: "#c7d5e0" }}>{children}</span>
   </span>
@@ -48,7 +56,9 @@ export const GameInfoInfoRow: FC<Props> = ({ appId, game, meta }) => {
   // Fetched out-of-band so it never blocks the panel; fall back to any
   // size already on the game record. See useGameSize.
   const fetchedSize = useGameSize(appId, Boolean(game.is_installed));
-  const size = formatSize(fetchedSize && fetchedSize > 0 ? fetchedSize : game.size_bytes);
+  const size = formatSize(
+    fetchedSize && fetchedSize > 0 ? fetchedSize : game.size_bytes,
+  );
   return (
     <Focusable
       flow-children="row"
@@ -76,24 +86,32 @@ export const GameInfoInfoRow: FC<Props> = ({ appId, game, meta }) => {
       </span>
       {size && <Cell label={t("gameInfoPanel.labels.size")}>{size}</Cell>}
       {meta.developer && (
-        <Cell label={t("gameInfoPanel.labels.developer")}>{meta.developer}</Cell>
+        <Cell label={t("gameInfoPanel.labels.developer")}>
+          {meta.developer}
+        </Cell>
       )}
       {meta.publisher && (
-        <Cell label={t("gameInfoPanel.labels.publisher")}>{meta.publisher}</Cell>
+        <Cell label={t("gameInfoPanel.labels.publisher")}>
+          {meta.publisher}
+        </Cell>
       )}
       {meta.release_date && (
-        <Cell label={t("gameInfoPanel.labels.released")}>{meta.release_date}</Cell>
+        <Cell label={t("gameInfoPanel.labels.released")}>
+          {meta.release_date}
+        </Cell>
       )}
       {meta.metacritic != null && (
         <Cell label={t("gameInfoPanel.labels.metacritic")}>
-          <span style={{
-            padding: "2px 8px",
-            borderRadius: 3,
-            background: metacriticColor(meta.metacritic),
-            color: "#000000",
-            fontWeight: 700,
-            fontSize: 12,
-          }}>
+          <span
+            style={{
+              padding: "2px 8px",
+              borderRadius: 3,
+              background: metacriticColor(meta.metacritic),
+              color: "#000000",
+              fontWeight: 700,
+              fontSize: 12,
+            }}
+          >
             {meta.metacritic}
           </span>
         </Cell>

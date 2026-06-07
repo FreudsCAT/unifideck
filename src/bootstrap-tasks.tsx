@@ -53,9 +53,7 @@ interface MigrateResult {
  */
 export async function applyLanguagePreference(): Promise<void> {
   try {
-    const r = await call<[], LanguagePref>(
-      rpcRoutes.getLanguagePreference,
-    );
+    const r = await call<[], LanguagePref>(rpcRoutes.getLanguagePreference);
     if (r?.success && r.language && r.language !== "auto") {
       await i18n.changeLanguage(r.language);
     }
@@ -75,9 +73,7 @@ export async function applyLanguagePreference(): Promise<void> {
  */
 export async function checkAccountSwitch(): Promise<void> {
   try {
-    const r = await call<[], AccountSwitchInfo>(
-      rpcRoutes.checkAccountSwitch,
-    );
+    const r = await call<[], AccountSwitchInfo>(rpcRoutes.checkAccountSwitch);
     if (!r?.show_modal) return;
     showModal(
       <AccountSwitchModal
@@ -109,10 +105,9 @@ export async function checkAccountSwitch(): Promise<void> {
 export function registerLifetimeListener(): Unregisterable | null {
   try {
     return (
-      window.SteamClient?.GameSessions
-        ?.RegisterForAppLifetimeNotifications?.(
-          (n) => onAppLifetime(n),
-        ) ?? null
+      window.SteamClient?.GameSessions?.RegisterForAppLifetimeNotifications?.(
+        (n) => onAppLifetime(n),
+      ) ?? null
     );
   } catch (e) {
     console.error("[Bootstrap] lifetime listener registration failed:", e);
@@ -121,7 +116,9 @@ export function registerLifetimeListener(): Unregisterable | null {
 }
 /** On app lifetime. */
 function onAppLifetime(n: {
-  unAppID: number; bRunning: boolean; nInstanceID: number;
+  unAppID: number;
+  bRunning: boolean;
+  nInstanceID: number;
 }): void {
   if (n.bRunning) {
     void call(rpcRoutes.notifyGameLaunched, n.unAppID).catch(() => {});
@@ -141,23 +138,27 @@ function onAppLifetime(n: {
  */
 export function purgeLeftoverAuthShortcuts(): void {
   try {
-    const appStore = (window as unknown as {
-      appStore?: {
-        m_mapApps?: {
-          forEach?: (
-            cb: (
-              app: { LaunchOptions?: unknown; launch_options?: unknown },
-              id: number,
-            ) => void,
-          ) => void;
+    const appStore = (
+      window as unknown as {
+        appStore?: {
+          m_mapApps?: {
+            forEach?: (
+              cb: (
+                app: { LaunchOptions?: unknown; launch_options?: unknown },
+                id: number,
+              ) => void,
+            ) => void;
+          };
         };
-      };
-    }).appStore;
+      }
+    ).appStore;
     const map = appStore?.m_mapApps;
     if (!map?.forEach) return;
     const stalePrefixes = [
-      "epic:epic-auth", "gog:gog-auth",
-      "amazon:amazon-auth", "microsoft:ms-auth",
+      "epic:epic-auth",
+      "gog:gog-auth",
+      "amazon:amazon-auth",
+      "microsoft:ms-auth",
     ];
     const victims: number[] = [];
     map.forEach((app, appId) => {
@@ -176,9 +177,7 @@ export function purgeLeftoverAuthShortcuts(): void {
       try {
         steamApps.RemoveShortcut(appId);
       } catch (e) {
-        console.error(
-          `[Bootstrap] RemoveShortcut(${appId}) failed:`, e,
-        );
+        console.error(`[Bootstrap] RemoveShortcut(${appId}) failed:`, e);
       }
     }
   } catch (e) {

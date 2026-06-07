@@ -45,9 +45,7 @@ export const InjectedSubtreeProvider: FC<{ children: ReactNode }> = ({
       <StoreProvider>
         <AuthProvider>
           <SyncProvider>
-            <DownloadProvider>
-              {children}
-            </DownloadProvider>
+            <DownloadProvider>{children}</DownloadProvider>
           </SyncProvider>
         </AuthProvider>
       </StoreProvider>

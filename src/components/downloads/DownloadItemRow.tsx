@@ -84,28 +84,45 @@ export const DownloadItemRow: FC<Props> = ({ item, variant }) => {
   }, [variant, item.status, item.store, item.game_id]);
 
   return (
-    <div style={{
-      display: "flex", flexDirection: "column", gap: 6, padding: 6,
-    }}>
+    <div
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        gap: 6,
+        padding: 6,
+      }}
+    >
       {/* Title row — full width, never competes with badges or
           status text. The QAM panel is narrow, so leaving room
           for the title to lay out on one or two lines (instead of
           wrapping around a sidebar badge) is the readability win. */}
-      <div style={{
-        display: "flex", alignItems: "center", gap: 6, minWidth: 0,
-      }}>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 6,
+          minWidth: 0,
+        }}
+      >
         <StoreIcon store={item.store} size={14} />
-        <span style={{
-          flex: 1, fontWeight: 500, minWidth: 0,
-          overflow: "hidden", textOverflow: "ellipsis",
-        }}>
+        <span
+          style={{
+            flex: 1,
+            fontWeight: 500,
+            minWidth: 0,
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+          }}
+        >
           {item.game_title}
         </span>
       </div>
 
       {variant === "finished" && (
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <span style={{ ...BADGE_STYLE, background: outcomeColor(item.status) }}>
+          <span
+            style={{ ...BADGE_STYLE, background: outcomeColor(item.status) }}
+          >
             {t(`downloads.outcome.${outcomeKey(item.status)}`)}
           </span>
           {playAppId != null && (
@@ -115,9 +132,14 @@ export const DownloadItemRow: FC<Props> = ({ item, variant }) => {
               className="unifideck-download-play-btn"
               style={{
                 ...BADGE_STYLE,
-                display: "inline-flex", alignItems: "center",
-                justifyContent: "center", width: "auto", minWidth: 0,
-                height: "auto", flex: "0 0 auto", border: "none",
+                display: "inline-flex",
+                alignItems: "center",
+                justifyContent: "center",
+                width: "auto",
+                minWidth: 0,
+                height: "auto",
+                flex: "0 0 auto",
+                border: "none",
                 background: "#22c55e",
               }}
               onClick={() => actions.launch(playAppId)}

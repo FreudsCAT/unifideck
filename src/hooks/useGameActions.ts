@@ -60,7 +60,8 @@ export function useGameActions(bridge: SteamBridgeShape): UseGameActionsResult {
 
   const install = useCallback(
     async (
-      store: StoreId, gameId: string,
+      store: StoreId,
+      gameId: string,
       options?: { storage?: string; language?: string; title?: string },
     ) => {
       setWorking(true);

@@ -44,7 +44,7 @@ class AccountRPCMixin:
             from unifideck.accounts import AccountManager
 
             mgr = AccountManager()
-            self._account_manager_inst = mgr  # type: ignore[attr-defined]
+            self._account_manager_inst = mgr
         return mgr
 
     async def check_account_switch(self) -> Any:
@@ -87,7 +87,7 @@ class AccountRPCMixin:
                 res = await shortcut_svc.reconcile(games)
                 shortcuts_created = res.get("added", 0) + res.get("reclaimed", 0)
             except Exception as e:
-                logger.error("[AccountSwitch] shortcut reconcile failed: %s", e)
+                logger.exception("[AccountSwitch] shortcut reconcile failed")
                 errors.append(f"shortcuts: {e}")
         else:
             errors.append("shortcut service or sync service unavailable")

@@ -45,7 +45,11 @@ function escapeRegExp(value: string): string {
  *  launcher path from the user's launch_options string so we
  *  keep only the user-supplied wrappers (mangohud, gamemoderun,
  *  #%command%, etc.). */
-function extractUserParams(launchOptions: string, storeGameId: string, launcherPath?: string): string {
+function extractUserParams(
+  launchOptions: string,
+  storeGameId: string,
+  launcherPath?: string,
+): string {
   let cleaned = launchOptions.replace(/\s*#%command%\s*$/g, "");
   const escaped = escapeRegExp(storeGameId);
   cleaned = cleaned.replace(/\bUNIFIDECK_[A-Z0-9_]+=(?:"[^"]*"|\S+)/g, "");
@@ -63,21 +67,25 @@ function extractUserParams(launchOptions: string, storeGameId: string, launcherP
 }
 
 /** Build temporary launch options. */
-function buildTemporaryLaunchOptions(context: ShortcutLaunchContext, extraEnv: Record<string, string>,
-  launchStoreGameId?: string): string {
+function buildTemporaryLaunchOptions(
+  context: ShortcutLaunchContext,
+  extraEnv: Record<string, string>,
+  launchStoreGameId?: string,
+): string {
   const sourceStoreGameId = context.store_game_id ?? "";
   const storeGameId = launchStoreGameId ?? sourceStoreGameId;
   const currentOptions = context.current_launch_options ?? sourceStoreGameId;
-  const userParams = extractUserParams(currentOptions, sourceStoreGameId, context.launcher_path);
+  const userParams = extractUserParams(
+    currentOptions,
+    sourceStoreGameId,
+    context.launcher_path,
+  );
   const envTokens = Object.entries(extraEnv)
     .filter(([, value]) => Boolean(value))
     .map(([key, value]) => `${key}=${value}`)
     .join(" ");
 
-    return [storeGameId, envTokens, userParams]
-    .filter(Boolean)
-    .join(" ")
-    .trim();
+  return [storeGameId, envTokens, userParams].filter(Boolean).join(" ").trim();
 }
 
 /** App store entry. */
@@ -102,7 +110,10 @@ function isShortcutRegistered(appId: number): boolean {
 
 /** Wait for Steam to register a shortcut after the backend
  *  reports it has been written to shortcuts.vdf. */
-async function waitForShortcutRegistration(appId: number, minimumDelayMs = 0): Promise<void> {
+async function waitForShortcutRegistration(
+  appId: number,
+  minimumDelayMs = 0,
+): Promise<void> {
   if (minimumDelayMs <= 0 && isShortcutRegistered(appId)) return;
   const startedAt = Date.now();
   const timeoutMs = Math.max(SHORTCUT_REGISTRATION_TIMEOUT_MS, minimumDelayMs);
@@ -146,14 +157,19 @@ export function terminateShortcutApp(appId: number): boolean {
  *  the original launch options. The restore polls until Steam
  *  reports the app as running, then waits a small grace
  *  period to avoid clobbering a still-applying RunGame. */
-function scheduleLaunchStateRestore(appId: number, context: ShortcutLaunchContext, originalLaunchOptions: string): void {
+function scheduleLaunchStateRestore(
+  appId: number,
+  context: ShortcutLaunchContext,
+  originalLaunchOptions: string,
+): void {
   const steamApps = window.SteamClient?.Apps;
   if (!steamApps) return;
 
   const startedAt = Date.now();
   const targetTool = context.saved_proton_tool ?? "";
 
-  const tryRestore = (): void => { /** Try restore. */
+  const tryRestore = (): void => {
+    /** Try restore. */
     const elapsed = Date.now() - startedAt;
     if (elapsed < RESTORE_START_DELAY_MS) {
       window.setTimeout(tryRestore, RESTORE_POLL_DELAY_MS);
@@ -168,7 +184,10 @@ function scheduleLaunchStateRestore(appId: number, context: ShortcutLaunchContex
       steamApps.SpecifyCompatTool?.(appId, targetTool);
       steamApps.SetShortcutLaunchOptions?.(appId, originalLaunchOptions);
     } catch (error) {
-      console.error(`[UbisoftShortcutLaunch] Restore failed for appId=${appId}:`, error);
+      console.error(
+        `[UbisoftShortcutLaunch] Restore failed for appId=${appId}:`,
+        error,
+      );
     }
   };
   window.setTimeout(tryRestore, RESTORE_START_DELAY_MS);
@@ -177,20 +196,20 @@ function scheduleLaunchStateRestore(appId: number, context: ShortcutLaunchContex
 /** Launch a Ubisoft GAME via its existing shortcut, passing
  *  the install_id so the launcher knows which UPC entry to
  *  start. */
-export async function launchUbisoftInstallViaShortcut(storeGameId: string, extraEnv: Record<string, string> = {}): Promise<ShortcutLaunchResult> {
+export async function launchUbisoftInstallViaShortcut(
+  storeGameId: string,
+  extraEnv: Record<string, string> = {},
+): Promise<ShortcutLaunchResult> {
   const rawCtx = await call<[string], unknown>(
     rpcRoutes.getCompatToolForGame,
     storeGameId,
   );
   const ctx = unwrapRpcEnvelope<ShortcutLaunchContext>(rawCtx, {
-    route: rpcRoutes.getCompatToolForGame, throwing: false,
+    route: rpcRoutes.getCompatToolForGame,
+    throwing: false,
   });
-  console.log(
-    "[UbisoftShortcutLaunch] getCompatToolForGame raw:", rawCtx,
-  );
-  console.log(
-    "[UbisoftShortcutLaunch] getCompatToolForGame ctx:", ctx,
-  );
+  console.log("[UbisoftShortcutLaunch] getCompatToolForGame raw:", rawCtx);
+  console.log("[UbisoftShortcutLaunch] getCompatToolForGame ctx:", ctx);
 
   // The RPC envelope strips ``success`` from the data dict
   // (``_to_envelope`` moves it to the outer layer). Check
@@ -200,7 +219,9 @@ export async function launchUbisoftInstallViaShortcut(storeGameId: string, extra
   if (!ctx.appid_unsigned) {
     console.error(
       "[UbisoftShortcutLaunch] ctx.appid_unsigned is falsy:",
-      ctx.appid_unsigned, "full ctx:", ctx,
+      ctx.appid_unsigned,
+      "full ctx:",
+      ctx,
     );
     return { success: false, error: ctx?.error || "Context unavailable" };
   }
@@ -217,8 +238,8 @@ export async function launchUbisoftInstallViaShortcut(storeGameId: string, extra
   const steamApps = window.SteamClient?.Apps;
   if (!steamApps?.RunGame || !steamApps?.SetShortcutLaunchOptions) {
     console.error(
-      "[UbisoftShortcutLaunch] Steam launch APIs unavailable: "
-      + "RunGame=%s SetShortcutLaunchOptions=%s",
+      "[UbisoftShortcutLaunch] Steam launch APIs unavailable: " +
+        "RunGame=%s SetShortcutLaunchOptions=%s",
       typeof steamApps?.RunGame,
       typeof steamApps?.SetShortcutLaunchOptions,
     );
@@ -230,7 +251,9 @@ export async function launchUbisoftInstallViaShortcut(storeGameId: string, extra
   const tempOptions = buildTemporaryLaunchOptions(ctx, extraEnv, storeGameId);
   console.log(
     "[UbisoftShortcutLaunch] RunGame(appId=%d, runGameId=%s, opts=%s)",
-    appId, getShortcutRunGameId(appId), tempOptions,
+    appId,
+    getShortcutRunGameId(appId),
+    tempOptions,
   );
 
   try {

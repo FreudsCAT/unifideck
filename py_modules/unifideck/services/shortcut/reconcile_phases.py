@@ -37,6 +37,31 @@ def _touch_marker(marker: Path) -> None:
         )
 
 
+def _dedup_shortcuts(shortcuts_dict: dict[str, Any]) -> int:
+    """Drop duplicate VDF entries sharing launch-options; return the count.
+
+    Scores each group by metadata richness and keeps the winner.
+    """
+    from .dedup import find_duplicate_losers
+    losers = find_duplicate_losers(shortcuts_dict)
+    for loser_key in losers:
+        shortcuts_dict.pop(loser_key, None)
+    return len(losers)
+
+
+def _log_restart_banner(added: int, removed: int, reclaimed: int) -> None:
+    """Log the "restart Steam to see changes" banner for tailed logs."""
+    for line in (
+        "=" * 60,
+        "IMPORTANT: Steam restart required to see shortcut changes!",
+        f"  (added={added} removed={removed} reclaimed={reclaimed})",
+        "Please EXIT Steam completely and restart for the "
+        "shortcuts.vdf changes to take effect.",
+        "=" * 60,
+    ):
+        logger.warning("[ShortcutService] %s", line)
+
+
 def _build_launch_index(shortcuts_dict: dict[str, Any]) -> dict[str, str]:
     """Map ``"store:game_id"`` → VDF ordinal key for every shortcut.
 
@@ -145,68 +170,66 @@ class _ReconcilePhasesMixin:
 
         from .registry import load_registry, save_registry
 
-        valid_keys = {f"{g.store}:{g.store_game_id}" for g in games}
-        launcher = getattr(self, "_launcher_path", "") or ""
-        valid_app_ids = {
-            g.app_id or generate_app_id(
-                launcher, f"{g.store}:{g.store_game_id}",
-            )
-            for g in games
-        }
-        valid_stores = {g.store for g in games}
         registry = load_registry()
-        registry_dirty = False
+        counts: dict[str, int] = self._apply_reconcile_phases(
+            games, registry, force=force,
+        )
+        if counts["added"] or counts["removed"] or counts["reclaimed"]:
+            await self._save_all()
+        if counts["added"] or counts["reclaimed"]:
+            save_registry(registry)
+        self._log_reconcile_result(games, counts)
+        return counts
 
+    def _apply_reconcile_phases(
+        self: Any, games: list[Game], registry: dict[str, Any], *, force: bool,
+    ) -> dict[str, int]:
+        """Prune, sync, drop-stale, then dedup; return the counts dict."""
+        launcher = getattr(self, "_launcher_path", "") or ""
+        valid_keys = {f"{g.store}:{g.store_game_id}" for g in games}
+        valid_app_ids = self._compute_valid_app_ids(games, launcher)
+        valid_stores = {g.store for g in games}
         removed = self._reconcile_phase_prune_map(valid_keys)
         self._shortcuts = self._ensure_shortcuts_root(self._shortcuts)
         shortcuts_dict = self._shortcuts["shortcuts"]
         added, kept, reclaimed = self._reconcile_phase_sync_games(
             games, shortcuts_dict, registry, force=force,
         )
-        if added > 0 or reclaimed > 0:
-            registry_dirty = True
         removed += self._reconcile_phase_drop_stale(
             shortcuts_dict, valid_app_ids, valid_stores,
         )
-        # Dedup pass — Steam occasionally creates duplicate VDF
+        # Dedup AFTER add/drop so reclaimed orphans count toward the
+        # winners' scores. Steam occasionally creates duplicate VDF
         # entries with the same launch-options (in-memory desync,
-        # crash recovery). Score by metadata richness, drop losers.
-        # Runs AFTER add/drop so reclaimed orphans count toward the
-        # winners' scores.
-        from .dedup import find_duplicate_losers
-        dedup_losers = find_duplicate_losers(shortcuts_dict)
-        for loser_key in dedup_losers:
-            shortcuts_dict.pop(loser_key, None)
-        removed += len(dedup_losers)
-        if added > 0 or removed > 0 or reclaimed > 0:
-            await self._save_all()
-        if registry_dirty:
-            save_registry(registry)
-        logger.info(
-            "[ShortcutService] reconcile: %d games → "
-            "added=%d kept=%d removed=%d reclaimed=%d",
-            len(games), added, kept, removed, reclaimed,
-        )
-        # Diagnostic banner — when reading ``~/homebrew/logs/`` to
-        # debug "my new games aren't showing up", the most common
-        # answer is "restart Steam". Staging printed this verbatim;
-        # the frontend modal handles the user-facing prompt but
-        # the log banner keeps the diagnostic obvious in tailed logs.
-        if added > 0 or removed > 0:
-            for line in (
-                "=" * 60,
-                "IMPORTANT: Steam restart required to see "
-                "shortcut changes!",
-                f"  (added={added} removed={removed} reclaimed={reclaimed})",
-                "Please EXIT Steam completely and restart for the "
-                "shortcuts.vdf changes to take effect.",
-                "=" * 60,
-            ):
-                logger.warning("[ShortcutService] %s", line)
+        # crash recovery).
+        removed += _dedup_shortcuts(shortcuts_dict)
         return {
             "added": added, "removed": removed,
             "kept": kept, "reclaimed": reclaimed,
         }
+
+    @staticmethod
+    def _compute_valid_app_ids(games: list[Game], launcher: str) -> set[int]:
+        """The set of app_ids the current library should keep."""
+        return {
+            g.app_id or generate_app_id(launcher, f"{g.store}:{g.store_game_id}")
+            for g in games
+        }
+
+    def _log_reconcile_result(
+        self: Any, games: list[Game], counts: dict[str, int],
+    ) -> None:
+        """Log the reconcile tally + a Steam-restart banner when changed."""
+        logger.info(
+            "[ShortcutService] reconcile: %d games → "
+            "added=%d kept=%d removed=%d reclaimed=%d",
+            len(games), counts["added"], counts["kept"],
+            counts["removed"], counts["reclaimed"],
+        )
+        if counts["added"] > 0 or counts["removed"] > 0:
+            _log_restart_banner(
+                counts["added"], counts["removed"], counts["reclaimed"],
+            )
 
     async def _reset_lastplaytime_once(self: Any) -> None:
         """One-time migration: clear bogus ``LastPlayTime`` stamps.
@@ -326,49 +349,17 @@ class _ReconcilePhasesMixin:
         the caller's tally. Side effects: updates ``self._games_map``,
         ``shortcuts_dict``, ``registry``.
         """
-        from .registry import get_registered_appid, register
+        from .registry import register
 
         key = f"{game.store}:{game.store_game_id}"
-        exe = game.exe_path or ""
         app_id = game.app_id or generate_app_id(launcher, key)
+        self._update_games_map_row(game, key, app_id)
 
-        # games.map is the launcher's exe-path lookup, only for games
-        # that have a local executable. xCloud (Microsoft) titles need
-        # no row — the dispatcher synthesizes their launch context from
-        # ``store == "microsoft"`` (see launcher/dispatcher.py).
-        #
-        # Crucially, library-sourced sync ``Game`` objects do NOT carry
-        # ``exe_path`` (it's resolved once at install time by the
-        # download worker and written via ``mark_installed``). So an
-        # installed game arriving here with an empty ``exe`` must NOT
-        # wipe its existing entry — doing so was the bug that silently
-        # dropped install-time games.map rows on the next sync (e.g.
-        # Amazon vanished after a post-install library sync). Preserve
-        # the existing row; only drop when the game is truly uninstalled.
-        if game.installed and exe:
-            self._games_map[key] = GameMapEntry(
-                exe=exe, work_dir=game.install_path or "", app_id=app_id,
-            )
-        elif game.installed and key in self._games_map:
-            # Keep the install-time entry; this sync just lacks the exe.
-            pass
-        else:
-            self._games_map.pop(key, None)
+        if self._try_reclaim_orphan(shortcuts_dict, registry, game, key):
+            return "reclaimed"
 
-        # ── Reclaim orphan by registry ──────────────────────
-        registered = get_registered_appid(registry, key)
-        if registered is not None:
-            ord_key = self._find_existing_shortcut_key(
-                shortcuts_dict, registered,
-            )
-            if ord_key is not None:
-                self._reclaim_orphan(
-                    shortcuts_dict[ord_key], game, registered,
-                )
-                register(registry, key, registered, game.title)
-                return "reclaimed"
-
-        # ── Match by LaunchOptions (primary — staging behaviour)
+        # ── Match by LaunchOptions (primary — staging behaviour).
+        # Only (re)register on a forced update.
         existing_key = launch_to_key.get(key)
         if existing_key is not None:
             if force:
@@ -378,10 +369,8 @@ class _ReconcilePhasesMixin:
                 register(registry, key, app_id, game.title)
             return "kept"
 
-        # ── Match by AppID (fallback — LaunchOptions missing)
-        existing_key = self._find_existing_shortcut_key(
-            shortcuts_dict, app_id,
-        )
+        # ── Match by AppID (fallback — LaunchOptions missing).
+        existing_key = self._find_existing_shortcut_key(shortcuts_dict, app_id)
         if existing_key is not None:
             if force:
                 self._update_existing_shortcut(
@@ -395,6 +384,45 @@ class _ReconcilePhasesMixin:
         shortcuts_dict[new_key] = self._build_shortcut_entry(game, app_id)
         register(registry, key, app_id, game.title)
         return "added"
+
+    def _update_games_map_row(
+        self: Any, game: Game, key: str, app_id: int,
+    ) -> None:
+        """Maintain the games.map exe row for *game* (installed-only).
+
+        games.map is the launcher's exe-path lookup, only for games
+        with a local executable (xCloud titles need no row). Library-
+        sourced sync ``Game`` objects do NOT carry ``exe_path`` (it's
+        resolved at install time by the worker via ``mark_installed``),
+        so an installed game arriving with an empty ``exe`` must NOT
+        wipe its existing entry — only a truly-uninstalled game drops it.
+        """
+        exe = game.exe_path or ""
+        if game.installed and exe:
+            self._games_map[key] = GameMapEntry(
+                exe=exe, work_dir=game.install_path or "", app_id=app_id,
+            )
+        elif not (game.installed and key in self._games_map):
+            self._games_map.pop(key, None)
+
+    def _try_reclaim_orphan(
+        self: Any,
+        shortcuts_dict: dict[str, Any],
+        registry: dict[str, Any],
+        game: Game,
+        key: str,
+    ) -> bool:
+        """Reclaim an orphaned shortcut via the registry; True if reclaimed."""
+        from .registry import get_registered_appid, register
+        registered = get_registered_appid(registry, key)
+        if registered is None:
+            return False
+        ord_key = self._find_existing_shortcut_key(shortcuts_dict, registered)
+        if ord_key is None:
+            return False
+        self._reclaim_orphan(shortcuts_dict[ord_key], game, registered)
+        register(registry, key, registered, game.title)
+        return True
 
     def _update_existing_shortcut(
         self: Any,

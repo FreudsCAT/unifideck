@@ -23,7 +23,10 @@ export const CleanupConfirmModal: FC<Props> = ({ onConfirm, closeModal }) => {
       strDescription={t("cleanup.modalDescription")}
       strOKButtonText={t("cleanup.confirmDelete")}
       strCancelButtonText={t("cleanup.cancel")}
-      onOK={() => { closeModal?.(); onConfirm(deleteFiles); }}
+      onOK={() => {
+        closeModal?.();
+        onConfirm(deleteFiles);
+      }}
       onCancel={closeModal}
       bHideCloseIcon={false}
       bDestructiveWarning

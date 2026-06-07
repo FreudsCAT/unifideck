@@ -11,6 +11,7 @@ PROTON=GE-Proton10-10 epic:gameid
 ```
 
 Or after the game ID:
+
 ```
 epic:gameid PROTON=GE-Proton10-10
 ```
@@ -18,13 +19,17 @@ epic:gameid PROTON=GE-Proton10-10
 ## Methods
 
 ### Method 1: Launch Options (Recommended)
+
 Add to your game's Steam shortcut launch options:
+
 ```
 PROTON=GE-Proton10-10 epic:7334aba246154b63857435cb9c7eecd5
 ```
 
 ### Method 2: Custom Proton Path
+
 For custom Proton installations:
+
 ```
 PROTONPATH=/path/to/custom/proton epic:gameid
 ```
@@ -32,6 +37,7 @@ PROTONPATH=/path/to/custom/proton epic:gameid
 ## Combining with Other Options
 
 You can combine Proton selection with other launch options:
+
 ```
 LSFG=1 PROTON=GE-Proton9-26 MANGOHUD=1 gog:12345
 ```
@@ -45,6 +51,7 @@ LSFG=1 PROTON=GE-Proton9-26 MANGOHUD=1 gog:12345
 ## Troubleshooting
 
 If a game crashes with default Proton, try a GE-Proton version:
+
 ```
 PROTON=GE-Proton10-10 epic:gameid
 ```

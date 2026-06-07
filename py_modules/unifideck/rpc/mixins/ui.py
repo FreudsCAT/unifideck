@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from unifideck.rpc.errors import RpcError
+from unifideck.rpc.mixins import _metadata_display as _mdisp
 
 logger = logging.getLogger(__name__)
 
@@ -70,9 +71,6 @@ def _is_dir_safe(entry: os.DirEntry[str]) -> bool:
         return entry.is_dir(follow_symlinks=False)
     except OSError:
         return False
-
-
-from unifideck.rpc.mixins import _metadata_display as _mdisp
 
 
 class UIRPCMixin:

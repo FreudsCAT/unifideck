@@ -70,7 +70,8 @@ export function applyAppDetailsPatch(bridge: SteamBridge): RouterPatchHandle {
           findInReactTree<NodeWithChildren>(
             tree,
             (x) =>
-              (x as NodeWithOverview | null)?.props?.children?.props?.overview != null,
+              (x as NodeWithOverview | null)?.props?.children?.props
+                ?.overview != null,
           )?.props?.children as unknown,
       ],
       (_args: unknown[], ret: unknown) => {
@@ -94,7 +95,8 @@ export function applyAppDetailsPatch(bridge: SteamBridge): RouterPatchHandle {
 function injectIntoTree(ret: unknown): void {
   const overviewNode = findInReactTree<NodeWithOverview>(
     ret,
-    (x) => (x as NodeWithOverview | null)?.props?.children?.props?.overview != null,
+    (x) =>
+      (x as NodeWithOverview | null)?.props?.children?.props?.overview != null,
   );
   const overview = overviewNode?.props?.children?.props?.overview;
   if (!overview) return;
@@ -109,18 +111,15 @@ function injectIntoTree(ret: unknown): void {
   // its in-memory cache; the backend RPC is a no-op stub.
   void injectGameToAppinfo(appId);
 
-  const innerContainer = findInReactTree<NodeWithChildren>(
-    ret,
-    (x) => {
-      const n = x as NodeWithChildren | null;
-      return (
-        Array.isArray(n?.props?.children) &&
-        typeof n?.props?.className === "string" &&
-        appDetailsClasses?.InnerContainer != null &&
-        n.props.className.includes(appDetailsClasses.InnerContainer)
-      );
-    },
-  );
+  const innerContainer = findInReactTree<NodeWithChildren>(ret, (x) => {
+    const n = x as NodeWithChildren | null;
+    return (
+      Array.isArray(n?.props?.children) &&
+      typeof n?.props?.className === "string" &&
+      appDetailsClasses?.InnerContainer != null &&
+      n.props.className.includes(appDetailsClasses.InnerContainer)
+    );
+  });
 
   // If the container isn't ready yet, skip — the patcher fires
   // again on the next render.
@@ -128,7 +127,8 @@ function injectIntoTree(ret: unknown): void {
     !innerContainer ||
     !innerContainer.props ||
     !Array.isArray(innerContainer.props.children)
-  ) return;
+  )
+    return;
 
   const children = innerContainer.props!.children as unknown[];
   const playWrapperKey = `unifideck-play-wrapper-${appId}`;
@@ -145,9 +145,7 @@ function injectPlayWrapper(
   baseKey: string,
   version: number,
 ): void {
-  const existingIdx = children.findIndex(
-    (c) => keyOf(c).startsWith(baseKey),
-  );
+  const existingIdx = children.findIndex((c) => keyOf(c).startsWith(baseKey));
 
   if (existingIdx === -1) {
     const idx = findPlaySectionInsertIndex(children);
@@ -195,20 +193,18 @@ function injectGameInfoPanel(
   baseKey: string,
   version: number,
 ): void {
-  const existingIdx = children.findIndex(
-    (c) => keyOf(c).startsWith(baseKey),
-  );
+  const existingIdx = children.findIndex((c) => keyOf(c).startsWith(baseKey));
 
   if (existingIdx === -1) {
-    const wrapperIdx = children.findIndex(
-      (c) => keyOf(c).startsWith(wrapperKey),
+    const wrapperIdx = children.findIndex((c) =>
+      keyOf(c).startsWith(wrapperKey),
     );
     let idx: number;
     if (wrapperIdx >= 0) {
       idx = wrapperIdx + 1;
     } else {
       const anchor = findPlaySectionInsertIndex(children);
-      if (anchor < 0) return;  // wait for next render — see injectPlayWrapper
+      if (anchor < 0) return; // wait for next render — see injectPlayWrapper
       idx = anchor + 1;
     }
     // DownloadProvider needed by GameInfoCompatRow's useDownloads.
@@ -223,13 +219,11 @@ function injectGameInfoPanel(
   }
 
   // Position-correction : keep panel immediately after wrapper.
-  const wrapperIdx = children.findIndex(
-    (c) => keyOf(c).startsWith(wrapperKey),
-  );
+  const wrapperIdx = children.findIndex((c) => keyOf(c).startsWith(wrapperKey));
   if (wrapperIdx >= 0 && existingIdx !== wrapperIdx + 1) {
     const [el] = children.splice(existingIdx, 1);
-    const newWrapperIdx = children.findIndex(
-      (c) => keyOf(c).startsWith(wrapperKey),
+    const newWrapperIdx = children.findIndex((c) =>
+      keyOf(c).startsWith(wrapperKey),
     );
     children.splice(newWrapperIdx + 1, 0, el);
   }

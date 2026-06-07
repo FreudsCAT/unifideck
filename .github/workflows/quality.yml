@@ -13,15 +13,15 @@ name: Quality
 on:
   pull_request:
     paths:
-      - 'py_modules/**'
-      - 'main.py'
-      - 'src/**'
-      - 'pyproject.toml'
-      - 'requirements*.txt'
-      - 'package.json'
-      - 'package-lock.json'
-      - 'tsconfig.json'
-      - '.github/workflows/quality.yml'
+      - "py_modules/**"
+      - "main.py"
+      - "src/**"
+      - "pyproject.toml"
+      - "requirements*.txt"
+      - "package.json"
+      - "package-lock.json"
+      - "tsconfig.json"
+      - ".github/workflows/quality.yml"
   push:
     branches: [new_architecture, staging, main]
 
@@ -36,7 +36,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python-version: ['3.11', '3.12']
+        python-version: ["3.11", "3.12"]
       # Report every matrix failure so we see 3.11-vs-3.12 deltas.
       fail-fast: false
 
@@ -130,7 +130,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: "20"
           cache: npm
 
       - name: Install dependencies

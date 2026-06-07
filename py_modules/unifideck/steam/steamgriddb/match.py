@@ -119,38 +119,54 @@ def strip_edition_suffix(normalized: str) -> str:
     changed = True
     while changed:
         changed = False
-        for suffix in EDITION_SUFFIXES:
-            if normalized.endswith(" " + suffix):
-                stripped = normalized[: -(len(suffix) + 1)].strip()
-                if stripped:
-                    normalized = stripped
-                    changed = True
-                    break
-        if changed:
-            continue
-
-        m = re.match(r"^(.+?)\s+(?:\w+\s+){0,2}edition$", normalized)
-        if m and m.group(1).strip():
-            normalized = m.group(1).strip()
-            changed = True
-            continue
-
-        m = re.match(
-            r"^(.+?)\s+(?:chapters?|episodes?)\s+[\d\s]+$",
-            normalized,
-        )
-        if m and m.group(1).strip():
-            normalized = m.group(1).strip()
-            changed = True
-            continue
-
-        m = re.match(r"^(.+?\D)\s+(\d{4})$", normalized)
-        if m and 1980 <= int(m.group(2)) <= 2030 and m.group(1).strip():
-            normalized = m.group(1).strip()
-            changed = True
-            continue
-
+        for strip in _STRIP_STRATEGIES:
+            stripped = strip(normalized)
+            if stripped and stripped != normalized:
+                normalized = stripped
+                changed = True
+                break
     return normalized
+
+
+def _strip_known_suffix(s: str) -> str | None:
+    """Strip one entry from the explicit ``EDITION_SUFFIXES`` table."""
+    for suffix in EDITION_SUFFIXES:
+        if s.endswith(" " + suffix):
+            stripped = s[: -(len(suffix) + 1)].strip()
+            if stripped:
+                return stripped
+    return None
+
+
+def _strip_edition_phrase(s: str) -> str | None:
+    """Strip a trailing ``<1-3 words> edition`` phrase."""
+    m = re.match(r"^(.+?)\s+(?:\w+\s+){0,2}edition$", s)
+    return m.group(1).strip() if m and m.group(1).strip() else None
+
+
+def _strip_chapters_episodes(s: str) -> str | None:
+    """Strip a trailing ``chapters/episodes <range>`` suffix."""
+    m = re.match(r"^(.+?)\s+(?:chapters?|episodes?)\s+[\d\s]+$", s)
+    return m.group(1).strip() if m and m.group(1).strip() else None
+
+
+def _strip_trailing_year(s: str) -> str | None:
+    """Strip a trailing 4-digit year in the 1980-2030 range."""
+    m = re.match(r"^(.+?\D)\s+(\d{4})$", s)
+    if m and 1980 <= int(m.group(2)) <= 2030 and m.group(1).strip():
+        return m.group(1).strip()
+    return None
+
+
+# Ordered strip strategies. ``strip_edition_suffix`` applies them
+# repeatedly (re-trying from the top after each change) so compound
+# suffixes peel off one layer at a time.
+_STRIP_STRATEGIES = (
+    _strip_known_suffix,
+    _strip_edition_phrase,
+    _strip_chapters_episodes,
+    _strip_trailing_year,
+)
 
 
 def score_match(query_norm: str, candidate_norm: str) -> float:

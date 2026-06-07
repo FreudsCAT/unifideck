@@ -79,15 +79,16 @@ async def _inject_into_target(
         return False
     msg_id = 0
     try:
-        async with aiohttp.ClientSession() as session, session.ws_connect(
+        async with aiohttp.ClientSession() as session, session.ws_connect(  # type: ignore[call-overload]
             ws_url,
             heartbeat=10,
             autoping=True,
             # aiohttp 3.10 introduced ClientWSTimeout for ws_connect; older
             # releases accepted ClientTimeout. The runtime accepts both, but
-            # mypy uses the latest stub. ignore the arg-type to keep the call
-            # compatible across aiohttp versions.
-            timeout=aiohttp.ClientTimeout(total=ws_timeout),  # type: ignore[arg-type]
+            # mypy uses the latest stub, so the overload doesn't match. Ignore
+            # the overload mismatch to keep the call compatible across aiohttp
+            # versions.
+            timeout=aiohttp.ClientTimeout(total=ws_timeout),
         ) as websocket:
             for source in sources:
                 if not source:

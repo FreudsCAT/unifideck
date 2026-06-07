@@ -25,11 +25,11 @@ name: Tests
 on:
   pull_request:
     paths:
-      - 'py_modules/**'
-      - 'main.py'
-      - 'tests/**'
-      - 'pyproject.toml'
-      - 'requirements*.txt'
+      - "py_modules/**"
+      - "main.py"
+      - "tests/**"
+      - "pyproject.toml"
+      - "requirements*.txt"
   push:
     branches: [new_architecture, staging, main]
 
@@ -38,7 +38,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python-version: ['3.11', '3.12']
+        python-version: ["3.11", "3.12"]
 
     steps:
       - uses: actions/checkout@v4

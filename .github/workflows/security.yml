@@ -16,19 +16,19 @@ name: Security
 on:
   pull_request:
     paths:
-      - 'py_modules/**'
-      - 'main.py'
-      - 'src/**'
-      - 'requirements*.txt'
-      - 'package.json'
-      - 'package-lock.json'
-      - '.github/workflows/security.yml'
+      - "py_modules/**"
+      - "main.py"
+      - "src/**"
+      - "requirements*.txt"
+      - "package.json"
+      - "package-lock.json"
+      - ".github/workflows/security.yml"
   push:
     branches: [new_architecture, staging, main]
   schedule:
     # Mondays 06:00 UTC — catches newly-disclosed CVEs in deps
     # that were green at merge time.
-    - cron: '0 6 * * 1'
+    - cron: "0 6 * * 1"
 
 concurrency:
   group: security-${{ github.workflow }}-${{ github.ref }}
@@ -69,7 +69,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: "3.11"
 
       - name: Install pip-audit
         run: pip install 'pip-audit>=2.7,<3.0'

@@ -140,11 +140,7 @@ export type StoreId =
  *  - `error`           : token rejected by the store API
  *  - `unavailable`     : store CLI / Wine prefix missing
  */
-export type StoreStatus =
-  | "connected"
-  | "disconnected"
-  | "expired"
-  | "error";
+export type StoreStatus = "connected" | "disconnected" | "expired" | "error";
 
 /**
  * How the user owns a given title. Discriminates
@@ -176,8 +172,4 @@ export type GameTag =
  * inferred from ProtonDB community grades when
  * Valve has no rating yet).
  */
-export type DeckRating =
-  | "verified"
-  | "playable"
-  | "unsupported"
-  | "unknown";
+export type DeckRating = "verified" | "playable" | "unsupported" | "unknown";

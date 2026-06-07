@@ -16,14 +16,27 @@ import { FC, useCallback, useEffect, useState } from "react";
 import { DialogButton, showModal } from "@decky/ui";
 import { useTranslation } from "react-i18next";
 import { call } from "@decky/api";
-import { FaCog, FaGamepad, FaPlay, FaSyncAlt, FaTimes, FaTrash } from "react-icons/fa";
+import {
+  FaCog,
+  FaGamepad,
+  FaPlay,
+  FaSyncAlt,
+  FaTimes,
+  FaTrash,
+} from "react-icons/fa";
 import { useGameInfo } from "../../hooks/useGameInfo";
 import { useGameActions } from "../../hooks/useGameActions";
 import { useLaunchPrep } from "../../hooks/useLaunchPrep";
 import { useToast } from "../../hooks/useToast";
 import { SteamBridge } from "../../lib/steam-bridge";
 import { UninstallConfirmModal } from "../modals/UninstallConfirmModal";
-import { PlayShell, MetaInline, IconGroup, actionBtnStyle, iconBtnStyle } from "./PlayMeta";
+import {
+  PlayShell,
+  MetaInline,
+  IconGroup,
+  actionBtnStyle,
+  iconBtnStyle,
+} from "./PlayMeta";
 
 interface Props {
   appId: number;
@@ -36,32 +49,51 @@ const STEAM_STATUS_RUNNING = 4;
 const STEAM_STATUS_LAUNCHING = 1;
 
 function readDisplayStatus(appId: number): number | undefined {
-  const store = (window as unknown as {
-    appStore?: {
-      m_mapApps?: { get?: (id: number) => { local_per_client_data?: { display_status?: number } } | undefined };
-    };
-  }).appStore;
+  const store = (
+    window as unknown as {
+      appStore?: {
+        m_mapApps?: {
+          get?: (
+            id: number,
+          ) =>
+            | { local_per_client_data?: { display_status?: number } }
+            | undefined;
+        };
+      };
+    }
+  ).appStore;
   const app = store?.m_mapApps?.get?.(appId);
   return app?.local_per_client_data?.display_status;
 }
 
 function openControllerConfig(appId: number): void {
-  (window as unknown as {
-    SteamClient?: { Apps?: { ShowControllerConfigurator?: (id: number) => void } };
-  }).SteamClient?.Apps?.ShowControllerConfigurator?.(appId);
+  (
+    window as unknown as {
+      SteamClient?: {
+        Apps?: { ShowControllerConfigurator?: (id: number) => void };
+      };
+    }
+  ).SteamClient?.Apps?.ShowControllerConfigurator?.(appId);
 }
 
 function openAppSettings(appId: number): void {
-  (window as unknown as {
-    SteamClient?: { Apps?: { OpenAppSettingsDialog?: (id: number, page: string) => void } };
-  }).SteamClient?.Apps?.OpenAppSettingsDialog?.(appId, "general");
+  (
+    window as unknown as {
+      SteamClient?: {
+        Apps?: { OpenAppSettingsDialog?: (id: number, page: string) => void };
+      };
+    }
+  ).SteamClient?.Apps?.OpenAppSettingsDialog?.(appId, "general");
 }
 
 interface UpdateCheckResponse {
   has_update?: boolean;
 }
 
-export const InstalledButtons: FC<Props> = ({ appId, bridge = defaultBridge }) => {
+export const InstalledButtons: FC<Props> = ({
+  appId,
+  bridge = defaultBridge,
+}) => {
   const { t } = useTranslation();
   const { data: game, loading } = useGameInfo(appId);
   const actions = useGameActions(bridge);
@@ -81,11 +113,16 @@ export const InstalledButtons: FC<Props> = ({ appId, bridge = defaultBridge }) =
       if (cancelled) return;
       const status = readDisplayStatus(appId);
       if (status === undefined) return;
-      setIsRunning(status === STEAM_STATUS_RUNNING || status === STEAM_STATUS_LAUNCHING);
+      setIsRunning(
+        status === STEAM_STATUS_RUNNING || status === STEAM_STATUS_LAUNCHING,
+      );
     };
     tick();
     const id = window.setInterval(tick, RUNNING_POLL_MS);
-    return () => { cancelled = true; window.clearInterval(id); };
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+    };
   }, [appId]);
 
   // Update check — one-shot on mount. The backend RPC takes
@@ -96,14 +133,20 @@ export const InstalledButtons: FC<Props> = ({ appId, bridge = defaultBridge }) =
     if (!game) return;
     let cancelled = false;
     call<[string, string], UpdateCheckResponse>(
-      "check_game_update", game.store, game.id,
+      "check_game_update",
+      game.store,
+      game.id,
     )
       .then((res) => {
         if (cancelled) return;
         setHasUpdate(Boolean(res?.has_update));
       })
-      .catch(() => { /* non-critical */ });
-    return () => { cancelled = true; };
+      .catch(() => {
+        /* non-critical */
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [game]);
 
   const onPlay = useCallback(() => {
@@ -119,7 +162,8 @@ export const InstalledButtons: FC<Props> = ({ appId, bridge = defaultBridge }) =
     if (!game) return;
     try {
       const res = await call<[number], { success: boolean; error?: string }>(
-        "update_game", appId,
+        "update_game",
+        appId,
       );
       if (res?.success) {
         setHasUpdate(false);
@@ -197,7 +241,12 @@ export const InstalledButtons: FC<Props> = ({ appId, bridge = defaultBridge }) =
   return (
     <PlayShell>
       {primaryButtons}
-      <MetaInline sizeBytes={game?.size_bytes} showLastPlayed appId={appId} installed />
+      <MetaInline
+        sizeBytes={game?.size_bytes}
+        showLastPlayed
+        appId={appId}
+        installed
+      />
       <IconGroup>
         <DialogButton
           style={iconBtnStyle}

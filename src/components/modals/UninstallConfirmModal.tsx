@@ -21,7 +21,10 @@ interface Props {
 }
 
 export const UninstallConfirmModal: FC<Props> = ({
-  gameId: _gameId, gameTitle, onConfirm, closeModal,
+  gameId: _gameId,
+  gameTitle,
+  onConfirm,
+  closeModal,
 }) => {
   const { t } = useTranslation();
   const [deletePrefix, setDeletePrefix] = useState(false);
@@ -38,16 +41,28 @@ export const UninstallConfirmModal: FC<Props> = ({
         onOK={closeModal}
         onCancel={closeModal}
       >
-        <div className="unifideck-uninstall-modal" style={{ padding: "10px 0" }}>
-          <div style={{
-            marginBottom: 16, color: "#ccc", fontSize: 14, lineHeight: 1.5,
-          }}>
+        <div
+          className="unifideck-uninstall-modal"
+          style={{ padding: "10px 0" }}
+        >
+          <div
+            style={{
+              marginBottom: 16,
+              color: "#ccc",
+              fontSize: 14,
+              lineHeight: 1.5,
+            }}
+          >
             {t("uninstallModal.description", { title: gameTitle })}
           </div>
-          <div style={{
-            marginBottom: 12, padding: 12,
-            backgroundColor: "rgba(0, 0, 0, 0.2)", borderRadius: 8,
-          }}>
+          <div
+            style={{
+              marginBottom: 12,
+              padding: 12,
+              backgroundColor: "rgba(0, 0, 0, 0.2)",
+              borderRadius: 8,
+            }}
+          >
             <ToggleField
               label={t("uninstallModal.deleteProtonLabel")}
               description={t("uninstallModal.deleteProtonDescription")}
@@ -56,13 +71,18 @@ export const UninstallConfirmModal: FC<Props> = ({
             />
           </div>
           {deletePrefix && (
-            <div style={{
-              display: "flex", alignItems: "flex-start", gap: 10,
-              padding: 12,
-              backgroundColor: "rgba(239, 68, 68, 0.15)",
-              borderRadius: 8, marginBottom: 16,
-              border: "1px solid rgba(239, 68, 68, 0.3)",
-            }}>
+            <div
+              style={{
+                display: "flex",
+                alignItems: "flex-start",
+                gap: 10,
+                padding: 12,
+                backgroundColor: "rgba(239, 68, 68, 0.15)",
+                borderRadius: 8,
+                marginBottom: 16,
+                border: "1px solid rgba(239, 68, 68, 0.3)",
+              }}
+            >
               <FaExclamationTriangle
                 style={{ color: "#ef4444", marginTop: 2, flexShrink: 0 }}
               />
@@ -73,10 +93,7 @@ export const UninstallConfirmModal: FC<Props> = ({
             </div>
           )}
           <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
-            <DialogButton
-              onClick={closeModal}
-              style={{ minWidth: 100 }}
-            >
+            <DialogButton onClick={closeModal} style={{ minWidth: 100 }}>
               {t("uninstallModal.cancel")}
             </DialogButton>
             <DialogButton
@@ -85,9 +102,12 @@ export const UninstallConfirmModal: FC<Props> = ({
                 await onConfirm(deletePrefix);
               }}
               style={{
-                minWidth: 100, color: "#ef4444",
-                display: "flex", alignItems: "center",
-                justifyContent: "center", gap: 6,
+                minWidth: 100,
+                color: "#ef4444",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                gap: 6,
               }}
             >
               <FaTrash /> {t("uninstallModal.uninstall")}

@@ -79,18 +79,7 @@ class MicrosoftSubscriptionService(
                 return cached.tier
             probe_result = await self._run_probe(token_manager)
             if probe_result.ok:
-                # Persist session artefacts (gsToken/regions/market) for
-                # the catalog reader to reuse within the JWT lifetime.
-                self._last_probe = probe_result
-                await self._store_tier_result(
-                    cache_key, probe_result.tier,
-                )
-                # Persist session so it survives plugin restarts.
-                xuid = self._xuid_from_chain()
-                if probe_result.is_session_fresh():
-                    self._persist_session(xuid, probe_result)
-                result_tier: SubscriptionTier = probe_result.tier
-                return result_tier
+                return await self._handle_probe_success(cache_key, probe_result)
             if cached is not None:
                 logger.warning(
                     "[MSSubSvc] probe failed (%s), using stale "
@@ -111,6 +100,22 @@ class MicrosoftSubscriptionService(
                 probe_result.error,
             )
             return SubscriptionTier.NONE
+
+    async def _handle_probe_success(
+        self, cache_key: str, probe_result: SubscriptionProbeResult,
+    ) -> SubscriptionTier:
+        """Persist a successful probe (tier + session) and return the tier.
+
+        Session artefacts (gsToken/regions/market) are kept in memory
+        for the catalog reader to reuse within the JWT lifetime, and
+        persisted to disk so they survive plugin restarts.
+        """
+        self._last_probe = probe_result
+        await self._store_tier_result(cache_key, probe_result.tier)
+        xuid = self._xuid_from_chain()
+        if probe_result.is_session_fresh():
+            self._persist_session(xuid, probe_result)
+        return probe_result.tier
     async def has_active_subscription(
         self,
         token_manager: MicrosoftTokenManager,

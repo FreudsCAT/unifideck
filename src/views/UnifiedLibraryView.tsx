@@ -21,9 +21,15 @@ interface UnifiedLibraryViewProps {
   onSelect?: (game: Game) => void;
 }
 
-interface ErrorBoundaryState { hasError: boolean; error?: Error }
+interface ErrorBoundaryState {
+  hasError: boolean;
+  error?: Error;
+}
 
-class ErrorBoundary extends Component<{ children: ReactNode }, ErrorBoundaryState> {
+class ErrorBoundary extends Component<
+  { children: ReactNode },
+  ErrorBoundaryState
+> {
   constructor(props: { children: ReactNode }) {
     super(props);
     this.state = { hasError: false };
@@ -54,7 +60,10 @@ function isGreatOnDeck(game: Game): boolean {
   }
   if (game.title) {
     const compat = getCachedCompatByTitle(game.title);
-    if (compat?.deckVerified === "verified" || compat?.deckVerified === "playable") {
+    if (
+      compat?.deckVerified === "verified" ||
+      compat?.deckVerified === "playable"
+    ) {
       return true;
     }
     if (compat?.tier === "platinum" || compat?.tier === "native") return true;
@@ -62,10 +71,14 @@ function isGreatOnDeck(game: Game): boolean {
   return false;
 }
 
-const UnifiedLibraryViewInner: FC<UnifiedLibraryViewProps> = ({ filter, onSelect }) => {
+const UnifiedLibraryViewInner: FC<UnifiedLibraryViewProps> = ({
+  filter,
+  onSelect,
+}) => {
   const { t } = useTranslation();
   const { data, error, loading } = useRPCQuery<[], Game[]>(
-    rpcRoutes.getAllUnifideckGames, [],
+    rpcRoutes.getAllUnifideckGames,
+    [],
   );
   const [storeFilter, setStoreFilter] = useState<StoreId | "all">("all");
   const [searchQuery, setSearchQuery] = useState("");
@@ -96,20 +109,30 @@ const UnifiedLibraryViewInner: FC<UnifiedLibraryViewProps> = ({ filter, onSelect
     );
   }
 
-  const title = filter === "installed"
-    ? t("deckTabs.installed")
-    : filter === "great-on-deck"
+  const title =
+    filter === "installed"
+      ? t("deckTabs.installed")
+      : filter === "great-on-deck"
       ? t("deckTabs.greatOnDeck")
       : t("deckTabs.allGames");
 
   return (
     <div style={{ height: "100%", display: "flex", flexDirection: "column" }}>
-      <div style={{
-        padding: "15px 20px",
-        background: "rgba(0,0,0,0.3)",
-        borderBottom: "1px solid rgba(255,255,255,0.1)",
-      }}>
-        <div style={{ display: "flex", gap: 15, alignItems: "center", flexWrap: "wrap" }}>
+      <div
+        style={{
+          padding: "15px 20px",
+          background: "rgba(0,0,0,0.3)",
+          borderBottom: "1px solid rgba(255,255,255,0.1)",
+        }}
+      >
+        <div
+          style={{
+            display: "flex",
+            gap: 15,
+            alignItems: "center",
+            flexWrap: "wrap",
+          }}
+        >
           <div style={{ fontSize: 18, fontWeight: "bold" }}>{title}</div>
           <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
             <span style={{ fontSize: 12, opacity: 0.7 }}>
@@ -117,7 +140,9 @@ const UnifiedLibraryViewInner: FC<UnifiedLibraryViewProps> = ({ filter, onSelect
             </span>
             <select
               value={storeFilter}
-              onChange={(e) => setStoreFilter(e.target.value as StoreId | "all")}
+              onChange={(e) =>
+                setStoreFilter(e.target.value as StoreId | "all")
+              }
               style={{
                 background: "rgba(255,255,255,0.1)",
                 border: "1px solid rgba(255,255,255,0.2)",
@@ -155,9 +180,11 @@ const UnifiedLibraryViewInner: FC<UnifiedLibraryViewProps> = ({ filter, onSelect
         </div>
       </div>
       <div style={{ flex: 1, overflow: "auto" }}>
-        {loading
-          ? <div style={{ padding: 20, opacity: 0.7 }}>{t("common.loading")}</div>
-          : <GameGrid games={filteredGames} onSelect={onSelect ?? (() => {})} />}
+        {loading ? (
+          <div style={{ padding: 20, opacity: 0.7 }}>{t("common.loading")}</div>
+        ) : (
+          <GameGrid games={filteredGames} onSelect={onSelect ?? (() => {})} />
+        )}
       </div>
     </div>
   );

@@ -9,14 +9,13 @@
  * re-opens the picker.
  */
 import { FC, useCallback, useState } from "react";
-import {
-  ConfirmModal,
-  Focusable,
-  showModal,
-} from "@decky/ui";
+import { ConfirmModal, Focusable, showModal } from "@decky/ui";
 import { useTranslation } from "react-i18next";
 import { StoragePathPicker } from "./StoragePathPicker";
-import type { StorageLocation, StorageLocationInfo } from "../../types/downloads";
+import type {
+  StorageLocation,
+  StorageLocationInfo,
+} from "../../types/downloads";
 
 /* ---- Props ---- */
 
@@ -102,7 +101,8 @@ export const PickStorageModal: FC<Props> = ({
   const { t } = useTranslation();
 
   const available = locations.filter((l) => l.available);
-  const [selectedId, setSelectedId] = useState<StorageLocation>(defaultLocation);
+  const [selectedId, setSelectedId] =
+    useState<StorageLocation>(defaultLocation);
   const [customPathPicked, setCustomPathPicked] = useState<string | null>(null);
   const [customFreeGb, setCustomFreeGb] = useState<number>(0);
   const [pickExpanded, setPickExpanded] = useState(false);
@@ -111,9 +111,16 @@ export const PickStorageModal: FC<Props> = ({
   const handleInstall = useCallback(async () => {
     setSaving(true);
     try {
-      console.log("[PickStorageModal] install: storage=%s customPath=%s", selectedId, customPathPicked ?? "none");
+      console.log(
+        "[PickStorageModal] install: storage=%s customPath=%s",
+        selectedId,
+        customPathPicked ?? "none",
+      );
       if (selectedId === "custom" && customPathPicked) {
-        console.log("[PickStorageModal] persisting custom path:", customPathPicked);
+        console.log(
+          "[PickStorageModal] persisting custom path:",
+          customPathPicked,
+        );
         await setCustomPath(customPathPicked);
       }
       onConfirm(selectedId, customPathPicked ?? undefined);
@@ -209,7 +216,9 @@ export const PickStorageModal: FC<Props> = ({
                 width: 16,
                 height: 16,
                 borderRadius: "50%",
-                border: `2px solid ${selectedId === "custom" ? "#dadedf" : "#8f98a0"}`,
+                border: `2px solid ${
+                  selectedId === "custom" ? "#dadedf" : "#8f98a0"
+                }`,
                 background: selectedId === "custom" ? "#dadedf" : "transparent",
                 flexShrink: 0,
                 marginTop: 2,

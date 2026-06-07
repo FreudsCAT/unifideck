@@ -40,7 +40,10 @@ interface ClearedFC {
  * details page is mounted. No-op for Steam-native games, uninstalled
  * games, and xCloud titles.
  */
-export function useLaunchPrep(appId: number, game: Game | null | undefined): void {
+export function useLaunchPrep(
+  appId: number,
+  game: Game | null | undefined,
+): void {
   const clearedRef = useRef<ClearedFC | null>(null);
 
   const store = game?.store;

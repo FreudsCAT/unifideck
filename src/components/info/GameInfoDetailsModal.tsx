@@ -10,7 +10,11 @@
 import { FC } from "react";
 import { ConfirmModal, DialogButton } from "@decky/ui";
 import { useTranslation } from "react-i18next";
-import { FaCheckCircle, FaExclamationTriangle, FaExternalLinkAlt } from "react-icons/fa";
+import {
+  FaCheckCircle,
+  FaExclamationTriangle,
+  FaExternalLinkAlt,
+} from "react-icons/fa";
 import type { GameMetadata } from "../../types/api";
 
 interface Props {
@@ -35,7 +39,9 @@ const COMPAT_LABEL: Record<0 | 1 | 2 | 3, string> = {
 export const GameInfoDetailsModal: FC<Props> = ({ meta, closeModal }) => {
   const { t } = useTranslation();
   const colors = COMPAT_COLORS[meta.deck_compatibility];
-  const labelKey = `gameInfoPanel.compatibility.${COMPAT_LABEL[meta.deck_compatibility]}`;
+  const labelKey = `gameInfoPanel.compatibility.${
+    COMPAT_LABEL[meta.deck_compatibility]
+  }`;
   const protonDbUrl = meta.steam_app_id
     ? `https://www.protondb.com/app/${meta.steam_app_id}`
     : null;
@@ -49,17 +55,26 @@ export const GameInfoDetailsModal: FC<Props> = ({ meta, closeModal }) => {
       strOKButtonText={t("gameInfoPanel.compatibility.close")}
     >
       <div style={{ padding: "10px 0" }}>
-        <div style={{ marginBottom: 16, display: "flex", gap: 12, alignItems: "center" }}>
-          <span style={{
-            padding: "4px 12px",
-            borderRadius: 4,
-            background: colors.bg,
-            color: colors.fg,
-            fontWeight: 700,
-            fontSize: 12,
-            letterSpacing: 0.5,
-            textTransform: "uppercase",
-          }}>
+        <div
+          style={{
+            marginBottom: 16,
+            display: "flex",
+            gap: 12,
+            alignItems: "center",
+          }}
+        >
+          <span
+            style={{
+              padding: "4px 12px",
+              borderRadius: 4,
+              background: colors.bg,
+              color: colors.fg,
+              fontWeight: 700,
+              fontSize: 12,
+              letterSpacing: 0.5,
+              textTransform: "uppercase",
+            }}
+          >
             {t(labelKey)}
           </span>
           {meta.title && (
@@ -71,17 +86,24 @@ export const GameInfoDetailsModal: FC<Props> = ({ meta, closeModal }) => {
         {meta.deck_test_results.length > 0 ? (
           <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
             {meta.deck_test_results.map((r, i) => (
-              <li key={i} style={{
-                display: "flex",
-                alignItems: "center",
-                gap: 8,
-                padding: "6px 0",
-                fontSize: 13,
-                color: "#acb2b8",
-              }}>
-                {r.passed
-                  ? <FaCheckCircle style={{ color: "#59bf40", flexShrink: 0 }} />
-                  : <FaExclamationTriangle style={{ color: "#ffc82c", flexShrink: 0 }} />}
+              <li
+                key={i}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 8,
+                  padding: "6px 0",
+                  fontSize: 13,
+                  color: "#acb2b8",
+                }}
+              >
+                {r.passed ? (
+                  <FaCheckCircle style={{ color: "#59bf40", flexShrink: 0 }} />
+                ) : (
+                  <FaExclamationTriangle
+                    style={{ color: "#ffc82c", flexShrink: 0 }}
+                  />
+                )}
                 <span>{r.text}</span>
               </li>
             ))}
@@ -103,13 +125,16 @@ export const GameInfoDetailsModal: FC<Props> = ({ meta, closeModal }) => {
               }}
               onClick={() => {
                 window.open(
-                  protonDbUrl, "_blank",
+                  protonDbUrl,
+                  "_blank",
                   "width=1024,height=768,popup=yes",
                 );
                 closeModal();
               }}
             >
-              <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+              <span
+                style={{ display: "inline-flex", alignItems: "center", gap: 8 }}
+              >
                 <FaExternalLinkAlt />
                 {t("gameInfoPanel.compatibility.viewOnProtonDb")}
               </span>

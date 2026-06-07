@@ -67,17 +67,17 @@ This feature turns the Steam Deck into a portable Xbox console by seamlessly int
 
 The Microsoft integration is split into single-responsibility specialized modules. The main connector orchestrates authentication and synchronization, while browser management, HTTP calls, CDP interception, and the virtual keyboard are isolated in their own files. This separation makes debugging, unit testing, and independent evolution of each component easier.
 
-| File | Role |
-|------|------|
-| `stores/microsoft.py` | Main connector: auth, tokens, catalog |
-| `stores/microsoft_chromium.py` | Chromium browser management |
-| `stores/microsoft_auth.py` | HTTP helpers, XBL/XSTS chain |
-| `stores/microsoft_cdp.py` | OAuth interception via CDP |
-| `utils/virtual_keyboard.py` | Virtual keyboard injected via CDP |
-| `bin/unifideck-launcher` | xCloud launch |
-| `src/components/PlayButtonOverride.tsx` | "Play on Cloud" button |
-| `src/components/ChromiumInstallModal.tsx` | Chromium install modal |
-| `src/components/StoreConnections.tsx` | Microsoft connection panel |
+| File                                      | Role                                  |
+| ----------------------------------------- | ------------------------------------- |
+| `stores/microsoft.py`                     | Main connector: auth, tokens, catalog |
+| `stores/microsoft_chromium.py`            | Chromium browser management           |
+| `stores/microsoft_auth.py`                | HTTP helpers, XBL/XSTS chain          |
+| `stores/microsoft_cdp.py`                 | OAuth interception via CDP            |
+| `utils/virtual_keyboard.py`               | Virtual keyboard injected via CDP     |
+| `bin/unifideck-launcher`                  | xCloud launch                         |
+| `src/components/PlayButtonOverride.tsx`   | "Play on Cloud" button                |
+| `src/components/ChromiumInstallModal.tsx` | Chromium install modal                |
+| `src/components/StoreConnections.tsx`     | Microsoft connection panel            |
 
 ### Module diagram
 
@@ -114,6 +114,7 @@ After obtaining the OAuth code, the backend builds a token chain to access Xbox 
 ### Token chain technical details
 
 The `RpsTicket` prefix (`d=` vs `t=`) depends on the token format:
+
 - `t=` is correct for JWT OAuth2 tokens
 - `d=` is for legacy compact tickets
 
@@ -148,6 +149,7 @@ microsoft:{productId}|xcloud|{full_url}
 ```
 
 Example:
+
 ```
 microsoft:9NPDN9R45JX4|xcloud|https://www.xbox.com/play/launch/9NPDN9R45JX4
 ```
@@ -164,16 +166,16 @@ The launcher reads this entry to determine that it is an xCloud game and open Ch
 
 ### Chromium flags for xCloud
 
-| Flag | Purpose |
-|------|---------|
-| `--app=URL` | App mode: no address bar or tabs |
-| `--start-fullscreen` | Fullscreen (no window borders) |
-| `--user-data-dir=chromium-auth/` | Shared profile with auth → SSO cookies |
-| `--enable-gamepad-button-axis-events` | Steam Deck controller support |
-| `--enable-features=WebGamepad` | Web Gamepad API enabled |
-| `--autoplay-policy=no-user-gesture-required` | Automatic video playback |
-| `--disable-dev-shm-usage` | Shared memory compatibility |
-| `--password-store=basic` | Prevents KWallet/GNOME Keyring popups |
+| Flag                                         | Purpose                                |
+| -------------------------------------------- | -------------------------------------- |
+| `--app=URL`                                  | App mode: no address bar or tabs       |
+| `--start-fullscreen`                         | Fullscreen (no window borders)         |
+| `--user-data-dir=chromium-auth/`             | Shared profile with auth → SSO cookies |
+| `--enable-gamepad-button-axis-events`        | Steam Deck controller support          |
+| `--enable-features=WebGamepad`               | Web Gamepad API enabled                |
+| `--autoplay-policy=no-user-gesture-required` | Automatic video playback               |
+| `--disable-dev-shm-usage`                    | Shared memory compatibility            |
+| `--password-store=basic`                     | Prevents KWallet/GNOME Keyring popups  |
 
 ### Shared Chromium profile
 
@@ -197,6 +199,7 @@ The Steam Deck has no physical keyboard. Steam's overlay keyboard is not availab
 ### Available layouts
 
 Two layouts are supported, automatically selected based on the locale:
+
 - **AZERTY** for `fr-*` locales
 - **QWERTY** for all other locales
 
@@ -220,13 +223,13 @@ The plugin runs inside **PluginLoader** (a systemd service) which has no graphic
 
 ### Environment variables injected by `clean_env()`
 
-| Variable | Value | Reason |
-|----------|-------|--------|
-| `DISPLAY` | `:0` | X11 session |
-| `XDG_RUNTIME_DIR` | `/run/user/1000` | Bus socket |
-| `DBUS_SESSION_BUS_ADDRESS` | `unix:path=/run/user/1000/bus` | D-Bus |
-| `XAUTHORITY` | `/run/user/1000/xauth_*` (glob) | X11 auth (randomly named on SteamOS) |
-| `GTK_MODULES` | `""` | Suppress canberra warnings |
+| Variable                   | Value                           | Reason                               |
+| -------------------------- | ------------------------------- | ------------------------------------ |
+| `DISPLAY`                  | `:0`                            | X11 session                          |
+| `XDG_RUNTIME_DIR`          | `/run/user/1000`                | Bus socket                           |
+| `DBUS_SESSION_BUS_ADDRESS` | `unix:path=/run/user/1000/bus`  | D-Bus                                |
+| `XAUTHORITY`               | `/run/user/1000/xauth_*` (glob) | X11 auth (randomly named on SteamOS) |
+| `GTK_MODULES`              | `""`                            | Suppress canberra warnings           |
 
 ### XAUTHORITY detection
 
@@ -275,9 +278,9 @@ cursor = conn.execute(
 
 When a game has the `store_tags: ["xcloud"]` tag, `PlayButtonOverride` displays a special button:
 
-| State | Display |
-|-------|---------|
-| Connected | **▶ Play on Cloud** (blue, clickable) |
+| State         | Display                                                      |
+| ------------- | ------------------------------------------------------------ |
+| Connected     | **▶ Play on Cloud** (blue, clickable)                        |
 | Not connected | **Sign in to play** (grayed out, `opacity: 0.4`, `disabled`) |
 
 Clicking triggers `SteamClient.Apps.RunGame()` which launches `unifideck-launcher` with `LaunchOptions: microsoft:{productId}`.
@@ -300,14 +303,14 @@ Every failure point is covered by a detection and recovery mechanism. The plugin
 
 The Microsoft integration requires the following, automatically verified by the plugin:
 
-| Prerequisite | Verification | Fallback |
-|-------------|-------------|----------|
-| **Chromium** (flatpak or native) | `find_cmd()` tests --user and --system | `ChromiumInstallModal` offered |
-| **websockets** (Python) | `import websockets` in `inject_virtual_keyboard` | Keyboard not injected (non-blocking) |
-| **Internet connection** | Implicit (Microsoft API calls) | HTTP errors logged |
-| **Game Pass subscription** | Verified by xbox.com at launch | "Subscribe" page displayed |
-| **flatpak** (for installation) | `shutil.which("flatpak")` | `flatpakNotFound` error |
-| **X11 session** (DISPLAY) | `clean_env()` injects `:0` | Chromium won't open |
+| Prerequisite                     | Verification                                     | Fallback                             |
+| -------------------------------- | ------------------------------------------------ | ------------------------------------ |
+| **Chromium** (flatpak or native) | `find_cmd()` tests --user and --system           | `ChromiumInstallModal` offered       |
+| **websockets** (Python)          | `import websockets` in `inject_virtual_keyboard` | Keyboard not injected (non-blocking) |
+| **Internet connection**          | Implicit (Microsoft API calls)                   | HTTP errors logged                   |
+| **Game Pass subscription**       | Verified by xbox.com at launch                   | "Subscribe" page displayed           |
+| **flatpak** (for installation)   | `shutil.which("flatpak")`                        | `flatpakNotFound` error              |
+| **X11 session** (DISPLAY)        | `clean_env()` injects `:0`                       | Chromium won't open                  |
 
 The plugin is designed to work without manual intervention: if a prerequisite is missing, the interface guides the user toward resolution (Chromium installation, re-connection).
 
@@ -317,19 +320,19 @@ The plugin is designed to work without manual intervention: if a prerequisite is
 
 All endpoints and parameters are read from `settings.json` (not hardcoded):
 
-| Key | Usage |
-|-----|-------|
-| `client_id` | Microsoft OAuth application ID |
-| `auth_url` | OAuth authorize endpoint |
-| `token_url` | OAuth token endpoint |
-| `redirect_uri` | OAuth redirect URI |
-| `scope` | `Xboxlive.signin Xboxlive.offline_access` |
-| `xbl_auth_url` | XBL user token endpoint |
-| `xsts_url` | XSTS token endpoint |
-| `product_url` | Display catalog API |
-| `gamepass_catalog_url` | Game Pass catalog |
-| `xcloud_catalog_id` | xCloud catalog ID |
-| `token_file` | Token file path |
+| Key                    | Usage                                     |
+| ---------------------- | ----------------------------------------- |
+| `client_id`            | Microsoft OAuth application ID            |
+| `auth_url`             | OAuth authorize endpoint                  |
+| `token_url`            | OAuth token endpoint                      |
+| `redirect_uri`         | OAuth redirect URI                        |
+| `scope`                | `Xboxlive.signin Xboxlive.offline_access` |
+| `xbl_auth_url`         | XBL user token endpoint                   |
+| `xsts_url`             | XSTS token endpoint                       |
+| `product_url`          | Display catalog API                       |
+| `gamepass_catalog_url` | Game Pass catalog                         |
+| `xcloud_catalog_id`    | xCloud catalog ID                         |
+| `token_file`           | Token file path                           |
 
 ---
 
@@ -346,6 +349,7 @@ The `ui_locales` parameter is added to the OAuth URL so that the Microsoft page 
 ### Virtual keyboard
 
 The layout (AZERTY/QWERTY) is selected based on the Unifideck locale:
+
 - `fr-*` → AZERTY
 - All others → QWERTY
 

@@ -199,8 +199,7 @@ class CompatibilityService:
         self, tasks: list[asyncio.Task[None]], progress: Any | None, total: int,
     ) -> None:
         """Await tasks as they finish; honour the cancel-status flank."""
-        done_count = 0
-        for fut in asyncio.as_completed(tasks):
+        for done_count, fut in enumerate(asyncio.as_completed(tasks)):
             if progress is not None and progress.status == "cancelled":
                 logger.info(
                     "[CompatibilityService] cancel detected at %d/%d — aborting",
@@ -212,9 +211,10 @@ class CompatibilityService:
                 break
             try:
                 await fut
-            except Exception:  # noqa: BLE001 — per-game failures are best-effort
-                pass
-            done_count += 1
+            except Exception:
+                logger.debug(
+                    "[CompatibilityService] drained task raised", exc_info=True,
+                )
 
     def _max_concurrent(self) -> int:
         """Read ``compat.max_concurrent`` from config or fall back to default."""

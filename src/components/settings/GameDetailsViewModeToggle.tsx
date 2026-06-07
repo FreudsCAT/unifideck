@@ -16,9 +16,11 @@ export const GameDetailsViewModeToggle: FC = () => {
     <PanelSection title={t("gameDetailsSettings.title")}>
       <PanelSectionRow>
         <ToggleField
-          label={compact
-            ? t("gameDetailsSettings.simple")
-            : t("gameDetailsSettings.detailed")}
+          label={
+            compact
+              ? t("gameDetailsSettings.simple")
+              : t("gameDetailsSettings.detailed")
+          }
           checked={compact}
           onChange={(c) => setMode(c ? "compact" : "full")}
         />

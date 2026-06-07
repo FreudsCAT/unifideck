@@ -51,12 +51,18 @@ export const ToastEventListener: FC = () => {
           remote={(payload.remote_snapshot ?? {}) as never}
           onKeepLocal={() => {
             void EventBusClient.dispatchAction(
-              "retry-sync", store, gameId, "sync_up",
+              "retry-sync",
+              store,
+              gameId,
+              "sync_up",
             );
           }}
           onKeepRemote={() => {
             void EventBusClient.dispatchAction(
-              "retry-sync", store, gameId, phase,
+              "retry-sync",
+              store,
+              gameId,
+              phase,
             );
           }}
           onCancel={() => {}}
@@ -66,10 +72,11 @@ export const ToastEventListener: FC = () => {
       return;
     }
     // Generic toast — optionally with action button.
-    const showToastFn = p.severity === "error"
-      ? toast.error
-      : p.severity === "warning"
-        ? toast.error  // warning shares the longer error duration
+    const showToastFn =
+      p.severity === "error"
+        ? toast.error
+        : p.severity === "warning"
+        ? toast.error // warning shares the longer error duration
         : toast.info;
     showToastFn(message);
   });
