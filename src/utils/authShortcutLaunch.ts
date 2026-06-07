@@ -100,7 +100,14 @@ const MICROSOFT_AUTH_CONFIG: AuthShortcutConfig = {
 
 const SHORTCUT_POLL_DELAY_MS = 250;
 const SHORTCUT_POLL_TIMEOUT_MS = 5000;
-const TEMP_SHORTCUT_CLEANUP_DELAY_MS = 15000;
+/** Safety-net delay for removing the temporary auth shortcut when the
+ *  "game stopped" lifetime notification is never observed (missed event
+ *  or a Steam API change). Matches the auth flow's own wait window — the
+ *  AuthDispatcher's 10-min ceiling and the launcher's 600s
+ *  `auth_max_seconds` — so the listener lives exactly as long as a sign-in
+ *  possibly can and no longer. On the happy path the shortcut is removed
+ *  the instant the auth "game" stops, well before this fires. */
+const TEMP_SHORTCUT_SAFETY_CLEANUP_MS = 10 * 60 * 1000;
 
 /** App store entry. */
 interface AppStoreEntry {
@@ -160,24 +167,67 @@ async function waitForShortcutGameId(
   });
 }
 
-/** Schedule temporary shortcut cleanup. Runs 15 seconds after
- *  the launch so Steam has time to record the gameid before we
- *  pull the entry out from under it. */
+/** Schedule temporary shortcut cleanup. Removes the entry only once
+ *  its auth "game" has actually **stopped** (sign-in completed, aborted,
+ *  or the Edge window closed), never on a blind timer.
+ *
+ *  Why: in Gaming Mode each launched game gets its own gamescope/XWayland
+ *  session (``STEAM_MULTIPLE_XWAYLANDS=1``). The Edge login window renders
+ *  on that per-app display. Calling ``RemoveShortcut`` while the game is
+ *  still running ends the session and tears down its XWayland, so the
+ *  login window vanishes back to the Steam UI mid-sign-in. (Desktop Mode
+ *  hid this: a single persistent X server keeps the window alive
+ *  regardless.) Waiting for Steam's "stopped" notification keeps the
+ *  session — and the window — alive for the whole login. */
 function scheduleTemporaryShortcutCleanup(
   appId: number,
   config: AuthShortcutConfig,
 ): void {
   const steamApps = window.SteamClient?.Apps;
-  window.setTimeout(() => {
+  const cleanup: Array<() => void> = [];
+  let removed = false;
+  let sawRunning = false;
+
+  const remove = (reason: string): void => {
+    if (removed) return;
+    removed = true;
+    for (const fn of cleanup) fn();
     try {
       steamApps?.RemoveShortcut?.(appId);
+      console.log(
+        `${logTag(config)} Removed temp auth shortcut ${appId} (${reason})`,
+      );
     } catch (error) {
       console.error(
         `${logTag(config)} Failed to remove temp shortcut ${appId}:`,
         error,
       );
     }
-  }, TEMP_SHORTCUT_CLEANUP_DELAY_MS);
+  };
+
+  const sub =
+    window.SteamClient?.GameSessions?.RegisterForAppLifetimeNotifications?.(
+      (n) => {
+        if (n.unAppID !== appId) return;
+        if (n.bRunning) {
+          sawRunning = true;
+        } else if (sawRunning) {
+          // The launcher (and with it the Edge window) has exited; the
+          // session is gone, so removing the entry now is safe.
+          remove("auth game stopped");
+        }
+      },
+    );
+  if (sub) cleanup.push(() => sub.unregister());
+
+  // Safety net: clean up even if the "stopped" notification never lands,
+  // but only well past the launcher's 600s auth ceiling so it can't fire
+  // during a normal sign-in.
+  const safetyTimer = window.setTimeout(
+    () => remove("safety timeout"),
+    TEMP_SHORTCUT_SAFETY_CLEANUP_MS,
+  );
+  cleanup.push(() => window.clearTimeout(safetyTimer));
 }
 
 /** Create temporary auth shortcut via Steam's ``AddShortcut`` API.
