@@ -81,6 +81,8 @@ export type EventName = (typeof Events)[keyof typeof Events];
 export interface ToastActionPayload {
   severity?: "info" | "warning" | "error";
   i18n_key?: string;
+  /** Optional bold title rendered above `i18n_key`'s message. */
+  i18n_title_key?: string;
   i18n_params?: Record<string, unknown>;
   duration_ms?: number;
   action?: { verb: string; args: string[] };

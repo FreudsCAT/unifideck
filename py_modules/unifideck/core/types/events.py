@@ -92,7 +92,8 @@ class Events(StrEnum):
     # LauncherToastListener subscribes to this channel to
     # render toast notifications with optional action buttons
     # (see actions/unifideck_uri.py for the URI scheme).
-    # Payload fields: i18n_key (str), severity
+    # Payload fields: i18n_key (str), i18n_title_key? (str — bold
+    # toast title rendered above i18n_key's message), severity
     # ("info"|"warning"|"error"), i18n_params (dict),
     # duration_ms (int), action? ({i18n_label_key, target_url,
     # fallback_url?}), store?, game_id?, phase?.

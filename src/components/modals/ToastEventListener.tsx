@@ -71,14 +71,20 @@ export const ToastEventListener: FC = () => {
       );
       return;
     }
-    // Generic toast — optionally with action button.
+    // Generic toast — optionally with a bold title above the message
+    // (e.g. "Proton Upgrade" / "Now using GE-Proton10-34").
     const showToastFn =
       p.severity === "error"
         ? toast.error
         : p.severity === "warning"
         ? toast.error // warning shares the longer error duration
         : toast.info;
-    showToastFn(message);
+    if (p.i18n_title_key) {
+      const title = t(p.i18n_title_key, p.i18n_params as Record<string, string>);
+      showToastFn(title, message);
+    } else {
+      showToastFn(message);
+    }
   });
   useEventBus(Events.STORE_ERROR, (payload) => {
     const store = String(payload.store ?? "?");

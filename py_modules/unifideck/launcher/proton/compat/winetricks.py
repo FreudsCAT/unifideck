@@ -12,6 +12,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
+from unifideck.launcher.frontend_bridge import launcher_toast
 from unifideck.launcher.proton.fixes.game_fixes import get_required_winetricks
 from unifideck.launcher.proton.infrastructure.core import ProtonLaunchPlan
 from unifideck.launcher.proton.infrastructure.umu_runtime import (
@@ -77,6 +78,11 @@ async def apply_winetricks(plan: ProtonLaunchPlan) -> None:
         plan.context.game_id, ", ".join(packages),
     )
     _write_marker(marker, "installing: " + ", ".join(packages))
+    launcher_toast(
+        "toasts.launcher.installingRedistributables",
+        i18n_title_key="toasts.launcher.dependenciesTitle",
+        game_title=plan.context.game_key,
+    )
 
     # winetricks runs under the same Proton/prefix the game uses. umu's
     # GAMEID=umu-0 (generic, no per-game protonfix) + no runtime update
@@ -103,9 +109,20 @@ async def apply_winetricks(plan: ProtonLaunchPlan) -> None:
         logger.info(
             "[compat.winetricks] complete for %s", plan.context.game_id,
         )
+        launcher_toast(
+            "toasts.launcher.redistributablesInstalled",
+            i18n_title_key="toasts.launcher.dependenciesReady",
+            game_title=plan.context.game_key,
+        )
     else:
         _write_marker(marker, f"failed: exit {rc}")
         logger.warning(
             "[compat.winetricks] rc=%d for %s",
             rc, plan.context.game_id,
+        )
+        launcher_toast(
+            "toasts.launcher.checkLogs",
+            i18n_title_key="toasts.launcher.dependenciesStatus",
+            game_title=plan.context.game_key,
+            severity="warning",
         )

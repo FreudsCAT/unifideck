@@ -9,7 +9,13 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from unifideck.launcher.frontend_bridge import launcher_toast
+
 logger = logging.getLogger(__name__)
+# Short pause before a recoverable umu retry — gives a transient
+# runtime/network hiccup a moment to clear and makes the "retrying in
+# Ns" toast truthful.
+_RETRY_BACKOFF_SECONDS = 3
 UMU_CACHE_DIR = Path("~/.local/share/umu").expanduser()
 _LAUNCHES_DIR = Path("~/.local/share/unifideck/launches").expanduser()
 _RECOVERABLE_CODES = {2, 74}
@@ -85,7 +91,18 @@ async def run_umu_with_retry(
                     "[launcher.umu] recoverable rc=%d, wiping cache + retry",
                     rc,
                 )
+                launcher_toast(
+                    "toasts.launcher.retryingUmu",
+                    i18n_title_key="toasts.launcher.networkError",
+                    i18n_params={
+                        "seconds": _RETRY_BACKOFF_SECONDS,
+                        "attempt": attempt + 1,
+                        "max": max_attempts,
+                    },
+                    severity="warning",
+                )
                 cleanup_umu_runtime_cache()
+                await asyncio.sleep(_RETRY_BACKOFF_SECONDS)
                 continue
             return rc
         return last_rc

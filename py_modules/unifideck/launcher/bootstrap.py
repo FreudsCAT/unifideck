@@ -24,11 +24,16 @@ def build_launcher_service(config: Any | None = None) -> Any:
     """
     from unifideck.auth.edge_browser import EdgeBrowser
     from unifideck.event_bus import EventBus
+    from unifideck.launcher.frontend_bridge import install_bus_forwarder
     from unifideck.services.bootstrap import build_service_subset
     from unifideck.services.launcher import LauncherService
     if config is None:
         config = _load_standalone_config()
     bus = EventBus()
+    # The launcher runs as its own process, so its LAUNCHER_STAGE toast
+    # events can't reach the plugin's replay buffer on their own. Mirror
+    # them into the shared bridge file the plugin drains (frontend_bridge).
+    install_bus_forwarder(bus)
     # Drift fix (lot 11g): the previous call was
     # ``build_service_subset(bus, config, paths, attrs={...})``
     # — but the real signature is

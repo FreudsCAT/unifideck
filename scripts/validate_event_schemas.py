@@ -95,7 +95,7 @@ CANONICAL_SCHEMA: dict[str, set[str]] = {
     "GAME_LAUNCHED":                {"app_id", "game_id", "store", "title"},
     "GAME_STOPPED":                 {"app_id", "elapsed_seconds", "exit_code", "game_id", "store", "terminated_by_signal"},
     "GAME_UNINSTALLED":             {"game_id", "store"},
-    "LAUNCHER_STAGE":               {"action", "duration_ms", "game_title", "i18n_key", "i18n_params", "priority", "severity", "store"},
+    "LAUNCHER_STAGE":               {"action", "duration_ms", "game_title", "i18n_key", "i18n_params", "i18n_title_key", "priority", "severity", "store"},
     "LIBRARY_SYNC_CANCELLED":       {"cancelled_at_store", "store_count"},
     "LIBRARY_SYNC_COMPLETED":       {"duration_ms", "errors", "game_count", "store_count"},
     "LIBRARY_SYNC_STARTED":         {"started_at_ms", "stores"},

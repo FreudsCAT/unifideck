@@ -102,7 +102,24 @@ class ObservabilityRPCMixin:
         """
         if getattr(self, "replay", None) is None:
             raise RpcError("service_unavailable", service="replay")
+        # Pull in any toasts emitted by the (separate-process) game
+        # launcher before snapshotting, so launcher-stage events reach
+        # the frontend through this same poll. See launcher.frontend_bridge.
+        self._drain_launcher_events()
         return self.replay.snapshot(events=events)
+
+    def _drain_launcher_events(self) -> None:
+        """Drain the launcher→plugin bridge file into the replay buffer."""
+        drainer = getattr(self, "_launcher_drainer", None)
+        if drainer is None:
+            from unifideck.launcher.frontend_bridge import LauncherEventDrainer
+
+            drainer = LauncherEventDrainer()
+            self._launcher_drainer = drainer
+        try:
+            drainer.drain(self.replay)
+        except Exception:
+            logger.debug("[Observability] launcher event drain failed", exc_info=True)
 
     async def release_quarantine(self, handler_name: str) -> Any:
         """Release a watchdog-quarantined handler after a fix.

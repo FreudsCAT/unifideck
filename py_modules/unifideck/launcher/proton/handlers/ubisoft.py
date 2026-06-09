@@ -5,6 +5,7 @@ import logging
 import os
 from pathlib import Path
 
+from unifideck.launcher.frontend_bridge import launcher_toast
 from unifideck.launcher.proton.infrastructure.core import ProtonLaunchPlan
 from unifideck.launcher.proton.infrastructure.umu_runtime import run_umu_with_retry
 from unifideck.launcher.types.errors import GameFailedError, UmuRuntimeError
@@ -83,6 +84,11 @@ async def ubisoft_launch(plan: ProtonLaunchPlan) -> int:
     logger.info(
         "[launcher.proton.ubisoft] launching %s",
         plan.context.game_key,
+    )
+    launcher_toast(
+        "toasts.launcher.startingUbisoftGame",
+        i18n_title_key="toasts.launcher.launchingGame",
+        game_title=plan.context.game_key,
     )
     await _apply_epic_wrapper_fix(plan)
     if not await _inject_registry_keys(plan):

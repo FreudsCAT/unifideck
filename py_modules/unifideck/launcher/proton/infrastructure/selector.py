@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-import os
 import re
 import subprocess
 from pathlib import Path
@@ -10,6 +9,8 @@ from unifideck.launcher.types.errors import (
     DependencyMissingError,
     ProtonUnavailableError,
 )
+
+from . import ge_installer
 
 logger = logging.getLogger(__name__)
 PYTHON_CANDIDATES: list[str] = [
@@ -56,6 +57,19 @@ STEAM_LIBRARY_ROOTS: list[str] = [
     "~/.local/share/Steam/steamapps/common",
 ]
 UNIFIDECK_COMPAT_DIR = "~/.local/share/unifideck/compat-tools"
+# Steam's internal compat-tool ids → the on-disk install directory
+# name. These differ for the official Protons: the id is
+# ``proton_experimental`` but the folder is ``Proton - Experimental``.
+# Without this mapping the Experimental fallback — and any user who
+# force-selects an official Proton in Steam — never resolves to a path.
+OFFICIAL_TOOL_DIRS: dict[str, str] = {
+    "proton_experimental": "Proton - Experimental",
+    "proton_hotfix": "Proton Hotfix",
+    "proton_10": "Proton 10.0",
+    "proton_9": "Proton 9.0 (Beta)",
+    "proton_8": "Proton 8.0",
+    "proton_7": "Proton 7.0",
+}
 def resolve_proton_path(tool_id: str) -> Path | None:
     """Resolve PROTON path."""
     if not tool_id:
@@ -67,10 +81,18 @@ def resolve_proton_path(tool_id: str) -> Path | None:
         candidate = Path(root).expanduser() / tool_id / "proton"
         if candidate.is_file():
             return candidate
+    # Official Proton tools live in steamapps/common under a display-name
+    # dir that differs from the tool id (see OFFICIAL_TOOL_DIRS). Try the
+    # id verbatim first, then the mapped directory name.
+    dir_names = [tool_id]
+    aliased = OFFICIAL_TOOL_DIRS.get(tool_id)
+    if aliased:
+        dir_names.append(aliased)
     for lib in STEAM_LIBRARY_ROOTS:
-        candidate = Path(lib).expanduser() / tool_id / "proton"
-        if candidate.is_file():
-            return candidate
+        for name in dir_names:
+            candidate = Path(lib).expanduser() / name / "proton"
+            if candidate.is_file():
+                return candidate
     return None
 def get_unifideck_proton_tool() -> str | None:
     """Get unifideck PROTON tool."""
@@ -134,41 +156,6 @@ def get_steam_compat_tool_override(app_id: str) -> str | None:
             if m.group("app_id") == app_id:
                 return m.group("name")
     return None
-def _ge_version_key(proton_script: Path) -> tuple[int, ...]:
-    """Numeric version tuple from a GE-Proton dir (e.g. (10, 34)).
-
-    MUST be numeric, not lexical: a plain string sort puts
-    ``GE-Proton9-26`` *after* ``GE-Proton10-34`` ('9' > '1'), so the
-    "newest" fallback would pick an OLD Proton — which crashes recent
-    titles (e.g. 2025 Unity games) that need a current Proton.
-    """
-    nums = re.findall(r"\d+", proton_script.parent.name)
-    return tuple(int(n) for n in nums) or (0,)
-
-
-def find_any_ge_proton() -> Path | None:
-    """Find the newest installed GE-Proton (by version, not name)."""
-    candidates: list[Path] = []
-    for root in STEAM_COMPAT_ROOTS:
-        expanded = Path(root).expanduser()
-        if not expanded.is_dir():
-            continue
-        for entry in expanded.iterdir():
-            if entry.name.startswith("GE-Proton"):
-                proton_script = entry / "proton"
-                # Must be EXECUTABLE — a broken/partial extract (e.g. a
-                # GE-Proton whose `proton` is 0644) would otherwise be
-                # picked as "newest" and die with "Permission denied" on
-                # exec. Skip it so we fall back to the newest WORKING one.
-                if proton_script.is_file() and os.access(
-                    proton_script, os.X_OK,
-                ):
-                    candidates.append(proton_script)
-    if not candidates:
-        return None
-    candidates.sort(key=_ge_version_key)
-    return candidates[-1]
-
 def select_proton_version(
     steam_app_id: str | None = None,
     store_game_id: str | None = None,
@@ -182,7 +169,8 @@ def select_proton_version(
          captured + cleared on the game-details page).
       2. A live Steam compat override for ``steam_app_id``.
       3. The Unifideck default from ``config.json``.
-      4. Newest installed GE-Proton as a last resort.
+      4. The latest GE-Proton released online (downloaded/installed on
+         demand), falling back to Proton Experimental when offline.
     """
     tried: list[str] = []
     saved_tool = get_saved_proton_tool(store_game_id) if store_game_id else None
@@ -202,7 +190,7 @@ def select_proton_version(
         path = _resolve_logged("unifideck", unifideck_tool, tried)
         if path:
             return path, unifideck_tool
-    return _proton_fallback(tried)
+    return _default_latest_ge(tried)
 
 
 def _resolve_logged(source: str, tool: str, tried: list[str]) -> Path | None:
@@ -214,16 +202,43 @@ def _resolve_logged(source: str, tool: str, tried: list[str]) -> Path | None:
     return path
 
 
-def _proton_fallback(tried: list[str]) -> tuple[Path, str]:
-    """Newest installed GE-Proton as a last resort; raise if none."""
-    fallback = find_any_ge_proton()
-    if fallback:
-        tool_id = fallback.parent.name
-        tried.append(f"fallback:{tool_id}")
+def _default_latest_ge(tried: list[str]) -> tuple[Path, str]:
+    """Default tier: latest GE-Proton online, else Proton Experimental.
+
+    1. Fast path — if the background installer recorded a latest tag
+       (``proton_ge_latest.json``) and it is validly installed, use it
+       without touching the network.
+    2. Safety net — fetch the newest GE-Proton tag and download/install
+       it on demand (bounded; offline returns ``None`` quickly).
+    3. Fallback — Proton Experimental (the only fallback by design;
+       older local GE versions stay user-selectable via Force Compat).
+    """
+    cached = ge_installer.read_cached_latest_tag()
+    if cached:
+        path = ge_installer.installed_ge_proton_path(cached)
+        if path:
+            tried.append(f"latest-ge-cached:{cached}")
+            logger.info(
+                "[launcher.proton] selected cached latest GE-Proton: %s", cached,
+            )
+            return path, cached
+
+    result = ge_installer.ensure_latest_ge()
+    if result:
+        path, tag = result
+        tried.append(f"latest-ge:{tag}")
+        logger.info("[launcher.proton] selected latest GE-Proton: %s", tag)
+        return path, tag
+
+    tried.append("fallback:proton_experimental")
+    experimental = resolve_proton_path("proton_experimental")
+    if experimental:
         logger.info(
-            "[launcher.proton] selected via GE-Proton fallback: %s", tool_id,
+            "[launcher.proton] GE-Proton unavailable; "
+            "falling back to Proton Experimental",
         )
-        return fallback, tool_id
+        return experimental, "proton_experimental"
+
     raise ProtonUnavailableError(
         "No usable Proton compat tool found",
         context={"tried": tried},

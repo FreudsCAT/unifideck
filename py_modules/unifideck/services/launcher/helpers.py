@@ -51,7 +51,6 @@ async def prepare_windows_plan(
             steam_app_id=ctx.steam_app_id,
             store_game_id=ctx.game_key,
         )
-
         def _on_process_start(proc: object) -> None:
             svc._active_subprocess = proc
 

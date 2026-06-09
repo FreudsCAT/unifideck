@@ -20,14 +20,17 @@ logger = logging.getLogger(__name__)
 # Services with async init hooks. First three open DBs or spawn
 # poll loops; ``security`` runs device-fingerprint verification;
 # ``launch_history`` doesn't truly need async but is listed here
-# for uniformity. Other services don't implement ``start`` and
-# are skipped by the getattr probe below.
+# for uniformity; ``proton`` background-installs the latest GE-Proton
+# (non-blocking — it spawns a detached task and returns immediately).
+# Other services don't implement ``start`` and are skipped by the
+# getattr probe below.
 _ASYNC_START_SERVICES: tuple[str, ...] = (
     "download",
     "account",
     "playtime",
     "security",
     "launch_history",
+    "proton",
 )
 
 

@@ -20,6 +20,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
+from unifideck.launcher.frontend_bridge import launcher_toast
 from unifideck.launcher.proton.infrastructure.core import ProtonLaunchPlan
 
 logger = logging.getLogger(__name__)
@@ -63,6 +64,11 @@ async def apply_epic_prerequisites(plan: ProtonLaunchPlan) -> bool:
     logger.info(
         "[epic_prerequisites] %s: installing %s", game_id, name,
     )
+    launcher_toast(
+        "toasts.launcher.installingPrerequisites",
+        i18n_title_key="toasts.launcher.prerequisitesTitle",
+        game_title=plan.context.game_key,
+    )
     ok = await _run_prerequisite(plan, prereq, prefix_root)
     if ok:
         _write_marker_sync(new_marker, body=f"installed: {name}")
@@ -70,9 +76,20 @@ async def apply_epic_prerequisites(plan: ProtonLaunchPlan) -> bool:
         logger.info(
             "[epic_prerequisites] %s: %s installed", game_id, name,
         )
+        launcher_toast(
+            "toasts.launcher.prerequisitesInstalled",
+            i18n_title_key="toasts.launcher.prerequisitesReady",
+            game_title=plan.context.game_key,
+        )
     else:
         logger.warning(
             "[epic_prerequisites] %s: %s install failed", game_id, name,
+        )
+        launcher_toast(
+            "toasts.launcher.prerequisitesFailedMessage",
+            i18n_title_key="toasts.launcher.prerequisitesFailed",
+            game_title=plan.context.game_key,
+            severity="warning",
         )
     return ok
 

@@ -222,6 +222,13 @@ class LauncherService:
             logger.warning(
                 "[LauncherService] xCloud launch aborted — Edge not installed",
             )
+            await emit_stage(
+                self._bus,
+                i18n_key="toasts.launcher.browserRequired",
+                game_title=ctx.game_key,
+                severity="error",
+                priority="normal",
+            )
             return Result(
                 success=False, error="edge_not_installed", store=store,
             )
@@ -243,6 +250,12 @@ class LauncherService:
         # in ``Path`` (which collapses ``https://`` → ``https:/``), so
         # it's not a safe URL source here.
         url = f"https://www.xbox.com/play/launch/{game_id}"
+
+        await emit_stage(
+            self._bus,
+            i18n_key="toasts.launcher.signingIn",
+            game_title=ctx.game_key,
+        )
 
         try:
             # ``EdgeBrowser.launch_xcloud`` is synchronous and

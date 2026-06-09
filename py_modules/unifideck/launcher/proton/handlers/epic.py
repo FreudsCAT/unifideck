@@ -5,6 +5,7 @@ import logging
 import os
 from pathlib import Path
 
+from unifideck.launcher.frontend_bridge import launcher_toast
 from unifideck.launcher.proton.compat.epic_cleanup import cleanup_epic_artifacts
 from unifideck.launcher.proton.infrastructure.core import ProtonLaunchPlan
 from unifideck.launcher.proton.infrastructure.umu_runtime import run_umu_with_retry
@@ -55,6 +56,11 @@ async def epic_launch(plan: ProtonLaunchPlan) -> int:
 
     """Epic launch."""
     logger.info("[launcher.proton.epic] launching %s", plan.context.game_key)
+    launcher_toast(
+        "toasts.launcher.startingEpicGame",
+        i18n_title_key="toasts.launcher.launchingGame",
+        game_title=plan.context.game_key,
+    )
     cleanup_epic_artifacts(plan)
     await _run_epic_prerequisites(plan)
     legendary_bin, env = await _prepare_epic_env(plan)

@@ -34,6 +34,12 @@ async def dispatch(plan: ProtonLaunchPlan) -> int:
     (Epic EOS overlay, GOG galaxy stub, Amazon fuel args).
     """
     from .compat import apply_prefix_compat
+    from .compat.prefix_init import ensure_prefix_initialized
+
+    # Reset the prefix if the Proton family changed (Force-Compat
+    # switch / fallback) and make sure it's created before the compat
+    # steps and the game run in it.
+    await ensure_prefix_initialized(plan)
     await apply_prefix_compat(plan)
 
     store = plan.context.store

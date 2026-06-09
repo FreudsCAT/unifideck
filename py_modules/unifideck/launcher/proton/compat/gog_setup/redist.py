@@ -14,6 +14,8 @@ import shlex
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from unifideck.launcher.frontend_bridge import launcher_toast
+
 from .common import AUTH_CONFIG, REDIST_DIR, run_wine
 
 if TYPE_CHECKING:
@@ -42,6 +44,11 @@ async def ensure_redist_downloaded(
         logger.info("[gog_setup] all redistributables already present")
         return
 
+    launcher_toast(
+        "toasts.launcher.installingRedistMessage",
+        i18n_title_key="toasts.launcher.installingRedist",
+        game_title=plan.context.game_key,
+    )
     gogdl = _gogdl_bin(plan)
     if not gogdl.is_file() or not AUTH_CONFIG.is_file():
         logger.warning(
