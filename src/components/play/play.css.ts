@@ -207,7 +207,7 @@ export const PLAY_FOCUS_CSS = `
 .unifideck-download-play-btn:focus-within,
 .unifideck-download-play-btn.gpfocus {
   filter: brightness(1.15) !important;
-  box-shadow: 0 0 0 2px rgba(34, 197, 94, 0.7) !important;
+  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.8) !important;
 }
 `;
 

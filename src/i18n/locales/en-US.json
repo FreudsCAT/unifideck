@@ -114,6 +114,8 @@
     "local": "Local:",
     "cloud": "Cloud:",
     "newer": "(newer)",
+    "filesSize": "{{count}} files · {{size}}",
+    "uploadBlockedEmpty": "Cloud upload skipped for {{game}} — no local saves found",
     "useCloud": "Use Cloud",
     "useLocal": "Use Local",
     "unknownDate": "Unknown",

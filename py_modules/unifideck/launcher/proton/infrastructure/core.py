@@ -125,6 +125,15 @@ def proton_prepare(
     # staging's ``export PROTONPATH``.
     env["PROTONPATH"] = str(proton_path.parent)
     env["STEAM_COMPAT_DATA_PATH"] = str(prefix_path)
+    # Pin the game to its per-game prefix. umu-run does NOT derive the
+    # prefix from STEAM_COMPAT_DATA_PATH — with no WINEPREFIX it defaults
+    # to ``~/Games/umu/$GAMEID`` (e.g. the shared ``umu-0`` when a game
+    # has no per-game umu_id). That shared prefix lacks the deps our
+    # compat steps install into prefix_path (they set WINEPREFIX
+    # explicitly) AND it's not where cloud-save sync writes — so the game
+    # would launch in the wrong prefix and never see its saves/deps.
+    # Mirrors the compat steps (e.g. compat/winetricks.py).
+    env["WINEPREFIX"] = str(prefix_path)
     # Game install dir — some Proton features/protonfixes key off this.
     env["STEAM_COMPAT_INSTALL_PATH"] = str(ctx.work_dir)
     # Let DXVK-NVAPI work on non-NVIDIA / mixed driver setups (harmless

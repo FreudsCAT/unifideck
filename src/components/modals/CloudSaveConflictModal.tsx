@@ -40,6 +40,18 @@ function formatTs(ts: number): string {
   });
 }
 
+function formatBytes(n: number): string {
+  if (!n) return "0 B";
+  const units = ["B", "KB", "MB", "GB"];
+  let value = n;
+  let i = 0;
+  while (value >= 1024 && i < units.length - 1) {
+    value /= 1024;
+    i += 1;
+  }
+  return `${value.toFixed(i > 0 && value < 10 ? 1 : 0)} ${units[i]}`;
+}
+
 export const CloudSaveConflictModal: FC<Props> = ({
   gameTitle,
   local,
@@ -97,14 +109,28 @@ export const CloudSaveConflictModal: FC<Props> = ({
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
               <FaDesktop size={16} /> <span>{t("cloudSave.local")}</span>
             </div>
-            <span
+            <div
               style={{
-                color: localNewer ? "#4caf50" : "#888",
-                fontWeight: localNewer ? "bold" : "normal",
+                display: "flex",
+                flexDirection: "column",
+                alignItems: "flex-end",
               }}
             >
-              {formatTs(local.timestamp)} {localNewer && t("cloudSave.newer")}
-            </span>
+              <span
+                style={{
+                  color: localNewer ? "#4caf50" : "#888",
+                  fontWeight: localNewer ? "bold" : "normal",
+                }}
+              >
+                {formatTs(local.timestamp)} {localNewer && t("cloudSave.newer")}
+              </span>
+              <span style={{ fontSize: 12, color: "#aaa" }}>
+                {t("cloudSave.filesSize", {
+                  count: local.file_count ?? 0,
+                  size: formatBytes(local.total_bytes ?? 0),
+                })}
+              </span>
+            </div>
           </div>
           <div
             style={{
@@ -116,14 +142,29 @@ export const CloudSaveConflictModal: FC<Props> = ({
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
               <FaCloud size={16} /> <span>{t("cloudSave.cloud")}</span>
             </div>
-            <span
+            <div
               style={{
-                color: !localNewer ? "#4caf50" : "#888",
-                fontWeight: !localNewer ? "bold" : "normal",
+                display: "flex",
+                flexDirection: "column",
+                alignItems: "flex-end",
               }}
             >
-              {formatTs(remote.timestamp)} {!localNewer && t("cloudSave.newer")}
-            </span>
+              <span
+                style={{
+                  color: !localNewer ? "#4caf50" : "#888",
+                  fontWeight: !localNewer ? "bold" : "normal",
+                }}
+              >
+                {formatTs(remote.timestamp)}{" "}
+                {!localNewer && t("cloudSave.newer")}
+              </span>
+              <span style={{ fontSize: 12, color: "#aaa" }}>
+                {t("cloudSave.filesSize", {
+                  count: remote.file_count ?? 0,
+                  size: formatBytes(remote.total_bytes ?? 0),
+                })}
+              </span>
+            </div>
           </div>
         </div>
         <div

@@ -142,6 +142,6 @@ class ServicePaths:
             queue_file=str(data_dir_path / "download_queue.json"),
             playtime_db=str(data_dir_path / "playtime.db"),
             local_save_root=str(data_dir_path / "saves"),
-            cloud_root=config.get("cloud_saves.remote_root") or None,
+            cloud_root=str(Path(config.get("cloud.root") or config.get("cloud_saves.remote_root") or "~/Save Games Backup").expanduser()),
             activity_log=str(data_dir_path / "sync_activity.log"),
         )

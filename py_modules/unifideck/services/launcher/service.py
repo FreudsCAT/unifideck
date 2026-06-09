@@ -37,7 +37,7 @@ class LauncherService:
         bus: EventBus,
         shortcut_svc: ShortcutService,
         proton_svc: ProtonService,
-        cloud_svc: CloudSaveService,
+        cloud_svc: CloudSaveService | None,
         edge_browser: EdgeBrowser,
         config: Any | None = None,
         launch_history: Any | None = None,

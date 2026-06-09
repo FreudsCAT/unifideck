@@ -85,6 +85,16 @@ async def cloud_sync_phase(
     if not store or not game_id:
         return
 
+    # Cloud-save is optional: the launcher may have been built without it
+    # (e.g. the service failed to instantiate). A launch must never depend
+    # on cloud-save being present, so skip silently when it's unavailable.
+    if svc._cloud_svc is None:
+        logger.debug(
+            "[Helpers] Cloud sync %s skipped — cloud service unavailable",
+            direction,
+        )
+        return
+
     try:
         if direction == "down":
             await svc._cloud_svc.sync_down(store, game_id)
