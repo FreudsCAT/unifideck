@@ -78,6 +78,7 @@ class _LibraryFetcher:
             configs,
             config_by_id,
             owned_set,
+            installed,
         )
         matched_configs = self._builder.apply_steam_filter(
             matched_configs,

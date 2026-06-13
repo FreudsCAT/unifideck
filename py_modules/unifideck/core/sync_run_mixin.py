@@ -316,6 +316,11 @@ class _SyncRunMixin:
             Events.SYNC_COMPLETE,
             games=result.games,
             stores_synced=list(libraries.keys()),
+            # Every registered store, not just the ones that returned
+            # games — lets ShortcutService.reconcile sweep stale
+            # shortcuts for a logged-out / empty store (phantom Ubisoft
+            # entries, the legacy microsoft:ms-auth row).
+            registered_stores=self._registry.store_ids(),
             errors=errors,
             duration_ms=duration_ms,
             fetch_artwork=fetch_artwork,

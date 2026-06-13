@@ -177,7 +177,7 @@ def test_select_downloads_latest_when_not_cached(tmp_path, monkeypatch):
     monkeypatch.setattr(selector.ge_installer, "read_cached_latest_tag", lambda: None)
     monkeypatch.setattr(
         selector.ge_installer, "ensure_latest_ge",
-        lambda: (proton, "GE-Proton10-34"),
+        lambda progress_cb=None: (proton, "GE-Proton10-34"),
     )
     assert selector.select_proton_version() == (proton, "GE-Proton10-34")
 
@@ -187,7 +187,9 @@ def test_select_falls_back_to_experimental_when_offline(tmp_path, monkeypatch):
     _compat, lib = _point_selector_roots(tmp_path, monkeypatch)
     exp = _make_proton(lib / "Proton - Experimental", executable=True)
     monkeypatch.setattr(selector.ge_installer, "read_cached_latest_tag", lambda: None)
-    monkeypatch.setattr(selector.ge_installer, "ensure_latest_ge", lambda: None)
+    monkeypatch.setattr(
+        selector.ge_installer, "ensure_latest_ge", lambda progress_cb=None: None,
+    )
 
     assert selector.select_proton_version() == (exp, "proton_experimental")
 
@@ -196,10 +198,102 @@ def test_select_raises_when_nothing_available(tmp_path, monkeypatch):
     _silence_higher_tiers(monkeypatch)
     _point_selector_roots(tmp_path, monkeypatch)  # no Experimental on disk
     monkeypatch.setattr(selector.ge_installer, "read_cached_latest_tag", lambda: None)
-    monkeypatch.setattr(selector.ge_installer, "ensure_latest_ge", lambda: None)
+    monkeypatch.setattr(
+        selector.ge_installer, "ensure_latest_ge", lambda progress_cb=None: None,
+    )
 
     with pytest.raises(ProtonUnavailableError):
         selector.select_proton_version()
+
+
+# ── launch-time GE-download toasts ────────────────────────────────
+
+def test_download_announcer_toasts_once(monkeypatch):
+    """The progress callback toasts on the first chunk, then stays quiet."""
+    import unifideck.launcher.frontend_bridge as fb
+    spy = MagicMock()
+    monkeypatch.setattr(fb, "launcher_toast", spy)
+
+    cb = selector._GeDownloadAnnouncer()
+    cb(1024, 9999)
+    cb(2048, 9999)
+    cb(4096, 9999)
+
+    assert cb.fired is True
+    spy.assert_called_once()
+    assert spy.call_args.args[0] == "toasts.launcher.downloadingProton"
+
+
+def test_select_toasts_when_download_happens(tmp_path, monkeypatch):
+    """A real launch-time download fires download + ready toasts."""
+    _silence_higher_tiers(monkeypatch)
+    import unifideck.launcher.frontend_bridge as fb
+    spy = MagicMock()
+    monkeypatch.setattr(fb, "launcher_toast", spy)
+    proton = tmp_path / "GE-Proton10-34" / "proton"
+    monkeypatch.setattr(selector.ge_installer, "read_cached_latest_tag", lambda: None)
+
+    def _ensure(progress_cb=None):
+        # Simulate streaming bytes so the announcer fires.
+        if progress_cb:
+            progress_cb(1024, 2048)
+        return proton, "GE-Proton10-34"
+
+    monkeypatch.setattr(selector.ge_installer, "ensure_latest_ge", _ensure)
+
+    assert selector.select_proton_version() == (proton, "GE-Proton10-34")
+    keys = [c.args[0] for c in spy.call_args_list]
+    assert "toasts.launcher.downloadingProton" in keys
+    assert "toasts.launcher.protonReadyBody" in keys
+
+
+def test_select_silent_when_no_download(tmp_path, monkeypatch):
+    """No download (cb never fires) → no GE toasts."""
+    _silence_higher_tiers(monkeypatch)
+    import unifideck.launcher.frontend_bridge as fb
+    spy = MagicMock()
+    monkeypatch.setattr(fb, "launcher_toast", spy)
+    proton = tmp_path / "GE-Proton10-34" / "proton"
+    monkeypatch.setattr(selector.ge_installer, "read_cached_latest_tag", lambda: None)
+    # Already-installed path: ensure_latest_ge returns without streaming.
+    monkeypatch.setattr(
+        selector.ge_installer, "ensure_latest_ge",
+        lambda progress_cb=None: (proton, "GE-Proton10-34"),
+    )
+
+    selector.select_proton_version()
+    keys = [c.args[0] for c in spy.call_args_list]
+    assert "toasts.launcher.downloadingProton" not in keys
+    assert "toasts.launcher.protonReadyBody" not in keys
+
+
+# ── umu runtime first-setup toast ─────────────────────────────────
+
+def test_umu_runtime_toasts_when_steamrt3_missing(tmp_path, monkeypatch):
+    from unifideck.launcher.proton.infrastructure import umu_runtime
+    spy = MagicMock()
+    monkeypatch.setattr(umu_runtime, "launcher_toast", spy)
+    monkeypatch.setattr(umu_runtime, "UMU_CACHE_DIR", tmp_path / "umu")
+    monkeypatch.setenv("HOME", str(tmp_path))  # contain ~/.config/umu
+
+    umu_runtime.ensure_umu_runtime_ready()
+
+    spy.assert_called_once()
+    assert spy.call_args.args[0] == "toasts.launcher.downloadingRuntime"
+
+
+def test_umu_runtime_silent_when_steamrt3_present(tmp_path, monkeypatch):
+    from unifideck.launcher.proton.infrastructure import umu_runtime
+    spy = MagicMock()
+    monkeypatch.setattr(umu_runtime, "launcher_toast", spy)
+    cache = tmp_path / "umu"
+    (cache / "steamrt3").mkdir(parents=True)
+    monkeypatch.setattr(umu_runtime, "UMU_CACHE_DIR", cache)
+    monkeypatch.setenv("HOME", str(tmp_path))
+
+    umu_runtime.ensure_umu_runtime_ready()
+
+    spy.assert_not_called()
 
 
 # ── ProtonService default-tool policy ─────────────────────────────

@@ -202,6 +202,47 @@ def _resolve_logged(source: str, tool: str, tried: list[str]) -> Path | None:
     return path
 
 
+class _GeDownloadAnnouncer:
+    """A ``progress_cb`` that toasts once when a real download starts.
+
+    ``ge_installer`` invokes this per byte chunk, but only when an
+    actual download happens (it returns early when GE is already
+    installed). We fire a single "downloading Proton" toast on the
+    first chunk and record ``fired`` so the caller knows whether to
+    also toast "ready". Best-effort — a toast failure never breaks
+    Proton selection.
+    """
+
+    def __init__(self) -> None:
+        self.fired = False
+
+    def __call__(self, _done: int, _total: int) -> None:
+        if self.fired:
+            return
+        self.fired = True
+        try:
+            from unifideck.launcher.frontend_bridge import launcher_toast
+            launcher_toast(
+                "toasts.launcher.downloadingProton",
+                i18n_title_key="toasts.launcher.installingProton",
+            )
+        except Exception:
+            logger.debug("[launcher.proton] GE download toast failed", exc_info=True)
+
+
+def _announce_ge_ready(tag: str) -> None:
+    """Toast that the just-downloaded GE-Proton is ready (best-effort)."""
+    try:
+        from unifideck.launcher.frontend_bridge import launcher_toast
+        launcher_toast(
+            "toasts.launcher.protonReadyBody",
+            i18n_title_key="toasts.launcher.protonReadyTitle",
+            i18n_params={"version": tag},
+        )
+    except Exception:
+        logger.debug("[launcher.proton] GE ready toast failed", exc_info=True)
+
+
 def _default_latest_ge(tried: list[str]) -> tuple[Path, str]:
     """Default tier: latest GE-Proton online, else Proton Experimental.
 
@@ -223,11 +264,20 @@ def _default_latest_ge(tried: list[str]) -> tuple[Path, str]:
             )
             return path, cached
 
-    result = ge_installer.ensure_latest_ge()
+    # On-demand download at launch time — the background installer
+    # hasn't finished (or never ran). This is otherwise silent, leaving
+    # the user staring at a frozen-looking launch while a ~hundreds-of-MB
+    # Proton downloads, so toast when a real download starts/finishes.
+    # ``progress_cb`` fires only during the actual byte stream, so the
+    # toast never appears when GE is already installed (no download).
+    announcer = _GeDownloadAnnouncer()
+    result = ge_installer.ensure_latest_ge(progress_cb=announcer)
     if result:
         path, tag = result
         tried.append(f"latest-ge:{tag}")
         logger.info("[launcher.proton] selected latest GE-Proton: %s", tag)
+        if announcer.fired:  # only when a download actually happened
+            _announce_ge_ready(tag)
         return path, tag
 
     tried.append("fallback:proton_experimental")

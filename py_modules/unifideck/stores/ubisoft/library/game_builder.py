@@ -103,20 +103,49 @@ class _GameBuilder:
         configs: list[GameConfig],
         config_by_id: dict[int, GameConfig],
         owned_set: set[int] | None,
+        installed: dict[str, Any] | None = None,
     ) -> list[GameConfig]:
-        """Cross reference ownership."""
+        """Cross reference ownership.
+
+        When the ownership binary is present (``owned_set is not None``)
+        we trust it. When it's missing — which happens when no account is
+        signed in, or before UPC has written the file post-login — we no
+        longer return *every* config: the local binaries catalogue lists
+        all configurable titles, not the ones the user owns, so that
+        path invented phantom "installed" games. The fallback now keeps
+        only configs that are actually installed on disk (matching the
+        bootstrap-marker scan), which mirrors the ``is_installed`` test
+        in :meth:`_build_one_game`.
+        """
         if owned_set is not None:
             return [
                 config_by_id[oid]
                 for oid in owned_set
                 if oid in config_by_id and config_by_id[oid].name
             ]
-        result = [c for c in configs if c.name]
+        installed = installed or {}
+        result = [
+            c for c in configs
+            if c.name and _GameBuilder._config_is_installed(c, installed)
+        ]
         logger.info(
-            "[UbisoftLibrary] no ownership binary — using all %d config entries",
-            len(result),
+            "[UbisoftLibrary] no ownership binary — keeping %d installed "
+            "config entries (of %d total)",
+            len(result), len([c for c in configs if c.name]),
         )
         return result
+
+    @staticmethod
+    def _config_is_installed(
+        cfg: GameConfig, installed: dict[str, Any],
+    ) -> bool:
+        """True if ``cfg`` matches an entry in the install scan.
+
+        Same key resolution as :meth:`_build_one_game`: a game is keyed
+        by its ``space_id`` when present, otherwise by its install id.
+        """
+        game_id = cfg.space_id if cfg.space_id else str(cfg.install_id)
+        return game_id in installed or cfg.space_id in installed
 
     def apply_steam_filter(
         self,

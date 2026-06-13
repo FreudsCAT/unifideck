@@ -135,7 +135,7 @@ class UIRPCMixin:
             game, enriched, steam_app_id, steam_meta, compat_entry,
         )
 
-    async def hide_play_section(self, app_id: int) -> Any:
+    async def hide_play_section(self, app_id: int, container_class: str = "") -> Any:
         """Inject CSS hiding a game's Play button in Steam UI.
 
         Routes through the :class:`SteamCSSInjector` singleton
@@ -143,12 +143,17 @@ class UIRPCMixin:
         is the low-level ``CDPClient`` and has no
         ``hide_play_section`` method, so the previous version
         raised ``AttributeError`` on every "Hide" button click.
+
+        ``container_class`` is Steam's play-section container class
+        (passed by the frontend from ``@decky/ui``); the injector
+        hides by it for a language-independent match, falling back
+        to the legacy text scan when absent.
         """
         from unifideck.cdp import get_cdp_client
         injector = await get_cdp_client()
         if injector is None:
             return {"ok": False, "error": "cdp_not_connected"}
-        return await injector.hide_play_section(app_id)
+        return await injector.hide_play_section(app_id, container_class)
 
     async def unhide_play_section(self, app_id: int) -> Any:
         """Remove the hide-play-section CSS injection.

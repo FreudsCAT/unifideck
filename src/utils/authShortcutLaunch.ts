@@ -30,6 +30,7 @@ import {
 } from "../lib/steam-bridge";
 import { rpcRoutes, type RouteName } from "../api/rpc-routes";
 import { unwrapRpcEnvelope } from "../api/useRPC";
+import { applyWebBrowserLayout } from "./controllerConfig";
 
 /**
  * Per-store configuration for the auth-shortcut
@@ -346,6 +347,10 @@ export async function launchAuthViaShortcut(
   const alreadyRunning = isShortcutAppRunning(tempAppId);
   try {
     steamApps.SpecifyCompatTool?.(tempAppId, "");
+    // Best-effort: give the login window a keyboard/mouse layout so the
+    // store sign-in page is navigable. Fully guarded — never blocks the
+    // launch (see applyWebBrowserLayout).
+    applyWebBrowserLayout(tempAppId);
     steamApps.SetShortcutLaunchOptions(tempAppId, tempLaunchOptions);
     const runGameId = getShortcutRunGameId(tempAppId);
     console.log(

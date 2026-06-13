@@ -130,7 +130,22 @@ class UbisoftStore(StoreBase):
         return await self._auth.logout()
 
     async def get_library(self) -> list[Game] | None:
-        """Get library."""
+        """Get library.
+
+        Gated on authentication (mirrors ``MicrosoftStore.get_library``).
+        Without a signed-in UPC session the library facade falls back to
+        the local UPC binaries — which list *every* configured Ubisoft
+        title, not the ones the user owns — and the bootstrap-marker
+        install scan flags them ``installed`` even though they can't
+        launch. Returning early keeps those phantom entries out of the
+        library; the install scan re-surfaces real games the moment the
+        user signs in.
+        """
+        if not await self.is_available():
+            logger.info(
+                "[UbisoftStore] not authenticated — returning empty library",
+            )
+            return []
         return await self._library.get_library()
 
     async def install_game(

@@ -21,11 +21,26 @@
  * with a stale unhide stomping on a new hide.
  */
 import { useEffect } from "react";
+import { playSectionClasses } from "@decky/ui";
 import { useRPC } from "../api/useRPC";
 import { rpcRoutes } from "../api/rpc-routes";
 
 const chain = new Map<number, Promise<void>>();
 const generation = new Map<number, number>();
+
+/**
+ * Steam's native play-section container class, resolved from
+ * `@decky/ui`. This is the SAME class `AppDetailsPatch` anchors
+ * the injection on, and the literal class on the rendered DOM
+ * element — so the backend can hide the native section by class
+ * (language-independent, rotates with each Steam build) instead
+ * of matching the localized button text. Falls back to `""` when
+ * the export is missing on a given Steam build; the backend then
+ * uses its text-regex path.
+ */
+function getNativePlaySectionClass(): string {
+  return playSectionClasses?.Container ?? "";
+}
 
 interface HideResult {
   ok: boolean;
@@ -47,7 +62,7 @@ export function useHidePlaySection(
   appId: number | null,
   enabled: boolean,
 ): void {
-  const hide = useRPC<[number], HideResult>(rpcRoutes.hidePlaySection);
+  const hide = useRPC<[number, string], HideResult>(rpcRoutes.hidePlaySection);
   const unhide = useRPC<[number], HideResult>(rpcRoutes.unhidePlaySection);
 
   useEffect(() => {
@@ -56,11 +71,14 @@ export function useHidePlaySection(
     // appId mounts/unmounts/remounts faster than RPC roundtrip.
     const gen = (generation.get(appId) ?? 0) + 1;
     generation.set(appId, gen);
+    // Resolved once per effect — the class is stable within a
+    // Steam build. Empty string => backend uses its text fallback.
+    const containerClass = getNativePlaySectionClass();
 
     const doHide = (): void => {
       appendOp(appId, async () => {
         if (generation.get(appId) !== gen) return;
-        const result = await hide(appId);
+        const result = await hide(appId, containerClass);
         // Surface the backend outcome in the CEF console so we can
         // tell from DevTools alone whether the burst is reaching JS
         // ("hidden"), missing the button ("not_found"), or silently

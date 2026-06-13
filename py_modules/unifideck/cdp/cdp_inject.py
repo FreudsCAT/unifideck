@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -101,29 +102,101 @@ _PLAY_BUTTON_TEXT_REGEX = (
 )
 
 
-def _hide_play_js(app_id: int) -> str:
+_VALID_CLASS_RE = re.compile(r"^[A-Za-z0-9_-]+$")
+
+
+def _hide_play_js(app_id: int, container_class: str = "") -> str:
     """Build the stateless one-shot hide JS for ``app_id``.
 
-    Verbatim port of staging's ``hide_native_play_section`` JS,
-    with one robustness tweak: action-verb matching strips
-    leading/trailing non-letter characters before the regex so
-    buttons with embedded icon glyphs (e.g. "▶ Play",
-    "↓INSTALL") still match. Without this, recent Steam UI
-    builds that inline the icon as a text character (rather
-    than an SVG) silently return ``"not_found"``.
+    Two-pass strategy:
 
-    Returns ``"hidden"`` / ``"not_found"`` / ``"too_large"`` so
-    Python can log the outcome.
+    1. **By class** (preferred, language-independent) — hide every
+       visible element carrying ``container_class``. This is Steam's
+       own play-section container class (resolved frontend-side from
+       ``@decky/ui``'s ``playSectionClasses.Container``), the literal
+       class on the rendered DOM node. It is correct in *every*
+       locale and rotates with each Steam build, so it sidesteps the
+       fragile text/size matching entirely.
+
+    2. **By text** (fallback) — only runs when the class pass hides
+       nothing (class not passed, or not present on this build). The
+       verbatim staging port: walk every visible button, token-match
+       its text against the multi-locale action-verb regex, size-gate
+       it, then walk up to the action-bar container.
+
+    ``container_class`` is validated against ``^[A-Za-z0-9_-]+$``;
+    anything else (incl. empty) disables the class pass so only the
+    text fallback runs.
+
+    Returns ``"hidden_by_class"`` / ``"hidden_by_text"`` /
+    ``"not_found"`` / ``"too_large"`` so Python (and the CEF console)
+    can log which path fired.
     """
-    return _HIDE_PLAY_JS.replace("__APP_ID__", str(app_id))
+    safe_class = container_class if _VALID_CLASS_RE.match(container_class or "") else ""
+    return (
+        _HIDE_PLAY_JS
+        .replace("__APP_ID__", str(app_id))
+        .replace("__CONTAINER_CLASS__", safe_class)
+    )
 
 
 # The injected JS is data, not logic — kept as a module-level template
-# (regex inlined at import; per-call ``app_id`` substituted via the
-# ``__APP_ID__`` placeholder) so ``_hide_play_js`` stays a trivial wrapper.
+# (regex inlined at import; per-call ``app_id`` / ``container_class``
+# substituted via the ``__APP_ID__`` / ``__CONTAINER_CLASS__``
+# placeholders) so ``_hide_play_js`` stays a trivial wrapper.
 _HIDE_PLAY_JS = (
     '(function() {\n'
     '    var appId = "__APP_ID__";\n'
+    '    var containerClass = "__CONTAINER_CLASS__";\n'
+        '    // Walk up from `el`; true if it sits inside our own play\n'
+        '    // wrapper or a modal dialog (never touch those).\n'
+        '    function insideOursOrDialog(el) {\n'
+        '        var p = el;\n'
+        '        while (p) {\n'
+        '            if (p.getAttribute) {\n'
+        '                if (p.getAttribute("data-unifideck-play-wrapper") === "true"\n'
+        '                    || p.getAttribute("role") === "dialog") {\n'
+        '                    return true;\n'
+        '                }\n'
+        '            }\n'
+        '            p = p.parentElement;\n'
+        '        }\n'
+        '        return false;\n'
+        '    }\n'
+        '    function hideEl(el) {\n'
+        '        el.setAttribute("data-unifideck-hidden-native", appId);\n'
+        '        el.style.setProperty("display", "none", "important");\n'
+        '        el.style.setProperty("visibility", "hidden", "important");\n'
+        '        el.style.setProperty("pointer-events", "none", "important");\n'
+        '    }\n'
+        '    \n'
+        '    // --- Pass 1: hide by CSS class (language-independent) ---\n'
+        '    if (containerClass) {\n'
+        '        var byClass = document.querySelectorAll("." + containerClass);\n'
+        '        var handled = 0;\n'
+        '        for (var ci = 0; ci < byClass.length; ci++) {\n'
+        '            var el = byClass[ci];\n'
+        '            if (insideOursOrDialog(el)) continue;\n'
+        '            // Already hidden by an earlier burst/poll tick — keep\n'
+        '            // ownership current and count it as handled.\n'
+        '            if (el.getAttribute("data-unifideck-hidden-native")) {\n'
+        '                el.setAttribute("data-unifideck-hidden-native", appId);\n'
+        '                handled++;\n'
+        '                continue;\n'
+        '            }\n'
+        '            var r = el.getBoundingClientRect();\n'
+        '            if (r.width <= 0 || r.height <= 0) continue;  // not visible\n'
+        '            hideEl(el);\n'
+        '            handled++;\n'
+        '        }\n'
+        '        if (handled > 0) {\n'
+        '            console.log("[Unifideck CDP] Hidden " + handled + " native play section(s) by class \'" + containerClass + "\' for app " + appId);\n'
+        '            return "hidden_by_class";\n'
+        '        }\n'
+        '        console.log("[Unifideck CDP] Class \'" + containerClass + "\' matched no visible native section for app " + appId + "; falling back to text scan");\n'
+        '    }\n'
+        '    \n'
+        '    // --- Pass 2: fallback action-verb text scan (legacy) ---\n'
     '    var buttons = document.querySelectorAll(\'button, [class*="Focusable"]\');\n'
         '    var playBtn = null;\n'
         '    var candidateCount = 0;\n'
@@ -205,29 +278,33 @@ _HIDE_PLAY_JS = (
         '        console.warn("[Unifideck CDP] Refusing oversized container (" + Math.round(cRect.height) + "px) for app " + appId);\n'
         '        return "too_large";\n'
         '    }\n'
-        '    container.setAttribute("data-unifideck-hidden-native", appId);\n'
-        '    container.style.setProperty("display", "none", "important");\n'
-        '    container.style.setProperty("visibility", "hidden", "important");\n'
-        '    container.style.setProperty("pointer-events", "none", "important");\n'
-        '    console.log("[Unifideck CDP] Hidden native play section for app " + appId + " (container " + Math.round(cRect.height) + "px, depth " + depth + ")");\n'
-        '    return "hidden";\n'
+        '    hideEl(container);\n'
+        '    console.log("[Unifideck CDP] Hidden native play section by text for app " + appId + " (container " + Math.round(cRect.height) + "px, depth " + depth + ")");\n'
+        '    return "hidden_by_text";\n'
         '})()'
     )
 
 
 def _show_play_js(app_id: int) -> str:
-    """Build the stateless unhide JS for ``app_id``."""
+    """Build the stateless unhide JS for ``app_id``.
+
+    Uses ``querySelectorAll`` because the class-based hide pass can
+    tag more than one element for a single app.
+    """
     app_id_str = str(app_id)
     return (
         '(function() {\n'
         '    var appId = "' + app_id_str + '";\n'
-        '    var el = document.querySelector(\'[data-unifideck-hidden-native="\' + appId + \'"]\');\n'
-        '    if (el) {\n'
+        '    var els = document.querySelectorAll(\'[data-unifideck-hidden-native="\' + appId + \'"]\');\n'
+        '    for (var i = 0; i < els.length; i++) {\n'
+        '        var el = els[i];\n'
         '        el.style.removeProperty("display");\n'
         '        el.style.removeProperty("visibility");\n'
         '        el.style.removeProperty("pointer-events");\n'
         '        el.removeAttribute("data-unifideck-hidden-native");\n'
-        '        console.log("[Unifideck CDP] Unhidden native play section for app " + appId);\n'
+        '    }\n'
+        '    if (els.length > 0) {\n'
+        '        console.log("[Unifideck CDP] Unhidden " + els.length + " native play section(s) for app " + appId);\n'
         '        return true;\n'
         '    }\n'
         '    return false;\n'
@@ -289,15 +366,21 @@ class SteamCSSInjector:
             logger.debug("[cdp_inject] remove failed for %s: %s", marker, e)
             return False
 
-    async def hide_play_section(self, app_id: int) -> Any:
+    async def hide_play_section(self, app_id: int, container_class: str = "") -> Any:
         """Hide Steam's native PlaySection for ``app_id``.
+
+        ``container_class`` is Steam's play-section container class
+        (from the frontend's ``@decky/ui`` exports). When present the
+        JS hides by that class — language-independent — and only
+        falls back to the legacy text scan if the class matches
+        nothing. Empty/invalid disables the class pass.
 
         Stateless one-shot — caller (frontend hook) re-invokes
         on a short burst + 2 s persistent poll to catch React
         re-renders that re-create the action bar.
         """
         try:
-            result = await self._cdp.eval_js(_hide_play_js(app_id))
+            result = await self._cdp.eval_js(_hide_play_js(app_id, container_class))
             # _send() returns None when the WS isn't connected — surface
             # that as an explicit failure so the silent-success regression
             # we hit on for-pr-0.7 can't recur unnoticed.

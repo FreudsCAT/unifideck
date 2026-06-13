@@ -126,6 +126,7 @@ class EventsMixin:
         ) -> int | None: ...
         async def reconcile(
             self, games: Sequence[Game], *, force: bool = ...,
+            valid_stores: set[str] | None = ...,
         ) -> dict[str, int]: ...
 
     @subscribe(Events.DOWNLOAD_COMPLETE)
@@ -175,12 +176,21 @@ class EventsMixin:
         if not games:
             return
         is_force = bool(kwargs.get("is_force", False))
+        # Widen the stale-sweep to every registered store (not just the
+        # ones that returned games) so shortcuts for a logged-out or
+        # empty store — phantom Ubisoft entries, the legacy
+        # ``microsoft:ms-auth`` row — get dropped on this sync instead of
+        # lingering forever.
+        registered = kwargs.get("registered_stores")
+        valid_stores = set(registered) if registered else None
         logger.info(
             "[ShortcutService] SYNC_COMPLETE → reconciling %d games "
-            "(force=%s)",
-            len(games), is_force,
+            "(force=%s, valid_stores=%s)",
+            len(games), is_force, sorted(valid_stores) if valid_stores else None,
         )
-        result = await self.reconcile(games, force=is_force)
+        result = await self.reconcile(
+            games, force=is_force, valid_stores=valid_stores,
+        )
         added = result.get("added", 0)
         removed = result.get("removed", 0)
         kept = result.get("kept", 0)

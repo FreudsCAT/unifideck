@@ -55,6 +55,17 @@ def cleanup_umu_runtime_cache() -> None:
     logger.info("[launcher.umu] cache cleaned: %s", UMU_CACHE_DIR)
 def ensure_umu_runtime_ready() -> None:
     """Ensure UMU runtime ready."""
+    # The Steam Linux Runtime (steamrt3) is downloaded by the first
+    # ``umu-run`` and is the slowest part of a first-ever launch
+    # (hundreds of MB), with no native progress — exactly the
+    # "is it frozen?" gap the user hit. Toast once when it's missing so
+    # the wait is expected. Fires only on the genuine first setup; the
+    # cache then persists and is shared across every game.
+    if not (UMU_CACHE_DIR / "steamrt3").exists():
+        launcher_toast(
+            "toasts.launcher.downloadingRuntime",
+            i18n_title_key="toasts.launcher.firstTimeSetup",
+        )
     UMU_CACHE_DIR.mkdir(parents=True, exist_ok=True)
     os.environ["UMU_LOG"] = "1"
     os.environ["UMU_NO_PROTON"] = "0"

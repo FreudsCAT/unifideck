@@ -150,6 +150,7 @@ class _ReconcilePhasesMixin:
 
     async def reconcile(
         self: Any, games: list[Game], *, force: bool = False,
+        valid_stores: set[str] | None = None,
     ) -> dict[str, int]:
         """Bulk-sync all shortcuts from a list of Games.
 
@@ -163,6 +164,15 @@ class _ReconcilePhasesMixin:
         ``icon`` fields updated to match current metadata, while
         preserving their ``appid`` so artwork and playtime survive
         the rewrite. Mirrors staging's ``force_update_games_batch``.
+
+        ``valid_stores`` overrides the set of store prefixes whose
+        stale shortcuts may be swept. By default only stores that
+        returned games are touched (so logging out of one store left
+        its now-orphaned shortcuts behind forever). Passing the full
+        set of *registered* stores lets reconcile drop shortcuts for a
+        store that returned nothing this sync — e.g. phantom Ubisoft
+        entries and the legacy ``microsoft:ms-auth`` row — so affected
+        libraries self-heal on the next sync.
         """
         await self._load_shortcuts()
         await self._load_games_map()
@@ -172,7 +182,7 @@ class _ReconcilePhasesMixin:
 
         registry = load_registry()
         counts: dict[str, int] = self._apply_reconcile_phases(
-            games, registry, force=force,
+            games, registry, force=force, valid_stores=valid_stores,
         )
         if counts["added"] or counts["removed"] or counts["reclaimed"]:
             await self._save_all()
@@ -183,12 +193,17 @@ class _ReconcilePhasesMixin:
 
     def _apply_reconcile_phases(
         self: Any, games: list[Game], registry: dict[str, Any], *, force: bool,
+        valid_stores: set[str] | None = None,
     ) -> dict[str, int]:
         """Prune, sync, drop-stale, then dedup; return the counts dict."""
         launcher = getattr(self, "_launcher_path", "") or ""
         valid_keys = {f"{g.store}:{g.store_game_id}" for g in games}
         valid_app_ids = self._compute_valid_app_ids(games, launcher)
-        valid_stores = {g.store for g in games}
+        # Default to stores-with-games; a caller (the post-sync
+        # reconcile) can widen this to every registered store so stale
+        # shortcuts for a logged-out / empty store also get swept.
+        if valid_stores is None:
+            valid_stores = {g.store for g in games}
         removed = self._reconcile_phase_prune_map(valid_keys)
         self._shortcuts = self._ensure_shortcuts_root(self._shortcuts)
         shortcuts_dict = self._shortcuts["shortcuts"]
