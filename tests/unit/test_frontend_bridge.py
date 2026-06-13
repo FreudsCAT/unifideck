@@ -21,14 +21,6 @@ def _bridge_file(tmp_path, monkeypatch):
     monkeypatch.setattr(fb, "EVENTS_FILE", tmp_path / "launcher_events.jsonl")
 
 
-class _FakeReplay:
-    def __init__(self) -> None:
-        self.recorded: list[tuple[str, dict]] = []
-
-    def record(self, event: str, kwargs: dict) -> None:
-        self.recorded.append((event, kwargs))
-
-
 # ── writer ────────────────────────────────────────────────────────
 
 def test_launcher_toast_writes_full_payload():
@@ -76,40 +68,33 @@ def test_record_event_swallows_unserialisable(monkeypatch):
 
 # ── reader (drainer) ──────────────────────────────────────────────
 
-def test_drain_primes_then_records_only_new():
+def test_poll_primes_then_returns_only_new():
     drainer = fb.LauncherEventDrainer()
-    replay = _FakeReplay()
 
     # Backlog written before the UI started polling.
     fb.launcher_toast("toasts.launcher.startingGogGame")
-    assert drainer.drain(replay) == 0  # prime only — no stale replay
-    assert replay.recorded == []
+    assert drainer.poll_new() == []  # prime only — no stale toasts
 
-    # A genuinely new event after priming is recorded once.
+    # A genuinely new event after priming is returned once.
     import time
     time.sleep(0.01)
     fb.launcher_toast("toasts.launcher.protonSwitchedTo")
-    assert drainer.drain(replay) == 1
-    assert replay.recorded[-1][0] == "launcher_stage"
-    assert replay.recorded[-1][1]["i18n_key"] == "toasts.launcher.protonSwitchedTo"
+    fresh = drainer.poll_new()
+    assert len(fresh) == 1
+    assert fresh[0]["i18n_key"] == "toasts.launcher.protonSwitchedTo"
 
-    # Idempotent — re-draining records nothing new.
-    assert drainer.drain(replay) == 0
-    assert len(replay.recorded) == 1
+    # Idempotent — re-polling returns nothing new.
+    assert drainer.poll_new() == []
 
 
-def test_drain_missing_file_is_noop():
+def test_poll_missing_file_is_noop():
     drainer = fb.LauncherEventDrainer()
-    replay = _FakeReplay()
-    assert drainer.drain(replay) == 0  # primes to 0
-    assert drainer.drain(replay) == 0
-    assert replay.recorded == []
+    assert drainer.poll_new() == []  # primes to 0
+    assert drainer.poll_new() == []
 
 
-def test_drain_skips_malformed_lines():
+def test_poll_skips_malformed_lines():
     fb.EVENTS_FILE.write_text('not json\n{"event":"launcher_stage"}\n')
     drainer = fb.LauncherEventDrainer()
-    replay = _FakeReplay()
-    # First entry has no ts → filtered; nothing valid to prime/record.
-    assert drainer.drain(replay) == 0
-    assert replay.recorded == []
+    # No valid ts → nothing to prime/return.
+    assert drainer.poll_new() == []

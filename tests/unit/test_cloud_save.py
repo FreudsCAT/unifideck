@@ -48,11 +48,35 @@ def test_wine_prefix_resolver(tmp_path):
         cloud_save_folder="{AppData}/GameName/Saves",
         prefix_path=str(prefix),
         install_path="/tmp/install",
-        epic_id="game123"
+        account_id="ed4745",
     )
     # Epic's {AppData} token resolves to %LOCALAPPDATA% (AppData/Local),
     # NOT %APPDATA% (Roaming) — that's where Epic games actually save.
     assert "drive_c/users/steamuser/AppData/Local/GameName/Saves" in resolved
+
+
+def test_wine_prefix_resolver_epicid_uses_account_id(tmp_path):
+    """{EpicID} must resolve to the Epic ACCOUNT id, not the game id —
+    Vampire Survivors / Brotato namespace saves under the account id, and
+    using the game id pointed the sync at a folder the game never reads."""
+    prefix = tmp_path / "vs_prefix"
+    prefix.mkdir()
+    (prefix / "user.reg").write_text(
+        '[Software\\\\Microsoft\\\\Windows\\\\CurrentVersion\\\\Explorer\\\\Shell Folders]\n'
+        '"AppData"="C:\\\\users\\\\steamuser\\\\AppData\\\\Roaming"\n'
+        '"Local AppData"="C:\\\\users\\\\steamuser\\\\AppData\\\\Local"\n'
+    )
+    resolved = WinePrefixResolver.resolve_path(
+        # Real Vampire Survivors template: {AppData}/../Roaming redirects
+        # Local→Roaming, {EpicID} is the account-id subfolder.
+        cloud_save_folder="{AppData}/../Roaming/Vampire_Survivors_EGS/{EpicID}/",
+        prefix_path=str(prefix),
+        account_id="ed4745dba2c6492d851bcb554dc98d60",
+    )
+    assert resolved.endswith(
+        "AppData/Roaming/Vampire_Survivors_EGS/ed4745dba2c6492d851bcb554dc98d60"
+    )
+    assert "game" not in resolved.rsplit("/", 1)[-1]  # not a game-id subfolder
 
 @pytest.mark.asyncio
 async def test_epic_strategy_sync(tmp_path, mock_config):
@@ -62,7 +86,11 @@ async def test_epic_strategy_sync(tmp_path, mock_config):
     # Mock legendary CLI response
     strategy = EpicCloudSaveStrategy(local_save_root, mock_config)
     strategy.legendary_bin = "mock_legendary"
-    
+    # Keep hermetic: don't read the dev machine's ~/.config/legendary, and
+    # don't spin up LegendaryCore for the validating fallback.
+    strategy._get_account_id = MagicMock(return_value="acct123")
+    strategy._legendary_save_path = MagicMock(return_value=None)
+
     with patch("subprocess.run") as mock_run, \
          patch("asyncio.create_subprocess_exec") as mock_exec:
          
@@ -86,10 +114,12 @@ async def test_epic_strategy_sync(tmp_path, mock_config):
         assert save_dir is not None
         assert "GameName/Saves" in save_dir
         
-        # Test sync_down
+        # Test sync_down — default (on-launch) must NOT force a download,
+        # so newer local saves are never silently overwritten.
         success = await strategy.sync_down("game123")
         assert success is True
-        
+        assert "--force-download" not in mock_exec.call_args.args
+
         # Test sync_up
         # Write dummy save to satisfy empty check
         os.makedirs(save_dir, exist_ok=True)
@@ -150,10 +180,10 @@ async def test_cloud_save_service_orchestration(tmp_path, mock_event_bus, mock_c
         # Verify custom path routing
         assert service.get_local_save_dir("epic", "game123") == "/tmp/test_epic_save"
         
-        # Test sync_down runs both strategy and fallback
+        # Test sync_down runs both strategy and fallback (force defaults False)
         res_down = await service.sync_down("epic", "game123")
         assert res_down.success is True
-        mock_epic.sync_down.assert_called_once_with("game123")
+        mock_epic.sync_down.assert_called_once_with("game123", False)
         
         # Test sync_up runs both strategy and fallback
         res_up = await service.sync_up("epic", "game123")
@@ -327,4 +357,79 @@ async def test_service_hard_block_emits_error_not_modal(
     evt = mock_event_bus.emit.await_args
     assert "action" not in evt.kwargs  # no retry-sync → no pick modal
     assert evt.kwargs.get("severity") == "error"
+
+
+# ── Forced pull (explicit "Use Cloud") ────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_epic_sync_down_force_adds_force_download(tmp_path, mock_config):
+    """force=True must add --force-download so legendary pulls even when the
+    local save is newer/same-age (the only way "Use Cloud" can override)."""
+    strategy = EpicCloudSaveStrategy(str(tmp_path), mock_config)
+    strategy.legendary_bin = "mock_legendary"
+    strategy.get_local_save_dir = MagicMock(return_value=str(tmp_path / "save"))
+    with patch("asyncio.create_subprocess_exec") as mock_exec:
+        proc = AsyncMock()
+        proc.returncode = 0
+        proc.communicate.return_value = (b"", b"Downloading remote savegame...")
+        mock_exec.return_value = proc
+        assert await strategy.sync_down("epic123", force=True) is True
+        assert "--force-download" in mock_exec.call_args.args
+
+
+@pytest.mark.asyncio
+async def test_gog_sync_down_force_uses_ts_zero(tmp_path, mock_config):
+    """force=True must pull a full copy (ts=0) even when a recent last-sync
+    timestamp would otherwise make gogdl skip the download."""
+    strategy = GOGCloudSaveStrategy(str(tmp_path), mock_config)
+    strategy.gogdl_bin = "mock_gogdl"
+    strategy._convert_gog_token = MagicMock(return_value="/tmp/auth.json")
+    save_dir = tmp_path / "save"
+    (save_dir).mkdir()
+    (save_dir / "slot.sav").write_text("data")  # local has saves → not the empty self-heal
+    strategy.get_local_save_dir = MagicMock(return_value=str(save_dir))
+    strategy._get_saved_timestamp = MagicMock(return_value="99999.0")
+    with patch("asyncio.create_subprocess_exec") as mock_exec:
+        proc = AsyncMock()
+        proc.returncode = 0
+        proc.communicate.return_value = (b"12345.6", b"")
+        mock_exec.return_value = proc
+        assert await strategy.sync_down("gog123", force=True) is True
+        args = mock_exec.call_args.args
+        assert "--ts" in args and args[args.index("--ts") + 1] == "0"
+
+
+@pytest.mark.asyncio
+async def test_service_sync_down_forwards_force(tmp_path, mock_event_bus, mock_config):
+    service = CloudSaveService(
+        bus=mock_event_bus, local_save_root=str(tmp_path / "saves"),
+        cloud_root=None, config=mock_config,
+    )
+    strat = MagicMock()
+    strat.sync_down = AsyncMock(return_value=True)
+    service._strategies["epic"] = strat
+    with patch.object(
+        CloudSaveService, "_acquire_sync_lock", return_value=(MagicMock(), None),
+    ):
+        await service.sync_down("epic", "g1", force=True)
+    strat.sync_down.assert_called_once_with("g1", True)
+
+
+@pytest.mark.asyncio
+async def test_dispatch_retry_sync_down_forces_pull():
+    """The retry-sync 'sync_down' phase is only reached via 'Use Cloud', so it
+    must force; 'sync_up' stays unforced."""
+    from unifideck.actions.dispatch import _dispatch_retry_sync
+    cloudsave = MagicMock()
+    cloudsave.sync_down = AsyncMock(return_value=Result(success=True))
+    cloudsave.sync_up = AsyncMock(return_value=Result(success=True))
+
+    down = MagicMock(args=["epic", "g1", "sync_down"])
+    await _dispatch_retry_sync(down, cloudsave)
+    cloudsave.sync_down.assert_called_once_with("epic", "g1", force=True)
+
+    up = MagicMock(args=["epic", "g1", "sync_up"])
+    await _dispatch_retry_sync(up, cloudsave)
+    cloudsave.sync_up.assert_called_once_with("epic", "g1")
 

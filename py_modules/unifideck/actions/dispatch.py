@@ -67,7 +67,11 @@ async def _dispatch_retry_sync(action: Any,
         raise RpcError("service_unavailable", service="cloudsave")
     store, game_id, phase = action.args
     if phase == "sync_down":
-        result = await cloudsave.sync_down(store, game_id)
+        # This phase is only reached via the explicit "Use Cloud" conflict
+        # choice, so force the pull — otherwise the store tool skips the
+        # download whenever the local save is newer/same-age and "Use Cloud"
+        # would do nothing.
+        result = await cloudsave.sync_down(store, game_id, force=True)
     elif phase == "sync_up":
         result = await cloudsave.sync_up(store, game_id)
     else:

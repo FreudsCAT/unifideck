@@ -183,8 +183,13 @@ class CloudSaveService(_SyncMixin):
 
         return str(Path(self._local_root) / store / game_id)
 
-    async def sync_down(self, store: str, game_id: str) -> Result:
-        """Pull cloud saves before a game launch."""
+    async def sync_down(self, store: str, game_id: str, force: bool = False) -> Result:
+        """Pull cloud saves before a game launch.
+
+        ``force`` pulls the cloud copy unconditionally (explicit "Use Cloud");
+        the automatic on-launch path leaves it False so newer local saves are
+        never silently overwritten.
+        """
         if self._config and not self._config.get_bool("cloud.enabled", True):
             logger.info("[CloudSaveService] Cloud sync is disabled globally")
             return Result(success=True)
@@ -203,8 +208,8 @@ class CloudSaveService(_SyncMixin):
 
             # 1. Run store-specific strategy sync down
             if store in self._strategies:
-                logger.info("[CloudSaveService] Executing %s sync_down strategy for %s", store, game_id)
-                success = await self._strategies[store].sync_down(game_id)
+                logger.info("[CloudSaveService] Executing %s sync_down strategy for %s (force=%s)", store, game_id, force)
+                success = await self._strategies[store].sync_down(game_id, force)
 
             # 2. Run fallback filesystem backup if configured
             if self._cloud_root:

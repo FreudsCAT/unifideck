@@ -14,10 +14,11 @@ event-replay pipeline):
   a shared file — either automatically (a bus forwarder installed in
   ``bootstrap``) or directly via :func:`launcher_toast` from deep launch
   code that has no bus reference.
-* **Plugin side** drains new lines into its replay buffer on each
-  ``subscribe_replay`` poll (:class:`LauncherEventDrainer`), so launcher
-  toasts flow through the exact same ``ToastEventListener`` path as
-  in-plugin events.
+* **Plugin side** returns new lines via the ``get_launcher_toasts`` RPC
+  (:class:`LauncherEventDrainer`), which a *persistent* frontend poll
+  calls regardless of whether the QAM panel is open — so launch-time
+  toasts appear in Gaming Mode (the QAM-bound ``ToastEventListener``
+  alone never polls during a closed-panel launch).
 
 Everything is best-effort: a launch must never fail because a toast
 couldn't be written or read.
@@ -112,32 +113,33 @@ def install_bus_forwarder(bus: Any) -> None:
 
 
 class LauncherEventDrainer:
-    """Plugin-side reader: drains new launcher events into the replay buffer.
+    """Plugin-side reader: returns launcher toast payloads since last poll.
 
-    Dedup is by wall-clock ``ts`` (the replay buffer stamps its own
-    monotonic time on ``record``, which isn't comparable across
-    processes). The first ``drain`` only primes the high-water mark so a
-    backlog from before the UI opened isn't replayed as a burst of stale
-    toasts; subsequent calls record only genuinely newer events.
+    Dedup is by wall-clock ``ts``. The first ``poll_new`` only primes the
+    high-water mark so a backlog from a previous session isn't returned
+    as a burst of stale toasts; later calls return only events written
+    since. A single instance is kept on the RPC mixin so the watermark
+    persists across the frontend's polling.
     """
 
     def __init__(self) -> None:
         self._last_ts: float | None = None
 
-    def drain(self, replay: Any) -> int:
-        """Record launcher events newer than the watermark; return count."""
+    def poll_new(self) -> list[dict[str, Any]]:
+        """Return the ``kwargs`` of launcher events newer than the watermark."""
         records = self._read_records()
         if self._last_ts is None:
-            # Prime only — don't replay the existing backlog as toasts.
+            # Prime only — don't return the existing backlog as toasts.
             self._last_ts = max((ts for ts, _ in records), default=0.0)
-            return 0
-        count = 0
+            return []
+        fresh: list[dict[str, Any]] = []
         for ts, rec in sorted(records, key=lambda item: item[0]):
             if ts > self._last_ts:
-                replay.record(rec.get("event", ""), rec.get("kwargs", {}))
                 self._last_ts = ts
-                count += 1
-        return count
+                kwargs = rec.get("kwargs")
+                if isinstance(kwargs, dict):
+                    fresh.append(kwargs)
+        return fresh
 
     @staticmethod
     def _read_records() -> list[tuple[float, dict[str, Any]]]:

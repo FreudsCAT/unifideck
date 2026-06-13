@@ -80,6 +80,7 @@ export const rpcRoutes = {
   getCloudFailureBehaviors: "get_cloud_failure_behaviors",
   // Observability (ObservabilityRPCMixin) — event bridge
   subscribeReplay: "subscribe_replay",
+  getLauncherToasts: "get_launcher_toasts",
   getBusHealth: "get_bus_health",
   getPluginMetrics: "get_plugin_metrics",
   getFeatureFlags: "get_feature_flags",

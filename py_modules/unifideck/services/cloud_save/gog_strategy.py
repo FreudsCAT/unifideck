@@ -325,8 +325,13 @@ class GOGCloudSaveStrategy(CloudSaveStrategy):
         except Exception as e:
             logger.error("[GOGSync] Failed to write cloud_sync_state: %s", e)
 
-    async def sync_down(self, game_id: str) -> bool:
-        """Pull GOG cloud saves to local save directory."""
+    async def sync_down(self, game_id: str, force: bool = False) -> bool:
+        """Pull GOG cloud saves to local save directory.
+
+        With ``force`` (explicit "Use Cloud"), pull a full copy (ts=0) even
+        when local saves exist — gogdl otherwise treats a recent last-sync
+        timestamp as "already synced" and downloads nothing.
+        """
         auth_file = self._convert_gog_token()
         if not auth_file:
             logger.error("[GOGSync] Cannot sync down: GOG credentials conversion failed")
@@ -349,7 +354,10 @@ class GOGCloudSaveStrategy(CloudSaveStrategy):
         # downloads NOTHING — leaving the game with no saves (Load Game
         # empty). Force a full pull (ts=0) whenever there are no local saves
         # so cloud saves are always restored into a fresh prefix.
-        if ts != "0" and not safety.has_save_data(local_dir):
+        if force and ts != "0":
+            logger.info("[GOGSync] Forced pull requested — using ts=0 for %s", game_id)
+            ts = "0"
+        elif ts != "0" and not safety.has_save_data(local_dir):
             logger.info(
                 "[GOGSync] Local save dir empty but ts=%s — forcing full "
                 "re-download (ts=0) to restore cloud saves", ts,

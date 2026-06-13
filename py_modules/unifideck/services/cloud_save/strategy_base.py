@@ -12,10 +12,13 @@ class CloudSaveStrategy(ABC):
         pass
 
     @abstractmethod
-    async def sync_down(self, game_id: str) -> bool:
+    async def sync_down(self, game_id: str, force: bool = False) -> bool:
         """Synchronize cloud save files from the store cloud to the local path.
 
-        Returns True on success, False otherwise.
+        When ``force`` is True, the cloud copy is pulled unconditionally
+        (overriding the store tool's local-newer/same-age "skip" decision) —
+        used for the explicit "Use Cloud" conflict resolution. Returns True on
+        success, False otherwise.
         """
         pass
 

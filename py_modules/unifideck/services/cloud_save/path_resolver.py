@@ -35,7 +35,7 @@ class WinePrefixResolver:
         return folders
 
     @classmethod
-    def resolve_path(cls, cloud_save_folder: str, prefix_path: str, install_path: str = "", epic_id: str = "") -> str:
+    def resolve_path(cls, cloud_save_folder: str, prefix_path: str, install_path: str = "", account_id: str = "") -> str:
         # Normalize slashes
         folder = cloud_save_folder.replace('\\', '/').strip('/')
         
@@ -54,8 +54,14 @@ class WinePrefixResolver:
             '{userprofile}': os.path.join(prefix_path, 'drive_c/users/steamuser'),
             '{usersavedgames}': os.path.join(prefix_path, 'drive_c/users/steamuser/Saved Games'),
             '{installdir}': install_path,
-            '{epicid}': epic_id,
-            '{epic_id}': epic_id,
+            # Epic's ``{EpicID}`` token is the logged-in user's Epic ACCOUNT
+            # id — NOT the game's catalog/app id. legendary resolves it the
+            # same way (``self.lgd.userdata['account_id']``, core.py:834).
+            # Games like Vampire Survivors / Brotato namespace saves under
+            # ``Roaming/<Game>/<AccountId>/``; feeding the app id here pointed
+            # the sync at a folder the game never reads (saves never appeared).
+            '{epicid}': account_id,
+            '{epic_id}': account_id,
         }
         
         # Try to read from user.reg

@@ -26,6 +26,7 @@ export interface TeardownHandles {
   collectionManager?: CollectionManagerHandle | null;
   appStorePatch?: { remove: () => void } | null;
   lifetimeListener?: Unregisterable | null;
+  launcherToastPoll?: (() => void) | null;
 }
 /**
  * Run every disposer captured during bootstrap, in
@@ -37,6 +38,13 @@ export interface TeardownHandles {
  * and produce subtle phantom listeners.
  */
 export function runTeardown(handles: TeardownHandles): void {
+  if (handles.launcherToastPoll) {
+    try {
+      handles.launcherToastPoll();
+    } catch (e) {
+      console.warn("[Teardown] launcher toast poll stop failed:", e);
+    }
+  }
   if (handles.lifetimeListener) {
     try {
       handles.lifetimeListener.unregister();
