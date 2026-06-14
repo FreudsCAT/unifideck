@@ -62,3 +62,16 @@ def test_ms_images_priority_fallbacks():
 def test_ms_images_empty_when_no_usable_purposes():
     assert _extract_ms_images([{"ImagePurpose": "Screenshot", "Uri": "//c/s"}]) == {}
     assert _extract_ms_images([]) == {}
+
+
+def test_match_shim_reexports_shared_util():
+    # The SGDB ``match`` module is now a shim over the shared util; pin
+    # that it forwards the exact same objects so the two can't drift.
+    from unifideck.steam.steamgriddb import match as shim
+    from unifideck.utils import title_match as canon
+
+    for name in (
+        "normalize_for_match", "strip_edition_suffix",
+        "score_match", "clean_search_query", "EDITION_SUFFIXES",
+    ):
+        assert getattr(shim, name) is getattr(canon, name)

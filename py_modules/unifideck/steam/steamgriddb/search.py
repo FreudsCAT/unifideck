@@ -32,13 +32,14 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any
 
-from .constants import PUBLISHER_PREFIXES
-from .match import (
+from unifideck.utils.title_match import (
     clean_search_query,
     normalize_for_match,
     score_match,
     strip_edition_suffix,
 )
+
+from .constants import PUBLISHER_PREFIXES
 
 if TYPE_CHECKING:
     import aiohttp

@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any
 import aiohttp
 
 from unifideck.utils.config_helpers import get_cfg
+from unifideck.utils.title_match import titles_match
 
 if TYPE_CHECKING:
     from unifideck.config import ConfigManager
@@ -171,12 +172,26 @@ async def search_store(
     items = data.get("items") if isinstance(data, dict) else None
     if not items:
         return None
-    item = items[0]
-    try:
-        app_id = int(item.get("id", 0))
-    except (TypeError, ValueError):
-        return None
-    if app_id <= 0:
+    # Validate the title instead of blindly trusting Steam's top hit.
+    # ``items[0]`` is frequently a sequel / soundtrack / unrelated game
+    # ("Control" → "Steam Controller", "Hades" → "Hades II", "Figment" →
+    # "Figment - Soundtrack"), which would feed WRONG metadata + compat
+    # downstream. Scan for the first result that actually IS this game;
+    # return None (no data) rather than guess wrong.
+    item = None
+    app_id = 0
+    for candidate in items:
+        try:
+            cid = int(candidate.get("id", 0))
+        except (TypeError, ValueError):
+            continue
+        if cid <= 0:
+            continue
+        if titles_match(title, str(candidate.get("name", ""))):
+            item = candidate
+            app_id = cid
+            break
+    if item is None:
         return None
     header_image = (
         f"https://cdn.akamai.steamstatic.com/steam/apps/{app_id}/header.jpg"

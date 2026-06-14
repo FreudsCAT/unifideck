@@ -10,8 +10,9 @@ Internal layout:
 
 * :mod:`constants` — API base, kind→endpoint map, dimension/style
   defaults + relaxed fallbacks, style priority, publisher prefixes.
-* :mod:`match` — title normalisation, edition-suffix stripping,
-  Jaccard scoring, pre-API query cleaning.
+* :mod:`match` — re-export shim; the title normalisation /
+  edition-suffix stripping / Jaccard scoring primitives now live in
+  the shared :mod:`unifideck.utils.title_match`.
 * :mod:`search` — 6-pass title→game_id ladder.
 * :mod:`assets` — :class:`ArtworkAsset` dataclass + filtered
   ``fetch_assets`` + ``fetch_with_fallback``.

@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from unifideck.utils.config_helpers import get_cfg
+from unifideck.utils.title_match import titles_match
 
 if TYPE_CHECKING:
     from unifideck.config import ConfigManager
@@ -115,17 +116,23 @@ def extract_store_id(game: dict[str, Any], store: str) -> str | None:
 def get_best_match(
     search_title: str,
     candidates: list[dict[str, Any]],
-    threshold: float = MATCH_THRESHOLD,
 ) -> dict[str, Any] | None:
-    """Get best match."""
-    if not candidates:
-        return None
+    """Best title-fallback match, gated by the shared ``titles_match``.
+
+    Only reached when no candidate carries the store-native id (the
+    exact path in :func:`lookup`). ``titles_match`` decides accept/reject
+    — rejecting the sequels the local substring scorer wrongly accepted
+    at 0.85 ("Hades" → "Hades II", "Quake" → "Quake II", "Spelunky" →
+    "Spelunky 2") while accepting publisher-prefix / Roman-numeral /
+    edition variants its token-Jaccard missed ("Assassin's Creed II" ↔
+    "Assassin's Creed 2"). ``score_title_match`` only ranks the
+    survivors when a bucket holds several genuine variants.
+    """
     scored: list[tuple[float, dict[str, Any]]] = []
     for c in candidates:
         name = c.get("title") or c.get("name") or ""
-        score = score_title_match(search_title, name)
-        if score >= threshold:
-            scored.append((score, c))
+        if titles_match(search_title, name):
+            scored.append((score_title_match(search_title, name), c))
     if not scored:
         return None
     scored.sort(key=lambda x: x[0], reverse=True)
@@ -173,9 +180,6 @@ async def lookup(
     cdn_base = get_cfg(
         config, "metadata.unifidb.cdn_base", UNIFIDB_CDN_BASE,
     )
-    threshold = get_cfg(
-        config, "metadata.unifidb.match_threshold", MATCH_THRESHOLD,
-    )
     timeout = get_cfg(
         config, "metadata.unifidb.fetch_timeout_seconds", 15,
     )
@@ -189,7 +193,7 @@ async def lookup(
                 "[unifidb] id match: %s:%s", store, game_id,
             )
             return game_to_cache_format(game)
-    best = get_best_match(title, games, threshold)
+    best = get_best_match(title, games)
     if best:
         logger.debug("[unifidb] title match: %r", title)
         return game_to_cache_format(best)

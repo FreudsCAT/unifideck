@@ -42,6 +42,8 @@ from typing import Any, cast
 
 import aiohttp
 
+from unifideck.utils.title_match import titles_match
+
 logger = logging.getLogger(__name__)
 
 _HTTP_OK = 200
@@ -61,38 +63,18 @@ _MS_DISPLAYCATALOG = (
 )
 
 
-def _steam_title_matches(
-    name: str, search: str, allowed_suffixes: tuple[str, ...],
-) -> bool:
-    """True if a Steam result *name* acceptably matches *search*.
-
-    Exact match, or a prefix relationship whose leftover words are
-    only edition suffixes (rejects sequels like ``Ghostrunner 2``).
-    """
-    if name == search:
-        return True
-    if not (name.startswith(search) or search.startswith(name)):
-        return False
-    remainder = name.replace(search, "").strip()
-    remainder2 = search.replace(name, "").strip()
-    return (
-        remainder == "" or remainder2 == ""
-        or any(s in remainder for s in allowed_suffixes)
-        or any(s in remainder2 for s in allowed_suffixes)
-    )
-
-
 async def steam_search_appid(
     title: str,
     timeout: int = _DEFAULT_TIMEOUT,  # noqa: ASYNC109 — passed to aiohttp.ClientTimeout
 ) -> int | None:
     """Resolve a title to a real Steam AppID, or ``None`` on miss.
 
-    Uses Steam Store's public ``storesearch`` endpoint. Validation
-    mirrors staging's ``search_steam_appid``: prefer exact title
-    match, allow common edition suffixes (``GOTY``, ``Definitive``,
-    etc.), reject mismatches that look like sequels (``Ghostrunner``
-    vs ``Ghostrunner 2``).
+    Uses Steam Store's public ``storesearch`` endpoint and the shared
+    :func:`~unifideck.utils.title_match.titles_match` to pick the row
+    that actually IS this game — so ®/™ / apostrophe / edition /
+    publisher-prefix / Roman-numeral noise no longer defeats the match,
+    while sequels ("Hades" → "Hades II") and unrelated hits ("Control" →
+    "Steam Controller") are rejected rather than blindly accepted.
     """
     if not title:
         return None
@@ -111,17 +93,11 @@ async def steam_search_appid(
         return None
 
     items = data.get("items", []) if isinstance(data, dict) else []
-    search = title.lower().strip()
-    allowed_suffixes = (
-        "edition", "goty", "definitive", "ultimate", "complete",
-        "enhanced", "remastered", "hd", "remake",
-    )
     for item in items:
         steam_id = item.get("id")
         if not isinstance(steam_id, int) or steam_id <= 0:
             continue
-        name = str(item.get("name", "")).lower().strip()
-        if _steam_title_matches(name, search, allowed_suffixes):
+        if titles_match(title, str(item.get("name", ""))):
             return steam_id
     return None
 
