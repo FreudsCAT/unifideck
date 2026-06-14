@@ -199,17 +199,28 @@ function scheduleLaunchStateRestore(
 export async function launchUbisoftInstallViaShortcut(
   storeGameId: string,
   extraEnv: Record<string, string> = {},
+  contextOverride?: Partial<ShortcutLaunchContext>,
 ): Promise<ShortcutLaunchResult> {
   const rawCtx = await call<[string], unknown>(
     rpcRoutes.getCompatToolForGame,
     storeGameId,
-  );
-  const ctx = unwrapRpcEnvelope<ShortcutLaunchContext>(rawCtx, {
-    route: rpcRoutes.getCompatToolForGame,
-    throwing: false,
-  });
+  ).catch(() => null);
+  const baseCtx =
+    rawCtx == null
+      ? ({} as ShortcutLaunchContext)
+      : unwrapRpcEnvelope<ShortcutLaunchContext>(rawCtx, {
+          route: rpcRoutes.getCompatToolForGame,
+          throwing: false,
+        });
+  // ``contextOverride`` wins. The auth flow resolves the shortcut's
+  // appid via ``get_ubisoft_auth_shortcut_context`` (which ensures the
+  // shortcut exists and repairs the VDF); ``get_compat_tool_for_game``
+  // only reads an already-registered game's compat setting and returns
+  // no appid for the auth shortcut — hence the "Context unavailable"
+  // regression when the auth path relied on it alone.
+  const ctx = { ...baseCtx, ...contextOverride } as ShortcutLaunchContext;
   console.log("[UbisoftShortcutLaunch] getCompatToolForGame raw:", rawCtx);
-  console.log("[UbisoftShortcutLaunch] getCompatToolForGame ctx:", ctx);
+  console.log("[UbisoftShortcutLaunch] resolved ctx:", ctx);
 
   // The RPC envelope strips ``success`` from the data dict
   // (``_to_envelope`` moves it to the outer layer). Check
@@ -279,7 +290,48 @@ export async function launchUbisoftInstallViaShortcut(
  *  (separate prefix to keep auth tokens away from the game
  *  prefix). The flow is otherwise the same as install. */
 export async function launchUbisoftAuthViaShortcut(): Promise<ShortcutLaunchResult> {
-  return launchUbisoftInstallViaShortcut(AUTH_SHORTCUT_STORE_ID, {
-    UNIFIDECK_UBISOFT_PREFIX_NAME: AUTH_PREFIX_NAME,
-  });
+  // Resolve (and ensure) the persistent auth shortcut's appid via the
+  // dedicated context route — it scans/repairs the VDF and creates the
+  // shortcut if missing. get_compat_tool_for_game (used by the install
+  // path) cannot see the auth shortcut, so relying on it alone yielded
+  // "Context unavailable". Mirrors staging's auth flow.
+  const rawAuth = await call<[], unknown>(
+    rpcRoutes.getUbisoftAuthShortcutContext,
+  ).catch(() => null);
+  const authCtx =
+    rawAuth == null
+      ? undefined
+      : unwrapRpcEnvelope<{
+          appid_unsigned?: number;
+          launch_wait_ms?: number;
+          error?: string;
+        }>(rawAuth, {
+          route: rpcRoutes.getUbisoftAuthShortcutContext,
+          throwing: false,
+        });
+  if (!authCtx?.appid_unsigned) {
+    console.error(
+      "[UbisoftShortcutLaunch] auth shortcut context unavailable:",
+      authCtx,
+    );
+    return {
+      success: false,
+      error: authCtx?.error || "Auth shortcut not available",
+    };
+  }
+  // Re-add UNIFIDECK_UBISOFT_ACTION=auth explicitly: buildTemporaryLaunchOptions
+  // strips all UNIFIDECK_* tokens from the shortcut's stored options, so the
+  // auth action must be re-supplied here or the launcher treats the run as a
+  // game launch instead of a sign-in.
+  return launchUbisoftInstallViaShortcut(
+    AUTH_SHORTCUT_STORE_ID,
+    {
+      UNIFIDECK_UBISOFT_ACTION: "auth",
+      UNIFIDECK_UBISOFT_PREFIX_NAME: AUTH_PREFIX_NAME,
+    },
+    {
+      appid_unsigned: authCtx.appid_unsigned,
+      launch_wait_ms: authCtx.launch_wait_ms,
+    },
+  );
 }

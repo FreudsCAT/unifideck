@@ -133,7 +133,16 @@ class UbisoftAuth:
         return await self._context.get_auth_shortcut_context()
 
     async def is_available(self) -> bool:
-        """Check whether available."""
+        """Check whether available.
+
+        Authentication is keyed on valid credentials in the ``.upc-auth``
+        prefix — which ``logout()`` deletes, so a signed-out user reads
+        as unavailable and the library self-heals. Known edge: if the
+        auth prefix is removed out-of-band while game prefixes still hold
+        credentials, this reads False and the whole library hides until
+        the user re-runs the auth shortcut. That is an acceptable
+        trade-off for the simple, single-source signed-in signal.
+        """
         auth_dir = self._config.auth_prefix_dir_expanded
         return self._session.has_valid_credentials(auth_dir)
 

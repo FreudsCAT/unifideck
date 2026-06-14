@@ -14,6 +14,7 @@ back to "installed games only" mode if the owned list can't be read.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
@@ -22,6 +23,7 @@ from unifideck.core.types import Game
 
 from .data_loader import _DataLoader
 from .game_builder import _GameBuilder
+from .steam_filter import apply_steam_owned_filter, load_steam_owned_titles
 
 if TYPE_CHECKING:
     from unifideck.stores.ubisoft.config import UbisoftConfig
@@ -73,6 +75,19 @@ class _LibraryFetcher:
         owned_set = await self._loader.load_ownership_set(
             parse_ownership,
         )
+        if owned_set is None:
+            # get_library is auth-gated upstream, so reaching here means
+            # we ARE signed in but UPC hasn't written its ownership cache
+            # yet (it can lag the credential capture by a few seconds, or
+            # the user closed UPC before it finished syncing). We fall
+            # back to installed-only (anti-phantom) and surface the state
+            # so a "signed in but library looks empty" report is
+            # diagnosable; the next refresh picks up the cache.
+            logger.warning(
+                "[UbisoftLibrary] authenticated but UPC ownership cache "
+                "absent — UPC may still be syncing; showing installed-only "
+                "until the next library refresh",
+            )
         config_by_id = self._builder.build_config_lookup(configs)
         matched_configs = self._builder.cross_reference_ownership(
             configs,
@@ -80,19 +95,58 @@ class _LibraryFetcher:
             owned_set,
             installed,
         )
-        matched_configs = self._builder.apply_steam_filter(
-            matched_configs,
-        )
+        db_names = await self._fetch_db_names()
+        connect_ids = await asyncio.to_thread(self._id_map.read_connect_ids)
         games = self._builder.build_games_from_configs(
             matched_configs,
             installed,
+            db_names=db_names,
+            connect_ids=connect_ids,
         )
+        games = await self._apply_steam_filter(games)
         logger.info(
             "[UbisoftLibrary] local binary library: %d games (from %d matched configs)",
             len(games),
             len(matched_configs),
         )
         return games
+
+    async def _apply_steam_filter(
+        self,
+        games: list[Game],
+    ) -> list[Game]:
+        """Hide games already owned on Steam (when enabled).
+
+        Gated by ``filter_steam_linked``; the (blocking) Steam library
+        scan runs off the event loop. A Steam-owned Ubisoft title can't
+        launch via ``uplay://`` so its shortcut would be a dead end —
+        see :mod:`.steam_filter`.
+        """
+        if not self._config.filter_steam_linked:
+            return games
+        steam_titles = await asyncio.to_thread(load_steam_owned_titles)
+        filtered, _hidden = apply_steam_owned_filter(games, steam_titles)
+        return filtered
+
+    async def _fetch_db_names(self) -> set[str]:
+        """Normalised community game-ID DB names for DLC parent detection.
+
+        Degrades to an empty set when the database is offline or
+        unavailable — separator dedup then relies on the owned-title
+        set alone (see :meth:`_GameBuilder._is_dlc_by_separator`).
+        """
+        try:
+            entries = await self._id_map.fetch_game_id_database()
+        except Exception:
+            logger.debug(
+                "[UbisoftLibrary] game-ID DB unavailable for dedup",
+            )
+            return set()
+        return {
+            self._id_map.normalize_for_matching(name)
+            for _install_id, name in entries
+            if name
+        }
 
     @staticmethod
     def _import_ubisoft_parser() -> (

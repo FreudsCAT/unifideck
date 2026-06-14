@@ -35,6 +35,7 @@ from unifideck.stores.ubisoft.paths import UbisoftPrefixPaths
 
 from .detection import _InstallDetector
 from .fetch import _LibraryFetcher
+from .free_to_play import _FreeToPlayFeed
 from .manifest import _VisibleManifestProcessor
 
 logger = logging.getLogger(__name__)
@@ -69,6 +70,7 @@ class UbisoftLibrary:
             id_map=id_map,
             load_json_file_safe=self._detector.load_json_file_safe,
         )
+        self._free_to_play = _FreeToPlayFeed(config=config)
 
     async def get_library(self) -> list[Game]:
         """Get library."""
@@ -93,6 +95,14 @@ class UbisoftLibrary:
                     installed,
                     override_manifest,
                     source_label="override",
+                )
+            if self._config.enable_free_to_play_feed:
+                ftp_entries = await self._free_to_play.fetch_entries()
+                local_games = self._manifest.supplement(
+                    local_games,
+                    installed,
+                    ftp_entries,
+                    source_label="free-to-play",
                 )
             if local_games:
                 template_dir = self._config.template_dir_expanded

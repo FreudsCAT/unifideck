@@ -37,18 +37,29 @@
  *
  * Conclusion: not shippable blind for the *game* launch path. But the
  * auth-window path (Edge browser login) genuinely benefits from a
- * keyboard/mouse layout, so `applyWebBrowserLayout` below ships a
- * fully-guarded best-effort: it probe-logs the real
- * `SteamClient.Input` method names (so the exact setter can be
- * confirmed on-device from the CEF console) and tries a few candidate
- * setters. Every call is wrapped so a wrong/absent method silently
- * no-ops and can NEVER break the auth launch — it is applied AFTER the
- * temp shortcut's app entry exists and BEFORE `RunGame`. Once a setter
- * is verified on-device, prune the candidate list to the confirmed one.
+ * keyboard/mouse layout, so `applyWebBrowserLayout` below applies the
+ * official Steam "Web Browser" template to the auth shortcut. The API
+ * (method names + the `SetSelectedConfigForApp` signature) was verified
+ * against the Steam client UI bundle (`steamui/*.js`) and the template
+ * itself (`controller_base/templates/controller_neptune_webbrowser.vdf`,
+ * Title "Web Browser", official Valve config). Rather than hardcode the
+ * template URL (its exact string is produced at runtime), we enumerate
+ * the live config list via `QueryControllerConfigsForApp` and pick the
+ * official Web-Browser entry. Every call is wrapped so any failure
+ * leaves the auth launch completely unaffected; applied AFTER the temp
+ * shortcut's app entry exists and BEFORE `RunGame`.
  */
 import { getShortcutRunGameId } from "../lib/steam-bridge";
+import type {
+  ControllerConfigInfoMessage,
+  ControllerConfigInfoMessageList,
+} from "../types/steam";
 
 const LOG_PREFIX = "[ControllerConfig]";
+// The Deck's built-in controller is index 0 in Gaming Mode.
+const PRIMARY_CONTROLLER_INDEX = 0;
+// How long to wait for Steam to stream the template list before giving up.
+const CONFIG_INFO_TIMEOUT_MS = 4000;
 
 /** Hook left as a no-op for forward-compatibility : when a
  *  Game-Mode-safe controller config signal lands, this is
@@ -95,74 +106,100 @@ export function resetControllerConfigCache(): void {
   /* intentionally empty */
 }
 
+/** A config-info message that carries a template (vs. a "Done" marker). */
+function isTemplateEntry(
+  m: ControllerConfigInfoMessage,
+): m is ControllerConfigInfoMessageList {
+  return (
+    "URL" in m && typeof (m as ControllerConfigInfoMessageList).URL === "string"
+  );
+}
+
+/** The official Steam "Web Browser" template (by title or filename). */
+function isWebBrowserTemplate(m: ControllerConfigInfoMessageList): boolean {
+  return (
+    m.bOfficial && (m.Title === "Web Browser" || /webbrowser/i.test(m.URL))
+  );
+}
+
 /**
- * Best-effort: apply a keyboard/mouse ("Web Browser") controller
- * layout to the temporary auth-window shortcut so the store-login page
- * is navigable with the trackpad/stick instead of a useless gamepad
- * binding.
+ * Apply the official Steam "Web Browser" controller template to the
+ * temporary auth-window shortcut so the store-login page is navigable
+ * with the trackpad/stick (mouse) instead of a useless gamepad binding.
  *
- * The exact `SteamClient.Input` setter varies by Steam build and isn't
- * in `@decky`'s typings, so this is deliberately defensive:
+ * Flow (all verified against the Steam UI bundle):
+ *   1. Register for the app's controller-config info stream.
+ *   2. `QueryControllerConfigsForApp` to make Steam emit it.
+ *   3. Pick the official Web-Browser entry and apply its `URL` via
+ *      `SetSelectedConfigForApp` (which persists the selection).
  *
- *   1. It logs the available `SteamClient.Input` method names — read
- *      these in the CEF console to confirm the right call, then this
- *      list can be pruned to the verified one.
- *   2. It tries each candidate setter, individually guarded, and stops
- *      at the first that doesn't throw.
- *
- * Every path is wrapped: a missing/renamed method, or any thrown error,
- * leaves the auth launch completely unaffected (the login still works,
- * just with the default layout). Call this AFTER the shortcut's app
- * entry exists and BEFORE `RunGame`.
+ * Fully guarded and non-blocking: a missing API, no match, or any
+ * thrown error leaves the auth launch completely unaffected (login
+ * still works, just with the default layout). A timeout unregisters the
+ * listener if Steam never streams a match. Call this AFTER the
+ * shortcut's app entry exists and BEFORE `RunGame`.
  */
 export function applyWebBrowserLayout(appId: number): void {
   try {
-    const input = (
-      window.SteamClient as unknown as {
-        Input?: Record<string, unknown>;
-      }
-    )?.Input;
-    if (!input) {
+    const input = window.SteamClient?.Input;
+    if (
+      !input?.RegisterForControllerConfigInfoMessages ||
+      !input?.QueryControllerConfigsForApp ||
+      !input?.SetSelectedConfigForApp
+    ) {
       console.log(
-        `${LOG_PREFIX} SteamClient.Input unavailable — ` +
-          `leaving default layout for appId=${appId}`,
+        `${LOG_PREFIX} SteamClient.Input config API unavailable — ` +
+          `default layout kept for appId=${appId}`,
       );
       return;
     }
-    // Probe: surface the real method names for on-device verification.
-    console.log(
-      `${LOG_PREFIX} SteamClient.Input methods:`,
-      Object.keys(input).sort(),
-    );
-
-    // Candidate keyboard/mouse-template setters, most-specific first.
-    // Each is guarded so a wrong/absent name never breaks auth.
-    const candidates: Array<
-      [string, (fn: (...a: unknown[]) => unknown) => unknown]
-    > = [
-      ["SetWebBrowserActiveControllerConfig", (fn) => fn(appId)],
-      ["SetControllerConfigForApp", (fn) => fn(appId, "web_browser")],
-      ["SetActiveControllerConfiguration", (fn) => fn(appId, "web_browser")],
-      ["SetControllerToTemplateBindings", (fn) => fn(appId, "web_browser")],
-    ];
-    for (const [name, invoke] of candidates) {
-      const fn = input[name];
-      if (typeof fn !== "function") continue;
+    const idx = PRIMARY_CONTROLLER_INDEX;
+    // Mutable holder so `cleanup` can close over the registration +
+    // timer that are created after it (avoids a let/const cycle).
+    const state: {
+      settled: boolean;
+      reg?: { unregister(): void };
+      timer?: ReturnType<typeof setTimeout>;
+    } = { settled: false };
+    const cleanup = () => {
+      if (state.timer !== undefined) clearTimeout(state.timer);
       try {
-        invoke(fn.bind(input) as (...a: unknown[]) => unknown);
-        console.log(
-          `${LOG_PREFIX} applied web-browser layout via ` +
-            `${name}(appId=${appId})`,
-        );
-        return;
-      } catch (e) {
-        console.warn(`${LOG_PREFIX} ${name} failed (trying next):`, e);
+        state.reg?.unregister();
+      } catch {
+        /* ignore */
       }
-    }
-    console.log(
-      `${LOG_PREFIX} no known controller-config setter matched — ` +
-        `default layout kept for appId=${appId}`,
+    };
+
+    state.reg = input.RegisterForControllerConfigInfoMessages(
+      appId,
+      (messages) => {
+        if (state.settled || !Array.isArray(messages)) return;
+        const tpl = messages.filter(isTemplateEntry).find(isWebBrowserTemplate);
+        if (!tpl) return;
+        state.settled = true;
+        try {
+          input.SetSelectedConfigForApp(appId, idx, tpl.URL, false, true);
+          console.log(
+            `${LOG_PREFIX} applied Web Browser layout to ` +
+              `appId=${appId} (${tpl.URL})`,
+          );
+        } catch (e) {
+          console.warn(`${LOG_PREFIX} SetSelectedConfigForApp failed:`, e);
+        }
+        cleanup();
+      },
     );
+    input.QueryControllerConfigsForApp(appId, idx, false);
+    state.timer = setTimeout(() => {
+      if (!state.settled) {
+        console.log(
+          `${LOG_PREFIX} Web Browser template not found for ` +
+            `appId=${appId} within ${CONFIG_INFO_TIMEOUT_MS}ms — ` +
+            `default layout kept`,
+        );
+      }
+      cleanup();
+    }, CONFIG_INFO_TIMEOUT_MS);
   } catch (e) {
     console.warn(`${LOG_PREFIX} applyWebBrowserLayout error (ignored):`, e);
   }

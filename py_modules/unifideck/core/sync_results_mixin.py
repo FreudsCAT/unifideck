@@ -17,9 +17,12 @@ from __future__ import annotations
 
 import logging
 
+from unifideck.utils.config_helpers import get_cfg
+
 from .types import Game, SyncResult
 
 logger = logging.getLogger(__name__)
+_DEFAULT_TRACKED_STORES = ("epic", "gog", "amazon", "ubisoft")
 
 
 class _SyncResultsMixin:
@@ -38,6 +41,7 @@ class _SyncResultsMixin:
         one store contributed.
         """
         merged = self._flatten(libraries)  # type: ignore[attr-defined]  # provided by _SyncQueriesMixin
+        merged = self._maybe_collapse_duplicates(merged)
         logger.info(
             "[SyncService] sync complete — %d games across %d stores "
             "in %dms (%d errors)",
@@ -50,3 +54,29 @@ class _SyncResultsMixin:
             duration_ms=duration_ms,
             error=None if not errors else f"{len(errors)}_stores_failed",
         )
+
+    def _maybe_collapse_duplicates(self, games: list[Game]) -> list[Game]:
+        """Optionally collapse cross-store duplicates (disabled by default).
+
+        No-op unless ``dedup.cross_store_enabled`` is true — the default
+        keeps each store's copy of a title as its own shortcut. When
+        enabled, a title owned on multiple ``dedup.tracked_stores`` is
+        collapsed to one (see :mod:`unifideck.core.cross_source_dedupe`).
+        Groundwork for the "one shortcut per game" feature.
+        """
+        config = getattr(self, "_config", None)
+        if not get_cfg(config, "dedup.cross_store_enabled", False):
+            return games
+        from unifideck.core.cross_source_dedupe import collapse_duplicates
+
+        tracked = get_cfg(
+            config, "dedup.tracked_stores", list(_DEFAULT_TRACKED_STORES),
+        )
+        collapsed = collapse_duplicates(games, tracked_stores=tracked)
+        if len(collapsed) != len(games):
+            logger.info(
+                "[SyncService] cross-store dedup collapsed %d → %d games",
+                len(games),
+                len(collapsed),
+            )
+        return collapsed

@@ -68,6 +68,12 @@ _DEFAULT_CONFIGURATIONS_RELATIVE_PATH = (
 _DEFAULT_OWNERSHIP_RELATIVE_PATH = (
     "drive_c/users/steamuser/AppData/Local/Ubisoft Game Launcher/cache/ownership"
 )
+# Ubisoft Connect's localStorage leveldb — holds the authoritative
+# space_id → ubisoftConnectGameId map used for ``uplay://`` deeplinks.
+_DEFAULT_LOCALSTORAGE_RELATIVE_PATH = (
+    "drive_c/users/steamuser/AppData/Local/"
+    "Ubisoft Game Launcher/cache/http2/Default/Local Storage"
+)
 _UBI_CONFIG_PREFIX = "stores.ubisoft"
 
 
@@ -99,6 +105,7 @@ class UbisoftConfig:
     upc_connect_relative_path: str = _DEFAULT_UPC_CONNECT_RELATIVE_PATH
     configurations_relative_path: str = _DEFAULT_CONFIGURATIONS_RELATIVE_PATH
     ownership_relative_path: str = _DEFAULT_OWNERSHIP_RELATIVE_PATH
+    localstorage_relative_path: str = _DEFAULT_LOCALSTORAGE_RELATIVE_PATH
     upc_credential_files: tuple[str, ...] = (
         "ConnectSecureStorage.dat",
         "user.dat",
@@ -122,13 +129,23 @@ class UbisoftConfig:
         "Default",
         "Default User",
     )
-    # filter_steam_linked default is False because the underlying
-    # steam_filter.py was removed in commits 6c84e7e / 908d350. The
-    # config flag is kept for forward compatibility — when the filter
-    # returns, flipping this default to True will re-enable the
-    # feature on existing installs without a config migration.
-    filter_steam_linked: bool = False
+    # filter_steam_linked hides Ubisoft games already owned on the
+    # native Steam library — their ``uplay://`` shortcut is a dead end
+    # (the entitlement is bound to the Steam copy). Default True because
+    # a non-launchable shortcut is worse than a hidden one; the
+    # re-implemented filter (``library/steam_filter.py``) is
+    # conservative (exact-match only, never hides on an empty scan, keeps
+    # installed games) so the default is safe. Set False to always show
+    # the Ubisoft copy.
+    filter_steam_linked: bool = True
     steam_library_cross_ref: bool = False
+    # Free-to-play CDN feed supplement (OP-57g). When enabled, the
+    # public Ubisoft free-games catalogue labels owned F2P titles
+    # (ownership_type="free" + cover) and surfaces F2P games the
+    # ownership binary doesn't list. Network is optional — failure
+    # degrades to no supplement. Off by default so a fresh install
+    # never gains unclaimed F2P shortcuts without opt-in.
+    enable_free_to_play_feed: bool = False
 
     @property
     def data_dir_expanded(self) -> str:
@@ -400,6 +417,12 @@ UbisoftConfig._FIELD_SPECS = (
         _DEFAULT_OWNERSHIP_RELATIVE_PATH,
     ),
     (
+        "localstorage_relative_path",
+        "localstorage_relative_path",
+        UbisoftConfig._parse_str,
+        _DEFAULT_LOCALSTORAGE_RELATIVE_PATH,
+    ),
+    (
         "upc_credential_files",
         "upc_credential_files",
         UbisoftConfig._parse_tuple,
@@ -415,6 +438,12 @@ UbisoftConfig._FIELD_SPECS = (
     (
         "steam_library_cross_ref",
         "steam_library_cross_ref",
+        UbisoftConfig._parse_bool,
+        False,
+    ),
+    (
+        "enable_free_to_play_feed",
+        "enable_free_to_play_feed",
         UbisoftConfig._parse_bool,
         False,
     ),

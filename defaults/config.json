@@ -19,7 +19,8 @@
     "artwork_concurrency": 4
   },
   "dedup": {
-    "tracked_stores": ["epic", "gog", "amazon", "ubisoft"]
+    "tracked_stores": ["epic", "gog", "amazon", "ubisoft"],
+    "cross_store_enabled": false
   },
   "download": {
     "custom_path": ""

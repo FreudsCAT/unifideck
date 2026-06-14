@@ -92,8 +92,10 @@ RUNTIME_REQUIRED_KEYS: tuple[str, ...] = (
     "compat.protondb_timeout_seconds",
     # dedup — Microsoft Store is intentionally absent so xCloud /
     # Game Pass entries are never filtered against Steam-native or
-    # cross-store duplicates.
+    # cross-store duplicates. ``cross_store_enabled`` gates the opt-in
+    # "one shortcut per game" collapse (default false).
     "dedup.tracked_stores",
+    "dedup.cross_store_enabled",
     # discovery
     "discovery.manifest_filename",
     # download

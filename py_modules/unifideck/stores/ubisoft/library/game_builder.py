@@ -24,11 +24,8 @@ from typing import TYPE_CHECKING, Any
 
 from unifideck.core.types import Game
 
-# NOTE: ``..steam_filter`` (the Ubisoft Steam dedup filter) was
-# removed in commits 6c84e7e and 908d350 because it caused issues
-# in production. The feature is currently disabled — see
-# ``apply_steam_filter`` below — and will be re-introduced in a
-# future update with a fixed implementation.
+# The Ubisoft Steam dedup filter now lives in ``.steam_filter`` and is
+# applied at the Game level in ``fetch.py`` (after build), not here.
 
 if TYPE_CHECKING:
     from unifideck.stores.ubisoft.config import UbisoftConfig
@@ -71,6 +68,18 @@ _STORE_MARKER_PATTERN = re.compile(
 _CYRILLIC_PATTERN = re.compile(r"[\u0400-\u04FF]")
 _PLACEHOLDER_L_PATTERN = re.compile(r"(l\d+|[A-Z0-9_]+)")
 _PLACEHOLDER_LITERALS = frozenset({"a ubisoft game"})
+# Trailing edition qualifier ("Assassin's Creed Valhalla Gold Edition").
+# Stripped so an edition collapses onto its base title in dedup, and so
+# the base name can be matched for variant detection.
+_EDITION_SUFFIX_PATTERN = re.compile(
+    r"\s+(gold|complete|ultimate|deluxe|premium|special|"
+    r"collector'?s?|limited|digital|standard)\s*(edition)?$",
+    re.IGNORECASE,
+)
+# Minimum parent length before the substring fallback in
+# :meth:`_GameBuilder._parent_matches` is allowed to fire \u2014 short
+# prefixes ("the", "tom") match far too eagerly.
+_MIN_SUBSTRING_PARENT_LEN = 5
 
 
 class _GameBuilder:
@@ -147,45 +156,66 @@ class _GameBuilder:
         game_id = cfg.space_id if cfg.space_id else str(cfg.install_id)
         return game_id in installed or cfg.space_id in installed
 
-    def apply_steam_filter(
-        self,
-        configs: list[GameConfig],
-    ) -> list[GameConfig]:
-        """No-op passthrough — Steam dedup filter is currently disabled.
-
-        The implementation in ``..steam_filter`` was removed in
-        commits 6c84e7e and 908d350 because it caused production
-        issues. Until it returns, this method preserves the call
-        site (``fetch.py``) without altering the config list.
-        Any ``filter_steam_linked`` config flag the user has set
-        is silently ignored — re-enabling will require restoring
-        ``steam_filter.py`` and reverting this method.
-        """
-        if self._config.filter_steam_linked:
-            logger.debug(
-                "[UbisoftLibrary] filter_steam_linked=True ignored — "
-                "feature disabled pending steam_filter.py restoration",
-            )
-        return configs
-
     def build_games_from_configs(
         self,
         matched_configs: list[GameConfig],
         installed: dict[str, Any],
+        *,
+        db_names: set[str] | None = None,
+        connect_ids: dict[str, str] | None = None,
     ) -> list[Game]:
-        """Build games from configs."""
-        games: list[Game] = []
-        seen_norms: set[str] = set()
-        id_map_updates: dict[str, dict[str, Any]] = {}
+        """Build games from configs.
+
+        Two passes so DLC/edition variants can be dropped against the
+        base titles we actually keep — mirrors staging's
+        ``known_base_names`` / ``all_db_names`` dedup. ``db_names`` is
+        the normalised community game-ID database name set; it widens
+        parent detection for the ``" - "`` separator and degrades to an
+        empty set when the database is offline. ``connect_ids`` maps
+        ``space_id`` → ``ubisoftConnectGameId`` (from UPC's leveldb
+        cache); when present for a game it is recorded in the id_map so
+        :meth:`UbisoftIdMap.resolve_launch_id` returns the canonical
+        deeplink id.
+        """
+        db_names = db_names or set()
+        connect_ids = connect_ids or {}
+        # Pass 1: clean + hard-filter, keeping (cfg, cleaned_title).
+        cleaned: list[tuple[GameConfig, str]] = []
         for cfg in sorted(
             matched_configs,
             key=lambda c: (c.name or "").lower(),
         ):
+            title = self._clean_launcher_title(cfg.name)
+            if self._should_skip_launcher_title(title):
+                continue
+            cleaned.append((cfg, title))
+        # Base titles = edition-stripped, normalised names of every kept
+        # entry. Used to recognise an entry as an edition/DLC of a game
+        # we already surface.
+        base_norms = {
+            self._id_map.normalize_for_matching(self._strip_edition(title))
+            for _, title in cleaned
+        }
+        # Pass 2: drop separator-DLC, build the rest (editions collapse
+        # onto their base via the strip-edition dedup key in
+        # :meth:`_build_one_game`).
+        games: list[Game] = []
+        seen_norms: set[str] = set()
+        id_map_updates: dict[str, dict[str, Any]] = {}
+        for cfg, title in cleaned:
+            if self._is_dlc_by_separator(title, base_norms, db_names):
+                logger.debug(
+                    "[UbisoftLibrary] dedup skip (DLC of base): %s",
+                    title,
+                )
+                continue
             game = self._build_one_game(
                 cfg,
+                title,
                 installed,
                 seen_norms,
                 id_map_updates,
+                connect_ids,
             )
             if game is not None:
                 games.append(game)
@@ -193,25 +223,102 @@ class _GameBuilder:
             self._id_map.update_bulk(id_map_updates)
         return games
 
+    @staticmethod
+    def _strip_edition(title: str) -> str:
+        """Strip a trailing edition qualifier (``Gold Edition`` …)."""
+        match = _EDITION_SUFFIX_PATTERN.search(title)
+        return title[: match.start()].strip() if match else title
+
+    def _is_dlc_by_separator(
+        self,
+        title: str,
+        base_norms: set[str],
+        db_names: set[str],
+    ) -> bool:
+        """True if ``title`` is a named DLC/expansion of a base we keep.
+
+        Only the ``" - "`` separator drives parent detection
+        (``"Base - Expansion Name"``): the part before the dash must
+        match an owned base title or a community-DB title.
+
+        The ``": "`` separator is **deliberately not** used here, unlike
+        staging. Staging only ran colon dedup on ownership-binary
+        entries that GraphQL had *not* already claimed, so its
+        authoritative owned-games list shielded standalone titles. With
+        the API gone, every owned game flows through this path — and
+        Ubisoft ships a great many *standalone* games as
+        ``"Franchise: Subtitle"`` (Rainbow Six: Siege, Ghost Recon:
+        Wildlands, Watch Dogs: Legion, Splinter Cell: Blacklist), so
+        colon parent-matching would delete real owned games. Genuine
+        colon-suffixed DLC ("Game: Season Pass") is already removed by
+        the keyword filter in :meth:`_should_skip_launcher_title`.
+        """
+        if " - " not in title:
+            return False
+        parent = self._id_map.normalize_for_matching(
+            title.split(" - ", 1)[0],
+        )
+        self_norm = self._id_map.normalize_for_matching(
+            self._strip_edition(title),
+        )
+        return self._parent_matches(
+            parent,
+            base_norms | db_names,
+            base_norms,
+            exclude=self_norm,
+        )
+
+    @staticmethod
+    def _parent_matches(
+        parent: str,
+        exact_set: set[str],
+        substring_set: set[str],
+        *,
+        exclude: str = "",
+    ) -> bool:
+        """Exact membership first, then a length-guarded substring match.
+
+        ``exclude`` is the candidate's own normalised title — it is
+        skipped so the substring fallback never matches an entry against
+        itself (the parent is always a prefix of its own full title).
+        """
+        if not parent:
+            return False
+        if parent in exact_set and parent != exclude:
+            return True
+        if len(parent) > _MIN_SUBSTRING_PARENT_LEN:
+            return any(
+                (parent in known or known in parent) and known != exclude
+                for known in substring_set
+            )
+        return False
+
     def _build_one_game(
         self,
         cfg: GameConfig,
+        title: str,
         installed: dict[str, Any],
         seen_norms: set[str],
         id_map_updates: dict[str, dict[str, Any]],
+        connect_ids: dict[str, str],
     ) -> Game | None:
-        """Build one game."""
-        title = self._clean_launcher_title(cfg.name)
-        if self._should_skip_launcher_title(title):
-            return None
-        norm_name = self._id_map.normalize_for_matching(title)
+        """Build one game.
+
+        ``title`` is the already-cleaned launcher title. Dedup keys on
+        the *edition-stripped* normalised name so ``"X"`` and
+        ``"X Gold Edition"`` collapse (the alphabetically-first, i.e.
+        plain, title wins).
+        """
+        norm_name = self._id_map.normalize_for_matching(
+            self._strip_edition(title),
+        )
         if norm_name in seen_norms:
             return None
         seen_norms.add(norm_name)
         game_id = cfg.space_id if cfg.space_id else str(cfg.install_id)
         is_installed = game_id in installed or cfg.space_id in installed
         install_meta = installed.get(game_id) or installed.get(cfg.space_id) or {}
-        id_map_updates[game_id] = {
+        id_map_entry: dict[str, Any] = {
             "install_id": str(cfg.install_id),
             "launch_id": str(cfg.launch_id),
             "name": title,
@@ -223,6 +330,12 @@ class _GameBuilder:
             ),
             "source": "local_binary",
         }
+        # Prefer the leveldb-sourced connect id (the value
+        # ``uplay://launch/{id}/0`` expects) when UPC has cached it.
+        connect_id = connect_ids.get(cfg.space_id) if cfg.space_id else None
+        if connect_id:
+            id_map_entry["ubisoftconnect_game_id"] = connect_id
+        id_map_updates[game_id] = id_map_entry
         return Game(
             app_id=0,
             store="ubisoft",

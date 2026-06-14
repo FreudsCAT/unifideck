@@ -71,6 +71,10 @@
           },
           "uniqueItems": true,
           "minItems": 1
+        },
+        "cross_store_enabled": {
+          "type": "boolean",
+          "description": "Opt-in: collapse a title owned on several tracked stores down to a single shortcut (\"one shortcut per game\"). Default false — each store's copy is its own shortcut. Groundwork; the precedence order is dedup.tracked_stores."
         }
       }
     },
