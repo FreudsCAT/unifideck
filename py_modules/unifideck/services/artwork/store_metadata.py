@@ -21,6 +21,11 @@ Sources, mirroring staging's pipeline:
 * **Ubisoft** — the per-game ``metadata`` dict (set during sync)
   carries ``coverUrl`` / ``backgroundUrl`` directly from
   Ubisoft's GraphQL API.
+* **Microsoft** — the public ``displaycatalog.mp.microsoft.com``
+  endpoint exposes ``LocalizedProperties[].Images`` (Poster,
+  SuperHeroArt, TitledHeroArt, …).  Keyed on the productId, so it
+  works even when the xCloud display name degraded to a slug
+  ("HALO5") that no title search could resolve.
 
 Each fetcher is best-effort: returns an empty ``urls`` dict on
 any failure so the orchestrator can fall through to SGDB / Steam
@@ -45,6 +50,15 @@ _STEAM_SEARCH_URL = "https://store.steampowered.com/api/storesearch"
 _STEAM_CDN = "https://shared.steamstatic.com/store_item_assets/steam/apps"
 _GAMESDB_URL = "https://gamesdb.gog.com/platforms/{platform}/external_releases/{id}"
 _GOG_PRODUCT_URL = "https://api.gog.com/products/{id}?expand=description"
+# Microsoft's public (no-auth) display catalog — same endpoint the
+# Microsoft store sync already hits to resolve product titles. Its
+# ``LocalizedProperties[].Images`` carries authoritative box art, so
+# we reuse it for artwork keyed on the productId (no title-search →
+# works even for mangled xCloud titleId slugs like "HALO5").
+_MS_DISPLAYCATALOG = (
+    "https://displaycatalog.mp.microsoft.com/v7.0/products"
+    "?bigIds={id}&market=US&languages=en-US"
+)
 
 
 def _steam_title_matches(
@@ -366,6 +380,72 @@ def ubisoft_metadata(extras: dict[str, Any]) -> dict[str, Any]:
     return {"urls": out}
 
 
+# Microsoft ``ImagePurpose`` → kind, in priority order.  ``Poster`` is a
+# true 2:3 portrait (ideal Steam grid); ``TitledHeroArt`` carries the
+# wordmark like Steam's landscape capsule; ``SuperHeroArt`` is a clean,
+# text-free 16:9 banner.  Logo + icon are intentionally left to SGDB —
+# Microsoft's ``Logo`` purpose is a square store tile, not the
+# transparent wordmark Steam composites over the hero.
+_MS_IMAGE_PRIORITY: dict[str, tuple[str, ...]] = {
+    "grid":   ("Poster", "BrandedKeyArt"),
+    "grid_l": ("TitledHeroArt", "Hero"),
+    "hero":   ("SuperHeroArt", "Hero", "TitledHeroArt"),
+}
+
+
+def _extract_ms_images(images: list[Any]) -> dict[str, str]:
+    """Map a displaycatalog ``Images`` list to ``{kind: url}``.
+
+    First-seen wins per ``ImagePurpose``; kinds resolve against
+    :data:`_MS_IMAGE_PRIORITY`.  Protocol-relative ``//`` URIs are
+    normalised to ``https://``.
+    """
+    by_purpose: dict[str, str] = {}
+    for im in images:
+        if not isinstance(im, dict):
+            continue
+        purpose = im.get("ImagePurpose")
+        uri = _ensure_proto(im.get("Uri"))
+        if isinstance(purpose, str) and uri and purpose not in by_purpose:
+            by_purpose[purpose] = uri
+    out: dict[str, str] = {}
+    for kind, purposes in _MS_IMAGE_PRIORITY.items():
+        for purpose in purposes:
+            if purpose in by_purpose:
+                out[kind] = by_purpose[purpose]
+                break
+    return out
+
+
+async def microsoft_metadata(
+    product_id: str,
+    timeout: int = _DEFAULT_TIMEOUT,  # noqa: ASYNC109 — passed to aiohttp
+) -> dict[str, Any]:
+    """Fetch Microsoft box art from the public display catalog.
+
+    Keyed on the ``productId`` (the store_game_id), so it resolves
+    art without a title search — the fix for xCloud games whose
+    display name degraded to a ``titleId`` slug ("HALO5",
+    "GEARSOFWAR4") that no title-based search can match.
+    """
+    out: dict[str, str] = {}
+    if not product_id:
+        return {"urls": out}
+    try:
+        url = _MS_DISPLAYCATALOG.format(id=urllib.parse.quote(product_id))
+        data = await _fetch_json(url, timeout)
+        products = data.get("Products") if isinstance(data, dict) else None
+        if isinstance(products, list) and products:
+            loc = products[0].get("LocalizedProperties")
+            if isinstance(loc, list) and loc:
+                images = loc[0].get("Images")
+                if isinstance(images, list):
+                    out.update(_extract_ms_images(images))
+    except Exception as e:
+        logger.debug("[Artwork.microsoft] %s failed: %s", product_id, e)
+    return {"urls": out}
+
+
 async def fetch_store_urls(
     store: str, store_game_id: str, extras: dict[str, Any] | None = None,
     timeout: int = _DEFAULT_TIMEOUT,  # noqa: ASYNC109 — passed to aiohttp
@@ -389,6 +469,9 @@ async def fetch_store_urls(
         return cast("dict[str, str]", payload.get("urls", {}))
     if store == "ubisoft":
         return cast("dict[str, str]", ubisoft_metadata(extras or {}).get("urls", {}))
+    if store == "microsoft":
+        payload = await microsoft_metadata(store_game_id, timeout)
+        return cast("dict[str, str]", payload.get("urls", {}))
     return {}
 
 
@@ -397,6 +480,7 @@ __all__ = [
     "epic_metadata",
     "fetch_store_urls",
     "gog_metadata",
+    "microsoft_metadata",
     "steam_cdn_urls",
     "steam_search_appid",
     "ubisoft_metadata",

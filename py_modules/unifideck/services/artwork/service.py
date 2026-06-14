@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import time
 from typing import TYPE_CHECKING, Any
 
 from unifideck.core.cache_manager import CacheManager
@@ -19,7 +18,7 @@ from unifideck.event_bus.event_bus import EventBus
 from unifideck.event_bus.event_bus_devex import auto_wire
 
 from .event_handlers import _EventHandlersMixin
-from .fetcher import download_and_save, has_artwork
+from .fetcher import download_and_save, get_missing_kinds
 from .store_metadata import (
     fetch_store_urls,
     steam_cdn_urls,
@@ -41,8 +40,6 @@ DEFAULT_MAX_CONCURRENT = 10
 # leaving headroom for the CDN image downloads that share the
 # same semaphore. Cap via ``artwork.max_concurrent`` config key
 # if your network needs a smaller batch.
-DEFAULT_FAILURE_COOLDOWN = 3600
-# 1 h skip after 404/parse failure
 DEFAULT_DOWNLOAD_TIMEOUT = 30
 # seconds for the image download
 
@@ -59,8 +56,14 @@ _STAGING_SGDB_API_KEY = "1a410cb7c288b8f21016c2df4c81df74"
 # time (Steam expects unsigned in shortcuts.vdf and on disk).
 _ARTWORK_KINDS = ("grid", "grid_l", "hero", "logo", "icon")
 
-# Cache namespace for SGDB fetch attempts (success/failure tracking).
-_CACHE_NAMESPACE = "sgdb_fetch"
+# Cache namespace for the per-game *still-missing kind set* (sorted list).
+# Lets a sync skip a game only when its missing kinds are unchanged since
+# the last attempt — i.e. those kinds are genuinely unavailable upstream —
+# instead of re-querying SGDB for them every sync. Ported from staging's
+# ``artwork_attempts`` (main.py); reuses the slot already declared in
+# ``bootstrap/cache_registry.py`` (ttl=0). Cleared on resync via
+# _clear_resync_cache.
+_ATTEMPTS_NAMESPACE = "artwork_attempts"
 
 
 class ArtworkService(_EventHandlersMixin):
@@ -91,12 +94,10 @@ class ArtworkService(_EventHandlersMixin):
             self._api_key = _STAGING_SGDB_API_KEY
 
         max_concurrent = DEFAULT_MAX_CONCURRENT
-        self._failure_cooldown = DEFAULT_FAILURE_COOLDOWN
         self._download_timeout = DEFAULT_DOWNLOAD_TIMEOUT
 
         if self._config:
             max_concurrent = self._config.get("artwork.max_concurrent", DEFAULT_MAX_CONCURRENT)
-            self._failure_cooldown = self._config.get("artwork.failure_cooldown", DEFAULT_FAILURE_COOLDOWN)
             self._download_timeout = self._config.get("artwork.download_timeout", DEFAULT_DOWNLOAD_TIMEOUT)
 
         self._semaphore = asyncio.Semaphore(max_concurrent)
@@ -155,6 +156,7 @@ class ArtworkService(_EventHandlersMixin):
         title: str,
         force: bool = False,
         extras: dict[str, Any] | None = None,
+        only_kinds: set[str] | None = None,
     ) -> dict[str, bool]:
         """Three-source pipeline that mirrors staging.
 
@@ -175,25 +177,47 @@ class ArtworkService(_EventHandlersMixin):
            ``library_600x900_2x``, ``header.jpg``,
            ``library_hero.jpg``, ``logo.png``.
 
-        Returns ``{kind: bool}`` for the five Steam-grid kinds:
-        ``grid`` (portrait), ``grid_l`` (landscape), ``hero``,
-        ``logo``, ``icon``.  Per-game failure cooldown writes
-        keep us out of SGDB rate-limit jail on dead titles.
+        ``only_kinds`` restricts the work to a subset of the five
+        kinds — the caller passes the kinds actually missing on disk
+        so a sync *backfills* gaps (logo / icon / landscape a previous
+        sync missed) instead of re-downloading the whole set or, worse,
+        treating the game as done the moment grid+hero land. ``None``
+        means "compute the missing set from disk here".
+
+        Returns ``{kind: bool}`` for all five Steam-grid kinds (kinds
+        already present on disk report ``True`` without being
+        re-fetched). The per-game *missing-set* cache skips a game only
+        when its gaps are unchanged since the last attempt, so we don't
+        re-query SGDB every sync for art that genuinely doesn't exist.
         """
-        result: dict[str, bool] = dict.fromkeys(_ARTWORK_KINDS, False)
         cache_key = f"{store}:{game_id}"
+
+        # Resolve which kinds we still need. Explicit ``only_kinds`` from
+        # the caller wins; ``force`` re-fetches everything; otherwise
+        # read the gaps off disk.
+        if only_kinds is not None:
+            target = {k for k in only_kinds if k in _ARTWORK_KINDS}
+        elif force:
+            target = set(_ARTWORK_KINDS)
+        else:
+            target = await get_missing_kinds(self._grid_dir, app_id)
+
+        # Kinds already on disk start True so the phases skip them and
+        # we never re-download existing covers.
+        result: dict[str, bool] = {k: (k not in target) for k in _ARTWORK_KINDS}
+        if not target:
+            return result
+
         if not force:
-            last_attempt = self._cache.get(_CACHE_NAMESPACE, cache_key)
-            if (
-                last_attempt is not None
-                and time.time() - float(last_attempt) < self._failure_cooldown
-            ):
+            # Incremental skip: identical missing set as last attempt →
+            # those kinds are genuinely unavailable upstream, don't retry.
+            attempted = self._cache.get(_ATTEMPTS_NAMESPACE, cache_key)
+            if attempted is not None and set(attempted) == target:
                 logger.debug(
-                    "[ArtworkService] skipping %s: in failure cooldown", title,
+                    "[ArtworkService] skipping %s: missing set unchanged (%s)",
+                    title, sorted(target),
                 )
                 return result
-            if await has_artwork(self._grid_dir, app_id):
-                return dict.fromkeys(_ARTWORK_KINDS, True)
 
         current_task = asyncio.current_task()
         if current_task:
@@ -201,7 +225,10 @@ class ArtworkService(_EventHandlersMixin):
             current_task.add_done_callback(self._pending_tasks.discard)
 
         async with self._semaphore:
-            logger.info("[ArtworkService] fetching art for %s", title)
+            logger.info(
+                "[ArtworkService] fetching art for %s (need: %s)",
+                title, "+".join(sorted(target)),
+            )
             sources: dict[str, str] = {}
             # Phase 1 — store metadata (authoritative).
             await self._fill_from_store(
@@ -209,15 +236,19 @@ class ArtworkService(_EventHandlersMixin):
             )
             # Phase 2 — SGDB fallback for any kind still missing.
             if not all(result.values()):
-                await self._fill_from_sgdb(title, app_id, result, sources)
+                await self._fill_from_sgdb(
+                    title, app_id, result, sources, only_kinds=target,
+                )
             # Phase 3 — Steam CDN last resort.
             if not all(result.values()):
                 await self._fill_from_steam_cdn(
                     title, app_id, result, sources,
                 )
-            if not any(result.values()):
-                self._cache.set(_CACHE_NAMESPACE, cache_key, time.time())
-            else:
+            # Record what's still missing so the next sync can skip this
+            # game iff the gaps haven't changed (genuinely-absent art).
+            still_missing = sorted(k for k in _ARTWORK_KINDS if not result.get(k))
+            self._cache.set(_ATTEMPTS_NAMESPACE, cache_key, still_missing)
+            if sources:
                 self._log_sources(title, sources)
             return result
 
@@ -251,25 +282,34 @@ class ArtworkService(_EventHandlersMixin):
         app_id: int,
         result: dict[str, bool],
         sources: dict[str, str],
+        only_kinds: set[str] | None = None,
     ) -> None:
         """Phase 2: batched SGDB lookup for everything still missing.
 
         Calls ``steamgriddb.fetch_all_kinds`` once per game — one
         title→game_id search followed by parallel asset fetches
-        for every kind. Previous per-kind loop did 5 separate
-        searches per game, blowing through the SGDB free-tier rate
-        limit on large libraries. The new package also resolves
-        ``grid_l`` natively with the landscape-dimension filter
-        (the old single-kind helper had no way to distinguish
-        portrait from landscape).
+        for the requested kinds. ``only_kinds`` narrows the asset
+        fetches to the gaps we actually need (e.g. just ``icon``),
+        sparing SGDB the kinds a store API already filled. Previous
+        per-kind loop did 5 separate searches per game, blowing
+        through the SGDB free-tier rate limit on large libraries.
+        The package resolves ``grid_l`` natively with the
+        landscape-dimension filter.
         """
+        kinds = frozenset(only_kinds) if only_kinds else None
         try:
             from unifideck.steam import steamgriddb
             urls = await steamgriddb.fetch_all_kinds(
-                title, self._api_key, config=self._config,
+                title, self._api_key, config=self._config, only_kinds=kinds,
             )
         except Exception as e:
-            logger.debug("[ArtworkService] sgdb fetch failed (%s): %s", title, e)
+            # WARNING (was DEBUG): a blanket SGDB failure silently
+            # stripped the whole library of community art + every icon.
+            # Surface it so a TLS/DNS/rate-limit outage is greppable.
+            logger.warning(
+                "[ArtworkService] sgdb fetch failed (%s): %s: %s",
+                title, type(e).__name__, e,
+            )
             return
         for kind in _ARTWORK_KINDS:
             if result.get(kind):

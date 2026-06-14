@@ -38,6 +38,70 @@ _KIND_SUFFIX = {
 # Logo is excluded: Steam needs PNG (alpha overlay).
 _FORMAT_FLEXIBLE_KINDS = frozenset({"grid", "grid_l", "hero", "icon"})
 
+# The five canonical Steam-grid artwork kinds, in display order.
+_ALL_KINDS = ("grid", "grid_l", "hero", "logo", "icon")
+
+
+def _candidate_names(kind: str, unsigned: int) -> tuple[str, ...]:
+    """On-disk filename candidates for ``kind`` under the unsigned appid.
+
+    Both extensions are listed for every flexible kind because
+    ``download_and_save`` picks the extension from the served MIME type,
+    so a previous sync may have saved either flavour. Logo is PNG-first
+    (Steam mandates PNG) but we also accept a stray ``.jpg`` so a
+    store-provided logo isn't re-fetched forever. Mirrors staging's
+    ``get_missing_artwork_types`` glob patterns.
+    """
+    if kind == "grid":
+        return (f"{unsigned}p.jpg", f"{unsigned}p.png")
+    if kind == "grid_l":
+        return (f"{unsigned}.jpg", f"{unsigned}.png")
+    if kind == "hero":
+        return (f"{unsigned}_hero.jpg", f"{unsigned}_hero.png")
+    if kind == "logo":
+        return (f"{unsigned}_logo.png", f"{unsigned}_logo.jpg")
+    if kind == "icon":
+        return (f"{unsigned}_icon.jpg", f"{unsigned}_icon.png")
+    return ()
+
+
+async def get_missing_kinds(grid_dir: str, app_id: int) -> set[str]:
+    """Return the set of the five artwork kinds NOT present on disk.
+
+    Checks each kind individually (both ``.jpg`` and ``.png`` variants)
+    rather than the coarse grid+hero gate :func:`has_artwork` used to
+    apply. This is what lets a sync *backfill* the kinds a previous sync
+    missed (logo / icon / landscape) instead of treating a game as
+    "done" the moment grid+hero land — the regression that left the
+    library with almost no icons and many partial covers.
+
+    Args:
+        grid_dir: absolute path to Steam's ``grid/`` directory.
+        app_id: shortcut appid (signed or unsigned — normalised here).
+
+    Returns:
+        Subset of ``{"grid", "grid_l", "hero", "logo", "icon"}`` whose
+        files are absent. Empty set means the game is fully covered.
+        On an unreadable directory every kind reads as missing
+        (``aio.is_file`` returns False on OSError), so the next sync
+        retries — fail-open, never fail-silent.
+    """
+    from unifideck.core.io import async_file_ops as aio
+
+    # Steam stores shortcut art under the *unsigned* 32-bit appid.
+    unsigned = app_id if app_id >= 0 else app_id + 0x100000000
+    grid_path = Path(grid_dir)
+    missing: set[str] = set()
+    for kind in _ALL_KINDS:
+        present = False
+        for name in _candidate_names(kind, unsigned):
+            if await aio.is_file(str(grid_path / name)):
+                present = True
+                break
+        if not present:
+            missing.add(kind)
+    return missing
+
 
 def _url_extension(url: str) -> str:
     """Extract the lowercase file extension from a URL's path component.
@@ -122,64 +186,23 @@ def _suffix_for(kind: str, url: str) -> str:
 
 
 async def has_artwork(grid_dir: str, app_id: int) -> bool:
-    """Predicate: is the minimum artwork set already present for this app?
+    """Predicate: is the *complete* artwork set already present?
 
-    "Minimum set" means both a grid (vertical capsule) AND
-    a hero (banner) — those are the two pieces of artwork
-    that show in the Steam library list and on the
-    game-detail page. Logo and icon are
-    nice-to-haves that don't affect this gate.
-
-    Pipeline:
-
-    1. Lazy-import ``async_file_ops`` to avoid a heavy
-       import at module load (kept lazy because this
-       module is loaded by the service bootstrap which is
-       latency-sensitive);
-    2. Build the four candidate paths — JPG + PNG
-       variants of both grid and hero — because both
-       extensions are valid Steam targets and the
-       format-aware ``download_and_save`` may have saved
-       either flavour on the previous sync;
-    3. Each artwork "exists" if at least one of its two
-       extension variants is present on disk;
-    4. Both grid AND hero must exist for the predicate to
-       be True.
-
-    Accepting both extensions is the anti-redownload
-    guard: without it, a previous sync that saved
-    ``42p.png`` (because SGDB served PNG) would not be
-    found by a check looking only for ``42p.jpg``, and
-    we'd hammer the SGDB API with redundant requests
-    every sync cycle (~500 syncs/day on an active install).
+    Thin wrapper over :func:`get_missing_kinds` — True iff none of the
+    five kinds is missing. This replaces the old grid+hero-only gate:
+    treating a game as "done" once just grid+hero landed permanently
+    stranded its logo / icon / landscape (the icon directory held 7
+    files for 1196 shortcuts). Callers that need to fetch *only* the
+    gaps should call :func:`get_missing_kinds` directly.
 
     Args:
-        grid_dir: absolute path to Steam's ``grid/``
-            directory under the user's userdata folder.
-        app_id: Steam application id (unsigned 32-bit).
+        grid_dir: absolute path to Steam's ``grid/`` directory.
+        app_id: Steam application id (signed or unsigned).
 
     Returns:
-        True iff both grid (jpg or png) AND hero (jpg or
-        png) exist as regular files at the expected
-        locations. False if either is missing or if the
-        directory itself is unreadable (``aio.is_file``
-        returns False on OSError).
+        True iff all five kinds are present on disk (jpg or png).
     """
-    from unifideck.core.io import async_file_ops as aio
-
-    # Steam stores shortcuts under their *unsigned* 32-bit AppID.
-    # ``app_id`` arrives signed; convert before resolving filenames
-    # so we don't miss covers that were saved under the unsigned key.
-    unsigned = app_id if app_id >= 0 else app_id + 0x100000000
-    grid_path = Path(grid_dir)
-    grid_jpg = str(grid_path / f"{unsigned}p.jpg")
-    grid_png = str(grid_path / f"{unsigned}p.png")
-    hero_jpg = str(grid_path / f"{unsigned}_hero.jpg")
-    hero_png = str(grid_path / f"{unsigned}_hero.png")
-    grid_ok = (await aio.is_file(grid_jpg) or await aio.is_file(grid_png))
-    hero_ok = (await aio.is_file(hero_jpg) or await aio.is_file(hero_png))
-
-    return grid_ok and hero_ok
+    return not await get_missing_kinds(grid_dir, app_id)
 
 
 async def delete_artwork_files(grid_dir: str, app_id: int) -> int:

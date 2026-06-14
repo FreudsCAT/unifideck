@@ -248,25 +248,27 @@ class _EventHandlersMixin:
         )
 
     def _clear_resync_cache(self: Any) -> None:
-        """Clear the SGDB failure-cooldown cache so resync refetches all games.
+        """Clear the SGDB attempt caches so resync refetches all games.
 
-        Without this, previously-failed games are silently skipped; the
-        ``force`` fetch below also bypasses the ``has_artwork`` on-disk
-        check so every game gets a fresh download.
+        Without this, games whose missing-kind set is unchanged are
+        skipped; the ``force`` fetch below also bypasses the per-kind
+        on-disk check so every game gets a fresh download. Also clears
+        the legacy ``sgdb_fetch`` namespace so old installs upgrading
+        from the timestamp-cooldown era don't keep stale entries.
         """
         cache = getattr(self, "_cache", None)
         if cache is None:
             return
-        try:
-            cache.clear("sgdb_fetch")
-            logger.info(
-                "[ArtworkService] resync_artwork=True — cleared sgdb_fetch "
-                "failure cache",
-            )
-        except Exception:
-            logger.exception(
-                "[ArtworkService] failed to clear sgdb_fetch cache",
-            )
+        for namespace in ("artwork_attempts", "sgdb_fetch"):
+            try:
+                cache.clear(namespace)
+            except Exception:
+                logger.exception(
+                    "[ArtworkService] failed to clear %s cache", namespace,
+                )
+        logger.info(
+            "[ArtworkService] resync_artwork=True — cleared SGDB attempt caches",
+        )
 
     def _dispatch_artwork_batch(
         self: Any,
@@ -352,12 +354,12 @@ class _EventHandlersMixin:
         ``sync_progress.increment_artwork()`` pattern.
 
         Args:
-            force: bypass the ``has_artwork`` on-disk skip
-                check. Set by the SYNC_COMPLETE handler when
-                ``resync_artwork=True`` so the Force-Sync modal's
-                "re-download artwork" choice actually re-downloads.
+            force: bypass the per-kind on-disk skip check. Set by the
+                SYNC_COMPLETE handler when ``resync_artwork=True`` so
+                the Force-Sync modal's "re-download artwork" choice
+                actually re-downloads every kind.
         """
-        from .fetcher import has_artwork
+        from .fetcher import get_missing_kinds
 
         # Cancel checkpoint — SyncService.cancel() flips progress.status
         # to "cancelled". Queued tasks short-circuit here instead of doing
@@ -369,16 +371,25 @@ class _EventHandlersMixin:
 
         if not game.app_id or not game.title:
             return "skipped"
-        if not force and await has_artwork(grid_dir, game.app_id):
+        # Per-kind gap detection (was a coarse grid+hero gate that
+        # stranded logo/icon/landscape forever). Pass the exact missing
+        # kinds so fetch_artwork backfills only those.
+        missing = None if force else await get_missing_kinds(grid_dir, game.app_id)
+        if missing is not None and not missing:
             return "cover-exists"
         extras = getattr(game, "metadata", None)
         result = await self.fetch_artwork(
             game.app_id, game.store, game.store_game_id, game.title,
-            extras=extras, force=force,
+            extras=extras, force=force, only_kinds=missing,
         )
         # Tick the progress bar — SyncService puts the tracker on the bus
         # in _setup_sync and clears it on completion.
         progress = _sync_progress(bus)
         if progress is not None:
             await progress.increment_artwork(game.title)
-        return "cover-saved" if any(result.values()) else "no-cover-found"
+        # "saved" only when a kind we were actually after got filled —
+        # pre-existing covers (True in result but not in `missing`) don't
+        # count, so the batch summary stays meaningful for backfills.
+        target_kinds = missing if missing is not None else set(result.keys())
+        filled = any(result.get(k) for k in target_kinds)
+        return "cover-saved" if filled else "no-cover-found"

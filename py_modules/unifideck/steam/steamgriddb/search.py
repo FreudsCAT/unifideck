@@ -69,15 +69,28 @@ async def _autocomplete(
             timeout=aiohttp.ClientTimeout(total=timeout_sec),
         ) as resp:
             if resp.status != 200:
-                logger.debug(
-                    "[sgdb.search] autocomplete(%r) → HTTP %d",
+                # 401/403 (auth/Cloudflare block), 429 (rate limit) and
+                # 5xx are systemic and worth surfacing; a stray 404 is
+                # routine, so keep it quiet.
+                level = (
+                    logging.WARNING
+                    if resp.status in (401, 403, 429) or resp.status >= 500
+                    else logging.DEBUG
+                )
+                logger.log(
+                    level, "[sgdb.search] autocomplete(%r) → HTTP %d",
                     query, resp.status,
                 )
                 return []
             payload = await resp.json()
     except (TimeoutError, aiohttp.ClientError, OSError, ValueError) as e:
-        logger.debug(
-            "[sgdb.search] autocomplete(%r) failed: %s", query, e,
+        # Promoted from DEBUG: a network/TLS/DNS failure talking to SGDB
+        # makes the whole search return None → no SGDB art for the game.
+        # On the Deck this was an unverified-cert SSL error that went
+        # silently swallowed for the entire library.
+        logger.warning(
+            "[sgdb.search] autocomplete(%r) failed: %s: %s",
+            query, type(e).__name__, e,
         )
         return []
     if not payload.get("success"):
@@ -86,33 +99,58 @@ async def _autocomplete(
     return data if isinstance(data, list) else []
 
 
+def _query_forms(title: str) -> list[tuple[str, str]]:
+    """Normalised ``(norm, base)`` match forms for a title.
+
+    Two forms: the full normalised title, and the *cleaned-query* form
+    (``clean_search_query`` strips DLC / edition / platform noise the
+    autocomplete query already drops). Matching against BOTH means a
+    candidate that equals the cleaned query — e.g. "Besiege" for the
+    shortcut "Besiege + The Splintered Sea DLC" — counts as an exact
+    match even though the raw title is far noisier. Without this, the
+    autocomplete returned the right game but the scorer rejected it
+    (Jaccard 0.2 against the noisy raw title). Deduped, full form first;
+    only ever widens the net (never rejects a prior match).
+    """
+    forms: list[tuple[str, str]] = []
+    for source in (title, clean_search_query(title)):
+        norm = normalize_for_match(source)
+        if not norm:
+            continue
+        pair = (norm, strip_edition_suffix(norm))
+        if pair not in forms:
+            forms.append(pair)
+    return forms
+
+
 def _best_exact_or_edition(
     results: list[dict[str, Any]],
-    query_norm: str,
-    query_base: str,
+    forms: list[tuple[str, str]],
 ) -> int | None:
     """Passes 1 + 2 combined — exact match then edition-stripped.
 
-    Splitting them across two loops would scan the result set twice
-    for no benefit; the inner check is cheap.
+    A candidate matches if it equals ANY query form's norm (exact) or
+    base (edition-stripped). Splitting exact / edition across two loops
+    keeps exact matches strictly preferred over edition ones.
     """
+    norms = {n for n, _ in forms}
+    bases = {b for _, b in forms}
     for item in results:
-        name = str(item.get("name", ""))
-        item_norm = normalize_for_match(name)
-        if item_norm == query_norm:
+        item_norm = normalize_for_match(str(item.get("name", "")))
+        if item_norm in norms:
             logger.debug(
                 "[sgdb.search] exact match: %r → id=%s",
-                query_norm, item.get("id"),
+                item_norm, item.get("id"),
             )
             return _to_id(item.get("id"))
     for item in results:
-        name = str(item.get("name", ""))
-        item_norm = normalize_for_match(name)
-        item_base = strip_edition_suffix(item_norm)
-        if item_base == query_base:
+        item_base = strip_edition_suffix(
+            normalize_for_match(str(item.get("name", ""))),
+        )
+        if item_base in bases:
             logger.debug(
                 "[sgdb.search] edition match: %r → id=%s",
-                query_base, item.get("id"),
+                item_base, item.get("id"),
             )
             return _to_id(item.get("id"))
     return None
@@ -120,11 +158,10 @@ def _best_exact_or_edition(
 
 def _best_scored(
     results: list[dict[str, Any]],
-    query_norm: str,
-    query_base: str,
+    forms: list[tuple[str, str]],
     threshold: float,
 ) -> tuple[float, int | None]:
-    """Pass 3 / 6 — best Jaccard score across results.
+    """Pass 3 / 6 — best Jaccard score across results and query forms.
 
     Returns ``(best_score, best_id_or_None)``. Caller compares against
     ``threshold`` to decide whether to accept.
@@ -136,8 +173,8 @@ def _best_scored(
         item_norm = normalize_for_match(name)
         item_base = strip_edition_suffix(item_norm)
         score = max(
-            score_match(query_norm, item_norm),
-            score_match(query_base, item_base),
+            max(score_match(norm, item_norm), score_match(base, item_base))
+            for norm, base in forms
         )
         if score > best_score:
             best_score = score
@@ -161,8 +198,8 @@ async def _pass4_retry_base(
     session: aiohttp.ClientSession,
     base: str,
     api_key: str,
-    query_norm: str,
     query_base: str,
+    forms: list[tuple[str, str]],
     timeout_sec: int,
 ) -> tuple[int | None, list[dict[str, Any]]]:
     """Pass 4: re-query SGDB with the edition-stripped title.
@@ -174,14 +211,14 @@ async def _pass4_retry_base(
     retry = await _autocomplete(
         session, base, api_key, query_base, timeout_sec,
     )
-    found = _best_exact_or_edition(retry, query_norm, query_base)
+    found = _best_exact_or_edition(retry, forms)
     if found is not None:
         logger.debug(
             "[sgdb.search] retry base match: %r → id=%d",
             query_base, found,
         )
         return found, retry
-    score, hit = _best_scored(retry, query_norm, query_base, 0.85)
+    score, hit = _best_scored(retry, forms, 0.85)
     if hit is not None:
         logger.debug(
             "[sgdb.search] retry scored: %r → id=%d (score=%.2f)",
@@ -247,17 +284,19 @@ async def search_game_id(
     cleaned = clean_search_query(title)
     if not cleaned:
         return None
-    query_norm = normalize_for_match(title)
-    query_base = strip_edition_suffix(query_norm)
+    # Match forms: the raw title AND the cleaned query (see _query_forms).
+    forms = _query_forms(title)
+    # query_base drives the pass-4 re-query string (edition-stripped).
+    query_base = forms[0][1]
 
     # Pass 1+2: cleaned-query autocomplete → exact + edition match
     results = await _autocomplete(session, base, api_key, cleaned, timeout_sec)
-    found = _best_exact_or_edition(results, query_norm, query_base)
+    found = _best_exact_or_edition(results, forms)
     if found is not None:
         return found
 
     # Pass 3: scored match @ 0.85
-    score3, id3 = _best_scored(results, query_norm, query_base, 0.85)
+    score3, id3 = _best_scored(results, forms, 0.85)
     if id3 is not None:
         logger.debug(
             "[sgdb.search] scored match: %r → id=%d (score=%.2f)",
@@ -268,7 +307,7 @@ async def search_game_id(
     # Pass 4: retry with edition-stripped query
     if query_base and query_base != cleaned.lower():
         hit, retry = await _pass4_retry_base(
-            session, base, api_key, query_norm, query_base, timeout_sec,
+            session, base, api_key, query_base, forms, timeout_sec,
         )
         if hit is not None:
             return hit
@@ -283,7 +322,7 @@ async def search_game_id(
         return prefix_hit
 
     # Pass 6: fuzzy fallback @ 0.50 across the last result set we have
-    score6, id6 = _best_scored(results, query_norm, query_base, 0.50)
+    score6, id6 = _best_scored(results, forms, 0.50)
     if id6 is not None:
         logger.info(
             "[sgdb.search] fuzzy match: %r → id=%d (score=%.2f)",
