@@ -183,8 +183,10 @@ def _maybe_rebuild_auth(store: Any, store_id: str) -> None:
     Stores that hold an auth orchestrator built lazily on top of
     the browser monitor expose this hook to reconstruct the
     orchestrator now that injection has filled
-    ``_browser_monitor``. Stores without the hook (e.g. ubisoft
-    which only needs ``_shortcut_service``) just skip it.
+    ``_browser_monitor``. Ubisoft also defines it — to propagate the
+    just-injected ``_shortcut_service`` into its auth facade (which
+    captured ``None`` at construction). Stores without the hook just
+    skip it.
 
     Exceptions are swallowed with a WARNING — auth rebuild
     failure should not prevent the rest of the boot from

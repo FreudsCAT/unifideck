@@ -200,6 +200,7 @@ export async function launchUbisoftInstallViaShortcut(
   storeGameId: string,
   extraEnv: Record<string, string> = {},
   contextOverride?: Partial<ShortcutLaunchContext>,
+  skipStateRestore = false,
 ): Promise<ShortcutLaunchResult> {
   const rawCtx = await call<[string], unknown>(
     rpcRoutes.getCompatToolForGame,
@@ -272,12 +273,23 @@ export async function launchUbisoftInstallViaShortcut(
     steamApps.SetShortcutLaunchOptions(appId, tempOptions);
     steamApps.RunGame(getShortcutRunGameId(appId), "", -1, 100);
     console.log("[UbisoftShortcutLaunch] RunGame called successfully");
-    scheduleLaunchStateRestore(appId, ctx, originalOptions);
+    // The auth shortcut's temp options ARE its canonical persistent
+    // options ("ubisoft:upc-auth UNIFIDECK_UBISOFT_ACTION=auth ..."), so
+    // we must NOT restore them to the (empty) original — doing so wiped
+    // the shortcut's LaunchOptions, leaving Steam to launch the bare
+    // launcher with no args ("missing store:game_id" → the tile that
+    // opens then instantly closes). Game installs still restore so the
+    // user's wrappers / clean options come back.
+    if (!skipStateRestore) {
+      scheduleLaunchStateRestore(appId, ctx, originalOptions);
+    }
 
     return { success: true, already_running: alreadyRunning };
   } catch (error) {
     console.error(`[UbisoftShortcutLaunch] launch failed:`, error);
-    steamApps.SetShortcutLaunchOptions?.(appId, originalOptions);
+    if (!skipStateRestore) {
+      steamApps.SetShortcutLaunchOptions?.(appId, originalOptions);
+    }
     return {
       success: false,
       error:
@@ -333,5 +345,8 @@ export async function launchUbisoftAuthViaShortcut(): Promise<ShortcutLaunchResu
       appid_unsigned: authCtx.appid_unsigned,
       launch_wait_ms: authCtx.launch_wait_ms,
     },
+    // skipStateRestore: keep the canonical auth LaunchOptions on the
+    // shortcut instead of wiping them back to empty after launch.
+    true,
   );
 }

@@ -99,6 +99,30 @@ class UbisoftStore(StoreBase):
         self._auth: UbisoftAuth = specialists.auth
         self._ubi_config = specialists.config
 
+    def _rebuild_auth_after_injection(self) -> None:
+        """Wire the post-injection shortcut service into the auth facade.
+
+        Auto-discovery builds the store — and its auth facade — before
+        the service container exists, so the facade captured
+        ``shortcut_service=None``. ``store_injector`` sets
+        ``self._shortcut_service`` afterward and invokes this hook;
+        without it the facade keeps the ``None`` and
+        ``get_auth_shortcut_context`` returns
+        ``shortcut_service_unavailable`` — surfaced in the QAM as
+        "Auth shortcut not available", which blocks sign-in entirely.
+        The facade's sub-objects (``_context``/``_shortcut``/
+        ``_registry_ops``) all read ``self._parent._shortcut_service``
+        dynamically, so re-pointing the single facade attribute wires
+        the whole auth flow.
+        """
+        shortcut_service = getattr(self, "_shortcut_service", None)
+        if shortcut_service is None:
+            return
+        self._auth._shortcut_service = shortcut_service
+        logger.info(
+            "[UbisoftStore] shortcut service wired into auth post-injection",
+        )
+
     async def is_available(self) -> bool:
         """Check whether available."""
         available = await self._auth.is_available()

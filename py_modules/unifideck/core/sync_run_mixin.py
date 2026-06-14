@@ -37,6 +37,16 @@ logger = logging.getLogger(__name__)
 # (bus.emit raises, task is killed without reaching its finally).
 POST_SYNC_WATCHDOG_SECONDS = 1800
 
+# Per-store ``get_library`` ceiling. The sync runs stores sequentially,
+# so a single store that hangs (a wedged Wine/UPC catalog parse, a
+# sleeping SD-card mount, a stalled network call) freezes the *whole*
+# sync at "store N/N" — the user just sees it stuck and never gets the
+# other stores' games. The slowest healthy store observed is well under
+# 30s, so 120s is a generous ceiling that still fails a wedged store
+# fast enough to finish the sync (the store reports a ``timeout`` error
+# and contributes zero games for this run; the next sync retries it).
+PER_STORE_FETCH_TIMEOUT_SECONDS = 120
+
 
 class _SyncRunMixin:
     """Per-run sync orchestration for :class:`SyncService`."""
@@ -129,7 +139,18 @@ class _SyncRunMixin:
             name=f"sync-store-{store.store_name}",
         )
         try:
-            return await self._current_store_task
+            return await asyncio.wait_for(
+                self._current_store_task,
+                timeout=PER_STORE_FETCH_TIMEOUT_SECONDS,
+            )
+        except TimeoutError:
+            logger.warning(
+                "[SyncService] %s fetch exceeded %ds — skipping it so the "
+                "rest of the sync can finish (retried next sync)",
+                store.store_name,
+                PER_STORE_FETCH_TIMEOUT_SECONDS,
+            )
+            return [], "timeout"
         except asyncio.CancelledError:
             return [], "cancelled"
         finally:

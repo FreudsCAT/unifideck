@@ -95,34 +95,7 @@
     },
     "ubisoft": {
       "data_dir": "~/.local/share/unifideck",
-      "id_map_file": "~/.local/share/unifideck/ubisoft_id_map.json",
-      "visible_games_file": "~/.local/share/unifideck/ubisoft_visible_games.json",
-      "prefixes_dir": "~/.local/share/unifideck/prefixes/ubisoft-games",
-      "installer_cache_dir": "~/.cache/unifideck/ubisoft",
-      "upc_session_file": "~/.local/share/unifideck/ubisoft_session_marker",
-      "game_id_db_file": "~/.cache/unifideck/ubisoft/game_id_db.txt",
-      "default_install_base": "~/Games/Ubisoft",
-      "sdcard_install_base": "/run/media/mmcblk0p1/Games/Ubisoft",
-      "template_prefix_name": ".template",
-      "auth_prefix_name": ".upc-auth",
-      "auth_shortcut_store_id": "ubisoft:.upc-auth",
-      "auth_shortcut_launch_wait_ms": 2000,
-      "installer_url": "https://ubistatic3-a.akamaihd.net/orbit/launcher_installer/UbisoftConnectInstaller.exe",
-      "installer_filename": "UbisoftConnectInstaller.exe",
-      "bootstrap_marker": ".unifideck_bootstrapped",
-      "game_id_db_url": "https://raw.githubusercontent.com/iArtorias/ubisoft_game_ids/main/game_ids.txt",
-      "game_id_db_max_age_seconds": 604800,
-      "upc_relative_path": "drive_c/Program Files (x86)/Ubisoft/Ubisoft Game Launcher/upc.exe",
-      "upc_connect_relative_path": "drive_c/Program Files (x86)/Ubisoft/Ubisoft Game Launcher/UbisoftConnect.exe",
-      "configurations_relative_path": "users/{user}/Local Settings/Application Data/Ubisoft Game Launcher/cache/configuration/configurations",
-      "ownership_relative_path": "users/{user}/Local Settings/Application Data/Ubisoft Game Launcher/cache/ownership",
-      "upc_credential_files": [
-        "ConnectSecureStorage.dat",
-        "OldSecureStorage.dat"
-      ],
-      "wine_system_users": ["steamuser", "deck", "Public"],
-      "filter_steam_linked": true,
-      "steam_library_cross_ref": false
+      "prefixes_dir": "~/.local/share/unifideck/prefixes/ubisoft"
     },
     "microsoft": {
       "client_id": "000000004C12AE6F",

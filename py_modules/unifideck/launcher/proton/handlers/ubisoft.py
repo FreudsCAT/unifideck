@@ -158,6 +158,49 @@ async def ubisoft_launch(plan: ProtonLaunchPlan) -> int:
     _raise_for_umu_rc(rc, plan)
     return rc
 
+async def ubisoft_auth_launch(plan: ProtonLaunchPlan) -> int:
+    """Open Ubisoft Connect (UPC) in the auth prefix so the user signs in.
+
+    The auth shortcut is *not* a game launch: unlike :func:`ubisoft_launch`
+    (which opens a specific title via ``uplay://launch/{id}/0``), this
+    just runs UPC bare in the ``.upc-auth`` prefix and keeps the process
+    alive until the user closes it. That's what stops the Steam shortcut
+    from exiting immediately — the bug where "something happened but the
+    shortcut closed". The plugin's session monitor captures the
+    credentials UPC writes once sign-in completes.
+
+    Run directly (not via :func:`dispatch`) on purpose: ``dispatch`` runs
+    ``ensure_prefix_initialized`` which can *reset* the prefix on a Proton
+    family change — that would wipe the UPC install the plugin already
+    built into the auth prefix.
+    """
+    logger.info(
+        "[launcher.proton.ubisoft] auth launch — opening UPC in %s",
+        plan.prefix_path,
+    )
+    launcher_toast(
+        "toasts.launcher.startingUbisoftGame",
+        i18n_title_key="toasts.launcher.launchingGame",
+        game_title="Ubisoft Connect",
+    )
+    upc_exe = _find_upc_exe(plan)
+    if upc_exe is None:
+        raise GameFailedError(
+            "upc.exe not found in the Ubisoft auth prefix — the auth "
+            "prefix may not be fully set up yet",
+            subprocess_rc=127,
+            context={"store": "ubisoft", "prefix": str(plan.prefix_path)},
+        )
+    argv = [str(plan.python_bin), str(plan.umu_wrapper), str(upc_exe)]
+    logger.info("[launcher.proton.ubisoft] auth argv: %s", argv)
+    rc = await run_umu_with_retry(
+        argv, env=plan.env, on_start=plan.on_process_start,
+    )
+    plan.state.game_exit_code = rc
+    logger.info("[launcher.proton.ubisoft] UPC auth session exited rc=%d", rc)
+    return rc
+
+
 def _apply_language_setup(plan: ProtonLaunchPlan) -> None:
 
     """Apply language setup."""

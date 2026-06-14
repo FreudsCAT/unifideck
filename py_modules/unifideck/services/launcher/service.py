@@ -176,21 +176,54 @@ class LauncherService:
         )
 
     async def _handle_auth_path(self, ctx: LaunchContext) -> Result:
-        """Route a non-launch context to the shared auth handler.
+        """Route a non-launch context to the right auth handler.
 
-        ``handle_store_auth`` is the canonical entry for all four
-        OAuth stores AND Ubisoft — UPC (Ubisoft Connect) runs in
-        a dedicated Wine prefix and the handler dispatches that
-        path internally (see launcher/flows/auth.py), so no
-        separate Ubisoft branch is needed here.
+        The four OAuth stores open Edge on a captured auth URL
+        (``launcher/flows/auth.py``). Ubisoft is different: it has no
+        browser OAuth — the user signs in inside the Ubisoft Connect
+        (UPC) desktop client, which must be launched via Proton in the
+        ``.upc-auth`` prefix. ``handle_store_auth`` only no-ops for
+        Ubisoft (it returns immediately, which is why the shortcut
+        closed at once), so Ubisoft gets its own Proton path here.
 
         Extracted from ``launch`` (lot 13a) to keep that method's
         fan-out under the gate.
         """
-        # OAuth shortcut path — delegate to auth.py which handles
-        # Ubisoft natively as well.
+        if ctx.auth_store == "ubisoft":
+            return await self._launch_ubisoft_auth(ctx)
         from unifideck.launcher.flows.auth import handle_store_auth
         return await handle_store_auth(ctx, self._edge_browser)
+
+    async def _launch_ubisoft_auth(self, ctx: LaunchContext) -> Result:
+        """Open Ubisoft Connect in the auth prefix via Proton for sign-in.
+
+        Builds the same Proton plan a game uses — the prefix resolves to
+        ``.upc-auth`` via the ``UNIFIDECK_UBISOFT_PREFIX_NAME`` launch
+        option — then runs UPC bare and blocks until the user closes it.
+        Auth success itself is reported separately by the plugin's
+        session monitor (which watches the prefix for captured
+        credentials), so a clean UPC exit is treated as success here
+        regardless of its return code.
+        """
+        from unifideck.launcher.proton.handlers.ubisoft import (
+            ubisoft_auth_launch,
+        )
+        from unifideck.services.launcher.helpers import prepare_windows_plan
+
+        state = self._build_runtime_state(ctx)
+        try:
+            plan, _ = await prepare_windows_plan(self, ctx, state)
+            rc = await ubisoft_auth_launch(plan)
+        finally:
+            self._active_subprocess = None
+        return Result(
+            success=True,
+            store="ubisoft",
+            metadata={
+                "elapsed": self._elapsed_since_launch(),
+                "rc": str(rc),
+            },
+        )
 
     async def _dispatch_launch_kind(
         self, ctx: LaunchContext, state: RuntimeState,

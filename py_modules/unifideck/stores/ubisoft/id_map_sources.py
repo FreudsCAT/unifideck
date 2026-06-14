@@ -62,6 +62,10 @@ _CONNECT_THEN_SPACE = re.compile(
     r'"ubisoftConnectGameId"\s*:\s*(\d+)' + _LEVELDB_GAP + r'"spaceId"\s*:\s*"([a-f0-9-]+)"',
     re.IGNORECASE,
 )
+# Cap per-file read + decode + regex work. localStorage leveldb entries
+# are small (KB–low-MB); anything larger is cache spill we shouldn't
+# scan synchronously during a library fetch (it would stall the sync).
+_MAX_LEVELDB_FILE_BYTES = 16 * 1024 * 1024
 
 
 def extract_cache_game_ids(
@@ -87,6 +91,12 @@ def extract_cache_game_ids(
         files = sorted(leveldb.glob("*.ldb")) or sorted(leveldb.glob("*.log"))
         for ldb_file in files:
             try:
+                if ldb_file.stat().st_size > _MAX_LEVELDB_FILE_BYTES:
+                    logger.debug(
+                        "[UbisoftIdMap] skipping oversized leveldb file %s",
+                        ldb_file,
+                    )
+                    continue
                 content = ldb_file.read_bytes()
             except OSError as e:
                 logger.debug(
