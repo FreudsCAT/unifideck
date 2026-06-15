@@ -89,20 +89,6 @@ class _AuthPrefixBuilder:
                 "[UbisoftPrefixManager] auth prefix Proton version stale, rebuilding",
             )
             return True
-        if self._template_builder.template_exists():
-            auth_guid = self._template_builder.read_machine_guid(
-                auth_dir,
-            )
-            tmpl_guid = self._template_builder.read_machine_guid(
-                self._config.template_dir_expanded,
-            )
-            if tmpl_guid and auth_guid and tmpl_guid != auth_guid:
-                logger.warning(
-                    "[UbisoftPrefixManager] auth prefix "
-                    "MachineGuid desynced from template — "
-                    "rebuilding for DPAPI compatibility",
-                )
-                return True
         return False
 
     async def _rebuild_and_finalise_auth_prefix(
@@ -118,8 +104,17 @@ class _AuthPrefixBuilder:
         upc_path = self._paths.find_upc_exe(auth_dir)
         if upc_path:
             self._helpers.try_inject_auth_state([auth_dir])
+            # The auth prefix is the canonical crypto identity for
+            # the whole Ubisoft prefix family. Derive the template
+            # from it immediately so every game prefix cloned from
+            # the template shares auth's MachineGuid + DPAPI
+            # registry state — the single-ancestor guarantee.
+            await self._helpers.create_template_from_auth_prefix(
+                auth_dir,
+            )
             logger.info(
-                "[UbisoftPrefixManager] auth prefix ready",
+                "[UbisoftPrefixManager] auth prefix ready "
+                "(template derived)",
             )
             return upc_path
         return None
@@ -169,25 +164,52 @@ class _AuthPrefixBuilder:
         return True
 
     def _pick_clone_source(self) -> tuple[str | None, str]:
-        """Pick clone source."""
+        """Pick clone source — prefer one that holds valid UPC credentials."""
+        cred_bearing: str | None = None
+        cred_label: str = ""
+        fallback: str | None = None
+        fallback_label: str = ""
+
+        # 1. check template (shared identity target)
         if self._template_builder.template_exists():
-            return (
-                self._config.template_dir_expanded,
-                "template",
-            )
+            tmpl = self._config.template_dir_expanded
+            if self._template_builder._prefix_has_valid_credentials(tmpl):
+                return (tmpl, "template (with creds)")
+            if self._template_builder.template_exists():
+                fallback = tmpl
+                fallback_label = "template"
+
+        # 2. scan game prefixes — prefer one with credentials
         prefixes_dir = self._config.prefixes_dir_expanded
-        if not Path(prefixes_dir).is_dir():
-            return (None, "")
-        try:
-            entries = sorted([entry.name for entry in Path(prefixes_dir).iterdir()])
-        except OSError:
-            return (None, "")
-        for entry in entries:
-            if entry.startswith("."):
-                continue
-            candidate = str(Path(prefixes_dir) / entry)
-            if self._paths.find_upc_exe(candidate):
-                return (candidate, f"game prefix {entry[:8]}")
+        if Path(prefixes_dir).is_dir():
+            try:
+                entries = sorted(
+                    [entry.name for entry in Path(prefixes_dir).iterdir()],
+                )
+            except OSError:
+                entries = []
+            for entry in entries:
+                if entry.startswith("."):
+                    continue
+                candidate = str(Path(prefixes_dir) / entry)
+                if not self._paths.find_upc_exe(candidate):
+                    continue
+                if (
+                    cred_bearing is None
+                    and self._template_builder._prefix_has_valid_credentials(
+                        candidate,
+                    )
+                ):
+                    cred_bearing = candidate
+                    cred_label = f"game prefix {entry[:8]} (with creds)"
+                elif fallback is None:
+                    fallback = candidate
+                    fallback_label = f"game prefix {entry[:8]}"
+
+        if cred_bearing:
+            return (cred_bearing, cred_label)
+        if fallback:
+            return (fallback, fallback_label)
         return (None, "")
 
     def queue_auth_assets_ensure(
@@ -218,6 +240,9 @@ class _AuthPrefixBuilder:
                 reason,
             )
             await self._template_builder.regenerate_template_if_stale()
+            # Realign template with auth if they've diverged
+            # (handles migration, post-capture, and returning-user paths).
+            await self._template_builder.regenerate_template_from_auth_if_diverged()
             if not self._template_builder.template_exists():
                 await self._template_builder.ensure_template_prefix()
                 return

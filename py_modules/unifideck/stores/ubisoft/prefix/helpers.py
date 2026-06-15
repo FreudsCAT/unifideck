@@ -22,6 +22,7 @@ import asyncio
 import contextlib
 import datetime
 import logging
+import os
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -112,10 +113,6 @@ class _PrefixHelpers:
                 space_id,
             )
             self.try_inject_auth_state([prefix_path])
-            if not self._parent.template_exists():
-                await self.create_template_from_game_prefix(
-                    prefix_path,
-                )
             return True
         except Exception:
             logger.exception("[UbisoftPrefixManager] fresh install failed for %s", space_id)
@@ -148,6 +145,52 @@ class _PrefixHelpers:
         except Exception as e:
             logger.warning(
                 "[UbisoftPrefixManager] template creation from game prefix failed: %s",
+                e,
+            )
+
+    async def create_template_from_auth_prefix(
+        self,
+        auth_dir: str,
+    ) -> None:
+        """Create template from auth prefix (canonical identity source).
+
+        Under the shared-identity invariant the ``.template`` prefix is
+        always an rsync clone of ``.upc-auth`` — never a standalone fresh
+        install.  This guarantees all prefixes in the Ubisoft family share
+        the same ``MachineGuid`` + DPAPI registry state, so the credential
+        vault decrypts everywhere.
+        """
+        template_dir = self._parent._config.template_dir_expanded
+        if os.path.realpath(auth_dir) == os.path.realpath(template_dir):
+            return
+        logger.info(
+            "[UbisoftPrefixManager] deriving template from auth prefix",
+        )
+        try:
+            await asyncio.to_thread(lambda: Path(template_dir).mkdir(parents=True, exist_ok=True))
+            ok = await self.rsync_clone(
+                auth_dir,
+                template_dir,
+                exclude_games=True,
+            )
+            if not ok:
+                logger.error(
+                    "[UbisoftPrefixManager] rsync clone (auth→template) failed",
+                )
+                return
+            self.write_bootstrap_marker(
+                template_dir,
+                "template_from_auth",
+                None,
+            )
+            self.try_inject_auth_state([template_dir])
+            logger.info(
+                "[UbisoftPrefixManager] template derived from auth prefix "
+                "— shared identity established",
+            )
+        except Exception as e:
+            logger.warning(
+                "[UbisoftPrefixManager] template derivation from auth failed: %s",
                 e,
             )
 
@@ -312,16 +355,16 @@ class _PrefixHelpers:
         lines = [source, f"created={created_at}"]
         if space_id:
             lines.insert(1, f"game={space_id}")
-            try:
-                with Path(marker_path).open("w",
-                    encoding="utf-8",
-                ) as f:
-                    f.write("\n".join(lines) + "\n")
-            except OSError as e:
-                logger.warning(
-                    "[UbisoftPrefixManager] could not write bootstrap marker: %s",
-                    e,
-                )
+        try:
+            with Path(marker_path).open("w",
+                encoding="utf-8",
+            ) as f:
+                f.write("\n".join(lines) + "\n")
+        except OSError as e:
+            logger.warning(
+                "[UbisoftPrefixManager] could not write bootstrap marker: %s",
+                e,
+            )
 
     def try_inject_auth_state(
         self,
