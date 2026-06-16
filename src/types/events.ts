@@ -52,6 +52,11 @@ export const Events = {
   DOWNLOAD_COMPLETE: "download_complete",
   DOWNLOAD_FAILED: "download_failed",
   DOWNLOAD_CANCELLED: "download_cancelled",
+  // Ubisoft install — backend asks the frontend to open Ubisoft Connect
+  // via RunGame (so UPC gets a gamescope session in Gaming Mode). Emitted
+  // by the download worker once the per-game prefix is bootstrapped.
+  // Payload: { store_game_id: "ubisoft:<game_id>" }.
+  UBISOFT_INSTALL_LAUNCH_REQUESTED: "ubisoft_install_launch_requested",
   // Game state
   GAME_INSTALLED: "game_installed",
   GAME_UNINSTALLED: "game_uninstalled",

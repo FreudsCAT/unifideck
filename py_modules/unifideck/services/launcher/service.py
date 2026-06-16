@@ -190,6 +190,8 @@ class LauncherService:
         fan-out under the gate.
         """
         if ctx.auth_store == "ubisoft":
+            if ctx.action == "install":
+                return await self._launch_ubisoft_install(ctx)
             return await self._launch_ubisoft_auth(ctx)
         from unifideck.launcher.flows.auth import handle_store_auth
         return await handle_store_auth(ctx, self._edge_browser)
@@ -214,6 +216,39 @@ class LauncherService:
         try:
             plan, _ = await prepare_windows_plan(self, ctx, state)
             rc = await ubisoft_auth_launch(plan)
+        finally:
+            self._active_subprocess = None
+        return Result(
+            success=True,
+            store="ubisoft",
+            metadata={
+                "elapsed": self._elapsed_since_launch(),
+                "rc": str(rc),
+            },
+        )
+
+    async def _launch_ubisoft_install(self, ctx: LaunchContext) -> Result:
+        """Open Ubisoft Connect to install a game, via Proton/RunGame.
+
+        Same Proton plan as a game launch — the prefix resolves to the
+        per-game prefix recorded in ``ubisoft_id_map.json`` (by
+        ``ctx.game_id``) during the backend's bootstrap. Runs UPC pointed
+        at the title's install deeplink and blocks until the user closes
+        it. Because this runs inside the RunGame-launched gamescope
+        session, the UPC window renders in Gaming Mode (unlike the old
+        backend-subprocess spawn). The plugin's download worker watches
+        the prefix for the installed files and finalises the queue item;
+        the UPC exit code is not the success signal here.
+        """
+        from unifideck.launcher.proton.handlers.ubisoft import (
+            ubisoft_install_launch,
+        )
+        from unifideck.services.launcher.helpers import prepare_windows_plan
+
+        state = self._build_runtime_state(ctx)
+        try:
+            plan, _ = await prepare_windows_plan(self, ctx, state)
+            rc = await ubisoft_install_launch(plan)
         finally:
             self._active_subprocess = None
         return Result(

@@ -265,6 +265,8 @@ class _AuthPrefixBuilder:
             "recreating",
         )
         await self.ensure_auth_prefix()
-        game_prefixes = list(self._config.iter_game_prefix_paths())
+        # Union of internal + SD/custom prefixes so externally-installed
+        # games also receive the recreated auth state.
+        game_prefixes = list(self._paths.iter_all_game_prefix_paths())
         if game_prefixes:
             self._helpers.try_inject_auth_state(game_prefixes)

@@ -135,18 +135,23 @@ async def _build_context(
     # can read them from ``os.environ`` as it expects.
     _promote_env_tokens(raw_options)
 
-    # Auth-shortcut path: key is ``<store>:<store>-auth`` with
-    # ``UNIFIDECK_<STORE>_ACTION=auth``. No games.map entry exists, so
-    # short-circuit the registry lookup and build a context the auth
-    # flow can consume directly.
-    auth_store, is_launch_action = _detect_auth_action()
+    # Non-launch action path. Two kinds, both keyed by
+    # ``UNIFIDECK_<STORE>_ACTION``:
+    #   * ``auth``    — key ``<store>:<store>-auth``, opens sign-in.
+    #   * ``install`` — Ubisoft only; key ``ubisoft:<game_id>``, opens
+    #     UPC to install the title (via RunGame, so it gets a gamescope
+    #     session in Gaming Mode). The game has no games.map row yet, so
+    #     short-circuit the registry lookup like auth does.
+    action_store, action, is_launch_action = _detect_special_action()
     if not is_launch_action:
         logger.info(
-            "[launcher.dispatcher] auth shortcut detected: "
-            "auth_store=%s game_key=%s",
-            auth_store, game_key,
+            "[launcher.dispatcher] %s action detected: "
+            "store=%s game_key=%s",
+            action, action_store, game_key,
         )
-        return _auth_context(store, game_id, raw_options, auth_store)
+        if action == "install":
+            return _ubisoft_install_context(store, game_id, raw_options)
+        return _auth_context(store, game_id, raw_options, action_store)
 
     exe, work_dir = await _resolve_game_exe(
         shortcut_svc, store, game_id, game_key,
@@ -209,6 +214,34 @@ def _auth_context(
         raw_options=raw_options,
         is_launch_action=False,
         auth_store=auth_store,
+        action="auth",
+        bypass_circuit_breaker=False,
+    )
+
+
+def _ubisoft_install_context(
+    store: str, game_id: str, raw_options: str,
+) -> LaunchContext:
+    """Context for a Ubisoft ``install`` action (open UPC to install).
+
+    Like the auth context this is a non-launch action with no games.map
+    row (the title isn't installed yet), but it carries the real
+    ``game_id`` so the launcher resolves the per-game prefix (recorded in
+    ``ubisoft_id_map.json`` during bootstrap) and the ``uplay://install``
+    deeplink. Routed by ``LauncherService._handle_auth_path`` on
+    ``action == "install"``.
+    """
+    plugin_dir = _resolve_plugin_dir()
+    return LaunchContext(
+        store=store,
+        game_id=game_id,
+        exe_path=Path("/dev/null"),
+        work_dir=plugin_dir,
+        plugin_dir=plugin_dir,
+        raw_options=raw_options,
+        is_launch_action=False,
+        auth_store="ubisoft",
+        action="install",
         bypass_circuit_breaker=False,
     )
 
@@ -248,20 +281,27 @@ def _game_context(
         bypass_circuit_breaker=_resolve_bypass_flag(store, game_id),
     )
 
-def _detect_auth_action() -> tuple[str | None, bool]:
+def _detect_special_action() -> tuple[str | None, str | None, bool]:
+    """Detect a non-launch action from ``UNIFIDECK_<STORE>_ACTION``.
 
-    """Detect auth action."""
-    auth_env = {
+    Returns ``(store, action, is_launch_action)``. ``auth`` is valid for
+    every store; ``install`` is Ubisoft-only (opens UPC to install a
+    title). Anything else (or no token) is a normal game launch
+    (``(None, None, True)``).
+    """
+    action_env = {
         "epic":      os.environ.get("UNIFIDECK_EPIC_ACTION"),
         "gog":       os.environ.get("UNIFIDECK_GOG_ACTION"),
         "amazon":    os.environ.get("UNIFIDECK_AMAZON_ACTION"),
         "microsoft": os.environ.get("UNIFIDECK_MICROSOFT_ACTION"),
         "ubisoft":   os.environ.get("UNIFIDECK_UBISOFT_ACTION"),
     }
-    for candidate_store, action in auth_env.items():
+    for candidate_store, action in action_env.items():
         if action == "auth":
-            return candidate_store, False
-    return None, True
+            return candidate_store, "auth", False
+        if action == "install" and candidate_store == "ubisoft":
+            return candidate_store, "install", False
+    return None, None, True
 def _resolve_bypass_flag(store: str, game_id: str) -> bool:
     """Resolve bypass flag."""
     bypass_raw = os.environ.get(

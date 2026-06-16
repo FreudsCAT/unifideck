@@ -178,9 +178,11 @@ async def ubisoft_auth_launch(plan: ProtonLaunchPlan) -> int:
         "[launcher.proton.ubisoft] auth launch — opening UPC in %s",
         plan.prefix_path,
     )
+    # Sign-in is NOT a game launch — use a sign-in-specific toast instead of
+    # the generic "Launching Game", which confused users clicking sign-in.
     launcher_toast(
-        "toasts.launcher.startingUbisoftGame",
-        i18n_title_key="toasts.launcher.launchingGame",
+        "toasts.launcher.signingInUbisoftMessage",
+        i18n_title_key="toasts.launcher.signingInUbisoft",
         game_title="Ubisoft Connect",
     )
     upc_exe = _find_upc_exe(plan)
@@ -198,6 +200,68 @@ async def ubisoft_auth_launch(plan: ProtonLaunchPlan) -> int:
     )
     plan.state.game_exit_code = rc
     logger.info("[launcher.proton.ubisoft] UPC auth session exited rc=%d", rc)
+    return rc
+
+
+async def ubisoft_install_launch(plan: ProtonLaunchPlan) -> int:
+    """Open Ubisoft Connect (UPC) to install a game, via RunGame.
+
+    The install shortcut is *not* a game launch: like
+    :func:`ubisoft_auth_launch` it opens UPC and keeps the process alive
+    until the user closes it, but it points UPC at the title's
+    ``uplay://install/{id}`` deeplink (when the id resolves) so the
+    install page opens directly; otherwise it opens UPC bare and the user
+    picks the game. Because Steam launches this through ``RunGame``, UPC
+    runs inside its own gamescope/XWayland session — so the window
+    actually renders in Gaming Mode, which the old backend-subprocess
+    spawn could not do (no session → invisible window).
+
+    Run directly (NOT via :func:`dispatch`) on purpose — ``dispatch``
+    runs ``ensure_prefix_initialized`` which can *reset* the per-game
+    prefix the plugin just bootstrapped UPC into. The plugin's download
+    worker watches the prefix for the installed files and finalises the
+    queue item; this handler does not report install success itself.
+    """
+    logger.info(
+        "[launcher.proton.ubisoft] install launch — opening UPC in %s",
+        plan.prefix_path,
+    )
+    launcher_toast(
+        "toasts.launcher.installingUbisoftMessage",
+        i18n_title_key="toasts.launcher.installingUbisoft",
+        game_title="Ubisoft Connect",
+    )
+    upc_exe = _find_upc_exe(plan)
+    if upc_exe is None:
+        raise GameFailedError(
+            "upc.exe not found in the Ubisoft prefix — the per-game "
+            "prefix may not be fully set up yet",
+            subprocess_rc=127,
+            context={"store": "ubisoft", "prefix": str(plan.prefix_path)},
+        )
+    uplay_id = os.environ.get("UPLAY_ID") or _uplay_id_from_id_map(
+        plan.context.game_id,
+    )
+    argv = [str(plan.python_bin), str(plan.umu_wrapper), str(upc_exe)]
+    if uplay_id:
+        argv.append(f"uplay://install/{uplay_id}")
+        logger.info(
+            "[launcher.proton.ubisoft] install deeplink: uplay://install/%s",
+            uplay_id,
+        )
+    else:
+        logger.info(
+            "[launcher.proton.ubisoft] no uplay id for %s — "
+            "opening UPC bare for install",
+            plan.context.game_id,
+        )
+    rc = await run_umu_with_retry(
+        argv, env=plan.env, on_start=plan.on_process_start,
+    )
+    plan.state.game_exit_code = rc
+    logger.info(
+        "[launcher.proton.ubisoft] UPC install session exited rc=%d", rc,
+    )
     return rc
 
 

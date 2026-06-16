@@ -31,7 +31,11 @@ export type DownloadPhase =
   | "downloading"
   | "extracting"
   | "verifying"
-  | "complete";
+  | "complete"
+  // Launcher-driven install (Ubisoft Connect): the external launcher
+  // performs the install, so there is no %/speed/ETA. Rendered as an
+  // indeterminate "Installing in Ubisoft Connect" state.
+  | "manual";
 
 /**
  * Where the game install lives. `internal` = eMMC, `sdcard`

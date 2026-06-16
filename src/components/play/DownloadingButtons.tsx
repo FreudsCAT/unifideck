@@ -79,6 +79,8 @@ export const DownloadingButtons: FC<Props> = ({
         <FaTimes />
         {cancelled
           ? t("play.cancelling")
+          : download.download_phase === "manual"
+          ? t("play.cancel")
           : `${t("play.cancel")} (${Math.round(
               Math.max(0, Math.min(100, download.progress_percent)),
             )}%)`}

@@ -140,6 +140,12 @@ class DownloadService(_WorkerMixin):
                 install_path=install_path,
                 title=title,
                 is_update=is_update,
+                # Ubisoft is a launcher-driven (UPC) install with no real
+                # download — mark it "manual" from enqueue so the UI shows the
+                # indeterminate "Installing in Ubisoft Connect" state instead
+                # of a fake "Download Queued"/"DOWNLOADING 0%" bar, even while
+                # it waits behind other downloads in the queue.
+                download_phase="manual" if store == "ubisoft" else "downloading",
             )
             self._queue.append(item)
 

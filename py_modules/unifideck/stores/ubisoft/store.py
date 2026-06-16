@@ -178,13 +178,21 @@ class UbisoftStore(StoreBase):
         *,
         progress_cb: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
         install_path: str | None = None,
+        on_ready: Callable[[], Awaitable[None]] | None = None,
         **kwargs: Any,
     ) -> InstallResult:
-        """Install game."""
+        """Install game.
+
+        ``on_ready`` (used by the download worker) fires once the
+        per-game prefix is bootstrapped and UPC is ready to open — the
+        worker emits the frontend RunGame request from it. See
+        ``UbisoftInstaller.install_game``.
+        """
         return await self._installer.install_game(
             game_id,
             progress_cb=progress_cb,
             install_path=install_path,
+            on_ready=on_ready,
         )
 
     async def uninstall_game(

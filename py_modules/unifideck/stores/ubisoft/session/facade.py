@@ -59,6 +59,7 @@ class UbisoftSession:
         self._payload = _PayloadSync(self)
         self._propagator = _CredentialPropagator(
             config=config,
+            paths=paths,
             payload=self._payload,
             reader=self._reader,
         )

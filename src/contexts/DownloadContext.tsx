@@ -19,6 +19,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useRef,
   useState,
 } from "react";
 import { useRPCMutation, useRPCQuery } from "../api/useRPC";
@@ -27,6 +28,7 @@ import { useEventBus, EventBusClient } from "../api/event-bus-client";
 import { Events } from "../types/events";
 import { invalidateGameInfo } from "../hooks/useGameInfo";
 import { bumpGameStateVersion } from "../lib/game-state-version";
+import { launchUbisoftInstallViaShortcut } from "../utils/ubisoftShortcutLaunch";
 import type { DownloadItem, DownloadQueueInfo } from "../types/downloads";
 import type { Result, StoreId } from "../types/api";
 
@@ -40,6 +42,20 @@ function extractAppId(payload: unknown): number | null {
   if (!game || typeof game !== "object") return null;
   const id = (game as { app_id?: unknown }).app_id;
   return typeof id === "number" ? id : null;
+}
+
+/** Build the ``"<store>:<game_id>"`` key from a DOWNLOAD_* terminal
+ *  payload's ``item`` so we can clear the Ubisoft launch-dedupe set
+ *  once an install finishes / fails / is cancelled. */
+function extractStoreGameId(payload: unknown): string | null {
+  if (!payload || typeof payload !== "object") return null;
+  const item = (payload as { item?: { store?: unknown; game_id?: unknown } })
+    .item;
+  if (!item || typeof item !== "object") return null;
+  const store = (item as { store?: unknown }).store;
+  const gameId = (item as { game_id?: unknown }).game_id;
+  if (typeof store !== "string" || typeof gameId !== "string") return null;
+  return `${store}:${gameId}`;
 }
 
 /** Wire shape the backend currently returns from
@@ -103,6 +119,12 @@ const Ctx = createContext<DownloadContextValue | null>(null);
 export const DownloadProvider: FC<{ children: ReactNode }> = ({ children }) => {
   const [queue, setQueue] = useState<DownloadQueueInfo | null>(null);
   const initial = useRPCQuery<[], unknown>(rpcRoutes.getDownloadQueue, []);
+
+  // Ubisoft installs we've already asked Steam to RunGame for, so a
+  // replayed UBISOFT_INSTALL_LAUNCH_REQUESTED event (the bus drains
+  // buffered events on reconnect) can't open UPC twice. Cleared per-game
+  // on the install's terminal event.
+  const ubisoftLaunchedRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
     if (initial.data) setQueue(adaptQueue(initial.data));
@@ -179,6 +201,9 @@ export const DownloadProvider: FC<{ children: ReactNode }> = ({ children }) => {
         invalidateGameInfo(appId);
         bumpGameStateVersion(appId);
       }
+      // Allow a future re-install of the same game to open UPC again.
+      const storeGameId = extractStoreGameId(payload);
+      if (storeGameId) ubisoftLaunchedRef.current.delete(storeGameId);
       refetchQueue();
     },
     [refetchQueue],
@@ -187,6 +212,30 @@ export const DownloadProvider: FC<{ children: ReactNode }> = ({ children }) => {
   useEventBus(Events.DOWNLOAD_COMPLETE, onDownloadTerminal);
   useEventBus(Events.DOWNLOAD_FAILED, onDownloadTerminal);
   useEventBus(Events.DOWNLOAD_CANCELLED, onDownloadTerminal);
+
+  // Ubisoft can't spawn UPC from the backend (no gamescope session in
+  // Gaming Mode → invisible window). The worker bootstraps the prefix,
+  // then emits UBISOFT_INSTALL_LAUNCH_REQUESTED; we open UPC via Steam's
+  // RunGame so it gets its own session and renders. The worker then
+  // watches the prefix for the installed files. See ubisoftShortcutLaunch.
+  useEventBus(Events.UBISOFT_INSTALL_LAUNCH_REQUESTED, (payload) => {
+    const storeGameId = (payload as { store_game_id?: unknown }).store_game_id;
+    if (typeof storeGameId !== "string" || !storeGameId) return;
+    if (ubisoftLaunchedRef.current.has(storeGameId)) return;
+    ubisoftLaunchedRef.current.add(storeGameId);
+    void launchUbisoftInstallViaShortcut(storeGameId, {
+      UNIFIDECK_UBISOFT_ACTION: "install",
+    }).then((result) => {
+      if (!result.success) {
+        // Launch failed — drop the dedupe entry so a retry can fire.
+        ubisoftLaunchedRef.current.delete(storeGameId);
+        console.error(
+          "[DownloadContext] Ubisoft UPC RunGame failed:",
+          result.error,
+        );
+      }
+    });
+  });
 
   const installGame = useCallback(
     (

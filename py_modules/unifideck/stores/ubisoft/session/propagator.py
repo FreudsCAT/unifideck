@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from unifideck.stores.ubisoft.config import UbisoftConfig
+    from unifideck.stores.ubisoft.paths import UbisoftPrefixPaths
 
     from .payload import _PayloadSync
     from .reader import _CredentialReader
@@ -37,13 +38,24 @@ class _CredentialPropagator:
         self,
         *,
         config: UbisoftConfig,
+        paths: UbisoftPrefixPaths,
         payload: _PayloadSync,
         reader: _CredentialReader,
     ) -> None:
         """Initialize the instance."""
         self._config = config
+        self._paths = paths
         self._payload = payload
         self._reader = reader
+
+    def _target_prefixes(self) -> list[str]:
+        """Game prefixes to propagate credentials into.
+
+        Unions the internal ``prefixes_dir`` scan with prefixes relocated to
+        SD / custom storage so an externally-installed game keeps its UPC
+        session refreshed after a re-login.
+        """
+        return self._paths.iter_all_game_prefix_paths()
 
     def propagate_credentials_to_all(self) -> int:
         """Propagate credentials to all."""
@@ -54,7 +66,7 @@ class _CredentialPropagator:
             )
             return 0
         total = 0
-        for prefix_path in self._config.iter_game_prefix_paths():
+        for prefix_path in self._target_prefixes():
             try:
                 total += self._payload.sync_credentials_to_prefix(
                     source,
@@ -79,7 +91,7 @@ class _CredentialPropagator:
         if not source:
             return 0
         total = 0
-        for prefix_path in self._config.iter_game_prefix_paths():
+        for prefix_path in self._target_prefixes():
             try:
                 total += self._payload.sync_auth_artifacts_to_prefix(
                     source,
@@ -182,7 +194,7 @@ class _CredentialPropagator:
                 if Path(hidden_prefix).is_dir():
                     target_prefixes.append(hidden_prefix)
             target_prefixes.extend(
-                self._config.iter_game_prefix_paths(),
+                self._target_prefixes(),
             )
             token_count = self.ensure_auth_state_in_prefixes(
                 target_prefixes,

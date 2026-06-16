@@ -127,6 +127,17 @@ class Events(StrEnum):
     DOWNLOAD_FAILED = "download_failed"
     DOWNLOAD_CANCELLED = "download_cancelled"
 
+    # Ubisoft install — frontend RunGame trigger. UPC must be opened
+    # via Steam's RunGame so it gets its own gamescope/XWayland session
+    # in Gaming Mode (a bare backend subprocess has no session to render
+    # into → invisible window — the install-never-appears bug). RunGame
+    # is a frontend SteamClient API, so the download worker emits this
+    # once it has bootstrapped the per-game prefix; the frontend reacts
+    # by calling ``launchUbisoftInstallViaShortcut`` with an ``install``
+    # action and the worker then monitors the filesystem for the install.
+    # Payload fields: store_game_id (str — "ubisoft:<game_id>").
+    UBISOFT_INSTALL_LAUNCH_REQUESTED = "ubisoft_install_launch_requested"
+
     # Generic store error
     STORE_ERROR = "store_error"
 

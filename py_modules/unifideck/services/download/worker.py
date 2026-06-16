@@ -239,6 +239,12 @@ class _WorkerMixin:
         from unifideck.core.types.events import Events
         item.status = "running"
         item.start_time = time.time()
+        # Ubisoft is a launcher-driven (UPC) install — there is no real
+        # download. Start it in the indeterminate "manual" phase so the UI
+        # never shows a "DOWNLOADING… 0.0%" frame before the first progress
+        # emit lands. The store's progress callback keeps it on "manual".
+        if item.store == "ubisoft":
+            item.download_phase = "manual"
         if self._bus:
             await self._bus.emit(Events.DOWNLOAD_STARTED, item=item.to_dict())
 
@@ -261,12 +267,39 @@ class _WorkerMixin:
                 item.game_id,
                 progress_cb=progress_cb,
                 install_path=item.install_path or None,
+                on_ready=self._make_ubisoft_launch_signal(item),
             )
         return await store.install_game(  # type: ignore[call-arg]
             item.game_id,
             item.install_path or None,
             progress_cb=progress_cb,
         )
+
+    def _make_ubisoft_launch_signal(self, item: DownloadItem) -> Any:
+        """Build the post-bootstrap callback that asks the frontend to
+        open Ubisoft Connect via RunGame.
+
+        Ubisoft installs can't spawn UPC from the backend — in Gaming
+        Mode a bare subprocess has no gamescope session, so the window
+        never appears. Instead the installer bootstraps the per-game
+        prefix and then invokes this callback; we emit
+        ``UBISOFT_INSTALL_LAUNCH_REQUESTED`` and the frontend reacts by
+        calling ``RunGame`` (which gives UPC its own session). The worker
+        then keeps monitoring the prefix for the installed files.
+        """
+        async def _signal() -> None:
+            if not self._bus:
+                return
+            from unifideck.core.types.events import Events
+            await self._bus.emit(
+                Events.UBISOFT_INSTALL_LAUNCH_REQUESTED,
+                store_game_id=f"ubisoft:{item.game_id}",
+            )
+            logger.info(
+                "[DownloadWorker] requested UPC launch for ubisoft:%s",
+                item.game_id,
+            )
+        return _signal
 
     async def _on_install_success(
         self, item: DownloadItem, result: InstallResult, store: StoreBase, key: str,

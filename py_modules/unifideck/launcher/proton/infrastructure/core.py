@@ -33,8 +33,26 @@ class ProtonLaunchPlan:
     env: dict[str, str]
     on_process_start: Callable[[object], None] | None = None
 def _ubisoft_prefix_path(ctx: LaunchContext, prefixes_dir: Path) -> Path:
-    """Ubisoft prefix path."""
+    """Ubisoft prefix path.
+
+    Games can be installed to a user-picked location (SD / custom); the
+    backend records the absolute per-game prefix path in
+    ``ubisoft_id_map.json`` (the same file ``_uplay_id_from_id_map`` reads).
+    Prefer that; fall back to the fixed internal location for games installed
+    before this existed and for the auth shortcut (whose game_id has no
+    recorded prefix — it uses ``UNIFIDECK_UBISOFT_PREFIX_NAME=.upc-auth``).
+    """
+    import json
     import os
+    id_map_file = Path("~/.local/share/unifideck/ubisoft_id_map.json").expanduser()
+    try:
+        data = json.loads(id_map_file.read_text(encoding="utf-8"))
+        entry = data.get(ctx.game_id) if isinstance(data, dict) else None
+        recorded = entry.get("prefix_path") if isinstance(entry, dict) else None
+        if recorded:
+            return Path(recorded)
+    except (OSError, ValueError):
+        pass
     ubi_name = os.environ.get("UNIFIDECK_UBISOFT_PREFIX_NAME") or ctx.game_id
     return prefixes_dir / "ubisoft" / ubi_name
 def _resolve_prefix(ctx: LaunchContext) -> Path:

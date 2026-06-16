@@ -165,7 +165,9 @@ class AuthShortcutsRPCMixin:
                 is_linux_runtime,
             )
 
-            appid_unsigned = self._resolve_shortcut_appid(store_game_id)
+            appid_unsigned, launch_options = self._resolve_shortcut_entry(
+                store_game_id,
+            )
             tool_name = (
                 get_compat_tool_for_app(appid_unsigned)
                 if appid_unsigned
@@ -175,10 +177,18 @@ class AuthShortcutsRPCMixin:
                 "[AuthShortcuts] compat tool for %s: appid=%s tool=%r",
                 store_game_id, appid_unsigned, tool_name,
             )
+            # ``appid_unsigned`` + ``current_launch_options`` let the
+            # frontend RunGame this shortcut directly (Ubisoft install
+            # flow) without a separate context RPC: it injects the
+            # ``install`` action into the options, launches, then restores
+            # ``current_launch_options`` so a later Play still works.
             return {
                 "success": True,
                 "tool_name": tool_name,
                 "is_linux_runtime": is_linux_runtime(tool_name),
+                "appid_unsigned": appid_unsigned,
+                "current_launch_options": launch_options,
+                "store_game_id": store_game_id,
             }
         except Exception as e:
             logger.warning(
@@ -192,6 +202,20 @@ class AuthShortcutsRPCMixin:
     def _resolve_shortcut_appid(store_game_id: str) -> int:
         """Scan shortcuts.vdf for an entry whose LaunchOptions
         contains ``store_game_id`` and return its AppID."""
+        return AuthShortcutsRPCMixin._resolve_shortcut_entry(store_game_id)[0]
+
+    @staticmethod
+    def _resolve_shortcut_entry(store_game_id: str) -> tuple[int, str]:
+        """Scan shortcuts.vdf for the entry whose LaunchOptions contains
+        ``store_game_id`` and return ``(appid_unsigned, launch_options)``.
+
+        ``launch_options`` is the shortcut's current ``LaunchOptions``
+        string (e.g. ``"ubisoft:<game_id>"`` plus any user wrappers) — the
+        Ubisoft install flow needs it so it can temporarily inject the
+        ``install`` action and then restore the real options afterwards
+        (restoring to ``""`` would wipe the shortcut and break Play).
+        Returns ``(0, "")`` when no matching shortcut exists.
+        """
         from pathlib import Path
 
         from unifideck.steam.steam_user import get_active_steam_user
@@ -199,7 +223,7 @@ class AuthShortcutsRPCMixin:
         active_user = get_active_steam_user(steam_root) or "0"
         vdf = steam_root / "userdata" / active_user / "config" / "shortcuts.vdf"
         if not vdf.is_file():
-            return 0
+            return 0, ""
         raw = vdf.read_bytes()
         # VDF stores the appid as a 4-byte little-endian
         # uint32 right after the \x01appid\x00 tag. Scan for
@@ -208,16 +232,16 @@ class AuthShortcutsRPCMixin:
         while True:
             i = raw.find(b"LaunchOptions", i)
             if i == -1:
-                return 0
+                return 0, ""
             # Look forward for store_game_id in the options value
             end = raw.find(b"\x00", i + 20)
             if end == -1:
-                return 0
+                return 0, ""
             opts = raw[i + 14:end]  # after \x01LaunchOptions\x00
             if store_game_id.encode() in opts:
                 appid = _appid_from_chunk(raw[max(0, i - 200):i])
                 if appid is not None:
-                    return appid
+                    return appid, opts.decode("utf-8", errors="replace")
             i = end
 
 

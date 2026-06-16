@@ -82,11 +82,34 @@ async def test_handle_auth_path_routes_ubisoft_to_proton(monkeypatch):
 
     svc = svc_mod.LauncherService.__new__(svc_mod.LauncherService)
     svc._launch_ubisoft_auth = AsyncMock(return_value="UBI")
+    svc._launch_ubisoft_install = AsyncMock(return_value="INSTALL")
     svc._edge_browser = object()
 
-    out = await svc._handle_auth_path(types.SimpleNamespace(auth_store="ubisoft"))
+    out = await svc._handle_auth_path(
+        types.SimpleNamespace(auth_store="ubisoft", action="auth"),
+    )
     assert out == "UBI"
     svc._launch_ubisoft_auth.assert_awaited_once()
+    svc._launch_ubisoft_install.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_handle_auth_path_routes_ubisoft_install_to_proton(monkeypatch):
+    from unittest.mock import AsyncMock
+
+    from unifideck.services.launcher import service as svc_mod
+
+    svc = svc_mod.LauncherService.__new__(svc_mod.LauncherService)
+    svc._launch_ubisoft_auth = AsyncMock(return_value="UBI")
+    svc._launch_ubisoft_install = AsyncMock(return_value="INSTALL")
+    svc._edge_browser = object()
+
+    out = await svc._handle_auth_path(
+        types.SimpleNamespace(auth_store="ubisoft", action="install"),
+    )
+    assert out == "INSTALL"
+    svc._launch_ubisoft_install.assert_awaited_once()
+    svc._launch_ubisoft_auth.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -101,6 +124,70 @@ async def test_handle_auth_path_routes_oauth_to_browser(monkeypatch):
     svc._launch_ubisoft_auth = AsyncMock(return_value="UBI")
     svc._edge_browser = object()
 
-    out = await svc._handle_auth_path(types.SimpleNamespace(auth_store="epic"))
+    out = await svc._handle_auth_path(
+        types.SimpleNamespace(auth_store="epic", action="auth"),
+    )
     assert out == "OAUTH"
     svc._launch_ubisoft_auth.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_install_launch_uses_uplay_install_deeplink(
+    tmp_path, monkeypatch, _quiet_toast,
+):
+    """``ubisoft_install_launch`` points UPC at the title's install
+    deeplink when the launch id resolves."""
+    captured: dict[str, object] = {}
+
+    async def fake_umu(argv, *, env=None, on_start=None, **kw):
+        captured["argv"] = argv
+        return 0
+
+    monkeypatch.setattr(h, "run_umu_with_retry", fake_umu)
+    monkeypatch.setattr(h, "_uplay_id_from_id_map", lambda _sid: "12345")
+    monkeypatch.delenv("UPLAY_ID", raising=False)
+    upc = tmp_path / _UPC_REL
+    upc.parent.mkdir(parents=True, exist_ok=True)
+    upc.write_text("stub")
+
+    plan = _plan(tmp_path)
+    plan.context.game_id = "100"  # type: ignore[attr-defined]
+    rc = await h.ubisoft_install_launch(plan)
+
+    assert rc == 0
+    assert captured["argv"] == [
+        "/usr/bin/python3",
+        "/plugin/bin/umu/umu/umu-run",
+        str(upc),
+        "uplay://install/12345",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_install_launch_bare_without_id(
+    tmp_path, monkeypatch, _quiet_toast,
+):
+    """No resolvable launch id → open UPC bare (user picks the game)."""
+    captured: dict[str, object] = {}
+
+    async def fake_umu(argv, *, env=None, on_start=None, **kw):
+        captured["argv"] = argv
+        return 0
+
+    monkeypatch.setattr(h, "run_umu_with_retry", fake_umu)
+    monkeypatch.setattr(h, "_uplay_id_from_id_map", lambda _sid: None)
+    monkeypatch.delenv("UPLAY_ID", raising=False)
+    upc = tmp_path / _UPC_REL
+    upc.parent.mkdir(parents=True, exist_ok=True)
+    upc.write_text("stub")
+
+    rc = await h.ubisoft_install_launch(_plan(tmp_path))
+
+    assert rc == 0
+    assert not any("uplay://" in str(a) for a in captured["argv"])  # type: ignore[union-attr]
+
+
+@pytest.mark.asyncio
+async def test_install_launch_missing_upc_raises(tmp_path, _quiet_toast):
+    with pytest.raises(GameFailedError, match=r"upc\.exe"):
+        await h.ubisoft_install_launch(_plan(tmp_path))

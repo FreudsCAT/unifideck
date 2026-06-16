@@ -253,17 +253,20 @@ class _IdMapSources:
             "template",
         ):
             return True
-        prefixes_dir = Path(config.prefixes_dir_expanded)
-        if not await asyncio.to_thread(prefixes_dir.is_dir):
+        # Union of the internal prefixes_dir scan and any per-game prefixes
+        # relocated to SD / custom storage — a freshly-installed game's
+        # configurations (which carry its launch_id) may live in an external
+        # prefix.
+        prefix_paths = await asyncio.to_thread(
+            self._idmap.iter_all_game_prefix_paths,
+        )
+        if not prefix_paths:
             logger.info(
                 "[UbisoftIdMap] no configurations found in any prefix",
             )
             return False
-        try:
-            entries = list(await asyncio.to_thread(prefixes_dir.iterdir))
-        except OSError:
-            return False
-        for entry in entries:
+        for prefix_str in prefix_paths:
+            entry = Path(prefix_str)
             if entry.name.startswith("."):
                 continue
             config_path = paths.find_configurations(
