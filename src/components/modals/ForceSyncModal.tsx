@@ -29,7 +29,9 @@ interface Props {
  * actionable.
  */
 export const ForceSyncModal: FC<Props> = ({
-  onResyncArtwork, onKeepArtwork, closeModal,
+  onResyncArtwork,
+  onKeepArtwork,
+  closeModal,
 }) => {
   const { t } = useTranslation();
 
@@ -46,7 +48,10 @@ export const ForceSyncModal: FC<Props> = ({
         onOK={closeModal}
         onCancel={closeModal}
       >
-        <div className="unifideck-force-sync-modal" style={{ padding: "10px 0" }}>
+        <div
+          className="unifideck-force-sync-modal"
+          style={{ padding: "10px 0" }}
+        >
           <div
             style={{
               marginBottom: 20,
@@ -65,7 +70,10 @@ export const ForceSyncModal: FC<Props> = ({
             }}
           >
             <DialogButton
-              onClick={() => { closeModal?.(); onResyncArtwork(); }}
+              onClick={() => {
+                closeModal?.();
+                onResyncArtwork();
+              }}
               style={{
                 display: "flex",
                 alignItems: "center",
@@ -77,7 +85,10 @@ export const ForceSyncModal: FC<Props> = ({
               <FaImage /> {t("confirmModals.resyncArtwork")}
             </DialogButton>
             <DialogButton
-              onClick={() => { closeModal?.(); onKeepArtwork(); }}
+              onClick={() => {
+                closeModal?.();
+                onKeepArtwork();
+              }}
               style={{
                 display: "flex",
                 alignItems: "center",

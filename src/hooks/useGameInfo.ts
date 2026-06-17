@@ -16,7 +16,54 @@
 import { useCallback, useEffect, useState } from "react";
 import { useRPC } from "../api/useRPC";
 import { rpcRoutes } from "../api/rpc-routes";
-import type { Game } from "../types/api";
+import type { Game, GameTag, StoreId } from "../types/api";
+
+/**
+ * Adapt the raw ``get_game_info`` RPC response into our
+ * frontend ``Game`` shape.
+ *
+ * Backend's :class:`Game` dataclass uses ``installed`` /
+ * ``store_game_id`` / ``exe_path``; the frontend Game interface
+ * (older shape, predates the unified-types refactor) expects
+ * ``is_installed`` / ``id`` / ``executable``. Without this
+ * adapter, every consumer of ``useGameInfo`` sees
+ * ``game.is_installed === undefined`` (falsy → "not installed")
+ * and ``game.id === undefined`` (so download-queue matching by
+ * ``game.id === download.game_id`` always misses), which is why
+ * the Play section stays on Install even mid-download.
+ */
+function adaptGame(raw: unknown): Game | null {
+  if (!raw || typeof raw !== "object") return null;
+  const r = raw as Record<string, unknown>;
+  const storeGameId = String(r.store_game_id ?? r.id ?? "");
+  if (!storeGameId) return null;
+  return {
+    id: storeGameId,
+    store_game_id: storeGameId,
+    title: String(r.title ?? ""),
+    store: (r.store ?? "unknown") as StoreId,
+    is_installed: Boolean(r.installed ?? r.is_installed),
+    install_path:
+      typeof r.install_path === "string" ? r.install_path : undefined,
+    executable:
+      typeof r.exe_path === "string"
+        ? r.exe_path
+        : typeof r.executable === "string"
+        ? r.executable
+        : undefined,
+    app_id: typeof r.app_id === "number" ? r.app_id : undefined,
+    size_bytes: typeof r.size_bytes === "number" ? r.size_bytes : undefined,
+    cover_image: typeof r.cover_image === "string" ? r.cover_image : undefined,
+    // Backend serialises store tags as ``tags`` (e.g. ``["xcloud"]``
+    // for Xbox Cloud games); expose them as ``store_tags`` so the
+    // play-section logic can branch on cloud-streaming titles.
+    store_tags: Array.isArray(r.store_tags)
+      ? (r.store_tags as GameTag[])
+      : Array.isArray(r.tags)
+      ? (r.tags as GameTag[])
+      : undefined,
+  };
+}
 
 /** Cache entry. */
 interface CacheEntry {
@@ -27,6 +74,31 @@ interface CacheEntry {
 
 const CACHE_TTL = 5000;
 const cache = new Map<number, CacheEntry>();
+
+// Mounted-hook subscribers, keyed by appId. `invalidateGameInfo`
+// notifies these so a live `useGameInfo` refetches immediately
+// (e.g. when a download completes and `is_installed` flips) —
+// clearing the module cache alone doesn't re-run a mounted hook,
+// which is why the Play section used to stay on "Install" until
+// the user reopened the page.
+const subscribers = new Map<number, Set<() => void>>();
+
+function subscribeGameInfo(appId: number, fn: () => void): () => void {
+  let set = subscribers.get(appId);
+  if (!set) {
+    set = new Set();
+    subscribers.set(appId, set);
+  }
+  set.add(fn);
+  return () => {
+    set?.delete(fn);
+    if (set && set.size === 0) subscribers.delete(appId);
+  };
+}
+
+function notifyGameInfo(appId: number): void {
+  subscribers.get(appId)?.forEach((fn) => fn());
+}
 
 /**
  * Aggregated game info returned by {@link useGameInfo} —
@@ -55,7 +127,15 @@ export function useGameInfo(appId: number | null): UseGameInfoResult {
   // store/game-id pair we don't have at the appId boundary.
   // `get_game_info(app_id)` is the right route for "look up
   // by Steam shortcut appid".
-  const fetch = useRPC<[number], Game>(rpcRoutes.getGameInfo);
+  // We receive the raw backend dict (snake_case, ``installed``
+  // not ``is_installed``, etc.) and adapt it via ``adaptGame``
+  // below; declaring the RPC return as ``unknown`` keeps the
+  // type system honest about the wire shape.
+  const fetchRaw = useRPC<[number], unknown>(rpcRoutes.getGameInfo);
+  const fetch = useCallback(
+    async (id: number): Promise<Game | null> => adaptGame(await fetchRaw(id)),
+    [fetchRaw],
+  );
   // Lazy priming : if the module-level cache has ANY entry for
   // this appId (fresh OR stale), seed the initial state with it
   // so consumers paint immediately. Stale data still triggers a
@@ -132,6 +212,17 @@ export function useGameInfo(appId: number | null): UseGameInfoResult {
     void load(false);
   }, [load]);
 
+  // Re-fetch when something invalidates this appId (download
+  // complete / uninstall / cancel). Without this, the mounted
+  // hook keeps its stale state — the Play section stays on the
+  // wrong button until the page is reopened.
+  useEffect(() => {
+    if (appId == null) return;
+    return subscribeGameInfo(appId, () => {
+      void load(true);
+    });
+  }, [appId, load]);
+
   const refresh = useCallback(() => load(true), [load]);
 
   return { ...state, refresh };
@@ -150,9 +241,15 @@ export function _clearGameInfoCache(): void {
  *  signed/unsigned variants since Steam shortcuts may be
  *  represented either way in the cache. */
 export function invalidateGameInfo(appId: number): void {
-  cache.delete(appId);
-  const signed = appId > 0x7FFFFFFF ? appId - 0x100000000 : appId;
+  const signed = appId > 0x7fffffff ? appId - 0x100000000 : appId;
   const unsigned = appId < 0 ? appId + 0x100000000 : appId;
-  if (signed !== appId) cache.delete(signed);
-  if (unsigned !== appId) cache.delete(unsigned);
+  // Clear the cache for every representation, then notify mounted
+  // hooks so they refetch. The caller may pass either the signed
+  // (backend Game.app_id) or unsigned (Steam shortcut) form, while
+  // the mounted hook is keyed on whichever the page handed it — so
+  // we fan out to both.
+  for (const id of new Set([appId, signed, unsigned])) {
+    cache.delete(id);
+    notifyGameInfo(id);
+  }
 }

@@ -174,16 +174,24 @@ check_requirements() {
 # so the install zip is self-contained and doesn't depend on the
 # Loader's pip behaviour.
 #
-# We download manylinux wheels for Python 3.11 (the SteamOS Python
-# version), regardless of the host's Python — this matches the
-# .so files already in py_modules/ and lets you build on any
-# distro / Python version. ``--only-binary :all:`` refuses sdists
-# so we never accidentally compile against the host's libpython.
+# We download manylinux wheels for Python 3.11 (Decky Loader's bundled
+# Python, which runs the plugin backend), regardless of the host's
+# Python. ``--only-binary :all:`` refuses sdists so we never accidentally
+# compile against the host's libpython.
+#
+# NOTE: the Steam shortcut launcher (bin/unifideck-launcher) does NOT run
+# under Decky's Python — it runs under the *system* /usr/bin/python3
+# (SteamOS is now 3.13). Any ABI-specific C extension that a launcher code
+# path imports must therefore be vendored for BOTH Pythons. Today that's
+# cffi's ``_cffi_backend`` (pulled in by cryptography via the cloud-save
+# service): see vendor_launcher_cffi() below. Without it the launcher
+# aborts at bootstrap and EVERY game launch dies immediately.
 #
 # Idempotent: if a package is already in py_modules/ we leave it
 # alone (--upgrade-strategy only-if-needed). Disk-cheap and fast
 # (~2s when fully cached, ~10s on first run).
 DECK_PYTHON_VERSION="3.11"
+LAUNCHER_PYTHON_VERSION="3.13"
 DECK_PLATFORM_TAG="manylinux2014_x86_64"
 
 vendor_deps() {
@@ -229,6 +237,60 @@ vendor_deps() {
         log_warn "Missing vendored deps after pip install: ${missing_deps[*]}"
         log_warn "Plugin features depending on these will be disabled at runtime."
     fi
+    echo ""
+}
+
+# Vendor cffi's ABI-specific _cffi_backend for the LAUNCHER's Python too.
+#
+# vendor_deps() above targets Decky's Python ($DECK_PYTHON_VERSION) and so
+# only produces _cffi_backend.cpython-311-*.so. But bin/unifideck-launcher
+# runs under the system /usr/bin/python3 ($LAUNCHER_PYTHON_VERSION). The
+# cloud-save service imports cryptography → cffi → _cffi_backend at load
+# time; under the launcher's Python the cp311 .so can't load, the service
+# fails to instantiate, and (historically) the launcher aborted — killing
+# ALL game launches. cryptography's own binding is abi3 (version-agnostic)
+# and the rest of cffi is pure-python, so the ONLY ABI-specific piece we
+# need for the second interpreter is _cffi_backend.
+#
+# We install the exact vendored cffi version into a temp dir for the
+# launcher's Python and copy just the extra _cffi_backend*.so alongside the
+# cp311 one. Pure-python files are identical across the two so they're left
+# untouched.
+vendor_launcher_cffi() {
+    local cffi_ver
+    cffi_ver=$(ls -d "$SCRIPT_DIR"/py_modules/cffi-*.dist-info 2>/dev/null \
+        | sed -E 's#.*/cffi-([0-9.]+)\.dist-info#\1#' | head -1)
+    if [ -z "$cffi_ver" ]; then
+        log_info "cffi not vendored (no cloud-save crypto path) — skipping launcher cffi"
+        return 0
+    fi
+    if ls "$SCRIPT_DIR"/py_modules/_cffi_backend.cpython-3"${LAUNCHER_PYTHON_VERSION#3.}"-*.so \
+            >/dev/null 2>&1; then
+        log_info "Launcher cffi backend already vendored (Python $LAUNCHER_PYTHON_VERSION)"
+        return 0
+    fi
+    log_info "Vendoring launcher cffi backend (cffi==$cffi_ver, Python $LAUNCHER_PYTHON_VERSION)..."
+    local tmp
+    tmp=$(mktemp -d)
+    if python3 -m pip install \
+            --quiet \
+            --target "$tmp" \
+            --platform "$DECK_PLATFORM_TAG" \
+            --python-version "$LAUNCHER_PYTHON_VERSION" \
+            --only-binary ":all:" \
+            --no-deps \
+            --cache-dir "$SCRIPT_DIR/.cache/pip-vendor" \
+            "cffi==$cffi_ver" 2>&1 | tail -10; then
+        if cp -f "$tmp"/_cffi_backend.cpython-*.so "$SCRIPT_DIR/py_modules/" 2>/dev/null; then
+            log_success "Vendored launcher cffi backend (Python $LAUNCHER_PYTHON_VERSION)"
+        else
+            log_warn "launcher cffi: no _cffi_backend .so produced — cloud-save disabled in launcher"
+        fi
+    else
+        log_warn "launcher cffi vendor failed — cloud-save will be disabled in the launcher"
+        log_warn "(game launches still work: the launcher tolerates a missing cloud-save service)"
+    fi
+    rm -rf "$tmp"
     echo ""
 }
 
@@ -463,7 +525,9 @@ build_local() {
         "py_modules/unifideck/rpc/mixins/action.py"
         "py_modules/unifideck/rpc/mixins/cloud_failure.py"
         "py_modules/unifideck/rpc/mixins/config_validation.py"
+        "py_modules/unifideck/rpc/mixins/storage.py"
         "py_modules/unifideck/rpc/mixins/ui.py"
+        "py_modules/unifideck/rpc/mixins/updater.py"
 
         # Layer 4 — Store connectors (3rd party API implementations)
         "py_modules/unifideck/stores/__init__.py"
@@ -492,6 +556,8 @@ build_local() {
         "py_modules/unifideck/services/metadata_service.py"
         "py_modules/unifideck/services/account_service.py"
         "py_modules/unifideck/services/proton_service.py"
+        "py_modules/unifideck/services/updater/__init__.py"
+        "py_modules/unifideck/services/updater/service.py"
 
         # Support packages
         "py_modules/unifideck/auth/__init__.py"
@@ -500,7 +566,7 @@ build_local() {
         "py_modules/unifideck/steam/__init__.py"
         "py_modules/unifideck/steam/library.py"
         "py_modules/unifideck/steam/shortcuts.py"
-        "py_modules/unifideck/steam/steamgriddb.py"
+        "py_modules/unifideck/steam/steamgriddb/__init__.py"
         "py_modules/unifideck/cdp/__init__.py"
         "py_modules/unifideck/compatibility/__init__.py"
         "py_modules/unifideck/compatibility/library.py"
@@ -753,6 +819,7 @@ main() {
     prebuild_binaries
     check_requirements
     vendor_deps
+    vendor_launcher_cffi
     gen_locales
     sync_version
 
@@ -772,7 +839,9 @@ main() {
     fi
 
     # Auto-install if requested
-    [[ "$INSTALL_AFTER" == "install" ]] && install_plugin
+    if [[ "$INSTALL_AFTER" == "install" ]]; then
+        install_plugin
+    fi
 }
 
 main "$@"

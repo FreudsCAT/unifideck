@@ -7,11 +7,14 @@ from typing import TYPE_CHECKING
 from unifideck.core.types import SubscriptionTier
 
 from .cache import _CachedEntry
-from .constants import _CACHE_KEY_PREFIX, _CACHE_STORE_NAME
+from .constants import _CACHE_KEY_PREFIX, _CACHE_STORE_NAME, _SESSION_CACHE_KEY_PREFIX
 from .time_utils import _end_of_month_utc
 
 if TYPE_CHECKING:
     from unifideck.core.cache_manager import CacheManager
+    from unifideck.stores.microsoft.microsoft_subscription import (
+        SubscriptionProbeResult,
+    )
     from unifideck.stores.microsoft.tokens import MicrosoftTokenManager, XBLTokenChain
 logger = logging.getLogger(__name__)
 
@@ -81,3 +84,63 @@ class _CacheMixin:
         )
         self._write_cache(cache_key, entry)
         await self._emit_state_change(cache_key, tier)  # type: ignore[attr-defined]  # self._emit_state_change provided by sibling mixin _EventHandlersMixin
+
+    # ── Session persistence (gsToken + regions) ──────────────────
+
+    def _persist_session(
+        self, xuid: str, probe: SubscriptionProbeResult,
+    ) -> None:
+        """Write the probe session to CacheManager for restart survival."""
+        key = f"{_SESSION_CACHE_KEY_PREFIX}{xuid or 'default'}"
+        try:
+            self._cache.set(
+                _CACHE_STORE_NAME, key, probe.to_dict(),
+            )
+            logger.debug(
+                "[MSSubSvc] persisted session for %s (expires_at=%.0f)",
+                xuid, probe.expires_at,
+            )
+        except Exception:
+            logger.exception("[MSSubSvc] session persist failed")
+
+    def _load_persisted_session(
+        self, xuid: str,
+    ) -> SubscriptionProbeResult | None:
+        """Load a persisted probe session from CacheManager.
+
+        Returns None if nothing is cached, the data is malformed,
+        or the gsToken has expired.
+        """
+        from unifideck.stores.microsoft.microsoft_subscription import (
+            SubscriptionProbeResult,
+        )
+
+        key = f"{_SESSION_CACHE_KEY_PREFIX}{xuid or 'default'}"
+        try:
+            raw = self._cache.get(_CACHE_STORE_NAME, key)
+        except Exception:
+            logger.exception("[MSSubSvc] session cache read failed")
+            return None
+        if not isinstance(raw, dict):
+            return None
+        probe = SubscriptionProbeResult.from_dict(raw)
+        if probe is None:
+            return None
+        if not probe.is_session_fresh():
+            logger.debug(
+                "[MSSubSvc] persisted session expired for %s", xuid,
+            )
+            return None
+        return probe
+
+    def _clear_persisted_sessions(self) -> None:
+        """Remove all persisted session entries from the cache."""
+        try:
+            # CacheManager.clear removes all keys for the store;
+            # tier entries are re-populated on next get_tier() call.
+            self._cache.clear(_CACHE_STORE_NAME)
+            logger.debug("[MSSubSvc] cleared persisted sessions")
+        except Exception:
+            logger.exception(
+                "[MSSubSvc] session cache clear failed",
+            )

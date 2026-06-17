@@ -1,13 +1,20 @@
-"""services/proton_service.py — Proton compat tool configurator.
+"""services/proton_service.py — Proton provisioning for non-Steam games.
 
-Automatically writes CompatToolMapping entries to Steam's
-``config.vdf`` for newly-installed games so users don't have to
-set "Force the use of a specific Steam Play compatibility tool"
-manually for each non-Steam game.
+Two responsibilities:
 
-Policy (overridable via config):
-- Epic / GOG / Amazon / Ubisoft → Proton Experimental
-- Microsoft (xCloud) → no compat tool (browser launcher)
+1. On plugin load (``start``), background-install the *latest*
+   GE-Proton released online (``ge_installer.ensure_latest_ge``) so
+   games default to the newest GE-Proton without blocking any launch.
+   Best-effort: offline/failure leaves the launcher to fall back to
+   Proton Experimental at launch time.
+
+2. On ``GAME_INSTALLED``, optionally force a per-store compat tool in
+   Steam's ``config.vdf`` (``set_compat_tool``). This is now a no-op by
+   default — see ``DEFAULT_TOOLS``: the launcher selects Proton itself
+   and forcing a tool here would pin every game to it (via
+   ``proton_settings.json``), defeating the "latest GE-Proton by
+   default" policy. A forced tool can still be reinstated per store or
+   via the ctor ``overrides`` kwarg.
 """
 from __future__ import annotations
 
@@ -27,13 +34,18 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Default compat tool per store. Overridable via ctor's
-# ``overrides`` kwarg or by future config integration.
+# Per-store compat tool to FORCE on install. Empty everywhere by
+# design: the launcher picks Proton itself (latest GE-Proton by
+# default, Proton Experimental as the offline fallback) and
+# ``useLaunchPrep`` clears Force-Compat before ``RunGame``. Forcing
+# ``proton_experimental`` here used to pin every game to Experimental
+# via ``proton_settings.json``, defeating the latest-GE default — so we
+# set nothing. Overridable via the ctor ``overrides`` kwarg.
 DEFAULT_TOOLS: dict[str, str] = {
-    "epic": "proton_experimental",
-    "gog": "proton_experimental",
-    "amazon": "proton_experimental",
-    "ubisoft": "proton_experimental",
+    "epic": "",
+    "gog": "",
+    "amazon": "",
+    "ubisoft": "",
     "microsoft": "",  # xCloud uses the browser — no compat tool
 }
 
@@ -50,6 +62,7 @@ class ProtonService:
         """Store refs, merge overrides, auto_wire."""
         self._bus = bus
         self._config_vdf_path = config_vdf_path
+        self._ge_task: asyncio.Task[None] | None = None
 
         self._tools = DEFAULT_TOOLS.copy()
         if overrides:
@@ -64,8 +77,84 @@ class ProtonService:
         # False and every subscription was silently dropped.
         auto_wire(self, self._bus)
 
+    async def start(self) -> None:
+        """Background-install the latest GE-Proton on plugin load.
+
+        Non-blocking: the (potentially large) GitHub fetch + extract
+        runs off the event loop via ``ge_installer.ensure_latest_ge``
+        so booting and game launches are never gated on it. Failures
+        (offline / GitHub down) are swallowed — the launcher falls
+        back to Proton Experimental at launch time. The task reference
+        is retained so it isn't garbage-collected mid-flight.
+        """
+        self._ge_task = asyncio.create_task(self._ensure_latest_ge())
+
+    async def _ensure_latest_ge(self) -> None:
+        """Background-install the latest GE-Proton, toasting a new install.
+
+        Stays silent when the latest is already present (the common
+        case): the install/ready toasts fire only when a download
+        actually happens, so a normal boot is quiet.
+        """
+        try:
+            from unifideck.launcher.proton.infrastructure import ge_installer
+
+            tag = await asyncio.to_thread(ge_installer.get_latest_ge_tag)
+            if not tag:
+                logger.info(
+                    "[ProtonService] latest GE-Proton unavailable "
+                    "(offline?); launcher will use Proton Experimental",
+                )
+                return
+            if await asyncio.to_thread(ge_installer.is_valid_ge_install, tag):
+                logger.info("[ProtonService] latest GE-Proton already installed: %s", tag)
+                return
+            # A download is needed → tell the user it's happening.
+            await self._emit_proton_toast(
+                "toasts.launcher.installingProton",
+                "toasts.launcher.attemptingInstall",
+                tag,
+            )
+            result = await asyncio.to_thread(ge_installer.ensure_latest_ge)
+        except Exception:
+            logger.exception("[ProtonService] background GE-Proton install failed")
+            return
+        if result:
+            _path, installed_tag = result
+            logger.info("[ProtonService] latest GE-Proton ready: %s", installed_tag)
+            await self._emit_proton_toast(
+                "toasts.launcher.protonReadyTitle",
+                "toasts.launcher.protonReadyBody",
+                installed_tag,
+            )
+        else:
+            logger.warning(
+                "[ProtonService] GE-Proton install failed; "
+                "launcher will fall back to Proton Experimental",
+            )
+
+    async def _emit_proton_toast(
+        self, title_key: str, body_key: str, version: str,
+    ) -> None:
+        """Best-effort LAUNCHER_STAGE toast for GE-Proton install progress."""
+        try:
+            from unifideck.launcher.rpc import emit_stage
+
+            await emit_stage(
+                self._bus,
+                i18n_title_key=title_key,
+                i18n_key=body_key,
+                game_title="",
+                i18n_params={"version": version},
+                priority="normal",
+            )
+        except Exception:
+            logger.warning("[ProtonService] proton toast emit failed", exc_info=True)
+
     async def stop(self) -> None:
-        """Lifecycle hook."""
+        """Cancel the background GE-Proton install if still running."""
+        if self._ge_task is not None and not self._ge_task.done():
+            self._ge_task.cancel()
 
     @subscribe(Events.GAME_INSTALLED)
     async def _on_game_installed(self, **kwargs: Any) -> None:
@@ -142,81 +231,3 @@ class ProtonService:
         # Inject new entry at the start of CompatToolMapping block
         # This is fragile but represents the intent
         return content.replace('"CompatToolMapping"\n\t\t\t\t{', f'"CompatToolMapping"\n\t\t\t\t{{\n\t\t\t\t\t{new_block}')
-
-    async def prepare_launch(self, **kwargs: Any) -> Any:
-        """Prepare a Proton launch plan via the infrastructure core.
-
-        Two call shapes are supported:
-
-        * ``prepare_launch(ctx=..., state=...)`` — preferred,
-          dispatched directly to the infrastructure core.
-        * ``prepare_launch(<exploded kwargs>)`` — legacy form
-          used by ``LauncherService.prepare_windows_plan``;
-          rebuild a synthetic ``LaunchContext`` from the kwargs
-          we know how to map.
-
-        Drift fix (2026-05-15, lot 11f): the previous fallback
-        called ``LaunchContext(game=kwargs, env={})`` — neither
-        ``game`` nor ``env`` exist on ``LaunchContext``. Mapping
-        the legacy keys to the real dataclass fields here.
-        """
-        from unifideck.launcher.proton.infrastructure.core import proton_prepare
-        from unifideck.launcher.types.context import LaunchContext, RuntimeState
-
-        ctx = kwargs.get("ctx")
-        state = kwargs.get("state")
-
-        if not ctx:
-            # Reconstruct LaunchContext from exploded kwargs. The
-            # legacy callers pass these as scalar fields; map them
-            # onto the real dataclass attributes. Missing fields
-            # are filled with safe defaults (empty strings / Path
-            # cwd) so the dispatcher proceeds even on incomplete
-            # input — the proton core itself will fail-fast if a
-            # required value is empty.
-            from pathlib import Path
-            ctx = LaunchContext(
-                store=str(kwargs.get("store", "")),
-                game_id=str(kwargs.get("game_id", "")),
-                exe_path=Path(str(kwargs.get("launch_path", ""))),
-                work_dir=Path(str(kwargs.get("work_dir", "."))),
-                plugin_dir=Path(str(kwargs.get("plugin_dir", "."))),
-            )
-            state = RuntimeState()
-
-        # Narrowing for mypy: ``state`` is ``Any | None`` from
-        # ``kwargs.get()``; if a caller passed ``ctx`` but not
-        # ``state``, fall back to a fresh RuntimeState so the
-        # downstream proton_prepare sees a real instance.
-        if state is None:
-            state = RuntimeState()
-
-        # ── KNOWN SIGNATURE DRIFT (tracked, lot 12d) ────────────
-        # ``proton_prepare`` (in launcher/proton/infrastructure/core.py)
-        # is a **synchronous** function (no ``async``) and requires
-        # three keyword-only arguments: ``python_bin``, ``proton_path``,
-        # and ``proton_tool_id``. The call below predates that
-        # signature: it ``await``s a sync function and omits the
-        # three kw args.
-        #
-        # The runtime impact is mitigated because the **only** real
-        # path through ``prepare_launch`` (via ``LauncherService._prepare_windows_plan``
-        # → ``helpers.prepare_windows_plan``) doesn't go through this
-        # branch — it passes ``app_id=0, launch_path=..., …`` so the
-        # ``ctx = kwargs.get("ctx")`` is None and the legacy-rebuild
-        # path runs, but the final ``await proton_prepare(...)`` would
-        # raise immediately at runtime (TypeError on missing args +
-        # TypeError on awaiting a non-awaitable).
-        #
-        # In other words: this branch IS dead code today. A future
-        # lot should either:
-        #   (a) resolve python_bin/proton_path/proton_tool_id from the
-        #       state and call ``proton_prepare`` correctly (remove
-        #       the ``await``), or
-        #   (b) delete this branch and document that the only entry
-        #       is via the explicit kwargs in helpers.prepare_windows_plan.
-        # The silences below acknowledge the known drift; the call
-        # would TypeError at runtime if it were ever exercised.
-        return await proton_prepare(  # type: ignore[call-arg,misc]  # see comment above
-            ctx, state,
-        )

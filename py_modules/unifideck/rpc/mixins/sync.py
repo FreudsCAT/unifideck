@@ -4,14 +4,31 @@ OP-26f | rpc/mixins/sync.py
 """
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import logging
+from pathlib import Path
 from typing import Any
+
+from unifideck.rpc.mixins.sync_cleanup import CleanupRPCMixin
+from unifideck.services.size_cache import get_size_cache
+from unifideck.stores.shared.installed_size import installed_size_bytes
 
 logger = logging.getLogger(__name__)
 
+# Upper bound for a single not-installed download-size lookup
+# (``store.get_game_size`` shells out to legendary / gogdl). Keeps the
+# ``get_game_size_bytes`` RPC from hanging on a slow or offline store.
+_SIZE_LOOKUP_TIMEOUT_S = 30.0
 
-class SyncRPCMixin:
-    """Library sync, progress, and game queries."""
+
+class SyncRPCMixin(CleanupRPCMixin):
+    """Library sync, progress, and game queries.
+
+    The "Delete all Unifideck data" flow lives in
+    :class:`~unifideck.rpc.mixins.sync_cleanup.CleanupRPCMixin`
+    (mixed in here) to keep this file under the volumetry cap.
+    """
 
     sync_service: Any
 
@@ -119,169 +136,90 @@ class SyncRPCMixin:
         # await. The previous body had a stray `await` which
         # raised `TypeError: object NoneType can't be used
         # in 'await' expression`.
-        return self.sync_service.get_game_info(app_id)
+        #
+        # Keep this fast and side-effect-free. The play-section
+        # override and the game-info panel both gate on this call
+        # resolving (see ``usePlaySection`` / ``GameInfoPanel``); any
+        # slow branch here (e.g. a ``legendary info`` / ``gogdl``
+        # subprocess) leaves the whole custom UI showing Steam's native
+        # section while it waits. Size resolution therefore lives in
+        # the separate, non-blocking ``get_game_size_bytes`` RPC, which
+        # the frontend fetches on its own (like Last Played).
+        return self.sync_service.get_game_info(app_id) if self.sync_service else None
 
-    services: Any
-    cache: Any
+    async def get_game_size_bytes(self, app_id: int) -> int:
+        """Resolve the "Space Required" size (bytes) for one AppID.
 
-    async def _resolve_install_dir(
-        self, shortcut_svc: Any, game: Any,
-    ) -> str | None:
-        """Look up the install directory for a Unifideck game."""
-        if shortcut_svc is None:
-            return None
-        store = (
-            game.get("store") if isinstance(game, dict)
-            else getattr(game, "store", None)
+        Fetched **separately** from :meth:`get_game_info` so the
+        sometimes-slow size lookup never delays the play-section
+        override (see the note in ``get_game_info``).
+
+        * **Installed** (``installed`` + ``install_path``) → on-disk
+          size of the install directory, computed off the event loop.
+        * **Not installed** → the store adapter's ``get_game_size``
+          download-size lookup. Epic / GOG / Amazon implement it
+          (each with its own cache); Ubisoft / Microsoft return
+          ``None``. Bounded by ``_SIZE_LOOKUP_TIMEOUT_S`` so a slow or
+          offline store can't leave the RPC hanging.
+
+        Always returns an int (``0`` when unknown) — never raises.
+        """
+        info = self.sync_service.get_game_info(app_id) if self.sync_service else None
+        if not isinstance(info, dict):
+            return 0
+
+        store = info.get("store")
+        game_id = info.get("store_game_id")
+        adapter = (
+            self.registry.get_store(store) if (self.registry and store) else None
         )
-        game_id = (
-            game.get("game_id") if isinstance(game, dict)
-            else getattr(game, "game_id", None)
-        )
+
+        if info.get("installed"):
+            # Exact on-disk size — shared across all stores. See
+            # ``stores/shared/installed_size.py``.
+            return await installed_size_bytes(
+                adapter, info.get("install_path"), game_id,
+            )
+
         if not store or not game_id:
-            return None
+            return 0
+
+        # Persistent cache: a not-installed download size is stable, and
+        # the live lookup (legendary/gogdl) takes seconds — so cache it
+        # to disk and serve instantly on every later open, even across
+        # restarts / reinstalls (the file lives in the data dir).
+        cache = get_size_cache(self._size_cache_path())
+        cached = await cache.get(store, game_id)
+        if cached is not None:
+            return cached
+
+        if adapter is None or not hasattr(adapter, "get_game_size"):
+            return 0
         try:
-            entry = await shortcut_svc.get_entry_for_game_key(
-                str(store), str(game_id),
+            size = await asyncio.wait_for(
+                adapter.get_game_size(game_id),
+                timeout=_SIZE_LOOKUP_TIMEOUT_S,
             )
         except Exception:
-            return None
-        return getattr(entry, "work_dir", None)
-
-    async def _delete_install_dir(
-        self, install_dir: str, home: str, safe_roots: tuple[str, ...],
-    ) -> bool:
-        """rm -rf an install directory if it sits under a safe root."""
-        import asyncio
-        import shutil
-        from pathlib import Path
-
-        if not install_dir:
-            return False
-        if install_dir in {"/", home}:
-            return False
-        if not any(k in install_dir for k in safe_roots):
-            return False
-        if not await asyncio.to_thread(Path(install_dir).is_dir):
-            return False
-        try:
-            await asyncio.to_thread(shutil.rmtree, install_dir, True)
-        except OSError:
-            logger.exception(
-                "[cleanup] rmtree(%s) failed", install_dir,
+            logger.debug(
+                "[sync] get_game_size(%s:%s) failed/timed out",
+                store, game_id, exc_info=True,
             )
-            return False
-        return True
+            return 0
+        size_int = int(size or 0)
+        if size_int > 0:
+            await cache.put(store, game_id, size_int)
+        return size_int
 
-    async def _cleanup_one_game(
-        self,
-        game: Any,
-        delete_files: bool,
-        shortcut_svc: Any,
-        home: str,
-        safe_roots: tuple[str, ...],
-    ) -> tuple[int | None, bool]:
-        """Per-game cleanup: returns (removed_app_id_or_None, files_deleted)."""
-        app_id = (
-            game.get("app_id") if isinstance(game, dict)
-            else getattr(game, "app_id", None)
-        )
-        if app_id is None:
-            return None, False
-        install_dir: str | None = None
-        if delete_files:
-            install_dir = await self._resolve_install_dir(shortcut_svc, game)
-        removed_id: int | None = None
-        if shortcut_svc is not None:
-            try:
-                if await shortcut_svc.remove_game(int(app_id)):
-                    removed_id = int(app_id)
-            except Exception:
-                logger.exception(
-                    "[cleanup] remove_game(%s) failed", app_id,
+    def _size_cache_path(self) -> str:
+        """Path to the persistent download-size cache (in the data dir)."""
+        data_dir = "~/.local/share/unifideck"
+        cfg = getattr(self, "config", None)
+        if cfg is not None:
+            with contextlib.suppress(Exception):
+                data_dir = (
+                    cfg.get("paths.data_dir", None)
+                    or cfg.get("data_dir", data_dir)
+                    or data_dir
                 )
-        files_deleted = False
-        if delete_files and install_dir:
-            files_deleted = await self._delete_install_dir(
-                install_dir, home, safe_roots,
-            )
-        return removed_id, files_deleted
-
-    async def perform_full_cleanup(
-        self, delete_files: bool = False,
-    ) -> dict[str, Any]:
-        """Wipe every Unifideck-managed shortcut, cache, and (optionally) install dir.
-
-        Used by the Quick-Access "Cleanup" section. Walks
-        ``sync_service.get_all_games()`` for the canonical Unifideck
-        AppID set, then for each AppID:
-
-        1. Records the install directory (if known via shortcut service).
-        2. Removes the shortcut via ``shortcut.remove_game`` — which
-           drops both ``shortcuts.vdf`` and ``games.map`` entries and
-           emits ``SHORTCUT_REMOVED``.
-        3. If ``delete_files=True`` and the install dir is inside a
-           known-safe parent ("Games", "Epic", "GOG", "unifideck", or
-           the user's configured custom install path), rm -rf it.
-
-        Finally clears every registered cache namespace so the next
-        sync rebuilds from upstream and the in-memory ProtonDB cache
-        is wiped on the frontend.
-
-        Args:
-            delete_files: when True, also delete the on-disk install
-                directories. Defaults to False (shortcuts-only).
-
-        Returns:
-            ``{"success": bool, "deleted_games": int,
-              "deleted_files_count": int, "deleted_app_ids": list[int],
-              "error": str | None}``. The frontend uses
-            ``deleted_app_ids`` to call ``SteamClient.Apps.RemoveShortcut``
-            for each so Steam's in-memory state catches up to the VDF.
-        """
-        import asyncio
-        from pathlib import Path
-
-        deleted_app_ids: list[int] = []
-        deleted_files_count = 0
-        try:
-            games = self.sync_service.get_all_games() or []
-        except Exception as e:
-            logger.exception("[cleanup] get_all_games failed")
-            return {
-                "success": False,
-                "deleted_games": 0,
-                "deleted_files_count": 0,
-                "deleted_app_ids": [],
-                "error": str(e),
-            }
-
-        shortcut_svc = getattr(self.services, "shortcut", None)
-        safe_roots = ("/Games/", "/Epic", "/GOG", "/Amazon", "unifideck")
-        home = await asyncio.to_thread(
-            lambda: str(Path("~").expanduser()),
-        )
-        for game in games:
-            removed_id, files_deleted = await self._cleanup_one_game(
-                game, delete_files, shortcut_svc, home, safe_roots,
-            )
-            if removed_id is not None:
-                deleted_app_ids.append(removed_id)
-            if files_deleted:
-                deleted_files_count += 1
-
-        for name in list(getattr(self.cache, "_stores", {}).keys()):
-            try:
-                self.cache.clear(name)
-            except Exception:
-                logger.exception(
-                    "[cleanup] cache.clear(%s) failed", name,
-                )
-
-        return {
-            "success": True,
-            "deleted_games": len(deleted_app_ids),
-            "deleted_files_count": deleted_files_count,
-            "deleted_app_ids": deleted_app_ids,
-            "error": None,
-        }
+        return str(Path(data_dir).expanduser() / "game_sizes.json")

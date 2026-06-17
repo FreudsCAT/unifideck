@@ -250,17 +250,17 @@ class _PostInstallMarker:
 
     async def regenerate_manifest(self, game_id: str, platform: str) -> None:
         """Regenerate manifest."""
-        cmd = [
-            self._parent._gogdl_bin,
-            "--auth-config-path",
-            self._parent._config.auth_config_path,
-            "info",
-            "--platform",
-            platform,
-            game_id,
-        ]
         try:
-            env, _gogdl_cleanup = await self._parent._tokens.acquire_gogdl_creds()
+            env, creds_path, _gogdl_cleanup = await self._parent._tokens.acquire_gogdl_creds()
+            cmd = [
+                self._parent._gogdl_bin,
+                "--auth-config-path",
+                creds_path,
+                "info",
+                "--platform",
+                platform,
+                game_id,
+            ]
             try:
                 proc = await asyncio.create_subprocess_exec(
                     *cmd,

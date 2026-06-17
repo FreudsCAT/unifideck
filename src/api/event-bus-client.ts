@@ -34,17 +34,34 @@ const POLL_SLOW_MS = 2000;
  *  defaults). Asking for an event type the backend doesn't
  *  buffer is safe : we get an empty list. */
 const WATCHED_EVENTS: EventName[] = [
-  "store_auth_started", "store_auth_complete", "store_auth_failed",
-  "store_logout", "store_registered",
-  "sync_started", "sync_progress", "sync_complete",
-  "sync_failed", "sync_cancelled", "sync_skipped",
+  "store_auth_started",
+  "store_auth_complete",
+  "store_auth_failed",
+  "store_logout",
+  "store_registered",
+  "sync_started",
+  "sync_progress",
+  "sync_complete",
+  "sync_failed",
+  "sync_cancelled",
+  "sync_skipped",
   "post_sync_phase_changed",
   "shortcut_reconcile_complete",
-  "download_queued", "download_started", "download_progress",
-  "download_complete", "download_failed", "download_cancelled",
-  "game_installed", "game_uninstalled", "game_update_available",
-  "game_launched", "game_stopped",
-  "store_error", "launcher_stage", "circuit_state_changed",
+  "shortcut_install_state_changed",
+  "download_queued",
+  "download_started",
+  "download_progress",
+  "download_complete",
+  "download_failed",
+  "download_cancelled",
+  "game_installed",
+  "game_uninstalled",
+  "game_update_available",
+  "game_launched",
+  "game_stopped",
+  "store_error",
+  "launcher_stage",
+  "circuit_state_changed",
 ];
 
 type Handler = (payload: Record<string, unknown>) => void;
@@ -63,7 +80,8 @@ function extractRecords(raw: unknown): EventRecord[] {
   // Delegate envelope unwrapping to the shared helper so the
   // semantics stay aligned with `useRPC` / `AuthDispatcher`.
   const unwrapped = unwrapRpcEnvelope<unknown>(raw, {
-    route: "subscribe_replay", throwing: false,
+    route: "subscribe_replay",
+    throwing: false,
   });
   if (Array.isArray(unwrapped)) return unwrapped as EventRecord[];
   return [];
@@ -102,7 +120,9 @@ class EventBusClientImpl {
   /** Dispatch an action URI to the backend. Convenience
    *  wrapper around `dispatch_unifideck_action`. */
   async dispatchAction(verb: string, ...args: string[]): Promise<unknown> {
-    const path = args.length ? "/" + args.map(encodeURIComponent).join("/") : "";
+    const path = args.length
+      ? "/" + args.map(encodeURIComponent).join("/")
+      : "";
     const uri = `unifideck://${verb}${path}`;
     return call(rpcRoutes.dispatchUnifideckAction, uri);
   }
@@ -151,7 +171,8 @@ class EventBusClientImpl {
   private async pollOnce(): Promise<void> {
     try {
       const raw = await call<[string[]], unknown>(
-        rpcRoutes.subscribeReplay, WATCHED_EVENTS,
+        rpcRoutes.subscribeReplay,
+        WATCHED_EVENTS,
       );
       // Backend wraps every RPC response in `{success, error, data}`
       // via `@auto_wrap_rpc_methods`. `useRPC` unwraps it for
@@ -173,8 +194,7 @@ class EventBusClientImpl {
       }
       // Adaptive cadence : speed up when events arrive,
       // slow down when the backend is quiet.
-      this.currentInterval = fresh.length > 0
-        ? POLL_FAST_MS : POLL_SLOW_MS;
+      this.currentInterval = fresh.length > 0 ? POLL_FAST_MS : POLL_SLOW_MS;
     } catch (e) {
       console.warn("[EventBusClient] poll error:", e);
       this.currentInterval = POLL_SLOW_MS;
@@ -198,9 +218,7 @@ class EventBusClientImpl {
       try {
         h(record.kwargs);
       } catch (e) {
-        console.error(
-          `[EventBusClient] handler for ${record.event} threw:`, e,
-        );
+        console.error(`[EventBusClient] handler for ${record.event} threw:`, e);
       }
     }
   }

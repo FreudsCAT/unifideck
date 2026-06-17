@@ -1,29 +1,20 @@
 """services/shortcut/games_map_mixin.py — Games map mutations + queries.
 
-5 core operations mutating shortcuts list + games.map manifest
-in tandem, plus ``_build_shortcut_entry`` helper. Mixin assumes
-the host exposes ``_bus``, ``_shortcuts``, ``_games_map``,
-paths, and async ``_load_*`` / ``_save_all`` primitives.
-
-Refactor history (2026-05-14): ``add_game`` was a single async
-method at CC=17 — it inlined the shortcuts dict normalisation,
-the obsolete-entry sweep (two-branch matching: by app_id and by
-AppName+tag), the new key allocation, and the bus emit. Pulled
-the obsolete-key search and tag check into private helpers; the
-shape-normalisation and key allocation reuse existing helpers
-(``_ensure_shortcuts_root``, ``_allocate_new_shortcut_key``)
-that were already defined for ``reconcile``.
+Mutating operations on the shortcuts list + games.map manifest.
+Mixin assumes the host exposes ``_bus``, ``_shortcuts``,
+``_games_map``, paths, and async ``_load_*`` / ``_save_all``
+primitives.
 """
 from __future__ import annotations
 
 import logging
 from typing import TYPE_CHECKING, Any
 
-from .games_map import UNIFIDECK_TAG, GameMapEntry, generate_app_id
+from .games_map import UNIFIDECK_TAG, GameMapEntry
+from .launch_options import get_full_id
 from .reconcile_phases import _ReconcilePhasesMixin
 
 if TYPE_CHECKING:
-    from unifideck.core.types import Game
     from unifideck.event_bus.event_bus import EventBus
 
 
@@ -47,114 +38,6 @@ class _GamesMapMixin(_ReconcilePhasesMixin):
     # async def _load_shortcuts(self) -> None: ...
     # async def _load_games_map(self) -> None: ...
     # async def _save_all(self) -> None: ...
-
-    async def add_game(self: Any, game: Game) -> int:
-        """Create a shortcut entry for ``game`` + register in games.map.
-
-        Generates a stable ``app_id`` via ``generate_app_id``,
-        appends to ``_shortcuts``, writes a ``GameMapEntry`` into
-        ``_games_map``, persists atomically via ``_save_all``,
-        emits ``SHORTCUT_CREATED``. Returns the app_id.
-        """
-        await self._load_shortcuts()
-        await self._load_games_map()
-
-        key = f"{game.store}:{game.app_id}"
-        exe = game.exe_path or ""
-        app_id = generate_app_id(exe, game.title)
-
-        # Update games.map first — even if the shortcuts.vdf write
-        # below fails, the canonical record of "what Unifideck owns"
-        # is correct.
-        # ``work_dir`` is the directory the launcher cd's into before
-        # starting the exe — for installed games it's the install
-        # directory itself (where the launcher binary sits next to
-        # the game data).
-        self._games_map[key] = GameMapEntry(
-            exe=exe, work_dir=game.install_path or "",
-        )
-
-        # Normalise the shortcuts dict shape (tolerates corrupt VDF
-        # produced by a third party clobbering the file).
-        self._shortcuts = self._ensure_shortcuts_root(self._shortcuts)
-        shortcuts_dict = self._shortcuts["shortcuts"]
-
-        # Remove any prior entry that would now collide.
-        for vdf_key in self._find_obsolete_keys(
-            shortcuts_dict, app_id, game.title,
-        ):
-            del shortcuts_dict[vdf_key]
-
-        # Allocate a fresh ordinal key and store the new entry.
-        new_key = self._allocate_new_shortcut_key(shortcuts_dict)
-        shortcuts_dict[new_key] = self._build_shortcut_entry(game, app_id)
-
-        await self._save_all()
-
-        if self._bus:
-            from unifideck.core.types.events import Events
-            await self._bus.emit(
-                Events.SHORTCUT_CREATED,
-                store=game.store,
-                app_id=app_id,
-                title=game.title,
-                is_auth=False,
-            )
-
-        return app_id
-
-    # ─────────────────────────────────────────────────────────────
-    # Helpers extracted from the former CC=17 add_game
-    # ─────────────────────────────────────────────────────────────
-
-    @staticmethod
-    def _find_obsolete_keys(
-        shortcuts_dict: dict[str, Any],
-        app_id: int,
-        title: str,
-    ) -> list[str]:
-        """Return shortcut keys to replace when adding ``app_id``/``title``.
-
-        Two collision cases trigger a deletion:
-
-            * ``appid`` matches — straightforward reinstall or
-              metadata refresh; we drop the old entry so the new
-              one takes its slot (Steam itself tolerates duplicate
-              ``appid`` rows but the UI shows two tiles).
-            * ``AppName`` matches AND the entry carries the
-              ``UNIFIDECK_TAG`` — same game, different app_id.
-              This happens when ``game.launch_path`` changes
-              (e.g. game moved to SD card): ``generate_app_id``
-              produces a new hash and the previous tile becomes
-              orphaned. We only delete tagged entries to leave
-              user-created shortcuts alone.
-        """
-        obsolete: list[str] = []
-        for vdf_key, entry in shortcuts_dict.items():
-            if not isinstance(entry, dict):
-                continue
-            if entry.get("appid") == app_id:
-                obsolete.append(vdf_key)
-                continue
-            if (
-                entry.get("AppName") == title
-                and _GamesMapMixin._entry_has_unifideck_tag(entry)
-            ):
-                obsolete.append(vdf_key)
-        return obsolete
-
-    @staticmethod
-    def _entry_has_unifideck_tag(entry: dict[str, Any]) -> bool:
-        """Whether a VDF entry is tagged as Unifideck-managed.
-
-        Defensive: tags can be missing (user-created shortcut),
-        ``None`` (legacy entries), or a non-dict value (corrupt
-        file) — all three reduce to "not managed".
-        """
-        tags = entry.get("tags", {})
-        if not isinstance(tags, dict):
-            return False
-        return any(t == UNIFIDECK_TAG for t in tags.values())
 
     async def get_exe_for_game_key(self: Any, store: str, game_id: str) -> str | None:
         """Return absolute exe path for ``store:game_id``, or None.
@@ -201,21 +84,249 @@ class _GamesMapMixin(_ReconcilePhasesMixin):
         return bool(keys_to_delete)
 
     def _drop_games_map_entries(self: Any, app_id: int) -> bool:
-        """Delete every ``games.map`` entry whose derived app_id matches.
+        """Delete every ``games.map`` entry whose stored app_id matches.
 
-        ``games.map`` is keyed by ``"<store>:<game_id>"`` so we
-        can't look the app_id up directly — we recompute it for
-        every entry and compare. The number of entries is small
-        enough (low hundreds at most) that this O(n) sweep is
-        fine. Returns True if at least one entry was deleted.
+        v3 entries store ``app_id`` directly. Legacy v1/v2 rows
+        carry ``app_id == 0`` and are matched by cross-referencing
+        the loaded ``shortcuts.vdf``: if any VDF entry with the
+        target ``app_id`` has the same ``Exe`` as the games.map
+        row, treat it as a match (covers the orphan-backfill case
+        before the next ``_save_all`` writes the v3 row).
+        Returns True if at least one entry was deleted.
         """
+        legacy_exes = _GamesMapMixin._collect_legacy_exes(
+            self._shortcuts, app_id,
+        )
         keys_to_delete = [
-            key for key, entry in self._games_map.items()
-            if generate_app_id(entry.exe, key.split(":", 1)[1]) == app_id
+            key
+            for key, entry in self._games_map.items()
+            if entry.app_id == app_id
+            or (entry.app_id == 0 and entry.exe in legacy_exes)
         ]
         for key in keys_to_delete:
             del self._games_map[key]
         return bool(keys_to_delete)
+
+    @staticmethod
+    def _collect_legacy_exes(shortcuts: Any, app_id: int) -> set[str]:
+        """Exe paths of VDF entries matching *app_id*.
+
+        Used to match legacy v1/v2 games.map rows (``app_id == 0``)
+        against the loaded ``shortcuts.vdf`` during deletion.
+        """
+        root = shortcuts.get("shortcuts") if isinstance(shortcuts, dict) else None
+        if not isinstance(root, dict):
+            return set()
+        exes: set[str] = set()
+        for entry in root.values():
+            if isinstance(entry, dict) and entry.get("appid") == app_id:
+                exe = entry.get("Exe") or entry.get("exe") or ""
+                if isinstance(exe, str):
+                    exes.add(exe.strip('"'))
+        return exes
+
+    async def mark_installed(
+        self: Any,
+        store: str,
+        store_game_id: str,
+        exe_path: str,
+        install_path: str,
+    ) -> int | None:
+        """Flip an existing shortcut to "installed" without recreating it.
+
+        The shortcut already exists from the prior sync (created by
+        ``_reconcile_phase_sync_games`` with ``tags["2"] = "Not Installed"``).
+        On install we only need to: (a) flip that tag to ``""``,
+        (b) write the games.map entry the launcher uses to resolve
+        the exe, and (c) emit a state-change event so SyncService and
+        the frontend cache update.
+
+        Critically, we read the existing ``appid`` off the shortcut
+        and reuse it for the games.map row. Regenerating with the
+        exe path (the worker's old behaviour) would diverge from the
+        launcher-anchored id sync wrote, leaving every appid-keyed
+        lookup downstream broken.
+
+        Match is strict ``LaunchOptions == f"{store}:{store_game_id}"``.
+        Since ``generate_app_id`` is keyed on (launcher, store,
+        store_game_id) (see ``games_map.generate_app_id``), the same
+        title on different stores has different appids and different
+        shortcuts — no title-fallback rebinding is needed.
+
+        Returns the existing app_id, or None if no shortcut matches.
+        """
+        await self._load_shortcuts()
+        await self._load_games_map()
+
+        target_launch = f"{store}:{store_game_id}"
+        existing_app_id: int | None = self._flip_existing_install(target_launch)
+        if existing_app_id is None:
+            return None
+
+        if not exe_path:
+            # An empty exe means the store's exe resolver returned
+            # nothing — the launcher dispatcher will have no target to
+            # run and the game silently fails to launch. Write the
+            # entry anyway (work_dir is still useful) but surface the
+            # gap loudly so it's caught in logs instead of at click time.
+            logger.warning(
+                "[ShortcutService] mark_installed %s — empty exe_path; "
+                "launcher will not be able to resolve a target",
+                target_launch,
+            )
+        self._games_map[target_launch] = GameMapEntry(
+            exe=exe_path, work_dir=install_path, app_id=existing_app_id,
+        )
+
+        await self._save_all()
+        await self._emit_installed(
+            store, store_game_id, existing_app_id, exe_path, install_path,
+        )
+        logger.info(
+            "[ShortcutService] mark_installed %s → app_id=%d",
+            target_launch, existing_app_id,
+        )
+        return existing_app_id
+
+    def _flip_existing_install(self: Any, target_launch: str) -> int | None:
+        """Flip the matching shortcut's install tag; return its app_id.
+
+        Returns ``None`` (with a warning) when ``shortcuts.vdf`` is
+        empty or no shortcut matches ``target_launch`` yet.
+        """
+        shortcuts_root = self._shortcuts.get("shortcuts") if isinstance(
+            self._shortcuts, dict,
+        ) else None
+        if not isinstance(shortcuts_root, dict):
+            logger.warning(
+                "[ShortcutService] mark_installed %s — shortcuts.vdf empty",
+                target_launch,
+            )
+            return None
+        existing_app_id: int | None = _GamesMapMixin._flip_install_tag(
+            shortcuts_root, target_launch, installed=True,
+        )
+        if existing_app_id is None:
+            logger.warning(
+                "[ShortcutService] mark_installed %s — no shortcut found "
+                "(sync may not have run yet)",
+                target_launch,
+            )
+        return existing_app_id
+
+    async def _emit_installed(
+        self: Any,
+        store: str,
+        store_game_id: str,
+        app_id: int,
+        exe_path: str,
+        install_path: str,
+    ) -> None:
+        """Emit SHORTCUT_INSTALL_STATE_CHANGED for a freshly-installed game."""
+        if not self._bus:
+            return
+        from unifideck.core.types.events import Events
+        await self._bus.emit(
+            Events.SHORTCUT_INSTALL_STATE_CHANGED,
+            store=store,
+            store_game_id=store_game_id,
+            app_id=app_id,
+            installed=True,
+            exe_path=exe_path,
+            install_path=install_path,
+        )
+
+    @staticmethod
+    def _flip_install_tag(
+        shortcuts_root: dict[str, Any],
+        target_launch: str,
+        *,
+        installed: bool,
+    ) -> int | None:
+        """Find the shortcut by LaunchOptions and flip ``tags["2"]``.
+
+        Returns the entry's ``appid``, or None if no match.
+        """
+        marker = "" if installed else "Not Installed"
+        for entry in shortcuts_root.values():
+            if not isinstance(entry, dict):
+                continue
+            launch = entry.get("LaunchOptions", "")
+            if not isinstance(launch, str):
+                continue
+            if get_full_id(launch) != target_launch:
+                continue
+            appid = entry.get("appid")
+            if not isinstance(appid, int):
+                continue
+            tags = entry.get("tags")
+            if not isinstance(tags, dict):
+                tags = {}
+                entry["tags"] = tags
+            tags["2"] = marker
+            return appid
+        return None
+
+    async def mark_uninstalled(
+        self: Any,
+        store: str,
+        store_game_id: str,
+    ) -> int | None:
+        """Symmetric counterpart to :meth:`mark_installed`.
+
+        Flips an existing shortcut back to "not installed" while
+        preserving it in shortcuts.vdf — the user still owns the
+        game, they just removed the bytes. The shortcut keeps its
+        appid so the frontend cache and detail-page UI continue to
+        recognise it. We additionally drop the games.map row since
+        the launcher can no longer resolve an exe.
+
+        Returns the existing app_id, or None if no shortcut matches.
+        """
+        await self._load_shortcuts()
+        await self._load_games_map()
+
+        target_launch = f"{store}:{store_game_id}"
+        shortcuts_root = self._shortcuts.get("shortcuts") if isinstance(
+            self._shortcuts, dict,
+        ) else None
+        if not isinstance(shortcuts_root, dict):
+            logger.warning(
+                "[ShortcutService] mark_uninstalled %s — shortcuts.vdf empty",
+                target_launch,
+            )
+            return None
+
+        existing_app_id: int | None = _GamesMapMixin._flip_install_tag(
+            shortcuts_root, target_launch, installed=False,
+        )
+        if existing_app_id is None:
+            logger.warning(
+                "[ShortcutService] mark_uninstalled %s — no shortcut found",
+                target_launch,
+            )
+            return None
+
+        self._games_map.pop(target_launch, None)
+
+        await self._save_all()
+
+        if self._bus:
+            from unifideck.core.types.events import Events
+            await self._bus.emit(
+                Events.SHORTCUT_INSTALL_STATE_CHANGED,
+                store=store,
+                store_game_id=store_game_id,
+                app_id=existing_app_id,
+                installed=False,
+                exe_path="",
+                install_path="",
+            )
+        logger.info(
+            "[ShortcutService] mark_uninstalled %s → app_id=%d",
+            target_launch, existing_app_id,
+        )
+        return existing_app_id
 
     async def remove_game(self: Any, app_id: int) -> bool:
         """Remove a shortcut by ``app_id``.

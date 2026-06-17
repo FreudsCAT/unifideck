@@ -22,7 +22,10 @@ import { FC, useMemo } from "react";
 import { PanelSection, PanelSectionRow, Dropdown } from "@decky/ui";
 import { useTranslation } from "react-i18next";
 
-import {SUPPORTED_LANGUAGES, LANGUAGE_NAMES, type SupportedLanguage,
+import {
+  SUPPORTED_LANGUAGES,
+  LANGUAGE_NAMES,
+  type SupportedLanguage,
 } from "../../i18n/locales.generated";
 import { useLocale } from "../../contexts/LocaleContext";
 
@@ -68,7 +71,9 @@ export const LanguageSelector: FC = () => {
         <Dropdown
           rgOptions={options}
           selectedOption={locale}
-          onChange={(opt) => void setLocale(String(opt.data) as LocaleSelection)}
+          onChange={(opt) =>
+            void setLocale(String(opt.data) as LocaleSelection)
+          }
         />
       </PanelSectionRow>
     </PanelSection>

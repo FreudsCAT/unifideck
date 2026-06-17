@@ -67,7 +67,7 @@ def _from_loginusers(steam_root: Path) -> str | None:
         import vdf
 
         with loginusers.open("r", encoding="utf-8", errors="ignore") as f:
-            data = vdf.load(f)
+            data = vdf.load(f)  # type: ignore[no-untyped-call]  # vendored vdf is untyped
     except Exception as e:
         logger.debug("[SteamUser] loginusers.vdf parse failed: %s", e)
         return None

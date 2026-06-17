@@ -20,8 +20,6 @@ rpc, event_bus) depends on:
 * ``metrics_collector`` — plugin-wide counters/timers;
 * ``sync_service``     — multi-store library-sync
   orchestrator;
-* ``cross_store_dedup`` — title-matching across stores so
-  the unified library doesn't show duplicates;
 * ``exe_finder``       — heuristic executable resolver for
   installed games;
 * ``paths``            — well-known path helpers.

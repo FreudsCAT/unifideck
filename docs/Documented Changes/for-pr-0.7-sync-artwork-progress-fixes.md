@@ -48,6 +48,7 @@ The refactored architecture distributes work across `SyncService.sync_all()` (li
 **Root cause:** `ServicePaths._USER_ID` was hardcoded to `"0"` — the guest / meta directory Steam ignores. Every `shortcuts.vdf` and `grid/` write landed under `userdata/0/config/...` instead of the real Steam user's directory (e.g. `userdata/225630054`).
 
 **Fix:**
+
 - **New module** [py_modules/unifideck/steam/steam_user.py](py_modules/unifideck/steam/steam_user.py) — ports staging's two-tier active-user detection: parse `loginusers.vdf` for `MostRecent = "1"`, convert SteamID64 → 32-bit account_id via `& 0xFFFFFFFF`, validate the directory exists. Falls back to mtime-based detection. **Both layers explicitly reject `"0"`** (guest dir).
 - [py_modules/unifideck/services/bootstrap/paths.py](py_modules/unifideck/services/bootstrap/paths.py) — `from_config` now calls `get_active_steam_user(steam_root_path)` before composing `shortcuts_path` and `grid_dir`. Renamed `_USER_ID` → `_USER_ID_GUEST` as a last-resort fallback.
 - [py_modules/unifideck/services/bootstrap/constructor.py](py_modules/unifideck/services/bootstrap/constructor.py) — `bootstrap_services` receives `plugin_dir` kwarg, forwards to `ServicePaths.from_config`.
@@ -64,6 +65,7 @@ The refactored architecture distributes work across `SyncService.sync_all()` (li
 **Root cause:** Per-store `get_library()` methods construct `Game(app_id=0, ...)`. Staging assigned `game.app_id = generate_app_id(launcher_script, game.title)` during the sync loop. The refactored `SyncService` never did this.
 
 **Fix:** [py_modules/unifideck/core/sync_service.py](py_modules/unifideck/core/sync_service.py)
+
 - `__init__` now stores `self._launcher_path` (passed from `_boot_layer4_stores` via `decky_plugin_dir + "bin/unifideck-launcher"`).
 - New method `_populate_app_ids(libraries)` runs inside `_finalize_sync` before `SYNC_COMPLETE` emits. Uses `generate_app_id(launcher_path, title)` — the same `crc32(path + title) | 0x80000000` formula as staging.
 
@@ -78,11 +80,13 @@ The refactored architecture distributes work across `SyncService.sync_all()` (li
 **Root cause:** `_GamesMapMixin._build_shortcut_entry` was writing `Exe=""` and `LaunchOptions=""` for uninstalled games. Staging always wrote `Exe="{launcher_script}"` and `LaunchOptions="{store}:{game_id}"` — the launcher reads `LaunchOptions` at runtime to decide what to install/run.
 
 **Fix:** [py_modules/unifideck/services/shortcut/games_map_mixin.py](py_modules/unifideck/services/shortcut/games_map_mixin.py)
+
 - `_build_shortcut_entry` rewritten to staging's shape: `Exe="{launcher_path}"` always, `LaunchOptions="{store}:{store_game_id}"`, `icon=game.icon_url or ""`, `tags = {0: "Unifideck", 1: store, 2: "" | "Not Installed"}`.
 - `_reconcile_phase_sync_games` now uses `game.app_id` (populated by SyncService) → stable across install transitions.
 - `reconcile` logs `[ShortcutService] reconcile: N games → added=X kept=Y removed=Z reclaimed=W`.
 
 **ShortcutService now receives `launcher_path`:**
+
 - [py_modules/unifideck/services/shortcut/service.py](py_modules/unifideck/services/shortcut/service.py) — accepts `launcher_path` ctor arg.
 - [py_modules/unifideck/services/bootstrap/service_defs.py](py_modules/unifideck/services/bootstrap/service_defs.py) — passes `p.launcher_path` through the lambda.
 - [py_modules/unifideck/services/bootstrap/paths.py](py_modules/unifideck/services/bootstrap/paths.py) — new `launcher_path` field (= `<plugin_dir>/bin/unifideck-launcher`).
@@ -98,6 +102,7 @@ The refactored architecture distributes work across `SyncService.sync_all()` (li
 **Root cause:** Shortcuts were identified by tags. Steam can strip custom tags during updates or after user edits. No persistent registry mapped `{store}:{game_id}` → AppID across session boundaries.
 
 **Fix — four-layer preservation system:**
+
 - **New module** [py_modules/unifideck/services/shortcut/launch_options.py](py_modules/unifideck/services/shortcut/launch_options.py) — regex `\b(epic|gog|amazon|ubisoft|microsoft):([a-zA-Z0-9][a-zA-Z0-9._-]*)` parses `LaunchOptions` to identify our shortcuts. Steam preserves `LaunchOptions` reliably because the string is opaque to Steam — it never parses or strips it.
 - **New module** [py_modules/unifideck/services/shortcut/registry.py](py_modules/unifideck/services/shortcut/registry.py) — persistent `~/.local/share/unifideck/shortcuts_registry.json` maps `{store}:{game_id}` → `{appid, title, created}`. Survives plugin uninstall (lives in user data).
 - **Reclamation** (`_reclaim_orphan` in [games_map_mixin.py](py_modules/unifideck/services/shortcut/games_map_mixin.py)) — when a shortcut's registered AppID appears in `shortcuts.vdf` as an orphan, rewrite it in-place instead of creating a duplicate.
@@ -121,6 +126,7 @@ The refactored architecture distributes work across `SyncService.sync_all()` (li
 3. **(Tertiary) Payload schema mismatch.** Backend `_emit_progress` emitted `{store, progress, current, total}` while frontend `SyncProgress` interface expected `{progress_percent, current_game, status, total_games, ...}`.
 
 **Fix:**
+
 - [py_modules/unifideck/event_bus/event_bus.py](py_modules/unifideck/event_bus/event_bus.py) — added `set_replay_recorder(fn)`. `emit()` now records every event to the replay buffer (best-effort, isolated from handler failures).
 - [py_modules/unifideck/bootstrap/pipeline_factory.py](py_modules/unifideck/bootstrap/pipeline_factory.py) — wired `plugin.bus.set_replay_recorder(plugin.replay.record)`.
 - [py_modules/unifideck/event_bus/event_priority.py](py_modules/unifideck/event_bus/event_priority.py) — removed `SYNC_PROGRESS` from `COALESCE_KEY` with a comment explaining why.
@@ -169,6 +175,7 @@ The refactored architecture distributes work across `SyncService.sync_all()` (li
 **Root cause:** `SyncProgress.increment_artwork()` / `increment_metadata()` existed as methods but were **dead code** — zero call sites. `ArtworkService` and `MetadataService` had no access to the `SyncProgress` instance because it lived on `SyncService` as a private attribute.
 
 **Fix — Inject SyncProgress via the EventBus:**
+
 - [py_modules/unifideck/event_bus/event_bus.py](py_modules/unifideck/event_bus/event_bus.py) — added `set_sync_progress(progress)` and `get_sync_progress()`. The bus is the single shared object every service already subscribes to.
 - [py_modules/unifideck/core/sync_service.py](py_modules/unifideck/core/sync_service.py) — `_setup_sync` calls `bus.set_sync_progress(self._progress)`; `_on_post_sync_phase` calls `bus.set_sync_progress(None)` on final completion.
 - [py_modules/unifideck/services/artwork/event_handlers.py](py_modules/unifideck/services/artwork/event_handlers.py) — `_process_one_game` calls `bus.get_sync_progress().increment_artwork(game.title)` after each fetch completes.
@@ -195,6 +202,7 @@ The refactored architecture distributes work across `SyncService.sync_all()` (li
 **Root cause:** `SyncContext.tsx` flipped `isSyncing=false` on `SYNC_COMPLETE`. Post-sync phases run as background tasks via `SYNC_COMPLETE` event handlers — the bar vanished the moment library fetch ended.
 
 **Fix — Multi-layer:**
+
 - **`SyncContext.tsx`** — removed `setSyncing(false)` from the `SYNC_COMPLETE` handler. The 500 ms polling loop now drives `isSyncing` — it stays `true` while `get_sync_progress.syncing=true`, which the backend keeps alive through post-sync phases.
 - **`SyncProgress` class** ([py_modules/unifideck/core/sync_progress.py](py_modules/unifideck/core/sync_progress.py)) — new module ported from staging's `SyncProgress` (13 phases with percentage ranges, per-phase sub-counters, `to_dict()`).
 - **`_SyncQueriesMixin.get_status`** — now delegates to `self._progress.to_dict()`, sets `syncing=True` while `_progress.status` is any non-terminal phase.
@@ -203,18 +211,18 @@ The refactored architecture distributes work across `SyncService.sync_all()` (li
 
 **Phase ranges (updated from staging):**
 
-| Phase | Percentage | Counter |
-|---|---|---|
-| idle | 0% | — |
-| fetching | 0-10% | — |
-| checking_installed | 10-20% | — |
-| syncing | 20-40% | `synced_games / total_games` |
-| steam_metadata | 40-50% | `steam_synced / steam_total` |
-| unifidb_lookup | 50-55% | `unifidb_synced / unifidb_total` |
-| sgdb_lookup | 55-60% | — |
-| artwork | 60-90% | `artwork_synced / artwork_total` |
-| metadata | 90-98% | `metadata_synced / metadata_total` |
-| complete | 100% | — |
+| Phase              | Percentage | Counter                            |
+| ------------------ | ---------- | ---------------------------------- |
+| idle               | 0%         | —                                  |
+| fetching           | 0-10%      | —                                  |
+| checking_installed | 10-20%     | —                                  |
+| syncing            | 20-40%     | `synced_games / total_games`       |
+| steam_metadata     | 40-50%     | `steam_synced / steam_total`       |
+| unifidb_lookup     | 50-55%     | `unifidb_synced / unifidb_total`   |
+| sgdb_lookup        | 55-60%     | —                                  |
+| artwork            | 60-90%     | `artwork_synced / artwork_total`   |
+| metadata           | 90-98%     | `metadata_synced / metadata_total` |
+| complete           | 100%       | —                                  |
 
 ---
 
@@ -225,6 +233,7 @@ The refactored architecture distributes work across `SyncService.sync_all()` (li
 **Root cause:** `start_artwork()` used non-existent i18n key `"sync.checkingArtwork"`, which fell through to the raw key string. `start_metadata()` used key `"sync.extractingMetadata"` which didn't exist either.
 
 **Fix:** [py_modules/unifideck/core/sync_progress.py](py_modules/unifideck/core/sync_progress.py) — all labels switched to existing i18n keys from staging:
+
 - `start_artwork` → `artwork.checking` ("Checking artwork...")
 - `increment_artwork` → `sync.downloadingArtwork` ("Downloading artwork for {{game}}...")
 - `start_store_sync` → `sync.fetchingStore` ("Fetching {{store}}...")
@@ -250,6 +259,7 @@ The refactored architecture distributes work across `SyncService.sync_all()` (li
 **Root cause:** The refactor had no per-store metadata modules. Staging's `steamgriddb.py` had dedicated `get_gog_metadata()`, `get_epic_metadata()`, `get_amazon_metadata()`, and Ubisoft extras methods.
 
 **Fix — New module** [py_modules/unifideck/services/artwork/store_metadata.py](py_modules/unifideck/services/artwork/store_metadata.py):
+
 - **Steam** — `steam_search_appid(title)` → `steam_cdn_urls(app_id)` (4 canonical CDN URLs)
 - **GOG** — `gog_metadata(product_id)` → `gamesdb.gog.com/platforms/gog/external_releases/{id}` (vertical_cover, background, logo, icon). Falls back to GOG products API.
 - **Amazon** — `amazon_metadata(game_id)` → same GamesDB endpoint, platform=`amazon`
@@ -310,15 +320,16 @@ Pipeline order: **Store API → SGDB → Steam CDN**. Store logos discarded for 
 
 Added route names to [src/api/rpc-routes.ts](src/api/rpc-routes.ts):
 
-| Route | Backend mixin | Purpose |
-|---|---|---|
-| `getProtondbCache` | `StoreRPCMixin` | ProtonDB/Deck-Verified compat cache |
-| `getRealSteamAppidMappings` | `StoreRPCMixin` | Shortcut → real-Steam-AppID mapping |
-| `getSteamMetadataCache` | `StoreRPCMixin` | Full Steam Store `appdetails` payloads |
-| `injectGameToAppinfo` | `StoreRPCMixin` | Persist spoofed metadata to `appinfo.vdf` (stub) |
-| `performFullCleanup` | `SyncRPCMixin` | Wipe all Unifideck shortcuts + cache |
+| Route                       | Backend mixin   | Purpose                                          |
+| --------------------------- | --------------- | ------------------------------------------------ |
+| `getProtondbCache`          | `StoreRPCMixin` | ProtonDB/Deck-Verified compat cache              |
+| `getRealSteamAppidMappings` | `StoreRPCMixin` | Shortcut → real-Steam-AppID mapping              |
+| `getSteamMetadataCache`     | `StoreRPCMixin` | Full Steam Store `appdetails` payloads           |
+| `injectGameToAppinfo`       | `StoreRPCMixin` | Persist spoofed metadata to `appinfo.vdf` (stub) |
+| `performFullCleanup`        | `SyncRPCMixin`  | Wipe all Unifideck shortcuts + cache             |
 
 **Backend handlers:**
+
 - [py_modules/unifideck/rpc/mixins/store.py](py_modules/unifideck/rpc/mixins/store.py) — `get_protondb_cache`, `get_real_steam_appid_mappings`, `get_steam_metadata_cache`, `inject_game_to_appinfo`
 - [py_modules/unifideck/rpc/mixins/sync.py](py_modules/unifideck/rpc/mixins/sync.py) — `perform_full_cleanup`
 
@@ -363,6 +374,7 @@ Wired in [src/index.tsx](src/index.tsx) with teardown handles in [src/teardown.t
 ### Backend — Python (37 files)
 
 **Modified (18):**
+
 - `py_modules/unifideck/bootstrap/boot.py`
 - `py_modules/unifideck/bootstrap/cache_registry.py`
 - `py_modules/unifideck/bootstrap/pipeline_factory.py`
@@ -385,6 +397,7 @@ Wired in [src/index.tsx](src/index.tsx) with teardown handles in [src/teardown.t
 - `py_modules/unifideck/services/shortcut/service.py`
 
 **New (7):**
+
 - `py_modules/unifideck/core/sync_progress.py`
 - `py_modules/unifideck/services/artwork/store_metadata.py`
 - `py_modules/unifideck/services/shortcut/launch_options.py`
@@ -396,6 +409,7 @@ Wired in [src/index.tsx](src/index.tsx) with teardown handles in [src/teardown.t
 ### Frontend — TypeScript (13 files)
 
 **Modified (10):**
+
 - `src/api/event-bus-client.ts`
 - `src/api/rpc-routes.ts`
 - `src/components/info/GameInfoScores.tsx`
@@ -410,6 +424,7 @@ Wired in [src/index.tsx](src/index.tsx) with teardown handles in [src/teardown.t
 - `src/views/AppDetailsPatch.tsx`
 
 **New (7):**
+
 - `src/components/settings/CleanupSection.tsx`
 - `src/components/settings/GameDetailsViewModeToggle.tsx`
 - `src/contexts/LibraryContext.tsx`

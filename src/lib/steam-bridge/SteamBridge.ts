@@ -11,9 +11,18 @@
  * passed via React context to consumers.
  */
 import { findInReactTree, type ReactTreeMatcher } from "./react-tree";
-import {getAppDetailsClasses, type AppDetailsClassNames} from "./app-details-classes";
+import {
+  getAppDetailsClasses,
+  type AppDetailsClassNames,
+} from "./app-details-classes";
 import { addRouterPatch, type RouterPatchHandle } from "./router-patch";
-import type {SteamApp, SteamAppOverview, SteamCollection, Unregisterable} from "../../types/steam";
+import { getShortcutRunGameId } from "./shortcut-types";
+import type {
+  SteamApp,
+  SteamAppOverview,
+  SteamCollection,
+  Unregisterable,
+} from "../../types/steam";
 export type { AppDetailsClassNames, ReactTreeMatcher, RouterPatchHandle };
 
 type AppLifetimeCallback = (notification: {
@@ -112,10 +121,17 @@ export class SteamBridge {
     return map ? Array.from(map.values()) : [];
   }
 
-  /** Tell Steam to launch a game with our launch options.
-   *  Used by `GameActionsService` after intercepting Play. */
-  runGame(appId: string, launchOptions: string): void {
-    window.SteamClient?.Apps?.RunGame(appId, launchOptions, 0, 0);
+  /** Launch a non-Steam shortcut via Steam's RunGame API.
+   *
+   *  ``RunGame``'s first argument must be the 64-bit shortcut
+   *  *gameID*, NOT the 32-bit appid — passing the raw appid is a
+   *  silent no-op for non-Steam shortcuts (this is why clicking
+   *  Play did nothing). We resolve it with ``getShortcutRunGameId``
+   *  and pass empty launch options + ``(-1, 100)`` so Steam uses
+   *  the shortcut's own stored ``LaunchOptions``. Mirrors the
+   *  proven auth-flow / controllerConfig call shape. */
+  runGame(appId: number): void {
+    window.SteamClient?.Apps?.RunGame(getShortcutRunGameId(appId), "", -1, 100);
   }
 
   /** Force-terminate a running app — used by "Stop game". */
@@ -126,7 +142,10 @@ export class SteamBridge {
   /** Patch a router route to mount our React content at the
    *  given path. Returns a handle whose `.remove()` undoes
    *  the patch. */
-  addRouterPatch(path: string, patch: (props: unknown) => unknown): RouterPatchHandle {
+  addRouterPatch(
+    path: string,
+    patch: (props: unknown) => unknown,
+  ): RouterPatchHandle {
     return addRouterPatch(path, patch);
   }
 

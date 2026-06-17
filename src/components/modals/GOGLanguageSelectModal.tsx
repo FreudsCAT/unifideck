@@ -58,7 +58,10 @@ interface Props {
  * call `install_game(..., { language })`.
  */
 export const GOGLanguageSelectModal: FC<Props> = ({
-  gameTitle, languages, onConfirm, closeModal,
+  gameTitle,
+  languages,
+  onConfirm,
+  closeModal,
 }) => {
   const { t } = useTranslation();
   const safeLanguages = languages.length > 0 ? languages : ["en-US"];
@@ -75,7 +78,10 @@ export const GOGLanguageSelectModal: FC<Props> = ({
       strDescription={t("gogLanguageModal.description", { title: gameTitle })}
       strOKButtonText={t("gogLanguageModal.install")}
       strCancelButtonText={t("common.cancel")}
-      onOK={() => { closeModal?.(); onConfirm(selected); }}
+      onOK={() => {
+        onConfirm(selected);
+        closeModal?.();
+      }}
       onCancel={closeModal}
       bHideCloseIcon={false}
     >

@@ -82,8 +82,10 @@ export async function loadCompatCacheFromBackend(): Promise<void> {
     for (const [key, entry] of Object.entries(raw)) {
       if (!entry || typeof entry !== "object") continue;
       const tier = (entry.protondb_tier ?? null) as ProtonDBTier | null;
-      const deckVerified = (entry.deck_status ?? "unknown") as DeckVerifiedStatus;
-      const steamAppId = typeof entry.appid === "number" ? entry.appid : Number(key);
+      const deckVerified = (entry.deck_status ??
+        "unknown") as DeckVerifiedStatus;
+      const steamAppId =
+        typeof entry.appid === "number" ? entry.appid : Number(key);
       const ts = Date.now();
       const titleKey = entry.title ? normalizeTitle(entry.title) : null;
       const value: CompatCacheEntry = {
@@ -130,7 +132,10 @@ export function meetsGreatOnDeckCriteria(
   compat: GameCompatInfo | null,
 ): boolean {
   if (!compat) return false;
-  if (compat.deckVerified === "verified" || compat.deckVerified === "playable") {
+  if (
+    compat.deckVerified === "verified" ||
+    compat.deckVerified === "playable"
+  ) {
     return true;
   }
   if (compat.tier === "native" || compat.tier === "platinum") return true;

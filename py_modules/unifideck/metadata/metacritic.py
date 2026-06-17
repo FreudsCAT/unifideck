@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, cast
 
 from unifideck.utils.config_helpers import get_cfg
+from unifideck.utils.title_match import titles_match
 
 if TYPE_CHECKING:
     from unifideck.config import ConfigManager
@@ -155,23 +156,48 @@ def _cfg(config: ConfigManager | None, key: str, default: Any) -> Any:
     return get_cfg(config, key, default)
 
 def _slug_candidates(title: str) -> list[str]:
-    """Slug candidates."""
-    variants = {title}
+    """Ordered, de-duplicated slug candidates (most-exact first).
+
+    Order matters now that ``_parse_composer_response`` validates the
+    landed page: we try the truest forms first (raw → ®/™-cleaned →
+    edition-stripped → numeral variants) so the best match wins
+    deterministically. A plain ``set`` gave arbitrary iteration order,
+    making the resolved game non-deterministic across runs.
+    """
+    ordered: list[str] = []
+
+    def add(value: str) -> None:
+        v = value.strip()
+        if v and v not in ordered:
+            ordered.append(v)
+
     cleaned = clean_title(title)
-    variants.add(cleaned)
-    variants.add(strip_suffixes(cleaned))
-    for v in list(variants):
+    add(title)
+    add(cleaned)
+    add(strip_suffixes(cleaned))
+    for v in list(ordered):
         for alt in get_numeral_variants(v):
-            variants.add(alt)
-    return [slugify_game_name(v) for v in variants if v.strip()]
+            add(alt)
+
+    slugs: list[str] = []
+    for v in ordered:
+        slug = slugify_game_name(v)
+        if slug and slug not in slugs:
+            slugs.append(slug)
+    return slugs
 
 async def _fetch_composer(slug: str, url_template: str, timeout: int) -> dict[str, Any] | None:  # noqa: ASYNC109 — timeout is API value passed to underlying lib (urllib/aiohttp/subprocess), not an asyncio.timeout() wrapper
     """Fetch composer."""
     import aiohttp
     url = url_template.format(slug=slug)
     try:
+        # ssl=False — see library.search_store's comment. SteamOS's
+        # bundled cert store is outdated and default SSL verification
+        # fails inside the Decky plugin process for several
+        # third-party hosts including backend.metacritic.com.
+        connector = aiohttp.TCPConnector(ssl=False)
         async with (
-            aiohttp.ClientSession() as session,
+            aiohttp.ClientSession(connector=connector) as session,
             session.get(url, timeout=aiohttp.ClientTimeout(total=timeout)) as resp,
         ):
             if resp.status != 200:
@@ -184,33 +210,46 @@ async def _fetch_composer(slug: str, url_template: str, timeout: int) -> dict[st
         return None
 
 def _parse_composer_response(title: str, slug: str, data: dict[str, Any]) -> MetacriticScore | None:
-    """Parse composer response."""
+    """Parse a composer response into a score, validating the game identity.
+
+    The composer payload nests the game record at
+    ``components[*].data.item`` with ``item["type"] == "game-title"`` — the
+    component objects themselves carry no ``type`` field. (The previous
+    body looked for a component ``type == "gameInfo"`` that never exists,
+    so every lookup silently returned ``None`` and the whole Metacritic
+    backfill was dead.)
+
+    Crucially, the resolved slug is validated against the page's actual
+    title via :func:`titles_match`: a slug variant (edition-stripped /
+    numeral-swapped) or a Metacritic redirect can land on a *different*
+    game, and attaching its score to the queried title is exactly the
+    kind of silent mismatch we're hardening against. A mismatch is
+    rejected (``None``) so ``fetch_score`` tries the next candidate.
+    """
     try:
-        components = data.get("components", [])
-        game_info = next(
-            (
-                c for c in components
-                if c.get("type") == "gameInfo"
-            ),
-            None,
-        )
-        if not game_info:
+        item: dict[str, Any] | None = None
+        for component in data.get("components", []):
+            cand = (component.get("data") or {}).get("item")
+            if isinstance(cand, dict) and cand.get("type") == "game-title":
+                item = cand
+                break
+        if not item:
             return None
-        payload = game_info.get("data", {}).get("item", {})
-        if not payload:
+        page_title = str(item.get("title", ""))
+        if page_title and not titles_match(title, page_title):
+            logger.debug(
+                "[metacritic] slug %r → %r rejected (title mismatch with %r)",
+                slug, page_title, title,
+            )
             return None
+        critic = item.get("criticScoreSummary") or {}
+        user = item.get("userScoreSummary") or {}
         return MetacriticScore(
-            title=title,
+            title=page_title or title,
             slug=slug,
-            metascore=payload.get(
-                "criticScoreSummary", {},
-            ).get("score"),
-            user_score=payload.get(
-                "userScoreSummary", {},
-            ).get("score"),
-            description=sanitize_description(
-                payload.get("description", ""),
-            ),
+            metascore=critic.get("score"),
+            user_score=user.get("score"),
+            description=sanitize_description(item.get("description", "")),
             url=f"https://www.metacritic.com/game/{slug}/",
         )
     except (AttributeError, TypeError, KeyError) as e:

@@ -70,17 +70,28 @@ def load_json_file_safe(path: str) -> Any | None:
 def walk_install_candidates(
     roots: list[str],
 ) -> Iterator[tuple[str, str]]:
-    """Walk install candidates."""
+    """Walk install candidates.
+
+    Every filesystem probe is guarded against ``OSError`` —
+    ``PermissionError`` in particular. A configured games root may
+    contain an unreadable directory (a microSD ``lost+found``, a
+    permission-restricted mount), and an unguarded ``is_dir()`` there
+    would propagate out of the whole library fetch and hide the user's
+    entire Ubisoft library. Skip what we can't read; keep scanning.
+    """
     for base_dir in roots:
         base = Path(base_dir)
-        if not base.is_dir():
-            continue
         try:
+            if not base.is_dir():
+                continue
             entries = list(base.iterdir())
         except OSError:
             continue
         for entry in entries:
-            if not entry.is_dir():
+            try:
+                if not entry.is_dir():
+                    continue
+            except OSError:
                 continue
             yield str(entry), entry.name
 

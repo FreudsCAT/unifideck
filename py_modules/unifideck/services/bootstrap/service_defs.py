@@ -63,7 +63,7 @@ _SERVICE_DEFS: tuple[tuple[Any, ...], ...] = (
         "download", "unifideck.services.download",
         "DownloadService",
         lambda b, r, c, cfg, p, pl: (b, r, p.queue_file),
-        lambda b, r, c, cfg, p, pl: {},
+        lambda b, r, c, cfg, p, pl: {"launcher_path": p.launcher_path},
     ),
     (
         "metadata", "unifideck.services.metadata_service",
@@ -113,7 +113,7 @@ _SERVICE_DEFS: tuple[tuple[Any, ...], ...] = (
         "cloudsave", "unifideck.services.cloud_save",
         "CloudSaveService",
         lambda b, r, c, cfg, p, pl: (b, p.local_save_root),
-        lambda b, r, c, cfg, p, pl: {"cloud_root": p.cloud_root},
+        lambda b, r, c, cfg, p, pl: {"cloud_root": p.cloud_root, "config": cfg},
     ),
     (
         "metrics", "unifideck.core.metrics_collector",

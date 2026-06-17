@@ -53,9 +53,7 @@ interface MigrateResult {
  */
 export async function applyLanguagePreference(): Promise<void> {
   try {
-    const r = await call<[], LanguagePref>(
-      rpcRoutes.getLanguagePreference,
-    );
+    const r = await call<[], LanguagePref>(rpcRoutes.getLanguagePreference);
     if (r?.success && r.language && r.language !== "auto") {
       await i18n.changeLanguage(r.language);
     }
@@ -75,9 +73,7 @@ export async function applyLanguagePreference(): Promise<void> {
  */
 export async function checkAccountSwitch(): Promise<void> {
   try {
-    const r = await call<[], AccountSwitchInfo>(
-      rpcRoutes.checkAccountSwitch,
-    );
+    const r = await call<[], AccountSwitchInfo>(rpcRoutes.checkAccountSwitch);
     if (!r?.show_modal) return;
     showModal(
       <AccountSwitchModal
@@ -109,10 +105,9 @@ export async function checkAccountSwitch(): Promise<void> {
 export function registerLifetimeListener(): Unregisterable | null {
   try {
     return (
-      window.SteamClient?.GameSessions
-        ?.RegisterForAppLifetimeNotifications?.(
-          (n) => onAppLifetime(n),
-        ) ?? null
+      window.SteamClient?.GameSessions?.RegisterForAppLifetimeNotifications?.(
+        (n) => onAppLifetime(n),
+      ) ?? null
     );
   } catch (e) {
     console.error("[Bootstrap] lifetime listener registration failed:", e);
@@ -121,7 +116,9 @@ export function registerLifetimeListener(): Unregisterable | null {
 }
 /** On app lifetime. */
 function onAppLifetime(n: {
-  unAppID: number; bRunning: boolean; nInstanceID: number;
+  unAppID: number;
+  bRunning: boolean;
+  nInstanceID: number;
 }): void {
   if (n.bRunning) {
     void call(rpcRoutes.notifyGameLaunched, n.unAppID).catch(() => {});
@@ -129,10 +126,69 @@ function onAppLifetime(n: {
     void call(rpcRoutes.notifyGameStopped, n.unAppID).catch(() => {});
   }
 }
+/**
+ * Bootstrap task : sweep any persistent OAuth auth
+ * shortcut left over in Steam's in-memory app store by
+ * a previous plugin version. Today's auth flow only
+ * uses ephemeral shortcuts (created and removed in one
+ * connect cycle); a stale persistent row would otherwise
+ * keep launching with cover art + a real-game tile
+ * instead of the unifideck-launcher tile. Idempotent —
+ * RemoveShortcut on an unknown appid is a no-op.
+ */
+export function purgeLeftoverAuthShortcuts(): void {
+  try {
+    const appStore = (
+      window as unknown as {
+        appStore?: {
+          m_mapApps?: {
+            forEach?: (
+              cb: (
+                app: { LaunchOptions?: unknown; launch_options?: unknown },
+                id: number,
+              ) => void,
+            ) => void;
+          };
+        };
+      }
+    ).appStore;
+    const map = appStore?.m_mapApps;
+    if (!map?.forEach) return;
+    const stalePrefixes = [
+      "epic:epic-auth",
+      "gog:gog-auth",
+      "amazon:amazon-auth",
+      "microsoft:ms-auth",
+    ];
+    const victims: number[] = [];
+    map.forEach((app, appId) => {
+      const lo = app?.LaunchOptions ?? app?.launch_options;
+      if (typeof lo !== "string") return;
+      if (stalePrefixes.some((p) => lo.startsWith(p))) {
+        victims.push(appId);
+      }
+    });
+    const steamApps = window.SteamClient?.Apps;
+    if (!steamApps?.RemoveShortcut) return;
+    for (const appId of victims) {
+      console.log(
+        `[Bootstrap] Removing leftover persistent auth shortcut appId=${appId}`,
+      );
+      try {
+        steamApps.RemoveShortcut(appId);
+      } catch (e) {
+        console.error(`[Bootstrap] RemoveShortcut(${appId}) failed:`, e);
+      }
+    }
+  } catch (e) {
+    console.error("[Bootstrap] purgeLeftoverAuthShortcuts failed:", e);
+  }
+}
 /** Run all bootstrap tasks concurrently. Returns the
  *  unregister handle for the lifetime listener so the
  *  plugin entry can call it on unload. */
 export async function runBootstrapTasks(): Promise<Unregisterable | null> {
+  purgeLeftoverAuthShortcuts();
   const [, , listener] = await Promise.all([
     applyLanguagePreference(),
     checkAccountSwitch(),

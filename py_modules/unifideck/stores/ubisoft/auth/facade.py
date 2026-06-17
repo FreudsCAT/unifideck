@@ -25,6 +25,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import shutil
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -48,6 +49,11 @@ if TYPE_CHECKING:
     from unifideck.services.shortcut import ShortcutService
     from unifideck.steam.steamgriddb import SteamGridDBClient
 logger = logging.getLogger(__name__)
+
+# Background prefix-deletion tasks. Holding a strong ref keeps them from
+# being garbage-collected (which would cancel the delete) before they
+# finish; the done-callback drops the ref.
+_PURGE_TASKS: set[asyncio.Task[None]] = set()
 
 
 @dataclass(frozen=True)
@@ -133,7 +139,16 @@ class UbisoftAuth:
         return await self._context.get_auth_shortcut_context()
 
     async def is_available(self) -> bool:
-        """Check whether available."""
+        """Check whether available.
+
+        Authentication is keyed on valid credentials in the ``.upc-auth``
+        prefix — which ``logout()`` deletes, so a signed-out user reads
+        as unavailable and the library self-heals. Known edge: if the
+        auth prefix is removed out-of-band while game prefixes still hold
+        credentials, this reads False and the whole library hides until
+        the user re-runs the auth shortcut. That is an acceptable
+        trade-off for the simple, single-source signed-in signal.
+        """
         auth_dir = self._config.auth_prefix_dir_expanded
         return self._session.has_valid_credentials(auth_dir)
 
@@ -159,12 +174,14 @@ class UbisoftAuth:
             },
         )
 
-    async def complete_auth(
-        self,
-        code: str = "",
-        **kwargs: Any,
-    ) -> AuthResult:
-        """Complete auth."""
+    async def complete_auth(self, **kwargs: Any) -> AuthResult:
+        """Complete auth — succeeds once UPC has captured credentials.
+
+        Ubisoft has no headless / code / 2FA flow: the user signs in
+        through the UPC GUI in the auth prefix and the session monitor
+        detects the credential files. This just reports whether that
+        capture has happened.
+        """
         if await self.is_available():
             return AuthResult(
                 success=True,
@@ -177,22 +194,59 @@ class UbisoftAuth:
         )
 
     async def logout(self) -> Result:
-        """Logout."""
+        """Sign out instantly; purge the auth prefix in the background.
+
+        The auth prefix is a full UPC Wine prefix — tens of thousands of
+        tiny Chromium-cache files — and a synchronous ``shutil.rmtree``
+        of it took ~45s while **blocking the event loop**, so the QAM
+        "sign out" button just greyed and looked dead. Instead we rename
+        the prefix to a ``.trash-*`` sibling (an atomic, instant metadata
+        op that immediately flips ``is_available`` to False = signed
+        out), then delete the renamed directory off the event loop
+        without making logout wait for it.
+        """
         self._session.clear_session_file()
         auth_dir = self._config.auth_prefix_dir_expanded
-        if await asyncio.to_thread(lambda: Path(auth_dir).is_dir()):
-            try:
-                shutil.rmtree(auth_dir)
-                logger.info(
-                    "[UbisoftAuth] removed auth prefix directory",
-                )
-            except OSError:
-                logger.exception("[UbisoftAuth] could not remove auth prefix")
+        trash = await asyncio.to_thread(self._rename_to_trash, auth_dir)
+        if trash:
+            self._spawn_background_purge(trash)
         await self._bus.emit(
             Events.STORE_LOGOUT,
             store="ubisoft",
         )
         return Result(success=True)
+
+    @staticmethod
+    def _rename_to_trash(auth_dir: str) -> str | None:
+        """Atomically move the auth prefix aside; return the path to delete.
+
+        Returns ``None`` when there's nothing to remove. On the rare
+        rename failure (e.g. a cross-device edge) it returns the original
+        path so the caller still deletes it — just in place.
+        """
+        src = Path(auth_dir)
+        if not src.is_dir():
+            return None
+        trash = src.with_name(f"{src.name}.trash-{int(time.time() * 1000)}")
+        try:
+            src.rename(trash)
+        except OSError:
+            logger.warning(
+                "[UbisoftAuth] auth prefix rename failed; deleting in place",
+            )
+            return str(src)
+        return str(trash)
+
+    def _spawn_background_purge(self, path: str) -> None:
+        """Fire-and-forget recursive delete of ``path`` off the event loop."""
+
+        async def _purge() -> None:
+            await asyncio.to_thread(shutil.rmtree, path, ignore_errors=True)
+            logger.info("[UbisoftAuth] purged old auth prefix %s", path)
+
+        task = asyncio.create_task(_purge())
+        _PURGE_TASKS.add(task)
+        task.add_done_callback(_PURGE_TASKS.discard)
 
     async def start_auth_session_monitor(self) -> Result:
         """Start auth session monitor."""

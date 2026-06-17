@@ -35,7 +35,10 @@ const Ctx = createContext<StoreContextValue | null>(null);
  * store appears without remounting the tree.
  */
 export const StoreProvider: FC<{ children: ReactNode }> = ({ children }) => {
-  const { data, loading, error, refetch } = useRPCQuery<[], StoreInfo[]>(rpcRoutes.getStoreInfos,[]);
+  const { data, loading, error, refetch } = useRPCQuery<[], StoreInfo[]>(
+    rpcRoutes.getStoreInfos,
+    [],
+  );
   const value: StoreContextValue = {
     stores: data ?? [],
     loading,

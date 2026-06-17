@@ -41,7 +41,7 @@ PHASE_RANGES: dict[str, tuple[int, int]] = {
     # metadata enrichment via CompatibilityService. Narrow band
     # (95-98) because individual lookups are fast (~50ms) and the
     # phase shouldn't dominate the bar visually.
-    "proton_setup": (95, 98),
+    "proton_meta": (95, 98),
     "complete": (100, 100),
     "error": (100, 100),
     "cancelled": (100, 100),
@@ -69,6 +69,11 @@ class SyncProgress:
         self.unifidb_synced: int = 0
         self.metacritic_total: int = 0
         self.metacritic_synced: int = 0
+        # Compatibility phase ("proton_meta"): ProtonDB tier +
+        # Deck-Verified status per game. Owned by
+        # :class:`CompatibilityService`.
+        self.compat_total: int = 0
+        self.compat_synced: int = 0
         self._lock: asyncio.Lock = asyncio.Lock()
 
     # ── Phase-entry helpers ────────────────────────────────────
@@ -108,20 +113,31 @@ class SyncProgress:
     ) -> None:
         """Enter the metadata enrichment phase.
 
-        Sets *all three* source totals to ``total`` because
-        ``MetadataService._run_enrichment`` attempts each source
-        once per game (Steam Store + UnifiDB + Metacritic in
-        parallel). The three counters tick in lockstep but are
-        exposed independently so the frontend can render one row
-        per source.
+        Sets the two source totals that are actually exercised
+        during the blocking enrichment loop (Steam Store search +
+        UnifiDB) — Metacritic moved to a fire-and-forget backfill
+        in :func:`metadata_backfill.spawn` and no longer ticks in
+        lockstep with the sync UI. Leaving ``metacritic_total`` at
+        ``0`` makes the frontend's ``> 0`` gate hide the row so
+        we don't display a counter for work that hasn't started.
         """
         self.status = "metadata"
         self.steam_total = total
         self.steam_synced = 0
         self.unifidb_total = total
         self.unifidb_synced = 0
-        self.metacritic_total = total
-        self.metacritic_synced = 0
+        self.current_game = {
+            "label": label,
+            "values": {"synced": 0, "total": total},
+        }
+
+    def start_compat(
+        self, total: int, label: str = "sync.fetchingEnhancedMetadata",
+    ) -> None:
+        """Enter the Compatibility (ProtonDB + Deck-Verified) phase."""
+        self.status = "proton_meta"
+        self.compat_total = total
+        self.compat_synced = 0
         self.current_game = {
             "label": label,
             "values": {"synced": 0, "total": total},
@@ -199,6 +215,20 @@ class SyncProgress:
             self._recalc()
             return self.metacritic_synced
 
+    async def increment_compat(self, title: str) -> int:
+        async with self._lock:
+            self.compat_synced += 1
+            self.current_game = {
+                "label": "sync.fetchingCompatData",
+                "values": {
+                    "synced": self.compat_synced,
+                    "total": self.compat_total,
+                    "game": title,
+                },
+            }
+            self._recalc()
+            return self.compat_synced
+
     # ── Internal ──────────────────────────────────────────────
 
     def _recalc(self) -> None:
@@ -234,6 +264,9 @@ class SyncProgress:
                 )
             else:
                 self.progress_percent = start_pct
+        elif self.status == "proton_meta" and self.compat_total > 0:
+            sub = self.compat_synced / self.compat_total
+            self.progress_percent = int(start_pct + span * sub)
         elif self.status == "syncing" and self.total_games > 0:
             sub = self.synced_games / self.total_games
             self.progress_percent = int(start_pct + span * sub)
@@ -258,4 +291,6 @@ class SyncProgress:
             "unifidb_synced": self.unifidb_synced,
             "metacritic_total": self.metacritic_total,
             "metacritic_synced": self.metacritic_synced,
+            "compat_total": self.compat_total,
+            "compat_synced": self.compat_synced,
         }

@@ -117,57 +117,69 @@ class AuthShortcutsRPCMixin:
         )
         return result
 
-    async def _get_compat_tool_impl(self, store_game_id: str) -> Any:
-        """Look up the current Proton compat tool for a shortcut.
+    async def save_proton_setting(
+        self, store_game_id: str, tool_name: str,
+    ) -> Any:
+        """Persist the per-game Proton tool the launcher should apply.
 
-        Frontend launchers call this to save/restore the
-        compat tool around the auth flow. Delegates to the
-        existing ``compatibility.proton_helpers`` helper.
-
-        For Ubisoft auth shortcuts, resolves the actual VDF
-        entry's unsigned AppID so the frontend can call
-        ``SteamClient.Apps.RunGame`` with the correct ID.
-        The Ubisoft shortcut is pre-created by
-        ``UbisoftAuth._ensure_auth_shortcut``.
-
-        Args:
-            store_game_id: the shortcut's ``store:game_id``
-                key as written into LaunchOptions.
-
-        Returns:
-            ``{success, tool_name, current_launch_options,
-              store_game_id, launcher_path, appid_unsigned}``
-            matching the ``ShortcutLaunchContext`` shape the
-            frontend consumes.
+        Called by the game-details page (``useLaunchPrep``) after it
+        reads Steam's Force-Compatibility selection and before it
+        clears it — so the launcher (which reads
+        ``proton_settings.json``) re-applies the user's chosen tool
+        instead of letting Steam wrap the launcher in Proton.
+        Passing an empty ``tool_name`` clears the saved entry.
         """
         try:
             from unifideck.compatibility.proton_helpers import (
-                get_compat_tool_for_game as _lookup,
+                save_proton_setting as _save,
             )
-            result = _lookup(store_game_id)
-            if not isinstance(result, dict):
-                # Defensive: ``get_compat_tool_for_game`` is typed
-                # as returning dict but historically returned a
-                # plain string in some code paths. Keep the
-                # normaliser; mypy thinks it's unreachable now.
-                result = {"tool_name": result or ""}  # type: ignore[unreachable]
-
-            # The generic proton_helpers lookup doesn't know
-            # the steam unsigned AppID. Resolve it from the
-            # shortcuts.vdf by scanning for the entry whose
-            # LaunchOptions contains this store_game_id.
-            if not result.get("appid_unsigned"):
-                resolved = self._resolve_shortcut_appid(store_game_id)
-                logger.info(
-                    "[AuthShortcuts] _resolve_shortcut_appid(%s) = %s",
-                    store_game_id, resolved,
-                )
-                result["appid_unsigned"] = resolved
+            result = _save(store_game_id, tool_name)
             logger.info(
-                "[AuthShortcuts] _get_compat_tool_impl result keys: %s",
-                list(result.keys()),
+                "[AuthShortcuts] save_proton_setting(%s, %r) → %s",
+                store_game_id, tool_name, result,
             )
             return result
+        except Exception as e:
+            logger.warning(
+                "[AuthShortcuts] save_proton_setting(%s) failed: %s",
+                store_game_id, e,
+            )
+            return {"success": False, "error": str(e)}
+
+    async def _get_compat_tool_impl(self, store_game_id: str) -> Any:
+        """Return the Steam Force-Compatibility tool for a game shortcut.
+
+        Reads the Proton tool currently set as Force Compatibility
+        (``config.vdf`` CompatToolMapping) for the shortcut, resolved
+        via its appid scanned from ``shortcuts.vdf``. Consumed by the
+        game-details page (``useLaunchPrep``): when a real Proton tool
+        is set it saves the tool to ``proton_settings.json`` and clears
+        Force Compatibility so ``RunGame`` runs the launcher natively
+        (no double-Proton loading screen) — the launcher re-applies the
+        tool itself. ``is_linux_runtime`` lets the frontend skip that
+        dance for Steam-Linux-Runtime entries (not real Proton).
+        """
+        try:
+            from unifideck.compatibility.proton_helpers import (
+                get_compat_tool_for_app,
+                is_linux_runtime,
+            )
+
+            appid_unsigned = self._resolve_shortcut_appid(store_game_id)
+            tool_name = (
+                get_compat_tool_for_app(appid_unsigned)
+                if appid_unsigned
+                else ""
+            )
+            logger.info(
+                "[AuthShortcuts] compat tool for %s: appid=%s tool=%r",
+                store_game_id, appid_unsigned, tool_name,
+            )
+            return {
+                "success": True,
+                "tool_name": tool_name,
+                "is_linux_runtime": is_linux_runtime(tool_name),
+            }
         except Exception as e:
             logger.warning(
                 "[AuthShortcutsRPCMixin] "
@@ -180,11 +192,12 @@ class AuthShortcutsRPCMixin:
     def _resolve_shortcut_appid(store_game_id: str) -> int:
         """Scan shortcuts.vdf for an entry whose LaunchOptions
         contains ``store_game_id`` and return its AppID."""
-        import re
         from pathlib import Path
-        vdf = Path(
-            "~/.steam/steam/userdata/0/config/shortcuts.vdf",
-        ).expanduser()
+
+        from unifideck.steam.steam_user import get_active_steam_user
+        steam_root = Path("~/.steam/steam").expanduser()
+        active_user = get_active_steam_user(steam_root) or "0"
+        vdf = steam_root / "userdata" / active_user / "config" / "shortcuts.vdf"
         if not vdf.is_file():
             return 0
         raw = vdf.read_bytes()
@@ -195,30 +208,38 @@ class AuthShortcutsRPCMixin:
         while True:
             i = raw.find(b"LaunchOptions", i)
             if i == -1:
-                break
+                return 0
             # Look forward for store_game_id in the options value
             end = raw.find(b"\x00", i + 20)
             if end == -1:
-                break
+                return 0
             opts = raw[i + 14:end]  # after \x01LaunchOptions\x00
             if store_game_id.encode() in opts:
-                # Scan backward for \x01appid\x00 + 4-byte uint32
-                chunk = raw[max(0, i - 200):i]
-                import struct
-                for m in re.finditer(
-                    b"\\x02appid\\x00(.{4})", chunk, re.DOTALL,
-                ):
-                    try:
-                        # struct.unpack returns tuple[Any, ...] so [0] is Any;
-                        # we know "<I" produces a single uint32 → int.
-                        return cast(int, struct.unpack("<I", m.group(1))[0])
-                    except struct.error:
-                        pass
+                appid = _appid_from_chunk(raw[max(0, i - 200):i])
+                if appid is not None:
+                    return appid
             i = end
-        return 0
 
 
 # ─── Module-level helpers ─────────────────────────────────────
+
+
+def _appid_from_chunk(chunk: bytes) -> int | None:
+    """Extract the uint32 ``appid`` preceding a matched LaunchOptions block.
+
+    VDF stores the appid as a 4-byte little-endian uint32 right after
+    the ``\\x02appid\\x00`` tag. Returns ``None`` if no valid tag is found.
+    """
+    import re
+    import struct
+    for m in re.finditer(b"\\x02appid\\x00(.{4})", chunk, re.DOTALL):
+        try:
+            # struct.unpack returns tuple[Any, ...] so [0] is Any;
+            # "<I" produces a single uint32 → int.
+            return cast(int, struct.unpack("<I", m.group(1))[0])
+        except struct.error:
+            continue
+    return None
 
 
 def _build_and_log(store: str) -> dict[str, Any]:
@@ -254,11 +275,7 @@ def _build_auth_shortcut_context(store: str) -> dict[str, Any]:
     Mirrors what the per-store ``_ensure_auth_shortcut`` method
     passes to ``ShortcutService.add_auth_shortcut`` so the
     appid we return matches what the backend actually wrote to
-    ``shortcuts.vdf``. Returns the ``bin/unifideck-launcher``
-    wrapper as the launcher_path so the frontend's
-    temporary-shortcut fallback uses the actual executable
-    (``dispatcher.py`` lacks the +x bit on purpose — it's
-    imported, not run).
+    ``shortcuts.vdf``.
     """
     meta = _AUTH_SHORTCUT_META.get(store)
     if meta is None:
@@ -267,15 +284,12 @@ def _build_auth_shortcut_context(store: str) -> dict[str, Any]:
         "DECKY_PLUGIN_DIR",
         "/home/deck/homebrew/plugins/Unifideck",
     )
-    dispatcher_path = str(
-        Path(plugin_dir) / "py_modules" / "unifideck" / "launcher" / "dispatcher.py",
-    )
     wrapper_path = str(Path(plugin_dir) / "bin" / "unifideck-launcher")
     try:
         from unifideck.services.shortcut.games_map import (
             generate_app_id,
         )
-        app_id = generate_app_id(dispatcher_path, meta["title"])
+        app_id = generate_app_id(wrapper_path, meta["title"])
     except Exception as e:
         logger.warning(
             "[AuthShortcutsRPCMixin] generate_app_id failed "
@@ -289,7 +303,7 @@ def _build_auth_shortcut_context(store: str) -> dict[str, Any]:
         "appid_unsigned": unsigned,
         "launcher_path": wrapper_path,
         "launch_options": (
-            f"{store}:{store}-auth {meta['env']}=auth"
+            f"{store}:{'ms' if store == 'microsoft' else store}-auth {meta['env']}=auth"
         ),
         "launch_wait_ms": _AUTH_SHORTCUT_LAUNCH_WAIT_MS,
     }

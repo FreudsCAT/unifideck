@@ -1,0 +1,287 @@
+"""launcher/proton/infrastructure/ge_installer.py — Latest GE-Proton fetch/install.
+
+Downloads and installs the newest GE-Proton release from GitHub
+(``GloriousEggroll/proton-ge-custom``) into Steam's
+``compatibilitytools.d`` so games default to the *latest* GE-Proton
+released online, not merely the newest copy already on disk.
+
+Used from two processes:
+
+* the plugin (Decky's Python) on startup — background, non-blocking,
+  via ``ProtonService.start`` → ``asyncio.to_thread``;
+* the launcher (system Python) as a launch-time safety net inside
+  ``selector.select_proton_version``.
+
+Every network/disk failure is swallowed and surfaced as ``None`` so
+the caller can fall back to Proton Experimental. Only the stdlib is
+used (``urllib`` / ``tarfile`` / ``json``) — the slim launcher has no
+third-party HTTP client.
+"""
+from __future__ import annotations
+
+import json
+import logging
+import os
+import shutil
+import stat
+import tarfile
+import tempfile
+import time
+import urllib.error
+import urllib.request
+from collections.abc import Callable
+from pathlib import Path
+from typing import Any
+
+logger = logging.getLogger(__name__)
+
+GE_REPO = "GloriousEggroll/proton-ge-custom"
+_LATEST_API = f"https://api.github.com/repos/{GE_REPO}/releases/latest"
+_USER_AGENT = "unifideck-proton-ge"
+
+# Install target — the primary root the selector scans first.
+COMPAT_TOOLS_DIR = Path("~/.steam/root/compatibilitytools.d").expanduser()
+# Roots scanned to decide whether a tag is already installed. Mirrors
+# ``selector.STEAM_COMPAT_ROOTS`` (kept local to avoid a circular
+# import — selector imports this module, not the other way round).
+_SCAN_ROOTS: tuple[str, ...] = (
+    "~/.steam/root/compatibilitytools.d",
+    "~/.local/share/Steam/compatibilitytools.d",
+)
+# Records the tag the background installer last validated, so the
+# launcher can resolve the default without a network round-trip.
+_MARKER = Path("~/.local/share/unifideck/proton_ge_latest.json").expanduser()
+
+ProgressCb = Callable[[int, int], None]
+
+
+def _fetch_latest_release(timeout: float) -> dict[str, Any] | None:
+    """GET the GitHub ``/releases/latest`` JSON, or ``None`` on failure."""
+    req = urllib.request.Request(
+        _LATEST_API,
+        headers={
+            "User-Agent": _USER_AGENT,
+            "Accept": "application/vnd.github+json",
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return json.loads(resp.read().decode())  # type: ignore[no-any-return]
+    except (urllib.error.URLError, OSError, ValueError) as e:
+        logger.warning("[ge_installer] latest-release lookup failed: %s", e)
+        return None
+
+
+def get_latest_ge_tag(timeout: float = 8.0) -> str | None:
+    """Return the newest GE-Proton release tag, or ``None`` on failure."""
+    release = _fetch_latest_release(timeout)
+    if not release:
+        return None
+    tag = release.get("tag_name")
+    return tag or None
+
+
+def _installed_proton_script(tag: str) -> Path | None:
+    """The on-disk ``proton`` script for ``tag`` if present in any root."""
+    for root in _SCAN_ROOTS:
+        candidate = Path(root).expanduser() / tag / "proton"
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def installed_ge_proton_path(tag: str) -> Path | None:
+    """Return ``tag``'s ``proton`` script only if it is validly installed.
+
+    A directory can survive a partial/aborted extract whose ``proton``
+    is left non-executable (observed with a real GE-Proton10-34 on
+    disk). Such a copy would be picked as "newest present" but die
+    with "Permission denied" on exec — so an install is only valid
+    when the ``proton`` script is BOTH present and executable.
+    """
+    script = _installed_proton_script(tag)
+    if script and os.access(script, os.X_OK):
+        return script
+    return None
+
+
+def is_valid_ge_install(tag: str) -> bool:
+    """True iff ``tag`` is installed with an executable ``proton`` script."""
+    return installed_ge_proton_path(tag) is not None
+
+
+def read_cached_latest_tag() -> str | None:
+    """Return the tag the background installer last validated, if any."""
+    if not _MARKER.is_file():
+        return None
+    try:
+        data = json.loads(_MARKER.read_text())
+    except (OSError, ValueError):
+        return None
+    tag = data.get("tag")
+    return tag or None
+
+
+def _write_marker(tag: str) -> None:
+    """Record ``tag`` as the validated latest GE-Proton (best effort)."""
+    try:
+        _MARKER.parent.mkdir(parents=True, exist_ok=True)
+        _MARKER.write_text(json.dumps({"tag": tag, "installed_at": time.time()}))
+    except OSError as e:
+        logger.warning("[ge_installer] could not write marker: %s", e)
+
+
+def _select_tarball(assets: list[dict[str, Any]]) -> str | None:
+    """Pick the GE-Proton ``.tar.gz`` asset URL (skipping the checksum)."""
+    for asset in assets:
+        name = asset.get("name", "")
+        if name.endswith(".tar.gz") and "sha512" not in name:
+            return asset.get("browser_download_url")
+    return None
+
+
+def _download(url: str, dest: Path, progress_cb: ProgressCb | None) -> None:
+    """Stream ``url`` to ``dest``, reporting bytes via ``progress_cb``."""
+    req = urllib.request.Request(url, headers={"User-Agent": _USER_AGENT})
+    with urllib.request.urlopen(req, timeout=30) as resp, dest.open("wb") as out:
+        total = int(resp.headers.get("Content-Length") or 0)
+        done = 0
+        while True:
+            chunk = resp.read(256 * 1024)
+            if not chunk:
+                break
+            out.write(chunk)
+            done += len(chunk)
+            if progress_cb:
+                progress_cb(done, total)
+
+
+def _download_with_retry(
+    url: str,
+    dest: Path,
+    progress_cb: ProgressCb | None,
+    attempts: int = 3,
+) -> bool:
+    """Download with exponential backoff (5/10/20s). True on success."""
+    for attempt in range(1, attempts + 1):
+        try:
+            _download(url, dest, progress_cb)
+        except (urllib.error.URLError, OSError) as e:
+            logger.warning(
+                "[ge_installer] download attempt %d/%d failed: %s",
+                attempt, attempts, e,
+            )
+            dest.unlink(missing_ok=True)
+            if attempt < attempts:
+                time.sleep(5 * (2 ** (attempt - 1)))
+        else:
+            return True
+    return False
+
+
+def _extract(tarball: Path, dest: Path) -> bool:
+    """Extract ``tarball`` into ``dest``. True on success."""
+    try:
+        with tarfile.open(tarball, "r:gz") as tar:
+            try:
+                # ``filter="data"`` (3.12, backported to 3.11.4) blocks
+                # path-traversal/symlink escapes; the older fallback is
+                # acceptable for a trusted GitHub release tarball.
+                tar.extractall(dest, filter="data")
+            except TypeError:
+                tar.extractall(dest)  # noqa: S202 — trusted GitHub release tarball
+    except (tarfile.TarError, OSError) as e:
+        logger.warning("[ge_installer] extract failed: %s", e)
+        return False
+    return True
+
+
+def _make_executable(path: Path) -> None:
+    """Add the +x bit (owner/group/other) to ``path``."""
+    st = path.stat()
+    path.chmod(st.st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+
+
+def _download_and_install(
+    tag: str,
+    url: str,
+    progress_cb: ProgressCb | None,
+) -> Path | None:
+    """Download + extract ``tag`` into ``COMPAT_TOOLS_DIR``; return ``proton``.
+
+    Stages into a temp dir on the SAME filesystem and moves the result
+    into place only after the ``proton`` script is confirmed present and
+    made executable — so a half-finished download never leaves a broken
+    ``<tag>/`` dir that later passes a naive presence check.
+    """
+    COMPAT_TOOLS_DIR.mkdir(parents=True, exist_ok=True)
+    staging = Path(tempfile.mkdtemp(prefix=f".{tag}.dl-", dir=COMPAT_TOOLS_DIR))
+    try:
+        tarball = staging / f"{tag}.tar.gz"
+        if not _download_with_retry(url, tarball, progress_cb):
+            return None
+        if not _extract(tarball, staging):
+            return None
+        tarball.unlink(missing_ok=True)
+
+        # GE-Proton archives expand to a single top-level ``<tag>/`` dir.
+        extracted = staging / tag
+        proton = extracted / "proton"
+        if not proton.is_file():
+            logger.warning(
+                "[ge_installer] extracted tree missing proton script (%s)", tag,
+            )
+            return None
+        _make_executable(proton)
+
+        dest = COMPAT_TOOLS_DIR / tag
+        if dest.exists():
+            shutil.rmtree(dest, ignore_errors=True)
+        shutil.move(extracted, dest)
+        final = dest / "proton"
+        if not os.access(final, os.X_OK):
+            return None
+        logger.info("[ge_installer] installed GE-Proton %s -> %s", tag, dest)
+        return final
+    except OSError as e:
+        logger.warning("[ge_installer] install of %s failed: %s", tag, e)
+        return None
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
+
+
+def ensure_latest_ge(
+    progress_cb: ProgressCb | None = None,
+    timeout: float = 8.0,
+) -> tuple[Path, str] | None:
+    """Ensure the newest GE-Proton is installed; return ``(proton, tag)``.
+
+    Returns ``None`` (the caller then falls back to Proton Experimental)
+    when the release can't be fetched (offline / GitHub down) or the
+    download/extract fails. When the latest is already validly installed
+    it just refreshes the marker and returns it without downloading.
+    """
+    release = _fetch_latest_release(timeout)
+    if not release:
+        return None
+    tag = release.get("tag_name")
+    if not tag:
+        return None
+
+    existing = installed_ge_proton_path(tag)
+    if existing:
+        _write_marker(tag)
+        logger.info("[ge_installer] latest GE-Proton already installed: %s", tag)
+        return existing, tag
+
+    url = _select_tarball(release.get("assets", []))
+    if not url:
+        logger.warning("[ge_installer] no .tar.gz asset found for %s", tag)
+        return None
+
+    logger.info("[ge_installer] downloading GE-Proton %s", tag)
+    script = _download_and_install(tag, url, progress_cb)
+    if not script:
+        return None
+    _write_marker(tag)
+    return script, tag

@@ -21,6 +21,11 @@ Sources, mirroring staging's pipeline:
 * **Ubisoft** — the per-game ``metadata`` dict (set during sync)
   carries ``coverUrl`` / ``backgroundUrl`` directly from
   Ubisoft's GraphQL API.
+* **Microsoft** — the public ``displaycatalog.mp.microsoft.com``
+  endpoint exposes ``LocalizedProperties[].Images`` (Poster,
+  SuperHeroArt, TitledHeroArt, …).  Keyed on the productId, so it
+  works even when the xCloud display name degraded to a slug
+  ("HALO5") that no title search could resolve.
 
 Each fetcher is best-effort: returns an empty ``urls`` dict on
 any failure so the orchestrator can fall through to SGDB / Steam
@@ -33,9 +38,11 @@ import json
 import logging
 import urllib.parse
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import aiohttp
+
+from unifideck.utils.title_match import titles_match
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +52,15 @@ _STEAM_SEARCH_URL = "https://store.steampowered.com/api/storesearch"
 _STEAM_CDN = "https://shared.steamstatic.com/store_item_assets/steam/apps"
 _GAMESDB_URL = "https://gamesdb.gog.com/platforms/{platform}/external_releases/{id}"
 _GOG_PRODUCT_URL = "https://api.gog.com/products/{id}?expand=description"
+# Microsoft's public (no-auth) display catalog — same endpoint the
+# Microsoft store sync already hits to resolve product titles. Its
+# ``LocalizedProperties[].Images`` carries authoritative box art, so
+# we reuse it for artwork keyed on the productId (no title-search →
+# works even for mangled xCloud titleId slugs like "HALO5").
+_MS_DISPLAYCATALOG = (
+    "https://displaycatalog.mp.microsoft.com/v7.0/products"
+    "?bigIds={id}&market=US&languages=en-US"
+)
 
 
 async def steam_search_appid(
@@ -53,11 +69,12 @@ async def steam_search_appid(
 ) -> int | None:
     """Resolve a title to a real Steam AppID, or ``None`` on miss.
 
-    Uses Steam Store's public ``storesearch`` endpoint. Validation
-    mirrors staging's ``search_steam_appid``: prefer exact title
-    match, allow common edition suffixes (``GOTY``, ``Definitive``,
-    etc.), reject mismatches that look like sequels (``Ghostrunner``
-    vs ``Ghostrunner 2``).
+    Uses Steam Store's public ``storesearch`` endpoint and the shared
+    :func:`~unifideck.utils.title_match.titles_match` to pick the row
+    that actually IS this game — so ®/™ / apostrophe / edition /
+    publisher-prefix / Roman-numeral noise no longer defeats the match,
+    while sequels ("Hades" → "Hades II") and unrelated hits ("Control" →
+    "Steam Controller") are rejected rather than blindly accepted.
     """
     if not title:
         return None
@@ -76,27 +93,12 @@ async def steam_search_appid(
         return None
 
     items = data.get("items", []) if isinstance(data, dict) else []
-    search = title.lower().strip()
-    allowed_suffixes = (
-        "edition", "goty", "definitive", "ultimate", "complete",
-        "enhanced", "remastered", "hd", "remake",
-    )
     for item in items:
-        name = str(item.get("name", "")).lower().strip()
         steam_id = item.get("id")
         if not isinstance(steam_id, int) or steam_id <= 0:
             continue
-        if name == search:
+        if titles_match(title, str(item.get("name", ""))):
             return steam_id
-        if name.startswith(search) or search.startswith(name):
-            remainder = name.replace(search, "").strip()
-            remainder2 = search.replace(name, "").strip()
-            if (
-                remainder == "" or remainder2 == ""
-                or any(s in remainder for s in allowed_suffixes)
-                or any(s in remainder2 for s in allowed_suffixes)
-            ):
-                return steam_id
     return None
 
 
@@ -300,12 +302,11 @@ def _pick_epic_image(
     """First-match-wins selector across ``key_images`` for ``type_keys``."""
     for tk in type_keys:
         for img in key_images:
-            if (
-                isinstance(img, dict)
-                and img.get("type") == tk
-                and isinstance(img.get("url"), str)
-            ):
-                return img["url"]
+            if not isinstance(img, dict) or img.get("type") != tk:
+                continue
+            url = img.get("url")
+            if isinstance(url, str):
+                return url
     return None
 
 
@@ -346,14 +347,78 @@ def ubisoft_metadata(extras: dict[str, Any]) -> dict[str, Any]:
     during sync; the keys we want are ``coverUrl`` / ``backgroundUrl``.
     """
     out: dict[str, str] = {}
-    if not isinstance(extras, dict):
-        return {"urls": out}
     cover = extras.get("coverUrl") or extras.get("cover_image")
     bg = extras.get("backgroundUrl") or extras.get("hero_image")
     if isinstance(cover, str):
         out["grid"] = cover
     if isinstance(bg, str):
         out["hero"] = bg
+    return {"urls": out}
+
+
+# Microsoft ``ImagePurpose`` → kind, in priority order.  ``Poster`` is a
+# true 2:3 portrait (ideal Steam grid); ``TitledHeroArt`` carries the
+# wordmark like Steam's landscape capsule; ``SuperHeroArt`` is a clean,
+# text-free 16:9 banner.  Logo + icon are intentionally left to SGDB —
+# Microsoft's ``Logo`` purpose is a square store tile, not the
+# transparent wordmark Steam composites over the hero.
+_MS_IMAGE_PRIORITY: dict[str, tuple[str, ...]] = {
+    "grid":   ("Poster", "BrandedKeyArt"),
+    "grid_l": ("TitledHeroArt", "Hero"),
+    "hero":   ("SuperHeroArt", "Hero", "TitledHeroArt"),
+}
+
+
+def _extract_ms_images(images: list[Any]) -> dict[str, str]:
+    """Map a displaycatalog ``Images`` list to ``{kind: url}``.
+
+    First-seen wins per ``ImagePurpose``; kinds resolve against
+    :data:`_MS_IMAGE_PRIORITY`.  Protocol-relative ``//`` URIs are
+    normalised to ``https://``.
+    """
+    by_purpose: dict[str, str] = {}
+    for im in images:
+        if not isinstance(im, dict):
+            continue
+        purpose = im.get("ImagePurpose")
+        uri = _ensure_proto(im.get("Uri"))
+        if isinstance(purpose, str) and uri and purpose not in by_purpose:
+            by_purpose[purpose] = uri
+    out: dict[str, str] = {}
+    for kind, purposes in _MS_IMAGE_PRIORITY.items():
+        for purpose in purposes:
+            if purpose in by_purpose:
+                out[kind] = by_purpose[purpose]
+                break
+    return out
+
+
+async def microsoft_metadata(
+    product_id: str,
+    timeout: int = _DEFAULT_TIMEOUT,  # noqa: ASYNC109 — passed to aiohttp
+) -> dict[str, Any]:
+    """Fetch Microsoft box art from the public display catalog.
+
+    Keyed on the ``productId`` (the store_game_id), so it resolves
+    art without a title search — the fix for xCloud games whose
+    display name degraded to a ``titleId`` slug ("HALO5",
+    "GEARSOFWAR4") that no title-based search can match.
+    """
+    out: dict[str, str] = {}
+    if not product_id:
+        return {"urls": out}
+    try:
+        url = _MS_DISPLAYCATALOG.format(id=urllib.parse.quote(product_id))
+        data = await _fetch_json(url, timeout)
+        products = data.get("Products") if isinstance(data, dict) else None
+        if isinstance(products, list) and products:
+            loc = products[0].get("LocalizedProperties")
+            if isinstance(loc, list) and loc:
+                images = loc[0].get("Images")
+                if isinstance(images, list):
+                    out.update(_extract_ms_images(images))
+    except Exception as e:
+        logger.debug("[Artwork.microsoft] %s failed: %s", product_id, e)
     return {"urls": out}
 
 
@@ -369,17 +434,20 @@ async def fetch_store_urls(
     if store == "gog":
         try:
             payload = await gog_metadata(int(store_game_id), timeout)
-            return payload.get("urls", {})
+            return cast("dict[str, str]", payload.get("urls", {}))
         except ValueError:
             return {}
     if store == "amazon":
         payload = await amazon_metadata(store_game_id, timeout)
-        return payload.get("urls", {})
+        return cast("dict[str, str]", payload.get("urls", {}))
     if store == "epic":
         payload = await epic_metadata(store_game_id)
-        return payload.get("urls", {})
+        return cast("dict[str, str]", payload.get("urls", {}))
     if store == "ubisoft":
-        return ubisoft_metadata(extras or {}).get("urls", {})
+        return cast("dict[str, str]", ubisoft_metadata(extras or {}).get("urls", {}))
+    if store == "microsoft":
+        payload = await microsoft_metadata(store_game_id, timeout)
+        return cast("dict[str, str]", payload.get("urls", {}))
     return {}
 
 
@@ -388,6 +456,7 @@ __all__ = [
     "epic_metadata",
     "fetch_store_urls",
     "gog_metadata",
+    "microsoft_metadata",
     "steam_cdn_urls",
     "steam_search_appid",
     "ubisoft_metadata",

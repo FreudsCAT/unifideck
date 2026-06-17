@@ -148,7 +148,6 @@ class MicrosoftStore(StoreBase):
         EdgeBrowser.ensure_controller_permissions()
         self._edge.clear_store_cookies("microsoft.com")
         self._edge.clear_store_cookies("live.com")
-        await self._ensure_auth_shortcut()
         return cast("AuthResult", await self._auth.start_auth())
     async def complete_auth(
         self, code: str = "", **kwargs: Any,
@@ -310,6 +309,7 @@ class MicrosoftStore(StoreBase):
         **kwargs: Any,
     ) -> InstallResult:
         """Install game."""
+        logger.info("[MicrosoftInstall] install_game game_id=%s base_path=%s", game_id, base_path)
         return InstallResult(
             success=True,
             store="microsoft",
@@ -361,36 +361,3 @@ class MicrosoftStore(StoreBase):
             self._edge is not None
             and self._edge.is_installed
         )
-    async def _ensure_auth_shortcut(self) -> None:
-        """Ensure auth shortcut."""
-        if self._shortcut_service is None:
-            logger.debug(
-                "[MicrosoftStore] no shortcut_service "
-                "injected; skipping auth shortcut creation",
-            )
-            return
-        launcher = str(
-            Path(self._plugin_dir or "")
-            / "py_modules" / "unifideck" / "launcher"
-            / "dispatcher.py",
-        )
-        if not await asyncio.to_thread(lambda: Path(launcher).is_file()):
-            logger.warning(
-                "[MicrosoftStore] launcher dispatcher not "
-                "found at %s",
-                launcher,
-            )
-            return
-        result = await (
-            self._shortcut_service.add_auth_shortcut(
-                store="microsoft",
-                launcher_path=launcher,
-                title="Microsoft Sign-In",
-            )
-        )
-        if not result.success:
-            logger.warning(
-                "[MicrosoftStore] add_auth_shortcut "
-                "failed: %s",
-                result.error,
-            )

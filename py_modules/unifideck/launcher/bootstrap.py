@@ -24,11 +24,16 @@ def build_launcher_service(config: Any | None = None) -> Any:
     """
     from unifideck.auth.edge_browser import EdgeBrowser
     from unifideck.event_bus import EventBus
+    from unifideck.launcher.frontend_bridge import install_bus_forwarder
     from unifideck.services.bootstrap import build_service_subset
     from unifideck.services.launcher import LauncherService
     if config is None:
         config = _load_standalone_config()
     bus = EventBus()
+    # The launcher runs as its own process, so its LAUNCHER_STAGE toast
+    # events can't reach the plugin's replay buffer on their own. Mirror
+    # them into the shared bridge file the plugin drains (frontend_bridge).
+    install_bus_forwarder(bus)
     # Drift fix (lot 11g): the previous call was
     # ``build_service_subset(bus, config, paths, attrs={...})``
     # — but the real signature is
@@ -46,7 +51,17 @@ def build_launcher_service(config: Any | None = None) -> Any:
     cloud_svc = services.cloudsave
     assert shortcut_svc is not None, "bootstrap: shortcut service missing"
     assert proton_svc is not None, "bootstrap: proton service missing"
-    assert cloud_svc is not None, "bootstrap: cloudsave service missing"
+    # cloud_svc is intentionally optional. Cloud-save is a non-essential
+    # feature and must NEVER block a game launch: if it failed to
+    # instantiate (e.g. a missing native dep under the launcher's Python),
+    # we log and launch without save-sync rather than aborting the whole
+    # launcher at bootstrap. LauncherService tolerates a None cloud_svc and
+    # the cloud-sync phases no-op (see helpers.cloud_sync_phase).
+    if cloud_svc is None:
+        logger.warning(
+            "bootstrap: cloudsave service unavailable — "
+            "launching without cloud-save sync",
+        )
     edge_browser = EdgeBrowser(
         cdp_port=config.get_int("edge.cdp_port", 9222),
         locale_fn=lambda: config.get_str("ui.locale", "en-US"),

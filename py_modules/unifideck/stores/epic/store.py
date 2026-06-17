@@ -51,7 +51,11 @@ from unifideck.utils.config_helpers import get_cfg
 
 from .auth import EpicAuthFlow
 from .exe_resolver import EpicExeResolver
-from .install import EpicInstaller, ProgressCallback
+from .install import (
+    EpicInstaller,
+    ProgressCallback,
+    _read_legendary_install_path,
+)
 from .library import EpicLibraryReader, merge_install_status
 from .updates import EpicUpdateChecker
 
@@ -238,7 +242,6 @@ class EpicStore(StoreBase):
         # auth attempt would otherwise auto-login and bypass the
         # OAuth redirect entirely.
         edge.clear_store_cookies("epicgames.com")
-        await self._ensure_auth_shortcut()
         return cast("AuthResult", await self._auth.start_auth())
 
     async def complete_auth(self, code: str = "", **kwargs: Any) -> AuthResult:
@@ -270,6 +273,37 @@ class EpicStore(StoreBase):
             logger.exception("[EpicStore] get_library failed")
             return []
 
+    async def find_installed_exe(
+        self, install_path: str, game_id: str | None = None,
+    ) -> str | None:
+        """Resolve the launchable exe for an installed Epic game.
+
+        Used by ``DownloadWorker._build_installed_game`` to populate
+        ``games.map``. Delegates to ``EpicExeResolver``, which reads
+        legendary's manifest ``launch_exe`` (the authoritative target)
+        and falls back to the heuristic ``.exe`` finder — much better
+        than the generic ``StoreBase._find_exe`` the worker would
+        otherwise use. ``game_id`` is required for the manifest lookup.
+        """
+        if game_id:
+            try:
+                result = await self._exe_resolver.resolve(game_id)
+                exe = result.get("executable")
+                if (
+                    isinstance(exe, str)
+                    and exe
+                    and await asyncio.to_thread(Path(exe).is_file)
+                ):
+                    return exe
+            except Exception:
+                logger.warning(
+                    "[EpicStore] exe resolve failed for %s", game_id,
+                    exc_info=True,
+                )
+        return self._find_exe(
+            install_path, [game_id] if game_id else None,
+        )
+
     async def install_game(self, game_id: str, base_path: str | None = None,
                            progress_cb: ProgressCallback | None = None, **kwargs: Any) -> InstallResult:
         """Install game."""
@@ -281,7 +315,9 @@ class EpicStore(StoreBase):
 
     async def uninstall_game(self, game_id: str, **kwargs: Any) -> Result:
         """Uninstall game."""
-        return await self._installer.uninstall_game(game_id)
+        return await self._installer.uninstall_game(
+            game_id, delete_prefix=bool(kwargs.get("delete_prefix", False)),
+        )
 
     async def update_game(
         self,
@@ -304,19 +340,12 @@ class EpicStore(StoreBase):
         """Get game size."""
         return await self._updates.get_game_size(game_id)
 
-    async def _ensure_auth_shortcut(self) -> None:
-        """Ensure auth shortcut."""
-        if self._shortcut_service is None:
-            logger.debug("[EpicStore] no shortcut_service injected; skipping auth shortcut creation")
-            return
-        launcher = str(Path(self._plugin_dir or "") / "py_modules" / "unifideck" / "launcher" / "dispatcher.py")
-        if not await asyncio.to_thread(lambda: Path(launcher).is_file()):
-            logger.warning("[EpicStore] launcher dispatcher not found at %s", launcher)
-            return
-        result = await self._shortcut_service.add_auth_shortcut(
-            store="epic",
-            launcher_path=launcher,
-            title="Epic Games Sign-In",
-        )
-        if not result.success:
-            logger.warning("[EpicStore] add_auth_shortcut failed: %s", result.error)
+    async def get_installed_path(self, game_id: str) -> str | None:
+        """On-disk install dir, read from legendary's ``installed.json``.
+
+        The sync cache often lands Epic installs with ``install_path =
+        None`` (they're detected during sync, not via our worker), so
+        the App-Details "Installed size" needs this to find the real
+        directory and measure it. Local file read, off the event loop.
+        """
+        return await asyncio.to_thread(_read_legendary_install_path, game_id)

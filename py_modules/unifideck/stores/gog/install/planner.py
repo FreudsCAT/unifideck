@@ -250,17 +250,17 @@ class GOGInstallPlanner:
         platform: str,
     ) -> bytes | None:
         """Spawn GOGDL info."""
-        cmd = [
-            gogdl_bin,
-            "--auth-config-path",
-            self._config.auth_config_path,
-            "info",
-            "--platform",
-            platform,
-            game_id,
-        ]
         try:
-            env, _gogdl_cleanup = await self._tokens.acquire_gogdl_creds()
+            env, creds_path, _gogdl_cleanup = await self._tokens.acquire_gogdl_creds()
+            cmd = [
+                gogdl_bin,
+                "--auth-config-path",
+                creds_path,
+                "info",
+                "--platform",
+                platform,
+                game_id,
+            ]
             try:
                 proc = await asyncio.create_subprocess_exec(
                     *cmd,

@@ -43,7 +43,8 @@ interface InstallEdgeResponse {
  *  (Spinner), and result (toast + close). Buttons are disabled
  *  while a call is in flight so the user can't double-click. */
 export const ChromiumInstallModal: FC<Props> = ({
-  onInstalled, closeModal,
+  onInstalled,
+  closeModal,
 }) => {
   const { t } = useTranslation();
   const toast = useToast();
@@ -57,7 +58,8 @@ export const ChromiumInstallModal: FC<Props> = ({
     try {
       const raw = await call<[], unknown>(rpcRoutes.installEdge);
       const result = unwrapRpcEnvelope<InstallEdgeResponse>(raw, {
-        route: rpcRoutes.installEdge, throwing: false,
+        route: rpcRoutes.installEdge,
+        throwing: false,
       });
       if (result?.installed) {
         setInstalled(true);
@@ -87,8 +89,8 @@ export const ChromiumInstallModal: FC<Props> = ({
         installed
           ? t("microsoft.chromiumInstalled")
           : installing
-            ? t("microsoft.chromiumInstalling")
-            : t("microsoft.chromiumInstallButton")
+          ? t("microsoft.chromiumInstalling")
+          : t("microsoft.chromiumInstallButton")
       }
       strCancelButtonText={t("common.cancel")}
       onOK={installed ? closeModal : handleInstall}
@@ -103,9 +105,14 @@ export const ChromiumInstallModal: FC<Props> = ({
           </p>
         )}
         {installing && (
-          <div style={{
-            display: "flex", alignItems: "center", gap: 12, padding: "16px 0",
-          }}>
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 12,
+              padding: "16px 0",
+            }}
+          >
             <Spinner width={24} height={24} />
             <span style={{ fontSize: 14 }}>
               {t("microsoft.chromiumInstalling")}
@@ -117,9 +124,7 @@ export const ChromiumInstallModal: FC<Props> = ({
             {t("microsoft.chromiumInstalled")}
           </p>
         )}
-        {error && (
-          <p style={{ fontSize: 14, color: "#ef4444" }}>{error}</p>
-        )}
+        {error && <p style={{ fontSize: 14, color: "#ef4444" }}>{error}</p>}
       </div>
     </ConfirmModal>
   );

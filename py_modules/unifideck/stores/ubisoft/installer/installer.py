@@ -157,6 +157,7 @@ class UbisoftInstaller:
         install_path: str | None = None,
     ) -> InstallResult:
         """Install game."""
+        logger.info("[UbisoftInstall] install_game game_id=%s install_path=%s", game_id, install_path)
         try:
             logger.info(
                 "[UbisoftInstaller] installing game %s",

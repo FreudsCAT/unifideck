@@ -26,11 +26,10 @@ interface Props {
  * recently played). Virtualised under a configurable
  * threshold to keep memory bounded on large libraries.
  */
-export const GameGrid: FC<Props> = ({games, onSelect, tileWidth = 140}) => {
+export const GameGrid: FC<Props> = ({ games, onSelect, tileWidth = 140 }) => {
   return (
     <Focusable
       flow-children="grid"
-      onActivate={() => {}}
       style={{
         display: "grid",
         gridTemplateColumns: `repeat(auto-fill, minmax(${tileWidth}px, 1fr))`,
@@ -64,23 +63,28 @@ export const GameGrid: FC<Props> = ({games, onSelect, tileWidth = 140}) => {
               }}
             />
           )}
-          <span style={{
-            fontSize: 12,
-            color: "#e5e7eb",
-            whiteSpace: "nowrap",
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-            textAlign: "left",
-          }}>
+          <span
+            style={{
+              fontSize: 12,
+              color: "#e5e7eb",
+              whiteSpace: "nowrap",
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              textAlign: "left",
+            }}
+          >
             {game.title}
           </span>
-          <span style={{
-            position: "absolute",
-            top: 6, right: 6,
-            background: "#0f172acc",
-            borderRadius: 3,
-            padding: 3,
-          }}>
+          <span
+            style={{
+              position: "absolute",
+              top: 6,
+              insetInlineEnd: 6,
+              background: "#0f172acc",
+              borderRadius: 3,
+              padding: 3,
+            }}
+          >
             <StoreIcon store={game.store} size={12} />
           </span>
         </DialogButton>

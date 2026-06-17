@@ -41,6 +41,11 @@ _FALLBACK_PATHS = {
 }
 
 
+def _expand_config_path(config: ConfigManager, key: str, fallback: str) -> str:
+    """Read a config path value and expand ``~`` to an absolute string."""
+    return str(Path(config.get(key, fallback)).expanduser())
+
+
 @dataclass
 class ServicePaths:
     """All filesystem paths derived from the user environment.
@@ -82,18 +87,11 @@ class ServicePaths:
         """
         # Base directories — both expanded via Path.expanduser so
         # the config can use ``~`` and we still get an absolute path.
-        data_dir = str(
-            Path(
-                config.get(
-                    "paths.data_dir",
-                    _FALLBACK_PATHS["paths.data_dir"],
-                ),
-            ).expanduser(),
+        data_dir = _expand_config_path(
+            config, "paths.data_dir", _FALLBACK_PATHS["paths.data_dir"],
         )
-        steam_root = str(
-            Path(
-                config.get("paths.steam_root", _DEFAULT_STEAM_ROOT),
-            ).expanduser(),
+        steam_root = _expand_config_path(
+            config, "paths.steam_root", _DEFAULT_STEAM_ROOT,
         )
         Path(data_dir).mkdir(parents=True, exist_ok=True)
 
@@ -133,13 +131,8 @@ class ServicePaths:
             plugin_dir=resolved_plugin_dir,
             launcher_path=launcher_path,
             shortcuts_path=str(config_dir / "shortcuts.vdf"),
-            games_map_path=str(
-                Path(
-                    config.get(
-                        "paths.games_map",
-                        _FALLBACK_PATHS["paths.games_map"],
-                    ),
-                ).expanduser(),
+            games_map_path=_expand_config_path(
+                config, "paths.games_map", _FALLBACK_PATHS["paths.games_map"],
             ),
             config_vdf_path=str(config_dir / "localconfig.vdf"),
             loginusers_path=str(
@@ -149,6 +142,6 @@ class ServicePaths:
             queue_file=str(data_dir_path / "download_queue.json"),
             playtime_db=str(data_dir_path / "playtime.db"),
             local_save_root=str(data_dir_path / "saves"),
-            cloud_root=config.get("cloud_saves.remote_root") or None,
+            cloud_root=str(Path(config.get("cloud.root") or config.get("cloud_saves.remote_root") or "~/Save Games Backup").expanduser()),
             activity_log=str(data_dir_path / "sync_activity.log"),
         )

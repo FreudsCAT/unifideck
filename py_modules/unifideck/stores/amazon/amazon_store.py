@@ -24,7 +24,6 @@ appropriate sub-component.
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 from pathlib import Path
@@ -223,7 +222,6 @@ class AmazonStore(StoreBase):
                 store="amazon",
             )
         edge.clear_store_cookies("amazon.com")
-        await self._ensure_auth_shortcut()
         return cast("AuthResult", await self._auth.start_auth())
 
     async def complete_auth(self, code: str = "", **kwargs: Any) -> AuthResult:
@@ -282,12 +280,13 @@ class AmazonStore(StoreBase):
         progress_cb: ProgressCallback | None = None,
         **kwargs: Any,
     ) -> InstallResult:
-        """Update game."""
+        """Update game via ``nile update`` (in-place patch)."""
         base_path = await self._updates.resolve_current_base_path(game_id)
         return await self._installer.install_game(
             game_id,
             base_path=base_path,
             progress_cb=progress_cb,
+            verb="update",
         )
 
     async def check_for_updates(self) -> list[str]:
@@ -298,32 +297,17 @@ class AmazonStore(StoreBase):
         """Get game size."""
         return await self._updates.get_game_size(game_id)
 
+    async def get_installed_path(self, game_id: str) -> str | None:
+        """On-disk install dir for an installed Amazon game (nile records).
+
+        Lets the App-Details "Installed size" find the real directory
+        when the sync cache's ``install_path`` is missing/stale.
+        """
+        installed = await self._library.read_installed_ids()
+        info = installed.get(game_id) if isinstance(installed, dict) else None
+        path = info.get("path") if isinstance(info, dict) else None
+        return path if isinstance(path, str) and path else None
+
     async def get_official_url(self, game_id: str) -> str | None:
         """Get official URL."""
         return await self._library.get_official_url(game_id)
-
-    async def _ensure_auth_shortcut(self) -> None:
-        """Ensure auth shortcut."""
-        if self._shortcut_service is None:
-            logger.debug(
-                "[AmazonStore] no shortcut_service "
-                "injected; skipping auth shortcut creation",
-            )
-            return
-        launcher = str(Path(self._plugin_dir or "") / "py_modules" / "unifideck" / "launcher" / "dispatcher.py")
-        if not await asyncio.to_thread(lambda: Path(launcher).is_file()):
-            logger.warning(
-                "[AmazonStore] launcher dispatcher not found at %s",
-                launcher,
-            )
-            return
-        result = await self._shortcut_service.add_auth_shortcut(
-            store="amazon",
-            launcher_path=launcher,
-            title="Amazon Games Sign-In",
-        )
-        if not result.success:
-            logger.warning(
-                "[AmazonStore] add_auth_shortcut failed: %s",
-                result.error,
-            )

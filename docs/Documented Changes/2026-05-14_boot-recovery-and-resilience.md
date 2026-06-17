@@ -178,13 +178,13 @@ Tightened `aiohttp.ClientSession.get(timeout=...)` to wrap an `int` in `aiohttp.
 
 Format-aware logic smoke-tested:
 
-| Input | Output |
-|---|---|
-| `_suffix_for("grid", ".../img.png")` | `p.png` |
-| `_suffix_for("grid", ".../img.jpg")` | `p.jpg` |
-| `_suffix_for("logo", anything)` | `_logo.png` |
+| Input                                          | Output      |
+| ---------------------------------------------- | ----------- |
+| `_suffix_for("grid", ".../img.png")`           | `p.png`     |
+| `_suffix_for("grid", ".../img.jpg")`           | `p.jpg`     |
+| `_suffix_for("logo", anything)`                | `_logo.png` |
 | `_suffix_for("hero", ".../img.PNG?token=abc")` | `_hero.png` |
-| `_url_extension("http://x/img.PNG?v=2")` | `png` |
+| `_url_extension("http://x/img.PNG?v=2")`       | `png`       |
 
 `ArtworkService` imports cleanly. The 4-subscription event wiring confirmed in production logs.
 
@@ -226,10 +226,10 @@ Added `DECKY_PLUGIN_RUNTIME_DIR` resolution to `main.py` with `~/.local/share/un
 
 **Resolved Paths**
 
-| Context | plugin_dir | runtime_dir | cache |
-|---|---|---|---|
+| Context     | plugin_dir                     | runtime_dir                 | cache                             |
+| ----------- | ------------------------------ | --------------------------- | --------------------------------- |
 | Under Decky | `~/homebrew/plugins/Unifideck` | `~/homebrew/data/Unifideck` | `~/homebrew/data/Unifideck/cache` |
-| Dev / tests | source repo path | `~/.local/share/unifideck` | `~/.local/share/unifideck/cache` |
+| Dev / tests | source repo path               | `~/.local/share/unifideck`  | `~/.local/share/unifideck/cache`  |
 
 Both locations are guaranteed writable by the running user. Public end users will never need a `chown` workaround.
 
@@ -292,10 +292,10 @@ Boot completed (thanks to Bug 7's fallbacks) but the plugin ran in degraded mode
 
 Decky CLI 0.0.8's `decky plugin build` flattens the contents of source `defaults/` to the install root. This is a documented Decky convention: `defaults/` represents files that should be materialised at the install root on first install and preserved across plugin updates, so users can customise them. Concretely:
 
-| Source location | After `decky plugin build` and install |
-|---|---|
-| `defaults/config.json` | `<install>/config.json` |
-| `defaults/backend/` | `<install>/backend/` |
+| Source location        | After `decky plugin build` and install |
+| ---------------------- | -------------------------------------- |
+| `defaults/config.json` | `<install>/config.json`                |
+| `defaults/backend/`    | `<install>/backend/`                   |
 
 The Unifideck boot code was looking for `<install>/defaults/config.json` — a path that does not exist in any Decky-CLI-produced install. The `defaults/` directory only survives in source layouts and in local builds that bypass the CLI.
 
@@ -492,12 +492,12 @@ Documented above. Runs as part of the standard `dev` and `prod` build flows. Rep
 
 ## Mode-Selection Guide for Future Releases
 
-| Command | Use case | Time |
-|---|---|---|
-| `bash build-plugin.sh dev quick-install` | Tight dev loop after Python/config/binary edits | Under 1 second |
-| `bash build-plugin.sh dev install` | End-to-end smoke test on the dev Deck | ~30 seconds |
-| `bash build-plugin.sh prod` | Produce `out/unifideck.prod.v<VERSION>.zip` for distribution. No install. | ~30 seconds |
-| `bash build-plugin.sh prod install` | Final pre-release sanity check on the dev Deck | ~30 seconds |
+| Command                                  | Use case                                                                  | Time           |
+| ---------------------------------------- | ------------------------------------------------------------------------- | -------------- |
+| `bash build-plugin.sh dev quick-install` | Tight dev loop after Python/config/binary edits                           | Under 1 second |
+| `bash build-plugin.sh dev install`       | End-to-end smoke test on the dev Deck                                     | ~30 seconds    |
+| `bash build-plugin.sh prod`              | Produce `out/unifideck.prod.v<VERSION>.zip` for distribution. No install. | ~30 seconds    |
+| `bash build-plugin.sh prod install`      | Final pre-release sanity check on the dev Deck                            | ~30 seconds    |
 
 For a public release: bump `version` in `package.json` and `plugin.json`, run `prod install` to verify, upload the zip from `out/` to a GitHub Release, and (for the Decky Plugin Store) submit per the store's review process.
 

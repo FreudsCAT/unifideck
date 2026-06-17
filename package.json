@@ -18,7 +18,10 @@
     "typecheck": "tsc --noEmit"
   },
   "lint-staged": {
-    "*.{js,ts,jsx,tsx}": ["eslint --fix", "prettier --write"],
+    "*.{js,ts,jsx,tsx}": [
+      "eslint --fix",
+      "prettier --write"
+    ],
     "*.{json,md,yml}": "prettier --write"
   },
   "keywords": [
@@ -80,9 +83,19 @@
       ]
     },
     "supportedArchitectures": {
-      "os": ["current", "linux"],
-      "cpu": ["current", "x64"],
-      "libc": ["current", "musl", "glibc"]
+      "os": [
+        "current",
+        "linux"
+      ],
+      "cpu": [
+        "current",
+        "x64"
+      ],
+      "libc": [
+        "current",
+        "musl",
+        "glibc"
+      ]
     }
   },
   "remote_binary_bundling": true,

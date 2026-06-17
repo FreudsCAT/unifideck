@@ -89,9 +89,9 @@ class ShortcutService(
         await self._save_all()
 
     @staticmethod
-    def generate_app_id(exe: str, title: str) -> int:
+    def generate_app_id(launcher: str, identity: str) -> int:
         """Delegate to module-level generate_app_id in games_map.py."""
-        return generate_app_id(exe, title)
+        return generate_app_id(launcher, identity)
 
     async def _load_shortcuts(self) -> None:
         """Load shortcuts.vdf into memory (idempotent)."""

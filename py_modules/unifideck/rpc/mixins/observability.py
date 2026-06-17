@@ -104,6 +104,30 @@ class ObservabilityRPCMixin:
             raise RpcError("service_unavailable", service="replay")
         return self.replay.snapshot(events=events)
 
+    async def get_launcher_toasts(self) -> Any:
+        """Return launcher-subprocess toasts written since the last poll.
+
+        The game launcher is a separate process; it appends
+        LAUNCHER_STAGE toasts to a shared file
+        (``launcher.frontend_bridge``) that this RPC drains. A
+        *persistent* frontend poll calls it regardless of whether the
+        QAM panel is open, so launch-time toasts (first-time prefix
+        setup, dependency install, Proton switch, …) appear in Gaming
+        Mode. Returns a list of payloads
+        ``{i18n_key, i18n_title_key?, i18n_params?, severity?, action?}``.
+        """
+        drainer = getattr(self, "_launcher_drainer", None)
+        if drainer is None:
+            from unifideck.launcher.frontend_bridge import LauncherEventDrainer
+
+            drainer = LauncherEventDrainer()
+            self._launcher_drainer = drainer
+        try:
+            return drainer.poll_new()
+        except Exception:
+            logger.debug("[Observability] launcher toast poll failed", exc_info=True)
+            return []
+
     async def release_quarantine(self, handler_name: str) -> Any:
         """Release a watchdog-quarantined handler after a fix.
 

@@ -65,8 +65,17 @@ async def fetch_appdetails(
     params = {"appids": str(steam_app_id), "cc": "us", "l": "english"}
     try:
         timeout = aiohttp.ClientTimeout(total=timeout_s)
+        # ``ssl=False`` for the same reason ``library.search_store`` does
+        # it: SteamOS's bundled cert store predates several Steam CDN
+        # cert rotations, so default SSL verification fails inside the
+        # Decky plugin process for ``store.steampowered.com`` (every
+        # call comes back as ``ClientConnectorCertificateError``, caught
+        # at debug level → silent ``None`` return).
+        connector = aiohttp.TCPConnector(ssl=False)
         async with (
-            aiohttp.ClientSession(timeout=timeout) as session,
+            aiohttp.ClientSession(
+                connector=connector, timeout=timeout,
+            ) as session,
             session.get(STEAM_APPDETAILS_URL, params=params) as response,
         ):
             if response.status != _HTTP_OK:

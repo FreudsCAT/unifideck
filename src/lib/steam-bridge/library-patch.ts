@@ -20,7 +20,7 @@ import {
   wrapReactType,
   type Patch,
 } from "@decky/ui";
-import { ReactElement, useEffect } from "react";
+import { ReactElement, useEffect, useState } from "react";
 import {
   tabManager,
   getHiddenDefaultTabs,
@@ -194,6 +194,13 @@ export function applyLibraryPatch(bridge: SteamBridge): RouterPatchHandle {
     const props = rawProps as LibraryRouteProps;
     if (isTabMasterInstalled()) return props;
 
+    const [, setVersion] = useState(0);
+    useEffect(() => {
+      return tabManager.onTabsChanged(() => {
+        setVersion((v) => v + 1);
+      });
+    }, []);
+
     afterPatch(
       props.children as never,
       "type",
@@ -227,8 +234,13 @@ export function applyLibraryPatch(bridge: SteamBridge): RouterPatchHandle {
                 const hooks = getReactHooks();
                 if (!hooks?.useMemo) return origMemoComponent(...args);
                 const realUseMemo = hooks.useMemo;
-                hooks.useMemo = <T>(fn: () => T, deps: unknown[]): T =>
-                  realUseMemo(() => spliceTabs(fn(), deps) as T, deps);
+                hooks.useMemo = <T>(fn: () => T, deps: unknown[]): T => {
+                  const enrichedDeps = [...deps, tabManager.getVersion()];
+                  return realUseMemo(
+                    () => spliceTabs(fn(), enrichedDeps) as T,
+                    enrichedDeps,
+                  );
+                };
                 try {
                   return origMemoComponent(...args);
                 } finally {

@@ -27,7 +27,12 @@ PROTECTED_IDS: frozenset[str] = frozenset({
     "epic:epic-auth",
     "gog:gog-auth",
     "amazon:amazon-auth",
-    "microsoft:xbox-auth",
+    # NOTE: Microsoft has no protected auth id. Its 0.7 auth flow uses
+    # ephemeral, frontend-managed shortcuts (``microsoft:ms-auth`` /
+    # ``microsoft:ms-auth-temp-*``) that never reach shortcuts.vdf, so
+    # there is nothing to protect here. The old persistent 0.6.x
+    # ``microsoft:ms-auth`` row MUST stay sweepable so reconcile can
+    # remove it on the next sync — do not add it back.
 })
 
 # Prefix-protected — when an auth shortcut uses a per-session id

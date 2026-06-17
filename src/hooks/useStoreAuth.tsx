@@ -12,7 +12,6 @@
  *  - `status`      : current StoreStatus
  *  - `connect`     : start auth, await terminal event
  *  - `disconnect`  : logout + clear local status
- *  - `submit2FA`   : complete an in-flight auth with a code
  *  - `busy`        : true when an auth call is in flight
  */
 import { useCallback, useState } from "react";
@@ -36,7 +35,6 @@ export interface UseStoreAuthResult {
   busy: boolean;
   connect: () => Promise<AuthResult | null>;
   disconnect: () => Promise<void>;
-  submit2FA: (code: string) => Promise<AuthResult | null>;
 }
 
 /**
@@ -103,17 +101,5 @@ export function useStoreAuth(store: StoreId): UseStoreAuthResult {
     }
   }, [auth, store]);
 
-  const submit2FA = useCallback(
-    async (code: string) => {
-      setBusy(true);
-      try {
-        return await auth.completeAuth(store, code);
-      } finally {
-        setBusy(false);
-      }
-    },
-    [auth, store],
-  );
-
-  return { info, status, busy, connect, disconnect, submit2FA };
+  return { info, status, busy, connect, disconnect };
 }

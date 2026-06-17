@@ -40,11 +40,7 @@ import {
 // Re-export so existing callers can import these from
 // "./translations" without caring that the data actually
 // comes from a generated file
-export {
-  SUPPORTED_LANGUAGES,
-  LANGUAGE_NAMES,
-  RTL_LANGUAGES,
-};
+export { SUPPORTED_LANGUAGES, LANGUAGE_NAMES, RTL_LANGUAGES };
 export type { SupportedLanguage };
 /**
  * Return true if the given language tag should be rendered in
@@ -82,15 +78,13 @@ function applyDirection(lang: SupportedLanguage): void {
 export async function initI18n(): Promise<void> {
   if (i18n.isInitialized) return;
   const initialLang = detectInitialLanguage();
-  await i18n
-    .use(initReactI18next)
-    .init({
-      resources: LOCALE_RESOURCES,
-      lng: initialLang,
-      fallbackLng: "en-US",
-      interpolation: { escapeValue: false },
-      returnEmptyString: false,
-    });
+  await i18n.use(initReactI18next).init({
+    resources: LOCALE_RESOURCES,
+    lng: initialLang,
+    fallbackLng: "en-US",
+    interpolation: { escapeValue: false },
+    returnEmptyString: false,
+  });
   applyDirection(initialLang);
 }
 /**
@@ -98,9 +92,7 @@ export async function initI18n(): Promise<void> {
  * to localStorage, and update the document direction so RTL
  * languages flip immediately without a page reload.
  */
-export async function changeLanguage(
-  lang: SupportedLanguage,
-): Promise<void> {
+export async function changeLanguage(lang: SupportedLanguage): Promise<void> {
   await i18n.changeLanguage(lang);
   applyDirection(lang);
   try {

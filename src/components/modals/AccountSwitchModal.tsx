@@ -23,7 +23,12 @@ interface Props {
 }
 
 export const AccountSwitchModal: FC<Props> = ({
-  hasRegistry, hasAuthTokens, onMigrate, onClearAuths, onSkip, closeModal,
+  hasRegistry,
+  hasAuthTokens,
+  onMigrate,
+  onClearAuths,
+  onSkip,
+  closeModal,
 }) => {
   const { t } = useTranslation();
   return (
@@ -40,18 +45,28 @@ export const AccountSwitchModal: FC<Props> = ({
         onCancel={closeModal}
       >
         <div className="unifideck-account-switch" style={{ padding: "10px 0" }}>
-          <div style={{
-            marginBottom: 20, color: "#ccc", fontSize: 14, lineHeight: 1.5,
-          }}>
+          <div
+            style={{
+              marginBottom: 20,
+              color: "#ccc",
+              fontSize: 14,
+              lineHeight: 1.5,
+            }}
+          >
             {t("accountSwitch.description")}
           </div>
           <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
             {hasRegistry && (
               <DialogButton
-                onClick={async () => { closeModal(); await onMigrate(); }}
+                onClick={async () => {
+                  closeModal();
+                  await onMigrate();
+                }}
                 style={{
-                  display: "flex", alignItems: "center",
-                  justifyContent: "center", gap: 8,
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  gap: 8,
                 }}
               >
                 <FaExchangeAlt /> {t("accountSwitch.migrate")}
@@ -59,20 +74,32 @@ export const AccountSwitchModal: FC<Props> = ({
             )}
             {hasAuthTokens && (
               <DialogButton
-                onClick={async () => { closeModal(); await onClearAuths(); }}
+                onClick={async () => {
+                  closeModal();
+                  await onClearAuths();
+                }}
                 style={{
-                  display: "flex", alignItems: "center",
-                  justifyContent: "center", gap: 8, color: "#ef4444",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  gap: 8,
+                  color: "#ef4444",
                 }}
               >
                 <FaTrashAlt /> {t("accountSwitch.freshStart")}
               </DialogButton>
             )}
             <DialogButton
-              onClick={() => { closeModal(); onSkip(); }}
+              onClick={() => {
+                closeModal();
+                onSkip();
+              }}
               style={{
-                display: "flex", alignItems: "center",
-                justifyContent: "center", gap: 8, opacity: 0.7,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                gap: 8,
+                opacity: 0.7,
               }}
             >
               <FaForward /> {t("accountSwitch.skip")}

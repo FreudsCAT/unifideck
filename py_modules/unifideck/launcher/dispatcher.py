@@ -63,6 +63,65 @@ def _resolve_plugin_dir() -> Path:
     """Resolve plugin dir."""
     from unifideck.core.paths import resolve_plugin_dir
     return resolve_plugin_dir(start=Path(__file__))
+def _install_path_from_cache(store: str, game_id: str) -> str:
+    """Look up an installed game's directory from the library cache.
+
+    Fallback for games whose games.map row is missing entirely (e.g.
+    installed by an older build that never wrote one). Returns ``""``
+    when the cache is absent or the game isn't found.
+    """
+    import json
+    cache = Path(
+        "~/.local/share/unifideck/library_cache.json",
+    ).expanduser()
+    if not cache.is_file():
+        return ""
+    try:
+        data = json.loads(cache.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return ""
+    libraries = data.get("libraries") if isinstance(data, dict) else None
+    games = (libraries or {}).get(store) or []
+    for game in games:
+        if isinstance(game, dict) and game.get("store_game_id") == game_id:
+            return str(game.get("install_path") or "")
+    return ""
+
+
+def _resolve_exe_from_install(store: str, install_path: str) -> str | None:
+    """Re-resolve a launchable target from an install dir.
+
+    Repairs stale/missing games.map rows at launch time. GOG (and
+    other) Linux-native games launch via a root ``start.sh`` wrapper;
+    everything else resolves the best ``.exe`` via the shared
+    ``exe_finder`` heuristic. Best-effort — returns None on failure.
+
+    Deliberately avoids importing any store package (e.g.
+    ``GOGExeResolver``): the store ``__init__`` chains pull in auth →
+    security → ``cryptography`` whose native ``_cffi_backend`` isn't
+    importable in the slim launcher Python, which would crash the
+    whole resolution. ``core.exe_finder`` is dependency-light and safe.
+    """
+    if not install_path:
+        return None
+    try:
+        from unifideck.core.exe_finder import exe_finder
+
+        # Native Linux games (notably GOG) launch via a ``start.sh``
+        # wrapper at the install root — ``exe_finder`` only finds
+        # ``.exe`` files, so check for it explicitly first.
+        start_sh = Path(install_path) / "start.sh"
+        if start_sh.is_file():
+            return str(start_sh)
+        return exe_finder.find(install_path)
+    except Exception:
+        logger.exception(
+            "[launcher.dispatcher] exe re-resolution failed for %s",
+            install_path,
+        )
+        return None
+
+
 async def _build_context(
     argv: list[str],
     shortcut_svc: ShortcutService,
@@ -71,18 +130,15 @@ async def _build_context(
     game_key, raw_options = _parse_argv(argv)
     store, game_id = game_key.split(":", 1)
 
-    # Steam passes launch options as argv, not as env vars —
-    # promote any ``UNIFIDECK_*=value`` tokens so the rest of
-    # the dispatcher (auth detection, downstream services) can
-    # read them from ``os.environ`` as it expects.
+    # Steam passes launch options as argv, not as env vars — promote
+    # any ``UNIFIDECK_*=value`` tokens so the rest of the dispatcher
+    # can read them from ``os.environ`` as it expects.
     _promote_env_tokens(raw_options)
 
-    # Auth-shortcut path : the auth shortcut key is
-    # ``<store>:<store>-auth`` and we expect
-    # ``UNIFIDECK_<STORE>_ACTION=auth`` in the launch options.
-    # There's no games.map entry for it (it's not a game) so we
-    # short-circuit the registry lookup and build a context the
-    # auth flow can consume directly.
+    # Auth-shortcut path: key is ``<store>:<store>-auth`` with
+    # ``UNIFIDECK_<STORE>_ACTION=auth``. No games.map entry exists, so
+    # short-circuit the registry lookup and build a context the auth
+    # flow can consume directly.
     auth_store, is_launch_action = _detect_auth_action()
     if not is_launch_action:
         logger.info(
@@ -90,39 +146,106 @@ async def _build_context(
             "auth_store=%s game_key=%s",
             auth_store, game_key,
         )
-        return LaunchContext(
-            store=store,
-            game_id=game_id,
-            exe_path=Path("/dev/null"),
-            work_dir=_resolve_plugin_dir(),
-            plugin_dir=_resolve_plugin_dir(),
-            raw_options=raw_options,
-            is_launch_action=False,
-            auth_store=auth_store,
-            bypass_circuit_breaker=False,
-        )
+        return _auth_context(store, game_id, raw_options, auth_store)
 
-    entry = await shortcut_svc.get_entry_for_game_key(
-        store, game_id,
+    exe, work_dir = await _resolve_game_exe(
+        shortcut_svc, store, game_id, game_key,
     )
-    if entry is None:
+    if not exe:
+        # Microsoft titles are Xbox Cloud Gaming (browser-streamed) —
+        # no install and no games.map row. Synthesize the xCloud
+        # context so the matrix routes to ``_launch_xcloud``.
+        if store == "microsoft":
+            logger.info(
+                "[launcher.dispatcher] microsoft game not in games.map — "
+                "synthesizing xCloud context for %s", game_key,
+            )
+            return _xcloud_context(store, game_id, raw_options)
         raise GameNotFoundError(
             f"game {game_key!r} not found in games.map",
             context={"game_key": game_key},
         )
-    exe_path = Path(entry.exe)
-    work_dir = Path(entry.work_dir)
-    bypass = _resolve_bypass_flag(store, game_id)
+    return _game_context(store, game_id, exe, work_dir, raw_options)
+
+
+async def _resolve_game_exe(
+    shortcut_svc: ShortcutService, store: str, game_id: str, game_key: str,
+) -> tuple[str, str]:
+    """Resolve ``(exe, work_dir)`` from games.map, repairing a stale row.
+
+    Games installed by older builds (or discovered via manifest) may
+    have an absent row (Amazon) or an empty exe (GOG ``start.sh``); we
+    re-resolve from the install dir so they launch without a reinstall.
+    """
+    entry = await shortcut_svc.get_entry_for_game_key(store, game_id)
+    exe = (entry.exe if entry else "") or ""
+    work_dir = (entry.work_dir if entry else "") or ""
+    if not exe and store != "microsoft":
+        if not work_dir:
+            work_dir = _install_path_from_cache(store, game_id)
+        resolved = (
+            _resolve_exe_from_install(store, work_dir) if work_dir else None
+        )
+        if resolved:
+            logger.info(
+                "[launcher.dispatcher] re-resolved exe for %s → %s",
+                game_key, resolved,
+            )
+            exe = resolved
+    return exe, work_dir
+
+
+def _auth_context(
+    store: str, game_id: str, raw_options: str, auth_store: str | None,
+) -> LaunchContext:
+    """Context for an auth shortcut (no game target)."""
+    plugin_dir = _resolve_plugin_dir()
     return LaunchContext(
         store=store,
         game_id=game_id,
-        exe_path=exe_path,
-        work_dir=work_dir,
-        plugin_dir=_resolve_plugin_dir(),
+        exe_path=Path("/dev/null"),
+        work_dir=plugin_dir,
+        plugin_dir=plugin_dir,
+        raw_options=raw_options,
+        is_launch_action=False,
+        auth_store=auth_store,
+        bypass_circuit_breaker=False,
+    )
+
+
+def _xcloud_context(
+    store: str, game_id: str, raw_options: str,
+) -> LaunchContext:
+    """Synthesized xCloud context for a Microsoft title with no row."""
+    plugin_dir = _resolve_plugin_dir()
+    return LaunchContext(
+        store=store,
+        game_id=game_id,
+        exe_path=Path("xcloud"),
+        work_dir=plugin_dir,
+        plugin_dir=plugin_dir,
         raw_options=raw_options,
         is_launch_action=True,
         auth_store=None,
-        bypass_circuit_breaker=bypass,
+        bypass_circuit_breaker=False,
+    )
+
+
+def _game_context(
+    store: str, game_id: str, exe: str, work_dir: str, raw_options: str,
+) -> LaunchContext:
+    """Context for a normal installed game with a resolved exe."""
+    plugin_dir = _resolve_plugin_dir()
+    return LaunchContext(
+        store=store,
+        game_id=game_id,
+        exe_path=Path(exe),
+        work_dir=Path(work_dir) if work_dir else plugin_dir,
+        plugin_dir=plugin_dir,
+        raw_options=raw_options,
+        is_launch_action=True,
+        auth_store=None,
+        bypass_circuit_breaker=_resolve_bypass_flag(store, game_id),
     )
 
 def _detect_auth_action() -> tuple[str | None, bool]:

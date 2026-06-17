@@ -285,15 +285,6 @@ def get_compat_tool_for_app(appid_unsigned: int) -> str:
     )
 
 
-def get_compat_tool_for_game(store_game_id: str) -> dict[str, Any]:
-    """Return the empty compat tool descriptor for a store game (legacy stub)."""
-    return {
-        "tool_name": "",
-        "appid": 0,
-        "store_game_id": store_game_id,
-    }
-
-
 def temporarily_clear_compat_tool(appid_unsigned: int) -> dict[str, Any]:
     """Clear the compat tool for ``appid_unsigned``, returning previous state."""
     result = _pt_mgr().clear_for_app(int(appid_unsigned))

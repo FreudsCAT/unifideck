@@ -68,9 +68,7 @@ export const SyncProvider: FC<{ children: ReactNode }> = ({ children }) => {
     rpcRoutes.forceSyncLibraries,
   );
 
-  const cancelMut = useRPCMutation<[], { ok: boolean }>(
-    rpcRoutes.cancelSync,
-  );
+  const cancelMut = useRPCMutation<[], { ok: boolean }>(rpcRoutes.cancelSync);
 
   // Tracks which post-sync phases the backend still owes us. Reset
   // on SYNC_STARTED; cleared via POST_SYNC_PHASE_CHANGED. When this
@@ -78,11 +76,21 @@ export const SyncProvider: FC<{ children: ReactNode }> = ({ children }) => {
   // if the 500ms poll hasn't caught up yet.
   const pendingPhasesRef = useRef<Set<string>>(new Set());
 
+  // True only after SYNC_STARTED fires in this JS session. Guards
+  // the Steam-restart modal against the event-bus replay path: when
+  // the plugin reloads (Steam/Decky restart), the backend's event
+  // buffer replays SHORTCUT_RECONCILE_COMPLETE + POST_SYNC_PHASE_CHANGED
+  // from the prior session. Without this guard the modal pops every
+  // time the QAM mounts after a plugin reload, even though Steam
+  // has already restarted and the prompt is obsolete.
+  const observedActiveSyncRef = useRef(false);
+
   // Wire EventBus
   useEventBus(Events.SYNC_STARTED, () => {
+    observedActiveSyncRef.current = true;
     setSyncing(true);
     setCancelling(false);
-    pendingPhasesRef.current = new Set(["artwork", "metadata", "proton_setup"]);
+    pendingPhasesRef.current = new Set(["artwork", "metadata", "proton_meta"]);
     EventBusClient.bumpToFast();
   });
 
@@ -120,13 +128,18 @@ export const SyncProvider: FC<{ children: ReactNode }> = ({ children }) => {
       // prompt for a Steam restart. The progress bar is at 100%,
       // artwork + metadata + compat enrichment are finished, and
       // the user can make an informed decision.
-      if (pendingRestartRef.current) {
+      if (pendingRestartRef.current && observedActiveSyncRef.current) {
         pendingRestartRef.current = false;
         try {
           showModal(<SteamRestartModal reason="sync" closeModal={() => {}} />);
         } catch (e) {
           console.error("[SyncContext] showModal(SteamRestartModal) failed", e);
         }
+      } else if (pendingRestartRef.current) {
+        // Replay path: events are from a sync that ran before this
+        // JS module loaded. Clear the flag so a later in-session
+        // SHORTCUT_RECONCILE_COMPLETE can re-arm it cleanly.
+        pendingRestartRef.current = false;
       }
     }
   });
@@ -140,6 +153,9 @@ export const SyncProvider: FC<{ children: ReactNode }> = ({ children }) => {
   useEventBus(Events.SYNC_CANCELLED, () => {
     setSyncing(false);
     setCancelling(false);
+    // Drop stale progress so the UI doesn't keep showing
+    // "cancelled" details forever; the next sync repopulates it.
+    setProgress(null);
     pendingPhasesRef.current.clear();
   });
 
@@ -225,32 +241,53 @@ export const SyncProvider: FC<{ children: ReactNode }> = ({ children }) => {
   const startSync = useCallback(async () => {
     if (isSyncing) return;
     EventBusClient.bumpToFast();
+    // Clear stale progress so the LibrarySync progress block,
+    // gated on ``IN_PROGRESS_STATUSES``, doesn't stay hidden by a
+    // lingering ``status="complete"`` from the previous run. The
+    // first 500ms poll repopulates it with the new sync's state.
+    setProgress(null);
+    observedActiveSyncRef.current = true;
     setSyncing(true);
-    void startMut.mutate().catch((e) =>
-      console.warn("[SyncContext] startSync RPC failed", e));
+    void startMut
+      .mutate()
+      .catch((e) => console.warn("[SyncContext] startSync RPC failed", e));
     void pollOnce();
   }, [isSyncing, startMut, pollOnce]);
 
   /** Force sync. Optionally re-fetches all artwork
    *  (slow, bandwidth-heavy). Default keeps current artwork. */
-  const forceSync = useCallback(async (resyncArtwork?: boolean) => {
-    EventBusClient.bumpToFast();
-    setSyncing(true);
-    void forceMut.mutate(resyncArtwork).catch((e) =>
-      console.warn("[SyncContext] forceSync RPC failed", e));
-    void pollOnce();
-  }, [forceMut, pollOnce]);
+  const forceSync = useCallback(
+    async (resyncArtwork?: boolean) => {
+      EventBusClient.bumpToFast();
+      setProgress(null);
+      observedActiveSyncRef.current = true;
+      setSyncing(true);
+      void forceMut
+        .mutate(resyncArtwork)
+        .catch((e) => console.warn("[SyncContext] forceSync RPC failed", e));
+      void pollOnce();
+    },
+    [forceMut, pollOnce],
+  );
 
-  /** Check whether cel sync. */
+  /** Cancel an in-flight sync. */
   const cancelSync = useCallback(async () => {
     if (!isSyncing || isCancelling) return;
     setCancelling(true);
+    // Clear stale progress immediately so the bar / counters don't
+    // linger while the backend tears the sync down — visual feedback
+    // that the cancel was received, even before SYNC_CANCELLED fires.
+    setProgress(null);
     await cancelMut.mutate();
   }, [isSyncing, isCancelling, cancelMut]);
 
   const value: SyncContextValue = {
-    progress, isSyncing, isCancelling,
-    startSync, forceSync, cancelSync,
+    progress,
+    isSyncing,
+    isCancelling,
+    startSync,
+    forceSync,
+    cancelSync,
   };
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;

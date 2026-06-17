@@ -24,13 +24,13 @@
  */
 import { call } from "@decky/api";
 import {
-  type ShortcutLaunchContext,
   type ShortcutLaunchResult,
   getShortcutRunGameId,
   isShortcutAppRunning,
 } from "../lib/steam-bridge";
 import { rpcRoutes, type RouteName } from "../api/rpc-routes";
 import { unwrapRpcEnvelope } from "../api/useRPC";
+import { applyWebBrowserLayout } from "./controllerConfig";
 
 /**
  * Per-store configuration for the auth-shortcut
@@ -59,7 +59,9 @@ export type AuthShortcutConfig = {
  * `Result<T>` so callers can discriminate timeouts
  * from auth rejections without parsing strings.
  */
-export type AuthShortcutLaunchResult = ShortcutLaunchResult & {appId?: number;};
+export type AuthShortcutLaunchResult = ShortcutLaunchResult & {
+  appId?: number;
+};
 
 const EPIC_AUTH_CONFIG: AuthShortcutConfig = {
   store: "epic",
@@ -99,40 +101,30 @@ const MICROSOFT_AUTH_CONFIG: AuthShortcutConfig = {
 
 const SHORTCUT_POLL_DELAY_MS = 250;
 const SHORTCUT_POLL_TIMEOUT_MS = 5000;
-const TEMP_SHORTCUT_CLEANUP_DELAY_MS = 15000;
-const TEMP_SHORTCUT_POST_REMOVE_REPAIR_DELAY_MS = 2000;
+/** Safety-net delay for removing the temporary auth shortcut when the
+ *  "game stopped" lifetime notification is never observed (missed event
+ *  or a Steam API change). Matches the auth flow's own wait window — the
+ *  AuthDispatcher's 10-min ceiling and the launcher's 600s
+ *  `auth_max_seconds` — so the listener lives exactly as long as a sign-in
+ *  possibly can and no longer. On the happy path the shortcut is removed
+ *  the instant the auth "game" stops, well before this fires. */
+const TEMP_SHORTCUT_SAFETY_CLEANUP_MS = 10 * 60 * 1000;
 
 /** App store entry. */
 interface AppStoreEntry {
   gameid?: unknown;
-  launch_options?: unknown;
-  strLaunchOptions?: unknown;
-  m_strLaunchOptions?: unknown;
 }
 
 /** App store shape. */
 interface AppStoreShape {
   m_mapApps?: {
     get?: (id: number) => AppStoreEntry | undefined;
-    forEach?: (cb: (app: AppStoreEntry, id: number) => void) => void;
   };
 }
 
 /** App store. */
 function appStore(): AppStoreShape | undefined {
   return (window as unknown as { appStore?: AppStoreShape }).appStore;
-}
-
-/** Check whether shortcut registered. */
-function isShortcutRegistered(appId: number): boolean {
-  return Boolean(appStore()?.m_mapApps?.get?.(appId));
-}
-
-/** Get shortcut launch options. */
-function getShortcutLaunchOptions(appId: number): string | null {
-  const app = appStore()?.m_mapApps?.get?.(appId);
-  const lo = app?.launch_options ?? app?.strLaunchOptions ?? app?.m_strLaunchOptions;
-  return typeof lo === "string" ? lo : null;
 }
 
 /** Get shortcut game ID string. */
@@ -142,66 +134,14 @@ function getShortcutGameIdString(appId: number): string | null {
   return typeof gameId === "string" && gameId.length > 0 ? gameId : null;
 }
 
-/** Scan Steam's in-memory app store for an entry whose
- *  launch options contain the given store id. Handles the
- *  case where the backend's CRC32-computed appid differs
- *  from what Steam actually loaded. */
-function findAppByStoreId(storeId: string): number | null {
-  const map = appStore()?.m_mapApps;
-  if (!map?.forEach) return null;
-  let found: number | null = null;
-  map.forEach((app, appId) => {
-    if (found !== null) return;
-    const lo =
-      app?.launch_options ?? app?.strLaunchOptions ?? app?.m_strLaunchOptions;
-    if (typeof lo === "string" && lo.includes(storeId)) {
-      found = appId;
-    }
-  });
-  return found;
-}
-// ─── Polling helpers ─────────────────────────────────────────
 /** Log tag. */
 function logTag(config: AuthShortcutConfig): string {
   return `[AuthShortcutLaunch:${config.store}]`;
 }
-/** Wait for shortcut. */
-async function waitForShortcut(
-  appId: number,
-  config: AuthShortcutConfig,
-  minimumDelayMs = 0,
-): Promise<number | null> {
-  const startedAt = Date.now();
-  const timeoutMs = Math.max(SHORTCUT_POLL_TIMEOUT_MS, minimumDelayMs);
-  return new Promise<number | null>((resolve) => {
-    /** Poll. */
-    const poll = (): void => {
-      const elapsed = Date.now() - startedAt;
-      if (elapsed >= minimumDelayMs && isShortcutRegistered(appId)) {
-        resolve(appId);
-        return;
-      }
-      if (elapsed >= minimumDelayMs) {
-        const foundId = findAppByStoreId(config.storeId);
-        if (foundId !== null) {
-          console.log(
-            `${logTag(config)} Found shortcut by store_id scan: ` +
-              `expected=${appId}, actual=${foundId}`,
-          );
-          resolve(foundId);
-          return;
-        }
-      }
-      if (elapsed >= timeoutMs) {
-        resolve(null);
-        return;
-      }
-      window.setTimeout(poll, SHORTCUT_POLL_DELAY_MS);
-    };
-    window.setTimeout(poll, SHORTCUT_POLL_DELAY_MS);
-  });
-}
-/** Wait for shortcut game ID. */
+
+/** Poll Steam's in-memory app store until the freshly-created
+ *  temp shortcut has a non-empty ``gameid`` (the signed CRC Steam
+ *  uses for ``RunGame``). */
 async function waitForShortcutGameId(
   appId: number,
   minimumDelayMs = 0,
@@ -209,7 +149,6 @@ async function waitForShortcutGameId(
   const startedAt = Date.now();
   const timeoutMs = Math.max(SHORTCUT_POLL_TIMEOUT_MS, minimumDelayMs);
   return new Promise<string | null>((resolve) => {
-    /** Poll. */
     const poll = (): void => {
       const elapsed = Date.now() - startedAt;
       if (elapsed >= minimumDelayMs) {
@@ -228,44 +167,73 @@ async function waitForShortcutGameId(
     window.setTimeout(poll, SHORTCUT_POLL_DELAY_MS);
   });
 }
-// ─── Persistent-shortcut repair & temp-shortcut cleanup ─────
-/** Schedule persistent shortcut repair. */
-function schedulePersistentShortcutRepair(
-  config: AuthShortcutConfig,
-  delayMs = 1000,
-): void {
-  window.setTimeout(() => {
-    call(config.contextRpcMethod).catch((error) => {
-      console.error(
-        `${logTag(config)} Persistent shortcut repair failed:`,
-        error,
-      );
-    });
-  }, delayMs);
-}
-/** Schedule temporary shortcut cleanup. */
+
+/** Schedule temporary shortcut cleanup. Removes the entry only once
+ *  its auth "game" has actually **stopped** (sign-in completed, aborted,
+ *  or the Edge window closed), never on a blind timer.
+ *
+ *  Why: in Gaming Mode each launched game gets its own gamescope/XWayland
+ *  session (``STEAM_MULTIPLE_XWAYLANDS=1``). The Edge login window renders
+ *  on that per-app display. Calling ``RemoveShortcut`` while the game is
+ *  still running ends the session and tears down its XWayland, so the
+ *  login window vanishes back to the Steam UI mid-sign-in. (Desktop Mode
+ *  hid this: a single persistent X server keeps the window alive
+ *  regardless.) Waiting for Steam's "stopped" notification keeps the
+ *  session — and the window — alive for the whole login. */
 function scheduleTemporaryShortcutCleanup(
   appId: number,
   config: AuthShortcutConfig,
 ): void {
   const steamApps = window.SteamClient?.Apps;
-  window.setTimeout(() => {
+  const cleanup: Array<() => void> = [];
+  let removed = false;
+  let sawRunning = false;
+
+  const remove = (reason: string): void => {
+    if (removed) return;
+    removed = true;
+    for (const fn of cleanup) fn();
     try {
       steamApps?.RemoveShortcut?.(appId);
+      console.log(
+        `${logTag(config)} Removed temp auth shortcut ${appId} (${reason})`,
+      );
     } catch (error) {
       console.error(
         `${logTag(config)} Failed to remove temp shortcut ${appId}:`,
         error,
       );
     }
-    schedulePersistentShortcutRepair(
-      config,
-      TEMP_SHORTCUT_POST_REMOVE_REPAIR_DELAY_MS,
+  };
+
+  const sub =
+    window.SteamClient?.GameSessions?.RegisterForAppLifetimeNotifications?.(
+      (n) => {
+        if (n.unAppID !== appId) return;
+        if (n.bRunning) {
+          sawRunning = true;
+        } else if (sawRunning) {
+          // The launcher (and with it the Edge window) has exited; the
+          // session is gone, so removing the entry now is safe.
+          remove("auth game stopped");
+        }
+      },
     );
-  }, TEMP_SHORTCUT_CLEANUP_DELAY_MS);
+  if (sub) cleanup.push(() => sub.unregister());
+
+  // Safety net: clean up even if the "stopped" notification never lands,
+  // but only well past the launcher's 600s auth ceiling so it can't fire
+  // during a normal sign-in.
+  const safetyTimer = window.setTimeout(
+    () => remove("safety timeout"),
+    TEMP_SHORTCUT_SAFETY_CLEANUP_MS,
+  );
+  cleanup.push(() => window.clearTimeout(safetyTimer));
 }
-// ─── Temporary shortcut creation ─────────────────────────────
-/** Create temporary auth shortcut. */
+
+/** Create temporary auth shortcut via Steam's ``AddShortcut`` API.
+ *  The shortcut is removed by ``scheduleTemporaryShortcutCleanup``
+ *  15s after launch. */
 async function createTemporaryAuthShortcut(
   launcherPath: string,
   temporaryLaunchOptions: string,
@@ -295,7 +263,6 @@ async function createTemporaryAuthShortcut(
         error,
       );
     }
-    schedulePersistentShortcutRepair(config);
     return null;
   }
   console.log(
@@ -315,48 +282,46 @@ interface AuthShortcutContextRPC {
   error?: string;
 }
 /**
- * Generic auth-shortcut launcher used by all stores
- * that capture credentials inside a Wine prefix
- * (Epic, GOG, Amazon, Microsoft). Creates a temporary
- * non-Steam shortcut, asks Steam to launch it through
- * the chosen Proton compat tool, then watches for
- * the session file produced by the in-prefix capture
- * helper. On success / timeout / cancel, removes the
- * shortcut so it never appears in the user's library.
+ * Generic auth-shortcut launcher used by all stores that
+ * capture credentials inside a Wine prefix (Epic, GOG,
+ * Amazon, Microsoft). Always creates a fresh ephemeral
+ * non-Steam shortcut, asks Steam to launch it through the
+ * launcher binary, then removes the shortcut after a 15s
+ * grace period so the user's library never accumulates
+ * "Sign-In" entries.
  *
- * @param config — store-specific paths and timing.
- * @param signal — `AbortSignal` to cancel the wait.
- * @returns the typed launch outcome.
+ * No persistent path: the previous implementation tried to
+ * reuse a backend-written shortcut, but Steam's in-memory
+ * app store is only populated from shortcuts.vdf at Steam
+ * startup, so backend writes mid-session weren't visible.
+ * Whichever stores happened to have their persistent
+ * entry loaded by Steam (typically only Epic) launched
+ * with the "real game" tile + cover art, while the rest
+ * fell through to the temp path. Going temp-only makes
+ * every store behave the same.
  */
 export async function launchAuthViaShortcut(
   config: AuthShortcutConfig,
 ): Promise<AuthShortcutLaunchResult> {
   const tag = logTag(config);
   console.log(`${tag} Starting auth shortcut launch flow`);
-  // `call()` returns the raw `{success, error, data}` envelope ;
-  // unwrap so we see the flat `AuthShortcutContextRPC` shape the
-  // backend mixin emits. `throwing: false` because the caller
-  // wants to inspect a non-success result, not catch.
   const raw = await call<[], unknown>(config.contextRpcMethod);
   const ctx = unwrapRpcEnvelope<AuthShortcutContextRPC>(raw, {
     route: config.contextRpcMethod,
     throwing: false,
   });
-  if (!ctx?.appid_unsigned) {
+  if (!ctx?.launcher_path) {
     console.error(
-      `${tag} Auth context failed — envelope:`, raw,
-      `unwrapped:`, ctx,
+      `${tag} Auth context failed — envelope:`,
+      raw,
+      `unwrapped:`,
+      ctx,
     );
     return {
       success: false,
-      error: ctx?.error || "Auth shortcut not available",
+      error: ctx?.error || "Auth launcher path unavailable",
     };
   }
-  const backendAppId = ctx.appid_unsigned;
-  console.log(
-    `${tag} Auth context received: appId=${backendAppId}, ` +
-      `launchWait=${ctx.launch_wait_ms}ms`,
-  );
   const steamApps = window.SteamClient?.Apps;
   if (!steamApps?.RunGame || !steamApps?.SetShortcutLaunchOptions) {
     return {
@@ -364,86 +329,40 @@ export async function launchAuthViaShortcut(
       error: "Steam shortcut launch APIs are unavailable",
     };
   }
-  const resolvedAppId = await waitForShortcut(
-    backendAppId,
+  const tempStoreId = `${config.tempStoreIdPrefix}-${Date.now()}`;
+  const tempLaunchOptions = `${tempStoreId} ${config.actionEnvVar}=auth`;
+  const tempAppId = await createTemporaryAuthShortcut(
+    ctx.launcher_path,
+    tempLaunchOptions,
     config,
-    ctx.launch_wait_ms ?? 0,
   );
-  let appId = resolvedAppId;
-  let usedTemporaryShortcut = false;
-  const tempLaunchOptions = `${config.storeId} ${config.actionEnvVar}=auth`;
-  if (appId === null) {
-    if (!ctx.launcher_path) {
-      console.error(
-        `${tag} Shortcut not loaded in Steam memory and ` +
-          `launcher path unavailable: expectedAppId=${backendAppId}`,
-      );
-      return {
-        success: false,
-        error:
-          `${config.appName} is not loaded in Steam yet. ` +
-          `Restart Steam once and try again.`,
-      };
-    }
-    const tempStoreId =
-      `${config.tempStoreIdPrefix}-${Date.now()}`;
-    const tempOpts = `${tempStoreId} ${config.actionEnvVar}=auth`;
-    console.log(
-      `${tag} Shortcut not loaded in Steam memory — ` +
-        `creating temporary auth shortcut`,
-    );
-    const tempAppId = await createTemporaryAuthShortcut(
-      ctx.launcher_path,
-      tempOpts,
-      config,
-    );
-    if (tempAppId === null) {
-      return {
-        success: false,
-        error:
-          `${config.appName} could not be prepared in Steam. ` +
-          `Restart Steam once and try again.`,
-      };
-    }
-    appId = tempAppId;
-    usedTemporaryShortcut = true;
-    schedulePersistentShortcutRepair(config);
+  if (tempAppId === null) {
+    return {
+      success: false,
+      error:
+        `${config.appName} could not be prepared in Steam. ` +
+        `Restart Steam once and try again.`,
+    };
   }
-  const alreadyRunning = isShortcutAppRunning(appId);
-  // Fetch current launch options to restore after launch
-  const shortcutContext = await call<[string], unknown>(
-    rpcRoutes.getCompatToolForGame,
-    config.storeId,
-  )
-    .then((raw) => unwrapRpcEnvelope<ShortcutLaunchContext>(raw, {
-      route: rpcRoutes.getCompatToolForGame, throwing: false,
-    }))
-    .catch(() => ({ success: false }) as ShortcutLaunchContext);
-  const originalLaunchOptions =
-    getShortcutLaunchOptions(appId) ??
-    shortcutContext.current_launch_options ??
-    tempLaunchOptions;
+  const alreadyRunning = isShortcutAppRunning(tempAppId);
   try {
-    steamApps.SpecifyCompatTool?.(appId, "");
-    steamApps.SetShortcutLaunchOptions(appId, tempLaunchOptions);
-    const runGameId = getShortcutRunGameId(appId);
+    steamApps.SpecifyCompatTool?.(tempAppId, "");
+    // Best-effort: give the login window a keyboard/mouse layout so the
+    // store sign-in page is navigable. Fully guarded — never blocks the
+    // launch (see applyWebBrowserLayout).
+    applyWebBrowserLayout(tempAppId);
+    steamApps.SetShortcutLaunchOptions(tempAppId, tempLaunchOptions);
+    const runGameId = getShortcutRunGameId(tempAppId);
     console.log(
-      `${tag} Calling RunGame: appId=${appId}, ` +
+      `${tag} Calling RunGame: appId=${tempAppId}, ` +
         `runGameId=${runGameId}, launchOpts="${tempLaunchOptions}"`,
     );
     steamApps.RunGame(runGameId, "", -1, 100);
-    if (usedTemporaryShortcut) {
-      scheduleTemporaryShortcutCleanup(appId, config);
-    } else {
-      window.setTimeout(() => {
-        steamApps.SetShortcutLaunchOptions?.(appId, originalLaunchOptions);
-      }, 2000);
-    }
-    console.log(`${tag} Auth launched via RunGame (appId=${appId})`);
-    return { success: true, already_running: alreadyRunning, appId };
+    scheduleTemporaryShortcutCleanup(tempAppId, config);
+    console.log(`${tag} Auth launched via RunGame (appId=${tempAppId})`);
+    return { success: true, already_running: alreadyRunning, appId: tempAppId };
   } catch (error) {
     console.error(`${tag} Shortcut launch failed:`, error);
-    steamApps.SetShortcutLaunchOptions?.(appId, originalLaunchOptions);
     return {
       success: false,
       error:
@@ -467,9 +386,8 @@ export const launchEpicAuthViaShortcut =
  * GOG prefix path, the OAuth login URL and the
  * GOG-specific session capture file name.
  */
-export const launchGogAuthViaShortcut =
-  (): Promise<AuthShortcutLaunchResult> =>
-    launchAuthViaShortcut(GOG_AUTH_CONFIG);
+export const launchGogAuthViaShortcut = (): Promise<AuthShortcutLaunchResult> =>
+  launchAuthViaShortcut(GOG_AUTH_CONFIG);
 /**
  * Amazon Games specialisation of
  * {@link launchAuthViaShortcut}. Pre-bound with the

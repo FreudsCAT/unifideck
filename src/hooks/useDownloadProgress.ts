@@ -38,11 +38,16 @@ export interface UseDownloadProgressResult {
  * @returns reactive progress fields, or `null`
  *   when the download id is unknown to the queue.
  */
-export function useDownloadProgress(gameId: string | null): UseDownloadProgressResult {
+export function useDownloadProgress(
+  gameId: string | null,
+): UseDownloadProgressResult {
   const { queue } = useDownloads();
   return useMemo(() => {
     const empty: UseDownloadProgressResult = {
-      item: null, isCurrent: false, isQueued: false, progressPercent: 0,
+      item: null,
+      isCurrent: false,
+      isQueued: false,
+      progressPercent: 0,
     };
 
     if (gameId == null || !queue) return empty;

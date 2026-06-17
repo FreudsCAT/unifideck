@@ -154,11 +154,11 @@ class GOGTokenManager:
         )
 
     @contextlib.asynccontextmanager
-    async def gogdl_credentials(self) -> AsyncIterator[dict[str, str]]:
+    async def gogdl_credentials(self) -> AsyncIterator[tuple[dict[str, str], str]]:
         """Gogdl credentials."""
-        env, cleanup = await self.acquire_gogdl_creds()
+        env, creds_path, cleanup = await self.acquire_gogdl_creds()
         try:
-            yield env
+            yield env, creds_path
         finally:
             await cleanup()
 
@@ -166,9 +166,17 @@ class GOGTokenManager:
         self,
     ) -> tuple[
         dict[str, str],
+        str,
         Any,
     ]:
-        """Acquire GOGDL creds."""
+        """Acquire GOGDL creds.
+
+        Returns ``(env, creds_path, cleanup)``. ``creds_path`` is the
+        absolute path to the freshly-written ``gog_credentials.json`` —
+        callers MUST pass this verbatim to gogdl's ``--auth-config-path``
+        flag (do not use ``GOGConfig.auth_config_path`` for that
+        purpose, as it points at the legacy persistent location).
+        """
         if not self._access_token or not self._refresh_token:
             raise RuntimeError(
                 "acquire_gogdl_creds called without authenticated tokens",

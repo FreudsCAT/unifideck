@@ -26,7 +26,22 @@ from .infrastructure.umu_runtime import (
 
 
 async def dispatch(plan: ProtonLaunchPlan) -> int:
-    """Dispatch."""
+    """Dispatch.
+
+    Runs the store-agnostic per-prefix compatibility setup
+    (redistributables + VC++ registry fix) once, then routes to the
+    per-store handler which adds any store-specific compatibility
+    (Epic EOS overlay, GOG galaxy stub, Amazon fuel args).
+    """
+    from .compat import apply_prefix_compat
+    from .compat.prefix_init import ensure_prefix_initialized
+
+    # Reset the prefix if the Proton family changed (Force-Compat
+    # switch / fallback) and make sure it's created before the compat
+    # steps and the game run in it.
+    await ensure_prefix_initialized(plan)
+    await apply_prefix_compat(plan)
+
     store = plan.context.store
     if store == "ubisoft":
         return await ubisoft_launch(plan)

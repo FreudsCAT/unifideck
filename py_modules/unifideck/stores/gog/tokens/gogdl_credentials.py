@@ -9,8 +9,19 @@ on disk permanently.
 
 ``_GogdlCreds.acquire`` creates a unique tmpdir, writes
 ``gog_credentials.json`` (with ``mode=0o600``) holding the current
-tokens, and returns an ``env`` dict with ``GOGDL_CONFIG_PATH`` pointing
-at the tmpdir plus a cleanup coroutine that wipes the tmpdir.
+tokens, and returns:
+
+* an ``env`` dict whose ``GOGDL_CONFIG_PATH`` points at the **persistent
+  parent of** ``gogdl_config_dir`` (typically ``~/.config/unifideck``).
+  gogdl needs that location to be persistent so it can populate the
+  ``heroic_gogdl/manifests/`` cache and the dependencies repository
+  between runs — pointing it at the credentials tmpdir caused
+  installs to hang at ``[API] Getting Dependencies repository``.
+* the ``creds_path`` of the just-written ``gog_credentials.json`` —
+  callers pass this verbatim to gogdl's ``--auth-config-path`` flag so
+  the auth file location stays in sync with where credentials were
+  actually written.
+* a cleanup coroutine that wipes the tmpdir.
 
 Used by ``install/progress.py`` (OP-51f) and ``install/marker.py``
 (OP-51g) when they spawn gogdl subprocesses.
@@ -47,7 +58,7 @@ class _GogdlCreds:
         self,
         access_token: str,
         refresh_token: str,
-    ) -> tuple[dict[str, str], CleanupFn]:
+    ) -> tuple[dict[str, str], str, CleanupFn]:
         """Acquire."""
         tmpdir = await asyncio.to_thread(
             tempfile.mkdtemp,
@@ -64,9 +75,23 @@ class _GogdlCreds:
             gogdl_data,
         )
         env = os.environ.copy()
-        env["GOGDL_CONFIG_PATH"] = tmpdir
+        # GOGDL_CONFIG_PATH must be the persistent parent of
+        # ``gogdl_config_dir`` so gogdl can populate / reuse its
+        # ``heroic_gogdl/manifests/`` and dependencies-repo cache between
+        # runs. Pointing it at the credentials tmpdir caused installs
+        # to hang at "[API] Getting Dependencies repository".
+        # ``expanduser`` here is a cheap ``~`` → ``$HOME`` substitution,
+        # not blocking filesystem I/O, so it's safe in this async path.
+        env["GOGDL_CONFIG_PATH"] = str(
+            Path(self._config.gogdl_config_dir).expanduser().parent,  # noqa: ASYNC240
+        )
+        # CRITICAL: Force unbuffered Python output in gogdl.
+        # Without this, gogdl (a Python script) buffers output when
+        # stdout is piped, causing the asyncio output reading loop to
+        # hang/timeout and downloads to fail.
+        env["PYTHONUNBUFFERED"] = "1"
         cleanup = self._make_cleanup(creds_path, tmpdir)
-        return env, cleanup
+        return env, creds_path, cleanup
 
     def _build_gogdl_data(
         self,

@@ -63,6 +63,7 @@ def _spawn_edge_process(
     args: list[str],
     log_mode: str,
     label: str,
+    env: dict[str, str] | None = None,
 ) -> bool:
     """Open stderr log, spawn Popen, track PID, handle errors.
 
@@ -77,12 +78,16 @@ def _spawn_edge_process(
       log_mode: ``"w"`` for auth (fresh log), ``"a"`` for xcloud
         (append to same log).
       label: ``"Auth"`` or ``"xCloud"`` for log messages.
+      env: Pre-computed clean environment. ``launch_auth`` passes the
+        same env it used for display detection so the browser spawns
+        with the DISPLAY we measured; defaults to a fresh ``clean_env``.
 
     Returns True on successful spawn, False on Popen error.
     """
     from .edge import LOG_FILE
 
-    env = clean_env()
+    if env is None:
+        env = clean_env()
     logger.info(
         "[Edge] Launching %s browser: %s...",
         label.lower(), " ".join(args[:7]),
@@ -146,10 +151,16 @@ def launch_auth(browser: EdgeBrowser, auth_url: str) -> bool:
     if not cmd:
         logger.warning("[Edge] No compatible browser found for auth")
         return False
+    from .display import auth_window_flags
     from .edge import _BASE_FLAGS, PROFILE_DIR
 
-    args = [*cmd, f"--app={auth_url}", "--class=unifideck-auth", f"--remote-debugging-port={browser.cdp_port}", f"--user-data-dir={PROFILE_DIR}", *_BASE_FLAGS, "--start-fullscreen", "--enable-touch-events", "--window-size=1280,800", f"--lang={browser.locale_fn().split('-')[0]}"]
-    return _spawn_edge_process(browser, args, log_mode="w", label="Auth")
+    # Compute env once so display detection and the spawn see the same
+    # DISPLAY, then size+scale the window to the active display (Deck
+    # panel vs. external monitor) for a readable login.
+    env = clean_env()
+    window_flags = auth_window_flags(env)
+    args = [*cmd, f"--app={auth_url}", "--class=unifideck-auth", f"--remote-debugging-port={browser.cdp_port}", f"--user-data-dir={PROFILE_DIR}", *_BASE_FLAGS, "--start-fullscreen", "--enable-touch-events", *window_flags, f"--lang={browser.locale_fn().split('-')[0]}"]
+    return _spawn_edge_process(browser, args, log_mode="w", label="Auth", env=env)
 
 
 def launch_xcloud(browser: EdgeBrowser, xcloud_url: str) -> bool:

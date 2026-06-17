@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from unifideck.rpc.errors import RpcError
+from unifideck.rpc.mixins import _metadata_display as _mdisp
 
 logger = logging.getLogger(__name__)
 
@@ -103,7 +104,38 @@ class UIRPCMixin:
                 return await metadata.enrich(game)
         return {}
 
-    async def hide_play_section(self, app_id: int) -> Any:
+    cache: Any
+
+    async def get_game_metadata_display(
+        self, app_id: int,
+    ) -> dict[str, Any] | None:
+        """Build the panel's ``GameMetadata`` payload for ``app_id``.
+
+        Looks up the shortcut's ``Game`` via sync, enriches via
+        ``MetadataService``, overlays the cached Steam appdetails
+        + compat-cache entry, and returns the merged dict. ``None``
+        when the shortcut isn't in the sync cache.
+        """
+        sync = getattr(self, "sync_service", None)
+        if sync is None:
+            raise RpcError("service_unavailable", service="sync_service")
+        info = sync.get_game_info(app_id)
+        if not info:
+            return None
+        game = _mdisp.build_game_from_info(info, app_id)
+        metadata = getattr(self.services, "metadata", None)
+        enriched = await _mdisp.safe_enrich(metadata, game, app_id)
+        steam_app_id, steam_meta = await _mdisp.resolve_steam_payload(
+            self.cache, metadata, game, app_id,
+        )
+        compat_entry = _mdisp.read_compat_entry(
+            self.cache, app_id, steam_app_id=steam_app_id,
+        )
+        return _mdisp.build_payload(
+            game, enriched, steam_app_id, steam_meta, compat_entry,
+        )
+
+    async def hide_play_section(self, app_id: int, container_class: str = "") -> Any:
         """Inject CSS hiding a game's Play button in Steam UI.
 
         Routes through the :class:`SteamCSSInjector` singleton
@@ -111,10 +143,17 @@ class UIRPCMixin:
         is the low-level ``CDPClient`` and has no
         ``hide_play_section`` method, so the previous version
         raised ``AttributeError`` on every "Hide" button click.
+
+        ``container_class`` is Steam's play-section container class
+        (passed by the frontend from ``@decky/ui``); the injector
+        hides by it for a language-independent match, falling back
+        to the legacy text scan when absent.
         """
         from unifideck.cdp import get_cdp_client
         injector = await get_cdp_client()
-        return await injector.hide_play_section(app_id)
+        if injector is None:
+            return {"ok": False, "error": "cdp_not_connected"}
+        return await injector.hide_play_section(app_id, container_class)
 
     async def unhide_play_section(self, app_id: int) -> Any:
         """Remove the hide-play-section CSS injection.
@@ -125,6 +164,8 @@ class UIRPCMixin:
         """
         from unifideck.cdp import get_cdp_client
         injector = await get_cdp_client()
+        if injector is None:
+            return {"ok": False, "error": "cdp_not_connected"}
         return await injector.show_play_section(app_id)
 
     async def inject_hide_css(self, app_id: int, css: str) -> Any:
@@ -138,6 +179,8 @@ class UIRPCMixin:
         from unifideck.cdp import get_cdp_client
         from unifideck.cdp.cdp_inject import build_marker_id
         injector = await get_cdp_client()
+        if injector is None:
+            return {"ok": False, "error": "cdp_not_connected"}
         marker = build_marker_id(f"app_{app_id}")
         return await injector.inject_css(css, marker)
 
@@ -176,42 +219,45 @@ class UIRPCMixin:
             sort_by: ``"name"`` (only sort supported today).
 
         Returns:
-            ``{success, path, directories: [str]}``. On any
-            OS-level error the response is non-success with
-            an ``error`` field — callers don't need to
-            handle exceptions.
+            ``{path, directories: [str]}``.
+
+        Raises:
+            RpcError: on any OS-level or permission error.
         """
         try:
             resolved = await asyncio.to_thread(_resolve_user_path, path)
             is_dir = await asyncio.to_thread(Path(resolved).is_dir)
             if not is_dir:
-                return {
-                    "success": False,
-                    "error": "not_a_directory",
-                    "path": resolved,
-                    "directories": [],
-                }
+                raise RpcError("not_a_directory", path=resolved)
             entries = await asyncio.to_thread(
                 _collect_subdirs, resolved, show_hidden, sort_by,
             )
-            return {
-                "success": True,
-                "path": resolved,
-                "directories": entries,
-            }
+            return {"path": resolved, "directories": entries}
         except PermissionError as e:
-            return {
-                "success": False,
-                "error": "permission_denied",
-                "path": path,
-                "directories": [],
-                "detail": str(e),
-            }
+            raise RpcError("permission_denied", path=path, detail=str(e)) from e
         except OSError as e:
-            return {
-                "success": False,
-                "error": "os_error",
-                "path": path,
-                "directories": [],
-                "detail": str(e),
-            }
+            raise RpcError("os_error", path=path, detail=str(e)) from e
+
+    async def create_directory(self, path: str) -> Any:
+        """Create a new directory at ``path``.
+
+        Used by the frontend ``StoragePathPicker`` new-folder
+        feature. Creates parent directories as needed.
+
+        Returns:
+            ``{"path": resolved}``.
+
+        Raises:
+            RpcError: on ``FileExistsError``, ``PermissionError``,
+                or any other ``OSError``.
+        """
+        resolved = await asyncio.to_thread(_resolve_user_path, path)
+        try:
+            await asyncio.to_thread(Path(resolved).mkdir, parents=True, exist_ok=False)
+        except FileExistsError as e:
+            raise RpcError("directory_exists", path=resolved) from e
+        except PermissionError as e:
+            raise RpcError("permission_denied", path=resolved) from e
+        except OSError as e:
+            raise RpcError("os_error", path=resolved, detail=str(e)) from e
+        return {"path": resolved}

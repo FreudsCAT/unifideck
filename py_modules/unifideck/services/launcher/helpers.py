@@ -7,7 +7,6 @@ behaviour to the pre-extraction versions — split out for volumetry.
 """
 from __future__ import annotations
 
-import asyncio
 import logging
 import time
 from typing import TYPE_CHECKING, Any
@@ -27,29 +26,47 @@ async def prepare_windows_plan(
 ) -> tuple[Any, Any]:
     """Prepare the Proton launch plan for a Windows game.
 
-    Drift fix (2026-05-15): the previous body accessed
-    ``ctx.game.get(...)`` — ``LaunchContext`` has no ``game``
-    attribute. The real attributes are directly on ``ctx``
-    (store, game_id, exe_path, work_dir, raw_options).
-    Fields with no equivalent on ``LaunchContext`` (``app_id``,
-    ``title``, ``launch_args``) are passed as their best-effort
-    defaults; this code path's correctness depends on
-    ``ProtonService.prepare_launch`` tolerating empty values
-    — to validate when the service graph is exercised end-to-end.
+    Resolves the three things ``proton_prepare`` needs — a
+    Python 3.10+ interpreter, the Proton tool path, and its
+    tool id — then builds the immutable ``ProtonLaunchPlan``
+    the store handlers consume. Proton is selected by
+    ``select_proton_version``, which honours (in order) the
+    per-game tool the frontend captured into
+    ``proton_settings.json``, any Steam compat override, the
+    Unifideck default, and finally a GE-Proton fallback.
+
+    The ``on_process_start`` callback registers the spawned
+    process on the service so SIGTERM/SIGINT cancellation can
+    reach it (mirrors the native path's ``_active_subprocess``).
     """
+    from unifideck.launcher.proton import (
+        find_python_3_10_plus,
+        proton_prepare,
+        select_proton_version,
+    )
+
     try:
-        plan = await svc._proton_svc.prepare_launch(
-            app_id=0,  # No app_id on LaunchContext; service must derive it.
-            launch_path=str(ctx.exe_path),
-            launch_args=[],  # raw_options is a string; service to parse.
-            work_dir=str(ctx.work_dir),
-            store=ctx.store,
-            game_id=ctx.game_id,
-            title="",  # No title on LaunchContext; service to fetch.
+        python_bin = find_python_3_10_plus()
+        proton_path, proton_tool_id = select_proton_version(
+            steam_app_id=ctx.steam_app_id,
+            store_game_id=ctx.game_key,
         )
-        # Dummy parsed_options for now, in a real implementation this parses LSFG, etc.
-        parsed_options = object()
-        return plan, parsed_options
+        def _on_process_start(proc: object) -> None:
+            svc._active_subprocess = proc
+
+        # ``proton_prepare`` is synchronous (prefix mkdir + umu-id
+        # lookup); call it directly — the launcher subprocess has
+        # nothing else on its event loop.
+        plan = proton_prepare(
+            ctx,
+            state,
+            python_bin=python_bin,
+            proton_path=proton_path,
+            proton_tool_id=proton_tool_id,
+            on_process_start=_on_process_start,
+        )
+        # parsed_options reserved for LSFG/wrapper parsing.
+        return plan, None
     except Exception:
         logger.exception("[Helpers] prepare_windows_plan failed")
         raise
@@ -67,6 +84,16 @@ async def cloud_sync_phase(
     if not store or not game_id:
         return
 
+    # Cloud-save is optional: the launcher may have been built without it
+    # (e.g. the service failed to instantiate). A launch must never depend
+    # on cloud-save being present, so skip silently when it's unavailable.
+    if svc._cloud_svc is None:
+        logger.debug(
+            "[Helpers] Cloud sync %s skipped — cloud service unavailable",
+            direction,
+        )
+        return
+
     try:
         if direction == "down":
             await svc._cloud_svc.sync_down(store, game_id)
@@ -82,22 +109,26 @@ async def run_game_subprocess(
     ctx: LaunchContext,
     state: RuntimeState,
 ) -> int:
-    """Run the game subprocess after materialising argv/env/cwd."""
-    cmd = plan.get_cmd()
-    env = plan.get_env()
-    cwd = plan.get_cwd()
+    """Run the Windows game via the per-store Proton handler.
 
-    logger.info("[Helpers] Spawning Windows subprocess: %s", cmd)
+    Delegates to ``proton.dispatch`` which routes the
+    ``ProtonLaunchPlan`` to the right store handler
+    (epic / ubisoft / generic) and runs it through umu-run.
+    The spawned process is registered on the service via the
+    plan's ``on_process_start`` callback (wired in
+    ``prepare_windows_plan``), so cancellation can reach it;
+    we clear the reference once the handler returns.
+    """
+    from unifideck.launcher.proton import dispatch
 
-    proc = await asyncio.create_subprocess_exec(
-        *cmd,
-        env=env,
-        cwd=cwd,
+    logger.info(
+        "[Helpers] Dispatching Proton launch: store=%s game_id=%s proton=%s",
+        ctx.store, ctx.game_id, state.proton_tool_id,
     )
-    svc._active_subprocess = proc
-
-    rc = await proc.wait()
-    svc._active_subprocess = None
+    try:
+        rc = await dispatch(plan)
+    finally:
+        svc._active_subprocess = None
 
     return rc
 

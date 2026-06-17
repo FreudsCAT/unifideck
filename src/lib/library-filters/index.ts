@@ -14,6 +14,8 @@
  */
 import { call } from "@decky/api";
 import { unwrapRpcEnvelope } from "../../api/useRPC";
+import { EventBusClient } from "../../api/event-bus-client";
+import { Events } from "../../types/events";
 import {
   getCachedCompatByTitle,
   getCachedRating,
@@ -65,6 +67,21 @@ interface UnifideckCacheEntry {
  *  filter functions can't predict which. */
 export const unifideckGameCache: Map<number, UnifideckCacheEntry> = new Map();
 
+/** Reverse index: ``"<store>:<store_game_id>"`` → shortcut appId.
+ *  Lets callers that only hold a store/game-id pair (e.g. the
+ *  downloads queue) resolve back to the Steam shortcut appId for
+ *  launch. Populated alongside ``unifideckGameCache``. */
+export const unifideckAppIdByStoreGame: Map<string, number> = new Map();
+
+/** Resolve a Steam shortcut appId from a store + store-game-id
+ *  pair. Returns null when the game isn't in the cache yet. */
+export function resolveAppIdFromStoreGame(
+  store: string,
+  gameId: string,
+): number | null {
+  return unifideckAppIdByStoreGame.get(`${store}:${gameId}`) ?? null;
+}
+
 /** Version bumped on every per-app status change — patchers read
  *  this to know when to remount React subtrees. */
 export const gameStateVersion: Map<number, number> = new Map();
@@ -93,10 +110,12 @@ export interface UnifideckGameInput {
   store: Exclude<StoreSlug, "steam">;
   isInstalled: boolean;
   steamAppId?: number;
+  storeGameId?: string;
 }
 
 export function updateUnifideckCache(games: UnifideckGameInput[]): void {
   unifideckGameCache.clear();
+  unifideckAppIdByStoreGame.clear();
   for (const g of games) {
     const entry: UnifideckCacheEntry = {
       store: g.store,
@@ -104,6 +123,9 @@ export function updateUnifideckCache(games: UnifideckGameInput[]): void {
       steamAppId: g.steamAppId,
     };
     for (const id of variantIds(g.appId)) unifideckGameCache.set(id, entry);
+    if (g.storeGameId) {
+      unifideckAppIdByStoreGame.set(`${g.store}:${g.storeGameId}`, g.appId);
+    }
   }
 }
 
@@ -323,6 +345,7 @@ export async function loadUnifideckCache(): Promise<void> {
         store: g.store,
         isInstalled: Boolean(g.installed),
         steamAppId,
+        storeGameId: g.store_game_id,
       });
       counts[g.store] += 1;
     }
@@ -341,5 +364,23 @@ export function startUnifideckCacheAutoload(): void {
   void loadUnifideckCache();
   window.addEventListener("unifideck-sync-completed", () => {
     void loadUnifideckCache();
+  });
+  // ShortcutService emits SHORTCUT_INSTALL_STATE_CHANGED on
+  // post-install/uninstall — flip the per-app entry immediately so
+  // the GOG tab and detail-page UI react without waiting for the
+  // next full library reload.
+  EventBusClient.subscribe(Events.SHORTCUT_INSTALL_STATE_CHANGED, (kw) => {
+    const appId = kw.app_id;
+    const store = kw.store;
+    const installed = kw.installed;
+    if (typeof appId !== "number") return;
+    if (typeof store !== "string") return;
+    if (typeof installed !== "boolean") return;
+    if (!isNonSteamStore(store as StoreSlug)) return;
+    updateSingleGameStatus({
+      appId,
+      store: store as Exclude<StoreSlug, "steam">,
+      isInstalled: installed,
+    });
   });
 }

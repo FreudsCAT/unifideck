@@ -46,8 +46,15 @@ from . import amazon_fuel
 from .amazon_library import AmazonLibraryReader
 
 logger = logging.getLogger(__name__)
-_PROGRESS_RE = re.compile(r"\[\s*(\d+)\s*%\s*\]")
-ProgressCallback = Callable[[float], Awaitable[None]]
+# Nile's ProgressBar emits lines like:
+#   = Progress: 42.50 123456789/987654321, Running for: 00:01:30, ETA: ...
+# The old regex (`\[\s*(\d+)\s*%\s*\]`) expected `[ 42% ]` which nile
+# never produces, so zero progress was ever captured.
+# New primary regex matches nile's actual format; the fallback covers
+# any tool that emits `[ NN% ]` brackets (e.g. future CLI updates).
+_PROGRESS_RE = re.compile(r"Progress:\s*([\d.]+)")
+_PROGRESS_RE_BRACKET = re.compile(r"\[\s*([\d.]+)\s*%\s*\]")
+ProgressCallback = Callable[[Any], Awaitable[None]]
 
 
 class AmazonInstaller:
@@ -77,8 +84,16 @@ class AmazonInstaller:
         game_id: str,
         base_path: str | None = None,
         progress_cb: ProgressCallback | None = None,
+        verb: str = "install",
     ) -> InstallResult:
-        """Install game."""
+        """Install or update a game.
+
+        ``verb="update"`` runs ``nile update`` (the genuine update
+        command — an alias of ``install`` in nile) for an in-place
+        patch; the rest of the pipeline (path resolution, manifest
+        rewrite, events) is identical to a fresh install.
+        """
+        logger.info("[AmazonInstall] %s game_id=%s base_path=%s", verb, game_id, base_path)
         if not self._cli_path:
             return InstallResult(
                 success=False,
@@ -101,7 +116,7 @@ class AmazonInstaller:
             store="amazon",
             game_id=game_id,
         )
-        rc = await self._run_install(base, game_id, progress_cb)
+        rc = await self._run_install(base, game_id, progress_cb, verb)
         if rc != 0:
             await self._bus.emit(
                 Events.DOWNLOAD_FAILED,
@@ -118,24 +133,42 @@ class AmazonInstaller:
         return await self._finalize_install(game_id, base)
 
     async def _finalize_install(self, game_id: str, base: str) -> InstallResult:
-        """Finalize install."""
-        install_path = await self._resolve_install_path(
-            game_id,
-            base,
-        )
+        """Finalize install — locate the installed directory and write manifest.
+
+        Nile may record the install path in its installed.json before
+        the directory is fully materialized, or use a folder name that
+        differs from both the game ID and title. ``_resolve_install_path``
+        verifies the directory exists on disk before returning it.
+        If we still can't locate the install directory after the CLI
+        reported success, the install is incomplete and we report failure.
+        """
+        install_path = await self._resolve_install_path(game_id, base)
+        if not install_path:
+            logger.error(
+                "[AmazonInstall] cannot locate install directory for %s "
+                "under %s — nile reported success but no matching "
+                "directory found on disk",
+                game_id, base,
+            )
+            await self._bus.emit(
+                Events.DOWNLOAD_FAILED,
+                store="amazon",
+                game_id=game_id,
+                error="install_dir_not_found",
+            )
+            return InstallResult(
+                success=False,
+                error="install_dir_not_found",
+                store="amazon",
+                game_id=game_id,
+            )
         exe = await self._resolve_executable(install_path, game_id)
         title = await self._resolve_title(game_id)
-        if install_path:
-            exe_relative = ""
-            if exe:
-                with contextlib.suppress(ValueError):
-                    # ``os.path.relpath`` is pure string manipulation —
-                    # no filesystem access — so the ASYNC240 rule
-                    # gives a false positive here.
-                    exe_relative = os.path.relpath(  # noqa: ASYNC240 — pure string op, no I/O
-                        exe,
-                        install_path,
-                    )
+        exe_relative = ""
+        if exe:
+            with contextlib.suppress(ValueError):
+                exe_relative = os.path.relpath(exe, install_path)  # noqa: ASYNC240
+        try:
             await write_manifest(
                 install_dir=install_path,
                 store="amazon",
@@ -143,6 +176,20 @@ class AmazonInstaller:
                 title=title,
                 executable_relative=exe_relative,
                 platform="windows",
+            )
+        except OSError as exc:
+            logger.exception("[AmazonInstall] write_manifest failed for %s", install_path)
+            await self._bus.emit(
+                Events.DOWNLOAD_FAILED,
+                store="amazon",
+                game_id=game_id,
+                error=f"manifest_write: {exc}",
+            )
+            return InstallResult(
+                success=False,
+                error=f"manifest_write: {exc}",
+                store="amazon",
+                game_id=game_id,
             )
         await self._bus.emit(
             Events.DOWNLOAD_COMPLETE,
@@ -154,7 +201,7 @@ class AmazonInstaller:
             success=True,
             store="amazon",
             game_id=game_id,
-            install_path=install_path or base,
+            install_path=install_path,
         )
 
     async def _run_install(
@@ -162,9 +209,17 @@ class AmazonInstaller:
         base: str,
         game_id: str,
         progress_cb: ProgressCallback | None,
+        verb: str = "install",
     ) -> int:
-        """Run install."""
-        cmd = self._build_install_cmd(base, game_id)
+        """Run install or update (``verb``)."""
+        self._current_progress = {
+            "progress_percent": 0.0,
+            "downloaded_bytes": 0,
+            "total_bytes": 0,
+            "speed_bps": 0.0,
+            "eta_seconds": 0,
+        }
+        cmd = self._build_install_cmd(base, game_id, verb)
         proc = await asyncio.create_subprocess_exec(
             *cmd,
             stdout=asyncio.subprocess.PIPE,
@@ -184,15 +239,21 @@ class AmazonInstaller:
             raise drain_exc
         return rc
 
-    def _build_install_cmd(self, base: str, game_id: str) -> list[str]:
-        """Build install cmd."""
+    def _build_install_cmd(self, base: str, game_id: str, verb: str = "install") -> list[str]:
+        """Build install/update cmd.
+
+        ``verb`` is ``"install"`` for a fresh install or ``"update"``
+        for an in-place update. In nile, ``update`` is an alias of
+        ``install`` (identical args/output) — running it on an
+        already-installed game patches it in place.
+        """
         if self._cli_path is None:
             raise RuntimeError(
                 "nile CLI path is not set; cannot build install cmd",
             )
         return [
             self._cli_path,
-            "install",
+            verb,
             game_id,
             "--base-path",
             base,
@@ -227,13 +288,21 @@ class AmazonInstaller:
         progress_cb: ProgressCallback | None,
     ) -> None:
         """Handle install line."""
-        pct = parse_progress_line(line, _PROGRESS_RE)
-        if pct is None:
+        updated = self._parse_progress_line(line, self._current_progress)
+        if not updated:
+            # Fallback to check bracket format
+            pct = parse_progress_line(line, _PROGRESS_RE_BRACKET)
+            if pct is not None:
+                self._current_progress["progress_percent"] = pct
+                updated = True
+
+        if not updated:
             logger.debug("[nile install] %s", line)
             return
+
         if progress_cb is not None:
             try:
-                await progress_cb(pct)
+                await progress_cb(dict(self._current_progress))
             except Exception as e:
                 logger.debug(
                     "[amazon_install] progress_cb raised: %s",
@@ -243,18 +312,104 @@ class AmazonInstaller:
             Events.DOWNLOAD_PROGRESS,
             store="amazon",
             game_id=game_id,
-            progress=pct,
+            progress=self._current_progress.get("progress_percent", 0.0),
+            speed_mbps=self._current_progress.get("speed_bps", 0.0) / (1024 * 1024),
+            eta_seconds=self._current_progress.get("eta_seconds", 0),
         )
 
+    @staticmethod
+    def _parse_eta(line: str) -> int | None:
+        """Parse eta from nile line."""
+        if "ETA:" not in line:
+            return None
+        try:
+            eta_part = line.split("ETA:", 1)[1].strip()
+            if not eta_part:
+                return None
+            eta_time = eta_part.split()[0]
+            parts = eta_time.split(":")
+            if len(parts) == 3:
+                h, m, s = int(parts[0]), int(parts[1]), int(parts[2])
+                return h * 3600 + m * 60 + s
+            if len(parts) == 2:
+                m, s = int(parts[0]), int(parts[1])
+                return m * 60 + s
+        except (ValueError, IndexError):
+            return None
+        return None
+
+    @staticmethod
+    def _parse_speed_mib(line: str) -> float | None:
+        """Parse speed from nile line."""
+        if "Download" not in line or "MiB/s" not in line:
+            return None
+        try:
+            tail = line.split("Download", 1)[1]
+            speed_part = tail.split("MiB/s", 1)[0].strip()
+            speed_part = speed_part.lstrip("-").strip()
+            speed_tokens = speed_part.split()
+            if not speed_tokens:
+                return None
+            return float(speed_tokens[-1]) * 1024 * 1024
+        except (ValueError, IndexError):
+            return None
+
+    def _parse_progress_line(self, line: str, progress: dict[str, Any]) -> bool:
+        """Parse progress percent and bytes from nile line."""
+        speed_bps = self._parse_speed_mib(line)
+        if speed_bps is not None:
+            progress["speed_bps"] = speed_bps
+            return True
+        if "Progress:" not in line:
+            return False
+        try:
+            part = line.split("Progress:", 1)[1].strip()
+            tokens = part.split()
+            if len(tokens) < 2:
+                return False
+            progress["progress_percent"] = float(tokens[0])
+            bytes_part = tokens[1].rstrip(",")
+            if "/" not in bytes_part:
+                return True
+            written, total = bytes_part.split("/", 1)
+            progress["downloaded_bytes"] = int(written)
+            progress["total_bytes"] = int(total)
+            eta = self._parse_eta(line)
+            if eta is not None:
+                progress["eta_seconds"] = eta
+            return True
+        except (ValueError, IndexError):
+            return False
+
     async def _resolve_install_path(self, game_id: str, base: str) -> str | None:
-        """Resolve install path."""
+        """Resolve install path from nile's installed.json or fallback.
+
+        Nile writes an entry to installed.json before (or during)
+        the download, and the recorded path may not exist on disk
+        yet if nile failed mid-flight or recorded an alternate
+        directory name. Always verify the directory exists before
+        returning a path — a stale entry that points nowhere
+        must fall through to the default-path check.
+        """
         installed = await self._library.read_installed_ids()
         info = installed.get(game_id)
         if info and info.get("path"):
-            return cast("str | None", info["path"])
+            candidate = cast("str | None", info["path"])
+            if candidate:
+                if await asyncio.to_thread(Path(candidate).is_dir):
+                    return candidate
         default = str(Path(base) / game_id)
-        if await asyncio.to_thread(lambda: Path(default).is_dir()):
+        if await asyncio.to_thread(Path(default).is_dir):
             return default
+        # Nile may create a subdirectory named after the game title
+        # rather than the game_id. Scan the base directory for any
+        # subdirectory that contains a .unifideck-id marker or
+        # matches a known pattern from nile's fuel.json.
+        title = await self._resolve_title(game_id)
+        if title and title != game_id:
+            title_path = str(Path(base) / title)
+            if await asyncio.to_thread(lambda: Path(title_path).is_dir()):
+                return title_path
         return None
 
     async def _resolve_executable(

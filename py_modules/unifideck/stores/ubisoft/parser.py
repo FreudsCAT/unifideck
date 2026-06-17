@@ -1,109 +1,49 @@
 """
-Ubisoft owned-games text parser — converts UPC's plaintext catalog
-into structured records.
+Ubisoft UPC binary cache parser — configurations + ownership.
 
 OP-55e | py_modules/unifideck/stores/ubisoft/parser.py
 
-UPC's owned-games inventory is stored as a text file with a custom
-key-value format (one game per stanza, ``key: value`` lines inside).
-This module exposes a set of pure functions that parse that format
-into Python dicts ready to be merged with the binary catalog parsed by
-``parser_binary.py`` (OP-55f).
+UPC stores its catalog in two protobuf-like binary files inside the Wine
+prefix:
 
-The parser handles every edge case observed in real UPC dumps:
-* multi-byte unicode in game titles;
-* nested sub-keys (e.g. ``localizations: { en-US: ... }``);
-* line-continuations via trailing ``\\``;
-* stray BOM bytes from Windows-side editing.
+* ``configuration/configurations`` — one length-prefixed record per
+  configured game (install_id, launch_id, and an embedded YAML blob with
+  name / space_id / executable);
+* ``ownership/{userId}`` — the owned-game records (the install_ids the
+  signed-in account actually owns).
 
-Errors on individual stanzas are reported as parse exceptions but
-don't abort the whole file — the caller can decide whether to drop
-the offending entry or escalate.
+Records are framed by a ``0x0A`` marker followed by a varint size; the
+body uses ``0x08``/``0x10``/``0x1A`` field markers. The scanner is
+**index-based** (``data[offset]``, never ``data[offset:]``) and always
+advances by at least one byte, so a malformed/unexpected region can
+never wedge it into an O(n²) re-slice or an infinite loop — a regression
+that previously hung the whole library sync at "Ubisoft 5/5".
+
+Field extraction from the embedded YAML is done with targeted regexes
+(no full YAML parse) — robust against the partial/garbled blobs real UPC
+dumps contain, and fast.
 """
 
 import logging
+import math
 import re
 from pathlib import Path
-from typing import Any, Optional, cast
+from typing import Any
 
-import yaml
-
-from .parser_binary import (
-    parse_install_id,
-    parse_launch_id,
-    parse_ownership_record,
-    parse_record_size,
-)
+from .parser_binary import parse_ownership_record
 
 logger = logging.getLogger(__name__)
-BLACKLISTED_NAMES = ["gamename", "l1", "l2", "thumbimage", "", "ubisoft game", "name"]
-
-
-def _parse_config_header(header: bytes, second_eight: bool = False) -> tuple[Any, ...]:
-    """Parse config header."""
-    try:
-        offset = 1
-        record_size, offset, tmp_size = parse_record_size(
-            header,
-            offset,
-            second_eight,
-        )
-        install_id, offset = parse_install_id(header, offset)
-        launch_id, offset = parse_launch_id(header, offset)
-        if record_size - offset < 128 <= record_size:
-            tmp_size -= 1
-            record_size += 1
-            return (
-                record_size - offset,
-                install_id,
-                launch_id,
-                offset + tmp_size + 1,
-            )
-        return 0, 0, 0, 10
-    except Exception:
-        return 0, 0, 0, 10
-
-
-def _get_yaml_field(game_yaml: dict[str, Any], field: str = "name") -> str:
-    """Get yaml field."""
-    root = game_yaml.get("root", {})
-    if not isinstance(root, dict):
-        return ""
-    value = str(root[field]) if field in root else ""
-    if field == "name" and value.lower() in BLACKLISTED_NAMES:
-        value = _yaml_field_installer_fallback(root, value)
-        if value.lower() in BLACKLISTED_NAMES:
-            return _yaml_field_localization_fallback(
-                game_yaml,
-                value,
-            )
-    return value
-
-
-def _yaml_field_installer_fallback(root: dict[str, Any], current: str) -> str:
-    """Yaml field installer fallback."""
-    installer = root.get("installer", {})
-    if isinstance(installer, dict) and "game_identifier" in installer:
-        return str(installer["game_identifier"])
-    return current
-
-
-def _yaml_field_localization_fallback(
-    game_yaml: dict[str, Any],
-    current: str,
-) -> str:
-    """Yaml field localization fallback."""
-    locs = game_yaml.get("localizations", {})
-    if not isinstance(locs, dict):
-        return current
-    default_loc = locs.get("default", {})
-    if isinstance(default_loc, dict) and current in default_loc:
-        return str(default_loc[current])
-    return current
+# Records smaller than this are markers / fragments, not real game
+# entries (a genuine game config's YAML blob is several KB).
+_MIN_RECORD_SIZE = 500
+# Names UPC emits as placeholders — fall back to localized name when hit.
+BLACKLISTED_NAMES = frozenset(
+    {"gamename", "l1", "l2", "thumbimage", "", "ubisoft game", "name"},
+)
 
 
 class GameConfig:
-    """Game config."""
+    """A parsed game entry from the configurations binary."""
 
     def __init__(self) -> None:
         """Initialize the instance."""
@@ -125,98 +65,94 @@ class GameConfig:
         )
 
 
-def _read_binary_file(filepath: str) -> bytes | None:
-    """Read binary file."""
+# ── varint primitives ────────────────────────────────────────────
+
+
+def _decode_varint(raw: int) -> int:
+    """Decode UPC's compact varint (the 'Konrad' correction formula)."""
+    if raw > 256 * 256:
+        raw -= 128 * 256 * math.ceil(raw / (256 * 256))
+        raw -= 128 * math.ceil(raw / 256)
+    elif raw > 256:
+        raw -= 128 * math.ceil(raw / 256)
+    return raw
+
+
+def _read_varint_at(buf: bytes, offset: int) -> tuple[int, int]:
+    """Read a varint at ``offset``; return ``(raw_value, bytes_consumed)``."""
+    raw = 0
+    consumed = 0
+    shift = 0
+    while offset + consumed < len(buf):
+        byte = buf[offset + consumed]
+        raw |= (byte & 0x7F) << shift
+        consumed += 1
+        shift += 7
+        if not (byte & 0x80):
+            break
+    return raw, consumed
+
+
+def _read_binary_file(filepath: str, label: str) -> bytes | None:
+    """Read a binary file, returning ``None`` (logged) on any failure."""
     if not Path(filepath).is_file():
-        logger.warning(
-            "[UbiParser] Configurations file not found: %s",
-            filepath,
-        )
+        logger.warning("[UbiParser] %s file not found: %s", label, filepath)
         return None
     try:
         with Path(filepath).open("rb") as f:
             return f.read()
     except Exception:
-        logger.exception("[UbiParser] Failed to read configurations")
+        logger.exception("[UbiParser] Failed to read %s", label)
         return None
 
 
-def _extract_config_chunk(
-    data: bytes,
-    global_offset: int,
-    header_size: int,
-    obj_size: int,
-    install_id: int,
-    launch_id: int,
-) -> Optional["GameConfig"]:
-    """Extract config chunk."""
-    if obj_size <= 500:
-        return None
-    yaml_start = global_offset + header_size
-    yaml_end = yaml_start + obj_size
-    if yaml_end > len(data):
-        return None
-    stream = data[yaml_start:yaml_end].decode(
-        "utf8",
-        errors="ignore",
-    )
-    if not stream or "start_game" not in stream:
-        return None
-    try:
-        parsed = yaml.safe_load(
-            stream.replace("\t", " "),
-        )
-    except Exception as e:
-        logger.debug(
-            "[UbiParser] YAML parse error at offset %d: %s",
-            global_offset,
-            e,
-        )
-        return None
-    if not parsed:
-        return None
-    config = _build_game_config(
-        parsed,
-        stream,
-        install_id,
-        launch_id,
-    )
-    if config and config.name:
-        return config
-    return None
+# ── configurations parser ────────────────────────────────────────
 
 
 def parse_configurations(filepath: str) -> list[GameConfig]:
-    """Parse configurations."""
-    data = _read_binary_file(filepath)
+    """Parse the UPC ``configurations`` binary into game configs.
+
+    Index-based scan: find a ``0x0A`` record marker, read the varint
+    size, and (for real game-sized records) parse the body. ``offset``
+    always advances, so the loop is O(n) and can never hang.
+    """
+    data = _read_binary_file(filepath, "Configurations")
     if data is None:
         return []
     results: list[GameConfig] = []
-    global_offset = 0
-    while global_offset < len(data):
-        chunk = data[global_offset:]
-        obj_size, install_id, launch_id, header_size = _parse_config_header(chunk)
-        launch_id = (
-            install_id if launch_id == 0 or launch_id == install_id else launch_id
-        )
-        config = _extract_config_chunk(
-            data,
-            global_offset,
-            header_size,
-            obj_size,
-            install_id,
-            launch_id,
-        )
-        if config:
-            results.append(config)
-        global_offset_tmp = global_offset
-        global_offset += obj_size + header_size
-        if global_offset < len(data) and data[global_offset] != 0x0A:
-            obj_size, _, _, header_size = _parse_config_header(
-                chunk,
-                True,
+    offset = 0
+    n = len(data)
+    while offset < n:
+        if data[offset] != 0x0A:
+            offset += 1
+            continue
+        record_start = offset
+        try:
+            offset += 1  # skip the 0x0A marker
+            obj_size_raw, consumed = _read_varint_at(data, offset)
+            obj_size = _decode_varint(obj_size_raw)
+            offset += consumed
+            if obj_size < _MIN_RECORD_SIZE:
+                continue
+            record_end = record_start + 1 + consumed + obj_size
+            if record_end > n:
+                break
+            record = data[record_start + 1 + consumed : record_end]
+            config = _parse_single_record(record)
+            if config and config.name:
+                results.append(config)
+            # Skip the body we just consumed; the next record's 0x0A
+            # follows. (A genuine game record can't contain a nested
+            # >=500-byte record, so this is safe and avoids re-scanning
+            # the YAML blob byte-by-byte.)
+            offset = record_end
+        except Exception as e:
+            logger.debug(
+                "[UbiParser] skipping malformed record at %d: %s",
+                record_start,
+                e,
             )
-            global_offset = global_offset_tmp + obj_size + header_size
+            offset = record_start + 1
     logger.info(
         "[UbiParser] Parsed %d game configs from %s",
         len(results),
@@ -225,61 +161,83 @@ def parse_configurations(filepath: str) -> list[GameConfig]:
     return results
 
 
-def _build_game_config(
-    parsed: dict[str, Any], yaml_text: str, install_id: int, launch_id: int
-) -> GameConfig | None:
-    """Build game config."""
+def _parse_single_record(record: bytes) -> GameConfig | None:
+    """Parse one configurations record (header ids + embedded YAML)."""
     config = GameConfig()
-    config.install_id = install_id
-    config.launch_id = launch_id
+    pos = 0
+    if pos < len(record) and record[pos] == 0x08:
+        pos += 1
+        raw, consumed = _read_varint_at(record, pos)
+        config.install_id = _decode_varint(raw)
+        pos += consumed
+    if pos < len(record) and record[pos] == 0x10:
+        pos += 1
+        raw, consumed = _read_varint_at(record, pos)
+        config.launch_id = _decode_varint(raw)
+        pos += consumed
+    if config.launch_id == 0 or config.launch_id == config.install_id:
+        config.launch_id = config.install_id
+
+    yaml_text = _extract_yaml_from_record(record, pos)
+    if not yaml_text or "start_game" not in yaml_text:
+        return None
     config.yaml_raw = yaml_text
-    config.name = _get_yaml_field(parsed, "name")
-    config.thumb_image = _get_yaml_field(parsed, "thumb_image")
-    root = parsed.get("root", {})
-    if isinstance(root, dict):
-        config.space_id = str(root.get("space_id", ""))
-        installer = root.get("installer", {})
-        if isinstance(installer, dict):
-            config.game_identifier = str(installer.get("game_identifier", ""))
-            config.third_party_platform = _extract_third_party_platform(
-                root,
-                installer,
-            )
-            exe_match = re.search(
-                r"relative:\s*(.+?\.exe)",
-                yaml_text,
-                re.IGNORECASE,
-            )
-            if exe_match:
-                config.executable = exe_match.group(1).strip().strip("'\"")
-                return config
-    return None
+    config.name = _yaml_extract(yaml_text, r"(?:^|\n)\s*name:\s*(.+?)(?:\n|$)")
+    config.space_id = _yaml_extract(yaml_text, r"space_id:\s*([a-f0-9\-]+)")
+    config.thumb_image = _yaml_extract(yaml_text, r"thumb_image:\s*(.+?)(?:\n|$)")
+    config.game_identifier = _yaml_extract(
+        yaml_text, r"game_identifier:\s*(.+?)(?:\n|$)",
+    )
+    config.third_party_platform = _yaml_extract(
+        yaml_text, r"third_party_platform:\s*(.+?)(?:\n|$)",
+    )
+    exe_match = re.search(r"relative:\s*(.+?\.exe)", yaml_text, re.IGNORECASE)
+    if exe_match:
+        config.executable = exe_match.group(1).strip().strip("'\"")
+    # UPC sometimes emits a placeholder ``name`` and the real one under
+    # ``GAMENAME`` in a localization block.
+    if config.name.lower() in BLACKLISTED_NAMES:
+        localized = _yaml_extract(yaml_text, r"GAMENAME:\s*(.+?)(?:\n|$)")
+        if localized:
+            config.name = localized
+    return config
 
 
-def _extract_third_party_platform(root: dict[str, Any], installer: Any) -> str:
-    """Extract third party platform."""
-    if isinstance(root.get("third_party_platform"), str):
-        return cast("str", root["third_party_platform"].strip())
-    if isinstance(installer, dict):
-        value = installer.get("third_party_platform")
-        if isinstance(value, str):
-            return value.strip()
-    start_game = root.get("start_game", {})
-    if isinstance(start_game, dict):
-        for mode in ("online", "offline"):
-            mode_dict = start_game.get(mode, {})
-            if isinstance(mode_dict, dict):
-                value = mode_dict.get(
-                    "third_party_platform",
-                )
-                if isinstance(value, str) and value:
-                    return value.strip()
+def _extract_yaml_from_record(record: bytes, start_pos: int) -> str | None:
+    """Extract the YAML blob (after the ``0x1A`` length-prefixed field)."""
+    yaml_start = -1
+    for i in range(start_pos, len(record)):
+        if record[i] == 0x1A:
+            yaml_start = i + 1
+            break
+    if yaml_start < 0:
+        return None
+    length_raw, consumed = _read_varint_at(record, yaml_start)
+    length = _decode_varint(length_raw)
+    yaml_start += consumed
+    if yaml_start + length > len(record):
+        raw = record[yaml_start:]
+    else:
+        raw = record[yaml_start : yaml_start + length]
+    text = raw.decode("utf-8", errors="replace")
+    text = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", "", text)
+    return text if text.strip() else None
+
+
+def _yaml_extract(text: str, pattern: str) -> str:
+    """Pull a single value out of the YAML-ish text via regex."""
+    match = re.search(pattern, text)
+    if match:
+        return match.group(1).strip().strip("'\"")
     return ""
 
 
+# ── ownership parser ─────────────────────────────────────────────
+
+
 def parse_ownership(filepath: str) -> list[int]:
-    """Parse ownership."""
-    data = _read_ownership_file(filepath)
+    """Parse the UPC ``ownership`` binary into a list of owned ids."""
+    data = _read_binary_file(filepath, "Ownership")
     if data is None:
         return []
     owned: list[int] = []
@@ -304,30 +262,13 @@ def parse_ownership(filepath: str) -> list[int]:
     return owned
 
 
-def _read_ownership_file(filepath: str) -> bytes | None:
-    """Read ownership file."""
-    if not Path(filepath).is_file():
-        logger.warning(
-            "[UbiParser] Ownership file not found: %s",
-            filepath,
-        )
-        return None
-    try:
-        with Path(filepath).open("rb") as f:
-            return f.read()
-    except Exception:
-        logger.exception("[UbiParser] Failed to read ownership")
-        return None
-
-
 def check_install_state(state_file: str) -> bool:
-    """Check install state."""
+    """A first byte of ``0x0A`` in uplay_install.state means installed."""
     if not Path(state_file).is_file():
         return False
     try:
         with Path(state_file).open("rb") as f:
-            first_byte = f.read(1)
-            return first_byte == b"\x0a"
+            return f.read(1) == b"\x0a"
     except Exception:
         return False
 
@@ -335,7 +276,7 @@ def check_install_state(state_file: str) -> bool:
 def build_id_map_from_configurations(
     filepath: str,
 ) -> dict[str, dict[str, Any]]:
-    """Build ID map from configurations."""
+    """Build a ``space_id → {ids, name, exe}`` map from the configs binary."""
     configs = parse_configurations(filepath)
     id_map: dict[str, dict[str, Any]] = {}
     for cfg in configs:

@@ -36,11 +36,12 @@ class names imported from `@decky/ui`
 (`appDetailsClasses.InnerContainer`, `playSectionClasses.Container`,
 `appDetailsHeaderClasses.TopCapsule`). Switched from
 `bridge.addRouterPatch(...)` to `afterPatch(routeProps, "renderFunc", ...)`
-+ `createReactTreePatcher`. Added the `__unifideckPatched` marker
-to prevent double-patching when ProtonDB / HLTB patch the same
-route. Added position-correction (if our injection drifts past
-index 3 after a Steam restart, splice it back). Restricted
-override to `appId > 2_000_000_000` (non-Steam shortcuts).
+
+- `createReactTreePatcher`. Added the `__unifideckPatched` marker
+  to prevent double-patching when ProtonDB / HLTB patch the same
+  route. Added position-correction (if our injection drifts past
+  index 3 after a Steam restart, splice it back). Restricted
+  override to `appId > 2_000_000_000` (non-Steam shortcuts).
 
 ### 1.2 Gamepad focus was invisible everywhere
 
@@ -55,6 +56,7 @@ ever drawn.
 survived the refactor.
 
 **Fix:**
+
 - Every play / info component now wraps its rows in
   `<Focusable flow-children="row" onActivate={() => {}}>`
   (per [MEMORY.md](../../../../.claude/projects/-home-deck-Documents-Projects-unifideck-main-unifideck-decky/memory/MEMORY.md):
@@ -110,6 +112,7 @@ invalidated on uninstall; the next render served the stale
 "is_installed: true" entry.
 
 **Fix:**
+
 - [src/hooks/useGameInfo.ts](../../src/hooks/useGameInfo.ts) — exported
   `invalidateGameInfo(appId)` (handles signed/unsigned variants).
 - [src/hooks/useGameActions.ts](../../src/hooks/useGameActions.ts) —
@@ -117,7 +120,7 @@ invalidated on uninstall; the next render served the stale
   on success.
 - Created [src/lib/game-state-version.ts](../../src/lib/game-state-version.ts)
   to break a circular dependency (`useGameActions → AppDetailsPatch
-  → components/play → … → useGameActions`).
+→ components/play → … → useGameActions`).
 
 ---
 
@@ -139,6 +142,7 @@ The new architecture removed three modals without replacements
   vs keep-artwork picker).
 
 Also new:
+
 - [src/components/modals/StorageBrowserModal.tsx](../../src/components/modals/StorageBrowserModal.tsx)
   — full-screen path picker wrapping `StoragePathPicker`.
 
@@ -188,6 +192,7 @@ directly and tried `.filter(...)` on the envelope object.
 **Fix:** Extracted `unwrapRpcEnvelope<T>(raw, options)` from
 the existing logic in [src/api/useRPC.ts](../../src/api/useRPC.ts).
 Used in:
+
 - [src/api/event-bus-client.ts](../../src/api/event-bus-client.ts)
 - [src/utils/authShortcutLaunch.ts](../../src/utils/authShortcutLaunch.ts)
 - [src/utils/ubisoftShortcutLaunch.ts](../../src/utils/ubisoftShortcutLaunch.ts)
@@ -207,6 +212,7 @@ declares `{current, queued, finished, state}`. Reading
 `queue.finished.length` on a missing field threw `TypeError`.
 
 **Fix:**
+
 - [src/contexts/DownloadContext.tsx](../../src/contexts/DownloadContext.tsx)
   — new `adaptQueue()` maps backend shape → frontend shape
   (`current = running[0]`, `finished = []`, `state` derived
@@ -357,7 +363,7 @@ fallback uses the actual executable wrapper.
 - `get_storage_locations` reshaped from
   `[{path, free_bytes, total_bytes}]` to
   `{success, locations: [{id, label, path, available,
-  free_space_gb}], default}` matching frontend
+free_space_gb}], default}` matching frontend
   `StorageLocationsResponse`.
 - `set_default_storage_location(loc_id)` — persists
   `download.default_location`.
@@ -409,6 +415,7 @@ Shared helper `_resolve_app_id()` smoke-tested for all 4 cases.
 clicks to backend execution.
 
 **Fix:** Added INFO-level logging on entry + exit:
+
 - `[StoreAuth:<store>] action=start kw={…}` /
   `success=<bool> error=<str>`
 - `[AuthShortcuts:<store>] context requested` /
@@ -481,6 +488,7 @@ sequence called it**. So `container.browser_monitor` and
 the auto-discovered store instances.
 
 **Fix:**
+
 - [py_modules/unifideck/bootstrap/boot.py](../../py_modules/unifideck/bootstrap/boot.py)
   — `_boot_layer5_services` now does 3-phase wiring:
   ```
@@ -510,12 +518,14 @@ the auto-discovered store instances.
 `auth_not_configured`.
 
 **Root cause:** Each store's `__init__` had a guard:
+
 ```python
 if browser_monitor is not None:
     self._auth = SomeAuthFlow(...)
 else:
     self._auth = None
 ```
+
 `StoreRegistry.auto_discover()` constructs stores with
 `browser_monitor=None` (the container doesn't exist yet), so
 `_auth` was permanently `None`. Setting `_browser_monitor`
@@ -602,9 +612,11 @@ returns `{success: true, store}`; on slow-path it returns
 the return value:
 
 ```ts
-void this.kickAndLaunch(store).then((early) => {
-  if (early) onResolved(early);   // ← resolves immediately
-}).catch(reject);
+void this.kickAndLaunch(store)
+  .then((early) => {
+    if (early) onResolved(early); // ← resolves immediately
+  })
+  .catch(reject);
 ```
 
 Both paths resolve cleanly — no race, no timeout.
@@ -654,18 +666,19 @@ was already authenticated; the correct behaviour is to
 report success without opening a browser.
 
 **Fix:**
+
 - [py_modules/unifideck/stores/epic/auth.py](../../py_modules/unifideck/stores/epic/auth.py)
   — `EpicAuthFlow.start_auth` now calls
   `_is_already_authed()` first. The check runs `legendary auth`
   (no args), reads stdout, looks for
   `_LEGENDARY_ALREADY_AUTHED_MARKERS` (`"Stored credentials
-  are still valid"`, `"Login successful"`). On hit, emits
+are still valid"`, `"Login successful"`). On hit, emits
   `STORE_AUTH_COMPLETE` and returns `AuthResult(success=True)`.
 - [py_modules/unifideck/stores/amazon/amazon_auth.py](../../py_modules/unifideck/stores/amazon/amazon_auth.py)
   — same pattern via `_is_already_authed()`. Runs
   `nile auth --login --non-interactive`, checks stderr/stdout
   for `_NILE_ALREADY_AUTHED_MARKERS` (`"You are already
-  logged in"`, `"already authenticated"`). On hit, emits
+logged in"`, `"already authenticated"`). On hit, emits
   `STORE_AUTH_COMPLETE` + success.
 
 ---
@@ -730,6 +743,7 @@ frontend modal. Additionally :
 4. **New `EdgeRPCMixin`**
    ([py_modules/unifideck/rpc/mixins/edge.py](../../py_modules/unifideck/rpc/mixins/edge.py),
    ~100 LOC) — exposes two RPCs:
+
    - `is_edge_installed()` → `{installed: bool}` — pre-flight
      check, proxies through `MicrosoftStore.is_edge_installed`.
    - `install_edge()` → `{success: bool, error?: str}` —
@@ -782,18 +796,18 @@ Click Connect → AuthDispatcher.start(store)
 
 Three orthogonal mechanisms, all per PDF spec:
 
-| Concern | Mechanism | When |
-|---------|-----------|------|
-| **Build the service graph at boot** | `bootstrap_services()` (OP-13d) | once, at plugin mount |
-| **Wire services into auto-discovered stores** | `inject_store_dependencies()` (OP-13g) | once, immediately after `bootstrap_services` |
-| **Trigger an action with a return value** | RPC: `store_auth`, `install_game`, etc. | per user click |
-| **Fan out a state change** | EventBus: `STORE_AUTH_COMPLETE`, `SYNC_PROGRESS`, `DOWNLOAD_PROGRESS`, etc. | continuous, multiple subscribers |
+| Concern                                       | Mechanism                                                                   | When                                         |
+| --------------------------------------------- | --------------------------------------------------------------------------- | -------------------------------------------- |
+| **Build the service graph at boot**           | `bootstrap_services()` (OP-13d)                                             | once, at plugin mount                        |
+| **Wire services into auto-discovered stores** | `inject_store_dependencies()` (OP-13g)                                      | once, immediately after `bootstrap_services` |
+| **Trigger an action with a return value**     | RPC: `store_auth`, `install_game`, etc.                                     | per user click                               |
+| **Fan out a state change**                    | EventBus: `STORE_AUTH_COMPLETE`, `SYNC_PROGRESS`, `DOWNLOAD_PROGRESS`, etc. | continuous, multiple subscribers             |
 
-The EventBus is *not* used for service construction or for
+The EventBus is _not_ used for service construction or for
 action triggering — it is the broadcast channel for runtime
 state changes. The frontend's `AuthDispatcher` calls
-`store_auth` (RPC) to *start* a flow, then awaits
-`STORE_AUTH_COMPLETE` / `_FAILED` on the EventBus to *complete*
+`store_auth` (RPC) to _start_ a flow, then awaits
+`STORE_AUTH_COMPLETE` / `_FAILED` on the EventBus to _complete_
 it.
 
 ---

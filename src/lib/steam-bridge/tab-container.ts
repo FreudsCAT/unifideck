@@ -278,7 +278,6 @@ type ConnectableStore = "epic" | "gog" | "amazon" | "ubisoft" | "microsoft";
 class TabManager {
   private tabs: UnifideckTabContainer[] = [];
   private initialized = false;
-  private connectedStores = new Set<ConnectableStore>();
   private storeCounts: Record<ConnectableStore, number> = {
     epic: 0,
     gog: 0,
@@ -286,6 +285,30 @@ class TabManager {
     ubisoft: 0,
     microsoft: 0,
   };
+  private version = 0;
+  private listeners: (() => void)[] = [];
+
+  getVersion(): number {
+    return this.version;
+  }
+
+  onTabsChanged(listener: () => void): () => void {
+    this.listeners.push(listener);
+    return () => {
+      this.listeners = this.listeners.filter((l) => l !== listener);
+    };
+  }
+
+  private notifyListeners(): void {
+    this.version++;
+    this.listeners.forEach((l) => {
+      try {
+        l();
+      } catch (e) {
+        console.error("[TabManager] Listener failed:", e);
+      }
+    });
+  }
 
   initialize(): void {
     if (this.initialized) return;
@@ -301,19 +324,10 @@ class TabManager {
     this.storeCounts = { ...this.storeCounts, ...counts };
   }
 
-  setConnectedStores(
-    statuses: Partial<Record<ConnectableStore, string>>,
-  ): void {
-    const next = new Set<ConnectableStore>();
-    (["epic", "gog", "amazon", "ubisoft", "microsoft"] as const).forEach(
-      (s) => {
-        if (statuses[s] === "connected") next.add(s);
-      },
-    );
-    this.connectedStores = next;
-    if (this.initialized) this.rebuildTabs();
-  }
-
+  // A per-store tab is shown only when that store has at least one
+  // game. Connection/login state is deliberately ignored — an empty
+  // store (even one the user is logged into) hides its tab until
+  // games sync in, and reappears once they do.
   private shouldShowTab(id: string): boolean {
     const m: Record<string, ConnectableStore> = {
       "unifideck-epic": "epic",
@@ -324,7 +338,7 @@ class TabManager {
     };
     const store = m[id];
     if (!store) return true;
-    return this.storeCounts[store] > 0 || this.connectedStores.has(store);
+    return this.storeCounts[store] > 0;
   }
 
   isInitialized(): boolean {
@@ -333,6 +347,7 @@ class TabManager {
 
   rebuildTabs(): void {
     this.tabs = getUnifideckTabs().map((tab) => new UnifideckTabContainer(tab));
+    this.notifyListeners();
   }
 }
 

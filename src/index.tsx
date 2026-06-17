@@ -33,7 +33,9 @@ import { applyLibraryPatch } from "./lib/steam-bridge/library-patch";
 import { startUnifideckCacheAutoload } from "./lib/library-filters";
 import { startCollectionManager } from "./lib/steam-bridge/collection-manager";
 import { applyAppStorePatch } from "./lib/steam-bridge/app-store-patcher";
+import { prefetchAuthStatus } from "./contexts/AuthContext";
 import { runBootstrapTasks } from "./bootstrap-tasks";
+import { startLauncherToastPoll } from "./services/launcherToasts";
 import { runTeardown, type TeardownHandles } from "./teardown";
 // Eager translation load — Decky's UI mounts before any
 // async work resolves, so we kick this off at module import.
@@ -77,6 +79,19 @@ export default definePlugin(() => {
     handles.collectionManager = startCollectionManager();
   } catch (e) {
     console.error("[Unifideck] collection manager start failed:", e);
+  }
+  // Start auth status check now (in definePlugin, where Decky's
+  // RPC bridge is ready) so the result is cached before the user
+  // opens QAM. Avoids the 1-2s delay on first QAM open.
+  prefetchAuthStatus();
+  // Persistent poll for launcher-subprocess toasts (first-time prefix
+  // setup, dependency install, Proton switch). Runs here — NOT in the
+  // QAM panel — so launch-time toasts show in Gaming Mode where the
+  // panel is closed during the launch.
+  try {
+    handles.launcherToastPoll = startLauncherToastPoll();
+  } catch (e) {
+    console.error("[Unifideck] launcher toast poll start failed:", e);
   }
   // Spoof non-Steam Unifideck shortcuts as Steam Store games so
   // Steam's own UI surfaces (library tile, AppDetails page,

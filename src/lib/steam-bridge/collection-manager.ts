@@ -13,6 +13,33 @@ import type { SteamAppOverview } from "../../types/steam";
 
 const COLLECTION_PREFIX = "[Unifideck] ";
 
+/**
+ * Set by `deleteAllUnifideckCollections` so the initial-load sync in
+ * `startCollectionManager` doesn't immediately recreate the collections
+ * the user just wiped. Cleared on the next `unifideck-sync-completed` —
+ * a fresh library sync is the explicit signal collections are wanted
+ * again. Lives in localStorage so it survives the Steam restart that
+ * cleanup prompts for.
+ */
+const SUPPRESSION_KEY = "unifideck.collections.suppressed";
+
+function isSuppressed(): boolean {
+  try {
+    return window.localStorage.getItem(SUPPRESSION_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function setSuppressed(on: boolean): void {
+  try {
+    if (on) window.localStorage.setItem(SUPPRESSION_KEY, "1");
+    else window.localStorage.removeItem(SUPPRESSION_KEY);
+  } catch {
+    /* localStorage unavailable — worst case is pre-fix behavior */
+  }
+}
+
 interface AppStoreOverview {
   appid: number;
   display_name: string;
@@ -75,22 +102,30 @@ async function deleteCollection(c: Collection): Promise<void> {
   }
 }
 
-async function cleanupStaleCollections(): Promise<void> {
-  const cs = getCollectionStore();
-  if (!cs) return;
+/**
+ * Snapshot of every `[Unifideck]` collection. `Delete()` mutates the
+ * underlying MobX Map, so iterating `userCollections.values()` live
+ * while deleting skips entries — always work from a snapshot.
+ */
+function snapshotUnifideckCollections(cs: CollectionStore): Collection[] {
   let collections: Map<string, Collection> | undefined;
   try {
     collections = cs.userCollections;
   } catch {
-    return;
+    return [];
   }
-  if (!collections || typeof collections.values !== "function") return;
+  if (!collections || typeof collections.values !== "function") return [];
+  return Array.from(collections.values()).filter((c) =>
+    c?.displayName?.startsWith(COLLECTION_PREFIX),
+  );
+}
+
+async function cleanupStaleCollections(): Promise<void> {
+  const cs = getCollectionStore();
+  if (!cs) return;
   const valid = validCollectionNames();
-  for (const c of collections.values()) {
-    if (
-      c?.displayName?.startsWith(COLLECTION_PREFIX) &&
-      !valid.has(c.displayName)
-    ) {
+  for (const c of snapshotUnifideckCollections(cs)) {
+    if (!valid.has(c.displayName)) {
       await deleteCollection(c);
     }
   }
@@ -124,6 +159,18 @@ async function syncTab(
   const matches = allApps.filter(
     (a) => a.appid > 0 && runFilters(tab.filters, a),
   );
+  if (matches.length === 0) {
+    // Nothing to show — don't create an empty `[Unifideck]` shell, and
+    // drop any leftover one from a previous sync.
+    const cs = getCollectionStore();
+    if (!cs) return false;
+    const id = cs.GetCollectionIDByUserTag(tabName(tab));
+    if (typeof id === "string") {
+      const existing = cs.GetCollection(id);
+      if (existing) await deleteCollection(existing);
+    }
+    return true;
+  }
   const c = await getOrCreateCollection(tabName(tab));
   if (!c) return false;
   const appStore = getAppStore();
@@ -147,6 +194,7 @@ async function syncTab(
 
 /** Sync every `[Unifideck]` collection to current tab filters. */
 export async function syncUnifideckCollections(): Promise<void> {
+  if (isSuppressed()) return;
   if (!isCollectionsAvailable()) return;
   await cleanupStaleCollections();
   const cs = getCollectionStore();
@@ -162,20 +210,42 @@ export async function syncUnifideckCollections(): Promise<void> {
   await Promise.allSettled(getUnifideckTabs().map((t) => syncTab(t, allApps)));
 }
 
-/** Delete every `[Unifideck]` collection. */
+/**
+ * Delete every `[Unifideck]` collection and suppress re-creation until
+ * the next library sync. Verifies the store actually dropped them
+ * (deletes persist asynchronously and can race a Steam restart),
+ * retrying leftovers a few times before giving up.
+ */
 export async function deleteAllUnifideckCollections(): Promise<void> {
+  setSuppressed(true);
   const cs = getCollectionStore();
   if (!cs) return;
-  let collections: Map<string, Collection> | undefined;
-  try {
-    collections = cs.userCollections;
-  } catch {
-    return;
+  // Tag-based pass first — deterministic lookup for the current locale;
+  // the prefix scan below also catches collections created under a
+  // different UI language.
+  for (const tab of getUnifideckTabs()) {
+    try {
+      const id = cs.GetCollectionIDByUserTag(tabName(tab));
+      if (typeof id === "string") {
+        const c = cs.GetCollection(id);
+        if (c) await deleteCollection(c);
+      }
+    } catch {
+      /* skip */
+    }
   }
-  if (!collections || typeof collections.values !== "function") return;
-  for (const c of collections.values()) {
-    if (c?.displayName?.startsWith(COLLECTION_PREFIX))
-      await deleteCollection(c);
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const targets = snapshotUnifideckCollections(cs);
+    if (targets.length === 0) return;
+    for (const c of targets) await deleteCollection(c);
+    await new Promise((r) => setTimeout(r, 250));
+  }
+  const survivors = snapshotUnifideckCollections(cs);
+  if (survivors.length > 0) {
+    console.error(
+      "[Unifideck Collections] collections survived deletion:",
+      survivors.map((c) => c.displayName),
+    );
   }
 }
 
@@ -223,6 +293,9 @@ async function waitForCollections(timeoutMs = 30_000): Promise<boolean> {
  */
 export function startCollectionManager(): CollectionManagerHandle {
   const onSync = () => {
+    // A fresh library sync means the user wants collections back —
+    // lift any post-cleanup suppression before rebuilding.
+    setSuppressed(false);
     void syncUnifideckCollections().catch((e) =>
       console.error("[Unifideck Collections] resync failed", e),
     );

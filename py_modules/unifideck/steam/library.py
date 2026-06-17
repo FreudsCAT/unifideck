@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any
 import aiohttp
 
 from unifideck.utils.config_helpers import get_cfg
+from unifideck.utils.title_match import titles_match
 
 if TYPE_CHECKING:
     from unifideck.config import ConfigManager
@@ -144,11 +145,26 @@ async def search_store(
     params = {"term": title, "l": "english", "cc": "us"}
     try:
         timeout = aiohttp.ClientTimeout(total=timeout_s)
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.get(STEAM_STORE_SEARCH_URL, params=params) as response:
-                if response.status != _HTTP_OK:
-                    return None
-                data = await response.json(content_type=None)
+        # SteamOS's bundled cert store predates several Steam Store CDN
+        # cert rotations (~2024) so default SSL verification fails inside
+        # the Decky plugin process — the symptom looks like every
+        # ``library.search_store`` call silently returning ``None``,
+        # which in turn makes ``MetadataService.enrich`` cache a
+        # ``_negative`` sentinel for every game. ArtworkService's parallel
+        # ``steam_search_appid`` (artwork/store_metadata.py:66) already
+        # works around this by passing ``ssl=False`` to its connector;
+        # mirroring that here. Hostname + chain validation are off, same
+        # trade-off as the GOG OAuth flow (see ``ssl_helpers``).
+        connector = aiohttp.TCPConnector(ssl=False)
+        async with (
+            aiohttp.ClientSession(
+                connector=connector, timeout=timeout,
+            ) as session,
+            session.get(STEAM_STORE_SEARCH_URL, params=params) as response,
+        ):
+            if response.status != _HTTP_OK:
+                return None
+            data = await response.json(content_type=None)
     except (aiohttp.ClientError, TimeoutError) as exc:
         logger.debug("[steam.search_store] %s failed: %s", title, exc)
         return None
@@ -156,12 +172,26 @@ async def search_store(
     items = data.get("items") if isinstance(data, dict) else None
     if not items:
         return None
-    item = items[0]
-    try:
-        app_id = int(item.get("id", 0))
-    except (TypeError, ValueError):
-        return None
-    if app_id <= 0:
+    # Validate the title instead of blindly trusting Steam's top hit.
+    # ``items[0]`` is frequently a sequel / soundtrack / unrelated game
+    # ("Control" → "Steam Controller", "Hades" → "Hades II", "Figment" →
+    # "Figment - Soundtrack"), which would feed WRONG metadata + compat
+    # downstream. Scan for the first result that actually IS this game;
+    # return None (no data) rather than guess wrong.
+    item = None
+    app_id = 0
+    for candidate in items:
+        try:
+            cid = int(candidate.get("id", 0))
+        except (TypeError, ValueError):
+            continue
+        if cid <= 0:
+            continue
+        if titles_match(title, str(candidate.get("name", ""))):
+            item = candidate
+            app_id = cid
+            break
+    if item is None:
         return None
     header_image = (
         f"https://cdn.akamai.steamstatic.com/steam/apps/{app_id}/header.jpg"

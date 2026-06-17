@@ -44,6 +44,25 @@ def _resolve_timeout(config: ConfigManager | None) -> int:
     return int(get_cfg(config, "artwork.download_timeout_seconds", 30))
 
 
+def _ssl_free_session() -> Any:
+    """``aiohttp.ClientSession`` with TLS verification disabled.
+
+    The Steam Deck's system CA store is frequently stale, so HTTPS to
+    ``www.steamgriddb.com`` can fail certificate verification inside the
+    Decky plugin process. Every other HTTP path in the artwork pipeline
+    — store metadata and the image download in
+    ``services/artwork`` — already opts out via
+    ``TCPConnector(ssl=False)``; the SGDB *API* session was the lone
+    exception, and the swallowed ``SSLCertVerificationError`` made every
+    search + asset call return empty, so SGDB contributed *zero* covers
+    to the whole library (icons, which only come from SGDB, were the
+    most visible casualty).
+    """
+    import aiohttp
+
+    return aiohttp.ClientSession(connector=aiohttp.TCPConnector(ssl=False))
+
+
 async def search_artwork(
     title: str,
     kind: str,
@@ -61,15 +80,13 @@ async def search_artwork(
     match, or any HTTP failure (always non-raising — caller chains
     into Steam-CDN fallback without exception handling).
     """
-    import aiohttp
-
     if kind not in ARTWORK_KINDS:
         raise ValueError(f"unknown artwork kind: {kind}")
     if not api_key:
         return None
     base = _resolve_base(config)
     timeout = _resolve_timeout(config)
-    async with aiohttp.ClientSession() as session:
+    async with _ssl_free_session() as session:
         game_id = await search_game_id(
             session, base, api_key, title, timeout_sec=timeout,
         )
@@ -86,23 +103,28 @@ async def fetch_all_kinds(
     title: str,
     api_key: str | None,
     config: ConfigManager | None = None,
+    only_kinds: frozenset[str] | None = None,
 ) -> dict[str, str | None]:
-    """Resolve a title to URLs for every kind (one search + parallel fetch).
+    """Resolve a title to URLs per kind (one search + parallel fetch).
 
-    Returns ``{kind: url | None}`` for all 5 kinds. ``None`` means
-    "no match" or "search failed" — caller treats both the same.
+    Args:
+        only_kinds: when set, resolve only these kinds (e.g.
+            ``frozenset({"icon"})`` to backfill just the gap a previous
+            sync missed). ``None`` means all five.
+
+    Returns ``{kind: url | None}`` for every requested kind. ``None``
+    means "no match" or "search failed" — caller treats both the same.
     Without an API key, returns all-None without making any HTTP
     calls (matches old behaviour).
     """
-    import aiohttp
-
     if not api_key:
-        return dict.fromkeys(ARTWORK_KINDS)
+        return dict.fromkeys(only_kinds or ARTWORK_KINDS)
     base = _resolve_base(config)
     timeout = _resolve_timeout(config)
-    async with aiohttp.ClientSession() as session:
+    async with _ssl_free_session() as session:
         picked = await _batch.fetch_all_artwork(
-            session, base, api_key, title, timeout_sec=timeout,
+            session, base, api_key, title,
+            only_kinds=only_kinds, timeout_sec=timeout,
         )
     return {kind: (asset.url if asset else None) for kind, asset in picked.items()}
 

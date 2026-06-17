@@ -130,24 +130,27 @@ class MicrosoftCatalogReader:
             len(title_map), len(product_ids),
             time.time() - t1, time.time() - t0,
         )
-        return [
-            Game(
+        return self._build_xcloud_games(entitled, title_map)
+
+    @staticmethod
+    def _build_xcloud_games(
+        entitled: list[dict[str, Any]], title_map: dict[str, Any],
+    ) -> list[Game]:
+        """Build xCloud ``Game`` records from entitled titles + names."""
+        games: list[Game] = []
+        for t in entitled:
+            pid = (t.get("details") or {}).get("productId") or ""
+            if not pid:
+                continue
+            games.append(Game(
                 app_id=0,
                 store="microsoft",
                 store_game_id=pid,
-                title=_title_for(title_map, pid, fallback_title),
+                title=_title_for(title_map, pid, t.get("titleId", "")),
                 installed=False,
                 tags=[GameTag.XCLOUD],
-            )
-            for pid, fallback_title in (
-                (
-                    (t.get("details") or {}).get("productId") or "",
-                    t.get("titleId", ""),
-                )
-                for t in entitled
-            )
-            if pid
-        ]
+            ))
+        return games
 
     async def _fetch_xcloud_titles(
         self, base_uri: str, gs_token: str,
@@ -258,8 +261,17 @@ def _unique_product_ids(entitled: list[dict[str, Any]]) -> list[str]:
 def _title_for(
     title_map: dict[str, str], product_id: str, fallback: str,
 ) -> str:
-    """Best display name: v3 ProductTitle, or titleId, or product_id."""
-    name = title_map.get(product_id)
+    """Best display name: v3 ProductTitle, or titleId, or product_id.
+
+    The lookup is case-folded: ``store_game_id`` is sometimes lowercase
+    (e.g. ``brrc2bp0g9p0``) but displaycatalog always returns the
+    canonical UPPERCASE ``ProductId`` (``BRRC2BP0G9P0``), which is what
+    :func:`_parse_displaycatalog` keys on. A case-sensitive lookup
+    missed every lowercase id and fell back to the ugly ``titleId`` slug
+    ("HALO5", "GEARSOFWAR4", "DEADBYDEADLIGHT") — a wrong title that then
+    poisoned metadata, compatibility, and artwork search downstream.
+    """
+    name = title_map.get(product_id.upper())
     if isinstance(name, str) and name:
         return name
     if fallback:
@@ -383,5 +395,7 @@ def _parse_displaycatalog(raw: str) -> dict[str, str]:
             continue
         title = loc[0].get("ProductTitle")
         if isinstance(title, str) and title:
-            out[pid] = title
+            # Key on the UPPER form so the case-folded lookup in
+            # ``_title_for`` matches lowercase store_game_ids too.
+            out[pid.upper()] = title
     return out

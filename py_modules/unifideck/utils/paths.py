@@ -54,25 +54,16 @@ DEFAULT_INSTALL_DIRS = {
     "ubisoft": "~/Games/Ubisoft",
 }
 
+# Root game directory — always checked so internal storage
+# shows up even before any per-store subdirectories exist.
+DEFAULT_GAMES_ROOT = "~/Games"
+
 # Where the games.map lives by default. Steam Deck never
 # relocates this without explicit user action, so the path is
 # stable.
 DEFAULT_GAMES_MAP = "~/.local/share/unifideck/games.map"
 
-# Mount root for SD cards / external drives on the Steam Deck
-DEFAULT_SD_ROOT = "/run/media"
 
-# ── Legacy compatibility aliases ──────────────────────────────
-# Keep the old constant names working so legacy modules
-# (utils/__init__.py, accounts/account_manager.py, etc.) that
-# ``from .paths import GAMES_MAP_PATH, DEFAULT_PATHS`` continue
-# to import successfully during the migration window. Both forms
-# resolve to the same expanded value.
-GAMES_MAP_PATH = str(Path(DEFAULT_GAMES_MAP).expanduser())
-DEFAULT_PATHS = {
-    store: str(Path(path).expanduser())
-    for store, path in DEFAULT_INSTALL_DIRS.items()
-}
 
 
 # ══════════════════════════════════════════════════════════════
@@ -80,7 +71,7 @@ DEFAULT_PATHS = {
 # ══════════════════════════════════════════════════════════════
 
 
-def expand(path: str) -> str:
+def _expand(path: str) -> str:
     """Expand ``~`` and ``$VAR`` references in a path string.
 
     Pure function — no filesystem I/O. Returns an absolute path
@@ -95,7 +86,7 @@ def expand(path: str) -> str:
     return str(Path(os.path.expandvars(path)).expanduser())
 
 
-def dedupe_paths(paths: list[str]) -> list[str]:
+def _dedupe_paths(paths: list[str]) -> list[str]:
     """Remove duplicate paths preserving order.
 
     Two paths are considered equal if their normalized form
@@ -140,97 +131,131 @@ def get_all_game_directories(config: ConfigManager | None = None) -> list[str]:
     """
     candidates: list[str] = []
 
-    # 1. Per-store install dirs
+    # 1. Root games directory — always available as internal storage.
+    #    Create it if missing so internal storage is never empty.
+    games_root = _expand(DEFAULT_GAMES_ROOT)
+    _ensure_dir(games_root)
+    candidates.append(games_root)
+
+    # 2. Per-store install dirs
     for store, default in DEFAULT_INSTALL_DIRS.items():
         path = _cfg(config, f"stores.{store}.install_dir", default)
-        candidates.append(expand(path))
+        candidates.append(_expand(path))
 
-    # 2. Custom user path
+    # 3. Custom user path
     custom = get_cfg(config, "download.custom_path", "")
     if custom:
-        candidates.append(expand(custom))
+        candidates.append(_expand(custom))
 
-    # 3. SD card / external drive scan
-    media_root = get_cfg(config, "paths.sd_card_root", DEFAULT_SD_ROOT)
-    candidates.extend(_scan_mount_root(media_root))
+    # 4. External drives — scan every writable non-system mount
+    #    from /proc/mounts for Game directories.  No hardcoded
+    #    paths — whatever is mounted and writable gets checked.
+    candidates.extend(_scan_external_mounts())
 
     # Filter to existing dirs and dedupe
     existing = [p for p in candidates if Path(p).is_dir()]
-    return dedupe_paths(existing)
+    return _dedupe_paths(existing)
 
 
 def _collect_game_dirs(parent_path: Path) -> list[str]:
     """Return ``Games/`` and ``GOG Games/`` subdirs of ``parent_path``.
 
-    Helper for ``_scan_mount_root`` — factored out so the scan
-    loop stays shallow. Symlinks are skipped to avoid loops.
+    Symlinks are skipped to avoid loops.  OSError (including
+    PermissionError on inaccessible mounts like /efi) is
+    caught per-path so one bad mount can't hide another.
     """
     found: list[str] = []
     for sub in ("Games", "GOG Games"):
         p = parent_path / sub
-        if p.is_dir() and not p.is_symlink():
-            found.append(str(p))
+        try:
+            if p.is_dir() and not p.is_symlink():
+                found.append(str(p))
+        except OSError:
+            continue
     return found
 
 
-def _scan_level2(level1_path: Path) -> list[str]:
-    """Scan the level-2 subtree under ``level1_path`` for game dirs.
 
-    Some Decks (LUKS-on-external SSD setups notably) mount
-    game partitions one level deeper than the standard
-    ``/run/media/<user>/<mount>/Games`` layout — this helper
-    handles the ``<mount>/<level2>/Games`` case. Returns an
-    empty list on any I/O error (mount disappeared between
-    listings, permissions trouble).
+def _ensure_dir(path: str) -> None:
+    """Create a directory if it doesn't exist. Idempotent."""
+    Path(path).mkdir(parents=True, exist_ok=True)
+
+
+def _device_id(path: str) -> int:
+    """Return st_dev of *path*, or 0 on error."""
+    try:
+        return Path(path).stat().st_dev
+    except OSError:
+        return 0
+
+
+def _scan_external_mounts() -> list[str]:
+    """Scan every writable external mount for game directories.
+
+    Reads ``/proc/mounts`` to discover mount points — no hardcoded
+    paths.  Skips the device that contains ``$HOME`` (internal
+    storage) and non-storage filesystem types.  For each remaining
+    mount, looks for ``Games/`` and ``GOG Games/`` subdirectories
+    at the mount root and one level deeper (some setups mount
+    partitions inside a parent directory).
+
+    Symlinks are skipped at every level to avoid loops.
     """
-    found: list[str] = []
-    with contextlib.suppress(OSError):
-        for level2_path in level1_path.iterdir():
-            if (
-                not level2_path.is_dir()
-                or level2_path.is_symlink()
-            ):
-                continue
-            found.extend(_collect_game_dirs(level2_path))
-    return found
-
-
-def _scan_mount_root(root: str) -> list[str]:
-    """Walk ``/run/media/<user>/<mount>/`` looking for game folders.
-
-    Returns paths matching ``<mount>/Games/`` or
-    ``<mount>/GOG Games/`` where they exist. Errors are logged
-    at debug level only — a missing ``/run/media`` on a
-    non-Deck system is normal.
-
-    SECURITY/ROBUSTNESS: symbolic links are skipped at every
-    level. A symlink loop (e.g. ``Games/Other -> Games/``) would
-    otherwise cause the scan to recurse indefinitely or return
-    duplicate paths. The dedupe pass at the caller would mask
-    the duplicates but the wasted CPU on a symlink loop could
-    freeze sync.
-    """
-    root_path = Path(root)
-    if not root_path.is_dir():
-        return []
-
+    home_dev = _device_id(str(Path.home()))
     found: list[str] = []
     try:
-        for level1_path in root_path.iterdir():
-            if (
-                not level1_path.is_dir()
-                or level1_path.is_symlink()
-            ):
-                continue
-            # /run/media/<level1>/Games or GOG Games
-            found.extend(_collect_game_dirs(level1_path))
-            # /run/media/<level1>/<level2>/Games (some Decks)
-            found.extend(_scan_level2(level1_path))
+        lines = Path("/proc/mounts").read_text().splitlines()
     except OSError as e:
-        logger.debug(
-            "[paths] mount scan failed on %s: %s", root, e,
-        )
+        logger.debug("[paths] external mount scan failed: %s", e)
+        return found
+    for line in lines:
+        mp_path = _eligible_mount_point(line, home_dev)
+        if mp_path is not None:
+            found.extend(_collect_mount_game_dirs(mp_path))
     return found
+
+
+def _eligible_mount_point(line: str, home_dev: int) -> Path | None:
+    """Return the mount ``Path`` for a writable external mount, else ``None``.
+
+    Skips short lines, system filesystem types, virtual prefixes,
+    non-directories, and the device hosting ``$HOME``.
+    """
+    parts = line.split()
+    if len(parts) < 3:
+        return None
+    mp, fstype = parts[1], parts[2]
+    if fstype in _SKIP_FSTYPES or mp.startswith(_VIRTUAL_PREFIXES):
+        return None
+    mp_path = Path(mp)
+    if not mp_path.is_dir() or _device_id(mp) == home_dev:
+        return None
+    return mp_path
+
+
+def _collect_mount_game_dirs(mp_path: Path) -> list[str]:
+    """Game dirs at the mount root plus one level deeper.
+
+    Some setups mount partitions inside a parent directory, so we
+    also scan immediate children. Symlinks are skipped to avoid loops.
+    """
+    found = list(_collect_game_dirs(mp_path))
+    with contextlib.suppress(OSError):
+        for child in mp_path.iterdir():
+            if child.is_dir() and not child.is_symlink():
+                found.extend(_collect_game_dirs(child))
+    return found
+
+
+_VIRTUAL_PREFIXES = ("/dev/", "/sys/", "/proc/", "/run/user/")
+
+_SKIP_FSTYPES = frozenset({
+    "proc", "sysfs", "devtmpfs", "devpts", "tmpfs", "cgroup",
+    "cgroup2", "pstore", "bpf", "debugfs", "tracefs", "hugetlbfs",
+    "ramfs", "overlay", "squashfs", "fuse.gvfsd-fuse",
+    "fuse.portal", "securityfs", "configfs", "efivarfs",
+    "autofs", "mqueue",
+})
 
 
 # ══════════════════════════════════════════════════════════════
@@ -246,22 +271,4 @@ def get_games_map_path(config: ConfigManager | None = None) -> str:
     and env vars in the configured path are expanded.
     """
     raw = get_cfg(config, "paths.games_map", DEFAULT_GAMES_MAP)
-    return expand(raw)
-
-
-def ensure_games_map_dir(config: ConfigManager | None = None) -> str | None:
-    """Create the parent directory for games.map if missing.
-
-    Returns the directory path on success, None on failure.
-    Idempotent — safe to call on every plugin start.
-    """
-    path = Path(get_games_map_path(config))
-    parent = path.parent
-    try:
-        parent.mkdir(parents=True, exist_ok=True)
-        return str(parent)
-    except OSError as e:
-        logger.warning(
-            "[paths] mkdir %s failed: %s", parent, e,
-        )
-        return None
+    return _expand(raw)

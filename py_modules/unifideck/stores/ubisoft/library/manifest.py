@@ -225,6 +225,51 @@ class _VisibleManifestProcessor:
         )
         return filtered
 
+    def supplement(
+        self,
+        games: list[Game],
+        installed: dict[str, Any],
+        entries: list[dict[str, Any]],
+        source_label: str,
+    ) -> list[Game]:
+        """Enrich + inject ``entries`` without filtering the base library.
+
+        Unlike :meth:`apply_filter` (a whitelist that drops unmatched
+        games), this keeps every existing game: matching entries are
+        enriched (ownership_type, cover) and their ids merged into the
+        id_map, and entries not already present are appended. Used for
+        the free-to-play feed supplement, which must never remove an
+        owned game.
+        """
+        if not entries:
+            return games
+        index = self._build_index(entries)
+        self._merge_manifest_into_id_map(entries)
+        seen_ids: set[str] = set()
+        seen_norms: set[str] = set()
+        for game in games:
+            norm_title = self._id_map.normalize_for_matching(game.title)
+            entry = index.lookup(game.store_game_id, norm_title)
+            if entry:
+                self._enrich_game_from_entry(game, entry)
+            seen_ids.add(game.store_game_id)
+            seen_norms.add(norm_title)
+        injected = self._inject_unseen_manifest_entries(
+            entries,
+            installed,
+            games,
+            seen_ids,
+            seen_norms,
+            source_label,
+        )
+        logger.info(
+            "[UbisoftLibrary] %s supplement: %d base games (+%d injected)",
+            source_label,
+            len(games) - injected,
+            injected,
+        )
+        return games
+
     def _merge_manifest_into_id_map(
         self,
         manifest: list[dict[str, Any]],

@@ -221,7 +221,6 @@ class GOGStore(StoreBase):
                 store="gog",
             )
         self._edge.clear_store_cookies("gog.com")
-        await self._ensure_auth_shortcut()
         return cast("AuthResult", await self._auth.start_auth())
 
     async def complete_auth(self, code: str = "", **kwargs: Any) -> AuthResult:
@@ -284,10 +283,22 @@ class GOGStore(StoreBase):
         """Uninstall game."""
         info = self._library.get_installed_game_info(game_id)
         install_path = info.get("install_path") if info else None
-        return await self._installer.uninstall_game(
+        result = await self._installer.uninstall_game(
             game_id=game_id,
             install_path=install_path,
         )
+        # Emit so the shortcut service flips this game's Steam
+        # shortcut to "Not Installed" and prunes games.map — Epic
+        # and Amazon already do this; GOG previously did not, so
+        # the shortcut stayed marked installed after a successful
+        # uninstall.
+        if result.success:
+            await self._emit(
+                Events.GAME_UNINSTALLED,
+                store="gog",
+                game_id=game_id,
+            )
+        return result
 
     async def update_game(
         self,
@@ -315,6 +326,19 @@ class GOGStore(StoreBase):
             "windows",
         )
         return size if size > 0 else None
+
+    async def get_installed_path(self, game_id: str) -> str | None:
+        """On-disk install dir for an installed GOG game.
+
+        Lets the App-Details "Installed size" find the real directory
+        when the sync cache's ``install_path`` is missing/stale. The
+        library scan is filesystem I/O, so run it off the event loop.
+        """
+        info = await asyncio.to_thread(
+            self._library.get_installed_game_info, game_id,
+        )
+        path = info.get("install_path") if isinstance(info, dict) else None
+        return path if isinstance(path, str) and path else None
 
     async def get_game_dlcs(self, game_id: str) -> list[dict[str, Any]]:
         """Get game dlcs."""
@@ -355,6 +379,26 @@ class GOGStore(StoreBase):
         """Get installed game info."""
         return self._library.get_installed_game_info(game_id)
 
+    def find_installed_exe(
+        self, install_path: str, game_id: str | None = None,
+    ) -> str | None:
+        """Resolve the launchable target for an installed GOG game.
+
+        ``game_id`` is accepted for a uniform store interface (the
+        download worker passes it) but unused — GOGExeResolver works
+        from the install dir alone.
+
+        Used by ``DownloadWorker._build_installed_game`` to populate
+        ``Game.exe_path`` (and thus the ``games.map`` entry the
+        launcher reads). GOG Linux-native games launch via a
+        ``start.sh`` wrapper, which the generic ``StoreBase._find_exe``
+        heuristic (``.exe``-only) misses — delegating to
+        ``GOGExeResolver`` handles start.sh, goggame play tasks, and
+        Windows ``.exe`` targets alike. Without this, GOG games landed
+        in ``games.map`` with an empty exe and silently failed to launch.
+        """
+        return self._exe.find(install_path)
+
     def migrate_old_markers(self) -> dict[str, int]:
         """Migrate old markers."""
         return self._library.migrate_old_markers()
@@ -378,31 +422,6 @@ class GOGStore(StoreBase):
                 path,
             )
         return path
-
-    async def _ensure_auth_shortcut(self) -> None:
-        """Ensure auth shortcut."""
-        if self._shortcut_service is None:
-            logger.debug(
-                "[GOGStore] no shortcut_service; skipping auth shortcut creation",
-            )
-            return
-        launcher = str(Path(self._plugin_dir or "") / "py_modules" / "unifideck" / "launcher" / "dispatcher.py")
-        if not await asyncio.to_thread(lambda: Path(launcher).is_file()):
-            logger.warning(
-                "[GOGStore] launcher dispatcher not found at %s",
-                launcher,
-            )
-            return
-        result = await self._shortcut_service.add_auth_shortcut(
-            store="gog",
-            launcher_path=launcher,
-            title="GOG Sign-In",
-        )
-        if not result.success:
-            logger.warning(
-                "[GOGStore] add_auth_shortcut failed: %s",
-                result.error,
-            )
 
     def _browser_monitor_from_auth(self) -> OAuthBrowserMonitor | None:
         """Browser monitor from auth."""

@@ -39,7 +39,10 @@ const Ctx = createContext<LocaleContextValue | null>(null);
  */
 export const LocaleProvider: FC<{ children: ReactNode }> = ({ children }) => {
   const [locale, setLocaleState] = useState<string>(i18n.language);
-  const pref = useRPCQuery<[], { success: boolean; language: string }>(rpcRoutes.getLanguagePreference, []);
+  const pref = useRPCQuery<[], { success: boolean; language: string }>(
+    rpcRoutes.getLanguagePreference,
+    [],
+  );
 
   const setMut = useRPCMutation<[string], { success: boolean }>(
     rpcRoutes.setLanguagePreference,
@@ -56,11 +59,14 @@ export const LocaleProvider: FC<{ children: ReactNode }> = ({ children }) => {
   }, [pref.data]);
 
   /** Set locale. */
-  const setLocale = useCallback(async (tag: string) => {
-    await i18n.changeLanguage(tag);
-    setLocaleState(tag);
-    await setMut.mutate(tag); // Persist
-  }, [setMut]);
+  const setLocale = useCallback(
+    async (tag: string) => {
+      await i18n.changeLanguage(tag);
+      setLocaleState(tag);
+      await setMut.mutate(tag); // Persist
+    },
+    [setMut],
+  );
 
   const value: LocaleContextValue = {
     locale,

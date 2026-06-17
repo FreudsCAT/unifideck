@@ -31,16 +31,14 @@ from .id_map_sources import (
     _IdMapSources,
 )
 from .id_map_sources import (
+    extract_cache_game_ids as _extract_cache_game_ids,
+)
+from .id_map_sources import (
     extract_game_id_from_registry as _extract_game_id_from_registry,
 )
 from .paths import UbisoftPrefixPaths
 
 logger = logging.getLogger(__name__)
-_STEAM_TITLE_PREFIXES_TO_SKIP = (
-    "Proton",
-    "Steam Linux Runtime",
-    "Steamworks",
-)
 
 
 class UbisoftIdMap:
@@ -199,45 +197,26 @@ class UbisoftIdMap:
         """Extract game ID from registry."""
         return _extract_game_id_from_registry(prefix_path)
 
-    @staticmethod
-    def get_steam_library_titles() -> set[str]:
-        """Get steam library titles."""
-        try:
-            # ``get_steam_library_names`` is optional — it may
-            # have been removed in a steam/library refactor. The
-            # ImportError fallback below covers that at runtime;
-            # ignore the static missing-attr warning so mypy
-            # doesn't fail on the optional import.
-            from unifideck.steam.library import (  # type: ignore[attr-defined]
-                get_steam_library_names,
+    def read_connect_ids(self) -> dict[str, str]:
+        """``space_id`` → ``ubisoftConnectGameId`` from UPC's leveldb cache.
+
+        Scans the auth prefix first, then the template — the first that
+        yields any mappings wins. Read-only: the caller folds the result
+        into the id_map (the builder records it on each game so
+        :meth:`resolve_launch_id` returns the canonical deeplink id).
+        Returns an empty dict when no cache is present.
+        """
+        for prefix_dir in (
+            self._config.auth_prefix_dir_expanded,
+            self._config.template_dir_expanded,
+        ):
+            ids = _extract_cache_game_ids(
+                prefix_dir,
+                self._config.localstorage_relative_path,
             )
-        except ImportError:
-            logger.debug(
-                "[UbisoftIdMap] Steam library module not available",
-            )
-            return set()
-        try:
-            raw_names = get_steam_library_names()
-        except Exception as e:
-            logger.debug(
-                "[UbisoftIdMap] Steam library scan failed: %s",
-                e,
-            )
-            return set()
-        steam_titles: set[str] = set()
-        for name in raw_names:
-            if not name or name.startswith(
-                _STEAM_TITLE_PREFIXES_TO_SKIP,
-            ):
-                continue
-            steam_titles.add(
-                UbisoftIdMap._normalize_for_matching(name),
-            )
-        logger.debug(
-            "[UbisoftIdMap] found %d Steam library titles",
-            len(steam_titles),
-        )
-        return steam_titles
+            if ids:
+                return ids
+        return {}
 
     @staticmethod
     def _normalize_for_matching(name: str) -> str:

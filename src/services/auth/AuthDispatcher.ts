@@ -38,14 +38,13 @@ import {
 import { launchUbisoftAuthViaShortcut } from "../../utils/ubisoftShortcutLaunch";
 import type { StoreId, AuthResult } from "../../types/api";
 
-const AUTH_TIMEOUT_MS = 10 * 60 * 1000;  // 10 minutes ceiling
+const AUTH_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes ceiling
 
 /** Auth event payload. */
 interface AuthEventPayload {
   store?: string;
   success?: boolean;
   error?: string;
-  needs_2fa?: boolean;
 }
 
 /** Backend `store_auth` envelope (unwrapped by useRPC for hook
@@ -60,7 +59,6 @@ interface StoreAuthResponse {
 
 /** Auth dispatcher impl. */
 class AuthDispatcherImpl {
-
   /** Per-store in-flight auth: allows concurrent auth for
    *  DIFFERENT stores (e.g. user starts GOG then clicks
    *  Microsoft — both run in parallel). Only deduplicates
@@ -79,7 +77,9 @@ class AuthDispatcherImpl {
     EventBusClient.bumpToFast();
     const promise = this.runFlow(store);
     this.inflight.set(store, promise);
-    promise.finally(() => { this.inflight.delete(store); });
+    promise.finally(() => {
+      this.inflight.delete(store);
+    });
     return promise;
   }
 
@@ -109,44 +109,43 @@ class AuthDispatcherImpl {
         resolve(result);
       };
 
-      cleanup.push(EventBusClient.subscribe(
-        Events.STORE_AUTH_COMPLETE,
-        (raw) => {
+      cleanup.push(
+        EventBusClient.subscribe(Events.STORE_AUTH_COMPLETE, (raw) => {
           const p = raw as AuthEventPayload;
           if (p.store !== store) return;
           onResolved({ success: true, store });
-        },
-      ));
+        }),
+      );
 
-      cleanup.push(EventBusClient.subscribe(
-        Events.STORE_AUTH_FAILED,
-        (raw) => {
+      cleanup.push(
+        EventBusClient.subscribe(Events.STORE_AUTH_FAILED, (raw) => {
           const p = raw as AuthEventPayload;
           if (p.store !== store) return;
           onResolved({
             success: false,
             store,
             error: p.error ?? "unknown auth failure",
-            needs_2fa: p.needs_2fa,
           });
-        },
-      ));
+        }),
+      );
 
       // Fire the kick + shortcut launch only after the
       // listeners are installed — otherwise a fast backend
       // flow could emit its terminal event before we
       // subscribe.
-      void this.kickAndLaunch(store).then((early) => {
-        // Fast-path : the backend's ``store_auth`` returned
-        // ``success: true`` right away (already-authed user).
-        // Don't wait for an EventBus echo — the event may
-        // race the RPC response and arrive before our poll
-        // tick, leaving the Promise hung. Resolve directly.
-        if (early) onResolved(early);
-      }).catch((e) => {
-        for (const fn of cleanup) fn();
-        reject(e);
-      });
+      void this.kickAndLaunch(store)
+        .then((early) => {
+          // Fast-path : the backend's ``store_auth`` returned
+          // ``success: true`` right away (already-authed user).
+          // Don't wait for an EventBus echo — the event may
+          // race the RPC response and arrive before our poll
+          // tick, leaving the Promise hung. Resolve directly.
+          if (early) onResolved(early);
+        })
+        .catch((e) => {
+          for (const fn of cleanup) fn();
+          reject(e);
+        });
     });
   }
 
@@ -170,23 +169,25 @@ class AuthDispatcherImpl {
    *  Throws if either stage fails outright (so ``runFlow``
    *  rejects the Promise).
    */
-  private async kickAndLaunch(
-    store: StoreId,
-  ): Promise<AuthResult | null> {
+  private async kickAndLaunch(store: StoreId): Promise<AuthResult | null> {
     console.log(`[AuthDispatcher:${store}] backend prep via store_auth`);
     const raw = await call<[StoreId, string], unknown>(
-      rpcRoutes.storeAuth, store, "start",
+      rpcRoutes.storeAuth,
+      store,
+      "start",
     );
     const startResult = unwrapRpcEnvelope<StoreAuthResponse>(raw, {
-      route: rpcRoutes.storeAuth, throwing: false,
+      route: rpcRoutes.storeAuth,
+      throwing: false,
     });
-    console.log(
-      `[AuthDispatcher:${store}] store_auth returned:`, startResult,
-    );
-    if (startResult?.success === true && !(startResult as any)?.metadata?.pending) {
+    console.log(`[AuthDispatcher:${store}] store_auth returned:`, startResult);
+    if (
+      startResult?.success === true &&
+      !(startResult as any)?.metadata?.pending
+    ) {
       console.log(
         `[AuthDispatcher:${store}] backend reports already-authed, ` +
-        `resolving without shortcut launch`,
+          `resolving without shortcut launch`,
       );
       return { success: true, store };
     }
@@ -198,7 +199,7 @@ class AuthDispatcherImpl {
     if (startResult && startResult.success === false && startResult.error) {
       console.log(
         `[AuthDispatcher:${store}] backend rejected start: ` +
-        `${startResult.error} — skipping shortcut launch`,
+          `${startResult.error} — skipping shortcut launch`,
       );
       return {
         success: false,
@@ -209,7 +210,8 @@ class AuthDispatcherImpl {
     console.log(`[AuthDispatcher:${store}] launching shortcut`);
     const launchResult = await this.launchForStore(store);
     console.log(
-      `[AuthDispatcher:${store}] shortcut launch result:`, launchResult,
+      `[AuthDispatcher:${store}] shortcut launch result:`,
+      launchResult,
     );
     if (!launchResult.success) {
       throw new Error(
@@ -226,11 +228,16 @@ class AuthDispatcherImpl {
     store: StoreId,
   ): Promise<{ success: boolean; error?: string }> {
     switch (store) {
-      case "epic":      return launchEpicAuthViaShortcut();
-      case "gog":       return launchGogAuthViaShortcut();
-      case "amazon":    return launchAmazonAuthViaShortcut();
-      case "microsoft": return launchMicrosoftAuthViaShortcut();
-      case "ubisoft":   return launchUbisoftAuthViaShortcut();
+      case "epic":
+        return launchEpicAuthViaShortcut();
+      case "gog":
+        return launchGogAuthViaShortcut();
+      case "amazon":
+        return launchAmazonAuthViaShortcut();
+      case "microsoft":
+        return launchMicrosoftAuthViaShortcut();
+      case "ubisoft":
+        return launchUbisoftAuthViaShortcut();
       default:
         return { success: false, error: `no launcher wired for ${store}` };
     }

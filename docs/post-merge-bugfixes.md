@@ -5,6 +5,7 @@
 ---
 
 ### BUG-1: Ubisoft Connect Shows "Sign in" After Successful Login
+
 - **Severity:** HIGH (Regression)
 - **Symptom:** StoreConnections shows "Sign in" for Ubisoft even though token file exists and user logged in successfully
 - **Root Cause:** `validate_ticket()` calls `PUT /v3/profiles/sessions` with a 5s timeout. If the Ubisoft API returns non-200 (e.g. ticket expired between sessions), `is_available()` returns `False`. The token refresh (`start_token_refresh()`) runs on plugin init but may not complete before the first `check_store_status()` call from the frontend.
@@ -21,6 +22,7 @@
 ---
 
 ### BUG-2: SteamGridDB Artwork Download Stuck (0/554)
+
 - **Severity:** HIGH (Pre-existing)
 - **Symptom:** Sync shows "Looking up 548 games on SteamGridDB..." but stays at 0/554 synced indefinitely
 - **Root Cause:** `asyncio.gather()` missing `return_exceptions=True` in two locations. When any single SteamGridDB lookup throws an exception, the entire gather crashes and the sync hangs silently.
@@ -36,6 +38,7 @@
 ---
 
 ### BUG-3: Microsoft Login Shows "Page Not Normally Shown"
+
 - **Severity:** CRITICAL (PR Bug)
 - **Symptom:** After entering Microsoft credentials, browser shows "You have reached a page that is not normally shown. Microsoft will never ask you to copy or share this URL."
 - **Root Cause:** OAuth `redirect_uri` is `https://login.live.com/oauth20_desktop.srf` — this is Microsoft's internal desktop OAuth endpoint not meant for browser navigation. The CDP code tries to intercept the auth code from network events, but the browser loads the redirect page first, causing Microsoft to show the error.
@@ -51,6 +54,7 @@
 ---
 
 ### BUG-4: Chromium Not Loading in Gaming Mode
+
 - **Severity:** CRITICAL (PR Bug)
 - **Symptom:** Custom Chromium browser for Microsoft auth doesn't launch in Steam Deck gaming mode
 - **Root Cause:** `clean_env()` in `microsoft_chromium.py` hardcodes `DISPLAY=:0`. Gaming mode uses gamescope with `DISPLAY=:1` or `:100`.
@@ -66,6 +70,7 @@
 ---
 
 ### BUG-5: File Handle Leak in Chromium Launch
+
 - **Severity:** CRITICAL (PR Bug)
 - **Symptom:** File handle for `chromium-auth.log` opened but never closed after Popen
 - **File:** `py_modules/unifideck/stores/microsoft_chromium.py:218-233`
@@ -74,6 +79,7 @@
 ---
 
 ### BUG-6: SSL Verification Disabled Fallback
+
 - **Severity:** CRITICAL (PR Bug)
 - **Symptom:** If `certifi` is not installed, SSL certificate verification is silently disabled for Microsoft auth endpoints, enabling MITM attacks
 - **File:** `py_modules/unifideck/stores/microsoft_auth.py:32-52`
@@ -85,6 +91,7 @@
 ---
 
 ### BUG-7: Race Condition — `_auth_monitor_task` Not Initialized
+
 - **Severity:** CRITICAL (PR Bug)
 - **Symptom:** `_auth_monitor_task` not set in `__init__()`, uses `hasattr()` check instead
 - **File:** `py_modules/unifideck/stores/microsoft.py:64-90,261-263`
@@ -93,6 +100,7 @@
 ---
 
 ### BUG-8: Locale Injection Without Sanitization (XSS)
+
 - **Severity:** HIGH (PR Bug)
 - **Symptom:** Locale string injected into JavaScript without escaping — potential XSS if locale contains quotes
 - **Files:**
@@ -103,6 +111,7 @@
 ---
 
 ### BUG-9: Silent Failure on `removed=true`
+
 - **Severity:** HIGH (PR Bug)
 - **Symptom:** Microsoft auth silently fails when account gets `removed=true` response, no user feedback
 - **File:** `py_modules/unifideck/stores/microsoft_cdp.py:159-178`
@@ -111,6 +120,7 @@
 ---
 
 ### BUG-10: Chromium Startup Timeout Too Short
+
 - **Severity:** MEDIUM (PR Bug)
 - **Symptom:** Fixed 2s timeout for Chromium CDP port check — too short for loaded systems
 - **File:** `py_modules/unifideck/stores/microsoft_chromium.py:391-410`
@@ -119,6 +129,7 @@
 ---
 
 ### BUG-11: Cookie DB Race Condition
+
 - **Severity:** MEDIUM (PR Bug)
 - **Symptom:** Direct SQLite modification of Chromium's cookie DB without locks
 - **File:** `py_modules/unifideck/stores/microsoft_chromium.py:273-308`
@@ -127,6 +138,7 @@
 ---
 
 ### BUG-12: Hardcoded `/home/deck` Paths
+
 - **Severity:** MEDIUM (PR Bug)
 - **Symptom:** Chromium env setup assumes username is always `deck`
 - **File:** `py_modules/unifideck/stores/microsoft_chromium.py:75,88-89`
@@ -136,31 +148,32 @@
 
 ## Fix Priority Order
 
-| Priority | Bug | Impact | Status |
-|----------|-----|--------|--------|
-| 1 | BUG-1 (Ubisoft auth) | Users can't see Ubisoft as connected | FIXED |
-| 2 | BUG-2 (SteamGridDB stuck) | Sync never completes for 500+ game libraries | FIXED |
-| 3 | BUG-4 (Gaming mode display) | Microsoft auth unusable in gaming mode | FIXED |
-| 4 | BUG-5 (File handle leak) | Resource leak on every auth attempt | FIXED |
-| 5 | BUG-7 (Task init race) | Crash on rapid auth attempts | FIXED |
-| 6 | BUG-6 (SSL fallback) | Security vulnerability | FIXED |
-| 7 | BUG-3 (OAuth redirect) | Microsoft login "page not normally shown" | INVESTIGATED — page is expected behavior; CDP intercepts code before page loads. Fixes to BUG-7/BUG-10 should resolve cases where CDP wasn't running. |
-| 8 | BUG-8 (Locale XSS) | Security vulnerability | FIXED |
-| 9 | BUG-10 (CDP timeout) | Auth fails on slow systems | FIXED |
-| 10 | BUG-12 (Hardcoded paths) | Breaks non-standard installs | FIXED |
-| 11 | BUG-11 (Cookie DB) | Potential DB corruption | FIXED |
-| 12 | BUG-9 (removed=true) | Silent auth failure | FIXED |
-| 6 | BUG-6 (SSL fallback) | Security vulnerability | Medium |
-| 7 | BUG-3 (OAuth redirect) | Microsoft login doesn't complete | High |
-| 8 | BUG-8 (Locale XSS) | Security vulnerability | Low |
-| 9 | BUG-10 (CDP timeout) | Auth fails on slow systems | Low |
-| 10 | BUG-12 (Hardcoded paths) | Breaks non-standard installs | Low |
-| 11 | BUG-11 (Cookie DB) | Potential DB corruption | Medium |
-| 12 | BUG-9 (removed=true) | Silent auth failure | Medium |
+| Priority | Bug                         | Impact                                       | Status                                                                                                                                                |
+| -------- | --------------------------- | -------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1        | BUG-1 (Ubisoft auth)        | Users can't see Ubisoft as connected         | FIXED                                                                                                                                                 |
+| 2        | BUG-2 (SteamGridDB stuck)   | Sync never completes for 500+ game libraries | FIXED                                                                                                                                                 |
+| 3        | BUG-4 (Gaming mode display) | Microsoft auth unusable in gaming mode       | FIXED                                                                                                                                                 |
+| 4        | BUG-5 (File handle leak)    | Resource leak on every auth attempt          | FIXED                                                                                                                                                 |
+| 5        | BUG-7 (Task init race)      | Crash on rapid auth attempts                 | FIXED                                                                                                                                                 |
+| 6        | BUG-6 (SSL fallback)        | Security vulnerability                       | FIXED                                                                                                                                                 |
+| 7        | BUG-3 (OAuth redirect)      | Microsoft login "page not normally shown"    | INVESTIGATED — page is expected behavior; CDP intercepts code before page loads. Fixes to BUG-7/BUG-10 should resolve cases where CDP wasn't running. |
+| 8        | BUG-8 (Locale XSS)          | Security vulnerability                       | FIXED                                                                                                                                                 |
+| 9        | BUG-10 (CDP timeout)        | Auth fails on slow systems                   | FIXED                                                                                                                                                 |
+| 10       | BUG-12 (Hardcoded paths)    | Breaks non-standard installs                 | FIXED                                                                                                                                                 |
+| 11       | BUG-11 (Cookie DB)          | Potential DB corruption                      | FIXED                                                                                                                                                 |
+| 12       | BUG-9 (removed=true)        | Silent auth failure                          | FIXED                                                                                                                                                 |
+| 6        | BUG-6 (SSL fallback)        | Security vulnerability                       | Medium                                                                                                                                                |
+| 7        | BUG-3 (OAuth redirect)      | Microsoft login doesn't complete             | High                                                                                                                                                  |
+| 8        | BUG-8 (Locale XSS)          | Security vulnerability                       | Low                                                                                                                                                   |
+| 9        | BUG-10 (CDP timeout)        | Auth fails on slow systems                   | Low                                                                                                                                                   |
+| 10       | BUG-12 (Hardcoded paths)    | Breaks non-standard installs                 | Low                                                                                                                                                   |
+| 11       | BUG-11 (Cookie DB)          | Potential DB corruption                      | Medium                                                                                                                                                |
+| 12       | BUG-9 (removed=true)        | Silent auth failure                          | Medium                                                                                                                                                |
 
 ---
 
 ### BUG-13: Ubisoft Library Shows Only Free Games
+
 - **Severity:** HIGH
 - **Symptom:** After sync, only free/F2P games appear in Ubisoft library; purchased games are missing
 - **Root Cause:** `_build_auto_visible_manifest()` creates a whitelist by corroborating GraphQL games against local UPC configuration cache. When no config cache exists (no `.upc-auth` prefix, fresh template), corroboration produces zero matches. The manifest then contains only F2P entries from the free games URL. `_apply_visible_manifest_filter()` uses this as a whitelist and drops all purchased games.
@@ -172,6 +185,7 @@
 ---
 
 ### BUG-14: Microsoft CDP Auth Code Not Captured
+
 - **Severity:** CRITICAL
 - **Symptom:** Chromium launches, user completes login, but OAuth code is never captured. Browser stays open indefinitely.
 - **Root Cause:** Multiple compounding issues:
@@ -196,6 +210,7 @@
 ---
 
 ### BUG-15: Microsoft Auth Only Launches Once Unless Chromium Profile Is Deleted
+
 - **Severity:** CRITICAL
 - **Symptom:** Microsoft sign-in opens once, but subsequent attempts do not reopen unless the user deletes Chromium files under `~/.local/share/unifideck/`
 - **Root Cause:** Auth and xCloud share the same Chromium profile (`~/.local/share/unifideck/chromium-auth`). A previous auth browser can linger on the CDP port, and broken `SingletonLock` / `SingletonCookie` / `SingletonSocket` artifacts can keep the shared profile in a bad state. The previous `kill()` only terminated the tracked wrapper process, not the full Chromium process group.
@@ -212,6 +227,7 @@
 ---
 
 ### BUG-16: Microsoft Auth Capture Fails When `websockets` Is Missing at Runtime
+
 - **Severity:** HIGH
 - **Symptom:** Auth monitor times out immediately with `websockets not available`, even though Chromium opens and the redirect eventually contains the OAuth code
 - **Root Cause:** `intercept_oauth_code()` returned early if Python `websockets` was unavailable, so the plugin never attempted any fallback code capture path in runtimes where the dependency was missing.
@@ -224,6 +240,7 @@
 ---
 
 ### BUG-17: Microsoft Appears Disconnected Even After Successful OAuth
+
 - **Severity:** HIGH
 - **Symptom:** Microsoft token file is written, but `check_store_status()` still reports `not_connected`
 - **Root Cause:** `is_available()` required an `xbox.com` browser cookie and would call `logout()` when the browser session was missing, deleting valid Microsoft OAuth state even though the connector had a refresh token.
@@ -236,6 +253,7 @@
 ---
 
 ### BUG-18: Microsoft Auth Chromium Does Not Appear in Steam Deck Gaming Mode
+
 - **Severity:** CRITICAL
 - **Symptom:** Microsoft sign-in may launch a Chromium process, but the auth window does not visibly appear in gaming mode / Steam frontend
 - **Root Cause:** Microsoft auth launch was still using a Decky-service-centric environment and `start_new_session=True`. That combination can put Chromium outside the active Steam/gamescope session even though the process starts successfully. Unlike Ubisoft's launcher/auth flows, Microsoft was not discovering the real graphical session env from running Steam/gamescope processes, and it was not seeding Steam window env defaults to help gamescope surface the window.
@@ -256,6 +274,7 @@
 ---
 
 ### BUG-19: Repeated Microsoft Sign-In Requests and Stale Auth Cleanup Tear Down the Auth Window
+
 - **Severity:** HIGH
 - **Symptom:** Repeated Microsoft sign-in attempts close and relaunch Chromium every 1-2 seconds, making the auth window appear to never load or instantly disappear
 - **Root Cause:** `start_auth()` always called `prepare_auth_launch()` + `launch_auth()` even if an auth session was already active. In practice, repeated frontend or user-triggered sign-in requests kept killing the existing Chromium auth window and replacing it before it could stabilize. There was also a backend race where an older `_auth_monitor_task` could still unwind and call `self._browser.kill()` after a newer launch had already replaced `self._browser.process`, making the fresh Chromium window vanish immediately. The frontend also had no debounce for in-progress Microsoft auth.
@@ -274,6 +293,7 @@
 ---
 
 ### BUG-20: Microsoft Auth Window Invisible in Gaming Mode
+
 - **Severity:** CRITICAL
 - **Symptom:** Microsoft sign-in launches Chromium via subprocess, but gamescope (Steam Deck's compositor in gaming mode) does not surface directly-launched windows. The auth window is completely invisible in gaming mode despite being detectable on X11.
 - **Root Cause:** Epic, GOG, and Amazon all open auth URLs in Steam's built-in CEF browser via `window.open()` from the frontend. Steam's CEF popup is always visible in gaming mode because it is Steam's own window. Microsoft, however, launched an external Chromium process from the Python backend and returned `chromium_auth: true` to the frontend (skipping the `window.open()` popup path). Gamescope only surfaces windows from Steam's own processes or those launched through `SteamClient.Apps.RunGame()` -- a raw subprocess is invisible.

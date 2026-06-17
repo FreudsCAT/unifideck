@@ -34,12 +34,7 @@ interface RpcEnvelope<T = unknown> {
 
 /** Type guard for the backend envelope. */
 function isRpcEnvelope(v: unknown): v is RpcEnvelope {
-  return (
-    typeof v === "object" &&
-    v !== null &&
-    "success" in v &&
-    "data" in v
-  );
+  return typeof v === "object" && v !== null && "success" in v && "data" in v;
 }
 
 /** Unwrap the backend ``{success, error, data}`` envelope.
@@ -62,12 +57,7 @@ export function unwrapRpcEnvelope<T>(
   const { route = "<unknown>", throwing = true } = options;
   if (isRpcEnvelope(raw)) {
     if (!raw.success && throwing) {
-      throw new RpcError(
-        "UNKNOWN",
-        raw.error ?? "RPC call failed",
-        route,
-        raw,
-      );
+      throw new RpcError("UNKNOWN", raw.error ?? "RPC call failed", route, raw);
     }
     return raw.data as T;
   }
@@ -79,14 +69,18 @@ export function unwrapRpcEnvelope<T>(
  *  backend `{success, error, data}` envelope so callers
  *  receive only the `data` payload. */
 export function useRPC<TArgs extends readonly unknown[], TReturn>(
-  route: RouteName): (...args: TArgs) => Promise<TReturn> {
+  route: RouteName,
+): (...args: TArgs) => Promise<TReturn> {
   return useCallback(
     async (...args: TArgs): Promise<TReturn> => {
       try {
         // @decky/api's call signature is variadic-typed; we
         // erase the variadic at the boundary and re-impose
         // the strict type via the generic.
-        const raw = await call<unknown[], RpcEnvelope<TReturn> | TReturn>(route, ...(args as unknown as unknown[]));
+        const raw = await call<unknown[], RpcEnvelope<TReturn> | TReturn>(
+          route,
+          ...(args as unknown as unknown[]),
+        );
 
         // Unwrap the backend envelope if present.
         if (isRpcEnvelope(raw)) {

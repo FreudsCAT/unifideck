@@ -144,16 +144,25 @@ async def fetch_assets(
             timeout=aiohttp.ClientTimeout(total=timeout_sec),
         ) as resp:
             if resp.status != 200:
-                logger.debug(
-                    "[sgdb.assets] %s/game/%d → HTTP %d",
+                # Surface auth/rate-limit/5xx (systemic); keep 404 quiet.
+                level = (
+                    logging.WARNING
+                    if resp.status in (401, 403, 429) or resp.status >= 500
+                    else logging.DEBUG
+                )
+                logger.log(
+                    level, "[sgdb.assets] %s/game/%d → HTTP %d",
                     endpoint, game_id, resp.status,
                 )
                 return []
             payload = await resp.json()
     except (TimeoutError, aiohttp.ClientError, OSError, ValueError) as e:
-        logger.debug(
-            "[sgdb.assets] %s/game/%d failed: %s",
-            endpoint, game_id, e,
+        # Promoted from DEBUG: a network/TLS/DNS failure here drops the
+        # kind to empty; if it fires for every kind the whole library
+        # loses its SGDB art silently (the bug this guards against).
+        logger.warning(
+            "[sgdb.assets] %s/game/%d failed: %s: %s",
+            endpoint, game_id, type(e).__name__, e,
         )
         return []
     if not payload.get("success"):

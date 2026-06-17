@@ -1,24 +1,17 @@
-"""services/shortcut/vdf_shortcuts.py — Escape-hatch read/write + auth delegator.
+"""services/shortcut/vdf_shortcuts.py — Escape-hatch read/write helpers.
 
-Provides direct access to the shortcuts list for the UI layer
-and delegates auth shortcut creation to the shortcut.py helper.
+Provides direct access to the shortcuts list for the UI layer.
 """
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any
-
-from . import shortcut as _auth
-
-if TYPE_CHECKING:
-    from unifideck.core.types import Result
-    # This is a mixin; `self` will be the ShortcutService facade at runtime.
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
 
 class _VdfShortcutsMixin:
-    """Escape-hatch read/write + auth shortcut delegator."""
+    """Escape-hatch shortcut read/write."""
 
     # These are provided by the ShortcutService facade at runtime
     _shortcuts: dict[str, Any]
@@ -49,20 +42,3 @@ class _VdfShortcutsMixin:
         """
         self._shortcuts = dict(data)
         await self._save_all()
-
-    async def add_auth_shortcut(
-        self: Any,
-        store: str,
-        launcher_path: str,
-        title: str,
-    ) -> Result:
-        """Create a hidden Steam shortcut for store OAuth login.
-
-        Delegates to the ``build_auth_shortcut`` free function.
-        """
-        return await _auth.build_auth_shortcut(
-            self,
-            store,
-            launcher_path,
-            title,
-        )

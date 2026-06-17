@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 import string
@@ -9,6 +10,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from unifideck.utils.config_helpers import get_cfg
+from unifideck.utils.title_match import titles_match
 
 if TYPE_CHECKING:
     from unifideck.config import ConfigManager
@@ -17,6 +19,40 @@ logger = logging.getLogger(__name__)
 
 UNIFIDB_CDN_BASE = ("https://cdn.jsdelivr.net/gh/mubaraknumann/unifiDB@main")
 MATCH_THRESHOLD = 0.65
+
+# Process-lifetime cache of fetched buckets.
+#
+# UnifiDB ships its catalog as static JSON files on jsdelivr's CDN —
+# one file per ``<first-letter><second-letter-or-digit>`` bucket
+# (about 36 buckets total, ``a.json``..``z.json`` + ``0_9.json`` etc.).
+# A library of 1000+ games triggers ``lookup()`` once per game, but
+# every game with the same prefix needs the SAME bucket — without
+# memoisation the same file is downloaded ~30-60 times per sync.
+#
+# We memoise per (cdn_base, bucket) so a config change to point at a
+# fork doesn't accidentally hit stale data. The cache is in-memory
+# only: it dies with the plugin process, and the next sync re-fetches.
+# That's the right TTL because:
+#   1. UnifiDB updates are rare (manual PRs to the mubaraknumann/unifiDB
+#      repo) — staleness within a single sync is impossible.
+#   2. jsdelivr's edge cache has its own ~12h TTL so a fresh fetch is
+#      cheap, no need to mirror it ourselves.
+#   3. Eliminates the need for a CacheManager namespace + disk persistence
+#      for what is essentially a request-coalescing optimisation.
+#
+# The lock prevents two concurrent ``lookup()`` calls for games in the
+# same bucket from both issuing the underlying HTTP request — the
+# second waits and reads from the cache. Important because
+# MetadataService's new game-level concurrency (semaphore=5) means
+# multiple ``lookup()`` calls can be in flight at once.
+_bucket_cache: dict[tuple[str, str], list[dict[str, Any]]] = {}
+_bucket_locks: dict[tuple[str, str], asyncio.Lock] = {}
+
+
+def _bucket_cache_clear() -> None:
+    """Drop every memoised bucket. Test/dev helper only."""
+    _bucket_cache.clear()
+    _bucket_locks.clear()
 
 def normalize_title_for_matching(title: str) -> str:
     """Normalize title for matching."""
@@ -80,17 +116,23 @@ def extract_store_id(game: dict[str, Any], store: str) -> str | None:
 def get_best_match(
     search_title: str,
     candidates: list[dict[str, Any]],
-    threshold: float = MATCH_THRESHOLD,
 ) -> dict[str, Any] | None:
-    """Get best match."""
-    if not candidates:
-        return None
+    """Best title-fallback match, gated by the shared ``titles_match``.
+
+    Only reached when no candidate carries the store-native id (the
+    exact path in :func:`lookup`). ``titles_match`` decides accept/reject
+    — rejecting the sequels the local substring scorer wrongly accepted
+    at 0.85 ("Hades" → "Hades II", "Quake" → "Quake II", "Spelunky" →
+    "Spelunky 2") while accepting publisher-prefix / Roman-numeral /
+    edition variants its token-Jaccard missed ("Assassin's Creed II" ↔
+    "Assassin's Creed 2"). ``score_title_match`` only ranks the
+    survivors when a bucket holds several genuine variants.
+    """
     scored: list[tuple[float, dict[str, Any]]] = []
     for c in candidates:
         name = c.get("title") or c.get("name") or ""
-        score = score_title_match(search_title, name)
-        if score >= threshold:
-            scored.append((score, c))
+        if titles_match(search_title, name):
+            scored.append((score_title_match(search_title, name), c))
     if not scored:
         return None
     scored.sort(key=lambda x: x[0], reverse=True)
@@ -138,9 +180,6 @@ async def lookup(
     cdn_base = get_cfg(
         config, "metadata.unifidb.cdn_base", UNIFIDB_CDN_BASE,
     )
-    threshold = get_cfg(
-        config, "metadata.unifidb.match_threshold", MATCH_THRESHOLD,
-    )
     timeout = get_cfg(
         config, "metadata.unifidb.fetch_timeout_seconds", 15,
     )
@@ -154,7 +193,7 @@ async def lookup(
                 "[unifidb] id match: %s:%s", store, game_id,
             )
             return game_to_cache_format(game)
-    best = get_best_match(title, games, threshold)
+    best = get_best_match(title, games)
     if best:
         logger.debug("[unifidb] title match: %r", title)
         return game_to_cache_format(best)
@@ -163,13 +202,49 @@ async def lookup(
 async def _fetch_bucket(
     bucket: str, cdn_base: str, timeout: int,  # noqa: ASYNC109 — timeout is API value passed to underlying lib (urllib/aiohttp/subprocess), not an asyncio.timeout() wrapper
 ) -> list[dict[str, Any]]:
-    """Fetch bucket."""
+    """Return the parsed bucket, memoised for the plugin's lifetime.
+
+    First call for a (cdn_base, bucket) pair fetches over HTTPS;
+    every subsequent call returns the cached list. See the module
+    docstring on ``_bucket_cache`` for the rationale.
+
+    The per-key ``asyncio.Lock`` collapses concurrent fetches for
+    the same bucket into a single HTTP request — without it, a
+    sync that processes games A1, A2, A3 in parallel would issue
+    three identical ``a.json`` GETs before the first one finished.
+    """
+    key = (cdn_base, bucket)
+    cached = _bucket_cache.get(key)
+    if cached is not None:
+        return cached
+    lock = _bucket_locks.setdefault(key, asyncio.Lock())
+    async with lock:
+        # Re-check after acquiring the lock — another coroutine may
+        # have populated the cache while we were waiting.
+        cached = _bucket_cache.get(key)
+        if cached is not None:
+            return cached
+        data = await _fetch_bucket_uncached(bucket, cdn_base, timeout)
+        _bucket_cache[key] = data
+        return data
+
+
+async def _fetch_bucket_uncached(
+    bucket: str, cdn_base: str, timeout: int,  # noqa: ASYNC109 — timeout is API value passed to underlying lib (urllib/aiohttp/subprocess), not an asyncio.timeout() wrapper
+) -> list[dict[str, Any]]:
+    """Single HTTP fetch of one bucket file. Caller owns memoisation."""
     import aiohttp
     first_char = bucket[0] if bucket else "0_9"
     url = f"{cdn_base}/games/{first_char}/{bucket}.json"
     try:
+        # ssl=False — see library.search_store's comment. The UnifiDB
+        # CDN is on jsdelivr which most clients verify fine, but
+        # SteamOS's outdated cert store breaks even those handshakes
+        # from inside the Decky plugin process; matching the
+        # workaround the other metadata modules use.
+        connector = aiohttp.TCPConnector(ssl=False)
         async with (
-            aiohttp.ClientSession() as session,
+            aiohttp.ClientSession(connector=connector) as session,
             session.get(url, timeout=aiohttp.ClientTimeout(total=timeout)) as resp,
         ):
             if resp.status != 200:

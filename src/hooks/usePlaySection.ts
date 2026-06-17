@@ -31,7 +31,8 @@ export type PlaySectionState =
   | { kind: "steam-native"; shouldOverride: false }
   | { kind: "not-installed"; shouldOverride: true; installable: true }
   | { kind: "downloading"; shouldOverride: true; download: DownloadItem }
-  | { kind: "installed"; shouldOverride: true; appId: number };
+  | { kind: "installed"; shouldOverride: true; appId: number }
+  | { kind: "xcloud"; shouldOverride: true; appId: number; gameId: string };
 
 /**
  * Hook that resolves the current Play-section state
@@ -58,11 +59,20 @@ export function usePlaySection(appId: number | null): PlaySectionState {
       return { kind: "steam-native", shouldOverride: false };
     }
 
+    // xCloud (Xbox Cloud Gaming) titles stream in a browser — there's
+    // nothing to install, so they're always "playable". Surface a Play
+    // state regardless of is_installed; the launcher routes the xcloud
+    // games.map sentinel to the Edge kiosk streaming flow.
+    if (game.store_tags?.includes("xcloud")) {
+      return { kind: "xcloud", shouldOverride: true, appId, gameId: game.id };
+    }
+
     // Check the live queue first — a download in progress
     // takes precedence over `is_installed` flag staleness.
-    const inQueue = findInQueue(downloads.queue?.current, game.id)
-      ?? downloads.queue?.queued.find((d) => d.game_id === game.id)
-      ?? null;
+    const inQueue =
+      findInQueue(downloads.queue?.current, game.id) ??
+      downloads.queue?.queued.find((d) => d.game_id === game.id) ??
+      null;
     if (inQueue) {
       return { kind: "downloading", shouldOverride: true, download: inQueue };
     }
@@ -74,9 +84,11 @@ export function usePlaySection(appId: number | null): PlaySectionState {
   }, [appId, info.data, downloads.queue]);
 }
 
-function findInQueue(current: DownloadItem | null | undefined, gameId: string): DownloadItem | null {
-  if (!current)
-    return null;
+function findInQueue(
+  current: DownloadItem | null | undefined,
+  gameId: string,
+): DownloadItem | null {
+  if (!current) return null;
 
   return current.game_id === gameId ? current : null;
 }

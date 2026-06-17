@@ -200,6 +200,8 @@ class GOGInstaller:
         language: str | None = None,
     ) -> InstallResult:
         """Install game."""
+        logger.info("[GogInstall] install_game game_id=%s base_path=%s language=%s",
+                     game_id, base_path, language)
         ctx, failure = self._install_preflight(
             game_id,
             base_path,

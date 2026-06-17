@@ -175,6 +175,37 @@ declare global {
           }) => void,
         ): Unregisterable;
       };
+      // Steam Input — controller-config selection. Method names + the
+      // ``SetSelectedConfigForApp`` signature were verified against the
+      // Steam client UI bundle (steamui/*.js). Used to apply the
+      // official "Web Browser" template to the auth-window shortcut.
+      Input?: {
+        // Streams the available controller-config templates/personal
+        // configs for ``appId`` as an array of ``List``/``Done``
+        // messages (see ControllerConfigInfoMessage). Populated after
+        // a ``QueryControllerConfigsForApp`` call.
+        RegisterForControllerConfigInfoMessages(
+          appId: number,
+          callback: (messages: ControllerConfigInfoMessage[]) => void,
+        ): Unregisterable;
+        // Triggers Steam to emit the config-info messages for the app.
+        QueryControllerConfigsForApp(
+          appId: number,
+          controllerIndex: number,
+          filterOtherControllerTypes: boolean,
+        ): void;
+        // Selects ``configUrl`` (a template/config ``URL`` from the
+        // info messages) as the active config for the app. The 4th arg
+        // is a boolean Steam passes as ``false`` at the template-pick
+        // call site; the 5th applies it to all controllers of the type.
+        SetSelectedConfigForApp(
+          appId: number,
+          controllerIndex: number,
+          configUrl: string,
+          unused: boolean,
+          applyToAllOfType: boolean,
+        ): void;
+      };
     };
     collectionStore?: {
       userCollections?: Map<string, SteamCollection>;

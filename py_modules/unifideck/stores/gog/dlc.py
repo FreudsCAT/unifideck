@@ -131,17 +131,17 @@ class GOGDlcManager:
             return None
         if not await asyncio.to_thread(lambda: Path(self._gogdl_bin).is_file()):
             return None
-        cmd = [
-            self._gogdl_bin,
-            "--auth-config-path",
-            self._config.auth_config_path,
-            "info",
-            "--platform",
-            "windows",
-            game_id,
-        ]
         try:
-            async with self._tokens.gogdl_credentials() as env:
+            async with self._tokens.gogdl_credentials() as (env, creds_path):
+                cmd = [
+                    self._gogdl_bin,
+                    "--auth-config-path",
+                    creds_path,
+                    "info",
+                    "--platform",
+                    "windows",
+                    game_id,
+                ]
                 proc = await asyncio.create_subprocess_exec(
                     *cmd,
                     stdout=asyncio.subprocess.PIPE,
@@ -256,21 +256,21 @@ class GOGDlcManager:
         lang: str,
     ) -> asyncio.subprocess.Process | None:
         """Dlc spawn GOGDL."""
-        cmd = [
-            self._gogdl_bin,
-            "--auth-config-path",
-            self._config.auth_config_path,
-            "repair",
-            dlc_id,
-            "--platform",
-            "windows",
-            "--path",
-            base_path,
-            "--lang",
-            lang,
-        ]
         try:
-            env, cleanup = await self._tokens.acquire_gogdl_creds()
+            env, creds_path, cleanup = await self._tokens.acquire_gogdl_creds()
+            cmd = [
+                self._gogdl_bin,
+                "--auth-config-path",
+                creds_path,
+                "repair",
+                dlc_id,
+                "--platform",
+                "windows",
+                "--path",
+                base_path,
+                "--lang",
+                lang,
+            ]
             proc = await asyncio.create_subprocess_exec(
                 *cmd,
                 stdout=asyncio.subprocess.PIPE,

@@ -42,6 +42,7 @@ from .security import SecurityRPCMixin
 from .store import StoreRPCMixin
 from .sync import SyncRPCMixin
 from .ui import UIRPCMixin
+from .updater import UpdaterRPCMixin
 
 __all__ = [
     "ActionRPCMixin",
@@ -55,4 +56,5 @@ __all__ = [
     "StoreRPCMixin",
     "SyncRPCMixin",
     "UIRPCMixin",
+    "UpdaterRPCMixin",
 ]

@@ -1,65 +1,48 @@
 from __future__ import annotations
 
 import logging
-import shutil
 from pathlib import Path
 
+from unifideck.launcher.frontend_bridge import launcher_toast
 from unifideck.launcher.proton.infrastructure.core import ProtonLaunchPlan
 from unifideck.launcher.proton.infrastructure.umu_runtime import run_umu_with_retry
 from unifideck.launcher.types.errors import GameFailedError, UmuRuntimeError
 
 logger = logging.getLogger(__name__)
-def _locate_store_cli(plan: ProtonLaunchPlan, tool_name: str) -> Path | None:
-    """Locate store cli."""
-    plugin_bin = plan.context.plugin_dir / "bin" / tool_name
-    if plugin_bin.is_file():
-        return plugin_bin
-    system = shutil.which(tool_name)
-    return Path(system) if system else None
+def _read_amazon_fuel_args(work_dir: Path) -> list[str]:
+    """Parse ``Main.Args`` from an Amazon ``fuel.json`` (launch params).
+
+    Amazon ships a ``fuel.json`` in the install dir describing the
+    launch command + args. Mirrors staging: strip ``//`` comments
+    (fuel.json sometimes has them), read ``Main.Args``. Returns ``[]``
+    on any problem — the exe still launches, just without extra args.
+    """
+    fuel = Path(work_dir) / "fuel.json"
+    if not fuel.is_file():
+        return []
+    try:
+        import json
+        import re
+        raw = fuel.read_text(encoding="utf-8", errors="replace")
+        content = re.sub(r"//.*$", "", raw, flags=re.MULTILINE)
+        data = json.loads(content)
+        args = (data.get("Main") or {}).get("Args") or []
+        return [str(a) for a in args]
+    except Exception:
+        logger.warning(
+            "[launcher.proton.generic] fuel.json parse failed at %s", fuel,
+        )
+        return []
 async def _gog_launch(plan: ProtonLaunchPlan) -> int:
-    """Gog launch."""
-    try:
-        from unifideck.config.config_manager import ConfigManager
-        from unifideck.launcher.proton.language_setup import apply_gog_language
-        _cfg = ConfigManager(
-            str(plan.context.plugin_dir / "defaults" / "config.json"),
-        )
-        work_dir = plan.context.work_dir or plan.context.exe_path.parent
-        apply_gog_language(
-            plan.context.game_id, str(work_dir), config=_cfg,
-        )
-    except Exception as err:
-        logger.warning(
-            "[launcher.proton.generic] GOG language setup failed: %s",
-            err,
-        )
-    try:
-        from unifideck.launcher.proton.fixes.galaxy_stub import install_galaxy_stub
-        install_galaxy_stub(
-            str(plan.prefix_path),
-            plugin_dir=plan.context.plugin_dir,
-        )
-    except Exception as err:
-        logger.warning(
-            "[launcher.proton.generic] Galaxy stub install failed: %s",
-            err,
-        )
-    gogdl = _locate_store_cli(plan, "gogdl")
-    if gogdl:
-        logger.info("[launcher.proton.generic] GOG via gogdl: %s", gogdl)
-        argv: list[str] = list(plan.state.wrappers)
-        argv.extend([
-            str(gogdl),
-            "launch",
-            plan.context.game_id,
-            "--wrapper",
-            f"{plan.python_bin} {plan.umu_wrapper}",
-        ])
-        if plan.state.game_args:
-            argv.append("--")
-            argv.extend(plan.state.game_args)
-        return await run_umu_with_retry(argv, env=plan.env, on_start=plan.on_process_start)
-    return await _raw_exe_launch(plan)
+    """GOG Windows launch — delegated to the GOG compat orchestrator.
+
+    The orchestrator handles language, the Galaxy stub, the GOG
+    redistributable/script setup (``gog_setup``), Comet, NVAPI, and the
+    broken-launcher-stub fallback. GOG *native* games (start.sh) never
+    reach here — they go through ``launch_native``.
+    """
+    from unifideck.launcher.proton.compat.gog import run_gog_launch
+    return await run_gog_launch(plan)
 
 async def _amazon_launch(plan: ProtonLaunchPlan) -> int:
 
@@ -76,22 +59,33 @@ async def _amazon_launch(plan: ProtonLaunchPlan) -> int:
             "[launcher.proton.generic] Amazon language setup failed: %s",
             err,
         )
-    nile = _locate_store_cli(plan, "nile")
-    if nile:
-        logger.info("[launcher.proton.generic] Amazon via nile: %s", nile)
-        argv: list[str] = list(plan.state.wrappers)
-        argv.extend([
-            str(nile),
-            "launch",
-            plan.context.game_id,
-            "--wrapper",
-            f"{plan.python_bin} {plan.umu_wrapper}",
-        ])
-        if plan.state.game_args:
-            argv.append("--")
-            argv.extend(plan.state.game_args)
-        return await run_umu_with_retry(argv, env=plan.env, on_start=plan.on_process_start)
-    return await _raw_exe_launch(plan)
+    # Amazon games launch by running the resolved exe directly through
+    # umu — matching staging. ``nile launch`` was the wrong port: nile
+    # manages its own wine binary + install manifest and exits rc=1
+    # here. fuel.json's ``Main.Args`` carry any required launch params.
+    work_dir = plan.context.work_dir or plan.context.exe_path.parent
+    fuel_args = _read_amazon_fuel_args(work_dir)
+    cwd: Path | None = (
+        plan.context.exe_path.parent
+        if plan.context.exe_path.parent.is_dir()
+        else None
+    )
+    argv: list[str] = list(plan.state.wrappers)
+    argv.extend([
+        str(plan.python_bin),
+        str(plan.umu_wrapper),
+        str(plan.context.exe_path),
+    ])
+    argv.extend(fuel_args)
+    argv.extend(plan.state.game_args)
+    logger.info(
+        "[launcher.proton.generic] Amazon direct exe launch: %s "
+        "(fuel_args=%d)",
+        plan.context.exe_path, len(fuel_args),
+    )
+    return await run_umu_with_retry(
+        argv, env=plan.env, cwd=cwd, on_start=plan.on_process_start,
+    )
 async def _raw_exe_launch(plan: ProtonLaunchPlan) -> int:
     """Raw exe launch."""
     logger.info(
@@ -112,8 +106,18 @@ async def generic_launch(plan: ProtonLaunchPlan) -> int:
     """Generic launch."""
     store = plan.context.store
     if store == "gog":
+        launcher_toast(
+            "toasts.launcher.startingGogGame",
+            i18n_title_key="toasts.launcher.launchingGame",
+            game_title=plan.context.game_key,
+        )
         rc = await _gog_launch(plan)
     elif store == "amazon":
+        launcher_toast(
+            "toasts.launcher.startingAmazonGame",
+            i18n_title_key="toasts.launcher.launchingGame",
+            game_title=plan.context.game_key,
+        )
         rc = await _amazon_launch(plan)
     else:
         rc = await _raw_exe_launch(plan)

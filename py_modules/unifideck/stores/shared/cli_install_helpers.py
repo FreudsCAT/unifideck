@@ -10,7 +10,7 @@ if TYPE_CHECKING:
     LineHandler = Callable[
         [str, str, "ProgressCallback | None"], Awaitable[None],
     ]
-    ProgressCallback = Callable[[float], Awaitable[None]]
+    ProgressCallback = Callable[[float | dict[str, Any]], Awaitable[None]]
 logger = logging.getLogger(__name__)
 async def drain_install_output(
     proc: Any,
@@ -53,5 +53,46 @@ def parse_progress_line(
         return None
     try:
         return float(match.group(1))
+    except ValueError:
+        return None
+def parse_eta_seconds(line: str) -> int | None:
+    """Parse ``ETA: HH:MM:SS`` (or ``MM:SS``) from a CLI line → seconds.
+
+    Both legendary and gogdl print ``ETA: <clock>`` on their progress
+    line. Returns ``None`` when no ETA token is present or it doesn't
+    parse — the caller leaves the previous value in place.
+    """
+    if "ETA:" not in line:
+        return None
+    tail = line.split("ETA:", 1)[1].strip()
+    if not tail:
+        return None
+    parts = tail.split()[0].split(":")
+    try:
+        if len(parts) == 3:
+            h, m, s = (int(p) for p in parts)
+            return h * 3600 + m * 60 + s
+        if len(parts) == 2:
+            m, s = (int(p) for p in parts)
+            return m * 60 + s
+    except ValueError:
+        return None
+    return None
+def parse_speed_bps(line: str) -> float | None:
+    """Parse a ``+ Download … <n> MiB/s`` transfer-rate line → bytes/sec.
+
+    Matches both gogdl (``+ Download\t+ 12.3 MiB/s``) and legendary
+    (``+ Download\t- 12.3 MiB/s``) — the sign is its own token, so the
+    rate is always the last token before ``MiB/s``. The ``Download``
+    guard skips legendary's ``+ Disk … MiB/s`` and ``Downloaded: … MiB``
+    lines (the latter has no ``/s``). Returns ``None`` on no match.
+    """
+    if "Download" not in line or "MiB/s" not in line:
+        return None
+    tokens = line.split("MiB/s", 1)[0].split()
+    if not tokens:
+        return None
+    try:
+        return float(tokens[-1]) * 1024 * 1024
     except ValueError:
         return None
