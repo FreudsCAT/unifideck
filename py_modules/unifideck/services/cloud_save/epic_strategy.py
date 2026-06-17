@@ -15,9 +15,12 @@ logger = logging.getLogger(__name__)
 class EpicCloudSaveStrategy(CloudSaveStrategy):
     """Cloud save strategy for Epic Games Store using legendary."""
 
-    def __init__(self, local_save_root: str, config=None) -> None:
+    def __init__(self, local_save_root: str, config=None, cache=None) -> None:
         self.local_save_root = local_save_root
         self.config = config
+        # CacheManager (or None in CLI mode). Used to read enriched
+        # save-location metadata (unifiDB/PCGamingWiki) — guard every read.
+        self.cache = cache
 
         # Per-game resolved-save-dir cache (get_local_save_dir is called
         # several times per launch; the legendary metadata lookup must only
@@ -25,6 +28,10 @@ class EpicCloudSaveStrategy(CloudSaveStrategy):
         self._cached_save_dir: dict[str, str] = {}
         self._account_id: str | None = None
         self._account_id_looked_up = False
+        # Real-cloud save info (from ``legendary list-saves``), memoised with a
+        # short TTL so the status path doesn't re-spawn legendary on every page
+        # load; invalidated after an upload (which changes the cloud copy).
+        self._cached_cloud_info: dict[str, tuple[float, dict]] = {}
 
         # Resolve path to the bundled legendary binary. Use the canonical
         # plugin-root resolver (same one the launch path uses) — bin/ is a
@@ -87,6 +94,30 @@ class EpicCloudSaveStrategy(CloudSaveStrategy):
             else:
                 os.environ["STEAM_COMPAT_DATA_PATH"] = prev
 
+    def _resolve_save_dir_from_enriched(
+        self, game_id: str, install_path: str,
+    ) -> str | None:
+        """Resolve from enriched save-location metadata (unifiDB/PCGamingWiki)."""
+        try:
+            from unifideck.services.cloud_save.save_location_resolver import (
+                resolve_save_dir,
+            )
+            prefix_root = Path(self.local_save_root).parent / "prefixes" / game_id
+            prefix_path = resolve_registry_prefix(prefix_root)
+            return resolve_save_dir(
+                "epic", game_id,
+                prefix_path=str(prefix_path),
+                install_path=install_path or "",
+                config=self.config,
+                cache=self.cache,
+            )
+        except Exception as e:
+            logger.debug(
+                "[EpicSync] enriched save-dir resolution failed for %s: %s",
+                game_id, e,
+            )
+            return None
+
     def get_local_save_dir(self, game_id: str) -> str | None:
         """Resolve the Epic game's local save directory using legendary info."""
         if self.config:
@@ -111,12 +142,17 @@ class EpicCloudSaveStrategy(CloudSaveStrategy):
             game_meta = data.get("game") or {}
             install_meta = data.get("install") or {}
 
+            install_path = install_meta.get("install_path") or ""
+
             cloud_save_folder = game_meta.get("cloud_save_folder")
             if not cloud_save_folder:
                 logger.info("[EpicSync] No cloud_save_folder metadata found for game %s", game_id)
-                return None
-
-            install_path = install_meta.get("install_path") or ""
+                # Legendary has no template — try enriched save-location
+                # metadata (unifiDB/PCGamingWiki) before giving up.
+                enriched = self._resolve_save_dir_from_enriched(game_id, install_path)
+                if enriched:
+                    self._cached_save_dir[game_id] = enriched
+                return enriched
 
             # Resolve prefix location
             prefix_root = Path(self.local_save_root).parent / "prefixes" / game_id
@@ -146,6 +182,13 @@ class EpicCloudSaveStrategy(CloudSaveStrategy):
                         resolved, leg,
                     )
                     resolved, source = leg, "legendary"
+                elif not leg:
+                    # Both our resolver and legendary came up empty/missing —
+                    # try enriched save-location metadata before accepting a
+                    # path the game never reads from.
+                    enriched = self._resolve_save_dir_from_enriched(game_id, install_path)
+                    if enriched:
+                        resolved, source = enriched, "enriched"
 
             logger.info("[EpicSync] Resolved save path for %s (%s): %s", game_id, source, resolved)
             self._cached_save_dir[game_id] = resolved
@@ -153,6 +196,51 @@ class EpicCloudSaveStrategy(CloudSaveStrategy):
         except Exception as e:
             logger.error("[EpicSync] Failed to resolve local save dir for %s: %s", game_id, e)
             return None
+
+    async def get_cloud_save_info(self, game_id: str) -> dict | None:
+        """Real Epic-cloud save info via ``legendary list-saves`` (memoised).
+
+        Returns ``{"has_saves": bool, "timestamp": <epoch of latest cloud
+        save>}`` so the UI shows the ACTUAL cloud state, not the local backup
+        mirror (which can be stale). ``None`` on failure → caller falls back.
+        """
+        import time
+        cached = self._cached_cloud_info.get(game_id)
+        if cached and (time.time() - cached[0]) < 300:
+            return cached[1]
+        info = await self._query_cloud_info(game_id)
+        if info is not None:
+            self._cached_cloud_info[game_id] = (time.time(), info)
+        return info
+
+    async def _query_cloud_info(self, game_id: str) -> dict | None:
+        """Run ``legendary list-saves <id>`` and parse the latest manifest ts."""
+        import re
+        from datetime import datetime, timezone
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                self.legendary_bin, "list-saves", game_id,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=20)
+        except Exception as e:
+            logger.debug("[EpicSync] list-saves failed for %s: %s", game_id, e)
+            return None
+        text = stdout.decode("utf-8", "replace")
+        stamps: list[float] = []
+        # Manifests are named ``YYYY.MM.DD-HH.MM.SS.manifest`` (UTC).
+        for m in re.finditer(
+            r"(\d{4})\.(\d{2})\.(\d{2})-(\d{2})\.(\d{2})\.(\d{2})\.manifest", text,
+        ):
+            try:
+                dt = datetime(
+                    *(int(x) for x in m.groups()), tzinfo=timezone.utc,
+                )
+                stamps.append(dt.timestamp())
+            except ValueError:
+                continue
+        return {"has_saves": bool(stamps), "timestamp": max(stamps) if stamps else 0.0}
 
     async def sync_down(self, game_id: str, force: bool = False) -> bool:
         """Pull Epic cloud saves to local save directory.
@@ -265,6 +353,8 @@ class EpicCloudSaveStrategy(CloudSaveStrategy):
                 )
                 return False
             logger.info("[EpicSync] sync_up completed successfully for %s", game_id)
+            # The cloud copy just changed — drop the memoised cloud-save info.
+            self._cached_cloud_info.pop(game_id, None)
             return True
         except Exception as e:
             logger.exception("[EpicSync] Error during sync_up for %s: %s", game_id, e)

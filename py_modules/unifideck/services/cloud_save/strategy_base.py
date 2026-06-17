@@ -29,3 +29,14 @@ class CloudSaveStrategy(ABC):
         Returns True on success, False otherwise.
         """
         pass
+
+    async def get_cloud_save_info(self, game_id: str) -> dict | None:
+        """Best-effort info about the game's ACTUAL store-cloud save.
+
+        Returns ``{"has_saves": bool, "timestamp": float}`` (timestamp = unix
+        epoch of the latest cloud save, 0 if unknown), or ``None`` when the
+        store can't report it cheaply. Used to show an accurate "Cloud" line in
+        the manual cloud-save UI instead of the local backup mirror (which can
+        be stale). Default: not supported.
+        """
+        return None

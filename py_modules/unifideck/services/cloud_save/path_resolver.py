@@ -108,5 +108,98 @@ class WinePrefixResolver:
             if match:
                 game_subpath = match.group(1)
                 resolved_path = os.path.join(path_vars['{locallow}'], game_subpath)
-        
+
         return os.path.realpath(resolved_path)
+
+    # ------------------------------------------------------------------
+    # Ludusavi / PCGamingWiki path tokens
+    # ------------------------------------------------------------------
+    #
+    # SEPARATE token table from ``resolve_path`` above on purpose. Ludusavi
+    # follows real Windows semantics: ``<winAppData>`` is %APPDATA% (Roaming)
+    # and ``<winLocalAppData>`` is %LOCALAPPDATA% (Local). Epic's ``{AppData}``
+    # token, by contrast, deliberately maps to Local (see the note in
+    # ``resolve_path``). Mixing the two tables would reintroduce that bug.
+    _LUDUSAVI_BASES = {
+        "<home>": "drive_c/users/steamuser",
+        "<winappdata>": "drive_c/users/steamuser/AppData/Roaming",
+        "<winlocalappdata>": "drive_c/users/steamuser/AppData/Local",
+        "<windocuments>": "drive_c/users/steamuser/Documents",
+        "<winpublic>": "drive_c/users/Public",
+        "<winprogramdata>": "drive_c/ProgramData",
+        "<windir>": "drive_c/windows",
+    }
+    # Registry shell-folder name -> Ludusavi base token, so a real prefix's
+    # redirected folders win over the defaults above.
+    _SHELL_TO_TOKEN = {
+        "AppData": "<winappdata>",
+        "Local AppData": "<winlocalappdata>",
+        "Personal": "<windocuments>",
+    }
+
+    @classmethod
+    def resolve_ludusavi_path(
+        cls,
+        ludusavi_path: str,
+        prefix_path: str,
+        install_path: str = "",
+    ) -> str | None:
+        """Resolve a Ludusavi/PCGamingWiki save path into a prefix directory.
+
+        Ludusavi paths look like ``<winAppData>/Foo/Saves`` or
+        ``<base>/save/user_*.dat``. We resolve the leading token, then walk
+        until the first DYNAMIC segment (a wildcard ``*`` or ``<storeUserId>``
+        / any other unresolved ``<...>`` token) and return the literal
+        directory up to that point — the sync tool then syncs that whole
+        subtree. Returns ``None`` when the path can't be resolved (unknown
+        token, or ``<base>`` with no known install path, or a Linux-only path).
+        """
+        if not ludusavi_path:
+            return None
+        raw = ludusavi_path.replace("\\", "/").strip("/")
+        segments = [s for s in raw.split("/") if s]
+        if not segments:
+            return None
+
+        # Build the base map with registry overrides where the prefix has them.
+        bases = dict(cls._LUDUSAVI_BASES)
+        resolved_bases = {
+            tok: os.path.join(prefix_path, rel) for tok, rel in bases.items()
+        }
+        user_reg_path = os.path.join(prefix_path, "user.reg")
+        if os.path.isfile(user_reg_path):
+            try:
+                folders = cls.get_shell_folders(cls.read_registry(prefix_path), prefix_path)
+                for shell_name, token in cls._SHELL_TO_TOKEN.items():
+                    if shell_name in folders:
+                        resolved_bases[token] = folders[shell_name]
+            except Exception as e:  # pragma: no cover - registry is best-effort
+                logger.debug("ludusavi: registry read failed: %s", e)
+
+        first = segments[0].lower()
+        if first in resolved_bases:
+            base = resolved_bases[first]
+        elif first in ("<base>", "<root>", "<game>"):
+            if not install_path:
+                return None
+            base = install_path
+        elif first == "<osusername>":
+            base = os.path.join(prefix_path, "drive_c/users/steamuser")
+        else:
+            # Unknown/Linux token (<xdgData>, <xdgConfig>, …) — not resolvable
+            # for a Proton (Windows) prefix.
+            return None
+
+        out_parts = [base]
+        for seg in segments[1:]:
+            low = seg.lower()
+            # Stop at the first dynamic segment; sync the containing directory.
+            if "*" in seg or low == "<storeuserid>" or (seg.startswith("<") and seg.endswith(">")):
+                break
+            if low == "<osusername>":
+                out_parts.append("steamuser")
+                continue
+            out_parts.append(seg)
+
+        resolved = os.path.normpath(os.path.join(*out_parts))
+        return os.path.realpath(resolved)

@@ -94,6 +94,15 @@ async def cloud_sync_phase(
         )
         return
 
+    # Respect the auto-sync config flags. Download-on-launch is on by default;
+    # upload-on-stop is OFF by default (manual via the cloud-save button), so
+    # this is the path that must honour ``cloud.auto_push_on_stop``.
+    if hasattr(svc._cloud_svc, "auto_sync_enabled") and not svc._cloud_svc.auto_sync_enabled(direction):
+        logger.info(
+            "[Helpers] Cloud sync %s skipped — disabled by config", direction,
+        )
+        return
+
     try:
         if direction == "down":
             await svc._cloud_svc.sync_down(store, game_id)

@@ -1,5 +1,6 @@
 import os
 import json
+import asyncio
 import pytest
 from unittest.mock import MagicMock, AsyncMock, patch
 from pathlib import Path
@@ -28,7 +29,11 @@ def mock_config():
 
 @pytest.fixture
 def mock_event_bus():
-    return MagicMock()
+    bus = MagicMock()
+    # sync_down/sync_up await bus.emit(...) for the CLOUD_SYNC_* completion
+    # events, so emit must be awaitable.
+    bus.emit = AsyncMock()
+    return bus
 
 def test_wine_prefix_resolver(tmp_path):
     # Setup a dummy prefix registry
@@ -135,10 +140,13 @@ async def test_gog_strategy_sync(tmp_path, mock_config):
     
     strategy = GOGCloudSaveStrategy(local_save_root, mock_config)
     strategy.gogdl_bin = "mock_gogdl"
-    
+
     # Mock token conversion directly
     strategy._convert_gog_token = MagicMock(return_value="/tmp/mock_auth.json")
-    
+    # Resolve to a real dir — the staging fallback was removed, so
+    # get_local_save_dir returns None without a prefix; provide a location.
+    strategy.get_local_save_dir = MagicMock(return_value=str(tmp_path / "gogsave"))
+
     # Mock subprocess
     with patch("asyncio.create_subprocess_exec") as mock_exec:
         mock_proc = AsyncMock()
@@ -352,11 +360,15 @@ async def test_service_hard_block_emits_error_not_modal(
         CloudSaveService, "_acquire_sync_lock", return_value=(MagicMock(), None),
     ):
         res = await service.sync_up("gog", "g1")
-    # HARD block (empty) → plain error toast, NEVER a "keep local" pick.
+    # HARD block (empty) → plain title+body toast, NEVER a "keep local" pick.
+    # Severity is a warning (an expected skip when there are no local saves,
+    # not a failure) and the message is split into a short title + body.
     assert res.success is True
     evt = mock_event_bus.emit.await_args
     assert "action" not in evt.kwargs  # no retry-sync → no pick modal
-    assert evt.kwargs.get("severity") == "error"
+    assert evt.kwargs.get("severity") == "warning"
+    assert evt.kwargs.get("i18n_title_key") == "cloudSave.uploadSkippedTitle"
+    assert evt.kwargs.get("i18n_key") == "cloudSave.uploadSkippedBody"
 
 
 # ── Forced pull (explicit "Use Cloud") ────────────────────────────────────
@@ -433,3 +445,225 @@ async def test_dispatch_retry_sync_down_forces_pull():
     await _dispatch_retry_sync(up, cloudsave)
     cloudsave.sync_up.assert_called_once_with("epic", "g1")
 
+
+# ── GOG dual-source save dir (Auto Cloud vs SDK IStorage) ─────────────────
+
+
+def _gog_strategy_for_pick(tmp_path):
+    s = GOGCloudSaveStrategy(str(tmp_path / "saves"), config=None)
+    # Avoid network: one Auto-Cloud location (Documents\MyGame).
+    s._fetch_gog_save_locations = lambda cid: ["<?DOCUMENTS?>\\MyGame"]
+    return s
+
+
+def test_gog_pick_prefers_autocloud_when_it_has_saves(tmp_path):
+    s = _gog_strategy_for_pick(tmp_path)
+    drive_c = tmp_path / "pfx" / "drive_c"
+    doc = drive_c / "users" / "steamuser" / "Documents" / "MyGame"
+    doc.mkdir(parents=True)
+    (doc / "slot.sav").write_text("SAVE" * 50)
+    assert s._pick_gog_save_dir("CID", drive_c) == doc
+
+
+def test_gog_pick_uses_sdk_istorage_when_autocloud_empty(tmp_path):
+    s = _gog_strategy_for_pick(tmp_path)
+    drive_c = tmp_path / "pfx" / "drive_c"
+    sdk = (
+        drive_c / "users" / "steamuser" / "AppData" / "Local"
+        / "GOG.com" / "Galaxy" / "Applications" / "CID" / "Storage"
+    )
+    sdk.mkdir(parents=True)
+    (sdk / "save.dat").write_text("DATA" * 50)
+    assert s._pick_gog_save_dir("CID", drive_c) == sdk
+
+
+def test_gog_pick_falls_back_to_first_autocloud_when_none_on_disk(tmp_path):
+    s = _gog_strategy_for_pick(tmp_path)
+    drive_c = tmp_path / "pfx" / "drive_c"
+    (drive_c / "users" / "steamuser").mkdir(parents=True)
+    chosen = s._pick_gog_save_dir("CID", drive_c)
+    assert chosen == drive_c / "users" / "steamuser" / "Documents" / "MyGame"
+
+
+# ── ~/Save Games Backup is WRITE-ONLY (never pulled from) ─────────────────
+
+
+def _wo_service(tmp_path, bus, cfg, local_dir):
+    svc = CloudSaveService(
+        bus, str(tmp_path / "saves"),
+        cloud_root=str(tmp_path / "backup"), config=cfg,
+    )
+    strat = MagicMock()
+    strat.sync_down = AsyncMock(return_value=True)
+    strat.sync_up = AsyncMock(return_value=True)
+    strat.get_local_save_dir.return_value = str(local_dir)
+    svc._strategies["gog"] = strat
+    return svc
+
+
+@pytest.mark.asyncio
+async def test_mirror_written_on_sync_down(tmp_path, mock_event_bus, mock_config):
+    local = tmp_path / "local"
+    local.mkdir()
+    (local / "save.dat").write_text("DATA" * 50)
+    svc = _wo_service(tmp_path, mock_event_bus, mock_config, local)
+    with patch.object(CloudSaveService, "_acquire_sync_lock", return_value=(MagicMock(), None)):
+        res = await svc.sync_down("gog", "g1", force=True)
+    assert res.success is True
+    assert (tmp_path / "backup" / "gog" / "g1" / "save.dat").is_file()
+
+
+@pytest.mark.asyncio
+async def test_empty_local_never_wipes_mirror(tmp_path, mock_event_bus, mock_config):
+    mirror = tmp_path / "backup" / "gog" / "g1"
+    mirror.mkdir(parents=True)
+    (mirror / "old.dat").write_text("OLD" * 50)
+    local = tmp_path / "local"
+    local.mkdir()  # empty
+    svc = _wo_service(tmp_path, mock_event_bus, mock_config, local)
+    with patch.object(CloudSaveService, "_acquire_sync_lock", return_value=(MagicMock(), None)):
+        await svc.sync_down("gog", "g1", force=True)
+    assert (mirror / "old.dat").is_file()  # backup preserved
+
+
+@pytest.mark.asyncio
+async def test_sync_down_never_pulls_from_mirror(tmp_path, mock_event_bus, mock_config):
+    mirror = tmp_path / "backup" / "gog" / "g1"
+    mirror.mkdir(parents=True)
+    (mirror / "cloud.dat").write_text("CLOUD" * 50)
+    local = tmp_path / "local"
+    local.mkdir()  # strategy is a no-op; local stays empty
+    svc = _wo_service(tmp_path, mock_event_bus, mock_config, local)
+    with patch.object(CloudSaveService, "_acquire_sync_lock", return_value=(MagicMock(), None)):
+        await svc.sync_down("gog", "g1", force=True)
+    assert not (local / "cloud.dat").exists()  # never restored from the mirror
+
+
+@pytest.mark.asyncio
+async def test_unresolved_when_no_real_location(tmp_path, mock_event_bus, mock_config):
+    # No prefix → the strategy resolves NO real location (returns None). The
+    # staging fallback is gone, so status must show unresolved + no local saves
+    # (we never read a staging dir, even one with leftover files).
+    saves_root = tmp_path / "saves"
+    # leftover staging files exist but must be ignored entirely
+    staging = saves_root / "gog" / "g1"
+    staging.mkdir(parents=True)
+    (staging / "old.sav").write_text("OLD" * 50)
+    svc = CloudSaveService(
+        mock_event_bus, str(saves_root), cloud_root=None, config=mock_config,
+    )
+    svc._strategies["gog"].get_local_save_dir = lambda gid: None
+    svc._real_cloud_info = AsyncMock(return_value=None)
+    st = await svc.get_cloud_status("gog", "g1")
+    assert st["save_path"] is None
+    assert st["save_path_resolved"] is False
+    assert st["has_local_saves"] is False
+    assert st["local_snapshot"] == {}
+
+
+# ── GOG forced pull does a CLEAN download (clears local first) ─────────────
+
+
+@pytest.mark.asyncio
+async def test_gog_force_pull_clears_local_first(tmp_path, mock_config):
+    # gogdl skips cloud-only files when local is non-empty ("conflict"); a
+    # forced "Use Cloud" pull must clear local first so the full set downloads.
+    local = tmp_path / "save"
+    local.mkdir()
+    (local / "stale.sav").write_text("STALE")
+    s = GOGCloudSaveStrategy(str(tmp_path / "root"), mock_config)
+    s._convert_gog_token = MagicMock(return_value="/tmp/auth.json")
+    s.get_local_save_dir = MagicMock(return_value=str(local))
+    s.gogdl_bin = "mock_gogdl"
+    with patch("unifideck.services.cloud_save.safety.snapshot_backup"), \
+         patch("asyncio.create_subprocess_exec") as mock_exec:
+        proc = AsyncMock()
+        proc.returncode = 0
+        proc.communicate.return_value = (b"1.0", b"")
+        mock_exec.return_value = proc
+        await s.sync_down("g1", force=True)
+    assert not (local / "stale.sav").exists()  # cleared before the clean pull
+
+
+@pytest.mark.asyncio
+async def test_gog_normal_pull_keeps_existing_saves(tmp_path, mock_config):
+    # A non-forced pull with REAL local saves must NOT clear them.
+    local = tmp_path / "save"
+    local.mkdir()
+    (local / "keep.sav").write_text("REAL-SAVE-DATA")
+    s = GOGCloudSaveStrategy(str(tmp_path / "root"), mock_config)
+    s._convert_gog_token = MagicMock(return_value="/tmp/auth.json")
+    s.get_local_save_dir = MagicMock(return_value=str(local))
+    s.gogdl_bin = "mock_gogdl"
+    with patch("unifideck.services.cloud_save.safety.snapshot_backup"), \
+         patch("asyncio.create_subprocess_exec") as mock_exec:
+        proc = AsyncMock()
+        proc.returncode = 0
+        proc.communicate.return_value = (b"1.0", b"")
+        mock_exec.return_value = proc
+        await s.sync_down("g1", force=False)
+    assert (local / "keep.sav").exists()  # preserved
+
+
+def test_gog_cloud_summary_counts_only_active_prefix():
+    # GOG cloud storage namespaces objects by location name. A game can carry
+    # a stale older prefix (``saves/``) alongside the live one (``__default/``).
+    # gogdl materializes only ONE locally, so the reported cloud count must be
+    # the newest prefix group's count (matching local) — NOT every object.
+    objects = [
+        {"name": "__default/a.sav", "last_modified": "2026-06-08T18:00:00+00:00"},
+        {"name": "__default/b.sav", "last_modified": "2026-06-08T18:01:00+00:00"},
+        # our own manifest is never a save file:
+        {"name": "__default/.unifideck_sync.json", "last_modified": "2026-06-08T18:02:00+00:00"},
+        {"name": "saves/old1.sav", "last_modified": "2026-03-29T20:00:00+00:00"},
+        {"name": "saves/old2.sav", "last_modified": "2026-03-29T20:01:00+00:00"},
+        {"name": "saves/old3.sav", "last_modified": "2026-03-29T20:02:00+00:00"},
+    ]
+    info = GOGCloudSaveStrategy._summarize_cloud_objects(objects)
+    assert info["file_count"] == 2  # __default's two real files, not 5
+    assert info["has_saves"] is True
+    # timestamp is the active group's newest (Jun 8 b.sav, not the manifest)
+    from datetime import datetime
+    expected = datetime.fromisoformat("2026-06-08T18:01:00+00:00").astimezone().timestamp()
+    assert info["timestamp"] == expected
+
+
+def test_gog_cloud_summary_empty_and_flat():
+    empty = GOGCloudSaveStrategy._summarize_cloud_objects([])
+    assert empty["file_count"] == 0 and empty["has_saves"] is False
+    flat = GOGCloudSaveStrategy._summarize_cloud_objects(
+        [{"name": "solo.sav", "last_modified": "2026-01-01T00:00:00+00:00"}]
+    )
+    assert flat["file_count"] == 1 and flat["has_saves"] is True
+
+
+# ── Manual pull/push are fire-and-forget (don't block the RPC) ─────────────
+
+
+@pytest.mark.asyncio
+async def test_cloud_save_pull_is_fire_and_forget(mock_event_bus):
+    # cloud_save_pull must return immediately ({"started": True}) and NOT block
+    # on the (slow) sync — otherwise the RPC client times out and shows a false
+    # failure even when the download succeeds.
+    from unifideck.rpc.mixins.cloud_save import CloudSaveRPCMixin, _SYNC_TASKS
+    started = asyncio.Event()
+    done = asyncio.Event()
+
+    async def slow_sync_down(store, game_id, force=False):
+        started.set()
+        await asyncio.sleep(0.05)
+        done.set()
+        return Result(success=True)
+
+    svc = MagicMock()
+    svc.sync_down = slow_sync_down
+
+    class Host(CloudSaveRPCMixin):
+        def __init__(self):
+            self.services = MagicMock(cloudsave=svc)
+
+    res = await Host().cloud_save_pull("gog", "g1", True)
+    assert res == {"started": True}          # returned before the sync finished
+    assert not done.is_set()                 # sync still running in background
+    await asyncio.wait_for(started.wait(), 1)
+    await asyncio.wait_for(done.wait(), 1)   # it does complete in the background

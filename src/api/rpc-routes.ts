@@ -78,6 +78,11 @@ export const rpcRoutes = {
   // Cloud-save behaviour preferences (CloudFailureRPCMixin)
   setCloudFailureBehavior: "set_cloud_failure_behavior",
   getCloudFailureBehaviors: "get_cloud_failure_behaviors",
+  // Manual cloud-save status / pull / push (CloudSaveRPCMixin)
+  getCloudSaveStatus: "get_cloud_save_status",
+  cloudSavePull: "cloud_save_pull",
+  cloudSavePush: "cloud_save_push",
+  setGameSavePath: "set_game_save_path",
   // Observability (ObservabilityRPCMixin) — event bridge
   subscribeReplay: "subscribe_replay",
   getLauncherToasts: "get_launcher_toasts",

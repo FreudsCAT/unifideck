@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING, Any, cast
 from unifideck.core.types import Game
 from unifideck.core.types.events import Events
 from unifideck.event_bus.event_bus_devex import auto_wire, subscribe
-from unifideck.services import metadata_backfill
+from unifideck.services import metadata_backfill, pcgw_backfill
 
 if TYPE_CHECKING:
     from unifideck.config import ConfigManager
@@ -220,6 +220,11 @@ class MetadataService:
             # gated on it. See ``metadata_backfill``.
             if not cancelled_by_replace:
                 metadata_backfill.spawn(self, games)
+                # Save-location backfill from PCGamingWiki for the GOG/Epic
+                # games unifiDB hasn't covered yet. Runs here (not earlier)
+                # because it joins on the ``steam_real_appid`` the metadata
+                # phase just populated. See ``pcgw_backfill``.
+                pcgw_backfill.spawn(self, games)
 
     def _sync_progress(self) -> Any:
         """Return the bus's ``SyncProgress`` tracker, or ``None``."""

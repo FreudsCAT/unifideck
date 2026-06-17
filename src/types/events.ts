@@ -63,6 +63,11 @@ export const Events = {
   GAME_UPDATE_AVAILABLE: "game_update_available",
   GAME_LAUNCHED: "game_launched",
   GAME_STOPPED: "game_stopped",
+  // Cloud-save sync (CloudSaveService)
+  CLOUD_SYNC_DOWN_COMPLETE: "cloud_sync_down_complete",
+  CLOUD_SYNC_DOWN_FAILED: "cloud_sync_down_failed",
+  CLOUD_SYNC_UP_COMPLETE: "cloud_sync_up_complete",
+  CLOUD_SYNC_UP_FAILED: "cloud_sync_up_failed",
   // Errors and toasts
   STORE_ERROR: "store_error",
   LAUNCHER_STAGE: "launcher_stage",

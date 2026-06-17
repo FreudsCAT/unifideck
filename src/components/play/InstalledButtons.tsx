@@ -30,6 +30,7 @@ import { useLaunchPrep } from "../../hooks/useLaunchPrep";
 import { useToast } from "../../hooks/useToast";
 import { SteamBridge } from "../../lib/steam-bridge";
 import { UninstallConfirmModal } from "../modals/UninstallConfirmModal";
+import { CloudSaveButton } from "./CloudSaveButton";
 import {
   PlayShell,
   MetaInline,
@@ -262,6 +263,13 @@ export const InstalledButtons: FC<Props> = ({
         >
           <FaCog />
         </DialogButton>
+        {game && (
+          <CloudSaveButton
+            store={game.store}
+            gameId={game.id}
+            gameTitle={game.title}
+          />
+        )}
         <DialogButton
           style={iconBtnStyle}
           disabled={loading || actions.isWorking}

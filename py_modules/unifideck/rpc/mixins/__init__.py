@@ -33,6 +33,7 @@ from __future__ import annotations
 
 from .action import ActionRPCMixin
 from .cloud_failure import CloudFailureRPCMixin
+from .cloud_save import CloudSaveRPCMixin
 from .config_validation import ConfigValidationRPCMixin
 from .download import DownloadRPCMixin
 from .launch import LaunchRPCMixin
@@ -47,6 +48,7 @@ from .updater import UpdaterRPCMixin
 __all__ = [
     "ActionRPCMixin",
     "CloudFailureRPCMixin",
+    "CloudSaveRPCMixin",
     "ConfigValidationRPCMixin",
     "DownloadRPCMixin",
     "LaunchRPCMixin",

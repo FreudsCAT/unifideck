@@ -113,7 +113,7 @@ _SERVICE_DEFS: tuple[tuple[Any, ...], ...] = (
         "cloudsave", "unifideck.services.cloud_save",
         "CloudSaveService",
         lambda b, r, c, cfg, p, pl: (b, p.local_save_root),
-        lambda b, r, c, cfg, p, pl: {"cloud_root": p.cloud_root, "config": cfg},
+        lambda b, r, c, cfg, p, pl: {"cloud_root": p.cloud_root, "config": cfg, "cache": c},
     ),
     (
         "metrics", "unifideck.core.metrics_collector",

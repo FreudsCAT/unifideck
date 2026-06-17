@@ -209,6 +209,14 @@ export const PLAY_FOCUS_CSS = `
   filter: brightness(1.15) !important;
   box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.8) !important;
 }
+
+/* Spinning cloud icon while a save sync is in flight. */
+@keyframes unifideck-cloud-spin {
+  100% { transform: rotate(360deg); }
+}
+.unifideck-cloud-spin {
+  animation: unifideck-cloud-spin 1s linear infinite;
+}
 `;
 
 /** Inject the focus CSS into <head> exactly once.

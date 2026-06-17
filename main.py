@@ -75,6 +75,7 @@ from unifideck.rpc.mixins.account import AccountRPCMixin  # noqa: E402
 from unifideck.rpc.mixins.action import ActionRPCMixin  # noqa: E402
 from unifideck.rpc.mixins.auth_shortcuts import AuthShortcutsRPCMixin  # noqa: E402
 from unifideck.rpc.mixins.cloud_failure import CloudFailureRPCMixin  # noqa: E402
+from unifideck.rpc.mixins.cloud_save import CloudSaveRPCMixin  # noqa: E402
 from unifideck.rpc.mixins.config_validation import ConfigValidationRPCMixin  # noqa: E402
 from unifideck.rpc.mixins.download import DownloadRPCMixin  # noqa: E402
 from unifideck.rpc.mixins.edge import EdgeRPCMixin  # noqa: E402
@@ -104,6 +105,7 @@ class Plugin(
     SyncRPCMixin,
     UIRPCMixin,
     CloudFailureRPCMixin,
+    CloudSaveRPCMixin,
     ConfigValidationRPCMixin,
     PlaytimeRPCMixin,
     ActionRPCMixin,
