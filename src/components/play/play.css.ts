@@ -79,10 +79,26 @@ export const PLAY_FOCUS_CSS = `
   box-shadow: 0 0 0 2px rgba(26, 159, 255, 0.55) inset !important;
 }
 .unifideck-stop-btn:hover,
+.unifideck-stop-btn:focus,
+.unifideck-stop-btn:focus-within,
 .unifideck-stop-btn.gpfocus,
 .unifideck-icon-btn:hover,
+.unifideck-icon-btn:focus,
+.unifideck-icon-btn:focus-within,
 .unifideck-icon-btn.gpfocus {
-  background: rgba(255, 255, 255, 0.22) !important;
+  background: #ffffff !important;
+  color: #1a1a1a !important;
+}
+.unifideck-stop-btn:hover svg,
+.unifideck-stop-btn:focus svg,
+.unifideck-stop-btn:focus-within svg,
+.unifideck-stop-btn.gpfocus svg,
+.unifideck-icon-btn:hover svg,
+.unifideck-icon-btn:focus svg,
+.unifideck-icon-btn:focus-within svg,
+.unifideck-icon-btn.gpfocus svg {
+  color: #1a1a1a !important;
+  fill: #1a1a1a !important;
 }
 .unifideck-update-btn:hover,
 .unifideck-update-btn:focus,
@@ -216,6 +232,23 @@ export const PLAY_FOCUS_CSS = `
 }
 .unifideck-cloud-spin {
   animation: unifideck-cloud-spin 1s linear infinite;
+}
+
+/* Breathing animation for save discrepancies. */
+@keyframes unifideck-breathe {
+  0%, 100% {
+    --unifideck-btn-bg: rgba(34, 197, 94, 0.08);
+    --unifideck-btn-shadow: 0 0 0 1.5px rgba(34, 197, 94, 0.35) inset, 0 0 0px rgba(34, 197, 94, 0);
+  }
+  50% {
+    --unifideck-btn-bg: rgba(34, 197, 94, 0.45);
+    --unifideck-btn-shadow: 0 0 0 2.5px rgba(34, 197, 94, 0.95) inset, 0 0 12px rgba(34, 197, 94, 0.75);
+  }
+}
+.unifideck-breathe:not(:hover):not(:focus):not(:focus-within):not(.gpfocus) {
+  background: var(--unifideck-btn-bg, rgba(34, 197, 94, 0.18)) !important;
+  box-shadow: var(--unifideck-btn-shadow, 0 0 0 2px rgba(34, 197, 94, 0.5) inset) !important;
+  animation: unifideck-breathe 1.5s ease-in-out infinite !important;
 }
 `;
 

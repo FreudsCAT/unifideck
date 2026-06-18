@@ -106,7 +106,8 @@
     "downloadingLabel": "Pobieranie...",
     "finalizingInstallation": "Finalizowanie instalacji...",
     "speedMbps": "{{speed}} MB/s",
-    "etaLabel": "Pozostały czas: {{eta}}"
+    "etaLabel": "Pozostały czas: {{eta}}",
+    "preparingMessage": "Inicjowanie prefiksu i synchronizowanie zapisów w chmurze..."
   },
   "cloudSave": {
     "title": "Konflikt zapisów w chmurze",
@@ -122,7 +123,8 @@
     "toastUsingLocalTitle": "Używanie zapisów lokalnych",
     "toastUsingLocalBody": "Przesyłanie zapisów lokalnych dla {{game}}",
     "toastErrorTitle": "Błąd",
-    "toastErrorBody": "Nie udało się rozwiązać konfliktu"
+    "toastErrorBody": "Nie udało się rozwiązać konfliktu",
+    "filesSize": "{{count}} plików · {{size}}"
   },
   "storeConnections": {
     "title": "POŁĄCZENIA SKLEPÓW",
@@ -323,7 +325,15 @@
     "library": {
       "_comment": "Toasts emitted by SyncService when a per-store library sync fails. The retry button triggers a fire-and-forget refresh via the unifideck://refresh-library/<store> verb; the user doesn't wait for the result inline, the Library view picks it up through its SYNC_PROGRESS subscription.",
       "syncStoreFailed": "Nie można odświeżyć biblioteki {{store}} ({{error}}). Bieżąca biblioteka pozostaje widoczna."
-    }
+    },
+    "cloudPullStarted": "Pobieranie zapisu z chmury…",
+    "cloudPushStarted": "Przesyłanie lokalnego zapisu…",
+    "cloudSavePathFailed": "Nie można ustawić lokalizacji zapisu",
+    "cloudSavePathSet": "Zaktualizowano lokalizację zapisu",
+    "cloudPullDone": "Zapis z chmury pobrany",
+    "cloudPullFailed": "Pobieranie zapisu z chmury nie powiodło się",
+    "cloudPushDone": "Lokalny zapis przesłany",
+    "cloudPushFailed": "Przesyłanie lokalnego zapisu nie powiodło się"
   },
   "uninstallModal": {
     "title": "Potwierdź odinstalowanie",
@@ -610,7 +620,26 @@
     "cancelConfirmBody": "Czy na pewno chcesz anulować pobieranie gry {{title}}? Częściowo pobrane pliki zostaną usunięte.",
     "cancelConfirmConfirm": "Anuluj pobieranie",
     "cancelConfirmCancel": "Kontynuuj pobieranie",
-    "playOnCloud": "Graj w chmurze"
+    "playOnCloud": "Graj w chmurze",
+    "cloudSave": {
+      "autoPullOn": "Zapisy w chmurze są pobierane automatycznie przy uruchomieniu.",
+      "close": "Zamknij",
+      "download": "Pobierz zapis z chmury",
+      "filesCount": "{{count}} plików",
+      "label": "Zapisy w chmurze",
+      "menuTitle": "Zapisy w chmurze — {{game}}",
+      "noCloudData": "Nieznana",
+      "noCloudSupport": "Brak obsługi zapisów w chmurze",
+      "setLocation": "Ustaw lokalizację zapisu",
+      "setLocationHint": "Wybierz folder, w którym ta gra przechowuje swoje zapisy.",
+      "setLocationTitle": "Wybierz folder zapisu tej gry",
+      "statusCloudAvailable": "Zapis w chmurze dostępny",
+      "statusNoSaves": "Brak lokalnych zapisów",
+      "statusSyncing": "Synchronizowanie zapisów w chmurze…",
+      "statusUnresolved": "Nie znaleziono lokalizacji zapisu — synchronizacja może nie działać dla tej gry.",
+      "unresolvedHint": "Uruchom grę raz, abyśmy mogli wykryć jej folder zapisu, lub ustaw lokalizację ręcznie.",
+      "upload": "Prześlij lokalny zapis"
+    }
   },
   "playMeta": {
     "spaceRequired": "Wymagane miejsce",

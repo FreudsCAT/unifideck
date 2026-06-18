@@ -97,6 +97,7 @@ export const NotInstalledButtons: FC<Props> = ({
 
       <IconGroup>
         <DialogButton
+          className="unifideck-icon-btn"
           style={iconBtnStyle}
           onClick={() => openControllerConfig(appId)}
           aria-label={t("playButton.controllerConfig")}
@@ -104,6 +105,7 @@ export const NotInstalledButtons: FC<Props> = ({
           <FaGamepad />
         </DialogButton>
         <DialogButton
+          className="unifideck-icon-btn"
           style={iconBtnStyle}
           onClick={() => openAppSettings(appId)}
           aria-label={t("playButton.appSettings")}

@@ -51,19 +51,14 @@ def _resolve_gog_location(template: str, drive_c: Path) -> Path | None:
 class GOGCloudSaveStrategy(CloudSaveStrategy):
     """Cloud save strategy for GOG games using gogdl."""
 
+    store_id = "gog"
+
     def __init__(self, local_save_root: str, config=None, cache=None) -> None:
-        self.local_save_root = local_save_root
-        self.config = config
-        # CacheManager (or None in CLI mode). Used to read enriched
-        # save-location metadata (unifiDB/PCGamingWiki) — guard every read.
-        self.cache = cache
-        # In-process cache of resolved save dirs (get_local_save_dir is
-        # called several times per launch; the network resolution must
-        # only happen once).
-        self._cached_save_dir: dict[str, str] = {}
-        # Real-cloud save info (GOG cloud-storage LIST), memoised 300s and
-        # cleared on upload — keeps the status path from re-hitting GOG.
-        self._cached_cloud_info: dict[str, tuple[float, dict]] = {}
+        super().__init__(local_save_root, config, cache)
+        # GOG-private in-memory cache of the *metadata*-resolved save dir (the
+        # base owns the top-level resolved-dir memo). Backed by an on-disk
+        # cache (``gog_save_dirs``) so the network round-trip survives restarts.
+        self._cached_metadata_dir: dict[str, str] = {}
 
         # Resolve path to the bundled gogdl binary. Use the canonical
         # plugin-root resolver (same one the launch path uses) — bin/ is a
@@ -76,37 +71,33 @@ class GOGCloudSaveStrategy(CloudSaveStrategy):
         if not os.path.exists(self.gogdl_bin):
             self.gogdl_bin = "gogdl"
 
-    def get_local_save_dir(self, game_id: str) -> str | None:
-        """Resolve the GOG game's local save directory.
+    def _resolve_store_save_dir(self, game_id: str) -> str | None:
+        """GOG-specific save-dir resolution (config override + memo in base).
 
         Resolution order (first hit wins):
-          1. Explicit ``games.<id>.save_path`` config override.
-          2. **GOG cloud-save metadata** (authoritative): the location
+          1. **GOG cloud-save metadata** (authoritative): the location
              template from ``remote-config.gog.com`` resolved against the
              game's Wine prefix — i.e. where the game actually reads/writes
              saves. This is what Galaxy/Heroic use.
+          2. Enriched save-location metadata (unifiDB/PCGamingWiki via Ludusavi).
           3. Heuristic title-match of an existing folder in the prefix.
-          4. A local fallback dir (last resort — the game won't read from
-             here, but cloud files aren't lost).
+        Returns ``None`` when no prefix/real location exists yet.
         """
-        if self.config:
-            configured = self.config.get(f"games.{game_id}.save_path")
-            if configured:
-                return str(configured)
-
-        prefix_root = Path(self.local_save_root).parent / "prefixes" / game_id
-        drive_c = resolve_drive_c(prefix_root)
+        drive_c = resolve_drive_c(self._prefix_root(game_id))
 
         if drive_c:
-            # 2. Authoritative: resolve from GOG's cloud-save config.
+            # 1. Authoritative: resolve from GOG's cloud-save config.
             meta_dir = self._resolve_save_dir_from_metadata(game_id, drive_c)
             if meta_dir:
                 return meta_dir
 
-            # 2.5 Enriched save-location metadata (unifiDB / PCGamingWiki via
+            # 2. Enriched save-location metadata (unifiDB / PCGamingWiki via
             # Ludusavi). More reliable than the title-folder scan below, but
             # below GOG's own authoritative config above so it can't regress.
-            enriched = self._resolve_save_dir_from_enriched(game_id, drive_c)
+            # ``prefix_path`` is drive_c's parent (the registry-prefix root).
+            enriched = self._resolve_enriched(
+                game_id, prefix_path=str(drive_c.parent),
+            )
             if enriched:
                 return enriched
 
@@ -139,32 +130,6 @@ class GOGCloudSaveStrategy(CloudSaveStrategy):
         logger.info("[GOGSync] No save dir resolved for %s (no prefix yet)", game_id)
         return None
 
-    def _resolve_save_dir_from_enriched(
-        self, game_id: str, drive_c: Path,
-    ) -> str | None:
-        """Resolve from enriched save-location metadata (unifiDB/PCGamingWiki).
-
-        Passes ``config`` so the resolver can read the game's actual install
-        dir from games.map (handles user-chosen install locations) for
-        ``<base>`` saves.
-        """
-        try:
-            from unifideck.services.cloud_save.save_location_resolver import (
-                resolve_save_dir,
-            )
-            return resolve_save_dir(
-                "gog", game_id,
-                prefix_path=str(drive_c.parent),
-                config=self.config,
-                cache=self.cache,
-            )
-        except Exception as e:
-            logger.debug(
-                "[GOGSync] enriched save-dir resolution failed for %s: %s",
-                game_id, e,
-            )
-            return None
-
     # ── GOG cloud-save location resolution (from GOG metadata) ───────
     _BUILDS_URL = (
         "https://content-system.gog.com/products/{game_id}"
@@ -186,9 +151,9 @@ class GOGCloudSaveStrategy(CloudSaveStrategy):
         (in-process + on disk) so the network round-trip happens once per
         game. Returns None on any failure so the caller can fall back.
         """
-        cached = self._cached_save_dir.get(game_id) or self._read_cached_save_dir(game_id)
+        cached = self._cached_metadata_dir.get(game_id) or self._read_cached_save_dir(game_id)
         if cached:
-            self._cached_save_dir[game_id] = cached
+            self._cached_metadata_dir[game_id] = cached
             return cached
         try:
             client_id = self._fetch_gog_client_id(game_id)
@@ -199,7 +164,7 @@ class GOGCloudSaveStrategy(CloudSaveStrategy):
                 return None
             chosen.mkdir(parents=True, exist_ok=True)
             path = str(chosen)
-            self._cached_save_dir[game_id] = path
+            self._cached_metadata_dir[game_id] = path
             self._write_cached_save_dir(game_id, path)
             logger.info(
                 "[GOGSync] Resolved save dir from GOG metadata: %s", path,
@@ -270,24 +235,18 @@ class GOGCloudSaveStrategy(CloudSaveStrategy):
         return candidates[0]
 
     # ── Real GOG cloud-save info (cloudstorage.gog.com LIST) ─────────
-    async def get_cloud_save_info(self, game_id: str) -> dict | None:
+    async def _fetch_cloud_info(self, game_id: str) -> dict | None:
         """Real GOG-cloud save info: has_saves, newest timestamp, file_count.
 
         Queries GOG's cloud-storage LIST endpoint (the same one gogdl uses
         internally) so the manual cloud-save UI shows the ACTUAL cloud state
         instead of the local backup mirror. Needs a per-game Galaxy-client
-        token exchange (GOG scopes cloud storage per clientId). Memoised 300s;
-        returns ``None`` on any failure so the caller falls back to the mirror.
-        ``total_bytes`` is 0 (not in the LIST response) — backfilled by caller.
+        token exchange (GOG scopes cloud storage per clientId). The base
+        memoises this 300s and invalidates it after an upload. Returns ``None``
+        on any failure so the caller falls back to the mirror. ``total_bytes``
+        is 0 (not in the LIST response) — backfilled by the caller.
         """
-        import time
-        cached = self._cached_cloud_info.get(game_id)
-        if cached and (time.time() - cached[0]) < 300:
-            return cached[1]
-        info = await asyncio.to_thread(self._query_cloud_info_blocking, game_id)
-        if info is not None:
-            self._cached_cloud_info[game_id] = (time.time(), info)
-        return info
+        return await asyncio.to_thread(self._query_cloud_info_blocking, game_id)
 
     def _query_cloud_info_blocking(self, game_id: str) -> dict | None:
         try:
@@ -571,8 +530,10 @@ class GOGCloudSaveStrategy(CloudSaveStrategy):
         except Exception as e:
             logger.warning("[GOGSync] failed to clear save dir %s: %s", local_dir, e)
 
-    async def sync_down(self, game_id: str, force: bool = False) -> bool:
-        """Pull GOG cloud saves to local save directory.
+    async def _do_sync_down(
+        self, game_id: str, local_dir: str, force: bool,
+    ) -> bool:
+        """Pull GOG cloud saves into ``local_dir`` (base did save-dir+snapshot).
 
         With ``force`` (explicit "Use Cloud"), pull a full copy (ts=0) even
         when local saves exist — gogdl otherwise treats a recent last-sync
@@ -582,16 +543,6 @@ class GOGCloudSaveStrategy(CloudSaveStrategy):
         if not auth_file:
             logger.error("[GOGSync] Cannot sync down: GOG credentials conversion failed")
             return False
-
-        local_dir = self.get_local_save_dir(game_id)
-        if not local_dir:
-            logger.error("[GOGSync] Cannot sync down: Local save dir not resolved")
-            return False
-
-        os.makedirs(local_dir, exist_ok=True)
-        # Snapshot whatever's there before we pull — a bad/destructive
-        # download must always be recoverable from a local backup.
-        safety.snapshot_backup(local_dir, "gog", game_id)
 
         ts = self._get_saved_timestamp(game_id)
         # A CLEAN full pull is needed when the user explicitly chose "Use
@@ -650,25 +601,12 @@ class GOGCloudSaveStrategy(CloudSaveStrategy):
             logger.exception("[GOGSync] Error during sync_down for %s: %s", game_id, e)
             return False
 
-    async def sync_up(self, game_id: str) -> bool:
-        """Push local saves to GOG cloud."""
+    async def _do_sync_up(self, game_id: str, local_dir: str) -> bool:
+        """Push local saves to GOG cloud (base did save-dir+guard+assert)."""
         auth_file = self._convert_gog_token()
         if not auth_file:
             logger.error("[GOGSync] Cannot sync up: GOG credentials conversion failed")
             return False
-
-        local_dir = self.get_local_save_dir(game_id)
-        if not local_dir:
-            logger.error("[GOGSync] Cannot sync up: Local save dir not resolved")
-            return False
-
-        # Guard against wiping the cloud copy. gogdl's save-sync reconciles
-        # deletions: uploading a state that's MISSING saves makes it delete
-        # them from the cloud too. ``guard_before_upload`` snapshots a local
-        # backup and raises SaveConflictError when the local copy has no
-        # real save data or regressed vs the last-sync manifest — the
-        # service turns that into a user-facing conflict instead of a wipe.
-        safety.guard_before_upload(local_dir, "gog", game_id)
 
         ts = self._get_saved_timestamp(game_id)
         cmd = [
@@ -682,11 +620,6 @@ class GOGCloudSaveStrategy(CloudSaveStrategy):
             "--skip-download"
         ]
         logger.info("[GOGSync] Running sync_up: %s", " ".join(cmd))
-
-        # Final hard gate: NEVER invoke the destructive push for an empty /
-        # settings-only dir, regardless of how we got here. Uploading
-        # nothing wipes the cloud — that must be impossible.
-        safety.assert_has_saves(local_dir, "gog", game_id)
 
         try:
             proc = await asyncio.create_subprocess_exec(
@@ -711,8 +644,6 @@ class GOGCloudSaveStrategy(CloudSaveStrategy):
                 logger.info("[GOGSync] Updated GOG timestamp to %s", new_ts)
 
             logger.info("[GOGSync] sync_up completed successfully for %s", game_id)
-            # Cloud copy just changed — drop the memoised cloud-save info.
-            self._cached_cloud_info.pop(game_id, None)
             return True
         except Exception as e:
             logger.exception("[GOGSync] Error during sync_up for %s: %s", game_id, e)

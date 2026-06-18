@@ -35,7 +35,12 @@ function formatEta(secs: number): string {
 }
 
 function isIndeterminate(phase: DownloadPhase | undefined): boolean {
-  return phase === "extracting" || phase === "verifying" || phase === "manual";
+  return (
+    phase === "extracting" ||
+    phase === "verifying" ||
+    phase === "manual" ||
+    phase === "preparing"
+  );
 }
 
 function statusLabelKey(
@@ -46,6 +51,7 @@ function statusLabelKey(
   // Ubisoft (UPC-driven) installs: no real download — show a dedicated
   // label and let the indeterminate path render the phase_message.
   if (phase === "manual") return "downloadsTab.installingViaUpcLabel";
+  if (phase === "preparing") return "downloadsTab.preparingLabel";
   if (phase === "extracting") return "downloadsTab.extractingLabel";
   if (phase === "verifying") return "downloadsTab.verifyingLabel";
   if (status === "queued") {
@@ -138,6 +144,8 @@ export const DownloadProgressRow: FC<Props> = ({
             {download.phase_message ||
               (download.download_phase === "manual"
                 ? ""
+                : download.download_phase === "preparing"
+                ? t("downloadsTab.preparingMessage")
                 : t("downloadsTab.finalizingInstallation"))}
           </span>
         ) : (

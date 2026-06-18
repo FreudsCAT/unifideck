@@ -75,6 +75,7 @@ export const XCloudButtons: FC<Props> = ({ appId, gameId }) => {
 
       <IconGroup>
         <DialogButton
+          className="unifideck-icon-btn"
           style={iconBtnStyle}
           onClick={() => openControllerConfig(appId)}
           aria-label={t("playButton.controllerConfig")}
@@ -82,6 +83,7 @@ export const XCloudButtons: FC<Props> = ({ appId, gameId }) => {
           <FaGamepad />
         </DialogButton>
         <DialogButton
+          className="unifideck-icon-btn"
           style={iconBtnStyle}
           onClick={() => openAppSettings(appId)}
           aria-label={t("playButton.appSettings")}

@@ -106,7 +106,8 @@
     "downloadingLabel": "Download in corso...",
     "finalizingInstallation": "Finalizzazione dell'installazione...",
     "speedMbps": "{{speed}} MB/s",
-    "etaLabel": "Tempo stimato: {{eta}}"
+    "etaLabel": "Tempo stimato: {{eta}}",
+    "preparingMessage": "Inizializzazione del prefisso e sincronizzazione dei salvataggi cloud..."
   },
   "cloudSave": {
     "title": "Conflitto di salvataggio cloud",
@@ -122,7 +123,8 @@
     "toastUsingLocalTitle": "Utilizzo dei salvataggi locali",
     "toastUsingLocalBody": "Caricamento dei salvataggi locali per {{game}}",
     "toastErrorTitle": "Errore",
-    "toastErrorBody": "Risoluzione del conflitto fallita"
+    "toastErrorBody": "Risoluzione del conflitto fallita",
+    "filesSize": "{{count}} file · {{size}}"
   },
   "storeConnections": {
     "title": "CONNESSIONI NEGOZIO",
@@ -323,7 +325,15 @@
     "library": {
       "_comment": "Toasts emitted by SyncService when a per-store library sync fails. The retry button triggers a fire-and-forget refresh via the unifideck://refresh-library/<store> verb; the user doesn't wait for the result inline, the Library view picks it up through its SYNC_PROGRESS subscription.",
       "syncStoreFailed": "Impossibile aggiornare la libreria {{store}} ({{error}}). La tua libreria esistente rimarrà visibile."
-    }
+    },
+    "cloudPullStarted": "Download del salvataggio cloud…",
+    "cloudPushStarted": "Caricamento del salvataggio locale…",
+    "cloudSavePathFailed": "Impossibile impostare la cartella di salvataggio",
+    "cloudSavePathSet": "Cartella di salvataggio aggiornata",
+    "cloudPullDone": "Salvataggio cloud scaricato",
+    "cloudPullFailed": "Download del salvataggio cloud non riuscito",
+    "cloudPushDone": "Salvataggio locale caricato",
+    "cloudPushFailed": "Caricamento del salvataggio locale non riuscito"
   },
   "uninstallModal": {
     "title": "Conferma disinstallazione",
@@ -610,7 +620,26 @@
     "cancelConfirmBody": "Sei sicuro di voler annullare il download di {{title}}? I file parziali verranno eliminati.",
     "cancelConfirmConfirm": "Annulla download",
     "cancelConfirmCancel": "Continua il download",
-    "playOnCloud": "Gioca sul Cloud"
+    "playOnCloud": "Gioca sul Cloud",
+    "cloudSave": {
+      "autoPullOn": "I salvataggi cloud vengono scaricati automaticamente all'avvio.",
+      "close": "Chiudi",
+      "download": "Scarica salvataggio cloud",
+      "filesCount": "{{count}} file",
+      "label": "Salvataggi cloud",
+      "menuTitle": "Salvataggi cloud — {{game}}",
+      "noCloudData": "Sconosciuto",
+      "noCloudSupport": "Nessun supporto al salvataggio cloud",
+      "setLocation": "Imposta cartella di salvataggio",
+      "setLocationHint": "Scegli la cartella in cui questo gioco memorizza i suoi salvataggi.",
+      "setLocationTitle": "Scegli la cartella di salvataggio del gioco",
+      "statusCloudAvailable": "Salvataggio cloud disponibile",
+      "statusNoSaves": "Nessun salvataggio locale",
+      "statusSyncing": "Sincronizzazione dei salvataggi cloud…",
+      "statusUnresolved": "Cartella di salvataggio non trovata — la sincronizzazione potrebbe non funzionare per questo gioco.",
+      "unresolvedHint": "Avvia il gioco una volta per rilevare la sua cartella di salvataggio, o impostala manualmente.",
+      "upload": "Carica salvataggio locale"
+    }
   },
   "playMeta": {
     "spaceRequired": "Spazio richiesto",

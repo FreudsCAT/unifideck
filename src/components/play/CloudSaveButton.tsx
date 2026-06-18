@@ -64,7 +64,25 @@ export const CloudSaveButton: FC<Props> = ({ store, gameId, gameTitle }) => {
   const syncing = !!data?.in_progress;
   const noCloudSupport = data?.cloud_supported === false;
   const unresolved = !!data && !data.save_path_resolved;
+
+  const local = data?.local_snapshot ?? {};
+  const remote = data?.remote_snapshot;
   const cloudAvailable = data?.has_cloud_saves === true;
+
+  const hasLocal = !!data?.has_local_saves;
+  const hasCloud = cloudAvailable || !!remote;
+  const localTs = local.timestamp;
+  const remoteTs = remote?.timestamp;
+
+  const case1 = hasCloud && !hasLocal;
+  const case2and3 = hasCloud && hasLocal && !!localTs && !!remoteTs && localTs !== remoteTs;
+  const case4 = !hasCloud && hasLocal;
+
+  const shouldBreathe = !noCloudSupport && !syncing && (
+    case1 ||
+    case2and3 ||
+    case4
+  );
 
   let icon = <FaCloud />;
   let label = t("play.cloudSave.label");
@@ -80,11 +98,11 @@ export const CloudSaveButton: FC<Props> = ({ store, gameId, gameTitle }) => {
   } else if (unresolved) {
     label = t("play.cloudSave.statusUnresolved");
     tintRing = "rgba(244, 180, 0, 0.55)";
-  } else if (cloudAvailable) {
+  } else if (shouldBreathe) {
     icon = <FaCloudDownloadAlt />;
-    label = t("play.cloudSave.statusCloudAvailable");
-    tintBg = "rgba(34, 197, 94, 0.18)";
-    tintRing = "rgba(34, 197, 94, 0.5)";
+    label = cloudAvailable
+      ? t("play.cloudSave.statusCloudAvailable")
+      : t("play.cloudSave.label");
   }
 
   const style: CSSProperties = {
@@ -109,7 +127,7 @@ export const CloudSaveButton: FC<Props> = ({ store, gameId, gameTitle }) => {
 
   return (
     <DialogButton
-      className="unifideck-icon-btn"
+      className={`unifideck-icon-btn${shouldBreathe ? " unifideck-breathe" : ""}`}
       style={style}
       disabled={loading || syncing || noCloudSupport}
       onClick={open}

@@ -106,7 +106,8 @@
     "downloadingLabel": "Загрузка...",
     "finalizingInstallation": "Завершение установки...",
     "speedMbps": "{{speed}} МБ/с",
-    "etaLabel": "Осталось времени: {{eta}}"
+    "etaLabel": "Осталось времени: {{eta}}",
+    "preparingMessage": "Инициализация префикса и синхронизация облачных сохранений..."
   },
   "cloudSave": {
     "title": "Конфликт облачных сохранений",
@@ -122,7 +123,8 @@
     "toastUsingLocalTitle": "Использование локальных сохранений",
     "toastUsingLocalBody": "Загрузка локальных сохранений в облако для {{game}}",
     "toastErrorTitle": "Ошибка",
-    "toastErrorBody": "Не удалось разрешить конфликт сохранений"
+    "toastErrorBody": "Не удалось разрешить конфликт сохранений",
+    "filesSize": "{{count}} файлов · {{size}}"
   },
   "storeConnections": {
     "title": "ПОДКЛЮЧЕНИЕ МАГАЗИНОВ",
@@ -323,7 +325,15 @@
     "library": {
       "_comment": "Toasts emitted by SyncService when a per-store library sync fails. The retry button triggers a fire-and-forget refresh via the unifideck://refresh-library/<store> verb; the user doesn't wait for the result inline, the Library view picks it up through its SYNC_PROGRESS subscription.",
       "syncStoreFailed": "Не удалось обновить библиотеку магазина {{store}} ({{error}}). Текущий список игр останется без изменений."
-    }
+    },
+    "cloudPullStarted": "Скачивание облачного сохранения…",
+    "cloudPushStarted": "Загрузка локального сохранения…",
+    "cloudSavePathFailed": "Не удалось установить папку сохранений",
+    "cloudSavePathSet": "Папка сохранений обновлена",
+    "cloudPullDone": "Облачное сохранение скачано",
+    "cloudPullFailed": "Не удалось скачать облачное сохранение",
+    "cloudPushDone": "Локальное сохранение загружено",
+    "cloudPushFailed": "Не удалось загрузить локальное сохранение"
   },
   "uninstallModal": {
     "title": "Подтверждение удаления",
@@ -610,7 +620,26 @@
     "cancelConfirmBody": "Вы уверены, что хотите отменить загрузку {{title}}? Частично загруженные файлы будут удалены.",
     "cancelConfirmConfirm": "Отменить загрузку",
     "cancelConfirmCancel": "Продолжить загрузку",
-    "playOnCloud": "Играть в облаке"
+    "playOnCloud": "Играть в облаке",
+    "cloudSave": {
+      "autoPullOn": "Облачные сохранения загружаются автоматически при запуске.",
+      "close": "Закрыть",
+      "download": "Скачать облачное сохранение",
+      "filesCount": "{{count}} файлов",
+      "label": "Облачные сохранения",
+      "menuTitle": "Облачные сохранения — {{game}}",
+      "noCloudData": "Неизвестно",
+      "noCloudSupport": "Нет поддержки облачных сохранений",
+      "setLocation": "Указать папку сохранений",
+      "setLocationHint": "Выберите папку, в которой эта игра хранит свои сохранения.",
+      "setLocationTitle": "Выберите папку сохранений этой игры",
+      "statusCloudAvailable": "Облачное сохранение доступно",
+      "statusNoSaves": "Нет локальных сохранений",
+      "statusSyncing": "Синхронизация облачных сохранений…",
+      "statusUnresolved": "Папка сохранений не найдена — синхронизация может не работать для этой игры.",
+      "unresolvedHint": "Запустите игру один раз, чтобы мы могли определить ее папку сохранений, или укажите ее вручную.",
+      "upload": "Загрузить локальное сохранение"
+    }
   },
   "playMeta": {
     "spaceRequired": "Требуется места",

@@ -43,6 +43,20 @@ async def launch_windows(
         store = ctx.store
         game_id = ctx.game_id
 
+        # Phase 1.5: Ensure the prefix is initialised BEFORE the cloud sync-down.
+        # The save dir resolves out of ``drive_c`` (e.g. GOG's
+        # ``<?DOCUMENTS?>\\<title>``), which only exists after ``createprefix``
+        # — so running sync-down first (the old order, where prefix creation
+        # happened later inside ``dispatch``) meant the FIRST launch resolved no
+        # save dir and pulled nothing (saves only appeared on a relaunch). This
+        # is idempotent: once ``system.reg`` exists it's a fast no-op, so it
+        # costs nothing when install-time warmup already created the prefix, and
+        # it self-heals games installed before that existed.
+        from unifideck.launcher.proton.compat.prefix_init import (
+            ensure_prefix_initialized,
+        )
+        await ensure_prefix_initialized(plan)
+
         # Phase 2: Cloud Sync Down
         await svc._cloud_sync_phase(ctx, "down")
 

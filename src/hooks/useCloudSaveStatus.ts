@@ -74,6 +74,7 @@ export function useCloudSaveStatus(
   useEventBus(Events.CLOUD_SYNC_DOWN_FAILED, onSyncEvent, [store, gameId]);
   useEventBus(Events.CLOUD_SYNC_UP_COMPLETE, onSyncEvent, [store, gameId]);
   useEventBus(Events.CLOUD_SYNC_UP_FAILED, onSyncEvent, [store, gameId]);
+  useEventBus(Events.GAME_STOPPED, onSyncEvent, [store, gameId]);
 
   return { ...query, enabled };
 }

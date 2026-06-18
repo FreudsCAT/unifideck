@@ -16,6 +16,9 @@ import logging
 from collections.abc import Callable
 from typing import Any
 
+from unifideck.core import marker_sweep
+from unifideck.core.safe_delete import safe_rmtree
+
 logger = logging.getLogger(__name__)
 
 
@@ -87,28 +90,24 @@ class CleanupRPCMixin:
     cache: Any
     registry: Any
 
-    async def _delete_install_dir(
-        self, install_dir: str, home: str, safe_roots: tuple[str, ...],
-    ) -> bool:
-        """rm -rf an install directory if it sits under a safe root."""
+    async def _delete_install_dir(self, install_dir: str) -> bool:
+        """rm -rf a recorded game install directory.
+
+        ``install_dir`` is a ``games.map`` ``work_dir`` — i.e. a directory we
+        recorded for a game we manage — so any location is fair game (SD
+        card, ``/mnt`` libraries, user-picked folders). The old substring
+        allowlist (``/Games/``, ``/Epic`` …) silently skipped custom paths;
+        :func:`safe_rmtree` instead guards structurally (rejects ``/``,
+        ``$HOME``, ancestors of ``$HOME``, and shallow paths).
+        """
         import asyncio
-        import shutil
         from pathlib import Path
 
         if not install_dir:
             return False
-        if install_dir in {"/", home}:
-            return False
-        if not any(k in install_dir for k in safe_roots):
-            return False
         if not await asyncio.to_thread(Path(install_dir).is_dir):
             return False
-        try:
-            await asyncio.to_thread(shutil.rmtree, install_dir, True)
-        except OSError:
-            logger.exception("[cleanup] rmtree(%s) failed", install_dir)
-            return False
-        return True
+        return await asyncio.to_thread(safe_rmtree, install_dir)
 
     @staticmethod
     def _collect_unifideck_app_ids(shortcut_svc: Any) -> list[int]:
@@ -162,8 +161,6 @@ class CleanupRPCMixin:
         app_id: int,
         delete_files: bool,
         shortcut_svc: Any,
-        home: str,
-        safe_roots: tuple[str, ...],
     ) -> tuple[int | None, bool]:
         """Per-app_id cleanup: returns (removed_app_id_or_None, files_deleted)."""
         install_dir: str | None = None
@@ -184,9 +181,7 @@ class CleanupRPCMixin:
 
         files_deleted = False
         if delete_files and install_dir:
-            files_deleted = await self._delete_install_dir(
-                install_dir, home, safe_roots,
-            )
+            files_deleted = await self._delete_install_dir(install_dir)
         return removed_id, files_deleted
 
     @staticmethod
@@ -354,21 +349,56 @@ class CleanupRPCMixin:
         await shortcut_svc._load_shortcuts()
         await shortcut_svc._load_games_map()
 
+        import asyncio
+
+        # Collect the library roots from install records *now* — the data-dir
+        # wipe below deletes games.map (one of the sources). The marked-dir
+        # sweep that uses them runs as the very last step, after all other
+        # deletion, to avoid racing the rest of the wipe.
+        install_roots = (
+            await asyncio.to_thread(marker_sweep.collect_install_roots)
+            if delete_files
+            else set()
+        )
+
         app_ids = self._collect_unifideck_app_ids(shortcut_svc)
         logger.info("[cleanup] %d candidate app_ids", len(app_ids))
         deleted_app_ids, deleted_files_count = await self._remove_shortcuts(
             shortcut_svc, app_ids, delete_files,
         )
         wiped = await self._wipe_residual_data(shortcut_svc)
+        # Destructive: external (SD/custom) Ubisoft prefixes are recorded in
+        # the id_map, which the data-dir wipe is about to delete — read and
+        # remove those out-of-tree prefixes first so they aren't orphaned.
+        external_prefixes = (
+            await self._delete_external_prefixes() if delete_files else 0
+        )
+        # Both modes: wipe residual state + Unifideck-owned store creds the
+        # old flow left behind (library cache, shortcut registry, download
+        # history, playtime, Ubisoft maps/db/cache, GOG refresh token, …).
+        # Destructive additionally removes prefixes/ + saves/ (the ~20 GB).
+        residual = await self._wipe_data_dir(delete_files)
+        residual += await self._wipe_config_auth()
         self._clear_all_caches()
+
+        # LAST step (destructive only): delete every Unifideck-marked install
+        # dir under the recorded roots — orphan stubs, out-of-default-root
+        # games, and custom locations that the games.map pass above can't
+        # reach. Runs after everything else so it never races the wipe.
+        marked = (
+            await asyncio.to_thread(marker_sweep.sweep_all, install_roots)
+            if delete_files
+            else 0
+        )
 
         logger.info("[cleanup] complete")
         return {
             "deleted_games": len(deleted_app_ids),
-            "deleted_files_count": deleted_files_count,
+            "deleted_files_count": deleted_files_count + marked,
             "deleted_artwork_count": wiped["artwork"],
             "logged_out_count": wiped["logged_out"],
             "deleted_stray_files_count": wiped["stray"],
+            "deleted_residual_count": residual + external_prefixes,
             "deleted_app_ids": deleted_app_ids,
         }
 
@@ -383,20 +413,15 @@ class CleanupRPCMixin:
         grid dir once per game. The single ``_delete_nonsteam_artwork``
         sweep clears all of it — current art AND orphans — in one pass.
         """
-        import asyncio
-        from pathlib import Path
-
         deleted_app_ids: list[int] = []
         deleted_files_count = 0
-        safe_roots = ("/Games/", "/Epic", "/GOG", "/Amazon", "unifideck")
-        home = await asyncio.to_thread(lambda: str(Path("~").expanduser()))
         artwork_svc = getattr(self.services, "artwork", None)
         if artwork_svc is not None:
             artwork_svc._suppress_removal_cleanup = True
         try:
             for app_id in app_ids:
                 removed_id, files_deleted = await self._cleanup_one_app_id(
-                    app_id, delete_files, shortcut_svc, home, safe_roots,
+                    app_id, delete_files, shortcut_svc,
                 )
                 if removed_id is not None:
                     deleted_app_ids.append(removed_id)
@@ -436,3 +461,141 @@ class CleanupRPCMixin:
                 self.cache.clear(name)
             except Exception:
                 logger.exception("[cleanup] cache.clear(%s) failed", name)
+
+    # Names directly under ``~/.local/share/unifideck`` that hold playable
+    # game data — kept in non-destructive mode so "installed games stay on
+    # disk and can be re-synced" (per the modal). Destructive removes these
+    # too (this is where the ~20 GB of Proton prefixes lives).
+    _DATA_DIR_KEEP_WHEN_KEEPING_GAMES = frozenset(
+        {"prefixes", "saves", "save_backups"},
+    )
+
+    async def _wipe_data_dir(self, delete_files: bool) -> int:
+        """Delete residual state under ``~/.local/share/unifideck``.
+
+        Both modes wipe everything the old flow left behind — library cache,
+        shortcut registry, download queue/history, playtime/activity dbs,
+        Ubisoft maps/db/installer cache, settings, launch logs — so the
+        modal's "removes cached data" promise actually holds. Non-destructive
+        preserves :data:`_DATA_DIR_KEEP_WHEN_KEEPING_GAMES`; destructive keeps
+        nothing, reclaiming the prefixes and local saves.
+
+        Iterating-and-deleting (rather than an explicit unlink list) means new
+        state files added later are swept automatically — the wipe stays
+        complete by construction.
+        """
+        import asyncio
+        from pathlib import Path
+
+        keep = (
+            frozenset()
+            if delete_files
+            else self._DATA_DIR_KEEP_WHEN_KEEPING_GAMES
+        )
+
+        def _sweep() -> int:
+            data_dir = Path("~/.local/share/unifideck").expanduser()
+            if not data_dir.is_dir():
+                return 0
+            count = 0
+            for entry in data_dir.iterdir():
+                if entry.name in keep:
+                    continue
+                try:
+                    if entry.is_dir() and not entry.is_symlink():
+                        if safe_rmtree(entry):
+                            count += 1
+                    else:
+                        entry.unlink(missing_ok=True)
+                        count += 1
+                except OSError:
+                    logger.exception("[cleanup] delete(%s) failed", entry)
+            return count
+
+        wiped = await asyncio.to_thread(_sweep)
+        logger.info(
+            "[cleanup] data-dir wipe removed %d entries (delete_files=%s)",
+            wiped, delete_files,
+        )
+        return wiped
+
+    async def _delete_external_prefixes(self) -> int:
+        """Delete per-game prefixes recorded *outside* the data dir.
+
+        Ubisoft games installed to SD/custom storage record an absolute
+        ``prefix_path`` in ``ubisoft_id_map.json`` that lives outside
+        ``~/.local/share/unifideck/prefixes`` (e.g. ``~/Games/prefixes/...``
+        or a microSD mount), so the blanket data-dir wipe never reaches them.
+        Read the map and delete each external prefix before the map file is
+        itself removed. Destructive-only.
+        """
+        import asyncio
+        import json
+        from pathlib import Path
+
+        def _sweep() -> int:
+            id_map = Path(
+                "~/.local/share/unifideck/ubisoft_id_map.json",
+            ).expanduser()
+            data_dir = str(Path("~/.local/share/unifideck").expanduser())
+            try:
+                data = json.loads(id_map.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                return 0
+            if not isinstance(data, dict):
+                return 0
+            count = 0
+            for entry in data.values():
+                p = entry.get("prefix_path") if isinstance(entry, dict) else None
+                if not p:
+                    continue
+                # Internal prefixes are handled by the data-dir wipe.
+                if str(Path(p).expanduser()).startswith(data_dir):
+                    continue
+                if safe_rmtree(p):
+                    count += 1
+            return count
+
+        wiped = await asyncio.to_thread(_sweep)
+        if wiped:
+            logger.info("[cleanup] removed %d external prefixes", wiped)
+        return wiped
+
+    async def _wipe_config_auth(self) -> int:
+        """Delete Unifideck-owned store creds under ``~/.config/unifideck``.
+
+        The old auth sweep targeted ``gogdl/gog_credentials.json``, but the
+        live GOG refresh token sits at ``gog_credentials.json`` /
+        ``gogdl_auth.json`` (top level), so a GOG login survived "Delete all
+        data". Remove those (and the Unifideck gogdl config dir). Leaves the
+        user's ``config.json`` and Heroic's ``heroic_gogdl`` untouched.
+        """
+        import asyncio
+        from pathlib import Path
+
+        files = (
+            "gog_token.json",
+            "gog_credentials.json",
+            "gogdl_auth.json",
+            "gog_save_paths.json",
+        )
+        dirs = ("gogdl",)
+
+        def _sweep() -> int:
+            base = Path("~/.config/unifideck").expanduser()
+            count = 0
+            for name in files:
+                p = base / name
+                try:
+                    if p.is_file():
+                        p.unlink(missing_ok=True)
+                        count += 1
+                except OSError:
+                    logger.exception("[cleanup] unlink(%s) failed", p)
+            for name in dirs:
+                d = base / name
+                if d.is_dir() and not d.is_symlink() and safe_rmtree(d):
+                    count += 1
+            return count
+
+        return await asyncio.to_thread(_sweep)

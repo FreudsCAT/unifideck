@@ -106,7 +106,8 @@
     "downloadingLabel": "جاري التنزيل...",
     "finalizingInstallation": "جاري إنهاء التثبيت...",
     "speedMbps": "{{speed}} ميجابايت/ثانية",
-    "etaLabel": "الوقت المتبقي: {{eta}}"
+    "etaLabel": "الوقت المتبقي: {{eta}}",
+    "preparingMessage": "جاري تهيئة البادئة ومزامنة الحفظ السحابي..."
   },
   "cloudSave": {
     "title": "تعارض الحفظ السحابي",
@@ -122,7 +123,8 @@
     "toastUsingLocalTitle": "استخدام الحفظ المحلي",
     "toastUsingLocalBody": "جاري رفع الحفظ المحلي لـ {{game}} إلى السحابة",
     "toastErrorTitle": "خطأ",
-    "toastErrorBody": "تعذر حل تعارض الحفظ"
+    "toastErrorBody": "تعذر حل تعارض الحفظ",
+    "filesSize": "{{count}} ملفات · {{size}}"
   },
   "storeConnections": {
     "title": "ربط المتاجر",
@@ -323,7 +325,15 @@
     "library": {
       "_comment": "Toasts emitted by SyncService when a per-store library sync fails. The retry button triggers a fire-and-forget refresh via the unifideck://refresh-library/<store> verb; the user doesn't wait for the result inline, the Library view picks it up through its SYNC_PROGRESS subscription.",
       "syncStoreFailed": "فشل تحديث مكتبة {{store}} ({{error}}). ستبقى مكتبتك الحالية ظاهرة."
-    }
+    },
+    "cloudPullStarted": "جاري تنزيل الحفظ السحابي...",
+    "cloudPushStarted": "جاري رفع الحفظ المحلي...",
+    "cloudSavePathFailed": "تعذر تحديد موقع الحفظ",
+    "cloudSavePathSet": "تم تحديث موقع الحفظ",
+    "cloudPullDone": "تم تنزيل الحفظ السحابي",
+    "cloudPullFailed": "فشل تنزيل الحفظ السحابي",
+    "cloudPushDone": "تم رفع الحفظ المحلي",
+    "cloudPushFailed": "فشل رفع الحفظ المحلي"
   },
   "uninstallModal": {
     "title": "تأكيد إلغاء التثبيت",
@@ -610,7 +620,26 @@
     "cancelConfirmBody": "هل أنت متأكد من إلغاء تثبيت {{title}}؟ سيتم حذف ملفات التنزيل غير المكتملة.",
     "cancelConfirmConfirm": "إلغاء التنزيل",
     "cancelConfirmCancel": "مواصلة التنزيل",
-    "playOnCloud": "اللعب عبر السحاب"
+    "playOnCloud": "اللعب عبر السحاب",
+    "cloudSave": {
+      "autoPullOn": "يتم تنزيل الحفظ السحابي تلقائيًا عند التشغيل.",
+      "close": "إغلاق",
+      "download": "تنزيل الحفظ السحابي",
+      "filesCount": "{{count}} ملفات",
+      "label": "الحفظ السحابي",
+      "menuTitle": "الحفظ السحابي — {{game}}",
+      "noCloudData": "غير معروف",
+      "noCloudSupport": "لا يوجد دعم للحفظ السحابي",
+      "setLocation": "تحديد موقع الحفظ",
+      "setLocationHint": "اختر المجلد الذي تخزن فيه هذه اللعبة ملفات حفظها.",
+      "setLocationTitle": "اختر مجلد الحفظ الخاص بهذه اللعبة",
+      "statusCloudAvailable": "الحفظ السحابي متاح",
+      "statusNoSaves": "لا توجد ملفات حفظ محلية",
+      "statusSyncing": "جاري مزامنة الحفظ السحابي...",
+      "statusUnresolved": "لم يتم العถور على موقع الحفظ — قد لا تعمل المزامنة لهذه اللعبة.",
+      "unresolvedHint": "قم بتشغيل اللعبة مرة واحدة حتى نتمكن من اكتشاف مجلد الحفظ الخاص بها، أو حدد الموقع يدويًا.",
+      "upload": "رفع الحفظ المحلي"
+    }
   },
   "playMeta": {
     "spaceRequired": "المساحة المطلوبة",

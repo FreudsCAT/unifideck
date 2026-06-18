@@ -106,7 +106,8 @@
     "downloadingLabel": "Descargando...",
     "finalizingInstallation": "Finalizando instalación...",
     "speedMbps": "{{speed}} MB/s",
-    "etaLabel": "Tiempo restante: {{eta}}"
+    "etaLabel": "Tiempo restante: {{eta}}",
+    "preparingMessage": "Inicializando prefijo y sincronizando guardados en la nube..."
   },
   "cloudSave": {
     "title": "Conflicto de guardado en la nube",
@@ -122,7 +123,8 @@
     "toastUsingLocalTitle": "Usando guardados locales",
     "toastUsingLocalBody": "Subiendo datos locales para {{game}}",
     "toastErrorTitle": "Error",
-    "toastErrorBody": "Error al resolver el conflicto"
+    "toastErrorBody": "Error al resolver el conflicto",
+    "filesSize": "{{count}} archivos · {{size}}"
   },
   "storeConnections": {
     "title": "CONEXIONES DE TIENDAS",
@@ -323,7 +325,15 @@
     "library": {
       "_comment": "Toasts emitted by SyncService when a per-store library sync fails. The retry button triggers a fire-and-forget refresh via the unifideck://refresh-library/<store> verb; the user doesn't wait for the result inline, the Library view picks it up through its SYNC_PROGRESS subscription.",
       "syncStoreFailed": "No se pudo actualizar la biblioteca de {{store}} ({{error}}). Tu biblioteca actual seguirá visible."
-    }
+    },
+    "cloudPullStarted": "Descargando guardado en la nube…",
+    "cloudPushStarted": "Subiendo guardado local…",
+    "cloudSavePathFailed": "No se pudo establecer la ubicación de guardado",
+    "cloudSavePathSet": "Ubicación de guardado actualizada",
+    "cloudPullDone": "Guardado en la nube descargado",
+    "cloudPullFailed": "Error al descargar el guardado en la nube",
+    "cloudPushDone": "Guardado local subido",
+    "cloudPushFailed": "Error al subir el guardado local"
   },
   "uninstallModal": {
     "title": "Confirmar desinstalación",
@@ -610,7 +620,26 @@
     "cancelConfirmBody": "¿Estás seguro de que deseas cancelar la descarga de {{title}}? Se descartarán los archivos parciales.",
     "cancelConfirmConfirm": "Cancelar descarga",
     "cancelConfirmCancel": "Seguir descargando",
-    "playOnCloud": "Jugar en la nube"
+    "playOnCloud": "Jugar en la nube",
+    "cloudSave": {
+      "autoPullOn": "Los guardados en la nube se descargan automáticamente al iniciar.",
+      "close": "Cerrar",
+      "download": "Descargar guardado en la nube",
+      "filesCount": "{{count}} archivos",
+      "label": "Guardados en la nube",
+      "menuTitle": "Guardados en la nube — {{game}}",
+      "noCloudData": "Desconocido",
+      "noCloudSupport": "Sin soporte de guardado en la nube",
+      "setLocation": "Definir ubicación de guardado",
+      "setLocationHint": "Elige la carpeta donde este juego guarda sus partidas.",
+      "setLocationTitle": "Elige la carpeta de guardado de este juego",
+      "statusCloudAvailable": "Guardado en la nube disponible",
+      "statusNoSaves": "Sin guardados locales",
+      "statusSyncing": "Sincronizando guardados en la nube…",
+      "statusUnresolved": "Ubicación de guardado no encontrada — la sincronización podría no funcionar para este juego.",
+      "unresolvedHint": "Inicia el juego una vez para que podamos detectar su carpeta de guardado, o define la ubicación manualmente.",
+      "upload": "Subir guardado local"
+    }
   },
   "playMeta": {
     "spaceRequired": "Espacio requerido",

@@ -22,6 +22,32 @@ STORE_TO_UMU = {
 }
 
 
+def sanitize_frozen_loader_env(env: dict[str, str]) -> None:
+    """Undo a PyInstaller-frozen parent's dynamic-loader pollution, in place.
+
+    When the launch plan is built inside the Decky plugin process — whose
+    ``PluginLoader`` is a PyInstaller-frozen binary — ``os.environ`` carries
+    ``LD_LIBRARY_PATH=/tmp/_MEIxxxx`` pointing at the loader's *bundled* libs
+    (an old ``libcrypto`` lacking ``OPENSSL_3.3.0``). umu-run runs under the
+    SYSTEM python, so that path makes its ``import ssl`` fail with
+    ``ImportError: libcrypto.so.3: version 'OPENSSL_3.3.0' not found`` — umu
+    then aborts, so ``createprefix`` / winetricks silently do nothing (the
+    install-time prefix warmup produced empty prefixes for exactly this
+    reason). PyInstaller stashes the real pre-launch value in ``<VAR>_ORIG``;
+    restore it, else drop a ``_MEI`` bundle path.
+
+    A NO-OP outside a frozen parent — e.g. the out-of-process launcher Steam
+    spawns has a clean env (no ``_ORIG``, no ``_MEI`` path) — so it's safe to
+    run on every launch path, not just the warmup.
+    """
+    for var in ("LD_LIBRARY_PATH", "LD_PRELOAD"):
+        orig = env.pop(f"{var}_ORIG", None)
+        if orig is not None:
+            env[var] = orig
+        elif "/_MEI" in env.get(var, ""):
+            env.pop(var, None)
+
+
 @dataclass(frozen=True)
 class ProtonLaunchPlan:
     """Everything store handlers need to spawn umu-run."""
@@ -134,6 +160,10 @@ def proton_prepare(
     state.umu_id = umu_id
     state.umu_wrapper = umu_wrapper
     env = dict(os.environ)
+    # Strip the Decky PluginLoader's PyInstaller LD_LIBRARY_PATH pollution so
+    # umu-run (system python) doesn't load a stale libcrypto and abort — the
+    # cause of empty install-time prefixes. No-op for the clean launcher env.
+    sanitize_frozen_loader_env(env)
     env["GAMEID"] = umu_id or "umu-0"
     env["STORE"] = umu_store
     # PROTONPATH tells umu-run which Proton to use — the *directory*

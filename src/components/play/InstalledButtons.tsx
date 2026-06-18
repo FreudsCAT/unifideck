@@ -249,20 +249,6 @@ export const InstalledButtons: FC<Props> = ({
         installed
       />
       <IconGroup>
-        <DialogButton
-          style={iconBtnStyle}
-          onClick={() => openControllerConfig(appId)}
-          aria-label={t("playButton.controllerConfig")}
-        >
-          <FaGamepad />
-        </DialogButton>
-        <DialogButton
-          style={iconBtnStyle}
-          onClick={() => openAppSettings(appId)}
-          aria-label={t("playButton.appSettings")}
-        >
-          <FaCog />
-        </DialogButton>
         {game && (
           <CloudSaveButton
             store={game.store}
@@ -271,6 +257,23 @@ export const InstalledButtons: FC<Props> = ({
           />
         )}
         <DialogButton
+          className="unifideck-icon-btn"
+          style={iconBtnStyle}
+          onClick={() => openControllerConfig(appId)}
+          aria-label={t("playButton.controllerConfig")}
+        >
+          <FaGamepad />
+        </DialogButton>
+        <DialogButton
+          className="unifideck-icon-btn"
+          style={iconBtnStyle}
+          onClick={() => openAppSettings(appId)}
+          aria-label={t("playButton.appSettings")}
+        >
+          <FaCog />
+        </DialogButton>
+        <DialogButton
+          className="unifideck-icon-btn"
           style={iconBtnStyle}
           disabled={loading || actions.isWorking}
           onClick={onUninstall}

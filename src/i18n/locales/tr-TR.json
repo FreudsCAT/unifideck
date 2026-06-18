@@ -106,7 +106,8 @@
     "downloadingLabel": "İndiriliyor...",
     "finalizingInstallation": "Kurulum tamamlanıyor...",
     "speedMbps": "{{speed}} MB/s",
-    "etaLabel": "Kalan Süre: {{eta}}"
+    "etaLabel": "Kalan Süre: {{eta}}",
+    "preparingMessage": "Ön ek hazırlanıyor ve bulut kayıtları eşitleniyor..."
   },
   "cloudSave": {
     "title": "Bulut Kaydı Çakışması",
@@ -122,7 +123,8 @@
     "toastUsingLocalTitle": "Yerel Kayıt Kullanılıyor",
     "toastUsingLocalBody": "{{game}} için yerel kayıtlar karşıya yükleniyor",
     "toastErrorTitle": "Hata",
-    "toastErrorBody": "Çakışma çözülemedi"
+    "toastErrorBody": "Çakışma çözülemedi",
+    "filesSize": "{{count}} dosya · {{size}}"
   },
   "storeConnections": {
     "title": "MAĞAZA BAĞLANTILARI",
@@ -323,7 +325,15 @@
     "library": {
       "_comment": "Toasts emitted by SyncService when a per-store library sync fails. The retry button triggers a fire-and-forget refresh via the unifideck://refresh-library/<store> verb; the user doesn't wait for the result inline, the Library view picks it up through its SYNC_PROGRESS subscription.",
       "syncStoreFailed": "{{store}} kütüphanesi yenilenemedi ({{error}}). Mevcut kütüphaneniz görünmeye devam edecek."
-    }
+    },
+    "cloudPullStarted": "Bulut kaydı indiriliyor…",
+    "cloudPushStarted": "Yerel kaydı yükleniyor…",
+    "cloudSavePathFailed": "Kayıt konumu ayarlanamadı",
+    "cloudSavePathSet": "Kayıt konumu güncellendi",
+    "cloudPullDone": "Bulut kaydı indirildi",
+    "cloudPullFailed": "Bulut kaydı indirilemedi",
+    "cloudPushDone": "Yerel kayıt yüklendi",
+    "cloudPushFailed": "Yerel kayıt yüklenemedi"
   },
   "uninstallModal": {
     "title": "Kaldırmayı Onayla",
@@ -610,7 +620,26 @@
     "cancelConfirmBody": "{{title}} indirmesini iptal etmek istediğinizden emin misiniz? Kısmen indirilen dosyalar silinecektir.",
     "cancelConfirmConfirm": "İndirmeyi İptal Et",
     "cancelConfirmCancel": "İndirmeye Devam Et",
-    "playOnCloud": "Bulutta Oyna"
+    "playOnCloud": "Bulutta Oyna",
+    "cloudSave": {
+      "autoPullOn": "Bulut kayıtları başlangıçta otomatik olarak indirilir.",
+      "close": "Kapat",
+      "download": "Bulut kaydını indir",
+      "filesCount": "{{count}} dosya",
+      "label": "Bulut kayıtları",
+      "menuTitle": "Bulut kayıtları — {{game}}",
+      "noCloudData": "Bilinmeyen",
+      "noCloudSupport": "Bulut kaydı desteği yok",
+      "setLocation": "Kayıt konumunu ayarla",
+      "setLocationHint": "Bu oyunun kayıtlarını sakladığı klasörü seçin.",
+      "setLocationTitle": "Bu oyunun kayıt klasörünü seçin",
+      "statusCloudAvailable": "Bulut kaydı kullanılabilir",
+      "statusNoSaves": "Yerel kayıt yok",
+      "statusSyncing": "Bulut kayıtları eşitleniyor…",
+      "statusUnresolved": "Kayıt konumu bulunamadı — eşitleme bu oyun için çalışmayabilir.",
+      "unresolvedHint": "Kayıt klasörünü tespit edebilmemiz için oyunu bir kez başlatın veya konumu manuel olarak ayarlayın.",
+      "upload": "Yerel kaydı yükle"
+    }
   },
   "playMeta": {
     "spaceRequired": "Gerekli Alan",

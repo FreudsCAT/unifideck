@@ -90,6 +90,9 @@ class _WorkerMixin:
     _queue: list[DownloadItem]
     _running: dict[str, DownloadItem]
     _launcher_path: str
+    # Note: ``_prefix_warmup`` and ``_on_complete_callback`` are intentionally
+    # NOT declared here — they're optional host-set hooks accessed via
+    # ``getattr(self, ..., None)`` so the mixin stays standalone-safe.
 
     async def _worker_loop(self) -> None:
         """Poll the queue and dispatch installs until cancelled.
@@ -307,11 +310,17 @@ class _WorkerMixin:
         """Mark complete, emit DOWNLOAD_COMPLETE, run the post-install hook."""
         from unifideck.core.types.events import Events
         item.progress = 100.0
-        item.status = "complete"
-        item.end_time = time.time()
         result_install_path = getattr(result, "install_path", None)
         if result_install_path:
             item.install_path = result_install_path
+        # Full first-run prefix setup (createprefix + compat + cloud pull) runs
+        # HERE — while the item is still in ``_running`` and rendered in a
+        # "preparing" state — so the install flow stays open until the prefix is
+        # ready. Best-effort; the launch path re-runs it idempotently as a
+        # fallback. Skipped for Ubisoft (UPC owns its prefix) / Microsoft.
+        await self._run_prefix_warmup(item)
+        item.status = "complete"
+        item.end_time = time.time()
         logger.info("[DownloadWorker] completed install for %s", key)
         # Build a Game record so the ShortcutService listener registers
         # the shortcut. We do NOT emit GAME_INSTALLED here — ArtworkService
@@ -328,6 +337,38 @@ class _WorkerMixin:
                 await on_complete(item)
             except Exception:
                 logger.exception("[DownloadWorker] on_complete callback failed")
+
+    async def _run_prefix_warmup(self, item: DownloadItem) -> None:
+        """Run install-time prefix setup, surfaced as a "preparing" phase.
+
+        Only for the stores that own a per-game prefix — Ubisoft bootstraps its
+        own prefix via UPC, and Microsoft is cloud-only, so both are skipped.
+        No-op when the hook isn't wired (e.g. launcher subset bootstrap).
+        Best-effort: a failure logs and the install still completes (the
+        launch-time path remains the fallback). Re-emitting DOWNLOAD_STARTED
+        forces the frontend to refetch the queue so the row picks up the new
+        ``download_phase`` (same mechanism Ubisoft's "manual" phase uses).
+        """
+        if item.store in ("ubisoft", "microsoft"):
+            return
+        hook = getattr(self, "_prefix_warmup", None)
+        if not callable(hook):
+            return
+        from unifideck.core.types.events import Events
+        item.download_phase = "preparing"
+        if self._bus:
+            await self._bus.emit(Events.DOWNLOAD_STARTED, item=item.to_dict())
+        logger.info(
+            "[DownloadWorker] running prefix warmup for %s:%s",
+            item.store, item.game_id,
+        )
+        try:
+            await hook(item)
+        except Exception:
+            logger.exception(
+                "[DownloadWorker] prefix warmup failed for %s:%s (continuing)",
+                item.store, item.game_id,
+            )
 
     async def _mark_cancelled(self, item: DownloadItem, key: str) -> None:
         """Mark the item cancelled and emit DOWNLOAD_CANCELLED."""

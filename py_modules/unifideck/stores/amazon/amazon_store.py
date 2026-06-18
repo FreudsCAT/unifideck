@@ -272,7 +272,10 @@ class AmazonStore(StoreBase):
 
     async def uninstall_game(self, game_id: str, **kwargs: Any) -> Result:
         """Uninstall game."""
-        return await self._installer.uninstall_game(game_id)
+        return await self._installer.uninstall_game(
+            game_id,
+            delete_prefix=bool(kwargs.get("delete_prefix", False)),
+        )
 
     async def update_game(
         self,

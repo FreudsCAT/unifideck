@@ -106,7 +106,8 @@
     "downloadingLabel": "Завантаження...",
     "finalizingInstallation": "Завершення встановлення...",
     "speedMbps": "{{speed}} МБ/с",
-    "etaLabel": "Залишилося часу: {{eta}}"
+    "etaLabel": "Залишилося часу: {{eta}}",
+    "preparingMessage": "Ініціалізація префікса та синхронізація хмарних збережень..."
   },
   "cloudSave": {
     "title": "Конфлікт хмарних збережень",
@@ -122,7 +123,8 @@
     "toastUsingLocalTitle": "Використання локальних збережень",
     "toastUsingLocalBody": "Завантаження локальних збережень у хмару для {{game}}",
     "toastErrorTitle": "Помилка",
-    "toastErrorBody": "Не вдалося вирішити конфлікт збережень"
+    "toastErrorBody": "Не вдалося вирішити конфлікт збережень",
+    "filesSize": "{{count}} файлів · {{size}}"
   },
   "storeConnections": {
     "title": "ПІДКЛЮЧЕННЯ МАГАЗИНІВ",
@@ -323,7 +325,15 @@
     "library": {
       "_comment": "Toasts emitted by SyncService when a per-store library sync fails. The retry button triggers a fire-and-forget refresh via the unifideck://refresh-library/<store> verb; the user doesn't wait for the result inline, the Library view picks it up through its SYNC_PROGRESS subscription.",
       "syncStoreFailed": "Не вдалося оновити бібліотеку магазину {{store}} ({{error}}). Поточний список ігор залишиться без змін."
-    }
+    },
+    "cloudPullStarted": "Скачування хмарного збереження…",
+    "cloudPushStarted": "Вивантаження локального збереження…",
+    "cloudSavePathFailed": "Не вдалося встановити розташування збережень",
+    "cloudSavePathSet": "Розташування збережень оновлено",
+    "cloudPullDone": "Хмарне збереження завантажено",
+    "cloudPullFailed": "Не вдалося завантажити хмарне збереження",
+    "cloudPushDone": "Локальне збереження вивантажено",
+    "cloudPushFailed": "Не вдалося вивантажити локальне збереження"
   },
   "uninstallModal": {
     "title": "Підтвердження видалення",
@@ -610,7 +620,26 @@
     "cancelConfirmBody": "Ви впевнені, що хочете скасувати завантаження {{title}}? Частково завантажені файли будуть видалені.",
     "cancelConfirmConfirm": "Скасувати завантаження",
     "cancelConfirmCancel": "Продовжити завантаження",
-    "playOnCloud": "Грати в хмарі"
+    "playOnCloud": "Грати в хмарі",
+    "cloudSave": {
+      "autoPullOn": "Хмарні збереження завантажуються автоматично при запуску.",
+      "close": "Закрити",
+      "download": "Завантажити хмарне збереження",
+      "filesCount": "{{count}} файлів",
+      "label": "Хмарні збереження",
+      "menuTitle": "Хмарні збереження — {{game}}",
+      "noCloudData": "Невідомо",
+      "noCloudSupport": "Немає підтримки хмарних збережень",
+      "setLocation": "Встановити розташування збережень",
+      "setLocationHint": "Виберіть папку, у якій ця гра зберігає свої збереження.",
+      "setLocationTitle": "Виберіть папку збережень цієї гри",
+      "statusCloudAvailable": "Хмарне збереження доступне",
+      "statusNoSaves": "Немає локальних збережень",
+      "statusSyncing": "Синхронізація хмарних збережень…",
+      "statusUnresolved": "Розташування збережень не знайдено — синхронізація може не працювати для цієї гри.",
+      "unresolvedHint": "Запустіть гру один раз, щоб ми могли виявити її папку збережень, або встановіть розташування вручну.",
+      "upload": "Завантажити локальне збереження"
+    }
   },
   "playMeta": {
     "spaceRequired": "Необхідно місця",

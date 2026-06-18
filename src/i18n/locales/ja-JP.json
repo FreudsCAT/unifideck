@@ -106,7 +106,8 @@
     "downloadingLabel": "ダウンロード中...",
     "finalizingInstallation": "インストールを完了しています...",
     "speedMbps": "{{speed}} MB/s",
-    "etaLabel": "残り時間: {{eta}}"
+    "etaLabel": "残り時間: {{eta}}",
+    "preparingMessage": "プレフィックスを初期化し、クラウドセーブを同期しています..."
   },
   "cloudSave": {
     "title": "クラウドセーブの競合",
@@ -122,7 +123,8 @@
     "toastUsingLocalTitle": "ローカルセーブを使用中",
     "toastUsingLocalBody": "{{game}} のローカルセーブをクラウドにアップロードしています",
     "toastErrorTitle": "エラー",
-    "toastErrorBody": "競合を解決できませんでした"
+    "toastErrorBody": "競合を解決できませんでした",
+    "filesSize": "{{count}} 個のファイル · {{size}}"
   },
   "storeConnections": {
     "title": "ストア連携",
@@ -323,7 +325,15 @@
     "library": {
       "_comment": "Toasts emitted by SyncService when a per-store library sync fails. The retry button triggers a fire-and-forget refresh via the unifideck://refresh-library/<store> verb; the user doesn't wait for the result inline, the Library view picks it up through its SYNC_PROGRESS subscription.",
       "syncStoreFailed": "{{store}} ライブラリの更新に失敗しました ({{error}})。既存のライブラリが引き続き表示されます。"
-    }
+    },
+    "cloudPullStarted": "クラウドセーブをダウンロード中…",
+    "cloudPushStarted": "ローカルセーブをアップロード中…",
+    "cloudSavePathFailed": "セーブ場所を設定できませんでした",
+    "cloudSavePathSet": "セーブ場所が更新されました",
+    "cloudPullDone": "クラウドセーブがダウンロードされました",
+    "cloudPullFailed": "クラウドセーブのダウンロードに失敗しました",
+    "cloudPushDone": "ローカルセーブがアップロードされました",
+    "cloudPushFailed": "ローカルセーブのアップロードに失敗しました"
   },
   "uninstallModal": {
     "title": "アンインストールの確認",
@@ -610,7 +620,26 @@
     "cancelConfirmBody": "{{title}} のダウンロードをキャンセルしてもよろしいですか？一時ダウンロードファイルは削除されます。",
     "cancelConfirmConfirm": "ダウンロードをキャンセル",
     "cancelConfirmCancel": "ダウンロードを継続",
-    "playOnCloud": "クラウドでプレイ"
+    "playOnCloud": "クラウドでプレイ",
+    "cloudSave": {
+      "autoPullOn": "起動時にクラウドセーブが自動的にダウンロードされます。",
+      "close": "閉じる",
+      "download": "クラウドセーブをダウンロード",
+      "filesCount": "{{count}} 個のファイル",
+      "label": "クラウドセーブ",
+      "menuTitle": "クラウドセーブ — {{game}}",
+      "noCloudData": "不明",
+      "noCloudSupport": "クラウドセーブ非対応",
+      "setLocation": "セーブデータの場所を設定",
+      "setLocationHint": "このゲームのセーブデータが保存されるフォルダを選択してください。",
+      "setLocationTitle": "ゲームのセーブフォルダを選択",
+      "statusCloudAvailable": "クラウドセーブ利用可能",
+      "statusNoSaves": "ローカルセーブなし",
+      "statusSyncing": "クラウドセーブを同期中…",
+      "statusUnresolved": "セーブ場所が見つかりません — このゲームでは同期が機能しない可能性があります。",
+      "unresolvedHint": "セーブフォルダを検出するためにゲームを一度起動するか、手動で場所を設定してください。",
+      "upload": "ローカルセーブをアップロード"
+    }
   },
   "playMeta": {
     "spaceRequired": "必要な空き容量",

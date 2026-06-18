@@ -25,11 +25,13 @@ so the rest of the codebase can treat them as already-sanitised.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 from pathlib import Path
 from typing import Any
 
+from unifideck.core import marker_sweep
 from unifideck.core.types import Result
 from unifideck.core.types.identifiers import (
     InvalidIdentifierError,
@@ -202,9 +204,17 @@ class DownloadRPCMixin:
         # falsy, so ``useGameActions`` never invalidates the game-info cache
         # and the Play section stays "installed" until a manual reload.
         # A dataclass return lands in ``data`` as ``{success, error, ...}``.
-        return await self._require_store(store).uninstall_game(
+        result = await self._require_store(store).uninstall_game(
             game_id, delete_prefix=delete_prefix,
         )
+        # Guarantee the install dir is gone even if the store no-op'd. GOG
+        # resolves install dirs by scanning its default download_dir, so a
+        # game installed elsewhere (SD/custom) can't be found and its
+        # uninstall returns success without deleting anything; nile likewise
+        # leaves our manifest marker (a stub dir) behind. The marker proves
+        # the folder is ours, so this only ever removes a dir we created.
+        await asyncio.to_thread(marker_sweep.sweep_game, store, game_id)
+        return result
 
     async def check_game_update(self, store: str, game_id: str) -> Any:
         """Check whether a specific game has an update available.

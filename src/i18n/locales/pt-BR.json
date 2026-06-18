@@ -106,7 +106,8 @@
     "downloadingLabel": "Baixando...",
     "finalizingInstallation": "Finalizando instalação...",
     "speedMbps": "{{speed}} MB/s",
-    "etaLabel": "Tempo restante: {{eta}}"
+    "etaLabel": "Tempo restante: {{eta}}",
+    "preparingMessage": "Inicializando prefixo e sincronizando salvamentos na nuvem..."
   },
   "cloudSave": {
     "title": "Conflito de Salvamento na Nuvem",
@@ -122,7 +123,8 @@
     "toastUsingLocalTitle": "Usando Salvamentos Locais",
     "toastUsingLocalBody": "Enviando salvamentos locais para {{game}}",
     "toastErrorTitle": "Erro",
-    "toastErrorBody": "Falha ao resolver conflito"
+    "toastErrorBody": "Falha ao resolver conflito",
+    "filesSize": "{{count}} arquivos · {{size}}"
   },
   "storeConnections": {
     "title": "CONEXÕES DE LOJAS",
@@ -323,7 +325,15 @@
     "library": {
       "_comment": "Toasts emitted by SyncService when a per-store library sync fails. The retry button triggers a fire-and-forget refresh via the unifideck://refresh-library/<store> verb; the user doesn't wait for the result inline, the Library view picks it up through its SYNC_PROGRESS subscription.",
       "syncStoreFailed": "Não foi possível atualizar a biblioteca {{store}} ({{error}}). Sua biblioteca existente continua visível."
-    }
+    },
+    "cloudPullStarted": "Baixando salvamento na nuvem…",
+    "cloudPushStarted": "Enviando salvamento local…",
+    "cloudSavePathFailed": "Não foi possível definir o local de salvamento",
+    "cloudSavePathSet": "Local de salvamento atualizado",
+    "cloudPullDone": "Salvamento na nuvem baixado",
+    "cloudPullFailed": "Falha ao baixar salvamento na nuvem",
+    "cloudPushDone": "Salvamento local enviado",
+    "cloudPushFailed": "Falha ao enviar salvamento local"
   },
   "uninstallModal": {
     "title": "Confirmar Desinstalação",
@@ -610,7 +620,26 @@
     "cancelConfirmBody": "Tem certeza de que deseja cancelar o download de {{title}}? Os arquivos parciais serão descartados.",
     "cancelConfirmConfirm": "Cancelar download",
     "cancelConfirmCancel": "Continuar baixando",
-    "playOnCloud": "Jogar na Nuvem"
+    "playOnCloud": "Jogar na Nuvem",
+    "cloudSave": {
+      "autoPullOn": "Os salvamentos na nuvem são baixados automaticamente na inicialização.",
+      "close": "Fechar",
+      "download": "Baixar salvamento na nuvem",
+      "filesCount": "{{count}} arquivos",
+      "label": "Salvamentos na nuvem",
+      "menuTitle": "Salvamentos na nuvem — {{game}}",
+      "noCloudData": "Desconhecido",
+      "noCloudSupport": "Sem suporte a salvamento na nuvem",
+      "setLocation": "Definir local de salvamento",
+      "setLocationHint": "Escolha a pasta onde este jogo armazena seus salvamentos.",
+      "setLocationTitle": "Escolha a pasta de salvamento deste jogo",
+      "statusCloudAvailable": "Salvamento na nuvem disponível",
+      "statusNoSaves": "Sem salvamentos locais",
+      "statusSyncing": "Sincronizando salvamentos na nuvem…",
+      "statusUnresolved": "Local de salvamento não encontrado — a sincronização pode não funcionar para este jogo.",
+      "unresolvedHint": "Inicie o jogo uma vez para que possamos detectar sua pasta de salvamento ou defina o local manualmente.",
+      "upload": "Enviar salvamento local"
+    }
   },
   "playMeta": {
     "spaceRequired": "Espaço necessário",

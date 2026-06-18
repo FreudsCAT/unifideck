@@ -169,10 +169,11 @@ async def ubisoft_auth_launch(plan: ProtonLaunchPlan) -> int:
     shortcut closed". The plugin's session monitor captures the
     credentials UPC writes once sign-in completes.
 
-    Run directly (not via :func:`dispatch`) on purpose: ``dispatch`` runs
-    ``ensure_prefix_initialized`` which can *reset* the prefix on a Proton
-    family change — that would wipe the UPC install the plugin already
-    built into the auth prefix.
+    Run directly (not via the normal launch pipeline) on purpose: that
+    pipeline runs ``ensure_prefix_initialized`` (now in
+    ``orchestrator.launch_windows``, before the cloud sync-down) which can
+    *reset* the prefix on a Proton family change — that would wipe the UPC
+    install the plugin already built into the auth prefix.
     """
     logger.info(
         "[launcher.proton.ubisoft] auth launch — opening UPC in %s",
@@ -216,11 +217,12 @@ async def ubisoft_install_launch(plan: ProtonLaunchPlan) -> int:
     actually renders in Gaming Mode, which the old backend-subprocess
     spawn could not do (no session → invisible window).
 
-    Run directly (NOT via :func:`dispatch`) on purpose — ``dispatch``
-    runs ``ensure_prefix_initialized`` which can *reset* the per-game
-    prefix the plugin just bootstrapped UPC into. The plugin's download
-    worker watches the prefix for the installed files and finalises the
-    queue item; this handler does not report install success itself.
+    Run directly (NOT via the normal launch pipeline) on purpose — that
+    pipeline runs ``ensure_prefix_initialized`` (in
+    ``orchestrator.launch_windows``) which can *reset* the per-game prefix
+    the plugin just bootstrapped UPC into. The plugin's download worker
+    watches the prefix for the installed files and finalises the queue
+    item; this handler does not report install success itself.
     """
     logger.info(
         "[launcher.proton.ubisoft] install launch — opening UPC in %s",

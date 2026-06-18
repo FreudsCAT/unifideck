@@ -22,6 +22,9 @@ from __future__ import annotations
 import logging
 
 from unifideck.launcher.proton.infrastructure.core import ProtonLaunchPlan
+from unifideck.launcher.proton.infrastructure.prefix_layout import (
+    normalize_prefix_root,
+)
 
 from .vcruntime import apply_vcruntime_fix
 from .winetricks import apply_winetricks
@@ -37,6 +40,21 @@ async def apply_prefix_compat(plan: ProtonLaunchPlan) -> None:
     independently guarded so one failure doesn't skip the other or the
     launch.
     """
+    # No initialised prefix (``createprefix`` hasn't produced ``system.reg``)
+    # → there is nothing to install redistributables into. Skip rather than
+    # let the steps run and write their terminal "done" markers anyway: a
+    # bogus marker would suppress the REAL install on the next launch (this is
+    # how the failed install-time warmup left prefixes with a "complete"
+    # winetricks marker but no actual redistributables).
+    prefix_root = normalize_prefix_root(plan.prefix_path)
+    if not (prefix_root / "system.reg").is_file():
+        logger.warning(
+            "[compat] no system.reg at %s — skipping compat "
+            "(prefix not initialised; markers left unwritten so launch redoes it)",
+            prefix_root,
+        )
+        return
+
     for label, step in (
         ("winetricks", apply_winetricks),
         ("vcruntime", apply_vcruntime_fix),

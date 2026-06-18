@@ -106,7 +106,8 @@
     "downloadingLabel": "Téléchargement en cours...",
     "finalizingInstallation": "Finalisation de l'installation...",
     "speedMbps": "{{speed}} Mo/s",
-    "etaLabel": "Temps restant : {{eta}}"
+    "etaLabel": "Temps restant : {{eta}}",
+    "preparingMessage": "Initialisation du préfixe et synchronisation des sauvegardes cloud..."
   },
   "cloudSave": {
     "title": "Conflit de sauvegardes cloud",
@@ -122,7 +123,8 @@
     "toastUsingLocalTitle": "Utilisation des sauvegardes locales",
     "toastUsingLocalBody": "Téléchargement des sauvegardes locales pour {{game}}",
     "toastErrorTitle": "Erreur",
-    "toastErrorBody": "Échec de la résolution du conflit"
+    "toastErrorBody": "Échec de la résolution du conflit",
+    "filesSize": "{{count}} fichiers · {{size}}"
   },
   "storeConnections": {
     "title": "CONNEXIONS AUX BOUTIQUES",
@@ -323,7 +325,15 @@
     "library": {
       "_comment": "Toasts emitted by SyncService when a per-store library sync fails. The retry button triggers a fire-and-forget refresh via the unifideck://refresh-library/<store> verb; the user doesn't wait for the result inline, the Library view picks it up through its SYNC_PROGRESS subscription.",
       "syncStoreFailed": "Impossible de rafraîchir la bibliothèque {{store}} ({{error}}). Votre bibliothèque existante reste visible."
-    }
+    },
+    "cloudPullStarted": "Téléchargement de la sauvegarde cloud…",
+    "cloudPushStarted": "Téléversement de la sauvegarde locale…",
+    "cloudSavePathFailed": "Impossible de définir l'emplacement de sauvegarde",
+    "cloudSavePathSet": "Emplacement de sauvegarde mis à jour",
+    "cloudPullDone": "Sauvegarde cloud téléchargée",
+    "cloudPullFailed": "Échec du téléchargement de la sauvegarde cloud",
+    "cloudPushDone": "Sauvegarde locale téléversée",
+    "cloudPushFailed": "Échec du téléversement de la sauvegarde locale"
   },
   "uninstallModal": {
     "title": "Confirmer la désinstallation",
@@ -610,7 +620,26 @@
     "cancelConfirmBody": "Êtes-vous sûr de vouloir annuler le téléchargement de {{title}} ? Les fichiers partiels seront supprimés.",
     "cancelConfirmConfirm": "Annuler le téléchargement",
     "cancelConfirmCancel": "Poursuivre le téléchargement",
-    "playOnCloud": "Jouer sur le Cloud"
+    "playOnCloud": "Jouer sur le Cloud",
+    "cloudSave": {
+      "autoPullOn": "Les sauvegardes cloud se téléchargent automatiquement au lancement.",
+      "close": "Fermer",
+      "download": "Télécharger la sauvegarde cloud",
+      "filesCount": "{{count}} fichiers",
+      "label": "Sauvegardes cloud",
+      "menuTitle": "Sauvegardes cloud — {{game}}",
+      "noCloudData": "Inconnu",
+      "noCloudSupport": "Pas de prise en charge des sauvegardes cloud",
+      "setLocation": "Définir l'emplacement de sauvegarde",
+      "setLocationHint": "Choisissez le dossier où ce jeu stocke ses sauvegardes.",
+      "setLocationTitle": "Choisir le dossier de sauvegarde de ce jeu",
+      "statusCloudAvailable": "Sauvegarde cloud disponible",
+      "statusNoSaves": "Pas de sauvegardes locales",
+      "statusSyncing": "Synchronisation des sauvegardes cloud…",
+      "statusUnresolved": "Emplacement de sauvegarde introuvable — la synchronisation pourrait ne pas fonctionner pour ce jeu.",
+      "unresolvedHint": "Lancez le jeu une fois pour que nous puissions détecter son dossier de sauvegarde, ou définissez l'emplacement manuellement.",
+      "upload": "Téléverser la sauvegarde locale"
+    }
   },
   "playMeta": {
     "spaceRequired": "Espace requis",
