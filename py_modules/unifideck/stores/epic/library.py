@@ -27,6 +27,7 @@ import asyncio
 import json
 import logging
 import time
+from pathlib import Path
 from typing import Any
 
 from unifideck.core.types import Game
@@ -163,7 +164,20 @@ def merge_install_status(
         if entry is None:
             merged.append(game)
             continue
+        # legendary's ``list-installed`` puts ``install_path`` at the top
+        # level; accept a nested ``install`` dict too for older call sites.
         install_data = entry.get("install", {}) or {}
+        install_path = entry.get("install_path") or install_data.get(
+            "install_path",
+        )
+        # Verify the files are actually on disk. legendary's installed.json
+        # can outlive the directory — e.g. "Delete all data" (or a manual
+        # rm) removes the files but not legendary's record — and without
+        # this the next sync re-marks the game installed, so Steam shows
+        # PLAY for a game with no files. Treat a missing dir as not-installed.
+        if install_path and not Path(install_path).is_dir():
+            merged.append(game)
+            continue
         merged.append(
             Game(
                 app_id=game.app_id,
@@ -171,7 +185,7 @@ def merge_install_status(
                 store_game_id=game.store_game_id,
                 title=game.title,
                 installed=True,
-                install_path=(install_data.get("install_path") or None),
+                install_path=(install_path or None),
                 exe_path=game.exe_path,
                 icon_url=game.icon_url,
                 hero_url=game.hero_url,
