@@ -33,6 +33,8 @@ import contextlib
 import logging
 from typing import TYPE_CHECKING, Any
 
+from unifideck.services import metadata_sources
+
 if TYPE_CHECKING:
     from unifideck.core.cache_manager import CacheManager
     from unifideck.core.types import Game
@@ -121,7 +123,7 @@ async def _fill_one(
         return
     async with sem:
         with contextlib.suppress(Exception):
-            data = await service._fetch_metacritic(game.title)
+            data = await metadata_sources.fetch_metacritic(game.title)
             if data:
                 _merge_into_metadata_cache(cache, game, data)
 

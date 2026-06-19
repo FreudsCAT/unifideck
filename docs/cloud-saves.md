@@ -53,13 +53,13 @@ or an external drive; saves are found wherever the game actually writes them).
 On a GOG/Epic game's page, a **cloud icon** sits in the button row next to
 **Play**. Its appearance tells you the save state at a glance:
 
-| Icon | Meaning |
-|------|---------|
-| ☁️ Cloud (plain) | Cloud saves supported; nothing needs attention |
-| ☁️⬇️ green dot | Cloud saves are available to download |
-| ☁️ amber ring | **Save location not found** — sync may not work yet (see below) |
-| 🔄 spinning | A sync is in progress |
-| ☁️ dimmed | This game has no cloud‑save support |
+| Icon             | Meaning                                                         |
+| ---------------- | --------------------------------------------------------------- |
+| ☁️ Cloud (plain) | Cloud saves supported; nothing needs attention                  |
+| ☁️⬇️ green dot   | Cloud saves are available to download                           |
+| ☁️ amber ring    | **Save location not found** — sync may not work yet (see below) |
+| 🔄 spinning      | A sync is in progress                                           |
+| ☁️ dimmed        | This game has no cloud‑save support                             |
 
 Selecting the icon opens the **Cloud saves** window, which shows:
 
@@ -75,10 +75,10 @@ Selecting the icon opens the **Cloud saves** window, which shows:
 
 Two settings control automatic syncing (in the plugin config under `cloud`):
 
-| Setting | Default | Effect |
-|---------|---------|--------|
-| `auto_pull_on_launch` | `true` | Download cloud saves automatically when a game launches. |
-| `auto_push_on_stop` | `false` | Upload local saves automatically when a game exits. |
+| Setting               | Default | Effect                                                   |
+| --------------------- | ------- | -------------------------------------------------------- |
+| `auto_pull_on_launch` | `true`  | Download cloud saves automatically when a game launches. |
+| `auto_push_on_stop`   | `false` | Upload local saves automatically when a game exits.      |
 
 - Leaving the defaults gives you **auto‑download + manual upload** — the safest
   balance, and the recommended setup.
@@ -157,10 +157,10 @@ location automatically.
 
 ## Where things are stored on your device
 
-| What | Location |
-|------|----------|
-| Game prefixes (where in‑prefix saves live) | `~/.local/share/unifideck/prefixes/<game id>/` |
-| Local backups (pre‑upload snapshots) | `~/Save Games Backup/<store>/<game id>/` |
+| What                                         | Location                                            |
+| -------------------------------------------- | --------------------------------------------------- |
+| Game prefixes (where in‑prefix saves live)   | `~/.local/share/unifideck/prefixes/<game id>/`      |
+| Local backups (pre‑upload snapshots)         | `~/Save Games Backup/<store>/<game id>/`            |
 | Staging folder (used before a prefix exists) | `~/.local/share/unifideck/saves/<store>/<game id>/` |
 
 ---

@@ -182,8 +182,14 @@
         "_comment": { "type": "string" },
         "enabled": { "type": "boolean" },
         "root": { "type": "string" },
-        "auto_pull_on_launch": { "type": "boolean", "description": "Automatically download cloud saves when a game launches (sync_down is non-destructive — it snapshots before pulling). Default true." },
-        "auto_push_on_stop": { "type": "boolean", "description": "Automatically upload local saves when a game stops. Default false — uploads are the destructive direction, so by default they are manual via the cloud-save button. Set true to restore fully-automatic sync." },
+        "auto_pull_on_launch": {
+          "type": "boolean",
+          "description": "Automatically download cloud saves when a game launches (sync_down is non-destructive — it snapshots before pulling). Default true."
+        },
+        "auto_push_on_stop": {
+          "type": "boolean",
+          "description": "Automatically upload local saves when a game stops. Default false — uploads are the destructive direction, so by default they are manual via the cloud-save button. Set true to restore fully-automatic sync."
+        },
         "tolerance_seconds": { "$ref": "#/$defs/positiveInt" },
         "sync_wait_timeout_seconds": { "$ref": "#/$defs/positiveInt" },
         "failure_behavior": {

@@ -80,7 +80,10 @@ export const ToastEventListener: FC = () => {
         ? toast.error // warning shares the longer error duration
         : toast.info;
     if (p.i18n_title_key) {
-      const title = t(p.i18n_title_key, p.i18n_params as Record<string, string>);
+      const title = t(
+        p.i18n_title_key,
+        p.i18n_params as Record<string, string>,
+      );
       showToastFn(title, message);
     } else {
       showToastFn(message);

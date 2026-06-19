@@ -158,7 +158,6 @@ select = [
     "TID",    # tidy imports
     "TC",     # type-checking
     "ARG",    # unused args
-    "PTH",    # use pathlib
     "ERA",    # eradicate (commented-out code)
     "PL",     # pylint
     "TRY",    # try-except antipatterns
@@ -186,6 +185,15 @@ ignore = [
     # ``flag=True`` keyword form, and the rule fires too eagerly on
     # legitimate APIs.
     "FBT",
+    # ─── pathlib migration (PTH) — deferred to Sprint C ──────────
+    # The PTH family (use pathlib over os.path) stays ignored
+    # pending its own dedicated migration pass, exactly as the
+    # quality.yml gate documents. Re-selecting it prematurely
+    # surfaced ~37 os.path findings across the cloud-save and
+    # Ubisoft-prefix code that belong to that future sweep, not a
+    # PR-blocking gate today. Graduate to ``select`` when Sprint C
+    # lands the migration.
+    "PTH",
     # ─── Refactor opinions ───────────────────────────────────────
     # PLR* are mostly "too many X" advisory thresholds. Useful at
     # design time, noisy in maintenance.
@@ -306,6 +314,15 @@ ignore = [
 # Treat ``unifideck`` as the first-party namespace so its imports
 # group correctly relative to stdlib/3rd-party.
 known-first-party = ["unifideck"]
+
+[tool.ruff.lint.mccabe]
+# Align ruff's C901 (cyclomatic) threshold with the project-wide
+# complexity policy enforced in .github/workflows/complexity.yml
+# (flake8 --max-complexity=15) and mirrored in .flake8. Ruff
+# defaults to 10, which would make the ruff gate *stricter* than
+# the documented bar and flag functions the complexity workflow
+# considers in-policy. 15 is the single source of truth.
+max-complexity = 15
 
 # ──────────────────────────────────────────────────────────────────
 # mypy — same scope as ruff

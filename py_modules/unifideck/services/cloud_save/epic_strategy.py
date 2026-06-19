@@ -1,13 +1,17 @@
-import os
+from __future__ import annotations
+
+import asyncio
 import json
 import logging
-import asyncio
+import os
 import subprocess
+from datetime import UTC
 from pathlib import Path
+from typing import Any
 
-from unifideck.services.cloud_save.strategy_base import CloudSaveStrategy
-from unifideck.services.cloud_save.path_resolver import WinePrefixResolver
 from unifideck.launcher.proton.infrastructure.prefix_layout import resolve_registry_prefix
+from unifideck.services.cloud_save.path_resolver import WinePrefixResolver
+from unifideck.services.cloud_save.strategy_base import CloudSaveStrategy
 
 logger = logging.getLogger(__name__)
 
@@ -16,7 +20,9 @@ class EpicCloudSaveStrategy(CloudSaveStrategy):
 
     store_id = "epic"
 
-    def __init__(self, local_save_root: str, config=None, cache=None) -> None:
+    def __init__(
+        self, local_save_root: str, config: Any = None, cache: Any = None,
+    ) -> None:
         super().__init__(local_save_root, config, cache)
         # Epic account id, looked up lazily and memoised — the ``{EpicID}``
         # cloud-save token is the ACCOUNT id, not the game id.
@@ -72,8 +78,8 @@ class EpicCloudSaveStrategy(CloudSaveStrategy):
         try:
             from legendary.core import LegendaryCore
             os.environ["STEAM_COMPAT_DATA_PATH"] = str(prefix_root)
-            core = LegendaryCore()
-            resolved = core.get_save_path(game_id)
+            core = LegendaryCore()  # type: ignore[no-untyped-call]  # vendored legendary, untyped
+            resolved = core.get_save_path(game_id)  # type: ignore[no-untyped-call]  # vendored legendary, untyped
             return resolved if resolved and os.path.isdir(resolved) else None
         except Exception as e:
             logger.debug("[EpicSync] legendary get_save_path fallback failed for %s: %s", game_id, e)
@@ -138,34 +144,45 @@ class EpicCloudSaveStrategy(CloudSaveStrategy):
                 install_path=install_path,
                 account_id=account_id,
             )
-            source = "resolver"
-
-            # Validating fallback: if our path doesn't exist, ask legendary
-            # itself (handles any token we don't yet cover). Prefer its result
-            # only when it points to an existing in-prefix directory.
-            if not os.path.isdir(resolved):
-                leg = self._legendary_save_path(game_id, prefix_root)
-                if leg and leg != resolved:
-                    logger.warning(
-                        "[EpicSync] resolver path %s missing; using legendary's %s",
-                        resolved, leg,
-                    )
-                    resolved, source = leg, "legendary"
-                elif not leg:
-                    # Both our resolver and legendary came up empty/missing —
-                    # try enriched save-location metadata before accepting a
-                    # path the game never reads from.
-                    enriched = self._resolve_save_dir_from_enriched(game_id, install_path)
-                    if enriched:
-                        resolved, source = enriched, "enriched"
+            resolved, source = self._validate_or_fallback(
+                game_id, resolved, prefix_root, install_path,
+            )
 
             logger.info("[EpicSync] Resolved save path for %s (%s): %s", game_id, source, resolved)
             return resolved
-        except Exception as e:
-            logger.error("[EpicSync] Failed to resolve local save dir for %s: %s", game_id, e)
+        except Exception:
+            logger.exception("[EpicSync] Failed to resolve local save dir for %s", game_id)
             return None
 
-    async def _fetch_cloud_info(self, game_id: str) -> dict | None:
+    def _validate_or_fallback(
+        self, game_id: str, resolved: str, prefix_root: Path, install_path: str,
+    ) -> tuple[str, str]:
+        """Validate the resolver path on disk; fall back to legendary/enriched.
+
+        Returns ``(path, source)``. If our resolved path exists, it's used as
+        is ("resolver"). Otherwise prefer legendary's own existing in-prefix
+        dir ("legendary"); if legendary also has nothing, try enriched
+        metadata ("enriched") before accepting a path the game never reads.
+        """
+        if os.path.isdir(resolved):
+            return resolved, "resolver"
+        leg = self._legendary_save_path(game_id, prefix_root)
+        if leg and leg != resolved:
+            logger.warning(
+                "[EpicSync] resolver path %s missing; using legendary's %s",
+                resolved, leg,
+            )
+            return leg, "legendary"
+        if not leg:
+            # Both our resolver and legendary came up empty/missing — try
+            # enriched save-location metadata before accepting a path the
+            # game never reads from.
+            enriched = self._resolve_save_dir_from_enriched(game_id, install_path)
+            if enriched:
+                return enriched, "enriched"
+        return resolved, "resolver"
+
+    async def _fetch_cloud_info(self, game_id: str) -> dict[str, Any] | None:
         """Real Epic-cloud save info via ``legendary list-saves``.
 
         Returns ``{"has_saves": bool, "timestamp": <epoch of latest cloud
@@ -175,10 +192,10 @@ class EpicCloudSaveStrategy(CloudSaveStrategy):
         """
         return await self._query_cloud_info(game_id)
 
-    async def _query_cloud_info(self, game_id: str) -> dict | None:
+    async def _query_cloud_info(self, game_id: str) -> dict[str, Any] | None:
         """Run ``legendary list-saves <id>`` and parse the latest manifest ts."""
         import re
-        from datetime import datetime, timezone
+        from datetime import datetime
         try:
             proc = await asyncio.create_subprocess_exec(
                 self.legendary_bin, "list-saves", game_id,
@@ -196,8 +213,15 @@ class EpicCloudSaveStrategy(CloudSaveStrategy):
             r"(\d{4})\.(\d{2})\.(\d{2})-(\d{2})\.(\d{2})\.(\d{2})\.manifest", text,
         ):
             try:
+                # The regex captures exactly 6 fields (Y, M, D, h, m, s);
+                # build a fixed 6-tuple so they fill datetime's positional
+                # date/time args and ``tzinfo=UTC`` stays a true keyword
+                # (splatting a generator made mypy/datetime read tzinfo twice).
+                year, month, day, hour, minute, second = (
+                    int(x) for x in m.groups()
+                )
                 dt = datetime(
-                    *(int(x) for x in m.groups()), tzinfo=timezone.utc,
+                    year, month, day, hour, minute, second, tzinfo=UTC,
                 )
                 stamps.append(dt.timestamp())
             except ValueError:
@@ -230,7 +254,7 @@ class EpicCloudSaveStrategy(CloudSaveStrategy):
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE
             )
-            stdout, stderr = await proc.communicate()
+            _stdout, stderr = await proc.communicate()
             stderr_text = stderr.decode(errors="replace")
             if proc.returncode != 0:
                 logger.error(
@@ -243,8 +267,8 @@ class EpicCloudSaveStrategy(CloudSaveStrategy):
             # nothing is diagnosable — and hint that a forced pull can override.
             self._log_sync_down_outcome(game_id, stderr_text, force)
             return True
-        except Exception as e:
-            logger.exception("[EpicSync] Error during sync_down for %s: %s", game_id, e)
+        except Exception:
+            logger.exception("[EpicSync] Error during sync_down for %s", game_id)
             return False
 
     @staticmethod
@@ -280,7 +304,7 @@ class EpicCloudSaveStrategy(CloudSaveStrategy):
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE
             )
-            stdout, stderr = await proc.communicate()
+            _stdout, stderr = await proc.communicate()
             if proc.returncode != 0:
                 logger.error(
                     "[EpicSync] sync_up failed with code %d: %s",
@@ -289,6 +313,6 @@ class EpicCloudSaveStrategy(CloudSaveStrategy):
                 return False
             logger.info("[EpicSync] sync_up completed successfully for %s", game_id)
             return True
-        except Exception as e:
-            logger.exception("[EpicSync] Error during sync_up for %s: %s", game_id, e)
+        except Exception:
+            logger.exception("[EpicSync] Error during sync_up for %s", game_id)
             return False

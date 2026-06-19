@@ -138,28 +138,11 @@ class UbisoftPrefixManager:
         #    if the GUID has diverged (migration for pre-existing
         #    broken installs).
         if marker_path.is_file() and self._paths.find_upc_exe(prefix_path):
-            if self._game_prefix_needs_identity_repair(prefix_path, auth_dir):
-                logger.warning(
-                    "[UbisoftPrefixManager] game prefix %s GUID "
-                    "diverged from auth — repairing identity "
-                    "from template (games preserved)",
-                    space_id,
-                )
-                ok = await self._helpers.rsync_clone(
-                    self._config.template_dir_expanded,
-                    prefix_path,
-                    exclude_games=True,
-                )
-                if not ok:
-                    logger.error(
-                        "[UbisoftPrefixManager] identity repair "
-                        "rsync failed for %s",
-                        space_id,
-                    )
-                # Always try injection — if rsync succeeded the
-                # GUIDs now match; if it failed we still report
-                # best-effort state.
-            self._helpers.try_inject_auth_state([prefix_path])
+            await self._reuse_existing_game_prefix(
+                space_id,
+                prefix_path,
+                auth_dir,
+            )
             return True
 
         if (
@@ -174,6 +157,42 @@ class UbisoftPrefixManager:
             space_id,
             prefix_path,
         )
+
+    async def _reuse_existing_game_prefix(
+        self,
+        space_id: str,
+        prefix_path: str,
+        auth_dir: str,
+    ) -> None:
+        """Reuse an existing game prefix: repair identity then inject creds.
+
+        Repairs the prefix's ``MachineGuid`` from the template (via
+        ``rsync`` with ``exclude_games=True``, preserving installed game
+        files) when it has diverged from auth, then always injects the
+        auth state — best-effort even if the repair rsync failed.
+        """
+        if self._game_prefix_needs_identity_repair(prefix_path, auth_dir):
+            logger.warning(
+                "[UbisoftPrefixManager] game prefix %s GUID "
+                "diverged from auth — repairing identity "
+                "from template (games preserved)",
+                space_id,
+            )
+            ok = await self._helpers.rsync_clone(
+                self._config.template_dir_expanded,
+                prefix_path,
+                exclude_games=True,
+            )
+            if not ok:
+                logger.error(
+                    "[UbisoftPrefixManager] identity repair "
+                    "rsync failed for %s",
+                    space_id,
+                )
+            # Always try injection — if rsync succeeded the
+            # GUIDs now match; if it failed we still report
+            # best-effort state.
+        self._helpers.try_inject_auth_state([prefix_path])
 
     def _game_prefix_needs_identity_repair(
         self,

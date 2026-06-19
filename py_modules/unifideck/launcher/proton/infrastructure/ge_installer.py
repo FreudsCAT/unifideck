@@ -202,6 +202,34 @@ def _make_executable(path: Path) -> None:
     path.chmod(st.st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
 
 
+def _promote_extracted(staging: Path, tag: str) -> Path | None:
+    """Validate the extracted ``<tag>/`` tree and move it into place.
+
+    GE-Proton archives expand to a single top-level ``<tag>/`` dir. The
+    move into ``COMPAT_TOOLS_DIR`` only happens after the ``proton``
+    script is confirmed present and made executable, returning the final
+    executable ``proton`` path (or ``None`` if validation fails).
+    """
+    extracted = staging / tag
+    proton = extracted / "proton"
+    if not proton.is_file():
+        logger.warning(
+            "[ge_installer] extracted tree missing proton script (%s)", tag,
+        )
+        return None
+    _make_executable(proton)
+
+    dest = COMPAT_TOOLS_DIR / tag
+    if dest.exists():
+        shutil.rmtree(dest, ignore_errors=True)
+    shutil.move(extracted, dest)
+    final = dest / "proton"
+    if not os.access(final, os.X_OK):
+        return None
+    logger.info("[ge_installer] installed GE-Proton %s -> %s", tag, dest)
+    return final
+
+
 def _download_and_install(
     tag: str,
     url: str,
@@ -223,26 +251,7 @@ def _download_and_install(
         if not _extract(tarball, staging):
             return None
         tarball.unlink(missing_ok=True)
-
-        # GE-Proton archives expand to a single top-level ``<tag>/`` dir.
-        extracted = staging / tag
-        proton = extracted / "proton"
-        if not proton.is_file():
-            logger.warning(
-                "[ge_installer] extracted tree missing proton script (%s)", tag,
-            )
-            return None
-        _make_executable(proton)
-
-        dest = COMPAT_TOOLS_DIR / tag
-        if dest.exists():
-            shutil.rmtree(dest, ignore_errors=True)
-        shutil.move(extracted, dest)
-        final = dest / "proton"
-        if not os.access(final, os.X_OK):
-            return None
-        logger.info("[ge_installer] installed GE-Proton %s -> %s", tag, dest)
-        return final
+        return _promote_extracted(staging, tag)
     except OSError as e:
         logger.warning("[ge_installer] install of %s failed: %s", tag, e)
         return None

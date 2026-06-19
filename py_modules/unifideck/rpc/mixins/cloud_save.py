@@ -24,7 +24,7 @@ from unifideck.rpc import RpcError
 
 # Strong refs to fire-and-forget sync tasks so the GC can't collect them
 # mid-flight (RUF006). The done-callback discards each when it settles.
-_SYNC_TASKS: set[asyncio.Task] = set()
+_SYNC_TASKS: set[asyncio.Task[Any]] = set()
 
 
 def _spawn(coro: Any) -> None:
@@ -83,8 +83,8 @@ class CloudSaveRPCMixin:
         """
         if not store or not game_id:
             raise RpcError("invalid_args", store=store, game_id=game_id)
-        cleaned = os.path.expanduser(path.strip()) if path else ""
-        if cleaned and not os.path.isdir(cleaned):
+        cleaned = os.path.expanduser(path.strip()) if path else ""  # noqa: ASYNC240  # pure string op, no I/O — never blocks
+        if cleaned and not await asyncio.to_thread(os.path.isdir, cleaned):
             raise RpcError("path_not_found", path=cleaned)
         self.config.set(f"games.{game_id}.save_path", cleaned)
         return {"success": True, "store": store, "game_id": game_id, "save_path": cleaned}

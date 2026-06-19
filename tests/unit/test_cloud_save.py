@@ -5,6 +5,7 @@ import pytest
 from unittest.mock import MagicMock, AsyncMock, patch
 from pathlib import Path
 
+from unifideck.services.cloud_save import gog_cloud_api
 from unifideck.services.cloud_save.path_resolver import WinePrefixResolver
 from unifideck.services.cloud_save.epic_strategy import EpicCloudSaveStrategy
 from unifideck.services.cloud_save.gog_strategy import GOGCloudSaveStrategy
@@ -449,24 +450,25 @@ async def test_dispatch_retry_sync_down_forces_pull():
 # ── GOG dual-source save dir (Auto Cloud vs SDK IStorage) ─────────────────
 
 
-def _gog_strategy_for_pick(tmp_path):
-    s = GOGCloudSaveStrategy(str(tmp_path / "saves"), config=None)
+def _stub_autocloud(monkeypatch):
     # Avoid network: one Auto-Cloud location (Documents\MyGame).
-    s._fetch_gog_save_locations = lambda cid: ["<?DOCUMENTS?>\\MyGame"]
-    return s
+    monkeypatch.setattr(
+        gog_cloud_api, "fetch_gog_save_locations",
+        lambda cid: ["<?DOCUMENTS?>\\MyGame"],
+    )
 
 
-def test_gog_pick_prefers_autocloud_when_it_has_saves(tmp_path):
-    s = _gog_strategy_for_pick(tmp_path)
+def test_gog_pick_prefers_autocloud_when_it_has_saves(tmp_path, monkeypatch):
+    _stub_autocloud(monkeypatch)
     drive_c = tmp_path / "pfx" / "drive_c"
     doc = drive_c / "users" / "steamuser" / "Documents" / "MyGame"
     doc.mkdir(parents=True)
     (doc / "slot.sav").write_text("SAVE" * 50)
-    assert s._pick_gog_save_dir("CID", drive_c) == doc
+    assert gog_cloud_api.pick_gog_save_dir("CID", drive_c) == doc
 
 
-def test_gog_pick_uses_sdk_istorage_when_autocloud_empty(tmp_path):
-    s = _gog_strategy_for_pick(tmp_path)
+def test_gog_pick_uses_sdk_istorage_when_autocloud_empty(tmp_path, monkeypatch):
+    _stub_autocloud(monkeypatch)
     drive_c = tmp_path / "pfx" / "drive_c"
     sdk = (
         drive_c / "users" / "steamuser" / "AppData" / "Local"
@@ -474,14 +476,14 @@ def test_gog_pick_uses_sdk_istorage_when_autocloud_empty(tmp_path):
     )
     sdk.mkdir(parents=True)
     (sdk / "save.dat").write_text("DATA" * 50)
-    assert s._pick_gog_save_dir("CID", drive_c) == sdk
+    assert gog_cloud_api.pick_gog_save_dir("CID", drive_c) == sdk
 
 
-def test_gog_pick_falls_back_to_first_autocloud_when_none_on_disk(tmp_path):
-    s = _gog_strategy_for_pick(tmp_path)
+def test_gog_pick_falls_back_to_first_autocloud_when_none_on_disk(tmp_path, monkeypatch):
+    _stub_autocloud(monkeypatch)
     drive_c = tmp_path / "pfx" / "drive_c"
     (drive_c / "users" / "steamuser").mkdir(parents=True)
-    chosen = s._pick_gog_save_dir("CID", drive_c)
+    chosen = gog_cloud_api.pick_gog_save_dir("CID", drive_c)
     assert chosen == drive_c / "users" / "steamuser" / "Documents" / "MyGame"
 
 
@@ -619,7 +621,7 @@ def test_gog_cloud_summary_counts_only_active_prefix():
         {"name": "saves/old2.sav", "last_modified": "2026-03-29T20:01:00+00:00"},
         {"name": "saves/old3.sav", "last_modified": "2026-03-29T20:02:00+00:00"},
     ]
-    info = GOGCloudSaveStrategy._summarize_cloud_objects(objects)
+    info = gog_cloud_api.summarize_cloud_objects(objects)
     assert info["file_count"] == 2  # __default's two real files, not 5
     assert info["has_saves"] is True
     # timestamp is the active group's newest (Jun 8 b.sav, not the manifest)
@@ -629,9 +631,9 @@ def test_gog_cloud_summary_counts_only_active_prefix():
 
 
 def test_gog_cloud_summary_empty_and_flat():
-    empty = GOGCloudSaveStrategy._summarize_cloud_objects([])
+    empty = gog_cloud_api.summarize_cloud_objects([])
     assert empty["file_count"] == 0 and empty["has_saves"] is False
-    flat = GOGCloudSaveStrategy._summarize_cloud_objects(
+    flat = gog_cloud_api.summarize_cloud_objects(
         [{"name": "solo.sav", "last_modified": "2026-01-01T00:00:00+00:00"}]
     )
     assert flat["file_count"] == 1 and flat["has_saves"] is True

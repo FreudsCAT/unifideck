@@ -28,7 +28,9 @@ import json
 import logging
 import shutil
 import time
+from collections.abc import Iterator
 from pathlib import Path
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -67,7 +69,7 @@ class SaveConflictError(Exception):
     """
 
     def __init__(
-        self, reason: str, local: dict, *, store: str, game_id: str,
+        self, reason: str, local: dict[str, Any], *, store: str, game_id: str,
         hard: bool = False,
     ) -> None:
         super().__init__(f"{reason} ({store}:{game_id})")
@@ -78,7 +80,7 @@ class SaveConflictError(Exception):
         self.hard = hard
 
 
-def _iter_save_files(directory: Path):
+def _iter_save_files(directory: Path) -> Iterator[Path]:
     """Yield regular save files under ``directory`` (excluding the manifest)."""
     if not directory.exists():
         return
@@ -143,7 +145,7 @@ def lost_saves_vs_manifest(directory: str | Path) -> bool:
     return bool(recorded - present)
 
 
-def snapshot(directory: str | Path) -> dict:
+def snapshot(directory: str | Path) -> dict[str, Any]:
     """Return ``{timestamp, file_count, total_bytes}`` for the save dir.
 
     Shape matches what ``CloudSaveConflictModal`` renders.
@@ -211,7 +213,7 @@ def snapshot_backup(
         return None
 
 
-def latest_backup_snapshot(store: str, game_id: str) -> dict:
+def latest_backup_snapshot(store: str, game_id: str) -> dict[str, Any]:
     """``snapshot`` of the most recent versioned backup, or zeros if none.
 
     Lets the conflict modal show a cheap, local approximation of the

@@ -24,7 +24,7 @@ from __future__ import annotations
 import logging
 import re
 import subprocess
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -116,11 +116,12 @@ def _from_drm() -> tuple[int, int] | None:
 
 def detect_screen_size(env: Mapping[str, str] | None = None) -> tuple[int, int]:
     """Best-effort current display resolution; ``(1280, 800)`` on failure."""
-    for source in (
+    sources: tuple[Callable[[], tuple[int, int] | None], ...] = (
         lambda: _from_xrandr(env),
         lambda: _from_xdpyinfo(env),
         _from_drm,
-    ):
+    )
+    for source in sources:
         size = source()
         if size and size[0] > 0 and size[1] > 0:
             logger.info("[Edge] detected display %dx%d", size[0], size[1])

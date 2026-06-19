@@ -58,7 +58,7 @@ class CloudSaveStrategy(ABC):
         self._cached_save_dir: dict[str, str] = {}
         # Real store-cloud save info, memoized with a short TTL; cleared on
         # upload (which changes the cloud copy).
-        self._cached_cloud_info: dict[str, tuple[float, dict]] = {}
+        self._cached_cloud_info: dict[str, tuple[float, dict[str, Any]]] = {}
 
     # ── shared save-dir resolution ───────────────────────────────────
     def _configured_save_dir(self, game_id: str) -> str | None:
@@ -142,7 +142,7 @@ class CloudSaveStrategy(ABC):
             return False
         # os.makedirs (not Path.mkdir) to match the store strategies' existing
         # pattern — the async sibling Path.mkdir trips ASYNC240.
-        os.makedirs(local_dir, exist_ok=True)  # noqa: PTH103
+        os.makedirs(local_dir, exist_ok=True)
         # Snapshot whatever's there before we pull — a bad/destructive
         # download must always be recoverable from a local backup.
         from unifideck.services.cloud_save import safety
@@ -189,7 +189,7 @@ class CloudSaveStrategy(ABC):
         """Run the store's CLI push from ``local_dir``. Return success."""
 
     # ── shared cloud-info memoization ────────────────────────────────
-    async def get_cloud_save_info(self, game_id: str) -> dict | None:
+    async def get_cloud_save_info(self, game_id: str) -> dict[str, Any] | None:
         """Best-effort info about the game's ACTUAL store-cloud save.
 
         Returns ``{"has_saves": bool, "timestamp": float, ...}`` (timestamp =
@@ -206,6 +206,6 @@ class CloudSaveStrategy(ABC):
             self._cached_cloud_info[game_id] = (time.time(), info)
         return info
 
-    async def _fetch_cloud_info(self, game_id: str) -> dict | None:
+    async def _fetch_cloud_info(self, game_id: str) -> dict[str, Any] | None:
         """Store-specific real-cloud query (un-memoized). Default: unsupported."""
         return None

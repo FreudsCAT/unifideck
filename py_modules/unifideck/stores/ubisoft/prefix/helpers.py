@@ -161,7 +161,10 @@ class _PrefixHelpers:
         vault decrypts everywhere.
         """
         template_dir = self._parent._config.template_dir_expanded
-        if os.path.realpath(auth_dir) == os.path.realpath(template_dir):
+        auth_real, template_real = await asyncio.to_thread(
+            lambda: (os.path.realpath(auth_dir), os.path.realpath(template_dir)),
+        )
+        if auth_real == template_real:
             return
         logger.info(
             "[UbisoftPrefixManager] deriving template from auth prefix",

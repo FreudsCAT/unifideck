@@ -1,7 +1,7 @@
-import os
-import re
 import configparser
 import logging
+import os
+import re
 
 logger = logging.getLogger(__name__)
 
@@ -11,103 +11,122 @@ class WinePrefixResolver:
     @staticmethod
     def read_registry(wine_pfx: str) -> configparser.ConfigParser:
         reg = configparser.ConfigParser(
-            comment_prefixes=(';', '#', '/', 'WINE'),
+            comment_prefixes=(";", "#", "/", "WINE"),
             allow_no_value=True,
             strict=False,
             interpolation=None
         )
-        reg.optionxform = str
-        reg.read(os.path.join(wine_pfx, 'user.reg'))
+        reg.optionxform = str  # type: ignore[method-assign, assignment]  # configparser idiom: preserve key case
+        reg.read(os.path.join(wine_pfx, "user.reg"))
         return reg
 
     @staticmethod
     def get_shell_folders(registry: configparser.ConfigParser, wine_pfx: str) -> dict[str, str]:
-        folders = dict()
-        section = 'Software\\\\Microsoft\\\\Windows\\\\CurrentVersion\\\\Explorer\\\\Shell Fold Folders'
+        folders: dict[str, str] = {}
+        section = "Software\\\\Microsoft\\\\Windows\\\\CurrentVersion\\\\Explorer\\\\Shell Fold Folders"
         if section not in registry:
-            section = 'Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Shell Folders'
-        
+            section = "Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Shell Folders"
+
         if section in registry:
             for k, v in registry[section].items():
                 key_name = k.strip('"').strip()
-                path_cleaned = v.strip('"').strip().replace('\\\\', '/').replace('C:/', '')
-                folders[key_name] = os.path.join(wine_pfx, 'drive_c', path_cleaned)
+                path_cleaned = v.strip('"').strip().replace("\\\\", "/").replace("C:/", "")
+                folders[key_name] = os.path.join(wine_pfx, "drive_c", path_cleaned)
         return folders
 
-    @classmethod
-    def resolve_path(cls, cloud_save_folder: str, prefix_path: str, install_path: str = "", account_id: str = "") -> str:
-        # Normalize slashes
-        folder = cloud_save_folder.replace('\\', '/').strip('/')
-        
-        # Default shell folder mappings (if registry parsing fails or is incomplete)
-        #
-        # NOTE: Epic's ``{AppData}`` cloud-save token resolves to
-        # %LOCALAPPDATA% (AppData/Local), NOT %APPDATA% (Roaming). Confirmed
-        # on real games: Felix The Reaper and Ghostrunner both ship a
-        # ``{AppData}/...`` CloudSaveFolder yet read/write saves under
-        # AppData/Local — mapping it to Roaming dropped the cloud save where
-        # the game never looks (Continue stayed greyed out).
-        path_vars = {
-            '{appdata}': os.path.join(prefix_path, 'drive_c/users/steamuser/AppData/Local'),
-            '{localappdata}': os.path.join(prefix_path, 'drive_c/users/steamuser/AppData/Local'),
-            '{userdir}': os.path.join(prefix_path, 'drive_c/users/steamuser/Documents'),
-            '{userprofile}': os.path.join(prefix_path, 'drive_c/users/steamuser'),
-            '{usersavedgames}': os.path.join(prefix_path, 'drive_c/users/steamuser/Saved Games'),
-            '{installdir}': install_path,
+    @staticmethod
+    def _default_path_vars(
+        prefix_path: str, install_path: str, account_id: str,
+    ) -> dict[str, str]:
+        """Default shell-folder token map (used when the registry is absent).
+
+        NOTE: Epic's ``{AppData}`` cloud-save token resolves to
+        %LOCALAPPDATA% (AppData/Local), NOT %APPDATA% (Roaming). Confirmed
+        on real games: Felix The Reaper and Ghostrunner both ship a
+        ``{AppData}/...`` CloudSaveFolder yet read/write saves under
+        AppData/Local — mapping it to Roaming dropped the cloud save where
+        the game never looks (Continue stayed greyed out).
+        """
+        return {
+            "{appdata}": os.path.join(prefix_path, "drive_c/users/steamuser/AppData/Local"),
+            "{localappdata}": os.path.join(prefix_path, "drive_c/users/steamuser/AppData/Local"),
+            "{userdir}": os.path.join(prefix_path, "drive_c/users/steamuser/Documents"),
+            "{userprofile}": os.path.join(prefix_path, "drive_c/users/steamuser"),
+            "{usersavedgames}": os.path.join(prefix_path, "drive_c/users/steamuser/Saved Games"),
+            "{installdir}": install_path,
             # Epic's ``{EpicID}`` token is the logged-in user's Epic ACCOUNT
             # id — NOT the game's catalog/app id. legendary resolves it the
             # same way (``self.lgd.userdata['account_id']``, core.py:834).
             # Games like Vampire Survivors / Brotato namespace saves under
             # ``Roaming/<Game>/<AccountId>/``; feeding the app id here pointed
             # the sync at a folder the game never reads (saves never appeared).
-            '{epicid}': account_id,
-            '{epic_id}': account_id,
+            "{epicid}": account_id,
+            "{epic_id}": account_id,
         }
-        
-        # Try to read from user.reg
-        user_reg_path = os.path.join(prefix_path, 'user.reg')
-        if os.path.isfile(user_reg_path):
-            try:
-                reg = cls.read_registry(prefix_path)
-                folders = cls.get_shell_folders(reg, prefix_path)
-                if folders:
-                    # Epic {AppData} == Local AppData (see note above), so
-                    # both tokens resolve to the registry's Local AppData.
-                    if 'Local AppData' in folders:
-                        path_vars['{appdata}'] = folders['Local AppData']
-                        path_vars['{localappdata}'] = folders['Local AppData']
-                    if 'Personal' in folders:
-                        path_vars['{userdir}'] = folders['Personal']
-                    if '{4C5C32FF-BB9D-43B0-B5B4-2D72E54EAAA4}' in folders:
-                        path_vars['{usersavedgames}'] = folders['{4C5C32FF-BB9D-43B0-B5B4-2D72E54EAAA4}']
-            except Exception as e:
-                logger.error("Failed to read registry: %s", e)
-        
-        # Add common aliases/variations
-        path_vars['{locallow}'] = os.path.join(prefix_path, 'drive_c/users/steamuser/AppData/LocalLow')
-        
-        # Split folder template into components
-        parts = folder.split('/')
+
+    @classmethod
+    def _apply_registry_overrides(
+        cls, path_vars: dict[str, str], prefix_path: str,
+    ) -> None:
+        """Override the AppData/Documents/SavedGames tokens from ``user.reg``.
+
+        Best-effort: a missing/unreadable registry leaves the defaults in
+        place. Mutates ``path_vars`` in place.
+        """
+        user_reg_path = os.path.join(prefix_path, "user.reg")
+        if not os.path.isfile(user_reg_path):
+            return
+        try:
+            folders = cls.get_shell_folders(cls.read_registry(prefix_path), prefix_path)
+        except Exception:
+            logger.exception("Failed to read registry")
+            return
+        if not folders:
+            return
+        # Epic {AppData} == Local AppData (see note above), so both tokens
+        # resolve to the registry's Local AppData.
+        if "Local AppData" in folders:
+            path_vars["{appdata}"] = folders["Local AppData"]
+            path_vars["{localappdata}"] = folders["Local AppData"]
+        if "Personal" in folders:
+            path_vars["{userdir}"] = folders["Personal"]
+        if "{4C5C32FF-BB9D-43B0-B5B4-2D72E54EAAA4}" in folders:
+            path_vars["{usersavedgames}"] = folders["{4C5C32FF-BB9D-43B0-B5B4-2D72E54EAAA4}"]
+
+    @staticmethod
+    def _resolve_template_parts(folder: str, path_vars: dict[str, str]) -> list[str]:
+        """Map each ``/``-separated template segment through ``path_vars``."""
         resolved_parts = []
-        for p in parts:
+        for p in folder.split("/"):
             p_lower = p.lower()
             if p_lower in path_vars:
                 resolved_parts.append(path_vars[p_lower])
-            elif p_lower == '%userprofile%':
-                resolved_parts.append(path_vars['{userprofile}'])
+            elif p_lower == "%userprofile%":
+                resolved_parts.append(path_vars["{userprofile}"])
             else:
                 resolved_parts.append(p)
-        
-        # Join the resolved parts
-        resolved_path = os.path.join(*resolved_parts)
-        resolved_path = os.path.normpath(resolved_path)
-        
+        return resolved_parts
+
+    @classmethod
+    def resolve_path(cls, cloud_save_folder: str, prefix_path: str, install_path: str = "", account_id: str = "") -> str:
+        # Normalize slashes
+        folder = cloud_save_folder.replace("\\", "/").strip("/")
+
+        path_vars = cls._default_path_vars(prefix_path, install_path, account_id)
+        cls._apply_registry_overrides(path_vars, prefix_path)
+
+        # Add common aliases/variations
+        path_vars["{locallow}"] = os.path.join(prefix_path, "drive_c/users/steamuser/AppData/LocalLow")
+
+        resolved_parts = cls._resolve_template_parts(folder, path_vars)
+        resolved_path = os.path.normpath(os.path.join(*resolved_parts))
+
         # De-duplicate nested path issues (e.g. AppData/LocalLow nested multiple times)
-        if 'LocalLow' in resolved_path:
-            match = re.search(r'LocalLow/(?:drive_c/users/[^/]+/AppData/LocalLow/)?(.*)', resolved_path, re.IGNORECASE)
+        if "LocalLow" in resolved_path:
+            match = re.search(r"LocalLow/(?:drive_c/users/[^/]+/AppData/LocalLow/)?(.*)", resolved_path, re.IGNORECASE)
             if match:
                 game_subpath = match.group(1)
-                resolved_path = os.path.join(path_vars['{locallow}'], game_subpath)
+                resolved_path = os.path.join(path_vars["{locallow}"], game_subpath)
 
         return os.path.realpath(resolved_path)
 
@@ -138,6 +157,49 @@ class WinePrefixResolver:
     }
 
     @classmethod
+    def _ludusavi_resolved_bases(cls, prefix_path: str) -> dict[str, str]:
+        """Ludusavi base-token → prefix dir map, with registry overrides.
+
+        Best-effort: a missing/unreadable registry just leaves the defaults.
+        """
+        resolved_bases = {
+            tok: os.path.join(prefix_path, rel)
+            for tok, rel in cls._LUDUSAVI_BASES.items()
+        }
+        user_reg_path = os.path.join(prefix_path, "user.reg")
+        if not os.path.isfile(user_reg_path):
+            return resolved_bases
+        try:
+            folders = cls.get_shell_folders(cls.read_registry(prefix_path), prefix_path)
+        except Exception:  # pragma: no cover - registry is best-effort
+            logger.debug("ludusavi: registry read failed", exc_info=True)
+            return resolved_bases
+        for shell_name, token in cls._SHELL_TO_TOKEN.items():
+            if shell_name in folders:
+                resolved_bases[token] = folders[shell_name]
+        return resolved_bases
+
+    @classmethod
+    def _ludusavi_base_for(
+        cls,
+        first: str,
+        resolved_bases: dict[str, str],
+        prefix_path: str,
+        install_path: str,
+    ) -> str | None:
+        """Resolve the leading Ludusavi token to a base dir, or ``None``."""
+        if first in resolved_bases:
+            return resolved_bases[first]
+        if first in ("<base>", "<root>", "<game>"):
+            # ``None`` when no install dir is known.
+            return install_path or None
+        if first == "<osusername>":
+            return os.path.join(prefix_path, "drive_c/users/steamuser")
+        # Unknown/Linux token (<xdgData>, <xdgConfig>, …) — not resolvable
+        # for a Proton (Windows) prefix.
+        return None
+
+    @classmethod
     def resolve_ludusavi_path(
         cls,
         ludusavi_path: str,
@@ -161,33 +223,11 @@ class WinePrefixResolver:
         if not segments:
             return None
 
-        # Build the base map with registry overrides where the prefix has them.
-        bases = dict(cls._LUDUSAVI_BASES)
-        resolved_bases = {
-            tok: os.path.join(prefix_path, rel) for tok, rel in bases.items()
-        }
-        user_reg_path = os.path.join(prefix_path, "user.reg")
-        if os.path.isfile(user_reg_path):
-            try:
-                folders = cls.get_shell_folders(cls.read_registry(prefix_path), prefix_path)
-                for shell_name, token in cls._SHELL_TO_TOKEN.items():
-                    if shell_name in folders:
-                        resolved_bases[token] = folders[shell_name]
-            except Exception as e:  # pragma: no cover - registry is best-effort
-                logger.debug("ludusavi: registry read failed: %s", e)
-
-        first = segments[0].lower()
-        if first in resolved_bases:
-            base = resolved_bases[first]
-        elif first in ("<base>", "<root>", "<game>"):
-            if not install_path:
-                return None
-            base = install_path
-        elif first == "<osusername>":
-            base = os.path.join(prefix_path, "drive_c/users/steamuser")
-        else:
-            # Unknown/Linux token (<xdgData>, <xdgConfig>, …) — not resolvable
-            # for a Proton (Windows) prefix.
+        resolved_bases = cls._ludusavi_resolved_bases(prefix_path)
+        base = cls._ludusavi_base_for(
+            segments[0].lower(), resolved_bases, prefix_path, install_path,
+        )
+        if base is None:
             return None
 
         out_parts = [base]

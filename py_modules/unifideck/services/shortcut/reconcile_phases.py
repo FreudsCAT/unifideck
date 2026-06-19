@@ -17,71 +17,18 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from .games_map import UNIFIDECK_TAG, GameMapEntry, generate_app_id
-from .launch_options import get_full_id, is_unifideck_shortcut
+from .launch_options import is_unifideck_shortcut
+from .reconcile_helpers import (
+    build_launch_index,
+    dedup_shortcuts,
+    log_restart_banner,
+    touch_marker,
+)
 
 if TYPE_CHECKING:
     from unifideck.core.types import Game
 
 logger = logging.getLogger(__name__)
-
-
-def _touch_marker(marker: Path) -> None:
-    """Create a one-time migration marker file (best-effort)."""
-    try:
-        marker.parent.mkdir(parents=True, exist_ok=True)
-        marker.write_text("done", encoding="utf-8")
-    except OSError as e:
-        logger.warning(
-            "[ShortcutService] could not write migration marker %s: %s",
-            marker, e,
-        )
-
-
-def _dedup_shortcuts(shortcuts_dict: dict[str, Any]) -> int:
-    """Drop duplicate VDF entries sharing launch-options; return the count.
-
-    Scores each group by metadata richness and keeps the winner.
-    """
-    from .dedup import find_duplicate_losers
-    losers = find_duplicate_losers(shortcuts_dict)
-    for loser_key in losers:
-        shortcuts_dict.pop(loser_key, None)
-    return len(losers)
-
-
-def _log_restart_banner(added: int, removed: int, reclaimed: int) -> None:
-    """Log the "restart Steam to see changes" banner for tailed logs."""
-    for line in (
-        "=" * 60,
-        "IMPORTANT: Steam restart required to see shortcut changes!",
-        f"  (added={added} removed={removed} reclaimed={reclaimed})",
-        "Please EXIT Steam completely and restart for the "
-        "shortcuts.vdf changes to take effect.",
-        "=" * 60,
-    ):
-        logger.warning("[ShortcutService] %s", line)
-
-
-def _build_launch_index(shortcuts_dict: dict[str, Any]) -> dict[str, str]:
-    """Map ``"store:game_id"`` → VDF ordinal key for every shortcut.
-
-    One O(N) pass over ``shortcuts_dict`` so per-game lookups in
-    ``_sync_one_game`` are O(1). Entries with missing or
-    non-string ``LaunchOptions`` and entries whose
-    ``LaunchOptions`` doesn't parse as Unifideck form are
-    skipped silently.
-    """
-    launch_to_key: dict[str, str] = {}
-    for vdf_key, entry in shortcuts_dict.items():
-        if not isinstance(entry, dict):
-            continue
-        launch = entry.get("LaunchOptions", "")
-        if not isinstance(launch, str) or not launch:
-            continue
-        full_id = get_full_id(launch)
-        if full_id:
-            launch_to_key[full_id] = vdf_key
-    return launch_to_key
 
 
 class _ReconcilePhasesMixin:
@@ -217,7 +164,7 @@ class _ReconcilePhasesMixin:
         # winners' scores. Steam occasionally creates duplicate VDF
         # entries with the same launch-options (in-memory desync,
         # crash recovery).
-        removed += _dedup_shortcuts(shortcuts_dict)
+        removed += dedup_shortcuts(shortcuts_dict)
         return {
             "added": added, "removed": removed,
             "kept": kept, "reclaimed": reclaimed,
@@ -242,7 +189,7 @@ class _ReconcilePhasesMixin:
             counts["removed"], counts["reclaimed"],
         )
         if counts["added"] > 0 or counts["removed"] > 0:
-            _log_restart_banner(
+            log_restart_banner(
                 counts["added"], counts["removed"], counts["reclaimed"],
             )
 
@@ -281,7 +228,7 @@ class _ReconcilePhasesMixin:
             await self._save_all()
         # Mark done even when nothing changed, so we don't rescan every
         # sync; a failed marker write just retries next sync (idempotent).
-        await asyncio.to_thread(_touch_marker, marker)
+        await asyncio.to_thread(touch_marker, marker)
         logger.info(
             "[ShortcutService] LastPlayTime reset migration: cleared %d shortcut(s)",
             cleared,
@@ -332,7 +279,7 @@ class _ReconcilePhasesMixin:
         # iterating games — one O(N) pass across shortcuts, then
         # O(1) per-game. Mirrors staging's approach at
         # shortcuts_manager.py line 1708-1713.
-        launch_to_key = _build_launch_index(shortcuts_dict)
+        launch_to_key = build_launch_index(shortcuts_dict)
         launcher = getattr(self, "_launcher_path", "") or ""
         added = kept = reclaimed = 0
         for game in games:

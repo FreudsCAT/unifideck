@@ -88,24 +88,7 @@ def extract_cache_game_ids(
         leveldb = base / localstorage_relative_path / "leveldb"
         if not leveldb.is_dir():
             continue
-        files = sorted(leveldb.glob("*.ldb")) or sorted(leveldb.glob("*.log"))
-        for ldb_file in files:
-            try:
-                if ldb_file.stat().st_size > _MAX_LEVELDB_FILE_BYTES:
-                    logger.debug(
-                        "[UbisoftIdMap] skipping oversized leveldb file %s",
-                        ldb_file,
-                    )
-                    continue
-                content = ldb_file.read_bytes()
-            except OSError as e:
-                logger.debug(
-                    "[UbisoftIdMap] leveldb read failed for %s: %s",
-                    ldb_file,
-                    e,
-                )
-                continue
-            _extract_ids_from_binary(content, result)
+        _scan_leveldb_dir(leveldb, result)
         if result:
             logger.info(
                 "[UbisoftIdMap] extracted %d ubisoftConnectGameId mappings from cache",
@@ -113,6 +96,33 @@ def extract_cache_game_ids(
             )
             return result
     return result
+
+
+def _scan_leveldb_dir(leveldb: Path, result: dict[str, str]) -> None:
+    """Scan every ``*.ldb``/``*.log`` file in a leveldb dir into ``result``.
+
+    Oversized files are skipped (cache spill we must not parse synchronously
+    during a library fetch); read errors degrade to a skip. Mutates
+    ``result`` in place via :func:`_extract_ids_from_binary`.
+    """
+    files = sorted(leveldb.glob("*.ldb")) or sorted(leveldb.glob("*.log"))
+    for ldb_file in files:
+        try:
+            if ldb_file.stat().st_size > _MAX_LEVELDB_FILE_BYTES:
+                logger.debug(
+                    "[UbisoftIdMap] skipping oversized leveldb file %s",
+                    ldb_file,
+                )
+                continue
+            content = ldb_file.read_bytes()
+        except OSError as e:
+            logger.debug(
+                "[UbisoftIdMap] leveldb read failed for %s: %s",
+                ldb_file,
+                e,
+            )
+            continue
+        _extract_ids_from_binary(content, result)
 
 
 def _extract_ids_from_binary(data: bytes, result: dict[str, str]) -> None:

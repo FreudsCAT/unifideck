@@ -8,18 +8,17 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import re
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from unifideck.core.types import Events, Result
 from unifideck.event_bus.event_bus import EventBus
 from unifideck.event_bus.event_bus_devex import auto_wire, subscribe
-from unifideck.launcher.proton.infrastructure.prefix_layout import resolve_drive_c
 
 from .epic_strategy import EpicCloudSaveStrategy
 from .gog_strategy import GOGCloudSaveStrategy
 from .safety import SaveConflictError
+from .status import _StatusMixin
 from .sync import _SyncMixin
 
 if TYPE_CHECKING:
@@ -38,8 +37,12 @@ def _track(task: asyncio.Task[Any]) -> None:
     task.add_done_callback(_BACKGROUND_TASKS.discard)
 
 
-class CloudSaveService(_SyncMixin):
-    """Reactive cloud save sync for game launches."""
+class CloudSaveService(_SyncMixin, _StatusMixin):
+    """Reactive cloud save sync for game launches.
+
+    Save-location resolution and the manual-button status surface live in
+    ``_StatusMixin`` (status.py); sync helpers in ``_SyncMixin`` (sync.py).
+    """
 
     def __init__(
         self,
@@ -148,15 +151,6 @@ class CloudSaveService(_SyncMixin):
         # Fire and forget; background task
         _track(asyncio.create_task(self.sync_up(store, game_id)))
 
-    def _auto_enabled(self, key: str, *, default: bool) -> bool:
-        """Read a ``cloud.<key>`` boolean flag, falling back to ``default``."""
-        if not self._config:
-            return default
-        try:
-            return bool(self._config.get(f"cloud.{key}", default))
-        except Exception:
-            return default
-
     def auto_sync_enabled(self, direction: str) -> bool:
         """Whether AUTOMATIC sync is enabled for ``direction`` ("down"/"up").
 
@@ -170,186 +164,6 @@ class CloudSaveService(_SyncMixin):
         if direction == "up":
             return self._auto_enabled("auto_push_on_stop", default=False)
         return True
-
-    def _detect_wine_prefix_save_dir(self, game_id: str) -> str | None:
-        """Attempt to auto-detect common locations under the wine prefix."""
-        try:
-            prefix_root = Path(self._local_root).parent / "prefixes" / game_id
-            drive_c = resolve_drive_c(prefix_root)
-            if not drive_c:
-                return None
-
-            game_title = ""
-            if self._config:
-                game_title = self._config.get(f"games.{game_id}.title") or ""
-
-            candidates = [
-                drive_c / "users" / "steamuser" / "Saved Games",
-                drive_c / "users" / "steamuser" / "Documents",
-                drive_c / "users" / "steamuser" / "AppData" / "Local",
-                drive_c / "users" / "steamuser" / "AppData" / "Roaming",
-            ]
-            for candidate in candidates:
-                if candidate.is_dir():
-                    if game_title:
-                        # Clean and normalize title for directory name matching
-                        safe_title = re.sub(r"[^a-zA-Z0-9]", "", game_title).lower()
-                        for child in candidate.iterdir():
-                            if child.is_dir():
-                                child_name = re.sub(r"[^a-zA-Z0-9]", "", child.name).lower()
-                                if safe_title in child_name or child_name in safe_title:
-                                    logger.info("[CloudSave] Auto-detected Wine prefix save dir: %s", child)
-                                    return str(child)
-        except Exception as e:
-            logger.debug("[CloudSave] Failed to auto-detect save dir: %s", e)
-        return None
-
-    def get_local_save_dir(self, store: str, game_id: str) -> str | None:
-        """Resolve a game's ACTUAL local save directory, or ``None``.
-
-        Order: explicit config override → store strategy (prefix-resolved) →
-        wine-prefix auto-detect. Returns ``None`` when no real location can be
-        found (e.g. the game was never launched, so no prefix exists). We do
-        NOT fall back to a ``saves/<store>/<id>`` staging dir — the game never
-        reads from there, so syncing/backing it up only strands saves.
-        """
-        if self._config:
-            configured = self._config.get(f"games.{game_id}.save_path")
-            if configured:
-                return str(configured)
-
-        if store in self._strategies:
-            strat_dir = self._strategies[store].get_local_save_dir(game_id)
-            if strat_dir:
-                return strat_dir
-
-        # Try to auto-detect prefix folder (real, in-prefix location).
-        return self._detect_wine_prefix_save_dir(game_id)
-
-    # ── Manual cloud-save button: status surface ─────────────────────
-    def is_syncing(self, store: str, game_id: str) -> bool:
-        """True if a sync for this game is currently in flight."""
-        lock = self._syncing.get(f"{store}:{game_id}")
-        return bool(lock and lock.locked())
-
-    def _cloud_supported(self, store: str, game_id: str) -> bool | None:
-        """Native cloud-save support for ``store``, from enriched metadata.
-
-        Reads the ``cloud`` flag baked in by the unifiDB save-location
-        pipeline (Ludusavi). ``None`` when unknown (no enriched data) — many
-        Epic games genuinely lack cloud support, which is why "didn't sync"
-        is sometimes "nothing to sync".
-        """
-        if self._cache is None:
-            return None
-        try:
-            meta = self._cache.get("metadata", f"{store}:{game_id}")
-        except Exception:
-            return None
-        if isinstance(meta, dict):
-            cloud = meta.get("cloud")
-            if isinstance(cloud, dict) and store in cloud:
-                return bool(cloud[store])
-        return None
-
-    def _browse_start(self, game_id: str, save_dir: str | None) -> str:
-        """Best starting folder for the manual save-location picker.
-
-        Prefers the game's prefix user dir (where in-prefix saves live), then an
-        existing resolved/fallback save dir, then the user's home.
-        """
-        users = (
-            Path(self._local_root).parent / "prefixes" / game_id
-            / "drive_c" / "users" / "steamuser"
-        )
-        if users.is_dir():
-            return str(users)
-        if save_dir and Path(save_dir).is_dir():
-            return str(save_dir)
-        return str(Path.home())
-
-    async def get_cloud_status(self, store: str, game_id: str) -> dict:
-        """Out-of-band status for the manual cloud-save button.
-
-        Possibly slow (``get_local_save_dir`` may hit the store's metadata on
-        first call), so callers must fetch this off the render hot path.
-        ``has_cloud_saves`` is best-effort: ``True`` when a local cloud
-        mirror/backup has files, ``False`` when the store has no cloud support,
-        else ``None`` (unknown without a full download).
-        """
-        from .safety import has_save_data, snapshot
-        supported = store in self._strategies
-        status: dict[str, Any] = {
-            "supported": supported,
-            "in_progress": self.is_syncing(store, game_id),
-            "auto_pull": self._auto_enabled("auto_pull_on_launch", default=True),
-            "auto_push": self._auto_enabled("auto_push_on_stop", default=False),
-            "cloud_supported": self._cloud_supported(store, game_id),
-            "save_path": None,
-            "save_path_resolved": False,
-            "has_local_saves": False,
-            "local_snapshot": {},
-            "has_cloud_saves": None,
-            "remote_snapshot": None,
-            "last_sync_ts": 0.0,
-            "browse_start": str(Path.home()),
-        }
-        if not supported:
-            return status
-        save_dir = ""
-        try:
-            save_dir = self.get_local_save_dir(store, game_id)
-        except Exception as e:
-            logger.debug("[CloudSave] status: get_local_save_dir failed: %s", e)
-        status["browse_start"] = self._browse_start(game_id, save_dir)
-        # save_dir is always a REAL resolved location now (or None) — the
-        # staging fallback is gone, so there's no stale dir to misreport as
-        # "local saves" (e.g. after the prefix was deleted).
-        if save_dir:
-            status["save_path"] = save_dir
-            status["save_path_resolved"] = True
-            if Path(save_dir).is_dir():
-                status["has_local_saves"] = has_save_data(save_dir)
-                status["local_snapshot"] = snapshot(save_dir)
-        remote = self._cloud_snapshot(store, game_id)
-        # Prefer the REAL store-cloud timestamp/presence (e.g. legendary
-        # list-saves) over the local backup mirror, which can be stale and
-        # would make "Cloud" misleadingly differ from "Local". File count/size
-        # still come from the mirror as a rough hint.
-        cloud_info = await self._real_cloud_info(store, game_id)
-        if cloud_info is not None:
-            has = bool(cloud_info.get("has_saves"))
-            status["has_cloud_saves"] = has
-            if has:
-                ts = float(cloud_info.get("timestamp") or 0.0)
-                # ONLY what the real cloud reported — never backfill from the
-                # local mirror (a stale/wrong size is worse than no size). 0
-                # means "unknown" and the UI omits that field.
-                status["remote_snapshot"] = {
-                    "timestamp": ts,
-                    "file_count": int(cloud_info.get("file_count") or 0),
-                    "total_bytes": int(cloud_info.get("total_bytes") or 0),
-                }
-                status["last_sync_ts"] = ts
-        elif remote and remote.get("file_count"):
-            status["remote_snapshot"] = remote
-            status["has_cloud_saves"] = True
-            status["last_sync_ts"] = float(remote.get("timestamp") or 0.0)
-        elif status["cloud_supported"] is False:
-            status["has_cloud_saves"] = False
-        return status
-
-    async def _real_cloud_info(self, store: str, game_id: str) -> dict | None:
-        """Real store-cloud save info via the strategy, timeout-bounded."""
-        strat = self._strategies.get(store)
-        if strat is None:
-            return None
-        try:
-            return await asyncio.wait_for(
-                strat.get_cloud_save_info(game_id), timeout=20,
-            )
-        except Exception:
-            return None
 
     async def sync_down(self, store: str, game_id: str, force: bool = False) -> Result:
         """Pull cloud saves before a game launch.
@@ -428,29 +242,7 @@ class CloudSaveService(_SyncMixin):
                     success = await self._strategies[store].sync_up(game_id)
                 except SaveConflictError as conflict:
                     conflict_handled = True
-                    # The strategy refused to push because the local copy
-                    # would WIPE the cloud saves. Never auto-destroy — and
-                    # never treat this as a launch failure (saves are intact
-                    # and locally backed up).
-                    if conflict.hard:
-                        # HARD: empty / no-save-data. Uploading nothing could
-                        # only wipe the cloud, so it's never a valid choice —
-                        # surface a plain error, not a "keep local" pick.
-                        logger.error(  # noqa: TRY400 — expected guard, no traceback wanted
-                            "[CloudSaveService] sync_up REFUSED for %s (%s) — "
-                            "no local save data; cloud copy preserved",
-                            key, conflict.reason,
-                        )
-                        await self._emit_save_error(store, game_id)
-                    else:
-                        # SOFT: local still has saves but diverged/regressed —
-                        # surface the conflict modal so the user picks.
-                        logger.warning(
-                            "[CloudSaveService] sync_up BLOCKED for %s (%s) — "
-                            "raising cloud-save conflict instead of wiping",
-                            key, conflict.reason,
-                        )
-                        await self._emit_save_conflict(store, game_id, conflict)
+                    await self._handle_sync_up_conflict(store, game_id, key, conflict)
 
             # Write-only safety backup of the current local saves.
             await self._backup_to_mirror(store, game_id)
@@ -471,6 +263,34 @@ class CloudSaveService(_SyncMixin):
             return Result(success=False, error=str(e))
         finally:
             lock.release()
+
+    async def _handle_sync_up_conflict(
+        self, store: str, game_id: str, key: str, conflict: SaveConflictError,
+    ) -> None:
+        """React to a strategy refusing to push (would WIPE cloud saves).
+
+        Never auto-destroy, and never treat this as a launch failure — saves
+        are intact and locally backed up. HARD (empty/no-save-data) surfaces a
+        plain error toast; SOFT (diverged/regressed) surfaces the pick modal.
+        """
+        if conflict.hard:
+            # HARD: empty / no-save-data. Uploading nothing could only wipe the
+            # cloud, so it's never a valid choice — plain error, not a pick.
+            logger.error(
+                "[CloudSaveService] sync_up REFUSED for %s (%s) — "
+                "no local save data; cloud copy preserved",
+                key, conflict.reason,
+            )
+            await self._emit_save_error(store, game_id)
+        else:
+            # SOFT: local still has saves but diverged/regressed — surface the
+            # conflict modal so the user picks.
+            logger.warning(
+                "[CloudSaveService] sync_up BLOCKED for %s (%s) — "
+                "raising cloud-save conflict instead of wiping",
+                key, conflict.reason,
+            )
+            await self._emit_save_conflict(store, game_id, conflict)
 
     async def _emit_save_conflict(
         self, store: str, game_id: str, conflict: SaveConflictError,
@@ -519,9 +339,8 @@ class CloudSaveService(_SyncMixin):
         if not self._cloud_root:
             return
         try:
-            from .safety import has_save_data
             local_dir = self.get_local_save_dir(store, game_id)
-            if not local_dir or not Path(local_dir).is_dir() or not has_save_data(local_dir):
+            if not local_dir or not self._has_real_local_saves(local_dir):
                 return
             mirror = Path(self._cloud_root) / store / game_id
             await self._copy_tree(local_dir, str(mirror))
@@ -532,21 +351,16 @@ class CloudSaveService(_SyncMixin):
                 store, game_id, e,
             )
 
-    def _cloud_snapshot(self, store: str, game_id: str) -> dict:
-        """Best-effort ``{timestamp, file_count, total_bytes}`` for the
-        cloud-side copy, to populate the conflict modal.
+    @staticmethod
+    def _has_real_local_saves(local_dir: str) -> bool:
+        """True if ``local_dir`` exists and holds real save data.
 
-        Uses the plugin's local cloud backup (``_cloud_root``) when present,
-        else the most recent versioned save backup — both are local and
-        cheap. A live store-cloud listing would mean a full download just to
-        render a modal, so we approximate from the nearest local mirror.
+        Kept synchronous (not inline in the async ``_backup_to_mirror``) so the
+        blocking ``is_dir`` stat doesn't trip the async-blocking-call gate; a
+        single local stat is negligible.
         """
-        from .safety import latest_backup_snapshot, snapshot
-        if self._cloud_root:
-            remote_dir = Path(self._cloud_root) / store / game_id
-            if remote_dir.is_dir():
-                return snapshot(remote_dir)
-        return latest_backup_snapshot(store, game_id)
+        from .safety import has_save_data
+        return Path(local_dir).is_dir() and has_save_data(local_dir)
 
     def _game_title(self, store: str, game_id: str) -> str:
         """Human-readable title for toasts: config → metadata cache → id.

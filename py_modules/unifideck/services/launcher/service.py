@@ -276,6 +276,29 @@ class LauncherService:
             return await self._launch_windows(ctx, state)
         return await self._launch_native(ctx, state)
 
+    async def _xcloud_edge_check(self, ctx: LaunchContext) -> Result | None:
+        """Abort result when Edge isn't installed, else ``None`` to continue.
+
+        xCloud streaming requires Edge. Checked before GAME_LAUNCHED so we
+        don't emit a launch/stop pair for a no-op. Extracted from
+        ``_launch_xcloud`` to keep that method under the line cap.
+        """
+        if self._edge_browser.is_installed:
+            return None
+        logger.warning(
+            "[LauncherService] xCloud launch aborted — Edge not installed",
+        )
+        await emit_stage(
+            self._bus,
+            i18n_key="toasts.launcher.browserRequired",
+            game_title=ctx.game_key,
+            severity="error",
+            priority="normal",
+        )
+        return Result(
+            success=False, error="edge_not_installed", store=ctx.store,
+        )
+
     async def _launch_xcloud(self, ctx: LaunchContext) -> Result:
         """xCloud streaming path — Edge kiosk mode on the Xbox URL."""
         from unifideck.core.types.events import Events
@@ -283,23 +306,9 @@ class LauncherService:
         store = ctx.store
         game_id = ctx.game_id
 
-        # Fail fast with a clear reason when Edge isn't installed —
-        # xCloud streaming requires it. Checked before GAME_LAUNCHED so
-        # we don't emit a launch/stop pair for a no-op.
-        if not self._edge_browser.is_installed:
-            logger.warning(
-                "[LauncherService] xCloud launch aborted — Edge not installed",
-            )
-            await emit_stage(
-                self._bus,
-                i18n_key="toasts.launcher.browserRequired",
-                game_title=ctx.game_key,
-                severity="error",
-                priority="normal",
-            )
-            return Result(
-                success=False, error="edge_not_installed", store=store,
-            )
+        edge_abort = await self._xcloud_edge_check(ctx)
+        if edge_abort is not None:
+            return edge_abort
 
         await self._bus.emit(
             Events.GAME_LAUNCHED,

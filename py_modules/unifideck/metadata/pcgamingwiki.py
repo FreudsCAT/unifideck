@@ -154,8 +154,8 @@ def _rows_from_fields(
     out: list[dict[str, Any]] = []
     for raw_field in path_fields:
         for seg in _split_top_pipes(raw_field):
-            seg = seg.strip()
-            translated = _translate_path(seg) if seg else None
+            stripped = seg.strip()
+            translated = _translate_path(stripped) if stripped else None
             if translated:
                 out.append({"path": translated, "tags": ["save"], "stores": stores})
     return out
@@ -177,7 +177,7 @@ def _parse_saves(wikitext: str) -> list[dict[str, Any]]:
     return rows
 
 
-async def _fetch(url: str, timeout: int) -> Any:
+async def _fetch(url: str, timeout: int) -> Any:  # noqa: ASYNC109  # timeout forwarded to aiohttp ClientTimeout, not an asyncio.timeout context
     import aiohttp
     try:
         connector = aiohttp.TCPConnector(ssl=False)
@@ -197,7 +197,7 @@ async def _fetch(url: str, timeout: int) -> Any:
 
 
 async def _resolve_page(
-    title: str, steam_appid: int | None, timeout: int,
+    title: str, steam_appid: int | None, timeout: int,  # noqa: ASYNC109  # timeout forwarded to aiohttp ClientTimeout, not an asyncio.timeout context
 ) -> str | None:
     """Find the PCGamingWiki page: Steam AppID Cargo join, then title search."""
     if steam_appid:
@@ -209,7 +209,8 @@ async def _resolve_page(
         data = await _fetch(q, timeout)
         rows = (data or {}).get("cargoquery") or []
         if rows:
-            return rows[0].get("title", {}).get("Page")
+            page: str | None = rows[0].get("title", {}).get("Page")
+            return page
     # Title-search fallback, gated by titles_match (no guessing).
     q = PCGW_API_BASE + "?" + urllib.parse.urlencode({
         "action": "query", "format": "json", "list": "search",
@@ -218,14 +219,14 @@ async def _resolve_page(
     data = await _fetch(q, timeout)
     hits = (((data or {}).get("query") or {}).get("search")) or []
     for hit in hits:
-        page = hit.get("title")
-        if page and titles_match(title, page):
-            return page
+        hit_page: str | None = hit.get("title")
+        if hit_page and titles_match(title, hit_page):
+            return hit_page
     return None
 
 
 async def _fetch_save_locations(
-    api_base: str, page: str, timeout: int,
+    api_base: str, page: str, timeout: int,  # noqa: ASYNC109  # timeout forwarded to aiohttp ClientTimeout, not an asyncio.timeout context
 ) -> list[dict[str, Any]]:
     """Fetch + parse a page's ``{{Game data/saves}}`` rows (coalesced)."""
     key = (api_base, page)

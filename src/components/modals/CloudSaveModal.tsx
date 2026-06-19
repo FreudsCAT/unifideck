@@ -175,14 +175,16 @@ export const CloudSaveModal: FC<Props> = ({
   // staging dir. The unresolved banner guides the user to launch / set a path.
   const canDownload =
     !busy && status.save_path_resolved && status.cloud_supported !== false;
-  const canUpload = !busy && status.save_path_resolved && status.has_local_saves;
+  const canUpload =
+    !busy && status.save_path_resolved && status.has_local_saves;
 
   // Build a snapshot line from ONLY the fields we actually know (0 = unknown).
   // The cloud size often isn't available from the store's listing — showing
   // nothing is better than an inaccurate (mirror-derived) value.
   const describeSnap = (snap: Partial<SaveSnapshot>): string => {
     const parts: string[] = [];
-    if (snap.file_count) parts.push(t("play.cloudSave.filesCount", { count: snap.file_count }));
+    if (snap.file_count)
+      parts.push(t("play.cloudSave.filesCount", { count: snap.file_count }));
     if (snap.total_bytes) parts.push(formatBytes(snap.total_bytes));
     if (snap.timestamp) parts.push(formatTs(snap.timestamp));
     return parts.length ? parts.join(" · ") : t("play.cloudSave.noCloudData");
@@ -245,7 +247,11 @@ export const CloudSaveModal: FC<Props> = ({
             </span>
             <DialogButton
               onClick={() => setPicking(true)}
-              style={{ ...actionBtnStyle, minWidth: 0, alignSelf: "flex-start" }}
+              style={{
+                ...actionBtnStyle,
+                minWidth: 0,
+                alignSelf: "flex-start",
+              }}
             >
               <FaFolderOpen /> {t("play.cloudSave.setLocation")}
             </DialogButton>
@@ -280,8 +286,8 @@ export const CloudSaveModal: FC<Props> = ({
               {remote
                 ? describeSnap(remote)
                 : status.cloud_supported === false
-                  ? t("play.cloudSave.noCloudSupport")
-                  : t("play.cloudSave.noCloudData")}
+                ? t("play.cloudSave.noCloudSupport")
+                : t("play.cloudSave.noCloudData")}
             </span>
           </div>
         </div>

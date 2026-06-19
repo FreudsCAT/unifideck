@@ -172,7 +172,7 @@ class _TemplatePrefixBuilder:
         ever rebuilds the template FROM auth, never the reverse.
         """
         auth_dir = self._config.auth_prefix_dir_expanded
-        if not Path(auth_dir).is_dir():
+        if not await asyncio.to_thread(lambda: Path(auth_dir).is_dir()):
             return
         if not self._auth_prefix_has_valid_credentials():
             return
@@ -231,13 +231,21 @@ class _TemplatePrefixBuilder:
             )
             return
         auth_dir = self._config.auth_prefix_dir_expanded
-        if Path(auth_dir).is_dir():
+        if await asyncio.to_thread(lambda: Path(auth_dir).is_dir()):
             logger.info(
                 "[UbisoftPrefixManager] deriving template from auth prefix",
             )
             await self._helpers.create_template_from_auth_prefix(auth_dir)
             return
 
+        await self._create_template_from_fresh_install()
+
+    async def _create_template_from_fresh_install(self) -> None:
+        """Create the template via a fresh, pre-sign-in UPC install.
+
+        Fallback path taken only when no ``.upc-auth`` prefix exists yet;
+        the template will be re-derived from auth once the user logs in.
+        """
         template_dir = self._config.template_dir_expanded
         logger.info(
             "[UbisoftPrefixManager] no auth prefix — creating "

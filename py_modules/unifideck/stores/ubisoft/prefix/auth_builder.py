@@ -165,52 +165,79 @@ class _AuthPrefixBuilder:
 
     def _pick_clone_source(self) -> tuple[str | None, str]:
         """Pick clone source — prefer one that holds valid UPC credentials."""
-        cred_bearing: str | None = None
-        cred_label: str = ""
-        fallback: str | None = None
-        fallback_label: str = ""
-
-        # 1. check template (shared identity target)
-        if self._template_builder.template_exists():
-            tmpl = self._config.template_dir_expanded
-            if self._template_builder._prefix_has_valid_credentials(tmpl):
-                return (tmpl, "template (with creds)")
-            if self._template_builder.template_exists():
-                fallback = tmpl
-                fallback_label = "template"
+        # 1. check template (shared identity target) — a credentialed
+        #    template short-circuits before any game-prefix scan.
+        template_creds, fallback, fallback_label = self._template_clone_source()
+        if template_creds:
+            return template_creds
 
         # 2. scan game prefixes — prefer one with credentials
-        prefixes_dir = self._config.prefixes_dir_expanded
-        if Path(prefixes_dir).is_dir():
-            try:
-                entries = sorted(
-                    [entry.name for entry in Path(prefixes_dir).iterdir()],
-                )
-            except OSError:
-                entries = []
-            for entry in entries:
-                if entry.startswith("."):
-                    continue
-                candidate = str(Path(prefixes_dir) / entry)
-                if not self._paths.find_upc_exe(candidate):
-                    continue
-                if (
-                    cred_bearing is None
-                    and self._template_builder._prefix_has_valid_credentials(
-                        candidate,
-                    )
-                ):
-                    cred_bearing = candidate
-                    cred_label = f"game prefix {entry[:8]} (with creds)"
-                elif fallback is None:
-                    fallback = candidate
-                    fallback_label = f"game prefix {entry[:8]}"
+        cred_bearing, cred_label, fallback, fallback_label = (
+            self._scan_game_prefix_clone_sources(fallback, fallback_label)
+        )
 
         if cred_bearing:
             return (cred_bearing, cred_label)
         if fallback:
             return (fallback, fallback_label)
         return (None, "")
+
+    def _template_clone_source(
+        self,
+    ) -> tuple[tuple[str, str] | None, str | None, str]:
+        """Classify the template as a clone source.
+
+        Returns ``(cred_source, fallback, fallback_label)``:
+        * ``cred_source`` is ``(template, "template (with creds)")`` when
+          the template holds valid credentials (caller returns it as-is,
+          short-circuiting the game-prefix scan);
+        * otherwise an existing template is offered as a plain *fallback*.
+        """
+        if not self._template_builder.template_exists():
+            return (None, None, "")
+        tmpl = self._config.template_dir_expanded
+        if self._template_builder._prefix_has_valid_credentials(tmpl):
+            return ((tmpl, "template (with creds)"), None, "")
+        return (None, tmpl, "template")
+
+    def _scan_game_prefix_clone_sources(
+        self,
+        fallback: str | None,
+        fallback_label: str,
+    ) -> tuple[str | None, str, str | None, str]:
+        """Scan game prefixes for clone sources, preferring credentials.
+
+        Returns ``(cred_bearing, cred_label, fallback, fallback_label)``,
+        carrying the incoming *fallback* forward so the first plain
+        candidate found (template or game prefix) wins.
+        """
+        cred_bearing: str | None = None
+        cred_label: str = ""
+        for entry in self._iter_game_prefix_entries():
+            candidate = str(Path(self._config.prefixes_dir_expanded) / entry)
+            if not self._paths.find_upc_exe(candidate):
+                continue
+            if (
+                cred_bearing is None
+                and self._template_builder._prefix_has_valid_credentials(candidate)
+            ):
+                cred_bearing = candidate
+                cred_label = f"game prefix {entry[:8]} (with creds)"
+            elif fallback is None:
+                fallback = candidate
+                fallback_label = f"game prefix {entry[:8]}"
+        return (cred_bearing, cred_label, fallback, fallback_label)
+
+    def _iter_game_prefix_entries(self) -> list[str]:
+        """Return sorted, non-hidden game-prefix directory names."""
+        prefixes_dir = self._config.prefixes_dir_expanded
+        if not Path(prefixes_dir).is_dir():
+            return []
+        try:
+            entries = sorted(entry.name for entry in Path(prefixes_dir).iterdir())
+        except OSError:
+            return []
+        return [entry for entry in entries if not entry.startswith(".")]
 
     def queue_auth_assets_ensure(
         self,

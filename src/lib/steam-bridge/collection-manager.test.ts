@@ -10,9 +10,7 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 // React and the Decky runtime are peer-provided in the Steam webview
 // and absent under vitest — stub the two imports that pull them in.
 vi.mock("./tab-container", () => ({
-  getUnifideckTabs: () => [
-    { id: "unifideck-alpha", title: "Alpha", position: 0, filters: [] },
-  ],
+  getUnifideckTabs: () => [{ id: "unifideck-alpha", title: "Alpha", position: 0, filters: [] }],
 }));
 vi.mock("../library-filters", () => ({
   runFilters: () => true,
@@ -61,9 +59,7 @@ function makeStore(names: string[]) {
   names.forEach(make);
   const store = {
     userCollections: map,
-    GetCollection: vi.fn((id: string) =>
-      id === "type-games" ? { allApps: [] } : map.get(id),
-    ),
+    GetCollection: vi.fn((id: string) => (id === "type-games" ? { allApps: [] } : map.get(id))),
     GetCollectionIDByUserTag: vi.fn((tag: string) => {
       for (const c of map.values()) if (c.displayName === tag) return c.id;
       return null;

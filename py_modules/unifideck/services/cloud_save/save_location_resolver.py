@@ -70,12 +70,11 @@ def _save_locations_for(
 ) -> list[dict[str, Any]] | None:
     """Enriched save-location rows for a game: unifiDB metadata then PCGW cache."""
     key = f"{store}:{game_id}"
-    meta = _read_cache(cache, "metadata", key)
-    if meta and meta.get("save_locations"):
-        return meta["save_locations"]
-    pcgw = _read_cache(cache, "pcgw_saves", key)
-    if pcgw and pcgw.get("save_locations"):
-        return pcgw["save_locations"]
+    for namespace in ("metadata", "pcgw_saves"):
+        data = _read_cache(cache, namespace, key)
+        if data and data.get("save_locations"):
+            rows: list[dict[str, Any]] = data["save_locations"]
+            return rows
     return None
 
 

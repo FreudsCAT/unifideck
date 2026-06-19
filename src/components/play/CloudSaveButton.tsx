@@ -41,21 +41,39 @@ export const CloudSaveButton: FC<Props> = ({ store, gameId, gameTitle }) => {
   // closed) — but ONLY for user-initiated ops (consumeCloudOpPending), so the
   // automatic on-launch pull never spams a toast. (useCloudSaveStatus already
   // refetches the status on these same events.)
-  const onSyncEvent = (
-    dir: "down" | "up",
-    ok: boolean,
-    okKey: string,
-    failKey: string,
-  ) => (p: Record<string, unknown>) => {
-    if (p.store !== store || p.game_id !== gameId) return;
-    if (!consumeCloudOpPending(store, gameId, dir)) return;
-    if (ok) toast.success(t(okKey));
-    else toast.error(t(failKey), String(p.error ?? ""));
-  };
-  useEventBus(Events.CLOUD_SYNC_DOWN_COMPLETE, onSyncEvent("down", true, "toasts.cloudPullDone", "toasts.cloudPullFailed"), [store, gameId]);
-  useEventBus(Events.CLOUD_SYNC_DOWN_FAILED, onSyncEvent("down", false, "toasts.cloudPullDone", "toasts.cloudPullFailed"), [store, gameId]);
-  useEventBus(Events.CLOUD_SYNC_UP_COMPLETE, onSyncEvent("up", true, "toasts.cloudPushDone", "toasts.cloudPushFailed"), [store, gameId]);
-  useEventBus(Events.CLOUD_SYNC_UP_FAILED, onSyncEvent("up", false, "toasts.cloudPushDone", "toasts.cloudPushFailed"), [store, gameId]);
+  const onSyncEvent =
+    (dir: "down" | "up", ok: boolean, okKey: string, failKey: string) =>
+    (p: Record<string, unknown>) => {
+      if (p.store !== store || p.game_id !== gameId) return;
+      if (!consumeCloudOpPending(store, gameId, dir)) return;
+      if (ok) toast.success(t(okKey));
+      else toast.error(t(failKey), String(p.error ?? ""));
+    };
+  useEventBus(
+    Events.CLOUD_SYNC_DOWN_COMPLETE,
+    onSyncEvent("down", true, "toasts.cloudPullDone", "toasts.cloudPullFailed"),
+    [store, gameId],
+  );
+  useEventBus(
+    Events.CLOUD_SYNC_DOWN_FAILED,
+    onSyncEvent(
+      "down",
+      false,
+      "toasts.cloudPullDone",
+      "toasts.cloudPullFailed",
+    ),
+    [store, gameId],
+  );
+  useEventBus(
+    Events.CLOUD_SYNC_UP_COMPLETE,
+    onSyncEvent("up", true, "toasts.cloudPushDone", "toasts.cloudPushFailed"),
+    [store, gameId],
+  );
+  useEventBus(
+    Events.CLOUD_SYNC_UP_FAILED,
+    onSyncEvent("up", false, "toasts.cloudPushDone", "toasts.cloudPushFailed"),
+    [store, gameId],
+  );
 
   // Not a cloud-save store, or the backend says this store isn't supported.
   if (!enabled) return null;
@@ -75,14 +93,12 @@ export const CloudSaveButton: FC<Props> = ({ store, gameId, gameTitle }) => {
   const remoteTs = remote?.timestamp;
 
   const case1 = hasCloud && !hasLocal;
-  const case2and3 = hasCloud && hasLocal && !!localTs && !!remoteTs && localTs !== remoteTs;
+  const case2and3 =
+    hasCloud && hasLocal && !!localTs && !!remoteTs && localTs !== remoteTs;
   const case4 = !hasCloud && hasLocal;
 
-  const shouldBreathe = !noCloudSupport && !syncing && (
-    case1 ||
-    case2and3 ||
-    case4
-  );
+  const shouldBreathe =
+    !noCloudSupport && !syncing && (case1 || case2and3 || case4);
 
   let icon = <FaCloud />;
   let label = t("play.cloudSave.label");
@@ -127,7 +143,9 @@ export const CloudSaveButton: FC<Props> = ({ store, gameId, gameTitle }) => {
 
   return (
     <DialogButton
-      className={`unifideck-icon-btn${shouldBreathe ? " unifideck-breathe" : ""}`}
+      className={`unifideck-icon-btn${
+        shouldBreathe ? " unifideck-breathe" : ""
+      }`}
       style={style}
       disabled={loading || syncing || noCloudSupport}
       onClick={open}

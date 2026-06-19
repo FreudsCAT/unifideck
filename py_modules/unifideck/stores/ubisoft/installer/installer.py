@@ -190,38 +190,12 @@ class UbisoftInstaller:
                     game_id=game_id,
                     error="prefix_bootstrap_failed",
                 )
-            prefix_path = self._paths.get_prefix_path(game_id)
-            game_name = self._library._detector._get_game_name(game_id)
-            try:
-                launch_env = self._build_upc_launch_env(
-                    game_id,
-                    prefix_path,
-                )
-            except UpcLaunchEnvBuildError as e:
-                return InstallResult(
-                    success=False,
-                    store="ubisoft",
-                    game_id=game_id,
-                    error=e.error_code,
-                )
-            try:
-                result = await self._manual_ui_installer.install_via_upc_ui(
-                    game_id=game_id,
-                    game_name=game_name,
-                    prefix_path=prefix_path,
-                    env=launch_env.env,
-                    progress_cb=progress_cb,
-                    install_path=install_path,
-                    on_ready=on_ready,
-                )
-            except asyncio.CancelledError:
-                # Cancelled from the download queue — clean up the prefix we
-                # created if the game never landed, then propagate.
-                await self._cleanup_abandoned_prefix(game_id, prefix_path)
-                raise
-            if not result.success:
-                await self._cleanup_abandoned_prefix(game_id, prefix_path)
-            return result
+            return await self._drive_upc_install(
+                game_id,
+                progress_cb=progress_cb,
+                install_path=install_path,
+                on_ready=on_ready,
+            )
         except asyncio.CancelledError:
             raise
         except Exception as e:
@@ -232,6 +206,54 @@ class UbisoftInstaller:
                 game_id=game_id,
                 error=f"install_exception: {e}",
             )
+
+    async def _drive_upc_install(
+        self,
+        game_id: str,
+        *,
+        progress_cb: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
+        install_path: str | None = None,
+        on_ready: Callable[[], Awaitable[None]] | None = None,
+    ) -> InstallResult:
+        """Run the UPC UI install for an already-bootstrapped prefix.
+
+        Resolves the prefix + game name, builds the UPC launch env, then
+        drives ``install_via_upc_ui``. A cancelled or failed install cleans
+        up the prefix we created (cancellation is re-raised). Extracted from
+        ``install_game`` to keep that method under the line cap.
+        """
+        prefix_path = self._paths.get_prefix_path(game_id)
+        game_name = self._library._detector._get_game_name(game_id)
+        try:
+            launch_env = self._build_upc_launch_env(
+                game_id,
+                prefix_path,
+            )
+        except UpcLaunchEnvBuildError as e:
+            return InstallResult(
+                success=False,
+                store="ubisoft",
+                game_id=game_id,
+                error=e.error_code,
+            )
+        try:
+            result = await self._manual_ui_installer.install_via_upc_ui(
+                game_id=game_id,
+                game_name=game_name,
+                prefix_path=prefix_path,
+                env=launch_env.env,
+                progress_cb=progress_cb,
+                install_path=install_path,
+                on_ready=on_ready,
+            )
+        except asyncio.CancelledError:
+            # Cancelled from the download queue — clean up the prefix we
+            # created if the game never landed, then propagate.
+            await self._cleanup_abandoned_prefix(game_id, prefix_path)
+            raise
+        if not result.success:
+            await self._cleanup_abandoned_prefix(game_id, prefix_path)
+        return result
 
     async def _cleanup_abandoned_prefix(
         self,
