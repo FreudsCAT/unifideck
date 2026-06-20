@@ -1,20 +1,15 @@
 /**
- * StoreContext — registered stores + per-store visual config.
+ * StoreContext — React wrapper around the boot-time StoreInfoStore.
  *
- * Loads `get_store_infos` once on mount, exposes the array
- * to the rest of the tree. Refresh is exposed as `refetch`
- * so consumers (e.g. after STORE_REGISTERED event) can
- * update without re-mounting the provider.
+ * The `get_store_infos` RPC fetch and `STORE_REGISTERED` event
+ * subscription now live in `stores/store-info-store.ts` and run
+ * independently of QAM mount.
  *
- * Design choice : auth status lives in `AuthContext`, NOT
- * here. This context is concerned with "which stores are
- * registered" only — the connectivity status changes far
- * more often and merging the two would cause spurious
- * re-renders.
+ * This context provides the same API as before: `stores`, `loading`,
+ * `error`, `refetch` — but state comes from `useSyncExternalStore`.
  */
-import { createContext, FC, ReactNode, useContext } from "react";
-import { useRPCQuery } from "../api/useRPC";
-import { rpcRoutes } from "../api/rpc-routes";
+import { createContext, FC, ReactNode, useCallback, useContext, useSyncExternalStore } from "react";
+import { storeInfoStore } from "../stores/store-info-store";
 import type { StoreInfo } from "../types/api";
 
 /** Store context value. */
@@ -28,19 +23,21 @@ interface StoreContextValue {
 const Ctx = createContext<StoreContextValue | null>(null);
 
 /**
- * Provider that loads the registered stores once on
- * mount via the `get_store_infos` RPC and exposes
- * them to descendants. Listens to the
- * `STORE_REGISTERED` event so a runtime-registered
- * store appears without remounting the tree.
+ * Provider that exposes registered stores to descendants.
+ * State comes from the boot-time `storeInfoStore` singleton.
  */
 export const StoreProvider: FC<{ children: ReactNode }> = ({ children }) => {
-  const { data, loading, error, refetch } = useRPCQuery<[], StoreInfo[]>(
-    rpcRoutes.getStoreInfos,
-    [],
+  const { stores, loading, error } = useSyncExternalStore(
+    storeInfoStore.subscribe,
+    storeInfoStore.getSnapshot,
   );
+
+  const refetch = useCallback(async () => {
+    await storeInfoStore.refetch();
+  }, []);
+
   const value: StoreContextValue = {
-    stores: data ?? [],
+    stores,
     loading,
     error,
     refetch,

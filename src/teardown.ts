@@ -14,6 +14,10 @@
 import type { RouterPatchHandle } from "./lib/steam-bridge";
 import type { CollectionManagerHandle } from "./lib/steam-bridge/collection-manager";
 import type { Unregisterable } from "./types/steam";
+import { downloadStore } from "./stores/download-store";
+import { syncStore } from "./stores/sync-store";
+import { authStore } from "./stores/auth-store";
+import { storeInfoStore } from "./stores/store-info-store";
 /**
  * Handles captured during bootstrap that {@link runTeardown}
  * must dispose on plugin unload. Currently the lifetime
@@ -28,6 +32,7 @@ export interface TeardownHandles {
   overviewEnrichment?: (() => void) | null;
   lifetimeListener?: Unregisterable | null;
   launcherToastPoll?: (() => void) | null;
+  bootEventListener?: (() => void) | null;
 }
 /**
  * Run every disposer captured during bootstrap, in
@@ -39,6 +44,35 @@ export interface TeardownHandles {
  * and produce subtle phantom listeners.
  */
 export function runTeardown(handles: TeardownHandles): void {
+  // Stop boot-time singletons first (they hold EventBus
+  // subscriptions and polling timers).
+  try {
+    syncStore.stop();
+  } catch (e) {
+    console.warn("[Teardown] syncStore stop failed:", e);
+  }
+  try {
+    downloadStore.stop();
+  } catch (e) {
+    console.warn("[Teardown] downloadStore stop failed:", e);
+  }
+  try {
+    authStore.stop();
+  } catch (e) {
+    console.warn("[Teardown] authStore stop failed:", e);
+  }
+  try {
+    storeInfoStore.stop();
+  } catch (e) {
+    console.warn("[Teardown] storeInfoStore stop failed:", e);
+  }
+  if (handles.bootEventListener) {
+    try {
+      handles.bootEventListener();
+    } catch (e) {
+      console.warn("[Teardown] boot event listener stop failed:", e);
+    }
+  }
   if (handles.launcherToastPoll) {
     try {
       handles.launcherToastPoll();
@@ -51,13 +85,6 @@ export function runTeardown(handles: TeardownHandles): void {
       handles.lifetimeListener.unregister();
     } catch (e) {
       console.warn("[Teardown] lifetime listener unregister failed:", e);
-    }
-  }
-  if (handles.overviewEnrichment) {
-    try {
-      handles.overviewEnrichment();
-    } catch (e) {
-      console.warn("[Teardown] overview enrichment stop failed:", e);
     }
   }
   if (handles.appStorePatch) {

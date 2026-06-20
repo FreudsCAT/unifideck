@@ -1,14 +1,15 @@
 /**
  * LocaleContext — UI language preference.
  *
- * Reads the saved preference at mount, exposes the current
- * language tag, and wraps the i18next `changeLanguage` call
- * so consumers don't reach into the i18n module directly.
+ * The language is set at boot by `applyLanguagePreference()` in
+ * `bootstrap-tasks.tsx`, so this provider reads directly from
+ * `i18n.language` — no mount-time RPC fetch needed.
  *
- * Persistence is delegated to the backend (set_language_preference
- * RPC). The frontend's i18next instance is updated locally
- * on success, so the UI re-renders immediately while the
- * RPC completes in the background.
+ * Persistence of user-initiated changes is delegated to the
+ * backend via `set_language_preference` RPC. The frontend's
+ * i18next instance is updated locally on success, so the UI
+ * re-renders immediately while the RPC completes in the
+ * background.
  */
 import {
   createContext,
@@ -16,11 +17,10 @@ import {
   ReactNode,
   useCallback,
   useContext,
-  useEffect,
   useState,
 } from "react";
 import i18n from "i18next";
-import { useRPCMutation, useRPCQuery } from "../api/useRPC";
+import { useRPCMutation } from "../api/useRPC";
 import { rpcRoutes } from "../api/rpc-routes";
 
 /** Locale context value. */
@@ -32,31 +32,17 @@ interface LocaleContextValue {
 
 const Ctx = createContext<LocaleContextValue | null>(null);
 /**
- * Provider that owns the active UI language. Reads
- * the persisted choice on mount, then propagates
- * changes to i18next and to the backend (so server
- * toasts come back already translated).
+ * Provider that owns the active UI language. Reads from
+ * `i18n.language` (set at boot by `applyLanguagePreference`),
+ * then propagates user-initiated changes to i18next and to
+ * the backend.
  */
 export const LocaleProvider: FC<{ children: ReactNode }> = ({ children }) => {
   const [locale, setLocaleState] = useState<string>(i18n.language);
-  const pref = useRPCQuery<[], { success: boolean; language: string }>(
-    rpcRoutes.getLanguagePreference,
-    [],
-  );
 
   const setMut = useRPCMutation<[string], { success: boolean }>(
     rpcRoutes.setLanguagePreference,
   );
-
-  useEffect(() => {
-    if (pref.data?.success && pref.data.language) {
-      const tag = pref.data.language;
-      if (tag && tag !== "auto" && tag !== locale) {
-        void i18n.changeLanguage(tag);
-        setLocaleState(tag);
-      }
-    }
-  }, [pref.data]);
 
   /** Set locale. */
   const setLocale = useCallback(
@@ -70,7 +56,7 @@ export const LocaleProvider: FC<{ children: ReactNode }> = ({ children }) => {
 
   const value: LocaleContextValue = {
     locale,
-    loading: pref.loading,
+    loading: false,
     setLocale,
   };
 

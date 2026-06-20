@@ -26,7 +26,6 @@ import { LibraryProvider } from "./LibraryContext";
 import { AuthProvider } from "./AuthContext";
 import { SyncProvider } from "./SyncContext";
 import { DownloadProvider } from "./DownloadContext";
-import { ToastEventListener } from "../components/modals/ToastEventListener";
 
 /**
  * Composition of all five context providers in the order
@@ -43,7 +42,6 @@ export const RootProvider: FC<{ children: ReactNode }> = ({ children }) => {
             <SyncProvider>
               <DownloadProvider>
                 {children}
-                <ToastEventListener />
               </DownloadProvider>
             </SyncProvider>
           </AuthProvider>

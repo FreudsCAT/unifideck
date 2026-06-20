@@ -1,14 +1,15 @@
 /**
  * Plugin entry — the thin lifecycle wiring.
  *
- * Replaces the 2409-line legacy index.tsx with ~110 LOC
+ * Replaces the 2409-line legacy index.tsx with ~130 LOC
  * that does exactly what a Decky plugin entry should do :
  *
  *   1. Mount <RootProvider> around <QuickAccessPanel>
  *   2. Register the App Details router patch
- *   3. Run bootstrap tasks (language, account switch,
+ *   3. Start boot-time singletons (stores, event listener)
+ *   4. Run bootstrap tasks (language, account switch,
  *      lifetime listener)
- *   4. Return a teardown function for plugin unload
+ *   5. Return a teardown function for plugin unload
  *
  * That's it. Every other concern lives in F1-F5 :
  *  - SteamBridge isolates Steam internals
@@ -33,10 +34,14 @@ import { applyLibraryPatch } from "./lib/steam-bridge/library-patch";
 import { startUnifideckCacheAutoload } from "./lib/library-filters";
 import { startCollectionManager } from "./lib/steam-bridge/collection-manager";
 import { applyAppStorePatch } from "./lib/steam-bridge/app-store-patcher";
-import { startOverviewEnrichment } from "./lib/steam-bridge/overview-enrichment";
-import { prefetchAuthStatus } from "./contexts/AuthContext";
+import { loadCompatCacheFromBackend } from "./lib/protondb-cache";
 import { runBootstrapTasks } from "./bootstrap-tasks";
 import { startLauncherToastPoll } from "./services/launcherToasts";
+import { startBootEventListener } from "./services/boot-event-listener";
+import { downloadStore } from "./stores/download-store";
+import { syncStore } from "./stores/sync-store";
+import { authStore } from "./stores/auth-store";
+import { storeInfoStore } from "./stores/store-info-store";
 import { runTeardown, type TeardownHandles } from "./teardown";
 // Eager translation load — Decky's UI mounts before any
 // async work resolves, so we kick this off at module import.
@@ -66,6 +71,9 @@ export default definePlugin(() => {
   } catch (e) {
     console.error("[Unifideck] cache autoload start failed:", e);
   }
+  // Load ProtonDB compat cache at boot so library tab patches
+  // have compat badges on first render (no QAM open required).
+  void loadCompatCacheFromBackend();
   // Inject the custom Unifideck tabs into Steam's library via
   // the ``/library`` route patch — same primitive TabMaster uses
   // (works in both Desktop and Gaming Mode).
@@ -81,20 +89,21 @@ export default definePlugin(() => {
   } catch (e) {
     console.error("[Unifideck] collection manager start failed:", e);
   }
-  // Enrich non-Steam shortcut AppOverviews (metacritic, deck compat,
-  // store categories, release date, reviews, date-added) so Steam's
-  // NATIVE library Sort menu + Library Filters work for them. Runs at
-  // boot — NOT on QAM mount — so it works in Gaming Mode. Enriches
-  // before the library grid first renders.
+  // ── Boot-time singletons ──────────────────────────────
+  // Start all reactive stores at boot so they track state
+  // even when the QAM panel is closed. Each store subscribes
+  // to EventBus events and/or fetches initial data.
+  authStore.start();
+  storeInfoStore.start();
+  downloadStore.start();
+  syncStore.start();
+  // Boot-time event listener — handles STORE_ERROR, LAUNCHER_STAGE,
+  // and STORE_AUTH_COMPLETE events independently of QAM mount.
   try {
-    handles.overviewEnrichment = startOverviewEnrichment();
+    handles.bootEventListener = startBootEventListener();
   } catch (e) {
-    console.error("[Unifideck] overview enrichment start failed:", e);
+    console.error("[Unifideck] boot event listener start failed:", e);
   }
-  // Start auth status check now (in definePlugin, where Decky's
-  // RPC bridge is ready) so the result is cached before the user
-  // opens QAM. Avoids the 1-2s delay on first QAM open.
-  prefetchAuthStatus();
   // Persistent poll for launcher-subprocess toasts (first-time prefix
   // setup, dependency install, Proton switch). Runs here — NOT in the
   // QAM panel — so launch-time toasts show in Gaming Mode where the
