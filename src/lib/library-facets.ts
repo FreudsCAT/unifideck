@@ -62,6 +62,13 @@ export function isFacetsLoaded(): boolean {
   return loaded;
 }
 
+/** Test-only: reset the in-memory cache so cases don't bleed state
+ *  (the maps + `loaded` flag are module-level singletons). */
+export function __resetFacetsForTest(): void {
+  facetByAppId.clear();
+  loaded = false;
+}
+
 /** All AppIDs we hold a facet for — used by the enrichment pass to
  *  iterate exactly the shortcuts that have data. */
 export function getFacetAppIds(): number[] {
@@ -100,8 +107,16 @@ export async function loadFacets(force = false): Promise<void> {
       raw,
       { route: rpcRoutes.getOverviewEnrichment },
     );
+    const entries = Object.entries(map ?? {});
+    // A forced reload during a library sync can race the backend: the
+    // metadata/compat caches are briefly mid-rebuild and the RPC
+    // returns empty. Don't wipe good enrichment in that window — keep
+    // what we have and let the next sync-completed refresh fill it.
+    if (entries.length === 0 && facetByAppId.size > 0) {
+      return;
+    }
     facetByAppId.clear();
-    for (const [key, rec] of Object.entries(map ?? {})) {
+    for (const [key, rec] of entries) {
       const id = Number(key);
       if (!Number.isNaN(id) && rec) facetByAppId.set(id, rec);
     }

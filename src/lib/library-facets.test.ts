@@ -23,6 +23,7 @@ import {
   getFacet,
   getCompatByShortcutAppId,
   isFacetsLoaded,
+  __resetFacetsForTest,
 } from "./library-facets";
 
 const mockCall = call as unknown as ReturnType<typeof vi.fn>;
@@ -46,6 +47,7 @@ const RECORD = {
 describe("library-facets", () => {
   beforeEach(() => {
     mockCall.mockReset();
+    __resetFacetsForTest();
   });
 
   it("loads the enrichment map and resolves a facet by appid", async () => {
@@ -77,5 +79,16 @@ describe("library-facets", () => {
     await loadFacets(true);
     // No throw; just no data for the appid.
     expect(getCompatByShortcutAppId(APPID)).toBeNull();
+  });
+
+  it("keeps existing facets when a forced reload returns empty (sync race)", async () => {
+    mockCall.mockResolvedValue({ success: true, data: { [APPID]: RECORD } });
+    await loadFacets(true);
+    expect(getFacet(APPID)).not.toBeNull();
+    // Mid-sync the caches are briefly empty — a forced reload must NOT
+    // wipe the good data we already hold.
+    mockCall.mockResolvedValue({ success: true, data: {} });
+    await loadFacets(true);
+    expect(getFacet(APPID)).not.toBeNull();
   });
 });

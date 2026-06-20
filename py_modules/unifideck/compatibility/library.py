@@ -236,6 +236,10 @@ class CompatLibrary:
                 return CompatRating(
                     title=title, error="not_found_on_steam_store",
                 )
+            # Backfill the shortcut → AppID mapping the metadata phase
+            # missed, so the facet join surfaces this game's badge.
+            if shortcut_app_id is not None:
+                self._persist_steam_real_appid(shortcut_app_id, steam_id)
         result = await self.get_for_appid(steam_id)
         result.title = title
         return result
@@ -376,6 +380,31 @@ class CompatLibrary:
             # Cache write failures are non-fatal: the rating was
             # computed successfully, we just won't re-use it.
             logger.debug("[CompatLibrary] cache.set %r failed: %s", key, e)
+
+    def _persist_steam_real_appid(
+        self, shortcut_app_id: int, steam_id: int,
+    ) -> None:
+        """Backfill the shortcut → real-Steam-AppID mapping.
+
+        Compat resolves the Steam AppID by title (``search_store`` +
+        the edition-strip fallback) even for games the metadata phase
+        negative-cached or never resolved — but only the metadata phase
+        writes ``steam_real_appid``, so those games' already-fetched
+        ProtonDB / Deck-Verified rating never linked back to the
+        shortcut for the library-facets join (e.g. "Among Us": compat
+        cached under 945360, but the shortcut had no mapping → no
+        badge). Persist it here, keyed by the signed AppID to match how
+        the sync layer writes it. Non-fatal on failure.
+        """
+        if self._cache is None or steam_id <= 0:
+            return
+        try:
+            self._cache.set("steam_real_appid", str(shortcut_app_id), steam_id)
+        except Exception as e:
+            logger.debug(
+                "[CompatLibrary] steam_real_appid backfill %r failed: %s",
+                shortcut_app_id, e,
+            )
 def load_compat_cache() -> dict[str, Any]:
     """Load compat cache (legacy passthrough — returns empty dict)."""
     logger.debug("[compat] load_compat_cache called via legacy path")

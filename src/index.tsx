@@ -33,6 +33,7 @@ import { applyAppDetailsPatch } from "./views/AppDetailsPatch";
 import { applyLibraryPatch } from "./lib/steam-bridge/library-patch";
 import { startUnifideckCacheAutoload } from "./lib/library-filters";
 import { startCollectionManager } from "./lib/steam-bridge/collection-manager";
+import { startOverviewEnrichment } from "./lib/steam-bridge/overview-enrichment";
 import { applyAppStorePatch } from "./lib/steam-bridge/app-store-patcher";
 import { loadCompatCacheFromBackend } from "./lib/protondb-cache";
 import { runBootstrapTasks } from "./bootstrap-tasks";
@@ -88,6 +89,17 @@ export default definePlugin(() => {
     handles.collectionManager = startCollectionManager();
   } catch (e) {
     console.error("[Unifideck] collection manager start failed:", e);
+  }
+  // Enrich non-Steam shortcut AppOverviews (metacritic, deck compat,
+  // store categories, release date, reviews, date-added, playtime,
+  // size) so Steam's NATIVE library Sort menu + Library Filters work
+  // for them. Runs at boot — NOT on QAM mount — so it works in Gaming
+  // Mode, and re-applies on every overview re-set so closing a game's
+  // details page doesn't wipe the enrichment.
+  try {
+    handles.overviewEnrichment = startOverviewEnrichment();
+  } catch (e) {
+    console.error("[Unifideck] overview enrichment start failed:", e);
   }
   // ── Boot-time singletons ──────────────────────────────
   // Start all reactive stores at boot so they track state
