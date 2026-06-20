@@ -51,6 +51,9 @@ export const rpcRoutes = {
   getStorageLocations: "get_storage_locations",
   getGogGameLanguages: "get_gog_game_languages",
   getProtondbCache: "get_protondb_cache",
+  // Library facets — per-shortcut enrichment for native Sort/Filters
+  // + shortcut-keyed Great-on-Deck compat (LibraryFacetsRPCMixin)
+  getOverviewEnrichment: "get_overview_enrichment",
   // Steam Store spoofing (StoreRPCMixin)
   getRealSteamAppidMappings: "get_real_steam_appid_mappings",
   getSteamMetadataCache: "get_steam_metadata_cache",

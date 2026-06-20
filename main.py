@@ -84,6 +84,7 @@ from unifideck.rpc.mixins.observability import ObservabilityRPCMixin  # noqa: E4
 from unifideck.rpc.mixins.playtime import PlaytimeRPCMixin  # noqa: E402
 from unifideck.rpc.mixins.security import SecurityRPCMixin  # noqa: E402
 from unifideck.rpc.mixins.storage import StorageRPCMixin  # noqa: E402
+from unifideck.rpc.mixins.library_facets import LibraryFacetsRPCMixin  # noqa: E402
 from unifideck.rpc.mixins.store import StoreRPCMixin  # noqa: E402
 from unifideck.rpc.mixins.sync import SyncRPCMixin  # noqa: E402
 from unifideck.rpc.mixins.ui import UIRPCMixin  # noqa: E402
@@ -103,6 +104,7 @@ class Plugin(
     AuthShortcutsRPCMixin,
     EdgeRPCMixin,
     SyncRPCMixin,
+    LibraryFacetsRPCMixin,
     UIRPCMixin,
     CloudFailureRPCMixin,
     CloudSaveRPCMixin,

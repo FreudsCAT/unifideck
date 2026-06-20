@@ -25,6 +25,7 @@ export interface TeardownHandles {
   libraryPatch?: RouterPatchHandle | null;
   collectionManager?: CollectionManagerHandle | null;
   appStorePatch?: { remove: () => void } | null;
+  overviewEnrichment?: (() => void) | null;
   lifetimeListener?: Unregisterable | null;
   launcherToastPoll?: (() => void) | null;
 }
@@ -50,6 +51,13 @@ export function runTeardown(handles: TeardownHandles): void {
       handles.lifetimeListener.unregister();
     } catch (e) {
       console.warn("[Teardown] lifetime listener unregister failed:", e);
+    }
+  }
+  if (handles.overviewEnrichment) {
+    try {
+      handles.overviewEnrichment();
+    } catch (e) {
+      console.warn("[Teardown] overview enrichment stop failed:", e);
     }
   }
   if (handles.appStorePatch) {

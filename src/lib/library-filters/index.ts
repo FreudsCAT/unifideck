@@ -19,8 +19,10 @@ import { Events } from "../../types/events";
 import {
   getCachedCompatByTitle,
   getCachedRating,
+  loadCompatCacheFromBackend,
   meetsGreatOnDeckCriteria,
 } from "../protondb-cache";
+import { getCompatByShortcutAppId, loadFacets } from "../library-facets";
 import type { SteamAppOverview } from "../../types/steam";
 
 export type StoreSlug =
@@ -229,10 +231,20 @@ const filterFunctions: { [K in FilterType]: FilterFn<K> } = {
     if (app.steam_deck_compat_category === DECK_VERIFIED) return true;
     const cached = unifideckGameCache.get(app.appid);
     if (cached) {
+      // Prefer the shortcut-keyed facet compat — the backend already
+      // resolved this shortcut → real-Steam-AppID → compat via the
+      // centralised title matcher, so no fuzzy lookup against the
+      // lossy ``display_name`` is needed here.
+      const facetCompat = getCompatByShortcutAppId(app.appid);
+      if (facetCompat) return meetsGreatOnDeckCriteria(facetCompat);
+      // Fallback: title-keyed compat for shortcuts the metadata phase
+      // never mapped to a Steam AppID (no facet yet).
       const title = app.display_name || "";
       if (!title) return false;
       return meetsGreatOnDeckCriteria(getCachedCompatByTitle(title));
     }
+    // Native Steam game (not a Unifideck shortcut): ``app.appid`` is a
+    // real Steam AppID, so the appid-keyed ProtonDB rating applies.
     const tier = getCachedRating(app.appid);
     return tier === "native" || tier === "platinum";
   },
@@ -362,8 +374,18 @@ export function startUnifideckCacheAutoload(): void {
   if (cacheLoadStarted) return;
   cacheLoadStarted = true;
   void loadUnifideckCache();
+  // Eager-load the compat cache + per-shortcut facet enrichment at
+  // plugin init (not just when the QAM panel mounts) so the Steam
+  // library's Great-on-Deck tab + native Sort/Filters have data on
+  // first render in Gaming Mode, where the panel is never opened.
+  void loadCompatCacheFromBackend();
+  void loadFacets();
   window.addEventListener("unifideck-sync-completed", () => {
     void loadUnifideckCache();
+    // A fresh sync rebuilt the metadata/compat caches — refresh the
+    // derived compat + facet data so badges/sort/filters reflect it.
+    void loadCompatCacheFromBackend(true);
+    void loadFacets(true);
   });
   // ShortcutService emits SHORTCUT_INSTALL_STATE_CHANGED on
   // post-install/uninstall — flip the per-app entry immediately so

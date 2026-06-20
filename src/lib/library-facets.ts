@@ -1,0 +1,115 @@
+/**
+ * Library Facets — per-shortcut enrichment data for Steam's native
+ * library Sort menu + Library Filters, plus shortcut-keyed
+ * Great-on-Deck resolution.
+ *
+ * Our custom tabs render through Steam's own grid, which sorts and
+ * filters purely on `AppOverview` field values. Non-Steam shortcuts
+ * have those fields empty, so this module pulls a per-shortcut
+ * `FacetRecord` from the backend (`get_overview_enrichment`, a pure
+ * reshape of the metadata/compat caches) and the overview-enrichment
+ * layer writes them onto the live overviews.
+ *
+ * The same records carry `protondb_tier` / `deck_status` keyed by the
+ * **shortcut** AppID, so Great-on-Deck no longer depends on fuzzy
+ * title matching against the compat cache.
+ *
+ * Backend keys every record under BOTH the signed and unsigned 32-bit
+ * forms of the shortcut AppID; we store whatever it sends, so a lookup
+ * by either form hits.
+ */
+import { call } from "@decky/api";
+import { rpcRoutes } from "../api/rpc-routes";
+import { unwrapRpcEnvelope } from "../api/useRPC";
+import type {
+  DeckVerifiedStatus,
+  GameCompatInfo,
+  ProtonDBTier,
+} from "./protondb-cache";
+
+/** One shortcut's facet data — mirrors the backend `FacetRecord`
+ *  (`rpc/mixins/_library_facets.py`). All fields are best-effort;
+ *  any may be null/empty when the source cache is cold. */
+export interface FacetRecord {
+  steam_app_id: number;
+  /** Sort dimensions */
+  metacritic: number | null;
+  /** Raw Steam release-date string (e.g. "21 Jun, 2022"); converted
+   *  to the unix value Steam sorts on at apply time. */
+  release_date: string;
+  recommendations_total: number | null;
+  review_score: number | null;
+  review_percentage: number | null;
+  date_added_unix: number;
+  /** Filter dimensions */
+  deck_category: number; // 0 Unknown · 1 Unsupported · 2 Playable · 3 Verified
+  store_category: number[];
+  store_tag: number[];
+  /** Great-on-Deck (shortcut-keyed compat — no title matching) */
+  protondb_tier: string | null;
+  deck_status: string;
+}
+
+const facetByAppId = new Map<number, FacetRecord>();
+let loaded = false;
+
+/** Synchronous facet lookup by AppID (signed or unsigned). */
+export function getFacet(appId: number): FacetRecord | null {
+  return facetByAppId.get(appId) ?? null;
+}
+
+export function isFacetsLoaded(): boolean {
+  return loaded;
+}
+
+/** All AppIDs we hold a facet for — used by the enrichment pass to
+ *  iterate exactly the shortcuts that have data. */
+export function getFacetAppIds(): number[] {
+  return [...facetByAppId.keys()];
+}
+
+/**
+ * Derive a `GameCompatInfo` for Great-on-Deck from the shortcut-keyed
+ * facet — no title matching. Returns null when this AppID has no
+ * facet (caller falls back to the title-keyed compat cache).
+ *
+ * `deck_status` strings ("verified"/"playable"/"unsupported"/"unknown")
+ * line up 1:1 with `DeckVerifiedStatus`.
+ */
+export function getCompatByShortcutAppId(appId: number): GameCompatInfo | null {
+  const f = facetByAppId.get(appId);
+  if (!f) return null;
+  return {
+    tier: (f.protondb_tier as ProtonDBTier | null) ?? null,
+    deckVerified: (f.deck_status as DeckVerifiedStatus) || "unknown",
+    steamAppId: f.steam_app_id || null,
+  };
+}
+
+/**
+ * Load the per-shortcut enrichment map from the backend. Idempotent
+ * unless `force` is passed (used to refresh after a library sync).
+ * Catches every error so a backend outage degrades to "no enrichment"
+ * rather than breaking plugin boot.
+ */
+export async function loadFacets(force = false): Promise<void> {
+  if (loaded && !force) return;
+  try {
+    const raw = await call<[], unknown>(rpcRoutes.getOverviewEnrichment);
+    const map = unwrapRpcEnvelope<Record<string, FacetRecord> | null | undefined>(
+      raw,
+      { route: rpcRoutes.getOverviewEnrichment },
+    );
+    facetByAppId.clear();
+    for (const [key, rec] of Object.entries(map ?? {})) {
+      const id = Number(key);
+      if (!Number.isNaN(id) && rec) facetByAppId.set(id, rec);
+    }
+    loaded = true;
+    console.log(
+      `[Unifideck] Loaded overview enrichment for ${facetByAppId.size} shortcut-id keys`,
+    );
+  } catch (e) {
+    console.error("[Unifideck] loadFacets failed", e);
+  }
+}

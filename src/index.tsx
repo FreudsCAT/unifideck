@@ -33,6 +33,7 @@ import { applyLibraryPatch } from "./lib/steam-bridge/library-patch";
 import { startUnifideckCacheAutoload } from "./lib/library-filters";
 import { startCollectionManager } from "./lib/steam-bridge/collection-manager";
 import { applyAppStorePatch } from "./lib/steam-bridge/app-store-patcher";
+import { startOverviewEnrichment } from "./lib/steam-bridge/overview-enrichment";
 import { prefetchAuthStatus } from "./contexts/AuthContext";
 import { runBootstrapTasks } from "./bootstrap-tasks";
 import { startLauncherToastPoll } from "./services/launcherToasts";
@@ -79,6 +80,16 @@ export default definePlugin(() => {
     handles.collectionManager = startCollectionManager();
   } catch (e) {
     console.error("[Unifideck] collection manager start failed:", e);
+  }
+  // Enrich non-Steam shortcut AppOverviews (metacritic, deck compat,
+  // store categories, release date, reviews, date-added) so Steam's
+  // NATIVE library Sort menu + Library Filters work for them. Runs at
+  // boot — NOT on QAM mount — so it works in Gaming Mode. Enriches
+  // before the library grid first renders.
+  try {
+    handles.overviewEnrichment = startOverviewEnrichment();
+  } catch (e) {
+    console.error("[Unifideck] overview enrichment start failed:", e);
   }
   // Start auth status check now (in definePlugin, where Decky's
   // RPC bridge is ready) so the result is cached before the user

@@ -10,7 +10,11 @@ from typing import TYPE_CHECKING, Any
 import aiohttp
 
 from unifideck.utils.config_helpers import get_cfg
-from unifideck.utils.title_match import titles_match
+from unifideck.utils.title_match import (
+    normalize_for_match,
+    strip_edition_suffix,
+    titles_match,
+)
 
 if TYPE_CHECKING:
     from unifideck.config import ConfigManager
@@ -129,32 +133,19 @@ def _format_price(price_block: Any) -> str:
     return f"{formatted} {currency}".strip()
 
 
-async def search_store(
-    title: str,
-    config: ConfigManager | None = None,
-) -> dict[str, Any] | None:
-    """Search store.
+async def _storesearch_items(term: str, timeout_s: float) -> list[dict[str, Any]]:
+    """Hit Steam's ``storesearch`` endpoint and return the raw item list.
 
-    Calls the Steam Store ``storesearch`` endpoint and returns the top
-    match as a dict (``app_id``, ``name``, ``header_image``, ``price``,
-    ``release_date``). Returns ``None`` on no hits or any network error.
+    ``ssl=False`` for the same SteamOS cert reason every Steam HTTP path
+    here uses (the bundled cert store predates Steam's CDN cert
+    rotations; default verification fails inside the Decky process).
+    Returns ``[]`` on any error / no hits.
     """
-    if not title:
-        return None
-    timeout_s = float(_cfg(config, "network.steam_store_timeout", _DEFAULT_TIMEOUT))
-    params = {"term": title, "l": "english", "cc": "us"}
+    if not term:
+        return []
+    params = {"term": term, "l": "english", "cc": "us"}
     try:
         timeout = aiohttp.ClientTimeout(total=timeout_s)
-        # SteamOS's bundled cert store predates several Steam Store CDN
-        # cert rotations (~2024) so default SSL verification fails inside
-        # the Decky plugin process — the symptom looks like every
-        # ``library.search_store`` call silently returning ``None``,
-        # which in turn makes ``MetadataService.enrich`` cache a
-        # ``_negative`` sentinel for every game. ArtworkService's parallel
-        # ``steam_search_appid`` (artwork/store_metadata.py:66) already
-        # works around this by passing ``ssl=False`` to its connector;
-        # mirroring that here. Hostname + chain validation are off, same
-        # trade-off as the GOG OAuth flow (see ``ssl_helpers``).
         connector = aiohttp.TCPConnector(ssl=False)
         async with (
             aiohttp.ClientSession(
@@ -163,23 +154,25 @@ async def search_store(
             session.get(STEAM_STORE_SEARCH_URL, params=params) as response,
         ):
             if response.status != _HTTP_OK:
-                return None
+                return []
             data = await response.json(content_type=None)
     except (aiohttp.ClientError, TimeoutError) as exc:
-        logger.debug("[steam.search_store] %s failed: %s", title, exc)
-        return None
-
+        logger.debug("[steam.search_store] %r failed: %s", term, exc)
+        return []
     items = data.get("items") if isinstance(data, dict) else None
-    if not items:
-        return None
-    # Validate the title instead of blindly trusting Steam's top hit.
-    # ``items[0]`` is frequently a sequel / soundtrack / unrelated game
-    # ("Control" → "Steam Controller", "Hades" → "Hades II", "Figment" →
-    # "Figment - Soundtrack"), which would feed WRONG metadata + compat
-    # downstream. Scan for the first result that actually IS this game;
-    # return None (no data) rather than guess wrong.
-    item = None
-    app_id = 0
+    return items if isinstance(items, list) else []
+
+
+def _pick_store_match(
+    query: str, items: list[dict[str, Any]],
+) -> tuple[dict[str, Any], int] | None:
+    """First storesearch item whose name passes ``titles_match(query, …)``.
+
+    Validates instead of trusting ``items[0]`` — it's frequently a
+    sequel / soundtrack / unrelated game ("Control" → "Steam
+    Controller", "Hades" → "Hades II"). Returns ``None`` rather than
+    guess wrong.
+    """
     for candidate in items:
         try:
             cid = int(candidate.get("id", 0))
@@ -187,12 +180,43 @@ async def search_store(
             continue
         if cid <= 0:
             continue
-        if titles_match(title, str(candidate.get("name", ""))):
-            item = candidate
-            app_id = cid
-            break
-    if item is None:
+        if titles_match(query, str(candidate.get("name", ""))):
+            return candidate, cid
+    return None
+
+
+async def search_store(
+    title: str,
+    config: ConfigManager | None = None,
+) -> dict[str, Any] | None:
+    """Resolve ``title`` to its Steam Store entry via ``storesearch``.
+
+    Returns the validated top match (``app_id``, ``name``,
+    ``header_image``, ``price``, ``release_date``) or ``None``.
+
+    Two passes: the raw title first, then — if that yields no validated
+    hit — the edition/celebration-stripped title. Steam's storesearch
+    frequently returns ZERO items for a full edition string ("Rise of
+    the Tomb Raider: 20 Year Celebration" → no hits) even though the
+    base game is on Steam, so the stripped retry recovers those without
+    loosening the match guard (every candidate is still validated
+    against the original title).
+    """
+    if not title:
         return None
+    timeout_s = float(_cfg(config, "network.steam_store_timeout", _DEFAULT_TIMEOUT))
+
+    match = _pick_store_match(title, await _storesearch_items(title, timeout_s))
+    if match is None:
+        stripped = strip_edition_suffix(normalize_for_match(title))
+        if stripped and stripped != normalize_for_match(title):
+            match = _pick_store_match(
+                title, await _storesearch_items(stripped, timeout_s),
+            )
+    if match is None:
+        return None
+
+    item, app_id = match
     header_image = (
         f"https://cdn.akamai.steamstatic.com/steam/apps/{app_id}/header.jpg"
     )

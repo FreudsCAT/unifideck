@@ -69,8 +69,10 @@ interface BackendCompatEntry {
  * outage degrades to "no badges, deckCompat tab empty" rather than
  * crashing module init.
  */
-export async function loadCompatCacheFromBackend(): Promise<void> {
-  if (cacheLoadedFromBackend) return;
+export async function loadCompatCacheFromBackend(
+  force = false,
+): Promise<void> {
+  if (cacheLoadedFromBackend && !force) return;
   try {
     const raw = await call<[], Record<string, BackendCompatEntry>>(
       rpcRoutes.getProtondbCache,
@@ -78,6 +80,12 @@ export async function loadCompatCacheFromBackend(): Promise<void> {
     if (!raw || typeof raw !== "object") {
       cacheLoadedFromBackend = true;
       return;
+    }
+    // A forced reload (post-sync) repopulates from scratch so entries
+    // dropped upstream don't linger.
+    if (force) {
+      compatCache.clear();
+      protonDBCache.clear();
     }
     for (const [key, entry] of Object.entries(raw)) {
       if (!entry || typeof entry !== "object") continue;

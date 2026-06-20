@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from typing import TYPE_CHECKING, Any, cast
 
 from unifideck.core.types import Game
@@ -36,6 +37,8 @@ CACHE_NAMESPACE = "metadata"
 # real Steam AppID. The frontend reads both via dedicated RPCs.
 STEAM_REAL_APPID_NS = "steam_real_appid"
 STEAM_METADATA_NS = "steam_metadata"
+STEAM_REVIEWS_NS = "steam_reviews"
+SHORTCUT_ADDED_NS = "shortcut_added"
 DEFAULT_CACHE_TTL = 7 * 24 * 3600  # fallback if config missing
 
 # Per-game concurrency cap. Sized for Steam's ``appdetails`` rate
@@ -404,6 +407,7 @@ class MetadataService:
         self._cache_set_safely(
             STEAM_REAL_APPID_NS, str(game.app_id), steam_id,
         )
+        self._stamp_date_added(game.app_id)
         try:
             existing = self._cache.get(STEAM_METADATA_NS, str(steam_id))
             if isinstance(existing, dict):
@@ -416,7 +420,50 @@ class MetadataService:
         if data is None:
             return None
         self._cache_set_safely(STEAM_METADATA_NS, str(steam_id), data)
+        await self._fetch_reviews(steam_id)
         return data
+
+    async def _fetch_reviews(self, steam_id: int) -> None:
+        """Fetch + cache the Steam review summary for ``steam_id`` once.
+
+        Powers the native "Steam Review" library sort for spoofed
+        shortcuts (``review_score`` / ``review_percentage`` aren't in
+        the ``appdetails`` payload). One-time per AppID — skipped when
+        already cached — so steady-state syncs pay nothing.
+        """
+        try:
+            if self._cache.get(STEAM_REVIEWS_NS, str(steam_id)) is not None:
+                return
+        except Exception:
+            logger.debug(
+                "[MetadataService] reviews cache read failed", exc_info=True,
+            )
+        from unifideck.steam.appreviews import fetch_appreviews
+        reviews = await fetch_appreviews(steam_id, config=self._config)
+        if reviews is not None:
+            self._cache_set_safely(STEAM_REVIEWS_NS, str(steam_id), reviews)
+
+    def _stamp_date_added(self, app_id: int) -> None:
+        """Record a stable first-seen timestamp for the Date-Added sort.
+
+        Stamped once per shortcut (only when absent) so the value never
+        drifts across syncs. The true historical add-date is
+        unrecoverable for games that predate this, so the first sync
+        after upgrade gives the existing library a common baseline and
+        genuinely-new games get their own (later) stamp. Keyed by the
+        signed ``Game.app_id``; the frontend reader tries both 32-bit
+        forms.
+        """
+        try:
+            if self._cache.get(SHORTCUT_ADDED_NS, str(app_id)) is not None:
+                return
+            self._cache_set_safely(
+                SHORTCUT_ADDED_NS, str(app_id), int(time.time()),
+            )
+        except Exception:
+            logger.debug(
+                "[MetadataService] date-added stamp failed", exc_info=True,
+            )
 
     async def _resolve_steam_id(
         self, game: Game, hint_steam_id: int | None,

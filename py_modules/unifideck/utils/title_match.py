@@ -154,6 +154,21 @@ def _strip_chapters_episodes(s: str) -> str | None:
     return m.group(1).strip() if m and m.group(1).strip() else None
 
 
+def _strip_celebration(s: str) -> str | None:
+    """Strip a trailing anniversary/celebration suffix.
+
+    Catches "Rise of the Tomb Raider: 20 Year Celebration" →
+    "rise of the tomb raider", "<game> anniversary celebration", and
+    "<game> celebration". These re-release tags aren't in the explicit
+    edition table and aren't "<word> edition", so they slipped through
+    and caused the base title to be rejected against the Steam hit.
+    """
+    m = re.match(
+        r"^(.+?)\s+(?:\d+\s+)?(?:year\s+)?(?:anniversary\s+)?celebration$", s,
+    )
+    return m.group(1).strip() if m and m.group(1).strip() else None
+
+
 def _strip_trailing_year(s: str) -> str | None:
     """Strip a trailing 4-digit year in the 1980-2030 range."""
     m = re.match(r"^(.+?\D)\s+(\d{4})$", s)
@@ -169,6 +184,7 @@ _STRIP_STRATEGIES = (
     _strip_known_suffix,
     _strip_edition_phrase,
     _strip_chapters_episodes,
+    _strip_celebration,
     _strip_trailing_year,
 )
 
