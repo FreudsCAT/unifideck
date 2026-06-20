@@ -391,6 +391,21 @@ follow_imports = "silent"
 module = ["attr", "attr.*", "attrs", "attrs.*", "rpds", "rpds.*"]
 ignore_errors = true
 
+# ``legendary`` (the Epic CLI) is bundled as a GitHub-release binary at
+# build time, NOT a pip dependency — its ``py_modules/legendary`` tree is
+# gitignored, so it is PRESENT locally but ABSENT in CI's checkout. Without
+# this override mypy diverges by environment: locally it resolves the
+# untyped module (``no-untyped-call``), in CI it can't find it at all
+# (``import-not-found``), and any ``type: ignore`` that fixes one fails as
+# ``unused-ignore`` in the other. ``follow_imports = "skip"`` +
+# ``ignore_missing_imports`` force it to ``Any`` either way, so the cloud-save
+# fallback that calls ``legendary.core.LegendaryCore`` type-checks identically
+# in both. (Only ``cloud_save/epic_strategy.py`` imports it.)
+[[tool.mypy.overrides]]
+module = ["legendary.*"]
+follow_imports = "skip"
+ignore_missing_imports = true
+
 # ──────────────────────────────────────────────────────────────────
 # pytest — test suite at the repo root
 # ──────────────────────────────────────────────────────────────────

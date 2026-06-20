@@ -76,11 +76,14 @@ class EpicCloudSaveStrategy(CloudSaveStrategy):
         """
         prev = os.environ.get("STEAM_COMPAT_DATA_PATH")
         try:
+            # legendary is forced to Any by the mypy override (it's absent in
+            # CI), so these calls need no no-untyped-call ignore; str() keeps
+            # the return concretely str | None (not Any).
             from legendary.core import LegendaryCore
             os.environ["STEAM_COMPAT_DATA_PATH"] = str(prefix_root)
-            core = LegendaryCore()  # type: ignore[no-untyped-call]  # vendored legendary, untyped
-            resolved = core.get_save_path(game_id)  # type: ignore[no-untyped-call]  # vendored legendary, untyped
-            return resolved if resolved and os.path.isdir(resolved) else None
+            core = LegendaryCore()
+            resolved = core.get_save_path(game_id)
+            return str(resolved) if resolved and os.path.isdir(resolved) else None
         except Exception as e:
             logger.debug("[EpicSync] legendary get_save_path fallback failed for %s: %s", game_id, e)
             return None
