@@ -34,6 +34,7 @@ import { applyLibraryPatch } from "./lib/steam-bridge/library-patch";
 import { startUnifideckCacheAutoload } from "./lib/library-filters";
 import { startCollectionManager } from "./lib/steam-bridge/collection-manager";
 import { startOverviewEnrichment } from "./lib/steam-bridge/overview-enrichment";
+import { startTileStoreBadgePatch } from "./lib/steam-bridge/tile-store-badge-patch";
 import { applyAppStorePatch } from "./lib/steam-bridge/app-store-patcher";
 import { loadCompatCacheFromBackend } from "./lib/protondb-cache";
 import { runBootstrapTasks } from "./bootstrap-tasks";
@@ -100,6 +101,15 @@ export default definePlugin(() => {
     handles.overviewEnrichment = startOverviewEnrichment();
   } catch (e) {
     console.error("[Unifideck] overview enrichment start failed:", e);
+  }
+  // Render each non-Steam shortcut's STORE logo (Epic/GOG/…) on its
+  // library tile in place of the Steam Deck 'D' glyph, keeping the
+  // compat status badge. Boot-time (before the grid mounts) so it works
+  // in Gaming Mode. Read-only w.r.t. overviews → launch unaffected.
+  try {
+    handles.tileStoreBadgePatch = startTileStoreBadgePatch();
+  } catch (e) {
+    console.error("[Unifideck] tile store-badge patch start failed:", e);
   }
   // ── Boot-time singletons ──────────────────────────────
   // Start all reactive stores at boot so they track state

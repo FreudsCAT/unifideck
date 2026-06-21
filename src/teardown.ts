@@ -30,6 +30,7 @@ export interface TeardownHandles {
   collectionManager?: CollectionManagerHandle | null;
   appStorePatch?: { remove: () => void } | null;
   overviewEnrichment?: (() => void) | null;
+  tileStoreBadgePatch?: (() => void) | null;
   lifetimeListener?: Unregisterable | null;
   launcherToastPoll?: (() => void) | null;
   bootEventListener?: (() => void) | null;
@@ -78,6 +79,13 @@ export function runTeardown(handles: TeardownHandles): void {
       handles.launcherToastPoll();
     } catch (e) {
       console.warn("[Teardown] launcher toast poll stop failed:", e);
+    }
+  }
+  if (handles.tileStoreBadgePatch) {
+    try {
+      handles.tileStoreBadgePatch();
+    } catch (e) {
+      console.warn("[Teardown] tile store-badge patch stop failed:", e);
     }
   }
   if (handles.lifetimeListener) {
