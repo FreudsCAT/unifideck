@@ -69,7 +69,7 @@ export const DownloadingButtons: FC<Props> = ({
   }, [cancelled, doCancel, download.game_title, t]);
 
   return (
-    <PlayShell>
+    <PlayShell autoFocus>
       <DialogButton
         className="unifideck-cancel-btn"
         disabled={cancelled || actions.isWorking}

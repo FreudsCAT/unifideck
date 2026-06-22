@@ -13,6 +13,7 @@ import { DialogButton } from "@decky/ui";
 import { useTranslation } from "react-i18next";
 import { FaCloud, FaGamepad, FaCog } from "react-icons/fa";
 import { launchAppWithConfiguredGamepad } from "../../utils/controllerConfig";
+import { openNativeAppManageMenu } from "../../utils/nativeAppMenu";
 import {
   PlayShell,
   MetaInline,
@@ -62,7 +63,7 @@ export const XCloudButtons: FC<Props> = ({ appId, gameId }) => {
   }, [appId, gameId]);
 
   return (
-    <PlayShell>
+    <PlayShell autoFocus>
       <DialogButton
         className="unifideck-play-btn"
         onClick={onPlay}
@@ -85,7 +86,13 @@ export const XCloudButtons: FC<Props> = ({ appId, gameId }) => {
         <DialogButton
           className="unifideck-icon-btn"
           style={iconBtnStyle}
-          onClick={() => openAppSettings(appId)}
+          onClick={(e) => {
+            // Open Steam's native app menu (Manage / Properties / …),
+            // matching the native gear; fall back to Properties directly.
+            if (!openNativeAppManageMenu(e?.currentTarget as HTMLElement)) {
+              openAppSettings(appId);
+            }
+          }}
           aria-label={t("playButton.appSettings")}
         >
           <FaCog />

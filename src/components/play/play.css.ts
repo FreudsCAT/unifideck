@@ -15,7 +15,63 @@
  * render itself.
  */
 
+import {
+  playSectionClasses,
+  basicAppDetailsSectionStylerClasses,
+} from "@decky/ui";
+
 const STYLE_ID = "unifideck-play-focus-styles";
+
+/** Marker class added to the App-Details inner container (in
+ *  `AppDetailsPatch`) for non-Steam shortcuts. {@link nativeAppDetailsHideCss}
+ *  scopes the native-section hides to subtrees carrying it, so Steam
+ *  games (never marked) keep their native UI. */
+export const HIDE_NATIVE_PLAY_MARKER = "unifideck-hide-native-play";
+
+/**
+ * CSS that hides Steam's native App-Details sections we replace for
+ * shortcut pages: the native Play row AND the lower tabbed section
+ * (Activity / Your Stuff / Community / Game Info — i.e. the whole
+ * `AppDetailsContainer`, nav row + tab content).
+ *
+ * Steam ships *separate* app-details modules for desktop and Gaming
+ * Mode (BPM / gamepadui), each with its own obfuscated class for the
+ * native Play row:
+ *   - Gaming Mode → `basicAppDetailsSectionStylerClasses.PlaySection`
+ *     (the module `@decky/ui` matches on `AppDetailsRoot`)
+ *   - Desktop     → `playSectionClasses.Container`
+ * The tabbed section is `basicAppDetailsSectionStylerClasses
+ * .AppDetailsContainer`. All rotate per Steam build, so they're
+ * resolved at runtime. These sections render in a *different* subtree
+ * from our injected wrapper (so they can't be removed in-tree);
+ * instead the patch marks a common ancestor with
+ * {@link HIDE_NATIVE_PLAY_MARKER} and these rules hide the targets
+ * beneath it. Purely declarative — applies the instant they paint, no
+ * RPC / CDP round-trip. We emit a rule for every class we can resolve
+ * so the hide lands in whichever UI is rendering. Returns `""` (no-op)
+ * if none resolve.
+ *
+ * Render it inline via `<style>` in our injected subtree (same pattern
+ * as {@link PLAY_FOCUS_CSS} / `PlayShell`) so it lands in the right
+ * CEF document.
+ */
+export function nativeAppDetailsHideCss(): string {
+  const classes = new Set<string>();
+  const add = (v: unknown): void => {
+    if (typeof v === "string" && v) classes.add(v);
+  };
+  // Native Play row (Gaming Mode + desktop variants).
+  add(basicAppDetailsSectionStylerClasses?.PlaySection);
+  add(playSectionClasses?.Container);
+  // Lower tabbed section (Activity / Community / Game Info + content).
+  add(basicAppDetailsSectionStylerClasses?.AppDetailsContainer);
+  return Array.from(classes)
+    .map(
+      (c) =>
+        `.${HIDE_NATIVE_PLAY_MARKER} [class*="${c}"]{display:none !important;}`,
+    )
+    .join("\n");
+}
 
 /** Focus / hover styling for every Unifideck-rendered button.
  *  Exported so components can render it inline via `<style>` in

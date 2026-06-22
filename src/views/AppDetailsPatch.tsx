@@ -41,6 +41,7 @@ import { getGameStateVersion } from "../lib/game-state-version";
 import { injectGameToAppinfo } from "../lib/steam-bridge/app-store-patcher";
 import { DownloadProvider } from "../contexts/DownloadContext";
 import { PlaySectionWrapper } from "../components/play";
+import { HIDE_NATIVE_PLAY_MARKER } from "../components/play/play.css";
 import { GameInfoPanel } from "../components/info";
 
 /** Stub component that's only used in the React DevTools
@@ -130,6 +131,21 @@ function injectIntoTree(ret: unknown): void {
   )
     return;
 
+  // Mark the inner container so our scoped CSS rule (nativePlayHideCss)
+  // hides Steam's native Play row — which renders in a *separate* subtree
+  // beneath this same container, so it can't be removed in-tree. Set
+  // synchronously here (re-applied every render; idempotent) instead of
+  // the old async CDP `display:none`. Only shortcuts reach this code, so
+  // native Steam games are never marked.
+  const containerClassName =
+    typeof innerContainer.props.className === "string"
+      ? innerContainer.props.className
+      : "";
+  if (!containerClassName.includes(HIDE_NATIVE_PLAY_MARKER)) {
+    innerContainer.props.className =
+      `${containerClassName} ${HIDE_NATIVE_PLAY_MARKER}`.trim();
+  }
+
   const children = innerContainer.props!.children as unknown[];
   const playWrapperKey = `unifideck-play-wrapper-${appId}`;
   const gameInfoKey = `unifideck-game-info-${appId}`;
@@ -166,7 +182,7 @@ function injectPlayWrapper(
       idx,
       0,
       <DownloadProvider key={`${baseKey}-v${version}`}>
-        <PlaySectionWrapper appId={appId}>{null}</PlaySectionWrapper>
+        <PlaySectionWrapper appId={appId} />
       </DownloadProvider>,
     );
     return;

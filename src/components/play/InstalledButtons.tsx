@@ -29,6 +29,7 @@ import { useGameActions } from "../../hooks/useGameActions";
 import { useLaunchPrep } from "../../hooks/useLaunchPrep";
 import { useToast } from "../../hooks/useToast";
 import { SteamBridge } from "../../lib/steam-bridge";
+import { openNativeAppManageMenu } from "../../utils/nativeAppMenu";
 import { UninstallConfirmModal } from "../modals/UninstallConfirmModal";
 import { CloudSaveButton } from "./CloudSaveButton";
 import {
@@ -240,7 +241,7 @@ export const InstalledButtons: FC<Props> = ({
   })();
 
   return (
-    <PlayShell>
+    <PlayShell autoFocus>
       {primaryButtons}
       <MetaInline
         sizeBytes={game?.size_bytes}
@@ -267,7 +268,13 @@ export const InstalledButtons: FC<Props> = ({
         <DialogButton
           className="unifideck-icon-btn"
           style={iconBtnStyle}
-          onClick={() => openAppSettings(appId)}
+          onClick={(e) => {
+            // Open Steam's native app menu (Manage / Properties / …),
+            // matching the native gear; fall back to Properties directly.
+            if (!openNativeAppManageMenu(e?.currentTarget as HTMLElement)) {
+              openAppSettings(appId);
+            }
+          }}
           aria-label={t("playButton.appSettings")}
         >
           <FaCog />

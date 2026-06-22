@@ -62,8 +62,6 @@ export const rpcRoutes = {
   performFullCleanup: "perform_full_cleanup",
   // UI helpers (UIRPCMixin)
   injectHideCss: "inject_hide_css",
-  hidePlaySection: "hide_play_section",
-  unhidePlaySection: "unhide_play_section",
   setLanguagePreference: "set_language_preference",
   getLanguagePreference: "get_language_preference",
   setDefaultStorageLocation: "set_default_storage_location",

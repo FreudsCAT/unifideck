@@ -12,7 +12,14 @@
  * Meta is inline (label+value pairs side by side), icons
  * float to the right via ``marginLeft: auto``.
  */
-import { CSSProperties, FC, ReactNode, useEffect, useState } from "react";
+import {
+  CSSProperties,
+  FC,
+  ReactNode,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 import { Focusable } from "@decky/ui";
 import { useTranslation } from "react-i18next";
 import { useGameSize } from "../../hooks/useGameSize";
@@ -55,34 +62,96 @@ export const iconBtnStyle: CSSProperties = {
 };
 
 /**
- * Outer Focusable shell for every play variant. Marks the
- * subtree with ``data-unifideck-play-wrapper="true"`` so the
- * backend CDP hide can skip our own DOM when walking ancestors.
- * Styling matches staging: full-width flex row with the
- * translucent dark background and 16 px inner padding.
+ * Outer Focusable shell for every play variant. Styling matches
+ * staging: full-width flex row with the translucent dark background
+ * and 16 px inner padding.
+ *
+ * `autoFocus` is a real Steam `Focusable` nav option (consumed into
+ * navOptions, NOT the React DOM attribute) — when true, gamepad focus
+ * lands on the shell's first focusable child (the primary action
+ * button) as the nav node mounts. The variants pass it so the page
+ * loads with our Install / Play / Resume / Cancel button focused
+ * instead of Steam's (now hidden) native Play button. The loading
+ * skeleton omits it.
  */
-export const PlayShell: FC<{ children: ReactNode }> = ({ children }) => (
-  <Focusable
-    flow-children="row"
-    data-unifideck-play-wrapper="true"
-    style={{
-      display: "flex",
-      alignItems: "center",
-      width: "100%",
-      padding: "16px",
-      boxSizing: "border-box",
-      background: "rgba(14, 20, 27, 0.33)",
-      position: "relative",
-      zIndex: 2,
-    }}
-  >
-    {/* Render the focus CSS inline so it lands in THIS (App-Details)
-        CEF document — a document.head injection from elsewhere does
-        not reach it. This is what makes Install→blue / Play→green /
-        Cancel→red actually apply on focus (staging's pattern). */}
-    <style>{PLAY_FOCUS_CSS}</style>
-    {children}
-  </Focusable>
+export const PlayShell: FC<{ children: ReactNode; autoFocus?: boolean }> = ({
+  children,
+  autoFocus,
+}) => {
+  const ref = useRef<HTMLDivElement>(null);
+  // The `autoFocus` navOption only wins if the Focusable exists during
+  // Steam's initial app-page focus pass — but our variant mounts *late*
+  // (after `get_game_info` resolves, past the loading skeleton), so it
+  // often misses. Imperatively focus the primary button on mount, with
+  // one delayed retry to beat that pass. Bails once focus has landed so
+  // it never steals focus the user moved away.
+  useEffect(() => {
+    if (!autoFocus) return;
+    let raf = 0;
+    let timer = 0;
+    let retried = false;
+    const grab = (): void => {
+      const root = ref.current;
+      if (!root) return;
+      const target = root.querySelector<HTMLElement>("button") ?? root;
+      if (document.activeElement === target) return;
+      target.focus?.();
+      if (document.activeElement !== target && !retried) {
+        retried = true;
+        timer = window.setTimeout(grab, 140);
+      }
+    };
+    raf = requestAnimationFrame(grab);
+    return () => {
+      cancelAnimationFrame(raf);
+      window.clearTimeout(timer);
+    };
+  }, [autoFocus]);
+
+  return (
+    <Focusable
+      ref={ref}
+      flow-children="row"
+      autoFocus={autoFocus}
+      style={{
+        display: "flex",
+        alignItems: "center",
+        width: "100%",
+        padding: "16px",
+        boxSizing: "border-box",
+        background: "rgba(14, 20, 27, 0.33)",
+        position: "relative",
+        zIndex: 2,
+      }}
+    >
+      {/* Render the focus CSS inline so it lands in THIS (App-Details)
+          CEF document — a document.head injection from elsewhere does
+          not reach it. This is what makes Install→blue / Play→green /
+          Cancel→red actually apply on focus (staging's pattern). */}
+      <style>{PLAY_FOCUS_CSS}</style>
+      {children}
+    </Focusable>
+  );
+};
+
+/**
+ * Placeholder shown in the Play section while `get_game_info` is still
+ * resolving for a shortcut. The native Play row is already hidden by
+ * CSS at that point, so this keeps the area from collapsing (no layout
+ * jump) until the real variant renders. A muted button-sized block —
+ * no text, so it needs no i18n.
+ */
+export const PlayLoadingSkeleton: FC = () => (
+  <PlayShell>
+    <div
+      style={{
+        minWidth: 200,
+        height: 48,
+        borderRadius: 4,
+        background: "rgba(255, 255, 255, 0.06)",
+      }}
+    />
+  </PlayShell>
 );
 
 /** Right-floated icon group. ``marginLeft: auto`` pushes it
