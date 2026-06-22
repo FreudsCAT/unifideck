@@ -6,8 +6,10 @@ Great-on-Deck compat. Validated against the real cache shapes
 (`steam_real_appid` signed keys → `steam_metadata`/`compat` by real
 Steam AppID) observed on a live device.
 """
+
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import Any
 
 from unifideck.rpc.mixins._library_facets import (
@@ -15,6 +17,16 @@ from unifideck.rpc.mixins._library_facets import (
     build_enrichment_map,
     build_facet_record,
 )
+
+
+def _game(app_id: int, store: str, store_game_id: str) -> Any:
+    """Duck-typed stand-in for ``core.types.Game`` (only the fields the
+    facet builder reads)."""
+    return SimpleNamespace(
+        app_id=app_id,
+        store=store,
+        store_game_id=store_game_id,
+    )
 
 
 class _Store:
@@ -126,34 +138,63 @@ def test_unmapped_shortcut_absent_from_map() -> None:
 def test_build_facet_record_direct() -> None:
     cache = _cache_with()
     rec = build_facet_record(
-        cache, _SHORTCUT_SIGNED, _REAL,
+        cache,
+        _SHORTCUT_SIGNED,
+        _REAL,
         reviews_data={str(_REAL): {"review_score": 9, "review_percentage": 98}},
         added_data={str(_SHORTCUT_SIGNED): 1700000000},
-        composite_mc={},
+        meta_entry=None,
     )
     assert rec["review_score"] == 9
     assert rec["date_added_unix"] == 1700000000
 
 
-def test_metacritic_composite_fallback() -> None:
-    # Steam appdetails lacks a metacritic score, but the sync's
-    # metacritic.com backfill put one in the composite ``metadata``
-    # cache (keyed store:game_id, carrying steam_appid). The facet must
-    # fall back to it via the resolved real Steam AppID.
+def test_metacritic_from_store_gid_entry_via_games() -> None:
+    # Steam appdetails lacks a metacritic score, but the metacritic.com
+    # backfill wrote one into ``metadata[store:game_id]`` WITHOUT a
+    # steam_appid (the orphaned-score case that the old steam_appid
+    # composite join dropped). The games path joins by store:game_id and
+    # recovers it.
     cache = _cache_with(
         steam_metadata={str(_REAL): {"name": "Alex Kidd"}},  # no "metacritic"
-        metadata={
-            "epic:abc": {"title": "Alex Kidd", "steam_appid": _REAL, "metacritic_score": 65},
-        },
+        metadata={"epic:abc": {"title": "Alex Kidd", "metacritic_score": 65}},
     )
-    rec = build_enrichment_map(cache)[str(_SHORTCUT_UNSIGNED)]
+    games = [_game(_SHORTCUT_SIGNED, "epic", "abc")]
+    rec = build_enrichment_map(cache, games)[str(_SHORTCUT_UNSIGNED)]
     assert rec["metacritic"] == 65
 
 
-def test_steam_metacritic_wins_over_composite() -> None:
+def test_steam_metacritic_wins_over_store_gid_entry() -> None:
     cache = _cache_with(
-        metadata={"epic:abc": {"steam_appid": _REAL, "metacritic_score": 50}},
+        metadata={"epic:abc": {"metacritic_score": 50}},
     )
     # _cache_with default steam_metadata has metacritic.score == 81.
-    rec = build_enrichment_map(cache)[str(_SHORTCUT_UNSIGNED)]
+    games = [_game(_SHORTCUT_SIGNED, "epic", "abc")]
+    rec = build_enrichment_map(cache, games)[str(_SHORTCUT_UNSIGNED)]
+    assert rec["metacritic"] == 81
+
+
+def test_games_path_record_without_resolved_real_appid() -> None:
+    # A game whose real Steam AppID never resolved (no steam_real_appid
+    # entry) is SKIPPED by the cache-only fallback, but the games path
+    # still emits a facet — with metacritic from store:game_id — so it
+    # sorts correctly instead of dropping to "Everything Else".
+    cache = _cache_with(
+        steam_real_appid={},
+        steam_metadata={},
+        metadata={"gog:xyz": {"metacritic_score": 77}},
+    )
+    games = [_game(_SHORTCUT_SIGNED, "gog", "xyz")]
+    out = build_enrichment_map(cache, games)
+    rec = out[str(_SHORTCUT_UNSIGNED)]
+    assert rec["steam_app_id"] == 0
+    assert rec["metacritic"] == 77
+    # Both signed + unsigned forms still emitted.
+    assert str(_SHORTCUT_SIGNED) in out
+
+
+def test_games_path_falls_back_to_real_appid_enumeration() -> None:
+    # No games supplied (sync service unavailable) → enumerate
+    # steam_real_appid; metacritic comes only from Steam's appdetails.
+    rec = build_enrichment_map(_cache_with(), None)[str(_SHORTCUT_UNSIGNED)]
     assert rec["metacritic"] == 81

@@ -114,7 +114,8 @@ function setIds(target: Set<number> | undefined, ids: number[]): void {
 }
 
 function applyFacet(ov: EnrichableOverview, facet: FacetRecord): void {
-  if (typeof facet.metacritic === "number") ov.metacritic_score = facet.metacritic;
+  if (typeof facet.metacritic === "number")
+    ov.metacritic_score = facet.metacritic;
   const rel = releaseUnix(facet.release_date);
   if (rel > 0) {
     ov.rt_original_release_date = rel;
@@ -320,11 +321,27 @@ export function startOverviewEnrichment(): () => void {
     }, 3000);
   });
 
+  // The metacritic backfill finishes in the background AFTER the sync's
+  // progress bar hits 100% (and after `onSync`'s short retry window), so
+  // its long-tail scores would otherwise only appear on the next
+  // resync/restart. Re-read facets + re-enrich when it signals done.
+  const unsubBackfill = EventBusClient.subscribe(
+    Events.METADATA_BACKFILL_COMPLETE,
+    () => {
+      void loadFacets(true).then(run);
+    },
+  );
+
   return () => {
     window.removeEventListener("unifideck-sync-completed", onSync);
     window.removeEventListener("unifideck-game-state-changed", onState);
     try {
       unsubStop?.();
+    } catch {
+      /* ignore */
+    }
+    try {
+      unsubBackfill?.();
     } catch {
       /* ignore */
     }

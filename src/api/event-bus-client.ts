@@ -46,6 +46,7 @@ const WATCHED_EVENTS: EventName[] = [
   "sync_cancelled",
   "sync_skipped",
   "post_sync_phase_changed",
+  "metadata_backfill_complete",
   "shortcut_reconcile_complete",
   "shortcut_install_state_changed",
   "download_queued",

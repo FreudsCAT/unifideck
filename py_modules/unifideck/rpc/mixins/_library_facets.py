@@ -17,9 +17,10 @@ populates; both degrade to ``None`` / ``0`` when cold.
 
 Underscore-prefixed: internal to ``library_facets.LibraryFacetsRPCMixin``.
 """
+
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from unifideck.rpc.mixins._metadata_display import (
     appid_candidates,
@@ -29,10 +30,15 @@ from unifideck.rpc.mixins._metadata_display import (
     read_steam_metadata,
 )
 
+if TYPE_CHECKING:
+    from unifideck.core.types import Game
+
 # Cache namespaces the sync phase fills with the two facets that are
 # NOT already derivable from steam_metadata / compat.
-STEAM_REVIEWS_NS = "steam_reviews"  # {str(real_steam_appid): {review_score, review_percentage, total_reviews}}
-DATE_ADDED_NS = "shortcut_added"    # {str(shortcut_app_id): int unix seconds}
+STEAM_REVIEWS_NS = (
+    "steam_reviews"  # {str(real_steam_appid): {review_score, review_percentage, total_reviews}}
+)
+DATE_ADDED_NS = "shortcut_added"  # {str(shortcut_app_id): int unix seconds}
 
 
 def _extract_ids(raw: Any) -> list[int]:
@@ -54,8 +60,7 @@ def _extract_ids(raw: Any) -> list[int]:
 
 def _metacritic(
     steam_meta: dict[str, Any],
-    steam_app_id: int,
-    composite_mc: dict[int, int],
+    meta_entry: dict[str, Any] | None,
 ) -> int | None:
     """Metacritic critic score.
 
@@ -63,36 +68,21 @@ def _metacritic(
     rated *and* Steam surfaces — many games (esp. non-AAA) miss it there.
     The sync's metacritic backfill (``metadata_backfill`` →
     ``metacritic.com``) fills the gap into the composite ``metadata``
-    cache, so fall back to that, keyed by the resolved real Steam AppID.
+    cache keyed by ``store:game_id``. We read that entry directly (the
+    backfill's native key), which avoids the fragile ``steam_appid``
+    join that stranded backfilled scores whose entry lacked a resolved
+    ``steam_appid``.
     """
     mc = steam_meta.get("metacritic")
     if isinstance(mc, dict):
         score = mc.get("score")
         if isinstance(score, int):
             return score
-    return composite_mc.get(steam_app_id)
-
-
-def _build_composite_metacritic(cache: Any) -> dict[int, int]:
-    """Map real-Steam-AppID → metacritic score from the composite
-    ``metadata`` cache (keyed ``store:game_id``), which includes the
-    backfilled metacritic.com scores Steam's appdetails lacks. Only
-    entries with a positive ``steam_appid`` + score are usable here.
-    """
-    out: dict[int, int] = {}
-    for entry in read_cache_store(cache, "metadata").values():
-        if not isinstance(entry, dict):
-            continue
-        score = entry.get("metacritic_score")
-        if not isinstance(score, int) or score <= 0:
-            continue
-        try:
-            sid = int(entry.get("steam_appid") or 0)
-        except (TypeError, ValueError):
-            continue
-        if sid > 0:
-            out.setdefault(sid, score)
-    return out
+    if isinstance(meta_entry, dict):
+        score = meta_entry.get("metacritic_score")
+        if isinstance(score, int) and score > 0:
+            return score
+    return None
 
 
 def _release_date_str(steam_meta: dict[str, Any]) -> str:
@@ -155,12 +145,14 @@ def build_facet_record(
     steam_app_id: int,
     reviews_data: dict[str, Any],
     added_data: dict[str, Any],
-    composite_mc: dict[int, int],
+    meta_entry: dict[str, Any] | None,
 ) -> dict[str, Any]:
     """Assemble one shortcut's facet record from the warm caches.
 
     All inputs are plain dicts already read once by the caller so this
-    stays O(1) per shortcut (no per-call store lookups).
+    stays O(1) per shortcut (no per-call store lookups). ``meta_entry``
+    is the composite ``metadata[store:game_id]`` record for this
+    shortcut (or ``None``) — the metacritic source the backfill writes.
     """
     steam_meta = read_steam_metadata(cache, steam_app_id)
     compat = read_compat_entry(cache, shortcut_app_id, steam_app_id)
@@ -171,7 +163,7 @@ def build_facet_record(
     return {
         "steam_app_id": steam_app_id,
         # Sort dimensions
-        "metacritic": _metacritic(steam_meta, steam_app_id, composite_mc),
+        "metacritic": _metacritic(steam_meta, meta_entry),
         "release_date": _release_date_str(steam_meta),
         "recommendations_total": _recommendations_total(steam_meta),
         "review_score": review.get("review_score"),
@@ -187,22 +179,58 @@ def build_facet_record(
     }
 
 
-def build_enrichment_map(cache: Any) -> dict[str, dict[str, Any]]:
-    """Build ``{shortcut_app_id: FacetRecord}`` for every mapped shortcut.
+def build_enrichment_map(
+    cache: Any,
+    games: list[Game] | None = None,
+) -> dict[str, dict[str, Any]]:
+    """Build ``{shortcut_app_id: FacetRecord}`` for every shortcut.
 
-    Enumerates the ``steam_real_appid`` cache (shortcut → real Steam
-    AppID, written during sync) — exactly the set of shortcuts with
-    resolvable Steam metadata/compat. Emits **both** the signed and
-    unsigned 32-bit string forms of each shortcut AppID so the
-    frontend (which gets the unsigned form via ``overview.appid``) and
-    the sync layer (which stores signed) can both look up.
+    Preferred path (``games`` provided): iterate the unified library
+    list — each game carries ``app_id`` + ``store`` + ``store_game_id``.
+    This (a) gives a record to **every** shortcut, including ones whose
+    real Steam AppID never resolved, and (b) reads metacritic from the
+    composite ``metadata[store:game_id]`` entry (the backfill's native
+    key) instead of the fragile ``steam_appid`` join that stranded
+    backfilled scores whose entry lacked a resolved ``steam_appid``.
+
+    Fallback (``games is None`` — sync service unavailable): enumerate
+    the ``steam_real_appid`` cache; metacritic then comes only from
+    Steam's own appdetails (no composite recovery).
+
+    Emits **both** the signed and unsigned 32-bit string forms of each
+    shortcut AppID so the frontend (unsigned via ``overview.appid``) and
+    the sync layer (signed) can both look up.
     """
     real_appid_data = read_cache_store(cache, "steam_real_appid")
     reviews_data = read_cache_store(cache, STEAM_REVIEWS_NS)
     added_data = read_cache_store(cache, DATE_ADDED_NS)
-    composite_mc = _build_composite_metacritic(cache)
+    metadata_data = read_cache_store(cache, "metadata")
 
     out: dict[str, dict[str, Any]] = {}
+
+    if games:
+        for game in games:
+            try:
+                shortcut_app_id = int(game.app_id)
+            except (TypeError, ValueError):
+                continue
+            if not shortcut_app_id:
+                continue
+            steam_app_id = _read_int(real_appid_data, shortcut_app_id)
+            entry = metadata_data.get(f"{game.store}:{game.store_game_id}")
+            record = build_facet_record(
+                cache,
+                shortcut_app_id,
+                steam_app_id,
+                reviews_data,
+                added_data,
+                entry if isinstance(entry, dict) else None,
+            )
+            for key in appid_candidates(shortcut_app_id):
+                out[key] = record
+        return out
+
+    # Fallback: no games list — enumerate the resolved-appid cache.
     for raw_key, raw_real in real_appid_data.items():
         try:
             shortcut_app_id = int(raw_key)
@@ -210,8 +238,12 @@ def build_enrichment_map(cache: Any) -> dict[str, dict[str, Any]]:
         except (TypeError, ValueError):
             continue
         record = build_facet_record(
-            cache, shortcut_app_id, steam_app_id, reviews_data, added_data,
-            composite_mc,
+            cache,
+            shortcut_app_id,
+            steam_app_id,
+            reviews_data,
+            added_data,
+            None,
         )
         for key in appid_candidates(shortcut_app_id):
             out[key] = record

@@ -35,6 +35,12 @@ export const Events = {
   // Payload: {phase: "artwork"|"metadata", active: bool, total, done}.
   // The frontend clears `isSyncing` when both phases report done.
   POST_SYNC_PHASE_CHANGED: "post_sync_phase_changed",
+  // Fired by the background Metacritic backfill once its long-tail
+  // metacritic.com lookups have landed (after the progress bar hit
+  // 100%). The overview-enrichment layer re-reads facets on this so
+  // newly-backfilled scores surface in Steam's native Sort-by-Metacritic
+  // without a manual resync/restart.
+  METADATA_BACKFILL_COMPLETE: "metadata_backfill_complete",
   // Emitted by ShortcutService once reconcile finishes; payload
   // carries {added, removed, kept, total} so the UI can decide
   // whether to prompt for a Steam restart.

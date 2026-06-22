@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import random
 from typing import TYPE_CHECKING, Any
 
 import aiohttp
@@ -35,8 +36,37 @@ logger = logging.getLogger(__name__)
 
 STEAM_APPDETAILS_URL = "https://store.steampowered.com/api/appdetails"
 _HTTP_OK = 200
+_HTTP_TOO_MANY = 429
 _DEFAULT_TIMEOUT = 15.0
 _BATCH_DELAY_S = 0.25  # Polite delay between requests to avoid 429s.
+_MAX_RETRIES = 3  # extra attempts after a 429 before giving up
+_RETRY_BASE_S = 1.0  # exponential backoff base for 429 retries
+_MAX_RETRY_AFTER_S = 30.0  # cap a server-supplied Retry-After
+
+
+def _retry_after_seconds(response: aiohttp.ClientResponse) -> float | None:
+    """Parse a numeric ``Retry-After`` header (seconds), clamped."""
+    raw = response.headers.get("Retry-After")
+    if not raw:
+        return None
+    try:
+        return min(float(raw), _MAX_RETRY_AFTER_S)
+    except (TypeError, ValueError):
+        return None
+
+
+def _parse_appdetails(
+    payload: Any,
+    steam_app_id: int,
+) -> dict[str, Any] | None:
+    """Pull the inner ``data`` dict from the appdetails response shape."""
+    if not isinstance(payload, dict):
+        return None
+    entry = payload.get(str(steam_app_id))
+    if not isinstance(entry, dict) or not entry.get("success"):
+        return None
+    data = entry.get("data")
+    return data if isinstance(data, dict) else None
 
 
 async def fetch_appdetails(
@@ -50,6 +80,13 @@ async def fetch_appdetails(
     any network error or when the upstream marks ``success=False``
     (delisted / region-locked games).
 
+    On **HTTP 429** (rate limited — common during a bulk sync) it
+    retries with exponential backoff, honoring a numeric ``Retry-After``
+    header, up to ``_MAX_RETRIES`` times before returning ``None``.
+    Without this, a large library's bulk fetch silently dropped every
+    game past Steam's rate-limit threshold, so their embedded metacritic
+    (and other appdetails) never landed in the cache at sync time.
+
     Args:
         steam_app_id: real Steam Store AppID.
         config: optional config manager (timeout override).
@@ -59,45 +96,61 @@ async def fetch_appdetails(
     """
     if steam_app_id <= 0:
         return None
-    timeout_s = float(get_cfg(
-        config, "network.steam_appdetails_timeout", _DEFAULT_TIMEOUT,
-    ))
-    params = {"appids": str(steam_app_id), "cc": "us", "l": "english"}
-    try:
-        timeout = aiohttp.ClientTimeout(total=timeout_s)
-        # ``ssl=False`` for the same reason ``library.search_store`` does
-        # it: SteamOS's bundled cert store predates several Steam CDN
-        # cert rotations, so default SSL verification fails inside the
-        # Decky plugin process for ``store.steampowered.com`` (every
-        # call comes back as ``ClientConnectorCertificateError``, caught
-        # at debug level → silent ``None`` return).
-        connector = aiohttp.TCPConnector(ssl=False)
-        async with (
-            aiohttp.ClientSession(
-                connector=connector, timeout=timeout,
-            ) as session,
-            session.get(STEAM_APPDETAILS_URL, params=params) as response,
-        ):
-            if response.status != _HTTP_OK:
-                return None
-            payload = await response.json(content_type=None)
-    except (aiohttp.ClientError, TimeoutError) as exc:
-        logger.debug(
-            "[steam.appdetails] %d failed: %s", steam_app_id, exc,
+    timeout_s = float(
+        get_cfg(
+            config,
+            "network.steam_appdetails_timeout",
+            _DEFAULT_TIMEOUT,
         )
-        return None
-
-    if not isinstance(payload, dict):
-        return None
-    entry = payload.get(str(steam_app_id))
-    if not isinstance(entry, dict):
-        return None
-    if not entry.get("success"):
-        return None
-    data = entry.get("data")
-    if not isinstance(data, dict):
-        return None
-    return data
+    )
+    params = {"appids": str(steam_app_id), "cc": "us", "l": "english"}
+    for attempt in range(_MAX_RETRIES + 1):
+        try:
+            timeout = aiohttp.ClientTimeout(total=timeout_s)
+            # ``ssl=False`` for the same reason ``library.search_store``
+            # does it: SteamOS's bundled cert store predates several
+            # Steam CDN cert rotations, so default SSL verification fails
+            # inside the Decky plugin process for
+            # ``store.steampowered.com`` (every call comes back as
+            # ``ClientConnectorCertificateError``, caught at debug level
+            # → silent ``None`` return).
+            connector = aiohttp.TCPConnector(ssl=False)
+            async with (
+                aiohttp.ClientSession(
+                    connector=connector,
+                    timeout=timeout,
+                ) as session,
+                session.get(STEAM_APPDETAILS_URL, params=params) as response,
+            ):
+                if response.status == _HTTP_TOO_MANY and attempt < _MAX_RETRIES:
+                    # Jitter de-syncs the up-to-5 concurrent sync fetches
+                    # so their retries don't re-burst in lockstep. Not
+                    # security-sensitive — ``random`` is fine here.
+                    jitter = random.uniform(0, 0.5)  # noqa: S311
+                    delay = (
+                        _retry_after_seconds(response) or _RETRY_BASE_S * (2**attempt)
+                    ) + jitter
+                    logger.debug(
+                        "[steam.appdetails] %d rate-limited (429), retry %d/%d in %.1fs",
+                        steam_app_id,
+                        attempt + 1,
+                        _MAX_RETRIES,
+                        delay,
+                    )
+                    await asyncio.sleep(delay)
+                    continue
+                if response.status != _HTTP_OK:
+                    return None
+                payload = await response.json(content_type=None)
+        except (aiohttp.ClientError, TimeoutError) as exc:
+            logger.debug(
+                "[steam.appdetails] %d failed: %s",
+                steam_app_id,
+                exc,
+            )
+            return None
+        return _parse_appdetails(payload, steam_app_id)
+    return None
 
 
 async def fetch_appdetails_batch(

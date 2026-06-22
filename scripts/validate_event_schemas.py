@@ -99,6 +99,7 @@ CANONICAL_SCHEMA: dict[str, set[str]] = {
     "LIBRARY_SYNC_CANCELLED":       {"cancelled_at_store", "store_count"},
     "LIBRARY_SYNC_COMPLETED":       {"duration_ms", "errors", "game_count", "store_count"},
     "LIBRARY_SYNC_STARTED":         {"started_at_ms", "stores"},
+    "METADATA_BACKFILL_COMPLETE":   {"count"},
     "PLAYTIME_UPDATED":             {"duration_secs", "game_id", "store"},
     "POST_SYNC_PHASE_CHANGED":      {"active", "done", "phase", "sync_kwargs", "total"},
     "RUNTIME_PROBES_REPORTED":      {"probes"},

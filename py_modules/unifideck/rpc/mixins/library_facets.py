@@ -16,6 +16,7 @@ The heavy lifting (cache joins, signed/unsigned keying) lives in
 :mod:`._library_facets` so this stays a thin endpoint wrapper.
 Pure cache read — never fetches.
 """
+
 from __future__ import annotations
 
 import logging
@@ -30,6 +31,7 @@ class LibraryFacetsRPCMixin:
     """Bulk library-facet enrichment RPC (read-only cache reshape)."""
 
     cache: Any
+    sync_service: Any
 
     async def get_overview_enrichment(self) -> dict[str, Any]:
         """Return ``{shortcut_app_id: FacetRecord}`` for every mapped shortcut.
@@ -45,7 +47,22 @@ class LibraryFacetsRPCMixin:
         cold or unregistered — the frontend degrades to no enrichment.
         """
         try:
-            return build_enrichment_map(self.cache)
+            # Prefer the unified games list: it gives a facet to every
+            # shortcut (even ones with no resolved Steam AppID) and lets
+            # the builder read metacritic by the robust ``store:game_id``
+            # key. Degrade to the cache-only enumeration if the sync
+            # service isn't available.
+            games = None
+            sync_service = getattr(self, "sync_service", None)
+            if sync_service is not None:
+                try:
+                    games = sync_service.get_all_games()
+                except Exception as exc:  # degrade, don't fail
+                    logger.warning(
+                        "[LibraryFacets] get_all_games failed: %s",
+                        exc,
+                    )
+            return build_enrichment_map(self.cache, games)
         except Exception as exc:  # never break the frontend boot path
             logger.warning("[LibraryFacets] enrichment build failed: %s", exc)
             return {}

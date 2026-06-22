@@ -26,6 +26,7 @@ Two small cache-reader helpers come along for the ride because
 they're only used by the backfill (``MetadataService`` itself reads
 the same caches through different paths).
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -33,6 +34,7 @@ import contextlib
 import logging
 from typing import TYPE_CHECKING, Any
 
+from unifideck.core.types.events import Events
 from unifideck.services import metadata_sources
 
 if TYPE_CHECKING:
@@ -101,6 +103,17 @@ async def _run(service: MetadataService, games: list[Game]) -> None:
         "[MetadataBackfill] metacritic backfill complete (%d games)",
         len(games),
     )
+    # Tell the frontend the long-tail scores have landed so it re-reads
+    # library facets — otherwise newly-backfilled metacritic only shows
+    # after a manual resync/restart (the facet read on sync-complete
+    # races this background task).
+    bus = getattr(service, "_bus", None)
+    if bus is not None:
+        with contextlib.suppress(Exception):
+            await bus.emit(
+                Events.METADATA_BACKFILL_COMPLETE,
+                count=len(games),
+            )
 
 
 async def _fill_one(
@@ -174,7 +187,9 @@ def _has_cached_metacritic(cache: CacheManager, game: Game) -> bool:
 
 
 def _merge_into_metadata_cache(
-    cache: CacheManager, game: Game, data: dict[str, Any],
+    cache: CacheManager,
+    game: Game,
+    data: dict[str, Any],
 ) -> None:
     """Merge fresh ``_fetch_metacritic`` output into the composite cache.
 
@@ -184,23 +199,30 @@ def _merge_into_metadata_cache(
     """
     cache_key = f"{game.store}:{game.store_game_id}"
     existing = cache.get(_CACHE_NAMESPACE, cache_key)
-    merged: dict[str, Any] = (
-        dict(existing) if isinstance(existing, dict) else {}
-    )
+    merged: dict[str, Any] = dict(existing) if isinstance(existing, dict) else {}
     merged.update(data)
     merged.pop("_negative", None)
+    # Stamp the resolved real Steam AppID when known. The facet now reads
+    # metacritic by the ``store:game_id`` key, but keeping steam_appid on
+    # the entry keeps any steam_appid-keyed reader correct (defensive).
+    if not merged.get("steam_appid"):
+        steam_id = _read_real_steam_id(cache, game.app_id)
+        if steam_id:
+            merged["steam_appid"] = steam_id
     cache.set(_CACHE_NAMESPACE, cache_key, merged)
 
 
 def _read_real_steam_id(
-    cache: CacheManager, shortcut_app_id: int | None,
+    cache: CacheManager,
+    shortcut_app_id: int | None,
 ) -> int:
     """Resolve a shortcut AppID to its real Steam AppID, or ``0``."""
     if shortcut_app_id is None:
         return 0
     try:
         value = cache.get(
-            _STEAM_REAL_APPID_NS, str(shortcut_app_id),
+            _STEAM_REAL_APPID_NS,
+            str(shortcut_app_id),
         )
     except Exception:
         return 0
@@ -208,7 +230,8 @@ def _read_real_steam_id(
 
 
 def _read_steam_metadata(
-    cache: CacheManager, steam_id: int,
+    cache: CacheManager,
+    steam_id: int,
 ) -> dict[str, Any]:
     """Return cached Steam appdetails for ``steam_id``, or ``{}``."""
     if not steam_id:

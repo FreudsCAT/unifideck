@@ -12,6 +12,7 @@ produces `"sync_complete"`, exactly what the frontend expects.
 
 Reference: Technical Document v1.0 — Section 3.3 (EventBus topology).
 """
+
 from __future__ import annotations
 
 from enum import StrEnum
@@ -45,6 +46,14 @@ class Events(StrEnum):
     # through artwork downloads + metadata extraction. Payload:
     #  { phase: "artwork"|"metadata", active: bool, total: int|None, done: int|None }
     POST_SYNC_PHASE_CHANGED = "post_sync_phase_changed"
+
+    # Fired by the fire-and-forget Metacritic backfill
+    # (``metadata_backfill``) once its long-tail metacritic.com lookups
+    # have all landed in the ``metadata`` cache — AFTER the sync's
+    # progress bar already hit 100%. The frontend re-reads library
+    # facets on this so newly-backfilled scores surface in Steam's
+    # native Sort-by-Metacritic without a manual resync/restart.
+    METADATA_BACKFILL_COMPLETE = "metadata_backfill_complete"
 
     # Durable activity-log events — captured by ActivityLogService
     # into a JSONL file (``runtime_dir/sync_activity.log``) so the
