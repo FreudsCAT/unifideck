@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import logging
 import re
 import time
@@ -36,6 +37,14 @@ from unifideck.core.net import ssl_ctx_permissive
 if TYPE_CHECKING:
     from .id_map import UbisoftIdMap
 logger = logging.getLogger(__name__)
+# uuid (appId/spaceId) → name catalog, built weekly from Ubisoft Connect's
+# public Algolia product index and served from unifiDB via jsDelivr. Names the
+# modern owned games the legacy install_id list lacks. Cached next to the
+# install_id DB with the same TTL.
+_UUID_CATALOG_URL = (
+    "https://cdn.jsdelivr.net/gh/mubaraknumann/unifiDB@main/ubisoft/uuid_catalog.json"
+)
+_UUID_CATALOG_FILENAME = "ubisoft_uuid_catalog.json"
 _REGISTRY_INSTALLS_PATTERN = re.compile(
     r"\[Software\\\\Wow6432Node\\\\Ubisoft\\\\Launcher"
     r"\\\\Installs\\\\(\d+)\]"
@@ -329,13 +338,18 @@ class _IdMapSources:
 
     async def fetch_game_id_database(
         self,
+        force: bool = False,
     ) -> list[tuple[str, str]]:
-        """Fetch game ID database."""
+        """Fetch game ID database.
+
+        ``force`` (a force-sync) bypasses the TTL cache and re-downloads the
+        latest list from unifiDB; a regular sync uses the weekly cache.
+        """
         config = self._idmap._config
         cache_file = config.game_id_db_file_expanded
         max_age = config.game_id_db_max_age_seconds
         cache_p = Path(cache_file)
-        if await asyncio.to_thread(cache_p.is_file):
+        if not force and await asyncio.to_thread(cache_p.is_file):
             with contextlib.suppress(OSError):
                 # Bug fix (lot 12c): the previous line read
                 # ``time.time() - await asyncio.to_thread(cache_p.stat).st_mtime``
@@ -375,6 +389,42 @@ class _IdMapSources:
             _parse_game_id_database,
             cache_file,
         )
+
+    async def fetch_uuid_catalog(
+        self,
+        force: bool = False,
+    ) -> dict[str, str]:
+        """``uuid (appId/spaceId) → name`` from unifiDB's Ubisoft catalog.
+
+        Names the modern owned games stored in the ownership binary by UUID
+        (the legacy install_id list can't). Cached with the same TTL as the
+        install_id DB; ``force`` (force-sync) bypasses it. Degrades to ``{}``
+        on any network/parse failure.
+        """
+        config = self._idmap._config
+        cache_file = str(
+            Path(config.data_dir_expanded) / _UUID_CATALOG_FILENAME,
+        )
+        cache_p = Path(cache_file)
+        if not force and await asyncio.to_thread(cache_p.is_file):
+            with contextlib.suppress(OSError):
+                stat_result = await asyncio.to_thread(cache_p.stat)
+                if time.time() - stat_result.st_mtime < config.game_id_db_max_age_seconds:
+                    return await asyncio.to_thread(_parse_uuid_catalog, cache_file)
+        try:
+            await asyncio.to_thread(
+                _download_game_id_database,
+                _UUID_CATALOG_URL,
+                cache_file,
+            )
+            logger.info("[UbisoftIdMap] uuid catalog downloaded")
+        except Exception as e:
+            logger.warning(
+                "[UbisoftIdMap] uuid catalog download failed: %s", e,
+            )
+            if not await asyncio.to_thread(cache_p.is_file):
+                return {}
+        return await asyncio.to_thread(_parse_uuid_catalog, cache_file)
 
     async def lookup_game_id_by_name(
         self,
@@ -440,6 +490,30 @@ def _download_game_id_database(
                 break
             f.write(chunk)
     tmp_path.replace(dest_p)
+
+
+def _parse_uuid_catalog(filepath: str) -> dict[str, str]:
+    """Parse unifiDB's ``uuid_catalog.json`` into ``uuid → name``.
+
+    The file shape is ``{"games": {"<uuid>": {"name": ..., ...}}}``. Any
+    read/parse error (or unexpected shape) degrades to an empty dict.
+    """
+    try:
+        data = json.loads(
+            Path(filepath).read_text(encoding="utf-8", errors="replace"),
+        )
+    except (OSError, ValueError) as e:
+        logger.warning("[UbisoftIdMap] uuid catalog parse failed: %s", e)
+        return {}
+    games = data.get("games") if isinstance(data, dict) else None
+    if not isinstance(games, dict):
+        return {}
+    out: dict[str, str] = {}
+    for uuid, meta in games.items():
+        name = meta.get("name") if isinstance(meta, dict) else None
+        if isinstance(uuid, str) and isinstance(name, str) and name:
+            out[uuid] = name
+    return out
 
 
 def _parse_game_id_database(

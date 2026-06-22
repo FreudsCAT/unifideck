@@ -262,6 +262,36 @@ def parse_ownership(filepath: str) -> list[int]:
     return owned
 
 
+_OWNERSHIP_UUID_RE = re.compile(
+    rb"[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}",
+)
+
+
+def parse_ownership_uuids(filepath: str) -> list[str]:
+    """Extract product UUIDs (appId/spaceId) from the UPC ownership binary.
+
+    The ownership binary stores each owned product under BOTH a numeric
+    install_id (parsed by :func:`parse_ownership`) AND a product UUID. The
+    UUIDs are the modern namespace that matches Ubisoft Connect's public
+    Algolia catalog (``uuid_catalog.json`` in unifiDB), so they name the
+    modern owned games the legacy install_id → name list doesn't cover.
+    Order-preserving, de-duplicated.
+    """
+    data = _read_binary_file(filepath, "Ownership")
+    if data is None:
+        return []
+    seen: dict[str, None] = {}
+    for match in _OWNERSHIP_UUID_RE.findall(data):
+        seen.setdefault(match.decode("ascii"), None)
+    uuids = list(seen)
+    logger.info(
+        "[UbiParser] Found %d product UUIDs in %s",
+        len(uuids),
+        filepath,
+    )
+    return uuids
+
+
 def check_install_state(state_file: str) -> bool:
     """A first byte of ``0x0A`` in uplay_install.state means installed."""
     if not Path(state_file).is_file():

@@ -55,6 +55,12 @@ const WATCHED_EVENTS: EventName[] = [
   "download_complete",
   "download_failed",
   "download_cancelled",
+  // The backend emits this after bootstrapping a Ubisoft per-game prefix to
+  // ask the frontend to RunGame the UPC shortcut. It MUST be polled here or
+  // the download-store handler never fires and the install hangs forever on
+  // "Installing Ubisoft Connect" (the rest of the chain — RunGame → launcher
+  // → UPC — works; this allowlist omission was the whole bug).
+  "ubisoft_install_launch_requested",
   "game_installed",
   "game_uninstalled",
   "game_update_available",

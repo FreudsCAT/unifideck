@@ -28,14 +28,14 @@ A Decky Loader plugin that brings together Steam, Epic Games Store, GOG, Amazon 
 
 ## Features
 
-- **Unified library tabs** - Browse Steam, Epic, GOG, Amazon, Ubisoft, Xbox Cloud Gaming, Installed, Great on Deck, and Non-Steam from one place.
-- **Steam-native install, update, and launch actions** - Manage supported games directly from the game details view, with progress and status feedback.
-- **Shortcut-based sign-in in Gaming Mode** - Authenticate Epic, GOG, Amazon, Ubisoft, and Microsoft without leaving the Steam UI.
-- **Flexible install locations** - Use internal storage, SD card, or a validated custom install directory.
-- **Proton control with GE-Proton auto-management** - Defaults to the latest GE-Proton (auto-downloaded and cached), with Proton Experimental as an offline fallback; force a specific tool per game via Steam's Compatibility menu. Environment-variable launch options (MangoHud, DXVK, Proton tweaks) are supported too — see the [Launch Options guide](docs/launch-options.md).
-- **Artwork and richer metadata** - Pull cover art, icons, banners, store links, Metacritic data, and Great on Deck style compatibility info where available.
-- **Cloud saves** - Epic and GOG cloud saves are supported, including conflict prompts when both local and cloud saves exist.
-- **Store-specific extras** - GOG language selection, Epic/GOG DLC auto-downloads, Epic offline mode, GOG Galaxy / Comet support for compatible titles, and xCloud "Play on Cloud" support through Edge.
+Unifideck brings your games from other stores into Steam, so they show up in your library and play just like Steam games — same Play button, same Gaming Mode, same controller-friendly feel. No switching to desktop mode, no juggling separate launchers.
+
+- **All your games in one place** — Your Epic, GOG, Amazon, Ubisoft, and Xbox titles sit right alongside your Steam library, in tabs you can browse like any other.
+- **Install and play like a Steam game** — Press Install, watch the progress, then press Play — all from the game's page in Gaming Mode, exactly the way Steam games work.
+- **Install games wherever you like** — Internal storage, an SD card, or a folder you pick yourself.
+- **Proton handled for you** — Most Windows games just work; Unifideck sets up a recent Proton automatically. If a game is picky, you can force a specific version from Steam's usual Compatibility menu.
+- **Cover art and real game info** — Cover images, icons, Metacritic scores, and Steam Deck compatibility ratings, so your non-Steam games look like they belong.
+- **Cloud saves for Epic and GOG** — Your progress syncs with the store's cloud and follows you between devices, with a heads-up if your local and cloud copies ever disagree.
 
 ## Screenshots
 
@@ -98,7 +98,7 @@ Installed games are playable immediately after install. The Steam restart is sti
 
 ## Known Limitations
 
-- Unifideck replaces Steam's default **All Games**, **Installed**, and **Great on Deck** tabs, so Steam's standard sort and filter behavior is not preserved there.
+- Unifideck replaces Steam's default **All Games**, **Installed**, and **Great on Deck** tabs, so some sort and filter behavior is not preserved.
 - With **TabMaster** installed, Unifideck skips custom tab injection and relies on `[Unifideck]` collections instead.
 - Steam still needs a restart after sync or cleanup so new shortcuts and artwork fully apply.
 - Xbox Cloud Gaming support is **streaming-only** and depends on **Microsoft Edge**.

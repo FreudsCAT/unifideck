@@ -115,6 +115,38 @@ class _CredentialPropagator:
         self.propagate_credentials_to_all()
         self.propagate_auth_artifacts_to_all()
 
+    def purge_credentials_from_all(self) -> int:
+        """Delete UPC auth state from every game prefix **and the template**
+        (the documented sign-out wipe). The auth prefix itself is removed
+        separately by ``logout()``. Without this, login's propagated
+        credential copies linger and ``find_best_credential_source`` (which
+        falls back to game prefixes) re-discovers them — so the next launch
+        or sign-in silently re-authenticates instead of prompting. Returns
+        the total number of entries removed."""
+        targets = list(self._target_prefixes())
+        template = self._config.template_dir_expanded
+        if Path(template).is_dir():
+            targets.append(template)
+        total = 0
+        for prefix_path in targets:
+            try:
+                total += self._payload.purge_credentials_from_prefix(
+                    prefix_path,
+                )
+            except Exception as e:
+                logger.warning(
+                    "[UbisoftSession] credential purge failed for %s: %s",
+                    Path(prefix_path).name,
+                    e,
+                )
+        if total:
+            logger.info(
+                "[UbisoftSession] purged UPC auth state from %d entry(ies) "
+                "across game prefixes + template",
+                total,
+            )
+        return total
+
     def inject_into_prefix(self, prefix_path: str) -> bool:
         """Inject into prefix."""
         source = self._reader.find_best_credential_source()

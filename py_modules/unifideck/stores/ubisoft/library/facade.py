@@ -72,12 +72,13 @@ class UbisoftLibrary:
         )
         self._free_to_play = _FreeToPlayFeed(config=config)
 
-    async def get_library(self) -> list[Game]:
-        """Get library."""
+    async def get_library(self, *, force: bool = False) -> list[Game]:
+        """Get library (``force`` re-pulls the unifiDB lookups, bypassing TTL)."""
         try:
             installed = await self._detector.get_installed()
             local_games = await self._fetcher.fetch_local_binaries(
                 installed,
+                force=force,
             )
             if local_games is None:
                 logger.info(

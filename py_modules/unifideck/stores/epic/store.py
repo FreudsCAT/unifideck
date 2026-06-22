@@ -261,7 +261,7 @@ class EpicStore(StoreBase):
             return Result(success=True)
         return await self._auth.logout()
 
-    async def get_library(self) -> list[Game] | None:
+    async def get_library(self, *, force: bool = False) -> list[Game] | None:
         """Get library."""
         if not self.cli_path:
             return []

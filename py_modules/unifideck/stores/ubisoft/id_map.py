@@ -222,9 +222,17 @@ class UbisoftIdMap:
 
     async def fetch_game_id_database(
         self,
+        force: bool = False,
     ) -> list[tuple[str, str]]:
-        """Fetch game ID database."""
-        return await self._sources.fetch_game_id_database()
+        """Fetch game ID database (``force`` bypasses the TTL cache)."""
+        return await self._sources.fetch_game_id_database(force=force)
+
+    async def fetch_uuid_catalog(
+        self,
+        force: bool = False,
+    ) -> dict[str, str]:
+        """``uuid → name`` from unifiDB (``force`` bypasses the TTL cache)."""
+        return await self._sources.fetch_uuid_catalog(force=force)
 
     async def lookup_game_id_by_name(
         self,

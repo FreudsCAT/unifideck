@@ -31,7 +31,7 @@ from __future__ import annotations
 import logging
 import os
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -219,7 +219,7 @@ class AuthShortcutsRPCMixin:
 
     @staticmethod
     def _resolve_shortcut_entry(store_game_id: str) -> tuple[int, str]:
-        """Scan shortcuts.vdf for the entry whose LaunchOptions contains
+        """Find the shortcut whose ``LaunchOptions`` first token equals
         ``store_game_id`` and return ``(appid_unsigned, launch_options)``.
 
         ``launch_options`` is the shortcut's current ``LaunchOptions``
@@ -228,55 +228,54 @@ class AuthShortcutsRPCMixin:
         ``install`` action and then restore the real options afterwards
         (restoring to ``""`` would wipe the shortcut and break Play).
         Returns ``(0, "")`` when no matching shortcut exists.
+
+        Parses ``shortcuts.vdf`` with the ``vdf`` library and reads each
+        entry's ``appid`` directly. The previous implementation byte-scanned
+        a fixed 200-byte window *backwards* from the ``LaunchOptions`` tag
+        for the appid — but for Ubisoft per-game shortcuts the AppName +
+        launcher Exe + icon path push the appid 209-217 bytes away, outside
+        that window, so it returned 0 and ``get_compat_tool_for_game`` (the
+        Ubisoft install/launch path) found no appid → "Context unavailable",
+        no RunGame, UPC never opened (and Play broke for installed titles).
+        It also matched ``store_game_id`` as a substring
+        (``ubisoft:4`` ⊂ ``ubisoft:46``) and returned the *first* (not the
+        nearest) appid in the window.
         """
         from pathlib import Path
+
+        import vdf
 
         from unifideck.steam.steam_user import get_active_steam_user
         steam_root = Path("~/.steam/steam").expanduser()
         active_user = get_active_steam_user(steam_root) or "0"
-        vdf = steam_root / "userdata" / active_user / "config" / "shortcuts.vdf"
-        if not vdf.is_file():
+        vdf_path = (
+            steam_root / "userdata" / active_user / "config" / "shortcuts.vdf"
+        )
+        if not vdf_path.is_file():
             return 0, ""
-        raw = vdf.read_bytes()
-        # VDF stores the appid as a 4-byte little-endian
-        # uint32 right after the \x01appid\x00 tag. Scan for
-        # entries matching store_game_id in LaunchOptions.
-        i = 0
-        while True:
-            i = raw.find(b"LaunchOptions", i)
-            if i == -1:
-                return 0, ""
-            # Look forward for store_game_id in the options value
-            end = raw.find(b"\x00", i + 20)
-            if end == -1:
-                return 0, ""
-            opts = raw[i + 14:end]  # after \x01LaunchOptions\x00
-            if store_game_id.encode() in opts:
-                appid = _appid_from_chunk(raw[max(0, i - 200):i])
-                if appid is not None:
-                    return appid, opts.decode("utf-8", errors="replace")
-            i = end
+        try:
+            data = vdf.binary_loads(vdf_path.read_bytes())  # type: ignore[no-untyped-call]  # vdf.binary_loads is untyped
+        except Exception:
+            logger.warning("[AuthShortcuts] failed to parse shortcuts.vdf")
+            return 0, ""
+        shortcuts = data.get("shortcuts", {})
+        entries = shortcuts.values() if isinstance(shortcuts, dict) else []
+        for entry in entries:
+            launch_options = entry.get("LaunchOptions", "") or ""
+            first_token = (
+                launch_options.split(maxsplit=1)[0] if launch_options else ""
+            )
+            if first_token != store_game_id:
+                continue
+            appid = entry.get("appid")
+            if appid is None:
+                continue
+            unsigned = appid if appid >= 0 else appid + 2**32
+            return int(unsigned), launch_options
+        return 0, ""
 
 
 # ─── Module-level helpers ─────────────────────────────────────
-
-
-def _appid_from_chunk(chunk: bytes) -> int | None:
-    """Extract the uint32 ``appid`` preceding a matched LaunchOptions block.
-
-    VDF stores the appid as a 4-byte little-endian uint32 right after
-    the ``\\x02appid\\x00`` tag. Returns ``None`` if no valid tag is found.
-    """
-    import re
-    import struct
-    for m in re.finditer(b"\\x02appid\\x00(.{4})", chunk, re.DOTALL):
-        try:
-            # struct.unpack returns tuple[Any, ...] so [0] is Any;
-            # "<I" produces a single uint32 → int.
-            return cast(int, struct.unpack("<I", m.group(1))[0])
-        except struct.error:
-            continue
-    return None
 
 
 def _build_and_log(store: str) -> dict[str, Any]:

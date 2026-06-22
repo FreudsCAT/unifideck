@@ -61,8 +61,14 @@ class _LibraryFetcher:
     async def fetch_local_binaries(
         self,
         installed: dict[str, Any],
+        *,
+        force: bool = False,
     ) -> list[Game] | None:
-        """Fetch local binaries."""
+        """Fetch local binaries.
+
+        ``force`` (a force-sync) makes the unifiDB lookups (install_id list +
+        uuid catalog) bypass their TTL cache and re-download.
+        """
         parser_funcs = self._import_ubisoft_parser()
         if parser_funcs is None:
             return None
@@ -75,6 +81,7 @@ class _LibraryFetcher:
         owned_set = await self._loader.load_ownership_set(
             parse_ownership,
         )
+        owned_uuids = await self._loader.load_ownership_uuids()
         if owned_set is None:
             # get_library is auth-gated upstream, so reaching here means
             # we ARE signed in but UPC hasn't written its ownership cache
@@ -95,7 +102,39 @@ class _LibraryFetcher:
             owned_set,
             installed,
         )
-        db_names = await self._fetch_db_names()
+        db_entries = await self._fetch_db_entries(force=force)
+        uuid_catalog = await self._id_map.fetch_uuid_catalog(force=force)
+        db_names = {
+            self._id_map.normalize_for_matching(name)
+            for _iid, name in db_entries
+            if name
+        }
+        db_names |= {
+            self._id_map.normalize_for_matching(name)
+            for name in uuid_catalog.values()
+            if name
+        }
+        # Backfill owned games that have no local ``configurations`` row.
+        # UPC only caches configs for installed/recent titles, so the
+        # owned∩config intersection is tiny (~6 of 118 owned IDs here). Two
+        # complementary sources name the rest so the full owned library
+        # shows: the legacy install_id list (numeric ids) and the unifiDB
+        # uuid catalog (modern ids the legacy list lacks). Both flow through
+        # the same dedup/DLC filters in ``build_games_from_configs``.
+        id_backfill = 0
+        uuid_backfill = 0
+        if owned_set is not None:
+            extra = self._build_backfill_configs(
+                owned_set, config_by_id, configs, db_entries,
+            )
+            id_backfill = len(extra)
+            matched_configs = matched_configs + extra
+        if owned_uuids and uuid_catalog:
+            extra_uuid = self._build_uuid_backfill_configs(
+                owned_uuids, uuid_catalog,
+            )
+            uuid_backfill = len(extra_uuid)
+            matched_configs = matched_configs + extra_uuid
         connect_ids = await asyncio.to_thread(self._id_map.read_connect_ids)
         games = self._builder.build_games_from_configs(
             matched_configs,
@@ -105,9 +144,12 @@ class _LibraryFetcher:
         )
         games = await self._apply_steam_filter(games)
         logger.info(
-            "[UbisoftLibrary] local binary library: %d games (from %d matched configs)",
+            "[UbisoftLibrary] local binary library: %d games "
+            "(%d config-matched + %d id-backfilled + %d uuid-backfilled)",
             len(games),
-            len(matched_configs),
+            len(matched_configs) - id_backfill - uuid_backfill,
+            id_backfill,
+            uuid_backfill,
         )
         return games
 
@@ -128,25 +170,92 @@ class _LibraryFetcher:
         filtered, _hidden = apply_steam_owned_filter(games, steam_titles)
         return filtered
 
-    async def _fetch_db_names(self) -> set[str]:
-        """Normalised community game-ID DB names for DLC parent detection.
+    async def _fetch_db_entries(
+        self,
+        *,
+        force: bool = False,
+    ) -> list[tuple[str, str]]:
+        """Community game-ID DB as ``(install_id, name)`` pairs.
 
-        Degrades to an empty set when the database is offline or
-        unavailable — separator dedup then relies on the owned-title
-        set alone (see :meth:`_GameBuilder._is_dlc_by_separator`).
+        Feeds both DLC parent-name detection and the owned-game backfill.
+        ``force`` bypasses the TTL cache. Degrades to an empty list when the
+        database is offline or unavailable.
         """
         try:
-            entries = await self._id_map.fetch_game_id_database()
+            return await self._id_map.fetch_game_id_database(force=force)
         except Exception:
             logger.debug(
-                "[UbisoftLibrary] game-ID DB unavailable for dedup",
+                "[UbisoftLibrary] game-ID DB unavailable",
             )
-            return set()
-        return {
-            self._id_map.normalize_for_matching(name)
-            for _install_id, name in entries
-            if name
-        }
+            return []
+
+    def _build_uuid_backfill_configs(
+        self,
+        owned_uuids: set[str],
+        uuid_catalog: dict[str, str],
+    ) -> list[GameConfig]:
+        """Synthesize ``GameConfig`` rows for owned product UUIDs, named via
+        the unifiDB uuid catalog. These cover modern games whose install_ids
+        the legacy list lacks. The UUID becomes the game's ``space_id`` (and
+        thus its ``store_game_id``), so leveldb-sourced ``connect_ids`` can
+        still supply a ``uplay://`` deeplink. Names colliding with an
+        install_id-backfilled game collapse via the dedup in
+        ``build_games_from_configs``.
+        """
+        from unifideck.stores.ubisoft.parser import GameConfig
+
+        backfilled: list[GameConfig] = []
+        for uuid in owned_uuids:
+            name = uuid_catalog.get(uuid)
+            if not name:
+                continue
+            synth = GameConfig()
+            synth.space_id = uuid
+            synth.name = name
+            backfilled.append(synth)
+        return backfilled
+
+    def _build_backfill_configs(
+        self,
+        owned_set: set[int],
+        config_by_id: dict[int, GameConfig],
+        configs: list[GameConfig],
+        db_entries: list[tuple[str, str]],
+    ) -> list[GameConfig]:
+        """Synthesize ``GameConfig`` rows for owned IDs absent from the local
+        ``configurations`` cache, named via the community DB (falling back to
+        any parsed config names). Owned IDs the DB can't name (modern games
+        not yet in the DB) are skipped — they stay unlisted until the DB
+        covers them. Edition/DLC/test noise is removed downstream by
+        :meth:`_GameBuilder.build_games_from_configs`.
+        """
+        from unifideck.stores.ubisoft.parser import GameConfig
+
+        id_to_name: dict[int, str] = {}
+        for iid_str, name in db_entries:
+            if not name:
+                continue
+            try:
+                iid = int(iid_str)
+            except (TypeError, ValueError):
+                continue
+            id_to_name.setdefault(iid, name)
+        for cfg in configs:
+            if cfg.name:
+                id_to_name.setdefault(cfg.install_id, cfg.name)
+        backfilled: list[GameConfig] = []
+        for oid in owned_set:
+            if oid in config_by_id:
+                continue
+            resolved = id_to_name.get(oid)
+            if not resolved:
+                continue
+            synth = GameConfig()
+            synth.install_id = oid
+            synth.launch_id = oid
+            synth.name = resolved
+            backfilled.append(synth)
+        return backfilled
 
     @staticmethod
     def _import_ubisoft_parser() -> (

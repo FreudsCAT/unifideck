@@ -52,8 +52,11 @@ _DEFAULT_INSTALLER_URL = (
     "https://static3.cdn.ubi.com/orbit/launcher_installer/UbisoftConnectInstaller.exe"
 )
 _DEFAULT_INSTALLER_FILENAME = "UbisoftConnectInstaller.exe"
+# install_id → name list, mirrored weekly into unifiDB from the
+# iArtorias/ubisoft_game_ids community list and served via jsDelivr.
+# (The uuid → name catalog URL lives in id_map_sources alongside its fetcher.)
 _DEFAULT_GAME_ID_DB_URL = (
-    "https://raw.githubusercontent.com/iArtorias/ubisoft_game_ids/main/UBI_GAMES.txt"
+    "https://cdn.jsdelivr.net/gh/mubaraknumann/unifiDB@main/ubisoft/install_ids.txt"
 )
 _DEFAULT_UPC_RELATIVE_PATH = (
     "drive_c/Program Files (x86)/Ubisoft/Ubisoft Game Launcher/upc.exe"

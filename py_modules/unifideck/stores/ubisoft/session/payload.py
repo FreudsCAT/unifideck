@@ -193,6 +193,43 @@ class _PayloadSync:
             )
             return False
 
+    def purge_credentials_from_prefix(self, target_prefix: str) -> int:
+        """Delete UPC credentials + auth-cache artifacts from a prefix.
+
+        The inverse of :meth:`sync_credentials_to_prefix` /
+        :meth:`sync_auth_artifacts_to_prefix`: removes the same entries
+        (``upc_credential_files`` + ``upc_auth_cache_artifacts``) so a
+        signed-out prefix can no longer be picked up as a credential
+        fallback source by
+        :meth:`_CredentialReader.find_best_credential_source` (which would
+        otherwise silently re-authenticate the user on the next launch).
+        Returns the number of entries removed.
+        """
+        config = self._parent._config
+        rel_entries = (
+            *config.upc_credential_files,
+            *config.upc_auth_cache_artifacts,
+        )
+        removed = 0
+        for _root, user_home in self._parent._paths.iter_user_homes(
+            target_prefix,
+        ):
+            local_root = Path(user_home) / config.upc_local_subdir
+            for rel in rel_entries:
+                target = local_root / rel
+                try:
+                    if target.is_dir():
+                        shutil.rmtree(target, ignore_errors=True)
+                        removed += 1
+                    elif target.exists():
+                        target.unlink()
+                        removed += 1
+                except OSError as e:
+                    logger.warning(
+                        "[UbisoftSession] purge failed for %s: %s", rel, e,
+                    )
+        return removed
+
     def sync_credentials_to_prefix(
         self,
         source_prefix: str,

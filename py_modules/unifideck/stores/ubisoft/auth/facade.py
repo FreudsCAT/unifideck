@@ -210,6 +210,22 @@ class UbisoftAuth:
         trash = await asyncio.to_thread(self._rename_to_trash, auth_dir)
         if trash:
             self._spawn_background_purge(trash)
+        # Removing the auth prefix alone doesn't sign the user out: login
+        # propagated the UPC credentials into every game prefix and the
+        # template, and ``find_best_credential_source`` falls back to those
+        # copies — so the next launch/sign-in silently re-authenticates.
+        # Purge them too (off the event loop; deletes across many prefixes).
+        try:
+            purged = await asyncio.to_thread(
+                self._session.purge_credentials_from_all,
+            )
+            logger.info(
+                "[UbisoftAuth] logout purged auth state from %d "
+                "prefix entry(ies)",
+                purged,
+            )
+        except Exception:
+            logger.exception("[UbisoftAuth] credential purge on logout failed")
         await self._bus.emit(
             Events.STORE_LOGOUT,
             store="ubisoft",

@@ -260,7 +260,7 @@ class GOGStore(StoreBase):
                 )
         return result
 
-    async def get_library(self) -> list[Game] | None:
+    async def get_library(self, *, force: bool = False) -> list[Game] | None:
         """Get library."""
         return await self._library.fetch_library()
 

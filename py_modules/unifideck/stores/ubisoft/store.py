@@ -153,8 +153,10 @@ class UbisoftStore(StoreBase):
         """Logout."""
         return await self._auth.logout()
 
-    async def get_library(self) -> list[Game] | None:
+    async def get_library(self, *, force: bool = False) -> list[Game] | None:
         """Get library.
+
+        ``force`` (force-sync) re-pulls the unifiDB lookup tables.
 
         Gated on authentication (mirrors ``MicrosoftStore.get_library``).
         Without a signed-in UPC session the library facade falls back to
@@ -170,7 +172,7 @@ class UbisoftStore(StoreBase):
                 "[UbisoftStore] not authenticated — returning empty library",
             )
             return []
-        return await self._library.get_library()
+        return await self._library.get_library(force=force)
 
     async def install_game(
         self,

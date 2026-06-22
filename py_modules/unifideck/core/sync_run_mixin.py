@@ -106,7 +106,7 @@ class _SyncRunMixin:
                 return await self._sync_cancelled_result(idx, total, libraries)
             self._current_store = store.store_name
             await self._emit_progress(store.store_name, idx, total)
-            games, err = await self._fetch_one(store)
+            games, err = await self._fetch_one(store, is_force)
             libraries[store.store_name] = games
             if err is not None:
                 errors[store.store_name] = err
@@ -123,7 +123,7 @@ class _SyncRunMixin:
         )
 
     async def _fetch_one(
-        self, store: StoreBase,
+        self, store: StoreBase, is_force: bool = False,
     ) -> tuple[list[Game], str | None]:
         """Run one store's fetch as a tracked task so ``cancel`` can
         interrupt it mid-await.
@@ -135,7 +135,7 @@ class _SyncRunMixin:
         HTTP/subprocess awaits, ending the fetch within milliseconds.
         """
         self._current_store_task = asyncio.create_task(
-            self._sync_one_store(store),
+            self._sync_one_store(store, is_force),
             name=f"sync-store-{store.store_name}",
         )
         try:
@@ -467,7 +467,7 @@ class _SyncRunMixin:
         )
 
     async def _sync_one_store(
-        self, store: StoreBase,
+        self, store: StoreBase, is_force: bool = False,
     ) -> tuple[list[Game], str | None]:
         """Fetch one store's library, with broad exception handling.
 
@@ -478,7 +478,7 @@ class _SyncRunMixin:
         return an empty list with the error string.
         """
         try:
-            games = await store.get_library()
+            games = await store.get_library(force=is_force)
             if games is None:
                 games = []
             logger.info(

@@ -92,6 +92,10 @@ class UbisoftSession:
         """Propagate all to all."""
         self._propagator.propagate_all_to_all()
 
+    def purge_credentials_from_all(self) -> int:
+        """Purge credentials from all game prefixes + the template."""
+        return self._propagator.purge_credentials_from_all()
+
     def inject_into_prefix(self, prefix_path: str) -> bool:
         """Inject into prefix."""
         return self._propagator.inject_into_prefix(prefix_path)
