@@ -313,6 +313,16 @@ type StoreCountSink = (counts: StoreCounts) => void;
 
 let storeCountSink: StoreCountSink | null = null;
 let cacheLoadStarted = false;
+let cacheLoaded = false;
+
+/** Whether the first ``loadUnifideckCache`` attempt has completed.
+ *  Synchronous callers (e.g. the App-Details patch) stay optimistic
+ *  before this flips so a Unifideck game opened on cold boot isn't
+ *  mistaken for a plain shortcut; once true, ``isUnifideckGame`` is
+ *  authoritative. */
+export function isUnifideckCacheLoaded(): boolean {
+  return cacheLoaded;
+}
 
 /** Register a callback to receive per-store game counts. The
  *  tab manager uses this to drive ``shouldShowTab``. */
@@ -365,6 +375,11 @@ export async function loadUnifideckCache(): Promise<void> {
     storeCountSink?.(counts);
   } catch (e) {
     console.error("[Unifideck] loadUnifideckCache failed", e);
+  } finally {
+    // Mark the cache as "attempted" even on failure so synchronous
+    // callers stop treating every shortcut as a potential Unifideck game
+    // (which would keep the user's own shortcuts' native UI hidden).
+    cacheLoaded = true;
   }
 }
 

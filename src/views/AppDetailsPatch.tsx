@@ -37,6 +37,10 @@ import {
 } from "@decky/ui";
 import { SteamBridge, type RouterPatchHandle } from "../lib/steam-bridge";
 import { findInReactTree } from "../lib/steam-bridge/react-tree";
+import {
+  isUnifideckGame,
+  isUnifideckCacheLoaded,
+} from "../lib/library-filters";
 import { getGameStateVersion } from "../lib/game-state-version";
 import { injectGameToAppinfo } from "../lib/steam-bridge/app-store-patcher";
 import { DownloadProvider } from "../contexts/DownloadContext";
@@ -105,6 +109,13 @@ function injectIntoTree(ret: unknown): void {
 
   // Only override non-Steam shortcuts (appId > 2 billion).
   if (!(appId > 2_000_000_000)) return;
+
+  // Only override Unifideck-managed games — never the user's own
+  // non-Steam shortcuts (Firefox, etc.). Skip once we KNOW it isn't
+  // ours; stay optimistic before the cache loads so a Unifideck game
+  // opened on cold boot never flashes the native UI. This single gate
+  // covers the hide marker, the Play wrapper, and the GameInfo panel.
+  if (isUnifideckCacheLoaded() && !isUnifideckGame(appId)) return;
 
   // Trigger Steam-Store metadata spoofing for this shortcut so
   // Steam's own UI (capsule image, tile, presence) renders the
