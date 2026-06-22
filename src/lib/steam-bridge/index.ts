@@ -25,3 +25,7 @@ export type {
   ShortcutLaunchResult,
 } from "./shortcut-types";
 export { getShortcutRunGameId, isShortcutAppRunning } from "./shortcut-types";
+export {
+  createTemporaryShortcut,
+  scheduleTemporaryShortcutCleanup,
+} from "./temp-shortcut";

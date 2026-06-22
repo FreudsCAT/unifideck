@@ -177,11 +177,23 @@ class AuthShortcutsRPCMixin:
                 "[AuthShortcuts] compat tool for %s: appid=%s tool=%r",
                 store_game_id, appid_unsigned, tool_name,
             )
+            plugin_dir = os.environ.get(
+                "DECKY_PLUGIN_DIR",
+                "/home/deck/homebrew/plugins/Unifideck",
+            )
+            launcher_path = str(
+                Path(plugin_dir) / "bin" / "unifideck-launcher",
+            )
             # ``appid_unsigned`` + ``current_launch_options`` let the
             # frontend RunGame this shortcut directly (Ubisoft install
             # flow) without a separate context RPC: it injects the
             # ``install`` action into the options, launches, then restores
             # ``current_launch_options`` so a later Play still works.
+            # ``launcher_path`` is the fallback exe used when the shortcut
+            # isn't yet in Steam's in-memory app store (first session after
+            # a backend VDF write) — the frontend then creates a temporary
+            # shortcut via ``AddShortcut`` instead of RunGame-ing an
+            # unregistered appid ("Game configuration unavailable").
             return {
                 "success": True,
                 "tool_name": tool_name,
@@ -189,6 +201,7 @@ class AuthShortcutsRPCMixin:
                 "appid_unsigned": appid_unsigned,
                 "current_launch_options": launch_options,
                 "store_game_id": store_game_id,
+                "launcher_path": launcher_path,
             }
         except Exception as e:
             logger.warning(
