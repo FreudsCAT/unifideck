@@ -1,5 +1,10 @@
 # Unifideck — New Architecture Directory Tree
 
+> **🗄️ ARCHIVED (2026-06-22) — outdated.** This was a contribution map for the 0.7
+> refactor (now complete; no `OP-XX`/`NotImplementedError` stubs remain). Some paths are
+> stale (`core/bin/` → `core/binaries/`, `service/` → `services/`). For current
+> architecture see [`../architecture.md`](../architecture.md).
+
 > **Branch:** `new-architecture` | **Doc version:** v1.2 cherry pik — April 2026
 > **Reference:** `unifideck_plan_operationnel_integration_v1.2_cherry_pik_backend_only.pdf` > **Author:** HardCPP (src893) | **Validator:** mubaraknumann
 

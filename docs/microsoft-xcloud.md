@@ -67,17 +67,22 @@ This feature turns the Steam Deck into a portable Xbox console by seamlessly int
 
 The Microsoft integration is split into single-responsibility specialized modules. The main connector orchestrates authentication and synchronization, while browser management, HTTP calls, CDP interception, and the virtual keyboard are isolated in their own files. This separation makes debugging, unit testing, and independent evolution of each component easier.
 
-| File                                      | Role                                  |
-| ----------------------------------------- | ------------------------------------- |
-| `stores/microsoft.py`                     | Main connector: auth, tokens, catalog |
-| `stores/microsoft_chromium.py`            | Chromium browser management           |
-| `stores/microsoft_auth.py`                | HTTP helpers, XBL/XSTS chain          |
-| `stores/microsoft_cdp.py`                 | OAuth interception via CDP            |
-| `utils/virtual_keyboard.py`               | Virtual keyboard injected via CDP     |
-| `bin/unifideck-launcher`                  | xCloud launch                         |
-| `src/components/PlayButtonOverride.tsx`   | "Play on Cloud" button                |
-| `src/components/ChromiumInstallModal.tsx` | Chromium install modal                |
-| `src/components/StoreConnections.tsx`     | Microsoft connection panel            |
+The integration is now a package under `stores/microsoft/` (it was a set of flat `stores/microsoft_*.py` modules before the 0.7 refactor).
+
+| File                                              | Role                                                       |
+| ------------------------------------------------- | ---------------------------------------------------------- |
+| `stores/microsoft/microsoft_store.py`             | Main connector: auth orchestration, tokens, catalog        |
+| `stores/microsoft/microsoft_auth.py`              | HTTP helpers, XBL/XSTS token chain                         |
+| `stores/microsoft/microsoft_browser_auth.py`      | Browser-based OAuth capture (CEF 8080 / Edge 9222 fallback)|
+| `stores/microsoft/microsoft_catalog.py`           | Game + xCloud catalog (displaycatalog)                     |
+| `stores/microsoft/microsoft_subscription.py`      | Game Pass subscription state                               |
+| `stores/microsoft/tokens/`                        | Token manager, OAuth, XBL chain, persistence               |
+| `auth/edge_browser/`                              | Chromium/Edge install + launch + profile management        |
+| `compatibility/library.py`                        | `inject_virtual_keyboard` (CDP)                            |
+| `bin/unifideck-launcher`                          | xCloud launch                                              |
+| `src/components/play/XCloudButtons.tsx`           | "Play on Cloud" button (rendered by `PlaySectionWrapper`)  |
+| `src/components/modals/ChromiumInstallModal.tsx`  | Chromium install modal                                     |
+| `src/components/settings/StoreConnections.tsx`    | Microsoft connection panel                                 |
 
 ### Module diagram
 
@@ -276,7 +281,7 @@ cursor = conn.execute(
 
 ### "Play on Cloud" button
 
-When a game has the `store_tags: ["xcloud"]` tag, `PlayButtonOverride` displays a special button:
+When a game has the `store_tags: ["xcloud"]` tag, `XCloudButtons` (rendered by `PlaySectionWrapper`) displays a special button:
 
 | State         | Display                                                      |
 | ------------- | ------------------------------------------------------------ |

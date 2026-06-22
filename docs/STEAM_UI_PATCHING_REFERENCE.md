@@ -597,14 +597,17 @@ AppDetailsPage
 
 **Files:**
 
-- `src/components/PlayButtonOverride.tsx` - Custom PlaySection component
-- `src/index.tsx` - Patcher that injects component
+- `src/components/play/PlaySectionWrapper.tsx` - Custom PlaySection component (plus the button set in `src/components/play/`: `InstalledButtons.tsx`, `NotInstalledButtons.tsx`, `DownloadingButtons.tsx`, `XCloudButtons.tsx`)
+- `src/components/play/play.css.ts` - Scoped CSS, including the native play-row hide rules
+- `src/views/AppDetailsPatch.tsx` - Patcher that injects the component
+
+> **⚠️ Current implementation note (2026-06):** the native Play row is no longer hidden via async CDP. It is now hidden **synchronously** by tagging the `InnerContainer` with a marker class (`unifideck-hide-native-play`) and emitting scoped CSS (`nativeAppDetailsHideCss`) at patch time, so there is no flash of the native UI before our component renders. The CDP material below is retained as general reference for cross-process CSS injection, but it is **not** how the play row is hidden today. **Gotcha:** desktop and Gaming-Mode (BPM/gamepadui) use *different* AppDetails class names — emit a hide rule for both (`playSectionClasses.Container` for desktop; `basicAppDetailsSectionStylerClasses.PlaySection` / `.AppDetailsContainer` for the Deck).
 
 **Strategy:**
 
-1. **Inject custom component at index 0** (before PlaySection)
-2. **Hide native PlaySection via CDP** when game is uninstalled
-3. **Show native PlaySection** when game is installed (remove CDP CSS)
+1. **Inject custom component at index 0** (before PlaySection), synchronously, during the React-tree patch
+2. **Tag the `InnerContainer` with the `unifideck-hide-native-play` marker class** and emit the scoped hide CSS in the same synchronous pass (no async round-trip → no flash)
+3. **Omit the marker** for non-managed shortcuts so Steam's native UI is left intact
 
 **Patcher (index.tsx):**
 
@@ -629,8 +632,8 @@ routerHook.addPatch("/library/app/:appid", (routeProps: any) => {
     );
 
     if (!alreadyHasWrapper) {
-      // Inject hide CSS via CDP (async, non-blocking)
-      injectHidePlaySectionCDP(appId);
+      // Tag the container so the scoped hide CSS applies (synchronous, no flash)
+      container.props.className += " unifideck-hide-native-play";
 
       // Inject wrapper at index 0 (synchronous)
       container.props.children.splice(
@@ -650,7 +653,7 @@ routerHook.addPatch("/library/app/:appid", (routeProps: any) => {
 });
 ```
 
-**Component (PlayButtonOverride.tsx):**
+**Component (`src/components/play/PlaySectionWrapper.tsx`):**
 
 ```typescript
 export const PlaySectionWrapper: FC<{ appId: number }> = ({ appId }) => {
@@ -744,7 +747,9 @@ export const PlaySectionWrapper: FC<{ appId: number }> = ({ appId }) => {
 
 ### CSS Hiding Strategy
 
-**Via CDP (cross-process):**
+> **Legacy approach.** The CDP cross-process injection below was the original mechanism. The live code now hides the native row synchronously via the `unifideck-hide-native-play` marker class + scoped CSS (`src/components/play/play.css.ts`). The CDP pattern is kept here as a general technique for cases where you must inject CSS into a tab you cannot patch in React.
+
+**Via CDP (cross-process) — legacy:**
 
 ```typescript
 // Frontend calls backend
@@ -1296,8 +1301,8 @@ window.SteamClient.Apps.RegisterForGameActionStart((id, appId, action) => {
 
 ### Native PlaySection Not Hidden
 
-- **Cause:** CSS class names outdated
-- **Fix:** Inspect DOM, update selectors in `cdp_inject.py`
+- **Cause:** marker class not applied, or hide rule missing for the current mode. Desktop and Gaming-Mode use different AppDetails class names.
+- **Fix:** Confirm the `InnerContainer` gets `unifideck-hide-native-play`, and that `play.css.ts` emits a hide rule for *both* `playSectionClasses.Container` (desktop) and `basicAppDetailsSectionStylerClasses.PlaySection` / `.AppDetailsContainer` (BPM/gamepadui). Prefer Decky's class exports over hardcoded obfuscated names.
 
 ### Custom Component Not Appearing
 
@@ -1326,4 +1331,4 @@ window.SteamClient.Apps.RegisterForGameActionStart((id, appId, action) => {
 
 ---
 
-_Last updated: 2026-02-09_
+_Last updated: 2026-06-22_

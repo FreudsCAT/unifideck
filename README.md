@@ -32,7 +32,7 @@ A Decky Loader plugin that brings together Steam, Epic Games Store, GOG, Amazon 
 - **Steam-native install, update, and launch actions** - Manage supported games directly from the game details view, with progress and status feedback.
 - **Shortcut-based sign-in in Gaming Mode** - Authenticate Epic, GOG, Amazon, Ubisoft, and Microsoft without leaving the Steam UI.
 - **Flexible install locations** - Use internal storage, SD card, or a validated custom install directory.
-- **Launch options and Proton control** - Preserve custom launch options across syncs, installs, and Proton toggles. Supports wrappers, MangoHud, LSFG, `PROTON=`, and `PROTONPATH=`.
+- **Proton control with GE-Proton auto-management** - Defaults to the latest GE-Proton (auto-downloaded and cached), with Proton Experimental as an offline fallback; force a specific tool per game via Steam's Compatibility menu. Environment-variable launch options (MangoHud, DXVK, Proton tweaks) are supported too — see the [Launch Options guide](docs/launch-options.md).
 - **Artwork and richer metadata** - Pull cover art, icons, banners, store links, Metacritic data, and Great on Deck style compatibility info where available.
 - **Cloud saves** - Epic and GOG cloud saves are supported, including conflict prompts when both local and cloud saves exist.
 - **Store-specific extras** - GOG language selection, Epic/GOG DLC auto-downloads, Epic offline mode, GOG Galaxy / Comet support for compatible titles, and xCloud "Play on Cloud" support through Edge.
@@ -81,9 +81,20 @@ Installed games are playable immediately after install. The Steam restart is sti
 
 ## Documentation
 
+**User guides**
+
 - **[FAQ](docs/faq.md)** - Common issues, workarounds, and version-specific fixes collected from releases, code comments, and GitHub issues.
-- **[Launch Options Guide](docs/launch-options.md)** - Custom parameters, wrappers, LSFG, and per-game launch tweaks.
-- **[Proton Compatibility Notes](docs/proton-compatibility.md)** - `PROTON=`, `PROTONPATH=`, and compatibility troubleshooting.
+- **[Launch Options](docs/launch-options.md)** - Environment-variable tweaks, what's supported, and what's planned.
+- **[Proton Compatibility](docs/proton-compatibility.md)** - Choosing a Proton version and troubleshooting/quick fixes.
+- **[Cloud Saves](docs/cloud-saves.md)** - How Epic/GOG cloud sync works, conflict handling, and custom save paths.
+- **[Microsoft / xCloud](docs/microsoft-xcloud.md)** - Xbox Game Pass and cloud-streaming integration.
+
+**Developer / reference**
+
+- **[Architecture & Build](docs/architecture.md)** - The 5-layer backend, EventBus, RPC mixins, and build flow.
+- **[Ubisoft Store Spec](docs/ubisoft-store-spec.md)** - How the Ubisoft Connect integration works end to end.
+- **[UI Injection](docs/ui-injection.md)** & **[Steam UI Patching Reference](docs/STEAM_UI_PATCHING_REFERENCE.md)** - How Unifideck patches Steam's React UI.
+- **[CONTRIBUTING](CONTRIBUTING.md)** - PR process and contribution guidelines.
 
 ## Known Limitations
 
@@ -93,8 +104,9 @@ Installed games are playable immediately after install. The Steam restart is sti
 - Xbox Cloud Gaming support is **streaming-only** and depends on **Microsoft Edge**.
 - Cloud saves currently cover **Epic** and **GOG** only, and game-level support varies.
 - Some titles still need manual Proton experimentation or store-specific workarounds.
+- **Proton version and launch options are configured through Steam's native shortcut Properties** (Compatibility tab / Launch Options field) — there is no in-plugin picker. Wrapper-style launch options and LSFG are **not yet wired up**; see the [Launch Options guide](docs/launch-options.md).
 - Not every game has SteamGridDB artwork or complete metadata.
-- For **Ubisoft**, choose your Proton version **before** installing. Changing Proton after install can invalidate the prefix and force a reinstall.
+- For **Ubisoft**, choose your Proton version **before** installing. Changing Proton after install can invalidate the prefix and force a reinstall. See the [Ubisoft store spec](docs/ubisoft-store-spec.md) for details.
 
 ## Troubleshooting
 
@@ -141,17 +153,21 @@ To add a new language, create a JSON file in `src/i18n/locales/` using `en-US.js
 To build the plugin from source:
 
 1. Install dependencies: `pnpm install`
-2. Build the frontend bundle: `pnpm run build`
-3. Build the plugin package:
-   - local repo workflow: `./build-plugin_old.sh`
-   - standard Decky / fork workflow: `./.vscode/build.sh` or the VS Code `build-plugin` task
+2. Build a release ZIP: `./build-plugin.sh prod` — produces a versioned plugin ZIP in `out/`.
 
-For frontend watch mode, use `pnpm run watch`.
+Common flows (`build-plugin.sh`):
+
+- `./build-plugin.sh prod install` - build, install into Decky, and restart it.
+- `./build-plugin.sh dev` / `./build-plugin.sh dev install` - development build (build number auto-incremented).
+- `./build-plugin.sh dev quick-install` - fast rsync of backend/config to the live install, no full repackage (run `pnpm run build` first if you changed the frontend).
+- `pnpm run build` / `pnpm run watch` - frontend bundle only.
+
+**Tests & checks:** `npm run test:all` (backend + frontend), `npm run test:backend`, `npm run test:coverage`, `npm run typecheck`, `npm run lint`.
 
 ## Tech Stack
 
 - **Frontend** - React, TypeScript, Rollup, `@decky/api`, `@decky/ui`, `i18next`
-- **Backend** - Python, Decky Loader RPC, CDP-based auth and browser helpers
+- **Backend** - Python, Decky Loader RPC, a 5-layer architecture with an EventBus and dependency-injection core, CDP-based auth and browser helpers
 - **Store tooling** - legendary, gogdl, nile, comet, winetricks, umu-launcher
 - **Services and data** - SteamGridDB, Epic/GOG/Amazon/Microsoft APIs, Microsoft Edge, Metacritic, compatibility metadata
 

@@ -1,5 +1,10 @@
 # Sync / Force Sync — Gap Analysis vs. `origin/staging`
 
+> **🗄️ ARCHIVED (2026-06-22) — mostly resolved.** This 2026-05-18 analysis drove later
+> fixes; the bulk of the P0/P1 gaps it lists are now implemented in
+> `services/sync_service.py`, `core/sync_progress.py`, and `services/artwork/`. Kept as a
+> historical record of what was addressed.
+
 > Reference branch: `origin/staging` (commit `30ec3b1`, 0.6.1-era — last known-working production pipeline)
 > Current branch: `for-pr-0.7` (new service-based architecture)
 > Generated: 2026-05-18

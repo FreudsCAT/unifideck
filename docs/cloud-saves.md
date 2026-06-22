@@ -21,15 +21,22 @@ using the first method that succeeds:
 
 1. **Your manual override** — a save location you set yourself (see
    [Set a custom save location](#set-a-custom-save-location)).
-2. **The store's own metadata** — GOG's cloud‑save configuration / Epic's
-   `legendary` metadata. This is the most authoritative source.
+2. **The store's own metadata** — Epic's `legendary` metadata, or GOG's cloud‑save
+   configuration fetched from GOG's cloud‑storage API. This is the most
+   authoritative source, and it also lets Unifideck show the **real** cloud copy's
+   file count and timestamp (not just the last copy it cached locally).
 3. **Community save‑location database** — paths sourced from
    [PCGamingWiki](https://www.pcgamingwiki.com/) (via the
    [Ludusavi](https://github.com/mtkennerly/ludusavi-manifest) project) and baked
-   into Unifideck's game database. This covers the large majority of games.
-4. **A live PCGamingWiki lookup** — for newer or niche games the database hasn't
-   covered yet.
-5. **A best‑effort folder scan** of the prefix as a last resort.
+   into Unifideck's game database. This covers the large majority of games. It is a
+   local, prebaked database — there is no live web lookup.
+4. **Prefix auto‑detect** — scanning the game's Proton prefix for a save folder
+   that matches the game's title (under the usual Windows locations: `Saved Games`,
+   `Documents`, `AppData/Local`, `AppData/Roaming`).
+
+If none of these resolve a location, the cloud‑save button shows **"Save location
+not found"** until you either launch the game (so the prefix exists) or set a
+location manually.
 
 Path templates from these sources (e.g. `%APPDATA%/MyGame/Saves`, or a folder
 next to the game's install directory) are resolved against the game's actual
@@ -85,6 +92,11 @@ Two settings control automatic syncing (in the plugin config under `cloud`):
 - Set `auto_push_on_stop` to `true` to restore **fully automatic** two‑way sync.
 - Set both to `false` to make **everything manual** via the button.
 
+Other keys under `cloud` you normally don't need to touch: `enabled` (master
+on/off, default `true`), `tolerance_seconds` (how much clock drift counts as
+"same", default `2`), and `sync_wait_timeout_seconds` (how long to wait for a
+concurrent sync to finish, default `30`).
+
 ---
 
 ## Safety: your cloud saves won't be wiped
@@ -97,8 +109,8 @@ Uploading is guarded so a bad local state can't destroy good cloud saves:
   missing locally, Unifideck stops and asks you which copy to keep instead of
   silently overwriting the cloud.
 - **Versioned local backups.** Before each upload, Unifideck snapshots your local
-  saves to `~/Save Games Backup/<store>/<game id>/` (the newest few are kept), so
-  a mistake is recoverable.
+  saves to `~/.local/share/unifideck/save_backups/<store>/<game id>/<timestamp>/`
+  (the newest five are kept), so a mistake is recoverable.
 
 When local and cloud genuinely disagree, you'll get a **conflict prompt** showing
 both copies (file counts, sizes, timestamps) and a choice of **Use Cloud** or
@@ -115,24 +127,22 @@ saves yet. The most common reasons:
 
 **1. You haven't launched the game on this device yet.**
 A game's save folder lives inside its Proton prefix, which **doesn't exist until
-the first launch**. Until then there's no real location to sync to, and any saves
-Unifideck has pulled are held in a temporary staging folder.
+the first launch**. Until then there's no real location to sync to.
 
 > **Fix:** Launch the game once. Unifideck creates the prefix, resolves the real
-> save folder, and brings your saves into it. After that the cloud‑save button
-> works normally.
+> save folder, and a cloud download then brings your saves into it. After that the
+> cloud‑save button works normally.
 
 **2. The game's save location isn't in our database and couldn't be auto‑detected.**
 Some games store saves in unusual places.
 
 > **Fix:** [Set a custom save location](#set-a-custom-save-location) yourself.
 
-### I see "11 files" locally and in the cloud, but download fails
+### The cloud shows saves, but download fails
 
-If the game hasn't been launched yet (no prefix), the files you see are real saves
-held in a **staging folder**, not the game's actual save directory. Sync can't
-complete because there's no valid destination inside a prefix yet. **Launch the
-game once**, then use the button.
+If the game hasn't been launched yet, there's no Proton prefix and therefore no
+valid destination folder to download into. Sync can't complete until the prefix
+exists. **Launch the game once**, then use the button.
 
 ### Set a custom save location
 
@@ -157,11 +167,15 @@ location automatically.
 
 ## Where things are stored on your device
 
-| What                                         | Location                                            |
-| -------------------------------------------- | --------------------------------------------------- |
-| Game prefixes (where in‑prefix saves live)   | `~/.local/share/unifideck/prefixes/<game id>/`      |
-| Local backups (pre‑upload snapshots)         | `~/Save Games Backup/<store>/<game id>/`            |
-| Staging folder (used before a prefix exists) | `~/.local/share/unifideck/saves/<store>/<game id>/` |
+| What                                         | Location                                                          |
+| -------------------------------------------- | ---------------------------------------------------------------- |
+| Game prefixes (where in‑prefix saves live)   | `~/.local/share/unifideck/prefixes/<game id>/`                   |
+| Versioned pre‑upload backups (newest 5 kept) | `~/.local/share/unifideck/save_backups/<store>/<game id>/<ts>/`  |
+| Local backup mirror (write‑only copy)        | `~/Save Games Backup/<store>/<game id>/`                         |
+
+> The `~/Save Games Backup/` mirror is a **write‑only safety copy** — Unifideck
+> writes to it but never restores from it. Your real saves always live inside the
+> game's Proton prefix; the cloud is the source of truth for syncing.
 
 ---
 
