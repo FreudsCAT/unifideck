@@ -119,7 +119,14 @@ class _ManualUiInstaller:
             # though it lives in a separate RunGame gamescope session.
             self._active_install_pids.pop(game_id, None)
             self._pkill_upc()
-        self._capture_and_propagate_session(prefix_path)
+            # Capture a fresh/rotated UPC token from this prefix back to the
+            # auth prefix + template even when the install is cancelled or
+            # fails (this runs in `finally`, so it fires on the CancelledError
+            # unwind too). Otherwise a token UPC rotated this run is lost and
+            # the next install/launch injects the stale auth-prefix credential
+            # → UPC opens logged out. capture() is guarded (acts only on a
+            # valid, newer credential), so a half-written session is ignored.
+            self._capture_and_propagate_session(prefix_path)
         if not install_dir:
             return InstallResult(
                 success=False,

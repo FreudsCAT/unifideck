@@ -102,6 +102,7 @@ class UbisoftAuth:
             config=self._config,
             session=self._session,
             queue_auth_assets_ensure=self._queue_auth_assets_ensure,
+            bus=self._bus,
         )
         self._direct_signin = _DirectSignIn(
             binaries=self._binaries,

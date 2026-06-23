@@ -223,6 +223,36 @@ class UbisoftInstaller:
         ``install_game`` to keep that method under the line cap.
         """
         prefix_path = self._paths.get_prefix_path(game_id)
+        # Guarantee the prefix is actually populated with upc.exe BEFORE we
+        # signal the frontend to RunGame UPC. A prior abandoned/cleaned
+        # install can leave the resolved path an empty directory; firing
+        # on_ready into an empty prefix makes the launcher exit immediately
+        # (upc.exe not found) — the user sees a black flash and nothing
+        # opens. Re-bootstrap (idempotent: reuses an existing populated
+        # prefix, else clones the .template) and re-check; only proceed once
+        # upc.exe is present so RunGame opens UPC into a prepared prefix.
+        if not self._paths.find_upc_exe(prefix_path):
+            logger.warning(
+                "[UbisoftInstaller] resolved prefix %s for %s has no "
+                "upc.exe — re-bootstrapping before launch",
+                prefix_path,
+                game_id,
+            )
+            await self._bootstrap_game_prefix(game_id)
+            if not self._paths.find_upc_exe(prefix_path):
+                logger.error(
+                    "[UbisoftInstaller] prefix %s still missing upc.exe "
+                    "after bootstrap — aborting install for %s "
+                    "(no RunGame signal emitted)",
+                    prefix_path,
+                    game_id,
+                )
+                return InstallResult(
+                    success=False,
+                    store="ubisoft",
+                    game_id=game_id,
+                    error="upc_exe_not_found",
+                )
         game_name = self._library._detector._get_game_name(game_id)
         try:
             launch_env = self._build_upc_launch_env(
@@ -280,12 +310,21 @@ class UbisoftInstaller:
         game_info = self._library._detector._detect_installed_game(
             game_id, prefix_path,
         )
-        if (game_info and game_info.get("install_path")) or _reg.prefix_has_game_files(
-            prefix_path,
+        # Keep the prefix if it holds a game OR is a populated, reusable UPC
+        # prefix (upc.exe present). The manual flow routinely returns
+        # ``no_install_detected`` before the user finishes downloading; the
+        # bootstrapped prefix has upc.exe but no game folder yet, so deleting
+        # it here (and clearing prefix_path) orphaned the install and made
+        # the next attempt resolve to an empty default → black flash. A
+        # populated UPC prefix is reusable, so retain it.
+        if (
+            (game_info and game_info.get("install_path"))
+            or _reg.prefix_has_game_files(prefix_path)
+            or self._paths.find_upc_exe(prefix_path)
         ):
             logger.info(
-                "[UbisoftInstaller] abandoned install for %s but game files "
-                "present — keeping prefix %s",
+                "[UbisoftInstaller] abandoned install for %s but prefix is "
+                "populated (game files or UPC) — keeping prefix %s",
                 game_id,
                 prefix_path,
             )

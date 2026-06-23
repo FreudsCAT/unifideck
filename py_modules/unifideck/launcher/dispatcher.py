@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import sys
@@ -166,6 +167,18 @@ async def _build_context(
                 "synthesizing xCloud context for %s", game_key,
             )
             return _xcloud_context(store, game_id, raw_options)
+        # Ubisoft install whose ``UNIFIDECK_UBISOFT_ACTION=install`` token
+        # never reached os.environ (Steam dropped the launch option) — so it
+        # looks like a plain launch but has no games.map row. If it's a known
+        # title with a populated prefix, treat it as an install action
+        # instead of erroring (opens UPC via RunGame).
+        if store == "ubisoft" and _ubisoft_has_populated_prefix(game_id):
+            logger.info(
+                "[launcher.dispatcher] ubisoft game %s not in games.map but "
+                "has a populated prefix — treating as install action",
+                game_key,
+            )
+            return _ubisoft_install_context(store, game_id, raw_options)
         raise GameNotFoundError(
             f"game {game_key!r} not found in games.map",
             context={"game_key": game_key},
@@ -244,6 +257,44 @@ def _ubisoft_install_context(
         action="install",
         bypass_circuit_breaker=False,
     )
+
+
+def _ubisoft_has_populated_prefix(game_id: str) -> bool:
+    """True if ``game_id`` is a known Ubisoft title with a populated prefix.
+
+    Used when the install env token was lost (Steam dropped the launch
+    option) so ``_detect_special_action`` saw a plain launch, yet the title
+    has no games.map row. Mirrors ``_ubisoft_prefix_path`` resolution: prefer
+    the recorded ``prefix_path`` in ``ubisoft_id_map.json``, else the fixed
+    internal default — and require upc.exe present so we only open UPC into a
+    real prefix (genuinely-missing games still raise GameNotFoundError).
+    """
+    id_map_file = Path(
+        "~/.local/share/unifideck/ubisoft_id_map.json",
+    ).expanduser()
+    try:
+        data = json.loads(id_map_file.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    if not isinstance(data, dict) or game_id not in data:
+        return False
+    entry = data.get(game_id)
+    recorded = entry.get("prefix_path") if isinstance(entry, dict) else None
+    upc_rel = (
+        Path("drive_c")
+        / "Program Files (x86)"
+        / "Ubisoft"
+        / "Ubisoft Game Launcher"
+        / "upc.exe"
+    )
+    candidates: list[Path] = []
+    if isinstance(recorded, str) and recorded:
+        candidates.append(Path(recorded))
+    candidates.append(
+        Path("~/.local/share/unifideck/prefixes/ubisoft").expanduser()
+        / game_id,
+    )
+    return any((c / upc_rel).is_file() for c in candidates)
 
 
 def _xcloud_context(

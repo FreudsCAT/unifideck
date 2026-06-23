@@ -75,6 +75,16 @@ const WATCHED_EVENTS: EventName[] = [
   "circuit_state_changed",
 ];
 
+/** Imperative events that *do something* when dispatched (here: RunGame →
+ *  open UPC) rather than just updating idempotent UI state. They must NOT be
+ *  re-fired from the backend's replay backlog on a fresh load — otherwise a
+ *  Steam restart relaunches UPC once per buffered event. They're primed past
+ *  (watermark advanced, not dispatched) on the first poll after load; events
+ *  emitted live during the session still fire normally. */
+const IMPERATIVE_EVENTS = new Set<string>([
+  "ubisoft_install_launch_requested",
+]);
+
 type Handler = (payload: Record<string, unknown>) => void;
 
 /** Wire format returned by `subscribe_replay`. */
@@ -102,6 +112,11 @@ function extractRecords(raw: unknown): EventRecord[] {
 class EventBusClientImpl {
   private subscribers = new Map<string, Set<Handler>>();
   private lastSeenTimestamp = 0;
+  /** False until the first poll after (re)load completes. While false, the
+   *  backend's whole replay buffer reads as "fresh", so we skip dispatching
+   *  imperative events (see IMPERATIVE_EVENTS) to avoid re-firing stale
+   *  side effects from a prior session. */
+  private primed = false;
   private timer: ReturnType<typeof setTimeout> | null = null;
   private currentInterval = POLL_SLOW_MS;
   /** Subscribe to a backend event by name. Returns the
@@ -196,7 +211,16 @@ class EventBusClientImpl {
       const fresh = records
         .filter((r) => r.timestamp > this.lastSeenTimestamp)
         .sort((a, b) => a.timestamp - b.timestamp);
-      for (const r of fresh) this.dispatch(r);
+      // On the first poll after a (re)load the watermark is 0, so the whole
+      // backend replay buffer is "fresh". Replaying state events is harmless
+      // (idempotent UI updates), but imperative events re-run a side effect
+      // (RunGame → UPC), so a Steam restart would relaunch UPC once per
+      // buffered event. Prime past them instead of firing them.
+      for (const r of fresh) {
+        if (!this.primed && IMPERATIVE_EVENTS.has(r.event)) continue;
+        this.dispatch(r);
+      }
+      this.primed = true;
       if (records.length > 0) {
         this.lastSeenTimestamp = Math.max(
           this.lastSeenTimestamp,
