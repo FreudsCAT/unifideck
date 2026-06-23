@@ -75,11 +75,14 @@ class CloudSaveStrategy(ABC):
 
     def _resolve_enriched(
         self, game_id: str, *, prefix_path: str, install_path: str = "",
+        native_linux: bool = False,
     ) -> str | None:
         """Resolve from enriched save-location metadata (unifiDB/PCGamingWiki).
 
         Shared by both stores so the enriched tier behaves identically; the
         store id is passed through so the resolver picks the right manifest.
+        ``native_linux`` resolves against real Linux home/XDG dirs (GOG native
+        builds) instead of the Wine prefix.
         """
         try:
             from unifideck.services.cloud_save.save_location_resolver import (
@@ -91,6 +94,7 @@ class CloudSaveStrategy(ABC):
                 install_path=install_path,
                 config=self.config,
                 cache=self.cache,
+                native_linux=native_linux,
             )
         except Exception as e:
             logger.debug(

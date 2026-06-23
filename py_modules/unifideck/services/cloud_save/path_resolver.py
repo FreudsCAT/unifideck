@@ -9,6 +9,55 @@ class WinePrefixResolver:
     """Helper to resolve Windows registry path variables in Wine prefixes."""
 
     @staticmethod
+    def _ci_child(parent: str, name: str) -> str | None:
+        """Unique case-insensitive child of ``parent`` named ``name``, else None.
+
+        Ambiguous (two siblings differing only in case) returns None so the
+        caller keeps the literal — never guess.
+        """
+        try:
+            if not os.path.isdir(parent):
+                return None
+            low = name.lower()
+            hits = [e for e in os.listdir(parent) if e.lower() == low]
+        except OSError:
+            return None
+        return os.path.join(parent, hits[0]) if len(hits) == 1 else None
+
+    @classmethod
+    def realize_case_insensitive(cls, path: str) -> str:
+        """Match an existing on-disk path case-insensitively.
+
+        Wine prefixes are case-INsensitive (NTFS-like) but the Linux
+        filesystem is case-SENSITIVE, so a save path whose casing differs
+        from what the game actually created on disk (``Documents/My Games``
+        vs ``documents/my games``) would point at a *different* directory.
+        Handing that to gogdl/legendary makes them create a second,
+        divergent-cased folder the game never reads (the same class of bug
+        as the GOG namespace issue). Mirrors Ludusavi's case-insensitive
+        path resolution (``glob_case_sensitive(false)`` / ``eq_ignore_ascii_case``).
+
+        Walk from the filesystem root: prefer an exact child (the fast,
+        no-op path when everything matches), else a UNIQUE case-insensitive
+        sibling, else keep the literal segment (it gets created on sync).
+        Only existing directories are ever substituted, so this never
+        changes a correct path — it only repairs a casing mismatch.
+        """
+        norm = os.path.normpath(path)
+        parts = norm.split(os.sep)
+        # Rebuild from the root; parts[0] is "" for an absolute path.
+        cur = os.sep if norm.startswith(os.sep) else (parts[0] or ".")
+        for seg in parts[1:]:
+            if not seg:
+                continue
+            exact = os.path.join(cur, seg)
+            if os.path.exists(exact):
+                cur = exact
+            else:
+                cur = cls._ci_child(cur, seg) or exact
+        return cur
+
+    @staticmethod
     def read_registry(wine_pfx: str) -> configparser.ConfigParser:
         reg = configparser.ConfigParser(
             comment_prefixes=(";", "#", "/", "WINE"),
@@ -128,6 +177,7 @@ class WinePrefixResolver:
                 game_subpath = match.group(1)
                 resolved_path = os.path.join(path_vars["{locallow}"], game_subpath)
 
+        resolved_path = cls.realize_case_insensitive(resolved_path)
         return os.path.realpath(resolved_path)
 
     # ------------------------------------------------------------------
@@ -179,6 +229,35 @@ class WinePrefixResolver:
                 resolved_bases[token] = folders[shell_name]
         return resolved_bases
 
+    @staticmethod
+    def _linux_bases() -> dict[str, str]:
+        """Real Linux base dirs for native (non-Proton) games — ``<home>`` and
+        the XDG dirs resolve to the actual user home, NOT a Wine prefix."""
+        home = os.path.expanduser("~")
+        xdg_data = os.environ.get("XDG_DATA_HOME")
+        xdg_conf = os.environ.get("XDG_CONFIG_HOME")
+        return {
+            "<home>": home,
+            "<xdgdata>": xdg_data if (xdg_data and os.path.isabs(xdg_data))
+            else os.path.join(home, ".local", "share"),
+            "<xdgconfig>": xdg_conf if (xdg_conf and os.path.isabs(xdg_conf))
+            else os.path.join(home, ".config"),
+        }
+
+    @classmethod
+    def _ludusavi_linux_base_for(
+        cls, first: str, install_path: str,
+    ) -> str | None:
+        """Resolve a leading Ludusavi token for a NATIVE-Linux game, or None."""
+        bases = cls._linux_bases()
+        if first in bases:
+            return bases[first]
+        if first in ("<base>", "<root>", "<game>"):
+            return install_path or None
+        # Windows tokens (<winAppData> …), <storeUserId>, unknown — N/A for a
+        # native Linux game.
+        return None
+
     @classmethod
     def _ludusavi_base_for(
         cls,
@@ -195,6 +274,11 @@ class WinePrefixResolver:
             return install_path or None
         if first == "<osusername>":
             return os.path.join(prefix_path, "drive_c/users/steamuser")
+        # Absolute Windows drive path (``C:/Users/Public/…``) — map the C:
+        # drive to the prefix's drive_c (case fixed up on disk later). Other
+        # drive letters aren't reliably present in a prefix, so skip them.
+        if first in ("c:", "c"):
+            return os.path.join(prefix_path, "drive_c")
         # Unknown/Linux token (<xdgData>, <xdgConfig>, …) — not resolvable
         # for a Proton (Windows) prefix.
         return None
@@ -205,16 +289,23 @@ class WinePrefixResolver:
         ludusavi_path: str,
         prefix_path: str,
         install_path: str = "",
+        native_linux: bool = False,
     ) -> str | None:
-        """Resolve a Ludusavi/PCGamingWiki save path into a prefix directory.
+        """Resolve a Ludusavi/PCGamingWiki save path into a directory.
 
         Ludusavi paths look like ``<winAppData>/Foo/Saves`` or
         ``<base>/save/user_*.dat``. We resolve the leading token, then walk
         until the first DYNAMIC segment (a wildcard ``*`` or ``<storeUserId>``
         / any other unresolved ``<...>`` token) and return the literal
         directory up to that point — the sync tool then syncs that whole
-        subtree. Returns ``None`` when the path can't be resolved (unknown
-        token, or ``<base>`` with no known install path, or a Linux-only path).
+        subtree. Returns ``None`` when the path can't be resolved.
+
+        ``native_linux`` switches the token meaning for games run NATIVELY
+        (not through Proton): ``<home>``/``<xdgData>``/``<xdgConfig>`` resolve
+        to the real Linux home/XDG dirs and ``<base>`` to the Linux install
+        dir; Windows tokens (``<winAppData>`` …) then return None (and vice
+        versa for the default Windows-prefix mode), so each runtime only
+        resolves the paths that actually apply to it.
         """
         if not ludusavi_path:
             return None
@@ -223,10 +314,15 @@ class WinePrefixResolver:
         if not segments:
             return None
 
-        resolved_bases = cls._ludusavi_resolved_bases(prefix_path)
-        base = cls._ludusavi_base_for(
-            segments[0].lower(), resolved_bases, prefix_path, install_path,
-        )
+        if native_linux:
+            base = cls._ludusavi_linux_base_for(segments[0].lower(), install_path)
+            username = os.environ.get("USER") or "deck"
+        else:
+            resolved_bases = cls._ludusavi_resolved_bases(prefix_path)
+            base = cls._ludusavi_base_for(
+                segments[0].lower(), resolved_bases, prefix_path, install_path,
+            )
+            username = "steamuser"
         if base is None:
             return None
 
@@ -234,12 +330,17 @@ class WinePrefixResolver:
         for seg in segments[1:]:
             low = seg.lower()
             # Stop at the first dynamic segment; sync the containing directory.
-            if "*" in seg or low == "<storeuserid>" or (seg.startswith("<") and seg.endswith(">")):
+            # ``<osUserName>`` is the one token we expand inline rather than
+            # stop at (it's a known value, not a wildcard).
+            if "*" in seg or low == "<storeuserid>" or (
+                seg.startswith("<") and seg.endswith(">") and low != "<osusername>"
+            ):
                 break
             if low == "<osusername>":
-                out_parts.append("steamuser")
+                out_parts.append(username)
                 continue
             out_parts.append(seg)
 
         resolved = os.path.normpath(os.path.join(*out_parts))
+        resolved = cls.realize_case_insensitive(resolved)
         return os.path.realpath(resolved)

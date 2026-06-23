@@ -451,10 +451,10 @@ async def test_dispatch_retry_sync_down_forces_pull():
 
 
 def _stub_autocloud(monkeypatch):
-    # Avoid network: one Auto-Cloud location (Documents\MyGame).
+    # Avoid network: one Auto-Cloud location named "saves" (Documents\MyGame).
     monkeypatch.setattr(
         gog_cloud_api, "fetch_gog_save_locations",
-        lambda cid: ["<?DOCUMENTS?>\\MyGame"],
+        lambda cid: [("saves", "<?DOCUMENTS?>\\MyGame")],
     )
 
 
@@ -464,7 +464,8 @@ def test_gog_pick_prefers_autocloud_when_it_has_saves(tmp_path, monkeypatch):
     doc = drive_c / "users" / "steamuser" / "Documents" / "MyGame"
     doc.mkdir(parents=True)
     (doc / "slot.sav").write_text("SAVE" * 50)
-    assert gog_cloud_api.pick_gog_save_dir("CID", drive_c) == doc
+    # Auto-Cloud dir + its cloud namespace name ("saves").
+    assert gog_cloud_api.pick_gog_save_dir("CID", drive_c) == (doc, "saves")
 
 
 def test_gog_pick_uses_sdk_istorage_when_autocloud_empty(tmp_path, monkeypatch):
@@ -476,7 +477,8 @@ def test_gog_pick_uses_sdk_istorage_when_autocloud_empty(tmp_path, monkeypatch):
     )
     sdk.mkdir(parents=True)
     (sdk / "save.dat").write_text("DATA" * 50)
-    assert gog_cloud_api.pick_gog_save_dir("CID", drive_c) == sdk
+    # SDK IStorage dir maps to the "__default" cloud namespace.
+    assert gog_cloud_api.pick_gog_save_dir("CID", drive_c) == (sdk, "__default")
 
 
 def test_gog_pick_falls_back_to_first_autocloud_when_none_on_disk(tmp_path, monkeypatch):
@@ -484,7 +486,293 @@ def test_gog_pick_falls_back_to_first_autocloud_when_none_on_disk(tmp_path, monk
     drive_c = tmp_path / "pfx" / "drive_c"
     (drive_c / "users" / "steamuser").mkdir(parents=True)
     chosen = gog_cloud_api.pick_gog_save_dir("CID", drive_c)
-    assert chosen == drive_c / "users" / "steamuser" / "Documents" / "MyGame"
+    doc = drive_c / "users" / "steamuser" / "Documents" / "MyGame"
+    assert chosen == (doc, "saves")
+
+
+def test_resolve_gog_location_locallow_underscore_variant(tmp_path):
+    # GOG emits both APPLICATION_DATA_LOCALLOW and the underscore variant
+    # APPLICATION_DATA_LOCAL_LOW (e.g. Control:Override); both must resolve.
+    drive_c = tmp_path / "drive_c"
+    locallow = drive_c / "users" / "steamuser" / "AppData" / "LocalLow"
+    assert gog_cloud_api.resolve_gog_location(
+        "<?APPLICATION_DATA_LOCAL_LOW?>/Studio/Game", drive_c,
+    ) == locallow / "Studio" / "Game"
+    assert gog_cloud_api.resolve_gog_location(
+        "<?APPLICATION_DATA_LOCALLOW?>/Studio/Game", drive_c,
+    ) == locallow / "Studio" / "Game"
+
+
+def test_resolve_gog_location_install_token(tmp_path):
+    # Older GOG titles (Fallout, Thief, SSI Gold Box …) save inside the
+    # install dir via <?INSTALL?>; resolves against install_path, else None.
+    drive_c = tmp_path / "drive_c"
+    install = tmp_path / "Games" / "Fallout"
+    assert gog_cloud_api.resolve_gog_location(
+        "<?INSTALL?>/DATA/SAVEGAME", drive_c, str(install),
+    ) == install / "DATA" / "SAVEGAME"
+    # Backslash variant + no trailing path.
+    assert gog_cloud_api.resolve_gog_location(
+        "<?INSTALL?>\\SAVES", drive_c, str(install),
+    ) == install / "SAVES"
+    # Unknown install path (game not installed) -> unresolvable.
+    assert gog_cloud_api.resolve_gog_location(
+        "<?INSTALL?>/cloud_saves", drive_c, "",
+    ) is None
+
+
+def test_resolve_gog_location_case_insensitive_disk(tmp_path):
+    # gogdl must sync into the dir the game actually created, regardless of
+    # the casing in GOG's remote-config (Wine is case-insensitive).
+    drive_c = tmp_path / "drive_c"
+    created = drive_c / "users" / "steamuser" / "Documents" / "bioshockhd" / "bioshock"
+    created.mkdir(parents=True)
+    got = gog_cloud_api.resolve_gog_location(
+        "<?DOCUMENTS?>/BioshockHD/Bioshock", drive_c,
+    )
+    assert got == created  # matched the on-disk casing, not the config's
+
+
+def test_resolve_gog_save_locations_resolves_install_targets(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        gog_cloud_api, "fetch_gog_save_locations",
+        lambda cid: [("saves", "<?INSTALL?>/Save")],
+    )
+    drive_c = tmp_path / "drive_c"
+    install = str(tmp_path / "game")
+    # With an install path the install-dir target resolves (+ SDK fallback).
+    got = gog_cloud_api.resolve_gog_save_locations("CID", drive_c, install)
+    assert got[0] == (Path(install) / "Save", "saves")
+    # Without it, only the SDK IStorage fallback remains.
+    only_sdk = gog_cloud_api.resolve_gog_save_locations("CID", drive_c, "")
+    assert [n for _, n in only_sdk] == ["__default"]
+
+
+def test_fetch_gog_save_locations_keeps_namespace_name(monkeypatch):
+    monkeypatch.setattr(
+        gog_cloud_api, "http_json",
+        lambda url, decompress=False: {"content": {"Windows": {"cloudStorage": {
+            "locations": [
+                {"name": "saves", "location": "<?APPLICATION_DATA_ROAMING?>/TRX"},
+                {"location": "<?DOCUMENTS?>/NoName"},  # missing name -> __default
+            ]
+        }}}},
+    )
+    assert gog_cloud_api.fetch_gog_save_locations("CID") == [
+        ("saves", "<?APPLICATION_DATA_ROAMING?>/TRX"),
+        ("__default", "<?DOCUMENTS?>/NoName"),
+    ]
+
+
+def _gog_strategy(tmp_path):
+    """A GOGCloudSaveStrategy whose state file lives under tmp_path."""
+    # _get_state_file() = local_save_root.parent / cloud_sync_state.json; in
+    # production the data dir always exists, so create it here too.
+    (tmp_path / "saves").mkdir(parents=True, exist_ok=True)
+    return GOGCloudSaveStrategy(str(tmp_path / "saves" / "gog"))
+
+
+def test_resolve_cloud_namespace_defaults_to_default(tmp_path):
+    # No cached entry (e.g. enriched/title-tier or config-override dir) ->
+    # gogdl's own default namespace, which is correct for SDK-IStorage games.
+    strat = _gog_strategy(tmp_path)
+    assert strat._resolve_cloud_namespace("g404") == "__default"
+
+
+def test_resolve_cloud_namespace_uses_cached_name(tmp_path):
+    strat = _gog_strategy(tmp_path)
+    strat._write_cached_save_dir("g1", "/some/dir", "saves")
+    # Fresh instance (no in-memory cache) reads it back off disk.
+    strat2 = _gog_strategy(tmp_path)
+    assert strat2._resolve_cloud_namespace("g1") == "saves"
+
+
+def test_read_cached_save_dir_tolerates_legacy_string(tmp_path):
+    strat = _gog_strategy(tmp_path)
+    state_file = strat._get_state_file()
+    state_file.parent.mkdir(parents=True, exist_ok=True)
+    # Legacy on-disk shape: a bare path string, no namespace.
+    state_file.write_text(json.dumps({"gog_save_dirs": {"g1": "/legacy/dir"}}))
+    assert strat._read_cached_save_dir("g1") == ("/legacy/dir", None)
+    # -> namespace falls back to __default until re-resolved.
+    assert strat._resolve_cloud_namespace("g1") == "__default"
+
+
+async def _run_gog_sync_capture_cmd(tmp_path, namespace, *, direction):
+    # Drive _do_sync_down/_do_sync_up directly: the base sync_* wrappers add
+    # snapshot/guard machinery (real-FS side effects) irrelevant to the cmd.
+    strat = GOGCloudSaveStrategy(str(tmp_path / "saves"))
+    strat.gogdl_bin = "mock_gogdl"
+    strat._convert_gog_token = MagicMock(return_value="/tmp/auth.json")
+    save_dir = str(tmp_path / "gogsave")
+    os.makedirs(save_dir, exist_ok=True)
+    (Path(save_dir) / "slot.sav").write_text("SAVE" * 50)  # real save data
+    strat._cached_namespace["gog123"] = namespace
+    with patch("asyncio.create_subprocess_exec") as mock_exec:
+        proc = AsyncMock()
+        proc.returncode = 0
+        proc.communicate.return_value = (b"1.0", b"")
+        mock_exec.return_value = proc
+        if direction == "down":
+            assert await strat._do_sync_down("gog123", save_dir, False) is True
+        else:
+            assert await strat._do_sync_up("gog123", save_dir) is True
+    return list(mock_exec.call_args.args)
+
+
+@pytest.mark.asyncio
+async def test_gog_sync_down_passes_cloud_namespace(tmp_path):
+    cmd = await _run_gog_sync_capture_cmd(tmp_path, "saves", direction="down")
+    assert "--name" in cmd
+    assert cmd[cmd.index("--name") + 1] == "saves"
+    assert "--skip-upload" in cmd
+
+
+@pytest.mark.asyncio
+async def test_gog_sync_up_passes_cloud_namespace(tmp_path):
+    cmd = await _run_gog_sync_capture_cmd(tmp_path, "saves", direction="up")
+    assert "--name" in cmd
+    assert cmd[cmd.index("--name") + 1] == "saves"
+    assert "--skip-download" in cmd
+
+
+# ── GOG multi-location games (e.g. BioShock Remastered: saves + saves2) ───
+
+
+def test_resolve_gog_save_locations_returns_all_targets(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        gog_cloud_api, "fetch_gog_save_locations",
+        lambda cid: [
+            ("saves", "<?DOCUMENTS?>/BioshockHD/Bioshock"),
+            ("saves2", "<?APPLICATION_DATA_ROAMING?>/BioshockHD/Bioshock/SaveGames"),
+        ],
+    )
+    drive_c = tmp_path / "drive_c"
+    su = drive_c / "users" / "steamuser"
+    assert gog_cloud_api.resolve_gog_save_locations("CID", drive_c) == [
+        (su / "Documents" / "BioshockHD" / "Bioshock", "saves"),
+        (su / "AppData" / "Roaming" / "BioshockHD" / "Bioshock" / "SaveGames", "saves2"),
+        (su / "AppData" / "Local" / "GOG.com" / "Galaxy" / "Applications"
+         / "CID" / "Storage", "__default"),
+    ]
+
+
+def _names_and_dirs(mock_exec):
+    names, dirs = [], []
+    for call in mock_exec.call_args_list:
+        argv = list(call.args)
+        names.append(argv[argv.index("--name") + 1])
+        dirs.append(argv[argv.index("save-sync") + 1])
+    return names, dirs
+
+
+@pytest.mark.asyncio
+async def test_gog_multi_location_sync_down_syncs_all_targets(tmp_path):
+    strat = _gog_strategy(tmp_path)
+    strat.gogdl_bin = "mock_gogdl"
+    strat._convert_gog_token = MagicMock(return_value="/tmp/auth.json")
+    a, b = tmp_path / "A", tmp_path / "B"
+    for d in (a, b):
+        d.mkdir()
+        (d / "x.sav").write_text("SAVE" * 50)  # real saves -> no clean-pull clear
+    strat._cached_targets["g"] = [(str(a), "saves"), (str(b), "saves2")]
+    with patch("asyncio.create_subprocess_exec") as mock_exec, \
+            patch("unifideck.services.cloud_save.safety.snapshot_backup"):
+        proc = AsyncMock()
+        proc.returncode = 0
+        proc.communicate.return_value = (b"1.0", b"")
+        mock_exec.return_value = proc
+        assert await strat._do_sync_down("g", str(a), False) is True
+    names, dirs = _names_and_dirs(mock_exec)
+    assert names == ["saves", "saves2"]      # BOTH namespaces synced
+    assert dirs == [str(a), str(b)]          # each into its own dir
+
+
+@pytest.mark.asyncio
+async def test_gog_multi_location_sync_up_skips_dirs_without_saves(tmp_path):
+    strat = _gog_strategy(tmp_path)
+    strat.gogdl_bin = "mock_gogdl"
+    strat._convert_gog_token = MagicMock(return_value="/tmp/auth.json")
+    a, b = tmp_path / "A", tmp_path / "B"
+    a.mkdir()
+    b.mkdir()
+    (a / "x.sav").write_text("SAVE" * 50)    # real saves
+    (b / "config.ini").write_text("[x]")     # config only -> has_save_data False
+    strat._cached_targets["g"] = [(str(a), "saves"), (str(b), "saves2")]
+    with patch("asyncio.create_subprocess_exec") as mock_exec:
+        proc = AsyncMock()
+        proc.returncode = 0
+        proc.communicate.return_value = (b"1.0", b"")
+        mock_exec.return_value = proc
+        assert await strat._do_sync_up("g", str(a)) is True
+    names, _ = _names_and_dirs(mock_exec)
+    assert names == ["saves"]                # saves2 (config-only) NOT uploaded
+
+
+def test_gog_timestamp_key_per_namespace(tmp_path):
+    strat = _gog_strategy(tmp_path)
+    strat._save_timestamp("g", "11.0")            # default namespace -> bare key
+    strat._save_timestamp("g", "22.0", "saves2")  # extra namespace -> namespaced key
+    assert strat._get_saved_timestamp("g") == "11.0"
+    assert strat._get_saved_timestamp("g", "saves2") == "22.0"
+    assert strat._get_saved_timestamp("g", "saves") == "0"  # untouched namespace
+    state = json.loads(strat._get_state_file().read_text())
+    assert state["gog"]["g"] == "11.0"            # backward-compatible key
+    assert state["gog"]["g::saves2"] == "22.0"
+
+
+def test_gog_native_linux_routes_to_enriched_linux(tmp_path):
+    # A native-Linux GOG game (start.sh) has no Wine prefix and GOG remote-config
+    # cloud is Windows/Mac-only, so resolution must go straight to the enriched
+    # Linux tier with native_linux=True + the install dir.
+    strat = _gog_strategy(tmp_path)
+    strat._is_native_linux = lambda gid: True
+    strat._install_dir = lambda gid: "/games/G"
+    captured = {}
+
+    def fake_enriched(game_id, *, prefix_path, install_path="", native_linux=False):
+        captured.update(
+            native_linux=native_linux, install_path=install_path,
+            prefix_path=prefix_path,
+        )
+        return "/home/deck/.local/share/G"
+
+    strat._resolve_enriched = fake_enriched
+    assert strat._resolve_store_save_dir("g") == "/home/deck/.local/share/G"
+    assert captured["native_linux"] is True
+    assert captured["install_path"] == "/games/G"
+
+
+@pytest.mark.asyncio
+async def test_gog_native_linux_sync_uses_os_linux(tmp_path):
+    strat = _gog_strategy(tmp_path)
+    strat.gogdl_bin = "mock_gogdl"
+    strat._convert_gog_token = MagicMock(return_value="/tmp/auth.json")
+    strat._is_native_linux = lambda gid: True
+    d = tmp_path / "lin"
+    d.mkdir()
+    (d / "x.sav").write_text("SAVE" * 50)
+    strat._cached_targets["g"] = [(str(d), "__default")]
+    with patch("asyncio.create_subprocess_exec") as mock_exec:
+        proc = AsyncMock()
+        proc.returncode = 0
+        proc.communicate.return_value = (b"1.0", b"")
+        mock_exec.return_value = proc
+        assert await strat._do_sync_down("g", str(d), False) is True
+    cmd = list(mock_exec.call_args.args)
+    assert cmd[cmd.index("--os") + 1] == "linux"
+
+
+def test_gog_cached_targets_roundtrip(tmp_path):
+    strat = _gog_strategy(tmp_path)
+    strat._write_cached_save_dir(
+        "g", "/p", "saves", [("/p", "saves"), ("/q", "saves2")],
+    )
+    # Fresh instance reads the full target list back off disk.
+    fresh = _gog_strategy(tmp_path)
+    assert fresh._resolve_sync_targets("g", "/fallback") == [
+        ("/p", "saves"), ("/q", "saves2"),
+    ]
 
 
 # ── ~/Save Games Backup is WRITE-ONLY (never pulled from) ─────────────────

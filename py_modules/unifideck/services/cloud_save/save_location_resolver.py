@@ -92,8 +92,19 @@ def _is_foreign_cloud_path(path: str) -> bool:
     return "userdata" in p and "<storeuserid>" in p
 
 
+def _os_compatible(loc: dict[str, Any], native_linux: bool) -> bool:
+    """Whether a row's ``os`` tag matches how the game runs (native-Linux vs
+    Proton/Windows). A row with no ``os`` applies to any OS."""
+    oses = loc.get("os") or []
+    if not oses:
+        return True
+    if native_linux:
+        return "linux" in oses
+    return "windows" in oses or "dos" in oses
+
+
 def _select_rows(
-    locations: list[dict[str, Any]], store: str,
+    locations: list[dict[str, Any]], store: str, native_linux: bool = False,
 ) -> list[dict[str, Any]]:
     """Order rows best-first for ``store``; keep foreign-tagged paths as backup.
 
@@ -101,20 +112,21 @@ def _select_rows(
     2's ``<base>/hl2/save`` is tagged ``steam`` yet a GOG copy saves there too)
     is KEPT as a lower-priority fallback. Only genuine store-cloud mirror paths
     (Steam ``userdata/<id>/<appid>/remote``) are demoted to last. Priority:
-    store-matched/generic → other-store backup; ``save`` before ``config``;
-    real paths before cloud-mirror paths.
+    OS-matched (native-Linux vs Windows-prefix) → store-matched/generic →
+    other-store backup; ``save`` before ``config``; real before cloud-mirror.
     """
     rows = [
         loc for loc in locations
         if isinstance(loc, dict) and loc.get("path")
     ]
 
-    def sort_key(loc: dict[str, Any]) -> tuple[int, int, int]:
+    def sort_key(loc: dict[str, Any]) -> tuple[int, int, int, int]:
         stores = loc.get("stores") or []
         tags = loc.get("tags") or []
         foreign_cloud = _is_foreign_cloud_path(loc.get("path", ""))
         store_rank = 0 if (not stores or store in stores) else 1
         return (
+            0 if _os_compatible(loc, native_linux) else 1,  # right-OS paths first
             1 if foreign_cloud else 0,   # cloud-mirror paths last
             store_rank,                  # our store / generic before other stores
             0 if "save" in tags else 1,  # save before config
@@ -132,13 +144,16 @@ def resolve_save_dir(
     install_path: str = "",
     config: Any = None,
     cache: Any = None,
+    native_linux: bool = False,
 ) -> str | None:
     """Resolve the best enriched save directory, or ``None`` if unavailable.
 
     Prefers a resolved candidate that already exists on disk; otherwise returns
     the first resolvable candidate (sync will create it). ``install_path`` (for
     ``<base>`` install-dir saves) defaults to the games.map ``work_dir`` so
-    user-chosen install locations resolve correctly.
+    user-chosen install locations resolve correctly. ``native_linux`` resolves
+    against real Linux home/XDG dirs (GOG native builds) instead of the Wine
+    prefix, and prefers Linux-tagged rows.
     """
     locations = _save_locations_for(store, game_id, cache)
     if not locations:
@@ -146,9 +161,9 @@ def resolve_save_dir(
     if not install_path:
         install_path = _install_path_from_games_map(store, game_id, config)
     candidates: list[str] = []
-    for loc in _select_rows(locations, store):
+    for loc in _select_rows(locations, store, native_linux):
         resolved = WinePrefixResolver.resolve_ludusavi_path(
-            loc["path"], prefix_path, install_path,
+            loc["path"], prefix_path, install_path, native_linux=native_linux,
         )
         if resolved and resolved not in candidates:
             candidates.append(resolved)
