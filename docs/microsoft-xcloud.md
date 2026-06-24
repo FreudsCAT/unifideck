@@ -191,6 +191,39 @@ The same directory `~/.local/share/unifideck/chromium-auth/` is used for:
 
 This avoids double authentication.
 
+### Controller support (Steam Deck)
+
+xCloud controller input **works in Gaming Mode** (the supported target). It does
+**not** work in Desktop Mode — that is a known, out-of-scope limitation.
+
+What actually makes the Deck controller drive a streamed game:
+
+- **Microsoft Edge is required.** Microsoft's Steam Deck controller fix for cloud
+  gaming is **Edge-only** — Chrome/Chromium do not get it. (This is why the plugin
+  hard-requires the Edge flatpak.)
+- **The xCloud shortcut needs a *gamepad* Steam Input layout.** Steam's default for
+  these shortcuts (`Gamepad with Mouse Trackpad`) already works. The plugin
+  best-effort defaults it to **`Gamepad With Joystick Trackpad`**
+  (`controller_neptune_gamepad_fps.vdf`) via
+  `controllerConfig.ts::ensureGamepadConfigForApp` → `SetSelectedConfigForApp`,
+  applied **after** `RunGame` (Steam's controller-config API is inert for an idle
+  shortcut, so it is set once the app is the active launch target; the selection
+  persists). If the auto-default doesn't take, set it manually once via
+  **gear → Controller Layout → Templates → Gamepad With Joystick Trackpad** — it
+  persists in Steam Cloud.
+- **udev metadata override.** `EdgeInstaller.ensure_controller_permissions` applies
+  `flatpak --user override --filesystem=/run/udev:ro com.microsoft.Edge` so Edge's
+  Gamepad API can identify the pad. No `--device=all` flag is needed: the Edge
+  flatpak's manifest already grants `devices=all` by default (verified via
+  `flatpak info -m com.microsoft.Edge`).
+
+Approaches that were tried and found **unnecessary** (do not re-add): a synthetic
+`evdev` button-injection "trigger" (it produced a *false* gamepad detection that
+masked the real layout issue), a runtime `--device=all` flag (redundant — see
+above), and the controller-layout "bounce" via the Configurator popup (staging
+disabled it as counterproductive). The real lever is simply the gamepad Steam
+Input layout above.
+
 ---
 
 ## Virtual keyboard
@@ -377,4 +410,4 @@ The layout (AZERTY/QWERTY) is selected based on the Unifideck locale:
 2. **Game Pass subscription required** — verified server-side (xbox.com) at launch
 3. **Requires Chromium** — installed via flatpak if missing
 4. **Network quality** — streaming depends on Internet connection
-5. **No native Steam Input controller support** — gamepad goes through Chromium's WebGamepad API
+5. **Controller works in Gaming Mode only** — input flows via Edge's Gamepad API and requires a *gamepad* Steam Input layout on the shortcut (see [Controller support (Steam Deck)](#controller-support-steam-deck)). Desktop Mode is unsupported.
