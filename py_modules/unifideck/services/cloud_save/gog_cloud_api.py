@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -221,7 +222,53 @@ def list_cloud_objects(
         raise
 
 
-def summarize_cloud_objects(objects: list[dict[str, Any]]) -> dict[str, Any]:
+def head_object_local_mtime(
+    user_id: str, client_id: str, access_token: str, name: str,
+) -> float | None:
+    """The object's preserved LOCAL mtime (``X-Object-Meta-LocalLastModified``).
+
+    GOG's object LIST only reports the server-side ``last_modified`` (when the
+    PUT was received), so that timestamp jumps to "now" on every upload even
+    when the bytes are unchanged — making "Cloud" disagree with "Local" right
+    after a push. gogdl uploads each file with the ORIGINAL local mtime in the
+    ``X-Object-Meta-LocalLastModified`` header (and restores it via ``os.utime``
+    on download); a HEAD reads it back. Returns the epoch float, or ``None`` on
+    a missing header / HTTP / parse failure so the caller falls back to the
+    server ``last_modified``. Never raises.
+    """
+    import urllib.error
+    import urllib.parse
+    import urllib.request
+    url = (
+        f"https://cloudstorage.gog.com/v1/{user_id}/{client_id}/"
+        + urllib.parse.quote(name, safe="/")
+    )
+    ctx = ssl_ctx_permissive("GOG cloud-save HEAD — outdated Deck cert store")
+    req = urllib.request.Request(url, method="HEAD", headers={
+        "Authorization": f"Bearer {access_token}",
+        "User-Agent": "GalaxyClient/2.0.45",
+    })
+    try:
+        with urllib.request.urlopen(req, timeout=8, context=ctx) as resp:
+            raw = resp.headers.get("X-Object-Meta-LocalLastModified")
+    except (urllib.error.URLError, OSError) as e:
+        logger.debug("[GOGSync] HEAD %s failed: %s", name, e)
+        return None
+    if not raw:
+        return None
+    try:
+        return datetime.fromisoformat(raw).astimezone().timestamp()
+    except ValueError:
+        try:
+            return float(raw)
+        except ValueError:
+            return None
+
+
+def summarize_cloud_objects(
+    objects: list[dict[str, Any]],
+    mtime_resolver: Callable[[str], float | None] | None = None,
+) -> dict[str, Any]:
     """Summarize the ACTIVE cloud save set (the newest location prefix).
 
     GOG cloud storage namespaces objects by location NAME — a game can
@@ -233,35 +280,54 @@ def summarize_cloud_objects(objects: list[dict[str, Any]]) -> dict[str, Any]:
     most-recently-written group — the set gogdl pulls. Our own
     ``.unifideck_sync.json`` manifest is excluded so the count lines up
     with ``safety.snapshot`` on the local side.
+
+    ``mtime_resolver`` (optional) maps an object name → its preserved local
+    mtime (see :func:`head_object_local_mtime`). When given, the reported
+    ``timestamp`` is the newest LOCAL mtime across the active group rather than
+    the server PUT time — so "Cloud" matches "Local" after an upload — with a
+    per-object fall back to the server ``last_modified`` when the resolver can't
+    supply one. Without it the behaviour is the original server-time summary.
     """
-    counts: dict[str, int] = {}
-    stamps: dict[str, list[float]] = {}
+    # Per top-level group: each object's (name, server last_modified epoch|None).
+    groups: dict[str, list[tuple[str, float | None]]] = {}
     for entry in objects:
         name = str(entry.get("name", ""))
         if name.endswith(".unifideck_sync.json"):
             continue
         top = name.split("/", 1)[0] if "/" in name else ""
-        counts[top] = counts.get(top, 0) + 1
+        server_ts: float | None = None
         lm = entry.get("last_modified")
         if lm:
             try:
-                stamps.setdefault(top, []).append(
-                    datetime.fromisoformat(lm).astimezone().timestamp()
-                )
+                server_ts = datetime.fromisoformat(lm).astimezone().timestamp()
             except ValueError:
-                pass
-    if not counts:
+                server_ts = None
+        groups.setdefault(top, []).append((name, server_ts))
+    if not groups:
         return {
             "has_saves": False, "timestamp": 0.0,
             "file_count": 0, "total_bytes": 0,
         }
-    # The active location = the group whose newest object is the most
-    # recent (what gogdl treats as the current cloud save).
-    active = max(counts, key=lambda top: max(stamps.get(top) or [0.0]))
-    group_stamps = stamps.get(active) or []
+    # The active location = the group whose newest object is the most recent
+    # (server time) — what gogdl treats as the current cloud save.
+    active = max(
+        groups,
+        key=lambda top: max((ts or 0.0 for _, ts in groups[top]), default=0.0),
+    )
+    items = groups[active]
+    # Prefer each object's preserved LOCAL mtime so the cloud time reflects when
+    # the save was actually written (matching the local snapshot) instead of the
+    # server PUT time; fall back per-object to the server ``last_modified``.
+    timestamps: list[float] = []
+    for name, server_ts in items:
+        ts = mtime_resolver(name) if mtime_resolver is not None else None
+        if ts is None:
+            ts = server_ts
+        if ts is not None:
+            timestamps.append(ts)
     return {
-        "has_saves": counts[active] > 0,
-        "timestamp": max(group_stamps) if group_stamps else 0.0,
-        "file_count": counts[active],
+        "has_saves": len(items) > 0,
+        "timestamp": max(timestamps) if timestamps else 0.0,
+        "file_count": len(items),
         "total_bytes": 0,
     }

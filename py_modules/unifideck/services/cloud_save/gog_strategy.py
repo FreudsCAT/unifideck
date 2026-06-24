@@ -14,6 +14,7 @@ from unifideck.services.cloud_save import safety
 from unifideck.services.cloud_save.gog_cloud_api import (
     GOG_DEFAULT_NAMESPACE,
     fetch_gog_client_id,
+    head_object_local_mtime,
     list_cloud_objects,
     resolve_gog_save_locations,
     select_primary_save_target,
@@ -299,7 +300,13 @@ class GOGCloudSaveStrategy(CloudSaveStrategy):
             objects = list_cloud_objects(user_id, client_id, token)
             if objects is None:
                 return None
-            return summarize_cloud_objects(objects)
+
+            def resolve_local_mtime(name: str) -> float | None:
+                return head_object_local_mtime(user_id, client_id, token, name)
+
+            return summarize_cloud_objects(
+                objects, mtime_resolver=resolve_local_mtime,
+            )
         except Exception as e:
             logger.debug("[GOGSync] cloud-info query failed for %s: %s", game_id, e)
             return None

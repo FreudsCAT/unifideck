@@ -927,6 +927,57 @@ def test_gog_cloud_summary_empty_and_flat():
     assert flat["file_count"] == 1 and flat["has_saves"] is True
 
 
+def test_gog_cloud_summary_prefers_preserved_local_mtime():
+    # The LIST reports server PUT times (newer, jump to "now" on every upload);
+    # the preserved X-Object-Meta-LocalLastModified (via the resolver) is the
+    # save's real mtime. The reported timestamp must be the newest LOCAL mtime
+    # so "Cloud" matches "Local" after a push instead of showing the upload time.
+    from datetime import datetime
+    objects = [
+        {"name": "saves/a.sav", "last_modified": "2026-06-25T00:16:08+00:00"},
+        {"name": "saves/b.sav", "last_modified": "2026-06-25T00:16:07+00:00"},
+    ]
+    local = {
+        "saves/a.sav": "2026-06-25T00:05:35+00:00",
+        "saves/b.sav": "2026-06-25T00:04:20+00:00",
+    }
+
+    def resolver(name):
+        v = local.get(name)
+        return datetime.fromisoformat(v).astimezone().timestamp() if v else None
+
+    info = gog_cloud_api.summarize_cloud_objects(objects, mtime_resolver=resolver)
+    expected = datetime.fromisoformat(
+        "2026-06-25T00:05:35+00:00"
+    ).astimezone().timestamp()
+    assert info["timestamp"] == expected  # newest LOCAL mtime, not 00:16:08
+    assert info["file_count"] == 2
+
+
+def test_gog_cloud_summary_resolver_falls_back_to_server_time():
+    # When the resolver can't supply a local mtime (missing header / HEAD fail)
+    # for an object, that object falls back to its server ``last_modified`` — so
+    # the result is never worse than the old server-time-only behaviour.
+    from datetime import datetime
+    objects = [
+        {"name": "saves/a.sav", "last_modified": "2026-06-25T00:16:08+00:00"},
+        {"name": "saves/b.sav", "last_modified": "2026-06-25T00:10:00+00:00"},
+    ]
+
+    def resolver(name):  # only b resolves; a (None) falls back to its server ts
+        if name == "saves/b.sav":
+            return datetime.fromisoformat(
+                "2026-06-25T00:05:00+00:00"
+            ).astimezone().timestamp()
+        return None
+
+    info = gog_cloud_api.summarize_cloud_objects(objects, mtime_resolver=resolver)
+    expected = datetime.fromisoformat(  # a's server 00:16:08 is newest overall
+        "2026-06-25T00:16:08+00:00"
+    ).astimezone().timestamp()
+    assert info["timestamp"] == expected
+
+
 # ── Manual pull/push are fire-and-forget (don't block the RPC) ─────────────
 
 

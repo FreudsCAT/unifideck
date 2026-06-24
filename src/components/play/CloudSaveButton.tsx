@@ -31,6 +31,11 @@ interface Props {
   gameTitle: string;
 }
 
+/** Local/cloud save-timestamp delta (seconds) treated as "in sync". Absorbs
+ *  gogdl truncating the stored cloud mtime to whole seconds vs the local
+ *  file's sub-second st_mtime; a real new save is always far larger. */
+const TS_SYNC_TOLERANCE_S = 2;
+
 export const CloudSaveButton: FC<Props> = ({ store, gameId, gameTitle }) => {
   const { t } = useTranslation();
   const toast = useToast();
@@ -93,8 +98,17 @@ export const CloudSaveButton: FC<Props> = ({ store, gameId, gameTitle }) => {
   const remoteTs = remote?.timestamp;
 
   const case1 = hasCloud && !hasLocal;
+  // Treat local vs cloud as "in sync" within a small tolerance: gogdl stores
+  // the cloud mtime (X-Object-Meta-LocalLastModified) truncated to whole
+  // seconds, while the local file's st_mtime keeps sub-second precision — so a
+  // freshly-pushed save reads ~0.x s apart and must NOT breathe. A genuine new
+  // save is always many seconds newer, so 2 s never masks a real divergence.
   const case2and3 =
-    hasCloud && hasLocal && !!localTs && !!remoteTs && localTs !== remoteTs;
+    hasCloud &&
+    hasLocal &&
+    !!localTs &&
+    !!remoteTs &&
+    Math.abs(localTs - remoteTs) > TS_SYNC_TOLERANCE_S;
   const case4 = !hasCloud && hasLocal;
 
   const shouldBreathe =
