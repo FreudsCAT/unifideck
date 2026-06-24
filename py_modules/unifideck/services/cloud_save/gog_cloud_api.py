@@ -19,6 +19,12 @@ from typing import Any
 from unifideck.core.net.ssl_helpers import ssl_ctx_permissive
 from unifideck.services.cloud_save import safety
 
+# The store-neutral Galaxy HTTP primitives live in the GOG store package
+# (Layer 4) so the store can reuse them for achievements without importing
+# this service (Layer 5). ``fetch_gog_client_creds`` / ``exchange_game_token``
+# moved there too — gog_strategy imports those from galaxy_api directly.
+from unifideck.stores.gog.galaxy_api import GOG_BUILDS_URL, http_json
+
 logger = logging.getLogger(__name__)
 
 # GOG cloud-save location templates use path variables like
@@ -51,10 +57,6 @@ _GOG_INSTALL_VARS = frozenset({"INSTALL", "INSTALL_DIR", "GAME_DIR"})
 # is gogdl's own default and the namespace for SDK IStorage saves.
 GOG_DEFAULT_NAMESPACE = "__default"
 
-_BUILDS_URL = (
-    "https://content-system.gog.com/products/{game_id}"
-    "/os/windows/builds?generation=2"
-)
 _REMOTE_CONFIG_URL = (
     "https://remote-config.gog.com/components/galaxy_client/"
     "clients/{client_id}?component_version=2.0.45"
@@ -96,41 +98,8 @@ def resolve_gog_location(
     return Path(WinePrefixResolver.realize_case_insensitive(str(resolved)))
 
 
-def http_json(url: str, decompress: bool = False) -> Any:
-    """GET ``url`` and parse JSON, using the permissive SSL context.
-
-    GOG's endpoints trip the Deck's outdated CA store, so we reuse the
-    same permissive context the GOG store HTTP path uses. The
-    content-system manifest is zlib/gzip-compressed — try the common
-    decoders before parsing. Returns the decoded JSON (object or list);
-    callers ``isinstance``-guard the shape they expect.
-    """
-    import gzip
-    import urllib.request
-    import zlib
-    ctx = ssl_ctx_permissive("GOG cloud-save config — outdated Deck cert store")
-    req = urllib.request.Request(
-        url, headers={"User-Agent": "GalaxyClient/2.0.45"},
-    )
-    with urllib.request.urlopen(req, timeout=8, context=ctx) as resp:
-        raw = resp.read()
-    if decompress:
-        for decoder in (
-            zlib.decompress,
-            lambda b: zlib.decompress(b, 16 + zlib.MAX_WBITS),
-            gzip.decompress,
-            lambda b: b,
-        ):
-            try:
-                raw = decoder(raw)
-                break
-            except Exception:  # noqa: S112 — trying each decoder; a failure just means try the next
-                continue
-    return json.loads(raw)
-
-
 def fetch_gog_client_id(game_id: str) -> str | None:
-    builds = http_json(_BUILDS_URL.format(game_id=game_id))
+    builds = http_json(GOG_BUILDS_URL.format(game_id=game_id))
     items = builds.get("items") if isinstance(builds, dict) else None
     if not items:
         return None
@@ -160,23 +129,6 @@ def fetch_gog_save_locations(client_id: str) -> list[tuple[str, str]]:
         for loc in locations
         if isinstance(loc, dict) and loc.get("location")
     ]
-
-
-def fetch_gog_client_creds(game_id: str) -> tuple[str | None, str | None]:
-    """Game's Galaxy ``(clientId, clientSecret)`` from the build manifest."""
-    builds = http_json(_BUILDS_URL.format(game_id=game_id))
-    items = builds.get("items") if isinstance(builds, dict) else None
-    if not items:
-        return None, None
-    link = items[0].get("link")
-    if not link:
-        return None, None
-    manifest = http_json(link, decompress=True)
-    if not isinstance(manifest, dict):
-        return None, None
-    cid = manifest.get("clientId")
-    csec = manifest.get("clientSecret")
-    return (str(cid) if cid else None, str(csec) if csec else None)
 
 
 def resolve_gog_save_locations(
@@ -244,24 +196,6 @@ def pick_gog_save_dir(
     return select_primary_save_target(
         resolve_gog_save_locations(client_id, drive_c, install_path),
     )
-
-
-def exchange_game_token(
-    client_id: str, client_secret: str, refresh_token: str,
-) -> str | None:
-    """Exchange the refresh token for a GAME-client-scoped access token."""
-    import urllib.parse
-    import urllib.request
-    url = "https://auth.gog.com/token?" + urllib.parse.urlencode({
-        "client_id": client_id, "client_secret": client_secret,
-        "grant_type": "refresh_token", "refresh_token": refresh_token,
-    })
-    ctx = ssl_ctx_permissive("GOG token exchange — outdated Deck cert store")
-    req = urllib.request.Request(url, headers={"User-Agent": "GalaxyClient/2.0.45"})
-    with urllib.request.urlopen(req, timeout=8, context=ctx) as resp:
-        data = json.loads(resp.read())
-    tok = data.get("access_token") if isinstance(data, dict) else None
-    return str(tok) if tok else None
 
 
 def list_cloud_objects(

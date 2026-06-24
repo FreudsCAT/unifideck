@@ -45,6 +45,7 @@ from unifideck.services.shortcut import ShortcutService
 from unifideck.stores.shared.store_base import StoreBase
 from unifideck.utils.locale import get_unifideck_locale
 
+from .achievements import GOGAchievements
 from .auth import GOGBrowserAuth
 from .config import GOG_AUTH_URL_FILE, GOGConfig
 from .dlc import GOGDlcManager
@@ -94,6 +95,9 @@ class GOGStore(StoreBase):
         self._shortcut_service = shortcut_service
         self._edge = edge_browser
         self._tokens = GOGTokenManager(self._gog_config, bus=bus)
+        # Achievements only need the (single, never-rebuilt) token manager, so
+        # build once here — unaffected by ``_rebuild_auth_after_injection``.
+        self._achievements = GOGAchievements(tokens=self._tokens)
         self._exe = GOGExeResolver()
 
         self._library = GOGLibrary(
@@ -350,6 +354,24 @@ class GOGStore(StoreBase):
         )
         path = info.get("install_path") if isinstance(info, dict) else None
         return path if isinstance(path, str) and path else None
+
+    async def get_game_achievements(
+        self, game_id: str, force: bool = False,
+    ) -> dict[str, Any]:
+        """A GOG game's achievements (definitions + this user's unlock status).
+
+        Read-only — unlocking happens in-game via Comet; this reads back what
+        was earned (``gameplay.gog.com``). Raises ``GOGAchievementsError`` on
+        auth/network/no-client-id failure; a game with no achievements is a
+        normal empty payload. ``force`` bypasses the TTL cache.
+        """
+        return await self._achievements.get_game_achievements(
+            game_id, force=force,
+        )
+
+    def invalidate_achievements(self, game_id: str) -> None:
+        """Drop a game's cached achievements (called on game-stop)."""
+        self._achievements.invalidate(game_id)
 
     async def get_game_dlcs(self, game_id: str) -> list[dict[str, Any]]:
         """Get game dlcs."""

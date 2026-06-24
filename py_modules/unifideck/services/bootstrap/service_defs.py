@@ -210,6 +210,16 @@ _SERVICE_DEFS: tuple[tuple[Any, ...], ...] = (
         lambda b, r, c, cfg, p, pl: (b, c),
         lambda b, r, c, cfg, p, pl: {"config": cfg},
     ),
+    # AchievementWatcher — GOG live unlock toasts (during play) + an
+    # end-of-session summary (persisted for the game-info panel). Needs the
+    # registry to reach the GOG store; plugin-only (not in the launcher
+    # subset), so registry is always present here.
+    (
+        "achievements", "unifideck.services.achievements",
+        "AchievementWatcher",
+        lambda b, r, c, cfg, p, pl: (b, r),
+        lambda b, r, c, cfg, p, pl: {"config": cfg},
+    ),
 )
 
 

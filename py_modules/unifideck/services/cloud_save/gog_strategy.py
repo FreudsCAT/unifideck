@@ -13,8 +13,6 @@ from unifideck.security.secure_token_store import SecureTokenStore
 from unifideck.services.cloud_save import safety
 from unifideck.services.cloud_save.gog_cloud_api import (
     GOG_DEFAULT_NAMESPACE,
-    exchange_game_token,
-    fetch_gog_client_creds,
     fetch_gog_client_id,
     list_cloud_objects,
     resolve_gog_save_locations,
@@ -22,6 +20,10 @@ from unifideck.services.cloud_save.gog_cloud_api import (
     summarize_cloud_objects,
 )
 from unifideck.services.cloud_save.strategy_base import CloudSaveStrategy
+from unifideck.stores.gog.galaxy_api import (
+    exchange_game_token,
+    fetch_gog_client_creds,
+)
 
 logger = logging.getLogger(__name__)
 

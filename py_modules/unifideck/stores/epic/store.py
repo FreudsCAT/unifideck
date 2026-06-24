@@ -49,6 +49,7 @@ from unifideck.services.shortcut import ShortcutService
 from unifideck.stores.shared.store_base import StoreBase
 from unifideck.utils.config_helpers import get_cfg
 
+from .achievements import EpicAchievements
 from .auth import EpicAuthFlow
 from .exe_resolver import EpicExeResolver
 from .install import (
@@ -133,6 +134,15 @@ class EpicStore(StoreBase):
             size_cache_ttl=epic_cfg["size_cache_ttl_seconds"],
             info_timeout=epic_cfg["info_timeout_seconds"],
         )
+        self._achievements = EpicAchievements(
+            cli_path=self.cli_path,
+            user_file=str(Path(get_cfg(
+                self._config,
+                "stores.epic.user_file",
+                "~/.config/legendary/user.json",
+            )).expanduser()),
+            info_timeout=epic_cfg["info_timeout_seconds"],
+        )
 
     def _build_auth_submodule(self, browser_monitor: OAuthBrowserMonitor | None) -> None:
         """Build auth submodule.
@@ -212,6 +222,25 @@ class EpicStore(StoreBase):
             )
             return False
         return "access_token" in data
+
+    async def get_game_achievements(
+        self, game_id: str, force: bool = False,
+    ) -> dict[str, Any]:
+        """An Epic game's achievements (definitions + this user's unlock status).
+
+        Read-only display, via Epic's storefront GraphQL (reverse-engineered).
+        Unlocking is handled in-game by the EOS overlay, not here. Raises
+        ``EpicAchievementsError`` on auth/network/no-sandbox failure; a game
+        with no EGS achievements is a normal empty payload. ``force`` bypasses
+        the TTL cache.
+        """
+        return await self._achievements.get_game_achievements(
+            game_id, force=force,
+        )
+
+    def invalidate_achievements(self, game_id: str) -> None:
+        """Drop a game's cached achievements."""
+        self._achievements.invalidate(game_id)
 
     async def start_auth(self, **kwargs: Any) -> AuthResult:
         """Start auth."""

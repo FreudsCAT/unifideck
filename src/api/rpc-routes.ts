@@ -84,6 +84,9 @@ export const rpcRoutes = {
   cloudSavePull: "cloud_save_pull",
   cloudSavePush: "cloud_save_push",
   setGameSavePath: "set_game_save_path",
+  // Achievements (AchievementsRPCMixin) — GOG display + last-session summary
+  getGameAchievements: "get_game_achievements",
+  getLastSessionAchievements: "get_last_session_achievements",
   // Observability (ObservabilityRPCMixin) — event bridge
   subscribeReplay: "subscribe_replay",
   getLauncherToasts: "get_launcher_toasts",

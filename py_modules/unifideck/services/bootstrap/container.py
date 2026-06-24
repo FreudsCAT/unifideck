@@ -15,6 +15,7 @@ if TYPE_CHECKING:
     from unifideck.cdp.cdp_client import CDPClient
     from unifideck.core.metrics_collector import MetricsCollector
     from unifideck.services.account_service import AccountService
+    from unifideck.services.achievements import AchievementWatcher
     from unifideck.services.activity_log import ActivityLogService
     from unifideck.services.artwork import ArtworkService
     from unifideck.services.cloud_save import CloudSaveService
@@ -54,6 +55,10 @@ class ServiceContainer:
     launch_history: LaunchHistoryService | None = None
     launch_logs: LaunchLogsService | None = None
     microsoft_subscription: MicrosoftSubscriptionService | None = None
+    # AchievementWatcher — GOG live unlock toasts + end-of-session summary.
+    # Reads achievements back from GOG (Comet does the in-game unlocking);
+    # plugin-only (the launcher subset never requests it).
+    achievements: AchievementWatcher | None = None
     # OAuth browser monitor — shared CDP-based redirect watcher
     # consumed by every store's `AuthOrchestrator`. Injected into
     # stores via `store_injector._STORE_INJECTIONS`.

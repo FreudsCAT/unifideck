@@ -24,6 +24,7 @@ import { useToast } from "../../hooks/useToast";
 import { SteamBridge } from "../../lib/steam-bridge";
 import { UninstallConfirmModal } from "../modals/UninstallConfirmModal";
 import { GameInfoDetailsModal } from "./GameInfoDetailsModal";
+import { GameAchievementsModal } from "./GameAchievementsModal";
 import type { GameMetadata } from "../../types/api";
 
 interface Props {
@@ -108,6 +109,18 @@ export const GameInfoCompatRow: FC<Props> = ({
     showModal(<GameInfoDetailsModal meta={meta} closeModal={() => {}} />);
   }, [meta]);
 
+  const onAchievements = useCallback(() => {
+    if (!game) return;
+    showModal(
+      <GameAchievementsModal
+        store={game.store}
+        gameId={game.id}
+        title={game.title}
+        closeModal={() => {}}
+      />,
+    );
+  }, [game]);
+
   // The compat row only exposes Uninstall — Install / Cancel are
   // already covered by the main play section directly above. Show
   // it only when the game is installed and not mid-(re)download,
@@ -176,6 +189,15 @@ export const GameInfoCompatRow: FC<Props> = ({
             onClick={onToggleSynopsis}
           >
             {t("gameInfoPanel.buttons.synopsis")}
+          </DialogButton>
+        )}
+        {(game?.store === "gog" || game?.store === "epic") && (
+          <DialogButton
+            className="unifideck-nav-button"
+            style={buttonStyle}
+            onClick={onAchievements}
+          >
+            {t("gameInfoPanel.buttons.achievements")}
           </DialogButton>
         )}
         {showAction && (

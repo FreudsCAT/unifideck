@@ -477,6 +477,7 @@
     "buttons": {
       "details": "Details",
       "synopsis": "Synopsis",
+      "achievements": "Achievements",
       "storePage": "Store Page",
       "dlc": "DLC",
       "communityHub": "Community Hub",
@@ -511,7 +512,26 @@
       "unsupported": "UNSUPPORTED",
       "unknown": "UNKNOWN"
     },
-    "failedToLoadMetadata": "Failed to load metadata"
+    "failedToLoadMetadata": "Failed to load metadata",
+    "lastSession": "Last session: unlocked {{names}}"
+  },
+  "achievements": {
+    "unlockedTitle": "Achievement Unlocked",
+    "unlockedBody": "{{name}}"
+  },
+  "achievementsModal": {
+    "title": "Achievements",
+    "progress": "{{unlocked}} / {{total}} ({{percent}}%)",
+    "refresh": "Refresh",
+    "close": "Close",
+    "loading": "Loading achievements…",
+    "empty": "This game has no achievements.",
+    "hidden": "Hidden achievement",
+    "unlockedOn": "Unlocked {{date}}",
+    "error": "Couldn't load achievements.",
+    "errorOffline": "Connect to the internet to view achievements.",
+    "errorAuth": "Sign in to this game's store to view achievements.",
+    "errorUnavailable": "Achievements aren't available for this game."
   },
   "gameDetailsSettings": {
     "title": "GAME DETAILS VIEW",
