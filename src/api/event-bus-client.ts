@@ -85,6 +85,28 @@ const IMPERATIVE_EVENTS = new Set<string>([
   "ubisoft_install_launch_requested",
 ]);
 
+/** Sync-lifecycle events describe a sync that was already underway or
+ *  finished in a PRIOR session. ``SteamRestartModal`` only restarts the
+ *  Steam *client*; the Decky backend (and its in-memory replay buffer)
+ *  keeps running, so on the next load these would replay from timestamp 0
+ *  on the first poll — resurrecting the progress bar (stale ``sync_progress``)
+ *  and re-showing the restart modal (``sync_started`` re-arms
+ *  ``_observedActiveSync`` so the replayed ``shortcut_reconcile_complete``
+ *  fires the prompt again). The authoritative restore is
+ *  ``syncStore.start()`` → ``get_sync_progress``, so prime past these on the
+ *  first poll after load; events emitted live during the session still fire
+ *  normally (their timestamps exceed the watermark). */
+const STALE_ON_RELOAD_EVENTS = new Set<string>([
+  "sync_started",
+  "sync_progress",
+  "sync_complete",
+  "sync_failed",
+  "sync_cancelled",
+  "sync_skipped",
+  "post_sync_phase_changed",
+  "shortcut_reconcile_complete",
+]);
+
 type Handler = (payload: Record<string, unknown>) => void;
 
 /** Wire format returned by `subscribe_replay`. */
@@ -212,12 +234,19 @@ class EventBusClientImpl {
         .filter((r) => r.timestamp > this.lastSeenTimestamp)
         .sort((a, b) => a.timestamp - b.timestamp);
       // On the first poll after a (re)load the watermark is 0, so the whole
-      // backend replay buffer is "fresh". Replaying state events is harmless
-      // (idempotent UI updates), but imperative events re-run a side effect
-      // (RunGame → UPC), so a Steam restart would relaunch UPC once per
-      // buffered event. Prime past them instead of firing them.
+      // backend replay buffer is "fresh". Most state events are harmless to
+      // replay (idempotent UI updates), but two classes are not and must be
+      // primed past instead of fired: IMPERATIVE_EVENTS re-run a side effect
+      // (RunGame → UPC), and STALE_ON_RELOAD_EVENTS re-animate a sync that
+      // already finished (stuck progress bar + repeating restart modal). Both
+      // still advance the watermark so they're never seen again; events emitted
+      // live during the session fire normally.
       for (const r of fresh) {
-        if (!this.primed && IMPERATIVE_EVENTS.has(r.event)) continue;
+        if (
+          !this.primed &&
+          (IMPERATIVE_EVENTS.has(r.event) || STALE_ON_RELOAD_EVENTS.has(r.event))
+        )
+          continue;
         this.dispatch(r);
       }
       this.primed = true;

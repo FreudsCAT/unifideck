@@ -195,7 +195,16 @@ class SyncStoreImpl {
       const partial: Partial<SyncSnapshot> = { progress: data };
       if (typeof data.syncing === "boolean") {
         partial.isSyncing = data.syncing;
-        if (!data.syncing) {
+        if (data.syncing) {
+          // A sync is in flight (e.g. restored at boot, or a
+          // background/scheduled run). Keep the 500ms loop alive so
+          // progress refreshes — we no longer rely on a replayed
+          // ``sync_started`` to start polling (those are primed past
+          // on reload). ``get_status`` reports syncing through the
+          // post-sync phases too, so this also self-clears the bar
+          // (status → "complete") when the run actually finishes.
+          this._startPolling();
+        } else {
           partial.isCancelling = false;
           this._stopPolling();
         }
