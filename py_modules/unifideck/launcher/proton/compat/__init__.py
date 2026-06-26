@@ -14,6 +14,13 @@ per-store handlers, not here:
 * GOG    → galaxy stub (``fixes.galaxy_stub``)
 * Amazon → fuel.json args (handler)
 
+**Ubisoft is skipped entirely** — its games launch *through* Ubisoft
+Connect (UPC), which installs the redistributables (VC++ runtimes, …) it
+and the game need as part of the install. Running our generic winetricks
+step on top is redundant and added a ~90s first-launch delay reinstalling
+what UPC already provides. The per-game prefix (cloned from the UPC
+template) is all that's required.
+
 Every step is first-launch only (marker-guarded) and best-effort — a
 failure logs and never blocks the launch.
 """
@@ -40,6 +47,16 @@ async def apply_prefix_compat(plan: ProtonLaunchPlan) -> None:
     independently guarded so one failure doesn't skip the other or the
     launch.
     """
+    # Ubisoft games launch through UPC, which installs its own
+    # redistributables — our generic winetricks/vcredist step is redundant
+    # and only adds a first-launch delay. The cloned per-game prefix +
+    # UPC are all that's needed, so skip generic compat entirely.
+    if plan.context.store == "ubisoft":
+        logger.info(
+            "[compat] skipping generic redistributables for ubisoft "
+            "(UPC installs its own)",
+        )
+        return
     # No initialised prefix (``createprefix`` hasn't produced ``system.reg``)
     # → there is nothing to install redistributables into. Skip rather than
     # let the steps run and write their terminal "done" markers anyway: a

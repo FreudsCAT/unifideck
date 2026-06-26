@@ -47,7 +47,9 @@ _MOJIBAKE_REPLACEMENTS = (
 )
 _SKIP_TITLE_KEYWORDS = re.compile(
     r"\b(test\b|beta|alpha|closed|preorder|pre-order|promotion|"
-    r"internal|dev/qc|pts|test server|demo|trial)\b",
+    r"internal|dev/qc|pts|test server|demo|trial|"
+    # iArtorias legacy-list noise rows that aren't ownable games.
+    r"subscription|company logo|secured)\b",
     re.IGNORECASE,
 )
 _SKIP_DLC_KEYWORDS = re.compile(
@@ -68,14 +70,21 @@ _STORE_MARKER_PATTERN = re.compile(
 _CYRILLIC_PATTERN = re.compile(r"[\u0400-\u04FF]")
 _PLACEHOLDER_L_PATTERN = re.compile(r"(l\d+|[A-Z0-9_]+)")
 _PLACEHOLDER_LITERALS = frozenset({"a ubisoft game"})
-# Trailing edition qualifier ("Assassin's Creed Valhalla Gold Edition").
-# Stripped so an edition collapses onto its base title in dedup, and so
-# the base name can be matched for variant detection.
+# Trailing edition qualifier ("Assassin's Creed Valhalla Gold Edition",
+# "Anno 1602 - History Edition"). Used to (a) recognise an entry as an
+# *edition of a base game* — a real game, never DLC — and (b) derive the
+# base title + edition tag for identity dedup. The leading ``\s+`` matches
+# the space in both " Gold Edition" and " - History Edition" forms.
 _EDITION_SUFFIX_PATTERN = re.compile(
     r"\s+(gold|complete|ultimate|deluxe|premium|special|"
-    r"collector'?s?|limited|digital|standard)\s*(edition)?$",
+    r"collector'?s?|limited|digital|standard|history|definitive|"
+    r"remastered?|anniversary|goty|game of the year|enhanced|"
+    r"legendary)\s*(edition)?$",
     re.IGNORECASE,
 )
+# Edition keywords that denote the *base* SKU (no distinct edition), so an
+# owned "X Standard Edition" dedups together with plain "X".
+_BASE_EDITION_WORDS = frozenset({"standard"})
 # Minimum parent length before the substring fallback in
 # :meth:`_GameBuilder._parent_matches` is allowed to fire \u2014 short
 # prefixes ("the", "tom") match far too eagerly.
@@ -163,65 +172,201 @@ class _GameBuilder:
         *,
         db_names: set[str] | None = None,
         connect_ids: dict[str, str] | None = None,
+        base_catalog_norms: set[str] | None = None,
     ) -> list[Game]:
         """Build games from configs.
 
-        Two passes so DLC/edition variants can be dropped against the
-        base titles we actually keep — mirrors staging's
-        ``known_base_names`` / ``all_db_names`` dedup. ``db_names`` is
-        the normalised community game-ID database name set; it widens
-        parent detection for the ``" - "`` separator and degrades to an
-        empty set when the database is offline. ``connect_ids`` maps
-        ``space_id`` → ``ubisoftConnectGameId`` (from UPC's leveldb
-        cache); when present for a game it is recorded in the id_map so
-        :meth:`UbisoftIdMap.resolve_launch_id` returns the canonical
-        deeplink id.
+        Two passes. ``db_names`` is the normalised community game-ID
+        database name set; it widens ``" - "`` parent detection and
+        degrades to an empty set when the database is offline.
+        ``connect_ids`` maps ``space_id`` → ``ubisoftConnectGameId``
+        (from UPC's leveldb cache); when present for a game it is
+        recorded in the id_map so :meth:`UbisoftIdMap.resolve_launch_id`
+        returns the canonical deeplink id.
+
+        ``base_catalog_norms`` is the **authoritative** set of normalised
+        base-game titles from the Algolia ``uuid_catalog`` (base games
+        only). It does two jobs: an allowlist (a title that matches a
+        known base game is always kept, never second-guessed by the DLC
+        heuristics) and the identity anchor for dedup (it bridges
+        publisher-prefixed names like "Tom Clancy's The Division 2" to
+        the catalog title "The Division 2"). Unlike ``db_names`` it is
+        not polluted by the legacy install-id list's DLC/noise rows.
+
+        Pass 2 groups surviving configs by canonical identity
+        ``(base_game, edition_tag)`` so the same game owned under
+        multiple ids / namespaces collapses to a single entry with a
+        deterministic ``store_game_id`` (see
+        :meth:`_select_group_winner`). Edition variants keep their own
+        identity (their ``edition_tag`` differs) so an owned
+        "X - History Edition" is shown as itself.
         """
         db_names = db_names or set()
         connect_ids = connect_ids or {}
-        # Pass 1: clean + hard-filter, keeping (cfg, cleaned_title).
-        cleaned: list[tuple[GameConfig, str]] = []
-        for cfg in sorted(
-            matched_configs,
-            key=lambda c: (c.name or "").lower(),
-        ):
+        base_catalog_norms = base_catalog_norms or set()
+        # Pass 1: clean + hard-filter, keeping (cfg, title, is_known).
+        # A catalog-known base game is kept unconditionally — the keyword
+        # heuristics only police entries the catalog can't vouch for.
+        cleaned: list[tuple[GameConfig, str, bool]] = []
+        for cfg in matched_configs:
             title = self._clean_launcher_title(cfg.name)
-            if self._should_skip_launcher_title(title):
+            if not title:
                 continue
-            cleaned.append((cfg, title))
+            if self._is_third_party_steam_copy(cfg):
+                logger.debug(
+                    "[UbisoftLibrary] skip Steam-linked copy: %s", title,
+                )
+                continue
+            known = self._is_known_base_game(title, base_catalog_norms)
+            if not known and self._should_skip_launcher_title(title):
+                continue
+            cleaned.append((cfg, title, known))
         # Base titles = edition-stripped, normalised names of every kept
-        # entry. Used to recognise an entry as an edition/DLC of a game
-        # we already surface.
+        # entry. Used to recognise an entry as a DLC of a game we surface.
         base_norms = {
             self._id_map.normalize_for_matching(self._strip_edition(title))
-            for _, title in cleaned
+            for _, title, _ in cleaned
         }
-        # Pass 2: drop separator-DLC, build the rest (editions collapse
-        # onto their base via the strip-edition dedup key in
-        # :meth:`_build_one_game`).
-        games: list[Game] = []
-        seen_norms: set[str] = set()
-        id_map_updates: dict[str, dict[str, Any]] = {}
-        for cfg, title in cleaned:
-            if self._is_dlc_by_separator(title, base_norms, db_names):
+        # Pass 2: drop separator-DLC, then group by canonical identity.
+        groups: dict[tuple[str, str], list[tuple[GameConfig, str]]] = {}
+        order: list[tuple[str, str]] = []
+        for cfg, title, known in cleaned:
+            if not known and self._is_dlc_by_separator(
+                title, base_norms, db_names,
+            ):
                 logger.debug(
                     "[UbisoftLibrary] dedup skip (DLC of base): %s",
                     title,
                 )
                 continue
+            key = self._canonical_key(title, base_catalog_norms)
+            if key not in groups:
+                groups[key] = []
+                order.append(key)
+            groups[key].append((cfg, title))
+        games: list[Game] = []
+        id_map_updates: dict[str, dict[str, Any]] = {}
+        for key in order:
+            cfg, title = self._select_group_winner(groups[key], connect_ids)
             game = self._build_one_game(
-                cfg,
-                title,
-                installed,
-                seen_norms,
-                id_map_updates,
-                connect_ids,
+                cfg, title, installed, id_map_updates, connect_ids,
             )
             if game is not None:
                 games.append(game)
         if id_map_updates:
             self._id_map.update_bulk(id_map_updates)
+        games.sort(key=lambda g: g.title.lower())
         return games
+
+    def _is_third_party_steam_copy(self, cfg: GameConfig) -> bool:
+        """True if ``cfg`` is a Steam/Epic copy that can't launch via uplay.
+
+        UPC marks these in the config's ``third_party_platform`` block
+        (e.g. ``name: Steam``). Such entitlements only launch from the
+        third-party store, so their ``uplay://`` shortcut is a dead end.
+        Only available on config-matched entries (backfilled synth
+        configs leave the field empty). Gated by ``filter_steam_linked``
+        so the user can opt out, mirroring the post-build Steam filter.
+        """
+        if not getattr(self._config, "filter_steam_linked", True):
+            return False
+        platform = (getattr(cfg, "third_party_platform", "") or "").lower()
+        return platform.startswith(("steam", "epic"))
+
+    def _is_known_base_game(
+        self, title: str, base_catalog_norms: set[str],
+    ) -> bool:
+        """True if ``title`` (edition-stripped) is a known catalog base game.
+
+        Exact normalised match only — substring would let DLC whose name
+        starts with a base title ("X - Some Expansion") masquerade as a
+        game. Such entries fall through to the DLC heuristics instead.
+        """
+        if not base_catalog_norms:
+            return False
+        norm = self._id_map.normalize_for_matching(self._strip_edition(title))
+        return bool(norm) and norm in base_catalog_norms
+
+    def _canonical_key(
+        self, title: str, base_catalog_norms: set[str],
+    ) -> tuple[str, str]:
+        """Canonical identity ``(base_game, edition_tag)`` for dedup."""
+        base_norm = self._id_map.normalize_for_matching(
+            self._strip_edition(title),
+        )
+        canonical = self._resolve_canonical_base(base_norm, base_catalog_norms)
+        return (canonical, self._edition_tag(title))
+
+    @staticmethod
+    def _edition_tag(title: str) -> str:
+        """The edition qualifier ("gold", "history", …) or "" for the base.
+
+        ``Standard`` maps to the base tag so "X Standard Edition" dedups
+        with plain "X".
+        """
+        match = _EDITION_SUFFIX_PATTERN.search(title)
+        if not match:
+            return ""
+        word = " ".join(match.group(1).lower().split())
+        return "" if word in _BASE_EDITION_WORDS else word
+
+    @staticmethod
+    def _resolve_canonical_base(
+        base_norm: str, base_catalog_norms: set[str],
+    ) -> str:
+        """Map an owned base title to its catalog identity when possible.
+
+        Exact match wins. Otherwise bridge a *prepended* publisher/brand
+        prefix ("Tom Clancy's The Division 2" → "The Division 2") by
+        requiring the catalog title to be a whole-word **suffix** of the
+        owned name. Suffix-only is deliberate: it bridges prefixes
+        without collapsing sequels — "Assassin's Creed II" must NOT fold
+        into "Assassin's Creed" (the extra token is a suffix, not a
+        prefix). Falls back to ``base_norm`` when nothing matches.
+        """
+        if not base_norm or base_norm in base_catalog_norms:
+            return base_norm
+        best = ""
+        for cat in base_catalog_norms:
+            if (
+                len(cat) > _MIN_SUBSTRING_PARENT_LEN
+                and base_norm.endswith(" " + cat)
+                and len(cat) > len(best)
+            ):
+                best = cat
+        return best or base_norm
+
+    @staticmethod
+    def _select_group_winner(
+        members: list[tuple[GameConfig, str]],
+        connect_ids: dict[str, str],
+    ) -> tuple[GameConfig, str]:
+        """Pick the surviving ``(cfg, title)`` for a canonical group.
+
+        The winning ``cfg`` decides ``store_game_id`` (and thus the
+        shortcut's stable ``LaunchOptions``); deterministic selection
+        kills the cross-sync id flip that stranded orphan duplicate
+        shortcuts. Priority: a ``space_id`` with a leveldb connect id
+        (best ``uplay://`` launch) > any ``space_id`` > lowest numeric
+        ``install_id``. The display title is the shortest member title
+        (the plain base form beats wordier variants).
+        """
+        def rank(item: tuple[GameConfig, str]) -> tuple[int, int, str]:
+            cfg, title = item
+            space = cfg.space_id or ""
+            if space and connect_ids.get(space):
+                tier = 0
+            elif space:
+                tier = 1
+            else:
+                tier = 2
+            return (tier, cfg.install_id or 0, title)
+
+        winner_cfg = min(members, key=rank)[0]
+        display_title = min(
+            (t for _, t in members), key=lambda t: (len(t), t),
+        )
+        return winner_cfg, display_title
 
     @staticmethod
     def _strip_edition(title: str) -> str:
@@ -252,8 +397,16 @@ class _GameBuilder:
         colon parent-matching would delete real owned games. Genuine
         colon-suffixed DLC ("Game: Season Pass") is already removed by
         the keyword filter in :meth:`_should_skip_launcher_title`.
+
+        An edition variant ("Base - History Edition", "Base - Gold
+        Edition") is a real game, not DLC — the ``" - "`` separator here
+        joins the base to an edition qualifier, not to an add-on name. We
+        bail out before the parent check so editions are kept (this is
+        what made "Anno 1602 - History Edition" vanish).
         """
         if " - " not in title:
+            return False
+        if _EDITION_SUFFIX_PATTERN.search(title):
             return False
         parent = self._id_map.normalize_for_matching(
             title.split(" - ", 1)[0],
@@ -298,23 +451,15 @@ class _GameBuilder:
         cfg: GameConfig,
         title: str,
         installed: dict[str, Any],
-        seen_norms: set[str],
         id_map_updates: dict[str, dict[str, Any]],
         connect_ids: dict[str, str],
     ) -> Game | None:
-        """Build one game.
+        """Build one game from its canonical-group winner ``cfg``.
 
-        ``title`` is the already-cleaned launcher title. Dedup keys on
-        the *edition-stripped* normalised name so ``"X"`` and
-        ``"X Gold Edition"`` collapse (the alphabetically-first, i.e.
-        plain, title wins).
+        ``title`` is the already-cleaned display title; dedup across the
+        canonical group already happened in
+        :meth:`build_games_from_configs`.
         """
-        norm_name = self._id_map.normalize_for_matching(
-            self._strip_edition(title),
-        )
-        if norm_name in seen_norms:
-            return None
-        seen_norms.add(norm_name)
         game_id = cfg.space_id if cfg.space_id else str(cfg.install_id)
         is_installed = game_id in installed or cfg.space_id in installed
         install_meta = installed.get(game_id) or installed.get(cfg.space_id) or {}

@@ -437,7 +437,12 @@ UbisoftConfig._FIELD_SPECS = (
         UbisoftConfig._parse_tuple,
         ("Public", "All Users", "Default", "Default User"),
     ),
-    ("filter_steam_linked", "filter_steam_linked", UbisoftConfig._parse_bool, False),
+    # Default True (matches the dataclass field + documented intent): a
+    # Steam-owned Ubisoft game's uplay:// shortcut is a dead end, so hide
+    # it. This loader default — not the dataclass one — is what
+    # ``from_config_manager`` actually applies, so it MUST be True or the
+    # filter is silently gated off for anyone without an explicit key.
+    ("filter_steam_linked", "filter_steam_linked", UbisoftConfig._parse_bool, True),
     (
         "steam_library_cross_ref",
         "steam_library_cross_ref",

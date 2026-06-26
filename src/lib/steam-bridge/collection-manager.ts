@@ -12,6 +12,9 @@ import { runFilters } from "../library-filters";
 import type { SteamAppOverview } from "../../types/steam";
 
 const COLLECTION_PREFIX = "[Unifideck] ";
+// Non-Steam shortcuts (ours + the user's) carry this app_type; exclude
+// them so we never feed Ubisoft titles back into the Steam-owned filter.
+const NON_STEAM_SHORTCUT_APP_TYPE = 1073741824;
 
 /**
  * Set by `deleteAllUnifideckCollections` so the initial-load sync in
@@ -208,6 +211,34 @@ export async function syncUnifideckCollections(): Promise<void> {
   }
   if (allApps.length === 0) return;
   await Promise.allSettled(getUnifideckTabs().map((t) => syncTab(t, allApps)));
+}
+
+/**
+ * Display names of every Steam game the user owns — installed or not —
+ * from Steam's "type-games" collection. Non-Steam shortcuts are excluded
+ * (see {@link NON_STEAM_SHORTCUT_APP_TYPE}). `appmanifest` only knows
+ * installed games, so this is the only way the backend learns about
+ * owned-but-not-installed Steam games.
+ */
+export function collectSteamOwnedGameTitles(): string[] {
+  const cs = getCollectionStore();
+  if (!cs) return [];
+  let allApps: SteamAppOverview[] = [];
+  try {
+    const games = cs.GetCollection("type-games");
+    allApps = (games?.allApps ?? []) as unknown as SteamAppOverview[];
+  } catch {
+    return [];
+  }
+  const titles = new Set<string>();
+  for (const a of allApps) {
+    if (!a || a.appid <= 0 || a.app_type === NON_STEAM_SHORTCUT_APP_TYPE) {
+      continue;
+    }
+    const name = a.display_name?.trim();
+    if (name) titles.add(name);
+  }
+  return Array.from(titles);
 }
 
 /**

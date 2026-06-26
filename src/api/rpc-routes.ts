@@ -38,6 +38,7 @@ export const rpcRoutes = {
   getAllUnifideckGames: "get_all_unifideck_games",
   getGameSizeBytes: "get_game_size_bytes",
   refreshStore: "refresh_store",
+  updateSteamOwnedTitles: "update_steam_owned_titles",
   // Downloads (DownloadRPCMixin)
   installGame: "install_game",
   uninstallGame: "uninstall_game",

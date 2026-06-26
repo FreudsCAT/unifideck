@@ -21,6 +21,7 @@ import {
 import { useRPCMutation } from "../api/useRPC";
 import { rpcRoutes } from "../api/rpc-routes";
 import { syncStore } from "../stores/sync-store";
+import { uploadSteamOwnedTitles } from "../lib/steam-bridge/owned-library";
 import type { SyncProgress } from "../types/syncProgress";
 
 /** Sync context value. */
@@ -59,6 +60,9 @@ export const SyncProvider: FC<{ children: ReactNode }> = ({ children }) => {
   const startSync = useCallback(async () => {
     if (isSyncing) return;
     syncStore.notifySyncStarted();
+    // Refresh the owned-Steam-library snapshot before the backend fetch
+    // so Steam-linked Ubisoft games are hidden this run.
+    await uploadSteamOwnedTitles();
     void startMut
       .mutate()
       .catch((e) => console.warn("[SyncContext] startSync RPC failed", e));
@@ -67,6 +71,7 @@ export const SyncProvider: FC<{ children: ReactNode }> = ({ children }) => {
   const forceSync = useCallback(
     async (resyncArtwork?: boolean) => {
       syncStore.notifySyncStarted();
+      await uploadSteamOwnedTitles();
       void forceMut
         .mutate(resyncArtwork)
         .catch((e) => console.warn("[SyncContext] forceSync RPC failed", e));

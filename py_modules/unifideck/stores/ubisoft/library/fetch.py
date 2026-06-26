@@ -114,6 +114,15 @@ class _LibraryFetcher:
             for name in uuid_catalog.values()
             if name
         }
+        # The Algolia uuid catalog is base-games-only (no DLC/noise), so
+        # its names are the authoritative allowlist + identity anchor for
+        # dedup. Kept separate from db_names, which the legacy install-id
+        # list pollutes with DLC/edition/QC rows.
+        base_catalog_norms = {
+            self._id_map.normalize_for_matching(name)
+            for name in uuid_catalog.values()
+            if name
+        }
         # Backfill owned games that have no local ``configurations`` row.
         # UPC only caches configs for installed/recent titles, so the
         # owned∩config intersection is tiny (~6 of 118 owned IDs here). Two
@@ -141,6 +150,7 @@ class _LibraryFetcher:
             installed,
             db_names=db_names,
             connect_ids=connect_ids,
+            base_catalog_norms=base_catalog_norms,
         )
         games = await self._apply_steam_filter(games)
         logger.info(

@@ -25,6 +25,7 @@ import { showModal } from "@decky/ui";
 import i18n from "i18next";
 import { rpcRoutes } from "./api/rpc-routes";
 import { AccountSwitchModal, SteamRestartModal } from "./components/modals";
+import { uploadSteamOwnedTitles } from "./lib/steam-bridge/owned-library";
 import type { Unregisterable } from "./types/steam";
 /** Language pref. */
 interface LanguagePref {
@@ -189,9 +190,13 @@ export function purgeLeftoverAuthShortcuts(): void {
  *  plugin entry can call it on unload. */
 export async function runBootstrapTasks(): Promise<Unregisterable | null> {
   purgeLeftoverAuthShortcuts();
-  const [, , listener] = await Promise.all([
+  const [, , , listener] = await Promise.all([
     applyLanguagePreference(),
     checkAccountSwitch(),
+    // Seed the owned-Steam-library snapshot early so a backend-triggered
+    // (auto) sync can hide Steam-linked Ubisoft games before the user's
+    // first manual sync. Best effort; refreshed again before each sync.
+    uploadSteamOwnedTitles(),
     Promise.resolve(registerLifetimeListener()),
   ]);
   return listener;

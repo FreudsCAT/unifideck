@@ -6,8 +6,11 @@ as non-Steam shortcuts.
 """
 from __future__ import annotations
 
+import json
 import logging
+import os
 import re
+import time
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -22,6 +25,50 @@ _ACF_NAME_PATTERN = re.compile(r'"name"\s+"([^"]*)"')
 _LIBFOLDER_PATH_PATTERN = re.compile(r'"path"\s+"([^"]*)"')
 _Fingerprint = tuple[str, float | None, tuple[tuple[str, float | None], ...]]
 _cache: tuple[_Fingerprint, frozenset[str]] | None = None
+# Owned-but-not-installed titles can't be read from appmanifests, so the
+# frontend (which can enumerate the full Steam library via collectionStore)
+# pushes them here for the backend filter to read.
+_FRONTEND_CACHE_PATH = Path(
+    "~/.local/share/unifideck/steam_owned_titles.json",
+).expanduser()
+
+
+def save_frontend_owned_titles(raw_titles: list[str]) -> int:
+    """Persist the frontend-supplied Steam-owned game titles (normalised).
+
+    Stores the shared-normaliser form so the filter reads them directly.
+    Atomic write; returns the number of titles stored.
+    """
+    normalized = sorted({
+        n for t in raw_titles
+        if isinstance(t, str) and (n := normalize_title_for_matching(t))
+    })
+    payload = {"updated": time.time(), "titles": normalized}
+    try:
+        _FRONTEND_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        tmp = _FRONTEND_CACHE_PATH.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(payload), encoding="utf-8")
+        os.replace(tmp, _FRONTEND_CACHE_PATH)
+    except OSError as e:
+        logger.warning("[owned_games] could not write owned-titles cache: %s", e)
+        return 0
+    logger.info(
+        "[owned_games] stored %d frontend-supplied owned Steam title(s)",
+        len(normalized),
+    )
+    return len(normalized)
+
+
+def load_frontend_owned_titles() -> frozenset[str]:
+    """Read the frontend-supplied owned titles (empty when absent/stale)."""
+    try:
+        data = json.loads(_FRONTEND_CACHE_PATH.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return frozenset()
+    titles = data.get("titles") if isinstance(data, dict) else None
+    if not isinstance(titles, list):
+        return frozenset()
+    return frozenset(t for t in titles if isinstance(t, str) and t)
 def get_owned_titles(
     config: ConfigManager | None = None,
 ) -> frozenset[str]:

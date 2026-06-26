@@ -188,8 +188,16 @@ def _parse_single_record(record: bytes) -> GameConfig | None:
     config.game_identifier = _yaml_extract(
         yaml_text, r"game_identifier:\s*(.+?)(?:\n|$)",
     )
+    # ``third_party_platform`` is usually a nested block
+    # (``third_party_platform:\n  name: Steam``) — extract the inner
+    # ``name``; fall back to an inline scalar form. This marks Ubisoft
+    # entitlements that are really Steam/Epic copies (non-launchable via
+    # uplay://), used by the Steam-linked library filter.
     config.third_party_platform = _yaml_extract(
-        yaml_text, r"third_party_platform:\s*(.+?)(?:\n|$)",
+        yaml_text,
+        r"third_party_platform:[^\S\n]*\n[^\S\n]*name:\s*(.+?)(?:\n|$)",
+    ) or _yaml_extract(
+        yaml_text, r"third_party_platform:[^\S\n]*(\S.*?)(?:\n|$)",
     )
     exe_match = re.search(r"relative:\s*(.+?\.exe)", yaml_text, re.IGNORECASE)
     if exe_match:
