@@ -107,7 +107,12 @@
     "finalizingInstallation": "جاري إنهاء التثبيت...",
     "speedMbps": "{{speed}} ميجابايت/ثانية",
     "etaLabel": "الوقت المتبقي: {{eta}}",
-    "preparingMessage": "جاري تهيئة البادئة ومزامنة الحفظ السحابي..."
+    "preparingMessage": "جاري تهيئة البادئة ومزامنة الحفظ السحابي...",
+    "preparingLabel": "جارٍ إعداد اللعبة...",
+    "installingViaUpcLabel": "التثبيت عبر Ubisoft Connect",
+    "extractingMessage": "جارٍ استخراج الملفات...",
+    "verifyingMessage": "جارٍ التحقق من الملفات... {{pct}}%",
+    "installingViaUpcMessage": "اتبع نافذة Ubisoft Connect لإكمال التثبيت..."
   },
   "cloudSave": {
     "title": "تعارض الحفظ السحابي",
@@ -124,7 +129,10 @@
     "toastUsingLocalBody": "جاري رفع الحفظ المحلي لـ {{game}} إلى السحابة",
     "toastErrorTitle": "خطأ",
     "toastErrorBody": "تعذر حل تعارض الحفظ",
-    "filesSize": "{{count}} ملفات · {{size}}"
+    "filesSize": "{{count}} ملفات · {{size}}",
+    "uploadBlockedEmpty": "تم تخطّي الرفع السحابي لـ {{game}} — لم يتم العثور على حفظ محلي",
+    "uploadSkippedTitle": "تم تخطّي الرفع السحابي",
+    "uploadSkippedBody": "لا توجد حفظ محلي للرفع بعد لـ {{game}}."
   },
   "storeConnections": {
     "title": "ربط المتاجر",
@@ -304,7 +312,18 @@
       "cloudSyncDownFailed": "فشل تنزيل ملفات الحفظ السحابي لـ {{store}} ({{error}}). تم تشغيل اللعبة ببيانات الحفظ المحلية.",
       "cloudSyncUpFailed": "فشل رفع ملفات الحفظ السحابي لـ {{store}} ({{error}}). تقدمك محفوظ محلياً فقط.",
       "errorCircuitBreakerOpen": "فشل تشغيل {{game_key}} لـ {{count}} مرات متتالية مؤخراً. تم تعليق التشغيل التلقائي.",
-      "launcherError": "تعذر تشغيل {{game_key}} ({{error_code}}). راجع السجلات للتفاصيل."
+      "launcherError": "تعذر تشغيل {{game_key}} ({{error_code}}). راجع السجلات للتفاصيل.",
+      "downloadingProton": "جارٍ تنزيل Proton — قد يستغرق ذلك بضع دقائق...",
+      "downloadingRuntime": "جارٍ تنزيل Steam Runtime — قد يستغرق التشغيل الأول بضع دقائق...",
+      "installingUbisoft": "التثبيت عبر Ubisoft Connect",
+      "installingUbisoftMessage": "جارٍ فتح Ubisoft Connect — ابدأ التثبيت من نافذة المشغّل.",
+      "protonReadyBody": "{{version}} جاهز للاستخدام",
+      "protonReadyTitle": "Proton جاهز",
+      "protonSwitchedTo": "يتم الآن استخدام {{version}}",
+      "signingInUbisoft": "جارٍ تسجيل الدخول إلى Ubisoft Connect",
+      "signingInUbisoftMessage": "جارٍ فتح Ubisoft Connect — سجّل الدخول هناك ثم عُد.",
+      "ubisoftPrefixNotReady": "Ubisoft Connect غير جاهز",
+      "ubisoftPrefixNotReadyMessage": "تعذّر تجهيز بادئة Ubisoft Connect لهذه اللعبة. حاول التثبيت مرة أخرى؛ وإذا استمر الفشل، فأعد تشغيل مزامنة المكتبة."
     },
     "updateComplete": "اكتمل التحديث!",
     "updateCompleteMessage": "تم تحديث {{title}}.",
@@ -470,7 +489,8 @@
       "support": "الدعم الفني",
       "install": "تثبيت",
       "uninstall": "إلغاء التثبيت",
-      "cancel": "إلغاء"
+      "cancel": "إلغاء",
+      "achievements": "الإنجازات"
     },
     "labels": {
       "store": "المتجر:",
@@ -495,7 +515,8 @@
       "unsupported": "غير مدعوم",
       "unknown": "غير معروف"
     },
-    "failedToLoadMetadata": "فشل تحميل البيانات الوصفية"
+    "failedToLoadMetadata": "فشل تحميل البيانات الوصفية",
+    "lastSession": "آخر جلسة: تم فتح {{names}}"
   },
   "gameDetailsSettings": {
     "title": "واجهة تفاصيل اللعبة",
@@ -882,5 +903,23 @@
     "typeReinstall": "إعادة تثبيت النسخة",
     "typeUpdate": "تحديث إلى النسخة",
     "updateButton": "تحديث إلى v{{version}}"
+  },
+  "achievements": {
+    "unlockedTitle": "تم فتح الإنجاز",
+    "unlockedBody": "{{name}}"
+  },
+  "achievementsModal": {
+    "title": "الإنجازات",
+    "progress": "{{unlocked}} / {{total}} ({{percent}}%)",
+    "refresh": "تحديث",
+    "close": "إغلاق",
+    "loading": "جارٍ تحميل الإنجازات…",
+    "empty": "لا تحتوي هذه اللعبة على إنجازات.",
+    "hidden": "إنجاز مخفي",
+    "unlockedOn": "تم الفتح في {{date}}",
+    "error": "تعذّر تحميل الإنجازات.",
+    "errorOffline": "اتصل بالإنترنت لعرض الإنجازات.",
+    "errorAuth": "سجّل الدخول إلى متجر هذه اللعبة لعرض الإنجازات.",
+    "errorUnavailable": "الإنجازات غير متوفرة لهذه اللعبة."
   }
 }

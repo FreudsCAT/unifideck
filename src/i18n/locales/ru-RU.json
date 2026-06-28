@@ -107,7 +107,12 @@
     "finalizingInstallation": "Завершение установки...",
     "speedMbps": "{{speed}} МБ/с",
     "etaLabel": "Осталось времени: {{eta}}",
-    "preparingMessage": "Инициализация префикса и синхронизация облачных сохранений..."
+    "preparingMessage": "Инициализация префикса и синхронизация облачных сохранений...",
+    "preparingLabel": "Настройка игры...",
+    "installingViaUpcLabel": "Установка через Ubisoft Connect",
+    "extractingMessage": "Извлечение файлов...",
+    "verifyingMessage": "Проверка файлов... {{pct}}%",
+    "installingViaUpcMessage": "Следуйте инструкциям в окне Ubisoft Connect, чтобы завершить установку..."
   },
   "cloudSave": {
     "title": "Конфликт облачных сохранений",
@@ -124,7 +129,10 @@
     "toastUsingLocalBody": "Загрузка локальных сохранений в облако для {{game}}",
     "toastErrorTitle": "Ошибка",
     "toastErrorBody": "Не удалось разрешить конфликт сохранений",
-    "filesSize": "{{count}} файлов · {{size}}"
+    "filesSize": "{{count}} файлов · {{size}}",
+    "uploadBlockedEmpty": "Загрузка в облако для {{game}} пропущена — локальные сохранения не найдены",
+    "uploadSkippedTitle": "Загрузка в облако пропущена",
+    "uploadSkippedBody": "Пока нет локальных сохранений для загрузки для {{game}}."
   },
   "storeConnections": {
     "title": "ПОДКЛЮЧЕНИЕ МАГАЗИНОВ",
@@ -304,7 +312,18 @@
       "cloudSyncDownFailed": "Не удалось скачать сохранения из облака для {{store}} ({{error}}). Игра запущена с локальными сохранениями.",
       "cloudSyncUpFailed": "Не удалось загрузить сохранения в облако для {{store}} ({{error}}). Ваш прогресс сохранен только локально.",
       "errorCircuitBreakerOpen": "Запуск {{game_key}} не удался {{count}} раз подряд. Автоматические запуски приостановлены.",
-      "launcherError": "Не удалось запустить {{game_key}} ({{error_code}}). Подробности смотрите в логах."
+      "launcherError": "Не удалось запустить {{game_key}} ({{error_code}}). Подробности смотрите в логах.",
+      "downloadingProton": "Загрузка Proton — это может занять несколько минут...",
+      "downloadingRuntime": "Загрузка Steam Runtime — первый запуск может занять несколько минут...",
+      "installingUbisoft": "Установка через Ubisoft Connect",
+      "installingUbisoftMessage": "Открытие Ubisoft Connect — начните установку в окне лаунчера.",
+      "protonReadyBody": "{{version}} готов к использованию",
+      "protonReadyTitle": "Proton готов",
+      "protonSwitchedTo": "Теперь используется {{version}}",
+      "signingInUbisoft": "Вход в Ubisoft Connect",
+      "signingInUbisoftMessage": "Открытие Ubisoft Connect — войдите там, затем вернитесь.",
+      "ubisoftPrefixNotReady": "Ubisoft Connect не готов",
+      "ubisoftPrefixNotReadyMessage": "Не удалось подготовить префикс Ubisoft Connect для этой игры. Попробуйте установить ещё раз; если ошибка повторяется, запустите синхронизацию библиотеки снова."
     },
     "updateComplete": "Обновление завершено!",
     "updateCompleteMessage": "{{title}} обновлен.",
@@ -470,7 +489,8 @@
       "support": "Поддержка",
       "install": "Установить",
       "uninstall": "Удалить",
-      "cancel": "Отмена"
+      "cancel": "Отмена",
+      "achievements": "Достижения"
     },
     "labels": {
       "store": "Магазин:",
@@ -495,7 +515,8 @@
       "unsupported": "НЕ ПОДДЕРЖИВАЕТСЯ",
       "unknown": "НЕИЗВЕСТНО"
     },
-    "failedToLoadMetadata": "Не удалось загрузить метаданные"
+    "failedToLoadMetadata": "Не удалось загрузить метаданные",
+    "lastSession": "Прошлая сессия: получено {{names}}"
   },
   "gameDetailsSettings": {
     "title": "ВИД СТРАНИЦЫ ИГРЫ",
@@ -882,5 +903,23 @@
     "typeReinstall": "Переустановка версии",
     "typeUpdate": "Обновление до версии",
     "updateButton": "Обновить до v{{version}}"
+  },
+  "achievements": {
+    "unlockedTitle": "Достижение получено",
+    "unlockedBody": "{{name}}"
+  },
+  "achievementsModal": {
+    "title": "Достижения",
+    "progress": "{{unlocked}} / {{total}} ({{percent}}%)",
+    "refresh": "Обновить",
+    "close": "Закрыть",
+    "loading": "Загрузка достижений…",
+    "empty": "В этой игре нет достижений.",
+    "hidden": "Скрытое достижение",
+    "unlockedOn": "Получено {{date}}",
+    "error": "Не удалось загрузить достижения.",
+    "errorOffline": "Подключитесь к интернету, чтобы просмотреть достижения.",
+    "errorAuth": "Войдите в магазин этой игры, чтобы просмотреть достижения.",
+    "errorUnavailable": "Достижения недоступны для этой игры."
   }
 }

@@ -107,7 +107,12 @@
     "finalizingInstallation": "正在完成安裝...",
     "speedMbps": "{{speed}} MB/s",
     "etaLabel": "剩餘時間: {{eta}}",
-    "preparingMessage": "正在初始化容器並同步雲端存檔..."
+    "preparingMessage": "正在初始化容器並同步雲端存檔...",
+    "preparingLabel": "正在設定遊戲...",
+    "installingViaUpcLabel": "正在透過 Ubisoft Connect 安裝",
+    "extractingMessage": "正在解壓縮檔案...",
+    "verifyingMessage": "正在驗證檔案... {{pct}}%",
+    "installingViaUpcMessage": "請依照 Ubisoft Connect 視窗的提示完成安裝..."
   },
   "cloudSave": {
     "title": "雲端存檔衝突",
@@ -124,7 +129,10 @@
     "toastUsingLocalBody": "正在上傳 {{game}} 的本機存檔",
     "toastErrorTitle": "錯誤",
     "toastErrorBody": "無法解決存檔衝突",
-    "filesSize": "{{count}} 個檔案 · {{size}}"
+    "filesSize": "{{count}} 個檔案 · {{size}}",
+    "uploadBlockedEmpty": "已略過 {{game}} 的雲端上傳 — 找不到本機存檔",
+    "uploadSkippedTitle": "已略過雲端上傳",
+    "uploadSkippedBody": "{{game}} 暫無可上傳的本機存檔。"
   },
   "storeConnections": {
     "title": "商店連接",
@@ -304,7 +312,18 @@
       "cloudSyncDownFailed": "無法為 {{store}} 下載雲端存檔 ({{error}})。正在以本機存檔啟動遊戲。",
       "cloudSyncUpFailed": "無法為 {{store}} 上傳雲端存檔 ({{error}})。您的進度僅儲存在本機。",
       "errorCircuitBreakerOpen": "{{game_key}} 最近啟動失敗了 {{count}} 次。已暫停自動執行。",
-      "launcherError": "無法啟動 {{game_key}} ({{error_code}})。請查看記錄檔了解詳細資訊。"
+      "launcherError": "無法啟動 {{game_key}} ({{error_code}})。請查看記錄檔了解詳細資訊。",
+      "downloadingProton": "正在下載 Proton — 這可能需要幾分鐘...",
+      "downloadingRuntime": "正在下載 Steam Runtime — 首次啟動可能需要幾分鐘...",
+      "installingUbisoft": "正在透過 Ubisoft Connect 安裝",
+      "installingUbisoftMessage": "正在開啟 Ubisoft Connect — 請在啟動器視窗中開始安裝。",
+      "protonReadyBody": "{{version}} 已可使用",
+      "protonReadyTitle": "Proton 已就緒",
+      "protonSwitchedTo": "現在使用 {{version}}",
+      "signingInUbisoft": "正在登入 Ubisoft Connect",
+      "signingInUbisoftMessage": "正在開啟 Ubisoft Connect — 請在那裡登入後返回。",
+      "ubisoftPrefixNotReady": "Ubisoft Connect 尚未就緒",
+      "ubisoftPrefixNotReadyMessage": "無法為此遊戲準備 Ubisoft Connect 前綴。請重試安裝；若仍然失敗，請重新執行庫同步。"
     },
     "updateComplete": "更新已完成！",
     "updateCompleteMessage": "{{title}} 已更新。",
@@ -470,7 +489,8 @@
       "support": "客服支援",
       "install": "安裝",
       "uninstall": "解除安裝",
-      "cancel": "取消"
+      "cancel": "取消",
+      "achievements": "成就"
     },
     "labels": {
       "store": "商店:",
@@ -495,7 +515,8 @@
       "unsupported": "不支持",
       "unknown": "未知"
     },
-    "failedToLoadMetadata": "載入元資料失敗"
+    "failedToLoadMetadata": "載入元資料失敗",
+    "lastSession": "上次遊玩：解鎖了 {{names}}"
   },
   "gameDetailsSettings": {
     "title": "遊戲詳情頁面視圖",
@@ -882,5 +903,23 @@
     "typeReinstall": "重新安裝",
     "typeUpdate": "升級至",
     "updateButton": "升級至 v{{version}}"
+  },
+  "achievements": {
+    "unlockedTitle": "成就已解鎖",
+    "unlockedBody": "{{name}}"
+  },
+  "achievementsModal": {
+    "title": "成就",
+    "progress": "{{unlocked}} / {{total}} ({{percent}}%)",
+    "refresh": "重新整理",
+    "close": "關閉",
+    "loading": "正在載入成就…",
+    "empty": "此遊戲沒有成就。",
+    "hidden": "隱藏成就",
+    "unlockedOn": "{{date}} 解鎖",
+    "error": "無法載入成就。",
+    "errorOffline": "連接到網際網路以檢視成就。",
+    "errorAuth": "登入此遊戲的商店以檢視成就。",
+    "errorUnavailable": "此遊戲不支援成就。"
   }
 }

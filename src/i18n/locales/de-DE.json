@@ -107,7 +107,12 @@
     "finalizingInstallation": "Installation wird abgeschlossen...",
     "speedMbps": "{{speed}} MB/s",
     "etaLabel": "Verbleibende Zeit: {{eta}}",
-    "preparingMessage": "Präfix wird initialisiert und Cloud-Spielstände werden synchronisiert..."
+    "preparingMessage": "Präfix wird initialisiert und Cloud-Spielstände werden synchronisiert...",
+    "preparingLabel": "Spiel wird eingerichtet...",
+    "installingViaUpcLabel": "Installation über Ubisoft Connect",
+    "extractingMessage": "Dateien werden extrahiert...",
+    "verifyingMessage": "Dateien werden überprüft... {{pct}}%",
+    "installingViaUpcMessage": "Folge dem Ubisoft-Connect-Fenster, um die Installation abzuschließen..."
   },
   "cloudSave": {
     "title": "Cloud-Speicher-Konflikt",
@@ -124,7 +129,10 @@
     "toastUsingLocalBody": "Lokale Spielstände für {{game}} werden hochgeladen",
     "toastErrorTitle": "Fehler",
     "toastErrorBody": "Konflikt konnte nicht gelöst werden",
-    "filesSize": "{{count}} Dateien · {{size}}"
+    "filesSize": "{{count}} Dateien · {{size}}",
+    "uploadBlockedEmpty": "Cloud-Upload für {{game}} übersprungen – keine lokalen Spielstände gefunden",
+    "uploadSkippedTitle": "Cloud-Upload übersprungen",
+    "uploadSkippedBody": "Noch keine lokalen Spielstände zum Hochladen für {{game}}."
   },
   "storeConnections": {
     "title": "STORE-VERBINDUNGEN",
@@ -304,7 +312,18 @@
       "cloudSyncDownFailed": "Download der Cloud-Spielstände für {{store}} fehlgeschlagen ({{error}}). Es wird mit lokalen Spielständen gespielt.",
       "cloudSyncUpFailed": "Upload der Cloud-Spielstände für {{store}} fehlgeschlagen ({{error}}). Dein Fortschritt ist nur lokal gespeichert.",
       "errorCircuitBreakerOpen": "{{game_key}} konnte in letzter Zeit {{count}} Mal nicht gestartet werden. Automatische Startversuche pausiert.",
-      "launcherError": "{{game_key}} konnte nicht gestartet werden ({{error_code}}). Siehe Protokolle für Details."
+      "launcherError": "{{game_key}} konnte nicht gestartet werden ({{error_code}}). Siehe Protokolle für Details.",
+      "downloadingProton": "Proton wird heruntergeladen – das kann einige Minuten dauern...",
+      "downloadingRuntime": "Steam Runtime wird heruntergeladen – der erste Start kann einige Minuten dauern...",
+      "installingUbisoft": "Installation über Ubisoft Connect",
+      "installingUbisoftMessage": "Ubisoft Connect wird geöffnet – starte die Installation im Launcher-Fenster.",
+      "protonReadyBody": "{{version}} ist einsatzbereit",
+      "protonReadyTitle": "Proton bereit",
+      "protonSwitchedTo": "{{version}} wird jetzt verwendet",
+      "signingInUbisoft": "Anmeldung bei Ubisoft Connect",
+      "signingInUbisoftMessage": "Ubisoft Connect wird geöffnet – melde dich dort an und kehre dann zurück.",
+      "ubisoftPrefixNotReady": "Ubisoft Connect ist nicht bereit",
+      "ubisoftPrefixNotReadyMessage": "Das Ubisoft-Connect-Prefix für dieses Spiel konnte nicht vorbereitet werden. Versuche die Installation erneut; wenn es weiterhin fehlschlägt, führe eine Bibliotheks-Synchronisierung erneut aus."
     },
     "updateComplete": "Update abgeschlossen!",
     "updateCompleteMessage": "{{title}} wurde aktualisiert.",
@@ -470,7 +489,8 @@
       "support": "Support",
       "install": "Installieren",
       "uninstall": "Deinstallieren",
-      "cancel": "Abbrechen"
+      "cancel": "Abbrechen",
+      "achievements": "Erfolge"
     },
     "labels": {
       "store": "Store:",
@@ -495,7 +515,8 @@
       "unsupported": "NICHT UNTERSTÜTZT",
       "unknown": "UNBEKANNT"
     },
-    "failedToLoadMetadata": "Metadaten konnten nicht geladen werden"
+    "failedToLoadMetadata": "Metadaten konnten nicht geladen werden",
+    "lastSession": "Letzte Sitzung: {{names}} freigeschaltet"
   },
   "gameDetailsSettings": {
     "title": "SPIELDETAIL-ANSICHT",
@@ -882,5 +903,23 @@
     "typeReinstall": "Neuinstallation",
     "typeUpdate": "Update auf",
     "updateButton": "Update auf v{{version}}"
+  },
+  "achievements": {
+    "unlockedTitle": "Erfolg freigeschaltet",
+    "unlockedBody": "{{name}}"
+  },
+  "achievementsModal": {
+    "title": "Erfolge",
+    "progress": "{{unlocked}} / {{total}} ({{percent}}%)",
+    "refresh": "Aktualisieren",
+    "close": "Schließen",
+    "loading": "Erfolge werden geladen…",
+    "empty": "Dieses Spiel hat keine Erfolge.",
+    "hidden": "Verborgener Erfolg",
+    "unlockedOn": "Freigeschaltet am {{date}}",
+    "error": "Erfolge konnten nicht geladen werden.",
+    "errorOffline": "Stelle eine Internetverbindung her, um Erfolge anzuzeigen.",
+    "errorAuth": "Melde dich im Store dieses Spiels an, um Erfolge anzuzeigen.",
+    "errorUnavailable": "Für dieses Spiel sind keine Erfolge verfügbar."
   }
 }

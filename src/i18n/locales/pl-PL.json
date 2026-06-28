@@ -107,7 +107,12 @@
     "finalizingInstallation": "Finalizowanie instalacji...",
     "speedMbps": "{{speed}} MB/s",
     "etaLabel": "Pozostały czas: {{eta}}",
-    "preparingMessage": "Inicjowanie prefiksu i synchronizowanie zapisów w chmurze..."
+    "preparingMessage": "Inicjowanie prefiksu i synchronizowanie zapisów w chmurze...",
+    "preparingLabel": "Przygotowywanie gry...",
+    "installingViaUpcLabel": "Instalowanie przez Ubisoft Connect",
+    "extractingMessage": "Wyodrębnianie plików...",
+    "verifyingMessage": "Weryfikowanie plików... {{pct}}%",
+    "installingViaUpcMessage": "Postępuj zgodnie z oknem Ubisoft Connect, aby zakończyć instalację..."
   },
   "cloudSave": {
     "title": "Konflikt zapisów w chmurze",
@@ -124,7 +129,10 @@
     "toastUsingLocalBody": "Przesyłanie zapisów lokalnych dla {{game}}",
     "toastErrorTitle": "Błąd",
     "toastErrorBody": "Nie udało się rozwiązać konfliktu",
-    "filesSize": "{{count}} plików · {{size}}"
+    "filesSize": "{{count}} plików · {{size}}",
+    "uploadBlockedEmpty": "Pominięto przesyłanie do chmury dla {{game}} — nie znaleziono lokalnych zapisów",
+    "uploadSkippedTitle": "Pominięto przesyłanie do chmury",
+    "uploadSkippedBody": "Brak lokalnych zapisów do przesłania dla {{game}}."
   },
   "storeConnections": {
     "title": "POŁĄCZENIA SKLEPÓW",
@@ -304,7 +312,18 @@
       "cloudSyncDownFailed": "Błąd pobierania zapisów w chmurze dla {{store}} ({{error}}). Uruchamianie z zapisem lokalnym.",
       "cloudSyncUpFailed": "Błąd przesyłania zapisów w chmurze dla {{store}} ({{error}}). Twój postęp jest zapisany tylko lokalnie.",
       "errorCircuitBreakerOpen": "Gra {{game_key}} nie uruchomiła się poprawnie {{count}} razy z rzędu. Automatyczne próby wstrzymane.",
-      "launcherError": "Nie udało się uruchomić {{game_key}} ({{error_code}}). Sprawdź logi."
+      "launcherError": "Nie udało się uruchomić {{game_key}} ({{error_code}}). Sprawdź logi.",
+      "downloadingProton": "Pobieranie Proton — może to potrwać kilka minut...",
+      "downloadingRuntime": "Pobieranie Steam Runtime — pierwsze uruchomienie może potrwać kilka minut...",
+      "installingUbisoft": "Instalowanie przez Ubisoft Connect",
+      "installingUbisoftMessage": "Otwieranie Ubisoft Connect — rozpocznij instalację w oknie launchera.",
+      "protonReadyBody": "{{version}} jest gotowy do użycia",
+      "protonReadyTitle": "Proton gotowy",
+      "protonSwitchedTo": "Teraz używasz {{version}}",
+      "signingInUbisoft": "Logowanie do Ubisoft Connect",
+      "signingInUbisoftMessage": "Otwieranie Ubisoft Connect — zaloguj się tam, a następnie wróć.",
+      "ubisoftPrefixNotReady": "Ubisoft Connect nie jest gotowy",
+      "ubisoftPrefixNotReadyMessage": "Nie udało się przygotować prefiksu Ubisoft Connect dla tej gry. Spróbuj zainstalować ponownie; jeśli błąd się powtarza, ponownie uruchom synchronizację biblioteki."
     },
     "updateComplete": "Aktualizacja zakończona!",
     "updateCompleteMessage": "Gra {{title}} została zaktualizowana.",
@@ -470,7 +489,8 @@
       "support": "Wsparcie",
       "install": "Zainstaluj",
       "uninstall": "Odinstaluj",
-      "cancel": "Anuluj"
+      "cancel": "Anuluj",
+      "achievements": "Osiągnięcia"
     },
     "labels": {
       "store": "Sklep:",
@@ -495,7 +515,8 @@
       "unsupported": "NIEWSPIERANA",
       "unknown": "NIEZNANA"
     },
-    "failedToLoadMetadata": "Nie udało się załadować metadanych"
+    "failedToLoadMetadata": "Nie udało się załadować metadanych",
+    "lastSession": "Ostatnia sesja: odblokowano {{names}}"
   },
   "gameDetailsSettings": {
     "title": "WIDOK SZCZEGÓŁÓW GRY",
@@ -882,5 +903,23 @@
     "typeReinstall": "Instalowanie ponowne",
     "typeUpdate": "Aktualizowanie do",
     "updateButton": "Aktualizuj do v{{version}}"
+  },
+  "achievements": {
+    "unlockedTitle": "Osiągnięcie odblokowane",
+    "unlockedBody": "{{name}}"
+  },
+  "achievementsModal": {
+    "title": "Osiągnięcia",
+    "progress": "{{unlocked}} / {{total}} ({{percent}}%)",
+    "refresh": "Odśwież",
+    "close": "Zamknij",
+    "loading": "Ładowanie osiągnięć…",
+    "empty": "Ta gra nie ma osiągnięć.",
+    "hidden": "Ukryte osiągnięcie",
+    "unlockedOn": "Odblokowano {{date}}",
+    "error": "Nie udało się wczytać osiągnięć.",
+    "errorOffline": "Połącz się z internetem, aby zobaczyć osiągnięcia.",
+    "errorAuth": "Zaloguj się w sklepie tej gry, aby zobaczyć osiągnięcia.",
+    "errorUnavailable": "Osiągnięcia nie są dostępne dla tej gry."
   }
 }

@@ -36,7 +36,27 @@ from .primitives import GOGFolderOps
 if TYPE_CHECKING:
     from .installer import GOGInstaller
 logger = logging.getLogger(__name__)
+# Stall watchdog for the *active download* phase. gogdl's progressbar emits a
+# "+ Disk … (write)/(read)" heartbeat roughly every second for the whole
+# download (even at 0 MiB/s while it retries the CDN), so any line resets this
+# — 2 min only fires on a genuine no-output stall.
 _GOGDL_STALL_TIMEOUT_S = 120.0
+# Tolerated silence once bytes are complete (~100%): gogdl may go quiet during
+# native archive extraction / worker shutdown / manifest write before EOF, and
+# the bounded post-EOF wait covers a process that closes stdout then lingers.
+# NOTE: no absolute wall-clock cap on the tail — a legitimately slow CDN can
+# keep a download at ~100% for a long time, and killing that would fail a
+# working install. The per-read window is the only bound; the heartbeat keeps
+# it from firing on a live-but-slow download.
+_GOGDL_FINALIZE_TIMEOUT_S = 1800.0
+# Tolerated silence for the conditional repair pass. gogdl `repair` re-hashes
+# every file as ONE silent block (~11 min for ~53 GB on microSD in the field
+# logs, scales with game size / disk speed). Repair must be allowed to finish,
+# so this is deliberately generous — it only guards a truly wedged process.
+_GOGDL_REPAIR_TIMEOUT_S = 3600.0
+# Progress threshold at which the download is effectively done and we flip the
+# UI to the indeterminate "Extracting…" phase so the row stops looking frozen.
+_GOGDL_TAIL_PROGRESS_PCT = 99.0
 
 
 class _GogdlProgressMonitor:
@@ -72,7 +92,19 @@ class _GogdlProgressMonitor:
             loop_ok = await self._read_progress_loop(proc, progress_cb)
             if not loop_ok:
                 return False
-            await proc.wait()
+            # gogdl closed stdout (EOF) but may still be flushing/exiting.
+            # Bound the wait so a process that closes stdout then hangs can't
+            # wedge the queue forever; the read loop already tolerated the
+            # silent extraction tail via the finalize timeout.
+            try:
+                await asyncio.wait_for(proc.wait(), timeout=_GOGDL_FINALIZE_TIMEOUT_S)
+            except TimeoutError:
+                logger.warning(
+                    "[GOGInstaller] gogdl did not exit after EOF (%ds) — killing",
+                    int(_GOGDL_FINALIZE_TIMEOUT_S),
+                )
+                await self._terminate_gogdl(proc)
+                return False
             if proc.returncode != 0:
                 logger.error(
                     "[GOGInstaller] gogdl exited with code %d",
@@ -134,7 +166,17 @@ class _GogdlProgressMonitor:
         proc: asyncio.subprocess.Process,
         progress_cb: Callable[[dict[str, Any]], Awaitable[None]] | None,
     ) -> bool:
-        """Read progress loop."""
+        """Read progress loop.
+
+        Two-phase watchdog: while bytes are still downloading a stall is a hard
+        failure (tight ``_GOGDL_STALL_TIMEOUT_S``). Once progress crosses
+        ``_GOGDL_TAIL_PROGRESS_PCT`` the download is effectively done; gogdl can
+        go quiet during finalization, so we widen the per-read window to
+        ``_GOGDL_FINALIZE_TIMEOUT_S`` and flip the UI to the indeterminate
+        "Extracting…" phase so the row stops looking frozen at 100%. Any line
+        (including gogdl's ~1 Hz heartbeat) resets the window, so a live-but-slow
+        download is never killed.
+        """
         progress: dict[str, Any] = {
             "progress_percent": 0,
             "downloaded_bytes": 0,
@@ -144,16 +186,24 @@ class _GogdlProgressMonitor:
             "phase_message": "Starting download…",
         }
         assert proc.stdout is not None
+        in_tail = False
         while True:
+            in_tail = await self._maybe_enter_tail(
+                progress,
+                progress_cb,
+                in_tail=in_tail,
+            )
+            timeout = _GOGDL_FINALIZE_TIMEOUT_S if in_tail else _GOGDL_STALL_TIMEOUT_S
             try:
                 line = await asyncio.wait_for(
                     proc.stdout.readline(),
-                    timeout=_GOGDL_STALL_TIMEOUT_S,
+                    timeout=timeout,
                 )
             except TimeoutError:
                 logger.warning(
-                    "[GOGInstaller] stalled (no output for %ds)",
-                    int(_GOGDL_STALL_TIMEOUT_S),
+                    "[GOGInstaller] stalled (no output for %ds, tail=%s)",
+                    int(timeout),
+                    in_tail,
                 )
                 await self._terminate_gogdl(proc)
                 return False
@@ -167,6 +217,34 @@ class _GogdlProgressMonitor:
                 progress,
                 progress_cb,
             )
+
+    async def _maybe_enter_tail(
+        self,
+        progress: dict[str, Any],
+        progress_cb: Callable[[dict[str, Any]], Awaitable[None]] | None,
+        *,
+        in_tail: bool,
+    ) -> bool:
+        """Flip into the finalization tail once download bytes are complete.
+
+        Emits a single ``phase="extracting"`` callback so the UI switches to
+        the indeterminate "Extracting…" spinner. Idempotent — returns ``True``
+        unchanged once already in the tail.
+        """
+        if in_tail:
+            return True
+        if float(progress.get("progress_percent") or 0) < _GOGDL_TAIL_PROGRESS_PCT:
+            return False
+        # Stamp the shared dict so the phase stays "extracting" for any later
+        # callbacks too — the indeterminate spinner shouldn't flip back.
+        progress["phase"] = "extracting"
+        if progress_cb is not None:
+            try:
+                await progress_cb({**progress, "phase_message": "Extracting…"})
+            except Exception as e:
+                logger.debug("[GOGInstaller] extracting phase_cb: %s", e)
+        logger.info("[GOGInstaller] download bytes complete → extracting/finalizing")
+        return True
 
     async def _handle_progress_line(
         self,
@@ -279,8 +357,16 @@ class _GogdlProgressMonitor:
         base_path: str,
         folder_name: str | None,
         preferred_lang: str,
+        progress_cb: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
     ) -> None:
-        """Run GOGDL repair pass."""
+        """Run GOGDL repair pass.
+
+        ``repair`` re-reads every file and re-hashes it against the manifest,
+        re-downloading mismatches — a full read-back over the whole game. It is
+        run *conditionally* (only when a download came up short), so when it
+        does run we surface it as an indeterminate "Verifying…" phase with live
+        percent text rather than leaving the row frozen at 100%.
+        """
         repair_path = self._resolve_repair_path(
             game_id,
             base_path,
@@ -317,16 +403,18 @@ class _GogdlProgressMonitor:
                 await _gogdl_cleanup()
                 return
             try:
-                assert proc.stdout is not None
-                while True:
-                    line = await proc.stdout.readline()
-                    if not line:
-                        break
-                    line_str = line.decode(errors="replace").strip()
-                    if line_str and not line_str.startswith("[gogdl]"):
-                        logger.info("[gogdl-verify] %s", line_str)
-                await proc.wait()
-                if proc.returncode != 0:
+                await self._read_repair_loop(proc, progress_cb)
+                try:
+                    await asyncio.wait_for(
+                        proc.wait(), timeout=_GOGDL_REPAIR_TIMEOUT_S,
+                    )
+                except TimeoutError:
+                    logger.warning(
+                        "[GOGInstaller] repair did not exit (%ds) — killing",
+                        int(_GOGDL_REPAIR_TIMEOUT_S),
+                    )
+                    await self._terminate_gogdl(proc)
+                if proc.returncode not in (0, None):
                     logger.warning(
                         "[GOGInstaller] repair code %d (non-fatal)",
                         proc.returncode,
@@ -338,6 +426,59 @@ class _GogdlProgressMonitor:
                 "[GOGInstaller] repair pipeline failed: %s",
                 e,
             )
+
+    async def _read_repair_loop(
+        self,
+        proc: asyncio.subprocess.Process,
+        progress_cb: Callable[[dict[str, Any]], Awaitable[None]] | None,
+    ) -> None:
+        """Drain repair stdout, reporting a "Verifying…" phase.
+
+        Reuses ``_parse_progress_line`` (repair emits the same ``Progress:``
+        format as download). Guarded by the finalize-phase watchdog so a wedged
+        repair can't read forever. Returns on EOF or watchdog kill — the caller
+        bounds ``proc.wait()`` and inspects the return code.
+        """
+        assert proc.stdout is not None
+        progress: dict[str, Any] = {
+            "progress_percent": 0,
+            "downloaded_bytes": 0,
+            "total_bytes": 0,
+            "speed_bps": 0.0,
+            "eta_seconds": 0,
+            "phase": "verifying",
+            "phase_message": "Verifying…",
+        }
+        while True:
+            try:
+                line = await asyncio.wait_for(
+                    proc.stdout.readline(),
+                    timeout=_GOGDL_REPAIR_TIMEOUT_S,
+                )
+            except TimeoutError:
+                logger.warning(
+                    "[GOGInstaller] repair stalled (no output for %ds) — killing",
+                    int(_GOGDL_REPAIR_TIMEOUT_S),
+                )
+                await self._terminate_gogdl(proc)
+                return
+            if not line:
+                return
+            line_str = line.decode(errors="replace").strip()
+            if not line_str:
+                continue
+            if not line_str.startswith("[gogdl]"):
+                logger.info("[gogdl-verify] %s", line_str)
+            if progress_cb is None or "Progress:" not in line_str:
+                continue
+            self._parse_progress_line(line_str, progress)
+            pct = float(progress.get("progress_percent") or 0)
+            progress["phase"] = "verifying"
+            progress["phase_message"] = f"Verifying… {pct:.1f}%"
+            try:
+                await progress_cb(dict(progress))
+            except Exception as e:
+                logger.debug("[GOGInstaller] verify phase_cb: %s", e)
 
     @staticmethod
     def _resolve_repair_path(

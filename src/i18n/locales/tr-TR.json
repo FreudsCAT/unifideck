@@ -107,7 +107,12 @@
     "finalizingInstallation": "Kurulum tamamlanıyor...",
     "speedMbps": "{{speed}} MB/s",
     "etaLabel": "Kalan Süre: {{eta}}",
-    "preparingMessage": "Ön ek hazırlanıyor ve bulut kayıtları eşitleniyor..."
+    "preparingMessage": "Ön ek hazırlanıyor ve bulut kayıtları eşitleniyor...",
+    "preparingLabel": "Oyun hazırlanıyor...",
+    "installingViaUpcLabel": "Ubisoft Connect ile yükleniyor",
+    "extractingMessage": "Dosyalar çıkarılıyor...",
+    "verifyingMessage": "Dosyalar doğrulanıyor... {{pct}}%",
+    "installingViaUpcMessage": "Kurulumu tamamlamak için Ubisoft Connect penceresini izleyin..."
   },
   "cloudSave": {
     "title": "Bulut Kaydı Çakışması",
@@ -124,7 +129,10 @@
     "toastUsingLocalBody": "{{game}} için yerel kayıtlar karşıya yükleniyor",
     "toastErrorTitle": "Hata",
     "toastErrorBody": "Çakışma çözülemedi",
-    "filesSize": "{{count}} dosya · {{size}}"
+    "filesSize": "{{count}} dosya · {{size}}",
+    "uploadBlockedEmpty": "{{game}} için buluta yükleme atlandı — yerel kayıt bulunamadı",
+    "uploadSkippedTitle": "Buluta yükleme atlandı",
+    "uploadSkippedBody": "{{game}} için henüz yüklenecek yerel kayıt yok."
   },
   "storeConnections": {
     "title": "MAĞAZA BAĞLANTILARI",
@@ -304,7 +312,18 @@
       "cloudSyncDownFailed": "{{store}} için bulut kaydı indirilemedi ({{error}}). Yerel kayıt ile oynanıyor.",
       "cloudSyncUpFailed": "{{store}} için bulut kaydı karşıya yüklenemedi ({{error}}). İlerlemeniz yalnızca yerel olarak kaydedildi.",
       "errorCircuitBreakerOpen": "{{game_key}} son zamanlarda {{count}} kez başlatılamadı. Otomatik başlatmalar askıya alındı.",
-      "launcherError": "{{game_key}} başlatılamadı ({{error_code}}). Detaylar için günlüklere bakın."
+      "launcherError": "{{game_key}} başlatılamadı ({{error_code}}). Detaylar için günlüklere bakın.",
+      "downloadingProton": "Proton indiriliyor — bu birkaç dakika sürebilir...",
+      "downloadingRuntime": "Steam Runtime indiriliyor — ilk başlatma birkaç dakika sürebilir...",
+      "installingUbisoft": "Ubisoft Connect ile yükleniyor",
+      "installingUbisoftMessage": "Ubisoft Connect açılıyor — kurulumu başlatıcı penceresinden başlatın.",
+      "protonReadyBody": "{{version}} kullanıma hazır",
+      "protonReadyTitle": "Proton hazır",
+      "protonSwitchedTo": "Şimdi {{version}} kullanılıyor",
+      "signingInUbisoft": "Ubisoft Connect'te oturum açılıyor",
+      "signingInUbisoftMessage": "Ubisoft Connect açılıyor — orada oturum açın, sonra geri dönün.",
+      "ubisoftPrefixNotReady": "Ubisoft Connect hazır değil",
+      "ubisoftPrefixNotReadyMessage": "Bu oyun için Ubisoft Connect ön eki hazırlanamadı. Tekrar yüklemeyi deneyin; sorun devam ederse kitaplık eşitlemesini yeniden çalıştırın."
     },
     "updateComplete": "Güncelleme Tamamlandı!",
     "updateCompleteMessage": "{{title}} güncellendi.",
@@ -470,7 +489,8 @@
       "support": "Destek",
       "install": "Yükle",
       "uninstall": "Kaldır",
-      "cancel": "İptal Et"
+      "cancel": "İptal Et",
+      "achievements": "Başarımlar"
     },
     "labels": {
       "store": "Mağaza:",
@@ -495,7 +515,8 @@
       "unsupported": "DESTEKLENMİYOR",
       "unknown": "BİLİNMİYOR"
     },
-    "failedToLoadMetadata": "Meta veriler yüklenemedi"
+    "failedToLoadMetadata": "Meta veriler yüklenemedi",
+    "lastSession": "Son oturum: {{names}} açıldı"
   },
   "gameDetailsSettings": {
     "title": "OYUN DETAYLARI GÖRÜNÜMÜ",
@@ -882,5 +903,23 @@
     "typeReinstall": "Yeniden yükleniyor",
     "typeUpdate": "Güncelleniyor:",
     "updateButton": "v{{version}} sürümüne güncelle"
+  },
+  "achievements": {
+    "unlockedTitle": "Başarım kilidi açıldı",
+    "unlockedBody": "{{name}}"
+  },
+  "achievementsModal": {
+    "title": "Başarımlar",
+    "progress": "{{unlocked}} / {{total}} ({{percent}}%)",
+    "refresh": "Yenile",
+    "close": "Kapat",
+    "loading": "Başarımlar yükleniyor…",
+    "empty": "Bu oyunda başarım yok.",
+    "hidden": "Gizli başarım",
+    "unlockedOn": "{{date}} tarihinde açıldı",
+    "error": "Başarımlar yüklenemedi.",
+    "errorOffline": "Başarımları görüntülemek için internete bağlanın.",
+    "errorAuth": "Başarımları görüntülemek için bu oyunun mağazasında oturum açın.",
+    "errorUnavailable": "Bu oyun için başarımlar mevcut değil."
   }
 }

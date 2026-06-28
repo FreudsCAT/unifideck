@@ -107,7 +107,12 @@
     "finalizingInstallation": "Finalizzazione dell'installazione...",
     "speedMbps": "{{speed}} MB/s",
     "etaLabel": "Tempo stimato: {{eta}}",
-    "preparingMessage": "Inizializzazione del prefisso e sincronizzazione dei salvataggi cloud..."
+    "preparingMessage": "Inizializzazione del prefisso e sincronizzazione dei salvataggi cloud...",
+    "preparingLabel": "Configurazione del gioco...",
+    "installingViaUpcLabel": "Installazione tramite Ubisoft Connect",
+    "extractingMessage": "Estrazione dei file...",
+    "verifyingMessage": "Verifica dei file... {{pct}}%",
+    "installingViaUpcMessage": "Segui la finestra di Ubisoft Connect per completare l'installazione..."
   },
   "cloudSave": {
     "title": "Conflitto di salvataggio cloud",
@@ -124,7 +129,10 @@
     "toastUsingLocalBody": "Caricamento dei salvataggi locali per {{game}}",
     "toastErrorTitle": "Errore",
     "toastErrorBody": "Risoluzione del conflitto fallita",
-    "filesSize": "{{count}} file · {{size}}"
+    "filesSize": "{{count}} file · {{size}}",
+    "uploadBlockedEmpty": "Caricamento sul cloud ignorato per {{game}} — nessun salvataggio locale trovato",
+    "uploadSkippedTitle": "Caricamento sul cloud ignorato",
+    "uploadSkippedBody": "Ancora nessun salvataggio locale da caricare per {{game}}."
   },
   "storeConnections": {
     "title": "CONNESSIONI NEGOZIO",
@@ -304,7 +312,18 @@
       "cloudSyncDownFailed": "Download salvataggi cloud fallito per {{store}} ({{error}}). Esecuzione con salvataggi locali.",
       "cloudSyncUpFailed": "Caricamento salvataggi cloud fallito per {{store}} ({{error}}). I tuoi progressi sono salvati solo in locale.",
       "errorCircuitBreakerOpen": "{{game_key}} ha fallito l'avvio {{count}} volte di recente. Avvii automatici sospesi.",
-      "launcherError": "Impossibile avviare {{game_key}} ({{error_code}}). Controlla i log per dettagli."
+      "launcherError": "Impossibile avviare {{game_key}} ({{error_code}}). Controlla i log per dettagli.",
+      "downloadingProton": "Download di Proton in corso — potrebbe richiedere qualche minuto...",
+      "downloadingRuntime": "Download di Steam Runtime in corso — il primo avvio potrebbe richiedere qualche minuto...",
+      "installingUbisoft": "Installazione tramite Ubisoft Connect",
+      "installingUbisoftMessage": "Apertura di Ubisoft Connect — avvia l'installazione dalla finestra del launcher.",
+      "protonReadyBody": "{{version}} è pronto all'uso",
+      "protonReadyTitle": "Proton pronto",
+      "protonSwitchedTo": "Ora in uso {{version}}",
+      "signingInUbisoft": "Accesso a Ubisoft Connect",
+      "signingInUbisoftMessage": "Apertura di Ubisoft Connect — accedi lì, poi torna indietro.",
+      "ubisoftPrefixNotReady": "Ubisoft Connect non è pronto",
+      "ubisoftPrefixNotReadyMessage": "Impossibile preparare il prefix di Ubisoft Connect per questo gioco. Prova a installare di nuovo; se continua a non riuscire, esegui di nuovo una sincronizzazione della libreria."
     },
     "updateComplete": "Aggiornamento completato!",
     "updateCompleteMessage": "{{title}} è stato aggiornato.",
@@ -470,7 +489,8 @@
       "support": "Supporto",
       "install": "Installa",
       "uninstall": "Disinstalla",
-      "cancel": "Annulla"
+      "cancel": "Annulla",
+      "achievements": "Obiettivi"
     },
     "labels": {
       "store": "Negozio:",
@@ -495,7 +515,8 @@
       "unsupported": "NON SUPPORTATO",
       "unknown": "SCONOSCIUTO"
     },
-    "failedToLoadMetadata": "Impossibile caricare i metadati"
+    "failedToLoadMetadata": "Impossibile caricare i metadati",
+    "lastSession": "Ultima sessione: sbloccato {{names}}"
   },
   "gameDetailsSettings": {
     "title": "VISTA DETTAGLI GIOCO",
@@ -882,5 +903,23 @@
     "typeReinstall": "Reinstallazione",
     "typeUpdate": "Aggiornamento a",
     "updateButton": "Aggiorna alla v{{version}}"
+  },
+  "achievements": {
+    "unlockedTitle": "Obiettivo sbloccato",
+    "unlockedBody": "{{name}}"
+  },
+  "achievementsModal": {
+    "title": "Obiettivi",
+    "progress": "{{unlocked}} / {{total}} ({{percent}}%)",
+    "refresh": "Aggiorna",
+    "close": "Chiudi",
+    "loading": "Caricamento obiettivi…",
+    "empty": "Questo gioco non ha obiettivi.",
+    "hidden": "Obiettivo nascosto",
+    "unlockedOn": "Sbloccato il {{date}}",
+    "error": "Impossibile caricare gli obiettivi.",
+    "errorOffline": "Connettiti a internet per vedere gli obiettivi.",
+    "errorAuth": "Accedi allo store di questo gioco per vedere gli obiettivi.",
+    "errorUnavailable": "Gli obiettivi non sono disponibili per questo gioco."
   }
 }

@@ -107,7 +107,12 @@
     "finalizingInstallation": "Завершення встановлення...",
     "speedMbps": "{{speed}} МБ/с",
     "etaLabel": "Залишилося часу: {{eta}}",
-    "preparingMessage": "Ініціалізація префікса та синхронізація хмарних збережень..."
+    "preparingMessage": "Ініціалізація префікса та синхронізація хмарних збережень...",
+    "preparingLabel": "Налаштування гри...",
+    "installingViaUpcLabel": "Встановлення через Ubisoft Connect",
+    "extractingMessage": "Розпакування файлів...",
+    "verifyingMessage": "Перевірка файлів... {{pct}}%",
+    "installingViaUpcMessage": "Дотримуйтесь вікна Ubisoft Connect, щоб завершити встановлення..."
   },
   "cloudSave": {
     "title": "Конфлікт хмарних збережень",
@@ -124,7 +129,10 @@
     "toastUsingLocalBody": "Завантаження локальних збережень у хмару для {{game}}",
     "toastErrorTitle": "Помилка",
     "toastErrorBody": "Не вдалося вирішити конфлікт збережень",
-    "filesSize": "{{count}} файлів · {{size}}"
+    "filesSize": "{{count}} файлів · {{size}}",
+    "uploadBlockedEmpty": "Завантаження в хмару для {{game}} пропущено — локальні збереження не знайдено",
+    "uploadSkippedTitle": "Завантаження в хмару пропущено",
+    "uploadSkippedBody": "Поки немає локальних збережень для завантаження для {{game}}."
   },
   "storeConnections": {
     "title": "ПІДКЛЮЧЕННЯ МАГАЗИНІВ",
@@ -304,7 +312,18 @@
       "cloudSyncDownFailed": "Не вдалося завантажити збереження з хмари для {{store}} ({{error}}). Гра запущена з локальними збереженнями.",
       "cloudSyncUpFailed": "Не вдалося завантажити збереження в хмару для {{store}} ({{error}}). Ваш прогрес збережено лише локально.",
       "errorCircuitBreakerOpen": "Запуск {{game_key}} не вдався {{count}} разів поспіль. Автоматичні запуски призупинено.",
-      "launcherError": "Не вдалося запустити {{game_key}} ({{error_code}}). Подробиці дивіться у логах."
+      "launcherError": "Не вдалося запустити {{game_key}} ({{error_code}}). Подробиці дивіться у логах.",
+      "downloadingProton": "Завантаження Proton — це може зайняти кілька хвилин...",
+      "downloadingRuntime": "Завантаження Steam Runtime — перший запуск може зайняти кілька хвилин...",
+      "installingUbisoft": "Встановлення через Ubisoft Connect",
+      "installingUbisoftMessage": "Відкриття Ubisoft Connect — почніть встановлення у вікні лаунчера.",
+      "protonReadyBody": "{{version}} готовий до використання",
+      "protonReadyTitle": "Proton готовий",
+      "protonSwitchedTo": "Тепер використовується {{version}}",
+      "signingInUbisoft": "Вхід у Ubisoft Connect",
+      "signingInUbisoftMessage": "Відкриття Ubisoft Connect — увійдіть там, а потім поверніться.",
+      "ubisoftPrefixNotReady": "Ubisoft Connect не готовий",
+      "ubisoftPrefixNotReadyMessage": "Не вдалося підготувати префікс Ubisoft Connect для цієї гри. Спробуйте встановити ще раз; якщо помилка повторюється, повторно запустіть синхронізацію бібліотеки."
     },
     "updateComplete": "Оновлення завершено!",
     "updateCompleteMessage": "{{title}} оновлено.",
@@ -470,7 +489,8 @@
       "support": "Підтримка",
       "install": "Встановити",
       "uninstall": "Видалити",
-      "cancel": "Скасувати"
+      "cancel": "Скасувати",
+      "achievements": "Досягнення"
     },
     "labels": {
       "store": "Магазин:",
@@ -495,7 +515,8 @@
       "unsupported": "НЕ ПІДТРИМУЄТЬСЯ",
       "unknown": "НЕВІДОМО"
     },
-    "failedToLoadMetadata": "Не вдалося завантажити метадані"
+    "failedToLoadMetadata": "Не вдалося завантажити метадані",
+    "lastSession": "Минула сесія: розблоковано {{names}}"
   },
   "gameDetailsSettings": {
     "title": "ВИД СТОРІНКИ ГРИ",
@@ -882,5 +903,23 @@
     "typeReinstall": "Перевстановлення версії",
     "typeUpdate": "Оновлення до версії",
     "updateButton": "Оновити до v{{version}}"
+  },
+  "achievements": {
+    "unlockedTitle": "Досягнення розблоковано",
+    "unlockedBody": "{{name}}"
+  },
+  "achievementsModal": {
+    "title": "Досягнення",
+    "progress": "{{unlocked}} / {{total}} ({{percent}}%)",
+    "refresh": "Оновити",
+    "close": "Закрити",
+    "loading": "Завантаження досягнень…",
+    "empty": "У цій грі немає досягнень.",
+    "hidden": "Приховане досягнення",
+    "unlockedOn": "Розблоковано {{date}}",
+    "error": "Не вдалося завантажити досягнення.",
+    "errorOffline": "Підключіться до інтернету, щоб переглянути досягнення.",
+    "errorAuth": "Увійдіть у магазин цієї гри, щоб переглянути досягнення.",
+    "errorUnavailable": "Досягнення недоступні для цієї гри."
   }
 }

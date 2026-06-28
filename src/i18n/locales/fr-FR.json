@@ -107,7 +107,12 @@
     "finalizingInstallation": "Finalisation de l'installation...",
     "speedMbps": "{{speed}} Mo/s",
     "etaLabel": "Temps restant : {{eta}}",
-    "preparingMessage": "Initialisation du préfixe et synchronisation des sauvegardes cloud..."
+    "preparingMessage": "Initialisation du préfixe et synchronisation des sauvegardes cloud...",
+    "preparingLabel": "Configuration du jeu...",
+    "installingViaUpcLabel": "Installation via Ubisoft Connect",
+    "extractingMessage": "Extraction des fichiers...",
+    "verifyingMessage": "Vérification des fichiers... {{pct}}%",
+    "installingViaUpcMessage": "Suivez la fenêtre Ubisoft Connect pour terminer l'installation..."
   },
   "cloudSave": {
     "title": "Conflit de sauvegardes cloud",
@@ -124,7 +129,10 @@
     "toastUsingLocalBody": "Téléchargement des sauvegardes locales pour {{game}}",
     "toastErrorTitle": "Erreur",
     "toastErrorBody": "Échec de la résolution du conflit",
-    "filesSize": "{{count}} fichiers · {{size}}"
+    "filesSize": "{{count}} fichiers · {{size}}",
+    "uploadBlockedEmpty": "Envoi vers le cloud ignoré pour {{game}} — aucune sauvegarde locale trouvée",
+    "uploadSkippedTitle": "Envoi vers le cloud ignoré",
+    "uploadSkippedBody": "Aucune sauvegarde locale à envoyer pour l'instant pour {{game}}."
   },
   "storeConnections": {
     "title": "CONNEXIONS AUX BOUTIQUES",
@@ -304,7 +312,18 @@
       "cloudSyncDownFailed": "Échec du téléchargement des sauvegardes cloud pour {{store}} ({{error}}). Jeu avec sauvegardes locales.",
       "cloudSyncUpFailed": "Échec de l'envoi des sauvegardes cloud pour {{store}} ({{error}}). Votre progression est uniquement sauvegardée localement.",
       "errorCircuitBreakerOpen": "{{game_key}} a échoué à démarrer {{count}} fois récemment. Suspensions des lancements automatiques.",
-      "launcherError": "Impossible de lancer {{game_key}} ({{error_code}}). Consultez les journaux pour les détails."
+      "launcherError": "Impossible de lancer {{game_key}} ({{error_code}}). Consultez les journaux pour les détails.",
+      "downloadingProton": "Téléchargement de Proton — cela peut prendre quelques minutes...",
+      "downloadingRuntime": "Téléchargement du Steam Runtime — le premier lancement peut prendre quelques minutes...",
+      "installingUbisoft": "Installation via Ubisoft Connect",
+      "installingUbisoftMessage": "Ouverture d'Ubisoft Connect — démarrez l'installation depuis la fenêtre du lanceur.",
+      "protonReadyBody": "{{version}} est prêt à l'emploi",
+      "protonReadyTitle": "Proton prêt",
+      "protonSwitchedTo": "Utilisation de {{version}} désormais",
+      "signingInUbisoft": "Connexion à Ubisoft Connect",
+      "signingInUbisoftMessage": "Ouverture d'Ubisoft Connect — connectez-vous, puis revenez.",
+      "ubisoftPrefixNotReady": "Ubisoft Connect n'est pas prêt",
+      "ubisoftPrefixNotReadyMessage": "Impossible de préparer le préfixe Ubisoft Connect pour ce jeu. Réessayez l'installation ; si l'échec persiste, relancez une synchronisation de la bibliothèque."
     },
     "updateComplete": "Mise à jour terminée !",
     "updateCompleteMessage": "{{title}} a été mis à jour.",
@@ -470,7 +489,8 @@
       "support": "Support",
       "install": "Installer",
       "uninstall": "Désinstaller",
-      "cancel": "Annuler"
+      "cancel": "Annuler",
+      "achievements": "Succès"
     },
     "labels": {
       "store": "Boutique :",
@@ -495,7 +515,8 @@
       "unsupported": "NON SUPPORTÉ",
       "unknown": "INCONNU"
     },
-    "failedToLoadMetadata": "Échec du chargement des métadonnées"
+    "failedToLoadMetadata": "Échec du chargement des métadonnées",
+    "lastSession": "Dernière session : {{names}} débloqué(s)"
   },
   "gameDetailsSettings": {
     "title": "VUE DU JEU",
@@ -882,5 +903,23 @@
     "typeReinstall": "Réinstallation",
     "typeUpdate": "Mise à jour vers",
     "updateButton": "Mettre à jour vers la v{{version}}"
+  },
+  "achievements": {
+    "unlockedTitle": "Succès débloqué",
+    "unlockedBody": "{{name}}"
+  },
+  "achievementsModal": {
+    "title": "Succès",
+    "progress": "{{unlocked}} / {{total}} ({{percent}}%)",
+    "refresh": "Actualiser",
+    "close": "Fermer",
+    "loading": "Chargement des succès…",
+    "empty": "Ce jeu n'a aucun succès.",
+    "hidden": "Succès caché",
+    "unlockedOn": "Débloqué le {{date}}",
+    "error": "Impossible de charger les succès.",
+    "errorOffline": "Connectez-vous à Internet pour voir les succès.",
+    "errorAuth": "Connectez-vous à la boutique de ce jeu pour voir les succès.",
+    "errorUnavailable": "Les succès ne sont pas disponibles pour ce jeu."
   }
 }

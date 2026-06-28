@@ -128,6 +128,7 @@ class GOGInstaller:
         base_path: str,
         folder_name: str | None,
         preferred_lang: str,
+        progress_cb: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
     ) -> None:
         """Run GOGDL repair pass."""
         await self._progress_monitor.run_gogdl_repair_pass(
@@ -136,6 +137,7 @@ class GOGInstaller:
             base_path,
             folder_name,
             preferred_lang,
+            progress_cb,
         )
 
     def _snapshot_dirs(self, base_path: str) -> set[Any]:
@@ -345,13 +347,11 @@ class GOGInstaller:
                 cleanup_path=ctx.base_path,
                 cleanup_folder=ctx.folder_name,
             )
-        await self._run_gogdl_repair_pass(
-            ctx.game_id,
-            ctx.platform,
-            ctx.base_path,
-            ctx.folder_name,
-            ctx.preferred_lang,
-        )
+        # NOTE: no unconditional repair pass here. gogdl ``download`` exits 0
+        # only once it has written every file/chunk the manifest specifies, so
+        # a clean download is already manifest-complete. The expensive
+        # read-back ``repair`` now runs in ``_install_finalize`` ONLY when the
+        # cheap completeness check fails — see ``_maybe_repair_and_reverify``.
         return None
 
     async def _install_finalize(self, ctx: _InstallContext) -> InstallResult:
@@ -387,6 +387,11 @@ class GOGInstaller:
             ctx.platform,
             self._find_exe,
         )
+        verification = await self._maybe_repair_and_reverify(
+            ctx,
+            found_path,
+            verification,
+        )
         if not verification.get("complete"):
             logger.warning(
                 "[GOGInstaller] verification issue: %s",
@@ -405,6 +410,41 @@ class GOGInstaller:
             store="gog",
             game_id=ctx.game_id,
             install_path=found_path,
+        )
+
+    async def _maybe_repair_and_reverify(
+        self,
+        ctx: _InstallContext,
+        found_path: str,
+        verification: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Run a repair pass + re-verify, but only if the install came up short.
+
+        gogdl's ``download`` is manifest-driven and exits 0 only when complete,
+        so the cheap completeness check (size-ratio / goggame.info / exe) passes
+        for clean installs and we skip the expensive read-back entirely. When it
+        *does* fail, the repair surfaces as a visible "Verifying…" phase (never
+        silent) and we re-verify once to reflect the repaired state.
+        """
+        if verification.get("complete"):
+            return verification
+        logger.warning(
+            "[GOGInstaller] verification incomplete (%s) → running repair pass",
+            verification.get("issue", "unknown"),
+        )
+        await self._run_gogdl_repair_pass(
+            ctx.game_id,
+            ctx.platform,
+            ctx.base_path,
+            ctx.folder_name,
+            ctx.preferred_lang,
+            ctx.progress_cb,
+        )
+        return await self._planner.verify_installation(
+            ctx.game_id,
+            found_path,
+            ctx.platform,
+            self._find_exe,
         )
 
     async def _wipe_manifests(self, game_id: str) -> None:

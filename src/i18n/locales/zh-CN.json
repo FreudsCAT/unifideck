@@ -107,7 +107,12 @@
     "finalizingInstallation": "正在完成安装...",
     "speedMbps": "{{speed}} MB/s",
     "etaLabel": "剩余时间: {{eta}}",
-    "preparingMessage": "正在初始化容器并同步云端存档..."
+    "preparingMessage": "正在初始化容器并同步云端存档...",
+    "preparingLabel": "正在设置游戏...",
+    "installingViaUpcLabel": "正在通过 Ubisoft Connect 安装",
+    "extractingMessage": "正在解压文件...",
+    "verifyingMessage": "正在校验文件... {{pct}}%",
+    "installingViaUpcMessage": "请按照 Ubisoft Connect 窗口的提示完成安装..."
   },
   "cloudSave": {
     "title": "云端存档冲突",
@@ -124,7 +129,10 @@
     "toastUsingLocalBody": "正在上传 {{game}} 的本地存档",
     "toastErrorTitle": "错误",
     "toastErrorBody": "无法解决存档冲突",
-    "filesSize": "{{count}} 个文件 · {{size}}"
+    "filesSize": "{{count}} 个文件 · {{size}}",
+    "uploadBlockedEmpty": "已跳过 {{game}} 的云上传 — 未找到本地存档",
+    "uploadSkippedTitle": "已跳过云上传",
+    "uploadSkippedBody": "{{game}} 暂无可上传的本地存档。"
   },
   "storeConnections": {
     "title": "商店连接",
@@ -304,7 +312,18 @@
       "cloudSyncDownFailed": "无法为 {{store}} 下载云端存档 ({{error}})。正在以本地存档启动游戏。",
       "cloudSyncUpFailed": "无法为 {{store}} 上传云端存档 ({{error}})。您的进度仅保存在本地。",
       "errorCircuitBreakerOpen": "{{game_key}} 最近启动失败了 {{count}} 次。已暂停自动运行。",
-      "launcherError": "无法启动 {{game_key}} ({{error_code}})。请查看日志了解详细信息。"
+      "launcherError": "无法启动 {{game_key}} ({{error_code}})。请查看日志了解详细信息。",
+      "downloadingProton": "正在下载 Proton — 这可能需要几分钟...",
+      "downloadingRuntime": "正在下载 Steam Runtime — 首次启动可能需要几分钟...",
+      "installingUbisoft": "正在通过 Ubisoft Connect 安装",
+      "installingUbisoftMessage": "正在打开 Ubisoft Connect — 请在启动器窗口中开始安装。",
+      "protonReadyBody": "{{version}} 已可使用",
+      "protonReadyTitle": "Proton 已就绪",
+      "protonSwitchedTo": "现在使用 {{version}}",
+      "signingInUbisoft": "正在登录 Ubisoft Connect",
+      "signingInUbisoftMessage": "正在打开 Ubisoft Connect — 请在那里登录后返回。",
+      "ubisoftPrefixNotReady": "Ubisoft Connect 尚未就绪",
+      "ubisoftPrefixNotReadyMessage": "无法为此游戏准备 Ubisoft Connect 前缀。请重试安装；如果仍然失败，请重新运行库同步。"
     },
     "updateComplete": "更新已完成！",
     "updateCompleteMessage": "{{title}} 已更新。",
@@ -470,7 +489,8 @@
       "support": "客服支持",
       "install": "安装",
       "uninstall": "卸载",
-      "cancel": "取消"
+      "cancel": "取消",
+      "achievements": "成就"
     },
     "labels": {
       "store": "商店:",
@@ -495,7 +515,8 @@
       "unsupported": "不支持",
       "unknown": "未知"
     },
-    "failedToLoadMetadata": "加载元数据失败"
+    "failedToLoadMetadata": "加载元数据失败",
+    "lastSession": "上次游玩：解锁了 {{names}}"
   },
   "gameDetailsSettings": {
     "title": "游戏详情页面视图",
@@ -882,5 +903,23 @@
     "typeReinstall": "重新安装",
     "typeUpdate": "升级至",
     "updateButton": "升级至 v{{version}}"
+  },
+  "achievements": {
+    "unlockedTitle": "成就已解锁",
+    "unlockedBody": "{{name}}"
+  },
+  "achievementsModal": {
+    "title": "成就",
+    "progress": "{{unlocked}} / {{total}} ({{percent}}%)",
+    "refresh": "刷新",
+    "close": "关闭",
+    "loading": "正在加载成就…",
+    "empty": "此游戏没有成就。",
+    "hidden": "隐藏成就",
+    "unlockedOn": "{{date}} 解锁",
+    "error": "无法加载成就。",
+    "errorOffline": "连接到互联网以查看成就。",
+    "errorAuth": "登录此游戏的商店以查看成就。",
+    "errorUnavailable": "此游戏不支持成就。"
   }
 }

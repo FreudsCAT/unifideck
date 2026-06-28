@@ -107,7 +107,12 @@
     "finalizingInstallation": "Finalizando instalação...",
     "speedMbps": "{{speed}} MB/s",
     "etaLabel": "Tempo restante: {{eta}}",
-    "preparingMessage": "Inicializando prefixo e sincronizando salvamentos na nuvem..."
+    "preparingMessage": "Inicializando prefixo e sincronizando salvamentos na nuvem...",
+    "preparingLabel": "Configurando o jogo...",
+    "installingViaUpcLabel": "Instalando via Ubisoft Connect",
+    "extractingMessage": "Extraindo arquivos...",
+    "verifyingMessage": "Verificando arquivos... {{pct}}%",
+    "installingViaUpcMessage": "Siga a janela do Ubisoft Connect para concluir a instalação..."
   },
   "cloudSave": {
     "title": "Conflito de Salvamento na Nuvem",
@@ -124,7 +129,10 @@
     "toastUsingLocalBody": "Enviando salvamentos locais para {{game}}",
     "toastErrorTitle": "Erro",
     "toastErrorBody": "Falha ao resolver conflito",
-    "filesSize": "{{count}} arquivos · {{size}}"
+    "filesSize": "{{count}} arquivos · {{size}}",
+    "uploadBlockedEmpty": "Envio para a nuvem ignorado para {{game}} — nenhum save local encontrado",
+    "uploadSkippedTitle": "Envio para a nuvem ignorado",
+    "uploadSkippedBody": "Ainda não há saves locais para enviar de {{game}}."
   },
   "storeConnections": {
     "title": "CONEXÕES DE LOJAS",
@@ -304,7 +312,18 @@
       "cloudSyncDownFailed": "Falha no download do save na nuvem para {{store}} ({{error}}). Jogando com saves locais.",
       "cloudSyncUpFailed": "Falha no upload do save na nuvem para {{store}} ({{error}}). Seu progresso está salvo apenas localmente.",
       "errorCircuitBreakerOpen": "{{game_key}} falhou ao iniciar {{count}} vezes recentemente. Inicializações automáticas pausadas.",
-      "launcherError": "Não foi possível iniciar {{game_key}} ({{error_code}}). Verifique os logs para detalhes."
+      "launcherError": "Não foi possível iniciar {{game_key}} ({{error_code}}). Verifique os logs para detalhes.",
+      "downloadingProton": "Baixando Proton — isso pode levar alguns minutos...",
+      "downloadingRuntime": "Baixando o Steam Runtime — a primeira execução pode levar alguns minutos...",
+      "installingUbisoft": "Instalando via Ubisoft Connect",
+      "installingUbisoftMessage": "Abrindo o Ubisoft Connect — inicie a instalação na janela do launcher.",
+      "protonReadyBody": "{{version}} está pronto para uso",
+      "protonReadyTitle": "Proton pronto",
+      "protonSwitchedTo": "Usando {{version}} agora",
+      "signingInUbisoft": "Entrando no Ubisoft Connect",
+      "signingInUbisoftMessage": "Abrindo o Ubisoft Connect — faça login lá e depois volte.",
+      "ubisoftPrefixNotReady": "O Ubisoft Connect não está pronto",
+      "ubisoftPrefixNotReadyMessage": "Não foi possível preparar o prefixo do Ubisoft Connect para este jogo. Tente instalar novamente; se continuar falhando, execute uma nova sincronização da biblioteca."
     },
     "updateComplete": "Atualização Concluída!",
     "updateCompleteMessage": "{{title}} foi atualizado.",
@@ -470,7 +489,8 @@
       "support": "Suporte",
       "install": "Instalar",
       "uninstall": "Desinstalar",
-      "cancel": "Cancelar"
+      "cancel": "Cancelar",
+      "achievements": "Conquistas"
     },
     "labels": {
       "store": "Loja:",
@@ -495,7 +515,8 @@
       "unsupported": "NÃO COMPATÍVEL",
       "unknown": "DESCONHECIDO"
     },
-    "failedToLoadMetadata": "Falha ao carregar metadados"
+    "failedToLoadMetadata": "Falha ao carregar metadados",
+    "lastSession": "Última sessão: desbloqueado {{names}}"
   },
   "gameDetailsSettings": {
     "title": "VISUALIZAÇÃO DOS DETALHES DO JOGO",
@@ -882,5 +903,23 @@
     "typeReinstall": "Reinstalando",
     "typeUpdate": "Atualizando para",
     "updateButton": "Atualizar para v{{version}}"
+  },
+  "achievements": {
+    "unlockedTitle": "Conquista desbloqueada",
+    "unlockedBody": "{{name}}"
+  },
+  "achievementsModal": {
+    "title": "Conquistas",
+    "progress": "{{unlocked}} / {{total}} ({{percent}}%)",
+    "refresh": "Atualizar",
+    "close": "Fechar",
+    "loading": "Carregando conquistas…",
+    "empty": "Este jogo não tem conquistas.",
+    "hidden": "Conquista oculta",
+    "unlockedOn": "Desbloqueado em {{date}}",
+    "error": "Não foi possível carregar as conquistas.",
+    "errorOffline": "Conecte-se à internet para ver as conquistas.",
+    "errorAuth": "Faça login na loja deste jogo para ver as conquistas.",
+    "errorUnavailable": "As conquistas não estão disponíveis para este jogo."
   }
 }

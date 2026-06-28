@@ -107,7 +107,12 @@
     "finalizingInstallation": "インストールを完了しています...",
     "speedMbps": "{{speed}} MB/s",
     "etaLabel": "残り時間: {{eta}}",
-    "preparingMessage": "プレフィックスを初期化し、クラウドセーブを同期しています..."
+    "preparingMessage": "プレフィックスを初期化し、クラウドセーブを同期しています...",
+    "preparingLabel": "ゲームを準備しています...",
+    "installingViaUpcLabel": "Ubisoft Connect でインストール中",
+    "extractingMessage": "ファイルを展開しています...",
+    "verifyingMessage": "ファイルを検証しています... {{pct}}%",
+    "installingViaUpcMessage": "Ubisoft Connect のウィンドウに従ってインストールを完了してください..."
   },
   "cloudSave": {
     "title": "クラウドセーブの競合",
@@ -124,7 +129,10 @@
     "toastUsingLocalBody": "{{game}} のローカルセーブをクラウドにアップロードしています",
     "toastErrorTitle": "エラー",
     "toastErrorBody": "競合を解決できませんでした",
-    "filesSize": "{{count}} 個のファイル · {{size}}"
+    "filesSize": "{{count}} 個のファイル · {{size}}",
+    "uploadBlockedEmpty": "{{game}} のクラウドアップロードをスキップしました — ローカルのセーブが見つかりません",
+    "uploadSkippedTitle": "クラウドアップロードをスキップ",
+    "uploadSkippedBody": "{{game}} にアップロードするローカルセーブはまだありません。"
   },
   "storeConnections": {
     "title": "ストア連携",
@@ -304,7 +312,18 @@
       "cloudSyncDownFailed": "{{store}} のクラウドセーブのダウンロードに失敗しました ({{error}})。ローカルデータで起動します。",
       "cloudSyncUpFailed": "{{store}} のクラウドセーブのアップロードに失敗しました ({{error}})。プレイ進行状況はローカルにのみ保存されます。",
       "errorCircuitBreakerOpen": "{{game_key}} の起動に最近 {{count}} 回失敗しました。自動起動を一時停止します。",
-      "launcherError": "{{game_key}} を起動できませんでした ({{error_code}})。詳細はログを確認してください。"
+      "launcherError": "{{game_key}} を起動できませんでした ({{error_code}})。詳細はログを確認してください。",
+      "downloadingProton": "Proton をダウンロードしています — 数分かかる場合があります...",
+      "downloadingRuntime": "Steam Runtime をダウンロードしています — 初回起動には数分かかる場合があります...",
+      "installingUbisoft": "Ubisoft Connect でインストール中",
+      "installingUbisoftMessage": "Ubisoft Connect を開いています — ランチャーのウィンドウからインストールを開始してください。",
+      "protonReadyBody": "{{version}} を使用できます",
+      "protonReadyTitle": "Proton の準備完了",
+      "protonSwitchedTo": "現在 {{version}} を使用中",
+      "signingInUbisoft": "Ubisoft Connect にサインインしています",
+      "signingInUbisoftMessage": "Ubisoft Connect を開いています — そこでサインインしてから戻ってください。",
+      "ubisoftPrefixNotReady": "Ubisoft Connect の準備ができていません",
+      "ubisoftPrefixNotReadyMessage": "このゲームの Ubisoft Connect プレフィックスを準備できませんでした。もう一度インストールしてみてください。それでも失敗する場合は、ライブラリの同期を再実行してください。"
     },
     "updateComplete": "アップデートが完了しました！",
     "updateCompleteMessage": "{{title}} をアップデートしました。",
@@ -470,7 +489,8 @@
       "support": "サポート",
       "install": "インストール",
       "uninstall": "アンインストール",
-      "cancel": "キャンセル"
+      "cancel": "キャンセル",
+      "achievements": "実績"
     },
     "labels": {
       "store": "ストア:",
@@ -495,7 +515,8 @@
       "unsupported": "非対応",
       "unknown": "不明"
     },
-    "failedToLoadMetadata": "メタデータの読み込みに失敗しました"
+    "failedToLoadMetadata": "メタデータの読み込みに失敗しました",
+    "lastSession": "前回のセッション: {{names}} を解除"
   },
   "gameDetailsSettings": {
     "title": "ゲーム詳細表示",
@@ -882,5 +903,23 @@
     "typeReinstall": "再インストール",
     "typeUpdate": "以下へアップデート:",
     "updateButton": "v{{version}} にアップデート"
+  },
+  "achievements": {
+    "unlockedTitle": "実績を解除しました",
+    "unlockedBody": "{{name}}"
+  },
+  "achievementsModal": {
+    "title": "実績",
+    "progress": "{{unlocked}} / {{total}} ({{percent}}%)",
+    "refresh": "更新",
+    "close": "閉じる",
+    "loading": "実績を読み込んでいます…",
+    "empty": "このゲームには実績がありません。",
+    "hidden": "隠し実績",
+    "unlockedOn": "{{date}} に解除",
+    "error": "実績を読み込めませんでした。",
+    "errorOffline": "実績を表示するにはインターネットに接続してください。",
+    "errorAuth": "実績を表示するには、このゲームのストアにサインインしてください。",
+    "errorUnavailable": "このゲームでは実績を利用できません。"
   }
 }

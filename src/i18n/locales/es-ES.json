@@ -107,7 +107,12 @@
     "finalizingInstallation": "Finalizando instalación...",
     "speedMbps": "{{speed}} MB/s",
     "etaLabel": "Tiempo restante: {{eta}}",
-    "preparingMessage": "Inicializando prefijo y sincronizando guardados en la nube..."
+    "preparingMessage": "Inicializando prefijo y sincronizando guardados en la nube...",
+    "preparingLabel": "Configurando el juego...",
+    "installingViaUpcLabel": "Instalando con Ubisoft Connect",
+    "extractingMessage": "Extrayendo archivos...",
+    "verifyingMessage": "Verificando archivos... {{pct}}%",
+    "installingViaUpcMessage": "Sigue la ventana de Ubisoft Connect para completar la instalación..."
   },
   "cloudSave": {
     "title": "Conflicto de guardado en la nube",
@@ -124,7 +129,10 @@
     "toastUsingLocalBody": "Subiendo datos locales para {{game}}",
     "toastErrorTitle": "Error",
     "toastErrorBody": "Error al resolver el conflicto",
-    "filesSize": "{{count}} archivos · {{size}}"
+    "filesSize": "{{count}} archivos · {{size}}",
+    "uploadBlockedEmpty": "Subida a la nube omitida para {{game}}: no se encontraron guardados locales",
+    "uploadSkippedTitle": "Subida a la nube omitida",
+    "uploadSkippedBody": "Aún no hay guardados locales para subir de {{game}}."
   },
   "storeConnections": {
     "title": "CONEXIONES DE TIENDAS",
@@ -304,7 +312,18 @@
       "cloudSyncDownFailed": "Error al descargar datos de la nube para {{store}} ({{error}}). Jugando con datos locales.",
       "cloudSyncUpFailed": "Error al subir datos de la nube para {{store}} ({{error}}). Tu progreso solo está guardado localmente.",
       "errorCircuitBreakerOpen": "{{game_key}} no se pudo iniciar {{count}} veces recientemente. Intentos automáticos pausados.",
-      "launcherError": "No se pudo iniciar {{game_key}} ({{error_code}}). Ver registros para detalles."
+      "launcherError": "No se pudo iniciar {{game_key}} ({{error_code}}). Ver registros para detalles.",
+      "downloadingProton": "Descargando Proton: esto puede tardar unos minutos...",
+      "downloadingRuntime": "Descargando Steam Runtime: el primer inicio puede tardar unos minutos...",
+      "installingUbisoft": "Instalando con Ubisoft Connect",
+      "installingUbisoftMessage": "Abriendo Ubisoft Connect: inicia la instalación desde la ventana del lanzador.",
+      "protonReadyBody": "{{version}} está listo para usar",
+      "protonReadyTitle": "Proton listo",
+      "protonSwitchedTo": "Ahora se usa {{version}}",
+      "signingInUbisoft": "Iniciando sesión en Ubisoft Connect",
+      "signingInUbisoftMessage": "Abriendo Ubisoft Connect: inicia sesión allí y luego vuelve.",
+      "ubisoftPrefixNotReady": "Ubisoft Connect no está listo",
+      "ubisoftPrefixNotReadyMessage": "No se pudo preparar el prefijo de Ubisoft Connect para este juego. Intenta instalarlo de nuevo; si sigue fallando, vuelve a ejecutar una sincronización de la biblioteca."
     },
     "updateComplete": "¡Actualización completada!",
     "updateCompleteMessage": "{{title}} ha sido actualizado.",
@@ -470,7 +489,8 @@
       "support": "Soporte",
       "install": "Instalar",
       "uninstall": "Desinstalar",
-      "cancel": "Cancelar"
+      "cancel": "Cancelar",
+      "achievements": "Logros"
     },
     "labels": {
       "store": "Tienda:",
@@ -495,7 +515,8 @@
       "unsupported": "NO COMPATIBLE",
       "unknown": "DESCONOCIDO"
     },
-    "failedToLoadMetadata": "Error al cargar metadatos"
+    "failedToLoadMetadata": "Error al cargar metadatos",
+    "lastSession": "Última sesión: desbloqueado {{names}}"
   },
   "gameDetailsSettings": {
     "title": "VISTA DE DETALLES DEL JUEGO",
@@ -882,5 +903,23 @@
     "typeReinstall": "Reinstalando",
     "typeUpdate": "Actualizando a",
     "updateButton": "Actualizar a v{{version}}"
+  },
+  "achievements": {
+    "unlockedTitle": "Logro desbloqueado",
+    "unlockedBody": "{{name}}"
+  },
+  "achievementsModal": {
+    "title": "Logros",
+    "progress": "{{unlocked}} / {{total}} ({{percent}}%)",
+    "refresh": "Actualizar",
+    "close": "Cerrar",
+    "loading": "Cargando logros…",
+    "empty": "Este juego no tiene logros.",
+    "hidden": "Logro oculto",
+    "unlockedOn": "Desbloqueado el {{date}}",
+    "error": "No se pudieron cargar los logros.",
+    "errorOffline": "Conéctate a internet para ver los logros.",
+    "errorAuth": "Inicia sesión en la tienda de este juego para ver los logros.",
+    "errorUnavailable": "Los logros no están disponibles para este juego."
   }
 }

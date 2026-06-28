@@ -81,6 +81,20 @@ export const DownloadProgressRow: FC<Props> = ({
   const label = t(
     statusLabelKey(download.status, download.download_phase, prev),
   );
+  // Indeterminate detail line: rendered purely from phase (+ percent) so it
+  // is always localized. The backend's ``phase_message`` is hardcoded English
+  // and is deliberately NOT displayed — see DownloadsTab i18n.
+  const phase = download.download_phase;
+  const detail =
+    phase === "preparing"
+      ? t("downloadsTab.preparingMessage")
+      : phase === "extracting"
+      ? t("downloadsTab.extractingMessage")
+      : phase === "verifying"
+      ? t("downloadsTab.verifyingMessage", { pct: pct.toFixed(1) })
+      : phase === "manual"
+      ? t("downloadsTab.installingViaUpcMessage")
+      : t("downloadsTab.finalizingInstallation");
 
   return (
     <div
@@ -140,14 +154,7 @@ export const DownloadProgressRow: FC<Props> = ({
         }}
       >
         {indeterminate ? (
-          <span>
-            {download.phase_message ||
-              (download.download_phase === "manual"
-                ? ""
-                : download.download_phase === "preparing"
-                ? t("downloadsTab.preparingMessage")
-                : t("downloadsTab.finalizingInstallation"))}
-          </span>
+          <span>{detail}</span>
         ) : (
           <>
             <span>
