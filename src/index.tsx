@@ -35,6 +35,7 @@ import { startUnifideckCacheAutoload } from "./lib/library-filters";
 import { startCollectionManager } from "./lib/steam-bridge/collection-manager";
 import { startOverviewEnrichment } from "./lib/steam-bridge/overview-enrichment";
 import { startTileStoreBadgePatch } from "./lib/steam-bridge/tile-store-badge-patch";
+import { applyAppContextMenuPatch } from "./lib/steam-bridge/app-context-menu-patch";
 import { applyAppStorePatch } from "./lib/steam-bridge/app-store-patcher";
 import { loadCompatCacheFromBackend } from "./lib/protondb-cache";
 import { runBootstrapTasks } from "./bootstrap-tasks";
@@ -110,6 +111,14 @@ export default definePlugin(() => {
     handles.tileStoreBadgePatch = startTileStoreBadgePatch();
   } catch (e) {
     console.error("[Unifideck] tile store-badge patch start failed:", e);
+  }
+  // Inject "Change executable…" into the native game context menu for
+  // installed Unifideck shortcuts (gog/amazon/epic). Read-only w.r.t. the
+  // overview — it only ADDS a menu item, never touches launch routing.
+  try {
+    handles.appContextMenuPatch = applyAppContextMenuPatch();
+  } catch (e) {
+    console.error("[Unifideck] app context-menu patch start failed:", e);
   }
   // ── Boot-time singletons ──────────────────────────────
   // Start all reactive stores at boot so they track state

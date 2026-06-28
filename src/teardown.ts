@@ -31,6 +31,7 @@ export interface TeardownHandles {
   appStorePatch?: { remove: () => void } | null;
   overviewEnrichment?: (() => void) | null;
   tileStoreBadgePatch?: (() => void) | null;
+  appContextMenuPatch?: { unpatch: () => void } | null;
   lifetimeListener?: Unregisterable | null;
   launcherToastPoll?: (() => void) | null;
   bootEventListener?: (() => void) | null;
@@ -86,6 +87,13 @@ export function runTeardown(handles: TeardownHandles): void {
       handles.tileStoreBadgePatch();
     } catch (e) {
       console.warn("[Teardown] tile store-badge patch stop failed:", e);
+    }
+  }
+  if (handles.appContextMenuPatch) {
+    try {
+      handles.appContextMenuPatch.unpatch();
+    } catch (e) {
+      console.warn("[Teardown] app context-menu patch unpatch failed:", e);
     }
   }
   if (handles.lifetimeListener) {

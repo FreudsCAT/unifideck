@@ -1008,3 +1008,47 @@ async def test_cloud_save_pull_is_fire_and_forget(mock_event_bus):
     assert not done.is_set()                 # sync still running in background
     await asyncio.wait_for(started.wait(), 1)
     await asyncio.wait_for(done.wait(), 1)   # it does complete in the background
+
+
+# ── Relocate orphaned saves tests (Tomb Raider steam_api64.dll pattern) ────
+
+def test_relocate_orphaned_saves_copies_from_numeric_subfolder(tmp_path):
+    from unifideck.services.cloud_save.strategy_base import CloudSaveStrategy
+    save_dir = tmp_path / "TRX"
+    numeric_dir = save_dir / "76561198000000000"
+    numeric_dir.mkdir(parents=True)
+    (numeric_dir / "savegame.dat").write_text("SAVE_DATA")
+
+    CloudSaveStrategy._relocate_orphaned_saves(str(save_dir))
+
+    assert (save_dir / "savegame.dat").is_file()
+    assert (save_dir / "savegame.dat").read_text() == "SAVE_DATA"
+    # Original file must be preserved for cloud sync compatibility
+    assert (numeric_dir / "savegame.dat").is_file()
+
+
+def test_relocate_orphaned_saves_noop_if_root_save_exists(tmp_path):
+    from unifideck.services.cloud_save.strategy_base import CloudSaveStrategy
+    save_dir = tmp_path / "TRX"
+    numeric_dir = save_dir / "76561198000000000"
+    numeric_dir.mkdir(parents=True)
+    (numeric_dir / "savegame.dat").write_text("OLD_SAVE_DATA")
+    (save_dir / "savegame.dat").write_text("ROOT_SAVE_DATA")
+
+    CloudSaveStrategy._relocate_orphaned_saves(str(save_dir))
+
+    # Root save should remain untouched
+    assert (save_dir / "savegame.dat").read_text() == "ROOT_SAVE_DATA"
+
+
+def test_relocate_orphaned_saves_noop_for_non_numeric_dirs(tmp_path):
+    from unifideck.services.cloud_save.strategy_base import CloudSaveStrategy
+    save_dir = tmp_path / "Game"
+    profile_dir = save_dir / "profile1"
+    profile_dir.mkdir(parents=True)
+    (profile_dir / "savegame.dat").write_text("PROFILE_SAVE")
+
+    CloudSaveStrategy._relocate_orphaned_saves(str(save_dir))
+
+    assert not (save_dir / "savegame.dat").exists()
+

@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import logging
 import os
+import shutil
 import time
 from abc import ABC, abstractmethod
 from pathlib import Path
@@ -151,7 +152,10 @@ class CloudSaveStrategy(ABC):
         # download must always be recoverable from a local backup.
         from unifideck.services.cloud_save import safety
         safety.snapshot_backup(local_dir, self.store_id, game_id)
-        return await self._do_sync_down(game_id, local_dir, force)
+        ok = await self._do_sync_down(game_id, local_dir, force)
+        if ok:
+            self._relocate_orphaned_saves(local_dir)
+        return ok
 
     async def sync_up(self, game_id: str) -> bool:
         """Push local saves to the store cloud (guarded against a wipe).
@@ -187,6 +191,59 @@ class CloudSaveStrategy(ABC):
         self, game_id: str, local_dir: str, force: bool,
     ) -> bool:
         """Run the store's CLI pull into ``local_dir``. Return success."""
+
+    @staticmethod
+    def _relocate_orphaned_saves(save_dir: str) -> None:
+        """Relocate saves stranded in a platform-ID subfolder.
+
+        Games that ship ``steam_api64.dll`` as a Steamworks wrapper (e.g.
+        Tomb Raider I-III Remastered) create saves under a platform user-ID
+        subfolder (``TRX/<steam-id>/savegame.dat``) on Windows where the DLL
+        initializes successfully.  Under Proton — where the DLL fails to
+        connect to a real Steam client — the game falls back to saving
+        directly in the root (``TRX/savegame.dat``).
+
+        When cloud saves originate from a Windows session, gogdl/legendary
+        faithfully preserve the ``<user-id>/`` subdirectory.  The Proton game
+        instance never looks there, so the saves are present on disk but
+        invisible to the game.
+
+        This method copies ``savegame.dat`` from a lone numeric-named
+        subfolder into the save-dir root so the game finds it.  The three
+        guard conditions make false-positives essentially impossible:
+
+          1. A ``savegame.dat`` at the root already ⇒ no-op (game reads it).
+          2. Only purely numeric directory names are considered (platform IDs).
+          3. That directory must contain a ``savegame.dat``.
+
+        ``copy2`` (not move) preserves the original cloud structure so
+        ``sync_up`` doesn't diverge from what gogdl expects, and so a future
+        Windows session with GOG Galaxy can still find the original subfolder.
+        Best-effort; never fatal.
+        """
+        root = Path(save_dir)
+        if not root.is_dir():
+            return
+        # Guard 1: root already has a savegame.dat — game can read it.
+        if (root / "savegame.dat").is_file():
+            return
+        try:
+            for child in root.iterdir():
+                if not child.is_dir() or not child.name.isdigit():
+                    continue
+                src = child / "savegame.dat"
+                if src.is_file():
+                    shutil.copy2(str(src), str(root / "savegame.dat"))
+                    logger.info(
+                        "[CloudSync] Relocated orphaned save from %s to %s",
+                        src, root / "savegame.dat",
+                    )
+                    return  # Only relocate once.
+        except Exception as e:
+            logger.warning(
+                "[CloudSync] Failed to relocate orphaned saves in %s: %s",
+                save_dir, e,
+            )
 
     @abstractmethod
     async def _do_sync_up(self, game_id: str, local_dir: str) -> bool:

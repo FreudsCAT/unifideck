@@ -59,6 +59,43 @@ class _GamesMapMixin(_ReconcilePhasesMixin):
         entry: GameMapEntry | None = self._games_map.get(key)
         return entry
 
+    async def set_executable(
+        self: Any, store: str, game_id: str, exe_abs: str,
+    ) -> bool:
+        """Rewrite ONLY the games.map exe column for ``store:game_id``.
+
+        Powers the "Change executable" feature: the user picks a different
+        launch target (skip a launcher, fix a wrong auto-detected path, run a
+        config tool). We update the ``exe`` column **only** — ``work_dir`` and
+        ``app_id`` are carried over verbatim from the existing row, so the
+        executable choice is fully decoupled from ``work_dir`` (the launch
+        CWD / ``STEAM_COMPAT_INSTALL_PATH`` and the source for ``<?INSTALL?>``
+        cloud-save resolution). This is the safe counterpart to hand-editing
+        games.map, which collapses the tab-delimited row to v1 and corrupts
+        ``work_dir`` to ``dirname(exe)``.
+
+        Returns ``False`` (no row to update) when the game has no games.map
+        entry yet — e.g. Epic titles, whose launch goes through legendary's
+        ``--override-exe`` and need no row rewrite.
+        """
+        await self._load_games_map()
+        key = f"{store}:{game_id}"
+        entry: GameMapEntry | None = self._games_map.get(key)
+        if entry is None:
+            logger.warning(
+                "[ShortcutService] set_executable %s — no games.map row", key,
+            )
+            return False
+        self._games_map[key] = GameMapEntry(
+            exe=exe_abs, work_dir=entry.work_dir, app_id=entry.app_id,
+        )
+        await self._save_all()
+        logger.info(
+            "[ShortcutService] set_executable %s → %s (work_dir/app_id kept)",
+            key, exe_abs,
+        )
+        return True
+
     @staticmethod
     def _drop_shortcut_entries(
         shortcuts: Any,

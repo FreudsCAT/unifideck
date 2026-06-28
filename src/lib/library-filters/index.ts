@@ -62,6 +62,7 @@ interface UnifideckCacheEntry {
   store: Exclude<StoreSlug, "steam">;
   isInstalled: boolean;
   steamAppId?: number;
+  storeGameId?: string;
 }
 
 /** Stored in both signed and unsigned forms — Steam returns the
@@ -123,6 +124,7 @@ export function updateUnifideckCache(games: UnifideckGameInput[]): void {
       store: g.store,
       isInstalled: g.isInstalled,
       steamAppId: g.steamAppId,
+      storeGameId: g.storeGameId,
     };
     for (const id of variantIds(g.appId)) unifideckGameCache.set(id, entry);
     if (g.storeGameId) {
@@ -137,6 +139,7 @@ export function updateSingleGameStatus(g: UnifideckGameInput): void {
     store: g.store,
     isInstalled: g.isInstalled,
     steamAppId: existing?.steamAppId ?? g.steamAppId,
+    storeGameId: g.storeGameId ?? existing?.storeGameId,
   };
   for (const id of variantIds(g.appId)) unifideckGameCache.set(id, entry);
   if (
@@ -168,6 +171,23 @@ export function updateValidThirdPartyCache(appIds: number[]): void {
 
 export function isUnifideckGame(appId: number): boolean {
   return unifideckGameCache.has(appId);
+}
+
+/** Resolve a shortcut's ``{ store, storeGameId, isInstalled }`` from its
+ *  Steam appId, or ``null`` if it isn't a known Unifideck shortcut. Used by
+ *  the "Change executable" context-menu item to gate + address the RPCs. */
+export function getUnifideckGame(appId: number): {
+  store: Exclude<StoreSlug, "steam">;
+  storeGameId: string | undefined;
+  isInstalled: boolean;
+} | null {
+  const cached = unifideckGameCache.get(appId);
+  if (!cached) return null;
+  return {
+    store: cached.store,
+    storeGameId: cached.storeGameId,
+    isInstalled: cached.isInstalled,
+  };
 }
 
 export function getStoreForApp(

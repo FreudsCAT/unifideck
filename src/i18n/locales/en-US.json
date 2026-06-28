@@ -598,6 +598,7 @@
     "unknown": "Unknown",
     "ok": "OK",
     "cancel": "Cancel",
+    "close": "Close",
     "working": "Working…",
     "loading": "Loading…",
     "free": "free"
@@ -678,6 +679,18 @@
       "noCloudSupport": "No cloud-save support",
       "noCloudData": "Unknown",
       "autoPullOn": "Cloud saves download automatically on launch."
+    },
+    "exe": {
+      "menuItem": "Change executable…",
+      "title": "Change executable — {{game}}",
+      "subtitle": "Pick which file this game launches (e.g. skip a launcher and run the game directly). The working directory and cloud saves are unaffected.",
+      "defaultTag": "(default)",
+      "browse": "Browse…",
+      "resetButton": "Reset to default",
+      "unavailable": "Couldn't read this game's folder.",
+      "changed": "Executable changed",
+      "changeFailed": "Couldn't change executable",
+      "reset": "Reset to default executable"
     }
   },
   "playMeta": {

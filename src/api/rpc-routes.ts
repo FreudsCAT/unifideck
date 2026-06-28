@@ -85,6 +85,10 @@ export const rpcRoutes = {
   cloudSavePull: "cloud_save_pull",
   cloudSavePush: "cloud_save_push",
   setGameSavePath: "set_game_save_path",
+  // Launch executable override (ExecutableRPCMixin)
+  listGameExecutables: "list_game_executables",
+  setGameExecutable: "set_game_executable",
+  resetGameExecutable: "reset_game_executable",
   // Achievements (AchievementsRPCMixin) — GOG display + last-session summary
   getGameAchievements: "get_game_achievements",
   getLastSessionAchievements: "get_last_session_achievements",

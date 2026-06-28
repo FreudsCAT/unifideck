@@ -66,8 +66,31 @@ _UMU_DATABASE_URL_FORMATS = [
 ]
 _UMU_CACHE: dict[str, tuple[float, dict[str, Any] | None]] = {}
 _CACHE_TTL_SECONDS = 3600
+def _user_exe_override(game_id: str) -> str | None:
+    """The user's "Change executable" choice (``games.<id>.executable``).
+
+    Read from the live user config so Epic's legendary ``--override-exe`` honors
+    a UI-set launch executable (the direct-launch stores use the games.map exe
+    column instead). Relative to the install dir, matching the curated
+    ``MANUAL_FIXES`` ``exe_override`` shape. Best-effort; never raises.
+    """
+    try:
+        from unifideck.launcher.bootstrap import _load_standalone_config
+        val = _load_standalone_config().get(f"games.{game_id}.executable")
+        return str(val) if val else None
+    except Exception:
+        return None
+
+
 def get_exe_override(game_id: str) -> str | None:
-    """Get exe override."""
+    """Resolve the launch-exe override (relative path) for a game.
+
+    The user's "Change executable" choice wins; otherwise the curated
+    ``MANUAL_FIXES`` table. ``None`` when neither applies.
+    """
+    user = _user_exe_override(game_id)
+    if user:
+        return user
     fix = MANUAL_FIXES.get(game_id)
     if fix is None:
         return None
