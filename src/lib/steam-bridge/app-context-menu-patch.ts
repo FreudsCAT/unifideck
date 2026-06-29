@@ -76,7 +76,6 @@ function openModal(appId: number): void {
 
 /** Insert our item before "Properties…" (matched by its onSelected source). */
 function spliceItem(children: unknown[], appId: number): void {
-  if (!eligible(appId)) return;
   const propsIdx = children.findIndex((item) =>
     findInReactTree(
       item,
@@ -99,6 +98,44 @@ function dedupe(children: unknown[]): void {
     (x) => (x as { key?: string } | null)?.key === MENU_ITEM_KEY,
   );
   if (idx !== -1) children.splice(idx, 1);
+}
+
+/** Re-resolve the appid from the menu's OWN React tree (not a stale closure).
+ *
+ * The outer-render `appId` is captured once (the first menu ever opened), so
+ * trusting it would make every game's menu act on that first game. Mirror
+ * decky-steamgriddb: prefer a child whose owner carries a *different* overview
+ * appid, then any `app.appid` in the tree, falling back to the closure value.
+ */
+function resolveItemsAppId(menuItems: unknown[], fallbackAppId: number): number {
+  const items = menuItems as Array<{
+    _owner?: { pendingProps?: { overview?: { appid?: number } } };
+  }>;
+  const parent = items.find((x) => {
+    const a = x?._owner?.pendingProps?.overview?.appid;
+    return !!a && a !== fallbackAppId;
+  });
+  const parentAppId = parent?._owner?.pendingProps?.overview?.appid;
+  if (parentAppId) return parentAppId;
+  const found = findInTree(
+    menuItems,
+    (x: { app?: { appid?: number } }) => !!x?.app?.appid,
+    { walkable: ["props", "children"] },
+  );
+  return found?.app?.appid ?? fallbackAppId;
+}
+
+/** Dedupe, re-resolve the per-menu appid, and (if eligible) splice our item.
+ *
+ * This is the single choke point for adding the item — every patched render
+ * path routes through here so the appid is ALWAYS resolved from the live menu
+ * (fixing the "every game shows Fallout NV" stale-closure bug).
+ */
+function patchMenuItems(menuItems: unknown[], fallbackAppId: number): void {
+  dedupe(menuItems);
+  const appId = resolveItemsAppId(menuItems, fallbackAppId);
+  if (!eligible(appId)) return;
+  spliceItem(menuItems, appId);
 }
 
 /** Heuristic that this is the app context menu (vs a screenshot/other menu). */
@@ -163,6 +200,8 @@ export function applyAppContextMenuPatch(): AppContextMenuPatchHandle {
     LibraryContextMenu.prototype,
     "render",
     (_args: unknown[], component: unknown) => {
+      // Fallback appid for THIS render; the real one is re-resolved per-menu
+      // inside patchMenuItems (the closure value goes stale across opens).
       const appId = resolveAppId(
         component as Parameters<typeof resolveAppId>[0],
       );
@@ -176,8 +215,7 @@ export function applyAppContextMenuPatch(): AppContextMenuPatchHandle {
               ?.props?.children?.[0];
             if (!isAppContextMenu(menuItems)) return ret2;
             try {
-              dedupe(menuItems as unknown[]);
-              spliceItem(menuItems as unknown[], appId);
+              patchMenuItems(menuItems as unknown[], appId);
             } catch (e) {
               console.error("[Unifideck] context-menu splice failed:", e);
             }
@@ -190,8 +228,8 @@ export function applyAppContextMenuPatch(): AppContextMenuPatchHandle {
               const next = (args?.[0] as { children?: unknown })?.children;
               if (Array.isArray(next)) {
                 try {
-                  dedupe(next);
-                  if (shouldUpdate === true) spliceItem(next, appId);
+                  dedupe(next); // always clear stale, even when not updating
+                  if (shouldUpdate === true) patchMenuItems(next, appId);
                 } catch {
                   /* wrong menu — leave it */
                 }
@@ -201,6 +239,17 @@ export function applyAppContextMenuPatch(): AppContextMenuPatchHandle {
           );
           return ret;
         });
+      } else {
+        // Subsequent opens: the inner patch is bound to the FIRST menu's
+        // component prototype and may not fire for this one — splice directly
+        // so the item reliably appears (fixes the "randomly disappears" bug).
+        try {
+          const children = (component as { props?: { children?: unknown } })
+            ?.props?.children;
+          if (Array.isArray(children)) patchMenuItems(children, appId);
+        } catch (e) {
+          console.error("[Unifideck] context-menu else-splice failed:", e);
+        }
       }
       return component;
     },
