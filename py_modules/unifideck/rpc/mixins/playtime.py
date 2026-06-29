@@ -32,3 +32,14 @@ class PlaytimeRPCMixin:
     async def get_all_playtimes(self) -> Any:
         """Return playtime data for every game with sessions."""
         return await self._require_playtime().get_all_playtimes()
+
+    async def sync_playtime_now(self) -> Any:
+        """Force a playtime → store drain now. Returns ``{store: pushed}``.
+
+        Sync is otherwise automatic (on every session end + at startup); this
+        is a manual/debug trigger. No-op-safe if the service is unavailable.
+        """
+        svc = getattr(self.services, "playtime_sync", None)
+        if svc is None:
+            raise RpcError("service_unavailable", service="playtime_sync")
+        return await svc.sync_now()

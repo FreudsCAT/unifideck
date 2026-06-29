@@ -154,9 +154,11 @@ class PlaytimeService:
 
         row = self._db.query_one(
             """SELECT gs.total_secs, gs.total_sessions, gs.last_played_at,
-                      gs.current_streak_days, gs.longest_streak_days
+                      gs.current_streak_days, gs.longest_streak_days,
+                      sp.store_total_secs
                FROM games g
                JOIN game_stats gs ON g.id = gs.game_id
+               LEFT JOIN store_playtime sp ON sp.game_id = g.id
                WHERE g.store = ? AND g.store_game_id = ?""",
             (store, game_id)
         )
@@ -164,6 +166,9 @@ class PlaytimeService:
         if row:
             return {
                 "total_seconds": row["total_secs"],
+                # Store's authoritative cross-device total (None until first
+                # synced). The frontend prefers this over ``total_seconds``.
+                "store_total_secs": row["store_total_secs"],
                 "session_count": row["total_sessions"],
                 "last_played": row["last_played_at"],
                 "current_streak": row["current_streak_days"],
@@ -173,6 +178,7 @@ class PlaytimeService:
 
         return {
             "total_seconds": 0,
+            "store_total_secs": None,
             "session_count": 0,
             "last_played": None,
             "current_streak": 0,
@@ -204,9 +210,11 @@ class PlaytimeService:
         rows = self._db.query(
             """SELECT g.store, g.store_game_id AS game_id, g.title,
                       gs.total_secs, gs.total_sessions, gs.last_played_at,
-                      gs.current_streak_days, gs.longest_streak_days
+                      gs.current_streak_days, gs.longest_streak_days,
+                      sp.store_total_secs
                FROM games g
                JOIN game_stats gs ON g.id = gs.game_id
+               LEFT JOIN store_playtime sp ON sp.game_id = g.id
                ORDER BY gs.total_secs DESC""",
         )
         result: list[dict[str, Any]] = []
@@ -217,6 +225,7 @@ class PlaytimeService:
                 "game_id": row["game_id"],
                 "title": row["title"],
                 "total_seconds": row["total_secs"],
+                "store_total_secs": row["store_total_secs"],
                 "session_count": row["total_sessions"],
                 "last_played": row["last_played_at"],
                 "current_streak": row["current_streak_days"],

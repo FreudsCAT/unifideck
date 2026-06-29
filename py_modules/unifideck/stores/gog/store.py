@@ -52,6 +52,7 @@ from .dlc import GOGDlcManager
 from .exe_resolver import GOGExeResolver
 from .install import GOGInstaller
 from .library import GOGLibrary
+from .sessions import GOGSessions
 from .tokens import GOGTokenManager
 from .updates import GOGUpdatesChecker
 
@@ -95,9 +96,11 @@ class GOGStore(StoreBase):
         self._shortcut_service = shortcut_service
         self._edge = edge_browser
         self._tokens = GOGTokenManager(self._gog_config, bus=bus)
-        # Achievements only need the (single, never-rebuilt) token manager, so
-        # build once here — unaffected by ``_rebuild_auth_after_injection``.
+        # Achievements + play-session sync only need the (single, never-rebuilt)
+        # token manager, so build once here — unaffected by
+        # ``_rebuild_auth_after_injection``.
         self._achievements = GOGAchievements(tokens=self._tokens)
+        self._sessions = GOGSessions(tokens=self._tokens)
         self._exe = GOGExeResolver()
 
         self._library = GOGLibrary(
@@ -372,6 +375,23 @@ class GOGStore(StoreBase):
     def invalidate_achievements(self, game_id: str) -> None:
         """Drop a game's cached achievements (called on game-stop)."""
         self._achievements.invalidate(game_id)
+
+    async def report_play_session(
+        self, game_id: str, started_at_unix: int, duration_secs: int,
+    ) -> bool:
+        """Report one finished play session to GOG (``gameplay.gog.com``).
+
+        Used by ``PlaytimeSyncService`` so GOG Galaxy / other devices reflect
+        time played here. ``True`` on success; ``False`` (never raises) on
+        auth/network failure so the caller can retry on the next drain.
+        """
+        return await self._sessions.report_session(
+            game_id, started_at_unix, duration_secs,
+        )
+
+    async def get_play_total_secs(self, game_id: str) -> int | None:
+        """GOG's authoritative total time played for ``game_id``, in seconds."""
+        return await self._sessions.get_total_secs(game_id)
 
     async def get_game_dlcs(self, game_id: str) -> list[dict[str, Any]]:
         """Get game dlcs."""

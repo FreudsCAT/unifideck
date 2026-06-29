@@ -27,6 +27,7 @@ if TYPE_CHECKING:
     from unifideck.services.metadata_service import MetadataService
     from unifideck.services.microsoft_subscription import MicrosoftSubscriptionService
     from unifideck.services.playtime import PlaytimeService
+    from unifideck.services.playtime_sync import PlaytimeSyncService
     from unifideck.services.probe_reaction_service import ProbeReactionService
     from unifideck.services.proton_service import ProtonService
     from unifideck.services.security import SecurityService
@@ -49,6 +50,7 @@ class ServiceContainer:
     metrics: MetricsCollector | None = None
     account: AccountService | None = None
     playtime: PlaytimeService | None = None
+    playtime_sync: PlaytimeSyncService | None = None
     feature_flags: FeatureFlagService | None = None
     probe_reaction: ProbeReactionService | None = None
     security: SecurityService | None = None

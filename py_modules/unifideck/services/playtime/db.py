@@ -126,7 +126,28 @@ def run_migrations(conn: sqlite3.Connection) -> int:
         """)
         cursor.execute("PRAGMA user_version = 1")
         conn.commit()
-        return 1
+        current_version = 1
+
+    if current_version < 2:
+        # Playtime → store sync (Heroic #1240). ``reported_at`` is the
+        # per-session watermark: NULL = not yet pushed to the store, so the
+        # set of unreported sessions IS the offline retry queue. Only the
+        # sync service ever writes this column. ``store_playtime`` caches the
+        # store's authoritative total (pulled back) for display.
+        cursor.executescript("""
+            ALTER TABLE play_sessions ADD COLUMN reported_at TEXT;
+
+            CREATE TABLE IF NOT EXISTS store_playtime (
+                game_id INTEGER PRIMARY KEY,
+                store_total_secs INTEGER NOT NULL DEFAULT 0,
+                fetched_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+                FOREIGN KEY(game_id) REFERENCES games(id) ON DELETE CASCADE
+            );
+        """)
+        cursor.execute("PRAGMA user_version = 2")
+        conn.commit()
+        current_version = 2
+
     return current_version
 
 # --- Database ---
@@ -224,3 +245,57 @@ class ActivityDatabase:
                 "should not happen on a successful insert.",
             )
         return last_id
+
+    # -- store playtime sync (schema v2) -----------------------------------
+
+    def get_unreported_sessions(
+        self,
+        stores: tuple[str, ...] = ("gog", "epic"),
+        min_secs: int = 5,
+    ) -> list[sqlite3.Row]:
+        """Finalized sessions not yet pushed to their store, oldest first.
+
+        Joins ``games`` so the caller gets the store + the store-side game id.
+        Drives ``PlaytimeSyncService``: the rows ARE the (offline-durable) push
+        queue. Only sessions with a known duration above ``min_secs`` qualify.
+        """
+        if not stores:
+            return []
+        # ``placeholders`` is only ``?`` marks; the store names are bound
+        # parameters — no untrusted text reaches the SQL (S608 false positive).
+        placeholders = ",".join("?" for _ in stores)
+        sql = (
+            "SELECT s.id, s.started_at, s.duration_secs, "  # noqa: S608
+            "g.id AS game_db_id, g.store, g.store_game_id "
+            "FROM play_sessions s "
+            "JOIN games g ON g.id = s.game_id "
+            f"WHERE g.store IN ({placeholders}) "
+            "AND s.ended_at IS NOT NULL "
+            "AND s.duration_secs >= ? "
+            "AND s.reported_at IS NULL "
+            "ORDER BY s.started_at ASC"
+        )
+        return self.query(sql, (*stores, min_secs))
+
+    def mark_session_reported(self, session_id: int) -> None:
+        """Stamp a session as pushed so it never re-reports."""
+        conn = self._require_conn()
+        self.execute(
+            "UPDATE play_sessions SET reported_at = "
+            "strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?",
+            (session_id,),
+        )
+        conn.commit()
+
+    def upsert_store_playtime(self, game_id: int, store_total_secs: int) -> None:
+        """Cache the store's authoritative total (pulled back) for display."""
+        conn = self._require_conn()
+        self.execute(
+            """INSERT INTO store_playtime (game_id, store_total_secs)
+               VALUES (?, ?)
+               ON CONFLICT(game_id) DO UPDATE SET
+                   store_total_secs = excluded.store_total_secs,
+                   fetched_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')""",
+            (game_id, store_total_secs),
+        )
+        conn.commit()

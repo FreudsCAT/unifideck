@@ -28,6 +28,7 @@ _ASYNC_START_SERVICES: tuple[str, ...] = (
     "download",
     "account",
     "playtime",
+    "playtime_sync",
     "security",
     "launch_history",
     "proton",

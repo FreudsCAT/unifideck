@@ -36,6 +36,13 @@ GOG_BUILDS_URL = (
 _ACHIEVEMENTS_URL = (
     "https://gameplay.gog.com/clients/{client_id}/users/{user_id}/achievements"
 )
+# Per-user, per-game play sessions. POST adds a session (so GOG Galaxy / other
+# devices reflect time played here); GET returns ``{"time_sum": <minutes>}``.
+# Same host + ACCOUNT-token auth as the achievements read above. Verified live
+# (June 2026): POST shape ``{"session_date": <unix_secs>, "time": <minutes>}``.
+_SESSIONS_URL = (
+    "https://gameplay.gog.com/games/{game_id}/users/{user_id}/sessions"
+)
 _GALAXY_UA = "GalaxyClient/2.0.45"
 
 
@@ -131,3 +138,63 @@ def fetch_achievements_page(
         if e.code == 404:
             return {"items": [], "total_count": 0, "page_token": None}
         raise
+
+
+def post_gog_session(
+    user_id: str,
+    game_id: str,
+    access_token: str,
+    session_date: int,
+    minutes: int,
+) -> bool:
+    """Report one play session to GOG. ``True`` on a 2xx.
+
+    POSTs ``{"session_date": <unix_secs_at_start>, "time": <minutes>}`` to the
+    per-user/per-game sessions endpoint with the ACCOUNT bearer token (same auth
+    as :func:`fetch_achievements_page`). Sessions are additive on GOG's side, so
+    the caller must de-dupe (only push each local session once). Lets
+    ``HTTPError`` propagate so the caller can refresh-and-retry on 401/403.
+    """
+    url = _SESSIONS_URL.format(game_id=game_id, user_id=user_id)
+    body = json.dumps(
+        {"session_date": session_date, "time": minutes},
+    ).encode()
+    ctx = ssl_ctx_permissive("GOG sessions — outdated Deck cert store")
+    req = urllib.request.Request(url, data=body, method="POST", headers={
+        "Authorization": f"Bearer {access_token}",
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+        "User-Agent": _GALAXY_UA,
+    })
+    with urllib.request.urlopen(req, timeout=15, context=ctx) as resp:
+        return bool(200 <= resp.status < 300)
+
+
+def fetch_gog_playtime_minutes(
+    user_id: str,
+    game_id: str,
+    access_token: str,
+) -> int | None:
+    """GOG's total time played for this game, in minutes (``time_sum``).
+
+    GET the sessions endpoint → ``{"time_sum": <minutes>}``. Returns ``None`` on
+    a 404 (game GOG has never seen a session for). Lets other ``HTTPError``
+    propagate so the caller can refresh-and-retry on 401/403.
+    """
+    url = _SESSIONS_URL.format(game_id=game_id, user_id=user_id)
+    ctx = ssl_ctx_permissive("GOG sessions — outdated Deck cert store")
+    req = urllib.request.Request(url, headers={
+        "Authorization": f"Bearer {access_token}",
+        "Accept": "application/json",
+        "User-Agent": _GALAXY_UA,
+    })
+    try:
+        with urllib.request.urlopen(req, timeout=8, context=ctx) as resp:
+            data = json.loads(resp.read())
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            return None
+        raise
+    if isinstance(data, dict) and data.get("time_sum") is not None:
+        return int(data["time_sum"])
+    return None

@@ -220,6 +220,16 @@ _SERVICE_DEFS: tuple[tuple[Any, ...], ...] = (
         lambda b, r, c, cfg, p, pl: (b, r),
         lambda b, r, c, cfg, p, pl: {"config": cfg},
     ),
+    # PlaytimeSyncService — reports finalized local play sessions up to GOG/Epic
+    # (Heroic #1240) and reconciles store totals for display. Needs the registry
+    # to reach the stores (like AchievementWatcher) + the shared playtime.db path
+    # (read sessions, stamp ``reported_at``). Plugin-only.
+    (
+        "playtime_sync", "unifideck.services.playtime_sync",
+        "PlaytimeSyncService",
+        lambda b, r, c, cfg, p, pl: (b, r),
+        lambda b, r, c, cfg, p, pl: {"config": cfg, "db_path": p.playtime_db},
+    ),
 )
 
 

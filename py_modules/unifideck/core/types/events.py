@@ -87,6 +87,9 @@ class Events(StrEnum):
     GAME_LAUNCHED = "game_launched"
     GAME_STOPPED = "game_stopped"
     PLAYTIME_UPDATED = "playtime_updated"
+    # Playtime → store sync (GOG/Epic) outcome, per drain.
+    PLAYTIME_SYNC_COMPLETE = "playtime_sync_complete"
+    PLAYTIME_SYNC_FAILED = "playtime_sync_failed"
 
     # Power/Sleep lifecycle
     SUSPEND = "suspend"

@@ -29,6 +29,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import socket
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
@@ -58,6 +59,7 @@ from .install import (
     _read_legendary_install_path,
 )
 from .library import EpicLibraryReader, merge_install_status
+from .sessions import EpicSessions
 from .updates import EpicUpdateChecker
 
 if TYPE_CHECKING:
@@ -134,13 +136,20 @@ class EpicStore(StoreBase):
             size_cache_ttl=epic_cfg["size_cache_ttl_seconds"],
             info_timeout=epic_cfg["info_timeout_seconds"],
         )
+        user_file = str(Path(get_cfg(
+            self._config,
+            "stores.epic.user_file",
+            "~/.config/legendary/user.json",
+        )).expanduser())
         self._achievements = EpicAchievements(
             cli_path=self.cli_path,
-            user_file=str(Path(get_cfg(
-                self._config,
-                "stores.epic.user_file",
-                "~/.config/legendary/user.json",
-            )).expanduser()),
+            user_file=user_file,
+            info_timeout=epic_cfg["info_timeout_seconds"],
+        )
+        self._sessions = EpicSessions(
+            cli_path=self.cli_path,
+            user_file=user_file,
+            machine_id=socket.gethostname() or "steamdeck",
             info_timeout=epic_cfg["info_timeout_seconds"],
         )
 
@@ -241,6 +250,24 @@ class EpicStore(StoreBase):
     def invalidate_achievements(self, game_id: str) -> None:
         """Drop a game's cached achievements."""
         self._achievements.invalidate(game_id)
+
+    async def report_play_session(
+        self, game_id: str, started_at_unix: int, duration_secs: int,
+    ) -> bool:
+        """Report one finished play session to Epic (``library-service``).
+
+        Used by ``PlaytimeSyncService`` so the Epic launcher's "Time Played" /
+        other devices reflect time played here. ``game_id`` is the Epic
+        ``artifactId`` (== legendary app_name). ``True`` on success; ``False``
+        (never raises) on auth/network failure so the caller can retry.
+        """
+        return await self._sessions.report_session(
+            game_id, started_at_unix, duration_secs,
+        )
+
+    async def get_play_total_secs(self, game_id: str) -> int | None:
+        """Epic's authoritative total time played for ``game_id``, in seconds."""
+        return await self._sessions.get_total_secs(game_id)
 
     async def start_auth(self, **kwargs: Any) -> AuthResult:
         """Start auth."""

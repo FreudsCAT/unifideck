@@ -75,6 +75,7 @@ export const rpcRoutes = {
   notifyGameStopped: "notify_game_stopped",
   getPlaytime: "get_playtime",
   getAllPlaytimes: "get_all_playtimes",
+  syncPlaytimeNow: "sync_playtime_now",
   // Action dispatcher (ActionRPCMixin) — bidirectional bridge
   dispatchUnifideckAction: "dispatch_unifideck_action",
   // Cloud-save behaviour preferences (CloudFailureRPCMixin)
