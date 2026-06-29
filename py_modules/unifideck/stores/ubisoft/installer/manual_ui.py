@@ -402,7 +402,7 @@ class _ManualUiInstaller:
         if shutil.which("xdotool") is None:
             return None
         display = env.get("DISPLAY") or ":0"
-        probe_env = {"DISPLAY": display, "HOME": env.get("HOME", "/home/deck")}
+        probe_env = {"DISPLAY": display, "HOME": env.get("HOME") or str(Path.home())}
         for key in ("XAUTHORITY", "XDG_RUNTIME_DIR", "WAYLAND_DISPLAY"):
             if env.get(key):
                 probe_env[key] = env[key]

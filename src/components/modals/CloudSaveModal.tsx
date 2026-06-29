@@ -202,7 +202,7 @@ export const CloudSaveModal: FC<Props> = ({
         onCancel={() => setPicking(false)}
       >
         <StoragePathPicker
-          startPath={status.browse_start || "/home/deck"}
+          startPath={status.browse_start || "/home"}
           onConfirm={(path) => void onPickFolder(path)}
         />
       </ConfirmModal>

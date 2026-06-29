@@ -35,6 +35,12 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
+# Fallback plugin dir when ``DECKY_PLUGIN_DIR`` is somehow unset (Decky always
+# sets it; this is belt-and-braces). Decky installs to ``$HOME/homebrew`` on
+# every distro, so derive it from ``~`` — never bake in the ``deck`` username.
+# Computed once at import so async callers don't do path I/O inline (ASYNC240).
+_FALLBACK_PLUGIN_DIR = os.path.expanduser("~/homebrew/plugins/Unifideck")
+
 # Default delay used when the frontend has to wait for Steam to
 # load the freshly-created shortcut into in-memory state. Lifted
 # from the legacy ``waitForShortcut`` timeout in
@@ -178,8 +184,7 @@ class AuthShortcutsRPCMixin:
                 store_game_id, appid_unsigned, tool_name,
             )
             plugin_dir = os.environ.get(
-                "DECKY_PLUGIN_DIR",
-                "/home/deck/homebrew/plugins/Unifideck",
+                "DECKY_PLUGIN_DIR", _FALLBACK_PLUGIN_DIR,
             )
             launcher_path = str(
                 Path(plugin_dir) / "bin" / "unifideck-launcher",
@@ -317,8 +322,7 @@ def _build_auth_shortcut_context(store: str) -> dict[str, Any]:
     if meta is None:
         return {"success": False, "error": "unknown_store"}
     plugin_dir = os.environ.get(
-        "DECKY_PLUGIN_DIR",
-        "/home/deck/homebrew/plugins/Unifideck",
+        "DECKY_PLUGIN_DIR", _FALLBACK_PLUGIN_DIR,
     )
     wrapper_path = str(Path(plugin_dir) / "bin" / "unifideck-launcher")
     try:

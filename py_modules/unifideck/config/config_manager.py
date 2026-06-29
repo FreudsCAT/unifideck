@@ -93,7 +93,7 @@ class ConfigManager:
     Usage:
     config = ConfigManager(
     defaults_path="/path/to/defaults/config.json",
-    user_path="/home/deck/.config/unifideck/config.json",
+    user_path="~/.config/unifideck/config.json",
     )
     lang = config.get("ui.language", default="en-US")
     config.set("ui.language", "fr-FR") # persisted.

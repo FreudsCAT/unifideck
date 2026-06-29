@@ -65,6 +65,7 @@ COMPAT_TOOLS_DIR = Path("~/.steam/root/compatibilitytools.d").expanduser()
 # import — selector imports this module, not the other way round).
 _SCAN_ROOTS: tuple[str, ...] = (
     "~/.steam/root/compatibilitytools.d",
+    "~/.steam/steam/compatibilitytools.d",
     "~/.local/share/Steam/compatibilitytools.d",
 )
 # Records the tag the background installer last validated, so the

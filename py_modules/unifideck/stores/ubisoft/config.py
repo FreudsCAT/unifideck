@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import contextlib
 import logging
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar
@@ -47,7 +48,49 @@ _DEFAULT_INSTALLER_CACHE_DIR = "~/.local/share/unifideck/ubisoft_installer_cache
 _DEFAULT_UPC_SESSION_FILE = "~/.local/share/unifideck/ubisoft_upc_session.txt"
 _DEFAULT_GAME_ID_DB_FILE = "~/.local/share/unifideck/ubisoft_game_db.txt"
 _DEFAULT_DEFAULT_INSTALL_BASE = "~/Games/Ubisoft"
-_DEFAULT_SDCARD_INSTALL_BASE = "/run/media/mmcblk0p1/Games/Ubisoft"
+
+
+def _detect_sdcard_install_base(media_base: Path | None = None) -> str:
+    """Best-effort default SD / removable-media install base for Ubisoft.
+
+    SteamOS mounts the Deck's internal microSD at ``/run/media/mmcblk0p1`` —
+    a device node that does NOT exist on desktops or other handhelds — so a
+    hardcoded path is wrong off-Deck. Instead pick the first writable
+    *mounted* directory under ``/run/media``, handling both SteamOS's flat
+    ``/run/media/<label>`` layout and udisks2's nested
+    ``/run/media/<user>/<label>`` layout, and append ``Games/Ubisoft``.
+
+    Falls back to the historical Deck path when nothing is mounted — that's
+    harmless: the path simply won't exist, and live install detection
+    re-scans removable media at scan time via
+    ``_DetectionHelpers._append_mounted_media_roots``. This value only seeds
+    the static default scan root and the uninstall safe-delete guard.
+
+    ``media_base`` is injectable for tests; production uses ``/run/media``.
+    """
+    if media_base is None:
+        media_base = Path("/run/media")
+    with contextlib.suppress(OSError):
+        for entry in sorted(media_base.iterdir()):
+            if entry.is_symlink() or not entry.is_dir():
+                continue
+            # Flat layout: /run/media/<label> is itself the mountpoint.
+            if os.path.ismount(entry) and os.access(entry, os.W_OK):
+                return str(entry / "Games" / "Ubisoft")
+            # Nested layout: /run/media/<user>/<label>.
+            with contextlib.suppress(OSError):
+                for sub in sorted(entry.iterdir()):
+                    if (
+                        not sub.is_symlink()
+                        and sub.is_dir()
+                        and os.path.ismount(sub)
+                        and os.access(sub, os.W_OK)
+                    ):
+                        return str(sub / "Games" / "Ubisoft")
+    return "/run/media/mmcblk0p1/Games/Ubisoft"
+
+
+_DEFAULT_SDCARD_INSTALL_BASE = _detect_sdcard_install_base()
 _DEFAULT_INSTALLER_URL = (
     "https://static3.cdn.ubi.com/orbit/launcher_installer/UbisoftConnectInstaller.exe"
 )

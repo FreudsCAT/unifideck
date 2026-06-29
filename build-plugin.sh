@@ -180,18 +180,29 @@ check_requirements() {
 # compile against the host's libpython.
 #
 # NOTE: the Steam shortcut launcher (bin/unifideck-launcher) does NOT run
-# under Decky's Python — it runs under the *system* /usr/bin/python3
-# (SteamOS is now 3.13). Any ABI-specific C extension that a launcher code
-# path imports must therefore be vendored for BOTH Pythons. Today that's
-# cffi's ``_cffi_backend`` (pulled in by cryptography via the cloud-save
-# service): see vendor_launcher_cffi() below. Without it the launcher
-# aborts at bootstrap and EVERY game launch dies immediately.
+# under Decky's Python — it runs under the *system* /usr/bin/python3, whose
+# minor version varies by distro (SteamOS/Bazzite/CachyOS are 3.13 today, but
+# CachyOS is rolling and Arch will bump to 3.14). Any ABI-specific C extension
+# that a launcher code path imports must therefore be vendored for Decky's
+# Python AND every system Python we want to support. Today that's cffi's
+# ``_cffi_backend`` (pulled in by cryptography via the cloud-save / token
+# paths): see vendor_launcher_cffi(), which loops LAUNCHER_PYTHON_VERSIONS.
+# Without a matching .so the launcher now degrades cloud-save gracefully
+# (see launcher/dispatcher.py) rather than aborting every game launch.
 #
 # Idempotent: if a package is already in py_modules/ we leave it
 # alone (--upgrade-strategy only-if-needed). Disk-cheap and fast
 # (~2s when fully cached, ~10s on first run).
 DECK_PYTHON_VERSION="3.11"
-LAUNCHER_PYTHON_VERSION="3.13"
+# The launcher runs under the HOST system Python, whose minor version differs
+# across distros (SteamOS/Bazzite/CachyOS are 3.13 today, but CachyOS is rolling
+# and Arch will bump to 3.14; an older Fedora rebase could still be on 3.12).
+# We vendor _cffi_backend for EVERY version in this list so whichever
+# /usr/bin/python3 the host ships finds a matching ABI .so. Versions with no
+# published cffi wheel are skipped gracefully. See vendor_launcher_cffi().
+# Keep this range in sync with ACCEPTED_VERSIONS in
+# py_modules/unifideck/launcher/proton/infrastructure/selector.py.
+LAUNCHER_PYTHON_VERSIONS=(3.10 3.11 3.12 3.13 3.14)
 DECK_PLATFORM_TAG="manylinux2014_x86_64"
 
 vendor_deps() {
@@ -244,17 +255,20 @@ vendor_deps() {
 #
 # vendor_deps() above targets Decky's Python ($DECK_PYTHON_VERSION) and so
 # only produces _cffi_backend.cpython-311-*.so. But bin/unifideck-launcher
-# runs under the system /usr/bin/python3 ($LAUNCHER_PYTHON_VERSION). The
-# cloud-save service imports cryptography → cffi → _cffi_backend at load
-# time; under the launcher's Python the cp311 .so can't load, the service
-# fails to instantiate, and (historically) the launcher aborted — killing
-# ALL game launches. cryptography's own binding is abi3 (version-agnostic)
-# and the rest of cffi is pure-python, so the ONLY ABI-specific piece we
-# need for the second interpreter is _cffi_backend.
+# runs under the system /usr/bin/python3, whose minor version varies by host
+# (see LAUNCHER_PYTHON_VERSIONS). The cloud-save / token-refresh paths import
+# cryptography → cffi → _cffi_backend at load time; under a system Python with
+# no matching .so the import raises and (historically) the launcher aborted —
+# killing ALL game launches. cryptography's own binding is abi3
+# (version-agnostic) and the rest of cffi is pure-python, so the ONLY
+# ABI-specific piece we need for the system interpreter is _cffi_backend.
 #
-# We install the exact vendored cffi version into a temp dir for the
-# launcher's Python and copy just the extra _cffi_backend*.so alongside the
-# cp311 one. Pure-python files are identical across the two so they're left
+# To stay portable across distros (SteamOS/Bazzite/CachyOS, and future Python
+# bumps) we vendor _cffi_backend for EVERY version in LAUNCHER_PYTHON_VERSIONS.
+# CPython's import machinery auto-selects the .so whose ABI tag matches the
+# running interpreter, so no runtime code change is needed. Versions with no
+# published cffi wheel (e.g. a not-yet-released CPython) are skipped with a
+# warning. Pure-python files are identical across versions so they're left
 # untouched.
 vendor_launcher_cffi() {
     local cffi_ver
@@ -264,33 +278,41 @@ vendor_launcher_cffi() {
         log_info "cffi not vendored (no cloud-save crypto path) — skipping launcher cffi"
         return 0
     fi
-    if ls "$SCRIPT_DIR"/py_modules/_cffi_backend.cpython-3"${LAUNCHER_PYTHON_VERSION#3.}"-*.so \
-            >/dev/null 2>&1; then
-        log_info "Launcher cffi backend already vendored (Python $LAUNCHER_PYTHON_VERSION)"
-        return 0
-    fi
-    log_info "Vendoring launcher cffi backend (cffi==$cffi_ver, Python $LAUNCHER_PYTHON_VERSION)..."
-    local tmp
-    tmp=$(mktemp -d)
-    if python3 -m pip install \
-            --quiet \
-            --target "$tmp" \
-            --platform "$DECK_PLATFORM_TAG" \
-            --python-version "$LAUNCHER_PYTHON_VERSION" \
-            --only-binary ":all:" \
-            --no-deps \
-            --cache-dir "$SCRIPT_DIR/.cache/pip-vendor" \
-            "cffi==$cffi_ver" 2>&1 | tail -10; then
-        if cp -f "$tmp"/_cffi_backend.cpython-*.so "$SCRIPT_DIR/py_modules/" 2>/dev/null; then
-            log_success "Vendored launcher cffi backend (Python $LAUNCHER_PYTHON_VERSION)"
-        else
-            log_warn "launcher cffi: no _cffi_backend .so produced — cloud-save disabled in launcher"
+    local vendored=() skipped=()
+    local ver abitag tmp
+    for ver in "${LAUNCHER_PYTHON_VERSIONS[@]}"; do
+        abitag="cpython-3${ver#3.}"
+        # Already present (e.g. cp311 from vendor_deps, or a prior run).
+        if ls "$SCRIPT_DIR"/py_modules/_cffi_backend.${abitag}-*.so \
+                >/dev/null 2>&1; then
+            vendored+=("$ver")
+            continue
         fi
-    else
-        log_warn "launcher cffi vendor failed — cloud-save will be disabled in the launcher"
-        log_warn "(game launches still work: the launcher tolerates a missing cloud-save service)"
+        tmp=$(mktemp -d)
+        if python3 -m pip install \
+                --quiet \
+                --target "$tmp" \
+                --platform "$DECK_PLATFORM_TAG" \
+                --python-version "$ver" \
+                --only-binary ":all:" \
+                --no-deps \
+                --cache-dir "$SCRIPT_DIR/.cache/pip-vendor" \
+                "cffi==$cffi_ver" 2>&1 | tail -5 \
+                && cp -f "$tmp"/_cffi_backend.${abitag}-*.so \
+                    "$SCRIPT_DIR/py_modules/" 2>/dev/null; then
+            vendored+=("$ver")
+        else
+            # No wheel for this Python (e.g. unreleased) — non-fatal.
+            skipped+=("$ver")
+        fi
+        rm -rf "$tmp"
+    done
+    if [ "${#vendored[@]}" -gt 0 ]; then
+        log_success "Vendored launcher cffi backends (cffi==$cffi_ver) for Python: ${vendored[*]}"
     fi
-    rm -rf "$tmp"
+    if [ "${#skipped[@]}" -gt 0 ]; then
+        log_warn "No cffi wheel for Python: ${skipped[*]} — cloud-save degrades gracefully on those hosts"
+    fi
     echo ""
 }
 

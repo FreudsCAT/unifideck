@@ -13,7 +13,15 @@ from unifideck.launcher.types.errors import (
 from . import ge_installer
 
 logger = logging.getLogger(__name__)
+# Interpreters tried (in order) to run the umu zipapp. umu needs Python
+# >=3.10 and uses its OWN bundled deps, so it does NOT depend on our vendored
+# ``_cffi_backend`` — unlike the launcher process itself, which Steam starts
+# via ``bin/unifideck-launcher``'s ``#!/usr/bin/env python3`` shebang and whose
+# cryptography import DOES need a matching backend. That coverage is handled at
+# build time: keep ACCEPTED_VERSIONS in sync with LAUNCHER_PYTHON_VERSIONS in
+# build-plugin.sh so a backend is shipped for every host Python we accept.
 PYTHON_CANDIDATES: list[str] = [
+    "/usr/bin/python3.14",
     "/usr/bin/python3.13",
     "/usr/bin/python3.12",
     "/usr/bin/python3.11",
@@ -48,12 +56,18 @@ def find_python_3_10_plus() -> Path:
         context={"tried": PYTHON_CANDIDATES},
     )
 
+# ``~/.steam/root`` is a symlink Steam creates to the active install; on most
+# distros it points at ``~/.local/share/Steam``. We also list ``~/.steam/steam``
+# explicitly so Proton still resolves if that symlink is absent (fresh install,
+# unusual setup) — it costs nothing when the dirs don't exist.
 STEAM_COMPAT_ROOTS: list[str] = [
     "~/.steam/root/compatibilitytools.d",
+    "~/.steam/steam/compatibilitytools.d",
     "~/.local/share/Steam/compatibilitytools.d",
 ]
 STEAM_LIBRARY_ROOTS: list[str] = [
     "~/.steam/root/steamapps/common",
+    "~/.steam/steam/steamapps/common",
     "~/.local/share/Steam/steamapps/common",
 ]
 UNIFIDECK_COMPAT_DIR = "~/.local/share/unifideck/compat-tools"

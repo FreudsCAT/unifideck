@@ -816,6 +816,7 @@
   },
   "cloudSync": {
     "_comment": "Toast strings emitted by the launcher when a cloud sync fails. The error placeholder is resolved through cloudSync.error.<code> via the backend payload's error_i18n_key field.",
+    "unavailableNativeDep": "Cloud saves are off on this system — its Python ({{python}}) is missing a required component. Your local saves are unaffected; rebuild/reinstall the plugin after a system update to restore sync.",
     "error": {
       "network_unreachable": "Network unreachable",
       "auth_expired": "Authentication expired",

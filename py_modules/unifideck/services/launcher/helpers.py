@@ -7,7 +7,9 @@ behaviour to the pre-extraction versions — split out for volumetry.
 """
 from __future__ import annotations
 
+import functools
 import logging
+import sys
 import time
 from typing import TYPE_CHECKING, Any
 
@@ -17,6 +19,56 @@ if TYPE_CHECKING:
     from .service import LauncherService
 
 logger = logging.getLogger(__name__)
+
+
+@functools.lru_cache(maxsize=1)
+def _cffi_backend_available() -> bool:
+    """Whether the host's system Python can import cffi's native backend.
+
+    The out-of-process launcher runs under the host ``/usr/bin/python3``,
+    whose minor version varies across distros (SteamOS/Bazzite/CachyOS).
+    The cloud-save service imports cryptography → cffi → ``_cffi_backend``,
+    an ABI-specific ``.so`` we vendor per Python version at build time. When
+    the host Python has no matching backend, the cloud-save service fails to
+    instantiate and ``svc._cloud_svc`` is ``None`` — this probe lets us tell
+    that specific cause apart so the user gets an actionable toast instead of
+    silence. Cached: the answer can't change within a process.
+    """
+    try:
+        import _cffi_backend  # noqa: F401  # ABI probe only
+    except Exception:
+        return False
+    return True
+
+
+async def _emit_cloud_unavailable_toast(
+    svc: LauncherService, ctx: LaunchContext,
+) -> None:
+    """Warn once that cloud-save is off because of an unsupported host Python.
+
+    Best-effort and fully isolated — any failure here is swallowed so it can
+    never affect the launch.
+    """
+    py_ver = f"{sys.version_info.major}.{sys.version_info.minor}"
+    logger.warning(
+        "[Helpers] cloud-save disabled: system Python %s has no matching "
+        "cffi backend (vendor it in build-plugin.sh LAUNCHER_PYTHON_VERSIONS)",
+        py_ver,
+    )
+    try:
+        from unifideck.launcher.rpc import emit_stage
+
+        await emit_stage(
+            svc._bus,
+            i18n_key="cloudSync.unavailableNativeDep",
+            game_title=getattr(ctx, "game_key", None)
+            or f"{ctx.store}:{ctx.game_id}",
+            priority="low",
+            severity="warning",
+            i18n_params={"python": py_ver},
+        )
+    except Exception as e:  # never let a toast break a launch
+        logger.debug("[Helpers] cloud-unavailable toast failed: %s", e)
 
 
 async def prepare_windows_plan(
@@ -86,12 +138,19 @@ async def cloud_sync_phase(
 
     # Cloud-save is optional: the launcher may have been built without it
     # (e.g. the service failed to instantiate). A launch must never depend
-    # on cloud-save being present, so skip silently when it's unavailable.
+    # on cloud-save being present, so skip when it's unavailable.
     if svc._cloud_svc is None:
         logger.debug(
             "[Helpers] Cloud sync %s skipped — cloud service unavailable",
             direction,
         )
+        # If the cause is a host Python with no matching cffi backend
+        # (the common non-SteamOS failure mode), tell the user once —
+        # on the "down" phase, which always runs first — instead of
+        # leaving them to wonder why saves never sync. Best-effort:
+        # the toast must never block or fail a launch.
+        if direction == "down" and not _cffi_backend_available():
+            await _emit_cloud_unavailable_toast(svc, ctx)
         return
 
     # Respect the auto-sync config flags. Download-on-launch is on by default;
