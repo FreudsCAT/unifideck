@@ -272,7 +272,6 @@ class GOGInstaller:
                 ctx.game_id,
                 "not_authenticated",
             )
-        await self._wipe_manifests(ctx.game_id)
         await self._wipe_support_cache(ctx.game_id)
         (
             ctx.platform,
@@ -288,7 +287,14 @@ class GOGInstaller:
             ctx.game_id,
             target_folder,
         )
-        await self._wipe_manifests(ctx.game_id)
+        # Wipe the local manifest ONLY for a fresh download. A stale manifest
+        # left over from a prior uninstall would make gogdl ``download`` report
+        # "Nothing to do" and skip the transfer, so a fresh install must clear
+        # it. But gogdl ``repair`` REQUIRES that manifest — wiping it makes it
+        # crash with "No manifest stored locally" and the existing valid install
+        # then gets deleted. So keep the manifest whenever we're repairing.
+        if ctx.install_mode == "download":
+            await self._wipe_manifests(ctx.game_id)
         return None
 
     async def _setup_support_dir(self, ctx: _InstallContext) -> None:
@@ -317,35 +323,50 @@ class GOGInstaller:
         ctx: _InstallContext,
     ) -> InstallResult | None:
         """Install run GOGDL phase."""
-        gogdl_path = (
-            ctx.base_path
-            if ctx.install_mode == "download"
-            else (
-                str(Path(ctx.base_path) / ctx.folder_name)
-                if ctx.folder_name
-                else ctx.base_path
-            )
-        )
         languages = self._helpers.pick_languages(
             ctx.preferred_lang,
             ctx.explicit_lang,
             ctx.supported_langs,
         )
+        started_as_repair = ctx.install_mode == "repair"
         download_ok = await self._run_gogdl_with_progress(
             install_mode=ctx.install_mode,
             game_id=ctx.game_id,
             platform=ctx.platform,
-            path=gogdl_path,
+            path=self._gogdl_path_for_mode(ctx),
             support_dir=ctx.support_dir,
             languages=languages,
             progress_cb=ctx.progress_cb,
         )
+        if not download_ok and started_as_repair:
+            # ``repair`` couldn't verify (e.g. the local manifest is missing or
+            # stale). Don't treat the existing valid install as a failed partial
+            # download — retry as a manifest-driven ``download`` that writes in
+            # place. With the manifest kept (see ``_install_probe_and_prepare``)
+            # this is usually a cheap "Nothing to do".
+            logger.warning(
+                "[GOGInstaller] repair failed for %s → retrying as download",
+                ctx.game_id,
+            )
+            ctx.install_mode = "download"
+            download_ok = await self._run_gogdl_with_progress(
+                install_mode="download",
+                game_id=ctx.game_id,
+                platform=ctx.platform,
+                path=ctx.base_path,
+                support_dir=ctx.support_dir,
+                languages=languages,
+                progress_cb=ctx.progress_cb,
+            )
         if not download_ok:
+            # Never delete a pre-existing valid install just because a repair
+            # (and its download fallback) failed — only clean up a partial
+            # FRESH download.
             return self._install_failed(
                 ctx.game_id,
                 "download_failed",
-                cleanup_path=ctx.base_path,
-                cleanup_folder=ctx.folder_name,
+                cleanup_path=None if started_as_repair else ctx.base_path,
+                cleanup_folder=None if started_as_repair else ctx.folder_name,
             )
         # NOTE: no unconditional repair pass here. gogdl ``download`` exits 0
         # only once it has written every file/chunk the manifest specifies, so
@@ -353,6 +374,17 @@ class GOGInstaller:
         # read-back ``repair`` now runs in ``_install_finalize`` ONLY when the
         # cheap completeness check fails — see ``_maybe_repair_and_reverify``.
         return None
+
+    @staticmethod
+    def _gogdl_path_for_mode(ctx: _InstallContext) -> str:
+        """gogdl ``--path``: the base dir for a fresh download (gogdl creates the
+        game folder under it), the resolved game folder for an in-place repair.
+        """
+        if ctx.install_mode == "download":
+            return ctx.base_path
+        if ctx.folder_name:
+            return str(Path(ctx.base_path) / ctx.folder_name)
+        return ctx.base_path
 
     async def _install_finalize(self, ctx: _InstallContext) -> InstallResult:
         """Install finalize."""

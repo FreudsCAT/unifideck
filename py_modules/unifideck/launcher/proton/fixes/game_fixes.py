@@ -116,7 +116,10 @@ async def fetch_umu_protonfixes(game_id: str) -> dict[str, Any] | None:
         )
         return None
     timeout = aiohttp.ClientTimeout(total=10)
-    async with aiohttp.ClientSession(timeout=timeout) as session:
+    # ssl=False — SteamOS's outdated cert store breaks strict TLS verification
+    # for the umu-database host, same as every other HTTP path in the plugin.
+    connector = aiohttp.TCPConnector(ssl=False)
+    async with aiohttp.ClientSession(timeout=timeout, connector=connector) as session:
         for url_format in _UMU_DATABASE_URL_FORMATS:
             url = url_format.format(game_id=game_id)
             data = await _try_umu_url(session, url)

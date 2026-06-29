@@ -23,6 +23,7 @@ import json
 import logging
 import os
 import shutil
+import ssl
 import stat
 import tarfile
 import tempfile
@@ -38,6 +39,24 @@ logger = logging.getLogger(__name__)
 GE_REPO = "GloriousEggroll/proton-ge-custom"
 _LATEST_API = f"https://api.github.com/repos/{GE_REPO}/releases/latest"
 _USER_AGENT = "unifideck-proton-ge"
+
+# SteamOS's cert store is too old to verify GitHub's chain under strict TLS,
+# so GE-Proton lookups/downloads fail with CERTIFICATE_VERIFY_FAILED (the
+# plugin disables verification everywhere for this reason — see
+# ``core.net.ssl_helpers``). Kept local + stdlib-only so this module stays
+# importable in the minimal launcher bootstrap (no ``unifideck.*`` deps).
+_permissive_ssl_ctx: ssl.SSLContext | None = None
+
+
+def _ssl_ctx() -> ssl.SSLContext:
+    """Return the shared permissive TLS context (hostname + chain checks off)."""
+    global _permissive_ssl_ctx
+    if _permissive_ssl_ctx is None:
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        _permissive_ssl_ctx = ctx
+    return _permissive_ssl_ctx
 
 # Install target — the primary root the selector scans first.
 COMPAT_TOOLS_DIR = Path("~/.steam/root/compatibilitytools.d").expanduser()
@@ -65,7 +84,7 @@ def _fetch_latest_release(timeout: float) -> dict[str, Any] | None:
         },
     )
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        with urllib.request.urlopen(req, timeout=timeout, context=_ssl_ctx()) as resp:
             return json.loads(resp.read().decode())  # type: ignore[no-any-return]
     except (urllib.error.URLError, OSError, ValueError) as e:
         logger.warning("[ge_installer] latest-release lookup failed: %s", e)
@@ -143,7 +162,7 @@ def _select_tarball(assets: list[dict[str, Any]]) -> str | None:
 def _download(url: str, dest: Path, progress_cb: ProgressCb | None) -> None:
     """Stream ``url`` to ``dest``, reporting bytes via ``progress_cb``."""
     req = urllib.request.Request(url, headers={"User-Agent": _USER_AGENT})
-    with urllib.request.urlopen(req, timeout=30) as resp, dest.open("wb") as out:
+    with urllib.request.urlopen(req, timeout=30, context=_ssl_ctx()) as resp, dest.open("wb") as out:
         total = int(resp.headers.get("Content-Length") or 0)
         done = 0
         while True:

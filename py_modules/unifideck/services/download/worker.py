@@ -74,6 +74,14 @@ def _apply_dict_progress(item: DownloadItem, progress: dict[str, Any]) -> None:
 # touching the loop logic itself.
 _POLL_INTERVAL_SEC: float = 1.0
 _ERROR_BACKOFF_SEC: float = 5.0
+# Upper bound on install-time prefix warmup (createprefix + winetricks +
+# cloud-save pull). Warmup is best-effort with launch-time setup as the
+# fallback, so a hang — e.g. ``umu-run`` unable to fetch its runtime on a
+# broken network — must NOT wedge the install in the "preparing" phase
+# forever (the install never reaches ``complete``, so no shortcut is
+# registered and the game stays on "Install"). On timeout we log and let the
+# install complete; the prefix is set up again at launch.
+_PREFIX_WARMUP_TIMEOUT_SEC: float = 600.0
 
 
 class _WorkerMixin:
@@ -351,7 +359,7 @@ class _WorkerMixin:
         """
         if item.store in ("ubisoft", "microsoft"):
             return
-        hook = getattr(self, "_prefix_warmup", None)
+        hook: Any = getattr(self, "_prefix_warmup", None)
         if not callable(hook):
             return
         from unifideck.core.types.events import Events
@@ -363,7 +371,13 @@ class _WorkerMixin:
             item.store, item.game_id,
         )
         try:
-            await hook(item)
+            await asyncio.wait_for(hook(item), timeout=_PREFIX_WARMUP_TIMEOUT_SEC)
+        except TimeoutError:
+            logger.warning(
+                "[DownloadWorker] prefix warmup timed out for %s:%s after %ds — "
+                "completing install; the prefix is set up at launch instead",
+                item.store, item.game_id, int(_PREFIX_WARMUP_TIMEOUT_SEC),
+            )
         except Exception:
             logger.exception(
                 "[DownloadWorker] prefix warmup failed for %s:%s (continuing)",

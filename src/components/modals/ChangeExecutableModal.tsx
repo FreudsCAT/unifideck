@@ -122,13 +122,21 @@ export const ChangeExecutableModal: FC<Props> = ({
   const browse = async () => {
     if (!installDir) return;
     try {
+      // NOTE: do NOT pass a RegExp `filter` — Decky forwards it to the Python
+      // backend (`utilities/filepicker_ls`), and a RegExp can't cross the
+      // JS→Python RPC bridge (it serialises to `{}`), which makes the backend
+      // return an empty listing. The `extensions` array IS serialisable and
+      // drives both the ".exe / All Files" dropdown and the server-side filter.
+      // `includeFolders: true` lets the user navigate into subdirectories.
       const res = await openFilePicker(
         FileSelectionType.FILE,
         installDir,
-        true,
-        false,
-        /\.exe$/i,
-        ["exe"],
+        true, // includeFiles
+        true, // includeFolders (navigate; was false → no folders shown)
+        undefined, // filter — see note above
+        ["exe"], // extensions: dropdown + server-side filter
+        false, // showHiddenFiles
+        true, // allowAllFiles (escape hatch to see everything)
       );
       const abs = res?.realpath || res?.path;
       if (!abs) return;
