@@ -29,7 +29,7 @@ import { PlayLoadingSkeleton } from "./PlayMeta";
 import {
   injectPlayFocusStyles,
   nativeAppDetailsHideCss,
-  FOREIGN_PLUGIN_CONTAINMENT_CSS,
+  HLTB_CLEAN_BOX_POSITION_CSS,
 } from "./play.css";
 
 /**
@@ -79,7 +79,7 @@ export const PlaySectionWrapper: FC<PlaySectionWrapperProps> = ({ appId }) => {
 
   return (
     <>
-      <style>{nativeAppDetailsHideCss() + FOREIGN_PLUGIN_CONTAINMENT_CSS}</style>
+      <style>{nativeAppDetailsHideCss() + HLTB_CLEAN_BOX_POSITION_CSS}</style>
       {body}
     </>
   );

@@ -74,45 +74,25 @@ export function nativeAppDetailsHideCss(): string {
 }
 
 /**
- * Containment CSS for foreign plugins that splice their own UI into the
- * same App-Details `InnerContainer` we patch. Today this is **HLTB for
- * Deck** (`#hltb-for-deck`), whose four display modes split into two
- * shapes:
- *   - **bar** modes — `default` (`.hltb-info`, already in-flow) and
- *     `clean-default` (`.hltb-info-clean-default`, an absolute full-width
- *     strip). These are meant to be a horizontal bar.
- *   - **box** modes — `clean` / `clean-left` (`.hltb-info-clean`
- *     [+ `.hltb-info-clean-left`]), a stat box that sits ON the hero
- *     image, right or left side. NOT a bar.
+ * Minimal position-only nudge for HLTB for Deck's "clean" / "clean-left"
+ * BOX modes (`.hltb-info-clean`). HLTB positions that box with `top:-55vh`
+ * — a float-hack calibrated for a LOW wrapper. Once `AppDetailsPatch`
+ * relocates HLTB's wrapper up to the hero/Play seam (so the `default` /
+ * `clean-default` BAR modes render at the hero bottom exactly like native),
+ * that same `-55vh` overshoots and throws the box off the top of the
+ * screen. We re-anchor it with `bottom` from the seam so it overlays the
+ * hero / game logo instead — where the box is meant to sit.
  *
- * `AppDetailsPatch` relocates HLTB's wrapper to just above our Play
- * section (the hero/Play seam) for every mode. These rules then place
- * each shape correctly so nothing overlaps our custom Play button / gear:
- *   - `clean-default` → flattened to a static in-flow bar above the Play row.
- *   - `clean` / `clean-left` → keep the box, but re-anchor it `bottom`-up
- *     from the seam onto the hero (right by default, left for clean-left)
- *     instead of HLTB's `top:-55vh` float that lands on our buttons.
- *   - `default` needs nothing — already an in-flow bar (relocation alone
- *     puts it above the Play row).
- *
- * The wrapper keeps HLTB's own `position:relative` so the box anchors to
- * it (do NOT force it static, or the box would resolve against a higher
- * ancestor/viewport). Scoped under {@link HIDE_NATIVE_PLAY_MARKER} so it
- * only affects Unifideck shortcuts — HLTB on native Steam games is
- * untouched. HLTB's id / class names are hard-coded in its bundle, so
- * these are static and no-op gracefully if HLTB is absent or renames them.
+ * Position ONLY: HLTB's transparency (`rgba(14,20,27,0.5)`), box size, and
+ * left/right side (`right:2.8vw` / `left:2.8vw`) are all left untouched, so
+ * the box still looks exactly as the HLTB devs designed it. Scoped under
+ * {@link HIDE_NATIVE_PLAY_MARKER} (Unifideck shortcuts only) and keyed on
+ * HLTB's hard-coded class, so it no-ops gracefully if HLTB is absent or
+ * renames it. The BAR modes need no CSS — relocation alone places them.
  */
-export const FOREIGN_PLUGIN_CONTAINMENT_CSS = `
-.${HIDE_NATIVE_PLAY_MARKER} #hltb-for-deck .hltb-info-clean-default{
-  position:static !important;
-  top:auto !important;bottom:auto !important;left:auto !important;right:auto !important;
-  width:100% !important;height:auto !important;
-}
+export const HLTB_CLEAN_BOX_POSITION_CSS = `
 .${HIDE_NATIVE_PLAY_MARKER} #hltb-for-deck .hltb-info-clean{
-  top:auto !important;bottom:8px !important;left:auto !important;right:2.8vw !important;
-}
-.${HIDE_NATIVE_PLAY_MARKER} #hltb-for-deck .hltb-info-clean.hltb-info-clean-left{
-  right:auto !important;left:2.8vw !important;
+  top:auto !important;bottom:8px !important;
 }
 `;
 

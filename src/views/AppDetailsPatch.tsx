@@ -167,16 +167,27 @@ function injectIntoTree(ret: unknown): void {
   relocateHltbAbovePlay(children, playWrapperKey);
 }
 
-/** Relocate HLTB for Deck's stats overlay (`#hltb-for-deck`) to sit
- *  immediately ABOVE our Play wrapper, mirroring where it sits in the
- *  native Steam UI. HLTB splices its element low (just before the
- *  now-hidden tabbed section); because our route patch is the OUTERMOST
- *  renderFunc wrapper (we register after HLTB), its element is already in
- *  `children` when this runs, so we can move it. Combined with
- *  `FOREIGN_PLUGIN_CONTAINMENT_CSS` (which flattens HLTB's absolute
- *  "clean" modes), this turns the overlay into a clean in-flow bar above
- *  the Play row instead of floating over our buttons. No-op — and
- *  therefore graceful — when HLTB isn't installed / co-patching. */
+/** Relocate HLTB for Deck's stats overlay (`#hltb-for-deck`) to the
+ *  hero/Play seam — the same spot it occupies in the *native* Steam UI
+ *  (right after the header, before the content panel).
+ *
+ *  On a native game HLTB splices its element just before Steam's content
+ *  panel, so it lands at the hero bottom and its own CSS (transparent bar
+ *  for `default`/`clean-default`, hero-anchored box for `clean`/
+ *  `clean-left`) renders correctly. In our layout the same splice point
+ *  lands LOW (after our injected Play + GameInfo, before the hidden tabbed
+ *  section), so the overlay drifts down onto our custom buttons — that
+ *  drift, not HLTB's styling, is the bug. Moving its wrapper back to the
+ *  seam makes the `default` / `clean-default` BAR modes render pixel-
+ *  identical to native with ZERO style changes. The `clean` / `clean-left`
+ *  BOX modes get one tiny position-only nudge ({@link HLTB_CLEAN_BOX_POSITION_CSS})
+ *  because HLTB's own `top:-55vh` overshoots the box off-screen from the
+ *  seam; everything else (transparency, size, side) stays HLTB's own.
+ *
+ *  Safe because our route patch is the OUTERMOST renderFunc wrapper (we
+ *  register after HLTB), so its element is already in `children` when this
+ *  runs. No-op — and therefore graceful — when HLTB isn't installed /
+ *  co-patching. */
 function relocateHltbAbovePlay(
   children: unknown[],
   playWrapperKey: string,
