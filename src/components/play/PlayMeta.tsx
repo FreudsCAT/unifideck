@@ -23,6 +23,7 @@ import {
 import { Focusable } from "@decky/ui";
 import { useTranslation } from "react-i18next";
 import { useGameSize } from "../../hooks/useGameSize";
+import { useGamePlaytime } from "../../hooks/useGamePlaytime";
 import { PLAY_FOCUS_CSS } from "./play.css";
 
 /** Inline style shared by every primary action button
@@ -182,17 +183,45 @@ export function formatBytes(bytes: number | undefined | null): string {
   return `${v.toFixed(v >= 100 ? 0 : 1)} ${units[i]}`;
 }
 
-/** Format a Unix timestamp (seconds) as a date string. */
-export function formatLastPlayed(
-  rtLastTimePlayed: number | undefined | null,
-): string {
-  if (!rtLastTimePlayed || rtLastTimePlayed <= 0) return "—";
-  const d = new Date(rtLastTimePlayed * 1000);
+/** Format a Date as a short localized date string. */
+function formatDate(d: Date): string {
   return d.toLocaleDateString(undefined, {
     year: "numeric",
     month: "short",
     day: "numeric",
   });
+}
+
+/** Format a Unix timestamp (seconds) as a date string. */
+export function formatLastPlayed(
+  rtLastTimePlayed: number | undefined | null,
+): string {
+  if (!rtLastTimePlayed || rtLastTimePlayed <= 0) return "—";
+  return formatDate(new Date(rtLastTimePlayed * 1000));
+}
+
+/** Format an ISO-8601 timestamp (our DB's ``last_played_at``) as a
+ *  date string, or ``null`` when absent/unparseable so callers can
+ *  fall back to Steam's value. */
+export function formatLastPlayedISO(iso: string | null | undefined): string | null {
+  if (!iso) return null;
+  const ms = Date.parse(iso);
+  if (Number.isNaN(ms)) return null;
+  return formatDate(new Date(ms));
+}
+
+/** Format a playtime duration (seconds) as a compact "12.5 h" / "45 min"
+ *  string. Returns "—" for zero/unknown. Units are i18n-supplied so the
+ *  abbreviation can be localized. */
+export function formatPlaytime(
+  secs: number | undefined | null,
+  hoursShort: string,
+  minutesShort: string,
+): string {
+  if (!secs || secs <= 0) return "—";
+  if (secs < 3600) return `${Math.max(1, Math.round(secs / 60))} ${minutesShort}`;
+  const hours = secs / 3600;
+  return `${hours >= 100 ? Math.round(hours) : hours.toFixed(1)} ${hoursShort}`;
 }
 
 /** One label/value column inside {@link MetaInline}. */
@@ -218,10 +247,15 @@ const MetaItem: FC<{ label: string; value: string }> = ({ label, value }) => (
 interface MetaInlineProps {
   /** Total install size in bytes (Space Required column). */
   sizeBytes?: number;
-  /** Whether to render the Last Played column (installed games only). */
+  /** Whether to render the Played / Last Played columns (installed games only). */
   showLastPlayed?: boolean;
-  /** Steam appId — used to look up rtLastTimePlayed. */
+  /** Steam appId — used to look up Steam's rtLastTimePlayed (fallback). */
   appId?: number | null;
+  /** Store id — together with {@link gameId}, enables the "Played" total
+   *  and an accurate "Last Played" sourced from our own tracking DB. */
+  store?: string | null;
+  /** Store-native game id (``Game.id`` / ``store_game_id``). */
+  gameId?: string | null;
   /** True for installed games. Switches the size label to
    *  "Installed Size" and makes {@link useGameSize} report the
    *  on-disk size instead of the (stale) pre-install download size. */
@@ -238,10 +272,12 @@ export const MetaInline: FC<MetaInlineProps> = ({
   sizeBytes,
   showLastPlayed = false,
   appId,
+  store,
+  gameId,
   installed = false,
 }) => {
   const { t } = useTranslation();
-  const [lastPlayed, setLastPlayed] = useState<number | null>(null);
+  const [steamLastPlayed, setSteamLastPlayed] = useState<number | null>(null);
   // Size is fetched out-of-band (see useGameSize) so a slow store
   // lookup never blocks this row from rendering. Keyed on `installed`
   // so the on-disk size replaces the pre-install download size once
@@ -249,6 +285,14 @@ export const MetaInline: FC<MetaInlineProps> = ({
   // to any size the caller already had.
   const fetchedSize = useGameSize(appId ?? null, installed);
   const resolvedSize = fetchedSize && fetchedSize > 0 ? fetchedSize : sizeBytes;
+
+  // Our own tracking DB (set when the caller knows the store/game pair).
+  // Preferred source for both the total and last-played; Steam's value
+  // is only used as a fallback when we have no local record.
+  const playtime = useGamePlaytime(
+    showLastPlayed ? store : null,
+    showLastPlayed ? gameId : null,
+  );
 
   useEffect(() => {
     if (!showLastPlayed || appId == null) return;
@@ -269,7 +313,7 @@ export const MetaInline: FC<MetaInlineProps> = ({
       .GetPlaytime(appId)
       .then((res) => {
         if (cancelled) return;
-        setLastPlayed(res?.rtLastTimePlayed ?? null);
+        setSteamLastPlayed(res?.rtLastTimePlayed ?? null);
       })
       .catch(() => {
         /* ignore */
@@ -278,6 +322,20 @@ export const MetaInline: FC<MetaInlineProps> = ({
       cancelled = true;
     };
   }, [appId, showLastPlayed]);
+
+  // Total played: store's cross-device total (GOG/Epic) when present,
+  // else our local total. Only rendered once we have a tracked record.
+  const totalSecs =
+    playtime != null
+      ? (playtime.store_total_secs ?? playtime.total_seconds)
+      : undefined;
+  const showPlayed = showLastPlayed && totalSecs != null && totalSecs > 0;
+
+  // Last played: prefer our DB's timestamp; fall back to Steam's only
+  // when we have no local record (e.g. a Steam-native game we don't track).
+  const lastPlayedValue =
+    formatLastPlayedISO(playtime?.last_played) ??
+    (steamLastPlayed ? formatLastPlayed(steamLastPlayed) : null);
 
   return (
     <div
@@ -295,14 +353,20 @@ export const MetaInline: FC<MetaInlineProps> = ({
         }
         value={formatBytes(resolvedSize)}
       />
+      {showPlayed && (
+        <MetaItem
+          label={t("playMeta.played")}
+          value={formatPlaytime(
+            totalSecs,
+            t("playMeta.hoursShort"),
+            t("playMeta.minutesShort"),
+          )}
+        />
+      )}
       {showLastPlayed && (
         <MetaItem
           label={t("playMeta.lastPlayed")}
-          value={
-            lastPlayed
-              ? formatLastPlayed(lastPlayed)
-              : t("playMeta.neverPlayed")
-          }
+          value={lastPlayedValue ?? t("playMeta.neverPlayed")}
         />
       )}
     </div>

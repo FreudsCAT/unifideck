@@ -7,6 +7,7 @@ owns event wiring + session lifecycle.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import UTC, date, datetime, timedelta
 from typing import TYPE_CHECKING, Any
@@ -24,6 +25,12 @@ logger = logging.getLogger(__name__)
 # Sessions shorter than this are ignored as accidental launches.
 _MIN_SESSION_SECONDS = 5
 
+# How often active sessions persist a provisional duration to disk. A crash /
+# force-kill (no clean stop) can then be recovered to within this interval on
+# the next startup (see ``_reconcile_orphans``). Cheap: one UPDATE per running
+# game per tick.
+_HEARTBEAT_SECONDS = 60
+
 
 class PlaytimeService:
     """SQLite-backed playtime tracker wired to the EventBus."""
@@ -34,6 +41,7 @@ class PlaytimeService:
         self._db_path = db_path
         self._db: ActivityDatabase | None = None
         self._active: dict[str, dict[str, Any]] = {}
+        self._heartbeat_task: asyncio.Task[Any] | None = None
 
         # ``auto_wire(self, bus)`` walks ``self``'s methods
         # and registers every ``@subscribe(Events.X)``-marked
@@ -45,13 +53,25 @@ class PlaytimeService:
         auto_wire(self, self._bus)
 
     async def start(self) -> None:
-        """Open the SQLite database + create tables if missing."""
+        """Open the DB, recover any crash-orphaned sessions, start heartbeat."""
         if self._db is None:
             self._db = ActivityDatabase(self._db_path)
             self._db.open()
+            # Close sessions left open by a previous crash/force-kill BEFORE
+            # any new sessions start, so the recovery can't race a relaunch.
+            self._reconcile_orphans()
+        if self._heartbeat_task is None:
+            self._heartbeat_task = asyncio.create_task(self._heartbeat_loop())
 
     async def stop(self) -> None:
-        """Flush in-flight sessions and close the DB."""
+        """Cancel heartbeat, flush in-flight sessions, close the DB."""
+        if self._heartbeat_task is not None:
+            self._heartbeat_task.cancel()
+            try:
+                await self._heartbeat_task
+            except asyncio.CancelledError:
+                pass
+            self._heartbeat_task = None
         if self._db is not None:
             # End all active sessions
             keys = list(self._active.keys())
@@ -61,6 +81,122 @@ class PlaytimeService:
 
             self._db.close()
             self._db = None
+
+    @staticmethod
+    def _provisional_duration(session: dict[str, Any], now: datetime) -> int:
+        """Played seconds so far for ``session`` (wall minus sleep), no mutation.
+
+        Single source of truth for both the heartbeat checkpoint and the final
+        ``_end_session`` calc. Folds any in-flight suspend into a LOCAL sleep
+        total so it never mutates the live session (the game is still running
+        during a heartbeat).
+        """
+        sleep = session["total_sleep_secs"]
+        if session["suspended_at"]:
+            sleep += (now - session["suspended_at"]).total_seconds()
+        wall_secs = (now - session["started_at"]).total_seconds()
+        return max(0, int(wall_secs - sleep))
+
+    async def _heartbeat_loop(self) -> None:
+        """Persist a provisional duration for active sessions every tick."""
+        try:
+            while True:
+                await asyncio.sleep(_HEARTBEAT_SECONDS)
+                try:
+                    self._checkpoint_active()
+                except Exception:
+                    logger.debug(
+                        "[PlaytimeService] heartbeat checkpoint failed",
+                        exc_info=True,
+                    )
+        except asyncio.CancelledError:
+            pass
+
+    def _checkpoint_active(self) -> None:
+        """Write each active session's running duration to disk (crash safety).
+
+        Deliberately leaves ``ended_at`` NULL and ``end_reason`` 'unknown' so
+        the row is NOT yet eligible for store sync (``get_unreported_sessions``
+        requires ``ended_at``) nor counted in stats (``_refresh_game_stats``
+        requires ``ended_at``) — it only records progress. If the process dies
+        before a clean stop, ``_reconcile_orphans`` recovers this lower bound.
+        """
+        if self._db is None or not self._active:
+            return
+        now = datetime.now(UTC)
+        for session in self._active.values():
+            row_id = session.get("db_row_id")
+            if not row_id:
+                continue
+            duration = self._provisional_duration(session, now)
+            self._db.execute(
+                """UPDATE play_sessions
+                   SET duration_secs = ?,
+                       updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+                   WHERE id = ? AND ended_at IS NULL""",
+                (duration, row_id),
+            )
+        self._db._require_conn().commit()
+
+    def _reconcile_orphans(self) -> None:
+        """Finalize sessions left open by a crash / force-kill, on startup.
+
+        A clean shutdown flushes active sessions via ``stop()`` → ``_end_session``
+        (which sets ``ended_at``), so any row still ``ended_at IS NULL`` here is
+        an orphan from a hard restart. We credit the last heartbeat checkpoint
+        (``duration_secs`` — a lower bound), label it ``'orphaned'``, and
+        recompute that game's stats so the time counts and becomes eligible for
+        store sync (``reported_at`` stays NULL → the sync drain picks it up).
+        Orphans with no checkpoint (crashed before the first heartbeat) get 0
+        duration: closed, but neither counted nor synced.
+        """
+        if self._db is None:
+            return
+        rows = self._db.query(
+            """SELECT id, game_id, started_at, duration_secs, updated_at
+               FROM play_sessions WHERE ended_at IS NULL""",
+        )
+        if not rows:
+            return
+        credited: set[int] = set()
+        for row in rows:
+            duration = int(row["duration_secs"] or 0)
+            started = self._parse_iso(row["started_at"])
+            # Approximate the end at the last heartbeat (``updated_at``); fall
+            # back to ``started + duration`` then to ``started`` so we always
+            # close the row even with no checkpoint.
+            ended = self._parse_iso(row["updated_at"])
+            if ended is None and started is not None:
+                ended = started + timedelta(seconds=duration)
+            ended_dt = ended or started or datetime.now(UTC)
+            ended_iso = ended_dt.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+            self._db.execute(
+                """UPDATE play_sessions
+                   SET ended_at = ?, duration_secs = ?, end_reason = 'orphaned',
+                       updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+                   WHERE id = ?""",
+                (ended_iso, duration, row["id"]),
+            )
+            if duration >= _MIN_SESSION_SECONDS and started is not None:
+                self._update_daily_stats(row["game_id"], started, ended_dt, duration)
+                credited.add(int(row["game_id"]))
+        for game_db_id in credited:
+            self._refresh_game_stats(game_db_id)
+        self._db._require_conn().commit()
+        logger.info(
+            "[PlaytimeService] Reconciled %d orphaned session(s); credited %d game(s)",
+            len(rows), len(credited),
+        )
+
+    @staticmethod
+    def _parse_iso(value: Any) -> datetime | None:
+        """Parse an ISO-8601 (``...Z``) timestamp to aware UTC, or None."""
+        if not value:
+            return None
+        try:
+            return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        except (ValueError, TypeError):
+            return None
 
     @subscribe(Events.GAME_LAUNCHED)
     async def _on_game_launched(self, **kwargs: Any) -> None:
@@ -247,14 +383,7 @@ class PlaytimeService:
         now = datetime.now(UTC)
         now_iso = now.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
 
-        # Handle in-flight suspend
-        if session["suspended_at"]:
-            sleep_duration = (now - session["suspended_at"]).total_seconds()
-            session["total_sleep_secs"] += sleep_duration
-            session["suspended_at"] = None
-
-        wall_secs = (now - session["started_at"]).total_seconds()
-        duration_secs = max(0, int(wall_secs - session["total_sleep_secs"]))
+        duration_secs = self._provisional_duration(session, now)
 
         if duration_secs < _MIN_SESSION_SECONDS:
             logger.debug("[PlaytimeService] Discarding short session (%ds) for %s", duration_secs, session["title"])

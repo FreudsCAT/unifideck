@@ -74,7 +74,11 @@ async def launch_windows(
             rc = await svc._run_game_subprocess(plan, ctx, state)
             state.rc = rc
         finally:
-            # Emit GAME_STOPPED here so playtime records accurate duration
+            # NOTE: this fires on the launcher SUBPROCESS bus (dispatcher.py),
+            # which only forwards LAUNCHER_STAGE — it does NOT reach the
+            # plugin's PlaytimeService. Playtime is recorded on the plugin bus
+            # via the frontend lifetime listener → notify_game_stopped RPC.
+            # Kept only for any future in-subprocess subscriber.
             await svc._bus.emit(Events.GAME_STOPPED, store=store, game_id=game_id)
 
         # Phase 4: Cloud Sync Up

@@ -94,7 +94,13 @@ export const NotInstalledButtons: FC<Props> = ({
           : t("playButton.install")}
       </DialogButton>
 
-      <MetaInline sizeBytes={game?.size_bytes} showLastPlayed appId={appId} />
+      <MetaInline
+        sizeBytes={game?.size_bytes}
+        showLastPlayed
+        appId={appId}
+        store={game?.store}
+        gameId={game?.id}
+      />
 
       <IconGroup>
         <DialogButton

@@ -8,43 +8,13 @@ from unifideck.core.types import Events
 if TYPE_CHECKING:
     from unifideck.event_bus import EventBus
 logger = logging.getLogger(__name__)
-async def emit_game_launched(
- bus: EventBus,
- *,
- store: str,
- game_id: str,
-) -> None:
-    """Emit game launched."""
-    logger.info(
-    "[launcher.rpc] emit GAME_LAUNCHED store=%s game=%s", store, game_id,
-   )
-    await bus.emit(
-    Events.GAME_LAUNCHED,
-    store=store,
-    game_id=game_id,
-   )
-async def emit_game_stopped(
- bus: EventBus,
- *,
- store: str,
- game_id: str,
- exit_code: int,
- elapsed_seconds: float = 0.0,
- terminated_by_signal: bool = False,
-) -> None:
-    """Emit game stopped."""
-    logger.info(
-    "[launcher.rpc] emit GAME_STOPPED store=%s game=%s rc=%d elapsed=%.1fs signal=%s",
-    store, game_id, exit_code, elapsed_seconds, terminated_by_signal,
-   )
-    await bus.emit(
-    Events.GAME_STOPPED,
-    store=store,
-    game_id=game_id,
-    exit_code=exit_code,
-    elapsed_seconds=elapsed_seconds,
-    terminated_by_signal=terminated_by_signal,
-   )
+
+
+# NOTE: ``emit_game_launched`` / ``emit_game_stopped`` were removed — they
+# were never called, and the launcher runs out-of-process (dispatcher.py)
+# on an isolated bus that only forwards LAUNCHER_STAGE, so they could never
+# reach the plugin's PlaytimeService. Playtime is recorded on the plugin
+# bus via the frontend lifetime listener → ``notify_game_launched`` RPC.
 async def emit_stage(
  bus: EventBus,
  *,

@@ -697,7 +697,10 @@
     "spaceRequired": "Space required",
     "installedSize": "Installed size",
     "lastPlayed": "Last played",
-    "neverPlayed": "Never played"
+    "neverPlayed": "Never played",
+    "played": "Played",
+    "hoursShort": "h",
+    "minutesShort": "min"
   },
   "downloads": {
     "title": "Downloads",

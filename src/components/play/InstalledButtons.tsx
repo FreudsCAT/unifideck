@@ -247,6 +247,8 @@ export const InstalledButtons: FC<Props> = ({
         sizeBytes={game?.size_bytes}
         showLastPlayed
         appId={appId}
+        store={game?.store}
+        gameId={game?.id}
         installed
       />
       <IconGroup>
