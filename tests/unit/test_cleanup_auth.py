@@ -73,6 +73,7 @@ async def test_delete_auth_data_unlinks_credential_files(
         tmp_path / ".config/nile/user.json",
         tmp_path / ".config/unifideck/gog_token.json",
         tmp_path / ".config/unifideck/gogdl/gog_credentials.json",
+        tmp_path / ".config/unifideck/microsoft_tokens.json",
         tmp_path / ".local/share/unifideck/microsoft_tokens.json",
     ]
     for f in creds:
@@ -270,3 +271,45 @@ def test_nonunifideck_unsigned_appids_filters_owned() -> None:
     keep = SyncRPCMixin._nonunifideck_unsigned_appids(svc)
 
     assert keep == {(-11936521) + 0x100000000}
+
+
+@pytest.mark.asyncio
+async def test_microsoft_tokens_legacy_migration(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import json
+    from unifideck.stores.microsoft.microsoft_config import MicrosoftConfig
+    from unifideck.stores.microsoft.tokens.persistence import PersistenceMixin
+    from unifideck.security import SecureTokenStore
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+
+    legacy_file = tmp_path / ".local/share/unifideck/microsoft_tokens.json"
+    new_file = tmp_path / ".config/unifideck/microsoft_tokens.json"
+    legacy_file.parent.mkdir(parents=True, exist_ok=True)
+
+    payload = {
+        "access_token": "mock_access",
+        "refresh_token": "mock_refresh",
+        "saved_at": 12345.0,
+    }
+    legacy_file.write_text(json.dumps(payload))
+
+    config = MicrosoftConfig(token_file=str(new_file))
+    secure_store = SecureTokenStore()
+
+    pm = PersistenceMixin()
+    pm._config = config
+    pm._secure_store = secure_store
+    pm._bus = None
+    pm._ms_access_token = None
+    pm._ms_refresh_token = None
+    pm._token_saved_at = 0.0
+
+    loaded = await pm.load()
+
+    assert loaded is True
+    assert pm._ms_access_token == "mock_access"
+    assert pm._ms_refresh_token == "mock_refresh"
+    assert new_file.exists()
+    assert not legacy_file.exists()

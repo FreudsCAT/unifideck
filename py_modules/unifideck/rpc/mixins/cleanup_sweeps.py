@@ -28,6 +28,7 @@ _AUTH_DATA_CANDIDATES = (
     "~/.config/nile/user.json",
     "~/.config/unifideck/gog_token.json",
     "~/.config/unifideck/gogdl/gog_credentials.json",
+    "~/.config/unifideck/microsoft_tokens.json",
     "~/.local/share/unifideck/microsoft_tokens.json",
     "~/.local/share/unifideck/gog_auth_url.txt",
     "~/.local/share/unifideck/ms_auth_url.txt",
@@ -43,6 +44,7 @@ _CONFIG_AUTH_FILES = (
     "gog_credentials.json",
     "gogdl_auth.json",
     "gog_save_paths.json",
+    "microsoft_tokens.json",
 )
 _CONFIG_AUTH_DIRS = ("gogdl",)
 

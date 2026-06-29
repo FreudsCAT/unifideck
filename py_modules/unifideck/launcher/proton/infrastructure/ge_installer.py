@@ -150,13 +150,20 @@ def _write_marker(tag: str) -> None:
         logger.warning("[ge_installer] could not write marker: %s", e)
 
 
-def _select_tarball(assets: list[dict[str, Any]]) -> str | None:
-    """Pick the GE-Proton ``.tar.gz`` asset URL (skipping the checksum)."""
+def _select_tarball(assets: list[dict[str, Any]], tag: str | None = None) -> str | None:
+    """Pick the GE-Proton x86_64 ``.tar.gz`` asset URL (skipping checksums and non-x86 archs)."""
+    if tag:
+        expected_name = f"{tag}.tar.gz"
+        for asset in assets:
+            if asset.get("name") == expected_name:
+                return asset.get("browser_download_url")
+
     for asset in assets:
         name = asset.get("name", "")
-        if name.endswith(".tar.gz") and "sha512" not in name:
+        if name.endswith(".tar.gz") and not any(k in name for k in ("sha512", "aarch64", "arm64")):
             return asset.get("browser_download_url")
     return None
+
 
 
 def _download(url: str, dest: Path, progress_cb: ProgressCb | None) -> None:
@@ -302,7 +309,7 @@ def ensure_latest_ge(
         logger.info("[ge_installer] latest GE-Proton already installed: %s", tag)
         return existing, tag
 
-    url = _select_tarball(release.get("assets", []))
+    url = _select_tarball(release.get("assets", []), tag)
     if not url:
         logger.warning("[ge_installer] no .tar.gz asset found for %s", tag)
         return None

@@ -80,7 +80,30 @@ def test_get_latest_ge_tag_network_failure_returns_none():
         assert ge_installer.get_latest_ge_tag() is None
 
 
+# ── ge_installer._select_tarball ───────────────────────────────────
+
+def test_select_tarball_ignores_aarch64_and_prefers_exact_tag():
+    assets = [
+        {"name": "GE-Proton11-1-aarch64.sha512sum", "browser_download_url": "http://example.com/arm.sha"},
+        {"name": "GE-Proton11-1-aarch64.tar.gz", "browser_download_url": "http://example.com/arm.tar.gz"},
+        {"name": "GE-Proton11-1.sha512sum", "browser_download_url": "http://example.com/x86.sha"},
+        {"name": "GE-Proton11-1.tar.gz", "browser_download_url": "http://example.com/x86.tar.gz"},
+    ]
+    url = ge_installer._select_tarball(assets, "GE-Proton11-1")
+    assert url == "http://example.com/x86.tar.gz"
+
+
+def test_select_tarball_fallback_without_tag():
+    assets = [
+        {"name": "GE-Proton11-1-aarch64.tar.gz", "browser_download_url": "http://example.com/arm.tar.gz"},
+        {"name": "GE-Proton11-1.tar.gz", "browser_download_url": "http://example.com/x86.tar.gz"},
+    ]
+    url = ge_installer._select_tarball(assets)
+    assert url == "http://example.com/x86.tar.gz"
+
+
 # ── ge_installer marker + ensure_latest_ge ────────────────────────
+
 
 def test_marker_roundtrip(tmp_path, monkeypatch):
     monkeypatch.setattr(ge_installer, "_MARKER", tmp_path / "latest.json")

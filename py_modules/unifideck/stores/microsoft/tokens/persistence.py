@@ -29,21 +29,31 @@ class PersistenceMixin:
     async def load(self) -> bool:
         """Load."""
         path = str(await asyncio.to_thread(lambda: Path(self._config.token_file).expanduser()))
-        if not await asyncio.to_thread(lambda: Path(path).is_file()):
-            return False
-        def _read_sync() -> bytes | None:
+        legacy_path = str(await asyncio.to_thread(lambda: Path("~/.local/share/unifideck/microsoft_tokens.json").expanduser()))
+        target_file = path
+        is_legacy = False
+
+        if not await asyncio.to_thread(lambda: Path(target_file).is_file()):
+            if await asyncio.to_thread(lambda: Path(legacy_path).is_file()):
+                target_file = legacy_path
+                is_legacy = True
+            else:
+                return False
+
+        def _read_sync(file_path: str) -> bytes | None:
             """Read sync."""
             try:
-                return Path(path).read_bytes()
+                return Path(file_path).read_bytes()
             except OSError as e:
                 logger.warning(
-                    "[MicrosoftTokens] load failed: %s", e,
+                    "[MicrosoftTokens] load failed for %s: %s", file_path, e,
                 )
                 return None
-        blob = await asyncio.to_thread(_read_sync)
+
+        blob = await asyncio.to_thread(_read_sync, target_file)
         if blob is None:
             return False
-        data = self._parse_blob(blob, path)
+        data = self._parse_blob(blob, target_file)
         if not isinstance(data, dict):
             return False
         refresh = data.get("refresh_token")
@@ -60,7 +70,20 @@ class PersistenceMixin:
             )
         except (TypeError, ValueError):
             self._token_saved_at = 0.0
-        logger.info("[MicrosoftTokens] loaded tokens from disk")
+        logger.info("[MicrosoftTokens] loaded tokens from disk (%s)", "legacy" if is_legacy else "current")
+
+        if is_legacy:
+            logger.info("[MicrosoftTokens] migrating legacy token file to %s", path)
+            saved = await self.save()
+            if saved:
+                def _unlink_legacy() -> None:
+                    try:
+                        p = Path(legacy_path)
+                        if p.is_file():
+                            p.unlink()
+                    except OSError as e:
+                        logger.warning("[MicrosoftTokens] could not remove legacy token file: %s", e)
+                await asyncio.to_thread(_unlink_legacy)
         return True
 
     def _parse_blob(
@@ -149,17 +172,18 @@ class PersistenceMixin:
         self._ms_refresh_token = None
         self._token_saved_at = 0.0
         path = str(await asyncio.to_thread(lambda: Path(self._config.token_file).expanduser()))
-        if await asyncio.to_thread(lambda: Path(path).is_file()):
-            def _remove_sync() -> None:
-                """Remove sync."""
+        legacy_path = str(await asyncio.to_thread(lambda: Path("~/.local/share/unifideck/microsoft_tokens.json").expanduser()))
+        def _remove_sync() -> None:
+            """Remove sync."""
+            for p in (path, legacy_path):
                 try:
-                    Path(path).unlink()
+                    if Path(p).is_file():
+                        Path(p).unlink()
                 except OSError as e:
                     logger.warning(
-                        "[MicrosoftTokens] clear: could not "
-                        "remove %s: %s", path, e,
+                        "[MicrosoftTokens] clear: could not remove %s: %s", p, e,
                     )
-            await asyncio.to_thread(_remove_sync)
+        await asyncio.to_thread(_remove_sync)
 def _write_atomic_0600(path: str, blob: bytes) -> bool:
     """Write atomic 0600."""
     try:

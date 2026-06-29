@@ -99,7 +99,7 @@
     },
     "microsoft": {
       "client_id": "000000004C12AE6F",
-      "token_file": "~/.local/share/unifideck/microsoft_tokens.json",
+      "token_file": "~/.config/unifideck/microsoft_tokens.json",
       "scope": "service::user.auth.xboxlive.com::MBI_SSL",
       "auth_url": "https://login.live.com/oauth20_authorize.srf",
       "token_url": "https://login.live.com/oauth20_token.srf",
@@ -271,6 +271,7 @@
     "bruteforce_escalation_threshold": 20,
     "fingerprint_path": "~/.config/unifideck/device_fingerprint.json",
     "token_files_to_wipe_on_reset": [
+      "~/.config/unifideck/microsoft_tokens.json",
       "~/.local/share/unifideck/microsoft_tokens.json",
       "~/.config/unifideck/gog_token.json"
     ]
