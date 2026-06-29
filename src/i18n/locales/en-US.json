@@ -541,6 +541,11 @@
     "simple": "Simple",
     "detailed": "Detailed"
   },
+  "collectionSettings": {
+    "title": "STEAM COLLECTIONS",
+    "enabled": "Collections enabled",
+    "disabled": "Collections disabled"
+  },
   "gogLanguageModal": {
     "title": "Select Language",
     "description": "Choose which language to download for {{title}}",

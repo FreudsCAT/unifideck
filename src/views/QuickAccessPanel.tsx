@@ -28,6 +28,7 @@ import {
   LibrarySync,
   LanguageSelector,
   GameDetailsViewModeToggle,
+  CollectionsToggle,
   CleanupSection,
   PluginUpdater,
 } from "../components/settings";
@@ -107,6 +108,7 @@ export const QuickAccessPanel: FC = () => {
             <LibrarySync />
             <LanguageSelector />
             <GameDetailsViewModeToggle />
+            <CollectionsToggle />
             <PluginUpdater />
             <CleanupSection />
           </>
