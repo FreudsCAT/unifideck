@@ -164,6 +164,42 @@ function injectIntoTree(ret: unknown): void {
 
   injectPlayWrapper(children, appId, playWrapperKey, version);
   injectGameInfoPanel(children, appId, playWrapperKey, gameInfoKey, version);
+  relocateHltbAbovePlay(children, playWrapperKey);
+}
+
+/** Relocate HLTB for Deck's stats overlay (`#hltb-for-deck`) to sit
+ *  immediately ABOVE our Play wrapper, mirroring where it sits in the
+ *  native Steam UI. HLTB splices its element low (just before the
+ *  now-hidden tabbed section); because our route patch is the OUTERMOST
+ *  renderFunc wrapper (we register after HLTB), its element is already in
+ *  `children` when this runs, so we can move it. Combined with
+ *  `FOREIGN_PLUGIN_CONTAINMENT_CSS` (which flattens HLTB's absolute
+ *  "clean" modes), this turns the overlay into a clean in-flow bar above
+ *  the Play row instead of floating over our buttons. No-op — and
+ *  therefore graceful — when HLTB isn't installed / co-patching. */
+function relocateHltbAbovePlay(
+  children: unknown[],
+  playWrapperKey: string,
+): void {
+  const hltbIdx = children.findIndex((c) => idOf(c) === "hltb-for-deck");
+  if (hltbIdx === -1) return; // HLTB not present this render
+  const playIdx = children.findIndex((c) =>
+    keyOf(c).startsWith(playWrapperKey),
+  );
+  if (playIdx === -1) return; // our Play wrapper not placed this render
+  if (hltbIdx === playIdx - 1) return; // already directly above — idempotent
+
+  const [hltbEl] = children.splice(hltbIdx, 1);
+  // Recompute the Play wrapper index — the splice above shifts it when
+  // HLTB sat before it.
+  const newPlayIdx = children.findIndex((c) =>
+    keyOf(c).startsWith(playWrapperKey),
+  );
+  if (newPlayIdx === -1) {
+    children.splice(hltbIdx, 0, hltbEl); // lost the anchor — don't drop HLTB
+    return;
+  }
+  children.splice(newPlayIdx, 0, hltbEl);
 }
 
 function injectPlayWrapper(
@@ -291,6 +327,13 @@ function findPlaySectionInsertIndex(children: unknown[]): number {
 
 function keyOf(node: unknown): string {
   return (node as { key?: string } | null)?.key ?? "";
+}
+
+/** Read a React element's `props.id` (used to find HLTB's
+ *  `id="hltb-for-deck"` element spliced into our container). */
+function idOf(node: unknown): string {
+  const id = (node as { props?: { id?: unknown } } | null)?.props?.id;
+  return typeof id === "string" ? id : "";
 }
 
 function classOf(node: unknown): string {

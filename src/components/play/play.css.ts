@@ -73,6 +73,49 @@ export function nativeAppDetailsHideCss(): string {
     .join("\n");
 }
 
+/**
+ * Containment CSS for foreign plugins that splice their own UI into the
+ * same App-Details `InnerContainer` we patch. Today this is **HLTB for
+ * Deck** (`#hltb-for-deck`), whose four display modes split into two
+ * shapes:
+ *   - **bar** modes — `default` (`.hltb-info`, already in-flow) and
+ *     `clean-default` (`.hltb-info-clean-default`, an absolute full-width
+ *     strip). These are meant to be a horizontal bar.
+ *   - **box** modes — `clean` / `clean-left` (`.hltb-info-clean`
+ *     [+ `.hltb-info-clean-left`]), a stat box that sits ON the hero
+ *     image, right or left side. NOT a bar.
+ *
+ * `AppDetailsPatch` relocates HLTB's wrapper to just above our Play
+ * section (the hero/Play seam) for every mode. These rules then place
+ * each shape correctly so nothing overlaps our custom Play button / gear:
+ *   - `clean-default` → flattened to a static in-flow bar above the Play row.
+ *   - `clean` / `clean-left` → keep the box, but re-anchor it `bottom`-up
+ *     from the seam onto the hero (right by default, left for clean-left)
+ *     instead of HLTB's `top:-55vh` float that lands on our buttons.
+ *   - `default` needs nothing — already an in-flow bar (relocation alone
+ *     puts it above the Play row).
+ *
+ * The wrapper keeps HLTB's own `position:relative` so the box anchors to
+ * it (do NOT force it static, or the box would resolve against a higher
+ * ancestor/viewport). Scoped under {@link HIDE_NATIVE_PLAY_MARKER} so it
+ * only affects Unifideck shortcuts — HLTB on native Steam games is
+ * untouched. HLTB's id / class names are hard-coded in its bundle, so
+ * these are static and no-op gracefully if HLTB is absent or renames them.
+ */
+export const FOREIGN_PLUGIN_CONTAINMENT_CSS = `
+.${HIDE_NATIVE_PLAY_MARKER} #hltb-for-deck .hltb-info-clean-default{
+  position:static !important;
+  top:auto !important;bottom:auto !important;left:auto !important;right:auto !important;
+  width:100% !important;height:auto !important;
+}
+.${HIDE_NATIVE_PLAY_MARKER} #hltb-for-deck .hltb-info-clean{
+  top:auto !important;bottom:8px !important;left:auto !important;right:2.8vw !important;
+}
+.${HIDE_NATIVE_PLAY_MARKER} #hltb-for-deck .hltb-info-clean.hltb-info-clean-left{
+  right:auto !important;left:2.8vw !important;
+}
+`;
+
 /** Focus / hover styling for every Unifideck-rendered button.
  *  Exported so components can render it inline via `<style>` in
  *  their own subtree — the reliable way to get the rules into the

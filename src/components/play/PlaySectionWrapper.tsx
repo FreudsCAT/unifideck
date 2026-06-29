@@ -26,7 +26,11 @@ import { DownloadingButtons } from "./DownloadingButtons";
 import { InstalledButtons } from "./InstalledButtons";
 import { XCloudButtons } from "./XCloudButtons";
 import { PlayLoadingSkeleton } from "./PlayMeta";
-import { injectPlayFocusStyles, nativeAppDetailsHideCss } from "./play.css";
+import {
+  injectPlayFocusStyles,
+  nativeAppDetailsHideCss,
+  FOREIGN_PLUGIN_CONTAINMENT_CSS,
+} from "./play.css";
 
 /**
  * Props of {@link PlaySectionWrapper}. The `appId` is the Steam
@@ -75,7 +79,7 @@ export const PlaySectionWrapper: FC<PlaySectionWrapperProps> = ({ appId }) => {
 
   return (
     <>
-      <style>{nativeAppDetailsHideCss()}</style>
+      <style>{nativeAppDetailsHideCss() + FOREIGN_PLUGIN_CONTAINMENT_CSS}</style>
       {body}
     </>
   );
