@@ -280,10 +280,19 @@ class _WorkerMixin:
                 install_path=item.install_path or None,
                 on_ready=self._make_ubisoft_launch_signal(item),
             )
+        # GOG honours a user-picked install language; other stores
+        # don't accept the kwarg, so only pass it for GOG.
+        extra: dict[str, Any] = {}
+        if item.store == "gog" and item.language:
+            extra["language"] = item.language
+            logger.info(
+                "[DownloadWorker] %s install language=%s", key, item.language,
+            )
         return await store.install_game(  # type: ignore[call-arg]
             item.game_id,
             item.install_path or None,
             progress_cb=progress_cb,
+            **extra,
         )
 
     def _make_ubisoft_launch_signal(self, item: DownloadItem) -> Any:

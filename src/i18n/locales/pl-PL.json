@@ -582,7 +582,8 @@
     "cancel": "Anuluj",
     "working": "Przetwarzanie…",
     "loading": "Ładowanie…",
-    "free": "darmowa"
+    "free": "darmowa",
+    "close": "Zamknij"
   },
   "info": {
     "expandDetails": "Pokaż szczegóły",
@@ -660,13 +661,28 @@
       "statusUnresolved": "Nie znaleziono lokalizacji zapisu — synchronizacja może nie działać dla tej gry.",
       "unresolvedHint": "Uruchom grę raz, abyśmy mogli wykryć jej folder zapisu, lub ustaw lokalizację ręcznie.",
       "upload": "Prześlij lokalny zapis"
+    },
+    "exe": {
+      "browse": "Przeglądaj…",
+      "changeFailed": "Nie można zmienić pliku wykonywalnego",
+      "changed": "Zmieniono plik wykonywalny",
+      "defaultTag": "(domyślny)",
+      "menuItem": "Zmień plik wykonywalny…",
+      "reset": "Przywróć domyślny plik wykonywalny",
+      "resetButton": "Przywróć domyślne",
+      "subtitle": "Wybierz plik uruchamiający tę grę (np. pomiń launcher i uruchom grę bezpośrednio). Katalog roboczy oraz zapisy w chmurze nie zostaną naruszone.",
+      "title": "Zmień plik wykonywalny — {{game}}",
+      "unavailable": "Nie można odczytać folderu tej gry."
     }
   },
   "playMeta": {
     "spaceRequired": "Wymagane miejsce",
     "installedSize": "Zajmowane miejsce",
     "lastPlayed": "Ostatnio grano",
-    "neverPlayed": "Nigdy nie grano"
+    "neverPlayed": "Nigdy nie grano",
+    "hoursShort": "godz.",
+    "minutesShort": "min.",
+    "played": "Rozegrano"
   },
   "downloads": {
     "title": "Pobieranie",
@@ -789,7 +805,8 @@
       "permission_denied": "Brak uprawnień",
       "cancelled": "Anulowano",
       "unknown": "Nieoczekiwany błąd"
-    }
+    },
+    "unavailableNativeDep": "Zapisy w chmurze są wyłączone na tym systemie — w jego Pythonie ({{python}}) brakuje wymaganego komponentu. Twoje lokalne zapisy nie zostaną naruszone; przebuduj/przeinstaluj wtyczkę po aktualizacji systemu, aby przywrócić synchronizację."
   },
   "launchLogs": {
     "_comment": "Wiadomości dla LaunchLogsModal. Dziennik inspekcji jest otwierany z akcji powiadomienia unifideck://show-logs/<launch_id>, dołączonej do ostrzeżeń o błędach launchera (circuit breaker + LauncherError). Odczytuje zarchiwizowane logi dla każdego uruchomienia w ~/.local/share/unifideck/launches/<launch_id>.log i wyświetla je pokolorowane według ważności.",
@@ -921,5 +938,10 @@
     "errorOffline": "Połącz się z internetem, aby zobaczyć osiągnięcia.",
     "errorAuth": "Zaloguj się w sklepie tej gry, aby zobaczyć osiągnięcia.",
     "errorUnavailable": "Osiągnięcia nie są dostępne dla tej gry."
+  },
+  "collectionSettings": {
+    "title": "KOLEKCJE STEAM",
+    "enabled": "Kolekcje włączone",
+    "disabled": "Kolekcje wyłączone"
   }
 }

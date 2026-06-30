@@ -28,14 +28,18 @@ import urllib.parse
 import urllib.request
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from unifideck.core.types import Game
+from unifideck.utils.paths import get_all_game_directories
 
 from .config import GOGConfig
 from .http import build_ssl_context, fetch_json_get
 from .library_migration import _MarkerMigration
 from .tokens import GOGTokenManager
+
+if TYPE_CHECKING:
+    from unifideck.config import ConfigManager
 
 logger = logging.getLogger(__name__)
 _INSTALL_MARKER = ".unifideck-id"
@@ -50,12 +54,35 @@ class GOGLibrary:
         config: GOGConfig,
         tokens: GOGTokenManager,
         exe_finder: Callable[[str], str | None] | None = None,
+        config_manager: ConfigManager | None = None,
     ) -> None:
         """Initialize the instance."""
         self._config = config
         self._tokens = tokens
         self._find_exe = exe_finder
+        # Used to enumerate EVERY install location (internal + per-store
+        # + custom + SD/external mounts) when scanning for installed
+        # games — not just the single default ``download_dir``. Without
+        # it, games installed on the SD card or a custom path can't be
+        # found, so uninstall silently no-ops and leaves the install
+        # (and its ``goggame-*.info``) on disk.
+        self._config_manager = config_manager
         self._migration = _MarkerMigration(self)
+
+    def _install_scan_dirs(self) -> list[str]:
+        """Every directory that may hold an installed GOG game.
+
+        ``get_all_game_directories`` covers internal storage, per-store
+        dirs, the user's custom path and external (SD) mounts. We append
+        the GOG ``download_dir`` defensively in case it's been pointed
+        somewhere outside that set.
+        """
+        dirs = list(get_all_game_directories(self._config_manager))
+        seen = {str(Path(d).expanduser()) for d in dirs}
+        dd = str(Path(self._config.download_dir).expanduser())
+        if dd not in seen:
+            dirs.append(dd)
+        return dirs
 
     def migrate_old_markers(self) -> dict[str, int]:
         """Migrate old markers."""
@@ -215,22 +242,24 @@ class GOGLibrary:
 
     def get_installed(self) -> list[str]:
         """Get installed."""
-        download_path = Path(
-            self._config.download_dir,
-        ).expanduser()
-        if not download_path.is_dir():
-            return []
         installed: list[str] = []
-        try:
-            for entry in download_path.iterdir():
-                if not entry.is_dir():
-                    continue
-                game_id = self._read_marker(str(entry))
-                if game_id:
-                    installed.append(game_id)
-        except OSError:
-            logger.exception("[GOGLibrary] get_installed scan failed")
-            return []
+        for base in self._install_scan_dirs():
+            base_path = Path(base).expanduser()
+            if not base_path.is_dir():
+                continue
+            try:
+                for entry in base_path.iterdir():
+                    if not entry.is_dir():
+                        continue
+                    game_id = self._read_marker(str(entry))
+                    if game_id:
+                        installed.append(game_id)
+            except OSError:
+                logger.exception(
+                    "[GOGLibrary] get_installed scan failed at %s", base,
+                )
+        # Dedupe (a game id could appear under more than one scanned dir).
+        installed = list(dict.fromkeys(installed))
         logger.info(
             "[GOGLibrary] found %d installed games",
             len(installed),
@@ -238,38 +267,46 @@ class GOGLibrary:
         return installed
 
     def get_installed_game_info(self, game_id: str) -> dict[str, str | None] | None:
-        """Get installed game info."""
-        download_path = Path(
-            self._config.download_dir,
-        ).expanduser()
-        if not download_path.is_dir():
-            return None
-        try:
-            for entry in download_path.iterdir():
-                if not entry.is_dir():
-                    continue
-                game_dir = str(entry)
-                found = self._read_marker(game_dir)
-                if found == game_id:
-                    return {
-                        "install_path": game_dir,
-                        "executable": self._resolve_exe(game_dir),
-                    }
-                if found is None and self._has_goggame_info(
-                    game_dir,
-                    game_id,
-                ):
-                    logger.info(
-                        "[GOGLibrary] found %s via goggame info fallback at %s",
-                        game_id,
+        """Get installed game info.
+
+        Scans EVERY install location (internal, per-store, custom, SD /
+        external mounts), not just the default ``download_dir`` — so a
+        game installed on the SD card or a custom path is found and can
+        actually be uninstalled.
+        """
+        for base in self._install_scan_dirs():
+            base_path = Path(base).expanduser()
+            if not base_path.is_dir():
+                continue
+            try:
+                for entry in base_path.iterdir():
+                    if not entry.is_dir():
+                        continue
+                    game_dir = str(entry)
+                    found = self._read_marker(game_dir)
+                    if found == game_id:
+                        return {
+                            "install_path": game_dir,
+                            "executable": self._resolve_exe(game_dir),
+                        }
+                    if found is None and self._has_goggame_info(
                         game_dir,
-                    )
-                    return {
-                        "install_path": game_dir,
-                        "executable": self._resolve_exe(game_dir),
-                    }
-        except OSError:
-            logger.exception("[GOGLibrary] get_installed_game_info")
+                        game_id,
+                    ):
+                        logger.info(
+                            "[GOGLibrary] found %s via goggame info fallback at %s",
+                            game_id,
+                            game_dir,
+                        )
+                        return {
+                            "install_path": game_dir,
+                            "executable": self._resolve_exe(game_dir),
+                        }
+            except OSError:
+                logger.exception(
+                    "[GOGLibrary] get_installed_game_info scan failed at %s",
+                    base,
+                )
         return None
 
     @staticmethod

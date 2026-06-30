@@ -12,6 +12,7 @@
  */
 import { useCallback, useState } from "react";
 import { showModal } from "@decky/ui";
+import i18n from "i18next";
 import { useRPC } from "../api/useRPC";
 import { rpcRoutes } from "../api/rpc-routes";
 import { useGameActions } from "./useGameActions";
@@ -121,7 +122,9 @@ export function useInstallFlow(bridge: SteamBridgeShape): UseInstallFlowResult {
 }
 
 /** Promise-wrapped showModal that resolves with the picked
- *  language (or null on cancel). */
+ *  language (or null on cancel). Pre-selects the active UI
+ *  language (which reflects the "auto" preference resolved to the
+ *  system language) when the game offers it. */
 function pickLanguageViaModal(
   title: string,
   languages: string[],
@@ -132,6 +135,7 @@ function pickLanguageViaModal(
       <GOGLanguageSelectModal
         gameTitle={title}
         languages={languages}
+        preferredTag={i18n.language}
         onConfirm={(lang) => {
           confirmed = true;
           resolve(lang);

@@ -193,13 +193,21 @@ def resolve_fallback_exe(install_path: str) -> str | None:
 
 
 def _install_language(work_dir: Path) -> str:
-    """Read the install-time language from the ``.unifideck-id`` marker."""
+    """Read the user's install-time language from the ``.unifideck-id``
+    marker, VERBATIM.
+
+    Returns the exact language code the user picked (whatever format
+    gogdl reported it in — ``"esp"``, ``"Spanish"``, ``"es-ES"``…).
+    The value is passed through unchanged; downstream consumers only
+    *normalize for matching*, never substitute the code. Returns ``""``
+    when no language was recorded, so callers fall back appropriately.
+    """
     marker = work_dir / ".unifideck-id"
     if marker.is_file():
         with contextlib.suppress(OSError, ValueError):
             data = json.loads(marker.read_text(encoding="utf-8"))
-            return str(data.get("language") or "en-US")
-    return "en-US"
+            return str(data.get("language") or "")
+    return ""
 
 
 async def _run_umu_exe(plan: ProtonLaunchPlan, exe_path: Path) -> int:
@@ -232,16 +240,15 @@ async def _apply_gog_prelaunch_setup(
 
     Each step is independent and never blocks the launch on failure.
     """
-    # Per-game language (goggame-*.info).
-    try:
-        from unifideck.config.config_manager import ConfigManager
-        from unifideck.launcher.proton.language_setup import apply_gog_language
-        cfg = ConfigManager(
-            str(plan.context.plugin_dir / "defaults" / "config.json"),
-        )
-        apply_gog_language(plan.context.game_id, str(work_dir), config=cfg)
-    except Exception:
-        logger.warning("[compat.gog] language setup failed", exc_info=True)
+    # NOTE: We deliberately do NOT touch ``goggame-*.info``. gogdl
+    # already writes the correct per-language ``goggame-*.info`` for
+    # whatever ``--lang`` we pass at install (verified: ``--lang
+    # es-MX`` → ``language="Latin American Spanish"``). The game reads
+    # that field at runtime to pick its language. Rewriting it here —
+    # as the removed ``apply_gog_language`` did — corrupted GOG's own
+    # value (e.g. clobbering "Latin American Spanish" with the raw code
+    # "es-MX"), so the game fell back to English. The install-time file
+    # is authoritative; leave it alone.
 
     # GalaxyCommunication.exe stub (offline SDK).
     try:
@@ -257,7 +264,7 @@ async def _apply_gog_prelaunch_setup(
     # GOG redistributables + setup scripts (first launch, marker-guarded).
     try:
         from .gog_setup import apply_gog_setup
-        await apply_gog_setup(plan, _install_language(work_dir))
+        await apply_gog_setup(plan, _install_language(work_dir) or "en-US")
     except Exception:
         logger.exception("[compat.gog] gog_setup failed (non-fatal)")
 

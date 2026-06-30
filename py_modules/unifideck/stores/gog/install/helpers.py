@@ -190,29 +190,24 @@ class _InstallHelpers:
     ) -> list[str]:
         """Pick languages."""
         if explicit:
-            return _InstallHelpers._pick_explicit_lang(
-                primary_lang,
-                supported,
-            )
+            return _InstallHelpers._pick_explicit_lang(primary_lang)
         return _InstallHelpers._pick_implicit_langs(
             primary_lang,
             supported,
         )
 
     @staticmethod
-    def _pick_explicit_lang(primary_lang: str, supported: list[str]) -> list[str]:
-        """Pick explicit lang."""
-        if not supported:
-            return [primary_lang]
-        matched = smart_match_language(primary_lang, supported)
-        if matched:
-            return [matched]
-        logger.warning(
-            "[GOGInstaller] %s not available, using %s",
-            primary_lang,
-            supported[0],
-        )
-        return [supported[0]]
+    def _pick_explicit_lang(primary_lang: str) -> list[str]:
+        """Pass the user's explicitly-picked language to gogdl VERBATIM.
+
+        The value was selected from the game's own gogdl language list
+        (the install modal shows exactly what gogdl reported), so it is
+        already a valid ``--lang`` code for this title. We must NOT
+        remap it — remapping silently changed picks like ``es-MX`` into
+        a different variant or fell back to English. Any normalization
+        is for the picker's display only, never the code we send.
+        """
+        return [primary_lang]
 
     @staticmethod
     def _pick_implicit_langs(primary_lang: str, supported: list[str]) -> list[str]:

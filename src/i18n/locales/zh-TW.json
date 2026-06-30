@@ -582,7 +582,8 @@
     "cancel": "取消",
     "working": "正在處理…",
     "loading": "正在載入…",
-    "free": "免費"
+    "free": "免費",
+    "close": "關閉"
   },
   "info": {
     "expandDetails": "展開詳情",
@@ -660,13 +661,28 @@
       "statusUnresolved": "未找到存檔位置 — 此遊戲可能無法進行同步。",
       "unresolvedHint": "啟動遊戲一次以便我們檢測其存檔資料夾，或手動設定位置。",
       "upload": "上傳本機存檔"
+    },
+    "exe": {
+      "browse": "瀏覽…",
+      "changeFailed": "無法變更可執行檔",
+      "changed": "可執行檔已變更",
+      "defaultTag": "(預設)",
+      "menuItem": "變更可執行檔…",
+      "reset": "重設為預設可執行檔",
+      "resetButton": "重設為預設",
+      "subtitle": "選擇此遊戲啟動的檔案（例如：跳過啟動器並直接執行遊戲）。工作目錄和雲端存檔不受影響。",
+      "title": "變更可執行檔 — {{game}}",
+      "unavailable": "無法讀取此遊戲的資料夾。"
     }
   },
   "playMeta": {
     "spaceRequired": "所需空間",
     "installedSize": "佔用空間",
     "lastPlayed": "上次執行",
-    "neverPlayed": "從未執行過"
+    "neverPlayed": "從未執行過",
+    "hoursShort": "小時",
+    "minutesShort": "分鐘",
+    "played": "已玩"
   },
   "downloads": {
     "title": "下載",
@@ -789,7 +805,8 @@
       "permission_denied": "權限被拒絕",
       "cancelled": "操作已取消",
       "unknown": "未預料的系統錯誤"
-    }
+    },
+    "unavailableNativeDep": "此系統上的雲端存檔已關閉 — 其 Python ({{python}}) 缺少必要的組件。您的本機存檔不受影響；請在系統更新後重新構建/重新安裝插件以恢復同步。"
   },
   "launchLogs": {
     "_comment": "LaunchLogsModal 使用 of 國際化文案。彈窗通過 launcher 出錯通知中附加 of unifideck://show-logs/<launch_id> 協定喚起。它用於讀取儲存在 ~/.local/share/unifideck/launches/<launch_id>.log 中的單次運行日誌，並提供帶等級色彩的分類渲染展示。",
@@ -921,5 +938,10 @@
     "errorOffline": "連接到網際網路以檢視成就。",
     "errorAuth": "登入此遊戲的商店以檢視成就。",
     "errorUnavailable": "此遊戲不支援成就。"
+  },
+  "collectionSettings": {
+    "title": "STEAM 收藏",
+    "enabled": "已啟用收藏",
+    "disabled": "已禁用收藏"
   }
 }

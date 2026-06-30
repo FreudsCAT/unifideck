@@ -582,7 +582,8 @@
     "cancel": "취소",
     "working": "처리 중…",
     "loading": "불러오는 중…",
-    "free": "무료"
+    "free": "무료",
+    "close": "닫기"
   },
   "info": {
     "expandDetails": "자세히 보기",
@@ -660,13 +661,28 @@
       "statusUnresolved": "저장 위치를 찾을 수 없음 — 이 게임은 동기화가 작동하지 않을 수 있습니다.",
       "unresolvedHint": "저장 폴더를 감지할 수 있도록 게임을 한 번 실행하거나, 수동으로 위치를 설정하십시오.",
       "upload": "로컬 저장 데이터 업로드"
+    },
+    "exe": {
+      "browse": "찾아보기…",
+      "changeFailed": "실행 파일을 변경할 수 없습니다",
+      "changed": "실행 파일 변경됨",
+      "defaultTag": "(기본값)",
+      "menuItem": "실행 파일 변경…",
+      "reset": "기본 실행 파일로 재설정",
+      "resetButton": "기본값으로 재설정",
+      "subtitle": "이 게임이 실행할 파일을 선택하십시오 (예: 런처를 건너뛰고 게임을 직접 실행). 작업 디렉토리와 클라우드 저장 데이터는 영향을 받지 않습니다.",
+      "title": "실행 파일 변경 — {{game}}",
+      "unavailable": "이 게임의 폴더를 읽을 수 없습니다."
     }
   },
   "playMeta": {
     "spaceRequired": "필요한 용량",
     "installedSize": "설치 크기",
     "lastPlayed": "최근 플레이",
-    "neverPlayed": "플레이한 적 없음"
+    "neverPlayed": "플레이한 적 없음",
+    "hoursShort": "시간",
+    "minutesShort": "분",
+    "played": "플레이함"
   },
   "downloads": {
     "title": "다운로드",
@@ -789,7 +805,8 @@
       "permission_denied": "액세스 거부됨",
       "cancelled": "취소됨",
       "unknown": "예기치 못한 에러 발생"
-    }
+    },
+    "unavailableNativeDep": "이 시스템에서는 클라우드 저장이 비활성화되어 있습니다 — Python ({{python}})에 필요한 구성 요소가 없습니다. 로컬 저장 데이터는 영향을 받지 않으며, 동기화를 복원하려면 시스템 업데이트 후 플러그인을 재빌드/재설치하십시오."
   },
   "launchLogs": {
     "_comment": "LaunchLogsModal용 다국어 텍스트 정보입니다. 런처 실패 알림(서킷 브레이커 + LauncherError)에 생성된 unifideck://show-logs/<launch_id> 링크 클릭 시 창이 열립니다. ~/.local/share/unifideck/launches/<launch_id>.log 에 기록된 로그 파일을 읽어와 중요도에 따라 색상별로 보여 줍니다.",
@@ -921,5 +938,10 @@
     "errorOffline": "도전 과제를 보려면 인터넷에 연결하세요.",
     "errorAuth": "도전 과제를 보려면 이 게임의 스토어에 로그인하세요.",
     "errorUnavailable": "이 게임에서는 도전 과제를 사용할 수 없습니다."
+  },
+  "collectionSettings": {
+    "title": "STEAM 컬렉션",
+    "enabled": "컬렉션 활성화됨",
+    "disabled": "컬렉션 비활성화됨"
   }
 }

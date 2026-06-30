@@ -582,7 +582,8 @@
     "cancel": "Annulla",
     "working": "Elaborazione…",
     "loading": "Caricamento…",
-    "free": "gratis"
+    "free": "gratis",
+    "close": "Chiudi"
   },
   "info": {
     "expandDetails": "Mostra dettagli",
@@ -660,13 +661,28 @@
       "statusUnresolved": "Cartella di salvataggio non trovata — la sincronizzazione potrebbe non funzionare per questo gioco.",
       "unresolvedHint": "Avvia il gioco una volta per rilevare la sua cartella di salvataggio, o impostala manualmente.",
       "upload": "Carica salvataggio locale"
+    },
+    "exe": {
+      "browse": "Sfoglia…",
+      "changeFailed": "Impossibile modificare l'eseguibile",
+      "changed": "Eseguibile modificato",
+      "defaultTag": "(predefinito)",
+      "menuItem": "Modifica eseguibile…",
+      "reset": "Ripristina l'eseguibile predefinito",
+      "resetButton": "Ripristina predefinito",
+      "subtitle": "Scegli quale file avvia questo gioco (es. saltare un launcher e avviare direttamente il gioco). La cartella di lavoro e i salvataggi cloud non subiranno variazioni.",
+      "title": "Modifica eseguibile — {{game}}",
+      "unavailable": "Impossibile leggere la cartella di questo gioco."
     }
   },
   "playMeta": {
     "spaceRequired": "Spazio richiesto",
     "installedSize": "Spazio occupato",
     "lastPlayed": "Ultima partita",
-    "neverPlayed": "Mai giocato"
+    "neverPlayed": "Mai giocato",
+    "hoursShort": "h",
+    "minutesShort": "m",
+    "played": "Giocati"
   },
   "downloads": {
     "title": "Download",
@@ -789,7 +805,8 @@
       "permission_denied": "Permesso negato",
       "cancelled": "Annullato",
       "unknown": "Errore imprevisto"
-    }
+    },
+    "unavailableNativeDep": "I salvataggi cloud sono disattivati su questo sistema — al suo Python ({{python}}) manca un componente richiesto. I tuoi salvataggi locali non sono influenzati; ricostruisci/reinstalla il plugin dopo un aggiornamento di sistema per ripristinare la sincronizzazione."
   },
   "launchLogs": {
     "_comment": "Stringhe di LaunchLogsModal. Il modal si apre dall'azione della notifica unifideck://show-logs/<launch_id>, associata alle notifiche di fallimento dell'avvio (circuit breaker + LauncherError). Legge i log archiviati per singolo avvio da ~/.local/share/unifideck/launches/<launch_id>.log e li mostra con colori in base alla gravità.",
@@ -921,5 +938,10 @@
     "errorOffline": "Connettiti a internet per vedere gli obiettivi.",
     "errorAuth": "Accedi allo store di questo gioco per vedere gli obiettivi.",
     "errorUnavailable": "Gli obiettivi non sono disponibili per questo gioco."
+  },
+  "collectionSettings": {
+    "title": "COLLEZIONI DI STEAM",
+    "enabled": "Collezioni abilitate",
+    "disabled": "Collezioni disabilitate"
   }
 }

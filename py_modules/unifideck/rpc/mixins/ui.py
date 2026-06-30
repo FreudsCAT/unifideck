@@ -152,8 +152,14 @@ class UIRPCMixin:
         return await injector.inject_css(css, marker)
 
     async def get_language_preference(self) -> Any:
-        """Return the current UI locale config value."""
-        return {"locale": self.config.get("ui.locale", "en-US")}
+        """Return the current UI locale preference.
+
+        ``locale`` is the stored *preference*: the ``"auto"``
+        sentinel (follow the system/UI language) or a concrete
+        BCP-47 tag. Defaults to ``"auto"`` so a fresh install
+        auto-detects rather than forcing English.
+        """
+        return {"success": True, "locale": self.config.get("ui.locale", "auto")}
 
     async def set_language_preference(self, locale: str) -> Any:
         """Persist the UI locale via config."""

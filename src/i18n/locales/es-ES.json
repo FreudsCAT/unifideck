@@ -582,7 +582,8 @@
     "cancel": "Cancelar",
     "working": "Trabajando…",
     "loading": "Cargando…",
-    "free": "gratis"
+    "free": "gratis",
+    "close": "Cerrar"
   },
   "info": {
     "expandDetails": "Mostrar detalles",
@@ -660,13 +661,28 @@
       "statusUnresolved": "Ubicación de guardado no encontrada — la sincronización podría no funcionar para este juego.",
       "unresolvedHint": "Inicia el juego una vez para que podamos detectar su carpeta de guardado, o define la ubicación manualmente.",
       "upload": "Subir guardado local"
+    },
+    "exe": {
+      "browse": "Buscar…",
+      "changeFailed": "No se pudo cambiar el ejecutable",
+      "changed": "Ejecutable cambiado",
+      "defaultTag": "(predeterminado)",
+      "menuItem": "Cambiar ejecutable…",
+      "reset": "Restablecer al ejecutable predeterminado",
+      "resetButton": "Restablecer al predeterminado",
+      "subtitle": "Elige qué archivo inicia este juego (por ejemplo, omitir un lanzador y ejecutar el juego directamente). El directorio de trabajo y los guardados en la nube no se verán afectados.",
+      "title": "Cambiar ejecutable — {{game}}",
+      "unavailable": "No se pudo leer la carpeta de este juego."
     }
   },
   "playMeta": {
     "spaceRequired": "Espacio requerido",
     "installedSize": "Tamaño instalado",
     "lastPlayed": "Última partida",
-    "neverPlayed": "Nunca jugado"
+    "neverPlayed": "Nunca jugado",
+    "hoursShort": "h",
+    "minutesShort": "m",
+    "played": "Jugados"
   },
   "downloads": {
     "title": "Descargas",
@@ -789,7 +805,8 @@
       "permission_denied": "Permiso denegado",
       "cancelled": "Cancelado",
       "unknown": "Error inesperado"
-    }
+    },
+    "unavailableNativeDep": "Los guardados en la nube están desactivados en este sistema — a su Python ({{python}}) le falta un componente requerido. Tus partidas locales no se verán afectadas; reconstruye/reinstala el complemento después de una actualización del sistema para restaurar la sincronización."
   },
   "launchLogs": {
     "_comment": "Mensajes de LaunchLogsModal. El modal se abre desde la acción de notificación unifideck://show-logs/<launch_id>, que se adjunta a los avisos de fallo del lanzador (circuit breaker + LauncherError). Lee los registros archivados de cada inicio en ~/.local/share/unifideck/launches/<launch_id>.log y los muestra con colores según el nivel de error.",
@@ -921,5 +938,10 @@
     "errorOffline": "Conéctate a internet para ver los logros.",
     "errorAuth": "Inicia sesión en la tienda de este juego para ver los logros.",
     "errorUnavailable": "Los logros no están disponibles para este juego."
+  },
+  "collectionSettings": {
+    "title": "COLECCIONES DE STEAM",
+    "enabled": "Colecciones activadas",
+    "disabled": "Colecciones desactivadas"
   }
 }

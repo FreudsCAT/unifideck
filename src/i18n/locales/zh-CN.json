@@ -582,7 +582,8 @@
     "cancel": "取消",
     "working": "正在处理…",
     "loading": "正在加载…",
-    "free": "免费"
+    "free": "免费",
+    "close": "关闭"
   },
   "info": {
     "expandDetails": "展开详情",
@@ -660,13 +661,28 @@
       "statusUnresolved": "未找到存档位置 — 此游戏可能无法进行同步。",
       "unresolvedHint": "启动游戏一次以便我们检测其存档文件夹，或手动设置位置。",
       "upload": "上传本地存档"
+    },
+    "exe": {
+      "browse": "浏览…",
+      "changeFailed": "无法更改可执行文件",
+      "changed": "可执行文件已更改",
+      "defaultTag": "(默认)",
+      "menuItem": "更改可执行文件…",
+      "reset": "重置为默认可执行文件",
+      "resetButton": "重置为默认",
+      "subtitle": "选择此游戏启动的文件（例如：跳过启动器并直接运行游戏）。工作目录和云端存档不受影响。",
+      "title": "更改可执行文件 — {{game}}",
+      "unavailable": "无法读取此游戏的文件夹。"
     }
   },
   "playMeta": {
     "spaceRequired": "所需空间",
     "installedSize": "占用空间",
     "lastPlayed": "上次运行",
-    "neverPlayed": "从未运行过"
+    "neverPlayed": "从未运行过",
+    "hoursShort": "小时",
+    "minutesShort": "分钟",
+    "played": "已玩"
   },
   "downloads": {
     "title": "下载",
@@ -789,7 +805,8 @@
       "permission_denied": "权限被拒绝",
       "cancelled": "操作已取消",
       "unknown": "未预料的系统错误"
-    }
+    },
+    "unavailableNativeDep": "此系统上的云端存档已关闭 — 其 Python ({{python}}) 缺少必要的组件。您的本地存档不受影响；请在系统更新后重新构建/重新安装插件以恢复同步。"
   },
   "launchLogs": {
     "_comment": "LaunchLogsModal 使用 of 国际化文案。弹窗通过 launcher 出错通知中附加 of unifideck://show-logs/<launch_id> 协议唤起。它用于读取保存在 ~/.local/share/unifideck/launches/<launch_id>.log 中的单次运行日志，并提供带等级色彩的分类渲染展示。",
@@ -921,5 +938,10 @@
     "errorOffline": "连接到互联网以查看成就。",
     "errorAuth": "登录此游戏的商店以查看成就。",
     "errorUnavailable": "此游戏不支持成就。"
+  },
+  "collectionSettings": {
+    "title": "STEAM 收藏夹",
+    "enabled": "收藏夹已启用",
+    "disabled": "收藏夹已禁用"
   }
 }

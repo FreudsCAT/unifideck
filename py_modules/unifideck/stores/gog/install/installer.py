@@ -328,6 +328,15 @@ class GOGInstaller:
             ctx.explicit_lang,
             ctx.supported_langs,
         )
+        logger.info(
+            "[GOGInstaller] %s gogdl --lang=%s (preferred=%s explicit=%s "
+            "supported=%s)",
+            ctx.game_id,
+            languages,
+            ctx.preferred_lang,
+            ctx.explicit_lang,
+            ctx.supported_langs,
+        )
         started_as_repair = ctx.install_mode == "repair"
         download_ok = await self._run_gogdl_with_progress(
             install_mode=ctx.install_mode,

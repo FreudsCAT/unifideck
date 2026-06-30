@@ -115,12 +115,18 @@ class DownloadService(_WorkerMixin):
         install_path: str,
         title: str = "",
         is_update: bool = False,
+        language: str | None = None,
     ) -> Result:
         """Queue a new download request.
 
         ``is_update`` is recorded as-is on the item — the caller
         (the ``install_game`` vs ``update_game`` RPC) knows the
         operation; the service does not infer it.
+
+        ``language`` is the user-picked install language (GOG
+        multi-language games); recorded on the item and threaded
+        to the store installer by the worker. ``None`` means "use
+        the store default".
         """
         # 1. Validation
         val_result = validate_path(install_path)
@@ -145,6 +151,7 @@ class DownloadService(_WorkerMixin):
                 install_path=install_path,
                 title=title,
                 is_update=is_update,
+                language=language or "",
                 # Ubisoft is a launcher-driven (UPC) install with no real
                 # download — mark it "manual" from enqueue so the UI shows the
                 # indeterminate "Installing in Ubisoft Connect" state instead

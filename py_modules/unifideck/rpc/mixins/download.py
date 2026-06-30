@@ -117,9 +117,16 @@ class DownloadRPCMixin:
             base_path = str(Path.home() / "Games")
 
         title: str = opts.pop("title", "") or opts.pop("game_title", "")
+        # GOG multi-language picker selection (verbatim — it's one of
+        # the game's own language codes, matched exactly downstream).
+        # Other stores don't send this.
+        language = opts.pop("language", None)
 
-        logger.info("[download] install_game store=%s game_id=%s storage=%s base_path=%s title=%s",
-                     store, game_id, storage_type, base_path, title)
+        logger.info(
+            "[download] install_game store=%s game_id=%s storage=%s "
+            "base_path=%s title=%s language=%s",
+            store, game_id, storage_type, base_path, title, language,
+        )
 
         download_svc = self._require_download()
         result = await download_svc.add(
@@ -128,6 +135,7 @@ class DownloadRPCMixin:
             install_path=base_path,
             title=title,
             is_update=False,
+            language=language,
         )
         return {"success": result.success, "error": result.error}
 

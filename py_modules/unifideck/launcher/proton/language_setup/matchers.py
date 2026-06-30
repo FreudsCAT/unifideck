@@ -16,16 +16,3 @@ def smart_match_locale(
         if code.split("-")[0].lower() == base:
             return data
     return None
-def smart_match_gog_language(
-    target: str, available: list[str],
-) -> str | None:
-    """Smart match GOG language."""
-    if not target or not available:
-        return None
-    if target in available:
-        return target
-    base = target.split("-", maxsplit=1)[0].lower()
-    for lang in available:
-        if lang.split("-")[0].lower() == base:
-            return lang
-    return None

@@ -582,7 +582,8 @@
     "cancel": "Abbrechen",
     "working": "Arbeiten…",
     "loading": "Laden…",
-    "free": "kostenlos"
+    "free": "kostenlos",
+    "close": "Schließen"
   },
   "info": {
     "expandDetails": "Details anzeigen",
@@ -660,13 +661,28 @@
       "statusUnresolved": "Speicherort nicht gefunden — Synchronisation funktioniert für dieses Spiel eventuell nicht.",
       "unresolvedHint": "Starte das Spiel einmal, damit wir den Speicherordner erkennen können, oder lege den Ort manuell fest.",
       "upload": "Lokalen Spielstand hochladen"
+    },
+    "exe": {
+      "browse": "Durchsuchen…",
+      "changeFailed": "Ausführbare Datei konnte nicht geändert werden",
+      "changed": "Ausführbare Datei geändert",
+      "defaultTag": "(Standard)",
+      "menuItem": "Ausführbare Datei ändern…",
+      "reset": "Auf Standard-Datei zurücksetzen",
+      "resetButton": "Auf Standard zurücksetzen",
+      "subtitle": "Wählen Sie aus, welche Datei dieses Spiel startet (z. B. um einen Launcher zu überspringen und das Spiel direkt auszuführen). Das Arbeitsverzeichnis und Cloud-Spielstände sind nicht betroffen.",
+      "title": "Ausführbare Datei ändern — {{game}}",
+      "unavailable": "Der Ordner dieses Spiels konnte nicht gelesen werden."
     }
   },
   "playMeta": {
     "spaceRequired": "Benötigter Speicherplatz",
     "installedSize": "Installierte Größe",
     "lastPlayed": "Zuletzt gespielt",
-    "neverPlayed": "Nie gespielt"
+    "neverPlayed": "Nie gespielt",
+    "hoursShort": "Std.",
+    "minutesShort": "Min.",
+    "played": "Gespielt"
   },
   "downloads": {
     "title": "Downloads",
@@ -789,7 +805,8 @@
       "permission_denied": "Berechtigung verweigert",
       "cancelled": "Abgebrochen",
       "unknown": "Unerwarteter Fehler"
-    }
+    },
+    "unavailableNativeDep": "Cloud-Spielstände sind auf diesem System deaktiviert — der Python-Installation ({{python}}) fehlt eine erforderliche Komponente. Ihre lokalen Spielstände sind nicht betroffen. Erstellen/installieren Sie das Plugin nach einem Systemupdate neu, um die Synchronisierung wiederherzustellen."
   },
   "launchLogs": {
     "_comment": "Zeichenfolgen für LaunchLogsModal. Das Modal wird über die Toast-Aktion unifideck://show-logs/<launch_id> geöffnet, die an Launcher-Fehler-Toasts (Circuit Breaker + LauncherError) angehängt ist. Liest archivierte Protokolle pro Start aus ~/.local/share/unifideck/launches/<launch_id>.log und rendert sie mit stufenbasierter Farbcodierung.",
@@ -921,5 +938,10 @@
     "errorOffline": "Stelle eine Internetverbindung her, um Erfolge anzuzeigen.",
     "errorAuth": "Melde dich im Store dieses Spiels an, um Erfolge anzuzeigen.",
     "errorUnavailable": "Für dieses Spiel sind keine Erfolge verfügbar."
+  },
+  "collectionSettings": {
+    "title": "STEAM-SAMMLUNGEN",
+    "enabled": "Sammlungen aktiviert",
+    "disabled": "Sammlungen deaktiviert"
   }
 }

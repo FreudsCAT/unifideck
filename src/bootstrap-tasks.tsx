@@ -24,13 +24,20 @@ import { call } from "@decky/api";
 import { showModal } from "@decky/ui";
 import i18n from "i18next";
 import { rpcRoutes } from "./api/rpc-routes";
+import { unwrapRpcEnvelope } from "./api/useRPC";
+import {
+  AUTO_DETECT,
+  LANG_STORAGE_KEY,
+  resolveAutoLanguage,
+} from "./i18n/translations";
 import { AccountSwitchModal, SteamRestartModal } from "./components/modals";
 import { uploadSteamOwnedTitles } from "./lib/steam-bridge/owned-library";
 import type { Unregisterable } from "./types/steam";
-/** Language pref. */
+/** Language pref — the `data` payload of `get_language_preference`
+ *  after the `{success, error, data}` envelope is unwrapped.
+ *  `locale` is the stored preference ("auto" or a concrete tag). */
 interface LanguagePref {
-  success: boolean;
-  language: string;
+  locale: string;
 }
 /** Account switch info. */
 interface AccountSwitchInfo {
@@ -54,9 +61,26 @@ interface MigrateResult {
  */
 export async function applyLanguagePreference(): Promise<void> {
   try {
-    const r = await call<[], LanguagePref>(rpcRoutes.getLanguagePreference);
-    if (r?.success && r.language && r.language !== "auto") {
-      await i18n.changeLanguage(r.language);
+    // get_language_preference returns the {success, error, data}
+    // envelope — unwrap to the {locale} payload (raw `call` doesn't).
+    const raw = await call<[], unknown>(rpcRoutes.getLanguagePreference);
+    const r = unwrapRpcEnvelope<LanguagePref>(raw, {
+      route: rpcRoutes.getLanguagePreference,
+      throwing: false,
+    });
+    const pref = r?.locale || AUTO_DETECT;
+    // "auto" (or an empty pref) resolves to the detected tag —
+    // i18next has no "auto" bundle and would fall back to English.
+    const tag = pref === AUTO_DETECT ? resolveAutoLanguage() : pref;
+    if (i18n.language !== tag) {
+      await i18n.changeLanguage(tag);
+    }
+    // Mirror the preference so the early toast path and
+    // <LocaleProvider> agree on what's selected.
+    try {
+      localStorage.setItem(LANG_STORAGE_KEY, pref);
+    } catch {
+      // ignore quota/availability errors
     }
   } catch {
     // Backend not ready — safe default (navigator language) stays

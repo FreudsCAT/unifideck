@@ -35,8 +35,17 @@ _LANG_MAP = {
 
 
 def language_name(lang_code: str) -> str:
-    """Map a locale (``en-US``) to a GOG setup language name (``english``)."""
-    return _LANG_MAP.get(lang_code.split("-", maxsplit=1)[0], "english")
+    """Map a language label to a GOG ``setup.exe`` language name.
+
+    The GOG installer's ``/Language=`` switch requires a name like
+    ``spanish`` — it can't take a raw locale code — so this mapping is
+    mandated by that interface, not a substitution of the user's code.
+    Normalizes whatever format the marker recorded (``esp`` / ``Spanish``
+    / ``es-ES``) to an ISO base first so the lookup actually resolves.
+    """
+    from unifideck.utils.lang_normalize import normalize_language
+    base = normalize_language(lang_code) or lang_code.split("-", maxsplit=1)[0].lower()
+    return _LANG_MAP.get(base, "english")
 
 
 def wait_for_prefix_ready(prefix_path: Path, timeout: int = 30) -> bool:

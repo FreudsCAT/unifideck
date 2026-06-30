@@ -582,7 +582,8 @@
     "cancel": "Annuleren",
     "working": "Verwerken…",
     "loading": "Laden…",
-    "free": "gratis"
+    "free": "gratis",
+    "close": "Sluiten"
   },
   "info": {
     "expandDetails": "Details weergeven",
@@ -660,13 +661,28 @@
       "statusUnresolved": "Opslaglocatie niet gevonden — synchronisatie werkt mogelijk niet voor deze game.",
       "unresolvedHint": "Start de game eenmaal op zodat we de opslagmap kunnen detecteren, of stel de locatie handmatig in.",
       "upload": "Lokale opslag uploaden"
+    },
+    "exe": {
+      "browse": "Bladeren…",
+      "changeFailed": "Kon het uitvoerbare bestand niet wijzigen",
+      "changed": "Uitvoerbaar bestand gewijzigd",
+      "defaultTag": "(standaard)",
+      "menuItem": "Uitvoerbaar bestand wijzigen…",
+      "reset": "Herstellen naar standaard uitvoerbaar bestand",
+      "resetButton": "Herstellen naar standaard",
+      "subtitle": "Kies welk bestand deze game start (bijv. sla een launcher over en start de game direct). De werkmap en cloudopslag worden niet beïnvloed.",
+      "title": "Uitvoerbaar bestand wijzigen — {{game}}",
+      "unavailable": "Kon de map van deze game niet lezen."
     }
   },
   "playMeta": {
     "spaceRequired": "Benodigde ruimte",
     "installedSize": "Geïnstalleerde grootte",
     "lastPlayed": "Laatst gespeeld",
-    "neverPlayed": "Nooit gespeeld"
+    "neverPlayed": "Nooit gespeeld",
+    "hoursShort": "u",
+    "minutesShort": "m",
+    "played": "Gespeeld"
   },
   "downloads": {
     "title": "Downloads",
@@ -789,7 +805,8 @@
       "permission_denied": "Toegang geweigerd",
       "cancelled": "Geannuleerd",
       "unknown": "Onverwachte fout"
-    }
+    },
+    "unavailableNativeDep": "Cloudopslag is uitgeschakeld op dit systeem — de Python-installatie ({{python}}) mist een vereist onderdeel. Je lokale opslag is niet beïnvloed; herbouw/herinstalleer de plugin na een systeemupdate om de synchronisatie te herstellen."
   },
   "launchLogs": {
     "_comment": "Berichten voor LaunchLogsModal. De modal wordt geopend via de notificatie-actie unifideck://show-logs/<launch_id>, die is gekoppeld aan launcher-foutmeldingen (circuit breaker + LauncherError). Leest de gearchiveerde logs van elke start in ~/.local/share/unifideck/launches/<launch_id>.log en toont ze gekleurd op basis van ernst.",
@@ -921,5 +938,10 @@
     "errorOffline": "Maak verbinding met internet om prestaties te bekijken.",
     "errorAuth": "Meld je aan bij de store van dit spel om prestaties te bekijken.",
     "errorUnavailable": "Prestaties zijn niet beschikbaar voor dit spel."
+  },
+  "collectionSettings": {
+    "title": "STEAM-COLLECTIES",
+    "enabled": "Collecties ingeschakeld",
+    "disabled": "Collecties uitgeschakeld"
   }
 }

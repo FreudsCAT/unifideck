@@ -582,7 +582,8 @@
     "cancel": "Annuler",
     "working": "Traitement…",
     "loading": "Chargement…",
-    "free": "gratuit"
+    "free": "gratuit",
+    "close": "Fermer"
   },
   "info": {
     "expandDetails": "Afficher les détails",
@@ -660,13 +661,28 @@
       "statusUnresolved": "Emplacement de sauvegarde introuvable — la synchronisation pourrait ne pas fonctionner pour ce jeu.",
       "unresolvedHint": "Lancez le jeu une fois pour que nous puissions détecter son dossier de sauvegarde, ou définissez l'emplacement manuellement.",
       "upload": "Téléverser la sauvegarde locale"
+    },
+    "exe": {
+      "browse": "Parcourir…",
+      "changeFailed": "Impossible de modifier l'exécutable",
+      "changed": "Exécutable modifié",
+      "defaultTag": "(par défaut)",
+      "menuItem": "Modifier l'exécutable…",
+      "reset": "Réinitialiser à l'exécutable par défaut",
+      "resetButton": "Réinitialiser",
+      "subtitle": "Choisissez le fichier avec lequel lancer ce jeu (ex. contourner un lanceur et lancer le jeu directement). Le dossier de travail et les sauvegardes cloud ne sont pas affectés.",
+      "title": "Modifier l'exécutable — {{game}}",
+      "unavailable": "Impossible de lire le dossier de ce jeu."
     }
   },
   "playMeta": {
     "spaceRequired": "Espace requis",
     "installedSize": "Taille installée",
     "lastPlayed": "Dernière partie",
-    "neverPlayed": "Jamais joué"
+    "neverPlayed": "Jamais joué",
+    "hoursShort": "h",
+    "minutesShort": "m",
+    "played": "Jouées"
   },
   "downloads": {
     "title": "Téléchargements",
@@ -789,7 +805,8 @@
       "permission_denied": "Permission refusée",
       "cancelled": "Annulé",
       "unknown": "Erreur inattendue"
-    }
+    },
+    "unavailableNativeDep": "Les sauvegardes cloud sont désactivées sur ce système — son Python ({{python}}) ne dispose pas d'un composant requis. Vos sauvegardes locales ne sont pas affectées ; recréez/réinstallez le plugin après une mise à jour du système pour restaurer la synchronisation."
   },
   "launchLogs": {
     "_comment": "Chaînes pour LaunchLogsModal. Le modal s'ouvre à partir de l'action de notification unifideck://show-logs/<launch_id>, associée aux notifications d'échec du lanceur (circuit breaker + LauncherError). Lit les journaux archivés par lancement depuis ~/.local/share/unifideck/launches/<launch_id>.log et les affiche avec un code couleur basé sur le niveau.",
@@ -921,5 +938,10 @@
     "errorOffline": "Connectez-vous à Internet pour voir les succès.",
     "errorAuth": "Connectez-vous à la boutique de ce jeu pour voir les succès.",
     "errorUnavailable": "Les succès ne sont pas disponibles pour ce jeu."
+  },
+  "collectionSettings": {
+    "title": "COLLECTIONS STEAM",
+    "enabled": "Collections activées",
+    "disabled": "Collections désactivées"
   }
 }

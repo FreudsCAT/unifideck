@@ -123,6 +123,7 @@ class GOGStore(StoreBase):
             config=self._gog_config,
             tokens=self._tokens,
             exe_finder=self._exe.find,
+            config_manager=self._config_manager,
         )
 
     def _build_gogdl_submodules(self) -> None:

@@ -582,7 +582,8 @@
     "cancel": "キャンセル",
     "working": "処理中…",
     "loading": "読み込み中…",
-    "free": "無料"
+    "free": "無料",
+    "close": "閉じる"
   },
   "info": {
     "expandDetails": "詳細を展開",
@@ -660,13 +661,28 @@
       "statusUnresolved": "セーブ場所が見つかりません — このゲームでは同期が機能しない可能性があります。",
       "unresolvedHint": "セーブフォルダを検出するためにゲームを一度起動するか、手動で場所を設定してください。",
       "upload": "ローカルセーブをアップロード"
+    },
+    "exe": {
+      "browse": "参照…",
+      "changeFailed": "実行ファイルを変更できませんでした",
+      "changed": "実行ファイルを変更しました",
+      "defaultTag": "(デフォルト)",
+      "menuItem": "実行ファイルを変更…",
+      "reset": "デフォルトの実行ファイルに戻す",
+      "resetButton": "デフォルトに戻す",
+      "subtitle": "このゲームが起動するファイルを選択します（ランチャーをスキップしてゲームを直接実行する場合など）。作業ディレクトリとクラウドセーブは影響を受けません。",
+      "title": "実行ファイルの変更 — {{game}}",
+      "unavailable": "このゲームのフォルダを読み取れませんでした。"
     }
   },
   "playMeta": {
     "spaceRequired": "必要な空き容量",
     "installedSize": "インストールサイズ",
     "lastPlayed": "最後にプレイした日",
-    "neverPlayed": "未プレイ"
+    "neverPlayed": "未プレイ",
+    "hoursShort": "時間",
+    "minutesShort": "分",
+    "played": "プレイ済み"
   },
   "downloads": {
     "title": "ダウンロード",
@@ -789,7 +805,8 @@
       "permission_denied": "アクセス権限がありません",
       "cancelled": "キャンセルされました",
       "unknown": "予期しないエラーが発生しました"
-    }
+    },
+    "unavailableNativeDep": "このシステムではクラウドセーブが無効になっています — Python ({{python}}) に必要なコンポーネントが不足しています。ローカルセーブには影響ありません。同期を復元するには、システムアップデート後にプラグインを再ビルド/再インストールしてください。"
   },
   "launchLogs": {
     "_comment": "LaunchLogsModal 用のメッセージ。このモーダルは、ランチャーの起動失敗（サーキットブレーカーまたはランチャーエラー）時に通知に添付される unifideck://show-logs/<launch_id> リンクから開かれます。~/.local/share/unifideck/launches/<launch_id>.log に保存されている起動ごとのアーカイブされたログを読み込み、ログの重要度に応じて色分けして表示します。",
@@ -921,5 +938,10 @@
     "errorOffline": "実績を表示するにはインターネットに接続してください。",
     "errorAuth": "実績を表示するには、このゲームのストアにサインインしてください。",
     "errorUnavailable": "このゲームでは実績を利用できません。"
+  },
+  "collectionSettings": {
+    "title": "STEAM コレクション",
+    "enabled": "コレクションが有効",
+    "disabled": "コレクションが無効"
   }
 }

@@ -107,30 +107,63 @@ class GOGDlcManager:
         return []
 
     async def get_available_languages(self, game_id: str) -> list[str]:
-        """Get available languages."""
-        stdout = await self._spawn_lang_probe(game_id)
-        if stdout is None:
-            return list(_LANGUAGE_FALLBACK)
-        languages = self._parse_languages_from_info(stdout)
-        if languages:
-            logger.info(
-                "[GOGDlcManager] %s languages: %s",
+        """Get available languages.
+
+        Mirrors the installer's platform resolution (Linux build
+        preferred, Windows fallback — see
+        ``_InstallHelpers.probe_game_info``) so the languages shown
+        in the install modal match the build that actually installs.
+        A Windows-only probe would otherwise list a different set
+        than the resolved build, breaking the modal pre-selection
+        and the language pass-through.
+        """
+        for platform in ("linux", "windows"):
+            stdout, returncode = await self._spawn_lang_probe(game_id, platform)
+            if returncode is None:
+                # Fatal pre-check (no tokens / gogdl missing) — not
+                # platform-specific, so don't bother with Windows.
+                return list(_LANGUAGE_FALLBACK)
+            if returncode != 0:
+                if platform == "linux":
+                    logger.info(
+                        "[GOGDlcManager] no Linux build for %s, trying Windows",
+                        game_id,
+                    )
+                    continue
+                return list(_LANGUAGE_FALLBACK)
+            languages = self._parse_languages_from_info(stdout or b"")
+            if languages:
+                logger.info(
+                    "[GOGDlcManager] %s (%s) languages: %s",
+                    game_id,
+                    platform,
+                    languages,
+                )
+                return languages
+            logger.warning(
+                "[GOGDlcManager] no languages in info output for %s (%s)",
                 game_id,
-                languages,
+                platform,
             )
-            return languages
-        logger.warning(
-            "[GOGDlcManager] no languages in info output for %s",
-            game_id,
-        )
+            return list(_LANGUAGE_FALLBACK)
         return list(_LANGUAGE_FALLBACK)
 
-    async def _spawn_lang_probe(self, game_id: str) -> bytes | None:
-        """Spawn lang probe."""
+    async def _spawn_lang_probe(
+        self,
+        game_id: str,
+        platform: str,
+    ) -> tuple[bytes | None, int | None]:
+        """Run ``gogdl info`` for ``platform``.
+
+        Returns ``(stdout, returncode)``. ``returncode`` is ``None``
+        for a fatal pre-check failure (no tokens / gogdl missing)
+        that won't differ by platform, so the caller can stop early
+        rather than retrying the other platform.
+        """
         if not await self._tokens.refresh_if_stale():
-            return None
+            return None, None
         if not await asyncio.to_thread(lambda: Path(self._gogdl_bin).is_file()):
-            return None
+            return None, None
         try:
             async with self._tokens.gogdl_credentials() as (env, creds_path):
                 cmd = [
@@ -139,7 +172,7 @@ class GOGDlcManager:
                     creds_path,
                     "info",
                     "--platform",
-                    "windows",
+                    platform,
                     game_id,
                 ]
                 proc = await asyncio.create_subprocess_exec(
@@ -154,19 +187,18 @@ class GOGDlcManager:
                 )
         except TimeoutError:
             logger.warning(
-                "[GOGDlcManager] language probe timed out for %s",
+                "[GOGDlcManager] language probe (%s) timed out for %s",
+                platform,
                 game_id,
             )
-            return None
+            return None, None
         except OSError as e:
             logger.warning(
                 "[GOGDlcManager] gogdl spawn failed: %s",
                 e,
             )
-            return None
-        if proc.returncode != 0:
-            return None
-        return stdout
+            return None, None
+        return stdout, proc.returncode
 
     @staticmethod
     def _parse_languages_from_info(stdout: bytes) -> list[str]:

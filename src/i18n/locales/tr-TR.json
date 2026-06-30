@@ -582,7 +582,8 @@
     "cancel": "İptal",
     "working": "İşleniyor…",
     "loading": "Yükleniyor…",
-    "free": "ücretsiz"
+    "free": "ücretsiz",
+    "close": "Kapat"
   },
   "info": {
     "expandDetails": "Ayrıntıları Genişlet",
@@ -660,13 +661,28 @@
       "statusUnresolved": "Kayıt konumu bulunamadı — eşitleme bu oyun için çalışmayabilir.",
       "unresolvedHint": "Kayıt klasörünü tespit edebilmemiz için oyunu bir kez başlatın veya konumu manuel olarak ayarlayın.",
       "upload": "Yerel kaydı yükle"
+    },
+    "exe": {
+      "browse": "Göz at…",
+      "changeFailed": "Çalıştırılabilir dosya değiştirilemedi",
+      "changed": "Çalıştırılabilir dosya değiştirildi",
+      "defaultTag": "(varsayılan)",
+      "menuItem": "Çalıştırılabilir dosyayı değiştir…",
+      "reset": "Varsayılan çalıştırılabilir dosyaya sıfırla",
+      "resetButton": "Varsayılana sıfırla",
+      "subtitle": "Bu oyunun hangi dosyayı başlatacağını seçin (örn. bir başlatıcıyı atlayıp oyunu doğrudan çalıştırmak için). Çalışma dizini ve bulut kayıtları etkilenmez.",
+      "title": "Çalıştırılabilir dosyayı değiştir — {{game}}",
+      "unavailable": "Bu oyunun klasörü okunamadı."
     }
   },
   "playMeta": {
     "spaceRequired": "Gerekli Alan",
     "installedSize": "Yüklü Boyut",
     "lastPlayed": "Son Oynama",
-    "neverPlayed": "Hiç Oynanmadı"
+    "neverPlayed": "Hiç Oynanmadı",
+    "hoursShort": "sa",
+    "minutesShort": "dk",
+    "played": "Oynandı"
   },
   "downloads": {
     "title": "İndirmeler",
@@ -789,7 +805,8 @@
       "permission_denied": "İzin reddedildi",
       "cancelled": "İptal edildi",
       "unknown": "Beklenmeyen hata"
-    }
+    },
+    "unavailableNativeDep": "Bu sistemde bulut kayıtları kapalı — Python ({{python}}) sürümünde gerekli bir bileşen eksik. Yerel kayıtlarınız bu durumdan etkilenmez; eşitlemeyi geri yüklemek için sistem güncellemesinden sonra eklentiyi yeniden derleyin/yükleyin."
   },
   "launchLogs": {
     "_comment": "LaunchLogsModal için mesajlar. Mod penceresi, başlatıcı hata uyarılarına (devre kesici + BaşlatıcıHatası) eklenmiş olan unifideck://show-logs/<launch_id> bildirim eyleminden açılır. ~/.local/share/unifideck/launches/<launch_id>.log adresindeki her başlatma için arşivlenmiş günlükleri okur ve önem derecesine göre renklendirilmiş olarak görüntüler.",
@@ -921,5 +938,10 @@
     "errorOffline": "Başarımları görüntülemek için internete bağlanın.",
     "errorAuth": "Başarımları görüntülemek için bu oyunun mağazasında oturum açın.",
     "errorUnavailable": "Bu oyun için başarımlar mevcut değil."
+  },
+  "collectionSettings": {
+    "title": "STEAM KOLEKSİYONLARI",
+    "enabled": "Koleksiyonlar etkin",
+    "disabled": "Koleksiyonlar devre dışı"
   }
 }

@@ -190,7 +190,7 @@
     "manifest_filename": ".unifideck_manifest.json"
   },
   "ui": {
-    "locale": "en-US"
+    "locale": "auto"
   },
   "probes": {
     "probe_to_features": {

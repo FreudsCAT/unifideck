@@ -52,6 +52,9 @@ class DownloadItem:
     game_id: str
     install_path: str
     title: str = ""
+    # User-picked install language (GOG multi-language games),
+    # verbatim store language code. Empty = use the store default.
+    language: str = ""
     progress: float = 0.0
     status: str = "queued"
     error: str = ""
@@ -91,6 +94,8 @@ class DownloadItem:
             # Title (both names)
             "title": self.title,
             "game_title": self.title,
+            # Install language (verbatim store code; "" = default)
+            "language": self.language,
             # Path
             "install_path": self.install_path,
             # Progress (both names)

@@ -14,6 +14,8 @@
 import { FC, useState } from "react";
 import { ConfirmModal, Dropdown, DropdownOption } from "@decky/ui";
 import { useTranslation } from "react-i18next";
+import i18n from "i18next";
+import { matchGogLanguage } from "../../lib/i18n/gog-language-match";
 
 /** Display labels for GOG language codes. Falls back to the
  *  raw code if a code isn't recognised — the modal still works,
@@ -50,6 +52,24 @@ interface Props {
   languages: string[];
   onConfirm: (language: string) => void;
   closeModal?: () => void;
+  /** Locale tag to pre-select if the game offers it. Defaults to
+   *  the active UI language (which reflects the "auto" preference
+   *  resolved to the system language). */
+  preferredTag?: string;
+}
+
+/**
+ * Pick the option to pre-select: the user's language if the game
+ * offers it, else an English option, else the first listed —
+ * normalizing the inconsistent label formats gogdl emits. The
+ * user still confirms (or changes) before anything installs.
+ */
+function pickDefaultLanguage(options: string[], preferredTag: string): string {
+  return (
+    matchGogLanguage(options, preferredTag) ??
+    matchGogLanguage(options, "en") ??
+    options[0]
+  );
 }
 
 /**
@@ -62,10 +82,13 @@ export const GOGLanguageSelectModal: FC<Props> = ({
   languages,
   onConfirm,
   closeModal,
+  preferredTag = i18n.language,
 }) => {
   const { t } = useTranslation();
   const safeLanguages = languages.length > 0 ? languages : ["en-US"];
-  const [selected, setSelected] = useState<string>(safeLanguages[0]);
+  const [selected, setSelected] = useState<string>(() =>
+    pickDefaultLanguage(safeLanguages, preferredTag),
+  );
 
   const options: DropdownOption[] = safeLanguages.map((lang) => ({
     data: lang,
