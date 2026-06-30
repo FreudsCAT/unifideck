@@ -2,8 +2,7 @@
 /**
  * Regression tests for the cleanup → collection-deletion flow:
  * Steam's `Delete()` mutates the live `userCollections` Map, which used
- * to skip entries mid-iteration, and the plugin-init sync used to
- * recreate everything the user just wiped.
+ * to skip entries mid-iteration, and the opt-in/opt-out collection manager.
  */
 import { describe, it, expect, beforeEach, vi } from "vitest";
 
@@ -11,6 +10,7 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 // and absent under vitest — stub the two imports that pull them in.
 vi.mock("./tab-container", () => ({
   getUnifideckTabs: () => [{ id: "unifideck-alpha", title: "Alpha", position: 0, filters: [] }],
+  isTabMasterInstalled: () => false,
 }));
 vi.mock("../library-filters", () => ({
   runFilters: () => true,
@@ -22,7 +22,8 @@ import {
   startCollectionManager,
 } from "./collection-manager";
 
-const SUPPRESSION_KEY = "unifideck.collections.suppressed";
+const COLLECTIONS_ENABLED_KEY = "unifideck:collections.enabled";
+const COLLECTIONS_CLEANED_KEY = "unifideck:collections.cleaned";
 
 interface MockCollection {
   id: string;
@@ -59,7 +60,7 @@ function makeStore(names: string[]) {
   names.forEach(make);
   const store = {
     userCollections: map,
-    GetCollection: vi.fn((id: string) => (id === "type-games" ? { allApps: [] } : map.get(id))),
+    GetCollection: vi.fn((id: string) => (id === "type-games" ? { allApps: [ { appid: 1, display_name: "Game" } ] } : map.get(id))),
     GetCollectionIDByUserTag: vi.fn((tag: string) => {
       for (const c of map.values()) if (c.displayName === tag) return c.id;
       return null;
@@ -67,6 +68,9 @@ function makeStore(names: string[]) {
     NewUnsavedCollection: vi.fn((tag: string) => make(tag)),
   };
   (window as unknown as { collectionStore: unknown }).collectionStore = store;
+  (window as unknown as { appStore: unknown }).appStore = {
+    GetAppOverviewByAppID: () => ({ appid: 1, display_name: "Game" }),
+  };
   return { map, store };
 }
 
@@ -88,30 +92,32 @@ describe("deleteAllUnifideckCollections", () => {
     expect(remaining).toEqual(["Untouched"]);
   });
 
-  it("sets the suppression flag so post-cleanup syncs are no-ops", async () => {
+  it("does not sync collections when disabled", async () => {
     const { store } = makeStore(["[Unifideck] Alpha"]);
-    await deleteAllUnifideckCollections();
-    expect(window.localStorage.getItem(SUPPRESSION_KEY)).toBe("1");
+    window.localStorage.setItem(COLLECTIONS_ENABLED_KEY, "0");
 
     store.GetCollection.mockClear();
     store.NewUnsavedCollection.mockClear();
     await syncUnifideckCollections();
-    // Suppressed sync bails before even probing the store.
+    
     expect(store.GetCollection).not.toHaveBeenCalled();
     expect(store.NewUnsavedCollection).not.toHaveBeenCalled();
   });
 });
 
 describe("startCollectionManager", () => {
-  it("clears the suppression flag when a library sync completes", async () => {
-    makeStore([]);
-    window.localStorage.setItem(SUPPRESSION_KEY, "1");
+  it("runs cleanup once when collections are disabled on startup", async () => {
+    const { map } = makeStore(["[Unifideck] Alpha"]);
+    window.localStorage.setItem(COLLECTIONS_ENABLED_KEY, "0");
+    
     const handle = startCollectionManager();
-    try {
-      window.dispatchEvent(new Event("unifideck-sync-completed"));
-      expect(window.localStorage.getItem(SUPPRESSION_KEY)).toBeNull();
-    } finally {
-      handle.remove();
-    }
+    
+    // Wait for the async waitForCollections() promise chain to resolve
+    await new Promise((r) => setTimeout(r, 10));
+    
+    expect(window.localStorage.getItem(COLLECTIONS_CLEANED_KEY)).toBe("1");
+    expect(Array.from(map.values()).map((c) => c.displayName)).not.toContain("[Unifideck] Alpha");
+    
+    handle.remove();
   });
 });

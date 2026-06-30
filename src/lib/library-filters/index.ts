@@ -226,13 +226,10 @@ const filterFunctions: { [K in FilterType]: FilterFn<K> } = {
     );
     const match = params.installed ? isInstalled : !isInstalled;
     if (params.installed && app.app_type === NON_STEAM_APP_TYPE) {
-      if (unifideckGameCache.has(app.appid)) return match;
-      if (
-        validThirdPartyCache.size > 0 &&
-        !validThirdPartyCache.has(app.appid)
-      ) {
-        return false;
+      if (unifideckGameCache.has(app.appid)) {
+        return match;
       }
+      return false;
     }
     return match;
   },
