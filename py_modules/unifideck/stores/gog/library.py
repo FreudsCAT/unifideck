@@ -275,39 +275,55 @@ class GOGLibrary:
         actually be uninstalled.
         """
         for base in self._install_scan_dirs():
-            base_path = Path(base).expanduser()
-            if not base_path.is_dir():
-                continue
-            try:
-                for entry in base_path.iterdir():
-                    if not entry.is_dir():
-                        continue
-                    game_dir = str(entry)
-                    found = self._read_marker(game_dir)
-                    if found == game_id:
-                        return {
-                            "install_path": game_dir,
-                            "executable": self._resolve_exe(game_dir),
-                        }
-                    if found is None and self._has_goggame_info(
-                        game_dir,
-                        game_id,
-                    ):
-                        logger.info(
-                            "[GOGLibrary] found %s via goggame info fallback at %s",
-                            game_id,
-                            game_dir,
-                        )
-                        return {
-                            "install_path": game_dir,
-                            "executable": self._resolve_exe(game_dir),
-                        }
-            except OSError:
-                logger.exception(
-                    "[GOGLibrary] get_installed_game_info scan failed at %s",
-                    base,
-                )
+            found = self._scan_base_for_game(base, game_id)
+            if found is not None:
+                return found
         return None
+
+    def _scan_base_for_game(
+        self, base: str, game_id: str,
+    ) -> dict[str, str | None] | None:
+        """Scan one install-base dir for ``game_id``'s install dir."""
+        base_path = Path(base).expanduser()
+        if not base_path.is_dir():
+            return None
+        try:
+            for entry in base_path.iterdir():
+                if not entry.is_dir():
+                    continue
+                info = self._match_install_dir(str(entry), game_id)
+                if info is not None:
+                    return info
+        except OSError:
+            logger.exception(
+                "[GOGLibrary] get_installed_game_info scan failed at %s",
+                base,
+            )
+        return None
+
+    def _match_install_dir(
+        self, game_dir: str, game_id: str,
+    ) -> dict[str, str | None] | None:
+        """Install info if ``game_dir`` is ``game_id``'s install — by marker,
+        else by goggame-info fallback — or None."""
+        found = self._read_marker(game_dir)
+        if found == game_id:
+            return self._install_info(game_dir)
+        if found is None and self._has_goggame_info(game_dir, game_id):
+            logger.info(
+                "[GOGLibrary] found %s via goggame info fallback at %s",
+                game_id,
+                game_dir,
+            )
+            return self._install_info(game_dir)
+        return None
+
+    def _install_info(self, game_dir: str) -> dict[str, str | None]:
+        """The ``{install_path, executable}`` record for an install dir."""
+        return {
+            "install_path": game_dir,
+            "executable": self._resolve_exe(game_dir),
+        }
 
     @staticmethod
     def _read_marker(game_dir: str) -> str | None:
