@@ -39,8 +39,7 @@ const NON_STEAM_SHORTCUT_APP_TYPE = 1073741824;
  * QAM toggle and the running manager stay in sync without a restart.
  */
 export const COLLECTIONS_ENABLED_KEY = "unifideck:collections.enabled";
-export const COLLECTIONS_ENABLED_EVENT =
-  "unifideck:collections-enabled-change";
+export const COLLECTIONS_ENABLED_EVENT = "unifideck:collections-enabled-change";
 
 /**
  * Grandfather marker. Before collections became opt-in they were created
@@ -473,9 +472,7 @@ export function startCollectionManager(): CollectionManagerHandle {
     if (isCleaned()) return;
     void deleteAllUnifideckCollections()
       .then(() => setCleaned(true))
-      .catch((e) =>
-        console.error("[Unifideck Collections] cleanup failed", e),
-      );
+      .catch((e) => console.error("[Unifideck Collections] cleanup failed", e));
   };
 
   // React to the QAM toggle without a restart.
@@ -517,9 +514,7 @@ export function startCollectionManager(): CollectionManagerHandle {
         cleanupOnce();
       }
     })
-    .catch((e) =>
-      console.error("[Unifideck Collections] startup failed", e),
-    );
+    .catch((e) => console.error("[Unifideck Collections] startup failed", e));
 
   return {
     resync: syncUnifideckCollections,

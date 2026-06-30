@@ -219,7 +219,10 @@ class AchievementWatcher:
         if gog is None:
             return None
         try:
-            return await gog.get_game_achievements(game_id, force=True)
+            result: dict[str, Any] | None = await gog.get_game_achievements(
+                game_id, force=True,
+            )
+            return result
         except GOGAchievementsError as e:
             logger.debug("[achievements.watcher] fetch skipped (%s)", e.code)
             return None

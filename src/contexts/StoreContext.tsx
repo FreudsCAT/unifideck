@@ -8,7 +8,14 @@
  * This context provides the same API as before: `stores`, `loading`,
  * `error`, `refetch` — but state comes from `useSyncExternalStore`.
  */
-import { createContext, FC, ReactNode, useCallback, useContext, useSyncExternalStore } from "react";
+import {
+  createContext,
+  FC,
+  ReactNode,
+  useCallback,
+  useContext,
+  useSyncExternalStore,
+} from "react";
 import { storeInfoStore } from "../stores/store-info-store";
 import type { StoreInfo } from "../types/api";
 

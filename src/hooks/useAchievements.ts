@@ -72,10 +72,9 @@ export function useLastSessionAchievements(
   gameId: string,
   enabled = true,
 ): LastSessionAchievements | null {
-  const { data } = useRPCQuery<[string, string], LastSessionAchievements | null>(
-    rpcRoutes.getLastSessionAchievements,
-    [store, gameId],
-    { enabled },
-  );
+  const { data } = useRPCQuery<
+    [string, string],
+    LastSessionAchievements | null
+  >(rpcRoutes.getLastSessionAchievements, [store, gameId], { enabled });
   return data ?? null;
 }

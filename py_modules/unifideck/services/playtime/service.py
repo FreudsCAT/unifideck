@@ -9,13 +9,14 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
 from unifideck.core.types import Events
 from unifideck.event_bus.event_bus_devex import auto_wire, subscribe
 
 from .db import ActivityDatabase
+from .stats_mixin import PlaytimeStatsMixin
 
 if TYPE_CHECKING:
     from unifideck.event_bus.event_bus import EventBus
@@ -32,8 +33,12 @@ _MIN_SESSION_SECONDS = 5
 _HEARTBEAT_SECONDS = 60
 
 
-class PlaytimeService:
-    """SQLite-backed playtime tracker wired to the EventBus."""
+class PlaytimeService(PlaytimeStatsMixin):
+    """SQLite-backed playtime tracker wired to the EventBus.
+
+    Daily-stats recording + streak math live in :class:`PlaytimeStatsMixin`
+    (``stats_mixin.py``); this module owns event wiring + session lifecycle.
+    """
 
     def __init__(self, bus: EventBus, db_path: str) -> None:
         """Store refs, init empty ``_active`` map, and auto_wire."""
@@ -160,26 +165,9 @@ class PlaytimeService:
             return
         credited: set[int] = set()
         for row in rows:
-            duration = int(row["duration_secs"] or 0)
-            started = self._parse_iso(row["started_at"])
-            # Approximate the end at the last heartbeat (``updated_at``); fall
-            # back to ``started + duration`` then to ``started`` so we always
-            # close the row even with no checkpoint.
-            ended = self._parse_iso(row["updated_at"])
-            if ended is None and started is not None:
-                ended = started + timedelta(seconds=duration)
-            ended_dt = ended or started or datetime.now(UTC)
-            ended_iso = ended_dt.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
-            self._db.execute(
-                """UPDATE play_sessions
-                   SET ended_at = ?, duration_secs = ?, end_reason = 'orphaned',
-                       updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
-                   WHERE id = ?""",
-                (ended_iso, duration, row["id"]),
-            )
-            if duration >= _MIN_SESSION_SECONDS and started is not None:
-                self._update_daily_stats(row["game_id"], started, ended_dt, duration)
-                credited.add(int(row["game_id"]))
+            game_db_id = self._finalize_orphan_row(row)
+            if game_db_id is not None:
+                credited.add(game_db_id)
         for game_db_id in credited:
             self._refresh_game_stats(game_db_id)
         self._db._require_conn().commit()
@@ -187,6 +175,35 @@ class PlaytimeService:
             "[PlaytimeService] Reconciled %d orphaned session(s); credited %d game(s)",
             len(rows), len(credited),
         )
+
+    def _finalize_orphan_row(self, row: Any) -> int | None:
+        """Close one crash-orphaned session row, crediting daily stats.
+
+        Approximates the end at the last heartbeat (``updated_at``), falling
+        back to ``started + duration`` then ``started`` so the row is always
+        closed even with no checkpoint. Returns the game's db id when the
+        duration was credited (the caller then refreshes its stats), else None.
+        """
+        if self._db is None:
+            return None
+        duration = int(row["duration_secs"] or 0)
+        started = self._parse_iso(row["started_at"])
+        ended = self._parse_iso(row["updated_at"])
+        if ended is None and started is not None:
+            ended = started + timedelta(seconds=duration)
+        ended_dt = ended or started or datetime.now(UTC)
+        ended_iso = ended_dt.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+        self._db.execute(
+            """UPDATE play_sessions
+               SET ended_at = ?, duration_secs = ?, end_reason = 'orphaned',
+                   updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+               WHERE id = ?""",
+            (ended_iso, duration, row["id"]),
+        )
+        if duration >= _MIN_SESSION_SECONDS and started is not None:
+            self._update_daily_stats(row["game_id"], started, ended_dt, duration)
+            return int(row["game_id"])
+        return None
 
     @staticmethod
     def _parse_iso(value: Any) -> datetime | None:
@@ -419,206 +436,3 @@ class PlaytimeService:
                 game_id=game_id,
                 duration_secs=duration_secs,
             )
-
-    def _update_daily_stats(self, game_db_id: int, started: datetime, ended: datetime, duration_secs: int) -> None:
-        """Split and record duration across day boundaries."""
-        if self._db is None:
-            return
-
-        # Use local time for day boundaries
-        local_start = started.astimezone()
-        local_end = ended.astimezone()
-
-        if local_start.date() == local_end.date():
-            splits = [(local_start.strftime("%Y-%m-%d"), duration_secs)]
-        else:
-            # Complex split logic
-            total_wall = (local_end - local_start).total_seconds()
-            if total_wall <= 0:
-                splits = [(local_start.strftime("%Y-%m-%d"), duration_secs)]
-            else:
-                ratio = duration_secs / total_wall
-                splits = []
-                current = local_start
-                remaining = duration_secs
-                while current.date() < local_end.date():
-                    next_midnight = datetime.combine(
-                        current.date() + timedelta(days=1), datetime.min.time(), tzinfo=current.tzinfo
-                    )
-                    wall_on_day = (next_midnight - current).total_seconds()
-                    secs_on_day = min(remaining, max(1, int(wall_on_day * ratio)))
-                    splits.append((current.strftime("%Y-%m-%d"), secs_on_day))
-                    remaining -= secs_on_day
-                    current = next_midnight
-                if remaining > 0:
-                    splits.append((current.strftime("%Y-%m-%d"), remaining))
-
-        for date_str, secs in splits:
-            self._db.execute(
-                """INSERT INTO daily_stats (game_id, date, total_secs, session_count, longest_session_secs)
-                   VALUES (?, ?, ?, 1, ?)
-                   ON CONFLICT(game_id, date) DO UPDATE SET
-                       total_secs = total_secs + excluded.total_secs,
-                       session_count = session_count + 1,
-                       longest_session_secs = MAX(longest_session_secs, excluded.longest_session_secs)""",
-                (game_db_id, date_str, secs, secs),
-            )
-
-    def _refresh_game_stats(self, game_db_id: int) -> None:
-        """Recompute materialized totals and streaks."""
-        if self._db is None:
-            return
-
-        row = self._db.query_one(
-            """SELECT COUNT(*) as total_sessions,
-                      COALESCE(SUM(duration_secs), 0) as total_secs,
-                      COALESCE(AVG(duration_secs), 0) as avg_session_secs,
-                      COALESCE(MAX(duration_secs), 0) as max_session_secs,
-                      MIN(started_at) as first_played_at,
-                      MAX(started_at) as last_played_at
-               FROM play_sessions
-               WHERE game_id = ? AND ended_at IS NOT NULL AND duration_secs > 0""",
-            (game_db_id,)
-        )
-
-        if not row or row["total_sessions"] == 0:
-            return
-
-        current_streak, longest_streak = self._compute_streaks(game_db_id)
-
-        self._db.execute(
-            """INSERT INTO game_stats
-               (game_id, total_secs, total_sessions, avg_session_secs,
-                max_session_secs, first_played_at, last_played_at,
-                current_streak_days, longest_streak_days)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-               ON CONFLICT(game_id) DO UPDATE SET
-                   total_secs = excluded.total_secs,
-                   total_sessions = excluded.total_sessions,
-                   avg_session_secs = excluded.avg_session_secs,
-                   max_session_secs = excluded.max_session_secs,
-                   first_played_at = excluded.first_played_at,
-                   last_played_at = excluded.last_played_at,
-                   current_streak_days = excluded.current_streak_days,
-                   longest_streak_days = excluded.longest_streak_days,
-                   updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')""",
-            (
-                game_db_id, row["total_secs"], row["total_sessions"], int(row["avg_session_secs"]),
-                row["max_session_secs"], row["first_played_at"], row["last_played_at"],
-                current_streak, longest_streak
-            )
-        )
-
-    @staticmethod
-    def _parse_daily_stats_dates(rows: list[Any]) -> list[Any]:
-        """Parse ``YYYY-MM-DD`` strings from daily_stats rows into UTC dates.
-
-        The daily_stats schema stores dates as plain strings (see
-        ``record_session`` which writes ``datetime.now(timezone.utc)``).
-        We re-pin to UTC explicitly so the streak math compares
-        apples to apples even on systems with a non-UTC local tz.
-        Malformed rows are silently dropped — partial data is fine
-        for a UI display, and we already log on write.
-        """
-        from datetime import datetime
-        dates: list[Any] = []
-        for r in rows:
-            try:
-                parsed = datetime.strptime(r["date"], "%Y-%m-%d").replace(
-                    tzinfo=UTC,
-                )
-                dates.append(parsed.date())
-            except ValueError:
-                continue
-        return dates
-
-    @staticmethod
-    def _walk_consecutive_from(
-        dates: list[Any], anchor: date,
-    ) -> int:
-        """Count consecutive days starting from ``anchor`` going backwards.
-
-        ``dates`` is assumed sorted descending. Returns the number
-        of dates matching ``anchor``, ``anchor - 1``, ``anchor - 2``,
-        … stopping at the first gap.
-        """
-        from datetime import timedelta
-        count = 0
-        expected = anchor
-        for d in dates:
-            if d == expected:
-                count += 1
-                expected -= timedelta(days=1)
-            elif d < expected:
-                break
-        return count
-
-    @classmethod
-    def _compute_current_streak(cls, dates: list[Any]) -> int:
-        """Compute the current streak ending today (or yesterday).
-
-        Tries today first; if there's no entry for today, falls
-        back to yesterday so the streak doesn't drop to 0 the
-        moment the date rolls over before the user has played.
-        """
-        from datetime import datetime, timedelta
-        today = datetime.now(UTC).date()
-
-        current = cls._walk_consecutive_from(dates, today)
-        if current > 0:
-            return current
-
-        # No play today — try yesterday as anchor, but only if
-        # the most-recent record actually IS yesterday (otherwise
-        # the streak is genuinely broken).
-        if dates and dates[0] == today - timedelta(days=1):
-            return cls._walk_consecutive_from(dates, today - timedelta(days=1))
-        return 0
-
-    @staticmethod
-    def _compute_longest_streak(dates: list[Any]) -> int:
-        """Compute the longest consecutive run of dates ever seen.
-
-        Operates on a sorted-ascending de-duplicated copy of
-        ``dates`` so we can walk forward. The minimum is 1 (any
-        single day still counts as a one-day streak).
-        """
-        from datetime import timedelta
-        dates_sorted = sorted(set(dates))
-        longest = 1
-        streak = 1
-        for i in range(1, len(dates_sorted)):
-            if (dates_sorted[i] - dates_sorted[i - 1]) == timedelta(days=1):
-                streak += 1
-                longest = max(longest, streak)
-            else:
-                streak = 1
-        return longest
-
-    def _compute_streaks(self, game_db_id: int) -> tuple[int, int]:
-        """Compute (current, longest) play streaks from daily_stats.
-
-        Both streaks are in whole UTC days. ``current`` is the
-        number of consecutive days up to today (or yesterday if
-        the user hasn't played today yet); ``longest`` is the
-        longest such run anywhere in the history.
-        """
-        if self._db is None:
-            return (0, 0)
-
-        rows = self._db.query(
-            "SELECT DISTINCT date FROM daily_stats WHERE game_id = ? ORDER BY date DESC",
-            (game_db_id,),
-        )
-        if not rows:
-            return (0, 0)
-
-        dates = self._parse_daily_stats_dates(rows)
-        if not dates:
-            return (0, 0)
-
-        return (
-            self._compute_current_streak(dates),
-            self._compute_longest_streak(dates),
-        )
-

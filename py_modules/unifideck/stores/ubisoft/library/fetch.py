@@ -17,7 +17,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Callable
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, NamedTuple
 
 from unifideck.core.types import Game
 
@@ -37,6 +37,21 @@ if TYPE_CHECKING:
 ParseConfigurationsFn = Callable[[str], "list[GameConfig]"]
 ParseOwnershipFn = Callable[[str], list[int]]
 logger = logging.getLogger(__name__)
+
+
+class _PreparedLibrary(NamedTuple):
+    """The owned-games working set, ready to hand to the game builder.
+
+    Bundles the cross-referenced + backfilled configs with the name
+    allowlists derived from the catalog sources, so ``fetch_local_binaries``
+    stays a thin orchestrator (see :meth:`_LibraryFetcher._prepare_library`).
+    """
+
+    matched_configs: list[GameConfig]
+    db_names: set[str]
+    base_catalog_norms: set[str]
+    id_backfill: int
+    uuid_backfill: int
 
 
 class _LibraryFetcher:
@@ -95,6 +110,45 @@ class _LibraryFetcher:
                 "absent — UPC may still be syncing; showing installed-only "
                 "until the next library refresh",
             )
+        prepared = await self._prepare_library(
+            configs, owned_set, owned_uuids, installed, force=force,
+        )
+        connect_ids = await asyncio.to_thread(self._id_map.read_connect_ids)
+        games = self._builder.build_games_from_configs(
+            prepared.matched_configs,
+            installed,
+            db_names=prepared.db_names,
+            connect_ids=connect_ids,
+            base_catalog_norms=prepared.base_catalog_norms,
+        )
+        games = await self._apply_steam_filter(games)
+        logger.info(
+            "[UbisoftLibrary] local binary library: %d games "
+            "(%d config-matched + %d id-backfilled + %d uuid-backfilled)",
+            len(games),
+            len(prepared.matched_configs)
+            - prepared.id_backfill
+            - prepared.uuid_backfill,
+            prepared.id_backfill,
+            prepared.uuid_backfill,
+        )
+        return games
+
+    async def _prepare_library(
+        self,
+        configs: list[GameConfig],
+        owned_set: set[int] | None,
+        owned_uuids: set[str],
+        installed: dict[str, Any],
+        *,
+        force: bool,
+    ) -> _PreparedLibrary:
+        """Cross-reference, backfill, and derive name allowlists.
+
+        Combines the owned∩config match with the two backfill sources and
+        the catalog-derived name sets into a single working set so the public
+        fetch entry point stays a thin orchestrator.
+        """
         config_by_id = self._builder.build_config_lookup(configs)
         matched_configs = self._builder.cross_reference_ownership(
             configs,
@@ -102,34 +156,86 @@ class _LibraryFetcher:
             owned_set,
             installed,
         )
+        db_entries, uuid_catalog = await self._load_catalog_data(force=force)
+        db_names, base_catalog_norms = self._build_name_sets(
+            db_entries, uuid_catalog,
+        )
+        matched_configs, id_backfill, uuid_backfill = self._apply_backfills(
+            matched_configs,
+            owned_set,
+            owned_uuids,
+            config_by_id,
+            configs,
+            db_entries,
+            uuid_catalog,
+        )
+        return _PreparedLibrary(
+            matched_configs=matched_configs,
+            db_names=db_names,
+            base_catalog_norms=base_catalog_norms,
+            id_backfill=id_backfill,
+            uuid_backfill=uuid_backfill,
+        )
+
+    async def _load_catalog_data(
+        self,
+        *,
+        force: bool,
+    ) -> tuple[list[tuple[str, str]], dict[str, str]]:
+        """The two unifiDB catalog sources: the legacy install-id ``(id,
+        name)`` list and the Algolia base-game uuid→name catalog. ``force``
+        bypasses both TTL caches."""
         db_entries = await self._fetch_db_entries(force=force)
         uuid_catalog = await self._id_map.fetch_uuid_catalog(force=force)
-        db_names = {
-            self._id_map.normalize_for_matching(name)
-            for _iid, name in db_entries
-            if name
-        }
-        db_names |= {
-            self._id_map.normalize_for_matching(name)
-            for name in uuid_catalog.values()
-            if name
-        }
-        # The Algolia uuid catalog is base-games-only (no DLC/noise), so
-        # its names are the authoritative allowlist + identity anchor for
-        # dedup. Kept separate from db_names, which the legacy install-id
-        # list pollutes with DLC/edition/QC rows.
+        return db_entries, uuid_catalog
+
+    def _build_name_sets(
+        self,
+        db_entries: list[tuple[str, str]],
+        uuid_catalog: dict[str, str],
+    ) -> tuple[set[str], set[str]]:
+        """Derive the two name allowlists from the catalog sources.
+
+        The Algolia uuid catalog is base-games-only (no DLC/noise), so its
+        names are the authoritative allowlist + identity anchor for dedup —
+        returned separately as ``base_catalog_norms``. ``db_names`` is the
+        union with the legacy install-id list (which is polluted with
+        DLC/edition/QC rows), used for DLC parent-name detection.
+        """
         base_catalog_norms = {
             self._id_map.normalize_for_matching(name)
             for name in uuid_catalog.values()
             if name
         }
-        # Backfill owned games that have no local ``configurations`` row.
-        # UPC only caches configs for installed/recent titles, so the
-        # owned∩config intersection is tiny (~6 of 118 owned IDs here). Two
-        # complementary sources name the rest so the full owned library
-        # shows: the legacy install_id list (numeric ids) and the unifiDB
-        # uuid catalog (modern ids the legacy list lacks). Both flow through
-        # the same dedup/DLC filters in ``build_games_from_configs``.
+        db_names = {
+            self._id_map.normalize_for_matching(name)
+            for _iid, name in db_entries
+            if name
+        } | base_catalog_norms
+        return db_names, base_catalog_norms
+
+    def _apply_backfills(
+        self,
+        matched_configs: list[GameConfig],
+        owned_set: set[int] | None,
+        owned_uuids: set[str],
+        config_by_id: dict[int, GameConfig],
+        configs: list[GameConfig],
+        db_entries: list[tuple[str, str]],
+        uuid_catalog: dict[str, str],
+    ) -> tuple[list[GameConfig], int, int]:
+        """Append synthesized configs for owned games with no local
+        ``configurations`` row.
+
+        UPC only caches configs for installed/recent titles, so the
+        owned∩config intersection is tiny (~6 of 118 owned IDs here). Two
+        complementary sources name the rest so the full owned library shows:
+        the legacy install_id list (numeric ids) and the unifiDB uuid catalog
+        (modern ids the legacy list lacks). Both flow through the same
+        dedup/DLC filters in ``build_games_from_configs``. Returns the
+        extended list plus the per-source backfill counts (for the summary
+        log).
+        """
         id_backfill = 0
         uuid_backfill = 0
         if owned_set is not None:
@@ -144,24 +250,7 @@ class _LibraryFetcher:
             )
             uuid_backfill = len(extra_uuid)
             matched_configs = matched_configs + extra_uuid
-        connect_ids = await asyncio.to_thread(self._id_map.read_connect_ids)
-        games = self._builder.build_games_from_configs(
-            matched_configs,
-            installed,
-            db_names=db_names,
-            connect_ids=connect_ids,
-            base_catalog_norms=base_catalog_norms,
-        )
-        games = await self._apply_steam_filter(games)
-        logger.info(
-            "[UbisoftLibrary] local binary library: %d games "
-            "(%d config-matched + %d id-backfilled + %d uuid-backfilled)",
-            len(games),
-            len(matched_configs) - id_backfill - uuid_backfill,
-            id_backfill,
-            uuid_backfill,
-        )
-        return games
+        return matched_configs, id_backfill, uuid_backfill
 
     async def _apply_steam_filter(
         self,

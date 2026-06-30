@@ -40,9 +40,7 @@ export const RootProvider: FC<{ children: ReactNode }> = ({ children }) => {
         <LibraryProvider>
           <AuthProvider>
             <SyncProvider>
-              <DownloadProvider>
-                {children}
-              </DownloadProvider>
+              <DownloadProvider>{children}</DownloadProvider>
             </SyncProvider>
           </AuthProvider>
         </LibraryProvider>

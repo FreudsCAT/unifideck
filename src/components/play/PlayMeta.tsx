@@ -113,6 +113,8 @@ export const PlayShell: FC<{ children: ReactNode; autoFocus?: boolean }> = ({
     <Focusable
       ref={ref}
       flow-children="row"
+      // autoFocus is intentional: claims gamepad focus for the primary action
+      // eslint-disable-next-line jsx-a11y/no-autofocus
       autoFocus={autoFocus}
       style={{
         display: "flex",
@@ -203,7 +205,9 @@ export function formatLastPlayed(
 /** Format an ISO-8601 timestamp (our DB's ``last_played_at``) as a
  *  date string, or ``null`` when absent/unparseable so callers can
  *  fall back to Steam's value. */
-export function formatLastPlayedISO(iso: string | null | undefined): string | null {
+export function formatLastPlayedISO(
+  iso: string | null | undefined,
+): string | null {
   if (!iso) return null;
   const ms = Date.parse(iso);
   if (Number.isNaN(ms)) return null;
@@ -219,7 +223,8 @@ export function formatPlaytime(
   minutesShort: string,
 ): string {
   if (!secs || secs <= 0) return "—";
-  if (secs < 3600) return `${Math.max(1, Math.round(secs / 60))} ${minutesShort}`;
+  if (secs < 3600)
+    return `${Math.max(1, Math.round(secs / 60))} ${minutesShort}`;
   const hours = secs / 3600;
   return `${hours >= 100 ? Math.round(hours) : hours.toFixed(1)} ${hoursShort}`;
 }
@@ -327,7 +332,7 @@ export const MetaInline: FC<MetaInlineProps> = ({
   // else our local total. Only rendered once we have a tracked record.
   const totalSecs =
     playtime != null
-      ? (playtime.store_total_secs ?? playtime.total_seconds)
+      ? playtime.store_total_secs ?? playtime.total_seconds
       : undefined;
   const showPlayed = showLastPlayed && totalSecs != null && totalSecs > 0;
 

@@ -188,6 +188,14 @@ async def test_install_launch_bare_without_id(
 
 
 @pytest.mark.asyncio
-async def test_install_launch_missing_upc_raises(tmp_path, _quiet_toast):
+async def test_install_launch_missing_upc_raises(
+    tmp_path, monkeypatch, _quiet_toast,
+):
+    # Pin the empty-prefix path: both recovery routes (find a populated
+    # prefix elsewhere / clone the .template) must come up empty so the
+    # handler raises. Without these patches the test is non-hermetic — on a
+    # dev machine with real Ubisoft prefix data it would recover instead.
+    monkeypatch.setattr(h, "_find_recovered_prefix", lambda _gid: None)
+    monkeypatch.setattr(h, "_clone_template_into", lambda _dir: False)
     with pytest.raises(GameFailedError, match=r"upc\.exe"):
         await h.ubisoft_install_launch(_plan(tmp_path))

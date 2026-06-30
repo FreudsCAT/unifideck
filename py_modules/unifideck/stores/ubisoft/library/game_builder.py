@@ -174,39 +174,50 @@ class _GameBuilder:
         connect_ids: dict[str, str] | None = None,
         base_catalog_norms: set[str] | None = None,
     ) -> list[Game]:
-        """Build games from configs.
+        """Two-pass build of deduped ``Game`` records from owned configs.
 
-        Two passes. ``db_names`` is the normalised community game-ID
-        database name set; it widens ``" - "`` parent detection and
-        degrades to an empty set when the database is offline.
-        ``connect_ids`` maps ``space_id`` → ``ubisoftConnectGameId``
-        (from UPC's leveldb cache); when present for a game it is
+        ``db_names`` (normalised community game-ID DB names) widens ``" - "``
+        parent detection; empty when the DB is offline. ``connect_ids`` maps
+        ``space_id`` → ``ubisoftConnectGameId`` (UPC leveldb cache) and is
         recorded in the id_map so :meth:`UbisoftIdMap.resolve_launch_id`
-        returns the canonical deeplink id.
-
-        ``base_catalog_norms`` is the **authoritative** set of normalised
-        base-game titles from the Algolia ``uuid_catalog`` (base games
-        only). It does two jobs: an allowlist (a title that matches a
-        known base game is always kept, never second-guessed by the DLC
-        heuristics) and the identity anchor for dedup (it bridges
-        publisher-prefixed names like "Tom Clancy's The Division 2" to
-        the catalog title "The Division 2"). Unlike ``db_names`` it is
-        not polluted by the legacy install-id list's DLC/noise rows.
-
-        Pass 2 groups surviving configs by canonical identity
-        ``(base_game, edition_tag)`` so the same game owned under
-        multiple ids / namespaces collapses to a single entry with a
-        deterministic ``store_game_id`` (see
-        :meth:`_select_group_winner`). Edition variants keep their own
-        identity (their ``edition_tag`` differs) so an owned
-        "X - History Edition" is shown as itself.
+        returns the deeplink id. ``base_catalog_norms`` (authoritative Algolia
+        base-game titles) is both a keep-allowlist and the dedup identity
+        anchor. See :meth:`_clean_and_filter` (pass 1) and
+        :meth:`_group_by_identity` (pass 2 — canonical ``(base_game,
+        edition_tag)`` grouping, then one record per group winner).
         """
         db_names = db_names or set()
         connect_ids = connect_ids or {}
         base_catalog_norms = base_catalog_norms or set()
-        # Pass 1: clean + hard-filter, keeping (cfg, title, is_known).
-        # A catalog-known base game is kept unconditionally — the keyword
-        # heuristics only police entries the catalog can't vouch for.
+        cleaned = self._clean_and_filter(matched_configs, base_catalog_norms)
+        groups, order = self._group_by_identity(
+            cleaned, db_names, base_catalog_norms,
+        )
+        games: list[Game] = []
+        id_map_updates: dict[str, dict[str, Any]] = {}
+        for key in order:
+            cfg, title = self._select_group_winner(groups[key], connect_ids)
+            game = self._build_one_game(
+                cfg, title, installed, id_map_updates, connect_ids,
+            )
+            if game is not None:
+                games.append(game)
+        if id_map_updates:
+            self._id_map.update_bulk(id_map_updates)
+        games.sort(key=lambda g: g.title.lower())
+        return games
+
+    def _clean_and_filter(
+        self,
+        matched_configs: list[GameConfig],
+        base_catalog_norms: set[str],
+    ) -> list[tuple[GameConfig, str, bool]]:
+        """Pass 1: clean titles + hard-filter, keeping ``(cfg, title,
+        is_known)``.
+
+        A catalog-known base game is kept unconditionally — the keyword
+        heuristics only police entries the catalog can't vouch for.
+        """
         cleaned: list[tuple[GameConfig, str, bool]] = []
         for cfg in matched_configs:
             title = self._clean_launcher_title(cfg.name)
@@ -221,13 +232,29 @@ class _GameBuilder:
             if not known and self._should_skip_launcher_title(title):
                 continue
             cleaned.append((cfg, title, known))
+        return cleaned
+
+    def _group_by_identity(
+        self,
+        cleaned: list[tuple[GameConfig, str, bool]],
+        db_names: set[str],
+        base_catalog_norms: set[str],
+    ) -> tuple[
+        dict[tuple[str, str], list[tuple[GameConfig, str]]],
+        list[tuple[str, str]],
+    ]:
+        """Pass 2: drop separator-DLC, then group by canonical identity.
+
+        Returns ``(groups, order)`` — ``groups`` maps each canonical
+        ``(base_game, edition_tag)`` key to its member ``(cfg, title)`` pairs,
+        and ``order`` preserves first-seen insertion for a stable display.
+        """
         # Base titles = edition-stripped, normalised names of every kept
         # entry. Used to recognise an entry as a DLC of a game we surface.
         base_norms = {
             self._id_map.normalize_for_matching(self._strip_edition(title))
             for _, title, _ in cleaned
         }
-        # Pass 2: drop separator-DLC, then group by canonical identity.
         groups: dict[tuple[str, str], list[tuple[GameConfig, str]]] = {}
         order: list[tuple[str, str]] = []
         for cfg, title, known in cleaned:
@@ -244,19 +271,7 @@ class _GameBuilder:
                 groups[key] = []
                 order.append(key)
             groups[key].append((cfg, title))
-        games: list[Game] = []
-        id_map_updates: dict[str, dict[str, Any]] = {}
-        for key in order:
-            cfg, title = self._select_group_winner(groups[key], connect_ids)
-            game = self._build_one_game(
-                cfg, title, installed, id_map_updates, connect_ids,
-            )
-            if game is not None:
-                games.append(game)
-        if id_map_updates:
-            self._id_map.update_bulk(id_map_updates)
-        games.sort(key=lambda g: g.title.lower())
-        return games
+        return groups, order
 
     def _is_third_party_steam_copy(self, cfg: GameConfig) -> bool:
         """True if ``cfg`` is a Steam/Epic copy that can't launch via uplay.

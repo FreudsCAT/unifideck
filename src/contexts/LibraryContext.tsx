@@ -22,9 +22,7 @@ import {
   useEffect,
   useState,
 } from "react";
-import {
-  loadCompatCacheFromBackend,
-} from "../lib/protondb-cache";
+import { loadCompatCacheFromBackend } from "../lib/protondb-cache";
 import { loadUnifideckCache, unifideckGameCache } from "../lib/library-filters";
 
 interface LibraryContextValue {

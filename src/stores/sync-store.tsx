@@ -85,9 +85,7 @@ class SyncStoreImpl {
 
     this._unsubs.push(
       EventBusClient.subscribe("post_sync_phase_changed", (payload) => {
-        const phase = String(
-          (payload as Record<string, unknown>)?.phase ?? "",
-        );
+        const phase = String((payload as Record<string, unknown>)?.phase ?? "");
         const active = Boolean(
           (payload as Record<string, unknown>)?.active ?? false,
         );

@@ -100,10 +100,7 @@ export function startBootEventListener(): () => void {
       // Generic toast
       if (p.i18n_title_key) {
         const title = String(
-          i18n.t(
-            p.i18n_title_key,
-            p.i18n_params as Record<string, string>,
-          ),
+          i18n.t(p.i18n_title_key, p.i18n_params as Record<string, string>),
         );
         showToast(title, message, p.severity);
       } else {
@@ -131,10 +128,7 @@ export function startBootEventListener(): () => void {
       try {
         Navigation.Navigate("/library/home");
       } catch (e) {
-        console.error(
-          "[BootEventListener] post-auth navigation failed:",
-          e,
-        );
+        console.error("[BootEventListener] post-auth navigation failed:", e);
       }
     }),
   );

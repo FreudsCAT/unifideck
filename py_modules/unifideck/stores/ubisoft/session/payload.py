@@ -216,19 +216,26 @@ class _PayloadSync:
         ):
             local_root = Path(user_home) / config.upc_local_subdir
             for rel in rel_entries:
-                target = local_root / rel
-                try:
-                    if target.is_dir():
-                        shutil.rmtree(target, ignore_errors=True)
-                        removed += 1
-                    elif target.exists():
-                        target.unlink()
-                        removed += 1
-                except OSError as e:
-                    logger.warning(
-                        "[UbisoftSession] purge failed for %s: %s", rel, e,
-                    )
+                if self._remove_credential_path(local_root / rel, rel):
+                    removed += 1
         return removed
+
+    @staticmethod
+    def _remove_credential_path(target: Path, rel: str) -> bool:
+        """Delete ``target`` (directory or file); True if it removed
+        something, False if it was absent or removal failed."""
+        try:
+            if target.is_dir():
+                shutil.rmtree(target, ignore_errors=True)
+                return True
+            if target.exists():
+                target.unlink()
+                return True
+        except OSError as e:
+            logger.warning(
+                "[UbisoftSession] purge failed for %s: %s", rel, e,
+            )
+        return False
 
     def sync_credentials_to_prefix(
         self,

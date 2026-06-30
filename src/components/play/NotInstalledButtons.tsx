@@ -81,6 +81,8 @@ export const NotInstalledButtons: FC<Props> = ({
   }, [installFlow, game, t, toast]);
 
   return (
+    // autoFocus is intentional: claims gamepad focus for the primary action
+    // eslint-disable-next-line jsx-a11y/no-autofocus
     <PlayShell autoFocus>
       <DialogButton
         className="unifideck-install-btn"

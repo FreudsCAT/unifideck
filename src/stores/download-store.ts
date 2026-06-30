@@ -119,8 +119,7 @@ class DownloadStoreImpl {
                 (payload.progress as number) ??
                 prev.queue.current.progress_percent,
               speed_mbps:
-                (payload.speed_mbps as number) ??
-                prev.queue.current.speed_mbps,
+                (payload.speed_mbps as number) ?? prev.queue.current.speed_mbps,
               eta_seconds:
                 (payload.eta_seconds as number) ??
                 prev.queue.current.eta_seconds,
@@ -144,9 +143,7 @@ class DownloadStoreImpl {
     this._unsubs.push(
       EventBusClient.subscribe("download_complete", onTerminal),
     );
-    this._unsubs.push(
-      EventBusClient.subscribe("download_failed", onTerminal),
-    );
+    this._unsubs.push(EventBusClient.subscribe("download_failed", onTerminal));
     this._unsubs.push(
       EventBusClient.subscribe("download_cancelled", onTerminal),
     );
@@ -215,8 +212,7 @@ class DownloadStoreImpl {
   private _setSnapshot(
     update: DownloadSnapshot | ((prev: DownloadSnapshot) => DownloadSnapshot),
   ): void {
-    const next =
-      typeof update === "function" ? update(this._snapshot) : update;
+    const next = typeof update === "function" ? update(this._snapshot) : update;
     this._snapshot = next;
     this._emit();
   }

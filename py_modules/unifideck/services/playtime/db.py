@@ -60,7 +60,22 @@ def run_migrations(conn: sqlite3.Connection) -> int:
     current_version = int(cursor.fetchone()[0])
 
     if current_version < 1:
-        cursor.executescript("""
+        _migrate_to_v1(cursor)
+        conn.commit()
+        current_version = 1
+
+    if current_version < 2:
+        _migrate_to_v2(cursor)
+        conn.commit()
+        current_version = 2
+
+    return current_version
+
+
+def _migrate_to_v1(cursor: sqlite3.Cursor) -> None:
+    """v1: initial schema — games, play_sessions, daily_stats, game_stats,
+    activity_log."""
+    cursor.executescript("""
             CREATE TABLE IF NOT EXISTS games (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 store TEXT NOT NULL,
@@ -124,17 +139,18 @@ def run_migrations(conn: sqlite3.Connection) -> int:
                 FOREIGN KEY(game_id) REFERENCES games(id) ON DELETE SET NULL
             );
         """)
-        cursor.execute("PRAGMA user_version = 1")
-        conn.commit()
-        current_version = 1
+    cursor.execute("PRAGMA user_version = 1")
 
-    if current_version < 2:
-        # Playtime → store sync (Heroic #1240). ``reported_at`` is the
-        # per-session watermark: NULL = not yet pushed to the store, so the
-        # set of unreported sessions IS the offline retry queue. Only the
-        # sync service ever writes this column. ``store_playtime`` caches the
-        # store's authoritative total (pulled back) for display.
-        cursor.executescript("""
+
+def _migrate_to_v2(cursor: sqlite3.Cursor) -> None:
+    """v2: playtime → store sync (Heroic #1240).
+
+    ``reported_at`` is the per-session watermark: NULL = not yet pushed to the
+    store, so the set of unreported sessions IS the offline retry queue. Only
+    the sync service ever writes this column. ``store_playtime`` caches the
+    store's authoritative total (pulled back) for display.
+    """
+    cursor.executescript("""
             ALTER TABLE play_sessions ADD COLUMN reported_at TEXT;
 
             CREATE TABLE IF NOT EXISTS store_playtime (
@@ -144,11 +160,7 @@ def run_migrations(conn: sqlite3.Connection) -> int:
                 FOREIGN KEY(game_id) REFERENCES games(id) ON DELETE CASCADE
             );
         """)
-        cursor.execute("PRAGMA user_version = 2")
-        conn.commit()
-        current_version = 2
-
-    return current_version
+    cursor.execute("PRAGMA user_version = 2")
 
 # --- Database ---
 class ActivityDatabase:

@@ -23,9 +23,9 @@ vi.mock("@decky/api", () => ({
 // and useRPC pull in.
 vi.mock("react", () => ({
   useEffect: () => {},
-  useRef: <T,>(v: T) => ({ current: v }),
-  useCallback: <T,>(fn: T) => fn,
-  useState: <T,>(v: T) => [v, () => {}],
+  useRef: <T>(v: T) => ({ current: v }),
+  useCallback: <T>(fn: T) => fn,
+  useState: <T>(v: T) => [v, () => {}],
 }));
 
 // The first poll is scheduled at POLL_SLOW_MS (2s); subsequent polls at

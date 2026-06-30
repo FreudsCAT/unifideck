@@ -89,10 +89,7 @@ export const ChangeExecutableModal: FC<Props> = ({
     try {
       const res = await setExe.mutate(store, gameId, rel);
       if (res && res.success !== false) {
-        toast.success(
-          t("play.exe.changed"),
-          res.executable ?? rel,
-        );
+        toast.success(t("play.exe.changed"), res.executable ?? rel);
         await list.refetch();
       } else {
         toast.error(t("play.exe.changeFailed"), rel);
@@ -163,9 +160,7 @@ export const ChangeExecutableModal: FC<Props> = ({
       {list.loading && <div>{t("common.loading")}</div>}
       {list.error && <div>{t("play.exe.unavailable")}</div>}
 
-      <Focusable
-        style={{ display: "flex", flexDirection: "column", gap: 4 }}
-      >
+      <Focusable style={{ display: "flex", flexDirection: "column", gap: 4 }}>
         {data?.candidates.map((c) => (
           <DialogButton
             key={c.rel}
@@ -183,7 +178,13 @@ export const ChangeExecutableModal: FC<Props> = ({
               >
                 {c.name}
                 {c.is_default ? ` ${t("play.exe.defaultTag")}` : ""}
-                <span style={{ opacity: 0.5, marginLeft: 8, fontSize: "0.8em" }}>
+                <span
+                  style={{
+                    opacity: 0.5,
+                    marginInlineStart: 8,
+                    fontSize: "0.8em",
+                  }}
+                >
                   {c.rel}
                 </span>
               </span>
@@ -193,16 +194,17 @@ export const ChangeExecutableModal: FC<Props> = ({
         ))}
       </Focusable>
 
-      <Focusable
-        style={{ display: "flex", gap: 8, marginTop: 12 }}
-      >
-        <DialogButton disabled={working || !installDir} onClick={() => void browse()}>
-          <FaFolderOpen style={{ marginRight: 8 }} />
+      <Focusable style={{ display: "flex", gap: 8, marginTop: 12 }}>
+        <DialogButton
+          disabled={working || !installDir}
+          onClick={() => void browse()}
+        >
+          <FaFolderOpen style={{ marginInlineEnd: 8 }} />
           {t("play.exe.browse")}
         </DialogButton>
         {data?.override_active && (
           <DialogButton disabled={working} onClick={() => void applyReset()}>
-            <FaUndo style={{ marginRight: 8 }} />
+            <FaUndo style={{ marginInlineEnd: 8 }} />
             {t("play.exe.resetButton")}
           </DialogButton>
         )}

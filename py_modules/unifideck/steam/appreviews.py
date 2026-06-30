@@ -34,15 +34,12 @@ _DEFAULT_TIMEOUT = 15.0
 async def fetch_appreviews(
     steam_app_id: int,
     config: ConfigManager | None = None,
+    session: aiohttp.ClientSession | None = None,
 ) -> dict[str, Any] | None:
     """Fetch the review summary for ``steam_app_id``.
 
     Returns ``{"review_score": int(0-9), "review_percentage": int(0-100),
     "total_reviews": int}`` or ``None`` on any error / no reviews.
-
-    Args:
-        steam_app_id: real Steam Store AppID.
-        config: optional config manager (timeout override).
     """
     if steam_app_id <= 0:
         return None
@@ -56,23 +53,41 @@ async def fetch_appreviews(
         "purchase_type": "all",
         "num_per_page": "0",  # summary only — we don't need review bodies
     }
+    if session is not None:
+        return await _request_appreviews(
+            session, steam_app_id, url, params, timeout_s,
+        )
+    connector = aiohttp.TCPConnector(ssl=False)
+    async with aiohttp.ClientSession(connector=connector) as session_new:
+        return await _request_appreviews(
+            session_new, steam_app_id, url, params, timeout_s,
+        )
+
+
+async def _request_appreviews(
+    sess: aiohttp.ClientSession,
+    steam_app_id: int,
+    url: str,
+    params: dict[str, str],
+    timeout_s: float,
+) -> dict[str, Any] | None:
+    """GET the appreviews summary on ``sess``; None on transport error."""
     try:
-        timeout = aiohttp.ClientTimeout(total=timeout_s)
-        # ``ssl=False`` for the same SteamOS cert reason as appdetails.
-        connector = aiohttp.TCPConnector(ssl=False)
-        async with (
-            aiohttp.ClientSession(
-                connector=connector, timeout=timeout,
-            ) as session,
-            session.get(url, params=params) as response,
-        ):
+        async with sess.get(
+            url, params=params, timeout=aiohttp.ClientTimeout(total=timeout_s),
+        ) as response:
             if response.status != _HTTP_OK:
                 return None
             payload = await response.json(content_type=None)
     except (aiohttp.ClientError, TimeoutError) as exc:
         logger.debug("[steam.appreviews] %d failed: %s", steam_app_id, exc)
         return None
+    return _parse_appreviews_summary(payload)
 
+
+def _parse_appreviews_summary(payload: Any) -> dict[str, Any] | None:
+    """Extract ``{review_score, review_percentage, total_reviews}`` from a raw
+    appreviews payload, or None when absent/malformed/zero reviews."""
     if not isinstance(payload, dict) or not payload.get("success"):
         return None
     summary = payload.get("query_summary")

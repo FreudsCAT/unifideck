@@ -103,10 +103,9 @@ export async function loadFacets(force = false): Promise<void> {
   if (loaded && !force) return;
   try {
     const raw = await call<[], unknown>(rpcRoutes.getOverviewEnrichment);
-    const map = unwrapRpcEnvelope<Record<string, FacetRecord> | null | undefined>(
-      raw,
-      { route: rpcRoutes.getOverviewEnrichment },
-    );
+    const map = unwrapRpcEnvelope<
+      Record<string, FacetRecord> | null | undefined
+    >(raw, { route: rpcRoutes.getOverviewEnrichment });
     const entries = Object.entries(map ?? {});
     // A forced reload during a library sync can race the backend: the
     // metadata/compat caches are briefly mid-rebuild and the RPC

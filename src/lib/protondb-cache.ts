@@ -69,9 +69,7 @@ interface BackendCompatEntry {
  * outage degrades to "no badges, deckCompat tab empty" rather than
  * crashing module init.
  */
-export async function loadCompatCacheFromBackend(
-  force = false,
-): Promise<void> {
+export async function loadCompatCacheFromBackend(force = false): Promise<void> {
   if (cacheLoadedFromBackend && !force) return;
   try {
     const raw = await call<[], Record<string, BackendCompatEntry>>(

@@ -230,30 +230,44 @@ def _candidate_prefix_dirs(space_id: str) -> list[Path]:
     THIS ``space_id`` under each, plus the fixed internal default. Strict:
     the candidate basename is always ``space_id`` (never a fuzzy match).
     """
-    bases: list[Path] = [_PREFIXES_BASE_DEFAULT]
-    try:
-        data = json.loads(_ID_MAP_FILE.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        data = {}
-    if isinstance(data, dict):
-        for entry in data.values():
-            recorded = (
-                entry.get("prefix_path") if isinstance(entry, dict) else None
-            )
-            if not isinstance(recorded, str) or not recorded:
-                continue
-            p = Path(recorded)
-            if p.parent.name == "ubisoft" and p.parent.parent.name == "prefixes":
-                bases.append(p.parent.parent.parent)
     seen: set[str] = set()
     candidates: list[Path] = []
-    for base in bases:
+    for base in _read_storage_bases():
         cand = base / "prefixes" / "ubisoft" / space_id
         key = str(cand)
         if key not in seen:
             seen.add(key)
             candidates.append(cand)
     return candidates
+
+
+def _read_storage_bases() -> list[Path]:
+    """Storage bases to probe: the fixed internal default plus every base
+    derived from recorded id_map ``prefix_path`` values."""
+    bases: list[Path] = [_PREFIXES_BASE_DEFAULT]
+    try:
+        data = json.loads(_ID_MAP_FILE.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return bases
+    if not isinstance(data, dict):
+        return bases
+    for entry in data.values():
+        base = _base_from_id_map_entry(entry)
+        if base is not None:
+            bases.append(base)
+    return bases
+
+
+def _base_from_id_map_entry(entry: object) -> Path | None:
+    """The storage base from one id_map entry's ``prefix_path`` (strip the
+    trailing ``prefixes/ubisoft/<id>``), or None when it doesn't match."""
+    recorded = entry.get("prefix_path") if isinstance(entry, dict) else None
+    if not isinstance(recorded, str) or not recorded:
+        return None
+    p = Path(recorded)
+    if p.parent.name == "ubisoft" and p.parent.parent.name == "prefixes":
+        return p.parent.parent.parent
+    return None
 
 
 def _find_recovered_prefix(space_id: str) -> Path | None:
@@ -304,6 +318,42 @@ def _clone_template_into(prefix_dir: Path) -> bool:
     return (prefix_dir / _UPC_RELATIVE).is_file()
 
 
+async def _resolve_or_recover_upc_exe(plan: ProtonLaunchPlan) -> Path | None:
+    """The install prefix's upc.exe, recovering an empty prefix first.
+
+    When the resolved prefix has no upc.exe, recover before giving up so the
+    user doesn't just see a black flash: first look for a populated prefix for
+    this game under another storage base (the recorded pointer can be lost),
+    then clone the prebuilt ``.template`` on demand and retarget the run env to
+    it. Returns None only when both recovery routes fail.
+    """
+    upc_exe = _find_upc_exe(plan)
+    if upc_exe is not None:
+        return upc_exe
+    recovered = _find_recovered_prefix(plan.context.game_id)
+    if recovered is not None:
+        logger.info(
+            "[launcher.proton.ubisoft] recovered populated prefix for "
+            "%s at %s (resolved %s was empty)",
+            plan.context.game_id,
+            recovered,
+            plan.prefix_path,
+        )
+        # The plan is frozen; retarget the run via its env (mutable dict)
+        # so umu opens UPC in the recovered prefix.
+        plan.env["WINEPREFIX"] = str(recovered)
+        plan.env["STEAM_COMPAT_DATA_PATH"] = str(recovered)
+        return recovered / _UPC_RELATIVE
+    if await asyncio.to_thread(_clone_template_into, plan.prefix_path):
+        logger.info(
+            "[launcher.proton.ubisoft] cloned .template into %s for %s",
+            plan.prefix_path,
+            plan.context.game_id,
+        )
+        return plan.prefix_path / _UPC_RELATIVE
+    return None
+
+
 async def ubisoft_install_launch(plan: ProtonLaunchPlan) -> int:
     """Open Ubisoft Connect (UPC) to install a game, via RunGame.
 
@@ -333,36 +383,10 @@ async def ubisoft_install_launch(plan: ProtonLaunchPlan) -> int:
         i18n_title_key="toasts.launcher.installingUbisoft",
         game_title="Ubisoft Connect",
     )
-    upc_exe = _find_upc_exe(plan)
-    if upc_exe is None:
-        # Resolved prefix is empty — recover before giving up so the user
-        # doesn't just see a black flash. First look for a populated prefix
-        # for this game under another storage base (the recorded pointer can
-        # be lost); failing that, clone the prebuilt .template on demand.
-        recovered = _find_recovered_prefix(plan.context.game_id)
-        if recovered is not None:
-            logger.info(
-                "[launcher.proton.ubisoft] recovered populated prefix for "
-                "%s at %s (resolved %s was empty)",
-                plan.context.game_id,
-                recovered,
-                plan.prefix_path,
-            )
-            # The plan is frozen; retarget the run via its env (mutable dict)
-            # so umu opens UPC in the recovered prefix.
-            plan.env["WINEPREFIX"] = str(recovered)
-            plan.env["STEAM_COMPAT_DATA_PATH"] = str(recovered)
-            upc_exe = recovered / _UPC_RELATIVE
-        elif await asyncio.to_thread(_clone_template_into, plan.prefix_path):
-            logger.info(
-                "[launcher.proton.ubisoft] cloned .template into %s for %s",
-                plan.prefix_path,
-                plan.context.game_id,
-            )
-            upc_exe = plan.prefix_path / _UPC_RELATIVE
-    # Every branch above that assigns a non-None upc_exe already verified the
-    # file exists (_find_upc_exe / _find_recovered_prefix / _clone_template_into
-    # all gate on is_file), so a remaining None means recovery fully failed.
+    # _resolve_or_recover_upc_exe returns a verified-existing path or None
+    # (every recovery branch gates on is_file), so a None means the resolved
+    # prefix was empty and both recovery routes failed.
+    upc_exe = await _resolve_or_recover_upc_exe(plan)
     if upc_exe is None:
         launcher_toast(
             "toasts.launcher.ubisoftPrefixNotReadyMessage",

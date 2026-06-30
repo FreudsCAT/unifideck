@@ -210,7 +210,7 @@ class EpicAchievements:
         except (TimeoutError, OSError) as e:
             logger.warning("[epic.achievements] token refresh failed: %s", e)
             with contextlib.suppress(ProcessLookupError):
-                proc.kill()  # type: ignore[possibly-undefined]
+                proc.kill()
 
     def _resolve_sandbox(self, game_id: str) -> str | None:
         """The game's sandboxId = legendary metadata ``namespace`` (cache file)."""

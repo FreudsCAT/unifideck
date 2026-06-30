@@ -81,9 +81,7 @@ const WATCHED_EVENTS: EventName[] = [
  *  Steam restart relaunches UPC once per buffered event. They're primed past
  *  (watermark advanced, not dispatched) on the first poll after load; events
  *  emitted live during the session still fire normally. */
-const IMPERATIVE_EVENTS = new Set<string>([
-  "ubisoft_install_launch_requested",
-]);
+const IMPERATIVE_EVENTS = new Set<string>(["ubisoft_install_launch_requested"]);
 
 /** Sync-lifecycle events describe a sync that was already underway or
  *  finished in a PRIOR session. ``SteamRestartModal`` only restarts the
@@ -244,7 +242,8 @@ class EventBusClientImpl {
       for (const r of fresh) {
         if (
           !this.primed &&
-          (IMPERATIVE_EVENTS.has(r.event) || STALE_ON_RELOAD_EVENTS.has(r.event))
+          (IMPERATIVE_EVENTS.has(r.event) ||
+            STALE_ON_RELOAD_EVENTS.has(r.event))
         )
           continue;
         this.dispatch(r);

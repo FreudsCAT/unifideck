@@ -60,7 +60,11 @@ function openModal(appId: number): void {
   if (!g) return;
   const overview = (
     window as unknown as {
-      appStore?: { GetAppOverviewByAppID?: (id: number) => { display_name?: string } | null };
+      appStore?: {
+        GetAppOverviewByAppID?: (
+          id: number,
+        ) => { display_name?: string } | null;
+      };
     }
   ).appStore?.GetAppOverviewByAppID?.(appId);
   const title = overview?.display_name ?? g.gameId;
@@ -107,7 +111,10 @@ function dedupe(children: unknown[]): void {
  * decky-steamgriddb: prefer a child whose owner carries a *different* overview
  * appid, then any `app.appid` in the tree, falling back to the closure value.
  */
-function resolveItemsAppId(menuItems: unknown[], fallbackAppId: number): number {
+function resolveItemsAppId(
+  menuItems: unknown[],
+  fallbackAppId: number,
+): number {
   const items = menuItems as Array<{
     _owner?: { pendingProps?: { overview?: { appid?: number } } };
   }>;
@@ -165,7 +172,9 @@ function resolveAppId(component: {
 }
 
 /** The `LibraryContextMenu` class component, or null if Steam changed it. */
-function resolveLibraryContextMenu(): { prototype: Record<string, unknown> } | null {
+function resolveLibraryContextMenu(): {
+  prototype: Record<string, unknown>;
+} | null {
   try {
     const mod = findModuleByExport(
       (e: { toString?: () => string }) =>
@@ -207,8 +216,9 @@ export function applyAppContextMenuPatch(): AppContextMenuPatchHandle {
       );
       if (!inner) {
         inner = afterPatch(component, "type", (_a: unknown[], ret: unknown) => {
-          const proto = (ret as { type?: { prototype?: Record<string, unknown> } })
-            ?.type?.prototype;
+          const proto = (
+            ret as { type?: { prototype?: Record<string, unknown> } }
+          )?.type?.prototype;
           if (!proto) return ret;
           afterPatch(proto, "render", (_b: unknown[], ret2: unknown) => {
             const menuItems = (ret2 as { props?: { children?: unknown[] } })

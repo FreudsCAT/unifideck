@@ -288,7 +288,37 @@ def summarize_cloud_objects(
     per-object fall back to the server ``last_modified`` when the resolver can't
     supply one. Without it the behaviour is the original server-time summary.
     """
-    # Per top-level group: each object's (name, server last_modified epoch|None).
+    groups = _group_cloud_objects(objects)
+    if not groups:
+        return {
+            "has_saves": False, "timestamp": 0.0,
+            "file_count": 0, "total_bytes": 0,
+        }
+    # The active location = the group whose newest object is the most recent
+    # (server time) — what gogdl treats as the current cloud save.
+    active = max(
+        groups,
+        key=lambda top: max((ts or 0.0 for _, ts in groups[top]), default=0.0),
+    )
+    items = groups[active]
+    timestamps = _resolve_active_timestamps(items, mtime_resolver)
+    return {
+        "has_saves": len(items) > 0,
+        "timestamp": max(timestamps) if timestamps else 0.0,
+        "file_count": len(items),
+        "total_bytes": 0,
+    }
+
+
+def _group_cloud_objects(
+    objects: list[dict[str, Any]],
+) -> dict[str, list[tuple[str, float | None]]]:
+    """Group cloud objects by top-level location prefix.
+
+    Maps each prefix to a list of ``(name, server_last_modified_epoch|None)``,
+    excluding our own ``.unifideck_sync.json`` manifest so the count lines up
+    with the local snapshot.
+    """
     groups: dict[str, list[tuple[str, float | None]]] = {}
     for entry in objects:
         name = str(entry.get("name", ""))
@@ -303,21 +333,19 @@ def summarize_cloud_objects(
             except ValueError:
                 server_ts = None
         groups.setdefault(top, []).append((name, server_ts))
-    if not groups:
-        return {
-            "has_saves": False, "timestamp": 0.0,
-            "file_count": 0, "total_bytes": 0,
-        }
-    # The active location = the group whose newest object is the most recent
-    # (server time) — what gogdl treats as the current cloud save.
-    active = max(
-        groups,
-        key=lambda top: max((ts or 0.0 for _, ts in groups[top]), default=0.0),
-    )
-    items = groups[active]
-    # Prefer each object's preserved LOCAL mtime so the cloud time reflects when
-    # the save was actually written (matching the local snapshot) instead of the
-    # server PUT time; fall back per-object to the server ``last_modified``.
+    return groups
+
+
+def _resolve_active_timestamps(
+    items: list[tuple[str, float | None]],
+    mtime_resolver: Callable[[str], float | None] | None,
+) -> list[float]:
+    """Newest-write timestamps for the active group.
+
+    Prefers each object's preserved LOCAL mtime (so the cloud time reflects
+    when the save was actually written, matching the local snapshot) and falls
+    back per-object to the server ``last_modified``.
+    """
     timestamps: list[float] = []
     for name, server_ts in items:
         ts = mtime_resolver(name) if mtime_resolver is not None else None
@@ -325,9 +353,4 @@ def summarize_cloud_objects(
             ts = server_ts
         if ts is not None:
             timestamps.append(ts)
-    return {
-        "has_saves": len(items) > 0,
-        "timestamp": max(timestamps) if timestamps else 0.0,
-        "file_count": len(items),
-        "total_bytes": 0,
-    }
+    return timestamps

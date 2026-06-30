@@ -96,18 +96,7 @@ class GOGStore(StoreBase):
         self._shortcut_service = shortcut_service
         self._edge = edge_browser
         self._tokens = GOGTokenManager(self._gog_config, bus=bus)
-        # Achievements + play-session sync only need the (single, never-rebuilt)
-        # token manager, so build once here — unaffected by
-        # ``_rebuild_auth_after_injection``.
-        self._achievements = GOGAchievements(tokens=self._tokens)
-        self._sessions = GOGSessions(tokens=self._tokens)
-        self._exe = GOGExeResolver()
-
-        self._library = GOGLibrary(
-            config=self._gog_config,
-            tokens=self._tokens,
-            exe_finder=self._exe.find,
-        )
+        self._build_core_components()
         # Auth is late-bound : at boot ``browser_monitor`` is
         # ``None`` (auto-discovery doesn't see the service
         # container yet). The injector sets ``_browser_monitor``
@@ -118,32 +107,58 @@ class GOGStore(StoreBase):
         self._auth: GOGBrowserAuth | None = None
         self._rebuild_auth_after_injection()
         if self._auth is None:
-            gogdl_bin = self._resolve_gogdl_bin()
-            self._installer = GOGInstaller(
-                config=self._gog_config,
-                tokens=self._tokens,
-                gogdl_bin=gogdl_bin,
-                exe_finder=self._exe.find,
-                locale_fn=lambda: get_unifideck_locale(
-                    self._config_manager,
-                ),
-            )
-            self._dlc = GOGDlcManager(
-                config=self._gog_config,
-                tokens=self._tokens,
-                gogdl_bin=gogdl_bin,
-                locale_fn=lambda: get_unifideck_locale(
-                    self._config_manager,
-                ),
-                resolve_install_path=self._library.get_installed_game_info,
-            )
-            self._updates = GOGUpdatesChecker(
-                config=self._gog_config,
-                tokens=self._tokens,
-                gogdl_bin=gogdl_bin,
-                get_installed_ids=self._library.get_installed,
-                resolve_install_info=self._library.get_installed_game_info,
-            )
+            self._build_gogdl_submodules()
+
+    def _build_core_components(self) -> None:
+        """Build the always-on submodules (no auth / gogdl needed).
+
+        Achievements + play-session sync only need the single, never-rebuilt
+        token manager, so they are built once here — unaffected by
+        :meth:`_rebuild_auth_after_injection`.
+        """
+        self._achievements = GOGAchievements(tokens=self._tokens)
+        self._sessions = GOGSessions(tokens=self._tokens)
+        self._exe = GOGExeResolver()
+        self._library = GOGLibrary(
+            config=self._gog_config,
+            tokens=self._tokens,
+            exe_finder=self._exe.find,
+        )
+
+    def _build_gogdl_submodules(self) -> None:
+        """(Re)build the gogdl-driven submodules (installer, dlc, updates)
+        against the live token manager.
+
+        Called from ``__init__`` when auth is disabled, and again from
+        :meth:`_rebuild_auth_after_injection` once the monitor wires in —
+        ``_auth`` may have refreshed tokens in the meantime.
+        """
+        gogdl_bin = self._resolve_gogdl_bin()
+        self._installer = GOGInstaller(
+            config=self._gog_config,
+            tokens=self._tokens,
+            gogdl_bin=gogdl_bin,
+            exe_finder=self._exe.find,
+            locale_fn=lambda: get_unifideck_locale(
+                self._config_manager,
+            ),
+        )
+        self._dlc = GOGDlcManager(
+            config=self._gog_config,
+            tokens=self._tokens,
+            gogdl_bin=gogdl_bin,
+            locale_fn=lambda: get_unifideck_locale(
+                self._config_manager,
+            ),
+            resolve_install_path=self._library.get_installed_game_info,
+        )
+        self._updates = GOGUpdatesChecker(
+            config=self._gog_config,
+            tokens=self._tokens,
+            gogdl_bin=gogdl_bin,
+            get_installed_ids=self._library.get_installed,
+            resolve_install_info=self._library.get_installed_game_info,
+        )
 
     def _rebuild_auth_after_injection(self) -> None:
         """(Re-)build the GOG browser-auth flow once a monitor is set.
@@ -171,35 +186,9 @@ class GOGStore(StoreBase):
             tokens=self._tokens,
             config=self._gog_config,
         )
-        # Rebuild the gogdl-driven submodules so they reference
-        # the live token manager — `_auth` may have refreshed
-        # tokens in the meantime.
-        gogdl_bin = self._resolve_gogdl_bin()
-        self._installer = GOGInstaller(
-            config=self._gog_config,
-            tokens=self._tokens,
-            gogdl_bin=gogdl_bin,
-            exe_finder=self._exe.find,
-            locale_fn=lambda: get_unifideck_locale(
-                self._config_manager,
-            ),
-        )
-        self._dlc = GOGDlcManager(
-            config=self._gog_config,
-            tokens=self._tokens,
-            gogdl_bin=gogdl_bin,
-            locale_fn=lambda: get_unifideck_locale(
-                self._config_manager,
-            ),
-            resolve_install_path=self._library.get_installed_game_info,
-        )
-        self._updates = GOGUpdatesChecker(
-            config=self._gog_config,
-            tokens=self._tokens,
-            gogdl_bin=gogdl_bin,
-            get_installed_ids=self._library.get_installed,
-            resolve_install_info=self._library.get_installed_game_info,
-        )
+        # Rebuild the gogdl-driven submodules so they reference the live
+        # token manager — `_auth` may have refreshed tokens in the meantime.
+        self._build_gogdl_submodules()
         logger.info("[GOGStore] auth flow wired")
 
     async def is_available(self) -> bool:

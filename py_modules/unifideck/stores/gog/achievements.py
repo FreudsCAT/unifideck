@@ -19,7 +19,7 @@ import asyncio
 import logging
 import time
 from datetime import datetime
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, NoReturn
 from urllib.error import HTTPError, URLError
 
 from .galaxy_api import (
@@ -137,36 +137,8 @@ class GOGAchievements:
             raise GOGAchievementsError("offline") from e
         if not client_id or not client_secret:
             raise GOGAchievementsError("no_client_id", game_id=game_id)
-
-        try:
-            token = exchange_game_token(client_id, client_secret, refresh_token)
-        except HTTPError as e:
-            if e.code in (401, 403):
-                raise GOGAchievementsError("auth_expired") from e
-            raise GOGAchievementsError("offline") from e
-        except (URLError, OSError, TimeoutError) as e:
-            raise GOGAchievementsError("offline") from e
-        if not token:
-            raise GOGAchievementsError("auth_expired")
-
-        items: list[dict[str, Any]] = []
-        page: str | None = None
-        try:
-            for _ in range(_MAX_PAGES):
-                resp = fetch_achievements_page(client_id, user_id, token, page)
-                items.extend(resp.get("items") or [])
-                total = int(resp.get("total_count") or 0)
-                page = resp.get("page_token")
-                # GOG terminates with page_token "0" (string), not empty.
-                if not page or page == "0" or len(items) >= total:
-                    break
-        except HTTPError as e:
-            if e.code in (401, 403):
-                raise GOGAchievementsError("auth_expired") from e
-            raise GOGAchievementsError("offline") from e
-        except (URLError, OSError, TimeoutError) as e:
-            raise GOGAchievementsError("offline") from e
-
+        token = _exchange_token(client_id, client_secret, refresh_token)
+        items = _fetch_all_pages(client_id, user_id, token)
         return self._build_payload(game_id, items)
 
     @staticmethod
@@ -217,3 +189,54 @@ class GOGAchievements:
             "unlocked_at": _parse_ts(date_unlocked),
             "rarity": item.get("rarity"),
         }
+
+
+def _raise_gog_http(e: HTTPError) -> NoReturn:
+    """Translate a GOG HTTP error: 401/403 → auth_expired, else offline."""
+    if e.code in (401, 403):
+        raise GOGAchievementsError("auth_expired") from e
+    raise GOGAchievementsError("offline") from e
+
+
+def _exchange_token(
+    client_id: str, client_secret: str, refresh_token: str,
+) -> str:
+    """Exchange creds for a game-scoped token (worker thread).
+
+    Raises :class:`GOGAchievementsError` on HTTP/network failure or an empty
+    token.
+    """
+    try:
+        token = exchange_game_token(client_id, client_secret, refresh_token)
+    except HTTPError as e:
+        _raise_gog_http(e)
+    except (URLError, OSError, TimeoutError) as e:
+        raise GOGAchievementsError("offline") from e
+    if not token:
+        raise GOGAchievementsError("auth_expired")
+    return token
+
+
+def _fetch_all_pages(
+    client_id: str, user_id: str, token: str,
+) -> list[dict[str, Any]]:
+    """Accumulate achievement items across the paginated endpoint.
+
+    Bounded by ``_MAX_PAGES``; GOG terminates with page_token ``"0"`` (string),
+    not empty. Raises :class:`GOGAchievementsError` on HTTP/network failure.
+    """
+    items: list[dict[str, Any]] = []
+    page: str | None = None
+    try:
+        for _ in range(_MAX_PAGES):
+            resp = fetch_achievements_page(client_id, user_id, token, page)
+            items.extend(resp.get("items") or [])
+            total = int(resp.get("total_count") or 0)
+            page = resp.get("page_token")
+            if not page or page == "0" or len(items) >= total:
+                break
+    except HTTPError as e:
+        _raise_gog_http(e)
+    except (URLError, OSError, TimeoutError) as e:
+        raise GOGAchievementsError("offline") from e
+    return items

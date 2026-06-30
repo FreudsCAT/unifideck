@@ -144,7 +144,9 @@ function isWebBrowserTemplate(m: ControllerConfigInfoMessageList): boolean {
  * the game itself receives no controller input. Matched by filename
  * (stable) or localized title.
  */
-function isGamepadJoystickTemplate(m: ControllerConfigInfoMessageList): boolean {
+function isGamepadJoystickTemplate(
+  m: ControllerConfigInfoMessageList,
+): boolean {
   return (
     m.bOfficial &&
     (/gamepad_fps/i.test(m.URL) || /gamepad\s+with\s+joystick/i.test(m.Title))

@@ -17,6 +17,8 @@ import logging
 import time
 from typing import TYPE_CHECKING, Any, cast
 
+import aiohttp
+
 from unifideck.core.types import Game
 from unifideck.core.types.events import Events
 from unifideck.event_bus.event_bus_devex import auto_wire, subscribe
@@ -164,20 +166,44 @@ class MetadataService:
             name="metadata-enrichment",
         )
 
+    def _has_complete_metadata(self, game: Game) -> bool:
+        """Check if metadata is already fully cached for a game."""
+        cache_key = f"{game.store}:{game.store_game_id}"
+        # 1. Check general metadata cache (positive or negative)
+        try:
+            cached_meta = self._cache.get(CACHE_NAMESPACE, cache_key)
+            if cached_meta is None:
+                return False
+        except Exception:
+            return False
+
+        # If it's a Steam-native game, general metadata is all we fetch
+        if game.store == "steam":
+            return True
+
+        # 2. For non-Steam games, check if real Steam AppID resolution is cached
+        try:
+            steam_id = self._cache.get(STEAM_REAL_APPID_NS, str(game.app_id))
+            if steam_id is None:
+                return False
+            if steam_id <= 0:
+                # Resolved to negative (no Steam counterpart exists)
+                return True
+
+            # 3. If it maps to a real Steam AppID, check if appdetails are cached
+            cached_details = self._cache.get(STEAM_METADATA_NS, str(steam_id))
+            if cached_details is None:
+                return False
+        except Exception:
+            return False
+
+        return True
+
     async def _run_enrichment(self, games: list[Game]) -> None:
         """Background enrichment loop. ``finally`` emits
         ``POST_SYNC_PHASE_CHANGED(active=False)`` so the sync's
         post-phase tracker advances on success, exception, or
-        user-initiated sync cancellation. Without the guard, an
-        empty game list or any uncaught error left the progress
-        bar stuck.
-
-        Exception: when the task is cancelled by a newer
-        ``SYNC_COMPLETE`` handler (because another sync started
-        before this enrichment finished), the emit is skipped —
-        the new run owns the metadata phase and emitting here
-        would mark it done before the new run has actually
-        processed any games.
+        user-initiated sync cancellation.
         """
         total = len(games)
         cancelled_by_replace = False
@@ -191,12 +217,12 @@ class MetadataService:
                 "[MetadataService] background enrichment started for %d games",
                 total,
             )
-            sem = asyncio.Semaphore(ENRICHMENT_CONCURRENCY)
-            tasks = [
-                asyncio.create_task(self._enrich_one_game(g, sem))
-                for g in games
-            ]
-            await self._drain_enrichment(tasks, progress, total)
+            complete_games, pending_games = self._partition_games(games)
+            await self._mark_complete_cached(complete_games, progress, total)
+            if pending_games:
+                await self._enrich_pending(
+                    pending_games, progress, total, len(complete_games),
+                )
         except asyncio.CancelledError:
             cancelled_by_replace = True
             logger.info(
@@ -204,30 +230,85 @@ class MetadataService:
             )
             raise
         finally:
-            if not cancelled_by_replace:
-                # Forward SYNC_COMPLETE kwargs so the serialised
-                # Artwork → Compat downstream chain reads them here.
-                sync_kwargs = getattr(self, "_sync_kwargs", None) or {}
-                await self._bus.emit(
-                    Events.POST_SYNC_PHASE_CHANGED,
-                    phase="metadata", active=False,
-                    total=total, done=total,
-                    sync_kwargs=sync_kwargs,
+            await self._finalize_enrichment(cancelled_by_replace, total, games)
+
+    def _partition_games(
+        self, games: list[Game],
+    ) -> tuple[list[Game], list[Game]]:
+        """Split games into ``(already-complete, pending-enrichment)``."""
+        complete_games: list[Game] = []
+        pending_games: list[Game] = []
+        for g in games:
+            if self._has_complete_metadata(g):
+                complete_games.append(g)
+            else:
+                pending_games.append(g)
+        return complete_games, pending_games
+
+    async def _mark_complete_cached(
+        self, complete_games: list[Game], progress: Any, total: int,
+    ) -> None:
+        """Instantly advance progress for games already fully cached."""
+        if not complete_games:
+            return
+        logger.info(
+            "[MetadataService] %d/%d games already have complete metadata cached",
+            len(complete_games), total,
+        )
+        if progress is None:
+            return
+        for g in complete_games:
+            await progress.increment_steam(g.title)
+            await progress.increment_unifidb(g.title)
+
+    async def _enrich_pending(
+        self,
+        pending_games: list[Game],
+        progress: Any,
+        total: int,
+        complete_count: int,
+    ) -> None:
+        """Run concurrent enrichment for the games that are missing data."""
+        logger.info(
+            "[MetadataService] Enqueueing %d games missing metadata for enrichment",
+            len(pending_games),
+        )
+        sem = asyncio.Semaphore(ENRICHMENT_CONCURRENCY)
+        connector = aiohttp.TCPConnector(ssl=False)
+        async with aiohttp.ClientSession(connector=connector) as session:
+            tasks = [
+                asyncio.create_task(
+                    self._enrich_one_game(g, sem, session=session),
                 )
-            logger.info(
-                "[MetadataService] background enrichment finished (%d games)",
-                total,
+                for g in pending_games
+            ]
+            await self._drain_enrichment(
+                tasks, progress, total, start_count=complete_count,
             )
-            # Long-tail Metacritic lookups: fire-and-forget, runs
-            # after the phase-done emit so the progress bar isn't
-            # gated on it. See ``metadata_backfill``.
-            if not cancelled_by_replace:
-                metadata_backfill.spawn(self, games)
-                # Save-location backfill from PCGamingWiki for the GOG/Epic
-                # games unifiDB hasn't covered yet. Runs here (not earlier)
-                # because it joins on the ``steam_real_appid`` the metadata
-                # phase just populated. See ``pcgw_backfill``.
-                pcgw_backfill.spawn(self, games)
+
+    async def _finalize_enrichment(
+        self, cancelled_by_replace: bool, total: int, games: list[Game],
+    ) -> None:
+        """``finally`` body: emit the phase-done event and spawn long-tail
+        backfills (skipped when a newer sync cancelled this run)."""
+        if not cancelled_by_replace:
+            # Forward SYNC_COMPLETE kwargs so the serialised
+            # Artwork → Compat downstream chain reads them here.
+            sync_kwargs = getattr(self, "_sync_kwargs", None) or {}
+            await self._bus.emit(
+                Events.POST_SYNC_PHASE_CHANGED,
+                phase="metadata", active=False,
+                total=total, done=total,
+                sync_kwargs=sync_kwargs,
+            )
+        logger.info(
+            "[MetadataService] background enrichment finished (%d games)",
+            total,
+        )
+        # Long-tail Metacritic + PCGamingWiki lookups: fire-and-forget.
+        if not cancelled_by_replace:
+            metadata_backfill.spawn(self, games)
+            pcgw_backfill.spawn(self, games)
 
     def _sync_progress(self) -> Any:
         """Return the bus's ``SyncProgress`` tracker, or ``None``."""
@@ -236,17 +317,15 @@ class MetadataService:
         return self._bus.get_sync_progress()
 
     async def _drain_enrichment(
-        self, tasks: list[asyncio.Task[None]], progress: Any, total: int,
+        self,
+        tasks: list[asyncio.Task[None]],
+        progress: Any,
+        total: int,
+        start_count: int = 0,
     ) -> None:
-        """Await every per-game task as it finishes, logging progress.
-
-        Extracted from ``_run_enrichment`` to keep that function
-        under the 80-LOC / 4-nesting volumetry caps. Honours the
-        ``progress.status == "cancelled"`` flank by cancelling
-        in-flight tasks and exiting early.
-        """
+        """Await every per-game task as it finishes, logging progress."""
         every = max(1, min(50, total // 5))
-        done_count = 0
+        done_count = start_count
         for fut in asyncio.as_completed(tasks):
             if progress is not None and progress.status == "cancelled":
                 logger.info(
@@ -261,10 +340,7 @@ class MetadataService:
                 logger.debug(
                     "[MetadataService] enrichment task raised", exc_info=True,
                 )
-            # ``done_count`` is read both before processing (cancel
-            # flank) and after (progress cadence), so enumerate can't
-            # replace it.
-            done_count += 1  # noqa: SIM113
+            done_count += 1
             if done_count % every == 0:
                 logger.info(
                     "[MetadataService] progress: %d/%d enriched",
@@ -272,18 +348,16 @@ class MetadataService:
                 )
 
     async def _enrich_one_game(
-        self, game: Game, sem: asyncio.Semaphore,
+        self,
+        game: Game,
+        sem: asyncio.Semaphore,
+        session: aiohttp.ClientSession | None = None,
     ) -> None:
-        """Per-game enrichment under the semaphore: enrich → appdetails → progress.
-
-        Reuses the ``steam_appid`` resolved inside ``enrich`` to skip
-        the duplicate ``search_store`` call that
-        ``fetch_appdetails_for_game`` would otherwise issue.
-        """
+        """Per-game enrichment under the semaphore: enrich → appdetails → progress."""
         async with sem:
             steam_id: int | None = None
             try:
-                enriched = await self.enrich(game)
+                enriched = await self.enrich(game, session=session)
                 raw = enriched.get("steam_appid")
                 if isinstance(raw, int) and raw > 0:
                     steam_id = raw
@@ -295,7 +369,7 @@ class MetadataService:
             if game.store != "steam":
                 try:
                     await self.fetch_appdetails_for_game(
-                        game, hint_steam_id=steam_id,
+                        game, hint_steam_id=steam_id, session=session,
                     )
                 except Exception as e:
                     logger.debug(
@@ -306,38 +380,19 @@ class MetadataService:
             if progress is not None:
                 await progress.increment_steam(game.title)
                 await progress.increment_unifidb(game.title)
-                # Metacritic increment intentionally absent: the
-                # actual ``_fetch_metacritic`` work moved to the
-                # post-phase backfill (see metadata_backfill.spawn).
-                # Ticking here would advance a counter for work
-                # that hasn't started yet.
 
-    async def enrich(self, game: Game) -> dict[str, Any]:
-        """Return enriched metadata for a single game.
-
-        Caches both positive and negative results — a previous miss
-        is stored with the ``{"_negative": True}`` sentinel so the
-        next sync skips the three API calls for known-not-found
-        titles. Without negative caching, every sync re-queries
-        Steam Store + UnifiDB + Metacritic for the same niche games
-        that none of them have, wasting bandwidth and tripping rate
-        limits on large libraries.
-        """
+    async def enrich(
+        self, game: Game, session: aiohttp.ClientSession | None = None,
+    ) -> dict[str, Any]:
+        """Return enriched metadata for a single game."""
         cache_key = f"{game.store}:{game.store_game_id}"
 
         try:
             cached = self._cache.get(CACHE_NAMESPACE, cache_key)
             if isinstance(cached, dict):
-                # Negative sentinel: previously confirmed no source
-                # had data for this game. Return empty so callers
-                # behave as if no metadata is available, without
-                # re-hitting the network.
                 if cached.get("_negative"):
                     return {}
                 if cached:
-                    # ``cache.get`` is typed Any — the isinstance
-                    # narrowing makes this a real dict at runtime;
-                    # anchor the type for mypy via cast.
                     return cast("dict[str, Any]", cached)
         except Exception as e:
             logger.debug("[MetadataService] Cache read failed for %s: %s", cache_key, e)
@@ -345,16 +400,11 @@ class MetadataService:
         # Cache miss — fetch
         logger.debug("[MetadataService] Fetching metadata for %s", game.title)
 
-        # Parallel fetch from sources. Metacritic is no longer in
-        # this gather — most games already get a metacritic.score
-        # from Steam's appdetails payload (fetched by
-        # ``fetch_appdetails_for_game``), and the long-tail
-        # remainder is filled in by ``_metacritic_backfill`` after
-        # the phase-done emit, so the user's progress bar isn't
-        # gated on the slowest source.
         results = await asyncio.gather(
-            metadata_sources.fetch_steam_store(game.title),
-            metadata_sources.fetch_unifidb(game),
+            metadata_sources.fetch_steam_store(
+                game.title, config=self._config, session=session,
+            ),
+            metadata_sources.fetch_unifidb(game, config=self._config),
             return_exceptions=True,
         )
 
@@ -367,19 +417,6 @@ class MetadataService:
         merged.update(steam_data)
 
         try:
-            # TTL is configured at register time in
-            # ``bootstrap/cache_registry.py`` (7 days for the
-            # ``"metadata"`` slot). ``CacheManager.set`` takes
-            # only ``(cache, key, value)`` — earlier this site
-            # also passed ``ttl=self._ttl`` and silently raised
-            # ``TypeError: set() got an unexpected keyword
-            # argument 'ttl'`` on every cache write.
-            #
-            # Empty result → store negative sentinel so the next
-            # sync skips the three API calls. Sharing the same TTL
-            # as positive entries is fine — a game that didn't have
-            # metadata last week probably still doesn't, and if it
-            # does the TTL expiry kicks in eventually.
             payload = merged if merged else {"_negative": True}
             self._cache.set(CACHE_NAMESPACE, cache_key, payload)
         except Exception as e:
@@ -388,21 +425,19 @@ class MetadataService:
         return merged
 
     async def fetch_appdetails_for_game(
-        self, game: Game, *, hint_steam_id: int | None = None,
+        self,
+        game: Game,
+        *,
+        hint_steam_id: int | None = None,
+        session: aiohttp.ClientSession | None = None,
     ) -> dict[str, Any] | None:
-        """Resolve a game to a real Steam AppID, fetch its rich appdetails.
-
-        Powers the frontend's ``SteamStorePatcher`` via two caches:
-        ``steam_real_appid`` (shortcut → Steam AppID) and
-        ``steam_metadata`` (full appdetails per Steam AppID).
-        ``hint_steam_id`` lets callers skip the duplicate
-        ``search_store`` call when they already resolved it via
-        ``enrich`` — passing ``None`` keeps the original ad-hoc
-        behaviour for callers outside the sync loop.
-        """
+        """Resolve a game to a real Steam AppID, fetch its rich appdetails."""
         from unifideck.steam.appdetails import fetch_appdetails
-        steam_id = await self._resolve_steam_id(game, hint_steam_id)
+        steam_id = await self._resolve_steam_id(game, hint_steam_id, session=session)
         if steam_id is None:
+            self._cache_set_safely(
+                STEAM_REAL_APPID_NS, str(game.app_id), -1,
+            )
             return None
         self._cache_set_safely(
             STEAM_REAL_APPID_NS, str(game.app_id), steam_id,
@@ -416,21 +451,17 @@ class MetadataService:
             logger.debug(
                 "[MetadataService] metadata cache read failed", exc_info=True,
             )
-        data = await fetch_appdetails(steam_id, config=self._config)
+        data = await fetch_appdetails(steam_id, config=self._config, session=session)
         if data is None:
             return None
         self._cache_set_safely(STEAM_METADATA_NS, str(steam_id), data)
-        await self._fetch_reviews(steam_id)
+        await self._fetch_reviews(steam_id, session=session)
         return data
 
-    async def _fetch_reviews(self, steam_id: int) -> None:
-        """Fetch + cache the Steam review summary for ``steam_id`` once.
-
-        Powers the native "Steam Review" library sort for spoofed
-        shortcuts (``review_score`` / ``review_percentage`` aren't in
-        the ``appdetails`` payload). One-time per AppID — skipped when
-        already cached — so steady-state syncs pay nothing.
-        """
+    async def _fetch_reviews(
+        self, steam_id: int, session: aiohttp.ClientSession | None = None,
+    ) -> None:
+        """Fetch + cache the Steam review summary for ``steam_id`` once."""
         try:
             if self._cache.get(STEAM_REVIEWS_NS, str(steam_id)) is not None:
                 return
@@ -439,21 +470,14 @@ class MetadataService:
                 "[MetadataService] reviews cache read failed", exc_info=True,
             )
         from unifideck.steam.appreviews import fetch_appreviews
-        reviews = await fetch_appreviews(steam_id, config=self._config)
+        reviews = await fetch_appreviews(
+            steam_id, config=self._config, session=session,
+        )
         if reviews is not None:
             self._cache_set_safely(STEAM_REVIEWS_NS, str(steam_id), reviews)
 
     def _stamp_date_added(self, app_id: int) -> None:
-        """Record a stable first-seen timestamp for the Date-Added sort.
-
-        Stamped once per shortcut (only when absent) so the value never
-        drifts across syncs. The true historical add-date is
-        unrecoverable for games that predate this, so the first sync
-        after upgrade gives the existing library a common baseline and
-        genuinely-new games get their own (later) stamp. Keyed by the
-        signed ``Game.app_id``; the frontend reader tries both 32-bit
-        forms.
-        """
+        """Record a stable first-seen timestamp for the Date-Added sort."""
         try:
             if self._cache.get(SHORTCUT_ADDED_NS, str(app_id)) is not None:
                 return
@@ -466,14 +490,28 @@ class MetadataService:
             )
 
     async def _resolve_steam_id(
-        self, game: Game, hint_steam_id: int | None,
+        self,
+        game: Game,
+        hint_steam_id: int | None,
+        session: aiohttp.ClientSession | None = None,
     ) -> int | None:
-        """Return a valid Steam AppID for ``game`` — hint or live search."""
+        """Return a valid Steam AppID for ``game`` — hint or cache or live search."""
         if hint_steam_id is not None and hint_steam_id > 0:
             return hint_steam_id
+        try:
+            cached_id = self._cache.get(STEAM_REAL_APPID_NS, str(game.app_id))
+            if isinstance(cached_id, int):
+                return cached_id if cached_id > 0 else None
+        except Exception:
+            logger.debug(
+                "[Metadata] cached appid read failed for %s", game.app_id,
+                exc_info=True,
+            )
         from unifideck.steam import library
         try:
-            best = await library.search_store(game.title)
+            best = await library.search_store(
+                game.title, config=self._config, session=session,
+            )
         except Exception:
             logger.debug(
                 "[Metadata] Steam search failed for %s", game.title,

@@ -103,7 +103,9 @@ export async function createTemporaryShortcut(params: {
   steamApps.SetShortcutLaunchOptions?.(newAppId, launchOptions);
   const gameId = await waitForShortcutGameId(newAppId, SHORTCUT_POLL_DELAY_MS);
   if (!gameId) {
-    console.error(`${logTag} Temp shortcut ${newAppId} never received a gameid`);
+    console.error(
+      `${logTag} Temp shortcut ${newAppId} never received a gameid`,
+    );
     try {
       steamApps.RemoveShortcut?.(newAppId);
     } catch (error) {
@@ -148,7 +150,10 @@ export function scheduleTemporaryShortcutCleanup(
       steamApps?.RemoveShortcut?.(appId);
       console.log(`${logTag} Removed temp shortcut ${appId} (${reason})`);
     } catch (error) {
-      console.error(`${logTag} Failed to remove temp shortcut ${appId}:`, error);
+      console.error(
+        `${logTag} Failed to remove temp shortcut ${appId}:`,
+        error,
+      );
     }
   };
 

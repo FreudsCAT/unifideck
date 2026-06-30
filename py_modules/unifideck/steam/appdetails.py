@@ -69,9 +69,60 @@ def _parse_appdetails(
     return data if isinstance(data, dict) else None
 
 
+async def _request_appdetails(
+    sess: aiohttp.ClientSession,
+    steam_app_id: int,
+    params: dict[str, str],
+    timeout_s: float,
+) -> dict[str, Any] | None:
+    """GET the appdetails payload on ``sess`` with HTTP 429 backoff.
+
+    Retries up to ``_MAX_RETRIES`` times, honoring a numeric ``Retry-After``
+    header plus jitter (which de-syncs concurrent sync fetches). Returns the
+    parsed inner ``data`` dict, or ``None`` on a non-OK status or transport
+    error.
+    """
+    for attempt in range(_MAX_RETRIES + 1):
+        try:
+            async with sess.get(
+                STEAM_APPDETAILS_URL,
+                params=params,
+                timeout=aiohttp.ClientTimeout(total=timeout_s),
+            ) as response:
+                if response.status == _HTTP_TOO_MANY and attempt < _MAX_RETRIES:
+                    jitter = random.uniform(0, 0.5)  # noqa: S311
+                    delay = (
+                        _retry_after_seconds(response)
+                        or _RETRY_BASE_S * (2**attempt)
+                    ) + jitter
+                    logger.debug(
+                        "[steam.appdetails] %d rate-limited (429), "
+                        "retry %d/%d in %.1fs",
+                        steam_app_id,
+                        attempt + 1,
+                        _MAX_RETRIES,
+                        delay,
+                    )
+                    await asyncio.sleep(delay)
+                    continue
+                if response.status != _HTTP_OK:
+                    return None
+                payload = await response.json(content_type=None)
+                return _parse_appdetails(payload, steam_app_id)
+        except (aiohttp.ClientError, TimeoutError) as exc:
+            logger.debug(
+                "[steam.appdetails] %d failed: %s",
+                steam_app_id,
+                exc,
+            )
+            return None
+    return None
+
+
 async def fetch_appdetails(
     steam_app_id: int,
     config: ConfigManager | None = None,
+    session: aiohttp.ClientSession | None = None,
 ) -> dict[str, Any] | None:
     """Fetch the full Steam Store ``appdetails`` payload for ``steam_app_id``.
 
@@ -83,16 +134,6 @@ async def fetch_appdetails(
     On **HTTP 429** (rate limited — common during a bulk sync) it
     retries with exponential backoff, honoring a numeric ``Retry-After``
     header, up to ``_MAX_RETRIES`` times before returning ``None``.
-    Without this, a large library's bulk fetch silently dropped every
-    game past Steam's rate-limit threshold, so their embedded metacritic
-    (and other appdetails) never landed in the cache at sync time.
-
-    Args:
-        steam_app_id: real Steam Store AppID.
-        config: optional config manager (timeout override).
-
-    Returns:
-        Rich appdetails dict, or ``None`` on failure.
     """
     if steam_app_id <= 0:
         return None
@@ -104,78 +145,32 @@ async def fetch_appdetails(
         )
     )
     params = {"appids": str(steam_app_id), "cc": "us", "l": "english"}
-    for attempt in range(_MAX_RETRIES + 1):
-        try:
-            timeout = aiohttp.ClientTimeout(total=timeout_s)
-            # ``ssl=False`` for the same reason ``library.search_store``
-            # does it: SteamOS's bundled cert store predates several
-            # Steam CDN cert rotations, so default SSL verification fails
-            # inside the Decky plugin process for
-            # ``store.steampowered.com`` (every call comes back as
-            # ``ClientConnectorCertificateError``, caught at debug level
-            # → silent ``None`` return).
-            connector = aiohttp.TCPConnector(ssl=False)
-            async with (
-                aiohttp.ClientSession(
-                    connector=connector,
-                    timeout=timeout,
-                ) as session,
-                session.get(STEAM_APPDETAILS_URL, params=params) as response,
-            ):
-                if response.status == _HTTP_TOO_MANY and attempt < _MAX_RETRIES:
-                    # Jitter de-syncs the up-to-5 concurrent sync fetches
-                    # so their retries don't re-burst in lockstep. Not
-                    # security-sensitive — ``random`` is fine here.
-                    jitter = random.uniform(0, 0.5)  # noqa: S311
-                    delay = (
-                        _retry_after_seconds(response) or _RETRY_BASE_S * (2**attempt)
-                    ) + jitter
-                    logger.debug(
-                        "[steam.appdetails] %d rate-limited (429), retry %d/%d in %.1fs",
-                        steam_app_id,
-                        attempt + 1,
-                        _MAX_RETRIES,
-                        delay,
-                    )
-                    await asyncio.sleep(delay)
-                    continue
-                if response.status != _HTTP_OK:
-                    return None
-                payload = await response.json(content_type=None)
-        except (aiohttp.ClientError, TimeoutError) as exc:
-            logger.debug(
-                "[steam.appdetails] %d failed: %s",
-                steam_app_id,
-                exc,
-            )
-            return None
-        return _parse_appdetails(payload, steam_app_id)
-    return None
+    if session is not None:
+        return await _request_appdetails(
+            session, steam_app_id, params, timeout_s,
+        )
+    connector = aiohttp.TCPConnector(ssl=False)
+    async with aiohttp.ClientSession(connector=connector) as session_new:
+        return await _request_appdetails(
+            session_new, steam_app_id, params, timeout_s,
+        )
 
 
 async def fetch_appdetails_batch(
     steam_app_ids: list[int],
     config: ConfigManager | None = None,
     delay_s: float = _BATCH_DELAY_S,
+    session: aiohttp.ClientSession | None = None,
 ) -> dict[int, dict[str, Any]]:
     """Fetch appdetails for many ids sequentially with a polite delay.
 
     Sequential (not gathered) so Steam doesn't rate-limit us.
     ``delay_s`` between calls. Ignores fetch failures — the
     returned dict only contains successful lookups.
-
-    Args:
-        steam_app_ids: list of real Steam AppIDs.
-        config: optional config manager.
-        delay_s: per-request throttle (default 0.25s).
-
-    Returns:
-        ``{steam_app_id: appdetails_dict}``. Failed lookups are
-        omitted from the result.
     """
     out: dict[int, dict[str, Any]] = {}
     for app_id in steam_app_ids:
-        data = await fetch_appdetails(app_id, config)
+        data = await fetch_appdetails(app_id, config, session)
         if data is not None:
             out[app_id] = data
         if delay_s > 0:

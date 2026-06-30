@@ -35,7 +35,7 @@ def _cffi_backend_available() -> bool:
     silence. Cached: the answer can't change within a process.
     """
     try:
-        import _cffi_backend  # noqa: F401  # ABI probe only
+        import _cffi_backend  # type: ignore[import-untyped]  # noqa: F401
     except Exception:
         return False
     return True

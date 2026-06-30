@@ -78,16 +78,25 @@ def _detect_sdcard_install_base(media_base: Path | None = None) -> str:
             if os.path.ismount(entry) and os.access(entry, os.W_OK):
                 return str(entry / "Games" / "Ubisoft")
             # Nested layout: /run/media/<user>/<label>.
-            with contextlib.suppress(OSError):
-                for sub in sorted(entry.iterdir()):
-                    if (
-                        not sub.is_symlink()
-                        and sub.is_dir()
-                        and os.path.ismount(sub)
-                        and os.access(sub, os.W_OK)
-                    ):
-                        return str(sub / "Games" / "Ubisoft")
+            nested = _first_writable_mount(entry)
+            if nested is not None:
+                return str(nested / "Games" / "Ubisoft")
     return "/run/media/mmcblk0p1/Games/Ubisoft"
+
+
+def _first_writable_mount(parent: Path) -> Path | None:
+    """First writable mountpoint directly under ``parent`` (the udisks2 nested
+    ``/run/media/<user>/<label>`` layout), or None when there's none."""
+    with contextlib.suppress(OSError):
+        for sub in sorted(parent.iterdir()):
+            if (
+                not sub.is_symlink()
+                and sub.is_dir()
+                and os.path.ismount(sub)
+                and os.access(sub, os.W_OK)
+            ):
+                return sub
+    return None
 
 
 _DEFAULT_SDCARD_INSTALL_BASE = _detect_sdcard_install_base()

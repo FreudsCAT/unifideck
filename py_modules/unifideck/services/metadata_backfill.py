@@ -136,7 +136,7 @@ async def _fill_one(
         return
     async with sem:
         with contextlib.suppress(Exception):
-            data = await metadata_sources.fetch_metacritic(game.title)
+            data = await metadata_sources.fetch_metacritic(game.title, config=service._config)
             if data:
                 _merge_into_metadata_cache(cache, game, data)
 

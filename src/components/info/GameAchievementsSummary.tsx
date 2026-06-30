@@ -20,7 +20,11 @@ interface Props {
   title?: string;
 }
 
-export const GameAchievementsSummary: FC<Props> = ({ store, gameId, title }) => {
+export const GameAchievementsSummary: FC<Props> = ({
+  store,
+  gameId,
+  title,
+}) => {
   const { t } = useTranslation();
   const summary = useLastSessionAchievements(store, gameId);
 

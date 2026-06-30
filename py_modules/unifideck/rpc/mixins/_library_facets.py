@@ -210,41 +210,77 @@ def build_enrichment_map(
 
     if games:
         for game in games:
-            try:
-                shortcut_app_id = int(game.app_id)
-            except (TypeError, ValueError):
-                continue
-            if not shortcut_app_id:
-                continue
-            steam_app_id = _read_int(real_appid_data, shortcut_app_id)
-            entry = metadata_data.get(f"{game.store}:{game.store_game_id}")
-            record = build_facet_record(
-                cache,
-                shortcut_app_id,
-                steam_app_id,
-                reviews_data,
-                added_data,
-                entry if isinstance(entry, dict) else None,
+            _add_game_facet(
+                out, cache, game,
+                real_appid_data, reviews_data, added_data, metadata_data,
             )
-            for key in appid_candidates(shortcut_app_id):
-                out[key] = record
         return out
 
     # Fallback: no games list — enumerate the resolved-appid cache.
     for raw_key, raw_real in real_appid_data.items():
-        try:
-            shortcut_app_id = int(raw_key)
-            steam_app_id = int(raw_real)
-        except (TypeError, ValueError):
-            continue
-        record = build_facet_record(
-            cache,
-            shortcut_app_id,
-            steam_app_id,
-            reviews_data,
-            added_data,
-            None,
+        _add_cached_facet(
+            out, cache, raw_key, raw_real, reviews_data, added_data,
         )
-        for key in appid_candidates(shortcut_app_id):
-            out[key] = record
     return out
+
+
+def _add_game_facet(
+    out: dict[str, dict[str, Any]],
+    cache: Any,
+    game: Game,
+    real_appid_data: dict[str, Any],
+    reviews_data: dict[str, Any],
+    added_data: dict[str, Any],
+    metadata_data: dict[str, Any],
+) -> None:
+    """Emit the facet record for one unified-library game (preferred path).
+
+    Reads metacritic from the composite ``metadata[store:game_id]`` entry and
+    writes the record under both signed/unsigned AppID forms. No-ops when the
+    game has no usable shortcut AppID.
+    """
+    try:
+        shortcut_app_id = int(game.app_id)
+    except (TypeError, ValueError):
+        return
+    if not shortcut_app_id:
+        return
+    steam_app_id = _read_int(real_appid_data, shortcut_app_id)
+    entry = metadata_data.get(f"{game.store}:{game.store_game_id}")
+    record = build_facet_record(
+        cache,
+        shortcut_app_id,
+        steam_app_id,
+        reviews_data,
+        added_data,
+        entry if isinstance(entry, dict) else None,
+    )
+    for key in appid_candidates(shortcut_app_id):
+        out[key] = record
+
+
+def _add_cached_facet(
+    out: dict[str, dict[str, Any]],
+    cache: Any,
+    raw_key: Any,
+    raw_real: Any,
+    reviews_data: dict[str, Any],
+    added_data: dict[str, Any],
+) -> None:
+    """Emit the facet record for one ``steam_real_appid`` cache entry
+    (fallback path); metacritic comes only from Steam's appdetails."""
+    try:
+        shortcut_app_id = int(raw_key)
+        steam_app_id = int(raw_real)
+    except (TypeError, ValueError):
+        return
+    record = build_facet_record(
+        cache,
+        shortcut_app_id,
+        steam_app_id,
+        reviews_data,
+        added_data,
+        None,
+    )
+    for key in appid_candidates(shortcut_app_id):
+        out[key] = record
