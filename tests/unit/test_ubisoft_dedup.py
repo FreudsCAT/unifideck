@@ -8,8 +8,11 @@ Three behaviours are covered:
 
 1. ``"Parent - DLC"`` collapses when ``Parent`` is an owned base game
    or appears in the community DB.
-2. ``"Parent: Subtitle"`` only collapses against the owned base set, so
-   standalone subtitled titles (Prince of Persia) survive.
+2. ``"Parent: Subtitle"`` collapses only under catalog gating: the base
+   must be a known Algolia game *and* separately owned, and the full
+   title must be absent from the catalog. Standalone subtitled games
+   (Prince of Persia: The Sands of Time, Watch Dogs: Legion) are catalog
+   entries in their own right, so they survive.
 3. Edition variants ("Gold Edition") collapse onto the plain base title.
 """
 from __future__ import annotations
@@ -242,6 +245,73 @@ def test_catalog_known_game_survives_keyword_filter():
         [game], installed={}, base_catalog_norms=catalog,
     )
     assert _titles(games) == {"Trackmania Club Access"}
+
+
+def test_colon_dlc_dropped_when_base_catalog_known_and_owned():
+    """Catalog-gated colon rule drops "Base: Subtitle" DLC.
+
+    The base ("Trials Fusion") is a known catalog game the user also owns
+    separately, and the full DLC title is absent from the catalog — the
+    exact shape of the leaking Trials Fusion expansions.
+    """
+    base = _cfg(733, "", "Trials Fusion")
+    dlc = _cfg(671, "", "Trials Fusion: Riders of the Rustlands")
+    catalog = {_norm("Trials Fusion")}
+    games = _builder().build_games_from_configs(
+        [base, dlc], installed={}, base_catalog_norms=catalog,
+    )
+    assert _titles(games) == {"Trials Fusion"}
+
+
+def test_colon_subtitled_game_survives_when_itself_catalog_known():
+    """A subtitled game that is itself in the catalog is never dropped.
+
+    "Prince of Persia: The Sands of Time" is a catalog base game in its
+    own right, so even with base "Prince of Persia" owned + catalogued it
+    stays (the full title is present in the catalog).
+    """
+    base = _cfg(276, "", "Prince of Persia")
+    sot = _cfg(111, "", "Prince of Persia: The Sands of Time")
+    catalog = {
+        _norm("Prince of Persia"),
+        _norm("Prince of Persia: The Sands of Time"),
+    }
+    games = _builder().build_games_from_configs(
+        [base, sot], installed={}, base_catalog_norms=catalog,
+    )
+    assert _titles(games) == {
+        "Prince of Persia",
+        "Prince of Persia: The Sands of Time",
+    }
+
+
+def test_colon_sequel_survives_with_catalog_when_itself_known():
+    """Watch Dogs: Legion stays even when base Watch Dogs is owned.
+
+    Legion is itself a catalog base game, so the colon rule's "full title
+    not in catalog" clause keeps the standalone sequel.
+    """
+    base = _cfg(1, "", "Watch Dogs")
+    legion = _cfg(2, "", "Watch Dogs: Legion")
+    catalog = {_norm("Watch Dogs"), _norm("Watch Dogs: Legion")}
+    games = _builder().build_games_from_configs(
+        [base, legion], installed={}, base_catalog_norms=catalog,
+    )
+    assert _titles(games) == {"Watch Dogs", "Watch Dogs: Legion"}
+
+
+def test_colon_dlc_kept_when_base_not_separately_owned():
+    """The colon rule fires only when the base is separately owned.
+
+    With just the DLC entry present (no standalone "Trials Fusion"), we
+    keep it rather than drop an entry we can't prove is DLC.
+    """
+    dlc = _cfg(671, "", "Trials Fusion: Riders of the Rustlands")
+    catalog = {_norm("Trials Fusion")}
+    games = _builder().build_games_from_configs(
+        [dlc], installed={}, base_catalog_norms=catalog,
+    )
+    assert _titles(games) == {"Trials Fusion: Riders of the Rustlands"}
 
 
 @pytest.mark.parametrize(

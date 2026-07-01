@@ -259,7 +259,7 @@ class _GameBuilder:
         order: list[tuple[str, str]] = []
         for cfg, title, known in cleaned:
             if not known and self._is_dlc_by_separator(
-                title, base_norms, db_names,
+                title, base_norms, db_names, base_catalog_norms,
             ):
                 logger.debug(
                     "[UbisoftLibrary] dedup skip (DLC of base): %s",
@@ -394,46 +394,82 @@ class _GameBuilder:
         title: str,
         base_norms: set[str],
         db_names: set[str],
+        base_catalog_norms: set[str],
     ) -> bool:
         """True if ``title`` is a named DLC/expansion of a base we keep.
 
-        Only the ``" - "`` separator drives parent detection
-        (``"Base - Expansion Name"``): the part before the dash must
-        match an owned base title or a community-DB title.
+        Two separators drive parent detection, with very different
+        safety profiles:
 
-        The ``": "`` separator is **deliberately not** used here, unlike
-        staging. Staging only ran colon dedup on ownership-binary
-        entries that GraphQL had *not* already claimed, so its
-        authoritative owned-games list shielded standalone titles. With
-        the API gone, every owned game flows through this path — and
-        Ubisoft ships a great many *standalone* games as
-        ``"Franchise: Subtitle"`` (Rainbow Six: Siege, Ghost Recon:
-        Wildlands, Watch Dogs: Legion, Splinter Cell: Blacklist), so
-        colon parent-matching would delete real owned games. Genuine
-        colon-suffixed DLC ("Game: Season Pass") is already removed by
-        the keyword filter in :meth:`_should_skip_launcher_title`.
+        * ``" - "`` (``"Base - Expansion Name"``) — the part before the
+          dash must match an owned base title or a community-DB title.
+          This dash form is DLC-specific enough to trust broadly.
+
+        * ``": "`` (``"Base: Subtitle"``) — used **only** under strict
+          catalog gating (below). Ubisoft ships a great many *standalone*
+          games as ``"Franchise: Subtitle"`` (Rainbow Six: Siege, Ghost
+          Recon: Wildlands, Watch Dogs: Legion, Splinter Cell:
+          Blacklist), so a bare colon parent-match would delete real
+          owned games. The gate exploits the fact that the Algolia base
+          catalog is base-games-only: a standalone subtitled game is
+          *itself* a catalog entry, whereas a DLC (Trials Fusion: Riders
+          of the Rustlands) is not — so we only drop a colon title whose
+          full name is absent from the catalog while its base is present.
 
         An edition variant ("Base - History Edition", "Base - Gold
-        Edition") is a real game, not DLC — the ``" - "`` separator here
-        joins the base to an edition qualifier, not to an add-on name. We
-        bail out before the parent check so editions are kept (this is
-        what made "Anno 1602 - History Edition" vanish).
+        Edition") is a real game, not DLC — the separator here joins the
+        base to an edition qualifier, not to an add-on name. We bail out
+        before any parent check so editions are kept (this is what made
+        "Anno 1602 - History Edition" vanish).
         """
-        if " - " not in title:
-            return False
         if _EDITION_SUFFIX_PATTERN.search(title):
             return False
-        parent = self._id_map.normalize_for_matching(
-            title.split(" - ", 1)[0],
-        )
         self_norm = self._id_map.normalize_for_matching(
             self._strip_edition(title),
         )
-        return self._parent_matches(
-            parent,
-            base_norms | db_names,
-            base_norms,
-            exclude=self_norm,
+        if " - " in title:
+            parent = self._id_map.normalize_for_matching(
+                title.split(" - ", 1)[0],
+            )
+            if self._parent_matches(
+                parent,
+                base_norms | db_names,
+                base_norms,
+                exclude=self_norm,
+            ):
+                return True
+        if ": " in title:
+            return self._is_colon_dlc(
+                title, self_norm, base_norms, base_catalog_norms,
+            )
+        return False
+
+    def _is_colon_dlc(
+        self,
+        title: str,
+        self_norm: str,
+        base_norms: set[str],
+        base_catalog_norms: set[str],
+    ) -> bool:
+        """Catalog-gated ``"Base: Subtitle"`` DLC test.
+
+        Drops the entry only when *all* hold: the pre-colon base is a
+        known Algolia base game (``base_catalog_norms``), that base is
+        *separately owned* (``base_norms``), and the full title is **not
+        itself** a catalog base game. The last clause is the discriminator
+        that keeps standalone subtitled games — "Prince of Persia: The
+        Sands of Time" and "Watch Dogs: Legion" are catalog entries in
+        their own right; "Trials Fusion: Riders of the Rustlands" is not.
+        """
+        parent = self._id_map.normalize_for_matching(
+            title.split(": ", 1)[0],
+        )
+        return (
+            bool(parent)
+            and parent != self_norm
+            and parent in base_catalog_norms
+            and parent in base_norms
+            and self_norm not in base_catalog_norms
         )
 
     @staticmethod

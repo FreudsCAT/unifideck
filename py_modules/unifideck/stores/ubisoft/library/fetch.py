@@ -304,14 +304,23 @@ class _LibraryFetcher:
         from unifideck.stores.ubisoft.parser import GameConfig
 
         backfilled: list[GameConfig] = []
+        unresolved: list[str] = []
         for uuid in owned_uuids:
             name = uuid_catalog.get(uuid)
             if not name:
+                unresolved.append(uuid)
                 continue
             synth = GameConfig()
             synth.space_id = uuid
             synth.name = name
             backfilled.append(synth)
+        if unresolved:
+            logger.info(
+                "[UbisoftLibrary] %d owned UUID(s) unnamed by uuid catalog "
+                "(dropped): %s",
+                len(unresolved),
+                ", ".join(sorted(unresolved)[:20]),
+            )
         return backfilled
 
     def _build_backfill_configs(
@@ -343,17 +352,26 @@ class _LibraryFetcher:
             if cfg.name:
                 id_to_name.setdefault(cfg.install_id, cfg.name)
         backfilled: list[GameConfig] = []
+        unresolved: list[int] = []
         for oid in owned_set:
             if oid in config_by_id:
                 continue
             resolved = id_to_name.get(oid)
             if not resolved:
+                unresolved.append(oid)
                 continue
             synth = GameConfig()
             synth.install_id = oid
             synth.launch_id = oid
             synth.name = resolved
             backfilled.append(synth)
+        if unresolved:
+            logger.info(
+                "[UbisoftLibrary] %d owned install_id(s) unnamed by "
+                "community DB (dropped): %s",
+                len(unresolved),
+                ", ".join(str(i) for i in sorted(unresolved)[:20]),
+            )
         return backfilled
 
     @staticmethod
