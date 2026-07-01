@@ -52,7 +52,10 @@ def _uplay_id_from_id_map(space_id: str) -> str | None:
         return None
     for key in ("ubisoftconnect_game_id", "launch_id", "install_id"):
         value = entry.get(key)
-        if value:
+        # UUID-only titles record "0" (no numeric uplay id resolved yet);
+        # ``uplay://launch/0/0`` opens UPC's home, not the game, so treat
+        # "0" as missing and fall through to the next candidate.
+        if value and str(value) != "0":
             return str(value)
     return None
 async def _apply_epic_wrapper_fix(plan: ProtonLaunchPlan) -> None:
@@ -141,29 +144,52 @@ async def ubisoft_launch(plan: ProtonLaunchPlan) -> int:
             "failed or skipped",
         )
     _apply_language_setup(plan)
-    upc_exe = _find_upc_exe(plan)
+    # Recover an empty/lost-pointer prefix before giving up (same routine the
+    # install path uses) so a missing upc.exe doesn't just black-flash.
+    upc_exe = await _resolve_or_recover_upc_exe(plan)
+    if upc_exe is None:
+        launcher_toast(
+            "toasts.launcher.ubisoftPrefixNotReadyMessage",
+            i18n_title_key="toasts.launcher.ubisoftPrefixNotReady",
+            game_title=plan.context.game_key,
+            severity="error",
+        )
+        raise GameFailedError(
+            "upc.exe not found in the Ubisoft prefix — the per-game "
+            "prefix may not be fully set up yet",
+            subprocess_rc=127,
+            context={"store": "ubisoft", "prefix": str(plan.prefix_path)},
+        )
     uplay_id = os.environ.get("UPLAY_ID") or _uplay_id_from_id_map(
         plan.context.game_id,
     )
-    if upc_exe and uplay_id:
+    argv = [str(plan.python_bin), str(plan.umu_wrapper), str(upc_exe)]
+    if uplay_id:
         logger.info(
             "[launcher.proton.ubisoft] direct launch: "
             "uplay://launch/%s/0",
             uplay_id,
         )
-        argv = [
-            str(plan.python_bin),
-            str(plan.umu_wrapper),
-            str(upc_exe),
-            f"uplay://launch/{uplay_id}/0",
-        ]
-        env = plan.env
+        argv.append(f"uplay://launch/{uplay_id}/0")
     else:
+        # No resolvable uplay id (id_map not seeded, or UUID-only "0"). The
+        # old behaviour fell back to ``legendary launch`` — an Epic-only
+        # codepath that can never launch a Ubisoft title. Open UPC bare into
+        # the game's prefix instead so the user lands in their installed
+        # library and can start the game, and surface why direct launch
+        # didn't work. (Robust post-install id seeding should make this rare.)
         logger.warning(
-            "[launcher.proton.ubisoft] upc.exe or UPLAY_ID "
-            "missing, falling back to Legendary path",
+            "[launcher.proton.ubisoft] no uplay id for %s — opening UPC "
+            "bare (user can launch from their library)",
+            plan.context.game_id,
         )
-        argv, env = _build_legendary_fallback_argv(plan)
+        launcher_toast(
+            "toasts.launcher.ubisoftLaunchIdMissingMessage",
+            i18n_title_key="toasts.launcher.ubisoftLaunchIdMissing",
+            game_title=plan.context.game_key,
+            severity="warning",
+        )
+    env = plan.env
     rc = await run_umu_with_retry(
         argv, env=env, on_start=plan.on_process_start,
     )
@@ -445,30 +471,6 @@ def _apply_language_setup(plan: ProtonLaunchPlan) -> None:
             "[launcher.proton.ubisoft] language setup failed: %s",
             err,
         )
-def _build_legendary_fallback_argv(
-    plan: ProtonLaunchPlan,
-) -> tuple[list[str], dict[str, str]]:
-    """Build LEGENDARY fallback argv."""
-    env = dict(plan.env)
-    env["LEGENDARY_WRAPPER_EXE"] = (
-        "C:\\windows\\command\\EpicGamesLauncher.exe"
-    )
-    legendary_bin = os.environ.get("LEGENDARY_BIN", "legendary")
-    argv = [*plan.state.wrappers, legendary_bin, "launch", plan.context.game_id, "--no-wine", "--skip-version-check", "--wrapper", f"{plan.python_bin} {plan.umu_wrapper}", "--language", os.environ.get("EPIC_LANG", "en")]
-    if plan.state.game_args:
-        argv.append("--")
-        argv.extend(plan.state.game_args)
-    try:
-        from unifideck.launcher.proton.fixes.auth_args_stripper import (
-            strip_epic_auth_args,
-        )
-        argv, _stripped = strip_epic_auth_args(argv)
-    except Exception as err:
-        logger.warning(
-            "[launcher.proton.ubisoft] auth args strip failed: %s",
-            err,
-        )
-    return argv, env
 def _raise_for_umu_rc(rc: int, plan: ProtonLaunchPlan) -> None:
     """Raise for UMU rc."""
     if rc in {2, 74}:

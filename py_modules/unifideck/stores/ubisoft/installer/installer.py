@@ -173,16 +173,28 @@ class UbisoftInstaller:
                 "[UbisoftInstaller] installing game %s",
                 game_id,
             )
+            # Every Install starts from a CLEAN prefix so an abandoned install
+            # never leaves an orphaned prefix eating disk. Delete any prior
+            # per-game prefix — both the previously recorded location (which
+            # can differ when the user picks a new disk, or linger from a prior
+            # uninstall) and the resolved target — then bootstrap builds fresh
+            # (no reuse). Play never reaches this path, so it never resets a
+            # prefix; and the button is "Installing" during an active install,
+            # so this only runs when no install is in flight.
+            new_prefix = (
+                self._prefix_path_for_base(install_path, game_id)
+                if install_path
+                else self._paths.get_prefix_path(game_id)
+            )
+            old_prefix = self._id_map.resolve_prefix_path(game_id)
+            await self._reset_prefix_for_fresh_install(old_prefix, new_prefix)
             # Per-game prefix placement: the storage location the user picked
             # becomes the prefix root, so the game (which UPC installs into
             # the prefix's drive_c) lands on the chosen disk. Record it BEFORE
             # bootstrap so ``get_prefix_path`` — used by bootstrap, the
             # launcher, detection and uninstall — all resolve the same dir.
             if install_path:
-                self._id_map.set_prefix_path(
-                    game_id,
-                    self._prefix_path_for_base(install_path, game_id),
-                )
+                self._id_map.set_prefix_path(game_id, new_prefix)
             if not await self._bootstrap_game_prefix(game_id):
                 return InstallResult(
                     success=False,
@@ -285,6 +297,35 @@ class UbisoftInstaller:
             await self._cleanup_abandoned_prefix(game_id, prefix_path)
         return result
 
+    async def _reset_prefix_for_fresh_install(
+        self,
+        old_prefix: str | None,
+        new_prefix: str,
+    ) -> None:
+        """Delete any pre-existing per-game prefix(es) so Install starts clean.
+
+        Removes both the previously recorded location (an orphan from a prior
+        install to a different disk, or a leftover from a prior uninstall) and
+        the resolved target location. The subsequent ``set_prefix_path`` +
+        ``bootstrap_game_prefix`` then build a fresh, auth-injected prefix with
+        no reuse. Guarded/retrying delete via the uninstall pipeline (protected
+        paths + depth check); best-effort — a failed delete still lets bootstrap
+        proceed (it clones over the top).
+        """
+        seen: set[str] = set()
+        for path in (old_prefix, new_prefix):
+            if not path or path in seen:
+                continue
+            seen.add(path)
+            # Safe closure over ``path``: to_thread invokes the lambda during
+            # this await, before the loop advances.
+            is_dir = await asyncio.to_thread(Path(path).is_dir)
+            if is_dir:
+                await self._uninstall_pipeline.delete_tree_with_retries(
+                    path,
+                    "fresh-install prefix reset",
+                )
+
     async def _cleanup_abandoned_prefix(
         self,
         game_id: str,
@@ -296,13 +337,17 @@ class UbisoftInstaller:
         prefixes don't accumulate at the user's chosen storage location.
 
         SAFETY (double-guarded — the user explicitly warned against deleting
-        a prefix that holds a game): keep the prefix if EITHER the install
+        a prefix that holds a game): keep the prefix ONLY if EITHER the install
         detector finds a game OR the UPC ``games/`` dir actually contains a
         game folder. The second guard matters because the snapshot-based
         install detector can false-negative (it does not always notice a
         completed install), and we must never delete real game files.
-        Only prefixes placed at a recorded (user-picked) location are
-        removed; the shared internal default is left for reuse.
+
+        A bootstrapped-but-no-game prefix (upc.exe present, no game folder) is
+        NOW deleted — resume is intentionally not preserved: each Install
+        rebuilds the prefix fresh, so keeping an abandoned UPC prefix would
+        only orphan disk. Only prefixes placed at a recorded (user-picked)
+        location are removed; the shared internal default is left for reuse.
         """
         recorded = self._id_map.resolve_prefix_path(game_id)
         if not recorded:
@@ -310,21 +355,13 @@ class UbisoftInstaller:
         game_info = self._library._detector._detect_installed_game(
             game_id, prefix_path,
         )
-        # Keep the prefix if it holds a game OR is a populated, reusable UPC
-        # prefix (upc.exe present). The manual flow routinely returns
-        # ``no_install_detected`` before the user finishes downloading; the
-        # bootstrapped prefix has upc.exe but no game folder yet, so deleting
-        # it here (and clearing prefix_path) orphaned the install and made
-        # the next attempt resolve to an empty default → black flash. A
-        # populated UPC prefix is reusable, so retain it.
         if (
             (game_info and game_info.get("install_path"))
             or _reg.prefix_has_game_files(prefix_path)
-            or self._paths.find_upc_exe(prefix_path)
         ):
             logger.info(
-                "[UbisoftInstaller] abandoned install for %s but prefix is "
-                "populated (game files or UPC) — keeping prefix %s",
+                "[UbisoftInstaller] abandoned install for %s but prefix holds "
+                "a game — keeping prefix %s",
                 game_id,
                 prefix_path,
             )

@@ -302,6 +302,8 @@
       "installingUbisoftMessage": "Opening Ubisoft Connect — start the install from the launcher window.",
       "ubisoftPrefixNotReady": "Ubisoft Connect isn't ready",
       "ubisoftPrefixNotReadyMessage": "Couldn't prepare the Ubisoft Connect prefix for this game. Try installing again; if it keeps failing, re-run a library sync.",
+      "ubisoftLaunchIdMissing": "Opening Ubisoft Connect",
+      "ubisoftLaunchIdMissingMessage": "Couldn't resolve this game's launch ID — opening Ubisoft Connect so you can start it from your library. Re-run a library sync to fix direct launch.",
       "dependenciesTitle": "Installing Dependencies",
       "installingRedistributables": "Installing game redistributables...",
       "dependenciesReady": "Dependencies Ready",

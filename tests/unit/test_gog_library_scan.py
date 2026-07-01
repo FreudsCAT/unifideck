@@ -17,8 +17,9 @@ from typing import TYPE_CHECKING
 from unittest.mock import Mock
 
 import unifideck.stores.gog.library as gog_library
+from unifideck.core.types import Game
 from unifideck.stores.gog.config import GOGConfig
-from unifideck.stores.gog.library import GOGLibrary
+from unifideck.stores.gog.library import GOGLibrary, merge_install_status
 
 if TYPE_CHECKING:
     import pytest
@@ -94,3 +95,120 @@ def test_get_installed_scans_all_locations(
         config_manager=None,
     )
     assert set(lib.get_installed()) == {"111", "222"}
+
+
+def test_get_installed_map_returns_path_and_exe(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    loc = tmp_path / "Games"
+    loc.mkdir()
+    install = _make_install(loc, "BioShock", "2022341186")
+    monkeypatch.setattr(
+        gog_library, "get_all_game_directories", lambda _cfg: [str(loc)],
+    )
+    lib = GOGLibrary(
+        config=GOGConfig(download_dir=str(tmp_path / "empty")),
+        tokens=Mock(),
+        exe_finder=lambda p: f"{p}/start.sh",
+        config_manager=None,
+    )
+
+    found = lib.get_installed_map()
+    assert found == {
+        "2022341186": {
+            "install_path": str(install),
+            "executable": f"{install}/start.sh",
+        },
+    }
+
+
+def test_get_installed_map_dedupes_across_dirs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    loc1 = tmp_path / "a"
+    loc2 = tmp_path / "b"
+    loc1.mkdir()
+    loc2.mkdir()
+    first = _make_install(loc1, "GameX", "333")
+    _make_install(loc2, "GameY", "333")  # same id, second location
+    monkeypatch.setattr(
+        gog_library,
+        "get_all_game_directories",
+        lambda _cfg: [str(loc1), str(loc2)],
+    )
+    lib = GOGLibrary(
+        config=GOGConfig(download_dir=str(tmp_path / "empty")),
+        tokens=Mock(),
+        exe_finder=lambda _p: None,
+        config_manager=None,
+    )
+
+    found = lib.get_installed_map()
+    # One entry, first scanned location wins.
+    assert list(found.keys()) == ["333"]
+    assert found["333"]["install_path"] == str(first)
+
+
+def test_merge_install_status_marks_owned_installed() -> None:
+    owned = [
+        Game(app_id=0, store="gog", store_game_id="111", title="A"),
+        Game(app_id=0, store="gog", store_game_id="222", title="B"),
+    ]
+    installed = {
+        "111": {"install_path": "/x/A", "executable": "/x/A/start.sh"},
+    }
+
+    merged = merge_install_status(owned, installed)
+
+    by_id = {g.store_game_id: g for g in merged}
+    assert by_id["111"].installed is True
+    assert by_id["111"].install_path == "/x/A"
+    assert by_id["111"].exe_path == "/x/A/start.sh"
+    # Owned game with no install dir stays not-installed.
+    assert by_id["222"].installed is False
+    assert by_id["222"].install_path is None
+    assert by_id["222"].exe_path is None
+
+
+def test_merge_install_status_preserves_fields() -> None:
+    owned = [
+        Game(
+            app_id=42,
+            store="gog",
+            store_game_id="111",
+            title="A",
+            tags=["rpg"],
+            icon_url="icon",
+            hero_url="hero",
+            logo_url="logo",
+            size_bytes=99,
+            metadata={"k": "v"},
+        ),
+    ]
+    installed = {"111": {"install_path": "/x/A", "executable": "/x/A/run"}}
+
+    merged = merge_install_status(owned, installed)[0]
+
+    assert merged.app_id == 42
+    assert merged.tags == ["rpg"]
+    assert merged.icon_url == "icon"
+    assert merged.hero_url == "hero"
+    assert merged.logo_url == "logo"
+    assert merged.size_bytes == 99
+    assert merged.metadata == {"k": "v"}
+    # tags / metadata are copies, not aliases of the owned game's objects.
+    merged.tags.append("fps")
+    merged.metadata["k2"] = "v2"
+    assert owned[0].tags == ["rpg"]
+    assert owned[0].metadata == {"k": "v"}
+
+
+def test_merge_install_status_no_exe_keeps_installed() -> None:
+    owned = [Game(app_id=0, store="gog", store_game_id="111", title="A")]
+    installed = {"111": {"install_path": "/x/A", "executable": None}}
+
+    merged = merge_install_status(owned, installed)[0]
+
+    assert merged.installed is True
+    assert merged.install_path == "/x/A"
+    assert merged.exe_path is None

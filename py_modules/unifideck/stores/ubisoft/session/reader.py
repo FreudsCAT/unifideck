@@ -72,6 +72,30 @@ class _CredentialReader:
                 best = mtime
         return best
 
+    def get_credential_size(self, prefix_path: str) -> int:
+        """Largest valid ``ConnectSecureStorage.dat`` size in the prefix, or 0.
+
+        UPC's credential file shrinks when a session logs out (the token is
+        stripped). Comparing a source prefix's size against the auth prefix's
+        lets the capture path recognise a logged-out / stale source and refuse
+        to propagate it — protecting both the auth prefix and the template.
+        """
+        best = 0
+        for _root, user_home in self._paths.iter_user_homes(
+            prefix_path,
+            pfx_first=True,
+        ):
+            css = self._css_path(user_home)
+            if not self._is_valid_css(css, _CSS_MIN_VALID_SIZE):
+                continue
+            try:
+                size = Path(css).stat().st_size
+            except OSError:
+                continue
+            if size > best:
+                best = size
+        return best
+
     def find_best_credential_source(self) -> str | None:
         """Find best credential source."""
         auth_source = self._check_auth_prefix_for_credentials()

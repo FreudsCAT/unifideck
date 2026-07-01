@@ -34,6 +34,7 @@ from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any, cast
 
 from unifideck.core.types import AuthResult, Events, Game, InstallResult, Result, StoreInfo
+from unifideck.event_bus.event_bus_devex import auto_wire, subscribe
 from unifideck.stores.shared.store_base import StoreBase
 
 from .specialists import build_ubisoft_specialists
@@ -98,6 +99,45 @@ class UbisoftStore(StoreBase):
         self._installer: UbisoftInstaller = specialists.installer
         self._auth: UbisoftAuth = specialists.auth
         self._ubi_config = specialists.config
+        # Subscribe to bus events (currently GAME_STOPPED, to capture the token
+        # UPC rotated during a play session back to the auth prefix).
+        auto_wire(self, bus)
+
+    @subscribe(Events.GAME_STOPPED)
+    async def _capture_upc_session_on_stop(self, **kwargs: Any) -> None:
+        """Capture the token UPC rotated during play back to the auth prefix.
+
+        The Play path runs in the launcher subprocess, which can't reach the
+        backend session facade — so a token UPC rotates while the game runs is
+        written only into the game prefix and never makes it back to
+        ``.upc-auth``. Left uncaptured, the auth prefix ends up on a
+        server-stale token and the next FRESH install (or a game installed to a
+        new prefix) opens signed-out. Capturing on game-stop keeps auth current
+        after every play. ``capture()`` is guarded (auth-only, skips a
+        logged-out / smaller source), so a normal exit that didn't rotate — or
+        an explicit logout — is a safe no-op.
+        """
+        if kwargs.get("store") != "ubisoft":
+            return
+        game_id = kwargs.get("game_id")
+        if not isinstance(game_id, str) or not game_id:
+            return
+        try:
+            prefix_path = self._paths.get_prefix_path(game_id)
+            captured = await asyncio.to_thread(
+                self._session.capture, prefix_path,
+            )
+            if captured:
+                await asyncio.to_thread(self._session.propagate_all_to_all)
+                logger.info(
+                    "[UbisoftStore] captured rotated UPC token after play "
+                    "for %s → auth refreshed",
+                    game_id,
+                )
+        except Exception as e:
+            logger.warning(
+                "[UbisoftStore] post-play session capture failed: %s", e,
+            )
 
     def _rebuild_auth_after_injection(self) -> None:
         """Wire the post-injection shortcut service into the auth facade.

@@ -45,11 +45,14 @@ _MANUAL_INSTALL_POLL_INTERVAL_S = 10.0
 _STABILITY_WAIT_MAX_POLLS = 360
 _STABILITY_POLL_INTERVAL_S = 10.0
 _STABILITY_STABLE_THRESHOLD = 3
-# Consecutive polls (× _MANUAL_INSTALL_POLL_INTERVAL_S = ~60s) with the UPC
+# Consecutive polls (× _MANUAL_INSTALL_POLL_INTERVAL_S = ~3min) with the UPC
 # window gone — after it was seen once — before we treat the session as
 # abandoned. Generous on purpose: it must outlast the first-run
 # installer→main-launcher window handoff so we never end a real install early.
-_UPC_WINDOW_GONE_THRESHOLD = 6
+# Abandonment is additionally gated on the UPC process having exited (see
+# ``_upc_process_alive``), so this threshold is now only a backstop for when
+# that liveness probe can't run.
+_UPC_WINDOW_GONE_THRESHOLD = 18
 
 
 class _ManualUiInstaller:
@@ -111,22 +114,28 @@ class _ManualUiInstaller:
                 env=env,
                 progress_cb=progress_cb,
             )
-        finally:
-            # Always close UPC — including when the install task is
-            # cancelled from the download queue. ``_pkill_upc`` runs
-            # synchronously before any await, so it still fires when the
-            # surrounding ``await`` re-raises ``CancelledError`` during a
-            # cancel unwind. A process kill closes the launcher window even
-            # though it lives in a separate RunGame gamescope session.
-            self._active_install_pids.pop(game_id, None)
+        except asyncio.CancelledError:
+            # Explicit cancel from the download queue is the ONLY path that
+            # closes UPC. The completion/timeout paths must NOT: completion is
+            # inferred from the install dir's size holding steady for ~30s, so
+            # a mid-download pause (UPC verifying/extracting a chunk, a network
+            # stall, a phase transition) can look "done" — and killing UPC then
+            # interrupts a still-running install (the user saw UPC close
+            # mid-install and resume on reopen). On completion we leave UPC
+            # open; it trays / the user closes it. ``_pkill_upc`` runs
+            # synchronously before the ``raise`` re-raises during the cancel
+            # unwind, and closes the launcher even across its RunGame gamescope
+            # session.
             self._pkill_upc()
+            raise
+        finally:
+            self._active_install_pids.pop(game_id, None)
             # Capture a fresh/rotated UPC token from this prefix back to the
-            # auth prefix + template even when the install is cancelled or
-            # fails (this runs in `finally`, so it fires on the CancelledError
-            # unwind too). Otherwise a token UPC rotated this run is lost and
-            # the next install/launch injects the stale auth-prefix credential
-            # → UPC opens logged out. capture() is guarded (acts only on a
-            # valid, newer credential), so a half-written session is ignored.
+            # auth prefix on every exit path (incl. the cancel unwind).
+            # Otherwise a token UPC rotated this run is lost and the next
+            # install/launch injects the stale auth-prefix credential → UPC
+            # opens logged out. capture() is guarded (acts only on a valid,
+            # non-logged-out credential), so a half-written session is ignored.
             self._capture_and_propagate_session(prefix_path)
         if not install_dir:
             return InstallResult(
@@ -139,6 +148,7 @@ class _ManualUiInstaller:
             game_id=game_id,
             game_name=game_name,
             install_dir=install_dir,
+            prefix_path=prefix_path,
         )
 
     async def _notify_upc_launching(
@@ -219,12 +229,42 @@ class _ManualUiInstaller:
                     check=False,  # rc=1 on "no match" is expected
                 )
 
+    @staticmethod
+    def _upc_process_alive() -> bool:
+        """Whether a UPC Wine process is currently running.
+
+        Counterpart to ``_pkill_upc`` (same image names, ``pgrep -f``
+        instead of ``pkill -f``). The window-gone watchdog uses this to
+        tell "the user quit UPC" (process gone → abandon the install)
+        from "UPC minimized to the tray" (process alive → keep waiting):
+        ``--onlyvisible`` reports a tray'd window as not visible, which
+        would otherwise look identical to a quit. ``pgrep`` returns rc=0
+        when a match exists, rc=1 on no match; a probe error (pgrep
+        missing) returns ``True`` so a broken probe can never end a real
+        install — same fail-safe spirit as ``upc_window_visible``.
+        """
+        import subprocess
+        for pattern in ("upc.exe", "UbisoftConnect.exe"):
+            try:
+                result = subprocess.run(
+                    ["pgrep", "-f", pattern],
+                    capture_output=True,
+                    timeout=5,
+                    check=False,
+                )
+            except (OSError, subprocess.SubprocessError):
+                return True  # can't check → assume alive (never abort)
+            if result.returncode == 0:
+                return True
+        return False
+
     async def _finalize_manual_install(
         self,
         *,
         game_id: str,
         game_name: str | None,
         install_dir: str,
+        prefix_path: str,
     ) -> InstallResult:
         """Finalize manual install."""
         exe = self._library.find_game_executable(install_dir)
@@ -240,13 +280,7 @@ class _ManualUiInstaller:
             install_dir,
             final_size / (1024 * 1024),
         )
-        try:
-            await self._id_map.refresh_from_configurations()
-        except Exception as e:
-            logger.debug(
-                "[UbisoftInstaller] id_map refresh after install failed: %s",
-                e,
-            )
+        await self._seed_launch_id(game_id, prefix_path, game_name)
         return InstallResult(
             success=True,
             store="ubisoft",
@@ -254,6 +288,62 @@ class _ManualUiInstaller:
             install_path=install_dir,
             size_bytes=final_size,
             metadata={"executable": exe},
+        )
+
+    def _launch_id_ok(self, game_id: str) -> bool:
+        """Whether a usable (non-zero) uplay launch id resolves for a game."""
+        resolved = self._id_map.resolve_launch_id(game_id)
+        return bool(resolved) and str(resolved) != "0"
+
+    async def _seed_launch_id(
+        self,
+        game_id: str,
+        prefix_path: str,
+        game_name: str | None,
+    ) -> None:
+        """Make sure a uplay launch id is resolvable right after install.
+
+        The launcher builds ``uplay://launch/{id}/0`` from
+        ``ubisoft_id_map.json``; with no resolvable id, Play can't launch the
+        game directly (it opens UPC bare). UPC writes the config files we read
+        from asynchronously, so the configuration refresh can miss on the
+        first pass — fall back to the Wine registry, then a unifiDB name
+        lookup (mirrors the library detector's ``_auto_resolve_missing_id``).
+        Best-effort: a failure here only costs direct-launch, never the
+        install itself.
+        """
+        try:
+            await self._id_map.refresh_from_configurations(game_id)
+        except Exception as e:
+            logger.warning(
+                "[UbisoftInstaller] id_map refresh after install failed: %s",
+                e,
+            )
+        if self._launch_id_ok(game_id):
+            return
+        reg_id = self._id_map.extract_game_id_from_registry(prefix_path)
+        if not reg_id and game_name:
+            with contextlib.suppress(Exception):
+                reg_id = await self._id_map.lookup_game_id_by_name(game_name)
+        if reg_id:
+            self._id_map.merge_entry(
+                game_id,
+                {
+                    "install_id": reg_id,
+                    "launch_id": reg_id,
+                    "ubisoftconnect_game_id": reg_id,
+                    "name": game_name or "",
+                },
+            )
+            logger.info(
+                "[UbisoftInstaller] seeded uplay launch id for %s: %s",
+                game_id, reg_id,
+            )
+            return
+        logger.warning(
+            "[UbisoftInstaller] could not resolve a uplay launch id for %s — "
+            "Play will open Ubisoft Connect until a library sync seeds it",
+            game_id,
         )
 
     @staticmethod
@@ -346,13 +436,30 @@ class _ManualUiInstaller:
                 env, window_ever_seen, no_window_polls,
             )
             if window_ever_seen and no_window_polls >= _UPC_WINDOW_GONE_THRESHOLD:
-                logger.info(
-                    "[UbisoftInstaller] UPC window gone for %d polls "
-                    "(~%.0fs) — treating install session as abandoned",
-                    no_window_polls,
-                    no_window_polls * _MANUAL_INSTALL_POLL_INTERVAL_S,
-                )
-                return None
+                # The window's been gone a while — but ``--onlyvisible`` also
+                # reports a UPC minimized to the tray as "not visible", which
+                # is exactly what happens during a long download. Only treat
+                # the session as abandoned when UPC's *process* is also gone
+                # (the user actually quit it). If it's still running, it's
+                # just backgrounded — reset the counter and keep waiting so we
+                # never kill an in-progress install.
+                if self._upc_process_alive():
+                    logger.debug(
+                        "[UbisoftInstaller] UPC window gone for %d polls but "
+                        "the process is still alive (minimized/tray) — "
+                        "continuing to wait",
+                        no_window_polls,
+                    )
+                    no_window_polls = 0
+                else:
+                    logger.info(
+                        "[UbisoftInstaller] UPC window gone for %d polls "
+                        "(~%.0fs) and the process has exited — treating "
+                        "install session as abandoned",
+                        no_window_polls,
+                        no_window_polls * _MANUAL_INSTALL_POLL_INTERVAL_S,
+                    )
+                    return None
             await self._maybe_emit_waiting_tick(progress_cb, iteration)
         return None
 

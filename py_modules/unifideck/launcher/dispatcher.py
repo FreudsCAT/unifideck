@@ -154,7 +154,7 @@ async def _build_context(
             return _ubisoft_install_context(store, game_id, raw_options)
         return _auth_context(store, game_id, raw_options, action_store)
 
-    exe, work_dir = await _resolve_game_exe(
+    exe, work_dir, has_entry = await _resolve_game_exe(
         shortcut_svc, store, game_id, game_key,
     )
     if not exe:
@@ -167,18 +167,33 @@ async def _build_context(
                 "synthesizing xCloud context for %s", game_key,
             )
             return _xcloud_context(store, game_id, raw_options)
-        # Ubisoft install whose ``UNIFIDECK_UBISOFT_ACTION=install`` token
-        # never reached os.environ (Steam dropped the launch option) — so it
-        # looks like a plain launch but has no games.map row. If it's a known
-        # title with a populated prefix, treat it as an install action
-        # instead of erroring (opens UPC via RunGame).
-        if store == "ubisoft" and _ubisoft_has_populated_prefix(game_id):
-            logger.info(
-                "[launcher.dispatcher] ubisoft game %s not in games.map but "
-                "has a populated prefix — treating as install action",
-                game_key,
-            )
-            return _ubisoft_install_context(store, game_id, raw_options)
+        if store == "ubisoft":
+            # An *installed* Ubisoft title legitimately has no resolvable exe:
+            # ``ubisoft_launch`` launches it via the ``uplay://launch/{id}/0``
+            # deeplink and ignores ``exe_path`` entirely. A games.map row is
+            # the "installed" signal — route it to the play handler so Play
+            # launches the game (NOT UPC). Only when the title is genuinely
+            # NOT installed (no row) yet has a bootstrapped prefix do we treat
+            # it as an install action — the case where Steam dropped the
+            # ``UNIFIDECK_UBISOFT_ACTION=install`` token (it looks like a plain
+            # launch). Opening UPC for an already-installed game was the
+            # regression where "Play" re-opened Ubisoft Connect.
+            if has_entry:
+                logger.info(
+                    "[launcher.dispatcher] ubisoft game %s installed "
+                    "(games.map row, no exe) — launching via uplay deeplink",
+                    game_key,
+                )
+                return _game_context(
+                    store, game_id, exe, work_dir, raw_options,
+                )
+            if _ubisoft_has_populated_prefix(game_id):
+                logger.info(
+                    "[launcher.dispatcher] ubisoft game %s not in games.map "
+                    "but has a populated prefix — treating as install action",
+                    game_key,
+                )
+                return _ubisoft_install_context(store, game_id, raw_options)
         raise GameNotFoundError(
             f"game {game_key!r} not found in games.map",
             context={"game_key": game_key},
@@ -188,14 +203,20 @@ async def _build_context(
 
 async def _resolve_game_exe(
     shortcut_svc: ShortcutService, store: str, game_id: str, game_key: str,
-) -> tuple[str, str]:
-    """Resolve ``(exe, work_dir)`` from games.map, repairing a stale row.
+) -> tuple[str, str, bool]:
+    """Resolve ``(exe, work_dir, has_entry)`` from games.map.
 
     Games installed by older builds (or discovered via manifest) may
     have an absent row (Amazon) or an empty exe (GOG ``start.sh``); we
     re-resolve from the install dir so they launch without a reinstall.
+
+    ``has_entry`` reports whether a games.map row existed at all — the
+    "installed" signal the caller needs to distinguish an installed
+    Ubisoft title (deeplink launch, exe legitimately empty) from one
+    that was never installed.
     """
     entry = await shortcut_svc.get_entry_for_game_key(store, game_id)
+    has_entry = entry is not None
     exe = (entry.exe if entry else "") or ""
     work_dir = (entry.work_dir if entry else "") or ""
     if not exe and store != "microsoft":
@@ -210,7 +231,7 @@ async def _resolve_game_exe(
                 game_key, resolved,
             )
             exe = resolved
-    return exe, work_dir
+    return exe, work_dir, has_entry
 
 
 def _auth_context(

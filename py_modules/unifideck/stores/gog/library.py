@@ -266,6 +266,47 @@ class GOGLibrary:
         )
         return installed
 
+    def get_installed_map(self) -> dict[str, dict[str, str | None]]:
+        """All installed GOG games, keyed by game id, in one disk walk.
+
+        Returns ``{game_id: {"install_path": <dir>, "executable": <exe>}}``.
+
+        Used by the full-library sync to overlay install status onto the
+        owned list (``get_library`` → :func:`merge_install_status`). A
+        single pass over every scan dir — vs ``get_installed_game_info``'s
+        per-game rescan — so the merge is O(dirs × entries), not
+        O(installed × dirs × entries). First match per game id wins (a
+        game id could appear under more than one scanned dir).
+
+        Keys off the ``.unifideck-id`` marker only: every install this
+        plugin performs writes one, so it's authoritative for the bulk
+        overlay. The ``goggame-{id}.info`` fallback in
+        :meth:`_match_install_dir` is intentionally NOT used here — it can
+        only be driven from a known target id, which would reintroduce the
+        per-game rescan cost; it stays reserved for the single-game callers
+        (uninstall, DLC, App-Details size, update checks).
+        """
+        found: dict[str, dict[str, str | None]] = {}
+        for base in self._install_scan_dirs():
+            base_path = Path(base).expanduser()
+            if not base_path.is_dir():
+                continue
+            try:
+                for entry in base_path.iterdir():
+                    if not entry.is_dir():
+                        continue
+                    game_id = self._read_marker(str(entry))
+                    if game_id and game_id not in found:
+                        found[game_id] = self._install_info(str(entry))
+            except OSError:
+                logger.exception(
+                    "[GOGLibrary] get_installed_map scan failed at %s", base,
+                )
+        logger.info(
+            "[GOGLibrary] install map: %d installed games", len(found),
+        )
+        return found
+
     def get_installed_game_info(self, game_id: str) -> dict[str, str | None] | None:
         """Get installed game info.
 
@@ -395,3 +436,52 @@ class GOGLibrary:
             extra_headers=headers,
             log_prefix="[GOGLibrary]",
         )
+
+
+def merge_install_status(
+    owned: list[Game],
+    installed: dict[str, dict[str, str | None]],
+) -> list[Game]:
+    """Overlay on-disk install state onto the owned-games list.
+
+    Mirrors Epic/Amazon's ``merge_install_status``: for each owned game
+    with a scanned install dir, rebuild it as ``installed=True`` with the
+    scanned ``install_path``/``exe_path``, preserving every other field.
+
+    Unlike Epic/Amazon — which carry the owned game's ``exe_path`` (None
+    on a fresh fetch) — GOG sets ``exe_path`` from the scanned executable.
+    Reconcile only (re)writes the games.map launch row when BOTH
+    ``game.installed`` and ``game.exe_path`` are truthy, so a missing
+    ``exe_path`` would leave launch broken after a sync rebuilt the row.
+
+    No ``Path(install_path).is_dir()`` guard (unlike Epic): GOG's
+    ``installed`` map comes from a live ``iterdir`` walk, so the dir
+    provably existed at scan time — there's no separate CLI record that
+    can outlive the files. ``size_bytes`` is left untouched (computing it
+    means walking the tree; App-Details resolves it on demand).
+    """
+    merged: list[Game] = []
+    for game in owned:
+        entry = installed.get(game.store_game_id)
+        install_path = entry.get("install_path") if entry else None
+        if entry is None or not install_path:
+            merged.append(game)
+            continue
+        merged.append(
+            Game(
+                app_id=game.app_id,
+                store=game.store,
+                store_game_id=game.store_game_id,
+                title=game.title,
+                installed=True,
+                install_path=install_path,
+                exe_path=(entry.get("executable") or game.exe_path),
+                size_bytes=game.size_bytes,
+                tags=list(game.tags),
+                icon_url=game.icon_url,
+                hero_url=game.hero_url,
+                logo_url=game.logo_url,
+                metadata=dict(game.metadata),
+            )
+        )
+    return merged

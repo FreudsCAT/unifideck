@@ -51,7 +51,7 @@ from .config import GOG_AUTH_URL_FILE, GOGConfig
 from .dlc import GOGDlcManager
 from .exe_resolver import GOGExeResolver
 from .install import GOGInstaller
-from .library import GOGLibrary
+from .library import GOGLibrary, merge_install_status
 from .sessions import GOGSessions
 from .tokens import GOGTokenManager
 from .updates import GOGUpdatesChecker
@@ -258,8 +258,35 @@ class GOGStore(StoreBase):
         return result
 
     async def get_library(self, *, force: bool = False) -> list[Game] | None:
-        """Get library."""
-        return await self._library.fetch_library()
+        """Owned GOG games with on-disk install status overlaid.
+
+        Every other store overlays install state inside ``get_library``;
+        GOG previously returned ``fetch_library`` verbatim (every game
+        ``installed=False``), so a full sync wiped the installed flag off
+        every GOG game — and reconcile then pruned their games.map launch
+        rows. Mirror Epic/Amazon: fetch owned, scan disk once (off the
+        event loop — it's blocking filesystem I/O), merge.
+
+        Defensive: a scan failure returns the owned list as-is (all
+        ``installed=False``) rather than blanking the library to ``[]``,
+        so a transient error degrades to "nothing installed", not "no
+        games". ``fetch_library`` already returns ``[]`` when
+        unauthenticated.
+        """
+        owned = await self._library.fetch_library()
+        if not owned:
+            return owned
+        try:
+            installed = await asyncio.to_thread(
+                self._library.get_installed_map,
+            )
+            return merge_install_status(owned, installed)
+        except Exception:
+            logger.exception(
+                "[GOGStore] get_library install overlay failed; "
+                "returning owned games as not-installed",
+            )
+            return owned
 
     async def install_game(
         self,
