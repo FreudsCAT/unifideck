@@ -90,7 +90,7 @@ export function useStoreAuth(store: StoreId): UseStoreAuthResult {
     } finally {
       setBusy(false);
     }
-  }, [store, toast]);
+  }, [store, toast, auth]);
 
   const disconnect = useCallback(async () => {
     setBusy(true);

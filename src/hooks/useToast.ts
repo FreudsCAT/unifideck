@@ -51,7 +51,7 @@ export function useToast(): UseToastResult {
           duration: options.duration ?? DEFAULT_DURATION,
           onClick: options.onClick,
         });
-      } catch (e) {
+      } catch {
         console.log(`[Toast] ${title}: ${body ?? ""}`);
       }
     },

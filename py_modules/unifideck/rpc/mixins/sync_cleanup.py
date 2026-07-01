@@ -68,8 +68,12 @@ class CleanupRPCMixin:
             "[orphan-scan] %d to delete, %d to recover",
             len(result["delete"]), len(result["recover"]),
         )
-        result["launcher_path"] = launcher_path
-        return result
+        # ``scan_orphans`` is typed ``dict[str, list[dict[str, Any]]]``; the RPC
+        # response also carries the launcher path (a ``str``), so widen into a
+        # fresh ``dict[str, Any]`` rather than mutating the narrow scan result.
+        payload: dict[str, Any] = dict(result)
+        payload["launcher_path"] = launcher_path
+        return payload
 
     async def _delete_install_dir(self, install_dir: str) -> bool:
         """rm -rf a recorded game install directory.

@@ -60,7 +60,9 @@ function makeStore(names: string[]) {
   names.forEach(make);
   const store = {
     userCollections: map,
-    GetCollection: vi.fn((id: string) => (id === "type-games" ? { allApps: [ { appid: 1, display_name: "Game" } ] } : map.get(id))),
+    GetCollection: vi.fn((id: string) =>
+      id === "type-games" ? { allApps: [{ appid: 1, display_name: "Game" }] } : map.get(id),
+    ),
     GetCollectionIDByUserTag: vi.fn((tag: string) => {
       for (const c of map.values()) if (c.displayName === tag) return c.id;
       return null;
@@ -99,7 +101,7 @@ describe("deleteAllUnifideckCollections", () => {
     store.GetCollection.mockClear();
     store.NewUnsavedCollection.mockClear();
     await syncUnifideckCollections();
-    
+
     expect(store.GetCollection).not.toHaveBeenCalled();
     expect(store.NewUnsavedCollection).not.toHaveBeenCalled();
   });
@@ -109,15 +111,15 @@ describe("startCollectionManager", () => {
   it("runs cleanup once when collections are disabled on startup", async () => {
     const { map } = makeStore(["[Unifideck] Alpha"]);
     window.localStorage.setItem(COLLECTIONS_ENABLED_KEY, "0");
-    
+
     const handle = startCollectionManager();
-    
+
     // Wait for the async waitForCollections() promise chain to resolve
     await new Promise((r) => setTimeout(r, 10));
-    
+
     expect(window.localStorage.getItem(COLLECTIONS_CLEANED_KEY)).toBe("1");
     expect(Array.from(map.values()).map((c) => c.displayName)).not.toContain("[Unifideck] Alpha");
-    
+
     handle.remove();
   });
 });

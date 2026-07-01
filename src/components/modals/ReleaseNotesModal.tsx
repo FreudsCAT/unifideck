@@ -1,6 +1,7 @@
-import { FC } from "react";
+import { FC, ReactNode } from "react";
 import { ConfirmModal } from "@decky/ui";
 import { useTranslation } from "react-i18next";
+import type { TFunction } from "i18next";
 
 interface Props {
   version: string;
@@ -10,7 +11,7 @@ interface Props {
 
 const parseInline = (text: string) => {
   const boldParts = text.split("**");
-  const result: any[] = [];
+  const result: ReactNode[] = [];
 
   boldParts.forEach((part, boldIdx) => {
     const isBold = boldIdx % 2 !== 0;
@@ -59,7 +60,7 @@ const parseInline = (text: string) => {
   return result;
 };
 
-const parseMarkdown = (text: string, t: any) => {
+const parseMarkdown = (text: string, t: TFunction) => {
   if (!text) {
     return (
       <div style={{ opacity: 0.6, fontStyle: "italic", padding: "10px 0" }}>

@@ -21,11 +21,7 @@ vi.mock("../../api/event-bus-client", () => ({
   },
 }));
 
-import {
-  runFilter,
-  unifideckGameCache,
-  validThirdPartyCache,
-} from "./index";
+import { runFilter, unifideckGameCache, validThirdPartyCache } from "./index";
 import type { SteamAppOverview } from "../../types/steam";
 
 const NON_STEAM_APP_TYPE = 1073741824;

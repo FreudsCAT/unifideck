@@ -227,10 +227,11 @@ export const PluginUpdater: FC = () => {
           defaultValue: "Successfully fetched latest version info.",
         }),
       );
-    } catch (e: any) {
+    } catch (e) {
+      const message = e instanceof Error ? e.message : undefined;
       toast.error(
         t("updater.checkFailedTitle", { defaultValue: "Check Failed" }),
-        e?.message ?? t("errors.unknown"),
+        message ?? t("errors.unknown"),
       );
     } finally {
       setChecking(false);
@@ -301,11 +302,12 @@ export const PluginUpdater: FC = () => {
         selectedRelease.sha256 || "",
         installType,
       );
-    } catch (e: any) {
-      logEvent("error", e?.message ?? String(e));
+    } catch (e) {
+      const message = e instanceof Error ? e.message : undefined;
+      logEvent("error", message ?? String(e));
       toast.error(
         t("updater.installFailedTitle", { defaultValue: "Install Failed" }),
-        e?.message ?? t("errors.unknown"),
+        message ?? t("errors.unknown"),
       );
     } finally {
       // The call returns before the install runs; never leave the panel locked.

@@ -183,7 +183,8 @@ class AuthDispatcherImpl {
     console.log(`[AuthDispatcher:${store}] store_auth returned:`, startResult);
     if (
       startResult?.success === true &&
-      !(startResult as any)?.metadata?.pending
+      !(startResult as { metadata?: { pending?: boolean } } | null)?.metadata
+        ?.pending
     ) {
       console.log(
         `[AuthDispatcher:${store}] backend reports already-authed, ` +

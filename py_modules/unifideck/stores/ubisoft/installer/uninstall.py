@@ -51,88 +51,109 @@ class _UninstallPipeline:
         *,
         delete_prefix: bool = False,
     ) -> Result:
-        """Uninstall game."""
+        """Uninstall game.
+
+        Thin wrapper: logs the request and turns any unexpected exception from
+        the pipeline into a failed :class:`Result`. The actual sequence lives
+        in :meth:`_perform_uninstall`.
+        """
         try:
             logger.info(
                 "[UbisoftInstaller] uninstalling %s (delete_prefix=%s)",
                 game_id,
                 delete_prefix,
             )
-            prefix_path, install_id, install_path = self.resolve_uninstall_targets(
-                game_id
-            )
-            # Prefer deleting the game files ourselves over UPC's
-            # ``uplay://uninstall`` protocol. Running UPC rotates the Ubisoft
-            # refresh token (the server invalidates the old one) and the
-            # uninstall path can't reliably capture the rotated token back —
-            # so the shared login goes stale and the next install opens
-            # signed-out (the "auth lost after uninstall" bug). When we can
-            # locate the install directory from our own records (the
-            # ``.unifideck_ubisoft`` install marker / detection cascade / the
-            # UPC registry ``InstallDir``), delete it directly and never touch
-            # UPC. Only fall back to the protocol uninstall when the files
-            # can't be located — and capture the rotated token back so even
-            # that path keeps the shared login current. ``capture()`` is
-            # guarded (valid + newer + non-smaller), so a logout / half-write
-            # can't poison auth/template.
-            protocol_attempted = False
-            if not await self._can_delete_directly(install_path, delete_prefix):
-                protocol_attempted = await self.attempt_protocol_uninstall(
-                    game_id,
-                    prefix_path,
-                    install_id,
-                    delete_prefix,
-                )
-                install_path = self.refresh_install_path(
-                    game_id,
-                    prefix_path,
-                    install_path,
-                )
-            # Capture the prefix's CURRENT token back to the auth prefix before
-            # we delete anything. UPC rotates the token on every run — including
-            # PLAY, whose launcher subprocess never captures it back — so the
-            # game prefix routinely holds a NEWER, still-valid token than auth
-            # (auth is left on the pre-play token the rotation invalidated
-            # server-side). Deleting the prefix without capturing strands auth
-            # on that stale token → the next install opens signed-out. Runs
-            # whether we direct-deleted or fell back to UPC (captures the latest
-            # either way). ``_capture_rotated_session`` → ``capture()`` is
-            # guarded (auth-only, skips a logged-out/smaller source), so it
-            # never propagates a logout.
-            self._capture_rotated_session(prefix_path)
-            game_dir_error = await self.delete_game_directory(
-                install_path,
-                prefix_path,
-                delete_prefix,
-            )
-            if game_dir_error:
-                return Result(success=False, error=game_dir_error)
-            prefix_deleted, prefix_error = await self.delete_prefix_if_requested(
-                prefix_path,
-                delete_prefix,
-            )
-            if prefix_error:
-                return Result(success=False, error=prefix_error)
-            self.post_uninstall_cleanup(
+            return await self._perform_uninstall(
                 game_id,
-                prefix_path,
-                install_id,
-                prefix_deleted,
+                delete_prefix=delete_prefix,
             )
-            logger.info(
-                "[UbisoftInstaller] game %s uninstalled "
-                "(protocol_attempted=%s, prefix_deleted=%s)",
-                game_id,
-                protocol_attempted,
-                prefix_deleted,
-            )
-            return Result(success=True)
         except Exception as e:
             logger.exception("[UbisoftInstaller] uninstall error for %s", game_id)
             return Result(
                 success=False,
                 error=f"uninstall_exception: {e}",
             )
+
+    async def _perform_uninstall(
+        self,
+        game_id: str,
+        *,
+        delete_prefix: bool,
+    ) -> Result:
+        """Resolve targets, uninstall (direct or via UPC), and clean up.
+
+        Raises on unexpected errors; :meth:`uninstall_game` wraps this in the
+        top-level ``try/except``.
+        """
+        prefix_path, install_id, install_path = self.resolve_uninstall_targets(
+            game_id
+        )
+        # Prefer deleting the game files ourselves over UPC's
+        # ``uplay://uninstall`` protocol. Running UPC rotates the Ubisoft
+        # refresh token (the server invalidates the old one) and the
+        # uninstall path can't reliably capture the rotated token back —
+        # so the shared login goes stale and the next install opens
+        # signed-out (the "auth lost after uninstall" bug). When we can
+        # locate the install directory from our own records (the
+        # ``.unifideck_ubisoft`` install marker / detection cascade / the
+        # UPC registry ``InstallDir``), delete it directly and never touch
+        # UPC. Only fall back to the protocol uninstall when the files
+        # can't be located — and capture the rotated token back so even
+        # that path keeps the shared login current. ``capture()`` is
+        # guarded (valid + newer + non-smaller), so a logout / half-write
+        # can't poison auth/template.
+        protocol_attempted = False
+        if not await self._can_delete_directly(install_path, delete_prefix):
+            protocol_attempted = await self.attempt_protocol_uninstall(
+                game_id,
+                prefix_path,
+                install_id,
+                delete_prefix,
+            )
+            install_path = self.refresh_install_path(
+                game_id,
+                prefix_path,
+                install_path,
+            )
+        # Capture the prefix's CURRENT token back to the auth prefix before
+        # we delete anything. UPC rotates the token on every run — including
+        # PLAY, whose launcher subprocess never captures it back — so the
+        # game prefix routinely holds a NEWER, still-valid token than auth
+        # (auth is left on the pre-play token the rotation invalidated
+        # server-side). Deleting the prefix without capturing strands auth
+        # on that stale token → the next install opens signed-out. Runs
+        # whether we direct-deleted or fell back to UPC (captures the latest
+        # either way). ``_capture_rotated_session`` → ``capture()`` is
+        # guarded (auth-only, skips a logged-out/smaller source), so it
+        # never propagates a logout.
+        self._capture_rotated_session(prefix_path)
+        game_dir_error = await self.delete_game_directory(
+            install_path,
+            prefix_path,
+            delete_prefix,
+        )
+        if game_dir_error:
+            return Result(success=False, error=game_dir_error)
+        prefix_deleted, prefix_error = await self.delete_prefix_if_requested(
+            prefix_path,
+            delete_prefix,
+        )
+        if prefix_error:
+            return Result(success=False, error=prefix_error)
+        self.post_uninstall_cleanup(
+            game_id,
+            prefix_path,
+            install_id,
+            prefix_deleted,
+        )
+        logger.info(
+            "[UbisoftInstaller] game %s uninstalled "
+            "(protocol_attempted=%s, prefix_deleted=%s)",
+            game_id,
+            protocol_attempted,
+            prefix_deleted,
+        )
+        return Result(success=True)
 
     async def _can_delete_directly(
         self,
