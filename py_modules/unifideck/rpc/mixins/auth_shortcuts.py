@@ -168,6 +168,7 @@ class AuthShortcutsRPCMixin:
         try:
             from unifideck.compatibility.proton_helpers import (
                 get_compat_tool_for_app,
+                get_global_default_compat_tool,
                 is_linux_runtime,
             )
 
@@ -179,9 +180,19 @@ class AuthShortcutsRPCMixin:
                 if appid_unsigned
                 else ""
             )
+            # A tool equal to Steam's global default (CompatToolMapping["0"])
+            # is a distro/system default (e.g. Bazzite's "Proton-CachyOS
+            # Latest") applied to every shortcut — NOT an explicit per-game
+            # choice. The frontend must not adopt it as a per-game override
+            # (it would be unresolvable and thrash the prefix); it only saves
+            # a tool that differs from the global default.
+            global_default = get_global_default_compat_tool()
+            is_global_default = bool(tool_name) and tool_name == global_default
             logger.info(
-                "[AuthShortcuts] compat tool for %s: appid=%s tool=%r",
+                "[AuthShortcuts] compat tool for %s: appid=%s tool=%r "
+                "global_default=%r is_global_default=%s",
                 store_game_id, appid_unsigned, tool_name,
+                global_default, is_global_default,
             )
             plugin_dir = os.environ.get(
                 "DECKY_PLUGIN_DIR", _FALLBACK_PLUGIN_DIR,
@@ -203,6 +214,7 @@ class AuthShortcutsRPCMixin:
                 "success": True,
                 "tool_name": tool_name,
                 "is_linux_runtime": is_linux_runtime(tool_name),
+                "is_global_default": is_global_default,
                 "appid_unsigned": appid_unsigned,
                 "current_launch_options": launch_options,
                 "store_game_id": store_game_id,

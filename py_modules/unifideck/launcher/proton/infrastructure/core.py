@@ -191,6 +191,18 @@ def proton_prepare(
     Path("~/.steam/root").expanduser(),
    )
     env["PROTON_VERB"] = "waitforexitandrun"
+    # On atomic/ostree hosts (Bazzite, Silverblue) pressure-vessel's
+    # host-symlink overlay loops when bwrap resolves ``pv-adverb`` under
+    # ``/usr/lib/pressure-vessel/from-host`` → "Too many levels of symbolic
+    # links" (ELOOP), and the game exits with code 1 before it ever starts.
+    # Copying the runtime into place instead of referencing it via those
+    # host symlinks avoids the loop. Gated on ``/run/ostree-booted`` (a
+    # runtime capability check, not os-release branching) so SteamOS/Deck
+    # launches — which don't hit this — stay on the faster symlink path.
+    # ``setdefault`` + running before ``env_overrides`` keeps it user-
+    # overridable.
+    if Path("/run/ostree-booted").exists():
+        env.setdefault("PRESSURE_VESSEL_COPY_RUNTIME", "1")
     env.update(ctx.env_overrides)
     logger.info(
     "[launcher.proton.core] plan ready: store=%s umu_store=%s "
