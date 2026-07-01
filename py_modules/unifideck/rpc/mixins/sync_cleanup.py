@@ -29,6 +29,48 @@ class CleanupRPCMixin:
     cache: Any
     registry: Any
 
+    async def scan_orphaned_shortcuts(self) -> dict[str, Any]:
+        """Detect orphaned Unifideck shortcuts for the frontend to sweep.
+
+        Reads ``shortcuts.vdf`` (read-only — never rewrites it) and
+        classifies each entry via
+        :func:`unifideck.services.shortcut.orphan_scan.scan_orphans`:
+
+        * ``delete`` — ``Exe`` is our launcher but ``LaunchOptions`` has no
+          resolvable ``"<store>:<game_id>"`` (Type A, unrecoverable). The
+          frontend removes these live via ``SteamClient.Apps.RemoveShortcut``
+          (no Steam restart needed).
+        * ``recover`` — valid id but a missing/foreign ``Exe`` (Type B). Not
+          fixable here (the frontend has no ``SetShortcutExe``); reported for
+          logging. The next library sync's reconcile restores the target
+          (in-library) or sweeps it (out-of-library).
+
+        The backend deliberately does NOT write ``shortcuts.vdf`` — a disk
+        write would clobber Steam's in-memory shortcut set and reintroduce a
+        restart requirement. Returns the raw data dict; the RPC wrapper adds
+        the envelope.
+        """
+        from unifideck.services.shortcut.orphan_scan import scan_orphans
+
+        shortcut_svc = getattr(self.services, "shortcut", None)
+        if shortcut_svc is None:
+            raise RuntimeError("shortcut service unavailable")
+
+        await shortcut_svc._load_shortcuts()
+        shortcuts = getattr(shortcut_svc, "_shortcuts", None) or {}
+        root = (
+            shortcuts.get("shortcuts") if isinstance(shortcuts, dict) else {}
+        )
+        launcher_path = getattr(shortcut_svc, "_launcher_path", "") or ""
+
+        result = scan_orphans(root, launcher_path)
+        logger.info(
+            "[orphan-scan] %d to delete, %d to recover",
+            len(result["delete"]), len(result["recover"]),
+        )
+        result["launcher_path"] = launcher_path
+        return result
+
     async def _delete_install_dir(self, install_dir: str) -> bool:
         """rm -rf a recorded game install directory.
 

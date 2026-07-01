@@ -39,6 +39,8 @@ export const rpcRoutes = {
   getGameSizeBytes: "get_game_size_bytes",
   refreshStore: "refresh_store",
   updateSteamOwnedTitles: "update_steam_owned_titles",
+  // Orphaned-shortcut sweep — boot-time cleanup (CleanupRPCMixin)
+  scanOrphanedShortcuts: "scan_orphaned_shortcuts",
   // Downloads (DownloadRPCMixin)
   installGame: "install_game",
   uninstallGame: "uninstall_game",
