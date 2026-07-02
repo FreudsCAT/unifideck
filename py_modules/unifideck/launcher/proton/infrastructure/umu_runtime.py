@@ -40,16 +40,9 @@ def _open_game_log() -> Any:
         logger.debug("[launcher.umu] game log open failed: %s", e)
         return None
 def cleanup_umu_runtime_cache() -> None:
-    """Wipe the umu runtime cache so the next launch re-fetches it clean.
-
-    umu names the Steam Linux Runtime by version (``steamrt3`` for umu
-    ≤1.2, ``steamrt4`` for 1.3+); glob ``steamrt*`` so a corrupt runtime
-    is cleared regardless of the bundled umu version — targeting only
-    ``steamrt3`` missed 1.3's ``steamrt4``, making the recoverable-retry
-    wipe a no-op.
-    """
+    """Cleanup UMU runtime cache."""
     targets = [
-        *UMU_CACHE_DIR.glob("steamrt*"),
+        UMU_CACHE_DIR / "steamrt3",
         UMU_CACHE_DIR / "compatibilitytool.vdf",
         UMU_CACHE_DIR / ".ref",
     ]

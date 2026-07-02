@@ -187,22 +187,18 @@ def proton_prepare(
     # Let DXVK-NVAPI work on non-NVIDIA / mixed driver setups (harmless
     # on the Deck's AMD GPU; required by some titles' NVAPI probes).
     env["DXVK_NVAPI_ALLOW_OTHER_DRIVERS"] = "1"
-    env["STEAM_COMPAT_CLIENT_INSTALL_PATH"] = str(
-    Path("~/.steam/root").expanduser(),
-   )
+    # Do NOT pin STEAM_COMPAT_CLIENT_INSTALL_PATH. umu-run derives it
+    # itself; forcing it to ``~/.steam/root`` — a symlink chain on
+    # atomic/ostree hosts (Bazzite: ``~`` → /var/home, ``.steam/root`` →
+    # steam) — makes pressure-vessel's ``/run/host`` + ``from-host``
+    # capsule-capture loop when bwrap resolves ``pv-adverb`` → "Too many
+    # levels of symbolic links" (ELOOP), so the game exits code 1 before it
+    # starts (Cyberpunk/GOG on Bazzite). The pre-refactor bash launcher
+    # deliberately UNSET this and worked on Deck + Bazzite + CachyOS; mirror
+    # that — also drop any value Steam passed down, since that's the looping
+    # one on atomic hosts.
+    env.pop("STEAM_COMPAT_CLIENT_INSTALL_PATH", None)
     env["PROTON_VERB"] = "waitforexitandrun"
-    # On atomic/ostree hosts (Bazzite, Silverblue) pressure-vessel's
-    # host-symlink overlay loops when bwrap resolves ``pv-adverb`` under
-    # ``/usr/lib/pressure-vessel/from-host`` → "Too many levels of symbolic
-    # links" (ELOOP), and the game exits with code 1 before it ever starts.
-    # Copying the runtime into place instead of referencing it via those
-    # host symlinks avoids the loop. Gated on ``/run/ostree-booted`` (a
-    # runtime capability check, not os-release branching) so SteamOS/Deck
-    # launches — which don't hit this — stay on the faster symlink path.
-    # ``setdefault`` + running before ``env_overrides`` keeps it user-
-    # overridable.
-    if Path("/run/ostree-booted").exists():
-        env.setdefault("PRESSURE_VESSEL_COPY_RUNTIME", "1")
     env.update(ctx.env_overrides)
     logger.info(
     "[launcher.proton.core] plan ready: store=%s umu_store=%s "
