@@ -107,6 +107,7 @@ antigravity-dashboard/*
 !test_gog_invalid.py
 task.md
 .claude/*
+CLAUDE.md
 build-plugin_old.sh
 .github/copilot-instructions.md
 __pycache__
