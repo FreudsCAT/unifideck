@@ -323,7 +323,9 @@
       "signingInUbisoft": "Вхід у Ubisoft Connect",
       "signingInUbisoftMessage": "Відкриття Ubisoft Connect — увійдіть там, а потім поверніться.",
       "ubisoftPrefixNotReady": "Ubisoft Connect не готовий",
-      "ubisoftPrefixNotReadyMessage": "Не вдалося підготувати префікс Ubisoft Connect для цієї гри. Спробуйте встановити ще раз; якщо помилка повторюється, повторно запустіть синхронізацію бібліотеки."
+      "ubisoftPrefixNotReadyMessage": "Не вдалося підготувати префікс Ubisoft Connect для цієї гри. Спробуйте встановити ще раз; якщо помилка повторюється, повторно запустіть синхронізацію бібліотеки.",
+      "ubisoftLaunchIdMissing": "Відкриття Ubisoft Connect",
+      "ubisoftLaunchIdMissingMessage": "Не вдалося визначити ID запуску цієї гри — відкривається Ubisoft Connect, щоб ви могли запустити її з бібліотеки. Повторно запустіть синхронізацію бібліотеки, щоб виправити пряме запускання."
     },
     "updateComplete": "Оновлення завершено!",
     "updateCompleteMessage": "{{title}} оновлено.",

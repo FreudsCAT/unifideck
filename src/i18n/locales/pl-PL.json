@@ -323,7 +323,9 @@
       "signingInUbisoft": "Logowanie do Ubisoft Connect",
       "signingInUbisoftMessage": "Otwieranie Ubisoft Connect — zaloguj się tam, a następnie wróć.",
       "ubisoftPrefixNotReady": "Ubisoft Connect nie jest gotowy",
-      "ubisoftPrefixNotReadyMessage": "Nie udało się przygotować prefiksu Ubisoft Connect dla tej gry. Spróbuj zainstalować ponownie; jeśli błąd się powtarza, ponownie uruchom synchronizację biblioteki."
+      "ubisoftPrefixNotReadyMessage": "Nie udało się przygotować prefiksu Ubisoft Connect dla tej gry. Spróbuj zainstalować ponownie; jeśli błąd się powtarza, ponownie uruchom synchronizację biblioteki.",
+      "ubisoftLaunchIdMissing": "Otwieranie Ubisoft Connect",
+      "ubisoftLaunchIdMissingMessage": "Nie udało się ustalić identyfikatora uruchamiania tej gry — otwieranie Ubisoft Connect, abyś mógł uruchomić ją z biblioteki. Ponownie uruchom synchronizację biblioteki, aby naprawić bezpośrednie uruchamianie."
     },
     "updateComplete": "Aktualizacja zakończona!",
     "updateCompleteMessage": "Gra {{title}} została zaktualizowana.",

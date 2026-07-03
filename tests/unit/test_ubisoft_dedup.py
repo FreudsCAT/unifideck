@@ -23,6 +23,7 @@ import pytest
 
 from unifideck.stores.ubisoft.id_map import UbisoftIdMap
 from unifideck.stores.ubisoft.library.game_builder import _GameBuilder
+from unifideck.stores.ubisoft.library.identity_resolver import _IdentityResolver
 from unifideck.stores.ubisoft.parser import GameConfig
 
 
@@ -329,4 +330,4 @@ def test_colon_dlc_kept_when_base_not_separately_owned():
     ],
 )
 def test_parent_matches(parent, exact, substr, expected):
-    assert _GameBuilder._parent_matches(parent, exact, substr) is expected
+    assert _IdentityResolver._parent_matches(parent, exact, substr) is expected

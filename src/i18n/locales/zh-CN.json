@@ -323,7 +323,9 @@
       "signingInUbisoft": "正在登录 Ubisoft Connect",
       "signingInUbisoftMessage": "正在打开 Ubisoft Connect — 请在那里登录后返回。",
       "ubisoftPrefixNotReady": "Ubisoft Connect 尚未就绪",
-      "ubisoftPrefixNotReadyMessage": "无法为此游戏准备 Ubisoft Connect 前缀。请重试安装；如果仍然失败，请重新运行库同步。"
+      "ubisoftPrefixNotReadyMessage": "无法为此游戏准备 Ubisoft Connect 前缀。请重试安装；如果仍然失败，请重新运行库同步。",
+      "ubisoftLaunchIdMissing": "正在打开 Ubisoft Connect",
+      "ubisoftLaunchIdMissingMessage": "无法解析此游戏的启动 ID — 正在打开 Ubisoft Connect，以便您从库中启动它。请重新运行库同步以修复直接启动。"
     },
     "updateComplete": "更新已完成！",
     "updateCompleteMessage": "{{title}} 已更新。",

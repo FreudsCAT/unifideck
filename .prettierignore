@@ -11,6 +11,8 @@ node_modules
 .ruff_cache
 .pytest_cache
 .agent
+.claude
+CLAUDE.md
 .cache
 __pycache__
 tmp

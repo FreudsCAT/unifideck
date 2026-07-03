@@ -323,7 +323,9 @@
       "signingInUbisoft": "Entrando no Ubisoft Connect",
       "signingInUbisoftMessage": "Abrindo o Ubisoft Connect — faça login lá e depois volte.",
       "ubisoftPrefixNotReady": "O Ubisoft Connect não está pronto",
-      "ubisoftPrefixNotReadyMessage": "Não foi possível preparar o prefixo do Ubisoft Connect para este jogo. Tente instalar novamente; se continuar falhando, execute uma nova sincronização da biblioteca."
+      "ubisoftPrefixNotReadyMessage": "Não foi possível preparar o prefixo do Ubisoft Connect para este jogo. Tente instalar novamente; se continuar falhando, execute uma nova sincronização da biblioteca.",
+      "ubisoftLaunchIdMissing": "Abrindo o Ubisoft Connect",
+      "ubisoftLaunchIdMissingMessage": "Não foi possível resolver o ID de inicialização deste jogo — abrindo o Ubisoft Connect para que você possa iniciá-lo pela sua biblioteca. Execute uma nova sincronização da biblioteca para corrigir a inicialização direta."
     },
     "updateComplete": "Atualização Concluída!",
     "updateCompleteMessage": "{{title}} foi atualizado.",

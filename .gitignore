@@ -129,3 +129,7 @@ build-plugin.sh
 build-plugin.sh
 test_ubisoft_launch.py
 /tmp
+docs/feasibility/battlenet.md
+docs/feasibility/ea.md
+docs/feasibility/itch.md
+docs/feasibility/README.md
