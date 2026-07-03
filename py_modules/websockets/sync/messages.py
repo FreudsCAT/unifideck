@@ -3,7 +3,7 @@ from __future__ import annotations
 import codecs
 import queue
 import threading
-from typing import Any, Callable, Iterable, Iterator
+from typing import Any, Callable, Iterable, Iterator, Literal, overload
 
 from ..exceptions import ConcurrencyError
 from ..frames import OP_BINARY, OP_CONT, OP_TEXT, Frame
@@ -79,7 +79,12 @@ class Assembler:
                 raise EOFError("stream of frames ended") from None
         else:
             try:
-                frame = self.frames.get(block=True, timeout=timeout)
+                # Check for a frame that's already received if timeout <= 0.
+                # SimpleQueue.get() doesn't support negative timeout values.
+                if timeout is not None and timeout <= 0:
+                    frame = self.frames.get(block=False)
+                else:
+                    frame = self.frames.get(block=True, timeout=timeout)
             except queue.Empty:
                 raise TimeoutError(f"timed out in {timeout:.1f}s") from None
         if frame is None:
@@ -104,6 +109,24 @@ class Assembler:
             # This loop runs only when a race condition occurs.
             for frame in queued:  # pragma: no cover
                 self.frames.put(frame)
+
+    # This overload structure is required to avoid the error:
+    # "parameter without a default follows parameter with a default"
+
+    @overload
+    def get(self, timeout: float | None, decode: Literal[True]) -> str: ...
+
+    @overload
+    def get(self, timeout: float | None, decode: Literal[False]) -> bytes: ...
+
+    @overload
+    def get(self, timeout: float | None = None, *, decode: Literal[True]) -> str: ...
+
+    @overload
+    def get(self, timeout: float | None = None, *, decode: Literal[False]) -> bytes: ...
+
+    @overload
+    def get(self, timeout: float | None = None, decode: bool | None = None) -> Data: ...
 
     def get(self, timeout: float | None = None, decode: bool | None = None) -> Data:
         """
@@ -142,8 +165,8 @@ class Assembler:
         try:
             deadline = Deadline(timeout)
 
-            # First frame
-            frame = self.get_next_frame(deadline.timeout())
+            # Fetch the first frame.
+            frame = self.get_next_frame(deadline.timeout(raise_if_elapsed=False))
             with self.mutex:
                 self.maybe_resume()
             assert frame.opcode is OP_TEXT or frame.opcode is OP_BINARY
@@ -151,10 +174,12 @@ class Assembler:
                 decode = frame.opcode is OP_TEXT
             frames = [frame]
 
-            # Following frames, for fragmented messages
+            # Fetch subsequent frames for fragmented messages.
             while not frame.fin:
                 try:
-                    frame = self.get_next_frame(deadline.timeout())
+                    frame = self.get_next_frame(
+                        deadline.timeout(raise_if_elapsed=False)
+                    )
                 except TimeoutError:
                     # Put frames already received back into the queue
                     # so that future calls to get() can return them.
@@ -168,11 +193,21 @@ class Assembler:
         finally:
             self.get_in_progress = False
 
+        # This converts frame.data to bytes when it's a bytearray.
         data = b"".join(frame.data for frame in frames)
         if decode:
             return data.decode()
         else:
             return data
+
+    @overload
+    def get_iter(self, decode: Literal[True]) -> Iterator[str]: ...
+
+    @overload
+    def get_iter(self, decode: Literal[False]) -> Iterator[bytes]: ...
+
+    @overload
+    def get_iter(self, decode: bool | None = None) -> Iterator[Data]: ...
 
     def get_iter(self, decode: bool | None = None) -> Iterator[Data]:
         """
@@ -210,7 +245,7 @@ class Assembler:
         # If get_iter() raises an exception e.g. in decoder.decode(),
         # get_in_progress remains set and the connection becomes unusable.
 
-        # First frame
+        # Yield the first frame.
         frame = self.get_next_frame()
         with self.mutex:
             self.maybe_resume()
@@ -221,9 +256,10 @@ class Assembler:
             decoder = UTF8Decoder()
             yield decoder.decode(frame.data, frame.fin)
         else:
-            yield frame.data
+            # Convert to bytes when frame.data is a bytearray.
+            yield bytes(frame.data)
 
-        # Following frames, for fragmented messages
+        # Yield subsequent frames for fragmented messages.
         while not frame.fin:
             frame = self.get_next_frame()
             with self.mutex:
@@ -232,7 +268,8 @@ class Assembler:
             if decode:
                 yield decoder.decode(frame.data, frame.fin)
             else:
-                yield frame.data
+                # Convert to bytes when frame.data is a bytearray.
+                yield bytes(frame.data)
 
         self.get_in_progress = False
 
@@ -263,26 +300,26 @@ class Assembler:
 
     def maybe_pause(self) -> None:
         """Pause the writer if queue is above the high water mark."""
-        # Skip if flow control is disabled
+        # Skip if flow control is disabled.
         if self.high is None:
             return
 
         assert self.mutex.locked()
 
-        # Check for "> high" to support high = 0
+        # Check for "> high" to support high = 0.
         if self.frames.qsize() > self.high and not self.paused:
             self.paused = True
             self.pause()
 
     def maybe_resume(self) -> None:
         """Resume the writer if queue is below the low water mark."""
-        # Skip if flow control is disabled
+        # Skip if flow control is disabled.
         if self.low is None:
             return
 
         assert self.mutex.locked()
 
-        # Check for "<= low" to support low = 0
+        # Check for "<= low" to support low = 0.
         if self.frames.qsize() <= self.low and self.paused:
             self.paused = False
             self.resume()
@@ -291,7 +328,7 @@ class Assembler:
         """
         End the stream of frames.
 
-        Callling :meth:`close` concurrently with :meth:`get`, :meth:`get_iter`,
+        Calling :meth:`close` concurrently with :meth:`get`, :meth:`get_iter`,
         or :meth:`put` is safe. They will raise :exc:`EOFError`.
 
         """
@@ -304,3 +341,8 @@ class Assembler:
             if self.get_in_progress:
                 # Unblock get() or get_iter().
                 self.frames.put(None)
+
+            if self.paused:
+                # Unblock recv_events().
+                self.paused = False
+                self.resume()

@@ -1,0 +1,199 @@
+name: Complexity Gates
+
+# Complexity/size gates for the whole backend, aligned with the
+# five-layer architecture of the technical document v1.1.
+# Previously limited to core/ + services/, this workflow now
+# covers main.py and every module under py_modules/unifideck/.
+#
+# Thresholds (hard gates — PR blocked on violation):
+#   - Max cyclomatic complexity per function: 15
+#   - Max cognitive complexity per function: 15
+#   - Max function length: 80 lines (warn at 50)
+#   - Max file LOC: 550 (main.py: 800 transitional)
+#
+# Grandfathering (2026-04-18): the tightening from 1000→550 LOC
+# per file and 150→100 per function flags 9 existing files and
+# 12 existing functions. They are listed explicitly below so:
+#   1. No new violation can slip in — any additional offender
+#      fails the gate immediately.
+#   2. Progress is measurable — the allowlist can only shrink;
+#      fixing a grandfathered offender triggers a reminder to
+#      delete its entry from the list.
+# Tracked for incremental refactoring in technical doc §7.8.
+#
+# ── Scope filter (2026-05-14) ────────────────────────────────────
+# Before this revision, the two ``flake8`` invocations below
+# scanned ``py_modules/`` as a whole and relied on ``.flake8``'s
+# ``extend-exclude`` to filter out the vendored libs (``pip/``,
+# ``urllib3/``, ``websockets/``, ``charset_normalizer/``, …).
+# When ``.flake8`` was missing from the branch (a real incident
+# on ``staging``), flake8 fell back to its defaults and remounted
+# ~189 CCR001/C901 errors on vendored code — none actionable.
+#
+# Defence in depth: both flake8 steps now scope directly to
+# ``py_modules/unifideck/`` and ``main.py``. Even if ``.flake8``
+# disappears again, the worst case is that the BACKEND becomes
+# linted with default thresholds (a noisy PR, not a CI cascade
+# of irrelevant vendor noise).
+#
+# A pytest-driven scope audit runs FIRST: it loads ``.flake8``,
+# validates its invariants, and asserts that no vendored file
+# leaks into a full-repo flake8 invocation. When it fails, the
+# error message points at the cause directly (e.g. "vendor X is
+# not in extend-exclude"), unlike the raw 189-line CCR001 dump.
+
+on:
+  pull_request:
+    paths:
+      - "py_modules/**"
+      - "main.py"
+      - "tests/unit/_tooling/**"
+      - ".flake8"
+      - "pyproject.toml"
+  push:
+    branches:
+      - new_architecture
+      - staging
+      - backend/issues
+      - main
+
+jobs:
+  complexity:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install tooling
+        run: |
+          pip install \
+            flake8 \
+            flake8-cognitive-complexity \
+            mccabe \
+            radon \
+            ruff \
+            pytest
+
+      # ── Pre-flight: audit the linter scope itself ────────────
+      # Loads .flake8, checks invariants (file present, valid
+      # section, no unknown option, thresholds aligned with the
+      # CLI args below), and runs a full-repo flake8 dry-run to
+      # assert no vendored file leaks. Fails fast with a
+      # diagnostic message that points at the cause.
+      - name: Audit lint scope (pytest)
+        run: |
+          python -m pytest tests/unit/_tooling/ -v --tb=short
+
+      # ── Hard gate: CC > 15 across the unifideck package ──────
+      # Scope: py_modules/unifideck/ + main.py (NOT py_modules/).
+      # Vendored libs are not our territory; .flake8 also excludes
+      # them at the config level for defence in depth.
+      #
+      # NOTE (2026-05-14): ``--select=C`` matches BOTH C901
+      # (mccabe / cyclomatic, controlled by ``--max-complexity``)
+      # AND CCR001 (flake8-cognitive-complexity, controlled by
+      # ``--max-cognitive-complexity``). If ``.flake8`` ever fails
+      # to load, CCR001 would silently fall back to its plugin
+      # default of 7 — far below our 15 policy — and flag ~178
+      # false positives. Passing the cognitive threshold
+      # explicitly here makes the gate immune to .flake8 going
+      # missing.
+      - name: flake8 max-complexity=15 (unifideck scope)
+        run: |
+          flake8 \
+            --select=C \
+            --max-complexity=15 \
+            --max-cognitive-complexity=15 \
+            py_modules/unifideck/ \
+            main.py
+
+      # ── Hard gate: cognitive complexity > 15 ─────────────────
+      # CC (cyclomatic) counts decisions; cognitive complexity
+      # additionally penalises nesting, breaks, continues. Two
+      # functions can have identical CC but very different
+      # readability — cognitive complexity catches the one that
+      # a human will struggle with. Threshold 15 matches Sonar's
+      # default. flake8-cognitive-complexity is already installed
+      # above, so this step just wires the select.
+      - name: flake8 cognitive-complexity (max 15)
+        run: |
+          flake8 \
+            --select=CCR \
+            --max-cognitive-complexity=15 \
+            py_modules/unifideck/ \
+            main.py
+
+      # ── Hard gate: no function should reach grade E/F (CC>30)
+      # radon doesn't read .flake8; its scope is controlled by
+      # the path argument. We scan py_modules/unifideck explicitly.
+      #
+      # Fix history (2026-05-14): the previous implementation
+      # used ``grep -E '\s[EF]\s'`` against the diagnostic
+      # output of ``radon cc -n C``. Radon's format is
+      # ``    F 237:0 search_store - C (11)`` where the leading
+      # ``F`` is the *kind* (Function), not the rank. The grep
+      # therefore matched every module-level function regardless
+      # of its actual rank and failed the gate on healthy code.
+      # Switched to ``radon cc -n E`` which natively filters on
+      # rank E (CC 31-40) or F (CC ≥ 41) — no regex maintenance,
+      # immune to radon format changes.
+      - name: radon cc (fail on E/F grade)
+        run: |
+          radon cc -s -n C py_modules/unifideck main.py | tee radon-cc.txt
+          violations=$(radon cc -s -n E py_modules/unifideck main.py)
+          if [ -n "$violations" ]; then
+            echo "::error::Function with CC > 30 detected"
+            echo "$violations"
+            exit 1
+          fi
+
+      # ── Hard gate: file size limit ───────────────────────────
+      # Backend cap: 550 LOC. main.py transitional cap: 800 LOC.
+      # Grandfathered files (exceeding cap as of 2026-04-18)
+      # listed in tools/volumetry_allowlist.py — they are
+      # tolerated but cannot grow further, and any file not in
+      # the list exceeding the cap fails the gate.
+      - name: File size limit
+        run: python3 scripts/volumetry_check.py files
+
+      # ── Hard gate: function length > 80 (warn at 50) ─────────
+      - name: Function length limit
+        run: python3 scripts/volumetry_check.py functions
+
+      # ── Hard gate: locals > 15 per function ──────────────────
+      # Proxy for SRP violations. A function juggling 20 locals
+      # orchestrates too much state to plausibly do "one thing".
+      # Cap 15 matches pylint R0914's default. Grandfathered set
+      # in scripts/volumetry_check.py::LOCALS_ALLOWLIST.
+      - name: Locals per function limit
+        run: python3 scripts/volumetry_check.py locals
+
+      # ── Hard gate: nesting depth > 4 per function ────────────
+      # Deep nesting signals interleaved flows — if/for/while/
+      # with/try stacked 5+ levels deep almost always means the
+      # function serves multiple responsibilities. Cap 4 matches
+      # SonarQube's cognitive-complexity nesting penalty turnover.
+      # Grandfathered set in NESTING_ALLOWLIST.
+      - name: Nesting depth limit
+        run: python3 scripts/volumetry_check.py nesting
+
+      # ── Hard gate: fan-out > 10 distinct callees ─────────────
+      # Counts distinct call targets excluding builtins + logger
+      # + common collection ops (see FANOUT_EXCLUDED). High fan-
+      # out identifies orchestrators that should be split into
+      # smaller helpers. Threshold 10 empirically catches real
+      # violators without flagging hygienic utility functions.
+      - name: Fan-out limit
+        run: python3 scripts/volumetry_check.py fanout
+
+      # ── ruff lint — warn-only during the remediation period ──
+      - name: ruff check (report only)
+        run: |
+          ruff check --config pyproject.toml \
+                     --output-format=github \
+                     py_modules main.py \
+            || echo "::warning::ruff found issues"

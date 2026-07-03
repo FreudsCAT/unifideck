@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import zlib
 from collections.abc import Sequence
-from typing import Any
+from typing import Any, Literal
 
 from .. import frames
 from ..exceptions import (
@@ -13,7 +13,7 @@ from ..exceptions import (
     PayloadTooBig,
     ProtocolError,
 )
-from ..typing import ExtensionName, ExtensionParameter
+from ..typing import BytesLike, ExtensionName, ExtensionParameter
 from .base import ClientExtensionFactory, Extension, ServerExtensionFactory
 
 
@@ -129,6 +129,7 @@ class PerMessageDeflate(Extension):
         # Uncompress data. Protect against zip bombs by preventing zlib from
         # decompressing more than max_length bytes (except when the limit is
         # disabled with max_size = None).
+        data: BytesLike
         if frame.fin and len(frame.data) < 2044:
             # Profiling shows that appending four bytes, which makes a copy, is
             # faster than calling decompress() again when data is less than 2kB.
@@ -182,6 +183,7 @@ class PerMessageDeflate(Extension):
                 )
 
         # Compress data.
+        data: BytesLike
         data = self.encoder.compress(frame.data) + self.encoder.flush(zlib.Z_SYNC_FLUSH)
         if frame.fin:
             # Sync flush generates between 5 or 6 bytes, ending with the bytes
@@ -212,7 +214,7 @@ def _build_parameters(
     server_no_context_takeover: bool,
     client_no_context_takeover: bool,
     server_max_window_bits: int | None,
-    client_max_window_bits: int | bool | None,
+    client_max_window_bits: int | Literal[True] | None,
 ) -> list[ExtensionParameter]:
     """
     Build a list of ``(name, value)`` pairs for some compression parameters.
@@ -234,7 +236,7 @@ def _build_parameters(
 
 def _extract_parameters(
     params: Sequence[ExtensionParameter], *, is_server: bool
-) -> tuple[bool, bool, int | None, int | bool | None]:
+) -> tuple[bool, bool, int | None, int | Literal[True] | None]:
     """
     Extract compression parameters from a list of ``(name, value)`` pairs.
 
@@ -245,7 +247,7 @@ def _extract_parameters(
     server_no_context_takeover: bool = False
     client_no_context_takeover: bool = False
     server_max_window_bits: int | None = None
-    client_max_window_bits: int | bool | None = None
+    client_max_window_bits: int | Literal[True] | None = None
 
     for name, value in params:
         if name == "server_no_context_takeover":
@@ -324,7 +326,7 @@ class ClientPerMessageDeflateFactory(ClientExtensionFactory):
         server_no_context_takeover: bool = False,
         client_no_context_takeover: bool = False,
         server_max_window_bits: int | None = None,
-        client_max_window_bits: int | bool | None = True,
+        client_max_window_bits: int | Literal[True] | None = True,
         compress_settings: dict[str, Any] | None = None,
     ) -> None:
         """
@@ -351,7 +353,7 @@ class ClientPerMessageDeflateFactory(ClientExtensionFactory):
         self.client_max_window_bits = client_max_window_bits
         self.compress_settings = compress_settings
 
-    def get_request_params(self) -> list[ExtensionParameter]:
+    def get_request_params(self) -> Sequence[ExtensionParameter]:
         """
         Build request parameters.
 

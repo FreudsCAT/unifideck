@@ -1,324 +1,176 @@
-import { formatETA } from "../../utils/format";
-import { formatBytes } from "../../utils/format";
-import { FC } from "react";
-import { DialogButton, showModal, ConfirmModal } from "@decky/ui";
+/**
+ * DownloadItemRow — single row in the downloads queue.
+ *
+ * Three variants :
+ *  - "current"  : shows progress bar + speed + ETA + cancel
+ *  - "queued"   : title + position + cancel-from-queue
+ *  - "finished" : title + outcome (success / cancelled /
+ *                 error) + remove-from-history
+ *
+ * The variant is passed by the parent (DownloadsTab) and
+ * picks the appropriate rendering. All three variants share
+ * the same StoreIcon + title prefix.
+ */
+import { FC, useMemo } from "react";
+import { ButtonItem, DialogButton } from "@decky/ui";
+import { useTranslation } from "react-i18next";
+import { useGameActions } from "../../hooks/useGameActions";
+import { SteamBridge } from "../../lib/steam-bridge";
 import {
-  FaTimes,
-  FaDownload,
-  FaCheck,
-  FaExclamationTriangle,
-} from "react-icons/fa";
+  resolveAppIdFromStoreGame,
+  getInstalledStatus,
+} from "../../lib/library-filters";
+import { StoreIcon } from "../shared/StoreIcon";
+import type { DownloadItem, DownloadStatus } from "../../types/downloads";
+import { DownloadProgressRow } from "./DownloadProgressRow";
 
-import type { DownloadItem } from "../../types/downloads";
+/** Map backend ``DownloadStatus`` to the i18n outcome key
+ *  (kept stable across 16 locale files). Backend says
+ *  ``"complete"``/``"failed"``/``"running"`` while the i18n
+ *  bundle uses ``"completed"``/``"error"``/``"downloading"`` —
+ *  the rename would touch every locale, so we adapt instead. */
+function outcomeKey(status: DownloadStatus): string {
+  if (status === "complete") return "completed";
+  if (status === "failed") return "error";
+  if (status === "running") return "downloading";
+  return status;
+}
 
-import { t } from "../../i18n";
-import StoreIcon from "../StoreIcon";
+function outcomeColor(status: DownloadStatus): string {
+  // Complete is blue (the Play badge alongside it carries the green
+  // "go" accent); cancelled grey; failed red.
+  if (status === "complete") return "#1a9fff";
+  if (status === "cancelled") return "#94a3b8";
+  return "#ef4444";
+}
+
+/** Shared badge geometry so the status badge and the Play badge
+ *  read as a matched pair. */
+const BADGE_STYLE = {
+  fontSize: 11,
+  padding: "2px 8px",
+  borderRadius: 3,
+  fontWeight: 600,
+  color: "#0f172a",
+  lineHeight: "1.4",
+} as const;
+
+/** Props. */
+interface Props {
+  item: DownloadItem;
+  variant: "current" | "queued" | "finished";
+}
+
+const bridge = new SteamBridge();
 
 /**
- * Single download item display
+ * One row of the downloads tab. Renders the artwork,
+ * progress bar, status badge, action buttons. Variants
+ * (`current` / `queued` / `finished`) tweak the layout
+ * and which actions are exposed.
  */
-const DownloadItemRow: FC<{
-  item: DownloadItem;
+export const DownloadItemRow: FC<Props> = ({ item, variant }) => {
+  const { t } = useTranslation();
+  const actions = useGameActions(bridge);
 
-  onCancel: (id: string) => void;
-  onClear?: (id: string) => void;
-}> = ({ item, onCancel, onClear }) => {
-  const statusColors: Record<string, string> = {
-    downloading: "#1a9fff",
-    queued: "#888",
-    completed: "#4ade80",
-    cancelled: "#f59e0b",
-    error: "#ef4444",
-  };
+  // Launchable appId for a finished row — only when the download
+  // completed AND the game still resolves to an installed shortcut.
+  const playAppId = useMemo(() => {
+    if (variant !== "finished" || item.status !== "complete") return null;
+    const id = resolveAppIdFromStoreGame(item.store, item.game_id);
+    // _appType is ignored once the appId is in the cache (which it
+    // is — resolveAppIdFromStoreGame read it from the same cache).
+    return id != null && getInstalledStatus(id, 0, false) ? id : null;
+  }, [variant, item.status, item.store, item.game_id]);
 
   return (
     <div
       style={{
-        backgroundColor: "#1e2329",
-        borderRadius: "8px",
-        padding: "12px",
-        marginBottom: "8px",
+        display: "flex",
+        flexDirection: "column",
+        gap: 6,
+        padding: 6,
       }}
     >
-      {/* Header row: Title + Store + Clear button for finished */}
+      {/* Title row — full width, never competes with badges or
+          status text. The QAM panel is narrow, so leaving room
+          for the title to lay out on one or two lines (instead of
+          wrapping around a sidebar badge) is the readability win. */}
       <div
         style={{
           display: "flex",
-          justifyContent: "space-between",
           alignItems: "center",
-          marginBottom: "8px",
+          gap: 6,
+          minWidth: 0,
         }}
       >
-        <div
-          style={{ display: "flex", alignItems: "center", flex: 1, gap: "8px" }}
-        >
-          <StoreIcon store={item.store} size="18px" />
-          <span style={{ fontWeight: "bold", color: "#fff", fontSize: "14px" }}>
-            {item.game_title}
-          </span>
-        </div>
-
-        {/* X button to clear finished items */}
-        {(item.status === "completed" ||
-          item.status === "error" ||
-          item.status === "cancelled") &&
-          onClear && (
-            <>
-              <style>{`
-                            .unifideck-clear-btn {
-                                padding: 0 !important;
-                                width: 24px !important;
-                                height: 24px !important;
-                                min-width: 24px !important;
-                                display: flex !important;
-                                align-items: center !important;
-                                justify-content: center !important;
-                                background-color: transparent !important;
-                                color: #888 !important;
-                                border-radius: 4px !important;
-                                transition: all 0.15s ease !important;
-                            }
-                            .unifideck-clear-btn:hover,
-                            .unifideck-clear-btn:focus,
-                            .unifideck-clear-btn.gpfocus,
-                            .unifideck-clear-btn.Focusable:focus-within {
-                                background-color: rgba(255, 255, 255, 0.15) !important;
-                                color: #fff !important;
-                                outline: 2px solid #1a9fff !important;
-                                outline-offset: 1px !important;
-                            }
-                        `}</style>
-              <DialogButton
-                className="unifideck-clear-btn"
-                onClick={() => onClear(item.id)}
-                onOKButton={() => onClear(item.id)}
-              >
-                <FaTimes size={12} />
-              </DialogButton>
-            </>
-          )}
-      </div>
-
-      {/* Progress section (only for downloading) */}
-      {item.status === "downloading" && (
-        <>
-          {/* Show phase-specific messages */}
-          {item.download_phase === "extracting" && (
-            <div
-              style={{
-                fontSize: "12px",
-                color: "#f59e0b",
-                marginBottom: "8px",
-              }}
-            >
-              {item.phase_message ||
-                t("downloadsTab.phaseExtracting", { game: item.game_title })}
-            </div>
-          )}
-          {item.download_phase === "verifying" && (
-            <div
-              style={{
-                fontSize: "12px",
-                color: "#4ade80",
-                marginBottom: "8px",
-              }}
-            >
-              ✓{" "}
-              {item.phase_message ||
-                t("downloadsTab.phaseVerifying", { game: item.game_title })}
-            </div>
-          )}
-
-          {/* Show "Preparing..." when no real progress yet */}
-          {item.progress_percent === 0 &&
-          item.downloaded_bytes === 0 &&
-          item.download_phase === "downloading" ? (
-            <div
-              style={{ fontSize: "12px", color: "#888", fontStyle: "italic" }}
-            >
-              {t("downloadsTab.preparingDownload")}
-            </div>
-          ) : item.download_phase === "extracting" ||
-            item.download_phase === "verifying" ? (
-            /* Animated indeterminate progress bar for extraction/verification */
-            <div
-              style={{
-                width: "100%",
-                height: "6px",
-                backgroundColor: "#333",
-                borderRadius: "3px",
-                overflow: "hidden",
-                marginBottom: "8px",
-              }}
-            >
-              <div
-                style={{
-                  width: "30%",
-                  height: "100%",
-                  backgroundColor:
-                    item.download_phase === "extracting"
-                      ? "#f59e0b"
-                      : "#4ade80",
-                  animation: "slide 1.5s ease-in-out infinite",
-                }}
-              />
-              <style>{`
-                                @keyframes slide {
-                                    0% { transform: translateX(-100%); }
-                                    100% { transform: translateX(400%); }
-                                }
-                            `}</style>
-            </div>
-          ) : (
-            (() => {
-              // Calculate progress from bytes when available (more accurate than chunk-based %)
-              // Legendary reports chunk-based progress which can differ significantly from byte progress
-              const byteProgress =
-                item.total_bytes > 0
-                  ? (item.downloaded_bytes / item.total_bytes) * 100
-                  : item.progress_percent;
-              const displayProgress = Math.min(byteProgress, 100);
-
-              return (
-                <>
-                  {/* Progress bar for downloading */}
-                  <div
-                    style={{
-                      width: "100%",
-                      height: "6px",
-                      backgroundColor: "#333",
-                      borderRadius: "3px",
-                      overflow: "hidden",
-                      marginBottom: "8px",
-                    }}
-                  >
-                    <div
-                      style={{
-                        width: `${displayProgress}%`,
-                        height: "100%",
-                        backgroundColor: "#1a9fff",
-                        transition: "width 0.3s ease",
-                      }}
-                    />
-                  </div>
-
-                  {/* Stats row */}
-                  <div
-                    style={{
-                      display: "flex",
-                      justifyContent: "space-between",
-                      flexWrap: "wrap",
-                      gap: "4px 8px",
-                      fontSize: "12px",
-                      color: "#888",
-                    }}
-                  >
-                    <span>
-                      {item.total_bytes > 0
-                        ? `${displayProgress.toFixed(1)}%`
-                        : "--"}
-                    </span>
-                    <span>
-                      {formatBytes(item.downloaded_bytes)} /{" "}
-                      {item.total_bytes > 0
-                        ? formatBytes(item.total_bytes)
-                        : "--"}
-                    </span>
-                    <span>
-                      {t("downloadsTab.speedMbps", {
-                        speed: item.speed_mbps.toFixed(1),
-                      })}
-                    </span>
-                    <span>
-                      {t("downloadsTab.etaLabel", {
-                        eta: formatETA(item.eta_seconds),
-                      })}
-                    </span>
-                  </div>
-                </>
-              );
-            })()
-          )}
-        </>
-      )}
-
-      {/* Cancel button on new line for active downloads */}
-      {(item.status === "downloading" || item.status === "queued") && (
-        <div style={{ marginTop: "8px" }}>
-          <style>
-            {`
-                        .cancel-button {
-                            padding: 4px 12px;
-                            min-width: auto;
-                            background-color: #ef4444 !important;
-                            color: #fff;
-                            font-size: 12px;
-                        }
-                        .cancel-button:focus,
-                        .cancel-button.gpfocus,
-                        .cancel-button.Focusable:focus-within {
-                            outline: 2px solid #1a9fff !important;
-                            outline-offset: 1px !important;
-                            color: #fff;
-                        }
-                    `}
-          </style>
-          <DialogButton
-            onClick={() => {
-              showModal(
-                <ConfirmModal
-                  strTitle={t("downloadsTab.confirmCancelTitle")}
-                  strDescription={t("downloadsTab.confirmCancelDescription", {
-                    game: item.game_title,
-                  })}
-                  strOKButtonText={t("downloadsTab.confirmCancelYes")}
-                  strCancelButtonText={t("downloadsTab.confirmCancelNo")}
-                  bDestructiveWarning={true}
-                  onOK={() => onCancel(item.id)}
-                />,
-              );
-            }}
-            className="cancel-button"
-          >
-            {t("downloadsTab.cancelDownload")}
-          </DialogButton>
-        </div>
-      )}
-
-      {/* Status badge for non-downloading items */}
-      {item.status !== "downloading" && (
-        <div
+        <StoreIcon store={item.store} size={14} />
+        <span
           style={{
-            display: "flex",
-            alignItems: "center",
-            fontSize: "12px",
-            color: statusColors[item.status],
+            flex: 1,
+            fontWeight: 500,
+            minWidth: 0,
+            overflow: "hidden",
+            textOverflow: "ellipsis",
           }}
         >
-          {item.status === "queued" && (
-            <FaDownload size={10} style={{ marginRight: "4px" }} />
-          )}
-          {item.status === "completed" && (
-            <FaCheck size={10} style={{ marginRight: "4px" }} />
-          )}
-          {item.status === "error" && (
-            <FaExclamationTriangle size={10} style={{ marginRight: "4px" }} />
-          )}
-          <span style={{ textTransform: "capitalize" }}>
-            {t(`downloadsTab.status.${item.status}`)}
+          {item.game_title}
+        </span>
+      </div>
+
+      {variant === "finished" && (
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <span
+            style={{ ...BADGE_STYLE, background: outcomeColor(item.status) }}
+          >
+            {t(`downloads.outcome.${outcomeKey(item.status)}`)}
           </span>
-          {item.error_message && (
-            <span style={{ marginLeft: "8px", color: "#888" }}>
-              -{" "}
-              {t(item.error_message) !== item.error_message
-                ? t(item.error_message)
-                : t("errors.download.generic")}
-            </span>
+          {playAppId != null && (
+            // Focusable green "Play" badge (replaces the old play icon
+            // button) — styled to match the status badge beside it.
+            <DialogButton
+              className="unifideck-download-play-btn"
+              style={{
+                ...BADGE_STYLE,
+                display: "inline-flex",
+                alignItems: "center",
+                justifyContent: "center",
+                width: "auto",
+                minWidth: 0,
+                height: "auto",
+                flex: "0 0 auto",
+                border: "none",
+                background: "#22c55e",
+              }}
+              onClick={() => actions.launch(playAppId)}
+            >
+              {t("downloads.play")}
+            </DialogButton>
           )}
         </div>
+      )}
+
+      {variant === "current" && (
+        <>
+          <DownloadProgressRow download={item} />
+          <ButtonItem
+            layout="below"
+            disabled={actions.isWorking}
+            onClick={() => void actions.cancel(item.id)}
+          >
+            {t("downloads.cancel")}
+          </ButtonItem>
+        </>
+      )}
+      {variant === "queued" && (
+        <ButtonItem
+          layout="below"
+          disabled={actions.isWorking}
+          onClick={() => void actions.cancel(item.id)}
+        >
+          {t("downloads.removeFromQueue")}
+        </ButtonItem>
       )}
     </div>
   );
 };
-
-export default DownloadItemRow;

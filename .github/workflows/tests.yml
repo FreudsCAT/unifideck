@@ -1,0 +1,139 @@
+name: Tests
+
+# Backend test suite + coverage gate. Runs on every PR and push.
+# Coverage target per technical doc §7.6: 40% Phase 1, 62% TIER4,
+# 80% core/. Hard fail under fail_under (pyproject.toml).
+#
+# Strict mode (added 2026-05): the suite runs with ZERO
+# tolerance for warnings or skips, on top of the usual
+# fail-on-test-failure:
+#
+#   * Warnings → errors. Enforced by ``filterwarnings =
+#     ["error", "ignore::ResourceWarning"]`` in
+#     pyproject.toml's [tool.pytest.ini_options]; the explicit
+#     ``-W`` flags below are belt-and-suspenders so the gate
+#     stays strict even if a future edit weakens that filter.
+#     ResourceWarning is the single documented allow-list
+#     entry (application/dependency unclosed-file noise, out
+#     of scope for the tests).
+#   * Skips → failure. pytest exits 0 even when tests are
+#     skipped, so the dedicated step below parses the JUnit
+#     report and fails the job on any skip. Silent skips hide
+#     untested code paths behind a green check — the strict
+#     contract forbids them.
+
+on:
+  pull_request:
+    paths:
+      - "py_modules/**"
+      - "main.py"
+      - "tests/**"
+      - "pyproject.toml"
+      - "requirements*.txt"
+  push:
+    branches: [new_architecture, staging, main]
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install -r requirements-dev.txt
+
+      # Static event-contract gate. Runs BEFORE pytest (per the
+      # script's own usage note): a kwarg/contract drift is
+      # cheaper to surface here than as a confusing downstream
+      # test failure. The script exits 1 on any mismatch
+      # (unexpected kwarg, phantom schema key, or an emitted
+      # event missing from CANONICAL_SCHEMA).
+      - name: Validate event schemas
+        run: python3 scripts/validate_event_schemas.py
+
+      - name: Run tests with coverage (strict)
+        run: |
+          # -W error                    : every warning is an error
+          # -W ignore::ResourceWarning  : the one documented
+          #                               allow-list entry (see
+          #                               pyproject.toml rationale)
+          # --strict-markers/--strict-config/-ra come from the
+          # pyproject addopts already; repeated -W here keeps the
+          # gate strict even if that file is later weakened.
+          # --junitxml feeds the no-skips gate below.
+          pytest tests/ \
+            -W error \
+            -W ignore::ResourceWarning \
+            --junitxml=pytest-report.xml \
+            --cov=py_modules/unifideck \
+            --cov-report=term-missing \
+            --cov-report=xml \
+            --cov-report=html \
+            -v
+
+      - name: Fail the build on any skipped test
+        if: always()
+        run: |
+          # pytest exits 0 even when tests are skipped. The
+          # strict contract forbids silent skips, so parse the
+          # JUnit report and fail if skipped > 0. ``if: always()``
+          # ensures this still runs (and reports) when an earlier
+          # step failed, so a skip is never masked by a failure.
+          python - <<'PY'
+          import sys
+          import xml.etree.ElementTree as ET
+
+          tree = ET.parse("pytest-report.xml")
+          root = tree.getroot()
+          # JUnit schema: <testsuites> wrapping <testsuite>,
+          # or a single <testsuite> at the root.
+          suites = (
+              root.findall("testsuite")
+              if root.tag == "testsuites"
+              else [root]
+          )
+          skipped = sum(int(s.get("skipped", 0)) for s in suites)
+          total = sum(int(s.get("tests", 0)) for s in suites)
+          print(f"{total} tests, {skipped} skipped")
+          if skipped:
+              print(
+                  f"::error::strict mode: {skipped} skipped "
+                  f"test(s) — skips are forbidden")
+              sys.exit(1)
+          print("strict mode OK: zero skips")
+          PY
+
+      - name: Upload coverage to Codecov
+        if: matrix.python-version == '3.11'
+        uses: codecov/codecov-action@v4
+        with:
+          files: ./coverage.xml
+          fail_ci_if_error: false
+
+      - name: Archive coverage HTML
+        if: matrix.python-version == '3.11'
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-html
+          path: htmlcov/
+          retention-days: 14
+
+      - name: Archive test report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pytest-report-${{ matrix.python-version }}
+          path: pytest-report.xml
+          if-no-files-found: warn

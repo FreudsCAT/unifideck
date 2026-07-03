@@ -1,0 +1,84 @@
+name: Security
+
+# Repository-wide security scans. Runs on every PR and on a
+# weekly schedule so CVEs that land in already-merged code get
+# surfaced even when no new PR is open.
+#
+# Gates kept intentionally narrow:
+#   - gitleaks: secret / credential leak detection (hard)
+#   - pip-audit: CVE scan of runtime deps (hard on PR, warn on schedule
+#                since a new CVE lands retroactively and shouldn't
+#                fail the nightly green build silently)
+#
+# CodeQL / Semgrep are not wired yet — tracked in the technical
+# doc §7.9 under "advanced static analysis".
+
+on:
+  pull_request:
+    paths:
+      - "py_modules/**"
+      - "main.py"
+      - "src/**"
+      - "requirements*.txt"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - ".github/workflows/security.yml"
+  push:
+    branches: [new_architecture, staging, main]
+  schedule:
+    # Mondays 06:00 UTC — catches newly-disclosed CVEs in deps
+    # that were green at merge time.
+    - cron: "0 6 * * 1"
+
+concurrency:
+  group: security-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ── Secret scanning ────────────────────────────────────────
+  # Detects accidentally-committed credentials (API keys, OAuth
+  # client secrets, SteamGridDB tokens, etc.). gitleaks scans
+  # the full git history on PRs; shallow on pushes.
+  secrets:
+    name: gitleaks (secret scan)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Full history needed so gitleaks can detect secrets
+          # that were introduced in a past commit, amended, and
+          # shadowed by subsequent changes.
+          fetch-depth: 0
+
+      - name: gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # ── CVE audit — runtime deps ───────────────────────────────
+  # Scans requirements.txt against the PyPI Advisory Database.
+  # Hard-fails on any CVE affecting a pinned version on PRs;
+  # warn-only on the weekly schedule to avoid flaking nightly
+  # green builds when a fresh CVE lands retroactively.
+  dependencies:
+    name: pip-audit (runtime deps)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install pip-audit
+        run: pip install 'pip-audit>=2.7,<3.0'
+
+      - name: pip-audit (PR hard gate)
+        if: github.event_name == 'pull_request'
+        run: pip-audit --requirement requirements.txt --strict
+
+      - name: pip-audit (schedule, warn-only)
+        if: github.event_name == 'schedule'
+        continue-on-error: true
+        run: pip-audit --requirement requirements.txt

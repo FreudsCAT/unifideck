@@ -1,7 +1,28 @@
 {
+  "_comment": "Unified catalog: merged from legacy src893/staging (28 top-level sections, 516 lines) + architectural-refactor additions (cloudSync, cloudSyncBehavior, launchLogs, library, navigation, playButton, saveFolder, security, settings, + new launcher toasts). The overlay policy is current-wins-on-conflict so new code's expected labels survive. Legacy top-level sections (accountSwitch, storageSettings, ubisoftAuth, etc.) are preserved as-is since their consumer components migrate unchanged.",
   "tabs": {
     "settings": "Settings",
     "downloads": "Downloads"
+  },
+  "auth": {
+    "connect": "Connect",
+    "disconnect": "Disconnect",
+    "status": {
+      "connected": "Connected",
+      "disconnected": "Not connected",
+      "checking": "Checking…",
+      "error": "Error — check logs"
+    }
+  },
+  "storage": {
+    "title": "Storage",
+    "defaultUpdated": "Default storage updated",
+    "isDefault": "Default",
+    "setDefault": "Set Default",
+    "customPath": "Custom Path",
+    "up": "↑ Up",
+    "refresh": "Refresh",
+    "useThisPath": "Use This Path"
   },
   "storageSettings": {
     "title": "Download Settings",
@@ -79,6 +100,12 @@
     "customLocation": "Custom: {{path}} ({{freeSpace}} GB free)",
     "extractingLabel": "Extracting...",
     "verifyingLabel": "Verifying...",
+    "installingViaUpcLabel": "Installing Ubisoft Connect",
+    "preparingLabel": "Setting up game...",
+    "preparingMessage": "Initializing prefix and syncing cloud saves...",
+    "extractingMessage": "Extracting files...",
+    "verifyingMessage": "Verifying files... {{pct}}%",
+    "installingViaUpcMessage": "Follow the Ubisoft Connect window to finish installing...",
     "updateQueuedLabel": "Update Queued",
     "downloadQueuedLabel": "Download Queued",
     "downloadingUpdateLabel": "Downloading Update",
@@ -93,6 +120,10 @@
     "local": "Local:",
     "cloud": "Cloud:",
     "newer": "(newer)",
+    "filesSize": "{{count}} files · {{size}}",
+    "uploadBlockedEmpty": "Cloud upload skipped for {{game}} — no local saves found",
+    "uploadSkippedTitle": "Cloud upload skipped",
+    "uploadSkippedBody": "No local saves to upload yet for {{game}}.",
     "useCloud": "Use Cloud",
     "useLocal": "Use Local",
     "unknownDate": "Unknown",
@@ -124,19 +155,25 @@
     "syncing": "Syncing...",
     "cancelSync": "Cancel Sync",
     "retryStatusCheck": "Retry Status Check",
+    "refreshStore": "Refresh this store's library",
     "gamesSynced": "{{synced}} / {{total}} games synced",
-    "artworkDownloaded": "{{synced}} / {{total}} artwork downloaded",
+    "artworkDownloaded": "{{synced}} / {{total}} artwork covers downloaded",
+    "metadataExtracted": "{{synced}} / {{total}} metadata records extracted",
     "steamMetadataDownloaded": "Steam metadata: {{synced}} / {{total}}",
     "unifidbMetadataDownloaded": "unifiDB metadata: {{synced}} / {{total}}",
     "metacriticMetadataDownloaded": "Metacritic data: {{synced}} / {{total}}",
-    "rawgMetadataDownloaded": "RAWG metadata: {{synced}} / {{total}}"
+    "rawgMetadataDownloaded": "RAWG metadata: {{synced}} / {{total}}",
+    "compatChecked": "Compatibility data: {{synced}} / {{total}}",
+    "cancelling": "Cancelling…",
+    "error": "Error"
   },
   "cleanup": {
     "title": "Cleanup",
     "deleteAll": "Delete all UNIFIDECK Libraries and Cache",
-    "warningTitle": "⚠️ Warning",
-    "warningDescription": "Deletes shortcuts, artwork, auth tokens, and cache. Installed games will be preserved and can be re-synced. Enable destructive mode to also delete game files and mappings.",
-    "deleteFilesLabel": "Also delete installed game files? (Destructive)",
+    "modalTitle": "Delete all Unifideck data?",
+    "modalDescription": "This will remove every Unifideck shortcut, Steam artwork, saved store login, and cached data. Installed games stay on disk and can be re-synced. Enable destructive mode below to also delete the installed game files.",
+    "deleteFilesLabel": "Also delete installed game files (Destructive)",
+    "deleteFilesDescription": "Removes the on-disk install directory for every Unifideck game under a safe root.",
     "confirmDelete": "Yes, Delete Everything",
     "cancel": "Cancel",
     "deleting": "Deleting..."
@@ -184,7 +221,19 @@
   },
   "toasts": {
     "downloadStarted": "Download Started. Check UNIFIDECK > Downloads",
-    "downloadQueued": "{{title}} has been added to the queue.",
+    "downloadQueued": "Download queued",
+    "downloadQueuedBody": "{{title}} has been added to the queue.",
+    "downloadFailedUnknown": "Unknown error.",
+    "updateQueued": "Update queued",
+    "uninstallDone": "Uninstall complete.",
+    "cloudPullStarted": "Downloading cloud save…",
+    "cloudPullDone": "Cloud save downloaded",
+    "cloudPullFailed": "Cloud save download failed",
+    "cloudPushStarted": "Uploading local save…",
+    "cloudPushDone": "Local save uploaded",
+    "cloudPushFailed": "Local save upload failed",
+    "cloudSavePathSet": "Save location updated",
+    "cloudSavePathFailed": "Couldn't set save location",
     "ubisoftLauncherOpening": "Opening Ubisoft Connect",
     "ubisoftLauncherOpeningMessage": "Ubisoft Connect is opening for {{title}}. Install the game there, then return to play.",
     "ubisoftLauncherAlreadyOpenMessage": "Ubisoft Connect is already open for this install.",
@@ -218,8 +267,12 @@
     "authError": "Authentication Error",
     "authConnected": "{{store}} Connected!",
     "authConnectedMessage": "Successfully authenticated with {{store}}",
+    "cleanupStarted": "Initiating full reset for Unifideck",
+    "cleanupStartedMessage": "Removing shortcuts, artwork, saved logins, prefixes, and cached data. This may take a moment…",
     "cleanupSuccessful": "Cleanup Successful",
-    "cleanupSuccessfulMessage": "Removed {{games}} games, {{artwork}} artwork sets, and {{files}} file directories. Auth & cache cleared.",
+    "cleanupSuccessfulMessage": "Removed {{games}} shortcuts, {{artwork}} artwork files, signed out of {{stores}} stores, deleted {{files}} install dirs, wiped {{residual}} data files. Cache cleared.",
+    "cleanupNoop": "Nothing to Clean",
+    "cleanupNoopMessage": "Unifideck has no shortcuts, artwork, or saved logins to remove.",
     "deleteFailed": "Delete Failed",
     "repairPrefixSuccess": "Prefix Repaired",
     "repairPrefixSuccessMessage": "Ubisoft Connect prefix has been rebuilt",
@@ -233,6 +286,7 @@
       "resettingPrefix": "Resetting prefix for {{version}}...",
       "firstTimeSetup": "First Time Setup",
       "initializingPrefix": "Initializing Wine prefix...",
+      "downloadingRuntime": "Downloading Steam Runtime — first launch may take a few minutes...",
       "setupCompleteTitle": "Setup Complete",
       "prefixInitialized": "Wine prefix initialized",
       "setupFallback": "Setup",
@@ -242,6 +296,14 @@
       "startingAmazonGame": "Starting Amazon game...",
       "startingGogGame": "Starting GOG game...",
       "startingUbisoftGame": "Starting Ubisoft game...",
+      "signingInUbisoft": "Signing in to Ubisoft Connect",
+      "signingInUbisoftMessage": "Opening Ubisoft Connect — sign in there, then return.",
+      "installingUbisoft": "Installing via Ubisoft Connect",
+      "installingUbisoftMessage": "Opening Ubisoft Connect — start the install from the launcher window.",
+      "ubisoftPrefixNotReady": "Ubisoft Connect isn't ready",
+      "ubisoftPrefixNotReadyMessage": "Couldn't prepare the Ubisoft Connect prefix for this game. Try installing again; if it keeps failing, re-run a library sync.",
+      "ubisoftLaunchIdMissing": "Opening Ubisoft Connect",
+      "ubisoftLaunchIdMissingMessage": "Couldn't resolve this game's launch ID — opening Ubisoft Connect so you can start it from your library. Re-run a library sync to fix direct launch.",
       "dependenciesTitle": "Installing Dependencies",
       "installingRedistributables": "Installing game redistributables...",
       "dependenciesReady": "Dependencies Ready",
@@ -250,6 +312,10 @@
       "checkLogs": "Setup complete (check logs for details)",
       "installingProton": "Installing Proton",
       "attemptingInstall": "Attempting to install {{version}}...",
+      "downloadingProton": "Downloading Proton — this may take a few minutes...",
+      "protonSwitchedTo": "Now using {{version}}",
+      "protonReadyTitle": "Proton Ready",
+      "protonReadyBody": "{{version}} is ready to use",
       "epicAuthRequired": "Epic Login Required",
       "epicAuthRequiredMessage": "Please sign in to Epic Games in Unifideck settings",
       "installingRedist": "Installing Redistributables",
@@ -263,14 +329,32 @@
       "prerequisitesFailed": "Prerequisites Warning",
       "prerequisitesFailedMessage": "Prerequisites may not have installed correctly",
       "browserRequired": "Microsoft Edge Required",
-      "signingIn": "Signing In..."
+      "signingIn": "Signing In...",
+      "cloudSyncDownFailed": "Cloud save download failed for {{store}} ({{error}}). Playing with local saves.",
+      "cloudSyncUpFailed": "Cloud save upload failed for {{store}} ({{error}}). Your progress is stored locally only.",
+      "errorCircuitBreakerOpen": "{{game_key}} failed to launch {{count}} times recently. Automatic retries paused.",
+      "launcherError": "Couldn't launch {{game_key}} ({{error_code}}). Check the logs for details."
     },
     "updateComplete": "Update Complete!",
     "updateCompleteMessage": "{{title}} has been updated.",
     "updateCancelled": "Update Cancelled",
     "updateCancelledMessage": "Update for {{title}} was cancelled.",
     "updateFailed": "Update Failed",
-    "updateFailedMessage": "Failed to start update."
+    "updateFailedMessage": "Failed to start update.",
+    "storeError": "Failed to communicate with {{store}} ({{errType}})",
+    "actions": {
+      "_comment": "Action button labels rendered next to toasts when the backend payload includes an ``action`` field. Each one is a one-click remediation for a specific error code. Steam URLs use SteamClient.URL.ExecuteSteamURL; unifideck:// URLs are dispatched through the dispatch_unifideck_action RPC (backend verbs) or handled locally (frontend verbs). See LauncherToastListener.tsx + actions/unifideck_uri.py.",
+      "openStorageManager": "Free up space",
+      "signInToStore": "Sign in",
+      "retrySync": "Retry",
+      "retryLibrarySync": "Refresh library",
+      "openSaveFolder": "Show save folder",
+      "showLogs": "Show logs"
+    },
+    "library": {
+      "_comment": "Toasts emitted by SyncService when a per-store library sync fails. The retry button triggers a fire-and-forget refresh via the unifideck://refresh-library/<store> verb; the user doesn't wait for the result inline, the Library view picks it up through its SYNC_PROGRESS subscription.",
+      "syncStoreFailed": "Couldn't refresh {{store}} library ({{error}}). Your existing library stays visible."
+    }
   },
   "uninstallModal": {
     "title": "Confirm Uninstallation",
@@ -327,8 +411,15 @@
     "steamAppsUnavailable": "SteamClient.Apps API not available"
   },
   "sync": {
+    "start": "Sync Libraries",
+    "force": "Force Sync",
+    "syncing": "Syncing…",
+    "cancel": "Cancel Sync",
+    "cancelling": "Cancelling…",
+    "preparing": "Preparing…",
     "downloadingArtwork": "Downloading artwork for {{game}}...",
     "fetchingGameLists": "Fetching game lists...",
+    "fetchingStore": "Fetching {{store}} ({{current}}/{{total}})...",
     "cancelledByUser": "Sync cancelled by user",
     "checkingInstalledGames": "Checking installed games...",
     "sgdbLookup": "Looking up {{count}} games on SteamGridDB...",
@@ -336,12 +427,15 @@
     "fetchingEnhancedMetadata": "Fetching enhanced metadata...",
     "lookingUpUnifiDB": "Fetching unifiDB metadata...",
     "fetchingMetacriticData": "Fetching Metacritic metadata...",
+    "fetchingCompatData": "Checking compatibility data...",
     "checkingExistingArtwork": "Checking existing artwork...",
     "cleaningOrphanedArtwork": "Cleaning up orphaned artwork...",
     "retryingMissingArtwork": "Retrying {{synced}} / {{total}} games with missing artwork...",
     "savingShortcuts": "Saving shortcuts...",
-    "completed": "Sync completed! Added {{added}}, Art {{artwork}}.",
-    "fetchingStore": "Fetching {{store}}..."
+    "completed": "Sync completed!",
+    "extractingMetadata": "Extracting metadata for {{game}}...",
+    "cooldown": "Wait {{secs}}s",
+    "artworkPhase": "Artwork {{done}} / {{total}}"
   },
   "force_sync": {
     "migratingOldInstallations": "Force sync: Migrating old installations...",
@@ -388,6 +482,7 @@
     "buttons": {
       "details": "Details",
       "synopsis": "Synopsis",
+      "achievements": "Achievements",
       "storePage": "Store Page",
       "dlc": "DLC",
       "communityHub": "Community Hub",
@@ -422,12 +517,36 @@
       "unsupported": "UNSUPPORTED",
       "unknown": "UNKNOWN"
     },
-    "failedToLoadMetadata": "Failed to load metadata"
+    "failedToLoadMetadata": "Failed to load metadata",
+    "lastSession": "Last session: unlocked {{names}}"
+  },
+  "achievements": {
+    "unlockedTitle": "Achievement Unlocked",
+    "unlockedBody": "{{name}}"
+  },
+  "achievementsModal": {
+    "title": "Achievements",
+    "progress": "{{unlocked}} / {{total}} ({{percent}}%)",
+    "refresh": "Refresh",
+    "close": "Close",
+    "loading": "Loading achievements…",
+    "empty": "This game has no achievements.",
+    "hidden": "Hidden achievement",
+    "unlockedOn": "Unlocked {{date}}",
+    "error": "Couldn't load achievements.",
+    "errorOffline": "Connect to the internet to view achievements.",
+    "errorAuth": "Sign in to this game's store to view achievements.",
+    "errorUnavailable": "Achievements aren't available for this game."
   },
   "gameDetailsSettings": {
     "title": "GAME DETAILS VIEW",
     "simple": "Simple",
     "detailed": "Detailed"
+  },
+  "collectionSettings": {
+    "title": "STEAM COLLECTIONS",
+    "enabled": "Collections enabled",
+    "disabled": "Collections disabled"
   },
   "gogLanguageModal": {
     "title": "Select Language",
@@ -484,7 +603,16 @@
     "thisGame": "this game",
     "game": "Game",
     "unknown": "Unknown",
-    "cancel": "Cancel"
+    "ok": "OK",
+    "cancel": "Cancel",
+    "close": "Close",
+    "working": "Working…",
+    "loading": "Loading…",
+    "free": "free"
+  },
+  "info": {
+    "expandDetails": "Show details",
+    "collapseDetails": "Hide details"
   },
   "microsoft": {
     "notCompatible": "This game format is not compatible with SteamOS",
@@ -506,11 +634,316 @@
     "browserInstalled": "Microsoft Edge installed successfully!",
     "browserInstallFailed": "Microsoft Edge installation failed. Please install manually: flatpak install com.microsoft.Edge",
     "flatpakNotFound": "Flatpak is not available on this system",
-    "signInRequired": "Sign in to play"
+    "signInRequired": "Sign in to play",
+    "syncSkippedNoSubscription": "No active Xbox Game Pass subscription detected. Your xCloud library was not synchronized.",
+    "syncSkippedTierUnknown": "Your Xbox Game Pass subscription was detected but the plan could not be determined. Sync skipped to avoid listing unavailable games.",
+    "subscriptionCheckFailed": "Could not verify your Xbox Game Pass subscription. xCloud sync skipped. Retry when your connection stabilizes.",
+    "subscriptionDetected": "Xbox Game Pass {{tier}} subscription active."
   },
-  "authSuccess": {
-    "title": "Authentication",
-    "titleStore": "{{store}} — Authentication ✓",
-    "subtitle": "Press the B button to close this window"
+  "playButton": {
+    "play": "Play",
+    "install": "Install",
+    "cancel": "Cancel",
+    "retry": "Retry",
+    "downloadFailed": "Download failed",
+    "installing": "Installing",
+    "controllerConfig": "Controller configuration",
+    "appSettings": "App settings"
+  },
+  "play": {
+    "play": "Play",
+    "resume": "Resume",
+    "stop": "Stop",
+    "cancel": "Cancel",
+    "cancelling": "Cancelling…",
+    "update": "Update",
+    "uninstall": "Uninstall",
+    "queued": "Queued",
+    "downloading": "Downloading",
+    "extracting": "Extracting",
+    "verifying": "Verifying",
+    "finalizing": "Finalising install",
+    "cancelConfirmTitle": "Cancel download?",
+    "cancelConfirmBody": "Are you sure you want to cancel the download for {{title}}? Partial files will be discarded.",
+    "cancelConfirmConfirm": "Cancel download",
+    "cancelConfirmCancel": "Keep downloading",
+    "playOnCloud": "Play on Cloud",
+    "cloudSave": {
+      "label": "Cloud saves",
+      "menuTitle": "Cloud saves — {{game}}",
+      "close": "Close",
+      "download": "Download cloud save",
+      "upload": "Upload local save",
+      "statusSyncing": "Syncing cloud saves…",
+      "statusCloudAvailable": "Cloud save available",
+      "statusNoSaves": "No local saves",
+      "filesCount": "{{count}} files",
+      "statusUnresolved": "Save location not found — sync may not work for this game.",
+      "unresolvedHint": "Launch the game once so we can detect its save folder, or set the location manually.",
+      "setLocation": "Set save location",
+      "setLocationTitle": "Choose this game's save folder",
+      "setLocationHint": "Pick the folder where this game stores its saves.",
+      "noCloudSupport": "No cloud-save support",
+      "noCloudData": "Unknown",
+      "autoPullOn": "Cloud saves download automatically on launch."
+    },
+    "exe": {
+      "menuItem": "Change executable…",
+      "title": "Change executable — {{game}}",
+      "subtitle": "Pick which file this game launches (e.g. skip a launcher and run the game directly). The working directory and cloud saves are unaffected.",
+      "defaultTag": "(default)",
+      "browse": "Browse…",
+      "resetButton": "Reset to default",
+      "unavailable": "Couldn't read this game's folder.",
+      "changed": "Executable changed",
+      "changeFailed": "Couldn't change executable",
+      "reset": "Reset to default executable"
+    }
+  },
+  "playMeta": {
+    "spaceRequired": "Space required",
+    "installedSize": "Installed size",
+    "lastPlayed": "Last played",
+    "neverPlayed": "Never played",
+    "played": "Played",
+    "hoursShort": "h",
+    "minutesShort": "min"
+  },
+  "downloads": {
+    "title": "Downloads",
+    "empty": "No downloads. Install games from your library to see them here.",
+    "current": "Now downloading",
+    "queued": "Queued",
+    "finished": "Recently finished",
+    "cancel": "Cancel",
+    "removeFromQueue": "Remove",
+    "play": "Play",
+    "outcome": {
+      "queued": "Queued",
+      "downloading": "Downloading",
+      "completed": "Complete",
+      "cancelled": "Cancelled",
+      "error": "Failed"
+    }
+  },
+  "navigation": {
+    "loading": "Loading...",
+    "storesTitle": "Stores",
+    "syncTitle": "Library Sync",
+    "languageTitle": "Language"
+  },
+  "security": {
+    "panelTitle": "Security",
+    "counters": {
+      "label": "Counters",
+      "empty": "No events observed since startup"
+    },
+    "log": {
+      "label": "Audit log",
+      "entryCount": "{{count}} entry",
+      "entryCount_other": "{{count}} entries",
+      "emptyFiltered": "No events matching the filter"
+    },
+    "filter": {
+      "label": "Filter",
+      "all": "All events"
+    },
+    "timeline": {
+      "label": "24h timeline ({{count}} event)",
+      "label_other": "24h timeline ({{count}} events)",
+      "axisStart": "-24h",
+      "axisEnd": "now"
+    },
+    "relativeTime": {
+      "seconds": "{{count}}s ago",
+      "minutes": "{{count}} min ago",
+      "hours": "{{count}}h ago",
+      "days": "{{count}}d ago"
+    },
+    "bruteforce": {
+      "warningTitle": "Warning: brute-force detection (warning level)",
+      "escalationTitle": "ALERT: brute-force detection (escalation level)",
+      "detail": "{{failures}} decryption failures in the last {{window}}s. Thresholds: {{warning}} (warning) / {{escalation}} (escalation).",
+      "resetButton": "Acknowledge and reset the detector"
+    },
+    "actions": {
+      "clearLog": "Clear log and counters"
+    },
+    "events": {
+      "tokenEncrypted": "Token encrypted",
+      "tokenDecrypted": "Token decrypted",
+      "decryptFailed": "Decryption failed",
+      "tokenFileMigrated": "Token file migrated",
+      "legacyPlaintextDetected": "Legacy plaintext detected",
+      "authFlowStarted": "Auth started",
+      "authFlowCompleted": "Auth completed",
+      "authFlowFailed": "Auth failed",
+      "permissionsCheck": "Permissions checked",
+      "permissionsRepaired": "Permissions repaired",
+      "bruteforceSuspected": "Brute-force suspected",
+      "deviceResetDetected": "Device reset detected",
+      "fingerprintInitialized": "Fingerprint initialized",
+      "externalAuthCheckFailed": "External auth check failed",
+      "configValidationCompleted": "Config validation completed",
+      "configValidationFailed": "Config validation failed"
+    },
+    "configValidation": {
+      "degradedTitle": "Configuration invalid - degraded mode active",
+      "detail": "{{count}} validation error detected at boot",
+      "detail_other": "{{count}} validation errors detected at boot",
+      "sourceDefaults": "defaults",
+      "sourceUser": "user overrides",
+      "sourceMerged": "merged",
+      "overflow": "+ {{count}} more error",
+      "overflow_other": "+ {{count}} more errors"
+    }
+  },
+  "cloudSyncBehavior": {
+    "_comment": "Settings panel letting the user pick, per store, how cloud save sync failures should be surfaced. The five store_label entries mirror the rows rendered by CloudSyncBehaviorPanel.tsx. Microsoft deliberately omitted — xCloud streaming has no local save to sync.",
+    "title": "Cloud save sync behavior",
+    "description": "Choose how Unifideck should react when a cloud save download or upload fails at game launch.",
+    "loadError": "Could not load current settings",
+    "saveError": "Could not save your change — please retry",
+    "store_label": {
+      "default": "Default (all stores)",
+      "epic": "Epic Games",
+      "gog": "GOG",
+      "amazon": "Amazon Games",
+      "ubisoft": "Ubisoft Connect"
+    },
+    "mode": {
+      "silent": "Silent (log only)",
+      "toast": "Notify (toast)"
+    }
+  },
+  "cloudSync": {
+    "_comment": "Toast strings emitted by the launcher when a cloud sync fails. The error placeholder is resolved through cloudSync.error.<code> via the backend payload's error_i18n_key field.",
+    "unavailableNativeDep": "Cloud saves are off on this system — its Python ({{python}}) is missing a required component. Your local saves are unaffected; rebuild/reinstall the plugin after a system update to restore sync.",
+    "error": {
+      "network_unreachable": "Network unreachable",
+      "auth_expired": "Authentication expired",
+      "forbidden": "Access denied",
+      "quota_exceeded": "Cloud quota exceeded",
+      "server_error": "Store server unavailable",
+      "timed_out": "Request timed out",
+      "disk_full": "Not enough disk space",
+      "disk_space_low": "Skipped — low disk space (free up some room and try again)",
+      "permission_denied": "Permission denied",
+      "cancelled": "Cancelled",
+      "unknown": "Unexpected error"
+    }
+  },
+  "launchLogs": {
+    "_comment": "LaunchLogsModal strings. The modal opens from the unifideck://show-logs/<launch_id> toast action, attached to launcher-failure toasts (circuit breaker + LauncherError). Reads per-launch archived logs from ~/.local/share/unifideck/launches/<launch_id>.log and renders them with level-based color coding.",
+    "title": "Launch logs — {{launchId}}",
+    "close": "Close",
+    "copyAll": "Copy all",
+    "export": "Export to file",
+    "copied": "Copied to clipboard",
+    "copyFailed": "Copy failed",
+    "exporting": "Exporting…",
+    "exportedTo": "Exported to {{path}}",
+    "exportFailed": "Export failed: {{error}}",
+    "loading": "Loading logs…",
+    "notAvailable": "Logs for this launch are no longer available (past the 7-day retention window).",
+    "error": "Couldn't read the logs: {{error}}",
+    "fileInfo": "{{path}} — showing {{shown}} of {{total}} lines",
+    "filterLabel": "Show",
+    "filterInfo": "Info",
+    "filterWarning": "Warning",
+    "filterError": "Error",
+    "nextError": "Next error ({{current}}/{{total}})",
+    "noErrors": "No errors",
+    "allFiltered": "All lines hidden by the current filter. Enable at least one level to see log entries."
+  },
+  "settings": {
+    "_comment": "UnifideckSettingsPanel action-type controls that aren't covered by more specific components (LanguageSelector, CloudSyncBehaviorPanel). refreshAll is a fire-and-forget button that triggers sync_all() across every registered store; the Library view shows the sync progress via its own subscription to SYNC_PROGRESS events.",
+    "storeConnections": "Store Connections",
+    "librarySync": "Library Sync",
+    "language": "Language",
+    "languageAuto": "Auto-detect",
+    "refreshAll": {
+      "sectionTitle": "Library actions",
+      "button": "Refresh all libraries",
+      "buttonBusy": "Starting…",
+      "startedTitle": "Library refresh started",
+      "startedBody": "Syncing all stores in the background.",
+      "startedSingle": "Refreshing {{store}} library in the background.",
+      "failedTitle": "Couldn't start library refresh"
+    }
+  },
+  "saveFolder": {
+    "_comment": "SaveFolderModal strings. The modal opens from the unifideck://open-save-folder/<store>/<game_id> toast action, typically surfaced on cloud sync failures where the user wants to inspect what's actually stored locally. count and size are interpolated; truncated shows only when the result was capped.",
+    "title": "Save folder — {{store}} / {{gameId}}",
+    "close": "Close",
+    "copyPath": "Copy path",
+    "copyFileList": "Copy file list",
+    "depthLabel": "Depth",
+    "filterLabel": "Filter",
+    "loading": "Loading folder contents…",
+    "noSavesYet": "No saves found locally for this game yet. The folder will be created on the next successful cloud sync.",
+    "aggregate": "{{count}} files, {{size}} total",
+    "truncated": "{{count}} more files ({{size}}) not shown — narrow your filter to see them.",
+    "error": "Couldn't read the save folder: {{error}}"
+  },
+  "library": {
+    "_comment": "Per-game UI affordances rendered in the Library view, including the circuit-breaker badge and force-launch / reset controls when launches fail repeatedly.",
+    "circuitBreaker": {
+      "_comment": "Surface for the launch-failure circuit breaker. Badge appears only when failures within the configured window reach circuit_breaker.failures_threshold (default 3 in 600s). Force launch arms a one-shot bypass; Reset wipes the failure history entirely.",
+      "badgeRecent": "{{count}} recent launch failure",
+      "badgeRecent_other": "{{count}} recent launch failures",
+      "badgeTooltip": "{{count}} failed launches in the recent time window — the circuit breaker has paused automatic retries",
+      "forceLaunchButton": "Force launch",
+      "resetButton": "Reset failures",
+      "failureKind": {
+        "fastBoot": "Fast boot crash",
+        "launcherError": "Launch setup error"
+      }
+    }
+  },
+  "pickStorage": {
+    "title": "Install Location",
+    "customOption": "Choose Another Location...",
+    "customLabel": "Custom Location",
+    "change": "Change...",
+    "gameSize": "Install Size"
+  },
+  "restart": {
+    "title": "Sync Complete!",
+    "body": "Please Restart Steam to apply your new games and artwork",
+    "confirm": "Restart Now",
+    "later": "Later"
+  },
+  "updater": {
+    "checkButton": "Check for Updates",
+    "checkCompleteMessage": "Successfully fetched latest version info.",
+    "checkCompleteTitle": "Update Check Complete",
+    "checkFailedTitle": "Check Failed",
+    "checkingButton": "Checking...",
+    "currentTitle": "Current",
+    "downgradeButton": "Downgrade to v{{version}}",
+    "installFailedTitle": "Install Failed",
+    "installedLabel": "installed",
+    "installingButton": "Installing...",
+    "installingTitle": "Installing Plugin",
+    "latestLabel": "latest",
+    "modalTitle": "UNIFIDECK v{{version}} — Release Notes",
+    "noBackend": "Decky backend is unavailable.",
+    "noReleaseNotes": "No release notes available.",
+    "reinstallButton": "Reinstall v{{version}}",
+    "releaseNotesButton": "Release Notes",
+    "stageDownload": "Downloading…",
+    "stageFinish": "Finishing…",
+    "stageInstall": "Installing…",
+    "stageOpen": "Reading package…",
+    "stageParse": "Verifying…",
+    "stageRemove": "Removing old version…",
+    "stageStart": "Starting…",
+    "stageWorking": "Installing…",
+    "titleLoading": "Checking version",
+    "typeDowngrade": "Downgrading to",
+    "typeReinstall": "Reinstalling",
+    "typeUpdate": "Updating to",
+    "updateButton": "Update to v{{version}}"
   }
 }

@@ -1,0 +1,607 @@
+# pyproject.toml — Unifideck plugin (py_modules/unifideck/)
+#
+# This config currently only carries the ruff settings. It lives at
+# the package root so ``ruff check .`` from any subdirectory of the
+# package picks it up automatically. If the upstream repo has a
+# pyproject.toml at the repo root, merge the [tool.ruff*] sections
+# into it and delete this file.
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+
+# ── Why both ``exclude`` AND ``force-exclude`` ────────────────────
+# ``extend-exclude`` only applies when ruff walks the filesystem
+# itself. CI gates that pass explicit file paths — ``pip-audit``
+# expanding ``defaults/python/**/*.py``, ``mypy --strict`` on a glob,
+# pre-commit hooks feeding the staged file list, or
+# ``ruff check defaults/python/`` invoked directly from a workflow —
+# bypass that filter entirely.
+#
+# Setting ``force-exclude = true`` makes ruff honour these patterns
+# even when files are passed by name. Combined with the catch-all
+# patterns below, the audit scope becomes "backend Python only"
+# regardless of how ruff is invoked.
+#
+# Patterns live in ``exclude`` (not ``extend-exclude``) so they
+# replace, not merge with, ruff's defaults — keeping the resolved
+# list short and predictable.
+force-exclude = true
+exclude = [
+    # ─── Ruff defaults we still want to keep ─────────────────────
+    ".bzr",
+    ".direnv",
+    ".eggs",
+    ".git",
+    ".git-rewrite",
+    ".hg",
+    ".ipynb_checkpoints",
+    ".mypy_cache",
+    ".nox",
+    ".pants.d",
+    ".pyenv",
+    ".pytest_cache",
+    ".pytype",
+    ".ruff_cache",
+    ".svn",
+    ".tox",
+    ".venv",
+    ".vscode",
+    "__pypackages__",
+    "_build",
+    "buck-out",
+    "build",
+    "dist",
+    "node_modules",
+    "site-packages",
+    "venv",
+    "env",
+    "__pycache__",
+    "*.egg-info",
+    # ─── Vendored 3rd-party libraries ────────────────────────────
+    # Pinned upstream code. CVE exposure is tracked via
+    # ``requirements.txt`` + ``pip-audit``; ruff style/complexity
+    # findings on this code are upstream choices that produce only
+    # noise here. A previous full-scope audit returned 24 K issues
+    # in the vendor tree, 0 actionable.
+    #
+    # Patterns are listed three ways to defeat invocation-path
+    # ambiguity:
+    #   * bare name             — matches dirs at the search root
+    #   * `**/<name>/`         — matches the dir anywhere under root
+    #   * specific full paths   — for the Decky Loader install layout
+    "pip",
+    "pip-*",
+    "**/pip",
+    "**/pip-*",
+    "requests",
+    "**/requests",
+    "urllib3",
+    "**/urllib3",
+    "aiohttp",
+    "**/aiohttp",
+    "websockets",
+    "**/websockets",
+    "idna",
+    "**/idna",
+    "charset_normalizer",
+    "**/charset_normalizer",
+    "certifi",
+    "**/certifi",
+    "cryptography",
+    "**/cryptography",
+    "jsonschema",
+    "jsonschema_specifications",
+    "**/jsonschema",
+    "**/jsonschema_specifications",
+    "vdf",
+    "**/vdf",
+    "steamgrid",
+    "**/steamgrid",
+    "yaml",
+    "**/yaml",
+    "_yaml",
+    # ─── Decky Loader vendor layouts ─────────────────────────────
+    # Decky drops vendored deps into one of these depending on the
+    # plugin version; all three are out of audit scope.
+    "defaults/python",
+    "defaults/python/*",
+    "**/defaults/python",
+    "**/defaults/python/*",
+    "python_modules",
+    "python_modules/*",
+    "**/python_modules",
+    "**/python_modules/*",
+    "**/site-packages",
+    "**/_vendor",
+    "**/_vendor/*",
+    "**/vendored",
+    "**/vendored/*",
+    "**/dist-info",
+    "**/*.dist-info",
+    # ─── Frontend ────────────────────────────────────────────────
+    # The TS/React layer has its own ESLint pipeline. Any ``.py``
+    # under ``frontend/`` would be a packaging accident, not audit
+    # territory.
+    "frontend",
+    "frontend/*",
+    # ─── Docs build output ───────────────────────────────────────
+    "docs/_build",
+    "docs/_build/*",
+]
+
+[tool.ruff.lint]
+# Rule selection — distilled from the audit sessions. Keep
+# everything that has historically caught a real bug, drop the
+# rules that produce only style noise or false positives in this
+# codebase.
+select = [
+    "F",      # Pyflakes (undefined names, unused imports, dead code)
+    "E",      # pycodestyle errors
+    "W",      # pycodestyle warnings (whitespace, EOF)
+    "I",      # isort (import sorting)
+    "N",      # pep8-naming
+    "UP",     # pyupgrade (modern syntax)
+    "B",      # bugbear (real bugs)
+    "A",      # builtins shadowing
+    "C4",     # comprehensions
+    "DTZ",    # datetime timezone (caught 4 naive-datetime bugs)
+    "T10",    # debugger
+    "EXE",    # executable shebangs
+    "ISC",    # implicit string concat
+    "ICN",    # import conventions
+    "PIE",    # misc anti-patterns
+    "PT",     # pytest
+    "Q",      # quotes (consistency)
+    "RET",    # return statements (caught the launcher/bootstrap cascade bug)
+    "SIM",    # simplify
+    "TID",    # tidy imports
+    "TC",     # type-checking
+    "ARG",    # unused args
+    "ERA",    # eradicate (commented-out code)
+    "PL",     # pylint
+    "TRY",    # try-except antipatterns
+    "RUF",    # ruff-specific
+    "S",      # bandit (security)
+    "ASYNC",  # async pitfalls (caught the proton_service blocking-IO bug)
+    "C90",    # mccabe complexity
+]
+
+ignore = [
+    # ─── Documentation ───────────────────────────────────────────
+    # Docstrings are tracked separately (Google-style coverage tooling
+    # in the docstrings PR). Don't let ruff churn on D-rules.
+    "D",
+    # Type annotations: the codebase uses ``from __future__ import
+    # annotations`` everywhere, ruff's ANN advice doesn't apply
+    # consistently.
+    "ANN",
+    # ─── Formatter territory ─────────────────────────────────────
+    # Formatter rules (long lines, trailing commas) belong to the
+    # formatter, not the linter.
+    "COM",
+    "E501",
+    # Boolean positional args (FBT) — many call sites already use
+    # ``flag=True`` keyword form, and the rule fires too eagerly on
+    # legitimate APIs.
+    "FBT",
+    # ─── pathlib migration (PTH) — deferred to Sprint C ──────────
+    # The PTH family (use pathlib over os.path) stays ignored
+    # pending its own dedicated migration pass, exactly as the
+    # quality.yml gate documents. Re-selecting it prematurely
+    # surfaced ~37 os.path findings across the cloud-save and
+    # Ubisoft-prefix code that belong to that future sweep, not a
+    # PR-blocking gate today. Graduate to ``select`` when Sprint C
+    # lands the migration.
+    "PTH",
+    # ─── Refactor opinions ───────────────────────────────────────
+    # PLR* are mostly "too many X" advisory thresholds. Useful at
+    # design time, noisy in maintenance.
+    "PLR",
+    # PLC0415 forbids imports below the module top — we use lazy
+    # imports intentionally to break circular-import chains in the
+    # store layer.
+    "PLC0415",
+    # ─── TRY opinions ────────────────────────────────────────────
+    # TRY003 (long messages) is taste. TRY300 (use else after try)
+    # forces a style we don't follow. TRY301 (abstract raise) fires
+    # on raise-from idioms.
+    "TRY003",
+    "TRY300",
+    "TRY301",
+    # ─── Mutable class attributes ────────────────────────────────
+    # RUF012 fires on dataclass ``field(default_factory=list)``
+    # which is the correct pattern.
+    "RUF012",
+    # ─── Bandit false-positive zone ──────────────────────────────
+    # S101 (assert): we use asserts as runtime invariants in launcher
+    # code, not as test scaffolding.
+    "S101",
+    # S603 (subprocess without shell=False): default is already
+    # shell=False; the rule has no signal.
+    "S603",
+    # S607 (partial paths in subprocess): the binaries we exec are
+    # resolved via ``which`` upstream or are intentional plain names
+    # (``pgrep``, ``pkill``, ``xdg-settings``).
+    "S607",
+    # ─── BLE001 — broad-except in best-effort boundaries ─────────
+    # The codebase deliberately catches ``Exception`` at every I/O,
+    # network, CDP, subprocess, and plugin-SDK boundary so that one
+    # flaky operation can't crash a launch. Every site logs the
+    # exception (audited in the cleanup pass: 151 sites, 100% logged
+    # at warning or debug level). The pattern is a feature, not a
+    # bug; converting it to per-exception handlers would be a large
+    # refactor with no clear payoff.
+    "BLE001",
+    # ─── Pytest discipline ───────────────────────────────────────
+    # This is not a pytest project (tests live elsewhere). Drop the
+    # PT rules so they don't fire on test fixtures we don't ship.
+    "PT",
+    # ─── Docstring micro-rules ───────────────────────────────────
+    # RUF002 fires on intentional Unicode in docstrings (× for
+    # multiplication, ≤/≥ in math notation, en-/em-dashes in prose).
+    # The codebase deliberately uses these as typographic conventions
+    # in docstrings; the rule has no signal here.
+    "RUF002",
+    # Same rationale extends to comments — ``× 100ms`` etc.
+    "RUF003",
+    # ─── Subprocess audit false positives ────────────────────────
+    # S310: urllib audit for ``http://`` URLs. Every flagged site is
+    # one of: a localhost CDP debugging port, a Steam-internal
+    # 127.0.0.1 service, or an explicit user-controlled config URL
+    # — never a default external endpoint over plain HTTP.
+    "S310",
+    # ─── Comment classification noise ────────────────────────────
+    # ERA001 flags "commented-out code" but every site flagged in
+    # this codebase is a doc-comment (worked example, RFC quote, or
+    # a snippet of code shown to explain the surrounding logic), not
+    # actual commented-out logic. We rely on git history for dead
+    # code, not ruff.
+    "ERA001",
+    # ─── ARG family false positives ──────────────────────────────
+    # ARG001/002/005 fire on unused lambda / method args that exist
+    # to match a callback signature (asyncio.to_thread, asyncio
+    # callbacks, mixin contracts where subclasses ignore the arg).
+    # Removing the arg would change the callable's shape and break
+    # the consumer. The rule has no signal in this codebase.
+    "ARG001",
+    "ARG002",
+    "ARG005",
+    # ─── Type-checking-import cosmetics ──────────────────────────
+    # TC001-006 enforce TYPE_CHECKING-guarded imports. The codebase
+    # uses ``from __future__ import annotations`` everywhere, which
+    # makes all annotations strings — there is no runtime benefit to
+    # moving the imports under TYPE_CHECKING and the noise drowns
+    # out actionable hints.
+    "TC001",
+    "TC002",
+    "TC003",
+    "TC005",
+    "TC006",
+    # ─── Style/preference rules ──────────────────────────────────
+    # SIM rules are mostly style preferences (use of contextlib.suppress
+    # for ignored exceptions, ternaries vs if/else, etc). They don't
+    # catch bugs; they enforce one author's taste.
+    "SIM102",  # nested if can be combined
+    "SIM105",  # use contextlib.suppress
+    "SIM108",  # use ternary
+    "SIM115",  # use context manager for open
+    "SIM117",  # combine `with` blocks
+    # ─── PLW0603 — module-level singletons ───────────────────────
+    # Every flagged site is a deliberate module-level cache or
+    # singleton pattern: lazy CDP-client init, SSL context cache,
+    # Steam owned-games TTL cache, locale-config import cache.
+    # Process-wide singletons are the correct shape for these,
+    # and the ``global`` keyword is the only way to update them
+    # from inside a function. Rule has no signal here.
+    "PLW0603",
+]
+
+# Per-file overrides for cases where a whole rule should be skipped
+# inside one directory rather than peppering the file with noqa.
+[tool.ruff.lint.per-file-ignores]
+# Type re-export modules: F401 is the expected pattern.
+"**/__init__.py" = ["F401"]
+# S105 false-positives (event-name constants and _DEFAULT_TOKEN_FILE
+# paths matching the "_TOKEN_" substring) are handled by inline
+# ``# noqa: S105`` directives in the affected files (events.py +
+# stores/{gog,microsoft}/config.py). Per-file-ignores were removed
+# in lot-async109 because some CI configurations bypass them, which
+# would let S105 fire on the CI side while silencing it locally —
+# inline noqa converges both paths.
+
+[tool.ruff.lint.isort]
+# Treat ``unifideck`` as the first-party namespace so its imports
+# group correctly relative to stdlib/3rd-party.
+known-first-party = ["unifideck"]
+
+[tool.ruff.lint.mccabe]
+# Align ruff's C901 (cyclomatic) threshold with the project-wide
+# complexity policy enforced in .github/workflows/complexity.yml
+# (flake8 --max-complexity=15) and mirrored in .flake8. Ruff
+# defaults to 10, which would make the ruff gate *stricter* than
+# the documented bar and flag functions the complexity workflow
+# considers in-policy. 15 is the single source of truth.
+max-complexity = 15
+
+# ──────────────────────────────────────────────────────────────────
+# mypy — same scope as ruff
+# ──────────────────────────────────────────────────────────────────
+#
+# mypy honours ``files`` and ``exclude`` settings under
+# ``[tool.mypy]``. The CI gate runs ``mypy py_modules/unifideck/``
+# from the repo root; that explicit-path invocation would
+# *otherwise* descend into any vendored deps under the package
+# unless we filter them here. The exclude regex mirrors the ruff
+# exclude list above — same scope, different tool.
+[tool.mypy]
+python_version = "3.11"
+# We list the package as ``files`` so a bare ``mypy`` invocation
+# without arguments still type-checks the right tree.
+files = ["py_modules/unifideck"]
+# Regex (not glob!) — mypy's exclude uses Python's ``re.search``.
+# Each alternative is a path fragment that disqualifies the file.
+exclude = '''(?x)(
+    /__pycache__/
+    | /\.ruff_cache/
+    | /\.mypy_cache/
+    | /build/
+    | /dist/
+    | /defaults/python/
+    | /python_modules/
+    | /site-packages/
+    | /_vendor/
+    | /vendored/
+    | \.dist-info/
+    | /pip/
+    | /requests/
+    | /urllib3/
+    | /aiohttp/
+    | /websockets/
+    | /idna/
+    | /charset_normalizer/
+    | /certifi/
+    | /cryptography/
+    | /jsonschema/
+    | /vdf/
+    | /steamgrid/
+    | /yaml/
+    | /frontend/
+)'''
+
+# Strict mode (matches the project's mypy invariant).
+strict = true
+warn_unused_configs = true
+warn_unreachable = true
+# Don't follow imports into excluded dirs.
+follow_imports = "silent"
+
+# ``attr`` / ``attrs`` / ``rpds`` ship ``.pyi`` stubs that mypy
+# reads transitively when ``jsonschema`` and friends pull them in.
+# Their stubs trigger 13 generic-type-arg and variance errors that
+# originate inside the stubs themselves — nothing actionable from
+# our side. ``ignore_errors = true`` silences them without
+# changing ``follow_imports``, so dependents of these modules
+# (jsonschema, etc.) keep their type info intact. Placed AFTER the
+# strict-mode flags so TOML scoping doesn't pull them into the
+# per-module override (a mistake that previously turned a 13-error
+# fix into a 1300-error regression by losing strict-mode for the
+# entire tree).
+[[tool.mypy.overrides]]
+module = ["attr", "attr.*", "attrs", "attrs.*", "rpds", "rpds.*"]
+ignore_errors = true
+
+# ``legendary`` (the Epic CLI) is bundled as a GitHub-release binary at
+# build time, NOT a pip dependency — its ``py_modules/legendary`` tree is
+# gitignored, so it is PRESENT locally but ABSENT in CI's checkout. Without
+# this override mypy diverges by environment: locally it resolves the
+# untyped module (``no-untyped-call``), in CI it can't find it at all
+# (``import-not-found``), and any ``type: ignore`` that fixes one fails as
+# ``unused-ignore`` in the other. ``follow_imports = "skip"`` +
+# ``ignore_missing_imports`` force it to ``Any`` either way, so the cloud-save
+# fallback that calls ``legendary.core.LegendaryCore`` type-checks identically
+# in both. (Only ``cloud_save/epic_strategy.py`` imports it.)
+[[tool.mypy.overrides]]
+module = ["legendary.*"]
+follow_imports = "skip"
+ignore_missing_imports = true
+
+# ──────────────────────────────────────────────────────────────────
+# pytest — test suite at the repo root
+# ──────────────────────────────────────────────────────────────────
+#
+# Layout convention (cf. "Test coverage companion v1.0", section
+# "Naming conventions") :
+#
+#   tests/unit/<sub_package>/test_<source_file>.py
+#
+# So ``py_modules/unifideck/core/cache_manager.py`` is mirrored
+# by ``tests/unit/core/test_cache_manager.py`` — drop the
+# ``py_modules/unifideck/`` prefix, keep the rest of the path,
+# prepend ``test_`` to the basename.
+#
+# ``testpaths`` is set to ``tests`` (relative to the repo root)
+# so that a bare ``pytest`` invocation walks the right tree.
+# This matches the CI commands :
+#   * ``.github/workflows/tests.yml`` — runs ``pytest tests/``
+#   * ``.github/workflows/complexity.yml`` — runs ``pytest tests/unit/_tooling/``
+#
+# Historical note : an earlier version of this config pointed
+# at ``py_modules/unifideck/tests`` (in-package). That layout
+# was abandoned in favour of root-level ``tests/`` so the test
+# tree doesn't ship inside the plugin zip (Decky bundles
+# ``py_modules/`` whole) and so the coverage companion's
+# mirror convention is enforceable by CI without a path
+# rewrite step.
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+# The plugin package lives in ``py_modules/unifideck/`` (a
+# non-src, non-installed layout dictated by Decky Loader). It
+# is never ``pip install``-ed, so without help ``import
+# unifideck`` fails under CI — locally it only worked because
+# PYTHONPATH was exported by hand. ``pythonpath`` (pytest >= 7,
+# guaranteed by ``minversion = 8.0``) prepends this dir to
+# ``sys.path`` at collection time, making the package importable
+# everywhere pytest runs (CI, local, pre-commit, IDE) with no
+# external env var or editable install. This is the canonical
+# fix for non-src layouts and replaces the manual PYTHONPATH.
+pythonpath = ["py_modules"]
+# Strict markers/config keep test scaffolding honest : a typo
+# in a marker name fails the suite instead of silently being a
+# no-op. ``no:cacheprovider`` disables the .pytest_cache dir
+# which is pure noise in CI runners.
+#
+# Strict warnings (added 2026-05): the suite must run with
+# **zero warnings**. ``filterwarnings = ["error", ...]``
+# promotes every warning to an error so a Deprecation/Runtime
+# warning introduced by a dependency bump or a sloppy test
+# fails the suite instead of scrolling past unnoticed. Because
+# pytest reads this file everywhere (CI, local, pre-commit,
+# IDE), the rule holds for every contributor, not just CI.
+#
+# ``ignore::ResourceWarning`` is the single, explicit
+# allow-list entry. Those warnings ("unclosed file") originate
+# in application/dependency code (config readers), are out of
+# scope for the test suite, never surface in normal runs, and
+# promoting them would fail CI for reasons unrelated to test
+# correctness. Any test that legitimately needs to assert on a
+# specific warning uses the ``filterwarnings`` marker, which
+# overrides these globals locally.
+#
+# ``-ra`` prints a short summary of every non-pass outcome
+# (skips, xfails) so they stay visible in CI logs — the
+# companion tests.yml turns a non-zero skip count into a hard
+# failure (pytest has no native "error on skip").
+addopts = [
+    "--strict-markers",
+    "--strict-config",
+    "-ra",
+    "-p", "no:cacheprovider",
+]
+filterwarnings = [
+    "error",
+    "ignore::ResourceWarning",
+]
+asyncio_mode = "auto"
+
+[tool.coverage.run]
+source = ["py_modules/unifideck"]
+# Mirror the exclusion list as omit patterns — coverage.py uses
+# fnmatch syntax (not regex like mypy, not glob like ruff).
+omit = [
+    "*/defaults/python/*",
+    "*/python_modules/*",
+    "*/site-packages/*",
+    "*/_vendor/*",
+    "*/vendored/*",
+    "*/*.dist-info/*",
+    "*/__pycache__/*",
+    "*/tests/*",
+    "*/frontend/*",
+]
+
+# ──────────────────────────────────────────────────────────────────
+# Tools whose scope is NOT controlled from this file
+# ──────────────────────────────────────────────────────────────────
+#
+# These tools take their config from separate root-level files.
+# They each need their own scope filter to avoid auditing vendored
+# deps. Left out of this file because mixing their TOML sections
+# here would split ownership of those tools' configuration.
+#
+# ──────────────────────────────────────────────────────────────────
+#
+# 1. ``flake8`` — reads ``.flake8`` (or ``setup.cfg [flake8]``).
+#    flake8 does NOT honour pyproject.toml: this is why ruff's
+#    ``[tool.ruff] exclude`` doesn't stop flake8 from descending
+#    into ``py_modules/urllib3/``, ``py_modules/vdf/``, etc.
+#    The companion ``.flake8`` file in this repo mirrors the
+#    vendored exclusions and the complexity ceilings below.
+#    Note that flake8 has no ``force-exclude`` — explicit-path
+#    invocations (``flake8 py_modules/urllib3/foo.py``) bypass
+#    the exclude list. Make sure CI invokes flake8 on
+#    ``py_modules/unifideck/`` (or the repo root with the walk
+#    relying on ``.flake8`` exclusions), never on a path inside a
+#    vendored dir.
+#
+# 2. ``pip-audit`` — reads ``requirements.txt`` directly. Already
+#    scoped correctly: we list only the 4 direct runtime deps
+#    (``aiohttp``, ``websockets``, ``cryptography``, ``jsonschema``),
+#    not the transitive vendor tree. No config change needed.
+#
+# 3. ``import-linter`` — reads ``.importlinter`` at the repo root.
+#    Contracts there must ignore packages they don't own. The
+#    canonical scope filter for that file is:
+#
+#       [importlinter]
+#       root_packages =
+#           unifideck
+#       include_external_packages = False
+#
+#    ``include_external_packages = False`` is the equivalent of
+#    ``force-exclude`` for this tool: it stops the linter from
+#    descending into ``site-packages``/``defaults/python``/
+#    ``python_modules`` when resolving imports.
+#
+# 4. ``vulture`` (dead-code finder, if used in CI) — scope via
+#    ``--exclude defaults/python,frontend,python_modules`` on the
+#    command line, or a ``vulture.toml`` next to ``pyproject.toml``.
+#
+# 5. GitHub Actions workflows — make sure every linter invocation
+#    runs ``py_modules/unifideck`` (or the package root) as its
+#    working directory rather than the repo root, OR passes
+#    ``py_modules/unifideck`` as the explicit path argument. With
+#    ``force-exclude = true`` set above, even a bad CI invocation
+#    can't accidentally lint vendored code through ruff — but
+#    flake8 (no force-exclude) and mypy honour their own
+#    ``exclude`` only during directory walking, so the same care
+#    applies.
+
+
+# ─── vulture ────────────────────────────────────────────────────
+# Dead-code finder. Run via ``vulture py_modules/unifideck/``.
+#
+# ``min_confidence = 80`` filters out the noisy 60%-confidence
+# class-method/attribute/property reports. The remaining
+# 80%-100% reports flag functions/variables/imports that are
+# genuinely unreferenced statically.
+#
+# WHY 60% IS NOISY HERE: this codebase relies on three patterns
+# vulture cannot resolve statically:
+#
+# 1. RPC methods on ``*RPCMixin`` classes are invoked from JS by
+#    the Decky bridge (no Python caller). Every public coroutine
+#    on a mixin looks "unused" to vulture.
+#
+# 2. Event-handler methods named ``_on_<event>`` are subscribed
+#    dynamically via ``bus.subscribe(handler.method)`` rather
+#    than called by name. They look unused even though every
+#    one fires on its corresponding event.
+#
+# 3. Dataclass attributes (``Result.metadata``, ``Game.appid``,
+#    ``SyncStats.bytes_transferred`` etc.) are read from
+#    serialised JSON on the JS side or from SQL row factories,
+#    again invisible to vulture's static walk.
+#
+# Together these account for 200+ of the 220 60%-confidence
+# reports. Raising the threshold catches the real dead code
+# (the single 100%-confidence ``resync_artwork`` parameter
+# triaged in lot-vulture) without drowning in noise.
+[tool.vulture]
+min_confidence = 80
+paths = ["py_modules/unifideck"]
+exclude = [
+    "defaults/python/",
+    "python_modules/",
+    "frontend/",
+    "node_modules/",
+    "**/__pycache__/",
+]
+# Pattern-level ignores for symbols vulture sees as orphan but
+# that the framework / RPC bridge / event bus invoke dynamically.
+# Patterns use glob-style matching (``*`` matches any substring).
+ignore_names = [
+    "_on_*",          # event handlers subscribed via bus
+    "_*RPCMixin*",    # RPC mixin classes invoked from JS
+]

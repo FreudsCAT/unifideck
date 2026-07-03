@@ -1,0 +1,166 @@
+name: Quality
+
+# Hard quality gates for PRs and pushes to long-lived branches.
+# Blocks merge on any of:
+#   - ruff lint errors (Python)
+#   - mypy type errors (Python)
+#   - tsc errors (TypeScript frontend)
+#
+# Coverage and test failures live in tests.yml. Plugin packaging
+# lives in build-plugin.yml. This workflow stays focused on static
+# analysis so it finishes under 2 minutes even on cold cache.
+
+on:
+  pull_request:
+    paths:
+      - "py_modules/**"
+      - "main.py"
+      - "src/**"
+      - "pyproject.toml"
+      - "requirements*.txt"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - "tsconfig.json"
+      - ".github/workflows/quality.yml"
+  push:
+    branches: [new_architecture, staging, main]
+
+# Cancel in-flight runs for the same PR when a new push lands.
+concurrency:
+  group: quality-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  python-quality:
+    name: Python (ruff + mypy)
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12"]
+      # Report every matrix failure so we see 3.11-vs-3.12 deltas.
+      fail-fast: false
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+      # ── Gate 1: ruff (HARD) ────────────────────────────────
+      # Rule selection and per-file ignores live in pyproject.toml
+      # under [tool.ruff.lint]. `--output-format=github` produces
+      # annotations on the PR diff for each violation.
+      # Hard-gates after Sprint B (April 2026) brought the count
+      # from 695 to zero via a mix of auto-fixes, targeted noqa
+      # markers with justifications, and migration to modern APIs
+      # (logger.exception, merged async-with, etc.). The PTH
+      # rule family stays in [tool.ruff.lint.ignore] pending its
+      # own dedicated pass — Sprint C.
+      - name: ruff check (hard gate)
+        run: ruff check py_modules/ main.py --output-format=github
+
+      # ruff format stays advisory: applying it produces a ~220
+      # file mechanical reformat that belongs in its own commit so
+      # the review diff stays readable. Graduate to hard after
+      # that dedicated pass lands.
+      - name: ruff format --check (advisory)
+        continue-on-error: true
+        run: ruff format --check py_modules/ main.py
+
+      # ── Gate 2: mypy (HARD) ────────────────────────────────
+      # Config lives entirely in pyproject.toml's [tool.mypy].
+      # The explicit_package_bases + mypy_path settings mean mypy
+      # resolves py_modules/ as the source root without CLI flags.
+      # Hard-gates on zero errors — the typing campaign delivered
+      # 484 → 0 on April 2026 and this job is what keeps us there.
+      - name: mypy (hard gate)
+        run: mypy py_modules/unifideck/
+
+      # ── Gate 3: import-linter (architectural invariants) ──
+      # Enforces two hard invariants codified in .importlinter:
+      #   1. rpc/ must stay a leaf package — only main.py (repo
+      #      root, outside the unifideck package) imports it.
+      #   2. core.types must stay a pure data island — its
+      #      dataclasses can be imported anywhere without cycles.
+      # The full 5-layer stack is documented in the technical
+      # doc §7.7 but not codified here — see .importlinter for
+      # the rationale behind the narrow-invariants approach.
+      - name: import-linter (hard gate)
+        run: PYTHONPATH=py_modules lint-imports --config .importlinter
+
+      # ── Gate 4: vulture (HARD) ─────────────────────────────
+      # Dead-code finder. Config lives in pyproject.toml under
+      # [tool.vulture]: min_confidence = 80 (high signal),
+      # ignore_decorators covering @subscribe / @dataclass /
+      # context-manager factories, and ignore_names covering
+      # plugin lifecycle hooks (Decky's _main, _unload, etc.),
+      # bus subscriber handlers (_on_*), and enum members.
+      # Project-specific false positives that don't match a
+      # general pattern live in ``vulture_whitelist.py`` at the
+      # repo root.
+      #
+      # Hard-gates on zero results at 80% confidence; the 60%
+      # confidence pass is for periodic manual review only (run
+      # locally — too noisy for the gate).
+      #
+      # Catches genuine cases like the core/bin vs core/binaries
+      # duplicate that lot 12b removed, plus future drift where
+      # a refactor leaves callers of a removed function dangling.
+      - name: vulture (hard gate)
+        run: vulture py_modules/unifideck vulture_whitelist.py
+
+  frontend-quality:
+    name: Frontend (tsc)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # ── Gate 5: ESLint (hard) ───────────────────────────
+      # `pnpm run lint` runs eslint on src/ with the rules from
+      # .eslintrc.json. Catches React hook misuse, unused vars,
+      # any-typed members, and project-specific rules the
+      # Decky frontend relies on. Must be clean.
+      - name: eslint (hard gate)
+        run: pnpm run lint
+
+      # ── Gate 6: Prettier --check (hard) ─────────────────
+      # `pnpm run check:prettier` runs prettier in check-only
+      # mode against .prettierrc. Hard-gates on any formatting
+      # drift. Dev workflow: `pnpm run fix:prettier` locally
+      # before pushing.
+      - name: prettier --check (hard gate)
+        run: pnpm run check:prettier
+
+      # ── Gate 7: TypeScript strict check ────────────────────
+      # `tsc --noEmit` runs the compiler in strict mode from
+      # tsconfig.json. Catches the same class of bugs as mypy
+      # does for Python: signature drift, unreachable paths,
+      # wrong union narrowing. Must be clean.
+      - name: tsc --noEmit (hard gate)
+        run: pnpm run typecheck

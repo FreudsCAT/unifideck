@@ -1,151 +1,144 @@
 # Launch Options Guide
 
-Unifideck lets you customize how your games launch by adding extra options to the Steam shortcut. This covers things like performance overlays, frame generation, trainers, debug tools, and game-specific tweaks — all without needing to modify any config files by hand.
+This guide explains how to pass extra options (performance overlays, Proton/Wine tweaks,
+debug flags) to a Unifideck game, **what currently works**, and **what is planned but not
+yet wired up**.
 
-## Where to Set It
+> [!IMPORTANT]
+> Unifideck used to parse rich launch options (wrapper programs, `~/lsfg`, `PROTON=`)
+> itself. After the 0.7 architecture rewrite that parser is **present but not yet connected
+> to the launcher**, so today only **environment-variable** tweaks take effect, and they do
+> so through Steam's standard `%command%` mechanism — not through Unifideck. See
+> [Planned / not yet wired](#planned--not-yet-wired) for the rest.
 
-1. Open your **Steam Library**
-2. Right-click the game → **Properties**
-3. Under **Shortcut** → **Launch Options**
+---
 
-You'll normally see just the game's identifier here, e.g.:
+## How a Unifideck game launches
+
+Every Unifideck game is a **non-Steam shortcut** whose target (`Exe`) is the Unifideck
+launcher and whose **Launch Options** hold the game's identifier, e.g.:
 
 ```
 epic:Salt
 ```
 
-or, if Proton (Force Compatibility) is enabled:
-
-```
-/home/deck/homebrew/plugins/Unifideck/bin/unifideck-launcher "epic:Salt" #%command%
-```
-
-Don't touch the `store:game_id` part or the launcher path — Unifideck needs those to identify and launch the game. Everything you add goes **after** the game ID.
+When you press Play, Steam runs `unifideck-launcher epic:Salt`. The launcher reads **only**
+the `store:game_id` token (plus internal `UNIFIDECK_*` flags); it then sets up the Wine
+prefix and hands off to Proton/umu, **inheriting the current environment**. That last part
+is the key: anything in the launcher's environment is passed through to the game.
 
 ---
 
-## What You Can Add
+## What works today — environment-variable tweaks
 
-### 1 — Environment Variables
+Because the game inherits the launcher's environment, you can set environment variables for
+a game using Steam's standard **`%command%`** convention. Edit the shortcut's launch
+options:
 
-These are `NAME=value` settings that get passed to the game at launch. You can add any number of them after the game ID.
+1. Steam **Library** → right-click the game → **Properties**
+2. **Shortcut** → **Launch Options**
+3. Put your `VAR=value` assignments **before** `%command%`, and keep the `store:game_id`
+   token **after** it:
 
 ```
-gog:1103900211 MANGOHUD=1 DXVK_HUD=fps
+MANGOHUD=1 DXVK_HUD=fps %command% epic:Salt
 ```
 
-Unifideck automatically recognises any `ALL_CAPS_NAME=value` style entry (letters, numbers, and underscores in the name) and exports it for the game. You don't need to stick to a predefined list — common examples:
+Steam exports the leading `VAR=value` assignments into the environment and replaces
+`%command%` with the launcher, so it runs `MANGOHUD=1 … unifideck-launcher epic:Salt` — the
+launcher inherits `MANGOHUD`/`DXVK_HUD` and the game picks them up.
 
-| What you type                                              | What it does                                                                                                                                                                                                                                                                                                                                                                                                                          |
-| ---------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `MANGOHUD=1`                                               | Turns on the MangoHud overlay                                                                                                                                                                                                                                                                                                                                                                                                         |
-| `mangohud=1`                                               | Same — lowercase is fine too                                                                                                                                                                                                                                                                                                                                                                                                          |
-| `DXVK_HUD=fps,frametime`                                   | Shows DXVK frame stats                                                                                                                                                                                                                                                                                                                                                                                                                |
-| `PROTON_ENABLE_NVAPI=1`                                    | Enables Nvidia API emulation                                                                                                                                                                                                                                                                                                                                                                                                          |
-| `PROTON_REMOTE_DEBUG_CMD="/path/to/trainer.exe"`           | Runs a trainer alongside the game                                                                                                                                                                                                                                                                                                                                                                                                     |
-| `PRESSURE_VESSEL_FILESYSTEMS_RW=/home/deck/Games/Trainers` | Grants the game access to a folder                                                                                                                                                                                                                                                                                                                                                                                                    |
-| `STEAM_COMPAT_MOUNTS=/mnt/games`                           | Mounts extra storage inside the game container                                                                                                                                                                                                                                                                                                                                                                                        |
-| `~/lsfg` or `LSFG=1`                                       | Enables [LSFG frame generation](https://www.lsfg.app/) — see [Frame Generation (LSFG)](#frame-generation-lsfg) below |
-| `PROTON=GE-Proton10-10`                                    | Forces a specific Proton version                                                                                                                                                                                                                                                                                                                                                                                                      |
+> [!TIP]
+> After editing, launch once to confirm it took effect (e.g. `MANGOHUD=1` should show the
+> overlay). Behavior depends on Steam's `%command%` handling for non-Steam shortcuts.
+
+### Useful variables
+
+| Variable | Effect |
+| --- | --- |
+| `MANGOHUD=1` | Enable the MangoHud performance overlay |
+| `MANGOHUD_CONFIG=fps_limit=60,...` | Configure MangoHud |
+| `DXVK_HUD=fps,frametime` | DXVK's built-in stats overlay |
+| `DXVK_FRAME_RATE=60` | Cap the frame rate via DXVK |
+| `PROTON_USE_WINED3D=1` | Use OpenGL (WineD3D) instead of DXVK/VKD3D |
+| `PROTON_NO_ESYNC=1` / `PROTON_NO_FSYNC=1` | Disable esync/fsync (workaround for some games) |
+| `PROTON_ENABLE_NVAPI=1` | Enable NVAPI emulation |
+| `WINEDLLOVERRIDES="dxgi=n,b"` | Override specific Wine DLLs |
 
 > [!NOTE]
-> Values with spaces must be quoted, e.g. `PROTON_REMOTE_DEBUG_CMD="/home/deck/Games/Trainers/My Trainer.exe"`
+> Quote values containing spaces: `WINEDLLOVERRIDES="..."`.
 
-### 2 — Wrapper Programs
+### What you cannot override this way
 
-A wrapper runs _before_ the game, wrapping around it. Put the wrapper path before the game ID:
-
-```
-gog:1103900211 /usr/bin/gamemoderun
-```
-
-Or with tilde shorthand:
+The launcher sets these itself and will **overwrite** any value you provide, so don't bother
+setting them in launch options:
 
 ```
-epic:Salt ~/fgmod/fgmod
+PROTONPATH  WINEPREFIX  STEAM_COMPAT_DATA_PATH  STEAM_COMPAT_INSTALL_PATH
+GAMEID  STORE  PROTON_VERB  DXVK_NVAPI_ALLOW_OTHER_DRIVERS
 ```
 
-The game still launches normally — the wrapper just gets to intercept or modify the process.
+In particular, you **cannot** pick a Proton version with `PROTONPATH=`/`PROTON=` — see
+[Choosing a Proton version](#choosing-a-proton-version).
 
-## Combining Options
+### Persistence across library sync
 
-You can freely mix all three types in a single launch options field. Order doesn't matter for environment variables:
-
-```
-gog:1103900211 MANGOHUD=1 PRESSURE_VESSEL_FILESYSTEMS_RW=/home/deck/Games/Trainers PROTON_REMOTE_DEBUG_CMD="/home/deck/Games/Trainers/My Trainer.exe"
-```
-
-Or with a wrapper and game argument:
-
-```
-epic:Salt ~/fgmod/fgmod MANGOHUD=1
-```
-
-Unifideck sorts everything out:
-
-- `store:game_id` → identifies the game
-- `ALL_CAPS=value` entries → exported as environment variables
-- Paths or commands before the game ID → run as wrappers around the game
-
-> [!CAUTION]
-> Do **not** add `%command%` to your launch options. Unlike native Steam games, Unifideck doesn't use Steam's process substitution — the launcher handles everything internally. Adding `%command%` will cause it to be passed as a literal argument and the game will not start correctly.
+- A normal **library sync keeps** your edited launch options (existing shortcuts are matched
+  and left alone).
+- A **Force Sync resets** a managed shortcut's launch options back to the plain
+  `store:game_id`, **removing your customizations**. Re-add them after a Force Sync.
+- Whatever you set, the `store:game_id` token must remain present — Unifideck finds the game
+  by searching the launch options for it. Remove it and Unifideck will treat the shortcut as
+  unmanaged and create a duplicate.
 
 ---
 
-## How Proton / Force Compatibility Interacts
+## Choosing a Proton version
 
-When you enable **Force Compatibility** (Proton) through Steam's Properties:
-
-- Unifideck saves your Proton version choice to its own config
-- It temporarily rewrites the launch options to a bypass format (so Steam doesn't try to run the launcher itself through Wine)
-- When you open the game page, it restores the simple format
-- **Your custom parameters are always preserved** through this process
-
-You can change Proton version at any time without losing anything you've added to Launch Options.
+Proton is **not** selected via launch options. Use Steam's native compatibility setting —
+see **[Proton Compatibility](proton-compatibility.md)** for the full guide. In short: open
+the game's **Properties → Compatibility**, tick *"Force the use of a specific Steam Play
+compatibility tool"*, and choose a tool. Unifideck detects your choice and applies it at
+launch. The default (no choice) is the latest GE-Proton.
 
 ---
 
-## Frame Generation (LSFG)
+## Planned / not yet wired
 
-Unifideck supports [LSFG frame generation](https://www.lsfg.app/) through the lsfg-vk Vulkan layer. It works the same way as on native Steam games — add `~/lsfg` to your launch options:
+The launcher contains a parser (`parse_launch_options` in
+`py_modules/unifideck/launcher/types/options.py`) for the options below, but it is **not yet
+invoked by the launch path**, so these have **no effect today**. They are documented here so
+you know the intended syntax (and because earlier 0.x releases supported them):
 
-```
-epic:Salt ~/lsfg
-```
+- **Wrapper programs** — run something around the game, e.g.
+  `gamemoderun %command%` or `mangohud %command%` (as a wrapper word, not the `MANGOHUD=1`
+  env var which *does* work today).
+- **LSFG frame generation** ([lsfg-vk](https://github.com/xXJSONDeruloXx/decky-lsfg-vk)) —
+  the intended form is the plugin's wrapper script `~/lsfg %command%`, or the env flags
+  `LSFG=1` / `ENABLE_LSFG=1`. Requires Lossless Scaling (Steam) + the Decky LSFG-VK plugin +
+  a configured profile.
+- **`PROTON=GE-ProtonX-Y`** — pick a Proton by name from launch options. (Use Steam's
+  Compatibility dropdown instead — see above.)
+- **Game arguments** after `%command%` and explicit wrapper/`%command%` ordering.
 
-You can also use `LSFG=1`:
-
-```
-epic:Salt LSFG=1
-```
-
-Both forms do the same thing: Unifideck reads the `~/lsfg` script (generated by the LSFG-VK plugin) and exports its environment variables so the Vulkan layer picks up the right profile. You can combine it with other options:
-
-```
-gog:1103900211 ~/lsfg MANGOHUD=1
-```
-
-`~/lsfg %command%` (the Steam-standard syntax) also works — `%command%` is simply ignored.
-
-### Requirements
-
-1. **[Lossless Scaling](https://store.steampowered.com/app/993090/Lossless_Scaling/)** purchased on Steam — provides the frame generation DLL
-2. **[Decky LSFG-VK](https://github.com/xXJSONDeruloXx/decky-lsfg-vk) plugin** installed via Decky Loader — provides the Vulkan layer and configuration UI
-3. **A profile configured** in the LSFG-VK plugin settings
-
-The Lossless Scaling app does not need to be running — lsfg-vk loads the DLL directly from disk.
-
-> [!NOTE]
-> LSFG only activates when you explicitly add `~/lsfg` or `LSFG=1` to a game's launch options. Having the LSFG-VK plugin installed does not affect games without these options.
+> When this parser is reconnected to the launcher, this section will move up into
+> "What works today."
 
 ---
 
 ## Troubleshooting
 
-**Parameters seem to disappear** — Make sure you're on the latest plugin version. Custom parameters are preserved across syncs, installs, and Proton toggles.
+**An environment variable isn't applied** — make sure you used the
+`VAR=value %command% store:game_id` form (the `%command%` is required for Steam to export
+the variable), the name is `ALL_CAPS` with no spaces around `=`, and it isn't one of the
+launcher-managed variables listed above. Launch once and check.
 
-**A variable isn't being picked up** — Check that the name is in `ALL_CAPS_WITH_UNDERSCORES` format with no spaces around the `=`. Values with spaces must be quoted: `VAR="value with spaces"`.
+**My options vanished** — a **Force Sync** resets launch options to `store:game_id`. Re-add
+your customizations afterward. (A normal sync preserves them.)
 
-**Wrapper isn't running** — Make sure the path is correct and the file is executable. Tilde paths (`~/my/script.sh`) work fine.
+**The game won't start** — don't remove the `store:game_id` token, and don't change the
+shortcut's target (the launcher path). If you suspect a Proton/prefix problem, see
+[Proton Compatibility → Troubleshooting](proton-compatibility.md#troubleshooting--quick-fixes).
 
-**Game doesn't start at all** — Don't remove the `store:game_id` from the launch options, and don't modify the launcher path or `#%command%` when Proton is active. Unifideck manages those automatically.
+**Wrappers / `~/lsfg` / `PROTON=` do nothing** — these are
+[not yet wired up](#planned--not-yet-wired) in the current build.

@@ -1,85 +1,81 @@
+"""Steam account-switch detector + data migrator.
+
+Ported from ``staging:py_modules/unifideck/accounts/account_manager.py``.
+On the new (mixin) architecture the runtime ``AccountService``
+([services/account_service.py]) handles *live* switch detection (polls
+``loginusers.vdf``, emits ``ACCOUNT_SWITCHED``); this class handles the
+*startup* modal flow the frontend drives via ``check_account_switch`` /
+``migrate_account_data``: it compares the active Steam user against the
+``last_known_user_id`` persisted in ``settings.json`` and offers to
+migrate shortcuts + artwork from the previous account.
+
+Two adaptations from the staging port:
+
+* Steam helpers — staging's ``get_logged_in_steam_user`` / ``_find_steam_path``
+  became :func:`unifideck.steam.steam_user.get_active_steam_user`
+  (takes a ``Path``) and :func:`unifideck.steam.library.find_steam_path`.
+* Shortcut reconciliation — staging called a synchronous
+  ``shortcuts_manager.reconcile_shortcuts_from_games_map()``. The new
+  ``ShortcutService.reconcile(games)`` is async and game-list driven, so
+  the RPC mixin drives it directly; this class only owns artwork
+  migration (pure filesystem) plus the detection/gating helpers.
 """
-Account Manager for Unifideck
+from __future__ import annotations
 
-Detects Steam account switches and provides migration/cleanup options.
-When a different account logs in, offers to:
-  a) Migrate shortcuts + artwork from the previous account
-  b) Clear store auth tokens for a fresh start
-  c) Skip (do nothing)
-
-Guest users are handled the same as regular accounts.
-"""
-
-import os
 import json
-import shutil
 import logging
-from typing import Dict, Any, Optional
+import shutil
+from pathlib import Path
+from typing import Any
 
-try:
-    import vdf
-    VDF_AVAILABLE = True
-except ImportError:
-    VDF_AVAILABLE = False
-
-from py_modules.unifideck.steam.steam_utils import get_logged_in_steam_user, _find_steam_path
+from unifideck.steam.library import find_steam_path
+from unifideck.steam.steam_user import get_active_steam_user
 
 logger = logging.getLogger(__name__)
 
-SETTINGS_PATH = os.path.expanduser("~/.local/share/unifideck/settings.json")
+SETTINGS_PATH = Path.home() / ".local/share/unifideck/settings.json"
 
-# Auth token file locations (shared across all Steam accounts)
-AUTH_TOKEN_PATHS = {
-    'epic': os.path.expanduser("~/.config/legendary/user.json"),
-    'gog': os.path.expanduser("~/.config/unifideck/gog_token.json"),
-    'gogdl': os.path.expanduser("~/.config/unifideck/gogdl/auth.json"),
-    'amazon': os.path.expanduser("~/.config/nile/user.json"),
-    'amazon_library': os.path.expanduser("~/.config/nile/library.json"),
-    'amazon_installed': os.path.expanduser("~/.config/nile/installed.json"),
-    'ubisoft': os.path.expanduser("~/.local/share/unifideck/ubisoft_token.json"),
-    'ubisoft_session': os.path.expanduser("~/.local/share/unifideck/ubisoft_upc_session.txt"),
-    'microsoft': os.path.expanduser("~/.config/unifideck/microsoft_token.json"),
+# Auth token file locations (shared across all Steam accounts). Existence
+# of any one means there's a signed-in store worth migrating/clearing.
+AUTH_TOKEN_PATHS: dict[str, Path] = {
+    "epic": Path.home() / ".config/legendary/user.json",
+    "gog": Path.home() / ".config/unifideck/gog_token.json",
+    "gogdl": Path.home() / ".config/unifideck/gogdl_auth.json",
+    "amazon": Path.home() / ".config/nile/user.json",
+    "amazon_library": Path.home() / ".config/nile/library.json",
+    "amazon_installed": Path.home() / ".config/nile/installed.json",
+    "ubisoft": Path.home() / ".local/share/unifideck/ubisoft_token.json",
+    "ubisoft_session": Path.home() / ".local/share/unifideck/ubisoft_upc_session.txt",
+    "microsoft": Path.home() / ".config/unifideck/microsoft_token.json",
 }
 
-AUTH_STATE_CLEANUP_PATHS = {
-    'epic_config': os.path.expanduser("~/.config/legendary"),
-    'epic_cache': os.path.expanduser("~/.cache/legendary"),
-    'microsoft_profile': os.path.expanduser("~/.local/share/unifideck/chromium-auth"),
-    'microsoft_profile_log': os.path.expanduser("~/.local/share/unifideck/chromium-auth.log"),
-    'microsoft_auth_url': os.path.expanduser("~/.local/share/unifideck/ms_auth_url.txt"),
-}
-
-# Shared Unifideck data files
-REGISTRY_PATH = os.path.expanduser("~/.local/share/unifideck/shortcuts_registry.json")
-GAMES_MAP_PATH = os.path.expanduser("~/.local/share/unifideck/games.map")
-GAMES_DISCOVERY_REGISTRY_PATH = os.path.expanduser("~/.local/share/unifideck/games_registry.json")
-
-
-def _delete_path(path: str) -> None:
-    """Delete a file or directory path if it exists."""
-    if os.path.isdir(path) and not os.path.islink(path):
-        shutil.rmtree(path)
-        return
-    os.remove(path)
+# Shared Unifideck data file (same path on the new branch —
+# see services/shortcut/registry.py DEFAULT_REGISTRY_PATH).
+REGISTRY_PATH = Path.home() / ".local/share/unifideck/shortcuts_registry.json"
 
 
 class AccountManager:
-    """Manages account switch detection, migration, and auth cleanup."""
+    """Manages account-switch detection + migration for the modal flow."""
 
-    def __init__(self):
-        self.steam_path = _find_steam_path()
+    def __init__(self) -> None:
+        """Resolve the Steam path; init empty switch state."""
+        self.steam_path: str | None = find_steam_path()
         self.account_switch_detected = False
-        self.previous_user_id: Optional[str] = None
-        self.current_user_id: Optional[str] = None
+        self.previous_user_id: str | None = None
+        self.current_user_id: str | None = None
 
     def detect_account_switch(self) -> bool:
-        """Compare current user to last_known_user_id in settings.json.
+        """Compare the active user to ``last_known_user_id`` in settings.
 
-        Returns True if a switch was detected AND there's data to act on
-        (auth tokens exist OR shortcuts registry has entries).
-        Guest users are treated the same as regular accounts.
+        Returns ``True`` only when a switch is detected **and** there's
+        data to act on (auth tokens exist or the shortcuts registry has
+        entries). Guest users are treated like regular accounts.
         """
-        self.current_user_id = get_logged_in_steam_user(self.steam_path)
+        self.current_user_id = (
+            get_active_steam_user(Path(self.steam_path))
+            if self.steam_path
+            else None
+        )
         if not self.current_user_id:
             logger.warning("[AccountSwitch] Could not detect current Steam user")
             return False
@@ -87,228 +83,156 @@ class AccountManager:
         last_known = self._load_last_known_user()
 
         if last_known is None:
-            # First install or settings cleared — no switch
-            logger.info(f"[AccountSwitch] First run, recording user {self.current_user_id}")
+            logger.info(
+                "[AccountSwitch] First run, recording user %s",
+                self.current_user_id,
+            )
             self.account_switch_detected = False
             return False
 
         if last_known == self.current_user_id:
-            # Same user — no switch
-            logger.debug(f"[AccountSwitch] Same user {self.current_user_id}, no switch")
+            logger.debug(
+                "[AccountSwitch] Same user %s, no switch", self.current_user_id
+            )
             self.account_switch_detected = False
             return False
 
-        # Different user detected
         self.previous_user_id = last_known
         logger.info(
-            f"[AccountSwitch] Account switch detected: {last_known} -> {self.current_user_id}"
+            "[AccountSwitch] Account switch detected: %s -> %s",
+            last_known,
+            self.current_user_id,
         )
 
-        # Only flag if there's something to act on
         if self.has_active_auth_tokens() or self.has_registry_entries():
             self.account_switch_detected = True
             return True
 
-        # User logged out of all stores and has no registry — nothing to do
-        logger.info("[AccountSwitch] Switch detected but no auth tokens or registry entries — skipping modal")
+        logger.info(
+            "[AccountSwitch] Switch detected but nothing to migrate — "
+            "skipping modal",
+        )
         self.account_switch_detected = False
         return False
 
     def should_show_modal(self) -> bool:
-        """True if account switch was detected and there's actionable data."""
+        """True if a switch was detected and there's actionable data."""
         return self.account_switch_detected
 
     def has_active_auth_tokens(self) -> bool:
-        """Check if any store auth token files exist on disk."""
+        """True if any store auth-token file exists on disk."""
         for store, path in AUTH_TOKEN_PATHS.items():
-            if os.path.exists(path):
-                logger.debug(f"[AccountSwitch] Found auth token for {store}: {path}")
+            if path.exists():
+                logger.debug(
+                    "[AccountSwitch] Found auth token for %s: %s", store, path
+                )
                 return True
         return False
 
     def has_registry_entries(self) -> bool:
-        """Check if shortcuts_registry.json has any entries."""
+        """True if ``shortcuts_registry.json`` has any entries."""
         try:
-            if os.path.exists(REGISTRY_PATH):
-                with open(REGISTRY_PATH, 'r') as f:
+            if REGISTRY_PATH.exists():
+                with REGISTRY_PATH.open() as f:
                     registry = json.load(f)
                 return len(registry) > 0
-        except Exception as e:
-            logger.error(f"[AccountSwitch] Error reading registry: {e}")
+        except Exception:
+            logger.exception("[AccountSwitch] Error reading registry")
         return False
 
-    def save_current_user(self):
-        """Write current_user_id to settings.json as last_known_user_id."""
+    def save_current_user(self) -> None:
+        """Persist ``current_user_id`` as ``last_known_user_id``.
+
+        Called after :meth:`detect_account_switch` so the *next* launch
+        compares against this user (the modal shows once per switch).
+        """
         if not self.current_user_id:
             return
         try:
-            settings_dir = os.path.dirname(SETTINGS_PATH)
-            os.makedirs(settings_dir, exist_ok=True)
-
-            settings = {}
-            if os.path.exists(SETTINGS_PATH):
-                with open(SETTINGS_PATH, 'r') as f:
+            SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
+            settings: dict[str, Any] = {}
+            if SETTINGS_PATH.exists():
+                with SETTINGS_PATH.open() as f:
                     settings = json.load(f)
-
-            settings['last_known_user_id'] = self.current_user_id
-
-            with open(SETTINGS_PATH, 'w') as f:
+            settings["last_known_user_id"] = self.current_user_id
+            with SETTINGS_PATH.open("w") as f:
                 json.dump(settings, f, indent=2)
+            logger.info(
+                "[AccountSwitch] Saved current user %s to settings",
+                self.current_user_id,
+            )
+        except Exception:
+            logger.exception("[AccountSwitch] Error saving current user")
 
-            logger.info(f"[AccountSwitch] Saved current user {self.current_user_id} to settings")
-        except Exception as e:
-            logger.error(f"[AccountSwitch] Error saving current user: {e}")
+    def migrate_artwork(self) -> dict[str, Any]:
+        """Copy grid artwork from the previous user's folder to the current.
 
-    def reconcile_shortcuts_from_registry(self, shortcuts_manager) -> Dict[str, Any]:
-        """Create shortcuts in the new user's shortcuts.vdf from the shared registry.
-
-        Uses shortcuts_registry.json (shared) to recreate shortcuts with
-        their original appids (preserves artwork mapping). Then copies
-        artwork from the previous user's grid folder.
-
-        Args:
-            shortcuts_manager: The ShortcutsManager instance from main.py
-
-        Returns:
-            dict: {'created': int, 'errors': list}
+        Never overwrites existing artwork. Returns
+        ``{'copied': int, 'errors': list}``.
         """
-        result = {'created': 0, 'errors': []}
+        result: dict[str, Any] = {"copied": 0, "errors": []}
 
-        if not self.current_user_id or not self.steam_path:
-            result['errors'].append("No current user or steam path")
+        if not (self.previous_user_id and self.current_user_id and self.steam_path):
+            result["errors"].append("Missing user IDs or steam path")
             return result
 
-        try:
-            # Use the existing reconcile method which reads games.map + shortcuts_registry
-            reconcile = shortcuts_manager.reconcile_shortcuts_from_games_map()
-            result['created'] = reconcile.get('created', 0)
-            result['errors'] = reconcile.get('errors', [])
-
-            logger.info(f"[AccountSwitch] Reconciled {result['created']} shortcuts for user {self.current_user_id}")
-        except Exception as e:
-            logger.error(f"[AccountSwitch] Error reconciling shortcuts: {e}")
-            result['errors'].append(str(e))
-
-        return result
-
-    def migrate_artwork(self) -> Dict[str, Any]:
-        """Copy grid artwork from the previous user's folder to the current user.
-
-        Returns:
-            dict: {'copied': int, 'errors': list}
-        """
-        result = {'copied': 0, 'errors': []}
-
-        if not self.previous_user_id or not self.current_user_id or not self.steam_path:
-            result['errors'].append("Missing user IDs or steam path")
-            return result
-
-        source_grid = os.path.join(
-            self.steam_path, "userdata", self.previous_user_id, "config", "grid"
+        source_grid = (
+            Path(self.steam_path)
+            / "userdata"
+            / self.previous_user_id
+            / "config"
+            / "grid"
         )
-        target_grid = os.path.join(
-            self.steam_path, "userdata", self.current_user_id, "config", "grid"
+        target_grid = (
+            Path(self.steam_path)
+            / "userdata"
+            / self.current_user_id
+            / "config"
+            / "grid"
         )
 
-        if not os.path.isdir(source_grid):
-            logger.info(f"[AccountSwitch] No artwork folder for previous user {self.previous_user_id}")
+        if not source_grid.is_dir():
+            logger.info(
+                "[AccountSwitch] No artwork folder for previous user %s",
+                self.previous_user_id,
+            )
             return result
 
-        os.makedirs(target_grid, exist_ok=True)
-
+        target_grid.mkdir(parents=True, exist_ok=True)
         try:
-            for filename in os.listdir(source_grid):
-                source_file = os.path.join(source_grid, filename)
-                target_file = os.path.join(target_grid, filename)
-
-                if not os.path.isfile(source_file):
+            for source_file in source_grid.iterdir():
+                target_file = target_grid / source_file.name
+                if not source_file.is_file():
                     continue
-
-                # Don't overwrite existing artwork
-                if os.path.exists(target_file):
+                if target_file.exists():
                     continue
-
                 try:
                     shutil.copy2(source_file, target_file)
-                    result['copied'] += 1
+                    result["copied"] += 1
                 except Exception as e:
-                    result['errors'].append(f"Failed to copy {filename}: {e}")
-
-            logger.info(f"[AccountSwitch] Copied {result['copied']} artwork files from user {self.previous_user_id} to {self.current_user_id}")
+                    result["errors"].append(
+                        f"Failed to copy {source_file.name}: {e}"
+                    )
+            logger.info(
+                "[AccountSwitch] Copied %d artwork files from %s to %s",
+                result["copied"],
+                self.previous_user_id,
+                self.current_user_id,
+            )
         except Exception as e:
-            logger.error(f"[AccountSwitch] Error migrating artwork: {e}")
-            result['errors'].append(str(e))
+            logger.exception("[AccountSwitch] Error migrating artwork")
+            result["errors"].append(str(e))
 
         return result
 
-    def clear_all_auth_tokens(self) -> Dict[str, Any]:
-        """Delete all store auth tokens and clear shared registry/games.map.
-
-        Returns:
-            dict: {'deleted_tokens': list, 'cleared_files': list, 'errors': list}
-        """
-        result = {'deleted_tokens': [], 'cleared_files': [], 'errors': []}
-
-        # Delete auth token files
-        for store, path in AUTH_TOKEN_PATHS.items():
-            if os.path.exists(path):
-                try:
-                    _delete_path(path)
-                    result['deleted_tokens'].append(store)
-                    logger.info(f"[AccountSwitch] Deleted {store} auth token: {path}")
-                except Exception as e:
-                    result['errors'].append(f"Failed to delete {store} token: {e}")
-
-        for name, path in AUTH_STATE_CLEANUP_PATHS.items():
-            if os.path.exists(path):
-                try:
-                    _delete_path(path)
-                    result['cleared_files'].append(name)
-                    logger.info(f"[AccountSwitch] Cleared auth state: {path}")
-                except Exception as e:
-                    result['errors'].append(f"Failed to clear {name}: {e}")
-
-        # Clear shortcuts registry (shared)
-        if os.path.exists(REGISTRY_PATH):
-            try:
-                _delete_path(REGISTRY_PATH)
-                result['cleared_files'].append('shortcuts_registry.json')
-                logger.info("[AccountSwitch] Cleared shortcuts registry")
-            except Exception as e:
-                result['errors'].append(f"Failed to clear registry: {e}")
-
-        # Clear games.map (shared)
-        if os.path.exists(GAMES_MAP_PATH):
-            try:
-                _delete_path(GAMES_MAP_PATH)
-                result['cleared_files'].append('games.map')
-                logger.info("[AccountSwitch] Cleared games.map")
-            except Exception as e:
-                result['errors'].append(f"Failed to clear games.map: {e}")
-
-        if os.path.exists(GAMES_DISCOVERY_REGISTRY_PATH):
-            try:
-                _delete_path(GAMES_DISCOVERY_REGISTRY_PATH)
-                result['cleared_files'].append('games_registry.json')
-                logger.info("[AccountSwitch] Cleared games_registry.json")
-            except Exception as e:
-                result['errors'].append(f"Failed to clear games_registry.json: {e}")
-
-        logger.info(
-            f"[AccountSwitch] Auth cleanup: {len(result['deleted_tokens'])} tokens deleted, "
-            f"{len(result['cleared_files'])} files cleared"
-        )
-        return result
-
-    # --- Private helpers ---
-
-    def _load_last_known_user(self) -> Optional[str]:
-        """Read last_known_user_id from settings.json. Returns None if not set."""
+    def _load_last_known_user(self) -> str | None:
+        """Read ``last_known_user_id`` from settings; ``None`` if unset."""
         try:
-            if os.path.exists(SETTINGS_PATH):
-                with open(SETTINGS_PATH, 'r') as f:
+            if SETTINGS_PATH.exists():
+                with SETTINGS_PATH.open() as f:
                     settings = json.load(f)
-                return settings.get('last_known_user_id')
-        except Exception as e:
-            logger.error(f"[AccountSwitch] Error reading settings: {e}")
+                value = settings.get("last_known_user_id")
+                return value if isinstance(value, str) else None
+        except Exception:
+            logger.exception("[AccountSwitch] Error reading settings")
         return None

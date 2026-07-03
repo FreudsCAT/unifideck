@@ -1,0 +1,52 @@
+; .importlinter — architectural invariants contract
+;
+; The full 5-layer stack doesn't cleanly map to the current tree
+; because several modules historically placed under core/ are
+; actually orchestrators (core.sync_service, core.metrics_collector)
+; and several store connectors legitimately import services
+; for auth shortcut creation. Rather than codify a layering
+; that doesn't match reality, we enforce two narrow invariants
+; that DO hold today and protect the most important boundaries.
+;
+; Graduating to a full layer stack will happen after the
+; core/services realignment tracked in the technical doc §7.7.
+
+[importlinter]
+root_packages =
+    unifideck
+
+; ── Invariant 1 — RPC is the top layer. Nothing inside
+; unifideck.* may import unifideck.rpc except rpc itself.
+; main.py lives at repo root and legitimately imports rpc
+; as the plugin's entry point.
+[importlinter:contract:rpc-is-leaf]
+name = rpc/ must stay a leaf package (only main.py imports it)
+type = forbidden
+source_modules =
+    unifideck.core
+    unifideck.event_bus
+    unifideck.services
+    unifideck.stores
+    unifideck.launcher
+    unifideck.cdp
+    unifideck.metadata
+    unifideck.compatibility
+    unifideck.auth
+    unifideck.security
+forbidden_modules =
+    unifideck.rpc
+
+; ── Invariant 2 — core.types stays a pure data island.
+; No cycle through core.types means its dataclasses are safe
+; to import from anywhere without circular-import surprises.
+[importlinter:contract:types-is-leaf]
+name = core.types must stay a pure data leaf
+type = forbidden
+source_modules =
+    unifideck.core.types
+forbidden_modules =
+    unifideck.event_bus
+    unifideck.services
+    unifideck.stores
+    unifideck.launcher
+    unifideck.rpc

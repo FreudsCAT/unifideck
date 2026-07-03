@@ -1,0 +1,57 @@
+# .pre-commit-config.yaml — Unifideck
+#
+# Run `pre-commit install` once, then every `git commit` runs
+# these hooks on changed files. Aligned with pyproject.toml.
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.6.0
+    hooks:
+      - id: check-yaml
+      - id: check-toml
+      - id: check-json
+      - id: check-merge-conflict
+      - id: check-added-large-files
+        args: [--maxkb=500]
+      - id: end-of-file-fixer
+        exclude: ^fiche_sources/
+      - id: trailing-whitespace
+        exclude: ^fiche_sources/
+      - id: mixed-line-ending
+      - id: detect-private-key
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.5.0
+    hooks:
+      - id: ruff
+        args: [--fix, --config, pyproject.toml]
+        exclude: ^fiche_sources/
+      - id: ruff-format
+        exclude: ^fiche_sources/
+
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v1.10.0
+    hooks:
+      - id: mypy
+        files: ^py_modules/unifideck/(core|event_bus)/
+        additional_dependencies:
+          - types-PyYAML
+          - types-requests
+        args: [--config-file, pyproject.toml]
+
+  - repo: https://github.com/PyCQA/bandit
+    rev: 1.7.9
+    hooks:
+      - id: bandit
+        args: [-c, pyproject.toml]
+        additional_dependencies: ["bandit[toml]"]
+        files: ^(py_modules/|main\.py$)
+
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.18.0
+    hooks:
+      - id: gitleaks
+
+ci:
+  autofix_commit_msg: "style: pre-commit autofixes"
+  autoupdate_schedule: monthly

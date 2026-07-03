@@ -1,0 +1,183 @@
+/**
+ * DownloadProgressRow — rich progress display shared by the
+ * App Details custom play section ({@link DownloadingButtons})
+ * and the QuickAccess Downloads tab ({@link DownloadItemRow}).
+ *
+ *   STATUS LABEL  (UPPERCASE · tracked letters)
+ *   ──────────────────  (4 px bar, slide-anim while indeterminate)
+ *   404 MB / 564 MB         19.6 MB/s · ETA 00:00:08
+ *
+ * Indeterminate phases (``extracting`` / ``verifying``) hide
+ * the byte counter and show ``phase_message`` (or the i18n
+ * fallback) so the user still has a textual signal.
+ */
+import { FC, useEffect } from "react";
+import { useTranslation } from "react-i18next";
+import type { DownloadItem, DownloadPhase } from "../../types/downloads";
+import { formatBytes } from "../play/PlayMeta";
+import { injectPlayFocusStyles } from "../play/play.css";
+
+interface Props {
+  download: DownloadItem;
+  /** Inline-start margin applied to the column — caller-controlled
+   *  because the play-section variant sits next to a Cancel button
+   *  and needs the gap, while the QAM panel doesn't. */
+  marginInlineStart?: number;
+}
+
+function formatEta(secs: number): string {
+  if (!secs || secs <= 0) return "--:--";
+  const h = Math.floor(secs / 3600);
+  const m = Math.floor((secs % 3600) / 60);
+  const s = secs % 60;
+  const pad = (n: number) => n.toString().padStart(2, "0");
+  return h > 0 ? `${pad(h)}:${pad(m)}:${pad(s)}` : `${pad(m)}:${pad(s)}`;
+}
+
+function isIndeterminate(phase: DownloadPhase | undefined): boolean {
+  return (
+    phase === "extracting" ||
+    phase === "verifying" ||
+    phase === "manual" ||
+    phase === "preparing"
+  );
+}
+
+function statusLabelKey(
+  status: DownloadItem["status"],
+  phase: DownloadPhase | undefined,
+  prev: boolean,
+): string {
+  // Ubisoft (UPC-driven) installs: no real download — show a dedicated
+  // label and let the indeterminate path render the phase_message.
+  if (phase === "manual") return "downloadsTab.installingViaUpcLabel";
+  if (phase === "preparing") return "downloadsTab.preparingLabel";
+  if (phase === "extracting") return "downloadsTab.extractingLabel";
+  if (phase === "verifying") return "downloadsTab.verifyingLabel";
+  if (status === "queued") {
+    return prev
+      ? "downloadsTab.updateQueuedLabel"
+      : "downloadsTab.downloadQueuedLabel";
+  }
+  return prev
+    ? "downloadsTab.downloadingUpdateLabel"
+    : "downloadsTab.downloadingLabel";
+}
+
+export const DownloadProgressRow: FC<Props> = ({
+  download,
+  marginInlineStart = 0,
+}) => {
+  const { t } = useTranslation();
+  // The indeterminate slide animation lives in play.css.ts. QAM and the
+  // App-Details patch render in different CEF documents, so each one
+  // needs its own <style> injection — the helper is idempotent.
+  useEffect(() => {
+    injectPlayFocusStyles();
+  }, []);
+  const indeterminate = isIndeterminate(download.download_phase);
+  const pct = Math.max(0, Math.min(100, download.progress_percent));
+  const prev = Boolean(download.is_update);
+  const label = t(
+    statusLabelKey(download.status, download.download_phase, prev),
+  );
+  // Indeterminate detail line: rendered purely from phase (+ percent) so it
+  // is always localized. The backend's ``phase_message`` is hardcoded English
+  // and is deliberately NOT displayed — see DownloadsTab i18n.
+  const phase = download.download_phase;
+  const detail =
+    phase === "preparing"
+      ? t("downloadsTab.preparingMessage")
+      : phase === "extracting"
+      ? t("downloadsTab.extractingMessage")
+      : phase === "verifying"
+      ? t("downloadsTab.verifyingMessage", { pct: pct.toFixed(1) })
+      : phase === "manual"
+      ? t("downloadsTab.installingViaUpcMessage")
+      : t("downloadsTab.finalizingInstallation");
+
+  return (
+    <div
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        gap: 6,
+        marginInlineStart,
+        flex: "1 1 auto",
+        minWidth: 0,
+      }}
+    >
+      <div
+        style={{
+          fontSize: 11,
+          fontWeight: 600,
+          textTransform: "uppercase",
+          color: "#8f98a0",
+          letterSpacing: "0.08em",
+        }}
+      >
+        {label}
+      </div>
+
+      <div
+        style={{
+          height: 4,
+          background: "rgba(255, 255, 255, 0.1)",
+          borderRadius: 2,
+          overflow: "hidden",
+          position: "relative",
+        }}
+      >
+        {indeterminate ? (
+          <div className="unifideck-progress-indeterminate" />
+        ) : (
+          <div
+            style={{
+              height: "100%",
+              width: `${pct}%`,
+              background: "#1a9fff",
+              transition: "width 0.3s ease",
+              borderRadius: 2,
+            }}
+          />
+        )}
+      </div>
+
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          fontSize: 11,
+          color: "#8f98a0",
+          fontWeight: 500,
+          letterSpacing: "0.02em",
+        }}
+      >
+        {indeterminate ? (
+          <span>{detail}</span>
+        ) : (
+          <>
+            <span>
+              {download.total_bytes > 0
+                ? `${formatBytes(download.downloaded_bytes)} / ${formatBytes(
+                    download.total_bytes,
+                  )}`
+                : `${pct.toFixed(1)}%`}
+            </span>
+            {download.status === "running" && (
+              <span style={{ marginInlineStart: "auto" }}>
+                {t("downloadsTab.speedMbps", {
+                  speed: download.speed_mbps.toFixed(1),
+                })}
+                {" · "}
+                {t("downloadsTab.etaLabel", {
+                  eta: formatEta(download.eta_seconds),
+                })}
+              </span>
+            )}
+          </>
+        )}
+      </div>
+    </div>
+  );
+};

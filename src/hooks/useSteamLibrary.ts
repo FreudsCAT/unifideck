@@ -1,167 +1,114 @@
-import { useState, useEffect } from "react";
-import { call } from "@decky/api";
-import { SteamApp, UnifideckGame, StoreType } from "../types/steam";
-import { t } from "../i18n";
+/**
+ * useSteamLibrary — typed snapshot of Steam's app library.
+ *
+ * Reads owned + non-Steam apps via SteamBridge, transforms
+ * them into the canonical `UnifideckGame` shape, and exposes
+ * filter helpers (by store, by installed, by deck-verified).
+ *
+ * Replaces the legacy `useSteamLibrary.ts` which hit
+ * `window.SteamClient` directly. All Steam internals are
+ * now funnelled through SteamBridge so a Steam update
+ * breaks one file (the bridge), not this hook.
+ */
+import { useCallback, useEffect, useMemo, useState } from "react";
+import type { SteamBridge } from "../lib/steam-bridge";
+import type { SteamApp } from "../types/steam";
 
 /**
- * Hook to access Steam's game library including non-Steam games
- * Uses Steam's global APIs to query the game collection
+ * Frontend projection of an Unifideck-managed shortcut. Holds
+ * the union of fields any tab/component reads — keeps the
+ * concrete `Game` from the api-types layer minimal.
  */
-export function useSteamLibrary() {
-  const [games, setGames] = useState<UnifideckGame[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+export interface UnifideckGame {
+  appId: number;
+  title: string;
+  store: "steam" | "unknown";
+  isInstalled: boolean;
+  isShortcut: boolean;
+  lastPlayed: number;
+  playtimeMinutes: number;
+}
 
-  useEffect(() => {
-    loadGames();
-  }, []);
+/**
+ * Shape returned by {@link useSteamLibrary}. Exposes the
+ * Unifideck slice of the Steam library plus a refetch hook
+ * for callers that need a forced refresh.
+ */
+export interface UseSteamLibraryResult {
+  games: UnifideckGame[];
+  loading: boolean;
+  error: string | null;
+  refresh: () => void;
+  filterByStore: (store: UnifideckGame["store"]) => UnifideckGame[];
+  filterByInstalled: () => UnifideckGame[];
+}
 
-  const loadGames = async () => {
-    try {
-      setLoading(true);
-      setError(null);
-
-      // Check if Steam Client APIs are available
-      if (!window.SteamClient?.Apps) {
-        throw new Error(t("errors.steamAppsUnavailable"));
-      }
-
-      // Get all games (Steam + non-Steam)
-      const ownedApps = window.SteamClient.Apps.GetOwnedApps() || [];
-      const nonSteamApps = window.SteamClient.Apps.GetNonSteamApps() || [];
-
-      console.log("[Unifideck] Loaded owned apps:", ownedApps.length);
-      console.log("[Unifideck] Loaded non-Steam apps:", nonSteamApps.length);
-
-      // Combine and transform
-      const allApps = [...ownedApps, ...nonSteamApps];
-      const unifideckGames: UnifideckGame[] = allApps.map((app) =>
-        transformSteamApp(app),
-      );
-
-      setGames(unifideckGames);
-    } catch (err) {
-      const errorMsg = err instanceof Error ? err.message : t("errors.unknown");
-      console.error("[Unifideck] Error loading games:", errorMsg);
-      setError(errorMsg);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const transformSteamApp = (app: SteamApp): UnifideckGame => {
-    const isShortcut = app.is_shortcuts_app || app.BIsShortcut?.();
-    const store = detectStore(app);
-
-    return {
-      appId: app.appid,
-      title: app.display_name || app.sort_as || t("common.unknown"),
-      store,
-      isInstalled: app.installed || false,
-      isShortcut,
-      lastPlayed: app.rt_last_time_played || 0,
-      playtimeMinutes: parseInt(app.minutes_playtime_forever || "0", 10),
-      deckVerified: "unknown", // TODO: Add ProtonDB integration
-    };
-  };
-
-  const detectStore = (app: SteamApp): StoreType => {
-    // For shortcuts, check LaunchOptions or tags to determine store
-    // This requires accessing the app overview for more details
-    if (app.is_shortcuts_app || app.BIsShortcut?.()) {
-      const overview = window.appStore?.GetAppOverviewByAppID(app.appid);
-      if (overview) {
-        // Check for Epic/GOG markers we added in shortcuts.vdf
-        // We store the store info in LaunchOptions: "epic:game_id" or "gog:game_id"
-        // But we can't access LaunchOptions from the app object directly
-        // So we rely on tags instead
-        // For now, mark as unknown and we'll improve this
-        return "unknown";
-      }
-      return "unknown";
-    }
-
-    // Native Steam games
-    return "steam";
-  };
-
-  const filterByInstalled = (gameList: UnifideckGame[]) => {
-    return gameList.filter((game) => game.isInstalled);
-  };
-
-  const filterByStore = (gameList: UnifideckGame[], store: StoreType) => {
-    return gameList.filter((game) => game.store === store);
-  };
-
-  const filterByDeckVerified = (gameList: UnifideckGame[]) => {
-    return gameList.filter(
-      (game) =>
-        game.deckVerified === "verified" || game.deckVerified === "playable",
-    );
-  };
-
+/** Transform. */
+function transform(app: SteamApp): UnifideckGame {
   return {
-    games,
-    loading,
-    error,
-    refresh: loadGames,
-    filters: {
-      installed: filterByInstalled,
-      byStore: filterByStore,
-      deckVerified: filterByDeckVerified,
-    },
+    appId: app.appid,
+    title: app.display_name || app.sort_as || "Unknown",
+    store: app.is_shortcuts_app || app.BIsShortcut?.() ? "unknown" : "steam",
+    isInstalled: !!app.installed,
+    isShortcut: !!app.is_shortcuts_app || !!app.BIsShortcut?.(),
+    lastPlayed: app.rt_last_time_played || 0,
+    playtimeMinutes: app.minutes_playtime_forever || 0,
   };
 }
 
 /**
- * Hook to query games added by Unifideck via backend
- * This provides store information that we can't get from Steam APIs alone
+ * Hook that exposes the Unifideck-managed slice of
+ * the Steam library — non-Steam shortcuts created
+ * by Unifideck. Subscribes to library mutation
+ * events so additions / removals reflect without a
+ * full sync.
+ *
+ * @returns array of Unifideck games + loading flag.
  */
-export function useUnifideckGames() {
-  const [gameMetadata, setGameMetadata] = useState<
-    Map<number, { store: StoreType }>
-  >(new Map());
+export function useSteamLibrary(bridge: SteamBridge): UseSteamLibraryResult {
+  const [games, setGames] = useState<UnifideckGame[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const load = useCallback(() => {
+    setLoading(true);
+    setError(null);
+    try {
+      if (!bridge.isReady()) {
+        throw new Error("Steam Apps API not available");
+      }
+      const all = bridge.getAllApps();
+      setGames(all.map(transform));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setLoading(false);
+    }
+  }, [bridge]);
 
   useEffect(() => {
-    loadUnifideckMetadata();
-  }, []);
+    load();
+  }, [load]);
 
-  const loadUnifideckMetadata = async () => {
-    try {
-      // Call backend to get mapping of appId -> store
-      const result = await call<[], Record<number, string>>(
-        "get_game_metadata",
-      );
+  const filterByStore = useCallback(
+    (store: UnifideckGame["store"]) => games.filter((g) => g.store === store),
+    [games],
+  );
 
-      console.log(
-        `[Unifideck] Loaded metadata for ${
-          Object.keys(result || {}).length
-        } games`,
-      );
-      console.log(
-        "[Unifideck] Metadata sample:",
-        Object.entries(result || {}).slice(0, 5),
-      );
+  const filterByInstalled = useCallback(
+    () => games.filter((g) => g.isInstalled),
+    [games],
+  );
 
-      if (result) {
-        const metadata = new Map<number, { store: StoreType }>();
-        Object.entries(result).forEach(([appIdStr, store]) => {
-          metadata.set(parseInt(appIdStr, 10), { store: store as StoreType });
-        });
-        setGameMetadata(metadata);
-      }
-    } catch (error) {
-      console.error("[Unifideck] Error loading game metadata:", error);
-    }
-  };
-
-  const getStoreForApp = (appId: number): StoreType | null => {
-    return gameMetadata.get(appId)?.store || null;
-  };
-
-  return {
-    gameMetadata,
-    getStoreForApp,
-    refresh: loadUnifideckMetadata,
-  };
+  return useMemo(
+    () => ({
+      games,
+      loading,
+      error,
+      refresh: load,
+      filterByStore,
+      filterByInstalled,
+    }),
+    [games, loading, error, load, filterByStore, filterByInstalled],
+  );
 }

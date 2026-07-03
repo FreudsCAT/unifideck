@@ -1,8 +1,6 @@
-# Stores package
-from .base import Store, Game
-from .manager import StoreManager
-from .epic import EpicConnector
-from .amazon import AmazonConnector
-from .gog import GOGAPIClient
-from .ubisoft import UbisoftConnector
-from .microsoft import MicrosoftConnector
+from .shared import StoreBase, StoreRegistry
+
+__all__ = [
+    "StoreBase",
+    "StoreRegistry",
+]

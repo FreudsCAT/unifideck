@@ -1,130 +1,274 @@
-"""
-Centralized path utilities for game installation directories.
+"""utils/paths.py — Centralized path resolution for game installations.
 
-This module provides consistent path handling across all store connectors,
-ensuring SD cards and external drives are properly detected.
+Refactor of legacy ``utils/paths.py`` (130 lines). Provides a
+single source of truth for where Unifideck looks for installed
+games: default install dirs per store, mounted SD cards/USB
+drives, and optional user-configured custom paths.
+
+The legacy module hardcoded ``~/.local/share/unifideck/...``
+paths and a fixed list of store install directories. This
+refactor:
+
+- Reads default install paths from ``stores.<n>.install_dir``
+- Reads custom override from ``download.custom_path``
+- Reads the SD card mount root from ``paths.sd_card_root``
+- Returns a deduplicated list of existing directories
+
+Pure helpers (no I/O):
+
+- ``expand`` : tilde + env-var expansion in one shot
+- ``dedupe_paths`` : remove duplicates preserving order
+
+Filesystem helpers:
+
+- ``get_all_game_directories(config)`` : full discovery scan
+- ``get_games_map_path(config)`` : the games.map location
+- ``ensure_games_map_dir(config)`` : create the parent dir
+
+Reference: Technical Document v1.0 — Section 3.6.1 (games.map),
+3.9 (ConfigManager), 5.6 (installation pipeline).
 """
-import os
-import json
+from __future__ import annotations
+
+import contextlib
 import logging
-from typing import List
+import os
+from pathlib import Path
+from typing import TYPE_CHECKING, Any
+
+from .config_helpers import get_cfg
+
+if TYPE_CHECKING:
+    from unifideck.config import ConfigManager
 
 logger = logging.getLogger(__name__)
 
-# Default install directories per store
-DEFAULT_PATHS = {
-    'epic': os.path.expanduser("~/Games/Epic"),
-    'gog': os.path.expanduser("~/GOG Games"),
-    'amazon': os.path.expanduser("~/Games/Amazon"),
-    'microsoft': os.path.expanduser("~/Games/Microsoft"),
+# Default install directories per store, used when no override
+# is set in ``stores.<n>.install_dir``. These match the legacy
+# paths so existing user installs are still discovered.
+DEFAULT_INSTALL_DIRS = {
+    "epic": "~/Games/Epic",
+    "gog": "~/GOG Games",
+    "amazon": "~/Games/Amazon",
+    "microsoft": "~/Games/Microsoft",
+    "ubisoft": "~/Games/Ubisoft",
 }
 
-# games.map location (user data, survives plugin reinstall)
-GAMES_MAP_PATH = os.path.expanduser("~/.local/share/unifideck/games.map")
+# Root game directory — always checked so internal storage
+# shows up even before any per-store subdirectories exist.
+DEFAULT_GAMES_ROOT = "~/Games"
 
-# Download settings (stores custom_path)
-DOWNLOAD_SETTINGS_PATH = os.path.expanduser("~/.local/share/unifideck/download_settings.json")
+# Where the games.map lives by default. Steam Deck never
+# relocates this without explicit user action, so the path is
+# stable.
+DEFAULT_GAMES_MAP = "~/.local/share/unifideck/games.map"
 
 
-def get_all_game_directories() -> List[str]:
+
+
+# ══════════════════════════════════════════════════════════════
+# Pure helpers
+# ══════════════════════════════════════════════════════════════
+
+
+def _expand(path: str) -> str:
+    """Expand ``~`` and ``$VAR`` references in a path string.
+
+    Pure function — no filesystem I/O. Returns an absolute path
+    (when the input is absolute or contains ``~``) or a relative
+    path unchanged.
+
+    Uses ``os.path.expandvars`` for env var substitution because
+    ``pathlib.Path`` has no equivalent. The result is then
+    wrapped through ``Path(...).expanduser()`` for the tilde
+    resolution.
     """
-    Get all possible game installation directories.
-    
-    Scans:
-    - Default install paths (~/Games/*, ~/GOG Games)
-    - All mounted SD cards/USB drives (/run/media/*/*)
-    
-    Returns:
-        List of existing directory paths
-    """
-    paths = []
-    
-    # Add default paths
-    for path in DEFAULT_PATHS.values():
-        if os.path.isdir(path):
-            paths.append(path)
-    
-    # Also add ~/Games directly (for subdirs we might not know about)
-    games_home = os.path.expanduser("~/Games")
-    if os.path.isdir(games_home):
-        paths.append(games_home)
-    
-    # Add ~/GOG Games if not already added
-    gog_home = os.path.expanduser("~/GOG Games")
-    if os.path.isdir(gog_home) and gog_home not in paths:
-        paths.append(gog_home)
-    
-    # Add custom install path from download settings (if configured)
-    try:
-        if os.path.exists(DOWNLOAD_SETTINGS_PATH):
-            with open(DOWNLOAD_SETTINGS_PATH, 'r') as f:
-                settings = json.load(f)
-            custom_path = settings.get('custom_path')
-            if custom_path and os.path.isdir(custom_path):
-                paths.append(custom_path)
-    except Exception as e:
-        logger.debug(f"[Paths] Could not read custom path from download settings: {e}")
+    return str(Path(os.path.expandvars(path)).expanduser())
 
-    # Scan mounted media (SD cards, USB drives)
-    media_base = "/run/media"
-    if os.path.exists(media_base):
-        try:
-            for user_or_mount in os.listdir(media_base):
-                user_path = os.path.join(media_base, user_or_mount)
-                if os.path.isdir(user_path):
-                    # Check if this level has Games directly (/run/media/Games - unlikely but possible)
-                    games_direct = os.path.join(user_path, "Games")
-                    if os.path.isdir(games_direct):
-                        paths.append(games_direct)
-                    
-                    # Check for GOG Games at this level
-                    gog_direct = os.path.join(user_path, "GOG Games")
-                    if os.path.isdir(gog_direct):
-                        paths.append(gog_direct)
-                    
-                    # Scan subdirectories (for /run/media/deck/SDCARD/Games)
-                    try:
-                        for mount in os.listdir(user_path):
-                            mount_path = os.path.join(user_path, mount)
-                            if os.path.isdir(mount_path):
-                                # Check for Games folder
-                                games_path = os.path.join(mount_path, "Games")
-                                if os.path.isdir(games_path):
-                                    paths.append(games_path)
-                                
-                                # Check for GOG Games folder
-                                gog_path = os.path.join(mount_path, "GOG Games")
-                                if os.path.isdir(gog_path):
-                                    paths.append(gog_path)
-                    except PermissionError:
-                        pass  # Skip directories we can't access
-        except Exception as e:
-            logger.warning(f"[Paths] Error scanning media paths: {e}")
-    
-    # Deduplicate while preserving order
-    seen = set()
-    unique_paths = []
+
+def _dedupe_paths(paths: list[str]) -> list[str]:
+    """Remove duplicate paths preserving order.
+
+    Two paths are considered equal if their normalized form
+    (``os.path.normpath``) matches. Useful when merging
+    discovery results from multiple sources that may overlap.
+    """
+    seen: set[str] = set()
+    out: list[str] = []
     for p in paths:
+        norm = os.path.normpath(p)
+        if norm in seen:
+            continue
+        seen.add(norm)
+        out.append(p)
+    return out
+
+
+def _cfg(config: ConfigManager | None, key: str, default: Any) -> Any:
+    """Legacy alias for backward compatibility. Delegates to `get_cfg`."""
+    return get_cfg(config, key, default)
+
+
+# ══════════════════════════════════════════════════════════════
+# Filesystem discovery
+# ══════════════════════════════════════════════════════════════
+
+
+def get_all_game_directories(config: ConfigManager | None = None) -> list[str]:
+    """Return every directory that may contain installed games.
+
+    Combines:
+
+    1. Per-store install dirs from ``stores.<n>.install_dir``
+       (or ``DEFAULT_INSTALL_DIRS`` as fallback)
+    2. The user's custom path from ``download.custom_path``
+    3. SD card / external drive mounts under
+       ``paths.sd_card_root`` — scans 2 levels deep for
+       ``Games/`` and ``GOG Games/`` folders
+
+    Only returns directories that actually exist on disk.
+    Result is deduplicated.
+    """
+    candidates: list[str] = []
+
+    # 1. Root games directory — always available as internal storage.
+    #    Create it if missing so internal storage is never empty.
+    games_root = _expand(DEFAULT_GAMES_ROOT)
+    _ensure_dir(games_root)
+    candidates.append(games_root)
+
+    # 2. Per-store install dirs
+    for store, default in DEFAULT_INSTALL_DIRS.items():
+        path = _cfg(config, f"stores.{store}.install_dir", default)
+        candidates.append(_expand(path))
+
+    # 3. Custom user path
+    custom = get_cfg(config, "download.custom_path", "")
+    if custom:
+        candidates.append(_expand(custom))
+
+    # 4. External drives — scan every writable non-system mount
+    #    from /proc/mounts for Game directories.  No hardcoded
+    #    paths — whatever is mounted and writable gets checked.
+    candidates.extend(_scan_external_mounts())
+
+    # Filter to existing dirs and dedupe
+    existing = [p for p in candidates if Path(p).is_dir()]
+    return _dedupe_paths(existing)
+
+
+def _collect_game_dirs(parent_path: Path) -> list[str]:
+    """Return ``Games/`` and ``GOG Games/`` subdirs of ``parent_path``.
+
+    Symlinks are skipped to avoid loops.  OSError (including
+    PermissionError on inaccessible mounts like /efi) is
+    caught per-path so one bad mount can't hide another.
+    """
+    found: list[str] = []
+    for sub in ("Games", "GOG Games"):
+        p = parent_path / sub
         try:
-            real_path = os.path.realpath(p)
-            if real_path not in seen:
-                seen.add(real_path)
-                unique_paths.append(p)
-        except Exception:
-            # If realpath fails, just use the original path
-            if p not in seen:
-                seen.add(p)
-                unique_paths.append(p)
-    
-    logger.debug(f"[Paths] Found {len(unique_paths)} game directories: {unique_paths}")
-    return unique_paths
+            if p.is_dir() and not p.is_symlink():
+                found.append(str(p))
+        except OSError:
+            continue
+    return found
 
 
-def get_games_map_path() -> str:
-    """Get the canonical path to games.map"""
-    return GAMES_MAP_PATH
+
+def _ensure_dir(path: str) -> None:
+    """Create a directory if it doesn't exist. Idempotent."""
+    Path(path).mkdir(parents=True, exist_ok=True)
 
 
-def ensure_games_map_dir() -> None:
-    """Ensure the games.map directory exists"""
-    os.makedirs(os.path.dirname(GAMES_MAP_PATH), exist_ok=True)
+def _device_id(path: str) -> int:
+    """Return st_dev of *path*, or 0 on error."""
+    try:
+        return Path(path).stat().st_dev
+    except OSError:
+        return 0
+
+
+def _scan_external_mounts() -> list[str]:
+    """Scan every writable external mount for game directories.
+
+    Reads ``/proc/mounts`` to discover mount points — no hardcoded
+    paths.  Skips the device that contains ``$HOME`` (internal
+    storage) and non-storage filesystem types.  For each remaining
+    mount, looks for ``Games/`` and ``GOG Games/`` subdirectories
+    at the mount root and one level deeper (some setups mount
+    partitions inside a parent directory).
+
+    Symlinks are skipped at every level to avoid loops.
+    """
+    home_dev = _device_id(str(Path.home()))
+    found: list[str] = []
+    try:
+        lines = Path("/proc/mounts").read_text().splitlines()
+    except OSError as e:
+        logger.debug("[paths] external mount scan failed: %s", e)
+        return found
+    for line in lines:
+        mp_path = _eligible_mount_point(line, home_dev)
+        if mp_path is not None:
+            found.extend(_collect_mount_game_dirs(mp_path))
+    return found
+
+
+def _eligible_mount_point(line: str, home_dev: int) -> Path | None:
+    """Return the mount ``Path`` for a writable external mount, else ``None``.
+
+    Skips short lines, system filesystem types, virtual prefixes,
+    non-directories, and the device hosting ``$HOME``.
+    """
+    parts = line.split()
+    if len(parts) < 3:
+        return None
+    mp, fstype = parts[1], parts[2]
+    if fstype in _SKIP_FSTYPES or mp.startswith(_VIRTUAL_PREFIXES):
+        return None
+    mp_path = Path(mp)
+    if not mp_path.is_dir() or _device_id(mp) == home_dev:
+        return None
+    return mp_path
+
+
+def _collect_mount_game_dirs(mp_path: Path) -> list[str]:
+    """Game dirs at the mount root plus one level deeper.
+
+    Some setups mount partitions inside a parent directory, so we
+    also scan immediate children. Symlinks are skipped to avoid loops.
+    """
+    found = list(_collect_game_dirs(mp_path))
+    with contextlib.suppress(OSError):
+        for child in mp_path.iterdir():
+            if child.is_dir() and not child.is_symlink():
+                found.extend(_collect_game_dirs(child))
+    return found
+
+
+_VIRTUAL_PREFIXES = ("/dev/", "/sys/", "/proc/", "/run/user/")
+
+_SKIP_FSTYPES = frozenset({
+    "proc", "sysfs", "devtmpfs", "devpts", "tmpfs", "cgroup",
+    "cgroup2", "pstore", "bpf", "debugfs", "tracefs", "hugetlbfs",
+    "ramfs", "overlay", "squashfs", "fuse.gvfsd-fuse",
+    "fuse.portal", "securityfs", "configfs", "efivarfs",
+    "autofs", "mqueue",
+})
+
+
+# ══════════════════════════════════════════════════════════════
+# games.map location
+# ══════════════════════════════════════════════════════════════
+
+
+def get_games_map_path(config: ConfigManager | None = None) -> str:
+    """Return the absolute path to the games.map file.
+
+    Reads ``paths.games_map`` from config if set, otherwise
+    falls back to ``~/.local/share/unifideck/games.map``. Tilde
+    and env vars in the configured path are expanded.
+    """
+    raw = get_cfg(config, "paths.games_map", DEFAULT_GAMES_MAP)
+    return _expand(raw)

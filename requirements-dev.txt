@@ -1,0 +1,64 @@
+# Unifideck developer & CI dependencies.
+#
+# Installed by the GitHub Actions tests.yml workflow on top of
+# requirements.txt. Not shipped with the plugin — only used by
+# linters, type checkers, and the test runner.
+
+# Include all runtime deps so dev environments are self-contained
+-r requirements.txt
+
+# Linting & static analysis
+ruff>=0.5,<1.0
+mypy>=1.10,<2.0
+
+# flake8 + the cognitive-complexity plugin. Needed by
+# tests/unit/_tooling/test_lint_scope.py, which audits the
+# .flake8 config by shelling out to the `flake8` executable
+# (subprocess.run(["flake8", "--help"])) and parsing its
+# option list. complexity.yml installs these explicitly for
+# its own gate; listing them here too means the tests gate
+# (tests.yml runs `pytest tests/`, which collects _tooling/)
+# finds the executable instead of FileNotFoundError. The
+# cognitive plugin is paired with flake8 so `flake8 --help`
+# advertises --max-cognitive-complexity, keeping the tooling
+# test's environment identical to complexity.yml's.
+flake8>=7.0,<8.0
+flake8-cognitive-complexity>=0.1,<1.0
+
+# Architectural invariants enforcement (contracts in .importlinter)
+import-linter>=2.0,<3.0
+
+# CVE audit on requirements.txt — gates quality.yml against
+# known-vulnerable pinned dependencies at PR time. Floor 2.7
+# stays where the upstream stabilised the OSV-cross-reference
+# fix (false negatives on GHSA-only CVEs before 2.7).
+pip-audit>=2.7,<3.0
+
+# Test runner & coverage measurement
+pytest>=8.0,<9.0
+pytest-asyncio>=0.23,<1.0
+pytest-cov>=5.0,<7.0
+
+# YAML loader used by the integration smoke test to validate
+# tests.yml itself (meta-test: the workflow file must parse).
+PyYAML>=6.0,<7.0
+
+# Mypy stub packages — needed at type-check time. Without these,
+# mypy reports ``Library stubs not installed for "yaml"`` /
+# ``"jsonschema"`` against ``stores/ubisoft/parser.py`` and
+# ``config/validator.py``. The runtime stays unchanged: stubs are
+# .pyi files mypy reads from site-packages, they don't ship with
+# the plugin.
+types-PyYAML>=6.0,<7.0
+types-jsonschema>=4.0,<5.0
+
+# JSON Schema validator imported lazily by ``config/validator.py``
+# (the validator falls back to a stub result when missing in
+# production, but tests/CI must exercise the real code path).
+jsonschema>=4.0,<5.0
+
+# Dead-code finder. Bundled into the quality CI gate (Gate 4).
+# Configuration lives in [tool.vulture] in pyproject.toml; the
+# project-specific whitelist of intentional false positives is
+# in ``vulture_whitelist.py`` at the repo root.
+vulture>=2.14,<3.0

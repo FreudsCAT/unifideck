@@ -1,37 +1,92 @@
 /**
- * Type definitions for Steam Client APIs
- * These are based on observed behavior and may change with Steam updates
+ * Steam Client API surface — handcrafted ambient declarations.
+ *
+ * These types describe Steam's CEF-injected globals
+ * (`window.SteamClient`, `window.collectionStore`, etc.).
+ * They are NOT documented by Valve and may change with any
+ * Steam update; the SteamBridge layer is the only consumer
+ * so a breakage is contained to one file.
+ *
+ * When Steam changes a signature, update this file FIRST,
+ * then propagate the type error fixes through SteamBridge.
+ * Never bypass the bridge to call Steam APIs directly from
+ * components — the type error wouldn't surface until runtime.
  */
+export interface Unregisterable {
+  unregister(): void;
+}
 
+/**
+ * Lightweight projection of the runtime
+ * `window.appStore.allApps` entries we actually
+ * read. Steam adds and renames fields between
+ * client versions ; only the fields listed here
+ * are guaranteed by the SteamBridge facade.
+ *
+ * @see SteamBridge.getApp() for the safe getter
+ */
 export interface SteamApp {
   appid: number;
   display_name: string;
   sort_as: string;
   installed: boolean;
-  is_shortcuts_app: boolean; // True for non-Steam games
-  BIsShortcut(): boolean;
-  size_on_disk: string;
-  minutes_playtime_forever: string;
-  minutes_playtime_last_two_weeks: string;
+  is_shortcuts_app: boolean;
+  // Steam types these as numbers on the live AppOverview (verified via
+  // CEF debugger; `size_on_disk` is often `undefined` for shortcuts).
+  // The native library Sort menu reads them numerically — a string
+  // here silently collapses every non-alpha sort to alphabetical.
+  size_on_disk?: number;
+  minutes_playtime_forever: number;
+  minutes_playtime_last_two_weeks: number;
   rt_last_time_played: number;
+  rt_last_time_locally_played?: number;
+  rt_original_release_date?: number;
+  rt_steam_release_date?: number;
+  rt_purchased_time?: number;
+  metacritic_score?: number;
+  review_score_with_bombs?: number;
+  review_percentage_with_bombs?: number;
+  steam_hw_compat_category_packed?: number;
+  steam_deck_compat_category?: number;
   store_category: number[];
+  /** MobX set backing the `store_category` getter; mutate this to
+   *  populate Steam's native Players filter for spoofed shortcuts. */
+  m_setStoreCategories?: Set<number>;
+  m_setStoreTags?: Set<number>;
   app_type: number;
   canonicalAppType: number;
   local_per_client_data?: {
     is_hidden?: boolean;
+    installed?: boolean;
+    display_status?: number;
   };
+  BIsShortcut(): boolean;
 }
 
+/**
+ * Subset of Steam's `AppOverview` we read at runtime.
+ * Every field is sourced through SteamBridge so a missing
+ * one is logged and replaced by a default rather than
+ * throwing on access.
+ */
 export interface SteamAppOverview extends SteamApp {
   icon_hash: string;
   review_score: number;
   review_percentage: number;
+  steam_deck_compat_category?: number;
+  visible_in_game_list?: boolean;
   GameID(): string;
   GetCapsuleImageURL(): string;
   GetHeaderImageURL(): string;
   GetLibraryImageURL(): string;
 }
 
+/**
+ * A Steam library collection ("All Games", "Family
+ * Sharing", custom user collections). Used by the
+ * tab spoofing layer to inject the Unifideck tab
+ * next to native Steam tabs.
+ */
 export interface SteamCollection {
   id: string;
   name: string;
@@ -40,12 +95,60 @@ export interface SteamCollection {
   visibleApps: number[];
 }
 
-export interface Unregisterable {
-  unregister(): void;
+/**
+ * Description of a connected controller, as
+ * delivered by `SteamClient.System.UI` events.
+ * `vid` / `pid` discriminate hardware ; `nativeId`
+ * is what we feed back to Steam to bind a config.
+ */
+export interface ControllerInfo {
+  strName: string;
+  eControllerType: number;
+  nControllerIndex: number;
+  bWireless: boolean;
 }
 
-// Global Steam Client API interfaces
+/**
+ * First message of the controller config stream :
+ * Steam sends the list of available templates for
+ * the active controller. Followed by a Done message.
+ */
+export interface ControllerConfigInfoMessageList {
+  appID: number;
+  nControllerType: number;
+  Title: string;
+  URL: string;
+  eExportType: number;
+  bUsesGamepad: boolean;
+  bSelected: boolean;
+  bOfficial: boolean;
+  bUsesMouse: boolean;
+  bUsesKeyboard: boolean;
+  publishedFileID: string;
+}
+
+/**
+ * Terminator message of the controller config stream.
+ * Receiving it without a matching `List` means the
+ * controller has no templates yet.
+ */
+export interface ControllerConfigInfoMessageDone {
+  appID: number;
+  bGameQueryDone?: boolean;
+  bPersonalQueryDone?: boolean;
+  bCloudQueryDone?: boolean;
+}
+
+/**
+ * Sum type of the two messages Steam emits on the
+ * controller config channel. Discriminated by the
+ * `nMessageType` field.
+ */
+export type ControllerConfigInfoMessage =
+  | ControllerConfigInfoMessageList
+  | ControllerConfigInfoMessageDone;
 declare global {
+  /** Window. */
   interface Window {
     SteamClient?: {
       Apps?: {
@@ -64,137 +167,70 @@ declare global {
         RunGame(
           appId: string,
           launchOptions: string,
-          param3: number,
-          param4: number,
+          a: number,
+          b: number,
         ): void;
         TerminateApp(appId: string, force: boolean): void;
         ShowControllerConfigurator(appId: number): void;
         OpenAppSettingsDialog(appId: number, section: string): void;
         AddShortcut(
-          appName: string,
-          exePath: string,
+          name: string,
+          exe: string,
           startDir: string,
-          launchOptions: string,
+          launchOpts: string,
         ): Promise<number>;
         RemoveShortcut(appId: number): void;
-        SetShortcutName?(appId: number, name: string): void;
-        SpecifyCompatTool(appId: number, strToolName: string): void;
-        SetShortcutLaunchOptions(appId: number, options: string): void;
-        GetPlaytime(
-          appId: number,
-        ): Promise<{ nPlaytimeForever: number; rtLastTimePlayed: number }>;
-        SetThirdPartyControllerConfiguration?(
-          appId: number,
-          value: number,
-        ): void;
-      };
-      Input?: {
-        QueryControllerConfigsForApp(
-          appId: number,
-          controllerIndex: number,
-          compatibleOnly: boolean,
-        ): void;
-        StartEditingControllerConfigurationForAppIDAndControllerIndex?(
-          appId: number,
-          controllerIndex: number,
-        ): Promise<void> | void;
-        SetSelectedConfigForApp(
-          appId: number,
-          controllerIndex: number,
-          url: string,
-          preview: boolean,
-          applyToSameControllerType?: boolean,
-        ): void;
-        SaveEditingControllerConfiguration?(
-          controllerIndex: number,
-          sharedConfig: boolean,
-        ): void;
-        StopEditingControllerConfiguration?(controllerIndex: number): void;
-        ClearSelectedConfigForApp?(
-          appId: number,
-          controllerIndex: number,
-        ): void;
-        RegisterForControllerConfigInfoMessages(
-          callback: (msgs: ControllerConfigInfoMessage[]) => void,
-        ): Unregisterable;
-        RegisterForControllerListChanges(
-          callback: (controllers: ControllerInfo[]) => void,
-        ): Unregisterable;
+        SpecifyCompatTool(appId: number, tool: string): void;
+        SetShortcutLaunchOptions(appId: number, opts: string): void;
+        GetPlaytime(appId: number): Promise<{
+          nPlaytimeForever: number;
+          rtLastTimePlayed: number;
+        }>;
       };
       GameSessions?: {
         RegisterForAppLifetimeNotifications(
-          callback: (notification: {
+          callback: (n: {
             unAppID: number;
             bRunning: boolean;
             nInstanceID: number;
           }) => void,
         ): Unregisterable;
       };
-      library?: {
-        GetCollections(): SteamCollection[];
+      // Steam Input — controller-config selection. Method names + the
+      // ``SetSelectedConfigForApp`` signature were verified against the
+      // Steam client UI bundle (steamui/*.js). Used to apply the
+      // official "Web Browser" template to the auth-window shortcut.
+      Input?: {
+        // Streams the available controller-config templates/personal
+        // configs for ``appId`` as an array of ``List``/``Done``
+        // messages (see ControllerConfigInfoMessage). Populated after
+        // a ``QueryControllerConfigsForApp`` call.
+        RegisterForControllerConfigInfoMessages(
+          appId: number,
+          callback: (messages: ControllerConfigInfoMessage[]) => void,
+        ): Unregisterable;
+        // Triggers Steam to emit the config-info messages for the app.
+        QueryControllerConfigsForApp(
+          appId: number,
+          controllerIndex: number,
+          filterOtherControllerTypes: boolean,
+        ): void;
+        // Selects ``configUrl`` (a template/config ``URL`` from the
+        // info messages) as the active config for the app. The 4th arg
+        // is a boolean Steam passes as ``false`` at the template-pick
+        // call site; the 5th applies it to all controllers of the type.
+        SetSelectedConfigForApp(
+          appId: number,
+          controllerIndex: number,
+          configUrl: string,
+          unused: boolean,
+          applyToAllOfType: boolean,
+        ): void;
       };
     };
     collectionStore?: {
       userCollections?: Map<string, SteamCollection>;
-      deckDesktopApps?: SteamCollection;
-      localGamesCollection?: SteamCollection;
     };
-    controllerConfiguratorStore?: {
-      m_controllerList?: ControllerInfo[];
-    };
-    // Note: appStore is defined by @decky/ui globals
   }
 }
-
-export type StoreType =
-  | "steam"
-  | "epic"
-  | "gog"
-  | "amazon"
-  | "microsoft"
-  | "unknown";
-
-export interface UnifideckGame {
-  appId: number;
-  title: string;
-  store: StoreType;
-  isInstalled: boolean;
-  isShortcut: boolean;
-  tags?: string[];
-  deckVerified?: "verified" | "playable" | "unsupported" | "unknown";
-  lastPlayed?: number;
-  playtimeMinutes?: number;
-}
-
-// Controller configuration types (from SteamClient.Input)
-export interface ControllerConfigInfoMessageList {
-  appID: number;
-  nControllerType: number;
-  Title: string;
-  URL: string;
-  eExportType: number; // 0=Unknown, 3=Community, 4=Template, 5=Official, 6=OfficialDefault
-  bUsesGamepad: boolean;
-  bSelected: boolean;
-  bOfficial: boolean;
-  bUsesMouse: boolean;
-  bUsesKeyboard: boolean;
-  publishedFileID: string;
-}
-
-export interface ControllerConfigInfoMessageDone {
-  appID: number;
-  bGameQueryDone?: boolean;
-  bPersonalQueryDone?: boolean;
-  bCloudQueryDone?: boolean;
-}
-
-export type ControllerConfigInfoMessage =
-  | ControllerConfigInfoMessageList
-  | ControllerConfigInfoMessageDone;
-
-export interface ControllerInfo {
-  strName: string;
-  eControllerType: number;
-  nControllerIndex: number;
-  bWireless: boolean;
-}
+export {};

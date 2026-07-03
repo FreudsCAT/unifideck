@@ -6,9 +6,13 @@
         * :exc:`ConnectionClosedOK`
         * :exc:`ConnectionClosedError`
     * :exc:`InvalidURI`
+    * :exc:`InvalidProxy`
     * :exc:`InvalidHandshake`
         * :exc:`SecurityError`
-        * :exc:`InvalidMessage` (legacy)
+        * :exc:`ProxyError`
+            * :exc:`InvalidProxyMessage`
+            * :exc:`InvalidProxyStatus`
+        * :exc:`InvalidMessage`
         * :exc:`InvalidStatus`
         * :exc:`InvalidStatusCode` (legacy)
         * :exc:`InvalidHeader`
@@ -42,8 +46,13 @@ __all__ = [
     "ConnectionClosedOK",
     "ConnectionClosedError",
     "InvalidURI",
+    "InvalidProxy",
     "InvalidHandshake",
     "SecurityError",
+    "ProxyError",
+    "InvalidProxyMessage",
+    "InvalidProxyStatus",
+    "InvalidMessage",
     "InvalidStatus",
     "InvalidHeader",
     "InvalidHeaderFormat",
@@ -168,6 +177,20 @@ class InvalidURI(WebSocketException):
         return f"{self.uri} isn't a valid URI: {self.msg}"
 
 
+class InvalidProxy(WebSocketException):
+    """
+    Raised when connecting via a proxy that isn't valid.
+
+    """
+
+    def __init__(self, proxy: str, msg: str) -> None:
+        self.proxy = proxy
+        self.msg = msg
+
+    def __str__(self) -> str:
+        return f"{self.proxy} isn't a valid proxy: {self.msg}"
+
+
 class InvalidHandshake(WebSocketException):
     """
     Base class for exceptions raised when the opening handshake fails.
@@ -185,6 +208,40 @@ class SecurityError(InvalidHandshake):
     """
 
 
+class ProxyError(InvalidHandshake):
+    """
+    Raised when failing to connect to a proxy.
+
+    """
+
+
+class InvalidProxyMessage(ProxyError):
+    """
+    Raised when an HTTP proxy response is malformed.
+
+    """
+
+
+class InvalidProxyStatus(ProxyError):
+    """
+    Raised when an HTTP proxy rejects the connection.
+
+    """
+
+    def __init__(self, response: http11.Response) -> None:
+        self.response = response
+
+    def __str__(self) -> str:
+        return f"proxy rejected connection: HTTP {self.response.status_code:d}"
+
+
+class InvalidMessage(InvalidHandshake):
+    """
+    Raised when a handshake request or response is malformed.
+
+    """
+
+
 class InvalidStatus(InvalidHandshake):
     """
     Raised when a handshake response rejects the WebSocket upgrade.
@@ -196,8 +253,7 @@ class InvalidStatus(InvalidHandshake):
 
     def __str__(self) -> str:
         return (
-            "server rejected WebSocket connection: "
-            f"HTTP {self.response.status_code:d}"
+            f"server rejected WebSocket connection: HTTP {self.response.status_code:d}"
         )
 
 
@@ -338,11 +394,11 @@ class PayloadTooBig(WebSocketException):
         self,
         size_or_message: int | None | str,
         max_size: int | None = None,
-        cur_size: int | None = None,
+        current_size: int | None = None,
     ) -> None:
         if isinstance(size_or_message, str):
             assert max_size is None
-            assert cur_size is None
+            assert current_size is None
             warnings.warn(  # deprecated in 14.0 - 2024-11-09
                 "PayloadTooBig(message) is deprecated; "
                 "change to PayloadTooBig(size, max_size)",
@@ -354,8 +410,8 @@ class PayloadTooBig(WebSocketException):
             self.size: int | None = size_or_message
             assert max_size is not None
             self.max_size: int = max_size
-            self.cur_size: int | None = None
-            self.set_current_size(cur_size)
+            self.current_size: int | None = None
+            self.set_current_size(current_size)
 
     def __str__(self) -> str:
         if self.message is not None:
@@ -364,16 +420,16 @@ class PayloadTooBig(WebSocketException):
             message = "frame "
             if self.size is not None:
                 message += f"with {self.size} bytes "
-            if self.cur_size is not None:
-                message += f"after reading {self.cur_size} bytes "
+            if self.current_size is not None:
+                message += f"after reading {self.current_size} bytes "
             message += f"exceeds limit of {self.max_size} bytes"
             return message
 
-    def set_current_size(self, cur_size: int | None) -> None:
-        assert self.cur_size is None
-        if cur_size is not None:
-            self.max_size += cur_size
-            self.cur_size = cur_size
+    def set_current_size(self, current_size: int | None) -> None:
+        assert self.current_size is None
+        if current_size is not None:
+            self.max_size += current_size
+            self.current_size = current_size
 
 
 class InvalidState(WebSocketException, AssertionError):
@@ -410,7 +466,6 @@ lazy_import(
     deprecated_aliases={
         # deprecated in 14.0 - 2024-11-09
         "AbortHandshake": ".legacy.exceptions",
-        "InvalidMessage": ".legacy.exceptions",
         "InvalidStatusCode": ".legacy.exceptions",
         "RedirectHandshake": ".legacy.exceptions",
         "WebSocketProtocolError": ".legacy.exceptions",

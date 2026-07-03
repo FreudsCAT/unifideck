@@ -1,511 +1,473 @@
-"""
-Chrome DevTools Protocol (CDP) based OAuth monitor.
+"""auth/browser.py — OAuth code capture via CDP page monitoring.
 
-This module provides tools for monitoring Steam's CEF browser for OAuth 
-authorization codes from Epic, GOG, and Amazon logins.
+While the user logs in to a store via the in-Steam embedded
+browser, this module watches the browser's tab list (via CDP)
+and captures the authorization code from the redirect URL the
+moment it appears.
+
+Lot 13a (file-cap split): the implementation is spread across
+four files to keep each under the 550-line volumetry gate:
+
+* ``browser_types`` — ``AuthCaptureResult`` dataclass.
+* ``browser_url_parsing`` — URL helpers, redirect match,
+  code-from-URL extraction, capture-result builders.
+* ``browser_content`` — page-body extraction via CDP websocket
+  (Epic JSON blob, generic caller-supplied patterns).
+* ``browser`` (this file) — ``OAuthBrowserMonitor`` class
+  orchestrating the polling loop and CDP endpoints.
+
+This module re-exports ``AuthCaptureResult``, ``extract_oauth_params``
+and ``match_redirect`` for backward compatibility — every previous
+``from unifideck.auth.browser import …`` still works.
 """
+from __future__ import annotations
+
 import asyncio
-import json
 import logging
 import re
-import urllib.request
-from urllib.parse import urlparse, parse_qs
-from typing import Tuple, Optional
+import time
+from typing import TYPE_CHECKING, Any
+
+from unifideck.utils.config_helpers import get_cfg
+
+# Re-exports for backward compatibility with prior import paths.
+from .browser_content import (
+    try_content_fallback,
+    try_epic_content_capture,
+)
+from .browser_types import AuthCaptureResult
+from .browser_url_parsing import (
+    build_redirect_capture,
+    build_url_code_capture,
+    extract_code_from_url,
+    extract_oauth_params,
+    is_oauth_relevant_url,
+    match_redirect,
+)
+
+if TYPE_CHECKING:
+    from unifideck.cdp.cdp_client import CDPClient
+    from unifideck.config import ConfigManager
+
 
 logger = logging.getLogger(__name__)
 
+DEFAULT_POLL_INTERVAL = 0.5  # seconds between tab list checks
+DEFAULT_OAUTH_TIMEOUT = 300  # seconds
 
-class CDPOAuthMonitor:
-    """Monitor Steam's CEF browser for OAuth authorization codes via Chrome DevTools Protocol"""
 
-    def __init__(self, cef_port=8080):
-        self.cef_url = f'http://127.0.0.1:{cef_port}/json'
-        self.monitored_urls = set()
+# Public re-exports — keep the module's import surface stable
+# even though the implementation has moved into siblings.
+__all__ = [
+    "DEFAULT_OAUTH_TIMEOUT",
+    "DEFAULT_POLL_INTERVAL",
+    "AuthCaptureResult",
+    "CDPOAuthMonitor",
+    "OAuthBrowserMonitor",
+    "extract_oauth_params",
+    "match_redirect",
+]
 
-    async def monitor_for_oauth_code(self, expected_store='epic', timeout=300, poll_interval=0.5) -> Tuple[Optional[str], Optional[str]]:
+
+def _init_polling_state() -> dict[str, Any]:
+    """Build the mutable state dict passed through the polling loop.
+
+    Four entries:
+
+    * ``monitored_urls`` — dedups URL inspection across loop
+      iterations; non-Epic URLs are added here after first sight.
+    * ``logged_urls`` — dedups the "OAuth page detected" INFO log
+      so a long-lived auth tab doesn't spam the log.
+    * ``content_extract_first_attempt`` — tracks URLs we've
+      already content-extracted from at least once, so failure
+      logging escalates from DEBUG to INFO only on the first
+      attempt per URL.
+    * ``last_heartbeat`` — monotonic timestamp of the last
+      heartbeat emit; the heartbeat helper resets it every 30s.
+    """
+    return {
+        "monitored_urls": set(),
+        "logged_urls": set(),
+        "content_extract_first_attempt": set(),
+        "last_heartbeat": 0.0,
+    }
+
+
+def _make_timeout_result(
+    state: dict[str, Any], start: float,
+) -> AuthCaptureResult:
+    """Build the timeout-failure result + emit the summary warning.
+
+    Called once when ``wait_for_redirect`` hits its deadline
+    without capturing anything. Log includes the count of
+    distinct URLs seen so ops can tell "user abandoned the
+    login" (zero unique URLs) from "user logged in but
+    redirect never fired" (many unique URLs).
+    """
+    elapsed = time.monotonic() - start
+    monitored = len(state["monitored_urls"])
+    logger.warning(
+        "[auth/browser] timeout after %.1fs — "
+        "no code found in %d unique URLs",
+        elapsed, monitored,
+    )
+    return AuthCaptureResult(
+        success=False,
+        error="timeout",
+        elapsed_seconds=elapsed,
+    )
+
+
+class OAuthBrowserMonitor:
+    """Watches Steam's embedded browser and Edge for an OAuth redirect.
+
+    Polls both the Steam CEF CDP endpoint (port 8080) and the
+    Edge CDP endpoint (port 9222) every ``poll_interval`` seconds
+    until a tab lands on a URL matching the allowed redirect
+    list. Bounded by a timeout so the user can abandon the auth
+    flow without leaving the plugin hanging.
+
+    The dual-endpoint design exists because the OAuth browser
+    is a standalone Edge instance (launched by the shortcut
+    helper), NOT a Steam CEF tab — but the CEF port was the
+    only port monitored pre-0.7, so redirects were never
+    detected and auth timed out after 300 s.
+    """
+
+    def __init__(
+        self,
+        cdp_client: CDPClient,
+        config: ConfigManager | None = None,
+        edge_cdp_port: int = 9222,
+    ) -> None:
+        self._cdp = cdp_client
+        self._config = config
+        self._edge_cdp_port = edge_cdp_port
+        self._poll_interval = float(get_cfg(
+            config, "auth.browser_poll_interval_seconds",
+            DEFAULT_POLL_INTERVAL,
+        ))
+        self._default_timeout = float(get_cfg(
+            config, "auth.browser_oauth_timeout_seconds",
+            DEFAULT_OAUTH_TIMEOUT,
+        ))
+
+    # ── Public API ─────────────────────────────────────────────
+
+    async def wait_for_redirect(
+        self,
+        allowed_uris: list[str],
+        timeout: float | None = None,  # noqa: ASYNC109 — timeout is API value passed to underlying lib (urllib/aiohttp/subprocess), not an asyncio.timeout() wrapper
+        *,
+        content_trigger_url: str | None = None,
+        content_regex: str | None = None,
+    ) -> AuthCaptureResult:
+        """Block until a browser tab navigates to an allowed URI.
+
+        Returns as soon as any tab in Steam's CEF process **or**
+        the Edge auth browser matches one of the prefixes in
+        ``allowed_uris``. If the timeout elapses first, returns
+        a failure result.
+
+        When ``content_trigger_url`` and ``content_regex`` are
+        both set, *also* scans page content for a matching
+        group: connects via CDP, evaluates
+        ``document.body.innerText``, and applies the regex.
+        Used for stores (e.g. Epic) that embed the code in a
+        JSON blob inside the page rather than a query parameter.
         """
-        Monitor CEF pages for OAuth redirect URLs and extract authorization codes.
-
-        For Microsoft, two strategies run concurrently:
-          - URL polling   : catches the redirect if the page is visible in /json
-          - CDP events    : listens to Page.frameNavigated + Network.requestWillBeSent on
-                            the login page, catching the redirect the instant it is issued
-                            even if the popup closes before the next poll tick.
-
-        Args:
-            expected_store: Only return codes for this store ('epic', 'gog', 'amazon', 'microsoft')
-            timeout: Maximum time to monitor in seconds (default 5 minutes)
-            poll_interval: How often to check CEF pages in seconds (default 0.5s)
-
-        Returns:
-            (code, store) tuple or (None, None) if timeout/error
-        """
-        logger.info(f"[CDP] Starting OAuth code monitoring for {expected_store}...")
-
-        if expected_store == 'microsoft':
-            # Run URL-poll and event-listener concurrently; return whichever wins.
-            poll_task   = asyncio.create_task(self._poll_for_code(expected_store, timeout, poll_interval))
-            events_task = asyncio.create_task(self._monitor_ms_page_events(timeout))
-
-            done, pending = await asyncio.wait(
-                {poll_task, events_task},
-                return_when=asyncio.FIRST_COMPLETED,
+        deadline = time.monotonic() + (
+            timeout if timeout is not None
+            else self._default_timeout
+        )
+        start = time.monotonic()
+        state = _init_polling_state()
+        while time.monotonic() < deadline:
+            cef_targets, edge_targets = await self._poll_both_endpoints()
+            all_targets = cef_targets + edge_targets
+            self._log_heartbeat_if_due(
+                state, cef_targets, edge_targets, all_targets,
             )
-            for t in pending:
-                t.cancel()
 
-            result = done.pop().result()
-            if result and result[0]:
-                return result
-            # Both timed out / returned nothing
-            logger.warning("[CDP] OAuth monitoring timeout - no Microsoft code found")
-            return None, None
+            for target in all_targets:
+                result = await self._try_capture_target(
+                    target, allowed_uris, state, start,
+                )
+                if result is not None:
+                    return result
 
-        # Non-Microsoft stores: existing poll-only path
-        return await self._poll_for_code(expected_store, timeout, poll_interval)
+            fallback = await try_content_fallback(
+                all_targets, content_trigger_url, content_regex, start,
+            )
+            if fallback is not None:
+                return fallback
 
-    # ── internal: URL polling ────────────────────────────────────────────────
+            await asyncio.sleep(self._poll_interval)
 
-    async def _poll_for_code(self, expected_store: str, timeout: float, poll_interval: float) -> Tuple[Optional[str], Optional[str]]:
-        """Poll /json every poll_interval seconds looking for OAuth redirect URLs."""
-        import time
-        start_time = time.time()
+        return _make_timeout_result(state, start)
 
-        while time.time() - start_time < timeout:
-            try:
-                with urllib.request.urlopen(self.cef_url, timeout=2) as response:
-                    pages = json.loads(response.read().decode())
+    async def close_oauth_tab(self, url_substring: str) -> bool:
+        """Close the first tab whose URL contains ``url_substring``.
 
-                for page in pages:
-                    url = page.get('url', '')
-
-                    if url in self.monitored_urls:
-                        continue
-                    self.monitored_urls.add(url)
-
-                    if any(p in url.lower() for p in [
-                        'auth', 'login', 'code=', 'epiclogin', 'on_login_success',
-                        'oauth', 'authorizationcode', '/id/api/redirect',
-                        'oauth20_desktop.srf', 'live.com/oauth',
-                    ]):
-                        logger.info(f"[CDP] OAuth page detected: {url[:80]}...")
-
-                        if '/id/api/redirect' in url or 'epicgames.com' in url.lower():
-                            code = await self._extract_epic_code_from_page(url)
-                            if code:
-                                if expected_store == 'epic':
-                                    logger.info("[CDP] Found epic authorization code from page content")
-                                    return code, 'epic'
-                                else:
-                                    logger.warning(f"[CDP] Ignoring epic code (expected: {expected_store})")
-
-                        code, store = self._extract_code(url)
-                        if code:
-                            if store == expected_store:
-                                logger.info(f"[CDP] Found {store} authorization code")
-                                return code, store
-                            else:
-                                logger.warning(f"[CDP] Ignoring {store} code (expected: {expected_store})")
-
-            except Exception as e:
-                logger.debug(f"[CDP] Polling error (normal): {e}")
-
-            await asyncio.sleep(poll_interval)
-
-        logger.warning(f"[CDP] Poll timeout - no {expected_store} code found")
-        return None, None
-
-    # ── internal: Fetch interception (Microsoft only) ───────────────────────
-
-    async def _monitor_ms_page_events(self, timeout: float) -> Tuple[Optional[str], Optional[str]]:
+        Searches both Steam CEF and Edge CDP endpoints in order;
+        returns on the first close that succeeds.
         """
-        Intercept ALL network requests to oauth20_desktop.srf using the CDP
-        Fetch domain connected to the browser-level target (/json/version).
-
-        This catches the ?code= redirect at the network layer — before CEF
-        processes or follows the redirect — regardless of which page or frame
-        issues it.  The intercepted request is always continued so the browser
-        behaves normally afterward.
-
-        Why Fetch interception instead of Network events or page polling:
-          - Network.requestWillBeSent fires AFTER the browser already decided to
-            follow a redirect; for 302s the ?code= URL is gone before the next
-            poll cycle.
-          - Fetch.requestPaused fires BEFORE the request is processed, giving us
-            a reliable synchronous hook into the redirect chain.
-          - Browser-level target captures requests from ALL pages/popups.
-        """
-        import time
-        try:
-            import websockets
-        except ImportError:
-            logger.warning("[CDP-fetch] websockets not available; falling back to poll-only")
-            return None, None
-
-        # ── connect to the browser-level CDP target ───────────────────────────
-        # /json/version returns the webSocketDebuggerUrl for the browser itself
-        # (not a specific tab), which lets us intercept network requests globally.
-        cef_port = self.cef_url.split(':')[2].split('/')[0]
-        browser_ws_url = None
-        try:
-            with urllib.request.urlopen(
-                f"http://127.0.0.1:{cef_port}/json/version", timeout=2
-            ) as r:
-                version_data = json.loads(r.read().decode())
-            browser_ws_url = version_data.get('webSocketDebuggerUrl')
-        except Exception as e:
-            logger.debug(f"[CDP-fetch] /json/version failed: {e}")
-
-        if not browser_ws_url:
-            # Fallback: use first available page target
-            try:
-                with urllib.request.urlopen(self.cef_url, timeout=2) as r:
-                    pages = json.loads(r.read().decode())
-                browser_ws_url = pages[0].get('webSocketDebuggerUrl') if pages else None
-            except Exception:
-                pass
-
-        if not browser_ws_url:
-            logger.warning("[CDP-fetch] No WebSocket URL available for Fetch interception")
-            return None, None
-
-        logger.info(f"[CDP-fetch] Connecting for Fetch interception, timeout={timeout:.0f}s")
-
-        try:
-            async with websockets.connect(browser_ws_url, ping_interval=None, open_timeout=10) as ws:
-                msg_id = 1
-
-                async def send(method, params=None):
-                    nonlocal msg_id
-                    payload = json.dumps({'id': msg_id, 'method': method, 'params': params or {}})
-                    await ws.send(payload)
-                    msg_id += 1
-
-                # Enable Fetch interception for oauth20_desktop.srf only
-                await send('Fetch.enable', {
-                    'patterns': [{'urlPattern': '*oauth20_desktop.srf*'}],
-                })
-                await asyncio.wait_for(ws.recv(), timeout=5)
-                logger.info("[CDP-fetch] Fetch interception enabled for oauth20_desktop.srf")
-
-                deadline = time.time() + timeout
-                while time.time() < deadline:
-                    try:
-                        raw = await asyncio.wait_for(ws.recv(), timeout=1.0)
-                    except asyncio.TimeoutError:
-                        continue
-
-                    try:
-                        msg = json.loads(raw)
-                    except json.JSONDecodeError:
-                        continue
-
-                    if msg.get('method') != 'Fetch.requestPaused':
-                        continue
-
-                    params_     = msg.get('params', {})
-                    request_id  = params_.get('requestId')
-                    req_url     = params_.get('request', {}).get('url', '')
-
-                    logger.debug(f"[CDP-fetch] Fetch.requestPaused: {req_url[:120]}")
-
-                    # Always continue so the browser behaves normally
-                    await send('Fetch.continueRequest', {'requestId': request_id})
-
-                    if 'code=' in req_url:
-                        code, store = self._extract_code(req_url)
-                        if code and store == 'microsoft':
-                            logger.info("[CDP-fetch] ✓ Microsoft code captured via Fetch interception")
-                            try:
-                                await send('Fetch.disable', {})
-                            except Exception:
-                                pass
-                            return code, store
-
-                    elif 'removed=true' in req_url:
-                        # Seen removed=true without a prior ?code= in this session
-                        logger.info("[CDP-fetch] removed=true without prior code — returning sentinel")
-                        try:
-                            await send('Fetch.disable', {})
-                        except Exception:
-                            pass
-                        return '__removed__', 'microsoft'
-
-        except Exception as e:
-            logger.warning(f"[CDP-fetch] WebSocket error: {e}")
-
-        logger.warning("[CDP-fetch] Fetch interception timed out")
-        return None, None
-
-    # ── public helpers ───────────────────────────────────────────────────────
-
-    async def close_page_by_url(self, url_pattern: str) -> bool:
-        """Close browser page matching URL pattern via CDP.
-
-        Uses /json/close/{id} HTTP endpoint first (most reliable in Steam CEF),
-        then falls back to Target.closeTarget, then Page.close.
-        """
-        try:
-            with urllib.request.urlopen(self.cef_url, timeout=2) as response:
-                pages = json.loads(response.read().decode())
-
-            for page in pages:
-                if url_pattern in page.get('url', ''):
-                    page_id = page.get('id', '')
-                    page_url = page.get('url', '')[:80]
-                    logger.info(f"[CDP] Closing page: {page_url}...")
-
-                    # Method 1: HTTP /json/close/{id} — simplest, works in most CEF builds
-                    if page_id:
-                        try:
-                            close_url = f"http://127.0.0.1:8080/json/close/{page_id}"
-                            with urllib.request.urlopen(close_url, timeout=2) as r:
-                                result = r.read().decode()
-                            logger.info(f"[CDP] Page closed via /json/close: {result}")
-                            return True
-                        except Exception as e:
-                            logger.debug(f"[CDP] /json/close failed: {e}, trying WS")
-
-                    # Method 2: Target.closeTarget via WebSocket
-                    ws_url = page.get('webSocketDebuggerUrl')
-                    if ws_url:
-                        try:
-                            import websockets
-                            async with websockets.connect(ws_url, ping_interval=None, open_timeout=5) as ws:
-                                # Try Target.closeTarget first
-                                await ws.send(json.dumps({
-                                    'id': 1,
-                                    'method': 'Target.closeTarget',
-                                    'params': {'targetId': page_id}
-                                }))
-                                await asyncio.wait_for(ws.recv(), timeout=3)
-                                logger.info("[CDP] Page closed via Target.closeTarget")
-                                return True
-                        except Exception as e:
-                            logger.debug(f"[CDP] Target.closeTarget failed: {e}, trying Page.close")
-
-                        try:
-                            import websockets
-                            async with websockets.connect(ws_url, ping_interval=None, open_timeout=5) as ws:
-                                await ws.send(json.dumps({
-                                    'id': 1,
-                                    'method': 'Page.close',
-                                    'params': {}
-                                }))
-                                logger.info("[CDP] Page.close command sent")
-                                return True
-                        except Exception as e:
-                            logger.debug(f"[CDP] Page.close failed: {e}")
-
-            logger.warning(f"[CDP] No page found matching: {url_pattern}")
-            return False
-
-        except Exception as e:
-            logger.error(f"[CDP] Error closing page: {e}")
-            return False
-
-    async def navigate_page_to_url(self, url_pattern: str, new_url: str) -> bool:
-        """Navigate a browser page matching url_pattern to new_url via CDP."""
-        try:
-            with urllib.request.urlopen(self.cef_url, timeout=2) as response:
-                pages = json.loads(response.read().decode())
-
-            for page in pages:
-                if url_pattern in page.get('url', ''):
-                    ws_url = page.get('webSocketDebuggerUrl')
-                    if ws_url:
-                        logger.info(f"[CDP] Navigating page to new URL: {new_url[:80]}...")
-                        import websockets
-                        async with websockets.connect(ws_url, ping_interval=None) as websocket:
-                            await websocket.send(json.dumps({
-                                'id': 1,
-                                'method': 'Page.navigate',
-                                'params': {'url': new_url}
-                            }))
-                            await asyncio.wait_for(websocket.recv(), timeout=5)
-                            logger.info("[CDP] Page navigation command sent")
-                            return True
-
-            logger.warning(f"[CDP] No page found matching: {url_pattern}")
-            return False
-
-        except Exception as e:
-            logger.error(f"[CDP] Error navigating page: {e}")
-            return False
-
-    async def refresh_page_by_url(self, url_pattern: str) -> bool:
-        """Refresh/reload a browser page matching URL pattern via CDP"""
-        try:
-            with urllib.request.urlopen(self.cef_url, timeout=2) as response:
-                pages = json.loads(response.read().decode())
-
-            for page in pages:
-                if url_pattern in page.get('url', ''):
-                    ws_url = page.get('webSocketDebuggerUrl')
-                    if ws_url:
-                        logger.info(f"[CDP] Refreshing page via CDP: {page.get('url', '')[:80]}...")
-                        import websockets
-                        async with websockets.connect(ws_url, ping_interval=None) as websocket:
-                            await websocket.send(json.dumps({
-                                'id': 1,
-                                'method': 'Page.reload',
-                                'params': {'ignoreCache': True}
-                            }))
-                            logger.info("[CDP] Page refresh command sent")
-                            return True
-
-            logger.warning(f"[CDP] No page found matching: {url_pattern}")
-            return False
-
-        except Exception as e:
-            logger.error(f"[CDP] Error refreshing page: {e}")
-            return False
-
-    async def clear_cookies_for_domain(self, domain: str) -> bool:
-        """Clear browser cookies for a specific domain via CDP.
-
-        Uses Network.getCookies + Network.deleteCookies to remove only cookies
-        that belong to the requested domain — does NOT wipe all browser cookies
-        (which would log the user out of Epic, GOG, Amazon, etc.).
-        """
-        try:
-            logger.info(f"[CDP] Clearing cookies for domain: {domain}")
-
-            with urllib.request.urlopen(self.cef_url, timeout=2) as response:
-                pages = json.loads(response.read().decode())
-
-            if not pages:
-                logger.error("[CDP] No pages available for CDP connection")
-                return False
-
-            ws_url = pages[0].get('webSocketDebuggerUrl')
-            if not ws_url:
-                logger.error("[CDP] No WebSocket URL available")
-                return False
-
-            import websockets
-            async with websockets.connect(ws_url, ping_interval=None) as websocket:
-
-                # Step 1: fetch all cookies
-                await websocket.send(json.dumps({
-                    'id': 1,
-                    'method': 'Network.getAllCookies',
-                    'params': {}
-                }))
-                raw = await asyncio.wait_for(websocket.recv(), timeout=5)
-                data = json.loads(raw)
-                cookies = data.get('result', {}).get('cookies', [])
-
-                # Step 2: delete only cookies whose domain matches
-                deleted = 0
-                msg_id = 2
-                for cookie in cookies:
-                    cookie_domain = cookie.get('domain', '')
-                    # cookie_domain may be ".live.com" or "login.live.com" etc.
-                    if domain in cookie_domain or cookie_domain.lstrip('.') in domain:
-                        await websocket.send(json.dumps({
-                            'id': msg_id,
-                            'method': 'Network.deleteCookies',
-                            'params': {
-                                'name':   cookie['name'],
-                                'domain': cookie_domain,
-                                'path':   cookie.get('path', '/'),
-                            }
-                        }))
-                        await asyncio.wait_for(websocket.recv(), timeout=5)
-                        msg_id += 1
-                        deleted += 1
-
-                logger.info(f"[CDP] Cleared {deleted} cookies for domain: {domain}")
+        endpoints = (
+            (self._list_targets, self._cdp.close_target, "CEF"),
+            (self._list_edge_targets, self._close_edge_target, "Edge"),
+        )
+        for list_fn, close_fn, label in endpoints:
+            if await self._try_close_in_endpoint(
+                list_fn, close_fn, url_substring, label,
+            ):
                 return True
+        return False
 
+    async def clear_store_cookies(self, domain: str) -> bool:
+        """Clear all cookies for ``domain`` via injected JavaScript.
+
+        SECURITY: ``domain`` is validated against a strict regex
+        before being interpolated into the JS template. Without
+        this check, a malicious caller could inject arbitrary
+        JavaScript into Steam's CEF process.
+        """
+        if not re.match(r"^[a-zA-Z0-9][a-zA-Z0-9.\-]*$", domain):
+            logger.warning(
+                "[auth/browser] rejected invalid cookie domain: %r", domain,
+            )
+            return False
+        try:
+            await self._cdp.eval_js(
+                "document.cookie.split(';').forEach(c => "
+                "document.cookie = c.replace(/^ +/, '')"
+                ".replace(/=.*/,"
+                f" '=;expires=Thu, 01 Jan 1970 00:00:00 GMT;"
+                f"path=/;domain={domain}'));",
+            )
+            return True
         except Exception as e:
-            logger.error(f"[CDP] Error clearing cookies: {e}")
+            logger.debug("[auth/browser] cookie clear failed: %s", e)
             return False
 
-    # ── private helpers ──────────────────────────────────────────────────────
+    # ── Internal: polling + capture ────────────────────────────
 
-    async def _extract_epic_code_from_page(self, url) -> Optional[str]:
-        """Extract authorizationCode from browser page via CDP WebSocket"""
+    async def _poll_both_endpoints(
+        self,
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        """List CDP targets from both Steam CEF and Edge.
+
+        Each endpoint is queried independently; failure on
+        one endpoint logs at DEBUG and returns an empty
+        list rather than aborting the whole poll cycle.
+        Returns ``(cef_targets, edge_targets)`` so the caller
+        can both concatenate them and log the per-endpoint
+        counts in the heartbeat.
+        """
+        cef_targets: list[dict[str, Any]] = []
+        edge_targets: list[dict[str, Any]] = []
         try:
-            logger.info(f"[CDP] Getting page details for: {url[:80]}...")
-
-            with urllib.request.urlopen(self.cef_url, timeout=2) as response:
-                pages = json.loads(response.read().decode())
-
-            target_page = None
-            for page in pages:
-                if url in page.get('url', ''):
-                    target_page = page
-                    break
-
-            if not target_page or 'webSocketDebuggerUrl' not in target_page:
-                logger.error(f"[CDP] Could not find page or WebSocket URL for: {url[:80]}")
-                return None
-
-            ws_url = target_page['webSocketDebuggerUrl']
-            import websockets
-            async with websockets.connect(ws_url, ping_interval=None) as websocket:
-                await websocket.send(json.dumps({
-                    'id': 1,
-                    'method': 'Runtime.evaluate',
-                    'params': {
-                        'expression': 'document.body.innerText',
-                        'returnByValue': True
-                    }
-                }))
-
-                response_text = await asyncio.wait_for(websocket.recv(), timeout=5)
-                response_data = json.loads(response_text)
-
-                if 'result' in response_data and 'result' in response_data['result']:
-                    page_content = response_data['result']['result'].get('value', '')
-                    logger.info(f"[CDP] Got page content from browser: {len(page_content)} chars")
-
-                    match = re.search(r'"authorizationCode"\s*:\s*"([^"]+)"', page_content)
-                    if match:
-                        logger.info("[CDP] Extracted authorizationCode from browser page")
-                        return match.group(1)
-
-                    logger.info(f"[CDP] No authorizationCode in page content (first 200 chars): {page_content[:200]}")
-                    return None
-                else:
-                    logger.error(f"[CDP] Unexpected response format: {response_data}")
-                    return None
-
+            cef_targets = await self._list_targets()
         except Exception as e:
-            logger.error(f"[CDP] Error extracting Epic code via WebSocket: {e}")
+            logger.debug("[auth/browser] CEF target list: %s", e)
+        try:
+            edge_targets = await self._list_edge_targets()
+        except Exception as e:
+            logger.debug("[auth/browser] Edge target list: %s", e)
+        return cef_targets, edge_targets
+
+    @staticmethod
+    def _log_heartbeat_if_due(
+        state: dict[str, Any],
+        cef_targets: list[dict[str, Any]],
+        edge_targets: list[dict[str, Any]],
+        all_targets: list[dict[str, Any]],
+    ) -> None:
+        """Log target counts every 30s so operators see liveness.
+
+        Mutates ``state["last_heartbeat"]`` on each emit.
+        Without this signal a stuck auth flow looks identical
+        in the logs to a flow waiting on a slow user — the
+        periodic heartbeat lets ops tell them apart.
+        """
+        now = time.monotonic()
+        if now - state["last_heartbeat"] < 30:
+            return
+        state["last_heartbeat"] = now
+        urls = [t.get("url", "")[:80] for t in all_targets if t.get("url")]
+        logger.info(
+            "[auth/browser] heartbeat: %d CEF + %d Edge = "
+            "%d total targets, urls=%s",
+            len(cef_targets), len(edge_targets),
+            len(all_targets), urls,
+        )
+
+    async def _try_capture_target(
+        self,
+        target: dict[str, Any],
+        allowed_uris: list[str],
+        state: dict[str, Any],
+        start: float,
+    ) -> AuthCaptureResult | None:
+        """Inspect one CDP target for an OAuth code.
+
+        Returns an ``AuthCaptureResult`` on the first match
+        (strict redirect, generic code-in-URL, or Epic
+        content-extraction), or ``None`` if this target is
+        irrelevant / already monitored / not yet ready.
+
+        Three capture paths, tried in order:
+
+        1. Strict redirect-URI match against ``allowed_uris``.
+        2. Generic ``?code=`` extraction from the URL — catches
+           providers that redirect through intermediate URLs.
+        3. Page content extraction for Epic's intermediate
+           page (retried every poll tick because the page
+           content changes when the user finishes signing in).
+        """
+        url = target.get("url", "")
+        if not url or url in state["monitored_urls"]:
             return None
 
-    def _extract_code(self, url) -> Tuple[Optional[str], Optional[str]]:
-        """Extract OAuth code from URL"""
-        # Epic style (check first - more specific)
-        if 'authorizationCode=' in url:
-            match = re.search(r'authorizationCode=([^&\s]+)', url)
-            if match:
-                return match.group(1), 'epic'
+        # Epic's content-extraction URLs are never deduped:
+        # the page body starts with the login form, then the
+        # ``authorizationCode`` JSON blob appears AFTER the user
+        # signs in. Dedup'ing after one failed read would miss
+        # the code permanently.
+        is_content_page = (
+            "/id/api/redirect" in url
+            or "epicgames.com" in url.lower()
+        )
+        if not is_content_page:
+            state["monitored_urls"].add(url)
 
-        # Amazon style
-        if 'amazon.com' in url.lower() and 'openid.oa2.authorization_code=' in url:
-            match = re.search(r'openid\.oa2\.authorization_code=([^&\s]+)', url)
-            if match:
-                return match.group(1), 'amazon'
+        # Broad pattern matching: inspect ANY URL containing
+        # OAuth-related keywords. More reliable than strict
+        # redirect-URI prefix matching — some providers redirect
+        # through intermediate URLs that don't match the callback
+        # prefix exactly.
+        if not is_oauth_relevant_url(url):
+            return None
 
-        # Microsoft / Xbox Live style
-        # Match oauth20_desktop.srf regardless of whether login.live.com is
-        # present in the URL (some CEF environments strip/rewrite the host).
-        if 'oauth20_desktop.srf' in url and 'code=' in url:
-            parsed = urlparse(url)
-            params = parse_qs(parsed.query)
-            if 'code' in params:
-                logger.info("[CDP] Detected Microsoft OAuth redirect")
-                return params['code'][0], 'microsoft'
+        if url not in state["logged_urls"]:
+            state["logged_urls"].add(url)
+            logger.info(
+                "[auth/browser] OAuth page detected: %s", url[:120],
+            )
 
-        # GOG style
-        if 'code=' in url:
-            parsed = urlparse(url)
-            params = parse_qs(parsed.query)
-            if 'code' in params:
-                return params['code'][0], 'gog'
+        # Epic content-page extraction (priority over URL).
+        if is_content_page:
+            content_result = await try_epic_content_capture(
+                target, url, state, start,
+            )
+            if content_result is not None:
+                return content_result
 
-        return None, None
+        # Strict redirect-URI check.
+        if match_redirect(url, allowed_uris):
+            return build_redirect_capture(url, start)
+
+        # Generic code extraction from any OAuth URL.
+        code_from_url = extract_code_from_url(url)
+        if code_from_url:
+            return build_url_code_capture(url, code_from_url, start)
+
+        return None
+
+    # ── Internal: close + endpoints ────────────────────────────
+
+    async def _try_close_in_endpoint(
+        self,
+        list_fn: Any,
+        close_fn: Any,
+        url_substring: str,
+        label: str,
+    ) -> bool:
+        """Try to close one target matching ``url_substring`` on one endpoint.
+
+        Returns True on a successful close, False on:
+
+        * Listing the endpoint raised (no tabs visible).
+        * No target's URL contains ``url_substring``.
+        * The matching target lacks an ``id`` field.
+        * Close itself raised (logged at DEBUG, no retry).
+        """
+        try:
+            targets = await list_fn()
+        except Exception:
+            return False
+        for target in targets:
+            if url_substring not in target.get("url", ""):
+                continue
+            target_id = target.get("id")
+            if not target_id:
+                continue
+            try:
+                # Edge close goes through its own helper because
+                # the close URL is different (``/json/close/<id>``
+                # vs CEF's protocol method). CEF goes through
+                # cdp_client.
+                if label == "Edge":
+                    await close_fn(target_id)
+                else:
+                    await self._cdp.close_target(target_id)
+                return True
+            except Exception as e:
+                logger.debug(
+                    "[auth/browser] close on %s failed: %s",
+                    label, e,
+                )
+                return False
+        return False
+
+    async def _close_edge_target(self, target_id: str) -> None:
+        """Close a single target on the Edge CDP endpoint."""
+        import aiohttp
+        async with aiohttp.ClientSession() as session:
+            url = (
+                f"http://127.0.0.1:{self._edge_cdp_port}"
+                f"/json/close/{target_id}"
+            )
+            async with session.get(
+                url, timeout=aiohttp.ClientTimeout(total=2),
+            ):
+                pass
+
+    async def _list_targets(self) -> list[dict[str, Any]]:
+        """Wrapper around the CDP client's public target listing."""
+        try:
+            return await self._cdp.list_targets()
+        except Exception as e:
+            logger.debug("[auth/browser] list_targets failed: %s", e)
+            return []
+
+    async def _list_edge_targets(self) -> list[dict[str, Any]]:
+        """List targets from the Edge CDP endpoint (auth browser).
+
+        Edge is launched by the shortcut helper with
+        ``--remote-debugging-port={self._edge_cdp_port}``. This
+        polls the standard CDP HTTP JSON endpoint to get the
+        list of open pages/workers. Uses aiohttp so the call
+        is non-blocking and fits into the asyncio polling loop.
+        """
+        import aiohttp
+        try:
+            async with aiohttp.ClientSession() as session:
+                url = (
+                    f"http://127.0.0.1:{self._edge_cdp_port}"
+                    f"/json/list"
+                )
+                async with session.get(
+                    url, timeout=aiohttp.ClientTimeout(total=2),
+                ) as resp:
+                    data = await resp.json()
+                    return data if isinstance(data, list) else []
+        except Exception as e:
+            logger.debug(
+                "[auth/browser] Edge CDP not reachable (port %s): %s",
+                self._edge_cdp_port, e,
+            )
+            return []
+
+
+# ── Legacy compatibility aliases ─────────────────────────────────
+CDPOAuthMonitor = OAuthBrowserMonitor

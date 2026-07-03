@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Iterator, Mapping, MutableMapping
-from typing import Any, Protocol, Union
+from typing import Any, Protocol
 
 
-__all__ = ["Headers", "HeadersLike", "MultipleValuesError"]
+__all__ = [
+    "Headers",
+    "HeadersLike",
+    "MultipleValuesError",
+]
 
 
 class MultipleValuesError(LookupError):
@@ -167,13 +171,9 @@ class SupportsKeysAndGetItem(Protocol):  # pragma: no cover
     def __getitem__(self, key: str) -> str: ...
 
 
-# Change to Headers | Mapping[str, str] | ... when dropping Python < 3.10.
-HeadersLike = Union[
-    Headers,
-    Mapping[str, str],
-    Iterable[tuple[str, str]],
-    SupportsKeysAndGetItem,
-]
+HeadersLike = (
+    Headers | Mapping[str, str] | Iterable[tuple[str, str]] | SupportsKeysAndGetItem
+)
 """
 Types accepted where :class:`Headers` is expected.
 
