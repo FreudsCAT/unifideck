@@ -18,7 +18,8 @@ before the Steam users — required for DPAPI credential matching.
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+import contextlib
+from collections.abc import Callable, Iterator
 from pathlib import Path
 
 from .config import UbisoftConfig
@@ -30,6 +31,22 @@ class UbisoftPrefixPaths:
     def __init__(self, config: UbisoftConfig) -> None:
         """Initialize the instance."""
         self._config = config
+        # Wired post-construction by ``build_ubisoft_specialists`` once the
+        # id_map exists (avoids a paths→id_map→sources→paths import cycle).
+        # ``_prefix_resolver`` maps space_id → recorded absolute prefix path;
+        # ``_recorded_lister`` returns all recorded external prefix paths.
+        self._prefix_resolver: Callable[[str], str | None] | None = None
+        self._recorded_lister: Callable[[], list[str]] | None = None
+
+    def set_prefix_registry(
+        self,
+        *,
+        resolver: Callable[[str], str | None],
+        lister: Callable[[], list[str]],
+    ) -> None:
+        """Wire the per-game prefix-location registry (from the id_map)."""
+        self._prefix_resolver = resolver
+        self._recorded_lister = lister
 
     def find_upc_exe(self, prefix_path: str) -> str | None:
         """Find UPC exe."""
@@ -83,10 +100,46 @@ class UbisoftPrefixPaths:
                     yield prefix_root, str(entry)
 
     def get_prefix_path(self, space_id: str) -> str:
-        """Get prefix path."""
+        """Resolve a game's Wine-prefix path.
+
+        Prefers the per-game location recorded at install time (games can
+        be installed to SD / custom storage); falls back to the fixed
+        internal ``prefixes_dir/<space_id>`` for games installed before
+        this existed.
+        """
+        if self._prefix_resolver is not None:
+            recorded = self._prefix_resolver(space_id)
+            if recorded:
+                return recorded
         return str(
             Path(self._config.prefixes_dir_expanded) / space_id,
         )
+
+    def iter_all_game_prefix_paths(self) -> list[str]:
+        """Every per-game prefix dir — fixed-base scan ∪ recorded externals.
+
+        ``config.iter_game_prefix_paths`` only scans the internal
+        ``prefixes_dir``; prefixes relocated to SD / custom storage live
+        elsewhere and are tracked in the id_map. Dangling entries (e.g. an
+        unmounted SD card) are skipped via the ``is_dir`` guard.
+        """
+        result = list(self._config.iter_game_prefix_paths())
+        seen: set[str] = set()
+        for path in result:
+            with contextlib.suppress(OSError):
+                seen.add(str(Path(path).resolve()))
+        if self._recorded_lister is not None:
+            for path in self._recorded_lister():
+                try:
+                    resolved = str(Path(path).resolve())
+                except OSError:
+                    continue
+                if resolved in seen:
+                    continue
+                if Path(path).is_dir():
+                    seen.add(resolved)
+                    result.append(path)
+        return result
 
     @staticmethod
     def _find_in_prefix(

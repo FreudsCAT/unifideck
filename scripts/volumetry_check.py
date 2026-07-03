@@ -196,7 +196,12 @@ NESTING_ALLOWLIST: Dict[str, int] = {
 }
 
 FANOUT_ALLOWLIST: Dict[str, int] = {
-    "py_modules/unifideck/stores/gog/store.py::__init__": 14,
+    # ``stores/gog/store.py::__init__`` graduated on 2026-06-30: the
+    # construction was split into ``_build_core_components`` (always-on
+    # submodules) and a shared ``_build_gogdl_submodules`` (also used by
+    # ``_rebuild_auth_after_injection``), bringing fan-out from 15 to 8.
+    # Removed per allowlist contract — grandfathered entries must stay above
+    # the cap or be cleaned up.
 }
 
 

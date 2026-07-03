@@ -238,6 +238,17 @@ async def _boot_layer5_services(
     compat = getattr(plugin.services, "compatibility", None)
     if compat is not None:
         compat.wire_sync_service(plugin.sync_service)
+    # Install-time prefix warmup: after a successful install (Epic/GOG/Amazon),
+    # the download worker runs the full first-run prefix setup + cloud pull
+    # before marking the item complete, so the prefix exists by the first
+    # launch (fixes the no-saves-on-first-launch race). Bound to the cloud-save
+    # service so the warmup can pull saves once drive_c exists.
+    download = getattr(plugin.services, "download", None)
+    if download is not None:
+        from unifideck.services.download.prefix_warmup import make_prefix_warmup
+        download.set_prefix_warmup(
+            make_prefix_warmup(getattr(plugin.services, "cloudsave", None)),
+        )
     await start_async_services(plugin.services)
 
 

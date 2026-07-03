@@ -25,7 +25,7 @@ import type { DownloadItem, DownloadStatus } from "../../types/downloads";
 import { DownloadProgressRow } from "./DownloadProgressRow";
 
 /** Map backend ``DownloadStatus`` to the i18n outcome key
- *  (kept stable across 14 locale files). Backend says
+ *  (kept stable across 16 locale files). Backend says
  *  ``"complete"``/``"failed"``/``"running"`` while the i18n
  *  bundle uses ``"completed"``/``"error"``/``"downloading"`` —
  *  the rename would touch every locale, so we adapt instead. */

@@ -35,7 +35,12 @@ function formatEta(secs: number): string {
 }
 
 function isIndeterminate(phase: DownloadPhase | undefined): boolean {
-  return phase === "extracting" || phase === "verifying";
+  return (
+    phase === "extracting" ||
+    phase === "verifying" ||
+    phase === "manual" ||
+    phase === "preparing"
+  );
 }
 
 function statusLabelKey(
@@ -43,6 +48,10 @@ function statusLabelKey(
   phase: DownloadPhase | undefined,
   prev: boolean,
 ): string {
+  // Ubisoft (UPC-driven) installs: no real download — show a dedicated
+  // label and let the indeterminate path render the phase_message.
+  if (phase === "manual") return "downloadsTab.installingViaUpcLabel";
+  if (phase === "preparing") return "downloadsTab.preparingLabel";
   if (phase === "extracting") return "downloadsTab.extractingLabel";
   if (phase === "verifying") return "downloadsTab.verifyingLabel";
   if (status === "queued") {
@@ -72,6 +81,20 @@ export const DownloadProgressRow: FC<Props> = ({
   const label = t(
     statusLabelKey(download.status, download.download_phase, prev),
   );
+  // Indeterminate detail line: rendered purely from phase (+ percent) so it
+  // is always localized. The backend's ``phase_message`` is hardcoded English
+  // and is deliberately NOT displayed — see DownloadsTab i18n.
+  const phase = download.download_phase;
+  const detail =
+    phase === "preparing"
+      ? t("downloadsTab.preparingMessage")
+      : phase === "extracting"
+      ? t("downloadsTab.extractingMessage")
+      : phase === "verifying"
+      ? t("downloadsTab.verifyingMessage", { pct: pct.toFixed(1) })
+      : phase === "manual"
+      ? t("downloadsTab.installingViaUpcMessage")
+      : t("downloadsTab.finalizingInstallation");
 
   return (
     <div
@@ -131,9 +154,7 @@ export const DownloadProgressRow: FC<Props> = ({
         }}
       >
         {indeterminate ? (
-          <span>
-            {download.phase_message || t("downloadsTab.finalizingInstallation")}
-          </span>
+          <span>{detail}</span>
         ) : (
           <>
             <span>

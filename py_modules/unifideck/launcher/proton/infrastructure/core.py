@@ -22,6 +22,32 @@ STORE_TO_UMU = {
 }
 
 
+def sanitize_frozen_loader_env(env: dict[str, str]) -> None:
+    """Undo a PyInstaller-frozen parent's dynamic-loader pollution, in place.
+
+    When the launch plan is built inside the Decky plugin process — whose
+    ``PluginLoader`` is a PyInstaller-frozen binary — ``os.environ`` carries
+    ``LD_LIBRARY_PATH=/tmp/_MEIxxxx`` pointing at the loader's *bundled* libs
+    (an old ``libcrypto`` lacking ``OPENSSL_3.3.0``). umu-run runs under the
+    SYSTEM python, so that path makes its ``import ssl`` fail with
+    ``ImportError: libcrypto.so.3: version 'OPENSSL_3.3.0' not found`` — umu
+    then aborts, so ``createprefix`` / winetricks silently do nothing (the
+    install-time prefix warmup produced empty prefixes for exactly this
+    reason). PyInstaller stashes the real pre-launch value in ``<VAR>_ORIG``;
+    restore it, else drop a ``_MEI`` bundle path.
+
+    A NO-OP outside a frozen parent — e.g. the out-of-process launcher Steam
+    spawns has a clean env (no ``_ORIG``, no ``_MEI`` path) — so it's safe to
+    run on every launch path, not just the warmup.
+    """
+    for var in ("LD_LIBRARY_PATH", "LD_PRELOAD"):
+        orig = env.pop(f"{var}_ORIG", None)
+        if orig is not None:
+            env[var] = orig
+        elif "/_MEI" in env.get(var, ""):
+            env.pop(var, None)
+
+
 @dataclass(frozen=True)
 class ProtonLaunchPlan:
     """Everything store handlers need to spawn umu-run."""
@@ -33,8 +59,26 @@ class ProtonLaunchPlan:
     env: dict[str, str]
     on_process_start: Callable[[object], None] | None = None
 def _ubisoft_prefix_path(ctx: LaunchContext, prefixes_dir: Path) -> Path:
-    """Ubisoft prefix path."""
+    """Ubisoft prefix path.
+
+    Games can be installed to a user-picked location (SD / custom); the
+    backend records the absolute per-game prefix path in
+    ``ubisoft_id_map.json`` (the same file ``_uplay_id_from_id_map`` reads).
+    Prefer that; fall back to the fixed internal location for games installed
+    before this existed and for the auth shortcut (whose game_id has no
+    recorded prefix — it uses ``UNIFIDECK_UBISOFT_PREFIX_NAME=.upc-auth``).
+    """
+    import json
     import os
+    id_map_file = Path("~/.local/share/unifideck/ubisoft_id_map.json").expanduser()
+    try:
+        data = json.loads(id_map_file.read_text(encoding="utf-8"))
+        entry = data.get(ctx.game_id) if isinstance(data, dict) else None
+        recorded = entry.get("prefix_path") if isinstance(entry, dict) else None
+        if recorded:
+            return Path(recorded)
+    except (OSError, ValueError):
+        pass
     ubi_name = os.environ.get("UNIFIDECK_UBISOFT_PREFIX_NAME") or ctx.game_id
     return prefixes_dir / "ubisoft" / ubi_name
 def _resolve_prefix(ctx: LaunchContext) -> Path:
@@ -116,6 +160,10 @@ def proton_prepare(
     state.umu_id = umu_id
     state.umu_wrapper = umu_wrapper
     env = dict(os.environ)
+    # Strip the Decky PluginLoader's PyInstaller LD_LIBRARY_PATH pollution so
+    # umu-run (system python) doesn't load a stale libcrypto and abort — the
+    # cause of empty install-time prefixes. No-op for the clean launcher env.
+    sanitize_frozen_loader_env(env)
     env["GAMEID"] = umu_id or "umu-0"
     env["STORE"] = umu_store
     # PROTONPATH tells umu-run which Proton to use — the *directory*
@@ -139,9 +187,17 @@ def proton_prepare(
     # Let DXVK-NVAPI work on non-NVIDIA / mixed driver setups (harmless
     # on the Deck's AMD GPU; required by some titles' NVAPI probes).
     env["DXVK_NVAPI_ALLOW_OTHER_DRIVERS"] = "1"
-    env["STEAM_COMPAT_CLIENT_INSTALL_PATH"] = str(
-    Path("~/.steam/root").expanduser(),
-   )
+    # Do NOT pin STEAM_COMPAT_CLIENT_INSTALL_PATH. umu-run derives it
+    # itself; forcing it to ``~/.steam/root`` — a symlink chain on
+    # atomic/ostree hosts (Bazzite: ``~`` → /var/home, ``.steam/root`` →
+    # steam) — makes pressure-vessel's ``/run/host`` + ``from-host``
+    # capsule-capture loop when bwrap resolves ``pv-adverb`` → "Too many
+    # levels of symbolic links" (ELOOP), so the game exits code 1 before it
+    # starts (Cyberpunk/GOG on Bazzite). The pre-refactor bash launcher
+    # deliberately UNSET this and worked on Deck + Bazzite + CachyOS; mirror
+    # that — also drop any value Steam passed down, since that's the looping
+    # one on atomic hosts.
+    env.pop("STEAM_COMPAT_CLIENT_INSTALL_PATH", None)
     env["PROTON_VERB"] = "waitforexitandrun"
     env.update(ctx.env_overrides)
     logger.info(

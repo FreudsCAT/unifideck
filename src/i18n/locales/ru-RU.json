@@ -106,7 +106,13 @@
     "downloadingLabel": "Загрузка...",
     "finalizingInstallation": "Завершение установки...",
     "speedMbps": "{{speed}} МБ/с",
-    "etaLabel": "Осталось времени: {{eta}}"
+    "etaLabel": "Осталось времени: {{eta}}",
+    "preparingMessage": "Инициализация префикса и синхронизация облачных сохранений...",
+    "preparingLabel": "Настройка игры...",
+    "installingViaUpcLabel": "Установка через Ubisoft Connect",
+    "extractingMessage": "Извлечение файлов...",
+    "verifyingMessage": "Проверка файлов... {{pct}}%",
+    "installingViaUpcMessage": "Следуйте инструкциям в окне Ubisoft Connect, чтобы завершить установку..."
   },
   "cloudSave": {
     "title": "Конфликт облачных сохранений",
@@ -122,7 +128,11 @@
     "toastUsingLocalTitle": "Использование локальных сохранений",
     "toastUsingLocalBody": "Загрузка локальных сохранений в облако для {{game}}",
     "toastErrorTitle": "Ошибка",
-    "toastErrorBody": "Не удалось разрешить конфликт сохранений"
+    "toastErrorBody": "Не удалось разрешить конфликт сохранений",
+    "filesSize": "{{count}} файлов · {{size}}",
+    "uploadBlockedEmpty": "Загрузка в облако для {{game}} пропущена — локальные сохранения не найдены",
+    "uploadSkippedTitle": "Загрузка в облако пропущена",
+    "uploadSkippedBody": "Пока нет локальных сохранений для загрузки для {{game}}."
   },
   "storeConnections": {
     "title": "ПОДКЛЮЧЕНИЕ МАГАЗИНОВ",
@@ -302,7 +312,20 @@
       "cloudSyncDownFailed": "Не удалось скачать сохранения из облака для {{store}} ({{error}}). Игра запущена с локальными сохранениями.",
       "cloudSyncUpFailed": "Не удалось загрузить сохранения в облако для {{store}} ({{error}}). Ваш прогресс сохранен только локально.",
       "errorCircuitBreakerOpen": "Запуск {{game_key}} не удался {{count}} раз подряд. Автоматические запуски приостановлены.",
-      "launcherError": "Не удалось запустить {{game_key}} ({{error_code}}). Подробности смотрите в логах."
+      "launcherError": "Не удалось запустить {{game_key}} ({{error_code}}). Подробности смотрите в логах.",
+      "downloadingProton": "Загрузка Proton — это может занять несколько минут...",
+      "downloadingRuntime": "Загрузка Steam Runtime — первый запуск может занять несколько минут...",
+      "installingUbisoft": "Установка через Ubisoft Connect",
+      "installingUbisoftMessage": "Открытие Ubisoft Connect — начните установку в окне лаунчера.",
+      "protonReadyBody": "{{version}} готов к использованию",
+      "protonReadyTitle": "Proton готов",
+      "protonSwitchedTo": "Теперь используется {{version}}",
+      "signingInUbisoft": "Вход в Ubisoft Connect",
+      "signingInUbisoftMessage": "Открытие Ubisoft Connect — войдите там, затем вернитесь.",
+      "ubisoftPrefixNotReady": "Ubisoft Connect не готов",
+      "ubisoftPrefixNotReadyMessage": "Не удалось подготовить префикс Ubisoft Connect для этой игры. Попробуйте установить ещё раз; если ошибка повторяется, запустите синхронизацию библиотеки снова.",
+      "ubisoftLaunchIdMissing": "Открытие Ubisoft Connect",
+      "ubisoftLaunchIdMissingMessage": "Не удалось определить ID запуска этой игры — открывается Ubisoft Connect, чтобы вы могли запустить её из своей библиотеки. Запустите синхронизацию библиотеки снова, чтобы исправить прямой запуск."
     },
     "updateComplete": "Обновление завершено!",
     "updateCompleteMessage": "{{title}} обновлен.",
@@ -323,7 +346,15 @@
     "library": {
       "_comment": "Toasts emitted by SyncService when a per-store library sync fails. The retry button triggers a fire-and-forget refresh via the unifideck://refresh-library/<store> verb; the user doesn't wait for the result inline, the Library view picks it up through its SYNC_PROGRESS subscription.",
       "syncStoreFailed": "Не удалось обновить библиотеку магазина {{store}} ({{error}}). Текущий список игр останется без изменений."
-    }
+    },
+    "cloudPullStarted": "Скачивание облачного сохранения…",
+    "cloudPushStarted": "Загрузка локального сохранения…",
+    "cloudSavePathFailed": "Не удалось установить папку сохранений",
+    "cloudSavePathSet": "Папка сохранений обновлена",
+    "cloudPullDone": "Облачное сохранение скачано",
+    "cloudPullFailed": "Не удалось скачать облачное сохранение",
+    "cloudPushDone": "Локальное сохранение загружено",
+    "cloudPushFailed": "Не удалось загрузить локальное сохранение"
   },
   "uninstallModal": {
     "title": "Подтверждение удаления",
@@ -460,7 +491,8 @@
       "support": "Поддержка",
       "install": "Установить",
       "uninstall": "Удалить",
-      "cancel": "Отмена"
+      "cancel": "Отмена",
+      "achievements": "Достижения"
     },
     "labels": {
       "store": "Магазин:",
@@ -485,7 +517,8 @@
       "unsupported": "НЕ ПОДДЕРЖИВАЕТСЯ",
       "unknown": "НЕИЗВЕСТНО"
     },
-    "failedToLoadMetadata": "Не удалось загрузить метаданные"
+    "failedToLoadMetadata": "Не удалось загрузить метаданные",
+    "lastSession": "Прошлая сессия: получено {{names}}"
   },
   "gameDetailsSettings": {
     "title": "ВИД СТРАНИЦЫ ИГРЫ",
@@ -551,7 +584,8 @@
     "cancel": "Отмена",
     "working": "Обработка…",
     "loading": "Загрузка…",
-    "free": "бесплатно"
+    "free": "бесплатно",
+    "close": "Закрыть"
   },
   "info": {
     "expandDetails": "Развернуть",
@@ -610,13 +644,47 @@
     "cancelConfirmBody": "Вы уверены, что хотите отменить загрузку {{title}}? Частично загруженные файлы будут удалены.",
     "cancelConfirmConfirm": "Отменить загрузку",
     "cancelConfirmCancel": "Продолжить загрузку",
-    "playOnCloud": "Играть в облаке"
+    "playOnCloud": "Играть в облаке",
+    "cloudSave": {
+      "autoPullOn": "Облачные сохранения загружаются автоматически при запуске.",
+      "close": "Закрыть",
+      "download": "Скачать облачное сохранение",
+      "filesCount": "{{count}} файлов",
+      "label": "Облачные сохранения",
+      "menuTitle": "Облачные сохранения — {{game}}",
+      "noCloudData": "Неизвестно",
+      "noCloudSupport": "Нет поддержки облачных сохранений",
+      "setLocation": "Указать папку сохранений",
+      "setLocationHint": "Выберите папку, в которой эта игра хранит свои сохранения.",
+      "setLocationTitle": "Выберите папку сохранений этой игры",
+      "statusCloudAvailable": "Облачное сохранение доступно",
+      "statusNoSaves": "Нет локальных сохранений",
+      "statusSyncing": "Синхронизация облачных сохранений…",
+      "statusUnresolved": "Папка сохранений не найдена — синхронизация может не работать для этой игры.",
+      "unresolvedHint": "Запустите игру один раз, чтобы мы могли определить ее папку сохранений, или укажите ее вручную.",
+      "upload": "Загрузить локальное сохранение"
+    },
+    "exe": {
+      "browse": "Обзор…",
+      "changeFailed": "Не удалось изменить исполняемый файл",
+      "changed": "Исполняемый файл изменен",
+      "defaultTag": "(по умолчанию)",
+      "menuItem": "Изменить исполняемый файл…",
+      "reset": "Сбросить на исполняемый файл по умолчанию",
+      "resetButton": "Сбросить по умолчанию",
+      "subtitle": "Выберите, какой файл запускает эту игру (например, чтобы пропустить лаунчер и запустить игру напрямую). Рабочая папка и облачные сохранения не изменятся.",
+      "title": "Изменить исполняемый файл — {{game}}",
+      "unavailable": "Не удалось прочитать папку этой игры."
+    }
   },
   "playMeta": {
     "spaceRequired": "Требуется места",
     "installedSize": "Размер на диске",
     "lastPlayed": "Последний запуск",
-    "neverPlayed": "Ни разу не запускалась"
+    "neverPlayed": "Ни разу не запускалась",
+    "hoursShort": "ч.",
+    "minutesShort": "мин.",
+    "played": "Сыграно"
   },
   "downloads": {
     "title": "Загрузки",
@@ -739,7 +807,8 @@
       "permission_denied": "Доступ ограничен",
       "cancelled": "Отменено",
       "unknown": "Непредвиденная ошибка"
-    }
+    },
+    "unavailableNativeDep": "Облачные сохранения отключены на этой системе — в её Python ({{python}}) отсутствует необходимый компонент. Это не повлияет на локальные сохранения; пересоберите или переустановите плагин после обновления системы, чтобы восстановить синхронизацию."
   },
   "launchLogs": {
     "_comment": "Сообщения для LaunchLogsModal. Модальное окно открывается при переходе по ссылке unifideck://show-logs/<launch_id>, прикрепленной к уведомлениям о сбое лаунчера (circuit breaker + LauncherError). Читает архивные логи запуска из ~/.local/share/unifideck/launches/<launch_id>.log и выводит их с цветовой разметкой по важности.",
@@ -853,5 +922,28 @@
     "typeReinstall": "Переустановка версии",
     "typeUpdate": "Обновление до версии",
     "updateButton": "Обновить до v{{version}}"
+  },
+  "achievements": {
+    "unlockedTitle": "Достижение получено",
+    "unlockedBody": "{{name}}"
+  },
+  "achievementsModal": {
+    "title": "Достижения",
+    "progress": "{{unlocked}} / {{total}} ({{percent}}%)",
+    "refresh": "Обновить",
+    "close": "Закрыть",
+    "loading": "Загрузка достижений…",
+    "empty": "В этой игре нет достижений.",
+    "hidden": "Скрытое достижение",
+    "unlockedOn": "Получено {{date}}",
+    "error": "Не удалось загрузить достижения.",
+    "errorOffline": "Подключитесь к интернету, чтобы просмотреть достижения.",
+    "errorAuth": "Войдите в магазин этой игры, чтобы просмотреть достижения.",
+    "errorUnavailable": "Достижения недоступны для этой игры."
+  },
+  "collectionSettings": {
+    "title": "КОЛЛЕКЦИИ STEAM",
+    "enabled": "Коллекции включены",
+    "disabled": "Коллекции выключены"
   }
 }

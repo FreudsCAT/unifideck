@@ -166,6 +166,51 @@ class UbisoftIdMap:
         """In cache."""
         return space_id in self._cache
 
+    def resolve_prefix_path(self, space_id: str) -> str | None:
+        """Recorded absolute Wine-prefix path for a game, if any.
+
+        Ubisoft games can be installed to a user-picked storage location
+        (internal / SD / custom); the per-game prefix is created there and
+        its absolute path recorded here so every store-side consumer — and
+        the separate launcher process, which reads this same JSON — resolves
+        the identical directory. Returns ``None`` for games on the fixed
+        internal default (back-compat).
+        """
+        path = self._cache.get(space_id, {}).get("prefix_path")
+        return path if isinstance(path, str) and path else None
+
+    def set_prefix_path(self, space_id: str, prefix_path: str) -> None:
+        """Record the absolute Wine-prefix path for a game."""
+        self.merge_entry(space_id, {"prefix_path": prefix_path})
+
+    def clear_prefix_path(self, space_id: str) -> None:
+        """Drop the recorded prefix path (e.g. after an abandoned install)."""
+        entry = self._cache.get(space_id)
+        if entry and "prefix_path" in entry:
+            entry.pop("prefix_path", None)
+            self._save()
+
+    def all_prefix_paths(self) -> list[str]:
+        """All recorded per-game prefix paths (deduped, order-preserving)."""
+        seen: set[str] = set()
+        out: list[str] = []
+        for entry in self._cache.values():
+            path = entry.get("prefix_path")
+            if isinstance(path, str) and path and path not in seen:
+                seen.add(path)
+                out.append(path)
+        return out
+
+    def iter_all_game_prefix_paths(self) -> list[str]:
+        """Union of the fixed-base scan and recorded external prefixes.
+
+        Per-game prefixes can live outside ``prefixes_dir`` (SD / custom),
+        so consumers that enumerate prefixes (install detection, session
+        propagation, id-map refresh) must union both. Delegated to
+        :class:`UbisoftPrefixPaths`, which owns prefix-location logic.
+        """
+        return self._paths.iter_all_game_prefix_paths()
+
     async def refresh_from_configurations(
         self,
         space_id: str | None = None,
@@ -177,9 +222,17 @@ class UbisoftIdMap:
 
     async def fetch_game_id_database(
         self,
+        force: bool = False,
     ) -> list[tuple[str, str]]:
-        """Fetch game ID database."""
-        return await self._sources.fetch_game_id_database()
+        """Fetch game ID database (``force`` bypasses the TTL cache)."""
+        return await self._sources.fetch_game_id_database(force=force)
+
+    async def fetch_uuid_catalog(
+        self,
+        force: bool = False,
+    ) -> dict[str, str]:
+        """``uuid → name`` from unifiDB (``force`` bypasses the TTL cache)."""
+        return await self._sources.fetch_uuid_catalog(force=force)
 
     async def lookup_game_id_by_name(
         self,

@@ -139,8 +139,14 @@ def get_best_match(
     return scored[0][1]
 
 def game_to_cache_format(game: dict[str, Any]) -> dict[str, Any]:
-    """Game to cache format."""
-    return {
+    """Game to cache format.
+
+    ``save_locations``/``cloud`` are populated by the unifiDB pipeline's
+    ``enrich_save_locations.py`` step (Ludusavi/PCGamingWiki). They flow
+    through the metadata cache to the cloud-save save-location resolver, which
+    uses them to find a game's real save directory instead of guessing.
+    """
+    out = {
         "title": game.get("title") or game.get("name") or "",
         "description": game.get("description", ""),
         "release_date": game.get("release_date", ""),
@@ -150,6 +156,15 @@ def game_to_cache_format(game: dict[str, Any]) -> dict[str, Any]:
         "platforms": game.get("platforms", []),
         "external_ids": game.get("external_ids", {}),
     }
+    save_locations = game.get("save_locations")
+    if save_locations:
+        out["save_locations"] = save_locations
+    cloud = game.get("cloud")
+    if cloud:
+        out["cloud"] = cloud
+    if game.get("save_source"):
+        out["save_source"] = game["save_source"]
+    return out
 
 @dataclass
 class UnifiDBResult:

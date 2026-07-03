@@ -35,6 +35,12 @@ export const Events = {
   // Payload: {phase: "artwork"|"metadata", active: bool, total, done}.
   // The frontend clears `isSyncing` when both phases report done.
   POST_SYNC_PHASE_CHANGED: "post_sync_phase_changed",
+  // Fired by the background Metacritic backfill once its long-tail
+  // metacritic.com lookups have landed (after the progress bar hit
+  // 100%). The overview-enrichment layer re-reads facets on this so
+  // newly-backfilled scores surface in Steam's native Sort-by-Metacritic
+  // without a manual resync/restart.
+  METADATA_BACKFILL_COMPLETE: "metadata_backfill_complete",
   // Emitted by ShortcutService once reconcile finishes; payload
   // carries {added, removed, kept, total} so the UI can decide
   // whether to prompt for a Steam restart.
@@ -52,12 +58,22 @@ export const Events = {
   DOWNLOAD_COMPLETE: "download_complete",
   DOWNLOAD_FAILED: "download_failed",
   DOWNLOAD_CANCELLED: "download_cancelled",
+  // Ubisoft install — backend asks the frontend to open Ubisoft Connect
+  // via RunGame (so UPC gets a gamescope session in Gaming Mode). Emitted
+  // by the download worker once the per-game prefix is bootstrapped.
+  // Payload: { store_game_id: "ubisoft:<game_id>" }.
+  UBISOFT_INSTALL_LAUNCH_REQUESTED: "ubisoft_install_launch_requested",
   // Game state
   GAME_INSTALLED: "game_installed",
   GAME_UNINSTALLED: "game_uninstalled",
   GAME_UPDATE_AVAILABLE: "game_update_available",
   GAME_LAUNCHED: "game_launched",
   GAME_STOPPED: "game_stopped",
+  // Cloud-save sync (CloudSaveService)
+  CLOUD_SYNC_DOWN_COMPLETE: "cloud_sync_down_complete",
+  CLOUD_SYNC_DOWN_FAILED: "cloud_sync_down_failed",
+  CLOUD_SYNC_UP_COMPLETE: "cloud_sync_up_complete",
+  CLOUD_SYNC_UP_FAILED: "cloud_sync_up_failed",
   // Errors and toasts
   STORE_ERROR: "store_error",
   LAUNCHER_STAGE: "launcher_stage",

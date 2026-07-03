@@ -1,15 +1,17 @@
 /**
  * LibraryContext — thin React subscription wrapper.
  *
- * The unifideck game cache is now populated eagerly at plugin
- * init by ``startUnifideckCacheAutoload`` in
- * ``lib/library-filters`` — independent of QAM mount, so the
- * library tab patches have data on first render. This provider
- * exists only to expose a reactive ``ready`` flag + ``refresh``
- * trigger for QAM components that want to re-fetch on demand.
+ * The unifideck game cache is populated eagerly at plugin init by
+ * ``startUnifideckCacheAutoload`` in ``lib/library-filters`` —
+ * independent of QAM mount.
  *
- * Also loads the ProtonDB compat cache on mount (still
- * QAM-gated since it's only read by QAM-rendered surfaces).
+ * The ProtonDB compat cache is also loaded at boot (in the
+ * `definePlugin` callback) so library tab patches have compat
+ * data on first render without waiting for a QAM open.
+ *
+ * This provider exists to expose a reactive ``ready`` flag +
+ * ``refresh`` trigger for QAM components that want to re-fetch
+ * on demand.
  */
 import {
   createContext,
@@ -20,10 +22,7 @@ import {
   useEffect,
   useState,
 } from "react";
-import {
-  loadCompatCacheFromBackend,
-  isCompatCacheLoaded,
-} from "../lib/protondb-cache";
+import { loadCompatCacheFromBackend } from "../lib/protondb-cache";
 import { loadUnifideckCache, unifideckGameCache } from "../lib/library-filters";
 
 interface LibraryContextValue {
@@ -38,18 +37,20 @@ export const LibraryProvider: FC<{ children: ReactNode }> = ({ children }) => {
 
   const refresh = useCallback(async () => {
     await loadUnifideckCache();
-    if (!isCompatCacheLoaded()) {
-      await loadCompatCacheFromBackend();
-    }
+    await loadCompatCacheFromBackend();
     setReady(true);
   }, []);
 
   useEffect(() => {
-    void refresh();
+    // On mount, just check if the cache is already populated (from boot).
+    // If not, load it now (first QAM open before boot finished).
+    if (!ready) {
+      void refresh();
+    }
     const onSync = () => void refresh();
     window.addEventListener("unifideck-sync-completed", onSync);
     return () => window.removeEventListener("unifideck-sync-completed", onSync);
-  }, [refresh]);
+  }, [refresh, ready]);
 
   return <Ctx.Provider value={{ ready, refresh }}>{children}</Ctx.Provider>;
 };

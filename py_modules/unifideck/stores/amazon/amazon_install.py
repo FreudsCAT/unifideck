@@ -34,6 +34,7 @@ from pathlib import Path
 from typing import Any, cast
 
 from unifideck.core.manifest import write_manifest
+from unifideck.core.safe_delete import canonical_prefix, safe_rmtree
 from unifideck.core.types import Events, InstallResult, Result
 from unifideck.event_bus.event_bus import EventBus
 from unifideck.stores.shared.cli_install_helpers import (
@@ -433,37 +434,40 @@ class AmazonInstaller:
                 return game.title
         return game_id
 
-    async def uninstall_game(self, game_id: str) -> Result:
-        """Uninstall game."""
-        if not self._cli_path:
-            return Result(
-                success=False,
-                error="nile_not_found",
-            )
-        proc = await asyncio.create_subprocess_exec(
-            self._cli_path,
-            "uninstall",
-            game_id,
-            "--yes",
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
+    async def uninstall_game(
+        self, game_id: str, delete_prefix: bool = False,
+    ) -> Result:
+        """Uninstall game.
+
+        ``nile uninstall`` only removes the files *it* tracks: it leaves our
+        own ``.unifideck_manifest.json`` marker behind (so the install dir
+        survives as a stub) and never touches the Proton prefix. On failure
+        it deletes nothing at all. So — like Epic — we resolve the install
+        dir up front (nile drops its ``installed.json`` entry on success),
+        run nile best-effort, then delete any directory + prefix it leaves
+        behind ourselves so nothing is orphaned.
+        """
+        # Resolve the install dir while nile's installed.json entry is intact.
+        install_path = await self._resolve_install_path(
+            game_id, self._default_install_root,
         )
-        try:
-            _stdout, stderr = await asyncio.wait_for(
-                proc.communicate(),
-                timeout=self._uninstall_timeout,
-            )
-        except TimeoutError:
-            proc.kill()
+
+        nile_error = (
+            await self._run_nile_uninstall(game_id)
+            if self._cli_path
+            else "nile_not_found"
+        )
+
+        # Fallback cleanup: remove the leftover stub dir (our manifest marker)
+        # and, if requested, the per-game Proton prefix.
+        removed = await self._ensure_install_dir_gone(install_path)
+        if delete_prefix:
+            await asyncio.to_thread(safe_rmtree, canonical_prefix(game_id))
+
+        if not removed:
             return Result(
                 success=False,
-                error="uninstall_timeout",
-            )
-        if proc.returncode != 0:
-            err = stderr.decode(errors="ignore")[:200]
-            return Result(
-                success=False,
-                error=f"uninstall_failed: {err}",
+                error=nile_error or "uninstall_incomplete_files_remain",
             )
         await self._bus.emit(
             Events.GAME_UNINSTALLED,
@@ -471,3 +475,46 @@ class AmazonInstaller:
             game_id=game_id,
         )
         return Result(success=True)
+
+    async def _run_nile_uninstall(self, game_id: str) -> str | None:
+        """Run ``nile uninstall`` best-effort. Returns an error str or None."""
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                cast("str", self._cli_path),
+                "uninstall",
+                game_id,
+                "--yes",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+        except OSError as e:
+            logger.warning("[AmazonUninstall] could not spawn nile: %s", e)
+            return f"nile_spawn_failed: {e}"
+        try:
+            _stdout, stderr = await asyncio.wait_for(
+                proc.communicate(),
+                timeout=self._uninstall_timeout,
+            )
+        except TimeoutError:
+            with contextlib.suppress(ProcessLookupError):
+                proc.kill()
+            logger.warning("[AmazonUninstall] nile uninstall timed out")
+            return "uninstall_timeout"
+        if proc.returncode != 0:
+            err = stderr.decode(errors="ignore")[:200]
+            logger.warning("[AmazonUninstall] nile uninstall failed: %s", err)
+            return f"uninstall_failed: {err}"
+        return None
+
+    async def _ensure_install_dir_gone(
+        self, install_path: str | None,
+    ) -> bool:
+        """Delete the install dir if it survived nile. True if gone after."""
+        if not install_path:
+            # Nothing tracked to delete — treat as already removed.
+            return True
+        p = Path(install_path)
+        if not await asyncio.to_thread(p.exists):
+            return True
+        logger.info("[AmazonUninstall] removing leftover install dir: %s", p)
+        return await asyncio.to_thread(safe_rmtree, p)

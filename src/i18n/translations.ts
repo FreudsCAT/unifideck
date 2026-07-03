@@ -20,7 +20,8 @@
  *   the choice and updates the document direction
  * - `isRTL()`: convenience re-export from the generated catalog
  * - `getSupportedLanguages()`: returns the canonical tuple
- * - `detectInitialLanguage()`: localStorage → navigator → en-US
+ * - `resolveAutoLanguage()`: navigator → supported tag → en-US
+ * - `detectInitialLanguage()`: localStorage pref → auto → tag
  *
  * Reference: Technical Document v1.0 — Section 10 (i18n),
  * Figure 85.
@@ -42,6 +43,20 @@ import {
 // comes from a generated file
 export { SUPPORTED_LANGUAGES, LANGUAGE_NAMES, RTL_LANGUAGES };
 export type { SupportedLanguage };
+
+/** localStorage key holding the user's language *preference*
+ *  — either the "auto" sentinel or a concrete supported tag. */
+export const LANG_STORAGE_KEY = "unifideck.lang";
+
+/** Sentinel preference meaning "follow the system / browser
+ *  language". Stored and displayed verbatim ; resolved to a
+ *  concrete tag by `resolveAutoLanguage()` before i18next sees
+ *  it (i18next has no "auto" resource bundle). */
+export const AUTO_DETECT = "auto" as const;
+
+/** A persisted language preference : the auto sentinel or a
+ *  concrete supported BCP-47 tag. */
+export type LocalePreference = typeof AUTO_DETECT | SupportedLanguage;
 /**
  * Return true if the given language tag should be rendered in
  * right-to-left mode. Centralized here so callers don't have to
@@ -96,7 +111,7 @@ export async function changeLanguage(lang: SupportedLanguage): Promise<void> {
   await i18n.changeLanguage(lang);
   applyDirection(lang);
   try {
-    localStorage.setItem("unifideck.lang", lang);
+    localStorage.setItem(LANG_STORAGE_KEY, lang);
   } catch {
     // ignore quota/availability errors
   }
@@ -106,22 +121,35 @@ export function getSupportedLanguages(): readonly SupportedLanguage[] {
   return SUPPORTED_LANGUAGES;
 }
 /**
- * Detect the initial language from localStorage, then the
- * browser's navigator.language, then fall back to en-US.
+ * Resolve the "auto-detect" preference to a concrete supported
+ * tag from the browser's navigator.language, falling back to
+ * en-US. Called both at boot and whenever the user (re-)selects
+ * "Auto-detect", so i18next always receives a real locale.
+ */
+export function resolveAutoLanguage(): SupportedLanguage {
+  const browserLang =
+    (typeof navigator !== "undefined" && navigator.language) || "en-US";
+  const match = SUPPORTED_LANGUAGES.find(
+    (l) => l === browserLang || l.startsWith(browserLang.split("-")[0]),
+  );
+  return match || "en-US";
+}
+/**
+ * Detect the initial *active* language for i18next at boot.
+ *
+ * Reads the stored preference (`LANG_STORAGE_KEY`): a concrete
+ * supported tag is used as-is ; "auto" or an absent/unknown
+ * value resolves through `resolveAutoLanguage()`. i18next never
+ * sees the "auto" sentinel — only a real locale tag.
  */
 function detectInitialLanguage(): SupportedLanguage {
   try {
-    const saved = localStorage.getItem("unifideck.lang");
+    const saved = localStorage.getItem(LANG_STORAGE_KEY);
     if (saved && (SUPPORTED_LANGUAGES as readonly string[]).includes(saved)) {
       return saved as SupportedLanguage;
     }
   } catch {
     // localStorage unavailable
   }
-  // Fall back to browser language if it matches a supported tag
-  const browserLang = navigator.language || "en-US";
-  const match = SUPPORTED_LANGUAGES.find(
-    (l) => l === browserLang || l.startsWith(browserLang.split("-")[0]),
-  );
-  return match || "en-US";
+  return resolveAutoLanguage();
 }

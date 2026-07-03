@@ -72,13 +72,17 @@ sys.path.insert(0, str(Path(DECKY_PLUGIN_DIR) / "py_modules" / "_vendor"))
 from unifideck.config.user_config_path import resolve_user_config_path  # noqa: E402
 from unifideck.rpc import auto_wrap_rpc_methods  # noqa: E402
 from unifideck.rpc.mixins.account import AccountRPCMixin  # noqa: E402
+from unifideck.rpc.mixins.achievements import AchievementsRPCMixin  # noqa: E402
 from unifideck.rpc.mixins.action import ActionRPCMixin  # noqa: E402
 from unifideck.rpc.mixins.auth_shortcuts import AuthShortcutsRPCMixin  # noqa: E402
 from unifideck.rpc.mixins.cloud_failure import CloudFailureRPCMixin  # noqa: E402
+from unifideck.rpc.mixins.cloud_save import CloudSaveRPCMixin  # noqa: E402
 from unifideck.rpc.mixins.config_validation import ConfigValidationRPCMixin  # noqa: E402
 from unifideck.rpc.mixins.download import DownloadRPCMixin  # noqa: E402
 from unifideck.rpc.mixins.edge import EdgeRPCMixin  # noqa: E402
+from unifideck.rpc.mixins.executable import ExecutableRPCMixin  # noqa: E402
 from unifideck.rpc.mixins.launch import LaunchRPCMixin  # noqa: E402
+from unifideck.rpc.mixins.library_facets import LibraryFacetsRPCMixin  # noqa: E402
 from unifideck.rpc.mixins.observability import ObservabilityRPCMixin  # noqa: E402
 from unifideck.rpc.mixins.playtime import PlaytimeRPCMixin  # noqa: E402
 from unifideck.rpc.mixins.security import SecurityRPCMixin  # noqa: E402
@@ -101,13 +105,17 @@ class Plugin(
     StoreRPCMixin,
     AuthShortcutsRPCMixin,
     EdgeRPCMixin,
+    ExecutableRPCMixin,
     SyncRPCMixin,
+    LibraryFacetsRPCMixin,
     UIRPCMixin,
     CloudFailureRPCMixin,
+    CloudSaveRPCMixin,
     ConfigValidationRPCMixin,
     PlaytimeRPCMixin,
     ActionRPCMixin,
     AccountRPCMixin,
+    AchievementsRPCMixin,
     UpdaterRPCMixin,
 ):
     """The Decky Loader plugin class.

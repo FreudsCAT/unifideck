@@ -113,7 +113,7 @@ _SERVICE_DEFS: tuple[tuple[Any, ...], ...] = (
         "cloudsave", "unifideck.services.cloud_save",
         "CloudSaveService",
         lambda b, r, c, cfg, p, pl: (b, p.local_save_root),
-        lambda b, r, c, cfg, p, pl: {"cloud_root": p.cloud_root, "config": cfg},
+        lambda b, r, c, cfg, p, pl: {"cloud_root": p.cloud_root, "config": cfg, "cache": c},
     ),
     (
         "metrics", "unifideck.core.metrics_collector",
@@ -209,6 +209,26 @@ _SERVICE_DEFS: tuple[tuple[Any, ...], ...] = (
         "MicrosoftSubscriptionService",
         lambda b, r, c, cfg, p, pl: (b, c),
         lambda b, r, c, cfg, p, pl: {"config": cfg},
+    ),
+    # AchievementWatcher — GOG live unlock toasts (during play) + an
+    # end-of-session summary (persisted for the game-info panel). Needs the
+    # registry to reach the GOG store; plugin-only (not in the launcher
+    # subset), so registry is always present here.
+    (
+        "achievements", "unifideck.services.achievements",
+        "AchievementWatcher",
+        lambda b, r, c, cfg, p, pl: (b, r),
+        lambda b, r, c, cfg, p, pl: {"config": cfg},
+    ),
+    # PlaytimeSyncService — reports finalized local play sessions up to GOG/Epic
+    # (Heroic #1240) and reconciles store totals for display. Needs the registry
+    # to reach the stores (like AchievementWatcher) + the shared playtime.db path
+    # (read sessions, stamp ``reported_at``). Plugin-only.
+    (
+        "playtime_sync", "unifideck.services.playtime_sync",
+        "PlaytimeSyncService",
+        lambda b, r, c, cfg, p, pl: (b, r),
+        lambda b, r, c, cfg, p, pl: {"config": cfg, "db_path": p.playtime_db},
     ),
 )
 

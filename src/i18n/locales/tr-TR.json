@@ -106,7 +106,13 @@
     "downloadingLabel": "İndiriliyor...",
     "finalizingInstallation": "Kurulum tamamlanıyor...",
     "speedMbps": "{{speed}} MB/s",
-    "etaLabel": "Kalan Süre: {{eta}}"
+    "etaLabel": "Kalan Süre: {{eta}}",
+    "preparingMessage": "Ön ek hazırlanıyor ve bulut kayıtları eşitleniyor...",
+    "preparingLabel": "Oyun hazırlanıyor...",
+    "installingViaUpcLabel": "Ubisoft Connect ile yükleniyor",
+    "extractingMessage": "Dosyalar çıkarılıyor...",
+    "verifyingMessage": "Dosyalar doğrulanıyor... {{pct}}%",
+    "installingViaUpcMessage": "Kurulumu tamamlamak için Ubisoft Connect penceresini izleyin..."
   },
   "cloudSave": {
     "title": "Bulut Kaydı Çakışması",
@@ -122,7 +128,11 @@
     "toastUsingLocalTitle": "Yerel Kayıt Kullanılıyor",
     "toastUsingLocalBody": "{{game}} için yerel kayıtlar karşıya yükleniyor",
     "toastErrorTitle": "Hata",
-    "toastErrorBody": "Çakışma çözülemedi"
+    "toastErrorBody": "Çakışma çözülemedi",
+    "filesSize": "{{count}} dosya · {{size}}",
+    "uploadBlockedEmpty": "{{game}} için buluta yükleme atlandı — yerel kayıt bulunamadı",
+    "uploadSkippedTitle": "Buluta yükleme atlandı",
+    "uploadSkippedBody": "{{game}} için henüz yüklenecek yerel kayıt yok."
   },
   "storeConnections": {
     "title": "MAĞAZA BAĞLANTILARI",
@@ -302,7 +312,20 @@
       "cloudSyncDownFailed": "{{store}} için bulut kaydı indirilemedi ({{error}}). Yerel kayıt ile oynanıyor.",
       "cloudSyncUpFailed": "{{store}} için bulut kaydı karşıya yüklenemedi ({{error}}). İlerlemeniz yalnızca yerel olarak kaydedildi.",
       "errorCircuitBreakerOpen": "{{game_key}} son zamanlarda {{count}} kez başlatılamadı. Otomatik başlatmalar askıya alındı.",
-      "launcherError": "{{game_key}} başlatılamadı ({{error_code}}). Detaylar için günlüklere bakın."
+      "launcherError": "{{game_key}} başlatılamadı ({{error_code}}). Detaylar için günlüklere bakın.",
+      "downloadingProton": "Proton indiriliyor — bu birkaç dakika sürebilir...",
+      "downloadingRuntime": "Steam Runtime indiriliyor — ilk başlatma birkaç dakika sürebilir...",
+      "installingUbisoft": "Ubisoft Connect ile yükleniyor",
+      "installingUbisoftMessage": "Ubisoft Connect açılıyor — kurulumu başlatıcı penceresinden başlatın.",
+      "protonReadyBody": "{{version}} kullanıma hazır",
+      "protonReadyTitle": "Proton hazır",
+      "protonSwitchedTo": "Şimdi {{version}} kullanılıyor",
+      "signingInUbisoft": "Ubisoft Connect'te oturum açılıyor",
+      "signingInUbisoftMessage": "Ubisoft Connect açılıyor — orada oturum açın, sonra geri dönün.",
+      "ubisoftPrefixNotReady": "Ubisoft Connect hazır değil",
+      "ubisoftPrefixNotReadyMessage": "Bu oyun için Ubisoft Connect ön eki hazırlanamadı. Tekrar yüklemeyi deneyin; sorun devam ederse kitaplık eşitlemesini yeniden çalıştırın.",
+      "ubisoftLaunchIdMissing": "Ubisoft Connect açılıyor",
+      "ubisoftLaunchIdMissingMessage": "Bu oyunun başlatma kimliği çözümlenemedi — kitaplığınızdan başlatabilmeniz için Ubisoft Connect açılıyor. Doğrudan başlatmayı düzeltmek için kitaplık eşitlemesini yeniden çalıştırın."
     },
     "updateComplete": "Güncelleme Tamamlandı!",
     "updateCompleteMessage": "{{title}} güncellendi.",
@@ -323,7 +346,15 @@
     "library": {
       "_comment": "Toasts emitted by SyncService when a per-store library sync fails. The retry button triggers a fire-and-forget refresh via the unifideck://refresh-library/<store> verb; the user doesn't wait for the result inline, the Library view picks it up through its SYNC_PROGRESS subscription.",
       "syncStoreFailed": "{{store}} kütüphanesi yenilenemedi ({{error}}). Mevcut kütüphaneniz görünmeye devam edecek."
-    }
+    },
+    "cloudPullStarted": "Bulut kaydı indiriliyor…",
+    "cloudPushStarted": "Yerel kaydı yükleniyor…",
+    "cloudSavePathFailed": "Kayıt konumu ayarlanamadı",
+    "cloudSavePathSet": "Kayıt konumu güncellendi",
+    "cloudPullDone": "Bulut kaydı indirildi",
+    "cloudPullFailed": "Bulut kaydı indirilemedi",
+    "cloudPushDone": "Yerel kayıt yüklendi",
+    "cloudPushFailed": "Yerel kayıt yüklenemedi"
   },
   "uninstallModal": {
     "title": "Kaldırmayı Onayla",
@@ -460,7 +491,8 @@
       "support": "Destek",
       "install": "Yükle",
       "uninstall": "Kaldır",
-      "cancel": "İptal Et"
+      "cancel": "İptal Et",
+      "achievements": "Başarımlar"
     },
     "labels": {
       "store": "Mağaza:",
@@ -485,7 +517,8 @@
       "unsupported": "DESTEKLENMİYOR",
       "unknown": "BİLİNMİYOR"
     },
-    "failedToLoadMetadata": "Meta veriler yüklenemedi"
+    "failedToLoadMetadata": "Meta veriler yüklenemedi",
+    "lastSession": "Son oturum: {{names}} açıldı"
   },
   "gameDetailsSettings": {
     "title": "OYUN DETAYLARI GÖRÜNÜMÜ",
@@ -551,7 +584,8 @@
     "cancel": "İptal",
     "working": "İşleniyor…",
     "loading": "Yükleniyor…",
-    "free": "ücretsiz"
+    "free": "ücretsiz",
+    "close": "Kapat"
   },
   "info": {
     "expandDetails": "Ayrıntıları Genişlet",
@@ -610,13 +644,47 @@
     "cancelConfirmBody": "{{title}} indirmesini iptal etmek istediğinizden emin misiniz? Kısmen indirilen dosyalar silinecektir.",
     "cancelConfirmConfirm": "İndirmeyi İptal Et",
     "cancelConfirmCancel": "İndirmeye Devam Et",
-    "playOnCloud": "Bulutta Oyna"
+    "playOnCloud": "Bulutta Oyna",
+    "cloudSave": {
+      "autoPullOn": "Bulut kayıtları başlangıçta otomatik olarak indirilir.",
+      "close": "Kapat",
+      "download": "Bulut kaydını indir",
+      "filesCount": "{{count}} dosya",
+      "label": "Bulut kayıtları",
+      "menuTitle": "Bulut kayıtları — {{game}}",
+      "noCloudData": "Bilinmeyen",
+      "noCloudSupport": "Bulut kaydı desteği yok",
+      "setLocation": "Kayıt konumunu ayarla",
+      "setLocationHint": "Bu oyunun kayıtlarını sakladığı klasörü seçin.",
+      "setLocationTitle": "Bu oyunun kayıt klasörünü seçin",
+      "statusCloudAvailable": "Bulut kaydı kullanılabilir",
+      "statusNoSaves": "Yerel kayıt yok",
+      "statusSyncing": "Bulut kayıtları eşitleniyor…",
+      "statusUnresolved": "Kayıt konumu bulunamadı — eşitleme bu oyun için çalışmayabilir.",
+      "unresolvedHint": "Kayıt klasörünü tespit edebilmemiz için oyunu bir kez başlatın veya konumu manuel olarak ayarlayın.",
+      "upload": "Yerel kaydı yükle"
+    },
+    "exe": {
+      "browse": "Göz at…",
+      "changeFailed": "Çalıştırılabilir dosya değiştirilemedi",
+      "changed": "Çalıştırılabilir dosya değiştirildi",
+      "defaultTag": "(varsayılan)",
+      "menuItem": "Çalıştırılabilir dosyayı değiştir…",
+      "reset": "Varsayılan çalıştırılabilir dosyaya sıfırla",
+      "resetButton": "Varsayılana sıfırla",
+      "subtitle": "Bu oyunun hangi dosyayı başlatacağını seçin (örn. bir başlatıcıyı atlayıp oyunu doğrudan çalıştırmak için). Çalışma dizini ve bulut kayıtları etkilenmez.",
+      "title": "Çalıştırılabilir dosyayı değiştir — {{game}}",
+      "unavailable": "Bu oyunun klasörü okunamadı."
+    }
   },
   "playMeta": {
     "spaceRequired": "Gerekli Alan",
     "installedSize": "Yüklü Boyut",
     "lastPlayed": "Son Oynama",
-    "neverPlayed": "Hiç Oynanmadı"
+    "neverPlayed": "Hiç Oynanmadı",
+    "hoursShort": "sa",
+    "minutesShort": "dk",
+    "played": "Oynandı"
   },
   "downloads": {
     "title": "İndirmeler",
@@ -739,7 +807,8 @@
       "permission_denied": "İzin reddedildi",
       "cancelled": "İptal edildi",
       "unknown": "Beklenmeyen hata"
-    }
+    },
+    "unavailableNativeDep": "Bu sistemde bulut kayıtları kapalı — Python ({{python}}) sürümünde gerekli bir bileşen eksik. Yerel kayıtlarınız bu durumdan etkilenmez; eşitlemeyi geri yüklemek için sistem güncellemesinden sonra eklentiyi yeniden derleyin/yükleyin."
   },
   "launchLogs": {
     "_comment": "LaunchLogsModal için mesajlar. Mod penceresi, başlatıcı hata uyarılarına (devre kesici + BaşlatıcıHatası) eklenmiş olan unifideck://show-logs/<launch_id> bildirim eyleminden açılır. ~/.local/share/unifideck/launches/<launch_id>.log adresindeki her başlatma için arşivlenmiş günlükleri okur ve önem derecesine göre renklendirilmiş olarak görüntüler.",
@@ -853,5 +922,28 @@
     "typeReinstall": "Yeniden yükleniyor",
     "typeUpdate": "Güncelleniyor:",
     "updateButton": "v{{version}} sürümüne güncelle"
+  },
+  "achievements": {
+    "unlockedTitle": "Başarım kilidi açıldı",
+    "unlockedBody": "{{name}}"
+  },
+  "achievementsModal": {
+    "title": "Başarımlar",
+    "progress": "{{unlocked}} / {{total}} ({{percent}}%)",
+    "refresh": "Yenile",
+    "close": "Kapat",
+    "loading": "Başarımlar yükleniyor…",
+    "empty": "Bu oyunda başarım yok.",
+    "hidden": "Gizli başarım",
+    "unlockedOn": "{{date}} tarihinde açıldı",
+    "error": "Başarımlar yüklenemedi.",
+    "errorOffline": "Başarımları görüntülemek için internete bağlanın.",
+    "errorAuth": "Başarımları görüntülemek için bu oyunun mağazasında oturum açın.",
+    "errorUnavailable": "Bu oyun için başarımlar mevcut değil."
+  },
+  "collectionSettings": {
+    "title": "STEAM KOLEKSİYONLARI",
+    "enabled": "Koleksiyonlar etkin",
+    "disabled": "Koleksiyonlar devre dışı"
   }
 }

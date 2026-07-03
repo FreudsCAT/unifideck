@@ -86,6 +86,14 @@ def _build_ubisoft_foundations(
     paths = UbisoftPrefixPaths(ubi_config)
     binaries = UbisoftBinaryResolver(ubi_config, plugin_dir)
     id_map = UbisoftIdMap(ubi_config, paths)
+    # Wire the per-game prefix-location registry now that the id_map exists,
+    # so ``paths.get_prefix_path`` / ``iter_all_game_prefix_paths`` resolve
+    # games installed to SD / custom storage. Done here (not in __init__) to
+    # avoid a paths→id_map→sources→paths import cycle.
+    paths.set_prefix_registry(
+        resolver=id_map.resolve_prefix_path,
+        lister=id_map.all_prefix_paths,
+    )
     return _UbisoftFoundations(
         ubi_config=ubi_config,
         paths=paths,

@@ -18,6 +18,7 @@ import { useGameInfo } from "../../hooks/useGameInfo";
 import { useInstallFlow } from "../../hooks/useInstallFlow";
 import { useToast } from "../../hooks/useToast";
 import { SteamBridge } from "../../lib/steam-bridge";
+import { openNativeAppManageMenu } from "../../utils/nativeAppMenu";
 import {
   PlayShell,
   MetaInline,
@@ -80,7 +81,9 @@ export const NotInstalledButtons: FC<Props> = ({
   }, [installFlow, game, t, toast]);
 
   return (
-    <PlayShell>
+    // autoFocus is intentional: claims gamepad focus for the primary action
+    // eslint-disable-next-line jsx-a11y/no-autofocus
+    <PlayShell autoFocus>
       <DialogButton
         className="unifideck-install-btn"
         disabled={loading || installFlow.isWorking || !game}
@@ -93,10 +96,17 @@ export const NotInstalledButtons: FC<Props> = ({
           : t("playButton.install")}
       </DialogButton>
 
-      <MetaInline sizeBytes={game?.size_bytes} showLastPlayed appId={appId} />
+      <MetaInline
+        sizeBytes={game?.size_bytes}
+        showLastPlayed
+        appId={appId}
+        store={game?.store}
+        gameId={game?.id}
+      />
 
       <IconGroup>
         <DialogButton
+          className="unifideck-icon-btn"
           style={iconBtnStyle}
           onClick={() => openControllerConfig(appId)}
           aria-label={t("playButton.controllerConfig")}
@@ -104,8 +114,15 @@ export const NotInstalledButtons: FC<Props> = ({
           <FaGamepad />
         </DialogButton>
         <DialogButton
+          className="unifideck-icon-btn"
           style={iconBtnStyle}
-          onClick={() => openAppSettings(appId)}
+          onClick={(e) => {
+            // Open Steam's native app menu (Manage / Properties / …),
+            // matching the native gear; fall back to Properties directly.
+            if (!openNativeAppManageMenu(e?.currentTarget as HTMLElement)) {
+              openAppSettings(appId);
+            }
+          }}
           aria-label={t("playButton.appSettings")}
         >
           <FaCog />

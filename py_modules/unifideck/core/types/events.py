@@ -12,6 +12,7 @@ produces `"sync_complete"`, exactly what the frontend expects.
 
 Reference: Technical Document v1.0 — Section 3.3 (EventBus topology).
 """
+
 from __future__ import annotations
 
 from enum import StrEnum
@@ -46,6 +47,14 @@ class Events(StrEnum):
     #  { phase: "artwork"|"metadata", active: bool, total: int|None, done: int|None }
     POST_SYNC_PHASE_CHANGED = "post_sync_phase_changed"
 
+    # Fired by the fire-and-forget Metacritic backfill
+    # (``metadata_backfill``) once its long-tail metacritic.com lookups
+    # have all landed in the ``metadata`` cache — AFTER the sync's
+    # progress bar already hit 100%. The frontend re-reads library
+    # facets on this so newly-backfilled scores surface in Steam's
+    # native Sort-by-Metacritic without a manual resync/restart.
+    METADATA_BACKFILL_COMPLETE = "metadata_backfill_complete"
+
     # Durable activity-log events — captured by ActivityLogService
     # into a JSONL file (``runtime_dir/sync_activity.log``) so the
     # frontend can show "last 10 syncs" with timestamps, durations,
@@ -78,6 +87,9 @@ class Events(StrEnum):
     GAME_LAUNCHED = "game_launched"
     GAME_STOPPED = "game_stopped"
     PLAYTIME_UPDATED = "playtime_updated"
+    # Playtime → store sync (GOG/Epic) outcome, per drain.
+    PLAYTIME_SYNC_COMPLETE = "playtime_sync_complete"
+    PLAYTIME_SYNC_FAILED = "playtime_sync_failed"
 
     # Power/Sleep lifecycle
     SUSPEND = "suspend"
@@ -126,6 +138,17 @@ class Events(StrEnum):
     DOWNLOAD_COMPLETE = "download_complete"
     DOWNLOAD_FAILED = "download_failed"
     DOWNLOAD_CANCELLED = "download_cancelled"
+
+    # Ubisoft install — frontend RunGame trigger. UPC must be opened
+    # via Steam's RunGame so it gets its own gamescope/XWayland session
+    # in Gaming Mode (a bare backend subprocess has no session to render
+    # into → invisible window — the install-never-appears bug). RunGame
+    # is a frontend SteamClient API, so the download worker emits this
+    # once it has bootstrapped the per-game prefix; the frontend reacts
+    # by calling ``launchUbisoftInstallViaShortcut`` with an ``install``
+    # action and the worker then monitors the filesystem for the install.
+    # Payload fields: store_game_id (str — "ubisoft:<game_id>").
+    UBISOFT_INSTALL_LAUNCH_REQUESTED = "ubisoft_install_launch_requested"
 
     # Generic store error
     STORE_ERROR = "store_error"

@@ -29,7 +29,9 @@ import { useGameActions } from "../../hooks/useGameActions";
 import { useLaunchPrep } from "../../hooks/useLaunchPrep";
 import { useToast } from "../../hooks/useToast";
 import { SteamBridge } from "../../lib/steam-bridge";
+import { openNativeAppManageMenu } from "../../utils/nativeAppMenu";
 import { UninstallConfirmModal } from "../modals/UninstallConfirmModal";
+import { CloudSaveButton } from "./CloudSaveButton";
 import {
   PlayShell,
   MetaInline,
@@ -239,16 +241,28 @@ export const InstalledButtons: FC<Props> = ({
   })();
 
   return (
-    <PlayShell>
+    // autoFocus is intentional: claims gamepad focus for the primary action
+    // eslint-disable-next-line jsx-a11y/no-autofocus
+    <PlayShell autoFocus>
       {primaryButtons}
       <MetaInline
         sizeBytes={game?.size_bytes}
         showLastPlayed
         appId={appId}
+        store={game?.store}
+        gameId={game?.id}
         installed
       />
       <IconGroup>
+        {game && (
+          <CloudSaveButton
+            store={game.store}
+            gameId={game.id}
+            gameTitle={game.title}
+          />
+        )}
         <DialogButton
+          className="unifideck-icon-btn"
           style={iconBtnStyle}
           onClick={() => openControllerConfig(appId)}
           aria-label={t("playButton.controllerConfig")}
@@ -256,13 +270,21 @@ export const InstalledButtons: FC<Props> = ({
           <FaGamepad />
         </DialogButton>
         <DialogButton
+          className="unifideck-icon-btn"
           style={iconBtnStyle}
-          onClick={() => openAppSettings(appId)}
+          onClick={(e) => {
+            // Open Steam's native app menu (Manage / Properties / …),
+            // matching the native gear; fall back to Properties directly.
+            if (!openNativeAppManageMenu(e?.currentTarget as HTMLElement)) {
+              openAppSettings(appId);
+            }
+          }}
           aria-label={t("playButton.appSettings")}
         >
           <FaCog />
         </DialogButton>
         <DialogButton
+          className="unifideck-icon-btn"
           style={iconBtnStyle}
           disabled={loading || actions.isWorking}
           onClick={onUninstall}

@@ -106,7 +106,13 @@
     "downloadingLabel": "正在下載...",
     "finalizingInstallation": "正在完成安裝...",
     "speedMbps": "{{speed}} MB/s",
-    "etaLabel": "剩餘時間: {{eta}}"
+    "etaLabel": "剩餘時間: {{eta}}",
+    "preparingMessage": "正在初始化容器並同步雲端存檔...",
+    "preparingLabel": "正在設定遊戲...",
+    "installingViaUpcLabel": "正在透過 Ubisoft Connect 安裝",
+    "extractingMessage": "正在解壓縮檔案...",
+    "verifyingMessage": "正在驗證檔案... {{pct}}%",
+    "installingViaUpcMessage": "請依照 Ubisoft Connect 視窗的提示完成安裝..."
   },
   "cloudSave": {
     "title": "雲端存檔衝突",
@@ -122,7 +128,11 @@
     "toastUsingLocalTitle": "使用本機存檔中",
     "toastUsingLocalBody": "正在上傳 {{game}} 的本機存檔",
     "toastErrorTitle": "錯誤",
-    "toastErrorBody": "無法解決存檔衝突"
+    "toastErrorBody": "無法解決存檔衝突",
+    "filesSize": "{{count}} 個檔案 · {{size}}",
+    "uploadBlockedEmpty": "已略過 {{game}} 的雲端上傳 — 找不到本機存檔",
+    "uploadSkippedTitle": "已略過雲端上傳",
+    "uploadSkippedBody": "{{game}} 暫無可上傳的本機存檔。"
   },
   "storeConnections": {
     "title": "商店連接",
@@ -302,7 +312,20 @@
       "cloudSyncDownFailed": "無法為 {{store}} 下載雲端存檔 ({{error}})。正在以本機存檔啟動遊戲。",
       "cloudSyncUpFailed": "無法為 {{store}} 上傳雲端存檔 ({{error}})。您的進度僅儲存在本機。",
       "errorCircuitBreakerOpen": "{{game_key}} 最近啟動失敗了 {{count}} 次。已暫停自動執行。",
-      "launcherError": "無法啟動 {{game_key}} ({{error_code}})。請查看記錄檔了解詳細資訊。"
+      "launcherError": "無法啟動 {{game_key}} ({{error_code}})。請查看記錄檔了解詳細資訊。",
+      "downloadingProton": "正在下載 Proton — 這可能需要幾分鐘...",
+      "downloadingRuntime": "正在下載 Steam Runtime — 首次啟動可能需要幾分鐘...",
+      "installingUbisoft": "正在透過 Ubisoft Connect 安裝",
+      "installingUbisoftMessage": "正在開啟 Ubisoft Connect — 請在啟動器視窗中開始安裝。",
+      "protonReadyBody": "{{version}} 已可使用",
+      "protonReadyTitle": "Proton 已就緒",
+      "protonSwitchedTo": "現在使用 {{version}}",
+      "signingInUbisoft": "正在登入 Ubisoft Connect",
+      "signingInUbisoftMessage": "正在開啟 Ubisoft Connect — 請在那裡登入後返回。",
+      "ubisoftPrefixNotReady": "Ubisoft Connect 尚未就緒",
+      "ubisoftPrefixNotReadyMessage": "無法為此遊戲準備 Ubisoft Connect 前綴。請重試安裝；若仍然失敗，請重新執行庫同步。",
+      "ubisoftLaunchIdMissing": "正在開啟 Ubisoft Connect",
+      "ubisoftLaunchIdMissingMessage": "無法解析此遊戲的啟動 ID — 正在開啟 Ubisoft Connect，以便您從庫中啟動它。請重新執行庫同步以修復直接啟動。"
     },
     "updateComplete": "更新已完成！",
     "updateCompleteMessage": "{{title}} 已更新。",
@@ -323,7 +346,15 @@
     "library": {
       "_comment": "Toasts emitted by SyncService when a per-store library sync fails. The retry button triggers a fire-and-forget refresh via the unifideck://refresh-library/<store> verb; the user doesn't wait for the result inline, the Library view picks it up through its SYNC_PROGRESS subscription.",
       "syncStoreFailed": "無法重新整理 {{store}} 遊戲庫 ({{error}})。您現有的遊戲庫列表保持可見。"
-    }
+    },
+    "cloudPullStarted": "正在下載雲端存檔…",
+    "cloudPushStarted": "正在上傳本機存檔…",
+    "cloudSavePathFailed": "無法設定存檔位置",
+    "cloudSavePathSet": "存檔位置已更新",
+    "cloudPullDone": "已下載雲端存檔",
+    "cloudPullFailed": "下載雲端存檔失敗",
+    "cloudPushDone": "已上傳本機存檔",
+    "cloudPushFailed": "上傳本機存檔失敗"
   },
   "uninstallModal": {
     "title": "確認解除安裝",
@@ -460,7 +491,8 @@
       "support": "客服支援",
       "install": "安裝",
       "uninstall": "解除安裝",
-      "cancel": "取消"
+      "cancel": "取消",
+      "achievements": "成就"
     },
     "labels": {
       "store": "商店:",
@@ -485,7 +517,8 @@
       "unsupported": "不支持",
       "unknown": "未知"
     },
-    "failedToLoadMetadata": "載入元資料失敗"
+    "failedToLoadMetadata": "載入元資料失敗",
+    "lastSession": "上次遊玩：解鎖了 {{names}}"
   },
   "gameDetailsSettings": {
     "title": "遊戲詳情頁面視圖",
@@ -551,7 +584,8 @@
     "cancel": "取消",
     "working": "正在處理…",
     "loading": "正在載入…",
-    "free": "免費"
+    "free": "免費",
+    "close": "關閉"
   },
   "info": {
     "expandDetails": "展開詳情",
@@ -610,13 +644,47 @@
     "cancelConfirmBody": "您確定要取消安裝 {{title}} 嗎？未完成下載的檔案將被刪除。",
     "cancelConfirmConfirm": "取消下載",
     "cancelConfirmCancel": "繼續下載",
-    "playOnCloud": "雲端遊玩"
+    "playOnCloud": "雲端遊玩",
+    "cloudSave": {
+      "autoPullOn": "啟動時自動下載雲端存檔。",
+      "close": "關閉",
+      "download": "下載雲端存檔",
+      "filesCount": "{{count}} 個檔案",
+      "label": "雲端存檔",
+      "menuTitle": "雲端存檔 — {{game}}",
+      "noCloudData": "未知",
+      "noCloudSupport": "不支援雲端存檔",
+      "setLocation": "設定存檔位置",
+      "setLocationHint": "選擇此遊戲儲存其存檔的資料夾。",
+      "setLocationTitle": "選擇此遊戲的存檔資料夾",
+      "statusCloudAvailable": "雲端存檔可用",
+      "statusNoSaves": "無本機存檔",
+      "statusSyncing": "正在同步雲端存檔…",
+      "statusUnresolved": "未找到存檔位置 — 此遊戲可能無法進行同步。",
+      "unresolvedHint": "啟動遊戲一次以便我們檢測其存檔資料夾，或手動設定位置。",
+      "upload": "上傳本機存檔"
+    },
+    "exe": {
+      "browse": "瀏覽…",
+      "changeFailed": "無法變更可執行檔",
+      "changed": "可執行檔已變更",
+      "defaultTag": "(預設)",
+      "menuItem": "變更可執行檔…",
+      "reset": "重設為預設可執行檔",
+      "resetButton": "重設為預設",
+      "subtitle": "選擇此遊戲啟動的檔案（例如：跳過啟動器並直接執行遊戲）。工作目錄和雲端存檔不受影響。",
+      "title": "變更可執行檔 — {{game}}",
+      "unavailable": "無法讀取此遊戲的資料夾。"
+    }
   },
   "playMeta": {
     "spaceRequired": "所需空間",
     "installedSize": "佔用空間",
     "lastPlayed": "上次執行",
-    "neverPlayed": "從未執行過"
+    "neverPlayed": "從未執行過",
+    "hoursShort": "小時",
+    "minutesShort": "分鐘",
+    "played": "已玩"
   },
   "downloads": {
     "title": "下載",
@@ -739,7 +807,8 @@
       "permission_denied": "權限被拒絕",
       "cancelled": "操作已取消",
       "unknown": "未預料的系統錯誤"
-    }
+    },
+    "unavailableNativeDep": "此系統上的雲端存檔已關閉 — 其 Python ({{python}}) 缺少必要的組件。您的本機存檔不受影響；請在系統更新後重新構建/重新安裝插件以恢復同步。"
   },
   "launchLogs": {
     "_comment": "LaunchLogsModal 使用 of 國際化文案。彈窗通過 launcher 出錯通知中附加 of unifideck://show-logs/<launch_id> 協定喚起。它用於讀取儲存在 ~/.local/share/unifideck/launches/<launch_id>.log 中的單次運行日誌，並提供帶等級色彩的分類渲染展示。",
@@ -853,5 +922,28 @@
     "typeReinstall": "重新安裝",
     "typeUpdate": "升級至",
     "updateButton": "升級至 v{{version}}"
+  },
+  "achievements": {
+    "unlockedTitle": "成就已解鎖",
+    "unlockedBody": "{{name}}"
+  },
+  "achievementsModal": {
+    "title": "成就",
+    "progress": "{{unlocked}} / {{total}} ({{percent}}%)",
+    "refresh": "重新整理",
+    "close": "關閉",
+    "loading": "正在載入成就…",
+    "empty": "此遊戲沒有成就。",
+    "hidden": "隱藏成就",
+    "unlockedOn": "{{date}} 解鎖",
+    "error": "無法載入成就。",
+    "errorOffline": "連接到網際網路以檢視成就。",
+    "errorAuth": "登入此遊戲的商店以檢視成就。",
+    "errorUnavailable": "此遊戲不支援成就。"
+  },
+  "collectionSettings": {
+    "title": "STEAM 收藏",
+    "enabled": "已啟用收藏",
+    "disabled": "已禁用收藏"
   }
 }

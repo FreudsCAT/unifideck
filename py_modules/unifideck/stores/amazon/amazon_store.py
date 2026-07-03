@@ -244,7 +244,7 @@ class AmazonStore(StoreBase):
             return Result(success=True)
         return await self._auth.logout()
 
-    async def get_library(self) -> list[Game] | None:
+    async def get_library(self, *, force: bool = False) -> list[Game] | None:
         """Get library."""
         if not self.cli_path:
             return []
@@ -272,7 +272,10 @@ class AmazonStore(StoreBase):
 
     async def uninstall_game(self, game_id: str, **kwargs: Any) -> Result:
         """Uninstall game."""
-        return await self._installer.uninstall_game(game_id)
+        return await self._installer.uninstall_game(
+            game_id,
+            delete_prefix=bool(kwargs.get("delete_prefix", False)),
+        )
 
     async def update_game(
         self,

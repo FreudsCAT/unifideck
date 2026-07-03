@@ -106,7 +106,13 @@
     "downloadingLabel": "正在下载...",
     "finalizingInstallation": "正在完成安装...",
     "speedMbps": "{{speed}} MB/s",
-    "etaLabel": "剩余时间: {{eta}}"
+    "etaLabel": "剩余时间: {{eta}}",
+    "preparingMessage": "正在初始化容器并同步云端存档...",
+    "preparingLabel": "正在设置游戏...",
+    "installingViaUpcLabel": "正在通过 Ubisoft Connect 安装",
+    "extractingMessage": "正在解压文件...",
+    "verifyingMessage": "正在校验文件... {{pct}}%",
+    "installingViaUpcMessage": "请按照 Ubisoft Connect 窗口的提示完成安装..."
   },
   "cloudSave": {
     "title": "云端存档冲突",
@@ -122,7 +128,11 @@
     "toastUsingLocalTitle": "使用本地存档中",
     "toastUsingLocalBody": "正在上传 {{game}} 的本地存档",
     "toastErrorTitle": "错误",
-    "toastErrorBody": "无法解决存档冲突"
+    "toastErrorBody": "无法解决存档冲突",
+    "filesSize": "{{count}} 个文件 · {{size}}",
+    "uploadBlockedEmpty": "已跳过 {{game}} 的云上传 — 未找到本地存档",
+    "uploadSkippedTitle": "已跳过云上传",
+    "uploadSkippedBody": "{{game}} 暂无可上传的本地存档。"
   },
   "storeConnections": {
     "title": "商店连接",
@@ -302,7 +312,20 @@
       "cloudSyncDownFailed": "无法为 {{store}} 下载云端存档 ({{error}})。正在以本地存档启动游戏。",
       "cloudSyncUpFailed": "无法为 {{store}} 上传云端存档 ({{error}})。您的进度仅保存在本地。",
       "errorCircuitBreakerOpen": "{{game_key}} 最近启动失败了 {{count}} 次。已暂停自动运行。",
-      "launcherError": "无法启动 {{game_key}} ({{error_code}})。请查看日志了解详细信息。"
+      "launcherError": "无法启动 {{game_key}} ({{error_code}})。请查看日志了解详细信息。",
+      "downloadingProton": "正在下载 Proton — 这可能需要几分钟...",
+      "downloadingRuntime": "正在下载 Steam Runtime — 首次启动可能需要几分钟...",
+      "installingUbisoft": "正在通过 Ubisoft Connect 安装",
+      "installingUbisoftMessage": "正在打开 Ubisoft Connect — 请在启动器窗口中开始安装。",
+      "protonReadyBody": "{{version}} 已可使用",
+      "protonReadyTitle": "Proton 已就绪",
+      "protonSwitchedTo": "现在使用 {{version}}",
+      "signingInUbisoft": "正在登录 Ubisoft Connect",
+      "signingInUbisoftMessage": "正在打开 Ubisoft Connect — 请在那里登录后返回。",
+      "ubisoftPrefixNotReady": "Ubisoft Connect 尚未就绪",
+      "ubisoftPrefixNotReadyMessage": "无法为此游戏准备 Ubisoft Connect 前缀。请重试安装；如果仍然失败，请重新运行库同步。",
+      "ubisoftLaunchIdMissing": "正在打开 Ubisoft Connect",
+      "ubisoftLaunchIdMissingMessage": "无法解析此游戏的启动 ID — 正在打开 Ubisoft Connect，以便您从库中启动它。请重新运行库同步以修复直接启动。"
     },
     "updateComplete": "更新已完成！",
     "updateCompleteMessage": "{{title}} 已更新。",
@@ -323,7 +346,15 @@
     "library": {
       "_comment": "Toasts emitted by SyncService when a per-store library sync fails. The retry button triggers a fire-and-forget refresh via the unifideck://refresh-library/<store> verb; the user doesn't wait for the result inline, the Library view picks it up through its SYNC_PROGRESS subscription.",
       "syncStoreFailed": "无法刷新 {{store}} 游戏库 ({{error}})。您现有的游戏库列表保持可见。"
-    }
+    },
+    "cloudPullStarted": "正在下载云端存档…",
+    "cloudPushStarted": "正在上传本地存档…",
+    "cloudSavePathFailed": "无法设置存档位置",
+    "cloudSavePathSet": "存档位置已更新",
+    "cloudPullDone": "已下载云端存档",
+    "cloudPullFailed": "下载云端存档失败",
+    "cloudPushDone": "已上传本地存档",
+    "cloudPushFailed": "上传本地存档失败"
   },
   "uninstallModal": {
     "title": "确认卸载",
@@ -460,7 +491,8 @@
       "support": "客服支持",
       "install": "安装",
       "uninstall": "卸载",
-      "cancel": "取消"
+      "cancel": "取消",
+      "achievements": "成就"
     },
     "labels": {
       "store": "商店:",
@@ -485,7 +517,8 @@
       "unsupported": "不支持",
       "unknown": "未知"
     },
-    "failedToLoadMetadata": "加载元数据失败"
+    "failedToLoadMetadata": "加载元数据失败",
+    "lastSession": "上次游玩：解锁了 {{names}}"
   },
   "gameDetailsSettings": {
     "title": "游戏详情页面视图",
@@ -551,7 +584,8 @@
     "cancel": "取消",
     "working": "正在处理…",
     "loading": "正在加载…",
-    "free": "免费"
+    "free": "免费",
+    "close": "关闭"
   },
   "info": {
     "expandDetails": "展开详情",
@@ -610,13 +644,47 @@
     "cancelConfirmBody": "您确定要取消安装 {{title}} 吗？未完成下载的文件将被删除。",
     "cancelConfirmConfirm": "取消下载",
     "cancelConfirmCancel": "继续下载",
-    "playOnCloud": "云端游玩"
+    "playOnCloud": "云端游玩",
+    "cloudSave": {
+      "autoPullOn": "启动时自动下载云端存档。",
+      "close": "关闭",
+      "download": "下载云端存档",
+      "filesCount": "{{count}} 个文件",
+      "label": "云端存档",
+      "menuTitle": "云端存档 — {{game}}",
+      "noCloudData": "未知",
+      "noCloudSupport": "不支持云端存档",
+      "setLocation": "设置存档位置",
+      "setLocationHint": "选择此游戏存储其存档的文件夹。",
+      "setLocationTitle": "选择此游戏的存档文件夹",
+      "statusCloudAvailable": "云端存档可用",
+      "statusNoSaves": "无本地存档",
+      "statusSyncing": "正在同步云端存档…",
+      "statusUnresolved": "未找到存档位置 — 此游戏可能无法进行同步。",
+      "unresolvedHint": "启动游戏一次以便我们检测其存档文件夹，或手动设置位置。",
+      "upload": "上传本地存档"
+    },
+    "exe": {
+      "browse": "浏览…",
+      "changeFailed": "无法更改可执行文件",
+      "changed": "可执行文件已更改",
+      "defaultTag": "(默认)",
+      "menuItem": "更改可执行文件…",
+      "reset": "重置为默认可执行文件",
+      "resetButton": "重置为默认",
+      "subtitle": "选择此游戏启动的文件（例如：跳过启动器并直接运行游戏）。工作目录和云端存档不受影响。",
+      "title": "更改可执行文件 — {{game}}",
+      "unavailable": "无法读取此游戏的文件夹。"
+    }
   },
   "playMeta": {
     "spaceRequired": "所需空间",
     "installedSize": "占用空间",
     "lastPlayed": "上次运行",
-    "neverPlayed": "从未运行过"
+    "neverPlayed": "从未运行过",
+    "hoursShort": "小时",
+    "minutesShort": "分钟",
+    "played": "已玩"
   },
   "downloads": {
     "title": "下载",
@@ -739,7 +807,8 @@
       "permission_denied": "权限被拒绝",
       "cancelled": "操作已取消",
       "unknown": "未预料的系统错误"
-    }
+    },
+    "unavailableNativeDep": "此系统上的云端存档已关闭 — 其 Python ({{python}}) 缺少必要的组件。您的本地存档不受影响；请在系统更新后重新构建/重新安装插件以恢复同步。"
   },
   "launchLogs": {
     "_comment": "LaunchLogsModal 使用 of 国际化文案。弹窗通过 launcher 出错通知中附加 of unifideck://show-logs/<launch_id> 协议唤起。它用于读取保存在 ~/.local/share/unifideck/launches/<launch_id>.log 中的单次运行日志，并提供带等级色彩的分类渲染展示。",
@@ -853,5 +922,28 @@
     "typeReinstall": "重新安装",
     "typeUpdate": "升级至",
     "updateButton": "升级至 v{{version}}"
+  },
+  "achievements": {
+    "unlockedTitle": "成就已解锁",
+    "unlockedBody": "{{name}}"
+  },
+  "achievementsModal": {
+    "title": "成就",
+    "progress": "{{unlocked}} / {{total}} ({{percent}}%)",
+    "refresh": "刷新",
+    "close": "关闭",
+    "loading": "正在加载成就…",
+    "empty": "此游戏没有成就。",
+    "hidden": "隐藏成就",
+    "unlockedOn": "{{date}} 解锁",
+    "error": "无法加载成就。",
+    "errorOffline": "连接到互联网以查看成就。",
+    "errorAuth": "登录此游戏的商店以查看成就。",
+    "errorUnavailable": "此游戏不支持成就。"
+  },
+  "collectionSettings": {
+    "title": "STEAM 收藏夹",
+    "enabled": "收藏夹已启用",
+    "disabled": "收藏夹已禁用"
   }
 }

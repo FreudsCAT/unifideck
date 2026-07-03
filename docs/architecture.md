@@ -1,6 +1,6 @@
 # Unifideck — Architecture & Build Process
 
-> **Branch:** `new-architecture` · **Version:** 0.7+ · **Plan ref:** operational plan v1.3
+> **Branch:** `for-pr-0.7` · **Version:** 0.7+ · **Plan ref:** operational plan v1.3
 
 ---
 
@@ -124,21 +124,28 @@ Infrastructure services that subscribe to the EventBus and own cross-cutting con
 
 ### Layer 6 — `rpc/mixins/` + `main.py`
 
-The `Plugin` class in `main.py` is composed from 11 RPC mixin classes. The `@auto_wrap_rpc_methods` decorator rewrites every public coroutine to return a typed `Result[T]` envelope, keeping the frontend contract stable across backend refactors.
+The `Plugin` class in `main.py` is composed from 18 RPC mixin classes (see `main.py` `class Plugin(...)`). The `@auto_wrap_rpc_methods` decorator rewrites every public coroutine to return a typed `Result[T]` envelope, keeping the frontend contract stable across backend refactors.
 
-| Mixin                      | Surface                                           |
-| -------------------------- | ------------------------------------------------- |
-| `StoreRPCMixin`            | `get_library`, `get_store_status`                 |
-| `SyncRPCMixin`             | `sync_library`, `get_sync_progress`               |
-| `DownloadRPCMixin`         | `install_game`, `uninstall_game`, `get_downloads` |
-| `LaunchRPCMixin`           | `launch_game`, `kill_game`                        |
-| `PlaytimeRPCMixin`         | `get_playtime`, `get_play_sessions`               |
-| `SecurityRPCMixin`         | `rotate_device_key`, `get_audit_log`              |
-| `ObservabilityRPCMixin`    | `get_metrics`, `get_event_log`                    |
-| `ActionRPCMixin`           | `dispatch_unifideck_action` (URI dispatch)        |
-| `CloudFailureRPCMixin`     | `get_cloud_failures`, `retry_cloud_sync`          |
-| `ConfigValidationRPCMixin` | `get_config_validation_result`                    |
-| `UIRPCMixin`               | `get_ui_state`, `set_locale`                      |
+| Mixin                      | Surface (representative)                                                        |
+| -------------------------- | ------------------------------------------------------------------------------- |
+| `StoreRPCMixin`            | `get_library`, `get_store_status`                                               |
+| `SyncRPCMixin`             | `sync_library`, `get_sync_progress`                                             |
+| `DownloadRPCMixin`         | `install_game`, `uninstall_game`, `get_downloads`                               |
+| `StorageRPCMixin`          | `get_storage_locations`, `get_browseable_devices`, `set_custom_install_path`    |
+| `LaunchRPCMixin`           | `launch_game`, `kill_game`                                                       |
+| `AuthShortcutsRPCMixin`    | `get_<store>_auth_shortcut_context`, `get_compat_tool_for_game`, `save_proton_setting` |
+| `EdgeRPCMixin`             | `is_edge_installed`, `install_edge`                                             |
+| `LibraryFacetsRPCMixin`    | `get_overview_enrichment`                                                       |
+| `PlaytimeRPCMixin`         | `get_playtime`, `get_play_sessions`                                             |
+| `SecurityRPCMixin`         | `rotate_device_key`, `get_audit_log`                                            |
+| `ObservabilityRPCMixin`    | `get_metrics`, `get_event_log`                                                  |
+| `ActionRPCMixin`           | `dispatch_unifideck_action` (URI dispatch)                                      |
+| `AccountRPCMixin`          | `check_account_switch`, `migrate_account_data`                                  |
+| `CloudFailureRPCMixin`     | `get_cloud_failures`, `retry_cloud_sync`                                        |
+| `CloudSaveRPCMixin`        | `get_cloud_save_status`, `cloud_save_pull`, `cloud_save_push`, `set_game_save_path` |
+| `ConfigValidationRPCMixin` | `get_config_validation_result`                                                  |
+| `UIRPCMixin`               | `get_ui_state`, `set_locale`                                                    |
+| `UpdaterRPCMixin`          | `check_plugin_update`, `get_available_versions`, `get_release_notes`            |
 
 ---
 
@@ -214,11 +221,11 @@ Installed via `pip install --target py_modules/ -r requirements.txt`.
 
 TypeScript/React frontend compiled to `dist/index.js` by Rollup.
 
-The frontend communicates with the backend exclusively via Decky's RPC bridge — it calls the public methods of the `Plugin` class (which are the 11 mixin surfaces) and receives typed `Result[T]` envelopes.
+The frontend communicates with the backend exclusively via Decky's RPC bridge — it calls the public methods of the `Plugin` class (which are the 18 mixin surfaces) and receives typed `Result[T]` envelopes.
 
 Key architectural landmarks post-restructure:
 
-- **`src/index.tsx`** — reduced from 2 409 LOC to ~69 LOC (plugin registration only)
+- **`src/index.tsx`** — reduced from 2 409 LOC to ~166 LOC (plugin registration only)
 - **`src/lib/steam-bridge/`** — new Steam interaction abstraction layer
 - **`src/views/`** — QuickAccessPanel, AppDetailsPatch
 - **`src/components/`** — decomposed into `play/`, `info/`, `modals/`, `settings/`, `shared/`, `downloads/`

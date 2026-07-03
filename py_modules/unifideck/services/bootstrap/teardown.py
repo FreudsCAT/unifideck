@@ -46,6 +46,8 @@ async def stop_all_services(container: ServiceContainer) -> None:
         "security",
         "probe_reaction",
         "feature_flags",
+        "achievements",
+        "playtime_sync",
         "playtime",
         "account",
         "metrics",

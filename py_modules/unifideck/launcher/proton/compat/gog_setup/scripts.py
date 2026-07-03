@@ -93,10 +93,34 @@ def _win_path(install_path: str) -> str:
     return "Z:" + install_path.replace("/", "\\")
 
 
+def _wow64_subkeys(root: str, subkey: str) -> list[str]:
+    """Return the subkey(s) to write so 32-bit *and* 64-bit games both see it.
+
+    A win64 prefix redirects 32-bit reads of ``HKLM\\Software\\…`` to
+    ``HKLM\\Software\\Wow6432Node\\…``. GOG ``setRegistry`` "Installed Path"
+    keys (older Bethesda / Ubisoft-on-GOG titles) are 32-bit, so a key written
+    only to the native view is invisible to the game → it shows "Install".
+    Mirror the Epic/Ubisoft fixes (``epic_registry.py``) and write the literal
+    ``Wow6432Node`` path too (don't rely on ``reg.exe /reg:32`` — Wine support
+    is version-dependent). Only HKLM\\Software keys are redirected; everything
+    else is written once, unchanged.
+    """
+    subkeys = [subkey]
+    prefix = "Software\\"
+    if (
+        root == "HKLM"
+        and subkey.lower().startswith(prefix.lower())
+        and "wow6432node" not in subkey.lower()
+    ):
+        remainder = subkey[len(prefix):]
+        subkeys.append(f"Software\\WOW6432Node\\{remainder}")
+    return subkeys
+
+
 async def _apply_set_registry(
     plan: ProtonLaunchPlan, args: dict[str, Any], install_path: str,
 ) -> None:
-    """Apply one ``setRegistry`` action via ``reg.exe add``."""
+    """Apply one ``setRegistry`` action via ``reg.exe add`` (both WOW64 views)."""
     root = _ROOT_MAP.get(args.get("root", ""), args.get("root", ""))
     subkey = args.get("subkey", "")
     if not root or not subkey:
@@ -104,12 +128,13 @@ async def _apply_set_registry(
     value_data = args.get("valueData", "")
     if isinstance(value_data, str):
         value_data = value_data.replace("{app}", _win_path(install_path))
-    reg_args = ["add", f"{root}\\{subkey}", "/f"]
     value_name = args.get("valueName", "")
+    value_args: list[str] = []
     if value_name:
         reg_type = _TYPE_MAP.get(str(args.get("valueType", "string")).lower(), "REG_SZ")
-        reg_args += ["/v", value_name, "/t", reg_type, "/d", str(value_data)]
-    await run_wine(plan, "reg.exe", reg_args)
+        value_args = ["/v", value_name, "/t", reg_type, "/d", str(value_data)]
+    for target in _wow64_subkeys(root, subkey):
+        await run_wine(plan, "reg.exe", ["add", f"{root}\\{target}", "/f", *value_args])
 
 
 def _load_script_actions(

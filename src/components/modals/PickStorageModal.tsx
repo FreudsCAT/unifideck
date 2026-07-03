@@ -241,7 +241,7 @@ export const PickStorageModal: FC<Props> = ({
           >
             <StoragePathPicker
               startPath={
-                locations.find((l) => l.id === "custom")?.path ?? "/home/deck"
+                locations.find((l) => l.id === "custom")?.path ?? "/home"
               }
               onConfirm={handleCustomPicked}
             />

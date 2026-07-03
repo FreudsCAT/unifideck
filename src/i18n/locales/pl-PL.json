@@ -106,7 +106,13 @@
     "downloadingLabel": "Pobieranie...",
     "finalizingInstallation": "Finalizowanie instalacji...",
     "speedMbps": "{{speed}} MB/s",
-    "etaLabel": "Pozostały czas: {{eta}}"
+    "etaLabel": "Pozostały czas: {{eta}}",
+    "preparingMessage": "Inicjowanie prefiksu i synchronizowanie zapisów w chmurze...",
+    "preparingLabel": "Przygotowywanie gry...",
+    "installingViaUpcLabel": "Instalowanie przez Ubisoft Connect",
+    "extractingMessage": "Wyodrębnianie plików...",
+    "verifyingMessage": "Weryfikowanie plików... {{pct}}%",
+    "installingViaUpcMessage": "Postępuj zgodnie z oknem Ubisoft Connect, aby zakończyć instalację..."
   },
   "cloudSave": {
     "title": "Konflikt zapisów w chmurze",
@@ -122,7 +128,11 @@
     "toastUsingLocalTitle": "Używanie zapisów lokalnych",
     "toastUsingLocalBody": "Przesyłanie zapisów lokalnych dla {{game}}",
     "toastErrorTitle": "Błąd",
-    "toastErrorBody": "Nie udało się rozwiązać konfliktu"
+    "toastErrorBody": "Nie udało się rozwiązać konfliktu",
+    "filesSize": "{{count}} plików · {{size}}",
+    "uploadBlockedEmpty": "Pominięto przesyłanie do chmury dla {{game}} — nie znaleziono lokalnych zapisów",
+    "uploadSkippedTitle": "Pominięto przesyłanie do chmury",
+    "uploadSkippedBody": "Brak lokalnych zapisów do przesłania dla {{game}}."
   },
   "storeConnections": {
     "title": "POŁĄCZENIA SKLEPÓW",
@@ -302,7 +312,20 @@
       "cloudSyncDownFailed": "Błąd pobierania zapisów w chmurze dla {{store}} ({{error}}). Uruchamianie z zapisem lokalnym.",
       "cloudSyncUpFailed": "Błąd przesyłania zapisów w chmurze dla {{store}} ({{error}}). Twój postęp jest zapisany tylko lokalnie.",
       "errorCircuitBreakerOpen": "Gra {{game_key}} nie uruchomiła się poprawnie {{count}} razy z rzędu. Automatyczne próby wstrzymane.",
-      "launcherError": "Nie udało się uruchomić {{game_key}} ({{error_code}}). Sprawdź logi."
+      "launcherError": "Nie udało się uruchomić {{game_key}} ({{error_code}}). Sprawdź logi.",
+      "downloadingProton": "Pobieranie Proton — może to potrwać kilka minut...",
+      "downloadingRuntime": "Pobieranie Steam Runtime — pierwsze uruchomienie może potrwać kilka minut...",
+      "installingUbisoft": "Instalowanie przez Ubisoft Connect",
+      "installingUbisoftMessage": "Otwieranie Ubisoft Connect — rozpocznij instalację w oknie launchera.",
+      "protonReadyBody": "{{version}} jest gotowy do użycia",
+      "protonReadyTitle": "Proton gotowy",
+      "protonSwitchedTo": "Teraz używasz {{version}}",
+      "signingInUbisoft": "Logowanie do Ubisoft Connect",
+      "signingInUbisoftMessage": "Otwieranie Ubisoft Connect — zaloguj się tam, a następnie wróć.",
+      "ubisoftPrefixNotReady": "Ubisoft Connect nie jest gotowy",
+      "ubisoftPrefixNotReadyMessage": "Nie udało się przygotować prefiksu Ubisoft Connect dla tej gry. Spróbuj zainstalować ponownie; jeśli błąd się powtarza, ponownie uruchom synchronizację biblioteki.",
+      "ubisoftLaunchIdMissing": "Otwieranie Ubisoft Connect",
+      "ubisoftLaunchIdMissingMessage": "Nie udało się ustalić identyfikatora uruchamiania tej gry — otwieranie Ubisoft Connect, abyś mógł uruchomić ją z biblioteki. Ponownie uruchom synchronizację biblioteki, aby naprawić bezpośrednie uruchamianie."
     },
     "updateComplete": "Aktualizacja zakończona!",
     "updateCompleteMessage": "Gra {{title}} została zaktualizowana.",
@@ -323,7 +346,15 @@
     "library": {
       "_comment": "Toasts emitted by SyncService when a per-store library sync fails. The retry button triggers a fire-and-forget refresh via the unifideck://refresh-library/<store> verb; the user doesn't wait for the result inline, the Library view picks it up through its SYNC_PROGRESS subscription.",
       "syncStoreFailed": "Nie można odświeżyć biblioteki {{store}} ({{error}}). Bieżąca biblioteka pozostaje widoczna."
-    }
+    },
+    "cloudPullStarted": "Pobieranie zapisu z chmury…",
+    "cloudPushStarted": "Przesyłanie lokalnego zapisu…",
+    "cloudSavePathFailed": "Nie można ustawić lokalizacji zapisu",
+    "cloudSavePathSet": "Zaktualizowano lokalizację zapisu",
+    "cloudPullDone": "Zapis z chmury pobrany",
+    "cloudPullFailed": "Pobieranie zapisu z chmury nie powiodło się",
+    "cloudPushDone": "Lokalny zapis przesłany",
+    "cloudPushFailed": "Przesyłanie lokalnego zapisu nie powiodło się"
   },
   "uninstallModal": {
     "title": "Potwierdź odinstalowanie",
@@ -460,7 +491,8 @@
       "support": "Wsparcie",
       "install": "Zainstaluj",
       "uninstall": "Odinstaluj",
-      "cancel": "Anuluj"
+      "cancel": "Anuluj",
+      "achievements": "Osiągnięcia"
     },
     "labels": {
       "store": "Sklep:",
@@ -485,7 +517,8 @@
       "unsupported": "NIEWSPIERANA",
       "unknown": "NIEZNANA"
     },
-    "failedToLoadMetadata": "Nie udało się załadować metadanych"
+    "failedToLoadMetadata": "Nie udało się załadować metadanych",
+    "lastSession": "Ostatnia sesja: odblokowano {{names}}"
   },
   "gameDetailsSettings": {
     "title": "WIDOK SZCZEGÓŁÓW GRY",
@@ -551,7 +584,8 @@
     "cancel": "Anuluj",
     "working": "Przetwarzanie…",
     "loading": "Ładowanie…",
-    "free": "darmowa"
+    "free": "darmowa",
+    "close": "Zamknij"
   },
   "info": {
     "expandDetails": "Pokaż szczegóły",
@@ -610,13 +644,47 @@
     "cancelConfirmBody": "Czy na pewno chcesz anulować pobieranie gry {{title}}? Częściowo pobrane pliki zostaną usunięte.",
     "cancelConfirmConfirm": "Anuluj pobieranie",
     "cancelConfirmCancel": "Kontynuuj pobieranie",
-    "playOnCloud": "Graj w chmurze"
+    "playOnCloud": "Graj w chmurze",
+    "cloudSave": {
+      "autoPullOn": "Zapisy w chmurze są pobierane automatycznie przy uruchomieniu.",
+      "close": "Zamknij",
+      "download": "Pobierz zapis z chmury",
+      "filesCount": "{{count}} plików",
+      "label": "Zapisy w chmurze",
+      "menuTitle": "Zapisy w chmurze — {{game}}",
+      "noCloudData": "Nieznana",
+      "noCloudSupport": "Brak obsługi zapisów w chmurze",
+      "setLocation": "Ustaw lokalizację zapisu",
+      "setLocationHint": "Wybierz folder, w którym ta gra przechowuje swoje zapisy.",
+      "setLocationTitle": "Wybierz folder zapisu tej gry",
+      "statusCloudAvailable": "Zapis w chmurze dostępny",
+      "statusNoSaves": "Brak lokalnych zapisów",
+      "statusSyncing": "Synchronizowanie zapisów w chmurze…",
+      "statusUnresolved": "Nie znaleziono lokalizacji zapisu — synchronizacja może nie działać dla tej gry.",
+      "unresolvedHint": "Uruchom grę raz, abyśmy mogli wykryć jej folder zapisu, lub ustaw lokalizację ręcznie.",
+      "upload": "Prześlij lokalny zapis"
+    },
+    "exe": {
+      "browse": "Przeglądaj…",
+      "changeFailed": "Nie można zmienić pliku wykonywalnego",
+      "changed": "Zmieniono plik wykonywalny",
+      "defaultTag": "(domyślny)",
+      "menuItem": "Zmień plik wykonywalny…",
+      "reset": "Przywróć domyślny plik wykonywalny",
+      "resetButton": "Przywróć domyślne",
+      "subtitle": "Wybierz plik uruchamiający tę grę (np. pomiń launcher i uruchom grę bezpośrednio). Katalog roboczy oraz zapisy w chmurze nie zostaną naruszone.",
+      "title": "Zmień plik wykonywalny — {{game}}",
+      "unavailable": "Nie można odczytać folderu tej gry."
+    }
   },
   "playMeta": {
     "spaceRequired": "Wymagane miejsce",
     "installedSize": "Zajmowane miejsce",
     "lastPlayed": "Ostatnio grano",
-    "neverPlayed": "Nigdy nie grano"
+    "neverPlayed": "Nigdy nie grano",
+    "hoursShort": "godz.",
+    "minutesShort": "min.",
+    "played": "Rozegrano"
   },
   "downloads": {
     "title": "Pobieranie",
@@ -739,7 +807,8 @@
       "permission_denied": "Brak uprawnień",
       "cancelled": "Anulowano",
       "unknown": "Nieoczekiwany błąd"
-    }
+    },
+    "unavailableNativeDep": "Zapisy w chmurze są wyłączone na tym systemie — w jego Pythonie ({{python}}) brakuje wymaganego komponentu. Twoje lokalne zapisy nie zostaną naruszone; przebuduj/przeinstaluj wtyczkę po aktualizacji systemu, aby przywrócić synchronizację."
   },
   "launchLogs": {
     "_comment": "Wiadomości dla LaunchLogsModal. Dziennik inspekcji jest otwierany z akcji powiadomienia unifideck://show-logs/<launch_id>, dołączonej do ostrzeżeń o błędach launchera (circuit breaker + LauncherError). Odczytuje zarchiwizowane logi dla każdego uruchomienia w ~/.local/share/unifideck/launches/<launch_id>.log i wyświetla je pokolorowane według ważności.",
@@ -853,5 +922,28 @@
     "typeReinstall": "Instalowanie ponowne",
     "typeUpdate": "Aktualizowanie do",
     "updateButton": "Aktualizuj do v{{version}}"
+  },
+  "achievements": {
+    "unlockedTitle": "Osiągnięcie odblokowane",
+    "unlockedBody": "{{name}}"
+  },
+  "achievementsModal": {
+    "title": "Osiągnięcia",
+    "progress": "{{unlocked}} / {{total}} ({{percent}}%)",
+    "refresh": "Odśwież",
+    "close": "Zamknij",
+    "loading": "Ładowanie osiągnięć…",
+    "empty": "Ta gra nie ma osiągnięć.",
+    "hidden": "Ukryte osiągnięcie",
+    "unlockedOn": "Odblokowano {{date}}",
+    "error": "Nie udało się wczytać osiągnięć.",
+    "errorOffline": "Połącz się z internetem, aby zobaczyć osiągnięcia.",
+    "errorAuth": "Zaloguj się w sklepie tej gry, aby zobaczyć osiągnięcia.",
+    "errorUnavailable": "Osiągnięcia nie są dostępne dla tej gry."
+  },
+  "collectionSettings": {
+    "title": "KOLEKCJE STEAM",
+    "enabled": "Kolekcje włączone",
+    "disabled": "Kolekcje wyłączone"
   }
 }

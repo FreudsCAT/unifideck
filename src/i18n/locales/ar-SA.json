@@ -106,7 +106,13 @@
     "downloadingLabel": "جاري التنزيل...",
     "finalizingInstallation": "جاري إنهاء التثبيت...",
     "speedMbps": "{{speed}} ميجابايت/ثانية",
-    "etaLabel": "الوقت المتبقي: {{eta}}"
+    "etaLabel": "الوقت المتبقي: {{eta}}",
+    "preparingMessage": "جاري تهيئة البادئة ومزامنة الحفظ السحابي...",
+    "preparingLabel": "جارٍ إعداد اللعبة...",
+    "installingViaUpcLabel": "التثبيت عبر Ubisoft Connect",
+    "extractingMessage": "جارٍ استخراج الملفات...",
+    "verifyingMessage": "جارٍ التحقق من الملفات... {{pct}}%",
+    "installingViaUpcMessage": "اتبع نافذة Ubisoft Connect لإكمال التثبيت..."
   },
   "cloudSave": {
     "title": "تعارض الحفظ السحابي",
@@ -122,7 +128,11 @@
     "toastUsingLocalTitle": "استخدام الحفظ المحلي",
     "toastUsingLocalBody": "جاري رفع الحفظ المحلي لـ {{game}} إلى السحابة",
     "toastErrorTitle": "خطأ",
-    "toastErrorBody": "تعذر حل تعارض الحفظ"
+    "toastErrorBody": "تعذر حل تعارض الحفظ",
+    "filesSize": "{{count}} ملفات · {{size}}",
+    "uploadBlockedEmpty": "تم تخطّي الرفع السحابي لـ {{game}} — لم يتم العثور على حفظ محلي",
+    "uploadSkippedTitle": "تم تخطّي الرفع السحابي",
+    "uploadSkippedBody": "لا توجد حفظ محلي للرفع بعد لـ {{game}}."
   },
   "storeConnections": {
     "title": "ربط المتاجر",
@@ -302,7 +312,20 @@
       "cloudSyncDownFailed": "فشل تنزيل ملفات الحفظ السحابي لـ {{store}} ({{error}}). تم تشغيل اللعبة ببيانات الحفظ المحلية.",
       "cloudSyncUpFailed": "فشل رفع ملفات الحفظ السحابي لـ {{store}} ({{error}}). تقدمك محفوظ محلياً فقط.",
       "errorCircuitBreakerOpen": "فشل تشغيل {{game_key}} لـ {{count}} مرات متتالية مؤخراً. تم تعليق التشغيل التلقائي.",
-      "launcherError": "تعذر تشغيل {{game_key}} ({{error_code}}). راجع السجلات للتفاصيل."
+      "launcherError": "تعذر تشغيل {{game_key}} ({{error_code}}). راجع السجلات للتفاصيل.",
+      "downloadingProton": "جارٍ تنزيل Proton — قد يستغرق ذلك بضع دقائق...",
+      "downloadingRuntime": "جارٍ تنزيل Steam Runtime — قد يستغرق التشغيل الأول بضع دقائق...",
+      "installingUbisoft": "التثبيت عبر Ubisoft Connect",
+      "installingUbisoftMessage": "جارٍ فتح Ubisoft Connect — ابدأ التثبيت من نافذة المشغّل.",
+      "protonReadyBody": "{{version}} جاهز للاستخدام",
+      "protonReadyTitle": "Proton جاهز",
+      "protonSwitchedTo": "يتم الآن استخدام {{version}}",
+      "signingInUbisoft": "جارٍ تسجيل الدخول إلى Ubisoft Connect",
+      "signingInUbisoftMessage": "جارٍ فتح Ubisoft Connect — سجّل الدخول هناك ثم عُد.",
+      "ubisoftPrefixNotReady": "Ubisoft Connect غير جاهز",
+      "ubisoftPrefixNotReadyMessage": "تعذّر تجهيز بادئة Ubisoft Connect لهذه اللعبة. حاول التثبيت مرة أخرى؛ وإذا استمر الفشل، فأعد تشغيل مزامنة المكتبة.",
+      "ubisoftLaunchIdMissing": "جارٍ فتح Ubisoft Connect",
+      "ubisoftLaunchIdMissingMessage": "تعذّر تحديد معرّف تشغيل هذه اللعبة — جارٍ فتح Ubisoft Connect لتتمكن من تشغيلها من مكتبتك. أعد تشغيل مزامنة المكتبة لإصلاح التشغيل المباشر."
     },
     "updateComplete": "اكتمل التحديث!",
     "updateCompleteMessage": "تم تحديث {{title}}.",
@@ -323,7 +346,15 @@
     "library": {
       "_comment": "Toasts emitted by SyncService when a per-store library sync fails. The retry button triggers a fire-and-forget refresh via the unifideck://refresh-library/<store> verb; the user doesn't wait for the result inline, the Library view picks it up through its SYNC_PROGRESS subscription.",
       "syncStoreFailed": "فشل تحديث مكتبة {{store}} ({{error}}). ستبقى مكتبتك الحالية ظاهرة."
-    }
+    },
+    "cloudPullStarted": "جاري تنزيل الحفظ السحابي...",
+    "cloudPushStarted": "جاري رفع الحفظ المحلي...",
+    "cloudSavePathFailed": "تعذر تحديد موقع الحفظ",
+    "cloudSavePathSet": "تم تحديث موقع الحفظ",
+    "cloudPullDone": "تم تنزيل الحفظ السحابي",
+    "cloudPullFailed": "فشل تنزيل الحفظ السحابي",
+    "cloudPushDone": "تم رفع الحفظ المحلي",
+    "cloudPushFailed": "فشل رفع الحفظ المحلي"
   },
   "uninstallModal": {
     "title": "تأكيد إلغاء التثبيت",
@@ -460,7 +491,8 @@
       "support": "الدعم الفني",
       "install": "تثبيت",
       "uninstall": "إلغاء التثبيت",
-      "cancel": "إلغاء"
+      "cancel": "إلغاء",
+      "achievements": "الإنجازات"
     },
     "labels": {
       "store": "المتجر:",
@@ -485,7 +517,8 @@
       "unsupported": "غير مدعوم",
       "unknown": "غير معروف"
     },
-    "failedToLoadMetadata": "فشل تحميل البيانات الوصفية"
+    "failedToLoadMetadata": "فشل تحميل البيانات الوصفية",
+    "lastSession": "آخر جلسة: تم فتح {{names}}"
   },
   "gameDetailsSettings": {
     "title": "واجهة تفاصيل اللعبة",
@@ -551,7 +584,8 @@
     "cancel": "إلغاء",
     "working": "جاري المعالجة…",
     "loading": "جاري التحميل…",
-    "free": "مجاني"
+    "free": "مجاني",
+    "close": "إغلاق"
   },
   "info": {
     "expandDetails": "عرض التفاصيل",
@@ -610,13 +644,47 @@
     "cancelConfirmBody": "هل أنت متأكد من إلغاء تثبيت {{title}}؟ سيتم حذف ملفات التنزيل غير المكتملة.",
     "cancelConfirmConfirm": "إلغاء التنزيل",
     "cancelConfirmCancel": "مواصلة التنزيل",
-    "playOnCloud": "اللعب عبر السحاب"
+    "playOnCloud": "اللعب عبر السحاب",
+    "cloudSave": {
+      "autoPullOn": "يتم تنزيل الحفظ السحابي تلقائيًا عند التشغيل.",
+      "close": "إغلاق",
+      "download": "تنزيل الحفظ السحابي",
+      "filesCount": "{{count}} ملفات",
+      "label": "الحفظ السحابي",
+      "menuTitle": "الحفظ السحابي — {{game}}",
+      "noCloudData": "غير معروف",
+      "noCloudSupport": "لا يوجد دعم للحفظ السحابي",
+      "setLocation": "تحديد موقع الحفظ",
+      "setLocationHint": "اختر المجلد الذي تخزن فيه هذه اللعبة ملفات حفظها.",
+      "setLocationTitle": "اختر مجلد الحفظ الخاص بهذه اللعبة",
+      "statusCloudAvailable": "الحفظ السحابي متاح",
+      "statusNoSaves": "لا توجد ملفات حفظ محلية",
+      "statusSyncing": "جاري مزامنة الحفظ السحابي...",
+      "statusUnresolved": "لم يتم العถور على موقع الحفظ — قد لا تعمل المزامنة لهذه اللعبة.",
+      "unresolvedHint": "قم بتشغيل اللعبة مرة واحدة حتى نتمكن من اكتشاف مجلد الحفظ الخاص بها، أو حدد الموقع يدويًا.",
+      "upload": "رفع الحفظ المحلي"
+    },
+    "exe": {
+      "browse": "تصفح…",
+      "changeFailed": "تعذر تغيير الملف التنفيذي",
+      "changed": "تم تغيير الملف التنفيذي",
+      "defaultTag": "(الافتراضي)",
+      "menuItem": "تغيير الملف التنفيذي…",
+      "reset": "إعادة تعيين إلى الملف التنفيذي الافتراضي",
+      "resetButton": "إعادة تعيين للافتراضي",
+      "subtitle": "اختر الملف الذي يقوم بتشغيل اللعبة (على سبيل المثال: تخطي المشغل وتشغيل اللعبة مباشرة). مجلد العمل والحفظ السحابي لن يتأثرا.",
+      "title": "تغيير الملف التنفيذي — {{game}}",
+      "unavailable": "تعذر قراءة مجلد هذه اللعبة."
+    }
   },
   "playMeta": {
     "spaceRequired": "المساحة المطلوبة",
     "installedSize": "المساحة المستخدمة",
     "lastPlayed": "آخر تشغيل",
-    "neverPlayed": "لم يتم اللعب بها قط"
+    "neverPlayed": "لم يتم اللعب بها قط",
+    "hoursShort": "ساعة",
+    "minutesShort": "دقيقة",
+    "played": "وقت اللعب"
   },
   "downloads": {
     "title": "التنزيلات",
@@ -739,7 +807,8 @@
       "permission_denied": "تم رفض الصلاحية",
       "cancelled": "تم إلغاء العملية",
       "unknown": "حدث خطأ غير متوقع في النظام"
-    }
+    },
+    "unavailableNativeDep": "الحفظ السحابي معطل على هذا النظام — إصدار Python ({{python}}) يفتقد إلى مكون مطلوب. حفظك المحلي لم يتأثر؛ أعد بناء/تثبيت الملحق بعد تحديث النظام لاستعادة المزامنة."
   },
   "launchLogs": {
     "_comment": "النصوص المستخدمة في نافذة LaunchLogsModal. تفتح عبر بروتوكول unifideck://show-logs/<launch_id>. تقرأ ملف السجل ~/.local/share/unifideck/launches/<launch_id>.log وتعرض الأسطر ملونة حسب خطورتها.",
@@ -853,5 +922,28 @@
     "typeReinstall": "إعادة تثبيت النسخة",
     "typeUpdate": "تحديث إلى النسخة",
     "updateButton": "تحديث إلى v{{version}}"
+  },
+  "achievements": {
+    "unlockedTitle": "تم فتح الإنجاز",
+    "unlockedBody": "{{name}}"
+  },
+  "achievementsModal": {
+    "title": "الإنجازات",
+    "progress": "{{unlocked}} / {{total}} ({{percent}}%)",
+    "refresh": "تحديث",
+    "close": "إغلاق",
+    "loading": "جارٍ تحميل الإنجازات…",
+    "empty": "لا تحتوي هذه اللعبة على إنجازات.",
+    "hidden": "إنجاز مخفي",
+    "unlockedOn": "تم الفتح في {{date}}",
+    "error": "تعذّر تحميل الإنجازات.",
+    "errorOffline": "اتصل بالإنترنت لعرض الإنجازات.",
+    "errorAuth": "سجّل الدخول إلى متجر هذه اللعبة لعرض الإنجازات.",
+    "errorUnavailable": "الإنجازات غير متوفرة لهذه اللعبة."
+  },
+  "collectionSettings": {
+    "title": "مجموعات STEAM",
+    "enabled": "تم تمكين المجموعات",
+    "disabled": "تم تعطيل المجموعات"
   }
 }

@@ -106,7 +106,13 @@
     "downloadingLabel": "ダウンロード中...",
     "finalizingInstallation": "インストールを完了しています...",
     "speedMbps": "{{speed}} MB/s",
-    "etaLabel": "残り時間: {{eta}}"
+    "etaLabel": "残り時間: {{eta}}",
+    "preparingMessage": "プレフィックスを初期化し、クラウドセーブを同期しています...",
+    "preparingLabel": "ゲームを準備しています...",
+    "installingViaUpcLabel": "Ubisoft Connect でインストール中",
+    "extractingMessage": "ファイルを展開しています...",
+    "verifyingMessage": "ファイルを検証しています... {{pct}}%",
+    "installingViaUpcMessage": "Ubisoft Connect のウィンドウに従ってインストールを完了してください..."
   },
   "cloudSave": {
     "title": "クラウドセーブの競合",
@@ -122,7 +128,11 @@
     "toastUsingLocalTitle": "ローカルセーブを使用中",
     "toastUsingLocalBody": "{{game}} のローカルセーブをクラウドにアップロードしています",
     "toastErrorTitle": "エラー",
-    "toastErrorBody": "競合を解決できませんでした"
+    "toastErrorBody": "競合を解決できませんでした",
+    "filesSize": "{{count}} 個のファイル · {{size}}",
+    "uploadBlockedEmpty": "{{game}} のクラウドアップロードをスキップしました — ローカルのセーブが見つかりません",
+    "uploadSkippedTitle": "クラウドアップロードをスキップ",
+    "uploadSkippedBody": "{{game}} にアップロードするローカルセーブはまだありません。"
   },
   "storeConnections": {
     "title": "ストア連携",
@@ -302,7 +312,20 @@
       "cloudSyncDownFailed": "{{store}} のクラウドセーブのダウンロードに失敗しました ({{error}})。ローカルデータで起動します。",
       "cloudSyncUpFailed": "{{store}} のクラウドセーブのアップロードに失敗しました ({{error}})。プレイ進行状況はローカルにのみ保存されます。",
       "errorCircuitBreakerOpen": "{{game_key}} の起動に最近 {{count}} 回失敗しました。自動起動を一時停止します。",
-      "launcherError": "{{game_key}} を起動できませんでした ({{error_code}})。詳細はログを確認してください。"
+      "launcherError": "{{game_key}} を起動できませんでした ({{error_code}})。詳細はログを確認してください。",
+      "downloadingProton": "Proton をダウンロードしています — 数分かかる場合があります...",
+      "downloadingRuntime": "Steam Runtime をダウンロードしています — 初回起動には数分かかる場合があります...",
+      "installingUbisoft": "Ubisoft Connect でインストール中",
+      "installingUbisoftMessage": "Ubisoft Connect を開いています — ランチャーのウィンドウからインストールを開始してください。",
+      "protonReadyBody": "{{version}} を使用できます",
+      "protonReadyTitle": "Proton の準備完了",
+      "protonSwitchedTo": "現在 {{version}} を使用中",
+      "signingInUbisoft": "Ubisoft Connect にサインインしています",
+      "signingInUbisoftMessage": "Ubisoft Connect を開いています — そこでサインインしてから戻ってください。",
+      "ubisoftPrefixNotReady": "Ubisoft Connect の準備ができていません",
+      "ubisoftPrefixNotReadyMessage": "このゲームの Ubisoft Connect プレフィックスを準備できませんでした。もう一度インストールしてみてください。それでも失敗する場合は、ライブラリの同期を再実行してください。",
+      "ubisoftLaunchIdMissing": "Ubisoft Connect を開いています",
+      "ubisoftLaunchIdMissingMessage": "このゲームの起動IDを解決できませんでした — ライブラリから起動できるように Ubisoft Connect を開いています。直接起動を修復するには、ライブラリの同期を再実行してください。"
     },
     "updateComplete": "アップデートが完了しました！",
     "updateCompleteMessage": "{{title}} をアップデートしました。",
@@ -323,7 +346,15 @@
     "library": {
       "_comment": "Toasts emitted by SyncService when a per-store library sync fails. The retry button triggers a fire-and-forget refresh via the unifideck://refresh-library/<store> verb; the user doesn't wait for the result inline, the Library view picks it up through its SYNC_PROGRESS subscription.",
       "syncStoreFailed": "{{store}} ライブラリの更新に失敗しました ({{error}})。既存のライブラリが引き続き表示されます。"
-    }
+    },
+    "cloudPullStarted": "クラウドセーブをダウンロード中…",
+    "cloudPushStarted": "ローカルセーブをアップロード中…",
+    "cloudSavePathFailed": "セーブ場所を設定できませんでした",
+    "cloudSavePathSet": "セーブ場所が更新されました",
+    "cloudPullDone": "クラウドセーブがダウンロードされました",
+    "cloudPullFailed": "クラウドセーブのダウンロードに失敗しました",
+    "cloudPushDone": "ローカルセーブがアップロードされました",
+    "cloudPushFailed": "ローカルセーブのアップロードに失敗しました"
   },
   "uninstallModal": {
     "title": "アンインストールの確認",
@@ -460,7 +491,8 @@
       "support": "サポート",
       "install": "インストール",
       "uninstall": "アンインストール",
-      "cancel": "キャンセル"
+      "cancel": "キャンセル",
+      "achievements": "実績"
     },
     "labels": {
       "store": "ストア:",
@@ -485,7 +517,8 @@
       "unsupported": "非対応",
       "unknown": "不明"
     },
-    "failedToLoadMetadata": "メタデータの読み込みに失敗しました"
+    "failedToLoadMetadata": "メタデータの読み込みに失敗しました",
+    "lastSession": "前回のセッション: {{names}} を解除"
   },
   "gameDetailsSettings": {
     "title": "ゲーム詳細表示",
@@ -551,7 +584,8 @@
     "cancel": "キャンセル",
     "working": "処理中…",
     "loading": "読み込み中…",
-    "free": "無料"
+    "free": "無料",
+    "close": "閉じる"
   },
   "info": {
     "expandDetails": "詳細を展開",
@@ -610,13 +644,47 @@
     "cancelConfirmBody": "{{title}} のダウンロードをキャンセルしてもよろしいですか？一時ダウンロードファイルは削除されます。",
     "cancelConfirmConfirm": "ダウンロードをキャンセル",
     "cancelConfirmCancel": "ダウンロードを継続",
-    "playOnCloud": "クラウドでプレイ"
+    "playOnCloud": "クラウドでプレイ",
+    "cloudSave": {
+      "autoPullOn": "起動時にクラウドセーブが自動的にダウンロードされます。",
+      "close": "閉じる",
+      "download": "クラウドセーブをダウンロード",
+      "filesCount": "{{count}} 個のファイル",
+      "label": "クラウドセーブ",
+      "menuTitle": "クラウドセーブ — {{game}}",
+      "noCloudData": "不明",
+      "noCloudSupport": "クラウドセーブ非対応",
+      "setLocation": "セーブデータの場所を設定",
+      "setLocationHint": "このゲームのセーブデータが保存されるフォルダを選択してください。",
+      "setLocationTitle": "ゲームのセーブフォルダを選択",
+      "statusCloudAvailable": "クラウドセーブ利用可能",
+      "statusNoSaves": "ローカルセーブなし",
+      "statusSyncing": "クラウドセーブを同期中…",
+      "statusUnresolved": "セーブ場所が見つかりません — このゲームでは同期が機能しない可能性があります。",
+      "unresolvedHint": "セーブフォルダを検出するためにゲームを一度起動するか、手動で場所を設定してください。",
+      "upload": "ローカルセーブをアップロード"
+    },
+    "exe": {
+      "browse": "参照…",
+      "changeFailed": "実行ファイルを変更できませんでした",
+      "changed": "実行ファイルを変更しました",
+      "defaultTag": "(デフォルト)",
+      "menuItem": "実行ファイルを変更…",
+      "reset": "デフォルトの実行ファイルに戻す",
+      "resetButton": "デフォルトに戻す",
+      "subtitle": "このゲームが起動するファイルを選択します（ランチャーをスキップしてゲームを直接実行する場合など）。作業ディレクトリとクラウドセーブは影響を受けません。",
+      "title": "実行ファイルの変更 — {{game}}",
+      "unavailable": "このゲームのフォルダを読み取れませんでした。"
+    }
   },
   "playMeta": {
     "spaceRequired": "必要な空き容量",
     "installedSize": "インストールサイズ",
     "lastPlayed": "最後にプレイした日",
-    "neverPlayed": "未プレイ"
+    "neverPlayed": "未プレイ",
+    "hoursShort": "時間",
+    "minutesShort": "分",
+    "played": "プレイ済み"
   },
   "downloads": {
     "title": "ダウンロード",
@@ -739,7 +807,8 @@
       "permission_denied": "アクセス権限がありません",
       "cancelled": "キャンセルされました",
       "unknown": "予期しないエラーが発生しました"
-    }
+    },
+    "unavailableNativeDep": "このシステムではクラウドセーブが無効になっています — Python ({{python}}) に必要なコンポーネントが不足しています。ローカルセーブには影響ありません。同期を復元するには、システムアップデート後にプラグインを再ビルド/再インストールしてください。"
   },
   "launchLogs": {
     "_comment": "LaunchLogsModal 用のメッセージ。このモーダルは、ランチャーの起動失敗（サーキットブレーカーまたはランチャーエラー）時に通知に添付される unifideck://show-logs/<launch_id> リンクから開かれます。~/.local/share/unifideck/launches/<launch_id>.log に保存されている起動ごとのアーカイブされたログを読み込み、ログの重要度に応じて色分けして表示します。",
@@ -853,5 +922,28 @@
     "typeReinstall": "再インストール",
     "typeUpdate": "以下へアップデート:",
     "updateButton": "v{{version}} にアップデート"
+  },
+  "achievements": {
+    "unlockedTitle": "実績を解除しました",
+    "unlockedBody": "{{name}}"
+  },
+  "achievementsModal": {
+    "title": "実績",
+    "progress": "{{unlocked}} / {{total}} ({{percent}}%)",
+    "refresh": "更新",
+    "close": "閉じる",
+    "loading": "実績を読み込んでいます…",
+    "empty": "このゲームには実績がありません。",
+    "hidden": "隠し実績",
+    "unlockedOn": "{{date}} に解除",
+    "error": "実績を読み込めませんでした。",
+    "errorOffline": "実績を表示するにはインターネットに接続してください。",
+    "errorAuth": "実績を表示するには、このゲームのストアにサインインしてください。",
+    "errorUnavailable": "このゲームでは実績を利用できません。"
+  },
+  "collectionSettings": {
+    "title": "STEAM コレクション",
+    "enabled": "コレクションが有効",
+    "disabled": "コレクションが無効"
   }
 }

@@ -61,11 +61,16 @@ class LaunchRPCMixin:
             ``{success: True, skipped: <reason>}`` when
             the AppID isn't a Unifideck shortcut.
         """
-        resolved_store, resolved_game = self._resolve_app_id(
+        resolved_store, resolved_game, resolved_title = self._resolve_app_id(
             app_id, store, game_id,
         )
         if resolved_store is None or resolved_game is None:
+            logger.debug(
+                "notify_game_launched skip: app_id=%s not a unifideck shortcut",
+                app_id,
+            )
             return {"success": True, "skipped": "not_unifideck_app"}
+        kw.setdefault("title", resolved_title or "")
         await self.bus.emit(
             Events.GAME_LAUNCHED,
             store=resolved_store,
@@ -87,10 +92,14 @@ class LaunchRPCMixin:
         Counterpart to ``notify_game_launched`` — accepts
         the same two-signature contract.
         """
-        resolved_store, resolved_game = self._resolve_app_id(
+        resolved_store, resolved_game, _ = self._resolve_app_id(
             app_id, store, game_id,
         )
         if resolved_store is None or resolved_game is None:
+            logger.debug(
+                "notify_game_stopped skip: app_id=%s not a unifideck shortcut",
+                app_id,
+            )
             return {"success": True, "skipped": "not_unifideck_app"}
         await self.bus.emit(
             Events.GAME_STOPPED,
@@ -106,29 +115,41 @@ class LaunchRPCMixin:
         app_id: int | None,
         store: str | None,
         game_id: str | None,
-    ) -> tuple[str | None, str | None]:
-        """Resolve ``(store, game_id)`` from any of the inputs.
+    ) -> tuple[str | None, str | None, str | None]:
+        """Resolve ``(store, game_id, title)`` from any of the inputs.
 
         Explicit ``(store, game_id)`` always wins ; otherwise
         we ask the sync service to find the game whose
-        AppID matches. Returns ``(None, None)`` if the AppID
-        doesn't belong to a known Unifideck shortcut — the
-        caller treats that as a quiet no-op.
+        AppID matches. Returns ``(None, None, None)`` if the
+        AppID doesn't belong to a known Unifideck shortcut —
+        the caller treats that as a quiet no-op.
+
+        ``title`` is best-effort (``None`` for explicit callers
+        that don't supply one) so the playtime/launch subscribers
+        can record a human-readable name instead of an empty string.
         """
         if store and game_id:
-            return store, game_id
+            return store, game_id, None
         if app_id is None:
-            return None, None
+            return None, None, None
         sync = getattr(self, "sync_service", None)
         if sync is None or not hasattr(sync, "get_game_info"):
-            return None, None
+            return None, None, None
         try:
             info = sync.get_game_info(app_id)
         except Exception:
-            return None, None
+            return None, None, None
         if not isinstance(info, dict):
-            return None, None
-        return info.get("store"), info.get("id") or info.get("game_id")
+            return None, None, None
+        # The sync layer returns ``asdict(Game)``, whose store-native
+        # id field is ``store_game_id`` (there is no ``id``/``game_id``
+        # key). Keep the legacy fallbacks for any non-Game dict callers.
+        resolved_game = (
+            info.get("store_game_id")
+            or info.get("id")
+            or info.get("game_id")
+        )
+        return info.get("store"), resolved_game, info.get("title")
 
     async def get_launch_failures(self, game_key: str) -> Any:
         """Return recent failures + circuit state for a game.

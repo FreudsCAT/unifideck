@@ -31,14 +31,35 @@ export interface SteamApp {
   sort_as: string;
   installed: boolean;
   is_shortcuts_app: boolean;
-  size_on_disk: string;
-  minutes_playtime_forever: string;
-  minutes_playtime_last_two_weeks: string;
+  // Steam types these as numbers on the live AppOverview (verified via
+  // CEF debugger; `size_on_disk` is often `undefined` for shortcuts).
+  // The native library Sort menu reads them numerically — a string
+  // here silently collapses every non-alpha sort to alphabetical.
+  size_on_disk?: number;
+  minutes_playtime_forever: number;
+  minutes_playtime_last_two_weeks: number;
   rt_last_time_played: number;
+  rt_last_time_locally_played?: number;
+  rt_original_release_date?: number;
+  rt_steam_release_date?: number;
+  rt_purchased_time?: number;
+  metacritic_score?: number;
+  review_score_with_bombs?: number;
+  review_percentage_with_bombs?: number;
+  steam_hw_compat_category_packed?: number;
+  steam_deck_compat_category?: number;
   store_category: number[];
+  /** MobX set backing the `store_category` getter; mutate this to
+   *  populate Steam's native Players filter for spoofed shortcuts. */
+  m_setStoreCategories?: Set<number>;
+  m_setStoreTags?: Set<number>;
   app_type: number;
   canonicalAppType: number;
-  local_per_client_data?: { is_hidden?: boolean };
+  local_per_client_data?: {
+    is_hidden?: boolean;
+    installed?: boolean;
+    display_status?: number;
+  };
   BIsShortcut(): boolean;
 }
 

@@ -99,7 +99,10 @@ CANONICAL_SCHEMA: dict[str, set[str]] = {
     "LIBRARY_SYNC_CANCELLED":       {"cancelled_at_store", "store_count"},
     "LIBRARY_SYNC_COMPLETED":       {"duration_ms", "errors", "game_count", "store_count"},
     "LIBRARY_SYNC_STARTED":         {"started_at_ms", "stores"},
+    "METADATA_BACKFILL_COMPLETE":   {"count"},
     "PLAYTIME_UPDATED":             {"duration_secs", "game_id", "store"},
+    "PLAYTIME_SYNC_COMPLETE":       {"pushed", "store"},
+    "PLAYTIME_SYNC_FAILED":         {"error", "store"},
     "POST_SYNC_PHASE_CHANGED":      {"active", "done", "phase", "sync_kwargs", "total"},
     "RUNTIME_PROBES_REPORTED":      {"probes"},
     "SHORTCUT_CREATED":             {"app_id", "is_auth", "store", "title"},
@@ -121,6 +124,7 @@ CANONICAL_SCHEMA: dict[str, set[str]] = {
     "SYNC_SKIPPED":                 {"reason", "store"},
     "SYNC_STARTED":                 {"scope", "stores"},
     "TOAST_NOTIFICATION":           {"actions", "duration_ms", "i18n_key", "params", "severity"},
+    "UBISOFT_INSTALL_LAUNCH_REQUESTED": {"store_game_id"},
 }
 
 

@@ -46,6 +46,7 @@ const WATCHED_EVENTS: EventName[] = [
   "sync_cancelled",
   "sync_skipped",
   "post_sync_phase_changed",
+  "metadata_backfill_complete",
   "shortcut_reconcile_complete",
   "shortcut_install_state_changed",
   "download_queued",
@@ -54,15 +55,55 @@ const WATCHED_EVENTS: EventName[] = [
   "download_complete",
   "download_failed",
   "download_cancelled",
+  // The backend emits this after bootstrapping a Ubisoft per-game prefix to
+  // ask the frontend to RunGame the UPC shortcut. It MUST be polled here or
+  // the download-store handler never fires and the install hangs forever on
+  // "Installing Ubisoft Connect" (the rest of the chain — RunGame → launcher
+  // → UPC — works; this allowlist omission was the whole bug).
+  "ubisoft_install_launch_requested",
   "game_installed",
   "game_uninstalled",
   "game_update_available",
   "game_launched",
   "game_stopped",
+  "cloud_sync_down_complete",
+  "cloud_sync_down_failed",
+  "cloud_sync_up_complete",
+  "cloud_sync_up_failed",
   "store_error",
   "launcher_stage",
   "circuit_state_changed",
 ];
+
+/** Imperative events that *do something* when dispatched (here: RunGame →
+ *  open UPC) rather than just updating idempotent UI state. They must NOT be
+ *  re-fired from the backend's replay backlog on a fresh load — otherwise a
+ *  Steam restart relaunches UPC once per buffered event. They're primed past
+ *  (watermark advanced, not dispatched) on the first poll after load; events
+ *  emitted live during the session still fire normally. */
+const IMPERATIVE_EVENTS = new Set<string>(["ubisoft_install_launch_requested"]);
+
+/** Sync-lifecycle events describe a sync that was already underway or
+ *  finished in a PRIOR session. ``SteamRestartModal`` only restarts the
+ *  Steam *client*; the Decky backend (and its in-memory replay buffer)
+ *  keeps running, so on the next load these would replay from timestamp 0
+ *  on the first poll — resurrecting the progress bar (stale ``sync_progress``)
+ *  and re-showing the restart modal (``sync_started`` re-arms
+ *  ``_observedActiveSync`` so the replayed ``shortcut_reconcile_complete``
+ *  fires the prompt again). The authoritative restore is
+ *  ``syncStore.start()`` → ``get_sync_progress``, so prime past these on the
+ *  first poll after load; events emitted live during the session still fire
+ *  normally (their timestamps exceed the watermark). */
+const STALE_ON_RELOAD_EVENTS = new Set<string>([
+  "sync_started",
+  "sync_progress",
+  "sync_complete",
+  "sync_failed",
+  "sync_cancelled",
+  "sync_skipped",
+  "post_sync_phase_changed",
+  "shortcut_reconcile_complete",
+]);
 
 type Handler = (payload: Record<string, unknown>) => void;
 
@@ -91,6 +132,11 @@ function extractRecords(raw: unknown): EventRecord[] {
 class EventBusClientImpl {
   private subscribers = new Map<string, Set<Handler>>();
   private lastSeenTimestamp = 0;
+  /** False until the first poll after (re)load completes. While false, the
+   *  backend's whole replay buffer reads as "fresh", so we skip dispatching
+   *  imperative events (see IMPERATIVE_EVENTS) to avoid re-firing stale
+   *  side effects from a prior session. */
+  private primed = false;
   private timer: ReturnType<typeof setTimeout> | null = null;
   private currentInterval = POLL_SLOW_MS;
   /** Subscribe to a backend event by name. Returns the
@@ -185,7 +231,24 @@ class EventBusClientImpl {
       const fresh = records
         .filter((r) => r.timestamp > this.lastSeenTimestamp)
         .sort((a, b) => a.timestamp - b.timestamp);
-      for (const r of fresh) this.dispatch(r);
+      // On the first poll after a (re)load the watermark is 0, so the whole
+      // backend replay buffer is "fresh". Most state events are harmless to
+      // replay (idempotent UI updates), but two classes are not and must be
+      // primed past instead of fired: IMPERATIVE_EVENTS re-run a side effect
+      // (RunGame → UPC), and STALE_ON_RELOAD_EVENTS re-animate a sync that
+      // already finished (stuck progress bar + repeating restart modal). Both
+      // still advance the watermark so they're never seen again; events emitted
+      // live during the session fire normally.
+      for (const r of fresh) {
+        if (
+          !this.primed &&
+          (IMPERATIVE_EVENTS.has(r.event) ||
+            STALE_ON_RELOAD_EVENTS.has(r.event))
+        )
+          continue;
+        this.dispatch(r);
+      }
+      this.primed = true;
       if (records.length > 0) {
         this.lastSeenTimestamp = Math.max(
           this.lastSeenTimestamp,

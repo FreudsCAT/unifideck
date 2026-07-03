@@ -106,7 +106,13 @@
     "downloadingLabel": "Downloaden...",
     "finalizingInstallation": "Installatie afronden...",
     "speedMbps": "{{speed}} MB/s",
-    "etaLabel": "Resterende tijd: {{eta}}"
+    "etaLabel": "Resterende tijd: {{eta}}",
+    "preparingMessage": "Prefix initialiseren en cloudopslag synchroniseren...",
+    "preparingLabel": "Spel instellen...",
+    "installingViaUpcLabel": "Installeren via Ubisoft Connect",
+    "extractingMessage": "Bestanden uitpakken...",
+    "verifyingMessage": "Bestanden controleren... {{pct}}%",
+    "installingViaUpcMessage": "Volg het Ubisoft Connect-venster om de installatie te voltooien..."
   },
   "cloudSave": {
     "title": "Cloudopslagconflict",
@@ -122,7 +128,11 @@
     "toastUsingLocalTitle": "Lokale opslag gebruiken",
     "toastUsingLocalBody": "Lokale opslag voor {{game}} uploaden",
     "toastErrorTitle": "Fout",
-    "toastErrorBody": "Conflict oplossen mislukt"
+    "toastErrorBody": "Conflict oplossen mislukt",
+    "filesSize": "{{count}} bestanden · {{size}}",
+    "uploadBlockedEmpty": "Cloud-upload overgeslagen voor {{game}} — geen lokale saves gevonden",
+    "uploadSkippedTitle": "Cloud-upload overgeslagen",
+    "uploadSkippedBody": "Nog geen lokale saves om te uploaden voor {{game}}."
   },
   "storeConnections": {
     "title": "WINKELVERBINDINGEN",
@@ -302,7 +312,20 @@
       "cloudSyncDownFailed": "Cloudopslag downloaden mislukt voor {{store}} ({{error}}). Spelen met lokale opslag.",
       "cloudSyncUpFailed": "Cloudopslag uploaden mislukt for {{store}} ({{error}}). Je voortgang is alleen lokaal opgeslagen.",
       "errorCircuitBreakerOpen": "{{game_key}} is onlangs {{count}} keer achter elkaar gecrasht. Automatische start uitgesteld.",
-      "launcherError": "Kan {{game_key}} niet starten ({{error_code}}). Controleer logs voor details."
+      "launcherError": "Kan {{game_key}} niet starten ({{error_code}}). Controleer logs voor details.",
+      "downloadingProton": "Proton downloaden — dit kan enkele minuten duren...",
+      "downloadingRuntime": "Steam Runtime downloaden — de eerste keer opstarten kan enkele minuten duren...",
+      "installingUbisoft": "Installeren via Ubisoft Connect",
+      "installingUbisoftMessage": "Ubisoft Connect openen — start de installatie vanuit het launcher-venster.",
+      "protonReadyBody": "{{version}} is klaar voor gebruik",
+      "protonReadyTitle": "Proton gereed",
+      "protonSwitchedTo": "Nu in gebruik: {{version}}",
+      "signingInUbisoft": "Aanmelden bij Ubisoft Connect",
+      "signingInUbisoftMessage": "Ubisoft Connect openen — meld je daar aan en kom dan terug.",
+      "ubisoftPrefixNotReady": "Ubisoft Connect is niet gereed",
+      "ubisoftPrefixNotReadyMessage": "Kan de Ubisoft Connect-prefix voor dit spel niet voorbereiden. Probeer opnieuw te installeren; als het blijft mislukken, voer dan opnieuw een bibliotheeksynchronisatie uit.",
+      "ubisoftLaunchIdMissing": "Ubisoft Connect openen",
+      "ubisoftLaunchIdMissingMessage": "Kon de start-ID van deze game niet herleiden — Ubisoft Connect openen zodat je de game vanuit je bibliotheek kunt starten. Voer opnieuw een bibliotheeksynchronisatie uit om rechtstreeks starten te herstellen."
     },
     "updateComplete": "Update voltooid!",
     "updateCompleteMessage": "{{title}} is bijgewerkt.",
@@ -323,7 +346,15 @@
     "library": {
       "_comment": "Toasts emitted by SyncService when a per-store library sync fails. The retry button triggers a fire-and-forget refresh via the unifideck://refresh-library/<store> verb; the user doesn't wait for the result inline, the Library view picks it up through its SYNC_PROGRESS subscription.",
       "syncStoreFailed": "Kan bibliotheek van {{store}} niet vernieuwen ({{error}}). Je bestaande bibliotheek blijft zichtbaar."
-    }
+    },
+    "cloudPullStarted": "Cloudopslag downloaden…",
+    "cloudPushStarted": "Lokale opslag uploaden…",
+    "cloudSavePathFailed": "Kon opslaglocatie niet instellen",
+    "cloudSavePathSet": "Opslaglocatie bijgewerkt",
+    "cloudPullDone": "Cloudopslag gedownload",
+    "cloudPullFailed": "Downloaden van cloudopslag mislukt",
+    "cloudPushDone": "Lokale opslag geüpload",
+    "cloudPushFailed": "Uploaden van lokale opslag mislukt"
   },
   "uninstallModal": {
     "title": "Deïnstallatie bevestigen",
@@ -460,7 +491,8 @@
       "support": "Ondersteuning",
       "install": "Installeren",
       "uninstall": "Deïnstalleren",
-      "cancel": "Annuleren"
+      "cancel": "Annuleren",
+      "achievements": "Prestaties"
     },
     "labels": {
       "store": "Winkel:",
@@ -485,7 +517,8 @@
       "unsupported": "NIET ONDERSTEUND",
       "unknown": "ONBEKEND"
     },
-    "failedToLoadMetadata": "Laden van metadata mislukt"
+    "failedToLoadMetadata": "Laden van metadata mislukt",
+    "lastSession": "Laatste sessie: {{names}} ontgrendeld"
   },
   "gameDetailsSettings": {
     "title": "GAMEDETAILSWEERGAVE",
@@ -551,7 +584,8 @@
     "cancel": "Annuleren",
     "working": "Verwerken…",
     "loading": "Laden…",
-    "free": "gratis"
+    "free": "gratis",
+    "close": "Sluiten"
   },
   "info": {
     "expandDetails": "Details weergeven",
@@ -610,13 +644,47 @@
     "cancelConfirmBody": "Weet je zeker dat je de download van {{title}} wilt annuleren? Gedeeltelijke bestanden worden weggegooid.",
     "cancelConfirmConfirm": "Download annuleren",
     "cancelConfirmCancel": "Doorgaan met downloaden",
-    "playOnCloud": "In de cloud spelen"
+    "playOnCloud": "In de cloud spelen",
+    "cloudSave": {
+      "autoPullOn": "Cloudopslag wordt automatisch gedownload bij het opstarten.",
+      "close": "Sluiten",
+      "download": "Cloudopslag downloaden",
+      "filesCount": "{{count}} bestanden",
+      "label": "Cloudopslag",
+      "menuTitle": "Cloudopslag — {{game}}",
+      "noCloudData": "Onbekend",
+      "noCloudSupport": "Geen ondersteuning voor cloudopslag",
+      "setLocation": "Opslaglocatie instellen",
+      "setLocationHint": "Kies de map waarin deze game zijn spelbestanden opslaat.",
+      "setLocationTitle": "Kies de opslagmap van deze game",
+      "statusCloudAvailable": "Cloudopslag beschikbaar",
+      "statusNoSaves": "Geen lokale spelbestanden",
+      "statusSyncing": "Cloudopslag synchroniseren…",
+      "statusUnresolved": "Opslaglocatie niet gevonden — synchronisatie werkt mogelijk niet voor deze game.",
+      "unresolvedHint": "Start de game eenmaal op zodat we de opslagmap kunnen detecteren, of stel de locatie handmatig in.",
+      "upload": "Lokale opslag uploaden"
+    },
+    "exe": {
+      "browse": "Bladeren…",
+      "changeFailed": "Kon het uitvoerbare bestand niet wijzigen",
+      "changed": "Uitvoerbaar bestand gewijzigd",
+      "defaultTag": "(standaard)",
+      "menuItem": "Uitvoerbaar bestand wijzigen…",
+      "reset": "Herstellen naar standaard uitvoerbaar bestand",
+      "resetButton": "Herstellen naar standaard",
+      "subtitle": "Kies welk bestand deze game start (bijv. sla een launcher over en start de game direct). De werkmap en cloudopslag worden niet beïnvloed.",
+      "title": "Uitvoerbaar bestand wijzigen — {{game}}",
+      "unavailable": "Kon de map van deze game niet lezen."
+    }
   },
   "playMeta": {
     "spaceRequired": "Benodigde ruimte",
     "installedSize": "Geïnstalleerde grootte",
     "lastPlayed": "Laatst gespeeld",
-    "neverPlayed": "Nooit gespeeld"
+    "neverPlayed": "Nooit gespeeld",
+    "hoursShort": "u",
+    "minutesShort": "m",
+    "played": "Gespeeld"
   },
   "downloads": {
     "title": "Downloads",
@@ -739,7 +807,8 @@
       "permission_denied": "Toegang geweigerd",
       "cancelled": "Geannuleerd",
       "unknown": "Onverwachte fout"
-    }
+    },
+    "unavailableNativeDep": "Cloudopslag is uitgeschakeld op dit systeem — de Python-installatie ({{python}}) mist een vereist onderdeel. Je lokale opslag is niet beïnvloed; herbouw/herinstalleer de plugin na een systeemupdate om de synchronisatie te herstellen."
   },
   "launchLogs": {
     "_comment": "Berichten voor LaunchLogsModal. De modal wordt geopend via de notificatie-actie unifideck://show-logs/<launch_id>, die is gekoppeld aan launcher-foutmeldingen (circuit breaker + LauncherError). Leest de gearchiveerde logs van elke start in ~/.local/share/unifideck/launches/<launch_id>.log en toont ze gekleurd op basis van ernst.",
@@ -853,5 +922,28 @@
     "typeReinstall": "Opnieuw installeren van",
     "typeUpdate": "Bijwerken naar",
     "updateButton": "Bijwerken naar v{{version}}"
+  },
+  "achievements": {
+    "unlockedTitle": "Prestatie ontgrendeld",
+    "unlockedBody": "{{name}}"
+  },
+  "achievementsModal": {
+    "title": "Prestaties",
+    "progress": "{{unlocked}} / {{total}} ({{percent}}%)",
+    "refresh": "Vernieuwen",
+    "close": "Sluiten",
+    "loading": "Prestaties laden…",
+    "empty": "Dit spel heeft geen prestaties.",
+    "hidden": "Verborgen prestatie",
+    "unlockedOn": "Ontgrendeld op {{date}}",
+    "error": "Kan prestaties niet laden.",
+    "errorOffline": "Maak verbinding met internet om prestaties te bekijken.",
+    "errorAuth": "Meld je aan bij de store van dit spel om prestaties te bekijken.",
+    "errorUnavailable": "Prestaties zijn niet beschikbaar voor dit spel."
+  },
+  "collectionSettings": {
+    "title": "STEAM-COLLECTIES",
+    "enabled": "Collecties ingeschakeld",
+    "disabled": "Collecties uitgeschakeld"
   }
 }

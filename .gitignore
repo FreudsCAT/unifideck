@@ -107,13 +107,13 @@ antigravity-dashboard/*
 !test_gog_invalid.py
 task.md
 .claude/*
+CLAUDE.md
 build-plugin_old.sh
 .github/copilot-instructions.md
 __pycache__
 *.pyc
 .vscode
 .vscode/extensions.json
-docs/ubisoft-store-spec.md
 CODE_PATTERNS.md
 EXPLORATION_INDEX.md
 QUICK_REFERENCE.md
@@ -121,9 +121,15 @@ UNIFIDECK_UBISOFT_EXPLORATION.md
 test_shortcut_launch.py
 test_upc_auth_launch.sh
 
-docs/UBISOFT_INTEGRATION_FIXES.md
+# Archived Ubisoft docs — retained locally, intentionally kept out of version control
+docs/archive/UBISOFT_INTEGRATION_FIXES.md
+docs/archive/ubisoft-store-spec-v1.md
 build-plugin_old-backup.sh
 build-plugin.sh
 build-plugin.sh
 test_ubisoft_launch.py
 /tmp
+docs/feasibility/battlenet.md
+docs/feasibility/ea.md
+docs/feasibility/itch.md
+docs/feasibility/README.md

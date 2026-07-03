@@ -53,6 +53,7 @@ class _PayloadSync:
         apply_dpapi_guard: bool,
         handle_directories: bool,
         log_label: str,
+        skip_if_smaller: bool = False,
     ) -> int:
         """Sync payload to prefix."""
         if self.should_skip_payload_sync(
@@ -67,6 +68,10 @@ class _PayloadSync:
             target_root = str(Path(user_home) / self._parent._config.upc_local_subdir)
             for rel_path, src_path in payload_sources.items():
                 dst_path = str(Path(target_root) / rel_path)
+                if skip_if_smaller and self._is_credential_regression(
+                    src_path, dst_path, log_label, rel_path,
+                ):
+                    continue
                 if self.copy_payload_entry(
                     src_path,
                     dst_path,
@@ -105,6 +110,42 @@ class _PayloadSync:
                     target_guid[:8],
                 )
                 return True
+        return False
+
+    @staticmethod
+    def _is_credential_regression(
+        src_path: str,
+        dst_path: str,
+        log_label: str,
+        rel_path: str,
+    ) -> bool:
+        """True if overwriting *dst* with *src* would shrink a credential.
+
+        UPC's ``ConnectSecureStorage.dat`` shrinks when a session logs out
+        (the token is stripped). Capture/propagation is otherwise
+        login/logout blind and picks the freshest file, so a single logout
+        in ONE prefix would overwrite the logged-in credential everywhere
+        (observed: an SD-card install logging out poisoned auth + every game
+        prefix). A real re-login is same-size-or-larger and still flows;
+        explicit sign-out deletes (not copies) so it is unaffected.
+        """
+        if not (Path(dst_path).is_file() and Path(src_path).is_file()):
+            return False
+        try:
+            src_sz = Path(src_path).stat().st_size
+            dst_sz = Path(dst_path).stat().st_size
+        except OSError:
+            return False
+        if src_sz and dst_sz and src_sz < dst_sz:
+            logger.info(
+                "[UbisoftSession] %s: keeping logged-in %s — refusing to "
+                "overwrite with a smaller (logged-out?) copy (%d < %d bytes)",
+                log_label,
+                rel_path,
+                src_sz,
+                dst_sz,
+            )
+            return True
         return False
 
     def copy_payload_entry(
@@ -152,6 +193,50 @@ class _PayloadSync:
             )
             return False
 
+    def purge_credentials_from_prefix(self, target_prefix: str) -> int:
+        """Delete UPC credentials + auth-cache artifacts from a prefix.
+
+        The inverse of :meth:`sync_credentials_to_prefix` /
+        :meth:`sync_auth_artifacts_to_prefix`: removes the same entries
+        (``upc_credential_files`` + ``upc_auth_cache_artifacts``) so a
+        signed-out prefix can no longer be picked up as a credential
+        fallback source by
+        :meth:`_CredentialReader.find_best_credential_source` (which would
+        otherwise silently re-authenticate the user on the next launch).
+        Returns the number of entries removed.
+        """
+        config = self._parent._config
+        rel_entries = (
+            *config.upc_credential_files,
+            *config.upc_auth_cache_artifacts,
+        )
+        removed = 0
+        for _root, user_home in self._parent._paths.iter_user_homes(
+            target_prefix,
+        ):
+            local_root = Path(user_home) / config.upc_local_subdir
+            for rel in rel_entries:
+                if self._remove_credential_path(local_root / rel, rel):
+                    removed += 1
+        return removed
+
+    @staticmethod
+    def _remove_credential_path(target: Path, rel: str) -> bool:
+        """Delete ``target`` (directory or file); True if it removed
+        something, False if it was absent or removal failed."""
+        try:
+            if target.is_dir():
+                shutil.rmtree(target, ignore_errors=True)
+                return True
+            if target.exists():
+                target.unlink()
+                return True
+        except OSError as e:
+            logger.warning(
+                "[UbisoftSession] purge failed for %s: %s", rel, e,
+            )
+        return False
+
     def sync_credentials_to_prefix(
         self,
         source_prefix: str,
@@ -167,6 +252,7 @@ class _PayloadSync:
             apply_dpapi_guard=True,
             handle_directories=False,
             log_label="credential",
+            skip_if_smaller=True,
         )
 
     def collect_credential_sources(

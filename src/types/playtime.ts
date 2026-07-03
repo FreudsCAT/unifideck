@@ -51,6 +51,27 @@ export interface DailyTotal {
 }
 
 /**
+ * Wire shape of `get_playtime` / `get_all_playtimes`.
+ *
+ * `total_seconds` is the local-only total; `store_total_secs` is the store's
+ * authoritative cross-device total (GOG/Epic), `null` until first synced —
+ * prefer it for display when present (it's the superset of local + other
+ * devices). `game_id` / `title` are only present on `get_all_playtimes` rows.
+ */
+export interface PlaytimeEntry {
+  store: string;
+  game_id?: string;
+  title?: string;
+  total_seconds: number;
+  store_total_secs: number | null;
+  session_count: number;
+  last_played: string | null;
+  current_streak: number;
+  longest_streak: number;
+  is_active: boolean;
+}
+
+/**
  * Aggregated playtime across all games and stores, with the
  * top-N favourites surfaced for the dashboard widget.
  */

@@ -32,6 +32,7 @@ from typing import TYPE_CHECKING, Any, cast
 from unifideck.auth.browser import OAuthBrowserMonitor
 from unifideck.auth.edge_browser import EdgeBrowser
 from unifideck.auth.orchestrator import AuthOrchestrator
+from unifideck.core.safe_delete import canonical_prefix, safe_rmtree
 from unifideck.core.types import (
     AuthResult,
     Events,
@@ -44,12 +45,14 @@ from unifideck.services.shortcut import ShortcutService
 from unifideck.stores.shared.store_base import StoreBase
 from unifideck.utils.locale import get_unifideck_locale
 
+from .achievements import GOGAchievements
 from .auth import GOGBrowserAuth
 from .config import GOG_AUTH_URL_FILE, GOGConfig
 from .dlc import GOGDlcManager
 from .exe_resolver import GOGExeResolver
 from .install import GOGInstaller
-from .library import GOGLibrary
+from .library import GOGLibrary, merge_install_status
+from .sessions import GOGSessions
 from .tokens import GOGTokenManager
 from .updates import GOGUpdatesChecker
 
@@ -93,13 +96,7 @@ class GOGStore(StoreBase):
         self._shortcut_service = shortcut_service
         self._edge = edge_browser
         self._tokens = GOGTokenManager(self._gog_config, bus=bus)
-        self._exe = GOGExeResolver()
-
-        self._library = GOGLibrary(
-            config=self._gog_config,
-            tokens=self._tokens,
-            exe_finder=self._exe.find,
-        )
+        self._build_core_components()
         # Auth is late-bound : at boot ``browser_monitor`` is
         # ``None`` (auto-discovery doesn't see the service
         # container yet). The injector sets ``_browser_monitor``
@@ -110,32 +107,59 @@ class GOGStore(StoreBase):
         self._auth: GOGBrowserAuth | None = None
         self._rebuild_auth_after_injection()
         if self._auth is None:
-            gogdl_bin = self._resolve_gogdl_bin()
-            self._installer = GOGInstaller(
-                config=self._gog_config,
-                tokens=self._tokens,
-                gogdl_bin=gogdl_bin,
-                exe_finder=self._exe.find,
-                locale_fn=lambda: get_unifideck_locale(
-                    self._config_manager,
-                ),
-            )
-            self._dlc = GOGDlcManager(
-                config=self._gog_config,
-                tokens=self._tokens,
-                gogdl_bin=gogdl_bin,
-                locale_fn=lambda: get_unifideck_locale(
-                    self._config_manager,
-                ),
-                resolve_install_path=self._library.get_installed_game_info,
-            )
-            self._updates = GOGUpdatesChecker(
-                config=self._gog_config,
-                tokens=self._tokens,
-                gogdl_bin=gogdl_bin,
-                get_installed_ids=self._library.get_installed,
-                resolve_install_info=self._library.get_installed_game_info,
-            )
+            self._build_gogdl_submodules()
+
+    def _build_core_components(self) -> None:
+        """Build the always-on submodules (no auth / gogdl needed).
+
+        Achievements + play-session sync only need the single, never-rebuilt
+        token manager, so they are built once here — unaffected by
+        :meth:`_rebuild_auth_after_injection`.
+        """
+        self._achievements = GOGAchievements(tokens=self._tokens)
+        self._sessions = GOGSessions(tokens=self._tokens)
+        self._exe = GOGExeResolver()
+        self._library = GOGLibrary(
+            config=self._gog_config,
+            tokens=self._tokens,
+            exe_finder=self._exe.find,
+            config_manager=self._config_manager,
+        )
+
+    def _build_gogdl_submodules(self) -> None:
+        """(Re)build the gogdl-driven submodules (installer, dlc, updates)
+        against the live token manager.
+
+        Called from ``__init__`` when auth is disabled, and again from
+        :meth:`_rebuild_auth_after_injection` once the monitor wires in —
+        ``_auth`` may have refreshed tokens in the meantime.
+        """
+        gogdl_bin = self._resolve_gogdl_bin()
+        self._installer = GOGInstaller(
+            config=self._gog_config,
+            tokens=self._tokens,
+            gogdl_bin=gogdl_bin,
+            exe_finder=self._exe.find,
+            locale_fn=lambda: get_unifideck_locale(
+                self._config_manager,
+            ),
+        )
+        self._dlc = GOGDlcManager(
+            config=self._gog_config,
+            tokens=self._tokens,
+            gogdl_bin=gogdl_bin,
+            locale_fn=lambda: get_unifideck_locale(
+                self._config_manager,
+            ),
+            resolve_install_path=self._library.get_installed_game_info,
+        )
+        self._updates = GOGUpdatesChecker(
+            config=self._gog_config,
+            tokens=self._tokens,
+            gogdl_bin=gogdl_bin,
+            get_installed_ids=self._library.get_installed,
+            resolve_install_info=self._library.get_installed_game_info,
+        )
 
     def _rebuild_auth_after_injection(self) -> None:
         """(Re-)build the GOG browser-auth flow once a monitor is set.
@@ -163,35 +187,9 @@ class GOGStore(StoreBase):
             tokens=self._tokens,
             config=self._gog_config,
         )
-        # Rebuild the gogdl-driven submodules so they reference
-        # the live token manager — `_auth` may have refreshed
-        # tokens in the meantime.
-        gogdl_bin = self._resolve_gogdl_bin()
-        self._installer = GOGInstaller(
-            config=self._gog_config,
-            tokens=self._tokens,
-            gogdl_bin=gogdl_bin,
-            exe_finder=self._exe.find,
-            locale_fn=lambda: get_unifideck_locale(
-                self._config_manager,
-            ),
-        )
-        self._dlc = GOGDlcManager(
-            config=self._gog_config,
-            tokens=self._tokens,
-            gogdl_bin=gogdl_bin,
-            locale_fn=lambda: get_unifideck_locale(
-                self._config_manager,
-            ),
-            resolve_install_path=self._library.get_installed_game_info,
-        )
-        self._updates = GOGUpdatesChecker(
-            config=self._gog_config,
-            tokens=self._tokens,
-            gogdl_bin=gogdl_bin,
-            get_installed_ids=self._library.get_installed,
-            resolve_install_info=self._library.get_installed_game_info,
-        )
+        # Rebuild the gogdl-driven submodules so they reference the live
+        # token manager — `_auth` may have refreshed tokens in the meantime.
+        self._build_gogdl_submodules()
         logger.info("[GOGStore] auth flow wired")
 
     async def is_available(self) -> bool:
@@ -259,9 +257,36 @@ class GOGStore(StoreBase):
                 )
         return result
 
-    async def get_library(self) -> list[Game] | None:
-        """Get library."""
-        return await self._library.fetch_library()
+    async def get_library(self, *, force: bool = False) -> list[Game] | None:
+        """Owned GOG games with on-disk install status overlaid.
+
+        Every other store overlays install state inside ``get_library``;
+        GOG previously returned ``fetch_library`` verbatim (every game
+        ``installed=False``), so a full sync wiped the installed flag off
+        every GOG game — and reconcile then pruned their games.map launch
+        rows. Mirror Epic/Amazon: fetch owned, scan disk once (off the
+        event loop — it's blocking filesystem I/O), merge.
+
+        Defensive: a scan failure returns the owned list as-is (all
+        ``installed=False``) rather than blanking the library to ``[]``,
+        so a transient error degrades to "nothing installed", not "no
+        games". ``fetch_library`` already returns ``[]`` when
+        unauthenticated.
+        """
+        owned = await self._library.fetch_library()
+        if not owned:
+            return owned
+        try:
+            installed = await asyncio.to_thread(
+                self._library.get_installed_map,
+            )
+            return merge_install_status(owned, installed)
+        except Exception:
+            logger.exception(
+                "[GOGStore] get_library install overlay failed; "
+                "returning owned games as not-installed",
+            )
+            return owned
 
     async def install_game(
         self,
@@ -279,7 +304,9 @@ class GOGStore(StoreBase):
             language=language,
         )
 
-    async def uninstall_game(self, game_id: str, **kwargs: Any) -> Result:
+    async def uninstall_game(
+        self, game_id: str, delete_prefix: bool = False, **kwargs: Any,
+    ) -> Result:
         """Uninstall game."""
         info = self._library.get_installed_game_info(game_id)
         install_path = info.get("install_path") if info else None
@@ -293,6 +320,14 @@ class GOGStore(StoreBase):
         # the shortcut stayed marked installed after a successful
         # uninstall.
         if result.success:
+            # GOG games run under Proton (umu) with a per-game prefix at the
+            # canonical flat location. The old signature swallowed
+            # ``delete_prefix`` via ``**kwargs``, so the prefix (~1.6 GB)
+            # leaked even when the user ticked "also delete Proton prefix".
+            if delete_prefix:
+                await asyncio.to_thread(
+                    safe_rmtree, canonical_prefix(game_id),
+                )
             await self._emit(
                 Events.GAME_UNINSTALLED,
                 store="gog",
@@ -339,6 +374,41 @@ class GOGStore(StoreBase):
         )
         path = info.get("install_path") if isinstance(info, dict) else None
         return path if isinstance(path, str) and path else None
+
+    async def get_game_achievements(
+        self, game_id: str, force: bool = False,
+    ) -> dict[str, Any]:
+        """A GOG game's achievements (definitions + this user's unlock status).
+
+        Read-only — unlocking happens in-game via Comet; this reads back what
+        was earned (``gameplay.gog.com``). Raises ``GOGAchievementsError`` on
+        auth/network/no-client-id failure; a game with no achievements is a
+        normal empty payload. ``force`` bypasses the TTL cache.
+        """
+        return await self._achievements.get_game_achievements(
+            game_id, force=force,
+        )
+
+    def invalidate_achievements(self, game_id: str) -> None:
+        """Drop a game's cached achievements (called on game-stop)."""
+        self._achievements.invalidate(game_id)
+
+    async def report_play_session(
+        self, game_id: str, started_at_unix: int, duration_secs: int,
+    ) -> bool:
+        """Report one finished play session to GOG (``gameplay.gog.com``).
+
+        Used by ``PlaytimeSyncService`` so GOG Galaxy / other devices reflect
+        time played here. ``True`` on success; ``False`` (never raises) on
+        auth/network failure so the caller can retry on the next drain.
+        """
+        return await self._sessions.report_session(
+            game_id, started_at_unix, duration_secs,
+        )
+
+    async def get_play_total_secs(self, game_id: str) -> int | None:
+        """GOG's authoritative total time played for ``game_id``, in seconds."""
+        return await self._sessions.get_total_secs(game_id)
 
     async def get_game_dlcs(self, game_id: str) -> list[dict[str, Any]]:
         """Get game dlcs."""

@@ -24,6 +24,9 @@ _ACCEPT = [
     ("Thief™ 2: The Metal Age", "Thief II: The Metal Age"),        # arabic↔roman
     ("No Man's Sky", "No Man's Sky"),                              # apostrophe exact
     ("DOOM Eternal", "DOOM Eternal"),                              # exact
+    ("Rise of the Tomb Raider: 20 Year Celebration",
+     "Rise of the Tomb Raider™"),                                  # N-Year Celebration re-release tag
+    ("Tomb Raider: Anniversary Celebration", "Tomb Raider"),       # anniversary celebration
 ]
 
 _REJECT = [

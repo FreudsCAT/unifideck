@@ -69,7 +69,9 @@ export const DownloadingButtons: FC<Props> = ({
   }, [cancelled, doCancel, download.game_title, t]);
 
   return (
-    <PlayShell>
+    // autoFocus is intentional: claims gamepad focus for the primary action
+    // eslint-disable-next-line jsx-a11y/no-autofocus
+    <PlayShell autoFocus>
       <DialogButton
         className="unifideck-cancel-btn"
         disabled={cancelled || actions.isWorking}
@@ -79,6 +81,9 @@ export const DownloadingButtons: FC<Props> = ({
         <FaTimes />
         {cancelled
           ? t("play.cancelling")
+          : download.download_phase === "manual" ||
+            download.download_phase === "preparing"
+          ? t("play.cancel")
           : `${t("play.cancel")} (${Math.round(
               Math.max(0, Math.min(100, download.progress_percent)),
             )}%)`}

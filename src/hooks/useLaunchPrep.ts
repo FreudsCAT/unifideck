@@ -72,15 +72,31 @@ export function useLaunchPrep(
         // entries are runtimes, not compat tools, and clearing them
         // would break native titles that legitimately use one.
         if (toolName && !ctx.is_linux_runtime) {
+          // Save the tool for the launcher to re-apply ONLY when it's a
+          // genuine per-game choice. A tool equal to Steam's global
+          // default (`is_global_default`) is a distro/system default —
+          // e.g. Bazzite's "Proton-CachyOS Latest" applied to every
+          // shortcut. Adopting it made the launcher try to resolve an
+          // unavailable tool, silently fall back to GE-Proton, and thrash
+          // the prefix ("Resetting Proton"). So for the global default we
+          // instead clear any stale saved override (self-heals users a
+          // prior build already broke), letting the launcher use its GE
+          // default. Either way we clear Steam's Force-Compat so RunGame
+          // doesn't double-wrap the launcher (perpetual loading screen).
+          const saveTool = ctx.is_global_default ? "" : toolName;
           await call<[string, string], { success: boolean }>(
             rpcRoutes.saveProtonSetting,
             storeGameId,
-            toolName,
+            saveTool,
           );
           steamApps?.SpecifyCompatTool?.(appId, "");
           clearedRef.current = { toolName };
           console.log(
-            `[useLaunchPrep] saved + cleared Force-Compat (${toolName}) for app ${appId}`,
+            `[useLaunchPrep] ${
+              ctx.is_global_default
+                ? `cleared saved override (global default ${toolName})`
+                : `saved (${toolName})`
+            } + cleared Force-Compat for app ${appId}`,
           );
         }
       } catch (e) {

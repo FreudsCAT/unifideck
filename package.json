@@ -37,7 +37,7 @@
     "library",
     "multi-store"
   ],
-  "author": "HardCPP",
+  "author": "mubaraknuman",
   "license": "GPL-3.0-or-later",
   "devDependencies": {
     "@decky/rollup": "^1.0.2",

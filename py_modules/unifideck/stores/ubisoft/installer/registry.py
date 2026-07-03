@@ -205,6 +205,24 @@ def get_directory_size(path: str) -> int:
     return total
 
 
+def prefix_has_game_files(prefix_path: str) -> bool:
+    """Return True if the prefix's UPC ``games/`` dir holds a game folder.
+
+    A direct filesystem check used as a hard safety guard before deleting an
+    abandoned prefix — independent of the (fallible) snapshot-based install
+    detector, so real game files are never removed.
+    """
+    rel = (
+        Path("drive_c") / "Program Files (x86)" / "Ubisoft"
+        / "Ubisoft Game Launcher" / "games"
+    )
+    for base in (Path(prefix_path) / rel, Path(prefix_path) / "pfx" / rel):
+        with contextlib.suppress(OSError):
+            if any(entry.is_dir() for entry in base.iterdir()):
+                return True
+    return False
+
+
 def parse_positive_int(value: Any) -> int | None:
     """Parse positive int."""
     try:

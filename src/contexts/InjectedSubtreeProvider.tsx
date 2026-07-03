@@ -15,15 +15,13 @@
  *   throw the "called outside <Provider>" guard.
  *
  *   This provider wraps the injected subtree with just the
- *   contexts those components need (Locale → Store → Auth →
- *   Sync → Download) — same composition as `RootProvider` but
- *   without `<ToastEventListener>`, which is global and must
- *   only be mounted once (by `RootProvider` in the QAM).
+ *   contexts those components need. Since the boot-time singletons
+ *   now hold all reactive state, the contexts here are thin wrappers
+ *   that subscribe to the same singletons — state is shared across
+ *   both provider trees automatically.
  *
- * The two provider trees keep independent React state, but the
- * underlying `EventBusClient` singleton + module-level caches
- * (`useGameInfo`, `useViewMode`, `gameStateVersion`) are shared,
- * so the two trees stay coherent.
+ * Note: `<ToastEventListener>` was global and now runs at boot
+ * via `boot-event-listener.tsx`, so it's not needed here.
  */
 import { FC, ReactNode } from "react";
 import { LocaleProvider } from "./LocaleContext";

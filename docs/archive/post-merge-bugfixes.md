@@ -1,5 +1,9 @@
 # Post-Merge Bug Fixes — PR #245 (Microsoft Store)
 
+> **🗄️ ARCHIVED (2026-06-22) — historical postmortem.** A point-in-time record of bugs
+> fixed after the PR #245 merge; the fixes are in the code. Kept for context, not
+> maintained.
+
 ## Regressions & Pre-existing Issues
 
 ---

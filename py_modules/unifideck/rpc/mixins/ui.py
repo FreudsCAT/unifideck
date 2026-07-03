@@ -135,39 +135,6 @@ class UIRPCMixin:
             game, enriched, steam_app_id, steam_meta, compat_entry,
         )
 
-    async def hide_play_section(self, app_id: int, container_class: str = "") -> Any:
-        """Inject CSS hiding a game's Play button in Steam UI.
-
-        Routes through the :class:`SteamCSSInjector` singleton
-        (see :mod:`unifideck.cdp.cdp_inject`) — ``self.services.cdp``
-        is the low-level ``CDPClient`` and has no
-        ``hide_play_section`` method, so the previous version
-        raised ``AttributeError`` on every "Hide" button click.
-
-        ``container_class`` is Steam's play-section container class
-        (passed by the frontend from ``@decky/ui``); the injector
-        hides by it for a language-independent match, falling back
-        to the legacy text scan when absent.
-        """
-        from unifideck.cdp import get_cdp_client
-        injector = await get_cdp_client()
-        if injector is None:
-            return {"ok": False, "error": "cdp_not_connected"}
-        return await injector.hide_play_section(app_id, container_class)
-
-    async def unhide_play_section(self, app_id: int) -> Any:
-        """Remove the hide-play-section CSS injection.
-
-        Real method on the injector is :meth:`show_play_section`
-        (matching the inject/show pair). Previous ``unhide_*``
-        call didn't exist on either CDPClient or SteamCSSInjector.
-        """
-        from unifideck.cdp import get_cdp_client
-        injector = await get_cdp_client()
-        if injector is None:
-            return {"ok": False, "error": "cdp_not_connected"}
-        return await injector.show_play_section(app_id)
-
     async def inject_hide_css(self, app_id: int, css: str) -> Any:
         """Inject arbitrary CSS keyed by app_id.
 
@@ -185,8 +152,14 @@ class UIRPCMixin:
         return await injector.inject_css(css, marker)
 
     async def get_language_preference(self) -> Any:
-        """Return the current UI locale config value."""
-        return {"locale": self.config.get("ui.locale", "en-US")}
+        """Return the current UI locale preference.
+
+        ``locale`` is the stored *preference*: the ``"auto"``
+        sentinel (follow the system/UI language) or a concrete
+        BCP-47 tag. Defaults to ``"auto"`` so a fresh install
+        auto-detects rather than forcing English.
+        """
+        return {"success": True, "locale": self.config.get("ui.locale", "auto")}
 
     async def set_language_preference(self, locale: str) -> Any:
         """Persist the UI locale via config."""

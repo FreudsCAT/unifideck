@@ -100,6 +100,12 @@
     "customLocation": "Custom: {{path}} ({{freeSpace}} GB free)",
     "extractingLabel": "Extracting...",
     "verifyingLabel": "Verifying...",
+    "installingViaUpcLabel": "Installing Ubisoft Connect",
+    "preparingLabel": "Setting up game...",
+    "preparingMessage": "Initializing prefix and syncing cloud saves...",
+    "extractingMessage": "Extracting files...",
+    "verifyingMessage": "Verifying files... {{pct}}%",
+    "installingViaUpcMessage": "Follow the Ubisoft Connect window to finish installing...",
     "updateQueuedLabel": "Update Queued",
     "downloadQueuedLabel": "Download Queued",
     "downloadingUpdateLabel": "Downloading Update",
@@ -116,6 +122,8 @@
     "newer": "(newer)",
     "filesSize": "{{count}} files · {{size}}",
     "uploadBlockedEmpty": "Cloud upload skipped for {{game}} — no local saves found",
+    "uploadSkippedTitle": "Cloud upload skipped",
+    "uploadSkippedBody": "No local saves to upload yet for {{game}}.",
     "useCloud": "Use Cloud",
     "useLocal": "Use Local",
     "unknownDate": "Unknown",
@@ -218,6 +226,14 @@
     "downloadFailedUnknown": "Unknown error.",
     "updateQueued": "Update queued",
     "uninstallDone": "Uninstall complete.",
+    "cloudPullStarted": "Downloading cloud save…",
+    "cloudPullDone": "Cloud save downloaded",
+    "cloudPullFailed": "Cloud save download failed",
+    "cloudPushStarted": "Uploading local save…",
+    "cloudPushDone": "Local save uploaded",
+    "cloudPushFailed": "Local save upload failed",
+    "cloudSavePathSet": "Save location updated",
+    "cloudSavePathFailed": "Couldn't set save location",
     "ubisoftLauncherOpening": "Opening Ubisoft Connect",
     "ubisoftLauncherOpeningMessage": "Ubisoft Connect is opening for {{title}}. Install the game there, then return to play.",
     "ubisoftLauncherAlreadyOpenMessage": "Ubisoft Connect is already open for this install.",
@@ -251,10 +267,10 @@
     "authError": "Authentication Error",
     "authConnected": "{{store}} Connected!",
     "authConnectedMessage": "Successfully authenticated with {{store}}",
-    "cleanupStarted": "Cleanup Started",
-    "cleanupStartedMessage": "Removing shortcuts, artwork, and saved logins. This may take a moment…",
+    "cleanupStarted": "Initiating full reset for Unifideck",
+    "cleanupStartedMessage": "Removing shortcuts, artwork, saved logins, prefixes, and cached data. This may take a moment…",
     "cleanupSuccessful": "Cleanup Successful",
-    "cleanupSuccessfulMessage": "Removed {{games}} shortcuts, {{artwork}} artwork files, signed out of {{stores}} stores, deleted {{files}} install dirs. Cache cleared.",
+    "cleanupSuccessfulMessage": "Removed {{games}} shortcuts, {{artwork}} artwork files, signed out of {{stores}} stores, deleted {{files}} install dirs, wiped {{residual}} data files. Cache cleared.",
     "cleanupNoop": "Nothing to Clean",
     "cleanupNoopMessage": "Unifideck has no shortcuts, artwork, or saved logins to remove.",
     "deleteFailed": "Delete Failed",
@@ -280,6 +296,14 @@
       "startingAmazonGame": "Starting Amazon game...",
       "startingGogGame": "Starting GOG game...",
       "startingUbisoftGame": "Starting Ubisoft game...",
+      "signingInUbisoft": "Signing in to Ubisoft Connect",
+      "signingInUbisoftMessage": "Opening Ubisoft Connect — sign in there, then return.",
+      "installingUbisoft": "Installing via Ubisoft Connect",
+      "installingUbisoftMessage": "Opening Ubisoft Connect — start the install from the launcher window.",
+      "ubisoftPrefixNotReady": "Ubisoft Connect isn't ready",
+      "ubisoftPrefixNotReadyMessage": "Couldn't prepare the Ubisoft Connect prefix for this game. Try installing again; if it keeps failing, re-run a library sync.",
+      "ubisoftLaunchIdMissing": "Opening Ubisoft Connect",
+      "ubisoftLaunchIdMissingMessage": "Couldn't resolve this game's launch ID — opening Ubisoft Connect so you can start it from your library. Re-run a library sync to fix direct launch.",
       "dependenciesTitle": "Installing Dependencies",
       "installingRedistributables": "Installing game redistributables...",
       "dependenciesReady": "Dependencies Ready",
@@ -458,6 +482,7 @@
     "buttons": {
       "details": "Details",
       "synopsis": "Synopsis",
+      "achievements": "Achievements",
       "storePage": "Store Page",
       "dlc": "DLC",
       "communityHub": "Community Hub",
@@ -492,12 +517,36 @@
       "unsupported": "UNSUPPORTED",
       "unknown": "UNKNOWN"
     },
-    "failedToLoadMetadata": "Failed to load metadata"
+    "failedToLoadMetadata": "Failed to load metadata",
+    "lastSession": "Last session: unlocked {{names}}"
+  },
+  "achievements": {
+    "unlockedTitle": "Achievement Unlocked",
+    "unlockedBody": "{{name}}"
+  },
+  "achievementsModal": {
+    "title": "Achievements",
+    "progress": "{{unlocked}} / {{total}} ({{percent}}%)",
+    "refresh": "Refresh",
+    "close": "Close",
+    "loading": "Loading achievements…",
+    "empty": "This game has no achievements.",
+    "hidden": "Hidden achievement",
+    "unlockedOn": "Unlocked {{date}}",
+    "error": "Couldn't load achievements.",
+    "errorOffline": "Connect to the internet to view achievements.",
+    "errorAuth": "Sign in to this game's store to view achievements.",
+    "errorUnavailable": "Achievements aren't available for this game."
   },
   "gameDetailsSettings": {
     "title": "GAME DETAILS VIEW",
     "simple": "Simple",
     "detailed": "Detailed"
+  },
+  "collectionSettings": {
+    "title": "STEAM COLLECTIONS",
+    "enabled": "Collections enabled",
+    "disabled": "Collections disabled"
   },
   "gogLanguageModal": {
     "title": "Select Language",
@@ -556,6 +605,7 @@
     "unknown": "Unknown",
     "ok": "OK",
     "cancel": "Cancel",
+    "close": "Close",
     "working": "Working…",
     "loading": "Loading…",
     "free": "free"
@@ -617,13 +667,47 @@
     "cancelConfirmBody": "Are you sure you want to cancel the download for {{title}}? Partial files will be discarded.",
     "cancelConfirmConfirm": "Cancel download",
     "cancelConfirmCancel": "Keep downloading",
-    "playOnCloud": "Play on Cloud"
+    "playOnCloud": "Play on Cloud",
+    "cloudSave": {
+      "label": "Cloud saves",
+      "menuTitle": "Cloud saves — {{game}}",
+      "close": "Close",
+      "download": "Download cloud save",
+      "upload": "Upload local save",
+      "statusSyncing": "Syncing cloud saves…",
+      "statusCloudAvailable": "Cloud save available",
+      "statusNoSaves": "No local saves",
+      "filesCount": "{{count}} files",
+      "statusUnresolved": "Save location not found — sync may not work for this game.",
+      "unresolvedHint": "Launch the game once so we can detect its save folder, or set the location manually.",
+      "setLocation": "Set save location",
+      "setLocationTitle": "Choose this game's save folder",
+      "setLocationHint": "Pick the folder where this game stores its saves.",
+      "noCloudSupport": "No cloud-save support",
+      "noCloudData": "Unknown",
+      "autoPullOn": "Cloud saves download automatically on launch."
+    },
+    "exe": {
+      "menuItem": "Change executable…",
+      "title": "Change executable — {{game}}",
+      "subtitle": "Pick which file this game launches (e.g. skip a launcher and run the game directly). The working directory and cloud saves are unaffected.",
+      "defaultTag": "(default)",
+      "browse": "Browse…",
+      "resetButton": "Reset to default",
+      "unavailable": "Couldn't read this game's folder.",
+      "changed": "Executable changed",
+      "changeFailed": "Couldn't change executable",
+      "reset": "Reset to default executable"
+    }
   },
   "playMeta": {
     "spaceRequired": "Space required",
     "installedSize": "Installed size",
     "lastPlayed": "Last played",
-    "neverPlayed": "Never played"
+    "neverPlayed": "Never played",
+    "played": "Played",
+    "hoursShort": "h",
+    "minutesShort": "min"
   },
   "downloads": {
     "title": "Downloads",
@@ -734,6 +818,7 @@
   },
   "cloudSync": {
     "_comment": "Toast strings emitted by the launcher when a cloud sync fails. The error placeholder is resolved through cloudSync.error.<code> via the backend payload's error_i18n_key field.",
+    "unavailableNativeDep": "Cloud saves are off on this system — its Python ({{python}}) is missing a required component. Your local saves are unaffected; rebuild/reinstall the plugin after a system update to restore sync.",
     "error": {
       "network_unreachable": "Network unreachable",
       "auth_expired": "Authentication expired",

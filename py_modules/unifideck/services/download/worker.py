@@ -74,6 +74,14 @@ def _apply_dict_progress(item: DownloadItem, progress: dict[str, Any]) -> None:
 # touching the loop logic itself.
 _POLL_INTERVAL_SEC: float = 1.0
 _ERROR_BACKOFF_SEC: float = 5.0
+# Upper bound on install-time prefix warmup (createprefix + winetricks +
+# cloud-save pull). Warmup is best-effort with launch-time setup as the
+# fallback, so a hang — e.g. ``umu-run`` unable to fetch its runtime on a
+# broken network — must NOT wedge the install in the "preparing" phase
+# forever (the install never reaches ``complete``, so no shortcut is
+# registered and the game stays on "Install"). On timeout we log and let the
+# install complete; the prefix is set up again at launch.
+_PREFIX_WARMUP_TIMEOUT_SEC: float = 600.0
 
 
 class _WorkerMixin:
@@ -90,6 +98,9 @@ class _WorkerMixin:
     _queue: list[DownloadItem]
     _running: dict[str, DownloadItem]
     _launcher_path: str
+    # Note: ``_prefix_warmup`` and ``_on_complete_callback`` are intentionally
+    # NOT declared here — they're optional host-set hooks accessed via
+    # ``getattr(self, ..., None)`` so the mixin stays standalone-safe.
 
     async def _worker_loop(self) -> None:
         """Poll the queue and dispatch installs until cancelled.
@@ -239,6 +250,12 @@ class _WorkerMixin:
         from unifideck.core.types.events import Events
         item.status = "running"
         item.start_time = time.time()
+        # Ubisoft is a launcher-driven (UPC) install — there is no real
+        # download. Start it in the indeterminate "manual" phase so the UI
+        # never shows a "DOWNLOADING… 0.0%" frame before the first progress
+        # emit lands. The store's progress callback keeps it on "manual".
+        if item.store == "ubisoft":
+            item.download_phase = "manual"
         if self._bus:
             await self._bus.emit(Events.DOWNLOAD_STARTED, item=item.to_dict())
 
@@ -261,12 +278,48 @@ class _WorkerMixin:
                 item.game_id,
                 progress_cb=progress_cb,
                 install_path=item.install_path or None,
+                on_ready=self._make_ubisoft_launch_signal(item),
+            )
+        # GOG honours a user-picked install language; other stores
+        # don't accept the kwarg, so only pass it for GOG.
+        extra: dict[str, Any] = {}
+        if item.store == "gog" and item.language:
+            extra["language"] = item.language
+            logger.info(
+                "[DownloadWorker] %s install language=%s", key, item.language,
             )
         return await store.install_game(  # type: ignore[call-arg]
             item.game_id,
             item.install_path or None,
             progress_cb=progress_cb,
+            **extra,
         )
+
+    def _make_ubisoft_launch_signal(self, item: DownloadItem) -> Any:
+        """Build the post-bootstrap callback that asks the frontend to
+        open Ubisoft Connect via RunGame.
+
+        Ubisoft installs can't spawn UPC from the backend — in Gaming
+        Mode a bare subprocess has no gamescope session, so the window
+        never appears. Instead the installer bootstraps the per-game
+        prefix and then invokes this callback; we emit
+        ``UBISOFT_INSTALL_LAUNCH_REQUESTED`` and the frontend reacts by
+        calling ``RunGame`` (which gives UPC its own session). The worker
+        then keeps monitoring the prefix for the installed files.
+        """
+        async def _signal() -> None:
+            if not self._bus:
+                return
+            from unifideck.core.types.events import Events
+            await self._bus.emit(
+                Events.UBISOFT_INSTALL_LAUNCH_REQUESTED,
+                store_game_id=f"ubisoft:{item.game_id}",
+            )
+            logger.info(
+                "[DownloadWorker] requested UPC launch for ubisoft:%s",
+                item.game_id,
+            )
+        return _signal
 
     async def _on_install_success(
         self, item: DownloadItem, result: InstallResult, store: StoreBase, key: str,
@@ -274,11 +327,17 @@ class _WorkerMixin:
         """Mark complete, emit DOWNLOAD_COMPLETE, run the post-install hook."""
         from unifideck.core.types.events import Events
         item.progress = 100.0
-        item.status = "complete"
-        item.end_time = time.time()
         result_install_path = getattr(result, "install_path", None)
         if result_install_path:
             item.install_path = result_install_path
+        # Full first-run prefix setup (createprefix + compat + cloud pull) runs
+        # HERE — while the item is still in ``_running`` and rendered in a
+        # "preparing" state — so the install flow stays open until the prefix is
+        # ready. Best-effort; the launch path re-runs it idempotently as a
+        # fallback. Skipped for Ubisoft (UPC owns its prefix) / Microsoft.
+        await self._run_prefix_warmup(item)
+        item.status = "complete"
+        item.end_time = time.time()
         logger.info("[DownloadWorker] completed install for %s", key)
         # Build a Game record so the ShortcutService listener registers
         # the shortcut. We do NOT emit GAME_INSTALLED here — ArtworkService
@@ -295,6 +354,44 @@ class _WorkerMixin:
                 await on_complete(item)
             except Exception:
                 logger.exception("[DownloadWorker] on_complete callback failed")
+
+    async def _run_prefix_warmup(self, item: DownloadItem) -> None:
+        """Run install-time prefix setup, surfaced as a "preparing" phase.
+
+        Only for the stores that own a per-game prefix — Ubisoft bootstraps its
+        own prefix via UPC, and Microsoft is cloud-only, so both are skipped.
+        No-op when the hook isn't wired (e.g. launcher subset bootstrap).
+        Best-effort: a failure logs and the install still completes (the
+        launch-time path remains the fallback). Re-emitting DOWNLOAD_STARTED
+        forces the frontend to refetch the queue so the row picks up the new
+        ``download_phase`` (same mechanism Ubisoft's "manual" phase uses).
+        """
+        if item.store in ("ubisoft", "microsoft"):
+            return
+        hook: Any = getattr(self, "_prefix_warmup", None)
+        if not callable(hook):
+            return
+        from unifideck.core.types.events import Events
+        item.download_phase = "preparing"
+        if self._bus:
+            await self._bus.emit(Events.DOWNLOAD_STARTED, item=item.to_dict())
+        logger.info(
+            "[DownloadWorker] running prefix warmup for %s:%s",
+            item.store, item.game_id,
+        )
+        try:
+            await asyncio.wait_for(hook(item), timeout=_PREFIX_WARMUP_TIMEOUT_SEC)
+        except TimeoutError:
+            logger.warning(
+                "[DownloadWorker] prefix warmup timed out for %s:%s after %ds — "
+                "completing install; the prefix is set up at launch instead",
+                item.store, item.game_id, int(_PREFIX_WARMUP_TIMEOUT_SEC),
+            )
+        except Exception:
+            logger.exception(
+                "[DownloadWorker] prefix warmup failed for %s:%s (continuing)",
+                item.store, item.game_id,
+            )
 
     async def _mark_cancelled(self, item: DownloadItem, key: str) -> None:
         """Mark the item cancelled and emit DOWNLOAD_CANCELLED."""

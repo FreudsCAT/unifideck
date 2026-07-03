@@ -29,6 +29,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import socket
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
@@ -49,6 +50,7 @@ from unifideck.services.shortcut import ShortcutService
 from unifideck.stores.shared.store_base import StoreBase
 from unifideck.utils.config_helpers import get_cfg
 
+from .achievements import EpicAchievements
 from .auth import EpicAuthFlow
 from .exe_resolver import EpicExeResolver
 from .install import (
@@ -57,6 +59,7 @@ from .install import (
     _read_legendary_install_path,
 )
 from .library import EpicLibraryReader, merge_install_status
+from .sessions import EpicSessions
 from .updates import EpicUpdateChecker
 
 if TYPE_CHECKING:
@@ -131,6 +134,22 @@ class EpicStore(StoreBase):
             library=self._library,
             list_updates_timeout=epic_cfg["list_updates_timeout_seconds"],
             size_cache_ttl=epic_cfg["size_cache_ttl_seconds"],
+            info_timeout=epic_cfg["info_timeout_seconds"],
+        )
+        user_file = str(Path(get_cfg(
+            self._config,
+            "stores.epic.user_file",
+            "~/.config/legendary/user.json",
+        )).expanduser())
+        self._achievements = EpicAchievements(
+            cli_path=self.cli_path,
+            user_file=user_file,
+            info_timeout=epic_cfg["info_timeout_seconds"],
+        )
+        self._sessions = EpicSessions(
+            cli_path=self.cli_path,
+            user_file=user_file,
+            machine_id=socket.gethostname() or "steamdeck",
             info_timeout=epic_cfg["info_timeout_seconds"],
         )
 
@@ -213,6 +232,43 @@ class EpicStore(StoreBase):
             return False
         return "access_token" in data
 
+    async def get_game_achievements(
+        self, game_id: str, force: bool = False,
+    ) -> dict[str, Any]:
+        """An Epic game's achievements (definitions + this user's unlock status).
+
+        Read-only display, via Epic's storefront GraphQL (reverse-engineered).
+        Unlocking is handled in-game by the EOS overlay, not here. Raises
+        ``EpicAchievementsError`` on auth/network/no-sandbox failure; a game
+        with no EGS achievements is a normal empty payload. ``force`` bypasses
+        the TTL cache.
+        """
+        return await self._achievements.get_game_achievements(
+            game_id, force=force,
+        )
+
+    def invalidate_achievements(self, game_id: str) -> None:
+        """Drop a game's cached achievements."""
+        self._achievements.invalidate(game_id)
+
+    async def report_play_session(
+        self, game_id: str, started_at_unix: int, duration_secs: int,
+    ) -> bool:
+        """Report one finished play session to Epic (``library-service``).
+
+        Used by ``PlaytimeSyncService`` so the Epic launcher's "Time Played" /
+        other devices reflect time played here. ``game_id`` is the Epic
+        ``artifactId`` (== legendary app_name). ``True`` on success; ``False``
+        (never raises) on auth/network failure so the caller can retry.
+        """
+        return await self._sessions.report_session(
+            game_id, started_at_unix, duration_secs,
+        )
+
+    async def get_play_total_secs(self, game_id: str) -> int | None:
+        """Epic's authoritative total time played for ``game_id``, in seconds."""
+        return await self._sessions.get_total_secs(game_id)
+
     async def start_auth(self, **kwargs: Any) -> AuthResult:
         """Start auth."""
         if self._auth is None:
@@ -261,7 +317,7 @@ class EpicStore(StoreBase):
             return Result(success=True)
         return await self._auth.logout()
 
-    async def get_library(self) -> list[Game] | None:
+    async def get_library(self, *, force: bool = False) -> list[Game] | None:
         """Get library."""
         if not self.cli_path:
             return []

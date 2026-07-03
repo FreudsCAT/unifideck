@@ -31,9 +31,15 @@ from __future__ import annotations
 import logging
 import os
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 logger = logging.getLogger(__name__)
+
+# Fallback plugin dir when ``DECKY_PLUGIN_DIR`` is somehow unset (Decky always
+# sets it; this is belt-and-braces). Decky installs to ``$HOME/homebrew`` on
+# every distro, so derive it from ``~`` — never bake in the ``deck`` username.
+# Computed once at import so async callers don't do path I/O inline (ASYNC240).
+_FALLBACK_PLUGIN_DIR = os.path.expanduser("~/homebrew/plugins/Unifideck")
 
 # Default delay used when the frontend has to wait for Steam to
 # load the freshly-created shortcut into in-memory state. Lifted
@@ -162,23 +168,57 @@ class AuthShortcutsRPCMixin:
         try:
             from unifideck.compatibility.proton_helpers import (
                 get_compat_tool_for_app,
+                get_global_default_compat_tool,
                 is_linux_runtime,
             )
 
-            appid_unsigned = self._resolve_shortcut_appid(store_game_id)
+            appid_unsigned, launch_options = self._resolve_shortcut_entry(
+                store_game_id,
+            )
             tool_name = (
                 get_compat_tool_for_app(appid_unsigned)
                 if appid_unsigned
                 else ""
             )
+            # A tool equal to Steam's global default (CompatToolMapping["0"])
+            # is a distro/system default (e.g. Bazzite's "Proton-CachyOS
+            # Latest") applied to every shortcut — NOT an explicit per-game
+            # choice. The frontend must not adopt it as a per-game override
+            # (it would be unresolvable and thrash the prefix); it only saves
+            # a tool that differs from the global default.
+            global_default = get_global_default_compat_tool()
+            is_global_default = bool(tool_name) and tool_name == global_default
             logger.info(
-                "[AuthShortcuts] compat tool for %s: appid=%s tool=%r",
+                "[AuthShortcuts] compat tool for %s: appid=%s tool=%r "
+                "global_default=%r is_global_default=%s",
                 store_game_id, appid_unsigned, tool_name,
+                global_default, is_global_default,
             )
+            plugin_dir = os.environ.get(
+                "DECKY_PLUGIN_DIR", _FALLBACK_PLUGIN_DIR,
+            )
+            launcher_path = str(
+                Path(plugin_dir) / "bin" / "unifideck-launcher",
+            )
+            # ``appid_unsigned`` + ``current_launch_options`` let the
+            # frontend RunGame this shortcut directly (Ubisoft install
+            # flow) without a separate context RPC: it injects the
+            # ``install`` action into the options, launches, then restores
+            # ``current_launch_options`` so a later Play still works.
+            # ``launcher_path`` is the fallback exe used when the shortcut
+            # isn't yet in Steam's in-memory app store (first session after
+            # a backend VDF write) — the frontend then creates a temporary
+            # shortcut via ``AddShortcut`` instead of RunGame-ing an
+            # unregistered appid ("Game configuration unavailable").
             return {
                 "success": True,
                 "tool_name": tool_name,
                 "is_linux_runtime": is_linux_runtime(tool_name),
+                "is_global_default": is_global_default,
+                "appid_unsigned": appid_unsigned,
+                "current_launch_options": launch_options,
+                "store_game_id": store_game_id,
+                "launcher_path": launcher_path,
             }
         except Exception as e:
             logger.warning(
@@ -192,54 +232,67 @@ class AuthShortcutsRPCMixin:
     def _resolve_shortcut_appid(store_game_id: str) -> int:
         """Scan shortcuts.vdf for an entry whose LaunchOptions
         contains ``store_game_id`` and return its AppID."""
+        return AuthShortcutsRPCMixin._resolve_shortcut_entry(store_game_id)[0]
+
+    @staticmethod
+    def _resolve_shortcut_entry(store_game_id: str) -> tuple[int, str]:
+        """Find the shortcut whose ``LaunchOptions`` first token equals
+        ``store_game_id`` and return ``(appid_unsigned, launch_options)``.
+
+        ``launch_options`` is the shortcut's current ``LaunchOptions``
+        string (e.g. ``"ubisoft:<game_id>"`` plus any user wrappers) — the
+        Ubisoft install flow needs it so it can temporarily inject the
+        ``install`` action and then restore the real options afterwards
+        (restoring to ``""`` would wipe the shortcut and break Play).
+        Returns ``(0, "")`` when no matching shortcut exists.
+
+        Parses ``shortcuts.vdf`` with the ``vdf`` library and reads each
+        entry's ``appid`` directly. The previous implementation byte-scanned
+        a fixed 200-byte window *backwards* from the ``LaunchOptions`` tag
+        for the appid — but for Ubisoft per-game shortcuts the AppName +
+        launcher Exe + icon path push the appid 209-217 bytes away, outside
+        that window, so it returned 0 and ``get_compat_tool_for_game`` (the
+        Ubisoft install/launch path) found no appid → "Context unavailable",
+        no RunGame, UPC never opened (and Play broke for installed titles).
+        It also matched ``store_game_id`` as a substring
+        (``ubisoft:4`` ⊂ ``ubisoft:46``) and returned the *first* (not the
+        nearest) appid in the window.
+        """
         from pathlib import Path
+
+        import vdf
 
         from unifideck.steam.steam_user import get_active_steam_user
         steam_root = Path("~/.steam/steam").expanduser()
         active_user = get_active_steam_user(steam_root) or "0"
-        vdf = steam_root / "userdata" / active_user / "config" / "shortcuts.vdf"
-        if not vdf.is_file():
-            return 0
-        raw = vdf.read_bytes()
-        # VDF stores the appid as a 4-byte little-endian
-        # uint32 right after the \x01appid\x00 tag. Scan for
-        # entries matching store_game_id in LaunchOptions.
-        i = 0
-        while True:
-            i = raw.find(b"LaunchOptions", i)
-            if i == -1:
-                return 0
-            # Look forward for store_game_id in the options value
-            end = raw.find(b"\x00", i + 20)
-            if end == -1:
-                return 0
-            opts = raw[i + 14:end]  # after \x01LaunchOptions\x00
-            if store_game_id.encode() in opts:
-                appid = _appid_from_chunk(raw[max(0, i - 200):i])
-                if appid is not None:
-                    return appid
-            i = end
+        vdf_path = (
+            steam_root / "userdata" / active_user / "config" / "shortcuts.vdf"
+        )
+        if not vdf_path.is_file():
+            return 0, ""
+        try:
+            data = vdf.binary_loads(vdf_path.read_bytes())  # type: ignore[no-untyped-call]  # vdf.binary_loads is untyped
+        except Exception:
+            logger.warning("[AuthShortcuts] failed to parse shortcuts.vdf")
+            return 0, ""
+        shortcuts = data.get("shortcuts", {})
+        entries = shortcuts.values() if isinstance(shortcuts, dict) else []
+        for entry in entries:
+            launch_options = entry.get("LaunchOptions", "") or ""
+            first_token = (
+                launch_options.split(maxsplit=1)[0] if launch_options else ""
+            )
+            if first_token != store_game_id:
+                continue
+            appid = entry.get("appid")
+            if appid is None:
+                continue
+            unsigned = appid if appid >= 0 else appid + 2**32
+            return int(unsigned), launch_options
+        return 0, ""
 
 
 # ─── Module-level helpers ─────────────────────────────────────
-
-
-def _appid_from_chunk(chunk: bytes) -> int | None:
-    """Extract the uint32 ``appid`` preceding a matched LaunchOptions block.
-
-    VDF stores the appid as a 4-byte little-endian uint32 right after
-    the ``\\x02appid\\x00`` tag. Returns ``None`` if no valid tag is found.
-    """
-    import re
-    import struct
-    for m in re.finditer(b"\\x02appid\\x00(.{4})", chunk, re.DOTALL):
-        try:
-            # struct.unpack returns tuple[Any, ...] so [0] is Any;
-            # "<I" produces a single uint32 → int.
-            return cast(int, struct.unpack("<I", m.group(1))[0])
-        except struct.error:
-            continue
-    return None
 
 
 def _build_and_log(store: str) -> dict[str, Any]:
@@ -281,8 +334,7 @@ def _build_auth_shortcut_context(store: str) -> dict[str, Any]:
     if meta is None:
         return {"success": False, "error": "unknown_store"}
     plugin_dir = os.environ.get(
-        "DECKY_PLUGIN_DIR",
-        "/home/deck/homebrew/plugins/Unifideck",
+        "DECKY_PLUGIN_DIR", _FALLBACK_PLUGIN_DIR,
     )
     wrapper_path = str(Path(plugin_dir) / "bin" / "unifideck-launcher")
     try:

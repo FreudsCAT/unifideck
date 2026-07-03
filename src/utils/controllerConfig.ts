@@ -1,14 +1,22 @@
 /**
  * Controller-aware launch wrapper.
  *
- * Programmatic Steam controller-layout editing was removed
- * from this module after observation in production : the
- * automation only proved Steam-side state changes, threw
- * runtime "Unknown method" errors in the Steam UI for some
- * launches, and could race Steam's own controller
- * configurator. Until we have a Game Mode-safe signal, this
- * wrapper only launches the shortcut and leaves controller
- * layouts alone.
+ * An earlier programmatic controller-layout approach (driving Steam's
+ * Controller Configurator popup) was reverted: it raced Steam's own
+ * configurator and threw "Unknown method" errors. The replacement here
+ * uses the typed `SteamClient.Input.SetSelectedConfigForApp` setter
+ * directly — method names + signature verified against the Steam UI
+ * bundle (`steamui/*.js`), and the call confirmed working in Gaming Mode.
+ *
+ * Two layouts are applied, both off the live template stream:
+ *   • Auth/login window → "Web Browser" (keyboard/mouse) so the in-prefix
+ *     login UI is navigable — see `applyWebBrowserLayout`.
+ *   • xCloud game launch → "Gamepad With Joystick Trackpad" so the Deck
+ *     controller drives the streamed game as an Xbox pad — see
+ *     `applyGamepadLayout` / `ensureGamepadConfigForApp`. This is the
+ *     layout Microsoft's official Steam Deck + Edge xCloud guide mandates;
+ *     without it the default keyboard/mouse layout leaves menus navigable
+ *     (trackpad-mouse) but sends no gamepad input to the streamed game.
  *
  * Standards compliance : the previous version reached into
  * `(window as any).appStore` directly, bypassing the
@@ -35,19 +43,16 @@
  *     template apply) is the exact code that raced Steam and
  *     threw "Unknown method"; it was deliberately reverted.
  *
- * Conclusion: not shippable blind for the *game* launch path. But the
- * auth-window path (Edge browser login) genuinely benefits from a
- * keyboard/mouse layout, so `applyWebBrowserLayout` below applies the
- * official Steam "Web Browser" template to the auth shortcut. The API
- * (method names + the `SetSelectedConfigForApp` signature) was verified
- * against the Steam client UI bundle (`steamui/*.js`) and the template
- * itself (`controller_base/templates/controller_neptune_webbrowser.vdf`,
- * Title "Web Browser", official Valve config). Rather than hardcode the
- * template URL (its exact string is produced at runtime), we enumerate
- * the live config list via `QueryControllerConfigsForApp` and pick the
- * official Web-Browser entry. Every call is wrapped so any failure
- * leaves the auth launch completely unaffected; applied AFTER the temp
- * shortcut's app entry exists and BEFORE `RunGame`.
+ * Update (2026-06): a typed `SteamClient.Input` setter surface WAS
+ * confirmed. `RegisterForControllerConfigInfoMessages` +
+ * `QueryControllerConfigsForApp` + `SetSelectedConfigForApp` were verified
+ * against the Steam UI bundle and exercised live in Gaming Mode (the
+ * "Unknown method" failures came from the old configurator-popup path, not
+ * these). Rather than hardcode the template URL (produced at runtime) we
+ * enumerate the live config list and pick the matching official entry
+ * (`controller_neptune_webbrowser.vdf` for auth,
+ * `controller_neptune_gamepad_fps.vdf` for xCloud). Every call is wrapped
+ * so any failure leaves the launch unaffected; applied BEFORE `RunGame`.
  */
 import { getShortcutRunGameId } from "../lib/steam-bridge";
 import type {
@@ -61,13 +66,17 @@ const PRIMARY_CONTROLLER_INDEX = 0;
 // How long to wait for Steam to stream the template list before giving up.
 const CONFIG_INFO_TIMEOUT_MS = 4000;
 
-/** Hook left as a no-op for forward-compatibility : when a
- *  Game-Mode-safe controller config signal lands, this is
- *  where the per-app config orchestration will be invoked. */
+/** Default an xCloud shortcut to the "Gamepad With Joystick Trackpad"
+ *  layout. Best-effort and fire-and-forget: a failed/absent apply just
+ *  leaves the current layout. Run *after* `RunGame` (see
+ *  `launchAppWithConfiguredGamepad`) — Steam's controller-config API is
+ *  inert for an idle shortcut, so we apply once the app is the active
+ *  launch target; the selection persists for subsequent launches. */
 export async function ensureGamepadConfigForApp(appId: number): Promise<void> {
+  const applied = await applyGamepadLayout(appId);
   console.log(
-    `${LOG_PREFIX} Skipping automatic controller configuration` +
-      ` for appId=${appId}`,
+    `${LOG_PREFIX} gamepad layout for appId=${appId}: ` +
+      `${applied ? "applied" : "kept default"}`,
   );
 }
 
@@ -82,12 +91,11 @@ export async function launchAppWithConfiguredGamepad(
     return false;
   }
 
-  await ensureGamepadConfigForApp(appId);
   steamApps.RunGame(getShortcutRunGameId(appId), "", -1, 100);
-  console.log(
-    `${LOG_PREFIX} Launched appId=${appId} ` +
-      `without changing controller layouts`,
-  );
+  console.log(`${LOG_PREFIX} Launched appId=${appId}`);
+  // Fire-and-forget so it never delays the launch: default the shortcut to
+  // the gamepad layout once it's the active controller-config target.
+  void ensureGamepadConfigForApp(appId);
 
   return true;
 }
@@ -115,6 +123,9 @@ function isTemplateEntry(
   );
 }
 
+/** Predicate selecting one official template from the live config stream. */
+type TemplateMatcher = (m: ControllerConfigInfoMessageList) => boolean;
+
 /** The official Steam "Web Browser" template (by title or filename). */
 function isWebBrowserTemplate(m: ControllerConfigInfoMessageList): boolean {
   return (
@@ -123,84 +134,143 @@ function isWebBrowserTemplate(m: ControllerConfigInfoMessageList): boolean {
 }
 
 /**
+ * The official "Gamepad With Joystick Trackpad" template
+ * (`controller_neptune_gamepad_fps.vdf`). This is the layout Microsoft's
+ * own "Xbox Cloud Gaming in Microsoft Edge with Steam Deck" guide tells
+ * users to apply: it maps the Deck's physical controls to the virtual
+ * Xbox pad (right trackpad → right stick) so xCloud forwards real gamepad
+ * input to the streamed game. Without it the Deck defaults to a
+ * keyboard/mouse layout — menus stay navigable via the trackpad-mouse but
+ * the game itself receives no controller input. Matched by filename
+ * (stable) or localized title.
+ */
+function isGamepadJoystickTemplate(
+  m: ControllerConfigInfoMessageList,
+): boolean {
+  return (
+    m.bOfficial &&
+    (/gamepad_fps/i.test(m.URL) || /gamepad\s+with\s+joystick/i.test(m.Title))
+  );
+}
+
+/**
+ * Shared core: stream the app's controller configs, pick the first
+ * official template matching `matches`, and persist it for the app via
+ * `SetSelectedConfigForApp`. Resolves `true` when a template was applied,
+ * `false` on unavailable API / no match / timeout / error. Never throws.
+ *
+ * Flow (all verified against the Steam UI bundle, and the live API
+ * confirmed callable in Gaming Mode):
+ *   1. Register for the app's controller-config info stream.
+ *   2. `QueryControllerConfigsForApp` to make Steam emit it.
+ *   3. Pick the matching official entry and apply its `URL` via
+ *      `SetSelectedConfigForApp` (which persists the selection).
+ *
+ * Fully guarded and non-blocking: any failure leaves the launch
+ * completely unaffected (the app still launches, just on the default
+ * layout). A timeout unregisters the listener if Steam never streams a
+ * match. Call this BEFORE `RunGame` (and await it if the current launch
+ * must pick up the layout).
+ */
+function applySelectedTemplate(
+  appId: number,
+  matches: TemplateMatcher,
+  label: string,
+): Promise<boolean> {
+  return new Promise<boolean>((resolve) => {
+    try {
+      const input = window.SteamClient?.Input;
+      if (
+        !input?.RegisterForControllerConfigInfoMessages ||
+        !input?.QueryControllerConfigsForApp ||
+        !input?.SetSelectedConfigForApp
+      ) {
+        console.log(
+          `${LOG_PREFIX} SteamClient.Input config API unavailable — ` +
+            `default layout kept for appId=${appId}`,
+        );
+        resolve(false);
+        return;
+      }
+      const idx = PRIMARY_CONTROLLER_INDEX;
+      // Mutable holder so `finish` can close over the registration +
+      // timer that are created after it (avoids a let/const cycle).
+      const state: {
+        settled: boolean;
+        reg?: { unregister(): void };
+        timer?: ReturnType<typeof setTimeout>;
+      } = { settled: false };
+      const finish = (ok: boolean) => {
+        if (state.timer !== undefined) clearTimeout(state.timer);
+        try {
+          state.reg?.unregister();
+        } catch {
+          /* ignore */
+        }
+        resolve(ok);
+      };
+
+      state.reg = input.RegisterForControllerConfigInfoMessages(
+        appId,
+        (messages) => {
+          if (state.settled || !Array.isArray(messages)) return;
+          const tpl = messages.filter(isTemplateEntry).find(matches);
+          if (!tpl) return;
+          state.settled = true;
+          try {
+            input.SetSelectedConfigForApp(appId, idx, tpl.URL, false, true);
+            console.log(
+              `${LOG_PREFIX} applied ${label} to ` +
+                `appId=${appId} (${tpl.URL})`,
+            );
+            finish(true);
+          } catch (e) {
+            console.warn(`${LOG_PREFIX} SetSelectedConfigForApp failed:`, e);
+            finish(false);
+          }
+        },
+      );
+      input.QueryControllerConfigsForApp(appId, idx, false);
+      state.timer = setTimeout(() => {
+        if (!state.settled) {
+          console.log(
+            `${LOG_PREFIX} ${label} template not found for ` +
+              `appId=${appId} within ${CONFIG_INFO_TIMEOUT_MS}ms — ` +
+              `default layout kept`,
+          );
+        }
+        finish(false);
+      }, CONFIG_INFO_TIMEOUT_MS);
+    } catch (e) {
+      console.warn(`${LOG_PREFIX} applySelectedTemplate error (ignored):`, e);
+      resolve(false);
+    }
+  });
+}
+
+/**
  * Apply the official Steam "Web Browser" controller template to the
  * temporary auth-window shortcut so the store-login page is navigable
  * with the trackpad/stick (mouse) instead of a useless gamepad binding.
- *
- * Flow (all verified against the Steam UI bundle):
- *   1. Register for the app's controller-config info stream.
- *   2. `QueryControllerConfigsForApp` to make Steam emit it.
- *   3. Pick the official Web-Browser entry and apply its `URL` via
- *      `SetSelectedConfigForApp` (which persists the selection).
- *
- * Fully guarded and non-blocking: a missing API, no match, or any
- * thrown error leaves the auth launch completely unaffected (login
- * still works, just with the default layout). A timeout unregisters the
- * listener if Steam never streams a match. Call this AFTER the
- * shortcut's app entry exists and BEFORE `RunGame`.
+ * Fire-and-forget: applied AFTER the temp shortcut's app entry exists and
+ * BEFORE `RunGame`; failure leaves login unaffected.
  */
 export function applyWebBrowserLayout(appId: number): void {
-  try {
-    const input = window.SteamClient?.Input;
-    if (
-      !input?.RegisterForControllerConfigInfoMessages ||
-      !input?.QueryControllerConfigsForApp ||
-      !input?.SetSelectedConfigForApp
-    ) {
-      console.log(
-        `${LOG_PREFIX} SteamClient.Input config API unavailable — ` +
-          `default layout kept for appId=${appId}`,
-      );
-      return;
-    }
-    const idx = PRIMARY_CONTROLLER_INDEX;
-    // Mutable holder so `cleanup` can close over the registration +
-    // timer that are created after it (avoids a let/const cycle).
-    const state: {
-      settled: boolean;
-      reg?: { unregister(): void };
-      timer?: ReturnType<typeof setTimeout>;
-    } = { settled: false };
-    const cleanup = () => {
-      if (state.timer !== undefined) clearTimeout(state.timer);
-      try {
-        state.reg?.unregister();
-      } catch {
-        /* ignore */
-      }
-    };
+  void applySelectedTemplate(appId, isWebBrowserTemplate, "Web Browser layout");
+}
 
-    state.reg = input.RegisterForControllerConfigInfoMessages(
-      appId,
-      (messages) => {
-        if (state.settled || !Array.isArray(messages)) return;
-        const tpl = messages.filter(isTemplateEntry).find(isWebBrowserTemplate);
-        if (!tpl) return;
-        state.settled = true;
-        try {
-          input.SetSelectedConfigForApp(appId, idx, tpl.URL, false, true);
-          console.log(
-            `${LOG_PREFIX} applied Web Browser layout to ` +
-              `appId=${appId} (${tpl.URL})`,
-          );
-        } catch (e) {
-          console.warn(`${LOG_PREFIX} SetSelectedConfigForApp failed:`, e);
-        }
-        cleanup();
-      },
-    );
-    input.QueryControllerConfigsForApp(appId, idx, false);
-    state.timer = setTimeout(() => {
-      if (!state.settled) {
-        console.log(
-          `${LOG_PREFIX} Web Browser template not found for ` +
-            `appId=${appId} within ${CONFIG_INFO_TIMEOUT_MS}ms — ` +
-            `default layout kept`,
-        );
-      }
-      cleanup();
-    }, CONFIG_INFO_TIMEOUT_MS);
-  } catch (e) {
-    console.warn(`${LOG_PREFIX} applyWebBrowserLayout error (ignored):`, e);
-  }
+/**
+ * Apply the official "Gamepad With Joystick Trackpad" template to an
+ * xCloud shortcut so the Steam Deck controller drives the streamed game
+ * as an Xbox pad (see `isGamepadJoystickTemplate`). Resolves once the
+ * layout is applied (or the attempt times out) so the caller can await it
+ * before `RunGame`, ensuring the current launch picks up the layout. The
+ * selection persists, so later launches keep it.
+ */
+export function applyGamepadLayout(appId: number): Promise<boolean> {
+  return applySelectedTemplate(
+    appId,
+    isGamepadJoystickTemplate,
+    "Gamepad (Joystick Trackpad) layout",
+  );
 }

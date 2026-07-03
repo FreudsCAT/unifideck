@@ -28,6 +28,7 @@ interface CleanupResult {
   deleted_artwork_count: number;
   logged_out_count: number;
   deleted_stray_files_count: number;
+  deleted_residual_count: number;
   deleted_app_ids?: number[];
 }
 
@@ -39,10 +40,20 @@ export const CleanupSection: FC = () => {
   );
 
   const runCleanup = async (deleteFiles: boolean) => {
-    // Immediate feedback on confirm — the backend wipe can take a few
-    // seconds, so surface a "started" toast right away rather than
-    // leaving the user staring at a closed modal until completion.
-    toast.info(t("toasts.cleanupStarted"), t("toasts.cleanupStartedMessage"));
+    // Feedback on confirm — the backend wipe can take several seconds.
+    // Deferred a beat on purpose: ConfirmModal fires onOK → onConfirm
+    // synchronously *during* its close animation, and Decky's toaster
+    // swallows toasts raised mid-teardown (the later success toast only
+    // survives because it fires after the await). Letting the modal fully
+    // unmount first makes the "started" toast actually appear.
+    setTimeout(
+      () =>
+        toast.info(
+          t("toasts.cleanupStarted"),
+          t("toasts.cleanupStartedMessage"),
+        ),
+      400,
+    );
     const result = await mutate(deleteFiles);
     if (!result) {
       toast.error(
@@ -73,7 +84,8 @@ export const CleanupSection: FC = () => {
       result.deleted_artwork_count +
       result.logged_out_count +
       result.deleted_stray_files_count +
-      result.deleted_files_count;
+      result.deleted_files_count +
+      (result.deleted_residual_count ?? 0);
     if (totalTouched === 0) {
       toast.info(t("toasts.cleanupNoop"), t("toasts.cleanupNoopMessage"));
     } else {
@@ -84,6 +96,7 @@ export const CleanupSection: FC = () => {
           artwork: result.deleted_artwork_count,
           stores: result.logged_out_count,
           files: result.deleted_files_count,
+          residual: result.deleted_residual_count ?? 0,
         }),
       );
     }

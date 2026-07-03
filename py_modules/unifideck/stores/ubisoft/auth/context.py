@@ -96,10 +96,19 @@ class _AuthContext:
         *,
         with_launch_wait: bool = True,
     ) -> dict[str, Any]:
-        """Build auth context success."""
+        """Build auth context success.
+
+        ``launcher_path`` lets the frontend fall back to a temporary
+        shortcut (created via ``AddShortcut``) when the persistent auth
+        shortcut isn't yet in Steam's in-memory app store — the first
+        session after it's written to ``shortcuts.vdf``, which Steam only
+        loads at startup. Without that fallback ``RunGame`` on the
+        unregistered shortcut fails with "Game configuration unavailable".
+        """
         return {
             "success": True,
             "appid_unsigned": unsigned_appid,
+            "launcher_path": self._parent._shortcut.get_launcher_path(),
             "launch_wait_ms": (
                 self._parent._config.auth_shortcut_launch_wait_ms
                 if with_launch_wait

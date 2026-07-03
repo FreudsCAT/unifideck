@@ -17,10 +17,15 @@ export {};
 declare global {
   interface DeckyBackendRouter {
     /** Call a loader route and await its reply. */
-    call<Return = unknown, Args extends any[] = any[]>(
+    call<Return = unknown, Args extends unknown[] = unknown[]>(
       route: string,
       ...args: Args
     ): Promise<Return>;
+    // Loader events carry arbitrary, per-event argument shapes; callers pass
+    // precisely-typed listeners (e.g. `(name: string) => void`). `unknown[]`
+    // rest params reject those under strict function-type checking, so the
+    // event-listener boundary is intentionally `any[]`.
+    /* eslint-disable @typescript-eslint/no-explicit-any */
     /** Subscribe to a loader event; returns the listener for symmetry. */
     addEventListener(
       event: string,
@@ -31,6 +36,7 @@ declare global {
       event: string,
       listener: (...args: any[]) => void,
     ): void;
+    /* eslint-enable @typescript-eslint/no-explicit-any */
   }
 
   interface Window {

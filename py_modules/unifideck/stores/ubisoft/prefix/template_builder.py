@@ -144,16 +144,112 @@ class _TemplatePrefixBuilder:
         )
         shutil.rmtree(template_dir, ignore_errors=True)
 
+    def _auth_prefix_has_valid_credentials(self) -> bool:
+        """Check whether the auth prefix holds a valid UPC credential vault."""
+        auth_dir = self._config.auth_prefix_dir_expanded
+        if not Path(auth_dir).is_dir():
+            return False
+        for _root, user_home in self._paths.iter_user_homes(
+            auth_dir,
+            pfx_first=True,
+        ):
+            css = (
+                Path(user_home)
+                / self._config.upc_local_subdir
+                / "ConnectSecureStorage.dat"
+            )
+            if css.is_file() and css.stat().st_size > 100:
+                return True
+        return False
+
+    async def regenerate_template_from_auth_if_diverged(self) -> None:
+        """Re-derive ``.template`` from auth when identities have diverged.
+
+        If the auth prefix holds valid credentials and the template either  (a)
+        has a different ``MachineGuid``, (b) has no credentials, or (c) doesn't
+        exist, remove the old template and clone a fresh one from ``.upc-auth``.
+        This is the migration mechanism for already-broken installs — it only
+        ever rebuilds the template FROM auth, never the reverse.
+        """
+        auth_dir = self._config.auth_prefix_dir_expanded
+        if not await asyncio.to_thread(lambda: Path(auth_dir).is_dir()):
+            return
+        if not self._auth_prefix_has_valid_credentials():
+            return
+
+        template_dir = self._config.template_dir_expanded
+        if self.template_exists():
+            auth_guid = self.read_machine_guid(auth_dir)
+            tmpl_guid = self.read_machine_guid(template_dir)
+            tmpl_has_creds = self._prefix_has_valid_credentials(
+                template_dir,
+            )
+            if auth_guid and tmpl_guid and auth_guid == tmpl_guid and tmpl_has_creds:
+                return  # identities match — nothing to do
+            logger.warning(
+                "[UbisoftPrefixManager] template diverged from auth "
+                "(auth=%s… tmpl=%s… tmpl_has_creds=%s) — realigning",
+                auth_guid[:8] if auth_guid else "none",
+                tmpl_guid[:8] if tmpl_guid else "none",
+                tmpl_has_creds,
+            )
+            shutil.rmtree(template_dir, ignore_errors=True)
+
+        logger.info(
+            "[UbisoftPrefixManager] deriving template from auth prefix",
+        )
+        await self._helpers.create_template_from_auth_prefix(auth_dir)
+
+    def _prefix_has_valid_credentials(self, prefix_path: str) -> bool:
+        """Check whether *prefix_path* holds a valid UPC credential vault."""
+        for _root, user_home in self._paths.iter_user_homes(
+            prefix_path,
+            pfx_first=True,
+        ):
+            css = (
+                Path(user_home)
+                / self._config.upc_local_subdir
+                / "ConnectSecureStorage.dat"
+            )
+            if css.is_file() and css.stat().st_size > 100:
+                return True
+        return False
+
     async def ensure_template_prefix(self) -> None:
-        """Ensure template prefix."""
+        """Ensure template prefix.
+
+        Precedence:
+        1. If ``.template`` already exists → return.
+        2. If ``.upc-auth`` exists → derive template from auth  (rsync clone,
+           shared ``MachineGuid`` + DPAPI identity).
+        3. Else → fall back to a fresh UPC install in the template
+           (pre-sign-in; will be re-derived from auth after login).
+        """
         if self.template_exists():
             logger.info(
                 "[UbisoftPrefixManager] template already exists",
             )
             return
+        auth_dir = self._config.auth_prefix_dir_expanded
+        if await asyncio.to_thread(lambda: Path(auth_dir).is_dir()):
+            logger.info(
+                "[UbisoftPrefixManager] deriving template from auth prefix",
+            )
+            await self._helpers.create_template_from_auth_prefix(auth_dir)
+            return
+
+        await self._create_template_from_fresh_install()
+
+    async def _create_template_from_fresh_install(self) -> None:
+        """Create the template via a fresh, pre-sign-in UPC install.
+
+        Fallback path taken only when no ``.upc-auth`` prefix exists yet;
+        the template will be re-derived from auth once the user logs in.
+        """
         template_dir = self._config.template_dir_expanded
         logger.info(
-            "[UbisoftPrefixManager] creating template prefix",
+            "[UbisoftPrefixManager] no auth prefix — creating "
+            "template from fresh UPC install (pre-sign-in)",
         )
         try:
             installer_path = await self._installer_cache.ensure_cached()

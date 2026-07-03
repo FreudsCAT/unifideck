@@ -190,6 +190,8 @@ class LauncherService:
         fan-out under the gate.
         """
         if ctx.auth_store == "ubisoft":
+            if ctx.action == "install":
+                return await self._launch_ubisoft_install(ctx)
             return await self._launch_ubisoft_auth(ctx)
         from unifideck.launcher.flows.auth import handle_store_auth
         return await handle_store_auth(ctx, self._edge_browser)
@@ -225,6 +227,39 @@ class LauncherService:
             },
         )
 
+    async def _launch_ubisoft_install(self, ctx: LaunchContext) -> Result:
+        """Open Ubisoft Connect to install a game, via Proton/RunGame.
+
+        Same Proton plan as a game launch — the prefix resolves to the
+        per-game prefix recorded in ``ubisoft_id_map.json`` (by
+        ``ctx.game_id``) during the backend's bootstrap. Runs UPC pointed
+        at the title's install deeplink and blocks until the user closes
+        it. Because this runs inside the RunGame-launched gamescope
+        session, the UPC window renders in Gaming Mode (unlike the old
+        backend-subprocess spawn). The plugin's download worker watches
+        the prefix for the installed files and finalises the queue item;
+        the UPC exit code is not the success signal here.
+        """
+        from unifideck.launcher.proton.handlers.ubisoft import (
+            ubisoft_install_launch,
+        )
+        from unifideck.services.launcher.helpers import prepare_windows_plan
+
+        state = self._build_runtime_state(ctx)
+        try:
+            plan, _ = await prepare_windows_plan(self, ctx, state)
+            rc = await ubisoft_install_launch(plan)
+        finally:
+            self._active_subprocess = None
+        return Result(
+            success=True,
+            store="ubisoft",
+            metadata={
+                "elapsed": self._elapsed_since_launch(),
+                "rc": str(rc),
+            },
+        )
+
     async def _dispatch_launch_kind(
         self, ctx: LaunchContext, state: RuntimeState,
     ) -> Result:
@@ -241,6 +276,29 @@ class LauncherService:
             return await self._launch_windows(ctx, state)
         return await self._launch_native(ctx, state)
 
+    async def _xcloud_edge_check(self, ctx: LaunchContext) -> Result | None:
+        """Abort result when Edge isn't installed, else ``None`` to continue.
+
+        xCloud streaming requires Edge. Checked before GAME_LAUNCHED so we
+        don't emit a launch/stop pair for a no-op. Extracted from
+        ``_launch_xcloud`` to keep that method under the line cap.
+        """
+        if self._edge_browser.is_installed:
+            return None
+        logger.warning(
+            "[LauncherService] xCloud launch aborted — Edge not installed",
+        )
+        await emit_stage(
+            self._bus,
+            i18n_key="toasts.launcher.browserRequired",
+            game_title=ctx.game_key,
+            severity="error",
+            priority="normal",
+        )
+        return Result(
+            success=False, error="edge_not_installed", store=ctx.store,
+        )
+
     async def _launch_xcloud(self, ctx: LaunchContext) -> Result:
         """xCloud streaming path — Edge kiosk mode on the Xbox URL."""
         from unifideck.core.types.events import Events
@@ -248,23 +306,9 @@ class LauncherService:
         store = ctx.store
         game_id = ctx.game_id
 
-        # Fail fast with a clear reason when Edge isn't installed —
-        # xCloud streaming requires it. Checked before GAME_LAUNCHED so
-        # we don't emit a launch/stop pair for a no-op.
-        if not self._edge_browser.is_installed:
-            logger.warning(
-                "[LauncherService] xCloud launch aborted — Edge not installed",
-            )
-            await emit_stage(
-                self._bus,
-                i18n_key="toasts.launcher.browserRequired",
-                game_title=ctx.game_key,
-                severity="error",
-                priority="normal",
-            )
-            return Result(
-                success=False, error="edge_not_installed", store=store,
-            )
+        edge_abort = await self._xcloud_edge_check(ctx)
+        if edge_abort is not None:
+            return edge_abort
 
         await self._bus.emit(
             Events.GAME_LAUNCHED,

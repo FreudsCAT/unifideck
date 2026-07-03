@@ -106,7 +106,13 @@
     "downloadingLabel": "Téléchargement en cours...",
     "finalizingInstallation": "Finalisation de l'installation...",
     "speedMbps": "{{speed}} Mo/s",
-    "etaLabel": "Temps restant : {{eta}}"
+    "etaLabel": "Temps restant : {{eta}}",
+    "preparingMessage": "Initialisation du préfixe et synchronisation des sauvegardes cloud...",
+    "preparingLabel": "Configuration du jeu...",
+    "installingViaUpcLabel": "Installation via Ubisoft Connect",
+    "extractingMessage": "Extraction des fichiers...",
+    "verifyingMessage": "Vérification des fichiers... {{pct}}%",
+    "installingViaUpcMessage": "Suivez la fenêtre Ubisoft Connect pour terminer l'installation..."
   },
   "cloudSave": {
     "title": "Conflit de sauvegardes cloud",
@@ -122,7 +128,11 @@
     "toastUsingLocalTitle": "Utilisation des sauvegardes locales",
     "toastUsingLocalBody": "Téléchargement des sauvegardes locales pour {{game}}",
     "toastErrorTitle": "Erreur",
-    "toastErrorBody": "Échec de la résolution du conflit"
+    "toastErrorBody": "Échec de la résolution du conflit",
+    "filesSize": "{{count}} fichiers · {{size}}",
+    "uploadBlockedEmpty": "Envoi vers le cloud ignoré pour {{game}} — aucune sauvegarde locale trouvée",
+    "uploadSkippedTitle": "Envoi vers le cloud ignoré",
+    "uploadSkippedBody": "Aucune sauvegarde locale à envoyer pour l'instant pour {{game}}."
   },
   "storeConnections": {
     "title": "CONNEXIONS AUX BOUTIQUES",
@@ -302,7 +312,20 @@
       "cloudSyncDownFailed": "Échec du téléchargement des sauvegardes cloud pour {{store}} ({{error}}). Jeu avec sauvegardes locales.",
       "cloudSyncUpFailed": "Échec de l'envoi des sauvegardes cloud pour {{store}} ({{error}}). Votre progression est uniquement sauvegardée localement.",
       "errorCircuitBreakerOpen": "{{game_key}} a échoué à démarrer {{count}} fois récemment. Suspensions des lancements automatiques.",
-      "launcherError": "Impossible de lancer {{game_key}} ({{error_code}}). Consultez les journaux pour les détails."
+      "launcherError": "Impossible de lancer {{game_key}} ({{error_code}}). Consultez les journaux pour les détails.",
+      "downloadingProton": "Téléchargement de Proton — cela peut prendre quelques minutes...",
+      "downloadingRuntime": "Téléchargement du Steam Runtime — le premier lancement peut prendre quelques minutes...",
+      "installingUbisoft": "Installation via Ubisoft Connect",
+      "installingUbisoftMessage": "Ouverture d'Ubisoft Connect — démarrez l'installation depuis la fenêtre du lanceur.",
+      "protonReadyBody": "{{version}} est prêt à l'emploi",
+      "protonReadyTitle": "Proton prêt",
+      "protonSwitchedTo": "Utilisation de {{version}} désormais",
+      "signingInUbisoft": "Connexion à Ubisoft Connect",
+      "signingInUbisoftMessage": "Ouverture d'Ubisoft Connect — connectez-vous, puis revenez.",
+      "ubisoftPrefixNotReady": "Ubisoft Connect n'est pas prêt",
+      "ubisoftPrefixNotReadyMessage": "Impossible de préparer le préfixe Ubisoft Connect pour ce jeu. Réessayez l'installation ; si l'échec persiste, relancez une synchronisation de la bibliothèque.",
+      "ubisoftLaunchIdMissing": "Ouverture d'Ubisoft Connect",
+      "ubisoftLaunchIdMissingMessage": "Impossible de résoudre l'ID de lancement de ce jeu — ouverture d'Ubisoft Connect pour que vous puissiez le démarrer depuis votre bibliothèque. Relancez une synchronisation de la bibliothèque pour corriger le lancement direct."
     },
     "updateComplete": "Mise à jour terminée !",
     "updateCompleteMessage": "{{title}} a été mis à jour.",
@@ -323,7 +346,15 @@
     "library": {
       "_comment": "Toasts emitted by SyncService when a per-store library sync fails. The retry button triggers a fire-and-forget refresh via the unifideck://refresh-library/<store> verb; the user doesn't wait for the result inline, the Library view picks it up through its SYNC_PROGRESS subscription.",
       "syncStoreFailed": "Impossible de rafraîchir la bibliothèque {{store}} ({{error}}). Votre bibliothèque existante reste visible."
-    }
+    },
+    "cloudPullStarted": "Téléchargement de la sauvegarde cloud…",
+    "cloudPushStarted": "Téléversement de la sauvegarde locale…",
+    "cloudSavePathFailed": "Impossible de définir l'emplacement de sauvegarde",
+    "cloudSavePathSet": "Emplacement de sauvegarde mis à jour",
+    "cloudPullDone": "Sauvegarde cloud téléchargée",
+    "cloudPullFailed": "Échec du téléchargement de la sauvegarde cloud",
+    "cloudPushDone": "Sauvegarde locale téléversée",
+    "cloudPushFailed": "Échec du téléversement de la sauvegarde locale"
   },
   "uninstallModal": {
     "title": "Confirmer la désinstallation",
@@ -460,7 +491,8 @@
       "support": "Support",
       "install": "Installer",
       "uninstall": "Désinstaller",
-      "cancel": "Annuler"
+      "cancel": "Annuler",
+      "achievements": "Succès"
     },
     "labels": {
       "store": "Boutique :",
@@ -485,7 +517,8 @@
       "unsupported": "NON SUPPORTÉ",
       "unknown": "INCONNU"
     },
-    "failedToLoadMetadata": "Échec du chargement des métadonnées"
+    "failedToLoadMetadata": "Échec du chargement des métadonnées",
+    "lastSession": "Dernière session : {{names}} débloqué(s)"
   },
   "gameDetailsSettings": {
     "title": "VUE DU JEU",
@@ -551,7 +584,8 @@
     "cancel": "Annuler",
     "working": "Traitement…",
     "loading": "Chargement…",
-    "free": "gratuit"
+    "free": "gratuit",
+    "close": "Fermer"
   },
   "info": {
     "expandDetails": "Afficher les détails",
@@ -610,13 +644,47 @@
     "cancelConfirmBody": "Êtes-vous sûr de vouloir annuler le téléchargement de {{title}} ? Les fichiers partiels seront supprimés.",
     "cancelConfirmConfirm": "Annuler le téléchargement",
     "cancelConfirmCancel": "Poursuivre le téléchargement",
-    "playOnCloud": "Jouer sur le Cloud"
+    "playOnCloud": "Jouer sur le Cloud",
+    "cloudSave": {
+      "autoPullOn": "Les sauvegardes cloud se téléchargent automatiquement au lancement.",
+      "close": "Fermer",
+      "download": "Télécharger la sauvegarde cloud",
+      "filesCount": "{{count}} fichiers",
+      "label": "Sauvegardes cloud",
+      "menuTitle": "Sauvegardes cloud — {{game}}",
+      "noCloudData": "Inconnu",
+      "noCloudSupport": "Pas de prise en charge des sauvegardes cloud",
+      "setLocation": "Définir l'emplacement de sauvegarde",
+      "setLocationHint": "Choisissez le dossier où ce jeu stocke ses sauvegardes.",
+      "setLocationTitle": "Choisir le dossier de sauvegarde de ce jeu",
+      "statusCloudAvailable": "Sauvegarde cloud disponible",
+      "statusNoSaves": "Pas de sauvegardes locales",
+      "statusSyncing": "Synchronisation des sauvegardes cloud…",
+      "statusUnresolved": "Emplacement de sauvegarde introuvable — la synchronisation pourrait ne pas fonctionner pour ce jeu.",
+      "unresolvedHint": "Lancez le jeu une fois pour que nous puissions détecter son dossier de sauvegarde, ou définissez l'emplacement manuellement.",
+      "upload": "Téléverser la sauvegarde locale"
+    },
+    "exe": {
+      "browse": "Parcourir…",
+      "changeFailed": "Impossible de modifier l'exécutable",
+      "changed": "Exécutable modifié",
+      "defaultTag": "(par défaut)",
+      "menuItem": "Modifier l'exécutable…",
+      "reset": "Réinitialiser à l'exécutable par défaut",
+      "resetButton": "Réinitialiser",
+      "subtitle": "Choisissez le fichier avec lequel lancer ce jeu (ex. contourner un lanceur et lancer le jeu directement). Le dossier de travail et les sauvegardes cloud ne sont pas affectés.",
+      "title": "Modifier l'exécutable — {{game}}",
+      "unavailable": "Impossible de lire le dossier de ce jeu."
+    }
   },
   "playMeta": {
     "spaceRequired": "Espace requis",
     "installedSize": "Taille installée",
     "lastPlayed": "Dernière partie",
-    "neverPlayed": "Jamais joué"
+    "neverPlayed": "Jamais joué",
+    "hoursShort": "h",
+    "minutesShort": "m",
+    "played": "Jouées"
   },
   "downloads": {
     "title": "Téléchargements",
@@ -739,7 +807,8 @@
       "permission_denied": "Permission refusée",
       "cancelled": "Annulé",
       "unknown": "Erreur inattendue"
-    }
+    },
+    "unavailableNativeDep": "Les sauvegardes cloud sont désactivées sur ce système — son Python ({{python}}) ne dispose pas d'un composant requis. Vos sauvegardes locales ne sont pas affectées ; recréez/réinstallez le plugin après une mise à jour du système pour restaurer la synchronisation."
   },
   "launchLogs": {
     "_comment": "Chaînes pour LaunchLogsModal. Le modal s'ouvre à partir de l'action de notification unifideck://show-logs/<launch_id>, associée aux notifications d'échec du lanceur (circuit breaker + LauncherError). Lit les journaux archivés par lancement depuis ~/.local/share/unifideck/launches/<launch_id>.log et les affiche avec un code couleur basé sur le niveau.",
@@ -853,5 +922,28 @@
     "typeReinstall": "Réinstallation",
     "typeUpdate": "Mise à jour vers",
     "updateButton": "Mettre à jour vers la v{{version}}"
+  },
+  "achievements": {
+    "unlockedTitle": "Succès débloqué",
+    "unlockedBody": "{{name}}"
+  },
+  "achievementsModal": {
+    "title": "Succès",
+    "progress": "{{unlocked}} / {{total}} ({{percent}}%)",
+    "refresh": "Actualiser",
+    "close": "Fermer",
+    "loading": "Chargement des succès…",
+    "empty": "Ce jeu n'a aucun succès.",
+    "hidden": "Succès caché",
+    "unlockedOn": "Débloqué le {{date}}",
+    "error": "Impossible de charger les succès.",
+    "errorOffline": "Connectez-vous à Internet pour voir les succès.",
+    "errorAuth": "Connectez-vous à la boutique de ce jeu pour voir les succès.",
+    "errorUnavailable": "Les succès ne sont pas disponibles pour ce jeu."
+  },
+  "collectionSettings": {
+    "title": "COLLECTIONS STEAM",
+    "enabled": "Collections activées",
+    "disabled": "Collections désactivées"
   }
 }

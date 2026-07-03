@@ -52,7 +52,7 @@ function transform(app: SteamApp): UnifideckGame {
     isInstalled: !!app.installed,
     isShortcut: !!app.is_shortcuts_app || !!app.BIsShortcut?.(),
     lastPlayed: app.rt_last_time_played || 0,
-    playtimeMinutes: parseInt(app.minutes_playtime_forever || "0", 10),
+    playtimeMinutes: app.minutes_playtime_forever || 0,
   };
 }
 

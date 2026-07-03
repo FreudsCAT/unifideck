@@ -24,4 +24,3 @@ export { ForceSyncModal } from "./ForceSyncModal";
 export { ChromiumInstallModal } from "./ChromiumInstallModal";
 export { PickStorageModal, pickStorageForInstall } from "./PickStorageModal";
 export { StoragePathPicker } from "./StoragePathPicker";
-export { ToastEventListener } from "./ToastEventListener";

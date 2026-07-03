@@ -28,6 +28,12 @@ export type ShortcutLaunchContext = {
   appid_unsigned?: number;
   launch_wait_ms?: number;
   is_linux_runtime?: boolean;
+  /** True when `tool_name` equals Steam's global default
+   *  (`CompatToolMapping["0"]`) — a distro/system default (e.g.
+   *  Bazzite's "Proton-CachyOS Latest") rather than an explicit
+   *  per-game Force-Compat choice, so it must not be adopted as a
+   *  per-game Proton override. */
+  is_global_default?: boolean;
   launcher_path?: string;
   current_launch_options?: string;
   saved_proton_tool?: string;

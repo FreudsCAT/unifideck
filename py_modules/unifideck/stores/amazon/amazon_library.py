@@ -145,6 +145,14 @@ def merge_install_status(
         if info is None:
             merged.append(game)
             continue
+        install_path = info.get("path")
+        # Verify the files are on disk. nile's installed.json can outlive the
+        # directory (e.g. after "Delete all data" or a manual delete); without
+        # this the next sync re-marks the game installed and Steam shows PLAY
+        # for a game with no files. Treat a missing dir as not-installed.
+        if install_path and not Path(install_path).is_dir():
+            merged.append(game)
+            continue
         merged.append(
             Game(
                 app_id=game.app_id,
@@ -152,7 +160,7 @@ def merge_install_status(
                 store_game_id=game.store_game_id,
                 title=game.title,
                 installed=True,
-                install_path=info.get("path"),
+                install_path=install_path,
                 exe_path=game.exe_path,
                 icon_url=game.icon_url,
                 hero_url=game.hero_url,

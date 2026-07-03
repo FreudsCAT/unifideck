@@ -1,15 +1,14 @@
 /**
- * AuthContext — per-store auth status + actions.
+ * AuthContext — React wrapper around the boot-time AuthStore.
  *
- * Exposes :
- *  - statuses: `Record<StoreId, StoreStatus>` (connected /
- *    disconnected / expired / error)
- *  - startAuth(store) — opens OAuth flow
- *  - logout(store) — clears stored credentials
- *  - logoutAll() — wipe every store at once
+ * The heavy lifting (initial fetch, EventBus subscriptions for
+ * auth status changes) now lives in `stores/auth-store.ts` and
+ * runs independently of QAM mount.
  *
- * Listens to AUTH_COMPLETE / AUTH_FAILED / LOGOUT_COMPLETE
- * to update statuses without polling.
+ * This context provides:
+ *   - Reactive `statuses` via `useSyncExternalStore`
+ *   - User-initiated actions: `startAuth`, `logout`, `logoutAll`
+ *   - `notifyConnected` — synchronous bypass for `useStoreAuth`
  */
 import {
   createContext,
@@ -17,54 +16,12 @@ import {
   ReactNode,
   useCallback,
   useContext,
-  useEffect,
-  useState,
+  useSyncExternalStore,
 } from "react";
-import { call } from "@decky/api";
-import { useRPCMutation, unwrapRpcEnvelope } from "../api/useRPC";
+import { useRPCMutation } from "../api/useRPC";
 import { rpcRoutes } from "../api/rpc-routes";
-import { useEventBus } from "../api/event-bus-client";
-import { Events } from "../types/events";
-import type { AuthResult, Result, StoreId, StoreStatus } from "../types/api";
-
-type StatusMap = Partial<Record<StoreId, StoreStatus>>;
-
-// Started by `prefetchAuthStatus()` — called inside `definePlugin`
-// where Decky's RPC bridge is guaranteed ready. AuthProvider awaits
-// this so statuses are available before the first QAM paint.
-let _prefetchPromise: Promise<StatusMap> | null = null;
-let _prefetchResolve: ((m: StatusMap) => void) | null = null;
-
-function _parseStatuses(raw: unknown): StatusMap {
-  // Unwrap the RPC envelope ({success, data}) — call() returns
-  // the raw envelope, unlike useRPC which unwraps automatically.
-  const data = unwrapRpcEnvelope(raw);
-  const arr: unknown[] = Array.isArray(data) ? data : [];
-  const map: StatusMap = {};
-  for (const entry of arr) {
-    if (entry && typeof entry === "object") {
-      const e = entry as Record<string, unknown>;
-      const id = e.store_id as StoreId | undefined;
-      if (id) {
-        map[id] = e.available ? "connected" : "disconnected";
-      }
-    }
-  }
-  return map;
-}
-
-/** Call inside `definePlugin` to kick off the auth status fetch before
- *  the QAM is ever opened. Safe to call multiple times — subsequent
- *  calls are no-ops. */
-export function prefetchAuthStatus(): void {
-  if (_prefetchPromise) return;
-  _prefetchPromise = new Promise<StatusMap>((resolve) => {
-    _prefetchResolve = resolve;
-  });
-  call<[], unknown>(rpcRoutes.checkStoreStatus)
-    .then((raw) => _prefetchResolve!(_parseStatuses(raw)))
-    .catch(() => _prefetchResolve!({}));
-}
+import { authStore, type StatusMap } from "../stores/auth-store";
+import type { AuthResult, Result, StoreId } from "../types/api";
 
 /** Auth context value. */
 interface AuthContextValue {
@@ -82,35 +39,15 @@ interface AuthContextValue {
 const Ctx = createContext<AuthContextValue | null>(null);
 
 /**
- * Provider that tracks per-store auth status.
- * Re-evaluates on `AUTH_COMPLETE`, `LOGOUT_COMPLETE`,
- * `AUTH_FAILED` and `ACCOUNT_SWITCHED` events so the
- * UI never shows a stale Connect / Disconnect badge.
+ * Provider that tracks per-store auth status. State comes from
+ * the boot-time `authStore` singleton; user-initiated mutations
+ * stay in the React layer.
  */
 export const AuthProvider: FC<{ children: ReactNode }> = ({ children }) => {
-  const [statuses, setStatuses] = useState<StatusMap>({});
-
-  useEffect(() => {
-    let cancelled = false;
-    // Seed immediately from the prefetch (started in definePlugin)
-    // so the UI paints with known status without a 1-2s delay.
-    if (_prefetchPromise) {
-      _prefetchPromise.then((map) => {
-        if (!cancelled) setStatuses(map);
-      });
-    }
-    // Always make a fresh call to get the latest status (auth may
-    // have changed since boot). The seed above prevents a flash of
-    // empty/disconnected buttons while this resolves.
-    call<[], unknown>(rpcRoutes.checkStoreStatus)
-      .then((raw) => {
-        if (!cancelled) setStatuses(_parseStatuses(raw));
-      })
-      .catch(() => {});
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+  const { statuses, loading } = useSyncExternalStore(
+    authStore.subscribe,
+    authStore.getSnapshot,
+  );
 
   // RPC mutations
   const startMut = useRPCMutation<[StoreId, "start"], AuthResult>(
@@ -120,25 +57,6 @@ export const AuthProvider: FC<{ children: ReactNode }> = ({ children }) => {
     rpcRoutes.storeAuth,
   );
   const logoutAllMut = useRPCMutation<[], Result>(rpcRoutes.clearStoreAuths);
-
-  // Bus reactions — use the canonical STORE_* names from
-  // `Events`. The legacy AUTH_COMPLETE / AUTH_FAILED /
-  // LOGOUT_COMPLETE aliases never existed on the bus so the
-  // old code silently never updated status.
-  useEventBus(Events.STORE_AUTH_COMPLETE, (payload) => {
-    const store = payload.store as StoreId | undefined;
-    if (store) setStatuses((s) => ({ ...s, [store]: "connected" }));
-  });
-
-  useEventBus(Events.STORE_AUTH_FAILED, (payload) => {
-    const store = payload.store as StoreId | undefined;
-    if (store) setStatuses((s) => ({ ...s, [store]: "error" }));
-  });
-
-  useEventBus(Events.STORE_LOGOUT, (payload) => {
-    const store = payload.store as StoreId | undefined;
-    if (store) setStatuses((s) => ({ ...s, [store]: "disconnected" }));
-  });
 
   const startAuth = useCallback(
     (store: StoreId) => startMut.mutate(store, "start"),
@@ -152,19 +70,18 @@ export const AuthProvider: FC<{ children: ReactNode }> = ({ children }) => {
     [logoutMut],
   );
 
-  /** Logout all. */
   const logoutAll = useCallback(async () => {
     await logoutAllMut.mutate();
-    setStatuses({});
+    authStore.clearAll();
   }, [logoutAllMut]);
 
   const notifyConnected = useCallback((store: StoreId) => {
-    setStatuses((s) => ({ ...s, [store]: "connected" }));
+    authStore.notifyConnected(store);
   }, []);
 
   const value: AuthContextValue = {
     statuses,
-    loading: Object.keys(statuses).length === 0,
+    loading,
     startAuth,
     logout,
     logoutAll,

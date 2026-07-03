@@ -65,6 +65,39 @@ export interface Game {
   deck_rating?: DeckRating;
 }
 
+/** One achievement (definition + this user's unlock status). */
+export interface Achievement {
+  key: string;
+  name: string;
+  description: string;
+  image_unlocked: string;
+  image_locked: string;
+  hidden: boolean;
+  unlocked: boolean;
+  /** Epoch seconds the achievement was unlocked, or null if still locked. */
+  unlocked_at: number | null;
+  rarity?: number | null;
+}
+
+/** A game's achievements + summary (from `get_game_achievements`). */
+export interface GameAchievements {
+  store: StoreId;
+  game_id: string;
+  total: number;
+  unlocked: number;
+  percent: number;
+  achievements: Achievement[];
+}
+
+/** Last play session's unlock summary (from `get_last_session_achievements`). */
+export interface LastSessionAchievements {
+  names: string[];
+  unlocked: number;
+  total: number;
+  /** Epoch seconds the session ended. */
+  at: number;
+}
+
 /** Common wrapper for every RPC method's response. */
 export interface Result {
   success: boolean;

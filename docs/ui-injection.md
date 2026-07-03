@@ -1,6 +1,8 @@
 # UI Injection Guide — Unifideck (Steam Deck / Decky Loader)
 
-This document describes the **working** UI injection methods used by Unifideck as of 2026-02.
+This document describes the UI injection methods used by Unifideck. The React-tree component injection (§1) is current. **Section 2 (native Play-button hiding) has been superseded:** the async CDP hide was removed in 2026-06 in favour of a synchronous scoped-CSS marker — see the note at the top of §2.
+
+_Last reviewed: 2026-06-22._
 
 ---
 
@@ -112,11 +114,17 @@ if (!alreadyHas) {
 
 ---
 
-## 2. CDP Native Play Button Hiding (DOM Manipulation)
+## 2. Native Play Button Hiding
 
-Used for: **Hiding Steam's native Play/Install button** for uninstalled Unifideck games.
+> **⚠️ Superseded (2026-06).** The CDP / DOM-manipulation approach described in the rest of this section is **no longer used**. The RPC methods `hide_native_play_section` / `unhide_native_play_section` and the frontend `chainCDPOp`/`pendingCDPOps` plumbing have been **removed**.
+>
+> **Current approach (synchronous, no flash):** during the `AppDetailsPatch` React-tree patch, the `InnerContainer` is tagged with the marker class `HIDE_NATIVE_PLAY_MARKER` (`"unifideck-hide-native-play"`, defined in `src/components/play/play.css.ts`). `PlaySectionWrapper` renders `<style>{nativeAppDetailsHideCss()}</style>`, whose rules hide the native row **only inside a marked container**. Because the marker and the style are applied in the same synchronous render pass, there is no async round-trip and no flash of the native UI. The marker is only applied for managed (non-Steam) shortcuts, so native Steam app details are left untouched.
+>
+> **Mode gotcha:** desktop vs Gaming-Mode (BPM/gamepadui) use different AppDetails class names — `nativeAppDetailsHideCss()` emits a rule for both (`playSectionClasses.Container` desktop; `basicAppDetailsSectionStylerClasses.PlaySection` / `.AppDetailsContainer` for the Deck).
+>
+> The CDP material below is retained as a general reference for cross-process CSS/DOM injection (still relevant for the xCloud streaming flows in `py_modules/unifideck/cdp/`), but it does **not** reflect how the play row is hidden today.
 
-### Why CDP?
+### Legacy: Why CDP was used
 
 - `@decky/ui`'s `playSectionClasses.PlayBar` resolves to a CSS class (e.g. `_3fLo166MlaNqP8r8tTyRz`)
   that **does not match any DOM element** — the class mappings are stale/outdated.
@@ -196,13 +204,13 @@ document.querySelector("[data-unifideck-hidden-native=" + appId + "]");
 
 ## 3. Key Files
 
-| File                                    | Purpose                                                                |
-| --------------------------------------- | ---------------------------------------------------------------------- |
-| `src/index.tsx`                         | Route patcher, component injection into InnerContainer                 |
-| `src/components/PlayButtonOverride.tsx` | PlaySectionWrapper + CDP hide/unhide wrappers                          |
-| `src/components/GameInfoPanel.tsx`      | Metadata panel (compat badge, info, synopsis, nav)                     |
-| `py_modules/unifideck/cdp_inject.py`    | CDP WebSocket client, JS execution, hide/unhide                        |
-| `main.py`                               | Backend RPC (`hide_native_play_section`, `unhide_native_play_section`) |
+| File                                          | Purpose                                                                       |
+| --------------------------------------------- | ----------------------------------------------------------------------------- |
+| `src/views/AppDetailsPatch.tsx`               | Route patcher, component injection into InnerContainer + marker class          |
+| `src/components/play/PlaySectionWrapper.tsx`  | Custom PlaySection; renders `nativeAppDetailsHideCss()` scoped hide `<style>`   |
+| `src/components/play/play.css.ts`             | `HIDE_NATIVE_PLAY_MARKER`, `nativeAppDetailsHideCss()`, focus styles            |
+| `src/components/info/GameInfoPanel.tsx`       | Metadata panel (compat badge, info, synopsis, nav)                             |
+| `py_modules/unifideck/cdp/cdp_inject.py`      | CDP WebSocket client (now used for xCloud streaming flows, not play hiding)    |
 
 ---
 

@@ -7,37 +7,151 @@
  * two Steam globals not abstracted by `SteamBridge` because the
  * collection APIs are too coupled to Steam's React tree to project.
  */
-import { getUnifideckTabs, type UnifideckTab } from "./tab-container";
+import {
+  getUnifideckTabs,
+  isTabMasterInstalled,
+  type UnifideckTab,
+} from "./tab-container";
 import { runFilters } from "../library-filters";
 import type { SteamAppOverview } from "../../types/steam";
 
 const COLLECTION_PREFIX = "[Unifideck] ";
+// Non-Steam shortcuts (ours + the user's) carry this app_type; exclude
+// them so we never feed Ubisoft titles back into the Steam-owned filter.
+const NON_STEAM_SHORTCUT_APP_TYPE = 1073741824;
 
 /**
- * Set by `deleteAllUnifideckCollections` so the initial-load sync in
- * `startCollectionManager` doesn't immediately recreate the collections
- * the user just wiped. Cleared on the next `unifideck-sync-completed` —
- * a fresh library sync is the explicit signal collections are wanted
- * again. Lives in localStorage so it survives the Steam restart that
- * cleanup prompts for.
+ * Master opt-in for `[Unifideck]` Steam Collections. Default OFF — except
+ * when TabMaster is installed, where it defaults ON (TabMaster suppresses
+ * our own injected library tabs, so collections are the only organization
+ * we can offer those users).
+ *
+ * Steam keeps ALL user collections in one CEF-localStorage blob and
+ * auto-syncs that whole namespace to Steam Cloud, so any collection we
+ * create propagates to the user's other devices — even ones without the
+ * plugin — and into Desktop mode. There is no per-collection "local only"
+ * flag. So collections are opt-in: most users get the in-React-tree
+ * library tabs (which sync nowhere) and never touch the cloud.
+ *
+ * Stored as "1"/"0" so an explicitly-chosen value is distinguishable
+ * from "never set" (the grandfather migration below relies on that).
+ * `setCollectionsEnabled` broadcasts `COLLECTIONS_ENABLED_EVENT` so the
+ * QAM toggle and the running manager stay in sync without a restart.
  */
-const SUPPRESSION_KEY = "unifideck.collections.suppressed";
+export const COLLECTIONS_ENABLED_KEY = "unifideck:collections.enabled";
+export const COLLECTIONS_ENABLED_EVENT = "unifideck:collections-enabled-change";
 
-function isSuppressed(): boolean {
+/**
+ * Grandfather marker. Before collections became opt-in they were created
+ * for everyone, so on the first run of this build we keep them for users
+ * who already have them (see `migrateGrandfatherExisting`). Set once so
+ * the detection never re-runs.
+ */
+const COLLECTIONS_MIGRATED_KEY = "unifideck:collections.migrated";
+
+/**
+ * One-time-cleanup marker for the OFF state. When collections are off we
+ * delete any leftover `[Unifideck]` collections exactly ONCE, then leave
+ * the blob alone. Cleaning on every boot would thrash against a *different*
+ * device that has them enabled and keeps re-creating them — collections
+ * are account-global, so an OFF device can't truly hide what an ON device
+ * insists on creating.
+ */
+const COLLECTIONS_CLEANED_KEY = "unifideck:collections.cleaned";
+
+export function isCollectionsEnabled(): boolean {
   try {
-    return window.localStorage.getItem(SUPPRESSION_KEY) === "1";
+    const v = window.localStorage.getItem(COLLECTIONS_ENABLED_KEY);
+    if (v === "1") return true;
+    if (v === "0") return false;
+  } catch {
+    /* fall through to the default */
+  }
+  // No explicit choice yet — default ON when TabMaster is installed (our
+  // own tabs are suppressed under it), OFF for everyone else. TabMaster
+  // detection is synchronous (reads DeckyPluginLoader), so this is safe to
+  // call before the collection store hydrates.
+  return isTabMasterInstalled();
+}
+
+/** True once the user (or the grandfather migration) has chosen a value. */
+function isEnabledExplicit(): boolean {
+  try {
+    return window.localStorage.getItem(COLLECTIONS_ENABLED_KEY) != null;
   } catch {
     return false;
   }
 }
 
-function setSuppressed(on: boolean): void {
+export function setCollectionsEnabled(on: boolean): void {
   try {
-    if (on) window.localStorage.setItem(SUPPRESSION_KEY, "1");
-    else window.localStorage.removeItem(SUPPRESSION_KEY);
+    window.localStorage.setItem(COLLECTIONS_ENABLED_KEY, on ? "1" : "0");
   } catch {
     /* localStorage unavailable — worst case is pre-fix behavior */
   }
+  try {
+    window.dispatchEvent(
+      new CustomEvent(COLLECTIONS_ENABLED_EVENT, { detail: on }),
+    );
+  } catch {
+    /* CEF can deny CustomEvent in rare half-loaded states */
+  }
+}
+
+function isCleaned(): boolean {
+  try {
+    return window.localStorage.getItem(COLLECTIONS_CLEANED_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function setCleaned(on: boolean): void {
+  try {
+    if (on) window.localStorage.setItem(COLLECTIONS_CLEANED_KEY, "1");
+    else window.localStorage.removeItem(COLLECTIONS_CLEANED_KEY);
+  } catch {
+    /* ignore */
+  }
+}
+
+function hasMigrated(): boolean {
+  try {
+    return window.localStorage.getItem(COLLECTIONS_MIGRATED_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function setMigrated(): void {
+  try {
+    window.localStorage.setItem(COLLECTIONS_MIGRATED_KEY, "1");
+  } catch {
+    /* ignore */
+  }
+}
+
+/**
+ * One-time grandfather migration. Collections used to be created for
+ * everyone, so users already relying on them should keep them. On the
+ * first run of the opt-in build, if the user has never chosen the setting
+ * AND `[Unifideck]` collections already exist in the store, default this
+ * account to ENABLED so we don't pull away tabs they use. Fresh installs
+ * (no such collections) stay OFF. Writes localStorage directly — NOT via
+ * `setCollectionsEnabled` — so it doesn't fire the toggle event (this is a
+ * silent default, not a user action). Caller must ensure the store is
+ * hydrated first so the collection scan is meaningful.
+ */
+function migrateGrandfatherExisting(cs: CollectionStore): void {
+  if (hasMigrated()) return;
+  if (!isEnabledExplicit() && snapshotUnifideckCollections(cs).length > 0) {
+    try {
+      window.localStorage.setItem(COLLECTIONS_ENABLED_KEY, "1");
+    } catch {
+      /* ignore — falls back to OFF, recoverable via the QAM toggle */
+    }
+  }
+  setMigrated();
 }
 
 interface AppStoreOverview {
@@ -194,7 +308,7 @@ async function syncTab(
 
 /** Sync every `[Unifideck]` collection to current tab filters. */
 export async function syncUnifideckCollections(): Promise<void> {
-  if (isSuppressed()) return;
+  if (!isCollectionsEnabled()) return;
   if (!isCollectionsAvailable()) return;
   await cleanupStaleCollections();
   const cs = getCollectionStore();
@@ -211,13 +325,40 @@ export async function syncUnifideckCollections(): Promise<void> {
 }
 
 /**
- * Delete every `[Unifideck]` collection and suppress re-creation until
- * the next library sync. Verifies the store actually dropped them
- * (deletes persist asynchronously and can race a Steam restart),
- * retrying leftovers a few times before giving up.
+ * Display names of every Steam game the user owns — installed or not —
+ * from Steam's "type-games" collection. Non-Steam shortcuts are excluded
+ * (see {@link NON_STEAM_SHORTCUT_APP_TYPE}). `appmanifest` only knows
+ * installed games, so this is the only way the backend learns about
+ * owned-but-not-installed Steam games.
+ */
+export function collectSteamOwnedGameTitles(): string[] {
+  const cs = getCollectionStore();
+  if (!cs) return [];
+  let allApps: SteamAppOverview[] = [];
+  try {
+    const games = cs.GetCollection("type-games");
+    allApps = (games?.allApps ?? []) as unknown as SteamAppOverview[];
+  } catch {
+    return [];
+  }
+  const titles = new Set<string>();
+  for (const a of allApps) {
+    if (!a || a.appid <= 0 || a.app_type === NON_STEAM_SHORTCUT_APP_TYPE) {
+      continue;
+    }
+    const name = a.display_name?.trim();
+    if (name) titles.add(name);
+  }
+  return Array.from(titles);
+}
+
+/**
+ * Delete every `[Unifideck]` collection. Verifies the store actually
+ * dropped them (deletes persist asynchronously and can race a Steam
+ * restart), retrying leftovers a few times before giving up. Re-creation
+ * is governed by the enabled flag / cleaned marker, not by this function.
  */
 export async function deleteAllUnifideckCollections(): Promise<void> {
-  setSuppressed(true);
   const cs = getCollectionStore();
   if (!cs) return;
   // Tag-based pass first — deterministic lookup for the current locale;
@@ -287,36 +428,99 @@ async function waitForCollections(timeoutMs = 30_000): Promise<boolean> {
 }
 
 /**
- * Subscribes to `unifideck-sync-completed` so collections are rebuilt
- * after every library sync. Returns a handle whose `remove()` detaches
- * the listener — call it from plugin teardown.
+ * Collection manager. Collections are opt-in ({@link isCollectionsEnabled}):
+ *
+ * - ON  → subscribe to `unifideck-sync-completed` and rebuild the
+ *   `[Unifideck]` collections after every library sync (original behavior).
+ * - OFF → delete any leftover `[Unifideck]` collections exactly once (see
+ *   {@link isCleaned}) and otherwise stay out of the way.
+ *
+ * On first run it grandfathers users who already have collections to ON
+ * (see {@link migrateGrandfatherExisting}). Reacts live to
+ * `COLLECTIONS_ENABLED_EVENT` (the QAM toggle) so flipping the setting
+ * takes effect without a Steam restart — turning it OFF deletes the
+ * collections immediately. `remove()` detaches every listener.
  */
 export function startCollectionManager(): CollectionManagerHandle {
+  let syncAttached = false;
   const onSync = () => {
-    // A fresh library sync means the user wants collections back —
-    // lift any post-cleanup suppression before rebuilding.
-    setSuppressed(false);
     void syncUnifideckCollections().catch((e) =>
       console.error("[Unifideck Collections] resync failed", e),
     );
   };
-  window.addEventListener("unifideck-sync-completed", onSync);
+  const attachSync = () => {
+    if (syncAttached) return;
+    window.addEventListener("unifideck-sync-completed", onSync);
+    syncAttached = true;
+  };
+  const detachSync = () => {
+    if (!syncAttached) return;
+    window.removeEventListener("unifideck-sync-completed", onSync);
+    syncAttached = false;
+  };
+
+  // Build/maintain collections for the ON state. `syncUnifideckCollections`
+  // self-guards on the enabled flag and store readiness, so this is safe to
+  // call eagerly.
+  const enabledSync = () =>
+    void syncUnifideckCollections().catch((e) =>
+      console.error("[Unifideck Collections] sync failed", e),
+    );
+
+  // Drop leftover collections for the OFF state, once.
+  const cleanupOnce = () => {
+    if (isCleaned()) return;
+    void deleteAllUnifideckCollections()
+      .then(() => setCleaned(true))
+      .catch((e) => console.error("[Unifideck Collections] cleanup failed", e));
+  };
+
+  // React to the QAM toggle without a restart.
+  const onEnabledChange = (e: Event) => {
+    const enabled = Boolean((e as CustomEvent<boolean>).detail);
+    if (enabled) {
+      // Opted back in — let a future opt-out clean up again, then rebuild.
+      setCleaned(false);
+      attachSync();
+      enabledSync();
+    } else {
+      // Opted out — collections are deleted immediately.
+      detachSync();
+      void deleteAllUnifideckCollections()
+        .then(() => setCleaned(true))
+        .catch((err) =>
+          console.error("[Unifideck Collections] disable cleanup failed", err),
+        );
+    }
+  };
+  window.addEventListener(COLLECTIONS_ENABLED_EVENT, onEnabledChange);
+
+  // Boot: wait for the store to hydrate, grandfather existing users, then
+  // apply the resolved ON/OFF state. We can only decide after migration
+  // (which needs the store), so the sync listener is attached here rather
+  // than synchronously — the initial sync below covers anything missed.
   void waitForCollections()
     .then((ready) => {
-      if (!ready) {
-        console.warn(
-          "[Unifideck Collections] store never became ready — skipping initial sync",
-        );
-        return;
+      const cs = ready ? getCollectionStore() : null;
+      if (cs) migrateGrandfatherExisting(cs);
+      if (isCollectionsEnabled()) {
+        attachSync();
+        if (ready) enabledSync();
+        else
+          console.warn(
+            "[Unifideck Collections] store never became ready — skipping initial sync",
+          );
+      } else if (ready) {
+        cleanupOnce();
       }
-      return syncUnifideckCollections();
     })
-    .catch((e) =>
-      console.error("[Unifideck Collections] initial sync failed", e),
-    );
+    .catch((e) => console.error("[Unifideck Collections] startup failed", e));
+
   return {
     resync: syncUnifideckCollections,
-    remove: () =>
-      window.removeEventListener("unifideck-sync-completed", onSync),
+    remove: () => {
+      detachSync();
+      window.removeEventListener(COLLECTIONS_ENABLED_EVENT, onEnabledChange);
+    },
   };
 }

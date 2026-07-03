@@ -19,7 +19,7 @@
  * `DialogButton` in another `Focusable` swallows the focus
  * target on this build of Decky.
  */
-import { FC, useState } from "react";
+import { CSSProperties, FC, useState } from "react";
 import { DialogButton } from "@decky/ui";
 import { useTranslation } from "react-i18next";
 import { useSync } from "../contexts/SyncContext";
@@ -28,6 +28,7 @@ import {
   LibrarySync,
   LanguageSelector,
   GameDetailsViewModeToggle,
+  CollectionsToggle,
   CleanupSection,
   PluginUpdater,
 } from "../components/settings";
@@ -37,6 +38,29 @@ type ActiveTab = "settings" | "downloads";
 
 /** Last-viewed tab persisted across QAM mount/unmount. */
 let persistentActiveTab: ActiveTab = "settings";
+
+/**
+ * Shared style for the two tab buttons.
+ *
+ * The QAM panel is narrow and each button is a fixed 50% (`flex: 1`), so the
+ * longest labels — French "Téléchargements" (15 chars), and longer still with
+ * the live "(NN%)" sync suffix — overran the button's rounded boundary. Tight
+ * horizontal padding plus a slightly smaller, *zoom-relative* font (`em`, so it
+ * scales with Steam's global UI scale at every resolution) gives the text room
+ * to fit; `nowrap` + `overflow: hidden` + `ellipsis` is the safety net so text
+ * is clipped *inside* the button (never spills past it) in the extreme case.
+ */
+const tabButtonStyle = (active: boolean): CSSProperties => ({
+  flex: 1,
+  minWidth: 0,
+  padding: "10px 6px",
+  fontSize: "0.9em",
+  whiteSpace: "nowrap",
+  overflow: "hidden",
+  textOverflow: "ellipsis",
+  fontWeight: active ? 600 : 400,
+  opacity: active ? 1 : 0.7,
+});
 
 /**
  * Root component of the Decky Loader Quick Access menu.
@@ -62,38 +86,35 @@ export const QuickAccessPanel: FC = () => {
       <div style={{ display: "flex", gap: 6, padding: "4px 8px 0" }}>
         <DialogButton
           onClick={() => setTab("settings")}
-          style={{
-            flex: 1,
-            minWidth: 0,
-            fontWeight: tab === "settings" ? 600 : 400,
-            opacity: tab === "settings" ? 1 : 0.7,
-          }}
+          style={tabButtonStyle(tab === "settings")}
         >
           {t("tabs.settings")}
         </DialogButton>
         <DialogButton
           onClick={() => setTab("downloads")}
-          style={{
-            flex: 1,
-            minWidth: 0,
-            fontWeight: tab === "downloads" ? 600 : 400,
-            opacity: tab === "downloads" ? 1 : 0.7,
-          }}
+          style={tabButtonStyle(tab === "downloads")}
         >
           {downloadsLabel}
         </DialogButton>
       </div>
-      {tab === "settings" && (
-        <>
-          <StoreConnections />
-          <LibrarySync />
-          <LanguageSelector />
-          <GameDetailsViewModeToggle />
-          <PluginUpdater />
-          <CleanupSection />
-        </>
-      )}
-      {tab === "downloads" && <DownloadsTab />}
+      {/* Spacer wrapper: Steam's PanelSection title carries a negative top
+          margin (it assumes it is the first child of the scroll container),
+          which otherwise pulls the first section header up into the tab
+          buttons above. Padding here pushes the content clear of the row. */}
+      <div style={{ paddingBlockStart: 12 }}>
+        {tab === "settings" && (
+          <>
+            <StoreConnections />
+            <LibrarySync />
+            <LanguageSelector />
+            <GameDetailsViewModeToggle />
+            <CollectionsToggle />
+            <PluginUpdater />
+            <CleanupSection />
+          </>
+        )}
+        {tab === "downloads" && <DownloadsTab />}
+      </div>
     </div>
   );
 };

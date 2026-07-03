@@ -22,8 +22,10 @@ import { call } from "@decky/api";
 import {
   type ShortcutLaunchContext,
   type ShortcutLaunchResult,
+  createTemporaryShortcut,
   getShortcutRunGameId,
   isShortcutAppRunning,
+  scheduleTemporaryShortcutCleanup,
 } from "../lib/steam-bridge";
 import { rpcRoutes } from "../api/rpc-routes";
 import { unwrapRpcEnvelope } from "../api/useRPC";
@@ -32,9 +34,10 @@ const RESTORE_POLL_DELAY_MS = 250;
 const RESTORE_START_DELAY_MS = 500;
 const RESTORE_TIMEOUT_MS = 5000;
 const SHORTCUT_REGISTRATION_POLL_DELAY_MS = 250;
-const SHORTCUT_REGISTRATION_TIMEOUT_MS = 5000;
 const AUTH_SHORTCUT_STORE_ID = "ubisoft:upc-auth";
 const AUTH_PREFIX_NAME = ".upc-auth";
+const LOG_TAG = "[UbisoftShortcutLaunch]";
+const SHORTCUT_DISPLAY_NAME = "Ubisoft Connect";
 
 /** Escape reg exp. */
 function escapeRegExp(value: string): string {
@@ -108,24 +111,30 @@ function isShortcutRegistered(appId: number): boolean {
   return Boolean(appStore()?.m_mapApps?.get?.(appId));
 }
 
-/** Wait for Steam to register a shortcut after the backend
- *  reports it has been written to shortcuts.vdf. */
+/** Wait (at most ``minimumDelayMs``) for Steam to register the
+ *  persistent shortcut in its in-memory app store.
+ *
+ *  Steam only loads ``shortcuts.vdf`` into ``appStore.m_mapApps`` at
+ *  startup, so a shortcut the backend just wrote this session never
+ *  appears here — there's no point polling a fixed timeout. We honour
+ *  only the backend's ``minimumDelayMs`` hint (to cover the narrow
+ *  window where Steam is still populating the map right after boot);
+ *  if it's still not registered the caller falls back to a temporary
+ *  shortcut created via ``AddShortcut``. */
 async function waitForShortcutRegistration(
   appId: number,
   minimumDelayMs = 0,
 ): Promise<void> {
-  if (minimumDelayMs <= 0 && isShortcutRegistered(appId)) return;
+  if (isShortcutRegistered(appId)) return;
+  if (minimumDelayMs <= 0) return;
   const startedAt = Date.now();
-  const timeoutMs = Math.max(SHORTCUT_REGISTRATION_TIMEOUT_MS, minimumDelayMs);
   await new Promise<void>((resolve) => {
     /** Poll. */
     const poll = (): void => {
-      const elapsed = Date.now() - startedAt;
-      if (elapsed >= minimumDelayMs && isShortcutRegistered(appId)) {
-        resolve();
-        return;
-      }
-      if (elapsed >= timeoutMs) {
+      if (
+        isShortcutRegistered(appId) ||
+        Date.now() - startedAt >= minimumDelayMs
+      ) {
         resolve();
         return;
       }
@@ -133,6 +142,59 @@ async function waitForShortcutRegistration(
     };
     window.setTimeout(poll, SHORTCUT_REGISTRATION_POLL_DELAY_MS);
   });
+}
+
+/** Launch a Ubisoft action (auth or install) via a freshly-created
+ *  throwaway shortcut. Used when the persistent "Ubisoft Connect"
+ *  shortcut isn't yet in Steam's in-memory app store — the first
+ *  session after the backend wrote it to ``shortcuts.vdf`` (Steam only
+ *  loads that file at startup). ``RunGame`` on the unregistered
+ *  persistent appid fails with Steam's "Game configuration unavailable"
+ *  modal; ``AddShortcut`` registers an entry immediately and returns a
+ *  real ``gameid``. The temp shortcut carries the same launch options,
+ *  so the launcher routes identically, and is removed once its session
+ *  ends. */
+async function launchViaTemporaryShortcut(
+  ctx: ShortcutLaunchContext,
+  launchOptions: string,
+): Promise<ShortcutLaunchResult> {
+  const steamApps = window.SteamClient?.Apps;
+  const launcherPath = ctx.launcher_path;
+  if (!steamApps?.RunGame || !launcherPath) {
+    return {
+      success: false,
+      error: "Steam launch APIs or launcher path unavailable",
+    };
+  }
+  const tempAppId = await createTemporaryShortcut({
+    appName: SHORTCUT_DISPLAY_NAME,
+    launcherPath,
+    launchOptions,
+    logTag: LOG_TAG,
+  });
+  if (tempAppId === null) {
+    return {
+      success: false,
+      error:
+        "Ubisoft Connect could not be prepared in Steam. " +
+        "Restart Steam once and try again.",
+    };
+  }
+  const alreadyRunning = isShortcutAppRunning(tempAppId);
+  try {
+    steamApps.SpecifyCompatTool?.(tempAppId, ctx.tool_name ?? "");
+    steamApps.SetShortcutLaunchOptions?.(tempAppId, launchOptions);
+    steamApps.RunGame(getShortcutRunGameId(tempAppId), "", -1, 100);
+    scheduleTemporaryShortcutCleanup(tempAppId, LOG_TAG);
+    return { success: true, already_running: alreadyRunning };
+  } catch (error) {
+    console.error(`${LOG_TAG} temp shortcut launch failed:`, error);
+    return {
+      success: false,
+      error:
+        error instanceof Error ? error.message : "Failed to launch shortcut",
+    };
+  }
 }
 
 /** Force-stop a shortcut launch via Steam's TerminateApp. */
@@ -244,9 +306,6 @@ export async function launchUbisoftInstallViaShortcut(
     appId,
   );
   await waitForShortcutRegistration(appId, ctx.launch_wait_ms ?? 0);
-  console.log(
-    "[UbisoftShortcutLaunch] shortcut registered, checking Steam APIs...",
-  );
   const steamApps = window.SteamClient?.Apps;
   if (!steamApps?.RunGame || !steamApps?.SetShortcutLaunchOptions) {
     console.error(
@@ -258,9 +317,25 @@ export async function launchUbisoftInstallViaShortcut(
     return { success: false, error: "Steam launch APIs unavailable" };
   }
 
-  const alreadyRunning = isShortcutAppRunning(appId);
   const originalOptions = ctx.current_launch_options ?? "";
   const tempOptions = buildTemporaryLaunchOptions(ctx, extraEnv, storeGameId);
+
+  // First session after the backend wrote this shortcut to shortcuts.vdf:
+  // Steam only loads that file into its in-memory app store at startup, so
+  // RunGame on the persistent appid fails with "Game configuration
+  // unavailable". Launch a throwaway shortcut instead (AddShortcut registers
+  // it immediately); Steam picks up the persistent entry on the next restart,
+  // after which the registered path below is used.
+  if (!isShortcutRegistered(appId)) {
+    console.log(
+      "[UbisoftShortcutLaunch] appId=%d not in Steam's app store; " +
+        "launching via temporary shortcut",
+      appId,
+    );
+    return launchViaTemporaryShortcut(ctx, tempOptions);
+  }
+
+  const alreadyRunning = isShortcutAppRunning(appId);
   console.log(
     "[UbisoftShortcutLaunch] RunGame(appId=%d, runGameId=%s, opts=%s)",
     appId,
@@ -316,6 +391,7 @@ export async function launchUbisoftAuthViaShortcut(): Promise<ShortcutLaunchResu
       : unwrapRpcEnvelope<{
           appid_unsigned?: number;
           launch_wait_ms?: number;
+          launcher_path?: string;
           error?: string;
         }>(rawAuth, {
           route: rpcRoutes.getUbisoftAuthShortcutContext,
@@ -344,6 +420,7 @@ export async function launchUbisoftAuthViaShortcut(): Promise<ShortcutLaunchResu
     {
       appid_unsigned: authCtx.appid_unsigned,
       launch_wait_ms: authCtx.launch_wait_ms,
+      launcher_path: authCtx.launcher_path,
     },
     // skipStateRestore: keep the canonical auth LaunchOptions on the
     // shortcut instead of wiping them back to empty after launch.

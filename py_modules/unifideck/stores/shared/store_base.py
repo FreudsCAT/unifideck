@@ -66,8 +66,8 @@ class StoreBase(ABC):
         """Logout."""
         ...
     @abstractmethod
-    async def get_library(self) -> list[Game] | None:
-        """Get library."""
+    async def get_library(self, *, force: bool = False) -> list[Game] | None:
+        """Get library (``force`` requests a cache-bypassing refresh)."""
         ...
 
     @abstractmethod

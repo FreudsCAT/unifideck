@@ -27,6 +27,7 @@ import { GameInfoCompatRow } from "./GameInfoCompatRow";
 import { GameInfoInfoRow } from "./GameInfoInfoRow";
 import { GameInfoSynopsisSection } from "./GameInfoSynopsisSection";
 import { GameInfoNavButtons } from "./GameInfoNavButtons";
+import { GameAchievementsSummary } from "./GameAchievementsSummary";
 
 interface Props {
   appId: number;
@@ -87,6 +88,13 @@ export const GameInfoPanel: FC<Props> = ({ appId }) => {
           onToggleSynopsis={() => setSynopsisOpen((v) => !v)}
         />
         <GameInfoInfoRow appId={appId} game={game} meta={meta} />
+        {game.store === "gog" && (
+          <GameAchievementsSummary
+            store={game.store}
+            gameId={game.id}
+            title={game.title}
+          />
+        )}
         {synopsisOpen && meta.description && (
           <GameInfoSynopsisSection description={meta.description} />
         )}

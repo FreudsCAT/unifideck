@@ -25,13 +25,38 @@ couldn't be written or read.
 """
 from __future__ import annotations
 
+import contextlib
+import contextvars
 import json
 import logging
 import time
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger(__name__)
+
+# When set (within a ``suppress_launcher_toasts`` scope), ``launcher_toast``
+# no-ops. Used by the install-time prefix warmup, which reuses the launch
+# path's prefix-init / compat / umu-runtime steps — those toast launch
+# progress ("first-time setup", "downloading runtime", ...) that is just
+# noise during a background install (the download row already shows a
+# "Setting up game…" state). A ContextVar keeps it scoped to the awaiting
+# task, so a concurrent real launch still toasts normally.
+_SUPPRESSED: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "launcher_toast_suppressed", default=False,
+)
+
+
+@contextlib.contextmanager
+def suppress_launcher_toasts() -> Iterator[None]:
+    """Suppress ``launcher_toast`` emits within this (task-scoped) block."""
+    token = _SUPPRESSED.set(True)
+    try:
+        yield
+    finally:
+        _SUPPRESSED.reset(token)
+
 
 EVENTS_FILE = Path("~/.local/share/unifideck/launcher_events.jsonl").expanduser()
 # The launcher only ever needs the most recent handful of stages; cap the
@@ -82,7 +107,12 @@ def launcher_toast(
     writes it straight to the bridge file. Use this from deep launch
     helpers (umu retry, compat/prereq install, store handlers) where
     threading the ``EventBus`` through would be impractical.
+
+    No-op inside a ``suppress_launcher_toasts`` scope (e.g. the install-time
+    prefix warmup reusing these launch helpers).
     """
+    if _SUPPRESSED.get():
+        return
     payload: dict[str, Any] = {
         "i18n_key": i18n_key,
         "game_title": game_title,

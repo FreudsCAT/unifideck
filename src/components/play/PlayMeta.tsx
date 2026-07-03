@@ -12,10 +12,18 @@
  * Meta is inline (label+value pairs side by side), icons
  * float to the right via ``marginLeft: auto``.
  */
-import { CSSProperties, FC, ReactNode, useEffect, useState } from "react";
+import {
+  CSSProperties,
+  FC,
+  ReactNode,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 import { Focusable } from "@decky/ui";
 import { useTranslation } from "react-i18next";
 import { useGameSize } from "../../hooks/useGameSize";
+import { useGamePlaytime } from "../../hooks/useGamePlaytime";
 import { PLAY_FOCUS_CSS } from "./play.css";
 
 /** Inline style shared by every primary action button
@@ -55,34 +63,98 @@ export const iconBtnStyle: CSSProperties = {
 };
 
 /**
- * Outer Focusable shell for every play variant. Marks the
- * subtree with ``data-unifideck-play-wrapper="true"`` so the
- * backend CDP hide can skip our own DOM when walking ancestors.
- * Styling matches staging: full-width flex row with the
- * translucent dark background and 16 px inner padding.
+ * Outer Focusable shell for every play variant. Styling matches
+ * staging: full-width flex row with the translucent dark background
+ * and 16 px inner padding.
+ *
+ * `autoFocus` is a real Steam `Focusable` nav option (consumed into
+ * navOptions, NOT the React DOM attribute) — when true, gamepad focus
+ * lands on the shell's first focusable child (the primary action
+ * button) as the nav node mounts. The variants pass it so the page
+ * loads with our Install / Play / Resume / Cancel button focused
+ * instead of Steam's (now hidden) native Play button. The loading
+ * skeleton omits it.
  */
-export const PlayShell: FC<{ children: ReactNode }> = ({ children }) => (
-  <Focusable
-    flow-children="row"
-    data-unifideck-play-wrapper="true"
-    style={{
-      display: "flex",
-      alignItems: "center",
-      width: "100%",
-      padding: "16px",
-      boxSizing: "border-box",
-      background: "rgba(14, 20, 27, 0.33)",
-      position: "relative",
-      zIndex: 2,
-    }}
-  >
-    {/* Render the focus CSS inline so it lands in THIS (App-Details)
-        CEF document — a document.head injection from elsewhere does
-        not reach it. This is what makes Install→blue / Play→green /
-        Cancel→red actually apply on focus (staging's pattern). */}
-    <style>{PLAY_FOCUS_CSS}</style>
-    {children}
-  </Focusable>
+export const PlayShell: FC<{ children: ReactNode; autoFocus?: boolean }> = ({
+  children,
+  autoFocus,
+}) => {
+  const ref = useRef<HTMLDivElement>(null);
+  // The `autoFocus` navOption only wins if the Focusable exists during
+  // Steam's initial app-page focus pass — but our variant mounts *late*
+  // (after `get_game_info` resolves, past the loading skeleton), so it
+  // often misses. Imperatively focus the primary button on mount, with
+  // one delayed retry to beat that pass. Bails once focus has landed so
+  // it never steals focus the user moved away.
+  useEffect(() => {
+    if (!autoFocus) return;
+    let raf = 0;
+    let timer = 0;
+    let retried = false;
+    const grab = (): void => {
+      const root = ref.current;
+      if (!root) return;
+      const target = root.querySelector<HTMLElement>("button") ?? root;
+      if (document.activeElement === target) return;
+      target.focus?.();
+      if (document.activeElement !== target && !retried) {
+        retried = true;
+        timer = window.setTimeout(grab, 140);
+      }
+    };
+    raf = requestAnimationFrame(grab);
+    return () => {
+      cancelAnimationFrame(raf);
+      window.clearTimeout(timer);
+    };
+  }, [autoFocus]);
+
+  return (
+    <Focusable
+      ref={ref}
+      flow-children="row"
+      // autoFocus is intentional: claims gamepad focus for the primary action
+      // eslint-disable-next-line jsx-a11y/no-autofocus
+      autoFocus={autoFocus}
+      style={{
+        display: "flex",
+        alignItems: "center",
+        width: "100%",
+        padding: "16px",
+        boxSizing: "border-box",
+        background: "rgba(14, 20, 27, 0.33)",
+        position: "relative",
+        zIndex: 2,
+      }}
+    >
+      {/* Render the focus CSS inline so it lands in THIS (App-Details)
+          CEF document — a document.head injection from elsewhere does
+          not reach it. This is what makes Install→blue / Play→green /
+          Cancel→red actually apply on focus (staging's pattern). */}
+      <style>{PLAY_FOCUS_CSS}</style>
+      {children}
+    </Focusable>
+  );
+};
+
+/**
+ * Placeholder shown in the Play section while `get_game_info` is still
+ * resolving for a shortcut. The native Play row is already hidden by
+ * CSS at that point, so this keeps the area from collapsing (no layout
+ * jump) until the real variant renders. A muted button-sized block —
+ * no text, so it needs no i18n.
+ */
+export const PlayLoadingSkeleton: FC = () => (
+  <PlayShell>
+    <div
+      style={{
+        minWidth: 200,
+        height: 48,
+        borderRadius: 4,
+        background: "rgba(255, 255, 255, 0.06)",
+      }}
+    />
+  </PlayShell>
 );
 
 /** Right-floated icon group. ``marginLeft: auto`` pushes it
@@ -113,17 +185,48 @@ export function formatBytes(bytes: number | undefined | null): string {
   return `${v.toFixed(v >= 100 ? 0 : 1)} ${units[i]}`;
 }
 
-/** Format a Unix timestamp (seconds) as a date string. */
-export function formatLastPlayed(
-  rtLastTimePlayed: number | undefined | null,
-): string {
-  if (!rtLastTimePlayed || rtLastTimePlayed <= 0) return "—";
-  const d = new Date(rtLastTimePlayed * 1000);
+/** Format a Date as a short localized date string. */
+function formatDate(d: Date): string {
   return d.toLocaleDateString(undefined, {
     year: "numeric",
     month: "short",
     day: "numeric",
   });
+}
+
+/** Format a Unix timestamp (seconds) as a date string. */
+export function formatLastPlayed(
+  rtLastTimePlayed: number | undefined | null,
+): string {
+  if (!rtLastTimePlayed || rtLastTimePlayed <= 0) return "—";
+  return formatDate(new Date(rtLastTimePlayed * 1000));
+}
+
+/** Format an ISO-8601 timestamp (our DB's ``last_played_at``) as a
+ *  date string, or ``null`` when absent/unparseable so callers can
+ *  fall back to Steam's value. */
+export function formatLastPlayedISO(
+  iso: string | null | undefined,
+): string | null {
+  if (!iso) return null;
+  const ms = Date.parse(iso);
+  if (Number.isNaN(ms)) return null;
+  return formatDate(new Date(ms));
+}
+
+/** Format a playtime duration (seconds) as a compact "12.5 h" / "45 min"
+ *  string. Returns "—" for zero/unknown. Units are i18n-supplied so the
+ *  abbreviation can be localized. */
+export function formatPlaytime(
+  secs: number | undefined | null,
+  hoursShort: string,
+  minutesShort: string,
+): string {
+  if (!secs || secs <= 0) return "—";
+  if (secs < 3600)
+    return `${Math.max(1, Math.round(secs / 60))} ${minutesShort}`;
+  const hours = secs / 3600;
+  return `${hours >= 100 ? Math.round(hours) : hours.toFixed(1)} ${hoursShort}`;
 }
 
 /** One label/value column inside {@link MetaInline}. */
@@ -149,10 +252,15 @@ const MetaItem: FC<{ label: string; value: string }> = ({ label, value }) => (
 interface MetaInlineProps {
   /** Total install size in bytes (Space Required column). */
   sizeBytes?: number;
-  /** Whether to render the Last Played column (installed games only). */
+  /** Whether to render the Played / Last Played columns (installed games only). */
   showLastPlayed?: boolean;
-  /** Steam appId — used to look up rtLastTimePlayed. */
+  /** Steam appId — used to look up Steam's rtLastTimePlayed (fallback). */
   appId?: number | null;
+  /** Store id — together with {@link gameId}, enables the "Played" total
+   *  and an accurate "Last Played" sourced from our own tracking DB. */
+  store?: string | null;
+  /** Store-native game id (``Game.id`` / ``store_game_id``). */
+  gameId?: string | null;
   /** True for installed games. Switches the size label to
    *  "Installed Size" and makes {@link useGameSize} report the
    *  on-disk size instead of the (stale) pre-install download size. */
@@ -169,10 +277,12 @@ export const MetaInline: FC<MetaInlineProps> = ({
   sizeBytes,
   showLastPlayed = false,
   appId,
+  store,
+  gameId,
   installed = false,
 }) => {
   const { t } = useTranslation();
-  const [lastPlayed, setLastPlayed] = useState<number | null>(null);
+  const [steamLastPlayed, setSteamLastPlayed] = useState<number | null>(null);
   // Size is fetched out-of-band (see useGameSize) so a slow store
   // lookup never blocks this row from rendering. Keyed on `installed`
   // so the on-disk size replaces the pre-install download size once
@@ -180,6 +290,14 @@ export const MetaInline: FC<MetaInlineProps> = ({
   // to any size the caller already had.
   const fetchedSize = useGameSize(appId ?? null, installed);
   const resolvedSize = fetchedSize && fetchedSize > 0 ? fetchedSize : sizeBytes;
+
+  // Our own tracking DB (set when the caller knows the store/game pair).
+  // Preferred source for both the total and last-played; Steam's value
+  // is only used as a fallback when we have no local record.
+  const playtime = useGamePlaytime(
+    showLastPlayed ? store : null,
+    showLastPlayed ? gameId : null,
+  );
 
   useEffect(() => {
     if (!showLastPlayed || appId == null) return;
@@ -200,7 +318,7 @@ export const MetaInline: FC<MetaInlineProps> = ({
       .GetPlaytime(appId)
       .then((res) => {
         if (cancelled) return;
-        setLastPlayed(res?.rtLastTimePlayed ?? null);
+        setSteamLastPlayed(res?.rtLastTimePlayed ?? null);
       })
       .catch(() => {
         /* ignore */
@@ -209,6 +327,20 @@ export const MetaInline: FC<MetaInlineProps> = ({
       cancelled = true;
     };
   }, [appId, showLastPlayed]);
+
+  // Total played: store's cross-device total (GOG/Epic) when present,
+  // else our local total. Only rendered once we have a tracked record.
+  const totalSecs =
+    playtime != null
+      ? playtime.store_total_secs ?? playtime.total_seconds
+      : undefined;
+  const showPlayed = showLastPlayed && totalSecs != null && totalSecs > 0;
+
+  // Last played: prefer our DB's timestamp; fall back to Steam's only
+  // when we have no local record (e.g. a Steam-native game we don't track).
+  const lastPlayedValue =
+    formatLastPlayedISO(playtime?.last_played) ??
+    (steamLastPlayed ? formatLastPlayed(steamLastPlayed) : null);
 
   return (
     <div
@@ -226,14 +358,20 @@ export const MetaInline: FC<MetaInlineProps> = ({
         }
         value={formatBytes(resolvedSize)}
       />
+      {showPlayed && (
+        <MetaItem
+          label={t("playMeta.played")}
+          value={formatPlaytime(
+            totalSecs,
+            t("playMeta.hoursShort"),
+            t("playMeta.minutesShort"),
+          )}
+        />
+      )}
       {showLastPlayed && (
         <MetaItem
           label={t("playMeta.lastPlayed")}
-          value={
-            lastPlayed
-              ? formatLastPlayed(lastPlayed)
-              : t("playMeta.neverPlayed")
-          }
+          value={lastPlayedValue ?? t("playMeta.neverPlayed")}
         />
       )}
     </div>

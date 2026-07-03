@@ -11,7 +11,11 @@ import { useTranslation } from "react-i18next";
 import { useRPCQuery } from "../api/useRPC";
 import { rpcRoutes } from "../api/rpc-routes";
 import { GameGrid } from "../components/shared/GameGrid";
-import { getCachedCompatByTitle, getCachedRating } from "../lib/protondb-cache";
+import {
+  getCachedCompatByTitle,
+  meetsGreatOnDeckCriteria,
+} from "../lib/protondb-cache";
+import { getCompatByShortcutAppId } from "../lib/library-facets";
 import type { Game, StoreId } from "../types/api";
 
 export type LibraryFilter = "all" | "installed" | "great-on-deck";
@@ -54,19 +58,18 @@ class ErrorBoundary extends Component<
 }
 
 function isGreatOnDeck(game: Game): boolean {
+  // Shortcut-keyed facet compat — the authoritative path (the old
+  // ``getCachedRating(game.app_id)`` passed a *shortcut* AppID into a
+  // cache keyed by *real Steam* AppID, so it never hit for non-Steam
+  // games).
   if (game.app_id != null) {
-    const tier = getCachedRating(game.app_id);
-    if (tier === "platinum" || tier === "native") return true;
+    const facetCompat = getCompatByShortcutAppId(game.app_id);
+    if (facetCompat) return meetsGreatOnDeckCriteria(facetCompat);
   }
+  // Fallback: title-keyed compat for shortcuts not yet mapped to a
+  // Steam AppID.
   if (game.title) {
-    const compat = getCachedCompatByTitle(game.title);
-    if (
-      compat?.deckVerified === "verified" ||
-      compat?.deckVerified === "playable"
-    ) {
-      return true;
-    }
-    if (compat?.tier === "platinum" || compat?.tier === "native") return true;
+    return meetsGreatOnDeckCriteria(getCachedCompatByTitle(game.title));
   }
   return false;
 }

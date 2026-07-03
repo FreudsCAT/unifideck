@@ -96,6 +96,23 @@ class _DataLoader:
         )
         return owned_set
 
+    async def load_ownership_uuids(self) -> set[str]:
+        """Owned product UUIDs from the ownership binary (modern namespace).
+
+        Complements :meth:`load_ownership_set` (numeric install_ids): UPC's
+        ownership binary records each entitlement under both a numeric id and
+        a product UUID (= Algolia ``appId``/``spaceId``). The UUIDs resolve to
+        names via unifiDB's ``uuid_catalog.json`` — the only way to name modern
+        games the legacy install_id list lacks. Empty set when no ownership
+        file is present.
+        """
+        ownership_path, _user_id = self._discover_ownership_file()
+        if not ownership_path:
+            return set()
+        from unifideck.stores.ubisoft.parser import parse_ownership_uuids
+        uuids = await asyncio.to_thread(parse_ownership_uuids, ownership_path)
+        return set(uuids)
+
     def _find_library_configurations_path(self) -> str | None:
         """Find library configurations path."""
         for prefix_dir in (

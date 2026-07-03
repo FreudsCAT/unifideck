@@ -22,7 +22,7 @@ class _Svc(m._SyncRunMixin):
         self._delay = delay
         self._games = games or []
 
-    async def _sync_one_store(self, _store: object):
+    async def _sync_one_store(self, _store: object, _is_force: bool = False):
         await asyncio.sleep(self._delay)
         return self._games, None
 

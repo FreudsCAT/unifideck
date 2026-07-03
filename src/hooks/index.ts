@@ -6,9 +6,8 @@
  * that components can call without juggling multiple
  * contexts manually. The 9 hooks cover the entire frontend's
  * interaction surface: auth, install/launch actions, game
- * info fetching, view-mode persistence, play-section CDP
- * coordination, download progress, toasts, and Steam library
- * access.
+ * info fetching, view-mode persistence, play-section state,
+ * download progress, toasts, and Steam library access.
  *
  * Rule of thumb: components import from this barrel; they
  * NEVER reach into individual hook files. Renaming an
@@ -20,7 +19,6 @@ export { useGameActions } from "./useGameActions";
 export { useGameInfo } from "./useGameInfo";
 export { useViewMode } from "./useViewMode";
 export { usePlaySection } from "./usePlaySection";
-export { useHidePlaySection } from "./useHidePlaySection";
 export { useDownloadProgress } from "./useDownloadProgress";
 export { useToast } from "./useToast";
 export { useSteamLibrary } from "./useSteamLibrary";

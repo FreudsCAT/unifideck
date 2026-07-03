@@ -1,6 +1,11 @@
 # Ubisoft Connect Store Integration -- Implementation Tracker
 
-**Spec:** [ubisoft-store-spec.md](ubisoft-store-spec.md)
+> **🗄️ ARCHIVED (2026-06-22) — outdated.** A phase tracker referencing pre-refactor file
+> paths (`stores/ubisoft_api.py`, `stores/ubisoft.py`) that no longer exist — the
+> integration is now the `stores/ubisoft/` package. For the current design see the v2 spec:
+> [`../ubisoft-store-spec.md`](../ubisoft-store-spec.md).
+
+**Spec (current):** [`../ubisoft-store-spec.md`](../ubisoft-store-spec.md)
 **Started:** 2026-03-09
 **Status:** Phase 1 ✅ | Phase 2 ✅ | Phase 3 ✅ | Phase 4 ✅
 

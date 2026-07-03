@@ -40,7 +40,7 @@ SETTINGS_PATH = Path.home() / ".local/share/unifideck/settings.json"
 AUTH_TOKEN_PATHS: dict[str, Path] = {
     "epic": Path.home() / ".config/legendary/user.json",
     "gog": Path.home() / ".config/unifideck/gog_token.json",
-    "gogdl": Path.home() / ".config/unifideck/gogdl/auth.json",
+    "gogdl": Path.home() / ".config/unifideck/gogdl_auth.json",
     "amazon": Path.home() / ".config/nile/user.json",
     "amazon_library": Path.home() / ".config/nile/library.json",
     "amazon_installed": Path.home() / ".config/nile/installed.json",

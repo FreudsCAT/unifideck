@@ -18,9 +18,12 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Callable
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from unifideck.core.types import Result
+from unifideck.core.types import Events, Result
+
+if TYPE_CHECKING:
+    from unifideck.event_bus.event_bus import EventBus
 
 _AUTH_MONITOR_TIMEOUT_S = 30 * 60
 _AUTH_MONITOR_POLL_INTERVAL_S = 2.0
@@ -36,11 +39,13 @@ class _AuthSessionMonitor:
         config: Any,
         session: Any,
         queue_auth_assets_ensure: Callable[[str], None],
+        bus: EventBus | None = None,
     ) -> None:
         """Initialize the instance."""
         self._config = config
         self._session = session
         self._queue_auth_assets_ensure = queue_auth_assets_ensure
+        self._bus = bus
         self._monitor_task: asyncio.Task[None] | None = None
         self._session_captured = False
 
@@ -81,11 +86,32 @@ class _AuthSessionMonitor:
                     "post-auth-session-capture",
                 )
                 self._session_captured = True
+                # Notify the frontend that sign-in finished so the auth
+                # button flips to "log out" without a restart. Without this
+                # the UI only re-detects auth at startup. Other stores emit
+                # this after auth (epic/amazon/orchestrator); the Ubisoft
+                # GUI-capture path never did.
+                await self._emit_auth_complete()
                 return
         logger.warning(
             "[UbisoftAuth] auth session monitor timed out after %ds",
             _AUTH_MONITOR_TIMEOUT_S,
         )
+
+    async def _emit_auth_complete(self) -> None:
+        """Emit STORE_AUTH_COMPLETE so the frontend refreshes auth state."""
+        if self._bus is None:
+            return
+        try:
+            await self._bus.emit(
+                Events.STORE_AUTH_COMPLETE,
+                store="ubisoft",
+            )
+        except Exception as e:
+            logger.warning(
+                "[UbisoftAuth] failed to emit STORE_AUTH_COMPLETE: %s",
+                e,
+            )
 
     def status(self) -> dict[str, Any]:
         """Status."""

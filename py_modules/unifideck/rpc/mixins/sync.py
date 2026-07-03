@@ -121,6 +121,21 @@ class SyncRPCMixin(CleanupRPCMixin):
         """
         return self.sync_service.get_all_games()
 
+    async def update_steam_owned_titles(self, titles: list[str]) -> Any:
+        """Persist the full owned-Steam-library titles from the frontend.
+
+        ``appmanifest`` only sees *installed* Steam games, so the
+        Ubisoft Steam-linked filter can't hide games the user owns on
+        Steam but hasn't installed. The frontend enumerates the full
+        owned library (``collectionStore``) and pushes the display names
+        here; :mod:`unifideck.stores.ubisoft.library.steam_filter` unions
+        them in. Returns ``{"count": <stored>}``.
+        """
+        from unifideck.steam.owned_games import save_frontend_owned_titles
+
+        safe = [t for t in (titles or []) if isinstance(t, str)]
+        return {"count": save_frontend_owned_titles(safe)}
+
     async def get_game_info(self, app_id: int) -> Any:
         """Return the full record for a single Unifideck AppID.
 

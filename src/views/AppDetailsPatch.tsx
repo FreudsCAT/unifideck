@@ -37,10 +37,15 @@ import {
 } from "@decky/ui";
 import { SteamBridge, type RouterPatchHandle } from "../lib/steam-bridge";
 import { findInReactTree } from "../lib/steam-bridge/react-tree";
+import {
+  isUnifideckGame,
+  isUnifideckCacheLoaded,
+} from "../lib/library-filters";
 import { getGameStateVersion } from "../lib/game-state-version";
 import { injectGameToAppinfo } from "../lib/steam-bridge/app-store-patcher";
 import { DownloadProvider } from "../contexts/DownloadContext";
 import { PlaySectionWrapper } from "../components/play";
+import { HIDE_NATIVE_PLAY_MARKER } from "../components/play/play.css";
 import { GameInfoPanel } from "../components/info";
 
 /** Stub component that's only used in the React DevTools
@@ -105,6 +110,13 @@ function injectIntoTree(ret: unknown): void {
   // Only override non-Steam shortcuts (appId > 2 billion).
   if (!(appId > 2_000_000_000)) return;
 
+  // Only override Unifideck-managed games — never the user's own
+  // non-Steam shortcuts (Firefox, etc.). Skip once we KNOW it isn't
+  // ours; stay optimistic before the cache loads so a Unifideck game
+  // opened on cold boot never flashes the native UI. This single gate
+  // covers the hide marker, the Play wrapper, and the GameInfo panel.
+  if (isUnifideckCacheLoaded() && !isUnifideckGame(appId)) return;
+
   // Trigger Steam-Store metadata spoofing for this shortcut so
   // Steam's own UI (capsule image, tile, presence) renders the
   // matched Steam game. Fire-and-forget — the patcher reads from
@@ -130,6 +142,21 @@ function injectIntoTree(ret: unknown): void {
   )
     return;
 
+  // Mark the inner container so our scoped CSS rule (nativePlayHideCss)
+  // hides Steam's native Play row — which renders in a *separate* subtree
+  // beneath this same container, so it can't be removed in-tree. Set
+  // synchronously here (re-applied every render; idempotent) instead of
+  // the old async CDP `display:none`. Only shortcuts reach this code, so
+  // native Steam games are never marked.
+  const containerClassName =
+    typeof innerContainer.props.className === "string"
+      ? innerContainer.props.className
+      : "";
+  if (!containerClassName.includes(HIDE_NATIVE_PLAY_MARKER)) {
+    innerContainer.props.className =
+      `${containerClassName} ${HIDE_NATIVE_PLAY_MARKER}`.trim();
+  }
+
   const children = innerContainer.props!.children as unknown[];
   const playWrapperKey = `unifideck-play-wrapper-${appId}`;
   const gameInfoKey = `unifideck-game-info-${appId}`;
@@ -137,6 +164,53 @@ function injectIntoTree(ret: unknown): void {
 
   injectPlayWrapper(children, appId, playWrapperKey, version);
   injectGameInfoPanel(children, appId, playWrapperKey, gameInfoKey, version);
+  relocateHltbAbovePlay(children, playWrapperKey);
+}
+
+/** Relocate HLTB for Deck's stats overlay (`#hltb-for-deck`) to the
+ *  hero/Play seam — the same spot it occupies in the *native* Steam UI
+ *  (right after the header, before the content panel).
+ *
+ *  On a native game HLTB splices its element just before Steam's content
+ *  panel, so it lands at the hero bottom and its own CSS (transparent bar
+ *  for `default`/`clean-default`, hero-anchored box for `clean`/
+ *  `clean-left`) renders correctly. In our layout the same splice point
+ *  lands LOW (after our injected Play + GameInfo, before the hidden tabbed
+ *  section), so the overlay drifts down onto our custom buttons — that
+ *  drift, not HLTB's styling, is the bug. Moving its wrapper back to the
+ *  seam makes the `default` / `clean-default` BAR modes render pixel-
+ *  identical to native with ZERO style changes. The `clean` / `clean-left`
+ *  BOX modes get one tiny position-only nudge ({@link HLTB_CLEAN_BOX_POSITION_CSS})
+ *  because HLTB's own `top:-55vh` overshoots the box off-screen from the
+ *  seam; everything else (transparency, size, side) stays HLTB's own.
+ *
+ *  Safe because our route patch is the OUTERMOST renderFunc wrapper (we
+ *  register after HLTB), so its element is already in `children` when this
+ *  runs. No-op — and therefore graceful — when HLTB isn't installed /
+ *  co-patching. */
+function relocateHltbAbovePlay(
+  children: unknown[],
+  playWrapperKey: string,
+): void {
+  const hltbIdx = children.findIndex((c) => idOf(c) === "hltb-for-deck");
+  if (hltbIdx === -1) return; // HLTB not present this render
+  const playIdx = children.findIndex((c) =>
+    keyOf(c).startsWith(playWrapperKey),
+  );
+  if (playIdx === -1) return; // our Play wrapper not placed this render
+  if (hltbIdx === playIdx - 1) return; // already directly above — idempotent
+
+  const [hltbEl] = children.splice(hltbIdx, 1);
+  // Recompute the Play wrapper index — the splice above shifts it when
+  // HLTB sat before it.
+  const newPlayIdx = children.findIndex((c) =>
+    keyOf(c).startsWith(playWrapperKey),
+  );
+  if (newPlayIdx === -1) {
+    children.splice(hltbIdx, 0, hltbEl); // lost the anchor — don't drop HLTB
+    return;
+  }
+  children.splice(newPlayIdx, 0, hltbEl);
 }
 
 function injectPlayWrapper(
@@ -166,7 +240,7 @@ function injectPlayWrapper(
       idx,
       0,
       <DownloadProvider key={`${baseKey}-v${version}`}>
-        <PlaySectionWrapper appId={appId}>{null}</PlaySectionWrapper>
+        <PlaySectionWrapper appId={appId} />
       </DownloadProvider>,
     );
     return;
@@ -264,6 +338,13 @@ function findPlaySectionInsertIndex(children: unknown[]): number {
 
 function keyOf(node: unknown): string {
   return (node as { key?: string } | null)?.key ?? "";
+}
+
+/** Read a React element's `props.id` (used to find HLTB's
+ *  `id="hltb-for-deck"` element spliced into our container). */
+function idOf(node: unknown): string {
+  const id = (node as { props?: { id?: unknown } } | null)?.props?.id;
+  return typeof id === "string" ? id : "";
 }
 
 function classOf(node: unknown): string {

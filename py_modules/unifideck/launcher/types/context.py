@@ -37,6 +37,11 @@ class LaunchContext:
     env_overrides: dict[str, str] = field(default_factory=dict)
     is_launch_action: bool = True
     auth_store: str | None = None
+    # Non-launch action kind, when ``is_launch_action`` is False.
+    # ``None``/"auth" → store sign-in; "install" → Ubisoft opens UPC to
+    # install a game via RunGame (gamescope session). The launcher service
+    # branches on this for the non-launch path.
+    action: str | None = None
     bypass_circuit_breaker: bool = False
     steam_app_id: str | None = None
     @property
@@ -69,6 +74,7 @@ class LaunchContext:
             "is_windows_game": self.is_windows_game,
             "is_launch_action": self.is_launch_action,
             "auth_store": self.auth_store,
+            "action": self.action,
             "bypass_circuit_breaker": self.bypass_circuit_breaker,
         }
 

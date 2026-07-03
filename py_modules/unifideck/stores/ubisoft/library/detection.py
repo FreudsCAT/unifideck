@@ -90,26 +90,25 @@ class _InstallDetector:
         return f"https://store.ubisoft.com/game?pid={game_id}"
 
     async def get_installed(self) -> dict[str, Any]:
-        """Get installed."""
+        """Get installed.
+
+        Scans the union of the internal ``prefixes_dir`` and any per-game
+        prefixes relocated to SD / custom storage (recorded in the id_map),
+        so games installed off-disk still flip Install→Play and appear
+        installed in the library.
+        """
         installed: dict[str, Any] = {}
-        prefixes_dir = Path(self._config.prefixes_dir_expanded)
-        if not await asyncio.to_thread(prefixes_dir.is_dir):
-            return installed
-        try:
-            entries = list(await asyncio.to_thread(prefixes_dir.iterdir))
-        except OSError as e:
-            logger.warning(
-                "[UbisoftLibrary] prefixes_dir scan failed: %s",
-                e,
-            )
-            return installed
-        for entry in entries:
+        prefix_paths = await asyncio.to_thread(
+            self._id_map.iter_all_game_prefix_paths,
+        )
+        for prefix_str in prefix_paths:
+            entry = Path(prefix_str)
             if entry.name.startswith("."):
                 continue
-            if not entry.is_dir():
+            if not await asyncio.to_thread(entry.is_dir):
                 continue
             marker_path = entry / self._config.bootstrap_marker
-            if not marker_path.is_file():
+            if not await asyncio.to_thread(marker_path.is_file):
                 continue
             game_info = self._detect_installed_game(
                 entry.name,
@@ -130,7 +129,10 @@ class _InstallDetector:
         game_id: str,
     ) -> dict[str, Any] | None:
         """Get installed game info."""
-        prefix_path = Path(self._config.prefixes_dir_expanded) / game_id
+        prefix_path = Path(
+            self._id_map.resolve_prefix_path(game_id)
+            or str(Path(self._config.prefixes_dir_expanded) / game_id),
+        )
         if not prefix_path.is_dir():
             return None
         marker_path = prefix_path / self._config.bootstrap_marker

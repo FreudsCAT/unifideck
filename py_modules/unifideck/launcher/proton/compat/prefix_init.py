@@ -175,6 +175,28 @@ def _safe_iterdir(path: Path) -> list[Path]:
         return []
 
 
+# Compat completion markers written by the per-prefix compat steps
+# (compat/winetricks.py, compat/vcruntime.py). Cleared on a fresh
+# createprefix so a stale one (from a failed setup) can't suppress the real
+# install. The vcruntime marker is Proton-version-suffixed, so match by prefix.
+_WINETRICKS_MARKER = "unifideck_winetricks_complete.marker"
+_VCREG_MARKER_PREFIX = ".unifideck_vcreg_"
+
+
+def _clear_stale_compat_markers(prefix_root: Path) -> None:
+    """Delete compat 'done' markers (best-effort) before a fresh prefix build."""
+    targets = [prefix_root / _WINETRICKS_MARKER]
+    targets += [
+        p for p in _safe_iterdir(prefix_root)
+        if p.name.startswith(_VCREG_MARKER_PREFIX) and p.name.endswith(".done")
+    ]
+    for marker in targets:
+        if marker.exists():
+            with contextlib.suppress(OSError):
+                marker.unlink()
+                logger.info("[prefix_init] cleared stale compat marker %s", marker.name)
+
+
 # ── save migration / restore ──────────────────────────────────────
 
 
@@ -298,6 +320,13 @@ async def _ensure_created(plan: ProtonLaunchPlan, prefix_root: Path) -> None:
     if (prefix_root / "system.reg").is_file():
         logger.debug("[prefix_init] prefix already initialised: %s", prefix_root)
         return
+
+    # Reaching here means there's no system.reg, so we're (re)building the
+    # prefix from scratch — any compat "done" markers present are stale (left
+    # by a prior *failed* attempt, e.g. the install-time warmup that crashed
+    # before the loader-env fix and wrote bogus "complete" markers). Clear them
+    # so apply_prefix_compat actually re-installs the redistributables.
+    _clear_stale_compat_markers(prefix_root)
 
     logger.info("[prefix_init] initialising prefix %s", prefix_root)
     launcher_toast(

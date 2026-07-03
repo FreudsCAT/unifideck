@@ -23,6 +23,7 @@ import json
 import logging
 import os
 import shutil
+import ssl
 import stat
 import tarfile
 import tempfile
@@ -39,6 +40,24 @@ GE_REPO = "GloriousEggroll/proton-ge-custom"
 _LATEST_API = f"https://api.github.com/repos/{GE_REPO}/releases/latest"
 _USER_AGENT = "unifideck-proton-ge"
 
+# SteamOS's cert store is too old to verify GitHub's chain under strict TLS,
+# so GE-Proton lookups/downloads fail with CERTIFICATE_VERIFY_FAILED (the
+# plugin disables verification everywhere for this reason — see
+# ``core.net.ssl_helpers``). Kept local + stdlib-only so this module stays
+# importable in the minimal launcher bootstrap (no ``unifideck.*`` deps).
+_permissive_ssl_ctx: ssl.SSLContext | None = None
+
+
+def _ssl_ctx() -> ssl.SSLContext:
+    """Return the shared permissive TLS context (hostname + chain checks off)."""
+    global _permissive_ssl_ctx
+    if _permissive_ssl_ctx is None:
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        _permissive_ssl_ctx = ctx
+    return _permissive_ssl_ctx
+
 # Install target — the primary root the selector scans first.
 COMPAT_TOOLS_DIR = Path("~/.steam/root/compatibilitytools.d").expanduser()
 # Roots scanned to decide whether a tag is already installed. Mirrors
@@ -46,6 +65,7 @@ COMPAT_TOOLS_DIR = Path("~/.steam/root/compatibilitytools.d").expanduser()
 # import — selector imports this module, not the other way round).
 _SCAN_ROOTS: tuple[str, ...] = (
     "~/.steam/root/compatibilitytools.d",
+    "~/.steam/steam/compatibilitytools.d",
     "~/.local/share/Steam/compatibilitytools.d",
 )
 # Records the tag the background installer last validated, so the
@@ -65,7 +85,7 @@ def _fetch_latest_release(timeout: float) -> dict[str, Any] | None:
         },
     )
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        with urllib.request.urlopen(req, timeout=timeout, context=_ssl_ctx()) as resp:
             return json.loads(resp.read().decode())  # type: ignore[no-any-return]
     except (urllib.error.URLError, OSError, ValueError) as e:
         logger.warning("[ge_installer] latest-release lookup failed: %s", e)
@@ -131,19 +151,26 @@ def _write_marker(tag: str) -> None:
         logger.warning("[ge_installer] could not write marker: %s", e)
 
 
-def _select_tarball(assets: list[dict[str, Any]]) -> str | None:
-    """Pick the GE-Proton ``.tar.gz`` asset URL (skipping the checksum)."""
+def _select_tarball(assets: list[dict[str, Any]], tag: str | None = None) -> str | None:
+    """Pick the GE-Proton x86_64 ``.tar.gz`` asset URL (skipping checksums and non-x86 archs)."""
+    if tag:
+        expected_name = f"{tag}.tar.gz"
+        for asset in assets:
+            if asset.get("name") == expected_name:
+                return asset.get("browser_download_url")
+
     for asset in assets:
         name = asset.get("name", "")
-        if name.endswith(".tar.gz") and "sha512" not in name:
+        if name.endswith(".tar.gz") and not any(k in name for k in ("sha512", "aarch64", "arm64")):
             return asset.get("browser_download_url")
     return None
+
 
 
 def _download(url: str, dest: Path, progress_cb: ProgressCb | None) -> None:
     """Stream ``url`` to ``dest``, reporting bytes via ``progress_cb``."""
     req = urllib.request.Request(url, headers={"User-Agent": _USER_AGENT})
-    with urllib.request.urlopen(req, timeout=30) as resp, dest.open("wb") as out:
+    with urllib.request.urlopen(req, timeout=30, context=_ssl_ctx()) as resp, dest.open("wb") as out:
         total = int(resp.headers.get("Content-Length") or 0)
         done = 0
         while True:
@@ -202,6 +229,34 @@ def _make_executable(path: Path) -> None:
     path.chmod(st.st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
 
 
+def _promote_extracted(staging: Path, tag: str) -> Path | None:
+    """Validate the extracted ``<tag>/`` tree and move it into place.
+
+    GE-Proton archives expand to a single top-level ``<tag>/`` dir. The
+    move into ``COMPAT_TOOLS_DIR`` only happens after the ``proton``
+    script is confirmed present and made executable, returning the final
+    executable ``proton`` path (or ``None`` if validation fails).
+    """
+    extracted = staging / tag
+    proton = extracted / "proton"
+    if not proton.is_file():
+        logger.warning(
+            "[ge_installer] extracted tree missing proton script (%s)", tag,
+        )
+        return None
+    _make_executable(proton)
+
+    dest = COMPAT_TOOLS_DIR / tag
+    if dest.exists():
+        shutil.rmtree(dest, ignore_errors=True)
+    shutil.move(extracted, dest)
+    final = dest / "proton"
+    if not os.access(final, os.X_OK):
+        return None
+    logger.info("[ge_installer] installed GE-Proton %s -> %s", tag, dest)
+    return final
+
+
 def _download_and_install(
     tag: str,
     url: str,
@@ -223,26 +278,7 @@ def _download_and_install(
         if not _extract(tarball, staging):
             return None
         tarball.unlink(missing_ok=True)
-
-        # GE-Proton archives expand to a single top-level ``<tag>/`` dir.
-        extracted = staging / tag
-        proton = extracted / "proton"
-        if not proton.is_file():
-            logger.warning(
-                "[ge_installer] extracted tree missing proton script (%s)", tag,
-            )
-            return None
-        _make_executable(proton)
-
-        dest = COMPAT_TOOLS_DIR / tag
-        if dest.exists():
-            shutil.rmtree(dest, ignore_errors=True)
-        shutil.move(extracted, dest)
-        final = dest / "proton"
-        if not os.access(final, os.X_OK):
-            return None
-        logger.info("[ge_installer] installed GE-Proton %s -> %s", tag, dest)
-        return final
+        return _promote_extracted(staging, tag)
     except OSError as e:
         logger.warning("[ge_installer] install of %s failed: %s", tag, e)
         return None
@@ -274,7 +310,7 @@ def ensure_latest_ge(
         logger.info("[ge_installer] latest GE-Proton already installed: %s", tag)
         return existing, tag
 
-    url = _select_tarball(release.get("assets", []))
+    url = _select_tarball(release.get("assets", []), tag)
     if not url:
         logger.warning("[ge_installer] no .tar.gz asset found for %s", tag)
         return None

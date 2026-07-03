@@ -31,7 +31,16 @@ export type DownloadPhase =
   | "downloading"
   | "extracting"
   | "verifying"
-  | "complete";
+  | "complete"
+  // Launcher-driven install (Ubisoft Connect): the external launcher
+  // performs the install, so there is no %/speed/ETA. Rendered as an
+  // indeterminate "Installing in Ubisoft Connect" state.
+  | "manual"
+  // Post-download prefix setup (Epic/GOG/Amazon): after the files land we
+  // run the full first-run prefix init (createprefix + redistributables) and
+  // pull cloud saves before completing. No %/speed/ETA — rendered as an
+  // indeterminate "Setting up game…" state.
+  | "preparing";
 
 /**
  * Where the game install lives. `internal` = eMMC, `sdcard`

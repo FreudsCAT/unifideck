@@ -62,26 +62,31 @@ async def ensure_redist_downloaded(
     with lock_path.open("w") as lock:
         with contextlib.suppress(OSError):
             fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
-        logger.info("[gog_setup] downloading redist: %s", ", ".join(missing))
-        cmd = [
-            str(gogdl), "--auth-config-path", str(AUTH_CONFIG),
-            "redist", "--ids", ",".join(missing), "--path", str(REDIST_DIR),
-        ]
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdout=asyncio.subprocess.DEVNULL,
-                stderr=asyncio.subprocess.PIPE,
+        await _run_redist_download(gogdl, missing)
+
+
+async def _run_redist_download(gogdl: Path, missing: list[str]) -> None:
+    """Invoke gogdl to download ``missing`` redistributables into REDIST_DIR."""
+    logger.info("[gog_setup] downloading redist: %s", ", ".join(missing))
+    cmd = [
+        str(gogdl), "--auth-config-path", str(AUTH_CONFIG),
+        "redist", "--ids", ",".join(missing), "--path", str(REDIST_DIR),
+    ]
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        _out, err = await proc.communicate()
+        if proc.returncode != 0:
+            logger.warning(
+                "[gog_setup] redist download rc=%d: %s",
+                proc.returncode,
+                (err or b"").decode("utf-8", "replace")[:300],
             )
-            _out, err = await proc.communicate()
-            if proc.returncode != 0:
-                logger.warning(
-                    "[gog_setup] redist download rc=%d: %s",
-                    proc.returncode,
-                    (err or b"").decode("utf-8", "replace")[:300],
-                )
-        except OSError as e:
-            logger.warning("[gog_setup] redist download spawn failed: %s", e)
+    except OSError as e:
+        logger.warning("[gog_setup] redist download spawn failed: %s", e)
 
 
 def _find_depot(

@@ -191,16 +191,9 @@ class ArtworkService(_EventHandlersMixin):
         re-query SGDB every sync for art that genuinely doesn't exist.
         """
         cache_key = f"{store}:{game_id}"
-
-        # Resolve which kinds we still need. Explicit ``only_kinds`` from
-        # the caller wins; ``force`` re-fetches everything; otherwise
-        # read the gaps off disk.
-        if only_kinds is not None:
-            target = {k for k in only_kinds if k in _ARTWORK_KINDS}
-        elif force:
-            target = set(_ARTWORK_KINDS)
-        else:
-            target = await get_missing_kinds(self._grid_dir, app_id)
+        target = await self._resolve_target_kinds(
+            app_id, force, only_kinds,
+        )
 
         # Kinds already on disk start True so the phases skip them and
         # we never re-download existing covers.
@@ -208,16 +201,12 @@ class ArtworkService(_EventHandlersMixin):
         if not target:
             return result
 
-        if not force:
-            # Incremental skip: identical missing set as last attempt →
-            # those kinds are genuinely unavailable upstream, don't retry.
-            attempted = self._cache.get(_ATTEMPTS_NAMESPACE, cache_key)
-            if attempted is not None and set(attempted) == target:
-                logger.debug(
-                    "[ArtworkService] skipping %s: missing set unchanged (%s)",
-                    title, sorted(target),
-                )
-                return result
+        if self._missing_set_unchanged(cache_key, target, force):
+            logger.debug(
+                "[ArtworkService] skipping %s: missing set unchanged (%s)",
+                title, sorted(target),
+            )
+            return result
 
         current_task = asyncio.current_task()
         if current_task:
@@ -225,32 +214,87 @@ class ArtworkService(_EventHandlersMixin):
             current_task.add_done_callback(self._pending_tasks.discard)
 
         async with self._semaphore:
-            logger.info(
-                "[ArtworkService] fetching art for %s (need: %s)",
-                title, "+".join(sorted(target)),
+            await self._run_fetch_phases(
+                store, game_id, title, app_id, extras, cache_key, target, result,
             )
-            sources: dict[str, str] = {}
-            # Phase 1 — store metadata (authoritative).
-            await self._fill_from_store(
-                store, game_id, extras, app_id, result, sources,
-            )
-            # Phase 2 — SGDB fallback for any kind still missing.
-            if not all(result.values()):
-                await self._fill_from_sgdb(
-                    title, app_id, result, sources, only_kinds=target,
-                )
-            # Phase 3 — Steam CDN last resort.
-            if not all(result.values()):
-                await self._fill_from_steam_cdn(
-                    title, app_id, result, sources,
-                )
-            # Record what's still missing so the next sync can skip this
-            # game iff the gaps haven't changed (genuinely-absent art).
-            still_missing = sorted(k for k in _ARTWORK_KINDS if not result.get(k))
-            self._cache.set(_ATTEMPTS_NAMESPACE, cache_key, still_missing)
-            if sources:
-                self._log_sources(title, sources)
             return result
+
+    async def _resolve_target_kinds(
+        self,
+        app_id: int,
+        force: bool,
+        only_kinds: set[str] | None,
+    ) -> set[str]:
+        """Resolve which artwork kinds still need fetching.
+
+        Explicit ``only_kinds`` from the caller wins; ``force`` re-fetches
+        everything; otherwise the gaps are read off disk.
+        """
+        if only_kinds is not None:
+            return {k for k in only_kinds if k in _ARTWORK_KINDS}
+        if force:
+            return set(_ARTWORK_KINDS)
+        return await get_missing_kinds(self._grid_dir, app_id)
+
+    def _missing_set_unchanged(
+        self,
+        cache_key: str,
+        target: set[str],
+        force: bool,
+    ) -> bool:
+        """Whether ``target`` matches the last recorded attempt (skip signal).
+
+        Incremental skip: an identical missing set as last attempt means
+        those kinds are genuinely unavailable upstream, so don't retry.
+        ``force`` always re-fetches, so it never reports unchanged.
+        """
+        if force:
+            return False
+        attempted = self._cache.get(_ATTEMPTS_NAMESPACE, cache_key)
+        return attempted is not None and set(attempted) == target
+
+    async def _run_fetch_phases(
+        self,
+        store: str,
+        game_id: str,
+        title: str,
+        app_id: int,
+        extras: dict[str, Any] | None,
+        cache_key: str,
+        target: set[str],
+        result: dict[str, bool],
+    ) -> None:
+        """Run the three-source fetch pipeline, mutating ``result`` in place.
+
+        Phase 1 store metadata → Phase 2 SGDB fallback → Phase 3 Steam CDN,
+        each filling only the kinds still missing. Records the residual
+        missing set so the next sync can skip genuinely-absent art.
+        """
+        logger.info(
+            "[ArtworkService] fetching art for %s (need: %s)",
+            title, "+".join(sorted(target)),
+        )
+        sources: dict[str, str] = {}
+        # Phase 1 — store metadata (authoritative).
+        await self._fill_from_store(
+            store, game_id, extras, app_id, result, sources,
+        )
+        # Phase 2 — SGDB fallback for any kind still missing.
+        if not all(result.values()):
+            await self._fill_from_sgdb(
+                title, app_id, result, sources, only_kinds=target,
+            )
+        # Phase 3 — Steam CDN last resort.
+        if not all(result.values()):
+            await self._fill_from_steam_cdn(
+                title, app_id, result, sources,
+            )
+        # Record what's still missing so the next sync can skip this
+        # game iff the gaps haven't changed (genuinely-absent art).
+        still_missing = sorted(k for k in _ARTWORK_KINDS if not result.get(k))
+        self._cache.set(_ATTEMPTS_NAMESPACE, cache_key, still_missing)
+        if sources:
+            self._log_sources(title, sources)
 
     async def _fill_from_store(
         self,

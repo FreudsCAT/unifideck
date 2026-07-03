@@ -79,10 +79,20 @@ function showLauncherToast(ev: LauncherToast): void {
         local={(ev.local_snapshot ?? {}) as never}
         remote={(ev.remote_snapshot ?? {}) as never}
         onKeepLocal={() => {
-          void EventBusClient.dispatchAction("retry-sync", store, gameId, "sync_up");
+          void EventBusClient.dispatchAction(
+            "retry-sync",
+            store,
+            gameId,
+            "sync_up",
+          );
         }}
         onKeepRemote={() => {
-          void EventBusClient.dispatchAction("retry-sync", store, gameId, phase);
+          void EventBusClient.dispatchAction(
+            "retry-sync",
+            store,
+            gameId,
+            phase,
+          );
         }}
         onCancel={() => {}}
         closeModal={() => {}}

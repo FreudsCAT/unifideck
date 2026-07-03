@@ -31,6 +31,17 @@ _NAMED_CACHES: tuple[tuple[str, int], ...] = (
     ("steam_appid", 0),
     ("steam_real_appid", 0),
     ("steam_metadata", 86400),
+    # ``MetadataService`` caches the Steam ``appreviews`` summary
+    # ({review_score, review_percentage, total_reviews}) per real
+    # Steam AppID — feeds the native "Steam Review" library sort for
+    # spoofed shortcuts via ``get_overview_enrichment``. Reviews drift
+    # slowly, so a 7-day TTL avoids re-hitting the endpoint each sync.
+    ("steam_reviews", 7 * 24 * 3600),
+    # First-seen timestamp per shortcut AppID, stamped by reconcile
+    # when a shortcut is first created. Drives the native "Date Added
+    # to Library" sort. Unbounded — must never expire or a game would
+    # appear "newly added" again.
+    ("shortcut_added", 0),
     ("rawg_metadata", 86400),
     ("unifidb_metadata", 86400),
     ("metacritic", 604800),
@@ -52,6 +63,11 @@ _NAMED_CACHES: tuple[tuple[str, int], ...] = (
     # silently re-fetched from all three upstream sources.
     # 7 days mirrors the service's ``DEFAULT_CACHE_TTL``.
     ("metadata", 7 * 24 * 3600),
+    # ``pcgw_backfill`` caches per-game save-location data fetched live
+    # from PCGamingWiki when unifiDB has no entry (the hybrid fallback).
+    # Save paths are very stable, so a long TTL avoids re-querying; the
+    # 30-day expiry still lets genuinely-absent games re-check eventually.
+    ("pcgw_saves", 30 * 24 * 3600),
 )
 
 _STORE_CACHES: tuple[str, ...] = (

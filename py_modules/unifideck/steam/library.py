@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import random
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -10,7 +11,11 @@ from typing import TYPE_CHECKING, Any
 import aiohttp
 
 from unifideck.utils.config_helpers import get_cfg
-from unifideck.utils.title_match import titles_match
+from unifideck.utils.title_match import (
+    normalize_for_match,
+    strip_edition_suffix,
+    titles_match,
+)
 
 if TYPE_CHECKING:
     from unifideck.config import ConfigManager
@@ -127,59 +132,91 @@ def _format_price(price_block: Any) -> str:
     currency = price_block.get("currency", "")
     formatted = f"{final / 100:.2f}"
     return f"{formatted} {currency}".strip()
+_HTTP_TOO_MANY = 429
+_MAX_RETRIES = 3
+_RETRY_BASE_S = 1.0
+_MAX_RETRY_AFTER_S = 30.0
 
 
-async def search_store(
-    title: str,
-    config: ConfigManager | None = None,
-) -> dict[str, Any] | None:
-    """Search store.
-
-    Calls the Steam Store ``storesearch`` endpoint and returns the top
-    match as a dict (``app_id``, ``name``, ``header_image``, ``price``,
-    ``release_date``). Returns ``None`` on no hits or any network error.
-    """
-    if not title:
+def _retry_after_seconds(response: aiohttp.ClientResponse) -> float | None:
+    """Parse a numeric Retry-After header (seconds), clamped."""
+    raw = response.headers.get("Retry-After")
+    if not raw:
         return None
-    timeout_s = float(_cfg(config, "network.steam_store_timeout", _DEFAULT_TIMEOUT))
-    params = {"term": title, "l": "english", "cc": "us"}
     try:
-        timeout = aiohttp.ClientTimeout(total=timeout_s)
-        # SteamOS's bundled cert store predates several Steam Store CDN
-        # cert rotations (~2024) so default SSL verification fails inside
-        # the Decky plugin process — the symptom looks like every
-        # ``library.search_store`` call silently returning ``None``,
-        # which in turn makes ``MetadataService.enrich`` cache a
-        # ``_negative`` sentinel for every game. ArtworkService's parallel
-        # ``steam_search_appid`` (artwork/store_metadata.py:66) already
-        # works around this by passing ``ssl=False`` to its connector;
-        # mirroring that here. Hostname + chain validation are off, same
-        # trade-off as the GOG OAuth flow (see ``ssl_helpers``).
-        connector = aiohttp.TCPConnector(ssl=False)
-        async with (
-            aiohttp.ClientSession(
-                connector=connector, timeout=timeout,
-            ) as session,
-            session.get(STEAM_STORE_SEARCH_URL, params=params) as response,
-        ):
-            if response.status != _HTTP_OK:
-                return None
-            data = await response.json(content_type=None)
-    except (aiohttp.ClientError, TimeoutError) as exc:
-        logger.debug("[steam.search_store] %s failed: %s", title, exc)
+        return min(float(raw), _MAX_RETRY_AFTER_S)
+    except (TypeError, ValueError):
         return None
 
-    items = data.get("items") if isinstance(data, dict) else None
-    if not items:
-        return None
-    # Validate the title instead of blindly trusting Steam's top hit.
-    # ``items[0]`` is frequently a sequel / soundtrack / unrelated game
-    # ("Control" → "Steam Controller", "Hades" → "Hades II", "Figment" →
-    # "Figment - Soundtrack"), which would feed WRONG metadata + compat
-    # downstream. Scan for the first result that actually IS this game;
-    # return None (no data) rather than guess wrong.
-    item = None
-    app_id = 0
+
+async def _storesearch_items(
+    term: str,
+    timeout_s: float,
+    session: aiohttp.ClientSession | None = None,
+) -> list[dict[str, Any]]:
+    """Hit Steam's ``storesearch`` endpoint and return the raw item list.
+
+    ``ssl=False`` for the same SteamOS cert reason every Steam HTTP path
+    here uses. Handles HTTP 429 Rate Limiting with backoff.
+    """
+    if not term:
+        return []
+    params = {"term": term, "l": "english", "cc": "us"}
+    if session is not None:
+        return await _request_storesearch(session, term, params, timeout_s)
+    connector = aiohttp.TCPConnector(ssl=False)
+    async with aiohttp.ClientSession(connector=connector) as session_new:
+        return await _request_storesearch(session_new, term, params, timeout_s)
+
+
+async def _request_storesearch(
+    sess: aiohttp.ClientSession,
+    term: str,
+    params: dict[str, str],
+    timeout_s: float,
+) -> list[dict[str, Any]]:
+    """GET Steam's ``storesearch`` on ``sess`` with HTTP 429 backoff.
+
+    Retries up to ``_MAX_RETRIES`` times, honoring a numeric ``Retry-After``
+    header plus jitter. Returns the raw item list, or ``[]`` on a non-OK
+    status or transport error.
+    """
+    for attempt in range(_MAX_RETRIES + 1):
+        try:
+            async with sess.get(
+                STEAM_STORE_SEARCH_URL,
+                params=params,
+                timeout=aiohttp.ClientTimeout(total=timeout_s),
+            ) as response:
+                if response.status == _HTTP_TOO_MANY and attempt < _MAX_RETRIES:
+                    jitter = random.uniform(0, 0.5)  # noqa: S311
+                    delay = (
+                        _retry_after_seconds(response)
+                        or _RETRY_BASE_S * (2**attempt)
+                    ) + jitter
+                    logger.debug(
+                        "[steam.search_store] rate-limited (429), retry %d/%d in %.1fs",
+                        attempt + 1,
+                        _MAX_RETRIES,
+                        delay,
+                    )
+                    await asyncio.sleep(delay)
+                    continue
+                if response.status != _HTTP_OK:
+                    return []
+                data = await response.json(content_type=None)
+                items = data.get("items") if isinstance(data, dict) else None
+                return items if isinstance(items, list) else []
+        except (aiohttp.ClientError, TimeoutError) as exc:
+            logger.debug("[steam.search_store] %r failed: %s", term, exc)
+            return []
+    return []
+
+
+def _pick_store_match(
+    query: str, items: list[dict[str, Any]],
+) -> tuple[dict[str, Any], int] | None:
+    """First storesearch item whose name passes ``titles_match(query, …)``."""
     for candidate in items:
         try:
             cid = int(candidate.get("id", 0))
@@ -187,12 +224,38 @@ async def search_store(
             continue
         if cid <= 0:
             continue
-        if titles_match(title, str(candidate.get("name", ""))):
-            item = candidate
-            app_id = cid
-            break
-    if item is None:
+        if titles_match(query, str(candidate.get("name", ""))):
+            return candidate, cid
+    return None
+
+
+async def search_store(
+    title: str,
+    config: ConfigManager | None = None,
+    session: aiohttp.ClientSession | None = None,
+) -> dict[str, Any] | None:
+    """Resolve ``title`` to its Steam Store entry via ``storesearch``.
+
+    Returns the validated top match (``app_id``, ``name``,
+    ``header_image``, ``price``, ``release_date``) or ``None``.
+    """
+    if not title:
         return None
+    timeout_s = float(_cfg(config, "network.steam_store_timeout", _DEFAULT_TIMEOUT))
+
+    match = _pick_store_match(
+        title, await _storesearch_items(title, timeout_s, session),
+    )
+    if match is None:
+        stripped = strip_edition_suffix(normalize_for_match(title))
+        if stripped and stripped != normalize_for_match(title):
+            match = _pick_store_match(
+                title, await _storesearch_items(stripped, timeout_s, session),
+            )
+    if match is None:
+        return None
+
+    item, app_id = match
     header_image = (
         f"https://cdn.akamai.steamstatic.com/steam/apps/{app_id}/header.jpg"
     )
@@ -205,12 +268,15 @@ async def search_store(
     ).to_dict()
 
 
-async def batch_search_store(titles: list[str]) -> dict[str, dict[str, Any] | None]:
+async def batch_search_store(
+    titles: list[str],
+    session: aiohttp.ClientSession | None = None,
+) -> dict[str, dict[str, Any] | None]:
     """Batch search store."""
     if not titles:
         return {}
     results = await asyncio.gather(
-        *(search_store(t) for t in titles),
+        *(search_store(t, session=session) for t in titles),
         return_exceptions=False,
     )
     return dict(zip(titles, results, strict=False))

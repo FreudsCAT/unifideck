@@ -59,6 +59,7 @@ class UbisoftSession:
         self._payload = _PayloadSync(self)
         self._propagator = _CredentialPropagator(
             config=config,
+            paths=paths,
             payload=self._payload,
             reader=self._reader,
         )
@@ -91,6 +92,10 @@ class UbisoftSession:
         """Propagate all to all."""
         self._propagator.propagate_all_to_all()
 
+    def purge_credentials_from_all(self) -> int:
+        """Purge credentials from all game prefixes + the template."""
+        return self._propagator.purge_credentials_from_all()
+
     def inject_into_prefix(self, prefix_path: str) -> bool:
         """Inject into prefix."""
         return self._propagator.inject_into_prefix(prefix_path)
@@ -112,6 +117,26 @@ class UbisoftSession:
         """Capture."""
         if not self._reader.has_valid_credentials(prefix_path):
             return None
+        auth_dir = self._config.auth_prefix_dir_expanded
+        source_is_auth = (
+            Path(prefix_path).resolve() == Path(auth_dir).resolve()
+        )
+        # Never propagate a regressed (logged-out) credential. UPC's
+        # ``ConnectSecureStorage.dat`` shrinks on logout; a game/launch/uninstall
+        # capture whose source is SMALLER than the live auth credential is a
+        # logout/stale token — skip the whole capture so neither the credential
+        # nor the (unguarded) auth-cache artifacts can carry it into the auth
+        # prefix or the template. (The auth prefix itself is exempt: it is the
+        # source of truth and may legitimately shrink on the user's own logout.)
+        if not source_is_auth and self._source_is_logged_out(
+            prefix_path, auth_dir,
+        ):
+            logger.info(
+                "[UbisoftSession] capture: %s is logged-out/stale relative to "
+                "the auth prefix — skipping (template + auth left intact)",
+                Path(prefix_path).name,
+            )
+            return None
         new_mtime = self._reader.get_credential_mtime(prefix_path)
         if not new_mtime:
             return None
@@ -123,10 +148,19 @@ class UbisoftSession:
                 "[UbisoftSession] detected new UPC "
                 "credentials (ConnectSecureStorage.dat)",
             )
-        for target in (
-            self._config.template_dir_expanded,
-            self._config.auth_prefix_dir_expanded,
-        ):
+        # Capture-back targets the AUTH prefix only. The template is a pristine
+        # golden image that must change ONLY on an explicit sign-in or sign-out
+        # — so a game/launch/uninstall capture must never write it. The one
+        # exception is the sign-in path (``session_monitor`` captures from the
+        # auth prefix): there the auth→auth copy self-skips and auth→template is
+        # the legitimate sign-in hydration. Cloned per-game prefixes re-inject
+        # from auth, so auth alone is a sufficient fresh source.
+        targets = (
+            (auth_dir, self._config.template_dir_expanded)
+            if source_is_auth
+            else (auth_dir,)
+        )
+        for target in targets:
             if not Path(target).is_dir():
                 continue
             if Path(target).resolve() == Path(prefix_path).resolve():
@@ -148,11 +182,21 @@ class UbisoftSession:
                 )
         if credentials_changed:
             logger.info(
-                "[UbisoftSession] captured credentials → "
-                "template + auth prefix updated",
+                "[UbisoftSession] captured credentials → auth prefix updated",
             )
             return _CAPTURE_SENTINEL
         return None
+
+    def _source_is_logged_out(self, prefix_path: str, auth_dir: str) -> bool:
+        """True if ``prefix_path``'s credential is smaller than auth's.
+
+        The logout signature (see :meth:`_CredentialReader.get_credential_size`).
+        Returns False when either side has no readable credential, so a first
+        capture that seeds an empty auth prefix still flows.
+        """
+        src = self._reader.get_credential_size(prefix_path)
+        auth = self._reader.get_credential_size(auth_dir)
+        return bool(auth and src and src < auth)
 
     def _read_stored_mtime(self) -> float:
         """Read stored mtime."""

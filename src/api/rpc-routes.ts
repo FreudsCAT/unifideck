@@ -38,6 +38,9 @@ export const rpcRoutes = {
   getAllUnifideckGames: "get_all_unifideck_games",
   getGameSizeBytes: "get_game_size_bytes",
   refreshStore: "refresh_store",
+  updateSteamOwnedTitles: "update_steam_owned_titles",
+  // Orphaned-shortcut sweep — boot-time cleanup (CleanupRPCMixin)
+  scanOrphanedShortcuts: "scan_orphaned_shortcuts",
   // Downloads (DownloadRPCMixin)
   installGame: "install_game",
   uninstallGame: "uninstall_game",
@@ -51,6 +54,9 @@ export const rpcRoutes = {
   getStorageLocations: "get_storage_locations",
   getGogGameLanguages: "get_gog_game_languages",
   getProtondbCache: "get_protondb_cache",
+  // Library facets — per-shortcut enrichment for native Sort/Filters
+  // + shortcut-keyed Great-on-Deck compat (LibraryFacetsRPCMixin)
+  getOverviewEnrichment: "get_overview_enrichment",
   // Steam Store spoofing (StoreRPCMixin)
   getRealSteamAppidMappings: "get_real_steam_appid_mappings",
   getSteamMetadataCache: "get_steam_metadata_cache",
@@ -59,8 +65,6 @@ export const rpcRoutes = {
   performFullCleanup: "perform_full_cleanup",
   // UI helpers (UIRPCMixin)
   injectHideCss: "inject_hide_css",
-  hidePlaySection: "hide_play_section",
-  unhidePlaySection: "unhide_play_section",
   setLanguagePreference: "set_language_preference",
   getLanguagePreference: "get_language_preference",
   setDefaultStorageLocation: "set_default_storage_location",
@@ -73,11 +77,24 @@ export const rpcRoutes = {
   notifyGameStopped: "notify_game_stopped",
   getPlaytime: "get_playtime",
   getAllPlaytimes: "get_all_playtimes",
+  syncPlaytimeNow: "sync_playtime_now",
   // Action dispatcher (ActionRPCMixin) — bidirectional bridge
   dispatchUnifideckAction: "dispatch_unifideck_action",
   // Cloud-save behaviour preferences (CloudFailureRPCMixin)
   setCloudFailureBehavior: "set_cloud_failure_behavior",
   getCloudFailureBehaviors: "get_cloud_failure_behaviors",
+  // Manual cloud-save status / pull / push (CloudSaveRPCMixin)
+  getCloudSaveStatus: "get_cloud_save_status",
+  cloudSavePull: "cloud_save_pull",
+  cloudSavePush: "cloud_save_push",
+  setGameSavePath: "set_game_save_path",
+  // Launch executable override (ExecutableRPCMixin)
+  listGameExecutables: "list_game_executables",
+  setGameExecutable: "set_game_executable",
+  resetGameExecutable: "reset_game_executable",
+  // Achievements (AchievementsRPCMixin) — GOG display + last-session summary
+  getGameAchievements: "get_game_achievements",
+  getLastSessionAchievements: "get_last_session_achievements",
   // Observability (ObservabilityRPCMixin) — event bridge
   subscribeReplay: "subscribe_replay",
   getLauncherToasts: "get_launcher_toasts",

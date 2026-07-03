@@ -32,14 +32,15 @@ async def dispatch(plan: ProtonLaunchPlan) -> int:
     (redistributables + VC++ registry fix) once, then routes to the
     per-store handler which adds any store-specific compatibility
     (Epic EOS overlay, GOG galaxy stub, Amazon fuel args).
+
+    Prefix creation / Proton-change reset (``ensure_prefix_initialized``)
+    is NOT done here: the orchestrator runs it earlier (Phase 1.5), before
+    the cloud sync-down, so the save dir resolves out of ``drive_c`` on the
+    first launch. Calling it again here would double-run the proton-change
+    toast, so the single call lives in ``orchestrator.launch_windows``.
     """
     from .compat import apply_prefix_compat
-    from .compat.prefix_init import ensure_prefix_initialized
 
-    # Reset the prefix if the Proton family changed (Force-Compat
-    # switch / fallback) and make sure it's created before the compat
-    # steps and the game run in it.
-    await ensure_prefix_initialized(plan)
     await apply_prefix_compat(plan)
 
     store = plan.context.store

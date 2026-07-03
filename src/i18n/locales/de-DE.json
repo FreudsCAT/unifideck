@@ -106,7 +106,13 @@
     "downloadingLabel": "Wird heruntergeladen...",
     "finalizingInstallation": "Installation wird abgeschlossen...",
     "speedMbps": "{{speed}} MB/s",
-    "etaLabel": "Verbleibende Zeit: {{eta}}"
+    "etaLabel": "Verbleibende Zeit: {{eta}}",
+    "preparingMessage": "Präfix wird initialisiert und Cloud-Spielstände werden synchronisiert...",
+    "preparingLabel": "Spiel wird eingerichtet...",
+    "installingViaUpcLabel": "Installation über Ubisoft Connect",
+    "extractingMessage": "Dateien werden extrahiert...",
+    "verifyingMessage": "Dateien werden überprüft... {{pct}}%",
+    "installingViaUpcMessage": "Folge dem Ubisoft-Connect-Fenster, um die Installation abzuschließen..."
   },
   "cloudSave": {
     "title": "Cloud-Speicher-Konflikt",
@@ -122,7 +128,11 @@
     "toastUsingLocalTitle": "Lokale Spielstände werden verwendet",
     "toastUsingLocalBody": "Lokale Spielstände für {{game}} werden hochgeladen",
     "toastErrorTitle": "Fehler",
-    "toastErrorBody": "Konflikt konnte nicht gelöst werden"
+    "toastErrorBody": "Konflikt konnte nicht gelöst werden",
+    "filesSize": "{{count}} Dateien · {{size}}",
+    "uploadBlockedEmpty": "Cloud-Upload für {{game}} übersprungen – keine lokalen Spielstände gefunden",
+    "uploadSkippedTitle": "Cloud-Upload übersprungen",
+    "uploadSkippedBody": "Noch keine lokalen Spielstände zum Hochladen für {{game}}."
   },
   "storeConnections": {
     "title": "STORE-VERBINDUNGEN",
@@ -302,7 +312,20 @@
       "cloudSyncDownFailed": "Download der Cloud-Spielstände für {{store}} fehlgeschlagen ({{error}}). Es wird mit lokalen Spielständen gespielt.",
       "cloudSyncUpFailed": "Upload der Cloud-Spielstände für {{store}} fehlgeschlagen ({{error}}). Dein Fortschritt ist nur lokal gespeichert.",
       "errorCircuitBreakerOpen": "{{game_key}} konnte in letzter Zeit {{count}} Mal nicht gestartet werden. Automatische Startversuche pausiert.",
-      "launcherError": "{{game_key}} konnte nicht gestartet werden ({{error_code}}). Siehe Protokolle für Details."
+      "launcherError": "{{game_key}} konnte nicht gestartet werden ({{error_code}}). Siehe Protokolle für Details.",
+      "downloadingProton": "Proton wird heruntergeladen – das kann einige Minuten dauern...",
+      "downloadingRuntime": "Steam Runtime wird heruntergeladen – der erste Start kann einige Minuten dauern...",
+      "installingUbisoft": "Installation über Ubisoft Connect",
+      "installingUbisoftMessage": "Ubisoft Connect wird geöffnet – starte die Installation im Launcher-Fenster.",
+      "protonReadyBody": "{{version}} ist einsatzbereit",
+      "protonReadyTitle": "Proton bereit",
+      "protonSwitchedTo": "{{version}} wird jetzt verwendet",
+      "signingInUbisoft": "Anmeldung bei Ubisoft Connect",
+      "signingInUbisoftMessage": "Ubisoft Connect wird geöffnet – melde dich dort an und kehre dann zurück.",
+      "ubisoftPrefixNotReady": "Ubisoft Connect ist nicht bereit",
+      "ubisoftPrefixNotReadyMessage": "Das Ubisoft-Connect-Prefix für dieses Spiel konnte nicht vorbereitet werden. Versuche die Installation erneut; wenn es weiterhin fehlschlägt, führe eine Bibliotheks-Synchronisierung erneut aus.",
+      "ubisoftLaunchIdMissing": "Ubisoft Connect wird geöffnet",
+      "ubisoftLaunchIdMissingMessage": "Die Start-ID für dieses Spiel konnte nicht ermittelt werden – Ubisoft Connect wird geöffnet, damit du es aus deiner Bibliothek starten kannst. Führe eine Bibliotheks-Synchronisierung erneut aus, um den Direktstart zu reparieren."
     },
     "updateComplete": "Update abgeschlossen!",
     "updateCompleteMessage": "{{title}} wurde aktualisiert.",
@@ -323,7 +346,15 @@
     "library": {
       "_comment": "Toasts emitted by SyncService when a per-store library sync fails. The retry button triggers a fire-and-forget refresh via the unifideck://refresh-library/<store> verb; the user doesn't wait for the result inline, the Library view picks it up through its SYNC_PROGRESS subscription.",
       "syncStoreFailed": "Bibliothek von {{store}} konnte nicht aktualisiert werden ({{error}}). Deine vorhandene Bibliothek bleibt sichtbar."
-    }
+    },
+    "cloudPullStarted": "Cloud-Spielstand wird heruntergeladen…",
+    "cloudPushStarted": "Lokaler Spielstand wird hochgeladen…",
+    "cloudSavePathFailed": "Speicherort konnte nicht festgelegt werden",
+    "cloudSavePathSet": "Speicherort aktualisiert",
+    "cloudPullDone": "Cloud-Spielstand heruntergeladen",
+    "cloudPullFailed": "Cloud-Spielstand-Download fehlgeschlagen",
+    "cloudPushDone": "Lokaler Spielstand hochgeladen",
+    "cloudPushFailed": "Lokaler Spielstand-Upload fehlgeschlagen"
   },
   "uninstallModal": {
     "title": "Deinstallation bestätigen",
@@ -460,7 +491,8 @@
       "support": "Support",
       "install": "Installieren",
       "uninstall": "Deinstallieren",
-      "cancel": "Abbrechen"
+      "cancel": "Abbrechen",
+      "achievements": "Erfolge"
     },
     "labels": {
       "store": "Store:",
@@ -485,7 +517,8 @@
       "unsupported": "NICHT UNTERSTÜTZT",
       "unknown": "UNBEKANNT"
     },
-    "failedToLoadMetadata": "Metadaten konnten nicht geladen werden"
+    "failedToLoadMetadata": "Metadaten konnten nicht geladen werden",
+    "lastSession": "Letzte Sitzung: {{names}} freigeschaltet"
   },
   "gameDetailsSettings": {
     "title": "SPIELDETAIL-ANSICHT",
@@ -551,7 +584,8 @@
     "cancel": "Abbrechen",
     "working": "Arbeiten…",
     "loading": "Laden…",
-    "free": "kostenlos"
+    "free": "kostenlos",
+    "close": "Schließen"
   },
   "info": {
     "expandDetails": "Details anzeigen",
@@ -610,13 +644,47 @@
     "cancelConfirmBody": "Sind Sie sicher, dass Sie den Download für {{title}} abbrechen möchten? Unvollständige Dateien werden verworfen.",
     "cancelConfirmConfirm": "Download abbrechen",
     "cancelConfirmCancel": "Download fortsetzen",
-    "playOnCloud": "In der Cloud spielen"
+    "playOnCloud": "In der Cloud spielen",
+    "cloudSave": {
+      "autoPullOn": "Cloud-Spielstände werden beim Start automatisch heruntergeladen.",
+      "close": "Schließen",
+      "download": "Cloud-Spielstand herunterladen",
+      "filesCount": "{{count}} Dateien",
+      "label": "Cloud-Spielstände",
+      "menuTitle": "Cloud-Spielstände — {{game}}",
+      "noCloudData": "Unbekannt",
+      "noCloudSupport": "Keine Cloud-Speicher-Unterstützung",
+      "setLocation": "Speicherort festlegen",
+      "setLocationHint": "Wähle den Ordner aus, in dem dieses Spiel seine Spielstände speichert.",
+      "setLocationTitle": "Speicherordner dieses Spiels wählen",
+      "statusCloudAvailable": "Cloud-Spielstand verfügbar",
+      "statusNoSaves": "Keine lokalen Spielstände",
+      "statusSyncing": "Cloud-Spielstände werden synchronisiert…",
+      "statusUnresolved": "Speicherort nicht gefunden — Synchronisation funktioniert für dieses Spiel eventuell nicht.",
+      "unresolvedHint": "Starte das Spiel einmal, damit wir den Speicherordner erkennen können, oder lege den Ort manuell fest.",
+      "upload": "Lokalen Spielstand hochladen"
+    },
+    "exe": {
+      "browse": "Durchsuchen…",
+      "changeFailed": "Ausführbare Datei konnte nicht geändert werden",
+      "changed": "Ausführbare Datei geändert",
+      "defaultTag": "(Standard)",
+      "menuItem": "Ausführbare Datei ändern…",
+      "reset": "Auf Standard-Datei zurücksetzen",
+      "resetButton": "Auf Standard zurücksetzen",
+      "subtitle": "Wählen Sie aus, welche Datei dieses Spiel startet (z. B. um einen Launcher zu überspringen und das Spiel direkt auszuführen). Das Arbeitsverzeichnis und Cloud-Spielstände sind nicht betroffen.",
+      "title": "Ausführbare Datei ändern — {{game}}",
+      "unavailable": "Der Ordner dieses Spiels konnte nicht gelesen werden."
+    }
   },
   "playMeta": {
     "spaceRequired": "Benötigter Speicherplatz",
     "installedSize": "Installierte Größe",
     "lastPlayed": "Zuletzt gespielt",
-    "neverPlayed": "Nie gespielt"
+    "neverPlayed": "Nie gespielt",
+    "hoursShort": "Std.",
+    "minutesShort": "Min.",
+    "played": "Gespielt"
   },
   "downloads": {
     "title": "Downloads",
@@ -739,7 +807,8 @@
       "permission_denied": "Berechtigung verweigert",
       "cancelled": "Abgebrochen",
       "unknown": "Unerwarteter Fehler"
-    }
+    },
+    "unavailableNativeDep": "Cloud-Spielstände sind auf diesem System deaktiviert — der Python-Installation ({{python}}) fehlt eine erforderliche Komponente. Ihre lokalen Spielstände sind nicht betroffen. Erstellen/installieren Sie das Plugin nach einem Systemupdate neu, um die Synchronisierung wiederherzustellen."
   },
   "launchLogs": {
     "_comment": "Zeichenfolgen für LaunchLogsModal. Das Modal wird über die Toast-Aktion unifideck://show-logs/<launch_id> geöffnet, die an Launcher-Fehler-Toasts (Circuit Breaker + LauncherError) angehängt ist. Liest archivierte Protokolle pro Start aus ~/.local/share/unifideck/launches/<launch_id>.log und rendert sie mit stufenbasierter Farbcodierung.",
@@ -853,5 +922,28 @@
     "typeReinstall": "Neuinstallation",
     "typeUpdate": "Update auf",
     "updateButton": "Update auf v{{version}}"
+  },
+  "achievements": {
+    "unlockedTitle": "Erfolg freigeschaltet",
+    "unlockedBody": "{{name}}"
+  },
+  "achievementsModal": {
+    "title": "Erfolge",
+    "progress": "{{unlocked}} / {{total}} ({{percent}}%)",
+    "refresh": "Aktualisieren",
+    "close": "Schließen",
+    "loading": "Erfolge werden geladen…",
+    "empty": "Dieses Spiel hat keine Erfolge.",
+    "hidden": "Verborgener Erfolg",
+    "unlockedOn": "Freigeschaltet am {{date}}",
+    "error": "Erfolge konnten nicht geladen werden.",
+    "errorOffline": "Stelle eine Internetverbindung her, um Erfolge anzuzeigen.",
+    "errorAuth": "Melde dich im Store dieses Spiels an, um Erfolge anzuzeigen.",
+    "errorUnavailable": "Für dieses Spiel sind keine Erfolge verfügbar."
+  },
+  "collectionSettings": {
+    "title": "STEAM-SAMMLUNGEN",
+    "enabled": "Sammlungen aktiviert",
+    "disabled": "Sammlungen deaktiviert"
   }
 }
