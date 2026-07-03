@@ -1,6 +1,6 @@
 # Unifideck — Architecture & Build Process
 
-> **Branch:** `for-pr-0.7` · **Version:** 0.7+ · **Plan ref:** operational plan v1.3
+> **Version:** 0.7.0 · **Plan ref:** operational plan v1.3
 
 ---
 

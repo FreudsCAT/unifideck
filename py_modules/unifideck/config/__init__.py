@@ -41,7 +41,7 @@ config-related public API of Unifideck's backend:
 Legacy entry points at unifideck.core.config_manager,
 unifideck.core.config_persistence and unifideck.core.config_schema
 are preserved as deprecated shims for backward compatibility with
-code written before v0.7.1. They emit a DeprecationWarning on
+code written before v0.7.0. They emit a DeprecationWarning on
 import and will be removed in v0.9.0.
 
 Typical usage from main.py::
