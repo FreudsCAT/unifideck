@@ -1,17 +1,28 @@
 {
   "name": "unifideck-decky",
-  "version": "0.6.1",
-  "description": "Unified game library for Steam Deck - Epic, GOG, and Steam in one place",
+  "version": "0.7.0",
+  "description": "Unified game library for Steam Deck — browse, install and launch games from Epic Games, GOG, Amazon, Ubisoft and Microsoft xCloud directly inside Steam's interface. Built on a 5-layer architecture with EventBus, service DI, and 90%+ test coverage.",
   "type": "module",
   "scripts": {
     "build": "rollup -c rollup.config.mjs",
     "watch": "rollup -c -w",
-    "test": "echo \"Error: no test specified\" && exit 1",
-    "check:prettier": "prettier --config .prettierrc --check",
-    "fix:prettier": "prettier --config .prettierrc --write"
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "test:backend": "python3 -m pytest py_modules/ --cov=py_modules/unifideck --cov-report=term-missing -q",
+    "test:all": "npm run test:coverage && npm run test:backend",
+    "lint": "eslint src/ --ext .ts,.tsx",
+    "lint:fix": "eslint src/ --ext .ts,.tsx --fix",
+    "check:prettier": "prettier --config .prettierrc --check .",
+    "fix:prettier": "prettier --config .prettierrc --write .",
+    "typecheck": "tsc --noEmit"
   },
   "lint-staged": {
-    "*.{js,ts,jsx,tsx,json,md}": "npm run fix:prettier"
+    "*.{js,ts,jsx,tsx}": [
+      "eslint --fix",
+      "prettier --write"
+    ],
+    "*.{json,md,yml}": "prettier --write"
   },
   "keywords": [
     "decky",
@@ -20,9 +31,13 @@
     "epic",
     "gog",
     "amazon",
-    "library"
+    "ubisoft",
+    "microsoft",
+    "xcloud",
+    "library",
+    "multi-store"
   ],
-  "author": "numan",
+  "author": "mubaraknuman",
   "license": "GPL-3.0-or-later",
   "devDependencies": {
     "@decky/rollup": "^1.0.2",
@@ -31,15 +46,26 @@
     "@rollup/plugin-node-resolve": "^16.0.3",
     "@rollup/plugin-replace": "^6.0.3",
     "@rollup/plugin-typescript": "^12.3.0",
+    "@testing-library/react": "^16.1.0",
+    "@testing-library/jest-dom": "^6.6.3",
     "@types/react": "^19.1.1",
     "@types/react-dom": "^19.1.1",
     "@types/webpack": "^5.28.5",
+    "@typescript-eslint/eslint-plugin": "^8.0.0",
+    "@typescript-eslint/parser": "^8.0.0",
+    "eslint": "^8.57.0",
     "eslint-config-prettier": "^8.5.0",
+    "eslint-plugin-jsx-a11y": "^6.10.0",
     "eslint-plugin-prettier": "^4.0.0",
+    "eslint-plugin-react": "^7.37.0",
+    "eslint-plugin-react-hooks": "^5.0.0",
+    "jsdom": "^25.0.0",
     "lint-staged": "^16.2.7",
     "prettier": "^2.8.8",
     "rollup": "^4.53.3",
-    "typescript": "^5.6.2"
+    "typescript": "^5.6.2",
+    "vitest": "^2.1.0",
+    "@vitest/coverage-v8": "^2.1.0"
   },
   "dependencies": {
     "@decky/api": "^1.1.3",

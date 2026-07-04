@@ -1,382 +1,275 @@
-"""unifiDB IGDB metadata fetcher via jsDelivr CDN."""
-import json
+
+
+from __future__ import annotations
+
 import asyncio
 import logging
-import ssl
-import certifi
-from pathlib import Path
-from typing import Dict, List, Any, Optional, Tuple, TYPE_CHECKING
-from urllib.parse import quote
+import re
+import string
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any
 
-try:
-    import aiohttp
-except ImportError:
-    aiohttp = None
+from unifideck.utils.config_helpers import get_cfg
+from unifideck.utils.title_match import titles_match
 
 if TYPE_CHECKING:
-    import aiohttp as aiohttp_types
+    from unifideck.config import ConfigManager
 
 logger = logging.getLogger(__name__)
 
-# unifiDB CDN endpoint
-UNIFIDB_CDN_BASE = "https://cdn.jsdelivr.net/gh/mubaraknumann/unifiDB@main"
+UNIFIDB_CDN_BASE = ("https://cdn.jsdelivr.net/gh/mubaraknumann/unifiDB@main")
+MATCH_THRESHOLD = 0.65
 
-# HTTP session for CDN requests (reused for efficiency)
-_cdn_session = None  # type: Optional[aiohttp.ClientSession]
-
-# IGDB store category mappings
-IGDB_STORE_CATEGORIES = {
-    1: 'steam',
-    5: 'gog',
-    26: 'epic',
-    20: 'amazon',
-    11: 'microsoft',  # Xbox / Microsoft Store
-    30: 'itch'
-}
-
-
-def normalize_title_for_unifidb(title: str) -> str:
-    """Normalize game title for unifiDB bucket calculation."""
-    if not title:
-        return '00'
-    
-    normalized = title.lower()
-    # Remove special characters, keep only alphanumeric
-    normalized = ''.join(c if c.isalnum() else '' for c in normalized)
-    
-    if not normalized:
-        return '00'
-    
-    # Return first 2 characters as bucket key
-    bucket = normalized[:2].lower()
-    return bucket
+# Process-lifetime cache of fetched buckets.
+#
+# UnifiDB ships its catalog as static JSON files on jsdelivr's CDN —
+# one file per ``<first-letter><second-letter-or-digit>`` bucket
+# (about 36 buckets total, ``a.json``..``z.json`` + ``0_9.json`` etc.).
+# A library of 1000+ games triggers ``lookup()`` once per game, but
+# every game with the same prefix needs the SAME bucket — without
+# memoisation the same file is downloaded ~30-60 times per sync.
+#
+# We memoise per (cdn_base, bucket) so a config change to point at a
+# fork doesn't accidentally hit stale data. The cache is in-memory
+# only: it dies with the plugin process, and the next sync re-fetches.
+# That's the right TTL because:
+#   1. UnifiDB updates are rare (manual PRs to the mubaraknumann/unifiDB
+#      repo) — staleness within a single sync is impossible.
+#   2. jsdelivr's edge cache has its own ~12h TTL so a fresh fetch is
+#      cheap, no need to mirror it ourselves.
+#   3. Eliminates the need for a CacheManager namespace + disk persistence
+#      for what is essentially a request-coalescing optimisation.
+#
+# The lock prevents two concurrent ``lookup()`` calls for games in the
+# same bucket from both issuing the underlying HTTP request — the
+# second waits and reads from the cache. Important because
+# MetadataService's new game-level concurrency (semaphore=5) means
+# multiple ``lookup()`` calls can be in flight at once.
+_bucket_cache: dict[tuple[str, str], list[dict[str, Any]]] = {}
+_bucket_locks: dict[tuple[str, str], asyncio.Lock] = {}
 
 
-def get_first_char_for_bucket(bucket: str) -> str:
-    """Get directory character from bucket."""
-    if not bucket:
-        return '0'
-    first = bucket[0]
-    if first.isalnum():
-        return first
-    return '0'
-
-
-def score_title_match(normalized_search: str, normalized_game_name: str) -> float:
-    """Score how well a game name matches the search.
-    
-    Returns:
-        1.0 for exact match, 0.8 for substring, 0.6 for similar, 0.0 for no match
-    """
-    # Exact match
-    if normalized_search == normalized_game_name:
-        return 1.0
-    
-    # One contains the other
-    if normalized_search in normalized_game_name or normalized_game_name in normalized_search:
-        return 0.8
-    
-    # Check if all search words appear in game name (partial match)
-    search_words = set(normalized_search.split())
-    game_words = set(normalized_game_name.split())
-    
-    if search_words and search_words.issubset(game_words):
-        return 0.6
-    
-    return 0.0
-
+def _bucket_cache_clear() -> None:
+    """Drop every memoised bucket. Test/dev helper only."""
+    _bucket_cache.clear()
+    _bucket_locks.clear()
 
 def normalize_title_for_matching(title: str) -> str:
-    """Normalize a game title for fuzzy matching."""
-    t = title.lower().strip()
-    
-    # Remove subtitles after common separators
-    for sep in [' - ', ': ', ' – ', '™', '®']:
-        if sep in t:
-            t = t.split(sep)[0].strip()
-    
-    # Remove common edition suffixes
-    suffixes = [
-        'definitive edition',
-        'complete edition',
-        'goty edition',
-        'game of the year edition',
-        'deluxe edition',
-        'ultimate edition',
-        'gold edition',
-        'anniversary edition',
-        'remastered',
-        'enhanced edition',
-    ]
-    
-    for suffix in suffixes:
-        if t.endswith(suffix):
-            t = t[:-len(suffix)].strip()
-    
-    # Remove punctuation and extra whitespace
-    t = ''.join(c if c.isalnum() or c.isspace() else '' for c in t)
-    t = ' '.join(t.split())  # Normalize whitespace
-    
-    return t
+    """Normalize title for matching."""
+    title = title.lower()
+    title = re.sub(r"[\u2122\u00AE]", "", title)
+    title = title.translate(
+        str.maketrans("", "", string.punctuation),
+    )
+    title = re.sub(r"\s+", " ", title)
+    return title.strip()
 
+def get_first_char_for_bucket(title: str) -> str:
+    """Get first char for bucket."""
+    normalized = normalize_title_for_matching(title)
+    if not normalized:
+        return "0_9"
+    for article in ("the ", "a ", "an "):
+        if normalized.startswith(article):
+            normalized = normalized[len(article):]
+            break
+    first = normalized[0]
+    if not first.isalpha():
+        return "0_9"
+    second = (
+        normalized[1]
+        if len(normalized) > 1 and normalized[1].isalnum()
+        else first
+    )
+    return f"{first}{second}"
 
-async def search_unifidb_local(game_title: str, unifidb_path: Path) -> List[Tuple[float, Dict[str, Any]]]:
-    """Search local unifiDB for games matching title.
-    
-    Args:
-        game_title: Title of the game to search for
-        unifidb_path: Path to local unifiDB directory
-        
-    Returns:
-        List of (score, game_dict) tuples sorted by score descending
-    """
-    # Calculate bucket
-    bucket = normalize_title_for_unifidb(game_title)
-    first_char = get_first_char_for_bucket(bucket)
-    
-    # Load bucket file
-    bucket_file = unifidb_path / "games" / first_char / f"{bucket}.json"
-    
-    if not bucket_file.exists():
-        logger.debug(f"[unifiDB] Bucket file not found: {bucket_file}")
-        return []
-    
-    try:
-        with open(bucket_file, 'r') as f:
-            games = json.load(f)
-    except Exception as e:
-        logger.error(f"[unifiDB] Error loading bucket {bucket}: {e}")
-        return []
-    
-    # Score matches
-    search_norm = normalize_title_for_matching(game_title)
-    matches = []
-    
-    for game in games:
-        if not isinstance(game, dict) or 'name' not in game:
-            continue
-        
-        game_norm = normalize_title_for_matching(game['name'])
-        score = score_title_match(search_norm, game_norm)
-        
-        if score > 0.0:
-            matches.append((score, game))
-    
-    # Sort by score descending
-    matches.sort(key=lambda x: -x[0])
-    return matches
+def score_title_match(search: str, candidate: str) -> float:
+    """Score title match."""
+    a = normalize_title_for_matching(search)
+    b = normalize_title_for_matching(candidate)
+    if a == b:
+        return 1.0
+    if not a or not b:
+        return 0.0
+    if a in b or b in a:
+        shorter = min(len(a), len(b))
+        longer = max(len(a), len(b))
+        if longer <= 2 * shorter:
+            return 0.85
+    tokens_a = set(a.split())
+    tokens_b = set(b.split())
+    if not tokens_a or not tokens_b:
+        return 0.0
+    intersect = tokens_a & tokens_b
+    union = tokens_a | tokens_b
+    return 0.8 * (len(intersect) / len(union))
 
+def extract_store_id(game: dict[str, Any], store: str) -> str | None:
 
-def extract_store_id_from_external_ids(game: Dict[str, Any], store: str) -> Optional[str]:
-    """Extract store-specific game ID from external_ids array.
-    
-    Args:
-        game: unifiDB game record
-        store: Store name ('steam', 'gog', 'epic', 'amazon')
-        
-    Returns:
-        Store-specific game ID or None if not found
-    """
-    external_ids = game.get('external_ids', [])
-    
-    for entry in external_ids:
-        if isinstance(entry, dict) and entry.get('store') == store:
-            return entry.get('uid')
-    
-    return None
-
+    """Extract store ID."""
+    external = game.get("external_ids") or {}
+    if not isinstance(external, dict):
+        return None
+    val = external.get(store)
+    return str(val) if val is not None else None
 
 def get_best_match(
-    game_title: str,
-    matches: List[Tuple[float, Dict[str, Any]]],
-    required_stores: Optional[List[str]] = None
-) -> Optional[Dict[str, Any]]:
-    """Get the best matching game, with optional store filtering.
-    
-    Args:
-        game_title: Original game title (for logging)
-        matches: List of (score, game) tuples
-        required_stores: List of store names that game must have IDs for (optional)
-        
-    Returns:
-        Best matching game dict, or None if no good match found
+    search_title: str,
+    candidates: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    """Best title-fallback match, gated by the shared ``titles_match``.
+
+    Only reached when no candidate carries the store-native id (the
+    exact path in :func:`lookup`). ``titles_match`` decides accept/reject
+    — rejecting the sequels the local substring scorer wrongly accepted
+    at 0.85 ("Hades" → "Hades II", "Quake" → "Quake II", "Spelunky" →
+    "Spelunky 2") while accepting publisher-prefix / Roman-numeral /
+    edition variants its token-Jaccard missed ("Assassin's Creed II" ↔
+    "Assassin's Creed 2"). ``score_title_match`` only ranks the
+    survivors when a bucket holds several genuine variants.
     """
-    if not matches:
+    scored: list[tuple[float, dict[str, Any]]] = []
+    for c in candidates:
+        name = c.get("title") or c.get("name") or ""
+        if titles_match(search_title, name):
+            scored.append((score_title_match(search_title, name), c))
+    if not scored:
         return None
-    
-    for score, game in matches:
-        # If score is too low, skip
-        if score < 0.6:
-            break
-        
-        # If we need specific stores, verify they exist
-        if required_stores:
-            has_all_stores = all(
-                extract_store_id_from_external_ids(game, store) 
-                for store in required_stores
+    scored.sort(key=lambda x: x[0], reverse=True)
+    return scored[0][1]
+
+def game_to_cache_format(game: dict[str, Any]) -> dict[str, Any]:
+    """Game to cache format.
+
+    ``save_locations``/``cloud`` are populated by the unifiDB pipeline's
+    ``enrich_save_locations.py`` step (Ludusavi/PCGamingWiki). They flow
+    through the metadata cache to the cloud-save save-location resolver, which
+    uses them to find a game's real save directory instead of guessing.
+    """
+    out = {
+        "title": game.get("title") or game.get("name") or "",
+        "description": game.get("description", ""),
+        "release_date": game.get("release_date", ""),
+        "publisher": game.get("publisher", ""),
+        "developers": game.get("developers", []),
+        "genres": game.get("genres", []),
+        "platforms": game.get("platforms", []),
+        "external_ids": game.get("external_ids", {}),
+    }
+    save_locations = game.get("save_locations")
+    if save_locations:
+        out["save_locations"] = save_locations
+    cloud = game.get("cloud")
+    if cloud:
+        out["cloud"] = cloud
+    if game.get("save_source"):
+        out["save_source"] = game["save_source"]
+    return out
+
+@dataclass
+class UnifiDBResult:
+    """Unifi dbresult."""
+    title: str
+    description: str
+    release_date: str
+    publisher: str
+    developers: list[str]
+    genres: list[str]
+    def to_dict(self) -> dict[str, Any]:
+        """To dict."""
+        return {
+            "title": self.title,
+            "description": self.description,
+            "release_date": self.release_date,
+            "publisher": self.publisher,
+            "developers": self.developers,
+            "genres": self.genres,
+        }
+
+async def lookup(
+    store: str, game_id: str, title: str,
+    config: ConfigManager | None = None,
+) -> dict[str, Any] | None:
+
+    """Lookup."""
+    cdn_base = get_cfg(
+        config, "metadata.unifidb.cdn_base", UNIFIDB_CDN_BASE,
+    )
+    timeout = get_cfg(
+        config, "metadata.unifidb.fetch_timeout_seconds", 15,
+    )
+    bucket = get_first_char_for_bucket(title)
+    games = await _fetch_bucket(bucket, cdn_base, timeout)
+    if not games:
+        return None
+    for game in games:
+        if extract_store_id(game, store) == game_id:
+            logger.debug(
+                "[unifidb] id match: %s:%s", store, game_id,
             )
-            if not has_all_stores:
-                continue
-        
-        logger.debug(f"[unifiDB] Best match for '{game_title}': '{game.get('name')}' (score={score:.2f})")
-        return game
-    
-    logger.debug(f"[unifiDB] No acceptable match found for '{game_title}'")
+            return game_to_cache_format(game)
+    best = get_best_match(title, games)
+    if best:
+        logger.debug("[unifidb] title match: %r", title)
+        return game_to_cache_format(best)
     return None
 
+async def _fetch_bucket(
+    bucket: str, cdn_base: str, timeout: int,  # noqa: ASYNC109 — timeout is API value passed to underlying lib (urllib/aiohttp/subprocess), not an asyncio.timeout() wrapper
+) -> list[dict[str, Any]]:
+    """Return the parsed bucket, memoised for the plugin's lifetime.
 
-def unifidb_game_to_cache_format(game: Dict[str, Any]) -> Dict[str, Any]:
-    """Convert unifiDB game record to cache format.
-    
-    Args:
-        game: Raw unifiDB game record
-        
-    Returns:
-        Standardized metadata dict for caching
+    First call for a (cdn_base, bucket) pair fetches over HTTPS;
+    every subsequent call returns the cached list. See the module
+    docstring on ``_bucket_cache`` for the rationale.
+
+    The per-key ``asyncio.Lock`` collapses concurrent fetches for
+    the same bucket into a single HTTP request — without it, a
+    sync that processes games A1, A2, A3 in parallel would issue
+    three identical ``a.json`` GETs before the first one finished.
     """
-    from datetime import datetime
-    
-    # Convert Unix timestamp to ISO date
-    release_date = ''
-    if 'release_date' in game and isinstance(game['release_date'], (int, float)):
-        try:
-            release_date = datetime.utcfromtimestamp(game['release_date']).strftime('%Y-%m-%d')
-        except (ValueError, OSError):
-            pass
-    
-    return {
-        'igdb_id': game.get('igdb_id'),
-        'name': game.get('name', ''),
-        'description': game.get('summary', ''),
-        'genres': game.get('genres', []),
-        'developers': game.get('developers', []),
-        'publishers': game.get('publishers', []),
-        'released': release_date,
-        'platforms': game.get('platforms', []),
-        'cover_url': game.get('cover_url', ''),
-        'external_ids': game.get('external_ids', []),
-    }
+    key = (cdn_base, bucket)
+    cached = _bucket_cache.get(key)
+    if cached is not None:
+        return cached
+    lock = _bucket_locks.setdefault(key, asyncio.Lock())
+    async with lock:
+        # Re-check after acquiring the lock — another coroutine may
+        # have populated the cache while we were waiting.
+        cached = _bucket_cache.get(key)
+        if cached is not None:
+            return cached
+        data = await _fetch_bucket_uncached(bucket, cdn_base, timeout)
+        _bucket_cache[key] = data
+        return data
 
 
-async def _get_cdn_session():
-    """Get or create CDN HTTP session with proper SSL context."""
-    global _cdn_session
-    if aiohttp is None:
-        raise ImportError("aiohttp is required for CDN fetching")
-    
-    if _cdn_session is None or _cdn_session.closed:
-        # Create SSL context with certifi certificates to avoid SSL verification errors
-        ssl_context = ssl.create_default_context(cafile=certifi.where())
-        connector = aiohttp.TCPConnector(ssl=ssl_context, limit_per_host=10)
-        _cdn_session = aiohttp.ClientSession(connector=connector)
-    
-    return _cdn_session
-
-
-async def close_cdn_session():
-    """Close the CDN HTTP session."""
-    global _cdn_session
-    if _cdn_session and not _cdn_session.closed:
-        await _cdn_session.close()
-        _cdn_session = None
-
-
-async def search_unifidb_cdn(
-    game_title: str,
-    timeout: float = 10.0
-) -> List[Tuple[float, Dict[str, Any]]]:
-    """Search unifiDB via CDN for games matching title.
-    
-    This fetches the bucket JSON file from jsDelivr CDN and searches for matches.
-    
-    Args:
-        game_title: Title of the game to search for
-        timeout: Request timeout in seconds
-        
-    Returns:
-        List of (score, game_dict) tuples sorted by score descending
-    """
-    if aiohttp is None:
-        logger.error("[unifiDB CDN] aiohttp not available")
-        return []
-    
-    # Calculate bucket
-    bucket = normalize_title_for_unifidb(game_title)
-    first_char = get_first_char_for_bucket(bucket)
-    
-    # Build CDN URL
-    cdn_url = f"{UNIFIDB_CDN_BASE}/games/{first_char}/{bucket}.json"
-    
+async def _fetch_bucket_uncached(
+    bucket: str, cdn_base: str, timeout: int,  # noqa: ASYNC109 — timeout is API value passed to underlying lib (urllib/aiohttp/subprocess), not an asyncio.timeout() wrapper
+) -> list[dict[str, Any]]:
+    """Single HTTP fetch of one bucket file. Caller owns memoisation."""
+    import aiohttp
+    first_char = bucket[0] if bucket else "0_9"
+    url = f"{cdn_base}/games/{first_char}/{bucket}.json"
     try:
-        session = await _get_cdn_session()
-        
-        # Don't pass ssl= here since we already configured SSL context in the connector
-        async with session.get(
-            cdn_url,
-            timeout=aiohttp.ClientTimeout(total=timeout)
-        ) as resp:
-            if resp.status == 404:
-                logger.debug(f"[unifiDB CDN] Bucket not found: {bucket}")
-                return []
-            
+        # ssl=False — see library.search_store's comment. The UnifiDB
+        # CDN is on jsdelivr which most clients verify fine, but
+        # SteamOS's outdated cert store breaks even those handshakes
+        # from inside the Decky plugin process; matching the
+        # workaround the other metadata modules use.
+        connector = aiohttp.TCPConnector(ssl=False)
+        async with (
+            aiohttp.ClientSession(connector=connector) as session,
+            session.get(url, timeout=aiohttp.ClientTimeout(total=timeout)) as resp,
+        ):
             if resp.status != 200:
-                logger.warning(f"[unifiDB CDN] HTTP {resp.status} for bucket {bucket}")
                 return []
-            
-            games = await resp.json()
-    
-    except asyncio.TimeoutError:
-        logger.warning(f"[unifiDB CDN] Timeout fetching bucket {bucket}")
-        return []
+            data = await resp.json()
+            if isinstance(data, list):
+                return data
+            return []
     except Exception as e:
-        logger.error(f"[unifiDB CDN] Error fetching bucket {bucket}: {e}")
+        logger.debug(
+            "[unifidb] fetch(%s) failed: %s", url, e,
+        )
         return []
-    
-    # Score matches
-    search_norm = normalize_title_for_matching(game_title)
-    matches = []
-    
-    for game in games:
-        if not isinstance(game, dict) or 'name' not in game:
-            continue
-        
-        game_norm = normalize_title_for_matching(game['name'])
-        score = score_title_match(search_norm, game_norm)
-        
-        if score > 0.0:
-            matches.append((score, game))
-    
-    # Sort by score descending
-    matches.sort(key=lambda x: -x[0])
-    return matches
-
-
-async def fetch_unifidb_metadata(
-    game_title: str,
-    timeout: float = 10.0
-) -> Optional[Dict[str, Any]]:
-    """Fetch unifiDB metadata for a single game via CDN.
-    
-    This is the main entry point for CDN-based unifiDB lookups.
-    
-    Args:
-        game_title: Name of the game to search for
-        timeout: Request timeout in seconds
-        
-    Returns:
-        Standardized metadata dict or None if not found
-    """
-    try:
-        matches = await search_unifidb_cdn(game_title, timeout=timeout)
-        best_match = get_best_match(game_title, matches)
-        
-        if best_match:
-            logger.info(f"[unifiDB CDN] Found metadata for: {game_title}")
-            return unifidb_game_to_cache_format(best_match)
-        else:
-            logger.debug(f"[unifiDB CDN] No match for: {game_title}")
-            return None
-    
-    except Exception as e:
-        logger.error(f"[unifiDB CDN] Error fetching {game_title}: {e}")
-        return None

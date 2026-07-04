@@ -1,2 +1,41 @@
 !src/**
 node_modules
+
+# Local-only dirs (tool caches, vendored clones, build output, virtualenvs).
+# Absent on a fresh CI checkout — listed here so a local `check:prettier`
+# matches what CI actually sees and isn't drowned in thousands of cache JSONs.
+# Mirrors the relevant .gitignore patterns.
+.pnpm-store
+.import_linter_cache
+.mypy_cache
+.ruff_cache
+.pytest_cache
+.agent
+.claude
+CLAUDE.md
+.cache
+__pycache__
+tmp
+out
+dist
+.venv
+venv
+
+# Vendored Python deps live under py_modules/* (gitignored); only our own
+# source py_modules/unifideck/** is committed. Mirror .gitignore so prettier
+# doesn't try to format bundled jsonschema/setuptools/cryptography assets.
+py_modules/*
+!py_modules/unifideck/
+!py_modules/unifideck/**
+
+# Local-only companion dashboard (its own venv) — gitignored.
+antigravity-dashboard
+
+# Documentation is prose, not code — not audited by CI. The Markdown under
+# docs/ is hand-authored and intentionally formatted; keep Prettier out of it.
+docs/
+
+# Auto-generated locale catalog — emitted by scripts/gen_locale_imports.py
+# (committed by the build's i18n step). Its formatting follows the
+# generator, not Prettier, so exclude it from the formatting gate.
+src/i18n/locales.generated.ts

@@ -1,110 +1,145 @@
+/**
+ * StoreConnections — per-store login status + Sign-in / Logout action.
+ *
+ * Rebuilt from staging:`src/components/settings/StoreConnections.tsx`:
+ * rich rows with a prominent StoreIcon (green when connected, white
+ * when disconnected), the localised display name, and the new
+ * `StoreAuthButton` as the action target. Driver hooks (`useStores`,
+ * `useStoreAuth`) come from the current architecture so the data
+ * plane is unchanged.
+ */
+import { FC, useCallback, useState } from "react";
 import { PanelSection, PanelSectionRow, Field } from "@decky/ui";
-import { loadTranslations, t } from "../../i18n";
-import StoreIcon from "../StoreIcon";
-import { Store } from "../../types/store";
-import StoreAuthButton from "./StoreAuthButton";
+import { useTranslation } from "react-i18next";
+import { call } from "@decky/api";
+import { FaSync } from "react-icons/fa";
+import { useStores } from "../../contexts/StoreContext";
+import { useStoreAuth } from "../../hooks/useStoreAuth";
+import { StoreIcon } from "../shared/StoreIcon";
+import { StoreAuthButton } from "./StoreAuthButton";
+import { rpcRoutes } from "../../api/rpc-routes";
+import type { StoreId } from "../../types/api";
 
-loadTranslations();
-
-interface StoreConnectionsProps {
-  storeStatus: Record<Store, string>;
-  onLogout: (store: Store) => void;
-  onStartAuth: (store: Store) => void;
-}
-
-const STORES: {
-  key: Store;
-  label: string;
+interface RowConfig {
   notInstalledStatus?: string;
   notInstalledMessage?: string;
-}[] = [
-  {
-    key: "epic",
-    label: "storeConnections.epicGames",
+}
+
+const ROW_CONFIG: Partial<Record<StoreId, RowConfig>> = {
+  epic: {
     notInstalledStatus: "legendary_not_installed",
     notInstalledMessage: "storeConnections.legendaryNotInstalled",
   },
-  { key: "gog", label: "storeConnections.gog" },
-  {
-    key: "amazon",
-    label: "storeConnections.amazonGames",
+  amazon: {
     notInstalledStatus: "nile_not_installed",
     notInstalledMessage: "storeConnections.nileNotInstalled",
   },
-  { key: "ubisoft", label: "storeConnections.ubisoftConnect" },
-  {
-    key: "microsoft",
-    label: "storeConnections.microsoftStore",
-  },
-];
+};
 
-const StoreConnections = ({
-  storeStatus,
-  onLogout,
-  onStartAuth,
-}: StoreConnectionsProps) => {
+const StoreRow: FC<{ storeId: StoreId; displayName: string }> = ({
+  storeId,
+  displayName,
+}) => {
+  const { t } = useTranslation();
+  const { status, busy, connect, disconnect } = useStoreAuth(storeId);
+  const isConnected = status === "connected";
+  const config = ROW_CONFIG[storeId];
+  const showNotInstalled =
+    config?.notInstalledStatus && status === config.notInstalledStatus;
+  const [refreshing, setRefreshing] = useState(false);
+
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
+    try {
+      await call<[string], unknown>(rpcRoutes.refreshStore, storeId);
+    } catch {
+      // RPC failure is silent — the store row isn't a progress
+      // display; the main sync bar and log carry the diagnostics.
+    } finally {
+      setRefreshing(false);
+    }
+  }, [storeId]);
+
+  return (
+    <div>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          flexDirection: "row",
+          justifyContent: "space-between",
+          padding: 0,
+        }}
+      >
+        <div style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+          <StoreIcon
+            store={storeId}
+            size="18px"
+            color={isConnected ? "#4ade80" : "#fff"}
+          />
+          <span style={{ fontSize: 14 }}>{displayName}</span>
+          {isConnected && (
+            <span
+              role="button"
+              tabIndex={0}
+              onClick={(e) => {
+                e.stopPropagation();
+                void onRefresh();
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.stopPropagation();
+                  void onRefresh();
+                }
+              }}
+              style={{
+                cursor: refreshing ? "default" : "pointer",
+                opacity: refreshing ? 0.4 : 0.6,
+                marginInlineStart: 4,
+              }}
+              title={t("librarySync.refreshStore", "Refresh this store")}
+            >
+              <FaSync
+                style={{
+                  fontSize: 11,
+                  animation: refreshing ? "spin 1s linear infinite" : "none",
+                }}
+              />
+            </span>
+          )}
+        </div>
+        <StoreAuthButton
+          store={storeId}
+          status={status ?? "disconnected"}
+          busy={busy}
+          onConnect={() => void connect()}
+          onDisconnect={() => void disconnect()}
+        />
+      </div>
+      {showNotInstalled && config?.notInstalledMessage && (
+        <PanelSectionRow>
+          <Field description={t(config.notInstalledMessage)} />
+        </PanelSectionRow>
+      )}
+    </div>
+  );
+};
+
+export const StoreConnections: FC = () => {
+  const { t } = useTranslation();
+  const { stores, loading } = useStores();
+  if (loading) return null;
   return (
     <PanelSection title={t("storeConnections.title")}>
-      <div style={{ display: "flex", flexDirection: "column", gap: "2px" }}>
-        {STORES.map(
-          ({ key, label, notInstalledStatus, notInstalledMessage }) => {
-            const status = storeStatus[key];
-            const isConnected = status === "connected";
-            const isCheckingOrError =
-              status === "checking" ||
-              status === "error" ||
-              status === notInstalledStatus;
-
-            return (
-              <div key={key}>
-                {/* Status indicators */}
-                <div
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    flexDirection: "row",
-                    justifyContent: "space-between",
-                    padding: 0,
-                  }}
-                >
-                  <div
-                    style={{
-                      display: "inline-flex",
-                      alignItems: "center",
-                      gap: "8px",
-                    }}
-                  >
-                    <StoreIcon
-                      store={key}
-                      size="18px"
-                      color={isConnected ? "#4ade80" : "#fff"}
-                    />
-                    <span style={{ fontSize: "14px" }}>{t(label)}</span>
-                  </div>
-
-                  {!isCheckingOrError && (
-                    <StoreAuthButton
-                      store={key}
-                      status={status}
-                      onLogout={onLogout}
-                      onStartAuth={onStartAuth}
-                    />
-                  )}
-                </div>
-
-                {/* Error/warning messages */}
-                {status === notInstalledStatus && notInstalledMessage && (
-                  <PanelSectionRow>
-                    <Field description={t(notInstalledMessage)} />
-                  </PanelSectionRow>
-                )}
-              </div>
-            );
-          },
-        )}
+      <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+        {stores.map((s) => (
+          <StoreRow
+            key={s.name}
+            storeId={s.name}
+            displayName={s.display_name}
+          />
+        ))}
       </div>
     </PanelSection>
   );
 };
-
-export default StoreConnections;

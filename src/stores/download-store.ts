@@ -1,0 +1,226 @@
+/**
+ * download-store — boot-time singleton for download queue state.
+ *
+ * Replaces the QAM-bound EventBus subscriptions and initial
+ * `get_download_queue` RPC that previously lived inside
+ * `<DownloadProvider>`. The store:
+ *
+ *   1. Fetches the initial queue at boot via `get_download_queue`.
+ *   2. Subscribes to all DOWNLOAD_* events to keep the snapshot
+ *      current even while the QAM is closed.
+ *   3. Handles `UBISOFT_INSTALL_LAUNCH_REQUESTED` — critical for
+ *      opening UPC in Gaming Mode when the QAM is closed.
+ *   4. Calls `invalidateGameInfo` + `bumpGameStateVersion` on
+ *      terminal download events so AppDetails shows fresh state.
+ *
+ * React components subscribe via `useSyncExternalStore` through
+ * the thin `<DownloadProvider>` wrapper (which now only provides
+ * mutation actions and the reactive snapshot).
+ */
+import { call } from "@decky/api";
+import { rpcRoutes } from "../api/rpc-routes";
+import { unwrapRpcEnvelope } from "../api/useRPC";
+import { EventBusClient } from "../api/event-bus-client";
+import { invalidateGameInfo } from "../hooks/useGameInfo";
+import { bumpGameStateVersion } from "../lib/game-state-version";
+import { launchUbisoftInstallViaShortcut } from "../utils/ubisoftShortcutLaunch";
+import type { DownloadItem, DownloadQueueInfo } from "../types/downloads";
+
+// ── Helpers (moved from DownloadContext) ─────────────────
+
+/** Pull the appId out of a DOWNLOAD_* terminal event payload. */
+function extractAppId(payload: unknown): number | null {
+  if (!payload || typeof payload !== "object") return null;
+  const game = (payload as { game?: { app_id?: unknown } }).game;
+  if (!game || typeof game !== "object") return null;
+  const id = (game as { app_id?: unknown }).app_id;
+  return typeof id === "number" ? id : null;
+}
+
+/** Build the `"<store>:<game_id>"` key from a terminal payload. */
+function extractStoreGameId(payload: unknown): string | null {
+  if (!payload || typeof payload !== "object") return null;
+  const item = (payload as { item?: { store?: unknown; game_id?: unknown } })
+    .item;
+  if (!item || typeof item !== "object") return null;
+  const store = (item as { store?: unknown }).store;
+  const gameId = (item as { game_id?: unknown }).game_id;
+  if (typeof store !== "string" || typeof gameId !== "string") return null;
+  return `${store}:${gameId}`;
+}
+
+/** Normalise the backend's queue shape to the frontend DTO. */
+function adaptQueue(raw: unknown): DownloadQueueInfo {
+  const obj =
+    typeof raw === "object" && raw !== null
+      ? (raw as Record<string, unknown>)
+      : {};
+  const queued = Array.isArray(obj.queued)
+    ? (obj.queued as DownloadItem[])
+    : [];
+  const running = Array.isArray(obj.running)
+    ? (obj.running as DownloadItem[])
+    : [];
+  const finished = Array.isArray(obj.finished)
+    ? (obj.finished as DownloadItem[])
+    : [];
+  const current =
+    (obj.current as DownloadItem | undefined) ?? running[0] ?? null;
+  return {
+    success: true,
+    queued,
+    finished,
+    current,
+    state: running.length > 0 ? "running" : "idle",
+  };
+}
+
+// ── Snapshot type ────────────────────────────────────────
+
+export interface DownloadSnapshot {
+  queue: DownloadQueueInfo | null;
+  loading: boolean;
+}
+
+// ── Store implementation ────────────────────────────────
+
+type Listener = () => void;
+
+class DownloadStoreImpl {
+  private _snapshot: DownloadSnapshot = { queue: null, loading: true };
+  private _listeners = new Set<Listener>();
+  private _unsubs: (() => void)[] = [];
+  private _ubisoftLaunched = new Set<string>();
+
+  /** Start subscriptions and initial fetch. */
+  start(): void {
+    void this._fetchQueue();
+
+    this._unsubs.push(
+      EventBusClient.subscribe("download_queued", () => this._fetchQueue()),
+    );
+
+    this._unsubs.push(
+      EventBusClient.subscribe("download_started", () => {
+        EventBusClient.bumpToFast();
+        void this._fetchQueue();
+      }),
+    );
+
+    this._unsubs.push(
+      EventBusClient.subscribe("download_progress", (payload) => {
+        this._setSnapshot((prev) => ({
+          ...prev,
+          queue: prev.queue && {
+            ...prev.queue,
+            current: prev.queue.current && {
+              ...prev.queue.current,
+              progress_percent:
+                (payload.progress as number) ??
+                prev.queue.current.progress_percent,
+              speed_mbps:
+                (payload.speed_mbps as number) ?? prev.queue.current.speed_mbps,
+              eta_seconds:
+                (payload.eta_seconds as number) ??
+                prev.queue.current.eta_seconds,
+            },
+          },
+        }));
+      }),
+    );
+
+    const onTerminal = (payload: Record<string, unknown>) => {
+      const appId = extractAppId(payload);
+      if (appId != null) {
+        invalidateGameInfo(appId);
+        bumpGameStateVersion(appId);
+      }
+      const storeGameId = extractStoreGameId(payload);
+      if (storeGameId) this._ubisoftLaunched.delete(storeGameId);
+      void this._fetchQueue();
+    };
+
+    this._unsubs.push(
+      EventBusClient.subscribe("download_complete", onTerminal),
+    );
+    this._unsubs.push(EventBusClient.subscribe("download_failed", onTerminal));
+    this._unsubs.push(
+      EventBusClient.subscribe("download_cancelled", onTerminal),
+    );
+
+    // Ubisoft install — open UPC via Steam's RunGame
+    this._unsubs.push(
+      EventBusClient.subscribe(
+        "ubisoft_install_launch_requested",
+        (payload) => {
+          const storeGameId = (payload as { store_game_id?: unknown })
+            .store_game_id;
+          if (typeof storeGameId !== "string" || !storeGameId) return;
+          if (this._ubisoftLaunched.has(storeGameId)) return;
+          this._ubisoftLaunched.add(storeGameId);
+          void launchUbisoftInstallViaShortcut(storeGameId, {
+            UNIFIDECK_UBISOFT_ACTION: "install",
+          }).then((result) => {
+            if (!result.success) {
+              this._ubisoftLaunched.delete(storeGameId);
+              console.error(
+                "[DownloadStore] Ubisoft UPC RunGame failed:",
+                result.error,
+              );
+            }
+          });
+        },
+      ),
+    );
+  }
+
+  /** Stop all subscriptions. */
+  stop(): void {
+    for (const unsub of this._unsubs) unsub();
+    this._unsubs = [];
+  }
+
+  /** Re-fetch the queue from the backend. */
+  async refetch(): Promise<void> {
+    await this._fetchQueue();
+  }
+
+  // ── useSyncExternalStore API ──────────────────────────
+
+  getSnapshot = (): DownloadSnapshot => this._snapshot;
+
+  subscribe = (listener: Listener): (() => void) => {
+    this._listeners.add(listener);
+    return () => this._listeners.delete(listener);
+  };
+
+  // ── Internals ─────────────────────────────────────────
+
+  private async _fetchQueue(): Promise<void> {
+    try {
+      const raw = await call<[], unknown>(rpcRoutes.getDownloadQueue);
+      const data = unwrapRpcEnvelope<unknown>(raw, {
+        route: rpcRoutes.getDownloadQueue,
+        throwing: false,
+      });
+      this._setSnapshot({ queue: adaptQueue(data), loading: false });
+    } catch (e) {
+      console.warn("[DownloadStore] fetch failed:", e);
+    }
+  }
+
+  private _setSnapshot(
+    update: DownloadSnapshot | ((prev: DownloadSnapshot) => DownloadSnapshot),
+  ): void {
+    const next = typeof update === "function" ? update(this._snapshot) : update;
+    this._snapshot = next;
+    this._emit();
+  }
+
+  private _emit(): void {
+    for (const listener of this._listeners) listener();
+  }
+}
+
+/** Singleton — started at boot from `definePlugin`. */
+export const downloadStore = new DownloadStoreImpl();

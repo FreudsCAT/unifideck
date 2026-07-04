@@ -1,72 +1,93 @@
-import React from "react";
-import { PanelSection, PanelSectionRow, ButtonItem } from "@decky/ui";
-import { FaSync } from "react-icons/fa";
-import { t } from "../../i18n";
-import ForceSyncModal from "../ForceSyncModal";
-import { SyncProgress } from "../../types/syncProgress";
-
-interface LibrarySyncProps {
-  syncing: boolean;
-  syncCancelling: boolean;
-  syncCooldown: boolean;
-  cooldownSeconds: number;
-  syncProgress: SyncProgress | null;
-  storeStatus: {
-    epic: string;
-    gog: string;
-    amazon: string;
-    microsoft: string;
-  };
-  handleManualSync: (force?: boolean, resyncArtwork?: boolean) => void;
-  handleCancelSync: () => void;
-  showModal: (
-    content: React.ReactNode,
-  ) =>
-    | {
-        Close?: () => void;
-      }
-    | void;
-  checkStoreStatus: () => void;
-}
-
-const LibrarySync: React.FC<LibrarySyncProps> = ({
-  syncing,
-  syncCancelling,
-  syncCooldown,
-  cooldownSeconds,
-  syncProgress,
-  storeStatus,
-  handleManualSync,
-  handleCancelSync,
+/**
+ * LibrarySync — sync controls + staging-style progress display.
+ *
+ * Ported from ``staging:src/components/settings/LibrarySync.tsx``.
+ * While a sync is in flight the component shows:
+ *  - A colour-coded progress bar (blue=sync, orange=artwork/metadata, green=complete)
+ *  - The current phase label via i18n (e.g. "Syncing Epic Games…")
+ *  - Per-phase X / Y counter lines (games synced, artwork downloaded, metadata extracted)
+ *
+ * Progress is read from `SyncContext` reactively — the 500ms polling
+ * loop inside the provider feeds ``sync.progress``.
+ */
+import { FC } from "react";
+import {
+  PanelSection,
+  PanelSectionRow,
+  ButtonItem,
   showModal,
-  checkStoreStatus,
-}) => {
+} from "@decky/ui";
+import { useTranslation } from "react-i18next";
+import { FaSync } from "react-icons/fa";
+import { useSync } from "../../contexts/SyncContext";
+import { useSyncCooldown } from "../../hooks/useSyncCooldown";
+import { ForceSyncModal } from "../modals/ForceSyncModal";
+
+// The progress block hides only on terminal statuses (sync not
+// running). Allow-listing in-progress phases is fragile because
+// the post-sync services (Metadata, Artwork, Compatibility) all
+// overwrite ``progress.status`` independently — Compatibility
+// sets ``"proton_meta"`` and leaves it there, so the bar would
+// stay hidden during artwork download if we required a specific
+// in-progress value. Inverting the check makes new phases work
+// without needing to add them here.
+const TERMINAL_STATUSES = new Set(["idle", "complete", "error", "cancelled"]);
+
+export const LibrarySync: FC = () => {
+  const { t } = useTranslation();
+  const sync = useSync();
+  const cooldown = useSyncCooldown();
+  const isSyncing = sync.isSyncing;
+  const isCancelling = sync.isCancelling;
+  const progress = sync.progress;
+
+  const onForceSync = (): void => {
+    showModal(
+      <ForceSyncModal
+        onResyncArtwork={() => void sync.forceSync(true)}
+        onKeepArtwork={() => void sync.forceSync(false)}
+        closeModal={() => {}}
+      />,
+    );
+  };
+
+  const isArtwork = progress?.status === "artwork";
+  const isComplete = progress?.status === "complete";
+  const isError = progress?.status === "error";
+  const barColor = isError
+    ? "#ff6b6b"
+    : isComplete
+    ? "#4caf50"
+    : isArtwork
+    ? "#ff9800"
+    : "#1a9fff";
+
   return (
     <PanelSection title={t("librarySync.title")}>
       <PanelSectionRow>
         <ButtonItem
           layout="below"
-          onClick={() => handleManualSync(false)}
-          disabled={syncing || syncCancelling || syncCooldown}
+          disabled={isSyncing || !cooldown.canSync}
+          onClick={() => void sync.startSync()}
         >
           <div
             style={{
               display: "flex",
               alignItems: "center",
-              gap: "8px",
+              gap: 8,
               justifyContent: "center",
             }}
           >
             <FaSync
               style={{
-                animation: syncing ? "spin 1s linear infinite" : "none",
-                opacity: syncCooldown ? 0.5 : 1,
+                animation: isSyncing ? "spin 1s linear infinite" : "none",
+                opacity: cooldown.canSync ? 1 : 0.5,
               }}
             />
-            {syncing
+            {isSyncing
               ? t("librarySync.syncing")
-              : syncCooldown
-              ? `${cooldownSeconds}s`
+              : !cooldown.canSync
+              ? `${cooldown.remainingSecs}s`
               : t("librarySync.syncLibraries")}
           </div>
         </ButtonItem>
@@ -74,172 +95,124 @@ const LibrarySync: React.FC<LibrarySyncProps> = ({
       <PanelSectionRow>
         <ButtonItem
           layout="below"
-          onClick={() => {
-            let modalResult:
-              | {
-                  Close?: () => void;
-                }
-              | void;
-
-            const closeModal = () => modalResult?.Close?.();
-
-            modalResult = showModal(
-              <ForceSyncModal
-                onResyncArtwork={() => handleManualSync(true, true)}
-                onKeepArtwork={() => handleManualSync(true, false)}
-                closeModal={closeModal}
-              />,
-            );
-          }}
-          disabled={syncing || syncCancelling || syncCooldown}
+          disabled={isSyncing || !cooldown.canSync}
+          onClick={onForceSync}
         >
           <div
             style={{
               display: "flex",
               alignItems: "center",
-              gap: "8px",
+              gap: 8,
               justifyContent: "center",
             }}
           >
-            <FaSync
-              style={{
-                animation: syncing ? "spin 1s linear infinite" : "none",
-                opacity: syncCooldown ? 0.5 : 1,
-              }}
-            />
-            {syncing
-              ? t("librarySync.syncing")
-              : syncCooldown
-              ? `${cooldownSeconds}s`
-              : t("librarySync.forceSync")}
+            <FaSync style={{ opacity: cooldown.canSync ? 1 : 0.5 }} />
+            {isSyncing ? "…" : t("librarySync.forceSync")}
           </div>
         </ButtonItem>
       </PanelSectionRow>
-
-      {/* Cancel button - only visible during sync */}
-      {syncing && (
+      {isSyncing && (
         <PanelSectionRow>
           <ButtonItem
             layout="below"
-            onClick={handleCancelSync}
-            disabled={syncCancelling}
+            onClick={() => void sync.cancelSync()}
+            disabled={isCancelling}
           >
-            {t("librarySync.cancelSync")}
+            {isCancelling
+              ? t("librarySync.cancelling", "Cancelling…")
+              : t("librarySync.cancelSync")}
           </ButtonItem>
         </PanelSectionRow>
       )}
-
-      {/* Progress display */}
-      {syncProgress && syncProgress.status !== "idle" && (
-        <div style={{ fontSize: "12px", width: "100%" }}>
-          {/* Status text */}
-          <div style={{ marginBottom: "5px", opacity: 0.9 }}>
-            {t(
-              syncProgress.current_game.label,
-              syncProgress.current_game.values,
-            )}
+      {progress && !TERMINAL_STATUSES.has(progress.status) && (
+        <div style={{ fontSize: 12, width: "100%" }}>
+          <div style={{ marginBottom: 5, opacity: 0.9 }}>
+            {progress.current_game?.label
+              ? t(
+                  progress.current_game.label,
+                  progress.current_game.values ?? {},
+                )
+              : "…"}
           </div>
-
-          {/* Progress bar */}
           <div
             style={{
               width: "100%",
-              height: "4px",
+              height: 4,
               backgroundColor: "#333",
-              borderRadius: "2px",
+              borderRadius: 2,
               overflow: "hidden",
             }}
           >
             <div
               style={{
-                width: `${syncProgress.progress_percent}%`,
+                width: `${progress.progress_percent ?? 0}%`,
                 height: "100%",
-                backgroundColor:
-                  syncProgress.status === "error"
-                    ? "#ff6b6b"
-                    : syncProgress.status === "complete"
-                    ? "#4caf50"
-                    : syncProgress.current_phase === "artwork"
-                    ? "#ff9800" // Orange for artwork
-                    : "#1a9fff", // Blue for sync
+                backgroundColor: barColor,
                 transition: "width 0.3s ease",
               }}
             />
           </div>
-
-          {/* Stats - different based on phase */}
-          <div style={{ marginTop: "5px", opacity: 0.7 }}>
-            {syncProgress.current_phase === "artwork" ? (
-              // Artwork phase: show artwork progress
-              <>
-                {t("librarySync.artworkDownloaded", {
-                  synced: syncProgress.artwork_synced || 0,
-                  total: syncProgress.artwork_total || 0,
-                })}
-              </>
-            ) : (
-              // Sync phase: show game progress
-              <>
+          <div style={{ marginTop: 5, opacity: 0.7 }}>
+            {/* Per-counter visibility driven by ``*_total > 0`` so
+               each row appears only once its phase has set a real
+               denominator. Mirrors staging's progress display where
+               steam, unifidb and metacritic each tick independently. */}
+            {(progress.total_games ?? 0) > 0 && (
+              <div>
                 {t("librarySync.gamesSynced", {
-                  synced: syncProgress.synced_games || 0,
-                  total: syncProgress.total_games || 0,
+                  synced: progress.synced_games ?? 0,
+                  total: progress.total_games ?? 0,
                 })}
-                {(syncProgress.steam_total || 0) > 0 && (
-                  <div>
-                    {t("librarySync.steamMetadataDownloaded", {
-                      synced: syncProgress.steam_synced || 0,
-                      total: syncProgress.steam_total || 0,
-                    })}
-                  </div>
-                )}
-                {(syncProgress.unifidb_total || 0) > 0 && (
-                  <div>
-                    {t("librarySync.unifidbMetadataDownloaded", {
-                      synced: syncProgress.unifidb_synced || 0,
-                      total: syncProgress.unifidb_total || 0,
-                    })}
-                  </div>
-                )}
-                {(syncProgress.metacritic_total || 0) > 0 && (
-                  <div>
-                    {t("librarySync.metacriticMetadataDownloaded", {
-                      synced: syncProgress.metacritic_synced || 0,
-                      total: syncProgress.metacritic_total || 0,
-                    })}
-                  </div>
-                )}
-                {(syncProgress.rawg_total || 0) > 0 && (
-                  <div>
-                    {t("librarySync.rawgMetadataDownloaded", {
-                      synced: syncProgress.rawg_synced || 0,
-                      total: syncProgress.rawg_total || 0,
-                    })}
-                  </div>
-                )}
-              </>
+              </div>
+            )}
+            {(progress.artwork_total ?? 0) > 0 && (
+              <div>
+                {t("librarySync.artworkDownloaded", {
+                  synced: progress.artwork_synced ?? 0,
+                  total: progress.artwork_total ?? 0,
+                })}
+              </div>
+            )}
+            {(progress.steam_total ?? 0) > 0 && (
+              <div>
+                {t("librarySync.steamMetadataDownloaded", {
+                  synced: progress.steam_synced ?? 0,
+                  total: progress.steam_total ?? 0,
+                })}
+              </div>
+            )}
+            {(progress.unifidb_total ?? 0) > 0 && (
+              <div>
+                {t("librarySync.unifidbMetadataDownloaded", {
+                  synced: progress.unifidb_synced ?? 0,
+                  total: progress.unifidb_total ?? 0,
+                })}
+              </div>
+            )}
+            {(progress.metacritic_total ?? 0) > 0 && (
+              <div>
+                {t("librarySync.metacriticMetadataDownloaded", {
+                  synced: progress.metacritic_synced ?? 0,
+                  total: progress.metacritic_total ?? 0,
+                })}
+              </div>
+            )}
+            {(progress.compat_total ?? 0) > 0 && (
+              <div>
+                {t("librarySync.compatChecked", {
+                  synced: progress.compat_synced ?? 0,
+                  total: progress.compat_total ?? 0,
+                })}
+              </div>
             )}
           </div>
-
-          {/* Error message */}
-          {syncProgress.error && (
-            <div style={{ color: "#ff6b6b", marginTop: "5px" }}>
-              Error: {syncProgress.error}
+          {progress.error && (
+            <div style={{ color: "#ff6b6b", marginTop: 5 }}>
+              {t("librarySync.error")}: {progress.error}
             </div>
           )}
         </div>
       )}
-
-      {(storeStatus.epic.includes("Error") ||
-        storeStatus.gog.includes("Error") ||
-        storeStatus.microsoft?.includes("Error")) && (
-        <PanelSectionRow>
-          <ButtonItem layout="below" onClick={checkStoreStatus}>
-            {t("librarySync.retryStatusCheck")}
-          </ButtonItem>
-        </PanelSectionRow>
-      )}
     </PanelSection>
   );
 };
-
-export default LibrarySync;

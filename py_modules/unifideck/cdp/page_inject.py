@@ -1,225 +1,239 @@
-"""
-Generic CDP page-script injection helpers.
-
-These helpers connect to a page target on a Chromium/Chrome DevTools port
-and inject one or more JavaScript snippets both for future navigations and
-the current document. They use ``aiohttp`` so they work in environments
-where the optional ``websockets`` dependency is unavailable.
-"""
-
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
-from typing import Any, Dict, Iterable, Optional, Sequence
+from collections.abc import AsyncIterator
+from typing import Any
 
 import aiohttp
 
 logger = logging.getLogger(__name__)
-
-
-def _matches_url(url: str, url_patterns: Sequence[str]) -> bool:
-    """Return True when the target URL matches any configured substring."""
-    if not url_patterns:
-        return True
-    return any(pattern in url for pattern in url_patterns)
-
-
 async def list_page_targets(
-    cdp_port: int,
-    timeout: float = 3.0,
-) -> Sequence[Dict[str, Any]]:
-    """List page-like CDP targets for a browser port."""
-    url = f"http://127.0.0.1:{cdp_port}/json"
-    async with aiohttp.ClientSession() as session:
-        async with session.get(url, timeout=aiohttp.ClientTimeout(total=timeout)) as resp:
-            if resp.status != 200:
-                raise RuntimeError(f"CDP /json returned {resp.status}")
-            payload = await resp.json(content_type=None)
-
+    port: int,
+    *,
+    timeout: float = 3.0,  # noqa: ASYNC109 — timeout is API value passed to underlying lib (urllib/aiohttp/subprocess), not an asyncio.timeout() wrapper
+) -> list[dict[str, Any]]:
+    """List page targets."""
+    url = f"http://127.0.0.1:{port}/json"
+    async with aiohttp.ClientSession() as session, session.get(
+        url,
+        timeout=aiohttp.ClientTimeout(total=timeout),
+    ) as response:
+        response.raise_for_status()
+        payload = await response.json(content_type=None)
     if not isinstance(payload, list):
         return []
-
-    return [
-        target for target in payload
-        if target.get("type", "page") in ("page", "webview")
-        and target.get("webSocketDebuggerUrl")
-    ]
-
-
-async def wait_for_matching_page(
-    cdp_port: int,
-    url_patterns: Sequence[str],
-    timeout: float = 30.0,
-    poll_delay: float = 0.3,
-) -> Optional[Dict[str, Any]]:
-    """Poll the DevTools target list until a matching page becomes available."""
-    deadline = asyncio.get_running_loop().time() + timeout
-    while asyncio.get_running_loop().time() < deadline:
-        try:
-            targets = await list_page_targets(cdp_port)
-            for target in targets:
-                if _matches_url(target.get("url", ""), url_patterns):
-                    return target
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:
-            logger.debug(f"[CDP-page-inject] waiting for page failed: {exc}")
-
-        await asyncio.sleep(poll_delay)
-
-    return None
-
-
-async def _send_command(
+    return [item for item in payload if isinstance(item, dict)]
+def _target_url_matches(
+    target: dict[str, Any], patterns: list[str],
+) -> bool:
+    """Target URL matches."""
+    url = str(target.get("url", ""))
+    return any(pattern and pattern in url for pattern in patterns)
+_CLOSE_MSG_TYPES = (
+    aiohttp.WSMsgType.CLOSED,
+    aiohttp.WSMsgType.CLOSING,
+    aiohttp.WSMsgType.ERROR,
+)
+async def _drain_until_reply(
     websocket: aiohttp.ClientWebSocketResponse,
     msg_id: int,
-    method: str,
-    params: Optional[Dict[str, Any]] = None,
-    timeout: float = 8.0,
-) -> Dict[str, Any]:
-    """Send a CDP command and wait for its matching response."""
-    await websocket.send_json({
-        "id": msg_id,
-        "method": method,
-        "params": params or {},
-    })
-
-    deadline = asyncio.get_running_loop().time() + timeout
+    ws_timeout: float,
+    logger_prefix: str,
+) -> bool:
+    """Drain until reply."""
     while True:
-        remaining = deadline - asyncio.get_running_loop().time()
-        if remaining <= 0:
-            raise TimeoutError(f"Timed out waiting for {method} response")
-
-        message = await websocket.receive(timeout=remaining)
+        message = await websocket.receive(timeout=ws_timeout)
+        if message.type in _CLOSE_MSG_TYPES:
+            logger.debug(
+                "[%s] websocket closed during inject",
+                logger_prefix,
+            )
+            return False
         if message.type != aiohttp.WSMsgType.TEXT:
-            if message.type in (aiohttp.WSMsgType.CLOSED, aiohttp.WSMsgType.CLOSING):
-                raise RuntimeError("CDP websocket closed")
-            if message.type == aiohttp.WSMsgType.ERROR:
-                raise RuntimeError("CDP websocket error")
             continue
-
-        try:
-            payload = json.loads(message.data)
-        except json.JSONDecodeError:
-            continue
-
+        payload = json.loads(message.data)
         if payload.get("id") != msg_id:
             continue
-
         if "error" in payload:
-            raise RuntimeError(f"{method} failed: {payload['error']}")
+            logger.debug(
+                "[%s] Runtime.evaluate error: %s",
+                logger_prefix, payload["error"],
+            )
+            return False
+        return True
 
-        return payload
-
-
-async def inject_scripts(
-    cdp_port: int,
-    sources: Iterable[str],
+async def _inject_into_target(
+    target: dict[str, Any],
+    sources: list[str],
     *,
-    url_patterns: Sequence[str],
-    timeout: float = 30.0,
-    logger_prefix: str = "CDP-page-inject",
+    ws_timeout: float,
+    logger_prefix: str,
 ) -> bool:
-    """Inject scripts into a matching CDP page target.
 
-    Each source is registered for future navigations via
-    ``Page.addScriptToEvaluateOnNewDocument`` and then executed immediately
-    in the current document via ``Runtime.evaluate``.
-    """
-    sources = [source for source in sources if source]
-    if not sources:
-        logger.warning(f"[{logger_prefix}] No sources provided for injection")
-        return False
-
-    target = await wait_for_matching_page(
-        cdp_port,
-        url_patterns=url_patterns,
-        timeout=timeout,
-    )
-    if not target:
-        logger.warning(
-            f"[{logger_prefix}] No matching page found on port {cdp_port} "
-            f"for patterns: {', '.join(url_patterns) or '<any>'}"
-        )
-        return False
-
+    """Inject into target."""
     ws_url = target.get("webSocketDebuggerUrl")
-    target_url = target.get("url", "")
-    logger.info(f"[{logger_prefix}] Injecting into {target_url[:120]}")
-
-    session = aiohttp.ClientSession()
+    if not isinstance(ws_url, str) or not ws_url:
+        return False
+    msg_id = 0
     try:
-        async with session.ws_connect(ws_url, heartbeat=10, autoping=True) as websocket:
-            msg_id = 9000
-            for source in sources:
-                await _send_command(
-                    websocket,
-                    msg_id,
-                    "Page.addScriptToEvaluateOnNewDocument",
-                    {"source": source},
-                )
-                msg_id += 1
-
-            for source in sources:
-                await _send_command(
-                    websocket,
-                    msg_id,
-                    "Runtime.evaluate",
-                    {
-                        "expression": source,
-                        "userGesture": True,
-                        "awaitPromise": False,
-                    },
-                )
-                msg_id += 1
-    finally:
-        await session.close()
-
-    logger.info(f"[{logger_prefix}] Script injection complete")
-    return True
-
-
-async def evaluate_script(
-    cdp_port: int,
-    expression: str,
-    *,
-    url_patterns: Sequence[str],
-    timeout: float = 30.0,
-    logger_prefix: str = "CDP-page-eval",
-) -> Any:
-    """Evaluate JavaScript in a matching page and return its JSON value."""
-    target = await wait_for_matching_page(
-        cdp_port,
-        url_patterns=url_patterns,
-        timeout=timeout,
-    )
-    if not target:
-        raise RuntimeError(
-            f"[{logger_prefix}] No matching page found for: "
-            f"{', '.join(url_patterns) or '<any>'}"
-        )
-
-    session = aiohttp.ClientSession()
-    try:
-        async with session.ws_connect(
-            target["webSocketDebuggerUrl"],
+        async with aiohttp.ClientSession() as session, session.ws_connect(  # type: ignore[call-overload]
+            ws_url,
             heartbeat=10,
             autoping=True,
+            # aiohttp 3.10 introduced ClientWSTimeout for ws_connect; older
+            # releases accepted ClientTimeout. The runtime accepts both, but
+            # mypy uses the latest stub, so the overload doesn't match. Ignore
+            # the overload mismatch to keep the call compatible across aiohttp
+            # versions.
+            timeout=aiohttp.ClientTimeout(total=ws_timeout),
         ) as websocket:
-            result = await _send_command(
-                websocket,
-                9800,
-                "Runtime.evaluate",
-                {
-                    "expression": expression,
-                    "userGesture": True,
-                    "awaitPromise": True,
-                    "returnByValue": True,
-                },
-            )
-    finally:
-        await session.close()
+            for source in sources:
+                if not source:
+                    continue
+                msg_id += 1
+                await websocket.send_json({
+                    "id": msg_id,
+                    "method": "Runtime.evaluate",
+                    "params": {
+                        "expression": source,
+                        "awaitPromise": True,
+                        "returnByValue": True,
+                        "userGesture": True,
+                    },
+                })
+                if not await _drain_until_reply(
+                    websocket, msg_id, ws_timeout, logger_prefix,
+                ):
+                    return False
+        return True
+    except (TimeoutError, aiohttp.ClientError, OSError) as exc:
+        logger.debug(
+            "[%s] inject into %s failed: %s",
+            logger_prefix, target.get("id"), exc,
+        )
+        return False
 
-    return result.get("result", {}).get("result", {}).get("value")
+async def inject_scripts(
+    port: int,
+    sources: list[str],
+    *,
+    url_patterns: list[str],
+    timeout: float = 45.0,  # noqa: ASYNC109 — timeout is API value passed to underlying lib (urllib/aiohttp/subprocess), not an asyncio.timeout() wrapper
+    logger_prefix: str = "cdp-inject",
+    poll_delay: float = 0.5,
+) -> bool:
+    """Inject ``sources`` into every matching CDP page target.
+
+    Polls the CDP target list at ``poll_delay`` intervals until
+    ``timeout`` elapses or every matching target has been
+    injected successfully. Returns True if at least one
+    injection happened ; False if the deadline expired with no
+    matches found.
+
+    Refactor history (2026-05-14): the polling loop inlined the
+    try/except around ``list_page_targets``, the URL filtering
+    comprehension, the empty-targets continue, the
+    inject-and-update flags, and the early-success return —
+    cyclomatic complexity 13. Pulled the per-iteration work
+    into ``_attempt_inject_cycle`` so this function reads as the
+    deadline envelope only.
+    """
+    if not sources or not url_patterns:
+        return False
+
+    deadline = asyncio.get_running_loop().time() + timeout
+    injected_once = False
+    while asyncio.get_running_loop().time() < deadline:
+        all_ok, had_success = await _attempt_inject_cycle(
+            port, sources, url_patterns, timeout, logger_prefix,
+        )
+        if had_success:
+            injected_once = True
+        if injected_once and all_ok:
+            return True
+        await asyncio.sleep(poll_delay)
+
+    if injected_once:
+        return True
+    logger.warning(
+        "[%s] timed out waiting for matching page (patterns=%r)",
+        logger_prefix, url_patterns,
+    )
+    return False
+
+
+async def _attempt_inject_cycle(
+    port: int,
+    sources: list[str],
+    url_patterns: list[str],
+    timeout: float,  # noqa: ASYNC109 — timeout is API value passed to underlying lib (urllib/aiohttp/subprocess), not an asyncio.timeout() wrapper
+    logger_prefix: str,
+) -> tuple[bool, bool]:
+    """One poll iteration : list targets, filter, inject, return flags.
+
+    Returns ``(all_ok, had_success)`` :
+
+        * ``all_ok`` = every matching target was injected this
+          cycle (or there were no matching targets — vacuously
+          true in that case ; the caller distinguishes via
+          ``had_success`` not flipping).
+        * ``had_success`` = at least one target was injected.
+
+    Returns ``(True, False)`` for both "list_page_targets raised"
+    and "no targets matched" so the caller's "all_ok AND
+    injected_once" guard still requires real progress before
+    returning success.
+    """
+    try:
+        targets = await list_page_targets(port, timeout=3.0)
+    except (TimeoutError, aiohttp.ClientError, OSError) as exc:
+        logger.debug(
+            "[%s] list_page_targets failed: %s", logger_prefix, exc,
+        )
+        return True, False
+
+    page_targets = [
+        t for t in targets
+        if t.get("type") == "page" and _target_url_matches(t, url_patterns)
+    ]
+    if not page_targets:
+        return True, False
+
+    return await _inject_into_matching_targets(
+        page_targets, sources, timeout, logger_prefix,
+    )
+async def _inject_into_matching_targets(
+    page_targets: list[dict[str, Any]],
+    sources: list[str],
+    timeout: float,  # noqa: ASYNC109 — timeout is API value passed to underlying lib (urllib/aiohttp/subprocess), not an asyncio.timeout() wrapper
+    logger_prefix: str,
+) -> tuple[bool, bool]:
+    """Inject into matching targets."""
+    all_ok = True
+    had_success = False
+    for target in page_targets:
+        ok = await _inject_into_target(
+            target,
+            sources,
+            ws_timeout=min(15.0, timeout),
+            logger_prefix=logger_prefix,
+        )
+        if ok:
+            had_success = True
+            logger.info(
+                "[%s] injected %d script(s) into %s",
+                logger_prefix, len(sources),
+                target.get("url", "?"),
+            )
+        else:
+            all_ok = False
+    return all_ok, had_success
+@contextlib.asynccontextmanager
+async def _session_timeout(
+    total: float,
+) -> AsyncIterator[aiohttp.ClientTimeout]:
+    """Async context manager that yields a ``ClientTimeout``."""
+    yield aiohttp.ClientTimeout(total=total)

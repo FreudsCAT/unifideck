@@ -1,0 +1,279 @@
+{
+  "paths": {
+    "data_dir": "~/.local/share/unifideck",
+    "cache_dir": "~/.cache/unifideck",
+    "steam_candidates": [
+      "~/.steam/steam",
+      "~/.local/share/Steam",
+      "~/.var/app/com.valvesoftware.Steam/.steam/steam"
+    ],
+    "games_map": "~/.local/share/unifideck/games.map",
+    "sd_card_root": "/run/media"
+  },
+  "cache_ttl": {
+    "steam_metadata": 604800,
+    "compat": 604800,
+    "metacritic_metadata": 2592000
+  },
+  "sync": {
+    "artwork_concurrency": 4
+  },
+  "dedup": {
+    "tracked_stores": ["epic", "gog", "amazon", "ubisoft"],
+    "cross_store_enabled": false
+  },
+  "download": {
+    "custom_path": ""
+  },
+  "cli_timeouts": {
+    "auth_check": 10,
+    "version_check": 2,
+    "library_fetch": 30,
+    "install_poll": 60,
+    "uninstall": 120
+  },
+  "stores": {
+    "gog": {
+      "client_id": "46899977096215655",
+      "client_secret": "9d85c43b1482497dbbce61f6e4aa173a433796eeae2ca8c5f6129f2dc4de46d9",
+      "auth_url": "https://auth.gog.com/auth",
+      "token_url": "https://auth.gog.com/token",
+      "redirect_uri": "https://embed.gog.com/on_login_success?origin=client",
+      "allowed_redirect_uris": ["https://embed.gog.com/on_login_success"],
+      "base_url": "https://embed.gog.com",
+      "api_gog_url": "https://api.gog.com",
+      "token_file": "~/.config/unifideck/gog_token.json",
+      "gogdl_config_dir": "~/.config/unifideck/gogdl",
+      "download_dir": "~/GOG Games",
+      "token_refresh_threshold_seconds": 2400,
+      "supported_languages": [
+        "en",
+        "de",
+        "fr",
+        "pl",
+        "ru",
+        "pt",
+        "es",
+        "it",
+        "zh",
+        "ko",
+        "ja"
+      ],
+      "user_agent": "Unifideck/1.0"
+    },
+    "epic": {
+      "cli_binary_search_paths": ["bin/legendary"],
+      "cli_version_flag": "--version",
+      "user_file": "~/.config/legendary/user.json",
+      "default_install_root": "~/Games/Epic",
+      "auth_redirect_urls": [
+        "https://legendary.epicgames.com/callback",
+        "https://www.epicgames.com/id/api/redirect"
+      ],
+      "auth_url_markers": ["epicgames.com"],
+      "info_timeout_seconds": 30,
+      "list_updates_timeout_seconds": 60,
+      "installed_cache_ttl_seconds": 30,
+      "size_cache_ttl_seconds": 300
+    },
+    "amazon": {
+      "cli_binary_search_paths": ["bin/nile"],
+      "cli_version_flag": "--version",
+      "nile_config_dir": "~/.config/nile",
+      "user_file": "~/.config/nile/user.json",
+      "default_install_root": "~/Games/Amazon",
+      "auth_redirect_urls": [
+        "https://www.amazon.com/ap/maplanding",
+        "https://amazon.com/ap/maplanding"
+      ],
+      "nile_register_success_markers": [
+        "Successfully registered",
+        "Succesfully registered"
+      ],
+      "list_updates_timeout_seconds": 60,
+      "get_size_timeout_seconds": 60
+    },
+    "ubisoft": {
+      "data_dir": "~/.local/share/unifideck",
+      "prefixes_dir": "~/.local/share/unifideck/prefixes/ubisoft"
+    },
+    "microsoft": {
+      "client_id": "000000004C12AE6F",
+      "token_file": "~/.config/unifideck/microsoft_tokens.json",
+      "scope": "service::user.auth.xboxlive.com::MBI_SSL",
+      "auth_url": "https://login.live.com/oauth20_authorize.srf",
+      "token_url": "https://login.live.com/oauth20_token.srf",
+      "redirect_uri": "https://login.live.com/oauth20_desktop.srf",
+      "allowed_redirect_uris": [
+        "https://login.live.com/oauth20_desktop.srf",
+        "https://login.microsoftonline.com/common/oauth2/nativeclient"
+      ],
+      "xbl_auth_url": "https://user.auth.xboxlive.com/user/authenticate",
+      "xsts_url": "https://xsts.auth.xboxlive.com/xsts/authorize",
+      "xcloud_catalog_url": "https://catalog.gamepass.com/sigls/v2?id=fdd9e2a7-0fee-49f6-ad69-4354098401ff",
+      "xcloud_titles_url": "https://catalog.gamepass.com/v3/products?market=US&language=en-US",
+      "xcloud_launch_url": "https://www.xbox.com/play/launch",
+      "gssv_relying_party": "http://gssv.xboxlive.com/",
+      "subscription_check_url": "https://xgpuweb.gssv-play-prod.xboxlive.com/v2/login/user"
+    }
+  },
+  "metadata": {
+    "metacritic": {
+      "composer_url": "https://backend.metacritic.com/composer/metacritic/pages/games/{slug}/web",
+      "fetch_timeout_seconds": 15
+    },
+    "unifidb": {
+      "cdn_base": "https://cdn.jsdelivr.net/gh/mubaraknumann/unifiDB@main",
+      "match_threshold": 0.65,
+      "fetch_timeout_seconds": 15
+    },
+    "steam_store": {
+      "search_url": "https://store.steampowered.com/api/storesearch",
+      "search_timeout_seconds": 15
+    }
+  },
+  "artwork": {
+    "steamgriddb_api_key": "",
+    "steamgriddb_api_base": "https://www.steamgriddb.com/api/v2",
+    "download_timeout_seconds": 30,
+    "failure_cooldown_seconds": 3600
+  },
+  "cdp": {
+    "host": "127.0.0.1",
+    "port": 8080,
+    "eval_timeout_seconds": 30,
+    "response_timeout_seconds": 10
+  },
+  "accounts": {
+    "poll_interval_seconds": 5
+  },
+  "cloud": {
+    "enabled": true,
+    "root": "",
+    "auto_pull_on_launch": true,
+    "auto_push_on_stop": false,
+    "tolerance_seconds": 2,
+    "sync_wait_timeout_seconds": 5,
+    "failure_behavior": {
+      "default": "toast",
+      "epic": "toast",
+      "gog": "toast",
+      "amazon": "toast",
+      "ubisoft": "toast"
+    }
+  },
+  "logs": {
+    "archive_path": "~/.local/share/unifideck/launches",
+    "export_path": "~/Downloads",
+    "retention_days": 7
+  },
+  "circuit_breaker": {
+    "failures_threshold": 3,
+    "window_seconds": 600,
+    "fast_boot_seconds": 10
+  },
+  "disk_space": {
+    "min_free_bytes": 1073741824,
+    "size_multiplier": 1.5,
+    "size_cache_path": "~/.cache/unifideck/cloud_save_sizes.json",
+    "size_cache_ttl_seconds": 2592000
+  },
+  "compat": {
+    "protondb_timeout_seconds": 30,
+    "deck_verified_timeout_seconds": 10
+  },
+  "auth": {
+    "browser_poll_interval_seconds": 0.5,
+    "browser_oauth_timeout_seconds": 300
+  },
+  "discovery": {
+    "manifest_filename": ".unifideck_manifest.json"
+  },
+  "ui": {
+    "locale": "auto"
+  },
+  "probes": {
+    "probe_to_features": {
+      "steam_client_input": [
+        "controller_hints",
+        "custom_binding_ui",
+        "steam_input_overlay"
+      ],
+      "router_hook_patch": ["library_view_patch", "quickaccess_menu_icon"],
+      "steam_client_apps": ["circuit_breaker_ui"]
+    },
+    "probe_to_handlers": {
+      "steam_client_apps": [
+        "ArtworkService._on_shortcut_created",
+        "ShortcutService._on_download_complete",
+        "ShortcutService._on_sync_complete",
+        "ShortcutService._on_game_uninstalled"
+      ],
+      "steam_client_downloads": ["ShortcutService._on_download_complete"]
+    }
+  },
+  "proton": {
+    "settings_path": "~/.local/share/unifideck/proton_settings.json",
+    "shortcuts_registry_path": "~/.local/share/unifideck/shortcuts_registry.json"
+  },
+  "binary_resolver": {
+    "version_check_timeout_seconds": 10
+  },
+  "i18n": {
+    "locales": [
+      { "tag": "en-US", "deepl_code": null, "name": "English", "rtl": false },
+      { "tag": "fr-FR", "deepl_code": "FR", "name": "Français", "rtl": false },
+      { "tag": "de-DE", "deepl_code": "DE", "name": "Deutsch", "rtl": false },
+      { "tag": "es-ES", "deepl_code": "ES", "name": "Español", "rtl": false },
+      { "tag": "it-IT", "deepl_code": "IT", "name": "Italiano", "rtl": false },
+      {
+        "tag": "pt-BR",
+        "deepl_code": "PT-BR",
+        "name": "Português (Brasil)",
+        "rtl": false
+      },
+      {
+        "tag": "nl-NL",
+        "deepl_code": "NL",
+        "name": "Nederlands",
+        "rtl": false
+      },
+      { "tag": "pl-PL", "deepl_code": "PL", "name": "Polski", "rtl": false },
+      { "tag": "ru-RU", "deepl_code": "RU", "name": "Русский", "rtl": false },
+      {
+        "tag": "uk-UA",
+        "deepl_code": "UK",
+        "name": "Українська",
+        "rtl": false
+      },
+      { "tag": "tr-TR", "deepl_code": "TR", "name": "Türkçe", "rtl": false },
+      { "tag": "ja-JP", "deepl_code": "JA", "name": "Japanese", "rtl": false },
+      { "tag": "ko-KR", "deepl_code": "KO", "name": "Korean", "rtl": false },
+      {
+        "tag": "zh-CN",
+        "deepl_code": "ZH-HANS",
+        "name": "Simplified Chinese",
+        "rtl": false
+      },
+      {
+        "tag": "zh-TW",
+        "deepl_code": "ZH-HANT",
+        "name": "Traditional Chinese",
+        "rtl": false
+      },
+      { "tag": "ar-SA", "deepl_code": "AR", "name": "Arabic", "rtl": true }
+    ]
+  },
+  "security": {
+    "audit_log_capacity": 500,
+    "bruteforce_window_seconds": 60.0,
+    "bruteforce_warning_threshold": 5,
+    "bruteforce_escalation_threshold": 20,
+    "fingerprint_path": "~/.config/unifideck/device_fingerprint.json",
+    "token_files_to_wipe_on_reset": [
+      "~/.config/unifideck/microsoft_tokens.json",
+      "~/.local/share/unifideck/microsoft_tokens.json",
+      "~/.config/unifideck/gog_token.json"
+    ]
+  }
+}

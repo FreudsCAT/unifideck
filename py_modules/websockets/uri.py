@@ -9,6 +9,10 @@ from .exceptions import InvalidURI
 __all__ = ["parse_uri", "WebSocketURI"]
 
 
+# All characters from the gen-delims and sub-delims sets in RFC 3987.
+DELIMS = ":/?#[]@!$&'()*+,;="
+
+
 @dataclasses.dataclass
 class WebSocketURI:
     """
@@ -51,10 +55,6 @@ class WebSocketURI:
             return None
         assert self.password is not None
         return (self.username, self.password)
-
-
-# All characters from the gen-delims and sub-delims sets in RFC 3987.
-DELIMS = ":/?#[]@!$&'()*+,;="
 
 
 def parse_uri(uri: str) -> WebSocketURI:

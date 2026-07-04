@@ -1,0 +1,523 @@
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+import os
+import sys
+from pathlib import Path
+from typing import TYPE_CHECKING, Any
+
+from unifideck.core.types.results import Result
+
+from .types.context import LaunchContext
+from .types.errors import GameNotFoundError, LauncherError
+from .types.exit_codes import ExitCode
+
+if TYPE_CHECKING:
+    from unifideck.services.shortcut import ShortcutService
+
+logger = logging.getLogger(__name__)
+def _parse_argv(argv: list[str]) -> tuple[str, str]:
+    """Parse argv."""
+    if len(argv) < 2:
+        raise GameNotFoundError(
+            "missing store:game_id argument",
+            context={"argv": argv},
+        )
+    game_key = argv[1]
+    if ":" not in game_key:
+        raise GameNotFoundError(
+            f"malformed game key {game_key!r}, "
+            "expected 'store:game_id'",
+            context={"game_key": game_key},
+        )
+    raw_options = " ".join(argv[2:])
+    return game_key, raw_options
+
+
+def _promote_env_tokens(raw_options: str) -> None:
+    """Promote ``KEY=value`` tokens from launch options to ``os.environ``.
+
+    Steam passes plugin launch options to the wrapper as argv,
+    not as env vars : a shortcut configured with launch options
+    ``"amazon:amazon-auth UNIFIDECK_AMAZON_ACTION=auth"`` arrives
+    as ``sys.argv[1:] = ["amazon:amazon-auth", "UNIFIDECK_AMAZON_ACTION=auth"]``.
+
+    The auth-detection path (and other downstream code) reads
+    these flags from ``os.environ``, so we promote any
+    bare ``KEY=value`` token in the joined raw options string
+    into the process environment before that code runs.
+    Only tokens starting with ``UNIFIDECK_`` are promoted —
+    don't pollute the env with arbitrary user-supplied args.
+    """
+    for token in raw_options.split():
+        if "=" not in token:
+            continue
+        key, _, value = token.partition("=")
+        if not key.startswith("UNIFIDECK_"):
+            continue
+        # Don't clobber an existing real env var — caller wins
+        # in case Steam ever evolves to pass env vars properly.
+        os.environ.setdefault(key, value)
+def _resolve_plugin_dir() -> Path:
+    """Resolve plugin dir."""
+    from unifideck.core.paths import resolve_plugin_dir
+    return resolve_plugin_dir(start=Path(__file__))
+def _install_path_from_cache(store: str, game_id: str) -> str:
+    """Look up an installed game's directory from the library cache.
+
+    Fallback for games whose games.map row is missing entirely (e.g.
+    installed by an older build that never wrote one). Returns ``""``
+    when the cache is absent or the game isn't found.
+    """
+    import json
+    cache = Path(
+        "~/.local/share/unifideck/library_cache.json",
+    ).expanduser()
+    if not cache.is_file():
+        return ""
+    try:
+        data = json.loads(cache.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return ""
+    libraries = data.get("libraries") if isinstance(data, dict) else None
+    games = (libraries or {}).get(store) or []
+    for game in games:
+        if isinstance(game, dict) and game.get("store_game_id") == game_id:
+            return str(game.get("install_path") or "")
+    return ""
+
+
+def _resolve_exe_from_install(store: str, install_path: str) -> str | None:
+    """Re-resolve a launchable target from an install dir.
+
+    Repairs stale/missing games.map rows at launch time. GOG (and
+    other) Linux-native games launch via a root ``start.sh`` wrapper;
+    everything else resolves the best ``.exe`` via the shared
+    ``exe_finder`` heuristic. Best-effort — returns None on failure.
+
+    Deliberately avoids importing any store package (e.g.
+    ``GOGExeResolver``): the store ``__init__`` chains pull in auth →
+    security → ``cryptography`` whose native ``_cffi_backend`` isn't
+    importable in the slim launcher Python, which would crash the
+    whole resolution. ``core.exe_finder`` is dependency-light and safe.
+    """
+    if not install_path:
+        return None
+    try:
+        from unifideck.core.exe_finder import exe_finder
+
+        # Native Linux games (notably GOG) launch via a ``start.sh``
+        # wrapper at the install root — ``exe_finder`` only finds
+        # ``.exe`` files, so check for it explicitly first.
+        start_sh = Path(install_path) / "start.sh"
+        if start_sh.is_file():
+            return str(start_sh)
+        return exe_finder.find(install_path)
+    except Exception:
+        logger.exception(
+            "[launcher.dispatcher] exe re-resolution failed for %s",
+            install_path,
+        )
+        return None
+
+
+async def _build_context(
+    argv: list[str],
+    shortcut_svc: ShortcutService,
+) -> LaunchContext:
+    """Build context."""
+    game_key, raw_options = _parse_argv(argv)
+    store, game_id = game_key.split(":", 1)
+
+    # Steam passes launch options as argv, not as env vars — promote
+    # any ``UNIFIDECK_*=value`` tokens so the rest of the dispatcher
+    # can read them from ``os.environ`` as it expects.
+    _promote_env_tokens(raw_options)
+
+    # Non-launch action path. Two kinds, both keyed by
+    # ``UNIFIDECK_<STORE>_ACTION``:
+    #   * ``auth``    — key ``<store>:<store>-auth``, opens sign-in.
+    #   * ``install`` — Ubisoft only; key ``ubisoft:<game_id>``, opens
+    #     UPC to install the title (via RunGame, so it gets a gamescope
+    #     session in Gaming Mode). The game has no games.map row yet, so
+    #     short-circuit the registry lookup like auth does.
+    action_store, action, is_launch_action = _detect_special_action()
+    if not is_launch_action:
+        logger.info(
+            "[launcher.dispatcher] %s action detected: "
+            "store=%s game_key=%s",
+            action, action_store, game_key,
+        )
+        if action == "install":
+            return _ubisoft_install_context(store, game_id, raw_options)
+        return _auth_context(store, game_id, raw_options, action_store)
+
+    exe, work_dir, has_entry = await _resolve_game_exe(
+        shortcut_svc, store, game_id, game_key,
+    )
+    if not exe:
+        # Microsoft titles are Xbox Cloud Gaming (browser-streamed) —
+        # no install and no games.map row. Synthesize the xCloud
+        # context so the matrix routes to ``_launch_xcloud``.
+        if store == "microsoft":
+            logger.info(
+                "[launcher.dispatcher] microsoft game not in games.map — "
+                "synthesizing xCloud context for %s", game_key,
+            )
+            return _xcloud_context(store, game_id, raw_options)
+        if store == "ubisoft":
+            # An *installed* Ubisoft title legitimately has no resolvable exe:
+            # ``ubisoft_launch`` launches it via the ``uplay://launch/{id}/0``
+            # deeplink and ignores ``exe_path`` entirely. A games.map row is
+            # the "installed" signal — route it to the play handler so Play
+            # launches the game (NOT UPC). Only when the title is genuinely
+            # NOT installed (no row) yet has a bootstrapped prefix do we treat
+            # it as an install action — the case where Steam dropped the
+            # ``UNIFIDECK_UBISOFT_ACTION=install`` token (it looks like a plain
+            # launch). Opening UPC for an already-installed game was the
+            # regression where "Play" re-opened Ubisoft Connect.
+            if has_entry:
+                logger.info(
+                    "[launcher.dispatcher] ubisoft game %s installed "
+                    "(games.map row, no exe) — launching via uplay deeplink",
+                    game_key,
+                )
+                return _game_context(
+                    store, game_id, exe, work_dir, raw_options,
+                )
+            if _ubisoft_has_populated_prefix(game_id):
+                logger.info(
+                    "[launcher.dispatcher] ubisoft game %s not in games.map "
+                    "but has a populated prefix — treating as install action",
+                    game_key,
+                )
+                return _ubisoft_install_context(store, game_id, raw_options)
+        raise GameNotFoundError(
+            f"game {game_key!r} not found in games.map",
+            context={"game_key": game_key},
+        )
+    return _game_context(store, game_id, exe, work_dir, raw_options)
+
+
+async def _resolve_game_exe(
+    shortcut_svc: ShortcutService, store: str, game_id: str, game_key: str,
+) -> tuple[str, str, bool]:
+    """Resolve ``(exe, work_dir, has_entry)`` from games.map.
+
+    Games installed by older builds (or discovered via manifest) may
+    have an absent row (Amazon) or an empty exe (GOG ``start.sh``); we
+    re-resolve from the install dir so they launch without a reinstall.
+
+    ``has_entry`` reports whether a games.map row existed at all — the
+    "installed" signal the caller needs to distinguish an installed
+    Ubisoft title (deeplink launch, exe legitimately empty) from one
+    that was never installed.
+    """
+    entry = await shortcut_svc.get_entry_for_game_key(store, game_id)
+    has_entry = entry is not None
+    exe = (entry.exe if entry else "") or ""
+    work_dir = (entry.work_dir if entry else "") or ""
+    if not exe and store != "microsoft":
+        if not work_dir:
+            work_dir = _install_path_from_cache(store, game_id)
+        resolved = (
+            _resolve_exe_from_install(store, work_dir) if work_dir else None
+        )
+        if resolved:
+            logger.info(
+                "[launcher.dispatcher] re-resolved exe for %s → %s",
+                game_key, resolved,
+            )
+            exe = resolved
+    return exe, work_dir, has_entry
+
+
+def _auth_context(
+    store: str, game_id: str, raw_options: str, auth_store: str | None,
+) -> LaunchContext:
+    """Context for an auth shortcut (no game target)."""
+    plugin_dir = _resolve_plugin_dir()
+    return LaunchContext(
+        store=store,
+        game_id=game_id,
+        exe_path=Path("/dev/null"),
+        work_dir=plugin_dir,
+        plugin_dir=plugin_dir,
+        raw_options=raw_options,
+        is_launch_action=False,
+        auth_store=auth_store,
+        action="auth",
+        bypass_circuit_breaker=False,
+    )
+
+
+def _ubisoft_install_context(
+    store: str, game_id: str, raw_options: str,
+) -> LaunchContext:
+    """Context for a Ubisoft ``install`` action (open UPC to install).
+
+    Like the auth context this is a non-launch action with no games.map
+    row (the title isn't installed yet), but it carries the real
+    ``game_id`` so the launcher resolves the per-game prefix (recorded in
+    ``ubisoft_id_map.json`` during bootstrap) and the ``uplay://install``
+    deeplink. Routed by ``LauncherService._handle_auth_path`` on
+    ``action == "install"``.
+    """
+    plugin_dir = _resolve_plugin_dir()
+    return LaunchContext(
+        store=store,
+        game_id=game_id,
+        exe_path=Path("/dev/null"),
+        work_dir=plugin_dir,
+        plugin_dir=plugin_dir,
+        raw_options=raw_options,
+        is_launch_action=False,
+        auth_store="ubisoft",
+        action="install",
+        bypass_circuit_breaker=False,
+    )
+
+
+def _ubisoft_has_populated_prefix(game_id: str) -> bool:
+    """True if ``game_id`` is a known Ubisoft title with a populated prefix.
+
+    Used when the install env token was lost (Steam dropped the launch
+    option) so ``_detect_special_action`` saw a plain launch, yet the title
+    has no games.map row. Mirrors ``_ubisoft_prefix_path`` resolution: prefer
+    the recorded ``prefix_path`` in ``ubisoft_id_map.json``, else the fixed
+    internal default — and require upc.exe present so we only open UPC into a
+    real prefix (genuinely-missing games still raise GameNotFoundError).
+    """
+    id_map_file = Path(
+        "~/.local/share/unifideck/ubisoft_id_map.json",
+    ).expanduser()
+    try:
+        data = json.loads(id_map_file.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    if not isinstance(data, dict) or game_id not in data:
+        return False
+    entry = data.get(game_id)
+    recorded = entry.get("prefix_path") if isinstance(entry, dict) else None
+    upc_rel = (
+        Path("drive_c")
+        / "Program Files (x86)"
+        / "Ubisoft"
+        / "Ubisoft Game Launcher"
+        / "upc.exe"
+    )
+    candidates: list[Path] = []
+    if isinstance(recorded, str) and recorded:
+        candidates.append(Path(recorded))
+    candidates.append(
+        Path("~/.local/share/unifideck/prefixes/ubisoft").expanduser()
+        / game_id,
+    )
+    return any((c / upc_rel).is_file() for c in candidates)
+
+
+def _xcloud_context(
+    store: str, game_id: str, raw_options: str,
+) -> LaunchContext:
+    """Synthesized xCloud context for a Microsoft title with no row."""
+    plugin_dir = _resolve_plugin_dir()
+    return LaunchContext(
+        store=store,
+        game_id=game_id,
+        exe_path=Path("xcloud"),
+        work_dir=plugin_dir,
+        plugin_dir=plugin_dir,
+        raw_options=raw_options,
+        is_launch_action=True,
+        auth_store=None,
+        bypass_circuit_breaker=False,
+    )
+
+
+def _game_context(
+    store: str, game_id: str, exe: str, work_dir: str, raw_options: str,
+) -> LaunchContext:
+    """Context for a normal installed game with a resolved exe."""
+    plugin_dir = _resolve_plugin_dir()
+    return LaunchContext(
+        store=store,
+        game_id=game_id,
+        exe_path=Path(exe),
+        work_dir=Path(work_dir) if work_dir else plugin_dir,
+        plugin_dir=plugin_dir,
+        raw_options=raw_options,
+        is_launch_action=True,
+        auth_store=None,
+        bypass_circuit_breaker=_resolve_bypass_flag(store, game_id),
+    )
+
+def _detect_special_action() -> tuple[str | None, str | None, bool]:
+    """Detect a non-launch action from ``UNIFIDECK_<STORE>_ACTION``.
+
+    Returns ``(store, action, is_launch_action)``. ``auth`` is valid for
+    every store; ``install`` is Ubisoft-only (opens UPC to install a
+    title). Anything else (or no token) is a normal game launch
+    (``(None, None, True)``).
+    """
+    action_env = {
+        "epic":      os.environ.get("UNIFIDECK_EPIC_ACTION"),
+        "gog":       os.environ.get("UNIFIDECK_GOG_ACTION"),
+        "amazon":    os.environ.get("UNIFIDECK_AMAZON_ACTION"),
+        "microsoft": os.environ.get("UNIFIDECK_MICROSOFT_ACTION"),
+        "ubisoft":   os.environ.get("UNIFIDECK_UBISOFT_ACTION"),
+    }
+    for candidate_store, action in action_env.items():
+        if action == "auth":
+            return candidate_store, "auth", False
+        if action == "install" and candidate_store == "ubisoft":
+            return candidate_store, "install", False
+    return None, None, True
+def _resolve_bypass_flag(store: str, game_id: str) -> bool:
+    """Resolve bypass flag."""
+    bypass_raw = os.environ.get(
+        "UNIFIDECK_BYPASS_CIRCUIT_BREAKER", "",
+    )
+    bypass_env = bypass_raw.strip().lower() in (
+        "1", "true", "yes",
+    )
+    try:
+        from unifideck.config.config_manager import ConfigManager
+        from unifideck.services.launch_history import LaunchHistoryService
+        cfg = ConfigManager(
+            str(
+                _resolve_plugin_dir()
+                / "defaults" / "config.json",
+            ),
+        )
+        lh = LaunchHistoryService(cfg)
+        bypass_flag = lh.consume_bypass(f"{store}:{game_id}")
+    except Exception:
+        bypass_flag = False
+    return bypass_env or bypass_flag
+async def _run(argv: list[str]) -> int:
+    """Run."""
+    from .diagnostics.correlation import launch_id_scope, new_launch_id
+    from .diagnostics.log_archive import (
+        attach_launch_handler,
+        detach_launch_handler,
+        prune_old_launches,
+    )
+    lid = new_launch_id()
+    with launch_id_scope(lid):
+        try:
+            from unifideck.config.config_manager import ConfigManager
+            from unifideck.core.paths import resolve_plugin_dir
+            _cfg = ConfigManager(str(
+                resolve_plugin_dir() /
+                "defaults" /
+                "config.json"))
+        except Exception:
+            _cfg = None
+        prune_old_launches(_cfg)
+        _archive_handler = attach_launch_handler(lid, _cfg)
+        try:
+            return await _run_with_id(argv)
+        finally:
+            detach_launch_handler(_archive_handler)
+
+async def _run_with_id(argv: list[str]) -> int:
+
+    """Run with ID."""
+    try:
+        game_key, _ = _parse_argv(argv)
+        logger.info(
+            "[launcher.dispatcher] request received: %s", game_key,
+        )
+    except LauncherError as err:
+        logger.exception(
+            "[launcher.dispatcher] argv parse failed: %s",
+            err.to_log_dict(),
+        )
+        return int(err.exit_code)
+    try:
+        launcher_service = _bootstrap_minimal_services()
+    except Exception:
+        logger.exception("[launcher.dispatcher] bootstrap failed")
+        return int(ExitCode.DEPENDENCY_MISSING)
+    try:
+        ctx = await _build_context(argv, launcher_service._shortcut_svc)
+    except LauncherError as err:
+        logger.exception(
+            "[launcher.dispatcher] context build failed: %s",
+            err.to_log_dict(),
+        )
+        return int(err.exit_code)
+    try:
+        await launcher_service.start()
+        result = await launcher_service.launch(ctx)
+    except LauncherError as err:
+        logger.exception(
+            "[launcher.dispatcher] launch raised: %s",
+            err.to_log_dict(),
+        )
+        return int(err.exit_code)
+    finally:
+        try:
+            await launcher_service.stop()
+        except Exception:
+            logger.exception(
+                "[launcher.dispatcher] launcher_service.stop failed",
+            )
+    return _map_result_to_exitcode(result)
+def _map_result_to_exitcode(result: Result) -> int:
+    """Map result to exitcode."""
+    if result.success:
+        return int(ExitCode.SUCCESS)
+    code = result.error_code or ""
+    if code == "not_implemented":
+        return int(ExitCode.GENERIC_ERROR)
+    if code == "circuit_open":
+        return int(ExitCode.CIRCUIT_BREAKER_OPEN)
+    if code.startswith("exit_"):
+        try:
+            rc = int(code.split("_", 1)[1])
+            return rc if 0 <= rc <= 255 else int(ExitCode.GAME_FAILED)
+        except (ValueError, IndexError):
+            return int(ExitCode.GAME_FAILED)
+    return int(ExitCode.GAME_FAILED)
+def _bootstrap_minimal_services() -> Any:
+    """Bootstrap minimal services.
+
+    Returns the ``LauncherService`` built by
+    ``launcher.bootstrap.build_launcher_service``. Typed as
+    ``Any`` to match the source return type (the bootstrap
+    helper itself is intentionally untyped at the call site to
+    avoid circular imports).
+    """
+    from .bootstrap import build_launcher_service
+    return build_launcher_service()
+
+def main(argv: list[str]) -> int:
+
+    """Main."""
+    from .diagnostics.correlation import install_launch_id_logging
+    logging.basicConfig(
+        format=(
+            "%(asctime)s [%(launch_id)s] %(levelname)s "
+            "%(name)s: %(message)s"
+        ),
+        level=logging.INFO,
+        stream=sys.stderr,
+    )
+    install_launch_id_logging()
+    try:
+        return int(asyncio.run(_run(argv)))
+    except KeyboardInterrupt:
+        return int(ExitCode.CANCELLED_BY_USER)
+    except asyncio.CancelledError:
+        logger.info(
+            "[launcher.dispatcher] launch cancelled by user",
+        )
+        return int(ExitCode.CANCELLED_BY_USER)
+    except Exception:
+        logger.exception("[launcher.dispatcher] uncaught exception")
+        return int(ExitCode.GENERIC_ERROR)
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

@@ -1,6 +1,31 @@
+# .github/workflows/build-plugin.yml
+#
+# CI pipeline for Unifideck. Triggered on every PR and push to
+# main/staging. Runs the full build pipeline:
+#
+#   1. Python setup + i18n translation (DeepL, only if en-US.json changed)
+#   2. TypeScript locale catalog generation from config.json
+#   3. RTL-safety lint (scripts/lint_rtl.py)
+#   4. pnpm install + ESLint + TypeScript type check
+#   5. Rollup frontend build (pnpm run build → dist/index.js)
+#   6. Decky CLI plugin packaging (cli/decky plugin build → out/Unifideck.zip)
+#   7. Upload plugin artifact for download from the PR
+#
+# ESLint cohabits with Prettier: ESLint catches semantic bugs
+# (React hooks in conditions, unused vars, a11y violations),
+# Prettier handles formatting. eslint-config-prettier (last in
+# extends) disables all ESLint rules that would conflict.
+#
+# Reference: Technical Document v1.0 — Sections 7 (Test strategy),
+# 10 (i18n). Operational Plan — OP-BUILD.
+
 name: Build plugin artifact
 
 on:
+  push:
+    branches:
+      - main
+      - staging
   pull_request:
     types: [opened, synchronize, reopened]
 
@@ -12,13 +37,61 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # ── i18n: translate + generate locale catalog ──────────
+
+      - name: Set up Python for i18n scripts
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Translate en-US.json via DeepL (if changed)
+        # Only calls DeepL for keys whose MD5 has changed since
+        # the last run. If en-US.json is unchanged → zero API
+        # calls, zero quota consumed. If running on a fork PR
+        # without DEEPL_API_KEY and en-US.json HAS changed →
+        # exits 1 with a clear message for the maintainer.
+        env:
+          DEEPL_API_KEY: ${{ secrets.DEEPL_API_KEY }}
+        run: python3 scripts/translate_at_build.py
+
+      - name: Regenerate locales.generated.ts from config.json
+        # Reads defaults/config.json i18n section and emits
+        # src/i18n/locales.generated.ts with static imports,
+        # SUPPORTED_LANGUAGES, LANGUAGE_NAMES, RTL_LANGUAGES,
+        # and LOCALE_RESOURCES. Single source of truth.
+        run: python3 scripts/gen_locale_imports.py
+
+      - name: Lint frontend for RTL-unsafe CSS patterns
+        # Fails if any src/ TS/TSX file uses directional CSS
+        # (marginLeft, textAlign:"left", ChevronRight, etc.)
+        # that wouldn't auto-flip in right-to-left mode.
+        run: python3 scripts/lint_rtl.py
+
+      - name: Commit regenerated locale files
+        # Only on push (not PR) — PRs can't write to the target
+        # repo. Commits any locale JSONs or generated TS that
+        # were updated by the translate/gen steps above.
+        if: github.event_name == 'push'
+        run: |
+          git config user.name "unifideck-bot"
+          git config user.email "bot@unifideck.invalid"
+          git add src/i18n/locales/*.json src/i18n/.translation-cache.json src/i18n/locales.generated.ts || true
+          if git diff --cached --quiet; then
+            echo "No locale changes to commit"
+          else
+            git commit -m "chore(i18n): auto-regenerate locales via DeepL"
+            git push
+          fi
+
+      # ── Frontend: install, lint, typecheck, build ──────────
+
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y cabextract
+
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
         with:
           version: 9
-
-      - name: Install system dependencies
-        run: sudo apt-get update && sudo apt-get install -y cabextract
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -29,8 +102,22 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Lint with ESLint
+        # Semantic code quality: React hooks rules, unused vars,
+        # TypeScript best practices, a11y violations. Does NOT
+        # check formatting — that's Prettier's job.
+        run: pnpm run lint
+
+      - name: Type-check with TypeScript
+        # Strict mode: noImplicitAny, noUnusedLocals,
+        # noImplicitReturns — catches type errors that ESLint
+        # and Rollup would miss.
+        run: pnpm run typecheck
+
       - name: Build frontend
         run: pnpm run build
+
+      # ── Decky CLI: package the plugin zip ──────────────────
 
       - name: Download Decky CLI
         run: |

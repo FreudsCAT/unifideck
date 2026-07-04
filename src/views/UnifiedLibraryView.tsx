@@ -1,259 +1,200 @@
-import React, { FC, useMemo, useState } from "react";
-import { useSteamLibrary, useUnifideckGames } from "../hooks/useSteamLibrary";
-import { GameGrid } from "../components/GameGrid";
-import { StoreType } from "../types/steam";
-import { t } from "../i18n";
+/**
+ * UnifiedLibraryView — content for a single Unifideck library tab.
+ *
+ * Replaces staging's `src/views/UnifiedLibraryView.tsx`. Wired to the
+ * RPC layer + LibraryContext rather than to global functions on
+ * `useUnifideckGames`. Receives a `filter` prop matching the staging
+ * shape so the library-patch hook can render it the same way per tab.
+ */
+import { Component, ErrorInfo, FC, ReactNode, useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
+import { useRPCQuery } from "../api/useRPC";
+import { rpcRoutes } from "../api/rpc-routes";
+import { GameGrid } from "../components/shared/GameGrid";
+import {
+  getCachedCompatByTitle,
+  meetsGreatOnDeckCriteria,
+} from "../lib/protondb-cache";
+import { getCompatByShortcutAppId } from "../lib/library-facets";
+import type { Game, StoreId } from "../types/api";
 
 export type LibraryFilter = "all" | "installed" | "great-on-deck";
 
 interface UnifiedLibraryViewProps {
   filter: LibraryFilter;
+  onSelect?: (game: Game) => void;
 }
 
-// Error boundary wrapper
-class ErrorBoundary extends React.Component<
-  { children: React.ReactNode },
-  { hasError: boolean; error?: Error }
+interface ErrorBoundaryState {
+  hasError: boolean;
+  error?: Error;
+}
+
+class ErrorBoundary extends Component<
+  { children: ReactNode },
+  ErrorBoundaryState
 > {
-  constructor(props: { children: React.ReactNode }) {
+  constructor(props: { children: ReactNode }) {
     super(props);
     this.state = { hasError: false };
   }
-
-  static getDerivedStateFromError(error: Error) {
+  static getDerivedStateFromError(error: Error): ErrorBoundaryState {
     return { hasError: true, error };
   }
-
-  componentDidCatch(error: Error, errorInfo: React.ErrorInfo) {
-    console.error("[Unifideck] UnifiedLibraryView error:", error, errorInfo);
+  componentDidCatch(error: Error, info: ErrorInfo): void {
+    console.error("[Unifideck] UnifiedLibraryView error:", error, info);
   }
-
-  render() {
-    if (this.state.hasError) {
-      return (
-        <div style={{ padding: "20px", color: "#ff6b6b" }}>
-          <h3>{t("unifiedLibrary.error")}</h3>
-          <p>{t("unifiedLibrary.errorLoadingView")}</p>
-          <pre style={{ fontSize: "11px", opacity: 0.7 }}>
-            {this.state.error?.message}
-          </pre>
-          <p style={{ fontSize: "12px", opacity: 0.7, marginTop: "10px" }}>
-            {t("unifiedLibrary.checkConsole")}
-          </p>
-        </div>
-      );
-    }
-
-    return this.props.children;
+  render(): ReactNode {
+    if (!this.state.hasError) return this.props.children;
+    return (
+      <div style={{ padding: 20, color: "#ff6b6b" }}>
+        <h3>Error loading library</h3>
+        <pre style={{ fontSize: 11, opacity: 0.7 }}>
+          {this.state.error?.message}
+        </pre>
+      </div>
+    );
   }
 }
 
-/**
- * Unified library view that shows games from all stores
- * Replaces Steam's default All Games, Installed, and Great on Deck tabs
- */
-const UnifiedLibraryViewInner: FC<UnifiedLibraryViewProps> = ({ filter }) => {
-  console.log(
-    `[Unifideck] Rendering UnifiedLibraryView with filter: ${filter}`,
+function isGreatOnDeck(game: Game): boolean {
+  // Shortcut-keyed facet compat — the authoritative path (the old
+  // ``getCachedRating(game.app_id)`` passed a *shortcut* AppID into a
+  // cache keyed by *real Steam* AppID, so it never hit for non-Steam
+  // games).
+  if (game.app_id != null) {
+    const facetCompat = getCompatByShortcutAppId(game.app_id);
+    if (facetCompat) return meetsGreatOnDeckCriteria(facetCompat);
+  }
+  // Fallback: title-keyed compat for shortcuts not yet mapped to a
+  // Steam AppID.
+  if (game.title) {
+    return meetsGreatOnDeckCriteria(getCachedCompatByTitle(game.title));
+  }
+  return false;
+}
+
+const UnifiedLibraryViewInner: FC<UnifiedLibraryViewProps> = ({
+  filter,
+  onSelect,
+}) => {
+  const { t } = useTranslation();
+  const { data, error, loading } = useRPCQuery<[], Game[]>(
+    rpcRoutes.getAllUnifideckGames,
+    [],
   );
-  const { games, loading, error } = useSteamLibrary();
-  const { gameMetadata, getStoreForApp } = useUnifideckGames();
-  const [storeFilter, setStoreFilter] = useState<StoreType | "all">("all");
+  const [storeFilter, setStoreFilter] = useState<StoreId | "all">("all");
   const [searchQuery, setSearchQuery] = useState("");
 
-  // Enhance games with Unifideck metadata (store info)
-  const enhancedGames = useMemo(() => {
-    const enhanced = games.map((game) => {
-      const store = getStoreForApp(game.appId);
-      if (store) {
-        return { ...game, store };
-      }
-
-      // Log games without metadata
-      if (game.store === "unknown" || !game.store) {
-        console.log(
-          `[Unifideck] No metadata for game ${game.appId}: ${game.title} (original store: ${game.store})`,
-        );
-      }
-
-      return game;
-    });
-
-    console.log(
-      `[Unifideck] Enhanced ${enhanced.length} games. Store breakdown:`,
-    );
-    const storeCounts = enhanced.reduce((acc, g) => {
-      acc[g.store || "undefined"] = (acc[g.store || "undefined"] || 0) + 1;
-      return acc;
-    }, {} as Record<string, number>);
-    console.log("[Unifideck]", storeCounts);
-
-    return enhanced;
-  }, [games, gameMetadata]);
-
-  // Apply filters
   const filteredGames = useMemo(() => {
-    let result = [...enhancedGames];
-
-    // Apply main filter (all/installed/great-on-deck)
-    switch (filter) {
-      case "installed":
-        result = result.filter((game) => game.isInstalled);
-        break;
-      case "great-on-deck":
-        result = result.filter(
-          (game) =>
-            game.deckVerified === "verified" ||
-            game.deckVerified === "playable",
-        );
-        break;
-      case "all":
-      default:
-        // Show all games
-        break;
+    let games = data ?? [];
+    if (filter === "installed") {
+      games = games.filter((g) => g.is_installed);
+    } else if (filter === "great-on-deck") {
+      games = games.filter(isGreatOnDeck);
     }
-
-    // Apply store filter
     if (storeFilter !== "all") {
-      result = result.filter((game) => game.store === storeFilter);
+      games = games.filter((g) => g.store === storeFilter);
     }
-
-    // Apply search filter
-    if (searchQuery.trim()) {
-      const query = searchQuery.toLowerCase();
-      result = result.filter((game) =>
-        game.title.toLowerCase().includes(query),
-      );
-    }
-
-    // Sort by title
-    result.sort((a, b) => a.title.localeCompare(b.title));
-
-    return result;
-  }, [enhancedGames, filter, storeFilter, searchQuery]);
+    const q = searchQuery.trim().toLowerCase();
+    if (q) games = games.filter((g) => g.title.toLowerCase().includes(q));
+    return [...games].sort((a, b) => a.title.localeCompare(b.title));
+  }, [data, filter, storeFilter, searchQuery]);
 
   if (error) {
     return (
-      <div
-        style={{
-          padding: "20px",
-          textAlign: "center",
-          color: "#ff6b6b",
-        }}
-      >
-        <div style={{ marginBottom: "10px", fontSize: "16px" }}>
+      <div style={{ padding: 20, color: "#ff6b6b" }}>
+        <div style={{ marginBottom: 10, fontSize: 16 }}>
           {t("unifiedLibrary.errorLoadingGames")}
         </div>
-        <div style={{ fontSize: "12px", opacity: 0.7 }}>{error}</div>
-        <div style={{ marginTop: "15px", fontSize: "11px", opacity: 0.5 }}>
-          {t("unifiedLibrary.tryReloading")}
-        </div>
+        <div style={{ fontSize: 12, opacity: 0.7 }}>{error.message}</div>
       </div>
     );
   }
 
+  const title =
+    filter === "installed"
+      ? t("deckTabs.installed")
+      : filter === "great-on-deck"
+      ? t("deckTabs.greatOnDeck")
+      : t("deckTabs.allGames");
+
   return (
-    <div
-      style={{
-        height: "100%",
-        display: "flex",
-        flexDirection: "column",
-      }}
-    >
-      {/* Header with filters */}
+    <div style={{ height: "100%", display: "flex", flexDirection: "column" }}>
       <div
         style={{
           padding: "15px 20px",
-          background: "rgba(0, 0, 0, 0.3)",
-          borderBottom: "1px solid rgba(255, 255, 255, 0.1)",
+          background: "rgba(0,0,0,0.3)",
+          borderBottom: "1px solid rgba(255,255,255,0.1)",
         }}
       >
         <div
           style={{
             display: "flex",
-            gap: "15px",
+            gap: 15,
             alignItems: "center",
             flexWrap: "wrap",
           }}
         >
-          {/* Title */}
-          <div style={{ fontSize: "18px", fontWeight: "bold" }}>
-            {getFilterTitle(filter)}
-          </div>
-
-          {/* Store filter */}
-          <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
-            <span style={{ fontSize: "12px", opacity: 0.7 }}>{t("unifiedLibrary.storeLabel")}</span>
+          <div style={{ fontSize: 18, fontWeight: "bold" }}>{title}</div>
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <span style={{ fontSize: 12, opacity: 0.7 }}>
+              {t("unifiedLibrary.storeLabel")}
+            </span>
             <select
               value={storeFilter}
               onChange={(e) =>
-                setStoreFilter(e.target.value as StoreType | "all")
+                setStoreFilter(e.target.value as StoreId | "all")
               }
               style={{
-                background: "rgba(255, 255, 255, 0.1)",
-                border: "1px solid rgba(255, 255, 255, 0.2)",
-                borderRadius: "4px",
+                background: "rgba(255,255,255,0.1)",
+                border: "1px solid rgba(255,255,255,0.2)",
+                borderRadius: 4,
                 padding: "4px 8px",
                 color: "white",
-                fontSize: "12px",
+                fontSize: 12,
               }}
             >
               <option value="all">{t("unifiedLibrary.allStores")}</option>
               <option value="steam">{t("deckTabs.steam")}</option>
-              <option value="epic">{t("storeConnections.epicGames")}</option>
+              <option value="epic">{t("deckTabs.epic")}</option>
               <option value="gog">{t("deckTabs.gog")}</option>
-              <option value="amazon">{t("storeConnections.amazonGames")}</option>
-              <option value="ubisoft">{t("storeConnections.ubisoftConnect")}</option>
-              <option value="microsoft">{t("storeConnections.microsoftStore")}</option>
+              <option value="amazon">{t("deckTabs.amazon")}</option>
+              <option value="ubisoft">{t("deckTabs.ubisoft")}</option>
+              <option value="microsoft">{t("deckTabs.microsoft")}</option>
             </select>
           </div>
-
-          {/* Search */}
           <input
             type="text"
             placeholder={t("unifiedLibrary.searchPlaceholder")}
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             style={{
-              background: "rgba(255, 255, 255, 0.1)",
-              border: "1px solid rgba(255, 255, 255, 0.2)",
-              borderRadius: "4px",
+              background: "rgba(255,255,255,0.1)",
+              border: "1px solid rgba(255,255,255,0.2)",
+              borderRadius: 4,
               padding: "6px 12px",
               color: "white",
-              fontSize: "12px",
-              flex: "1",
-              minWidth: "200px",
+              fontSize: 12,
+              flex: 1,
+              minWidth: 200,
             }}
           />
         </div>
       </div>
-
-      {/* Game grid */}
       <div style={{ flex: 1, overflow: "auto" }}>
-        <GameGrid games={filteredGames} loading={loading} />
+        {loading ? (
+          <div style={{ padding: 20, opacity: 0.7 }}>{t("common.loading")}</div>
+        ) : (
+          <GameGrid games={filteredGames} onSelect={onSelect ?? (() => {})} />
+        )}
       </div>
     </div>
   );
 };
 
-// Wrapped export with error boundary
-export const UnifiedLibraryView: FC<UnifiedLibraryViewProps> = (props) => {
-  return (
-    <ErrorBoundary>
-      <UnifiedLibraryViewInner {...props} />
-    </ErrorBoundary>
-  );
-};
-
-function getFilterTitle(filter: LibraryFilter): string {
-  switch (filter) {
-    case "all":
-      return t("deckTabs.allGames");
-    case "installed":
-      return t("deckTabs.installed");
-    case "great-on-deck":
-      return t("deckTabs.greatOnDeck");
-    default:
-      return t("unifiedLibrary.library");
-  }
-}
+export const UnifiedLibraryView: FC<UnifiedLibraryViewProps> = (props) => (
+  <ErrorBoundary>
+    <UnifiedLibraryViewInner {...props} />
+  </ErrorBoundary>
+);

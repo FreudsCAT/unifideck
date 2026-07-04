@@ -2,8 +2,7 @@ from __future__ import annotations
 
 import http
 import logging
-import typing
-from typing import Any, NewType, Optional, Union
+from typing import TYPE_CHECKING, Any, NewType, Sequence
 
 
 __all__ = [
@@ -19,28 +18,30 @@ __all__ = [
 
 # Public types used in the signature of public APIs
 
-# Change to str | bytes when dropping Python < 3.10.
-Data = Union[str, bytes]
+Data = str | bytes
 """Types supported in a WebSocket message:
-:class:`str` for a Text_ frame, :class:`bytes` for a Binary_.
+:class:`str` for a Text_ frame, :class:`bytes` for a Binary_ frame.
 
 .. _Text: https://datatracker.ietf.org/doc/html/rfc6455#section-5.6
 .. _Binary : https://datatracker.ietf.org/doc/html/rfc6455#section-5.6
 
 """
 
+BytesLike = bytes | bytearray | memoryview
+"""Types accepted where :class:`bytes` is expected."""
 
-# Change to logging.Logger | ... when dropping Python < 3.10.
-if typing.TYPE_CHECKING:
-    LoggerLike = Union[logging.Logger, logging.LoggerAdapter[Any]]
+DataLike = str | bytes | bytearray | memoryview
+"""Types accepted where :class:`Data` is expected."""
+
+if TYPE_CHECKING:
+    LoggerLike = logging.Logger | logging.LoggerAdapter[Any]
     """Types accepted where a :class:`~logging.Logger` is expected."""
 else:  # remove this branch when dropping support for Python < 3.11
-    LoggerLike = Union[logging.Logger, logging.LoggerAdapter]
+    LoggerLike = logging.Logger | logging.LoggerAdapter
     """Types accepted where a :class:`~logging.Logger` is expected."""
 
 
-# Change to http.HTTPStatus | int when dropping Python < 3.10.
-StatusLike = Union[http.HTTPStatus, int]
+StatusLike = http.HTTPStatus | int
 """
 Types accepted where an :class:`~http.HTTPStatus` is expected."""
 
@@ -56,14 +57,13 @@ Subprotocol = NewType("Subprotocol", str)
 ExtensionName = NewType("ExtensionName", str)
 """Name of a WebSocket extension."""
 
-# Change to tuple[str, str | None] when dropping Python < 3.10.
-ExtensionParameter = tuple[str, Optional[str]]
+ExtensionParameter = tuple[str, str | None]
 """Parameter of a WebSocket extension."""
 
 
 # Private types
 
-ExtensionHeader = tuple[ExtensionName, list[ExtensionParameter]]
+ExtensionHeader = tuple[ExtensionName, Sequence[ExtensionParameter]]
 """Extension in a ``Sec-WebSocket-Extensions`` header."""
 
 

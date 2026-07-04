@@ -1,0 +1,338 @@
+# Unifideck — Architecture & Build Process
+
+> **Version:** 0.7.0 · **Plan ref:** operational plan v1.3
+
+---
+
+## 1. Overview
+
+Unifideck is a [Decky Loader](https://github.com/SteamDeckHomebrew/decky-loader) plugin that provides a unified game library for Steam Deck, integrating Epic Games, GOG, Amazon Games, Ubisoft Connect, and Microsoft PC Game Pass directly into Steam's interface.
+
+The 0.7 restructure replaced the legacy monolithic layout with a strict **5-layer Python package architecture** driven by an EventBus, a dependency-injection service container, and a typed RPC surface.
+
+---
+
+## 2. Repository Layout
+
+```
+unifideck-decky/
+├── main.py                  # Decky entry point — Plugin class + RPC composition
+├── plugin.json              # Decky plugin manifest (name, version, api_version)
+├── package.json             # JS manifest + remote_binary bundling spec
+├── requirements.txt         # Vendored Python deps (pip install --target py_modules/)
+├── defaults/
+│   ├── config.json          # User config schema + default values
+│   └── backend/             # Backend-specific default data files
+├── bin/                     # Native binaries & shell wrappers (no .py scripts)
+├── py_modules/              # All Python runtime code (vendored + unifideck/)
+│   └── unifideck/           # The plugin's own 5-layer package
+├── src/                     # TypeScript/React frontend
+├── assets/                  # Plugin artwork and icons
+├── tests/                   # pytest test suite (mirrors py_modules/unifideck/)
+├── scripts/                 # Dev/CI helper scripts (not bundled)
+├── docs/                    # Documentation (this file)
+└── build-plugin.sh          # Local build script (this document's subject)
+```
+
+---
+
+## 3. The 5-Layer Backend Architecture
+
+Declared in `py_modules/unifideck/__init__.py` and enforced by `.importlinter`.
+Imports flow **downward only** — no layer may import from a layer above it.
+
+```
+┌─────────────────────────────────────────────────┐
+│  Layer 6 — RPC (main.py + rpc/mixins/)          │  ← Decky JS bridge
+├─────────────────────────────────────────────────┤
+│  Layer 5 — Services (services/)                 │  ← Infrastructure services
+├─────────────────────────────────────────────────┤
+│  Layer 4 — Stores (stores/)                     │  ← 5 store connectors
+├─────────────────────────────────────────────────┤
+│  Layer 3 — StoreBase (stores/shared/)           │  ← Abstract store contract
+├─────────────────────────────────────────────────┤
+│  Layer 2 — Core (core/)                         │  ← CacheManager, SyncService…
+├─────────────────────────────────────────────────┤
+│  Layer 1 — Types (core/types/)                  │  ← Game, Result, Events (pure data)
+└─────────────────────────────────────────────────┘
+```
+
+### Layer 1 — `core/types/`
+
+Pure data island. No side-effects, no I/O. Safe to import from any layer.
+
+| File         | Contents                                      |
+| ------------ | --------------------------------------------- |
+| `domain.py`  | `Game`, `StoreId`, `InstallState` dataclasses |
+| `events.py`  | All typed `EventBus` event payloads           |
+| `results.py` | `Result[T]` envelope (success/error/code)     |
+
+### Layer 2 — `core/`
+
+Infrastructure primitives. No store or service knowledge.
+
+| Module/Package                  | Purpose                                   |
+| ------------------------------- | ----------------------------------------- |
+| `cache_manager.py`              | Namespace-keyed in-memory + disk cache    |
+| `sync_service.py`               | Cross-store library sync orchestration    |
+| `manifest.py`                   | Plugin installation manifest reader       |
+| `metrics_collector.py`          | Latency/counter telemetry                 |
+| `exe_finder.py`                 | Heuristic executable discovery            |
+| `paths.py`                      | Canonical path resolution                 |
+| `io/async_file_ops.py`          | Async file read/write/remove              |
+| `io/safe_file_op.py`            | Atomic write with rollback                |
+| `binaries/binary_resolver.py`   | Resolves `bin/` tool paths                |
+| `binaries/binary_signatures.py` | SHA-256 verification for bundled binaries |
+| `binaries/cli_timeouts.py`      | Per-tool subprocess timeout config        |
+
+### Layer 3 — `stores/shared/`
+
+`StoreBase` ABC — defines the five abstract methods every store must implement:
+`get_library()`, `install()`, `uninstall()`, `launch()`, `get_updates()`.
+
+### Layer 4 — `stores/`
+
+Five store connector sub-packages. Each is self-contained with its own auth, library, install, and update logic.
+
+| Package             | Store                 | CLI backend                     |
+| ------------------- | --------------------- | ------------------------------- |
+| `stores/epic/`      | Epic Games Store      | `bin/legendary`                 |
+| `stores/gog/`       | GOG                   | `bin/gogdl` + `bin/comet`       |
+| `stores/amazon/`    | Amazon Games          | `bin/nile`                      |
+| `stores/ubisoft/`   | Ubisoft Connect       | Custom HTTP + session injection |
+| `stores/microsoft/` | PC Game Pass / xCloud | Edge browser + CDP              |
+
+### Layer 5 — `services/`
+
+Infrastructure services that subscribe to the EventBus and own cross-cutting concerns.
+
+| Service package                    | Responsibility                                |
+| ---------------------------------- | --------------------------------------------- |
+| `services/download/`               | Download queue, progress tracking, worker     |
+| `services/playtime/`               | Session recording, DB persistence             |
+| `services/cloud_save/`             | Save sync — upload/download/conflict          |
+| `services/shortcut/`               | Steam VDF shortcut create/delete/update       |
+| `services/artwork/`                | SteamGridDB artwork fetching                  |
+| `services/launcher/`               | Game launch orchestration, circuit breaker    |
+| `services/security/`               | Token store, bruteforce protection, audit log |
+| `services/microsoft_subscription/` | Game Pass entitlement probing                 |
+| `services/launch_history/`         | Per-game launch timestamps                    |
+| `services/bootstrap/`              | DI container, service constructor, teardown   |
+| `metadata_service.py`              | Metacritic + UnifiDB metadata aggregation     |
+| `account_service.py`               | Multi-account lifecycle                       |
+| `proton_service.py`                | Proton version resolution                     |
+
+### Layer 6 — `rpc/mixins/` + `main.py`
+
+The `Plugin` class in `main.py` is composed from 18 RPC mixin classes (see `main.py` `class Plugin(...)`). The `@auto_wrap_rpc_methods` decorator rewrites every public coroutine to return a typed `Result[T]` envelope, keeping the frontend contract stable across backend refactors.
+
+| Mixin                      | Surface (representative)                                                        |
+| -------------------------- | ------------------------------------------------------------------------------- |
+| `StoreRPCMixin`            | `get_library`, `get_store_status`                                               |
+| `SyncRPCMixin`             | `sync_library`, `get_sync_progress`                                             |
+| `DownloadRPCMixin`         | `install_game`, `uninstall_game`, `get_downloads`                               |
+| `StorageRPCMixin`          | `get_storage_locations`, `get_browseable_devices`, `set_custom_install_path`    |
+| `LaunchRPCMixin`           | `launch_game`, `kill_game`                                                       |
+| `AuthShortcutsRPCMixin`    | `get_<store>_auth_shortcut_context`, `get_compat_tool_for_game`, `save_proton_setting` |
+| `EdgeRPCMixin`             | `is_edge_installed`, `install_edge`                                             |
+| `LibraryFacetsRPCMixin`    | `get_overview_enrichment`                                                       |
+| `PlaytimeRPCMixin`         | `get_playtime`, `get_play_sessions`                                             |
+| `SecurityRPCMixin`         | `rotate_device_key`, `get_audit_log`                                            |
+| `ObservabilityRPCMixin`    | `get_metrics`, `get_event_log`                                                  |
+| `ActionRPCMixin`           | `dispatch_unifideck_action` (URI dispatch)                                      |
+| `AccountRPCMixin`          | `check_account_switch`, `migrate_account_data`                                  |
+| `CloudFailureRPCMixin`     | `get_cloud_failures`, `retry_cloud_sync`                                        |
+| `CloudSaveRPCMixin`        | `get_cloud_save_status`, `cloud_save_pull`, `cloud_save_push`, `set_game_save_path` |
+| `ConfigValidationRPCMixin` | `get_config_validation_result`                                                  |
+| `UIRPCMixin`               | `get_ui_state`, `set_locale`                                                    |
+| `UpdaterRPCMixin`          | `check_plugin_update`, `get_available_versions`, `get_release_notes`            |
+
+---
+
+## 4. Support Packages
+
+These sit alongside the 5-layer stack and can be imported by any layer.
+
+| Package          | Description                                                                                                |
+| ---------------- | ---------------------------------------------------------------------------------------------------------- |
+| `auth/`          | OAuth browser monitor + multi-store auth orchestrator + Edge browser shims                                 |
+| `cdp/`           | Chrome DevTools Protocol injection utilities                                                               |
+| `compatibility/` | Proton/Wine prefix management and helper wrappers                                                          |
+| `event_bus/`     | `EventBus`, `PriorityDispatcher`, replay buffer, supervision (watchdog + metrics handler)                  |
+| `config/`        | Config manager, JSON schema validator, i18n schema, startup validation                                     |
+| `bootstrap/`     | DI wiring: `boot_plugin`, `unload_plugin`, `build_eventbus_pipeline`, cache registry                       |
+| `security/`      | Ephemeral credential store, secure I/O, device fingerprint, audit emission, redaction                      |
+| `metadata/`      | Metacritic scraper, UnifiDB API client                                                                     |
+| `steam/`         | Steam library path discovery, VDF shortcuts, SteamGridDB, owned games                                      |
+| `utils/`         | Shared path helpers, locale utilities, config helpers                                                      |
+| `launcher/`      | Game launcher dispatcher, Proton infrastructure, language setup, cloud save trigger, CDP flows, game fixes |
+| `actions/`       | `dispatch.py` — `unifideck://` URI handler; `unifideck_uri.py` — URI parser                                |
+| `rpc/`           | `auto_wrap_rpc_methods` decorator, handler base classes, mixin registry                                    |
+
+---
+
+## 5. `bin/` Directory
+
+Contains **only** compiled binaries and shell wrappers. All old `bin/*.py` helper scripts have been absorbed into `py_modules/unifideck/launcher/` and the relevant service packages.
+
+| File                            | Size    | Role                                                                                     |
+| ------------------------------- | ------- | ---------------------------------------------------------------------------------------- |
+| `legendary`                     | ~10 MB  | Epic Games Store CLI (upstream)                                                          |
+| `gogdl`                         | ~7 MB   | GOG download manager (upstream, Heroic)                                                  |
+| `nile`                          | ~10 MB  | Amazon Games CLI (upstream, imLinguin)                                                   |
+| `comet`                         | —       | GOG online services / Galaxy stub (upstream, imLinguin)                                  |
+| `winetricks`                    | ~820 KB | Wine component installer (shell script)                                                  |
+| `unifideck-launcher`            | shell   | Entry-point wrapper — bootstraps `py_modules/` path and calls `launcher.dispatcher.main` |
+| `unifideck-launcher.py`         | Python  | Python source for the launcher (companion to the shell wrapper)                          |
+| `unifideck-runner`              | shell   | Minimal wrapper for Proton runs                                                          |
+| `EpicGamesLauncher.exe`         | 150 KB  | Stub wrapper used by Legendary for Epic auth                                             |
+| `vcruntime_fix.reg`             | 1 KB    | Windows registry patch for VC runtime in Wine prefix                                     |
+| `stubs/GalaxyCommunication.exe` | binary  | GOG Galaxy overlay stub (copied into Wine prefix by the GOG store)                       |
+| `umu/`                          | dir     | `umu-run` runtime bundle (upstream project)                                              |
+
+---
+
+## 6. `py_modules/` — Vendored Python Dependencies
+
+Installed via `pip install --target py_modules/ -r requirements.txt`.
+
+**Active runtime deps:**
+
+| Package        | Purpose                                      |
+| -------------- | -------------------------------------------- |
+| `aiohttp`      | Async HTTP client (used across ~10 modules)  |
+| `websockets`   | WebSocket support (CDP, auth browser)        |
+| `vdf`          | Valve Data Format parser (Steam shortcuts)   |
+| `certifi`      | TLS CA bundle                                |
+| `aiofiles`     | Async file I/O helpers                       |
+| `filelock`     | Cross-process file locking                   |
+| `legendary`    | Legendary Python library (Epic auth helpers) |
+| `steamgrid`    | SteamGridDB Python bindings                  |
+| `cryptography` | Token encryption in `security/`              |
+
+**Removed in v0.7 restructure** (no longer bundled):
+
+- `requests`, `urllib3`, `idna`, `charset_normalizer` — replaced by `aiohttp`
+- `pip/`, `py_modules/bin/` — packaging artefacts, not runtime deps
+
+---
+
+## 7. Frontend (`src/`)
+
+TypeScript/React frontend compiled to `dist/index.js` by Rollup.
+
+The frontend communicates with the backend exclusively via Decky's RPC bridge — it calls the public methods of the `Plugin` class (which are the 18 mixin surfaces) and receives typed `Result[T]` envelopes.
+
+Key architectural landmarks post-restructure:
+
+- **`src/index.tsx`** — reduced from 2 409 LOC to ~166 LOC (plugin registration only)
+- **`src/lib/steam-bridge/`** — new Steam interaction abstraction layer
+- **`src/views/`** — QuickAccessPanel, AppDetailsPatch
+- **`src/components/`** — decomposed into `play/`, `info/`, `modals/`, `settings/`, `shared/`, `downloads/`
+- **`src/hooks/`** — `useSteamLibrary`, `usePlaySection`, `useGameActions`
+- **`src/types/`** — typed sub-package (`store.ts`, `steam.ts`, `downloads.ts`, `playtime.ts`, `syncProgress.ts`)
+
+---
+
+## 8. Build Process
+
+### Prerequisites
+
+- `pnpm` (for frontend build)
+- `curl` (binary downloads)
+- Docker or Podman (for Decky CLI builds) **or** nothing (local fallback)
+- `zip`, `unzip`
+
+### Script usage
+
+```bash
+./build-plugin.sh [dev|prod] [install]
+
+# Examples:
+./build-plugin.sh          # dev build, no install
+./build-plugin.sh dev      # dev build, no install
+./build-plugin.sh prod     # production build
+./build-plugin.sh dev install  # dev build + auto-install to Decky
+```
+
+### Build flow
+
+```
+build-plugin.sh
+    │
+    ├─ prebuild_binaries()
+    │       Download/verify: legendary, gogdl, nile, comet, winetricks
+    │       Source of truth: package.json "remote_binary" array + SHA-256 hashes
+    │
+    ├─ check_requirements()
+    │       Ensure requirements.txt exists (fallback: copy from requirements.in)
+    │
+    ├─ sync_version()
+    │       Read version from plugin.json (no auto-increment)
+    │
+    ├─ check_decky_cli()  ──→  [CLI available?]
+    │       Yes → check_container_engine()
+    │               Docker/Podman found → build_with_cli()
+    │               No container      → build_local()
+    │       No  → build_local()
+    │
+    └─ [install?] → install_plugin()
+```
+
+### `build_with_cli` (Docker/Podman path)
+
+1. Cleans `dist/` (handles root-owned files from previous container builds)
+2. Creates a clean staging directory containing:
+   `py_modules/`, `bin/`, `defaults/`, `src/`, `assets/`, `main.py`, `plugin.json`, `package.json`, `pnpm-lock.yaml`, `tsconfig.json`, `rollup.config.mjs`, `requirements.txt`, `LICENSE`, `README.md`
+3. Runs `decky plugin build` inside the container — compiles frontend + packages everything
+4. Renames `Unifideck.zip` → `unifideck.[dev|prod].vN.zip`
+
+### `build_local` (Steam Deck / no container)
+
+1. Runs `pnpm run build` to compile frontend → `dist/`
+2. Copies staged files (same set as above) + `dist/` into a temp `Unifideck/` directory
+3. Runs **critical file verification** — 80+ path assertions covering all layers
+4. Sets executable bits on `bin/`
+5. Zips into `out/unifideck.[dev|prod].vN.zip`
+
+### `install_plugin`
+
+1. Stops `plugin_loader` systemd service
+2. Removes existing `~/homebrew/plugins/Unifideck/`
+3. Extracts new zip into `~/homebrew/plugins/`
+4. Sets `deck:deck` ownership + `755` permissions
+5. Starts `plugin_loader`
+
+### Output naming
+
+| Mode        | Pattern                                 | Example                     |
+| ----------- | --------------------------------------- | --------------------------- |
+| Production  | `unifideck.prod.vX.Y.Z.zip`             | `unifideck.prod.v0.7.0.zip` |
+| Development | `unifideck.dev.vN.zip` (auto-increment) | `unifideck.dev.v12.zip`     |
+
+---
+
+## 9. Architectural Constraints (`.importlinter`)
+
+Two import invariants are machine-enforced:
+
+| Contract        | Rule                                                                                     |
+| --------------- | ---------------------------------------------------------------------------------------- |
+| `rpc-is-leaf`   | Nothing inside `unifideck.*` may import `unifideck.rpc` — only `main.py` may             |
+| `types-is-leaf` | `core.types` may not import from `event_bus`, `services`, `stores`, `launcher`, or `rpc` |
+
+Run `lint-imports` (via `pyproject.toml`) to verify these invariants in CI.
+
+---
+
+## 10. Binary Version Manifest
+
+All remote binaries are declared in `package.json` under `"remote_binary"`. The build script derives download URLs and validation from this manifest. **Keep these two in sync.**
+
+| Binary       | Version  | URL                                             |
+| ------------ | -------- | ----------------------------------------------- |
+| `legendary`  | 0.20.38  | `github.com/Heroic-Games-Launcher/legendary`    |
+| `gogdl`      | v1.1.2   | `github.com/Heroic-Games-Launcher/heroic-gogdl` |
+| `nile`       | v1.1.2   | `github.com/imLinguin/nile`                     |
+| `comet`      | v0.3.2   | `github.com/imLinguin/comet`                    |
+| `winetricks` | 20260125 | `github.com/Winetricks/winetricks`              |

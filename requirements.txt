@@ -1,20 +1,94 @@
-# Unifideck Python Dependencies
+# Unifideck runtime dependencies.
+#
+# These are the only Python packages the plugin needs at runtime
+# on the Steam Deck. Decky Loader installs them automatically when
+# the plugin is loaded.
+#
+# Versions are pinned to major.minor only — patch updates are
+# accepted to pick up security fixes without re-validation.
+#
+# Floors are CVE-driven: pip-audit (in requirements-dev.txt) gates
+# the GHA quality.yml workflow against any pin whose lower bound
+# admits a known-vulnerable release. Every bump below cites the
+# CVE that forced it. Bump in the same PR as the corresponding
+# audit-report entry to keep changelog provenance.
 
-# Core dependencies (should already be available in Decky environment)
-# asyncio - stdlib
-# logging - stdlib
-# json - stdlib
+# HTTP client for store API calls (Epic, GOG, Amazon, Microsoft,
+# SteamGridDB, ProtonDB, Metacritic, UnifiDB).
+#
+# Floor 3.10.11 closes CVE-2024-52303 (client-side memory leak on
+# request body, MED 5.5) and CVE-2024-52304 (request smuggling via
+# Transfer-Encoding, MED 5.3) — both reachable from the client
+# code path Unifideck uses. The 3.9.x line is end-of-fix for these
+# issues; 3.10.11 is the earliest line carrying both patches. The
+# server-side CVE-2025-53643 (HIGH, fixed in 3.12.14) does not
+# apply: Unifideck does not run aiohttp.web — OAuth redirect
+# capture uses CDP injection, not a local callback server.
+aiohttp>=3.10.11,<4.0
 
-# Store integrations
-legendary-gl>=0.20.34  # Epic Games Store CLI
+# WebSocket client for the Chrome DevTools Protocol bridge that
+# powers Steam UI injection (CSS hide play button, OAuth redirect
+# capture, virtual keyboard for xCloud).
+#
+# No CVE published against the 12.x or 13.x lines. Floor stays at
+# 13.1 (last 13.x patch, Sep 2024) — leapfrogging the 12.x line
+# picks up the asyncio implementation rewrite that fixed several
+# crashes in the CDP idle-reconnect path. Ceiling expanded to <17
+# so a future Decky-loader upgrade isn't held back by this pin.
+websockets>=13.1,<17
 
-# Steam Grid DB integration (for cover art)
-python-steamgriddb>=1.0.5
-aiohttp>=3.8.0
-aiofiles>=23.0.0
+# Symmetric authenticated encryption (AES-256-GCM) for OAuth token
+# persistence. Used by core/secure_token_store.py to encrypt
+# gog_token.json and microsoft_tokens.json with a key derived from
+# /etc/machine-id via scrypt. Standard library has no AEAD
+# primitive, so we depend on the canonical pyca lib.
+#
+# Floor 44.0.1 is mandatory:
+#   CVE-2024-26130 (HIGH 7.5) NULL deref + segfault in PKCS#12
+#     serialization — fixed in 42.0.4 but we go higher because:
+#   CVE-2024-12797 (HIGH 7.5) the wheels in 42.0.0–44.0.0 ship a
+#     statically-linked vulnerable OpenSSL (Bleichenbacher timing
+#     oracle on RSA key exchange). 44.0.1 is the earliest wheel
+#     with a patched OpenSSL. Since pyca/cryptography ships
+#     pre-built wheels on PyPI and Decky Loader installs from
+#     PyPI, the OpenSSL bundled in the wheel is what runs in
+#     production — the system OpenSSL doesn't shield us here.
+cryptography>=44.0.1,<49.0
 
-# CDP WebSocket for Epic OAuth (read browser page content)
-websockets>=11.0
+# JSON Schema validation for defaults/config.json and user
+# overrides at plugin boot. Used by config/validator.py to catch
+# typos and type errors before they cause runtime failures in
+# store adapters. Draft-07 schema lives in config/schema.json.
+#
+# No major CVE in the 4.x line. Floor raised to 4.17 (the last
+# release of the active 4.x maintenance branch) — earlier
+# 4.0–4.16 versions have known parser-correctness bugs around
+# default values and $ref resolution that would silently let
+# malformed config through validation.
+#
+# Ceiling capped at <4.24: jsonschema 4.24+ pulls in attrs>=24.1
+# which exports ``attr.Converter`` — a symbol absent from the
+# ``attrs 23.2.0`` that Decky Loader bundles inside its
+# PyInstaller ``_MEI*`` extraction dir. Because Decky's ``attr``
+# lands on ``sys.path`` before our vendored copy, the newer
+# ``attrs`` package fails with ``ImportError: cannot import name
+# 'Converter' from 'attr'``. Pinning <4.24 keeps the entire
+# attrs ↔ jsonschema chain compatible with Decky's 23.2.0.
+jsonschema>=4.17,<4.24
 
-# Optional: For better async file operations
-# Note: These may need to be installed via pip on Steam Deck
+# attrs — dataclass-like declarative classes. Required by
+# jsonschema, referencing, and jsonschema-specifications.
+#
+# Decky Loader (3.x) is a PyInstaller-bundled binary that
+# extracts ``attrs 23.2.0`` into ``/tmp/_MEI*/`` and places it on
+# ``sys.path`` for the plugin Python process. If our vendored
+# ``attrs`` is newer than 23.x, the ``attrs`` package tries to
+# ``from attr import Converter`` — a class added in 24.1.0 — but
+# Python resolves the *Decky-bundled* ``attr`` (23.2.0, no
+# ``Converter``), causing an ImportError that cascades into
+# jsonschema, putting the plugin into degraded mode.
+#
+# Pin to 23.x so our vendored copy is ABI-identical to Decky's
+# and the import succeeds regardless of which ``attr`` Python
+# finds first.
+attrs>=23.2.0,<24.0

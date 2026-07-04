@@ -1,296 +1,282 @@
-"""
-Steam library enumeration — reads local VDF files to discover ALL owned games.
+"""steam/library.py — Steam install discovery + Steam Store search."""
+from __future__ import annotations
 
-Uses two data sources:
-1. librarycache/ directories → owned app IDs (most complete, includes uninstalled)
-2. appinfo.vdf binary → app_id ↔ name mapping (Steam's metadata cache)
-"""
+import asyncio
 import logging
-import os
-import struct
+import random
+from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Dict, Optional, Set
+from typing import TYPE_CHECKING, Any
+
+import aiohttp
+
+from unifideck.utils.config_helpers import get_cfg
+from unifideck.utils.title_match import (
+    normalize_for_match,
+    strip_edition_suffix,
+    titles_match,
+)
+
+if TYPE_CHECKING:
+    from unifideck.config import ConfigManager
 
 logger = logging.getLogger(__name__)
 
-# Steam root candidates (Linux/Steam Deck)
-_STEAM_ROOTS = [
-    Path.home() / ".steam" / "steam",
-    Path.home() / ".local" / "share" / "Steam",
-]
+STEAM_PATH_CANDIDATES = (
+    "~/.steam/steam",
+    "~/.local/share/Steam",
+    "~/.var/app/com.valvesoftware.Steam/.steam/steam",
+)
+STEAM_STORE_SEARCH_URL = "https://store.steampowered.com/api/storesearch"
+
+_HTTP_OK = 200
+_DEFAULT_TIMEOUT = 10.0
+_RESERVED_USERDATA_DIRS = frozenset({"0", "anonymous", "ac"})
 
 
-def _find_steam_root() -> Optional[Path]:
-    for root in _STEAM_ROOTS:
-        if (root / "appcache" / "appinfo.vdf").is_file():
-            return root
+def _cfg(config: ConfigManager | None, key: str, default: Any) -> Any:
+    """Cfg."""
+    return get_cfg(config, key, default)
+
+
+def find_steam_path(config: ConfigManager | None = None) -> str | None:
+    """Find steam path.
+
+    Honours an optional ``paths.steam_root`` config override; falls back
+    to the standard candidate locations. Returns the directory string
+    on success, or ``None`` when no Steam install is detectable.
+    """
+    if config is not None:
+        override = _cfg(config, "paths.steam_root", None)
+        if override:
+            full = str(Path(str(override)).expanduser())
+            if (Path(full) / "steamapps").is_dir():
+                return full
+    for candidate in STEAM_PATH_CANDIDATES:
+        full_path = str(Path(candidate).expanduser())
+        if (Path(full_path) / "steamapps").is_dir():
+            return full_path
     return None
 
 
-def get_owned_app_ids() -> Set[int]:
-    """Return app IDs for ALL games the user owns/has in their Steam library.
+def _find_most_recent_user(steam_path: str) -> str | None:
+    """Find most recent user."""
+    userdata = Path(steam_path) / "userdata"
+    if not userdata.is_dir():
+        return None
+    latest: tuple[float, str] | None = None
+    for entry in userdata.iterdir():
+        if not entry.is_dir() or entry.name in _RESERVED_USERDATA_DIRS:
+            continue
+        try:
+            mtime = entry.stat().st_mtime
+        except OSError:
+            continue
+        if latest is None or mtime > latest[0]:
+            latest = (mtime, entry.name)
+    return latest[1] if latest else None
 
-    Reads directory names from Steam's librarycache/ — each directory
-    corresponds to a game the user has access to (installed or not).
-    """
-    steam_root = _find_steam_root()
-    if not steam_root:
-        return set()
 
-    cache_dir = steam_root / "appcache" / "librarycache"
-    if not cache_dir.is_dir():
-        return set()
+def find_grid_path(
+    steam_path: str | None = None,
+    config: ConfigManager | None = None,
+) -> str | None:
+    """Find grid path."""
+    base = steam_path or find_steam_path(config)
+    if base is None:
+        return None
+    user = _find_most_recent_user(base)
+    if user is None:
+        return None
+    return str(Path(base) / "userdata" / user / "config" / "grid")
 
-    app_ids: Set[int] = set()
+
+def find_shortcuts_vdf(
+    steam_path: str | None = None,
+    config: ConfigManager | None = None,
+) -> str | None:
+    """Find shortcuts VDF."""
+    base = steam_path or find_steam_path(config)
+    if base is None:
+        return None
+    user = _find_most_recent_user(base)
+    if user is None:
+        return None
+    return str(Path(base) / "userdata" / user / "config" / "shortcuts.vdf")
+
+
+@dataclass
+class SteamStoreResult:
+    """Steam store result."""
+
+    app_id: int
+    name: str
+    header_image: str
+    price: str
+    release_date: str
+
+    def to_dict(self) -> dict[str, Any]:
+        """To dict."""
+        return asdict(self)
+
+
+def _format_price(price_block: Any) -> str:
+    """Format the Steam Store price block to a display string."""
+    if not isinstance(price_block, dict):
+        return ""
+    final = price_block.get("final")
+    if not isinstance(final, int):
+        return ""
+    if final == 0:
+        return "Free"
+    currency = price_block.get("currency", "")
+    formatted = f"{final / 100:.2f}"
+    return f"{formatted} {currency}".strip()
+_HTTP_TOO_MANY = 429
+_MAX_RETRIES = 3
+_RETRY_BASE_S = 1.0
+_MAX_RETRY_AFTER_S = 30.0
+
+
+def _retry_after_seconds(response: aiohttp.ClientResponse) -> float | None:
+    """Parse a numeric Retry-After header (seconds), clamped."""
+    raw = response.headers.get("Retry-After")
+    if not raw:
+        return None
     try:
-        for entry in os.listdir(cache_dir):
-            if entry.isdigit():
-                app_ids.add(int(entry))
-    except OSError as e:
-        logger.debug(f"[Steam] Failed to list librarycache: {e}")
-
-    logger.debug(f"[Steam] librarycache: {len(app_ids)} owned app IDs")
-    return app_ids
+        return min(float(raw), _MAX_RETRY_AFTER_S)
+    except (TypeError, ValueError):
+        return None
 
 
-def get_app_names(app_ids: Optional[Set[int]] = None) -> Dict[int, str]:
-    """Extract game names from Steam's appinfo.vdf for the given app IDs.
+async def _storesearch_items(
+    term: str,
+    timeout_s: float,
+    session: aiohttp.ClientSession | None = None,
+) -> list[dict[str, Any]]:
+    """Hit Steam's ``storesearch`` endpoint and return the raw item list.
 
-    If app_ids is None, returns names for ALL apps (slower).
-    Returns {app_id: game_name}.
+    ``ssl=False`` for the same SteamOS cert reason every Steam HTTP path
+    here uses. Handles HTTP 429 Rate Limiting with backoff.
     """
-    steam_root = _find_steam_root()
-    if not steam_root:
-        return {}
-
-    appinfo_path = steam_root / "appcache" / "appinfo.vdf"
-    if not appinfo_path.is_file():
-        return {}
-
-    try:
-        with open(appinfo_path, "rb") as f:
-            data = f.read()
-
-        magic = struct.unpack_from("<I", data, 0)[0]
-        if magic == 0x07564429:
-            return _extract_names_v29(data, app_ids)
-        elif magic in (0x07564427, 0x07564428):
-            return _extract_names_v27(data, app_ids)
-        else:
-            logger.debug(f"[Steam] Unsupported appinfo.vdf version: 0x{magic:08x}")
-            return {}
-    except Exception as e:
-        logger.debug(f"[Steam] Failed to parse appinfo.vdf: {e}")
-        return {}
+    if not term:
+        return []
+    params = {"term": term, "l": "english", "cc": "us"}
+    if session is not None:
+        return await _request_storesearch(session, term, params, timeout_s)
+    connector = aiohttp.TCPConnector(ssl=False)
+    async with aiohttp.ClientSession(connector=connector) as session_new:
+        return await _request_storesearch(session_new, term, params, timeout_s)
 
 
-def get_steam_library_names() -> Set[str]:
-    """Return normalized game names for ALL games in the user's Steam library.
+async def _request_storesearch(
+    sess: aiohttp.ClientSession,
+    term: str,
+    params: dict[str, str],
+    timeout_s: float,
+) -> list[dict[str, Any]]:
+    """GET Steam's ``storesearch`` on ``sess`` with HTTP 429 backoff.
 
-    This is the main entry point — combines librarycache app IDs with
-    appinfo.vdf name resolution.
+    Retries up to ``_MAX_RETRIES`` times, honoring a numeric ``Retry-After``
+    header plus jitter. Returns the raw item list, or ``[]`` on a non-OK
+    status or transport error.
     """
-    owned_ids = get_owned_app_ids()
-    if not owned_ids:
-        return set()
+    for attempt in range(_MAX_RETRIES + 1):
+        try:
+            async with sess.get(
+                STEAM_STORE_SEARCH_URL,
+                params=params,
+                timeout=aiohttp.ClientTimeout(total=timeout_s),
+            ) as response:
+                if response.status == _HTTP_TOO_MANY and attempt < _MAX_RETRIES:
+                    jitter = random.uniform(0, 0.5)  # noqa: S311
+                    delay = (
+                        _retry_after_seconds(response)
+                        or _RETRY_BASE_S * (2**attempt)
+                    ) + jitter
+                    logger.debug(
+                        "[steam.search_store] rate-limited (429), retry %d/%d in %.1fs",
+                        attempt + 1,
+                        _MAX_RETRIES,
+                        delay,
+                    )
+                    await asyncio.sleep(delay)
+                    continue
+                if response.status != _HTTP_OK:
+                    return []
+                data = await response.json(content_type=None)
+                items = data.get("items") if isinstance(data, dict) else None
+                return items if isinstance(items, list) else []
+        except (aiohttp.ClientError, TimeoutError) as exc:
+            logger.debug("[steam.search_store] %r failed: %s", term, exc)
+            return []
+    return []
 
-    names = get_app_names(owned_ids)
-    logger.debug(
-        f"[Steam] Resolved {len(names)} names out of {len(owned_ids)} owned app IDs"
+
+def _pick_store_match(
+    query: str, items: list[dict[str, Any]],
+) -> tuple[dict[str, Any], int] | None:
+    """First storesearch item whose name passes ``titles_match(query, …)``."""
+    for candidate in items:
+        try:
+            cid = int(candidate.get("id", 0))
+        except (TypeError, ValueError):
+            continue
+        if cid <= 0:
+            continue
+        if titles_match(query, str(candidate.get("name", ""))):
+            return candidate, cid
+    return None
+
+
+async def search_store(
+    title: str,
+    config: ConfigManager | None = None,
+    session: aiohttp.ClientSession | None = None,
+) -> dict[str, Any] | None:
+    """Resolve ``title`` to its Steam Store entry via ``storesearch``.
+
+    Returns the validated top match (``app_id``, ``name``,
+    ``header_image``, ``price``, ``release_date``) or ``None``.
+    """
+    if not title:
+        return None
+    timeout_s = float(_cfg(config, "network.steam_store_timeout", _DEFAULT_TIMEOUT))
+
+    match = _pick_store_match(
+        title, await _storesearch_items(title, timeout_s, session),
     )
-    return set(names.values())
+    if match is None:
+        stripped = strip_edition_suffix(normalize_for_match(title))
+        if stripped and stripped != normalize_for_match(title):
+            match = _pick_store_match(
+                title, await _storesearch_items(stripped, timeout_s, session),
+            )
+    if match is None:
+        return None
+
+    item, app_id = match
+    header_image = (
+        f"https://cdn.akamai.steamstatic.com/steam/apps/{app_id}/header.jpg"
+    )
+    return SteamStoreResult(
+        app_id=app_id,
+        name=str(item.get("name", "")),
+        header_image=header_image,
+        price=_format_price(item.get("price")),
+        release_date=str(item.get("released", "")),
+    ).to_dict()
 
 
-# ============================================================================
-# appinfo.vdf binary parsers (minimal — name extraction only)
-# ============================================================================
-
-def _extract_names_v29(
-    data: bytes, wanted: Optional[Set[int]]
-) -> Dict[int, str]:
-    """Parse v29 appinfo.vdf and extract app_id → name for wanted IDs."""
-    string_table_offset = struct.unpack_from("<Q", data, 8)[0]
-
-    # Parse string table
-    st_off = string_table_offset
-    string_count = struct.unpack_from("<I", data, st_off)[0]
-    st_off += 4
-    strings = []
-    for _ in range(string_count):
-        end = data.index(b"\x00", st_off)
-        strings.append(data[st_off:end].decode("utf-8", errors="replace"))
-        st_off = end + 1
-
-    result: Dict[int, str] = {}
-    offset = 16
-    while offset < string_table_offset:
-        app_id = struct.unpack_from("<I", data, offset)[0]
-        if app_id == 0:
-            break
-        offset += 4 + 64  # header
-
-        if wanted is not None and app_id not in wanted:
-            # Skip this entry's sections quickly
-            offset = _skip_vdf_indexed(data, offset)
-        else:
-            name = _find_name_indexed(data, offset, strings)
-            offset = _skip_vdf_indexed(data, offset)
-            if name:
-                result[app_id] = name
-
-    return result
-
-
-def _extract_names_v27(
-    data: bytes, wanted: Optional[Set[int]]
-) -> Dict[int, str]:
-    """Parse v27/v28 appinfo.vdf and extract app_id → name for wanted IDs."""
-    result: Dict[int, str] = {}
-    offset = 8
-    while True:
-        app_id = struct.unpack_from("<I", data, offset)[0]
-        if app_id == 0:
-            break
-        offset += 4 + 44  # header
-
-        if wanted is not None and app_id not in wanted:
-            offset = _skip_vdf_inline(data, offset)
-        else:
-            name = _find_name_inline(data, offset)
-            offset = _skip_vdf_inline(data, offset)
-            if name:
-                result[app_id] = name
-
-    return result
-
-
-def _find_name_indexed(data: bytes, offset: int, strings: list) -> Optional[str]:
-    """Walk indexed VDF sections looking for appinfo.common.name."""
-    # Structure: SECTION("appinfo") → SECTION("common") → STRING("name")
-    depth = 0
-    in_common = False
-    while offset < len(data):
-        tb = data[offset]
-        offset += 1
-        if tb == 0x08:  # SECTION_END
-            if in_common and depth == 2:
-                return None  # Left common without finding name
-            depth -= 1
-            if depth < 0:
-                break
-            continue
-
-        key_idx = struct.unpack_from("<I", data, offset)[0]
-        offset += 4
-        key = strings[key_idx] if key_idx < len(strings) else ""
-
-        if tb == 0x00:  # SECTION
-            depth += 1
-            if depth == 2 and key == "common":
-                in_common = True
-            elif in_common and depth > 2:
-                # Skip nested sections inside common
-                offset = _skip_one_section_indexed(data, offset)
-                depth -= 1
-        elif tb == 0x01:  # STRING
-            end = data.index(b"\x00", offset)
-            if in_common and key == "name":
-                return data[offset:end].decode("utf-8", errors="replace")
-            offset = end + 1
-        elif tb == 0x02:  # INT32
-            offset += 4
-        elif tb == 0x07:  # INT64
-            offset += 8
-
-    return None
-
-
-def _find_name_inline(data: bytes, offset: int) -> Optional[str]:
-    """Walk inline VDF sections looking for appinfo.common.name."""
-    depth = 0
-    in_common = False
-    while offset < len(data):
-        tb = data[offset]
-        offset += 1
-        if tb == 0x08:
-            if in_common and depth == 2:
-                return None
-            depth -= 1
-            if depth < 0:
-                break
-            continue
-
-        end = data.index(b"\x00", offset)
-        key = data[offset:end].decode("utf-8", errors="replace")
-        offset = end + 1
-
-        if tb == 0x00:
-            depth += 1
-            if depth == 2 and key == "common":
-                in_common = True
-            elif in_common and depth > 2:
-                offset = _skip_one_section_inline(data, offset)
-                depth -= 1
-        elif tb == 0x01:
-            end = data.index(b"\x00", offset)
-            if in_common and key == "name":
-                return data[offset:end].decode("utf-8", errors="replace")
-            offset = end + 1
-        elif tb == 0x02:
-            offset += 4
-        elif tb == 0x07:
-            offset += 8
-
-    return None
-
-
-def _skip_vdf_indexed(data: bytes, offset: int) -> int:
-    """Skip an entire VDF section tree (indexed keys)."""
-    depth = 0
-    while offset < len(data):
-        tb = data[offset]
-        offset += 1
-        if tb == 0x08:
-            if depth == 0:
-                break
-            depth -= 1
-            continue
-        offset += 4  # key index
-        if tb == 0x00:
-            depth += 1
-        elif tb == 0x01:
-            offset = data.index(b"\x00", offset) + 1
-        elif tb == 0x02:
-            offset += 4
-        elif tb == 0x07:
-            offset += 8
-    return offset
-
-
-_skip_one_section_indexed = _skip_vdf_indexed
-
-
-def _skip_vdf_inline(data: bytes, offset: int) -> int:
-    """Skip an entire VDF section tree (inline keys)."""
-    depth = 0
-    while offset < len(data):
-        tb = data[offset]
-        offset += 1
-        if tb == 0x08:
-            if depth == 0:
-                break
-            depth -= 1
-            continue
-        offset = data.index(b"\x00", offset) + 1  # key string
-        if tb == 0x00:
-            depth += 1
-        elif tb == 0x01:
-            offset = data.index(b"\x00", offset) + 1
-        elif tb == 0x02:
-            offset += 4
-        elif tb == 0x07:
-            offset += 8
-    return offset
-
-
-_skip_one_section_inline = _skip_vdf_inline
+async def batch_search_store(
+    titles: list[str],
+    session: aiohttp.ClientSession | None = None,
+) -> dict[str, dict[str, Any] | None]:
+    """Batch search store."""
+    if not titles:
+        return {}
+    results = await asyncio.gather(
+        *(search_store(t, session=session) for t in titles),
+        return_exceptions=False,
+    )
+    return dict(zip(titles, results, strict=False))
