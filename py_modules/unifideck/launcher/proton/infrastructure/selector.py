@@ -143,8 +143,21 @@ def get_saved_proton_tool(store_game_id: str) -> str | None:
         import json
         with settings_path.open() as f:
             settings = json.load(f)
-        tool = settings.get("games", {}).get(store_game_id, "")
-        return tool or None
+        entry = settings.get("games", {}).get(store_game_id, "")
+        # Pre-0.7.0 wrote each entry as {"proton_tool": "<id>"}; nothing
+        # writes that shape anymore, so its presence means this entry
+        # hasn't been refreshed since before the rewrite — likely a
+        # long-forgotten pin (useLaunchPrep only refreshes it when the
+        # game-details page is opened, not on every launch). Extracting
+        # and honoring it resurrects a stale, possibly-incompatible
+        # Proton choice the user no longer wants (and can't see is even
+        # in effect, since Steam's own Force-Compat UI shows whatever
+        # was last restored there, not this file). Treat it as no saved
+        # override instead and fall through to the normal priority
+        # chain — this also fixes the original TypeError crash.
+        if isinstance(entry, dict):
+            return None
+        return entry or None
     except (OSError, ValueError):
         return None
 _COMPAT_TOOL_RE = re.compile(

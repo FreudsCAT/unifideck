@@ -317,7 +317,7 @@ async def _restore_or_migrate_saves(
 
 async def _ensure_created(plan: ProtonLaunchPlan, prefix_root: Path) -> None:
     """Run ``createprefix`` when the prefix has no ``system.reg`` yet."""
-    if (prefix_root / "system.reg").is_file():
+    if (resolve_registry_prefix(prefix_root) / "system.reg").is_file():
         logger.debug("[prefix_init] prefix already initialised: %s", prefix_root)
         return
 
@@ -358,7 +358,7 @@ async def _ensure_created(plan: ProtonLaunchPlan, prefix_root: Path) -> None:
         severity="warning",
     )
     await _run_umu(plan, env, "wineboot", "--init")
-    if (prefix_root / "system.reg").is_file():
+    if (resolve_registry_prefix(prefix_root) / "system.reg").is_file():
         logger.info("[prefix_init] wineboot fallback initialised the prefix")
         await _restore_or_migrate_saves(plan, prefix_root)
     else:
@@ -383,7 +383,7 @@ async def _run_createprefix_with_retry(
             attempt, _CREATEPREFIX_ATTEMPTS,
         )
         await _run_umu(plan, env, "createprefix")
-        if (prefix_root / "system.reg").is_file():
+        if (resolve_registry_prefix(prefix_root) / "system.reg").is_file():
             logger.info("[prefix_init] prefix created (system.reg present)")
             return True
         if attempt < _CREATEPREFIX_ATTEMPTS:

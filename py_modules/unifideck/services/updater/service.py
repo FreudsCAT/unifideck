@@ -153,7 +153,7 @@ class UpdaterService:
             # Return stale cache if available
             return self._cached_releases
 
-    async def check_for_update(self) -> dict[str, Any]:
+    async def check_for_update(self, *, force: bool = False) -> dict[str, Any]:
         """Check whether a newer version is available.
 
         Returns a dict with::
@@ -167,9 +167,15 @@ class UpdaterService:
         The ``latest`` field is the newest *stable* release (non-
         prerelease). If no stable release is found, the newest
         prerelease is used instead.
+
+        Args:
+            force: bypass ``CACHE_TTL_SECONDS`` and re-fetch from
+                GitHub. Used by the explicit "Check for Updates"
+                action so a mutable prerelease tag's rotated asset
+                is never missed by the 1-hour cache.
         """
         current = self.get_current_version()
-        releases = await self.fetch_releases()
+        releases = await self.fetch_releases(force=force)
 
         if not releases:
             return {"available": False, "current": current, "latest": None}

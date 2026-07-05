@@ -165,7 +165,19 @@ def proton_prepare(
     # cause of empty install-time prefixes. No-op for the clean launcher env.
     sanitize_frozen_loader_env(env)
     env["GAMEID"] = umu_id or "umu-0"
-    env["STORE"] = umu_store
+    # Epic is the one store whose ProtonFixes "STORE=egs" defaults are
+    # actively harmful rather than just redundant: they winetrick
+    # vcrun2022 again (core-dumps inside pressure-vessel) and — the one
+    # that actually breaks launches — add a `HKCR\com.epicgames.launcher`
+    # registry key that makes the EOS SDK switch to launcher-IPC auth
+    # mode, causing an instant exit/hang for any non-Ubisoft Epic title
+    # that uses EOS (the retired bash launcher forced STORE=none for
+    # exactly this reason). Every umu-run invocation for an Epic launch —
+    # createprefix, winetricks, the vcruntime regedit fix, and the game
+    # itself — derives its env from this dict, so overriding it here
+    # once is what actually keeps ProtonFixes from ever seeing "egs".
+    # ``state.umu_store_code`` below keeps the real value for diagnostics.
+    env["STORE"] = "none" if ctx.store == "epic" else umu_store
     # PROTONPATH tells umu-run which Proton to use — the *directory*
     # holding the ``proton`` script (``proton_path`` is that script, so
     # use its parent). Without this umu falls back to downloading its

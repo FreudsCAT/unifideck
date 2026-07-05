@@ -18,7 +18,16 @@ logger = logging.getLogger(__name__)
 _RETRY_BACKOFF_SECONDS = 3
 UMU_CACHE_DIR = Path("~/.local/share/umu").expanduser()
 _LAUNCHES_DIR = Path("~/.local/share/unifideck/launches").expanduser()
-_RECOVERABLE_CODES = {2, 74}
+# umu-run picks the Steam Runtime *generation* per Proton build (it reads
+# the selected PROTONPATH's own toolmanifest.vdf) — a newer GE-Proton can
+# require "steamrt4" instead of the default "sniper"/"steamrt3". Mirrors
+# the variant names in umu's own bundled ``umu/__init__.py``
+# (``__runtime_versions__``). Managing only "steamrt3" here made our own
+# cache checks/wipes a silent no-op for anyone on a build that resolved to
+# a different variant — covering all three keeps them meaningful
+# regardless of which runtime a given Proton build actually uses.
+UMU_RUNTIME_VARIANTS = ("steamrt2", "steamrt3", "steamrt4")
+_RECOVERABLE_CODES = {2, 74, 127}
 
 
 def _open_game_log() -> Any:
@@ -42,7 +51,7 @@ def _open_game_log() -> Any:
 def cleanup_umu_runtime_cache() -> None:
     """Cleanup UMU runtime cache."""
     targets = [
-        UMU_CACHE_DIR / "steamrt3",
+        *(UMU_CACHE_DIR / variant for variant in UMU_RUNTIME_VARIANTS),
         UMU_CACHE_DIR / "compatibilitytool.vdf",
         UMU_CACHE_DIR / ".ref",
     ]
@@ -55,13 +64,14 @@ def cleanup_umu_runtime_cache() -> None:
     logger.info("[launcher.umu] cache cleaned: %s", UMU_CACHE_DIR)
 def ensure_umu_runtime_ready() -> None:
     """Ensure UMU runtime ready."""
-    # The Steam Linux Runtime (steamrt3) is downloaded by the first
+    # The Steam Linux Runtime (steamrt2/3/4, depending on which one the
+    # selected Proton build requires) is downloaded by the first
     # ``umu-run`` and is the slowest part of a first-ever launch
     # (hundreds of MB), with no native progress — exactly the
     # "is it frozen?" gap the user hit. Toast once when it's missing so
     # the wait is expected. Fires only on the genuine first setup; the
     # cache then persists and is shared across every game.
-    if not (UMU_CACHE_DIR / "steamrt3").exists():
+    if not any((UMU_CACHE_DIR / variant).exists() for variant in UMU_RUNTIME_VARIANTS):
         launcher_toast(
             "toasts.launcher.downloadingRuntime",
             i18n_title_key="toasts.launcher.firstTimeSetup",

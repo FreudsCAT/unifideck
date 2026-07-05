@@ -169,6 +169,73 @@ def test_resolve_proton_path_unknown_returns_none(tmp_path, monkeypatch):
     assert selector.resolve_proton_path("does-not-exist") is None
 
 
+# ── selector.get_saved_proton_tool (pre-0.7.0 schema compat) ──────
+
+def _write_proton_settings(tmp_path, monkeypatch, games: dict) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    path = tmp_path / ".local" / "share" / "unifideck" / "proton_settings.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"games": games}))
+
+
+def test_get_saved_proton_tool_reads_current_string_schema(tmp_path, monkeypatch):
+    _write_proton_settings(tmp_path, monkeypatch, {"gog:1": "GE-Proton10-34"})
+    assert selector.get_saved_proton_tool("gog:1") == "GE-Proton10-34"
+
+
+def test_get_saved_proton_tool_ignores_legacy_dict_schema(tmp_path, monkeypatch):
+    """Regression: a pre-0.7.0 dict-shaped entry ({"proton_tool": "<id>"},
+    see the retired bash launcher's get_unifideck_proton_tool) must not be
+    extracted and honored as the current choice. useLaunchPrep only
+    refreshes this file when the game-details page is opened, not on
+    every launch — so a legacy entry is stale data from before the
+    rewrite, possibly a long-forgotten pin the user can't even see is in
+    effect anymore (Steam's own Force-Compat UI reflects whatever was
+    last restored there, independent of this file). Real field case: a
+    game silently kept launching on a much older GE-Proton than the
+    reporter's actual current default, with no visible error. Treat any
+    dict shape as "no saved override" so the normal priority chain
+    (Steam override -> Unifideck default -> latest GE-Proton) applies.
+    """
+    _write_proton_settings(
+        tmp_path, monkeypatch, {"gog:1": {"proton_tool": "GE-Proton10-34"}},
+    )
+    assert selector.get_saved_proton_tool("gog:1") is None
+
+
+def test_get_saved_proton_tool_legacy_dict_missing_key_is_none(tmp_path, monkeypatch):
+    _write_proton_settings(tmp_path, monkeypatch, {"gog:1": {}})
+    assert selector.get_saved_proton_tool("gog:1") is None
+
+
+def test_select_proton_version_falls_through_legacy_dict_entry(
+    tmp_path, monkeypatch,
+):
+    """Regression: a pre-0.7.0 dict-shaped entry must not raise TypeError
+    (the original field crash: ``resolve_proton_path`` received a dict
+    instead of a str tool id and blew up on ``Path(...) / tool_id``) AND
+    must not resurrect the stale pinned version — it should fall through
+    to the next tier exactly as if no saved override existed.
+    """
+    _write_proton_settings(
+        tmp_path, monkeypatch, {"gog:1": {"proton_tool": "GE-Proton10-34"}},
+    )
+    monkeypatch.setattr(selector, "get_steam_compat_tool_override", lambda aid: None)
+    monkeypatch.setattr(selector, "get_unifideck_proton_tool", lambda: None)
+    proton = tmp_path / "GE-Proton11-1" / "proton"
+    monkeypatch.setattr(
+        selector.ge_installer, "read_cached_latest_tag", lambda: "GE-Proton11-1",
+    )
+    monkeypatch.setattr(
+        selector.ge_installer, "installed_ge_proton_path",
+        lambda tag: proton if tag == "GE-Proton11-1" else None,
+    )
+
+    assert selector.select_proton_version(store_game_id="gog:1") == (
+        proton, "GE-Proton11-1",
+    )
+
+
 # ── selector.select_proton_version (default tier) ─────────────────
 
 def _silence_higher_tiers(monkeypatch):
@@ -317,6 +384,66 @@ def test_umu_runtime_silent_when_steamrt3_present(tmp_path, monkeypatch):
     umu_runtime.ensure_umu_runtime_ready()
 
     spy.assert_not_called()
+
+
+def test_umu_runtime_silent_when_steamrt4_present(tmp_path, monkeypatch):
+    """Regression: a newer Proton build can resolve umu to steamrt4, not
+    the default steamrt3 — the readiness check must recognize either."""
+    from unifideck.launcher.proton.infrastructure import umu_runtime
+    spy = MagicMock()
+    monkeypatch.setattr(umu_runtime, "launcher_toast", spy)
+    cache = tmp_path / "umu"
+    (cache / "steamrt4").mkdir(parents=True)
+    monkeypatch.setattr(umu_runtime, "UMU_CACHE_DIR", cache)
+    monkeypatch.setenv("HOME", str(tmp_path))
+
+    umu_runtime.ensure_umu_runtime_ready()
+
+    spy.assert_not_called()
+
+
+async def test_run_umu_with_retry_recovers_from_exit_127(tmp_path, monkeypatch):
+    """Regression: rc=127 (missing shared library / exec failure — the
+    exact symptom of a corrupted Steam Runtime cache) must trigger the
+    same wipe-and-retry recovery as the existing 2/74 codes, not just
+    give up on the first attempt.
+    """
+    from unifideck.launcher.proton.infrastructure import umu_runtime
+
+    counter = tmp_path / "attempts"
+    script = tmp_path / "flaky.sh"
+    script.write_text(
+        "#!/bin/sh\n"
+        f'n=$(cat "{counter}" 2>/dev/null || echo 0)\n'
+        f'echo $((n + 1)) > "{counter}"\n'
+        'if [ "$n" -eq 0 ]; then exit 127; fi\n'
+        "exit 0\n",
+    )
+    script.chmod(0o755)
+    cleanup = MagicMock()
+    monkeypatch.setattr(umu_runtime, "cleanup_umu_runtime_cache", cleanup)
+
+    rc = await umu_runtime.run_umu_with_retry([str(script)], max_attempts=2)
+
+    assert rc == 0
+    assert counter.read_text().strip() == "2"
+    cleanup.assert_called_once()
+
+
+def test_cleanup_umu_runtime_cache_wipes_steamrt4(tmp_path, monkeypatch):
+    """Regression: cache cleanup used to only ever target "steamrt3",
+    silently no-op'ing for anyone whose Proton build resolved umu to
+    steamrt4 — the retry-and-wipe self-heal never actually fixed anything
+    for them. Must wipe whichever runtime variant(s) are actually present.
+    """
+    from unifideck.launcher.proton.infrastructure import umu_runtime
+    cache = tmp_path / "umu"
+    (cache / "steamrt4" / "pressure-vessel").mkdir(parents=True)
+    monkeypatch.setattr(umu_runtime, "UMU_CACHE_DIR", cache)
+
+    umu_runtime.cleanup_umu_runtime_cache()
+
+    assert not (cache / "steamrt4").exists()
 
 
 # ── ProtonService default-tool policy ─────────────────────────────

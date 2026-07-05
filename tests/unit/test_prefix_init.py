@@ -154,6 +154,53 @@ async def test_ensure_created_no_migration_when_already_initialised(
     spy.assert_not_called()
 
 
+async def test_ensure_created_skips_when_system_reg_under_pfx(tmp_path, toast_spy):
+    """Regression: umu/Proton nest the real registry under ``pfx/``.
+
+    WINEPREFIX is the prefix root, but umu-run creates the actual Wine
+    tree at ``<root>/pfx/``. Checking ``root/system.reg`` directly never
+    finds it, so a fully-initialised prefix looked "missing" on every
+    single first launch — 3 pointless createprefix retries (each wiping
+    the shared Steam Runtime cache) + a "Network Error" toast + a
+    wineboot fallback, all failing the same way, before the game
+    launched anyway.
+    """
+    root = tmp_path / "prefix"
+    (root / "pfx").mkdir(parents=True)
+    (root / "pfx" / "system.reg").write_text("reg")
+    (root / "pfx" / "user.reg").write_text("reg")
+
+    await pi._ensure_created(_plan(root, "GE-Proton10-34"), root)
+
+    toast_spy.assert_not_called()
+
+
+async def test_run_createprefix_with_retry_detects_success_under_pfx(
+    tmp_path, toast_spy, monkeypatch,
+):
+    """A real createprefix success (registry lands under pfx/) must not retry."""
+    root = tmp_path / "prefix"
+    root.mkdir()
+
+    async def _fake_run_umu(plan, env, *args):
+        (root / "pfx").mkdir(parents=True, exist_ok=True)
+        (root / "pfx" / "system.reg").write_text("reg")
+
+    monkeypatch.setattr(pi, "_run_umu", _fake_run_umu)
+    cleanup = MagicMock()
+    monkeypatch.setattr(pi, "cleanup_umu_runtime_cache", cleanup)
+
+    ok = await pi._run_createprefix_with_retry(
+        _plan(root, "GE-Proton10-34"), {}, root,
+    )
+
+    assert ok is True
+    cleanup.assert_not_called()  # no retry needed → cache never wiped
+    assert not any(
+        c.args[0] == "toasts.launcher.retryingUmu" for c in toast_spy.call_args_list
+    )
+
+
 # ── save migration / restore ──────────────────────────────────────
 
 

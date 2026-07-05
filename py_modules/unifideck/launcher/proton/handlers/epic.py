@@ -114,7 +114,13 @@ def _build_legendary_argv(
         logger.info("[launcher.proton.epic] offline mode — passing --offline")
     argv.extend([
         "--wrapper",
-        f"{plan.python_bin} {plan.umu_wrapper}",
+        # legendary is a PyInstaller onefile binary; it may hand its own
+        # bundled LD_LIBRARY_PATH/LD_PRELOAD down to this wrapper child
+        # instead of restoring the clean env it was launched with. That
+        # pollution then rides umu-run straight into the pressure-vessel
+        # container, breaking the container's own python3 (missing
+        # libz.so.1). Force-clear both right at the boundary.
+        f"env -u LD_LIBRARY_PATH -u LD_PRELOAD {plan.python_bin} {plan.umu_wrapper}",
         "--language",
         os.environ.get("EPIC_LANG", "en"),
     ])

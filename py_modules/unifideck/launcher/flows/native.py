@@ -23,7 +23,18 @@ def _find_steam_runtime() -> Path | None:
             return path
     return None
 def _restore_steam_env(env: dict[str, str]) -> None:
-    """Restore steam env."""
+    """Restore steam env.
+
+    ``bin/unifideck-launcher`` unconditionally strips ``LD_PRELOAD`` at
+    the top of the process (needed to keep it out of the pressure-vessel
+    Proton path). Native Linux games run directly on the host with no
+    container involved, so unlike Proton there's no host/container
+    library mismatch to worry about — and without Steam's overlay
+    preload actually restored, Steam/gamescope has no in-process hook
+    into the game to know it's running, and Steam Input never attaches
+    (the retired bash launcher's equivalent called this "critical for
+    controller support"). Restore it here alongside the feature flags.
+    """
     steam_env = Path("~/.steam/steam.env").expanduser()
     if not steam_env.is_file():
         return
@@ -37,7 +48,7 @@ def _restore_steam_env(env: dict[str, str]) -> None:
             if "=" not in line:
                 continue
             key, _, value = line.partition("=")
-            if key in ("STEAM_OVERLAY", "STEAM_INPUT"):
+            if key in ("STEAM_OVERLAY", "STEAM_INPUT", "LD_PRELOAD"):
                 env[key] = value
 def _is_gog_dosbox_wrapper(ctx: LaunchContext) -> bool:
     """Is GOG dosbox wrapper."""

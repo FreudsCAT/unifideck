@@ -10,7 +10,7 @@ import {
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 import { call } from "@decky/api";
-import { useRPCQuery } from "../../api/useRPC";
+import { useRPCQuery, useRPCMutation } from "../../api/useRPC";
 import { rpcRoutes } from "../../api/rpc-routes";
 import { useToast } from "../../hooks/useToast";
 import { ReleaseNotesModal } from "../modals/ReleaseNotesModal";
@@ -28,6 +28,14 @@ interface ReleaseInfo {
 const INSTALL_TYPE_REINSTALL = 1;
 const INSTALL_TYPE_UPDATE = 2;
 const INSTALL_TYPE_DOWNGRADE = 3;
+
+// If Decky's own loader install dies silently (e.g. a 404 on a rotated
+// dev-build asset — confirmed in journalctl: the browser CRITICAL "Could
+// not fetch from URL" is followed by zero further progress/finish events),
+// downloadActive would otherwise stay true forever. This is an inactivity
+// timeout reset on every progress tick, not a single fixed deadline, so a
+// legitimately slow ~40-50MB download over Wi-Fi isn't falsely flagged.
+const INSTALL_WATCHDOG_TIMEOUT_MS = 45_000;
 
 const compareVersions = (a: string, b: string) => {
   const parse = (v: string) => v.split(".").map((x) => parseInt(x, 10) || 0);
@@ -99,6 +107,7 @@ export const PluginUpdater: FC = () => {
   const [downloadPercent, setDownloadPercent] = useState(0);
   const [downloadStatus, setDownloadStatus] = useState("");
   const downloadActiveRef = useRef(false);
+  const watchdogTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Fetch updates status
   const {
@@ -116,6 +125,19 @@ export const PluginUpdater: FC = () => {
     loading: loadingVersions,
     refetch: refetchVersions,
   } = useRPCQuery<[], ReleaseInfo[]>(rpcRoutes.getAvailableVersions, []);
+
+  // Cache-bypassing variants — used by the explicit "Check for Updates"
+  // action and before installing a prerelease, whose single GitHub asset
+  // gets deleted and re-uploaded under a new name/URL on every dev build.
+  // The plain queries above stay on the 1-hour cache (mount-time auto-check,
+  // background poller) so we don't hammer GitHub's unauthenticated rate limit.
+  const forceCheckMut = useRPCMutation<
+    [],
+    { available: boolean; current: string; latest: ReleaseInfo | null }
+  >(rpcRoutes.forceCheckPluginUpdate);
+  const forceVersionsMut = useRPCMutation<[], ReleaseInfo[]>(
+    rpcRoutes.forceGetAvailableVersions,
+  );
 
   const currentVersion = updateData?.current ?? "0.0.0";
   const initializedRef = useRef(false);
@@ -146,6 +168,33 @@ export const PluginUpdater: FC = () => {
     const backend = window.DeckyBackend;
     if (!backend) return;
 
+    const clearWatchdog = () => {
+      if (watchdogTimerRef.current !== null) {
+        clearTimeout(watchdogTimerRef.current);
+        watchdogTimerRef.current = null;
+      }
+    };
+    // Decky's own install code can die silently (confirmed: a 404 on a
+    // rotated dev-build asset logs one CRITICAL line in journalctl and then
+    // never fires plugin_download_info/finish again) — without this, the
+    // panel freezes forever with downloadActive stuck true.
+    const armWatchdog = () => {
+      clearWatchdog();
+      watchdogTimerRef.current = setTimeout(() => {
+        if (!downloadActiveRef.current) return;
+        downloadActiveRef.current = false;
+        setDownloadActive(false);
+        logEvent("error", "watchdog_timeout after 45s of inactivity");
+        toast.error(
+          t("updater.installFailedTitle", { defaultValue: "Install Failed" }),
+          t("updater.installTimeoutMessage", {
+            defaultValue:
+              "No response from Decky Loader — the install may have stalled or failed. Please try again.",
+          }),
+        );
+      }, INSTALL_WATCHDOG_TIMEOUT_MS);
+    };
+
     const onStart = (name: string) => {
       if (name !== "Unifideck") return;
       downloadActiveRef.current = true;
@@ -153,12 +202,14 @@ export const PluginUpdater: FC = () => {
       setDownloadPercent(0);
       setDownloadStatus(stageLabel("start", t));
       logEvent("download_start", name);
+      armWatchdog();
     };
     const onInfo = (percent: number, key?: string) => {
       if (!downloadActiveRef.current) return;
       setDownloadPercent(percent);
       setDownloadStatus(stageLabel(key, t));
       logEvent("progress", `${percent}% ${key ?? ""}`.trim());
+      armWatchdog();
     };
     const onFinish = (name: string) => {
       if (name !== "Unifideck") return;
@@ -166,6 +217,7 @@ export const PluginUpdater: FC = () => {
       setDownloadPercent(100);
       setDownloadActive(false);
       logEvent("download_finish", name);
+      clearWatchdog();
     };
 
     backend.addEventListener("loader/plugin_download_start", onStart);
@@ -175,8 +227,16 @@ export const PluginUpdater: FC = () => {
       backend.removeEventListener("loader/plugin_download_start", onStart);
       backend.removeEventListener("loader/plugin_download_info", onInfo);
       backend.removeEventListener("loader/plugin_download_finish", onFinish);
+      // Avoid a false-positive error toast firing after the QAM panel
+      // unmounts while a download legitimately continues server-side.
+      clearWatchdog();
     };
-  }, [t]);
+    // toast.error is useCallback-memoized in useToast(), so this is stable
+    // and won't cause the effect (and its addEventListener subscriptions)
+    // to re-run on every render the way depending on `toast` itself would
+    // (useToast() returns a new object literal every render).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [t, toast.error]);
 
   const selectedRelease = useMemo(() => {
     if (!versionsData) return null;
@@ -218,6 +278,10 @@ export const PluginUpdater: FC = () => {
   const handleCheckUpdate = async () => {
     setChecking(true);
     try {
+      // Force GitHub to be re-queried (bypasses the 1-hour cache), then
+      // pull the now-warm result into the displayed query state — this
+      // second pair only hits the in-process cache, no extra GitHub call.
+      await Promise.all([forceCheckMut.mutate(), forceVersionsMut.mutate()]);
       await Promise.all([checkUpdate(), refetchVersions()]);
       toast.success(
         t("updater.checkCompleteTitle", {
@@ -264,7 +328,31 @@ export const PluginUpdater: FC = () => {
 
     setInstalling(true);
     try {
-      const cmp = compareVersions(selectedVersion, currentVersion);
+      // Prerelease/dev tags are mutable — their single GitHub asset gets
+      // deleted and re-uploaded under a new name every time a new dev
+      // build is cut, so a URL sitting in React state can already be
+      // dead. Force a fresh fetch and re-resolve by tag (the stable
+      // identifier) before ever handing a URL to Decky's installer.
+      let release = selectedRelease;
+      if (release.prerelease) {
+        const fresh = await forceVersionsMut.mutate();
+        const match = fresh?.find((v) => v.tag === release.tag);
+        if (!match) {
+          toast.error(
+            t("updater.installFailedTitle", { defaultValue: "Install Failed" }),
+            t("updater.releaseGoneMessage", {
+              defaultValue:
+                "This release is no longer available. Please Check for Updates and select again.",
+            }),
+          );
+          setInstalling(false);
+          return;
+        }
+        release = match;
+      }
+
+      const releaseVersion = release.version;
+      const cmp = compareVersions(releaseVersion, currentVersion);
       let installType = INSTALL_TYPE_UPDATE;
       let typeLabel = t("updater.typeUpdate", { defaultValue: "Updating to" });
 
@@ -282,11 +370,11 @@ export const PluginUpdater: FC = () => {
 
       logEvent(
         "triggered",
-        `${typeLabel} v${selectedVersion} (type=${installType}) url=${selectedRelease.asset_url}`,
+        `${typeLabel} v${releaseVersion} (type=${installType}) url=${release.asset_url}`,
       );
       toast.info(
         t("updater.installingTitle", { defaultValue: "Installing Plugin" }),
-        `${typeLabel} v${selectedVersion}...`,
+        `${typeLabel} v${releaseVersion}...`,
       );
 
       // Hand off to Decky Loader's installer via the GLOBAL ws router.
@@ -296,10 +384,10 @@ export const PluginUpdater: FC = () => {
       // calls confirm_plugin_install on OK; our listeners mirror the progress.
       await backend.call(
         "utilities/install_plugin",
-        selectedRelease.asset_url,
+        release.asset_url,
         "Unifideck",
-        selectedRelease.version,
-        selectedRelease.sha256 || "",
+        release.version,
+        release.sha256 || "",
         installType,
       );
     } catch (e) {

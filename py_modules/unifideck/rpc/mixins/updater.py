@@ -61,6 +61,26 @@ class UpdaterRPCMixin:
         releases = await svc.fetch_releases()
         return [r.to_dict() for r in releases]
 
+    async def force_check_plugin_update(self) -> dict[str, Any]:
+        """Like ``check_plugin_update`` but bypasses the 1-hour cache.
+
+        Used only by the explicit "Check for Updates" action —
+        the mount-time auto-check and the 6-hour background
+        poller keep using the cached path.
+        """
+        svc = getattr(self, "_updater_service", None)
+        if svc is None:
+            raise RpcError("service_unavailable", service="updater")
+        return cast("dict[str, Any]", await svc.check_for_update(force=True))
+
+    async def force_get_available_versions(self) -> list[dict[str, Any]]:
+        """Like ``get_available_versions`` but bypasses the 1-hour cache."""
+        svc = getattr(self, "_updater_service", None)
+        if svc is None:
+            raise RpcError("service_unavailable", service="updater")
+        releases = await svc.fetch_releases(force=True)
+        return [r.to_dict() for r in releases]
+
     async def get_release_notes(self, version: str) -> str:
         """Get release notes (markdown body) for a specific version.
 
