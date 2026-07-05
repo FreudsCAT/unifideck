@@ -13,6 +13,12 @@ No path is hardcoded: device roots come from ``/proc/mounts``
 comparison instead of string-prefix heuristics, and ``$HOME``
 is resolved at runtime via ``Path.home()``.
 
+Mount enumeration itself is delegated to ``utils/mounts.py``
+(shared with ``rpc/mixins/download.py`` and ``utils/paths.py``),
+which also handles FUSE-mounted external media (NTFS via ntfs-3g,
+some exFAT setups) that are invisible to this backend's root
+process without a demoted subprocess — see that module's docstring.
+
 The ``/proc/mounts`` scan and per-device directory creation are
 blocking filesystem work, so the async RPCs delegate to the
 module-level sync builders (``_build_storage_locations`` /
@@ -30,18 +36,9 @@ from pathlib import Path
 from typing import Any
 
 from unifideck.rpc import RpcError
+from unifideck.utils import mounts
 
 logger = logging.getLogger(__name__)
-
-# Filesystem types we skip when scanning /proc/mounts.
-_SKIP_FSTYPES = frozenset({
-    "proc", "sysfs", "devtmpfs", "devpts", "tmpfs", "cgroup",
-    "cgroup2", "pstore", "bpf", "debugfs", "tracefs", "hugetlbfs",
-    "ramfs", "overlay", "squashfs", "fuse.gvfsd-fuse",
-    "fuse.portal", "securityfs", "configfs", "efivarfs", "mqueue",
-})
-
-_VIRTUAL_PREFIXES = ("/dev/", "/sys/", "/proc/", "/run/user/")
 
 
 class StorageRPCMixin:
@@ -67,6 +64,7 @@ class StorageRPCMixin:
             or "internal"
         )
         locations = await asyncio.to_thread(_build_storage_locations, custom_path)
+        default = _remap_legacy_default(default, locations)
         return {"locations": locations, "default": default}
 
     async def get_browseable_devices(self) -> Any:
@@ -82,7 +80,7 @@ class StorageRPCMixin:
 
     async def set_default_storage_location(self, loc_id: str) -> Any:
         """Persist the user's preferred default storage location."""
-        if loc_id not in ("internal", "sdcard", "custom"):
+        if loc_id not in ("internal", "sdcard", "custom") and not loc_id.startswith("ext:"):
             raise RpcError("invalid_location", loc_id=loc_id)
         config = getattr(self, "config", None)
         if config is None:
@@ -130,16 +128,22 @@ def _build_storage_locations(custom_path: str | None) -> list[dict[str, Any]]:
     external device contributes one ``Games/`` entry; a configured
     custom path is appended last.
     """
-    home_dev = _device_id(str(Path.home()))
+    home_dev = mounts.stat_dev(os.path.expanduser("~"))
     games_root = str(Path("~/Games").expanduser())
     _ensure_dir(games_root)
     locations: list[dict[str, Any]] = [
         _location_entry("internal", "Internal storage", games_root, games_root),
     ]
-    for mp, _dev, name in _external_mounts(home_dev):
-        locations.append(
-            _location_entry("sdcard", name, _ensure_games_subdir(mp), mp),
+    externals = mounts.dedupe_by_device(
+        mounts.scan_mounts(home_dev, require_writable=True),
+    )
+    for m in externals:
+        loc_id = mounts.mount_id(m.mount_point)
+        label = _external_label(m)
+        games_path = mounts.ensure_games_subdir(
+            m.mount_point, m.effective_uid, m.effective_gid,
         )
+        locations.append(_location_entry(loc_id, label, games_path, m.mount_point))
     if custom_path:
         locations.append(
             _location_entry("custom", custom_path, custom_path, custom_path),
@@ -158,63 +162,49 @@ def _build_browseable_devices() -> list[dict[str, Any]]:
             "free_space_gb": _free_gb(home),
         },
     ]
-    for mp, _dev, name in _external_mounts(_device_id(home)):
+    externals = mounts.dedupe_by_device(
+        mounts.scan_mounts(mounts.stat_dev(home), require_writable=True),
+    )
+    for m in externals:
         devices.append({
-            "id": _mount_id(mp),
-            "label": name,
-            "path": mp,
-            "free_space_gb": _free_gb(mp),
+            "id": mounts.mount_id(m.mount_point),
+            "label": _external_label(m),
+            "path": m.mount_point,
+            "free_space_gb": _free_gb(m.mount_point),
         })
     return devices
 
 
-def _external_mounts(home_dev: int) -> list[tuple[str, int, str]]:
-    """Return ``(mount_point, st_dev, label)`` for each external device.
+def _external_label(m: mounts.MountInfo) -> str:
+    """SD-card-looking source device → "SD Card"; else the mount's name."""
+    if mounts.is_sdcard_source(m.device):
+        return "SD Card"
+    name = Path(m.mount_point).name or m.mount_point
+    return f"External Drive ({name})"
 
-    Deduplicated by device; the device hosting ``$HOME`` is
-    excluded. Pure blocking I/O — call from a thread.
+
+def _remap_legacy_default(default: str, locations: list[dict[str, Any]]) -> str:
+    """Remap a persisted legacy ``"sdcard"`` default to a real id.
+
+    Configs saved before this fix may have
+    ``download.default_location == "sdcard"`` from when every
+    external mount shared that one hardcoded id. Once externals get
+    unique ``ext:<name>`` ids, that stale value would match nothing
+    in *locations* and silently fail to pre-select any row in the
+    picker.
     """
-    found: list[tuple[str, int, str]] = []
-    seen: set[int] = {home_dev}
-    try:
-        lines = Path("/proc/mounts").read_text().splitlines()
-    except OSError as e:
-        logger.debug("[storage] /proc/mounts read failed: %s", e)
-        return found
-    for line in lines:
-        parts = line.split()
-        if len(parts) < 3:
-            continue
-        mp, fstype = parts[1], parts[2]
-        if not _is_eligible_mount(mp, fstype):
-            continue
-        dev = _device_id(mp)
-        if dev == 0 or dev in seen or not _is_writable(mp):
-            continue
-        seen.add(dev)
-        logger.info("[storage] external mount candidate: %s (dev=%s)", mp, dev)
-        found.append((mp, dev, Path(mp).name or mp))
-    return found
+    ids = {loc["id"] for loc in locations}
+    if default in ids:
+        return default
+    if default == "sdcard":
+        for loc in locations:
+            loc_id = loc["id"]
+            if isinstance(loc_id, str) and loc_id.startswith("ext:"):
+                return loc_id
+    return "internal"
 
 
 # ─── Module-level helpers ─────────────────────────────────────
-
-
-def _is_eligible_mount(mp: str, fstype: str) -> bool:
-    """True if *mp* is a real, non-virtual, mountable directory."""
-    if fstype in _SKIP_FSTYPES or mp.startswith(_VIRTUAL_PREFIXES):
-        return False
-    return Path(mp).is_dir()
-
-
-def _ensure_games_subdir(mp: str) -> str:
-    """Return ``<mp>/Games`` (created if needed), or *mp* on failure."""
-    games = Path(mp) / "Games"
-    try:
-        games.mkdir(parents=True, exist_ok=True)
-    except OSError:
-        return mp
-    return str(games)
 
 
 def _location_entry(
@@ -256,21 +246,3 @@ def _free_gb(path: str) -> float:
 def _ensure_dir(path: str) -> None:
     """Create a directory if it doesn't exist. Idempotent."""
     Path(path).mkdir(parents=True, exist_ok=True)
-
-
-def _device_id(path: str) -> int:
-    """Return the ``st_dev`` of *path*, or 0 on error."""
-    try:
-        return Path(path).stat().st_dev
-    except OSError:
-        return 0
-
-
-def _is_writable(path: str) -> bool:
-    return os.access(path, os.W_OK)
-
-
-def _mount_id(mp: str) -> str:
-    """Stable id derived from the mount point name."""
-    name = Path(mp).name.replace(" ", "_")
-    return f"ext:{name}" if name else "ext"

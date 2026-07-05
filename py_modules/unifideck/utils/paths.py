@@ -30,12 +30,12 @@ Reference: Technical Document v1.0 — Section 3.6.1 (games.map),
 """
 from __future__ import annotations
 
-import contextlib
 import logging
 import os
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from . import mounts
 from .config_helpers import get_cfg
 
 if TYPE_CHECKING:
@@ -157,23 +157,31 @@ def get_all_game_directories(config: ConfigManager | None = None) -> list[str]:
     return _dedupe_paths(existing)
 
 
-def _collect_game_dirs(parent_path: Path) -> list[str]:
+def _collect_game_dirs(parent_path: Path, effective_uid: int | None = None) -> list[str]:
     """Return ``Games/`` and ``GOG Games/`` subdirs of ``parent_path``.
 
-    Symlinks are skipped to avoid loops.  OSError (including
-    PermissionError on inaccessible mounts like /efi) is
-    caught per-path so one bad mount can't hide another.
+    Symlinks are skipped to avoid loops. ``effective_uid`` threads
+    through the demotion context from ``mounts.scan_mounts`` — a
+    FUSE mount only visible via a demoted uid at enumeration time is
+    still invisible to root for this per-subdir check too.
     """
     found: list[str] = []
     for sub in ("Games", "GOG Games"):
         p = parent_path / sub
-        try:
-            if p.is_dir() and not p.is_symlink():
-                found.append(str(p))
-        except OSError:
-            continue
+        if mounts.mount_is_dir(str(p), effective_uid) and not _is_symlink(p, effective_uid):
+            found.append(str(p))
     return found
 
+
+def _is_symlink(path: Path, effective_uid: int | None) -> bool:
+    """Demotion-aware ``is_symlink()`` — see ``mounts.mount_is_dir``."""
+    if effective_uid is None:
+        try:
+            return path.is_symlink()
+        except OSError:
+            return False
+    proc = mounts.run_demoted(["test", "-L", str(path)], effective_uid)
+    return proc is not None and proc.returncode == 0
 
 
 def _ensure_dir(path: str) -> None:
@@ -181,81 +189,34 @@ def _ensure_dir(path: str) -> None:
     Path(path).mkdir(parents=True, exist_ok=True)
 
 
-def _device_id(path: str) -> int:
-    """Return st_dev of *path*, or 0 on error."""
-    try:
-        return Path(path).stat().st_dev
-    except OSError:
-        return 0
-
-
 def _scan_external_mounts() -> list[str]:
-    """Scan every writable external mount for game directories.
+    """Scan every readable external mount for game directories.
 
-    Reads ``/proc/mounts`` to discover mount points — no hardcoded
-    paths.  Skips the device that contains ``$HOME`` (internal
-    storage) and non-storage filesystem types.  For each remaining
-    mount, looks for ``Games/`` and ``GOG Games/`` subdirectories
-    at the mount root and one level deeper (some setups mount
-    partitions inside a parent directory).
-
-    Symlinks are skipped at every level to avoid loops.
+    Delegates enumeration to ``mounts.scan_mounts`` (shared with
+    ``rpc/mixins/storage.py`` and ``rpc/mixins/download.py`` — see
+    that module for why a mount only visible to a non-root uid, e.g.
+    a FUSE-mounted exFAT/NTFS card, still needs a demoted subprocess
+    for every access, not just to notice it exists).
+    ``require_writable=False``: this is discovering already-installed
+    games, a read-only concern, not offering new install targets.
     """
-    home_dev = _device_id(str(Path.home()))
+    home_dev = mounts.stat_dev(str(Path.home()))
     found: list[str] = []
-    try:
-        lines = Path("/proc/mounts").read_text().splitlines()
-    except OSError as e:
-        logger.debug("[paths] external mount scan failed: %s", e)
-        return found
-    for line in lines:
-        mp_path = _eligible_mount_point(line, home_dev)
-        if mp_path is not None:
-            found.extend(_collect_mount_game_dirs(mp_path))
+    for m in mounts.scan_mounts(home_dev, require_writable=False):
+        found.extend(_collect_mount_game_dirs(Path(m.mount_point), m.effective_uid))
     return found
 
 
-def _eligible_mount_point(line: str, home_dev: int) -> Path | None:
-    """Return the mount ``Path`` for a writable external mount, else ``None``.
-
-    Skips short lines, system filesystem types, virtual prefixes,
-    non-directories, and the device hosting ``$HOME``.
-    """
-    parts = line.split()
-    if len(parts) < 3:
-        return None
-    mp, fstype = parts[1], parts[2]
-    if fstype in _SKIP_FSTYPES or mp.startswith(_VIRTUAL_PREFIXES):
-        return None
-    mp_path = Path(mp)
-    if not mp_path.is_dir() or _device_id(mp) == home_dev:
-        return None
-    return mp_path
-
-
-def _collect_mount_game_dirs(mp_path: Path) -> list[str]:
+def _collect_mount_game_dirs(mp_path: Path, effective_uid: int | None = None) -> list[str]:
     """Game dirs at the mount root plus one level deeper.
 
     Some setups mount partitions inside a parent directory, so we
     also scan immediate children. Symlinks are skipped to avoid loops.
     """
-    found = list(_collect_game_dirs(mp_path))
-    with contextlib.suppress(OSError):
-        for child in mp_path.iterdir():
-            if child.is_dir() and not child.is_symlink():
-                found.extend(_collect_game_dirs(child))
+    found = list(_collect_game_dirs(mp_path, effective_uid))
+    for child in mounts.mount_child_dirs(str(mp_path), effective_uid):
+        found.extend(_collect_game_dirs(child, effective_uid))
     return found
-
-
-_VIRTUAL_PREFIXES = ("/dev/", "/sys/", "/proc/", "/run/user/")
-
-_SKIP_FSTYPES = frozenset({
-    "proc", "sysfs", "devtmpfs", "devpts", "tmpfs", "cgroup",
-    "cgroup2", "pstore", "bpf", "debugfs", "tracefs", "hugetlbfs",
-    "ramfs", "overlay", "squashfs", "fuse.gvfsd-fuse",
-    "fuse.portal", "securityfs", "configfs", "efivarfs",
-    "autofs", "mqueue",
-})
 
 
 # ══════════════════════════════════════════════════════════════
