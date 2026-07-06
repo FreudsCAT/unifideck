@@ -16,17 +16,17 @@ from unifideck.utils.title_match import (
     strip_edition_suffix,
     titles_match,
 )
+from unifideck.utils.vdf_compat import STEAM_ROOT_CANDIDATES
 
 if TYPE_CHECKING:
     from unifideck.config import ConfigManager
 
 logger = logging.getLogger(__name__)
 
-STEAM_PATH_CANDIDATES = (
-    "~/.steam/steam",
-    "~/.local/share/Steam",
-    "~/.var/app/com.valvesoftware.Steam/.steam/steam",
-)
+# Single source of truth shared with the launcher + ``defaults/config.json``
+# (``paths.steam_candidates``) so the write paths and Proton resolution agree
+# on where Steam can live across SteamOS / Bazzite / CachyOS / Flatpak.
+STEAM_PATH_CANDIDATES = STEAM_ROOT_CANDIDATES
 STEAM_STORE_SEARCH_URL = "https://store.steampowered.com/api/storesearch"
 
 _HTTP_OK = 200
@@ -42,9 +42,12 @@ def _cfg(config: ConfigManager | None, key: str, default: Any) -> Any:
 def find_steam_path(config: ConfigManager | None = None) -> str | None:
     """Find steam path.
 
-    Honours an optional ``paths.steam_root`` config override; falls back
-    to the standard candidate locations. Returns the directory string
-    on success, or ``None`` when no Steam install is detectable.
+    Honours an optional ``paths.steam_root`` config override, then any
+    ``paths.steam_candidates`` list from config (advertised in
+    ``defaults/config.json`` but previously never read), then the built-in
+    cross-distro candidates. Returns the directory string on success, or
+    ``None`` when no Steam install is detectable. A root counts only if it
+    has a ``steamapps/`` dir, so a stale symlink never wins.
     """
     if config is not None:
         override = _cfg(config, "paths.steam_root", None)
@@ -52,7 +55,13 @@ def find_steam_path(config: ConfigManager | None = None) -> str | None:
             full = str(Path(str(override)).expanduser())
             if (Path(full) / "steamapps").is_dir():
                 return full
-    for candidate in STEAM_PATH_CANDIDATES:
+    candidates: list[str] = []
+    if config is not None:
+        configured = _cfg(config, "paths.steam_candidates", None)
+        if isinstance(configured, (list, tuple)):
+            candidates.extend(str(c) for c in configured)
+    candidates.extend(STEAM_PATH_CANDIDATES)
+    for candidate in candidates:
         full_path = str(Path(candidate).expanduser())
         if (Path(full_path) / "steamapps").is_dir():
             return full_path

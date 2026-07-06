@@ -137,8 +137,7 @@ def _build_storage_locations(custom_path: str | None) -> list[dict[str, Any]]:
     externals = mounts.dedupe_by_device(
         mounts.scan_mounts(home_dev, require_writable=True),
     )
-    for m in externals:
-        loc_id = mounts.mount_id(m.mount_point)
+    for loc_id, m in mounts.assign_unique_ids(externals):
         label = _external_label(m)
         games_path = mounts.ensure_games_subdir(
             m.mount_point, m.effective_uid, m.effective_gid,
@@ -165,9 +164,9 @@ def _build_browseable_devices() -> list[dict[str, Any]]:
     externals = mounts.dedupe_by_device(
         mounts.scan_mounts(mounts.stat_dev(home), require_writable=True),
     )
-    for m in externals:
+    for loc_id, m in mounts.assign_unique_ids(externals):
         devices.append({
-            "id": mounts.mount_id(m.mount_point),
+            "id": loc_id,
             "label": _external_label(m),
             "path": m.mount_point,
             "free_space_gb": _free_gb(m.mount_point),

@@ -42,6 +42,25 @@ def test_build_storage_locations_two_external_mounts_get_distinct_ids(
     assert len(ids) == 2, "two simultaneous external mounts must not collide on one id"
 
 
+def test_build_storage_locations_same_basename_gets_distinct_ids(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Distinct devices whose mount points share a basename stay unique."""
+    a = _mount("/run/media/deck/GAMES", device="/dev/sda1")
+    b = _mount("/media/GAMES", device="/dev/sdb1")
+    monkeypatch.setattr(mounts, "scan_mounts", lambda *args, **kw: [a, b])
+    monkeypatch.setattr(mounts, "ensure_games_subdir", lambda mp, uid, gid: f"{mp}/Games")
+
+    external = [
+        loc for loc in storage_mod._build_storage_locations(None)
+        if loc["id"] != "internal"
+    ]
+    ids = [loc["id"] for loc in external]
+    assert len(external) == 2
+    assert len(set(ids)) == 2, ids
+    assert all(str(i).startswith("ext:") for i in ids)
+
+
 def test_build_storage_locations_labels_mmcblk_source_as_sd_card(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

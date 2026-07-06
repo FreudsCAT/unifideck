@@ -34,6 +34,23 @@ def test_resolve_by_exact_ext_id_not_first_mount(monkeypatch: pytest.MonkeyPatch
     assert result == f"{second.mount_point}/Games"
 
 
+def test_resolve_collided_ext_id_picks_correct_device(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A basename collision → the suffixed id still resolves the right device."""
+    first = _mount("/run/media/deck/GAMES")
+    second = _mount("/media/GAMES")
+    monkeypatch.setattr(mounts, "scan_mounts", lambda *a, **k: [first, second])
+    monkeypatch.setattr(mounts, "ensure_games_subdir", lambda mp, uid, gid: f"{mp}/Games")
+
+    ids = mounts.assign_unique_ids([first, second])
+    second_id = next(i for i, m in ids if m.mount_point == second.mount_point)
+    assert second_id != "ext:GAMES"  # was disambiguated
+
+    result = download_mod._resolve_storage_path(second_id, None)
+    assert result == f"{second.mount_point}/Games"
+
+
 def test_resolve_legacy_sdcard_picks_first_mount(monkeypatch: pytest.MonkeyPatch) -> None:
     first = _mount("/run/media/deck/FIRST")
     second = _mount("/run/media/deck/SECOND")

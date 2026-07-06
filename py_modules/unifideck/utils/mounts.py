@@ -141,6 +141,33 @@ def is_sdcard_source(device: str) -> bool:
     return device.startswith("/dev/mmcblk0")
 
 
+def assign_unique_ids(mounts: list[MountInfo]) -> list[tuple[str, MountInfo]]:
+    """Pair each mount with a UNIQUE ``ext:`` id, in input order.
+
+    ``mount_id`` derives from the mount-point basename, so two distinct
+    devices whose mount points share a basename (e.g. ``/run/media/deck/GAMES``
+    and ``/media/GAMES``) would collide on one id — duplicate picker rows
+    (React key clashes) and an ambiguous install-target lookup. On collision
+    the later device is disambiguated deterministically with its ``st_dev``
+    (a counter when ``st_dev`` is 0), so BOTH the enumerator (storage) and
+    the resolver (download) — which iterate the same ordered, deduped list —
+    derive the same id. The first/only device with a given basename keeps the
+    bare ``ext:<name>`` id, preserving existing behaviour in the common case.
+    """
+    seen: dict[str, int] = {}
+    result: list[tuple[str, MountInfo]] = []
+    for m in mounts:
+        base = mount_id(m.mount_point)
+        count = seen.get(base, 0)
+        seen[base] = count + 1
+        if count == 0:
+            result.append((base, m))
+        else:
+            suffix = m.st_dev if m.st_dev else count
+            result.append((f"{base}-{suffix}", m))
+    return result
+
+
 def dedupe_by_device(mounts: list[MountInfo]) -> list[MountInfo]:
     """Collapse mounts that share a nonzero ``st_dev`` (same physical device).
 

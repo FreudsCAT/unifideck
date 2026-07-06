@@ -90,7 +90,9 @@ def detect_offline() -> bool:
     ``WantsOfflineMode``, then a fast TCP probe (no ``ping``/``curl``
     dependency). Any error → assume online (return False).
     """
-    login_vdf = Path("~/.steam/steam/config/loginusers.vdf").expanduser()
+    from unifideck.utils.vdf_compat import find_steam_root
+    steam_root = find_steam_root() or Path("~/.steam/steam").expanduser()
+    login_vdf = steam_root / "config" / "loginusers.vdf"
     with contextlib.suppress(OSError):
         if login_vdf.is_file():
             text = login_vdf.read_text(encoding="utf-8", errors="replace")

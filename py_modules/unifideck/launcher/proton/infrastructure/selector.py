@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-import re
 import subprocess
 from pathlib import Path
 
@@ -9,6 +8,7 @@ from unifideck.launcher.types.errors import (
     DependencyMissingError,
     ProtonUnavailableError,
 )
+from unifideck.utils import vdf_compat
 
 from . import ge_installer
 
@@ -84,17 +84,33 @@ OFFICIAL_TOOL_DIRS: dict[str, str] = {
     "proton_8": "Proton 8.0",
     "proton_7": "Proton 7.0",
 }
+def _compat_tool_roots() -> list[Path]:
+    """Every ``compatibilitytools.d`` root to search, in priority order.
+
+    unifideck-managed dir first, then the user Steam compat dirs, then the
+    system-wide dirs distro packages install into but Steam never lists
+    (CachyOS ``proton-cachyos`` → ``/usr/share/steam/compatibilitytools.d``,
+    Arch ``proton-ge-custom``). The pre-0.7.1 resolver scanned only the
+    three user dirs, so a system-wide / manifest-registered tool the user
+    force-selected was unresolvable and silently fell back to GE-latest.
+    """
+    roots = [Path(UNIFIDECK_COMPAT_DIR).expanduser()]
+    roots += [Path(r).expanduser() for r in STEAM_COMPAT_ROOTS]
+    roots += [Path(r) for r in vdf_compat.SYSTEM_COMPAT_DIRS]
+    return roots
+
+
 def resolve_proton_path(tool_id: str) -> Path | None:
     """Resolve PROTON path."""
     if not tool_id:
         return None
-    unifideck_path = Path(UNIFIDECK_COMPAT_DIR).expanduser() / tool_id / "proton"
-    if unifideck_path.is_file():
-        return unifideck_path
-    for root in STEAM_COMPAT_ROOTS:
-        candidate = Path(root).expanduser() / tool_id / "proton"
-        if candidate.is_file():
-            return candidate
+    # Compat tools (compatibilitytools.d) across user + system-wide roots,
+    # manifest-aware: follows a ``compatibilitytool.vdf`` / loose ``.vdf``
+    # ``install_path`` (how proton-cachyos is registered) and matches the
+    # internal name, display name, or directory name however Steam wrote it.
+    resolved = vdf_compat.resolve_compat_tool(tool_id, _compat_tool_roots())
+    if resolved is not None:
+        return resolved
     # Official Proton tools live in steamapps/common under a display-name
     # dir that differs from the tool id (see OFFICIAL_TOOL_DIRS). Try the
     # id verbatim first, then the mapped directory name.
@@ -160,29 +176,41 @@ def get_saved_proton_tool(store_game_id: str) -> str | None:
         return entry or None
     except (OSError, ValueError):
         return None
-_COMPAT_TOOL_RE = re.compile(
-    r'"(?P<app_id>\d+)"\s*\{[^}]*?"name"\s*"(?P<name>[^"]+)"',
-    re.S,
-)
+def _read_steam_config_vdf() -> str:
+    """Text of the global ``<steam>/config/config.vdf`` (cross-distro), or ""."""
+    config_vdf = vdf_compat.find_steam_config_vdf()
+    if config_vdf is None:
+        return ""
+    try:
+        return config_vdf.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ""
+
+
 def get_steam_compat_tool_override(app_id: str) -> str | None:
-    """Get steam compat tool override."""
+    """Return the per-app Force-Compat tool Steam recorded for *app_id*.
+
+    ``CompatToolMapping`` lives in the GLOBAL ``config/config.vdf`` — the
+    pre-0.7.1 code scanned the per-user ``localconfig.vdf``, which does not
+    carry these entries, so this tier generally matched nothing. Root is
+    resolved by probing the cross-distro candidates.
+    """
     if not app_id:
         return None
-    userdata = Path("~/.steam/root/userdata").expanduser()
-    if not userdata.is_dir():
+    try:
+        appid_int = int(app_id)
+    except (TypeError, ValueError):
         return None
-    for user_dir in userdata.iterdir():
-        cfg = user_dir / "config" / "localconfig.vdf"
-        if not cfg.is_file():
-            continue
-        try:
-            content = cfg.read_text(encoding="utf-8", errors="replace")
-        except OSError:
-            continue
-        for m in _COMPAT_TOOL_RE.finditer(content):
-            if m.group("app_id") == app_id:
-                return m.group("name")
-    return None
+    return vdf_compat.parse_compat_tool(_read_steam_config_vdf(), appid_int) or None
+
+
+def get_global_default_tool() -> str | None:
+    """Steam's global-default compat tool (``CompatToolMapping["0"]``), or None.
+
+    On Bazzite/CachyOS this is the tool the user expects (e.g.
+    ``Proton-CachyOS``); empty on stock SteamOS/Deck.
+    """
+    return vdf_compat.parse_global_default_compat_tool(_read_steam_config_vdf()) or None
 def select_proton_version(
     steam_app_id: str | None = None,
     store_game_id: str | None = None,
@@ -194,9 +222,15 @@ def select_proton_version(
       1. Per-game tool the frontend saved into
          ``proton_settings.json`` (the user's Force-Compat choice,
          captured + cleared on the game-details page).
-      2. A live Steam compat override for ``steam_app_id``.
+      2. A live per-app Steam compat override for ``steam_app_id``
+         (``config.vdf`` ``CompatToolMapping[appid]``).
       3. The Unifideck default from ``config.json``.
-      4. The latest GE-Proton released online (downloaded/installed on
+      4. Steam's GLOBAL default compat tool (``CompatToolMapping["0"]``) —
+         the distro/system default (e.g. Proton-CachyOS on CachyOS/Bazzite).
+         The launcher runs the shortcut natively, so Steam's own global
+         Steam-Play default is never applied unless honored here. Empty on
+         stock SteamOS/Deck, so this tier is a no-op there.
+      5. The latest GE-Proton released online (downloaded/installed on
          demand), falling back to Proton Experimental when offline.
     """
     tried: list[str] = []
@@ -217,6 +251,11 @@ def select_proton_version(
         path = _resolve_logged("unifideck", unifideck_tool, tried)
         if path:
             return path, unifideck_tool
+    global_tool = get_global_default_tool()
+    if global_tool:
+        path = _resolve_logged("global-default", global_tool, tried)
+        if path:
+            return path, global_tool
     return _default_latest_ge(tried)
 
 

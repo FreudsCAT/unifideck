@@ -358,3 +358,27 @@ def test_scan_mounts_two_simultaneous_external_mounts_get_distinct_ids(
 
 def test_scan_mounts_missing_file_returns_empty(tmp_path: Path) -> None:
     assert mounts.scan_mounts(0, mounts_path=tmp_path / "nope") == []
+
+
+def test_assign_unique_ids_keeps_bare_id_without_collision() -> None:
+    a = _mount_info("/run/media/deck/SDCARD", st_dev=11)
+    b = _mount_info("/run/media/deck/USB", st_dev=22)
+    ids = dict(mounts.assign_unique_ids([a, b]))
+    assert set(ids) == {"ext:SDCARD", "ext:USB"}
+
+
+def test_assign_unique_ids_disambiguates_same_basename() -> None:
+    """Two distinct devices sharing a mount-point basename get unique ids."""
+    a = _mount_info("/run/media/deck/GAMES", st_dev=11)
+    b = _mount_info("/media/GAMES", st_dev=22)
+    pairs = mounts.assign_unique_ids([a, b])
+    ids = [i for i, _ in pairs]
+    assert ids == ["ext:GAMES", "ext:GAMES-22"]  # first bare, later suffixed
+    assert len(set(ids)) == 2
+
+
+def test_assign_unique_ids_stable_across_repeat_calls() -> None:
+    """Enumerator + resolver must derive the same ids from the same list."""
+    a = _mount_info("/run/media/deck/GAMES", st_dev=11)
+    b = _mount_info("/media/GAMES", st_dev=22)
+    assert mounts.assign_unique_ids([a, b]) == mounts.assign_unique_ids([a, b])

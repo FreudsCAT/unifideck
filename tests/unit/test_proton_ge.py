@@ -242,6 +242,7 @@ def _silence_higher_tiers(monkeypatch):
     monkeypatch.setattr(selector, "get_saved_proton_tool", lambda gid: None)
     monkeypatch.setattr(selector, "get_steam_compat_tool_override", lambda aid: None)
     monkeypatch.setattr(selector, "get_unifideck_proton_tool", lambda: None)
+    monkeypatch.setattr(selector, "get_global_default_tool", lambda: None)
 
 
 def test_select_prefers_cached_latest_ge(tmp_path, monkeypatch):

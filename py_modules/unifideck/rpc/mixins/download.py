@@ -322,7 +322,11 @@ def _external_games_path(storage_type: str) -> str | None:
     internal storage — see ``install_game``).
     """
     home_dev = mounts.stat_dev(str(Path.home()))
-    externals = mounts.scan_mounts(home_dev, require_writable=True)
+    # Dedupe first so the "first external" (legacy alias) and the unique-id
+    # assignment match the storage picker's device list exactly.
+    externals = mounts.dedupe_by_device(
+        mounts.scan_mounts(home_dev, require_writable=True),
+    )
     if storage_type == "sdcard":
         match = externals[0] if externals else None
         if match is not None:
@@ -332,7 +336,8 @@ def _external_games_path(storage_type: str) -> str | None:
             )
     else:
         match = next(
-            (m for m in externals if mounts.mount_id(m.mount_point) == storage_type),
+            (m for loc_id, m in mounts.assign_unique_ids(externals)
+             if loc_id == storage_type),
             None,
         )
     if match is None:
