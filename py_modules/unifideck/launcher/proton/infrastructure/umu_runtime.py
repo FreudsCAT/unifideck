@@ -141,6 +141,12 @@ async def _run_umu_once(
     on_start: Callable[[object], None] | None,
 ) -> int:
     """Spawn one umu process, fire ``on_start``, await its exit code."""
+    if env is not None:
+        # Belt-and-suspenders: LD_PRELOAD must never reach umu-run/pressure-
+        # vessel here regardless of what built ``env`` — re-exporting the
+        # host's gameoverlayrenderer.so crashes the game process with
+        # "WARNING: Keyboard Interrupt". See sanitize_frozen_loader_env.
+        env.pop("LD_PRELOAD", None)
     proc = await asyncio.create_subprocess_exec(
         *argv,
         env=env,
