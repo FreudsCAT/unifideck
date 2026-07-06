@@ -16,7 +16,10 @@ from unifideck.utils.title_match import (
     strip_edition_suffix,
     titles_match,
 )
-from unifideck.utils.vdf_compat import STEAM_ROOT_CANDIDATES
+from unifideck.utils.vdf_compat import (
+    STEAM_ROOT_CANDIDATES,
+    resolve_live_steam_root,
+)
 
 if TYPE_CHECKING:
     from unifideck.config import ConfigManager
@@ -46,8 +49,14 @@ def find_steam_path(config: ConfigManager | None = None) -> str | None:
     ``paths.steam_candidates`` list from config (advertised in
     ``defaults/config.json`` but previously never read), then the built-in
     cross-distro candidates. Returns the directory string on success, or
-    ``None`` when no Steam install is detectable. A root counts only if it
-    has a ``steamapps/`` dir, so a stale symlink never wins.
+    ``None`` when no Steam install is detectable.
+
+    A root counts only if it has a ``steamapps/`` dir. When several distinct
+    installs qualify (e.g. a stale native ``~/.steam/steam`` alongside a
+    running Flatpak Steam), ``resolve_live_steam_root`` picks the most
+    recently active one — writing shortcuts to a root Steam never reads was
+    the "synced but nothing shows in Steam" bug. The explicit
+    ``paths.steam_root`` override still wins outright.
     """
     if config is not None:
         override = _cfg(config, "paths.steam_root", None)
@@ -61,11 +70,8 @@ def find_steam_path(config: ConfigManager | None = None) -> str | None:
         if isinstance(configured, (list, tuple)):
             candidates.extend(str(c) for c in configured)
     candidates.extend(STEAM_PATH_CANDIDATES)
-    for candidate in candidates:
-        full_path = str(Path(candidate).expanduser())
-        if (Path(full_path) / "steamapps").is_dir():
-            return full_path
-    return None
+    live = resolve_live_steam_root(candidates)
+    return str(live) if live is not None else None
 
 
 def _find_most_recent_user(steam_path: str) -> str | None:

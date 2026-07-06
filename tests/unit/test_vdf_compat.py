@@ -168,3 +168,46 @@ def test_find_steam_root_none_when_absent(
     monkeypatch.setenv("HOME", str(tmp_path / "empty"))
     assert vc.find_steam_root() is None
     assert vc.find_steam_config_vdf() is None
+
+
+def test_resolve_live_steam_root_dedupes_symlinked_roots(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    """The standard layout — ``~/.steam/steam`` → ``~/.local/share/Steam`` — is
+    ONE install, not two competing ones. Dedup keeps behaviour unchanged on a
+    normal single-Steam machine (no false 'ambiguous installs')."""
+    home = tmp_path / "home"
+    real = home / ".local" / "share" / "Steam"
+    (real / "steamapps").mkdir(parents=True)
+    (home / ".steam").mkdir(parents=True)
+    (home / ".steam" / "steam").symlink_to(real, target_is_directory=True)
+    monkeypatch.setenv("HOME", str(home))
+
+    resolved = vc.resolve_live_steam_root()
+    assert resolved is not None
+    assert resolved.resolve() == real.resolve()
+
+
+def test_resolve_live_steam_root_picks_freshest_of_distinct_installs(
+    tmp_path: Path,
+) -> None:
+    """Two genuinely distinct installs → the more recently active one wins."""
+    import os
+
+    def _mk(sub: str, ts: int) -> Path:
+        root = tmp_path / sub
+        (root / "steamapps").mkdir(parents=True)
+        login = root / "config" / "loginusers.vdf"
+        login.parent.mkdir(parents=True)
+        login.write_text(
+            '"users"\n{\n\t"76561197960265728"\n\t{\n'
+            '\t\t"MostRecent"\t\t"1"\n'
+            f'\t\t"Timestamp"\t\t"{ts}"\n\t}}\n}}\n',
+        )
+        os.utime(login, (ts, ts))
+        return root
+
+    stale = _mk("stale", 1_000_000_000)
+    live = _mk("live", 2_000_000_000)
+
+    assert vc.resolve_live_steam_root([str(stale), str(live)]) == live

@@ -6,7 +6,15 @@
  * `useUnifideckGames`. Receives a `filter` prop matching the staging
  * shape so the library-patch hook can render it the same way per tab.
  */
-import { Component, ErrorInfo, FC, ReactNode, useMemo, useState } from "react";
+import {
+  Component,
+  ErrorInfo,
+  FC,
+  ReactNode,
+  useEffect,
+  useMemo,
+  useState,
+} from "react";
 import { useTranslation } from "react-i18next";
 import { useRPCQuery } from "../api/useRPC";
 import { rpcRoutes } from "../api/rpc-routes";
@@ -79,17 +87,32 @@ const UnifiedLibraryViewInner: FC<UnifiedLibraryViewProps> = ({
   onSelect,
 }) => {
   const { t } = useTranslation();
-  const { data, error, loading } = useRPCQuery<[], Game[]>(
+  const { data, error, loading, refetch } = useRPCQuery<[], Game[]>(
     rpcRoutes.getAllUnifideckGames,
     [],
   );
   const [storeFilter, setStoreFilter] = useState<StoreId | "all">("all");
   const [searchQuery, setSearchQuery] = useState("");
 
+  // Re-pull the library when a sync finishes. Without this the view keeps its
+  // mount-time snapshot (e.g. 0 games for a store the user logged into AFTER
+  // opening the panel) until Steam is restarted. Mirrors the cache refresh in
+  // ``src/lib/library-filters/index.ts``.
+  useEffect(() => {
+    const onSync = (): void => {
+      void refetch();
+    };
+    window.addEventListener("unifideck-sync-completed", onSync);
+    return () =>
+      window.removeEventListener("unifideck-sync-completed", onSync);
+  }, [refetch]);
+
   const filteredGames = useMemo(() => {
     let games = data ?? [];
     if (filter === "installed") {
-      games = games.filter((g) => g.is_installed);
+      // Raw RPC rows carry ``installed`` (wire field); ``is_installed`` only
+      // exists after ``adaptGame`` runs, which it doesn't on this path.
+      games = games.filter((g) => g.installed ?? g.is_installed);
     } else if (filter === "great-on-deck") {
       games = games.filter(isGreatOnDeck);
     }

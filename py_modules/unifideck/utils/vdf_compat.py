@@ -26,7 +26,7 @@ from __future__ import annotations
 
 import logging
 import re
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -52,17 +52,115 @@ SYSTEM_COMPAT_DIRS: tuple[str, ...] = (
 )
 
 
-def find_steam_root() -> Path | None:
-    """First candidate Steam root that has a ``steamapps`` dir, else ``None``.
+# loginusers.vdf user blocks are flat KeyValues (no nested braces), so a
+# ``[^{}]*`` body capture is safe and keeps this launcher-safe — no need to
+# import the ``vdf`` lib in the root-resolution hot path.
+_LOGINUSERS_USER_RE = re.compile(r'"(\d{6,})"\s*\{([^{}]*)\}', re.DOTALL)
+_MOST_RECENT_RE = re.compile(r'"MostRecent"\s+"1"')
+_TIMESTAMP_RE = re.compile(r'"Timestamp"\s+"(\d+)"')
 
-    Launcher-safe twin of ``steam.library.find_steam_path`` (which pulls
-    in ``aiohttp`` at import and so cannot run in the launcher process).
+
+def _most_recent_login(loginusers: Path) -> tuple[int | None, str | None]:
+    """``(Timestamp, userdata-id)`` for the ``MostRecent`` account, else ``(None, None)``.
+
+    Steam stamps the last-logged-in account's ``Timestamp`` here; it's the
+    sharpest "which install is live" signal when several Steam roots coexist.
+    Regex-parsed (not the ``vdf`` lib) so the launcher process can call it
+    without extra deps.
     """
-    for candidate in STEAM_ROOT_CANDIDATES:
-        root = Path(candidate).expanduser()
-        if (root / "steamapps").is_dir():
-            return root
-    return None
+    try:
+        text = loginusers.read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return None, None
+    best_ts: int | None = None
+    best_user: str | None = None
+    for steam64, body in _LOGINUSERS_USER_RE.findall(text):
+        if not _MOST_RECENT_RE.search(body):
+            continue
+        m = _TIMESTAMP_RE.search(body)
+        try:
+            ts = int(m.group(1)) if m else 0
+            acct = str(int(steam64) & 0xFFFFFFFF)
+        except (TypeError, ValueError):
+            continue
+        if best_ts is None or ts > best_ts:
+            best_ts, best_user = ts, acct
+    return best_ts, best_user
+
+
+def _steam_root_liveness(root: Path) -> tuple[float, str | None]:
+    """``(recency_score, most_recent_user)`` — higher score = more recently active.
+
+    Combines the ``MostRecent`` login ``Timestamp`` with the mtimes of the
+    files Steam rewrites while running (``loginusers.vdf`` and each user's
+    ``localconfig.vdf``). The install the user is actually running always has
+    the freshest of these, so it outranks a stale sibling root.
+    """
+    login = root / "config" / "loginusers.vdf"
+    ts, user = _most_recent_login(login)
+    score = float(ts) if ts else 0.0
+    for path in (login, *root.glob("userdata/*/config/localconfig.vdf")):
+        try:
+            score = max(score, path.stat().st_mtime)
+        except OSError:
+            continue
+    return score, user
+
+
+def resolve_live_steam_root(
+    candidates: Iterable[str] = STEAM_ROOT_CANDIDATES,
+) -> Path | None:
+    """The Steam root the user is *running*, not merely the first that exists.
+
+    A candidate qualifies only if it has a ``steamapps/`` dir. Symlinked
+    duplicates (``~/.steam/steam`` → ``~/.local/share/Steam``) collapse to one
+    real install. When two *distinct* installs both qualify, the freshest
+    (see ``_steam_root_liveness``) wins — so a stale ``~/.steam/steam``
+    skeleton can't shadow a running Flatpak Steam (the "synced but nothing
+    shows" bug), and a WARNING names both so support can spot the mismatch.
+    """
+    rooted: list[Path] = []
+    seen: set[Path] = set()
+    for cand in candidates:
+        root = Path(cand).expanduser()
+        if not (root / "steamapps").is_dir():
+            continue
+        try:
+            key = root.resolve()
+        except OSError:
+            key = root
+        if key in seen:
+            continue
+        seen.add(key)
+        rooted.append(root)
+    if not rooted:
+        return None
+    if len(rooted) == 1:
+        return rooted[0]
+    scored = sorted(
+        ((_steam_root_liveness(r)[0], r) for r in rooted),
+        key=lambda t: t[0],
+        reverse=True,
+    )
+    chosen, runner_up = scored[0][1], scored[1][1]
+    logger.warning(
+        "[vdf_compat] %d distinct Steam installs have steamapps/; writing to "
+        "the most recently active: %s (runner-up: %s). If shortcuts never "
+        "appear, set paths.steam_root to the Steam you actually run.",
+        len(scored), chosen, runner_up,
+    )
+    return chosen
+
+
+def find_steam_root() -> Path | None:
+    """The live Steam root, or ``None``.
+
+    Launcher-safe twin of ``steam.library.find_steam_path`` (which pulls in
+    ``aiohttp`` at import and so cannot run in the launcher process, and which
+    additionally honours the Decky-only ``paths.steam_root`` /
+    ``paths.steam_candidates`` config overrides).
+    """
+    return resolve_live_steam_root()
 
 
 def find_steam_config_vdf() -> Path | None:

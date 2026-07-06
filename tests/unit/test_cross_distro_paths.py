@@ -79,6 +79,91 @@ def test_find_steam_path_honors_configured_candidates(
     assert find_steam_path(cfg) == str(custom)
 
 
+def _login_vdf(account_id: int, timestamp: int) -> str:
+    """A minimal, vdf-parseable ``loginusers.vdf`` with one MostRecent user."""
+    steam64 = 76561197960265728 + account_id
+    return (
+        '"users"\n{\n'
+        f'\t"{steam64}"\n\t{{\n'
+        '\t\t"AccountName"\t\t"acct"\n'
+        '\t\t"MostRecent"\t\t"1"\n'
+        f'\t\t"Timestamp"\t\t"{timestamp}"\n'
+        "\t}\n}\n"
+    )
+
+
+def _make_install(
+    root: Path, *, account_id: int, timestamp: int, mtime: float,
+) -> Path:
+    """Build a Steam install: steamapps + userdata/<id> + a dated loginusers.vdf.
+
+    ``timestamp``/``mtime`` control the liveness score so a test can express
+    "this install was last used long ago" vs "this one is running now".
+    """
+    (root / "steamapps").mkdir(parents=True)
+    (root / "userdata" / str(account_id)).mkdir(parents=True)
+    login = root / "config" / "loginusers.vdf"
+    login.parent.mkdir(parents=True, exist_ok=True)
+    login.write_text(_login_vdf(account_id, timestamp))
+    os.utime(login, (mtime, mtime))
+    return root
+
+
+def test_find_steam_path_prefers_running_install_over_stale(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    """Reporter bug: a stale native ~/.steam/steam must not shadow live Flatpak.
+
+    Both roots have steamapps/, so the pre-fix 'first candidate wins' picked the
+    stale native root and 228 shortcuts landed where the running client never
+    reads them — 'synced but nothing shows in Steam', restart-immune.
+    """
+    home = tmp_path / "flatpak-user"
+    monkeypatch.setenv("HOME", str(home))
+    stale = _make_install(
+        home / ".steam" / "steam",
+        account_id=40677867, timestamp=1_000_000_000, mtime=1_000_000_000,
+    )
+    live = _make_install(
+        home / ".var/app/com.valvesoftware.Steam/.steam/steam",
+        account_id=225630054, timestamp=2_000_000_000, mtime=2_000_000_000,
+    )
+
+    assert find_steam_path(None) == str(live)
+    assert find_steam_path(None) != str(stale)
+
+
+def test_service_paths_target_the_live_install(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    """The whole write chain (root + active_user) follows the live install.
+
+    shortcuts.vdf must resolve under the *running* Flatpak's userdata/<id>, not
+    the stale native root's — this is what makes the games actually appear.
+    """
+    from unifideck.services.bootstrap.paths import ServicePaths
+
+    home = tmp_path / "flatpak-user"
+    monkeypatch.setenv("HOME", str(home))
+    _make_install(
+        home / ".steam" / "steam",
+        account_id=40677867, timestamp=1_000_000_000, mtime=1_000_000_000,
+    )
+    live = _make_install(
+        home / ".var/app/com.valvesoftware.Steam/.steam/steam",
+        account_id=225630054, timestamp=2_000_000_000, mtime=2_000_000_000,
+    )
+
+    sp = ServicePaths.from_config(
+        _FakeConfig(), plugin_dir=str(tmp_path / "plug"),
+    )
+
+    assert sp.steam_root == str(live)
+    assert sp.shortcuts_path == str(
+        live / "userdata" / "225630054" / "config" / "shortcuts.vdf",
+    )
+
+
 def test_service_paths_write_target_follows_probed_root(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
 ) -> None:
