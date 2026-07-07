@@ -21,6 +21,7 @@ import logging
 import time
 from typing import TYPE_CHECKING, Any
 
+from .sync_availability import refresh_store_availability
 from .types import Events, Game, SyncResult
 
 if TYPE_CHECKING:
@@ -206,6 +207,7 @@ class _SyncRunMixin:
         else:
             self._cache_snapshot = None
         started = time.monotonic()
+        await refresh_store_availability(self._registry)
         available_stores = self._registry.available()
         store_names = [s.store_name for s in available_stores]
         self._progress.start_fetching(len(available_stores))

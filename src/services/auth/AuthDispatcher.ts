@@ -106,6 +106,21 @@ class AuthDispatcherImpl {
       /** On resolved. */
       const onResolved = (result: AuthResult): void => {
         for (const fn of cleanup) fn();
+        if (result.success) {
+          // Fire-and-forget: a fresh login should make the store
+          // available for sync immediately, not just after the next
+          // restart. Queues behind an in-flight sync on the backend
+          // (SyncService._enqueue) rather than blocking this Promise —
+          // callers resolve as soon as auth completes, same as before.
+          void call<[StoreId], unknown>(rpcRoutes.requestAuthSync, store).catch(
+            (e) => {
+              console.error(
+                `[AuthDispatcher:${store}] requestAuthSync failed:`,
+                e,
+              );
+            },
+          );
+        }
         resolve(result);
       };
 
