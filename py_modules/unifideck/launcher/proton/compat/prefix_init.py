@@ -30,11 +30,14 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import os
 import shutil
+import signal
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from unifideck.launcher.frontend_bridge import launcher_toast
+from unifideck.launcher.proton.compat.ge_fallback import fallback_to_ge_proton
 from unifideck.launcher.proton.infrastructure.prefix_layout import (
     normalize_prefix_root,
     resolve_registry_prefix,
@@ -55,6 +58,12 @@ _MARKER_NAME = ".unifideck_proton_version"
 _PRESERVE = frozenset({_MARKER_NAME, ".save_backup"})
 _CREATEPREFIX_ATTEMPTS = 3
 _CREATEPREFIX_BACKOFF_SECONDS = 5
+# Bounds a single umu-run step (createprefix / wineboot --init). Generous —
+# legitimate first-time setup downloads the Steam Linux Runtime (hundreds of
+# MB) — but finite: a hung Proton/Wine boot (confirmed live: a broken
+# Proton-Experimental build spinning wineserver forever) must be killed
+# rather than orphaned to run indefinitely.
+_UMU_STEP_TIMEOUT_SECONDS = 120.0
 # Written into a per-game prefix once the one-time legacy-save migration
 # has run, so we don't rescan the legacy umu prefixes on every launch.
 _LEGACY_MIGRATED_MARKER = ".unifideck_legacy_migrated"
@@ -361,10 +370,13 @@ async def _ensure_created(plan: ProtonLaunchPlan, prefix_root: Path) -> None:
     if (resolve_registry_prefix(prefix_root) / "system.reg").is_file():
         logger.info("[prefix_init] wineboot fallback initialised the prefix")
         await _restore_or_migrate_saves(plan, prefix_root)
-    else:
-        logger.warning(
-            "[prefix_init] prefix still missing system.reg — game may init it",
-        )
+        return
+
+    logger.warning(
+        "[prefix_init] prefix still missing system.reg after createprefix "
+        "+ wineboot fallback",
+    )
+    await fallback_to_ge_proton(plan, prefix_root)
 
 
 async def _run_createprefix_with_retry(
@@ -403,10 +415,35 @@ async def _run_createprefix_with_retry(
     return False
 
 
+def _kill_process_group(proc: asyncio.subprocess.Process) -> None:
+    """Best-effort SIGKILL of ``proc``'s whole process group.
+
+    ``start_new_session=True`` makes the spawned umu-run its own
+    session/process-group leader, so killing just ``proc.pid`` would
+    leave every descendant running untouched — pressure-vessel,
+    wineserver, the simulated services.exe/explorer.exe boot. That's
+    exactly what left multiple hung createprefix trees running
+    indefinitely (one over 30 minutes, still burning ~30% CPU) while
+    diagnosing a broken Proton-Experimental build live.
+    """
+    try:
+        os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    except OSError as e:
+        logger.warning("[prefix_init] failed to kill umu process group: %s", e)
+
+
 async def _run_umu(
     plan: ProtonLaunchPlan, env: dict[str, str], *umu_args: str,
 ) -> None:
-    """Spawn ``<python> <umu-run> <args>`` and wait (output discarded)."""
+    """Spawn ``<python> <umu-run> <args>`` and wait (output discarded).
+
+    Runs in its own process group and is bounded by
+    ``_UMU_STEP_TIMEOUT_SECONDS`` — a hung Proton/Wine boot is
+    force-killed, process tree and all, instead of orphaned to run
+    forever.
+    """
     argv = [str(plan.python_bin), str(plan.umu_wrapper), *umu_args]
     try:
         proc = await asyncio.create_subprocess_exec(
@@ -414,7 +451,18 @@ async def _run_umu(
             env=env,
             stdout=asyncio.subprocess.DEVNULL,
             stderr=asyncio.subprocess.DEVNULL,
+            start_new_session=True,
         )
-        await proc.wait()
     except OSError as e:
         logger.warning("[prefix_init] umu %s spawn failed: %s", umu_args, e)
+        return
+    try:
+        await asyncio.wait_for(proc.wait(), timeout=_UMU_STEP_TIMEOUT_SECONDS)
+    except TimeoutError:
+        logger.warning(
+            "[prefix_init] umu %s exceeded %ds — killing process group",
+            umu_args, int(_UMU_STEP_TIMEOUT_SECONDS),
+        )
+        _kill_process_group(proc)
+        with contextlib.suppress(Exception):
+            await asyncio.wait_for(proc.wait(), timeout=5)

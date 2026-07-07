@@ -10,6 +10,11 @@ event topology is only live after the bootstrap step.
 
 Boot sequence (each step must complete before the next):
 
+  0. Startup migrations — one-time renames/rewrites of on-disk
+     state left behind by older versions (see
+     ``bootstrap.migrations``). Runs before anything else touches
+     disk so a migrated file is already in place the first time a
+     store or config layer reads it.
   1. ``EventBus`` instantiation — empty, no pipeline yet
   2. Pipeline construction — watchdog + latency + replay +
      batcher + dispatcher, with dispatcher.start() awaited
@@ -36,6 +41,7 @@ from pathlib import Path
 from typing import Any
 
 from unifideck.bootstrap.cache_registry import register_default_caches
+from unifideck.bootstrap.migrations import run_startup_migrations
 from unifideck.bootstrap.pipeline_factory import build_eventbus_pipeline
 from unifideck.config import ConfigManager
 from unifideck.config.startup import validate_config_at_startup
@@ -86,6 +92,7 @@ async def boot_plugin(
     the ServiceContainer itself and leave the failed service
     entry as ``None`` for the mixin guards to handle.
     """
+    run_startup_migrations()
     pipeline = await _boot_layer2_core(plugin, decky_runtime_dir)
     await _boot_config_and_validate(
         plugin, decky_plugin_dir, user_config_path_resolver,
@@ -93,6 +100,7 @@ async def boot_plugin(
     _boot_layer4_stores(plugin, decky_plugin_dir)
     await _boot_layer5_services(plugin, pipeline, decky_plugin_dir)
     await _boot_updater(plugin, decky_plugin_dir)
+    await _start_store_background_tasks(plugin)
     logger.info("[Unifideck] plugin loaded")
 
 
@@ -274,4 +282,24 @@ async def _boot_updater(plugin: Any, decky_plugin_dir: str) -> None:
     except Exception:
         logger.exception("[Updater] failed to wire — update checking disabled")
         plugin._updater_service = None
+
+
+async def _start_store_background_tasks(plugin: Any) -> None:
+    """Kick off per-store background tasks outside the generic Layer-5
+    service container (mirrors ``_boot_updater``'s standalone wiring).
+
+    Currently just the Microsoft/Xbox token-refresh poller — see
+    ``MicrosoftStore.start_token_refresh_polling``. A failure here must
+    never block boot; the store still works via on-demand refresh.
+    """
+    microsoft = plugin.registry.get("microsoft")
+    starter = getattr(microsoft, "start_token_refresh_polling", None)
+    if not callable(starter):
+        return
+    try:
+        starter()
+    except Exception:
+        logger.exception(
+            "[Unifideck] failed to start Microsoft token refresh polling",
+        )
 

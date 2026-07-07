@@ -8,6 +8,8 @@ fast "already initialised → skip" case (no subprocess).
 """
 from __future__ import annotations
 
+import os
+import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
@@ -335,3 +337,53 @@ async def test_restore_or_migrate_falls_back_to_legacy(tmp_path, monkeypatch):
 
     migrate.assert_called_once()
     restore.assert_not_called()
+
+
+# ── _run_umu: bounded + process-group kill on hang ─────────────────
+#
+# Regression: a hung Proton/Wine boot (confirmed live -- a broken
+# Proton-Experimental build spun wineserver forever inside createprefix)
+# was never killed. ``_run_umu`` had no timeout at all, and the only
+# thing that ever gave up (DownloadWorker's outer 600s watchdog) merely
+# cancelled the awaiting Python coroutine without touching the actual
+# subprocess -- start_new_session=True detaches it into its own
+# session/process group, so a plain kill of the parent never reaches it.
+# Multiple such trees were found still running, one having burned ~30%
+# CPU for nearly an hour.
+
+async def test_run_umu_kills_hung_process_on_timeout(tmp_path, monkeypatch):
+    monkeypatch.setattr(pi, "_UMU_STEP_TIMEOUT_SECONDS", 0.2)
+    pid_file = tmp_path / "pid"
+    plan = SimpleNamespace(python_bin="/bin/bash", umu_wrapper="-c")
+
+    await pi._run_umu(plan, {}, f"echo $$ > {pid_file}; exec sleep 100")
+
+    pid = int(pid_file.read_text().strip())
+    with pytest.raises(ProcessLookupError):
+        os.kill(pid, 0)
+
+
+async def test_run_umu_completes_normally_within_timeout(caplog):
+    plan = SimpleNamespace(python_bin="/bin/true", umu_wrapper="")
+
+    await pi._run_umu(plan, {})
+
+    assert "killing process group" not in caplog.text
+
+
+def test_kill_process_group_kills_real_process():
+    proc = subprocess.Popen(["sleep", "100"], start_new_session=True)
+    fake_proc = SimpleNamespace(pid=proc.pid)
+
+    pi._kill_process_group(fake_proc)
+
+    proc.wait(timeout=2)
+    assert proc.returncode is not None
+
+
+def test_kill_process_group_swallows_already_dead_process():
+    proc = subprocess.Popen(["true"], start_new_session=True)
+    proc.wait()
+    fake_proc = SimpleNamespace(pid=proc.pid)
+
+    pi._kill_process_group(fake_proc)  # must not raise

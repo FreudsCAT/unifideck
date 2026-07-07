@@ -9,6 +9,7 @@ from pathlib import Path
 
 from unifideck.launcher.frontend_bridge import launcher_toast
 from unifideck.launcher.proton.infrastructure.core import ProtonLaunchPlan
+from unifideck.launcher.proton.infrastructure.prefix_layout import resolve_drive_c
 from unifideck.launcher.proton.infrastructure.umu_runtime import run_umu_with_retry
 from unifideck.launcher.types.errors import GameFailedError, UmuRuntimeError
 
@@ -16,10 +17,12 @@ logger = logging.getLogger(__name__)
 _ID_MAP_FILE = Path(
     "~/.local/share/unifideck/ubisoft_id_map.json",
 ).expanduser()
-# upc.exe location relative to a Wine prefix root (matches ``_find_upc_exe``).
+# upc.exe location relative to a prefix's drive_c (see ``_find_upc_in`` —
+# umu/Proton nest the real drive_c under ``pfx/``, so this is never
+# combined with a prefix root directly; always go through
+# ``resolve_drive_c``).
 _UPC_RELATIVE = (
-    Path("drive_c")
-    / "Program Files (x86)"
+    Path("Program Files (x86)")
     / "Ubisoft"
     / "Ubisoft Game Launcher"
     / "upc.exe"
@@ -100,32 +103,33 @@ async def _inject_registry_keys(plan: ProtonLaunchPlan) -> bool:
         )
         return False
 
-def _find_upc_exe(plan: ProtonLaunchPlan) -> Path | None:
+def _find_upc_in(prefix_root: Path) -> Path | None:
+    """upc.exe under ``prefix_root`` if present, or ``None``.
 
+    Goes through :func:`resolve_drive_c` rather than combining
+    ``prefix_root / "drive_c"`` directly — umu/Proton nest the real
+    ``drive_c`` under ``pfx/``, so a direct combine never finds it on a
+    modern prefix layout. Same bug class already fixed elsewhere for
+    ``system.reg``/``user.reg`` (``prefix_init.py``, ``epic_cleanup.py``);
+    this file's several upc.exe lookups had never been ported to it,
+    which is why the Ubisoft auth/install flows silently failed to find
+    an upc.exe that was genuinely present.
+    """
+    drive_c = resolve_drive_c(prefix_root)
+    if drive_c is None:
+        return None
+    candidate = drive_c / _UPC_RELATIVE
+    return candidate if candidate.is_file() else None
+
+
+def _find_upc_exe(plan: ProtonLaunchPlan) -> Path | None:
     """Find UPC exe."""
     active_prefix = os.environ.get("ACTIVE_WINEPREFIX")
-    candidates: list[Path] = []
     if active_prefix:
-        candidates.append(
-            Path(active_prefix)
-            / "drive_c"
-            / "Program Files (x86)"
-            / "Ubisoft"
-            / "Ubisoft Game Launcher"
-            / "upc.exe",
-        )
-    candidates.append(
-        plan.prefix_path
-        / "drive_c"
-        / "Program Files (x86)"
-        / "Ubisoft"
-        / "Ubisoft Game Launcher"
-        / "upc.exe",
-    )
-    for c in candidates:
-        if c.is_file():
-            return c
-    return None
+        found = _find_upc_in(Path(active_prefix))
+        if found is not None:
+            return found
+    return _find_upc_in(plan.prefix_path)
 async def ubisoft_launch(plan: ProtonLaunchPlan) -> int:
     """Ubisoft launch."""
     logger.info(
@@ -299,7 +303,7 @@ def _base_from_id_map_entry(entry: object) -> Path | None:
 def _find_recovered_prefix(space_id: str) -> Path | None:
     """A populated (upc.exe-bearing) prefix for ``space_id``, found by scan."""
     for cand in _candidate_prefix_dirs(space_id):
-        if (cand / _UPC_RELATIVE).is_file():
+        if _find_upc_in(cand) is not None:
             return cand
     return None
 
@@ -313,9 +317,9 @@ def _clone_template_into(prefix_dir: Path) -> bool:
     preserves the template's ``pfx`` symlink (the shared auth prefix) via
     ``rsync -a`` / ``cp -a``. Returns True only if upc.exe lands.
     """
-    if (prefix_dir / _UPC_RELATIVE).is_file():
+    if _find_upc_in(prefix_dir) is not None:
         return True
-    if not (_TEMPLATE_DIR / _UPC_RELATIVE).is_file():
+    if _find_upc_in(_TEMPLATE_DIR) is None:
         logger.warning(
             "[launcher.proton.ubisoft] template missing upc.exe at %s — "
             "cannot clone",
@@ -341,7 +345,7 @@ def _clone_template_into(prefix_dir: Path) -> bool:
             prefix_dir,
         )
         return False
-    return (prefix_dir / _UPC_RELATIVE).is_file()
+    return _find_upc_in(prefix_dir) is not None
 
 
 async def _resolve_or_recover_upc_exe(plan: ProtonLaunchPlan) -> Path | None:
@@ -369,14 +373,14 @@ async def _resolve_or_recover_upc_exe(plan: ProtonLaunchPlan) -> Path | None:
         # so umu opens UPC in the recovered prefix.
         plan.env["WINEPREFIX"] = str(recovered)
         plan.env["STEAM_COMPAT_DATA_PATH"] = str(recovered)
-        return recovered / _UPC_RELATIVE
+        return _find_upc_in(recovered)
     if await asyncio.to_thread(_clone_template_into, plan.prefix_path):
         logger.info(
             "[launcher.proton.ubisoft] cloned .template into %s for %s",
             plan.prefix_path,
             plan.context.game_id,
         )
-        return plan.prefix_path / _UPC_RELATIVE
+        return _find_upc_in(plan.prefix_path)
     return None
 
 

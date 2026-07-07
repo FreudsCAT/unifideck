@@ -85,6 +85,7 @@ class MicrosoftStore(StoreBase):
         # ``_rebuild_auth_after_injection``.
         self._browser_monitor = browser_monitor
         self._auth: MicrosoftBrowserAuth | None = None
+        self._poll_task: asyncio.Task[None] | None = None
         self._rebuild_auth_after_injection()
     def _rebuild_auth_after_injection(self) -> None:
         """(Re-)build the Microsoft browser-auth flow once a monitor is set.
@@ -115,14 +116,92 @@ class MicrosoftStore(StoreBase):
         )
         logger.info("[MicrosoftStore] auth flow wired")
 
+    # ── Background token refresh ─────────────────────────────────
+    #
+    # Refresh was previously ONLY on-demand, inside get_library() — a
+    # token nobody happened to fetch a library with (e.g. sitting behind
+    # an unrelated bug, or just because the user hadn't opened the
+    # xCloud tab in a while) never got refreshed at all, and Microsoft's
+    # server-side handling of a long-unused refresh_token is opaque to
+    # us. This is a best-effort attempt to keep the session alive by
+    # exercising it periodically instead — deliberately conservative
+    # (well under the 2400s/40min access-token staleness threshold, so
+    # it never fires more than once per cycle) so the real-world effect
+    # can be observed rather than assumed.
+    TOKEN_POLL_INTERVAL_SECONDS = 1800
+
+    def start_token_refresh_polling(self) -> None:
+        """Start the periodic background token-refresh loop."""
+        if self._poll_task is not None:
+            return
+        self._poll_task = asyncio.create_task(
+            self._token_poll_loop(), name="microsoft-token-refresh",
+        )
+        logger.info(
+            "[MicrosoftStore] background token refresh started (every %ds)",
+            self.TOKEN_POLL_INTERVAL_SECONDS,
+        )
+
+    async def stop_token_refresh_polling(self) -> None:
+        """Cancel the background token-refresh loop."""
+        if self._poll_task is not None:
+            self._poll_task.cancel()
+            try:
+                await self._poll_task
+            except asyncio.CancelledError:
+                pass
+            self._poll_task = None
+
+    async def _token_poll_loop(self) -> None:
+        """Internal loop: refresh (if stale) every poll interval."""
+        while True:
+            try:
+                await asyncio.sleep(self.TOKEN_POLL_INTERVAL_SECONDS)
+                if not await self._tokens.load():
+                    continue  # not signed in -- nothing to refresh
+                if not await self._tokens.refresh_if_stale():
+                    logger.warning(
+                        "[MicrosoftStore] background token refresh "
+                        "failed; clearing dead session",
+                    )
+                    await self._tokens.clear()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception(
+                    "[MicrosoftStore] token refresh poll cycle error",
+                )
+
     async def is_available(self) -> bool:
-        """Check whether available."""
+        """Check whether available.
+
+        Validates the token, not just its presence: a stored
+        ``refresh_token`` that Microsoft has actually revoked/expired
+        used to still report ``True`` here (only ``get_library`` did a
+        real refresh), so the QAM could show "logged in" for a session
+        that was already dead until the next sync exposed it.
+        ``refresh_if_stale`` is cheap when the access token isn't
+        actually due for renewal (an in-memory age check, no network
+        call), so this stays fast on the common path.
+        """
         if not self._ms_config.is_valid():
             self._cached_available = False
             return False
         loaded = await self._tokens.load()
-        self._cached_available = loaded
-        return loaded
+        if not loaded:
+            self._cached_available = False
+            return False
+        fresh = await self._tokens.refresh_if_stale()
+        if not fresh:
+            logger.warning(
+                "[MicrosoftStore] token invalid during availability "
+                "check; clearing dead session",
+            )
+            await self._tokens.clear()
+            self._cached_available = False
+            return False
+        self._cached_available = True
+        return True
 
     async def start_auth(self, **kwargs: Any) -> AuthResult:
 

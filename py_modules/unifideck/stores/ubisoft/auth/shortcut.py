@@ -44,7 +44,7 @@ def _prune_orphan_shortcuts(shortcuts: dict[str, Any]) -> int:
         idx
         for idx, s in shortcuts.items()
         if s.get("AppName", "").lower() in _ORPHAN_SHORTCUT_NAMES
-        and not s.get("exe", "").strip('"')
+        and not (s.get("Exe") or s.get("exe") or "").strip('"')
         and not s.get("LaunchOptions", "")
     ]
     for idx in orphan_ids:
@@ -239,7 +239,7 @@ class _AuthShortcut:
         shortcuts[str(next_idx)] = {
             "appid": appid,
             "AppName": _AUTH_SHORTCUT_NAME,
-            "exe": f'"{launcher_path}"',
+            "Exe": f'"{launcher_path}"',
             "StartDir": f'"{Path(launcher_path).parent}"',
             "LaunchOptions": self.build_auth_launch_options(),
             "IsHidden": 1,
@@ -320,13 +320,17 @@ class _AuthShortcut:
             )
             entry["LaunchOptions"] = expected_launch_options
             changed = True
-        current_exe = entry.get("exe", "").strip('"')
+        current_exe = (entry.get("Exe") or entry.get("exe") or "").strip('"')
         if current_exe != launcher_path:
             logger.info(
                 "[UbisoftAuth] auth shortcut exe outdated, fixing",
             )
-            entry["exe"] = f'"{launcher_path}"'
+            entry["Exe"] = f'"{launcher_path}"'
             entry["StartDir"] = f'"{Path(launcher_path).parent}"'
+            # Clean up the phantom lowercase key a pre-fix version of this
+            # code could have written (Steam never reads it) so a stale
+            # entry doesn't carry it forever.
+            entry.pop("exe", None)
             changed = True
         if entry.get("appid") != expected_appid:
             logger.info(
@@ -372,7 +376,7 @@ class _AuthShortcut:
         shortcuts[str(next_idx)] = {
             "appid": appid,
             "AppName": _AUTH_SHORTCUT_NAME,
-            "exe": f'"{launcher_path}"',
+            "Exe": f'"{launcher_path}"',
             "StartDir": f'"{Path(launcher_path).parent}"',
             "LaunchOptions": launch_options,
             "IsHidden": 1,
