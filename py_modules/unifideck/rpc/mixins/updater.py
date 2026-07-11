@@ -37,6 +37,7 @@ class UpdaterRPCMixin:
             {
                 "available": bool,
                 "current": "0.6.1",
+                "current_build_id": "0.7.1.g3f9a1c2" | None,
                 "latest": {version, name, asset_url, sha256, ...} | None,
             }
 
