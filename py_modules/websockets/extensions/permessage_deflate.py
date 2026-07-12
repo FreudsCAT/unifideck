@@ -109,6 +109,8 @@ class PerMessageDeflate(Extension):
         if frame.opcode is frames.OP_CONT:
             if not self.decode_cont_data:
                 return frame
+            if frame.rsv1:
+                raise ProtocolError("RSV1 bit set in continuation frame")
             if frame.fin:
                 self.decode_cont_data = False
 
@@ -140,11 +142,11 @@ class PerMessageDeflate(Extension):
         try:
             data = self.decoder.decompress(data, max_length)
             if self.decoder.unconsumed_tail:
-                assert max_size is not None  # help mypy
                 raise PayloadTooBig(None, max_size)
             if frame.fin and len(frame.data) >= 2044:
-                # This cannot generate additional data.
-                self.decoder.decompress(_EMPTY_UNCOMPRESSED_BLOCK)
+                # In edge cases, flushing may yield data held back by max_size.
+                if self.decoder.decompress(_EMPTY_UNCOMPRESSED_BLOCK, 1):
+                    raise PayloadTooBig(None, max_size)
         except zlib.error as exc:
             raise ProtocolError("decompression failed") from exc
 
