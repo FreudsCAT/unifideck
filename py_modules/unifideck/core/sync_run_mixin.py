@@ -210,6 +210,22 @@ class _SyncRunMixin:
         await refresh_store_availability(self._registry)
         available_stores = self._registry.available()
         store_names = [s.store_name for s in available_stores]
+        # Surface stores excluded from this sync. A dropped store never
+        # reaches its per-store "fetched N games" log, so without this a
+        # silently-skipped store (e.g. GOG after a transient availability
+        # probe blip) looks identical to "0 games" in an all-green log
+        # (UD-005).
+        dropped = [
+            s.store_name
+            for s in self._registry.all()
+            if s.store_name not in store_names
+        ]
+        if dropped:
+            logger.warning(
+                "[SyncService] stores excluded from sync "
+                "(not available): %s",
+                dropped,
+            )
         self._progress.start_fetching(len(available_stores))
         self._bus.set_sync_progress(self._progress)
         await self._bus.emit(
