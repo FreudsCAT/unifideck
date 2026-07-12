@@ -36,6 +36,7 @@ from unifideck.event_bus import EventBus
 from unifideck.stores import StoreRegistry
 
 from .sync_cache_mixin import _SyncCacheMixin
+from .sync_finalize_mixin import _SyncFinalizeMixin
 from .sync_queries_mixin import _SyncQueriesMixin
 from .sync_results_mixin import _SyncResultsMixin
 from .sync_run_mixin import _SyncRunMixin
@@ -54,15 +55,17 @@ DEFAULT_COOLDOWN_MS = DEFAULT_COOLDOWN_SECONDS * 1000
 
 
 class SyncService(
-    _SyncCacheMixin, _SyncRunMixin, _SyncQueriesMixin, _SyncResultsMixin,
+    _SyncCacheMixin, _SyncRunMixin, _SyncFinalizeMixin,
+    _SyncQueriesMixin, _SyncResultsMixin,
 ):
     """Single-flight multi-store library sync orchestrator.
 
-    Composes the run loop (``_SyncRunMixin``), cache persistence
-    (``_SyncCacheMixin``), read-only queries (``_SyncQueriesMixin``),
-    and result aggregation (``_SyncResultsMixin``). The split is
-    purely about file size — externally this class still exposes the
-    same API surface it always did.
+    Composes the run loop (``_SyncRunMixin``), post-sync finalize
+    (``_SyncFinalizeMixin``), cache persistence (``_SyncCacheMixin``),
+    read-only queries (``_SyncQueriesMixin``), and result aggregation
+    (``_SyncResultsMixin``). The split is purely about file size —
+    externally this class still exposes the same API surface it
+    always did.
     """
 
     def __init__(

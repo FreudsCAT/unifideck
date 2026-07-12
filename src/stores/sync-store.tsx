@@ -60,9 +60,22 @@ class SyncStoreImpl {
     void this._pollOnce();
 
     this._unsubs.push(
-      EventBusClient.subscribe("sync_started", () => {
+      EventBusClient.subscribe("sync_started", (payload) => {
         this._observedActiveSync = true;
-        this._pendingPhases = new Set(["artwork", "metadata", "proton_meta"]);
+        // Seed the phase set from the backend's authoritative
+        // ``registered_phases`` rather than a hardcoded list. The old
+        // hardcoded {artwork,metadata,proton_meta} over-counted when the
+        // real set was smaller (no CompatibilityService → no proton_meta),
+        // so the set never drained and the Steam-restart modal never fired
+        // (UD-006). Fall back to the legacy set for replay/older backends.
+        // An artwork skip is drained by its own phase-done event.
+        const phases = (payload as { registered_phases?: string[] })
+          ?.registered_phases;
+        this._pendingPhases = new Set(
+          Array.isArray(phases) && phases.length
+            ? phases
+            : ["artwork", "metadata", "proton_meta"],
+        );
         this._update({ isSyncing: true, isCancelling: false });
         EventBusClient.bumpToFast();
         this._startPolling();

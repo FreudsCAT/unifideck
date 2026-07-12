@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, Any
 
 from .games_map import UNIFIDECK_TAG, GameMapEntry, generate_app_id
 from .launch_options import is_unifideck_shortcut
+from .orphan_scan import _is_launcher_exe
 from .reconcile_helpers import (
     build_launch_index,
     dedup_shortcuts,
@@ -45,15 +46,26 @@ class _ReconcilePhasesMixin:
         entry: Any,
         valid_app_ids: set[int],
         valid_stores: set[str] | None = None,
+        launcher_path: str = "",
     ) -> bool:
         """True if ``entry`` is a Unifideck-managed shortcut no longer needed.
 
-        Identification is **LaunchOptions-based** (regex on
-        ``"<store>:<game_id>"``) rather than tag-based — Steam
-        can strip our ``UNIFIDECK_TAG`` on update / by user
-        edit, but it preserves ``LaunchOptions`` reliably. Tag
-        check is kept as a secondary signal for very old entries
-        that predate the LaunchOptions convention.
+        Ownership is decided on the shortcut's ``Exe`` field: only
+        entries whose ``Exe`` points at our ``bin/unifideck-launcher``
+        are ever swept (via :func:`orphan_scan._is_launcher_exe`, a
+        basename match — the plugin dir differs across installs). A
+        foreign shortcut (NonSteamLaunchers', or a manually-added one)
+        can carry a ``"<store>:<id>"``-shaped ``LaunchOptions`` token or
+        even our stale ``UNIFIDECK_TAG``, so LaunchOptions/tags alone
+        cannot distinguish it from ours — matching on them deleted the
+        user's own non-Steam shortcuts (UD-006). The launcher ``Exe`` is
+        the one marker a foreign scanner cannot forge.
+
+        Beyond the Exe gate, identification of *which* Unifideck games a
+        shortcut maps to stays **LaunchOptions-based** (regex on
+        ``"<store>:<game_id>"``) rather than tag-based — Steam can strip
+        our ``UNIFIDECK_TAG`` on update / by user edit, but it preserves
+        ``LaunchOptions`` reliably.
 
         Auth shortcuts (``ubisoft:upc-auth`` and any
         ``auth-*``-tagged entry) are explicitly preserved —
@@ -88,6 +100,14 @@ class _ReconcilePhasesMixin:
             t == UNIFIDECK_TAG for t in tags_dict.values()
         )
         if not (is_managed_by_options or is_managed_by_tag):
+            return False
+        # Ownership gate: never sweep a shortcut we didn't create. A
+        # foreign shortcut whose Exe was left intact (or a Unifideck one
+        # whose Exe a foreign scanner rewrote) is handed to
+        # ``orphan_scan``'s recover path instead of being deleted here.
+        exe_raw = entry.get("Exe") or entry.get("exe") or ""
+        exe = exe_raw.strip().strip('"') if isinstance(exe_raw, str) else ""
+        if not _is_launcher_exe(exe, launcher_path):
             return False
         if valid_stores is not None and full_id is not None:
             store = get_store_prefix(launch)
@@ -158,7 +178,7 @@ class _ReconcilePhasesMixin:
             games, shortcuts_dict, registry, force=force,
         )
         removed += self._reconcile_phase_drop_stale(
-            shortcuts_dict, valid_app_ids, valid_stores,
+            shortcuts_dict, valid_app_ids, valid_stores, launcher,
         )
         # Dedup AFTER add/drop so reclaimed orphans count toward the
         # winners' scores. Steam occasionally creates duplicate VDF
@@ -444,12 +464,13 @@ class _ReconcilePhasesMixin:
         shortcuts_dict: dict[str, Any],
         valid_app_ids: set[int],
         valid_stores: set[str] | None = None,
+        launcher_path: str = "",
     ) -> int:
         """Phase 3: delete Unifideck-managed shortcuts no longer needed."""
         keys_to_delete = [
             vdf_key for vdf_key, entry in shortcuts_dict.items()
             if self._is_stale_managed_shortcut(
-                entry, valid_app_ids, valid_stores,
+                entry, valid_app_ids, valid_stores, launcher_path,
             )
         ]
         for key in keys_to_delete:

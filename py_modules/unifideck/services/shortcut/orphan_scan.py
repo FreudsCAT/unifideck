@@ -1,16 +1,21 @@
 """Boot-time orphaned-shortcut classifier.
 
-Detects Unifideck shortcuts that the post-sync reconcile pass can't
-handle because it keys entirely off ``LaunchOptions``/tags and never
-inspects the ``Exe`` field (see ``reconcile_phases._is_stale_managed_shortcut``):
+Handles the two orphan shapes the post-sync reconcile pass leaves behind.
+Both reconcile (``reconcile_phases._is_stale_managed_shortcut``) and this
+classifier now require the launcher ``Exe`` before touching a shortcut
+(see :func:`_is_launcher_exe`), so neither deletes a foreign entry:
 
 * **Type A — delete**: ``Exe`` points at our launcher but ``LaunchOptions``
   has no valid ``"<store>:<game_id>"`` token. Unrecoverable — without the
-  launch id we can't know which game it is — so it can only be deleted.
+  launch id we can't know which game it is, and reconcile keys its
+  add/keep/drop off that id — so it can only be deleted.
 * **Type B — recover**: a valid ``"<store>:<game_id>"`` ``LaunchOptions`` but
-  a missing/foreign ``Exe``. The launcher path is a known constant, so the
-  next library sync's reconcile restores the target (in-library) or sweeps it
-  (out-of-library). Reported here for logging only — not acted on.
+  a missing/foreign ``Exe``. Reconcile's Exe gate deliberately skips these
+  (they may be the user's own shortcut for the same game, or ours with a
+  foreign scanner's Exe), so they need repointing here rather than deletion.
+  The launcher path is a known constant, so the next library sync's reconcile
+  restores the target once the ``Exe`` is ours again. Reported here for
+  logging only — not acted on.
 
 Pure + stateless so the decision table is unit-testable without the service.
 The RPC layer (``CleanupRPCMixin.scan_orphaned_shortcuts``) feeds it the
