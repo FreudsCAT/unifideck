@@ -294,11 +294,25 @@ _CONFIG_VDF_GLOBAL = (
 
 
 def _system_proton(tmp_path: Path, name: str) -> Path:
-    """Create ``<tmp>/system/<name>/proton`` and return the compat root dir."""
+    """Create ``<tmp>/system/<name>/proton`` and return the compat root dir.
+
+    Builds a *structurally complete* install (executable ``proton``,
+    non-empty ``files/bin/wine`` payload, ``version``) so it passes the
+    selector's install-completeness validation — the selection tiers
+    now skip a truncated/half-extracted Proton, so a stub would be
+    (correctly) rejected and fall through to GE.
+    """
+    import os
+    import stat
+
     root = tmp_path / "system"
     tool = root / name
-    tool.mkdir(parents=True)
-    (tool / "proton").write_text("#!/bin/sh\n")
+    (tool / "files" / "bin").mkdir(parents=True)
+    proton = tool / "proton"
+    proton.write_text("#!/bin/sh\n")
+    os.chmod(proton, proton.stat().st_mode | stat.S_IXUSR)
+    (tool / "files" / "bin" / "wine").write_text("")
+    (tool / "version").write_text("1.0\n")
     return root
 
 

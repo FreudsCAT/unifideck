@@ -15,6 +15,7 @@ from .infrastructure.core import ProtonLaunchPlan, proton_prepare
 from .infrastructure.selector import (
     find_python_3_10_plus,
     resolve_proton_path,
+    select_managed_ge_proton,
     select_proton_version,
 )
 from .infrastructure.umu_runtime import (
@@ -63,6 +64,7 @@ __all__ = [
     "proton_prepare",
     "resolve_proton_path",
     "run_umu_with_retry",
+    "select_managed_ge_proton",
     "select_proton_version",
     "ubisoft_launch",
 ]

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 import platform
 import re
@@ -8,6 +9,7 @@ import sys
 from pathlib import Path
 from typing import NoReturn
 
+logger = logging.getLogger(__name__)
 DOSBOX_CALL_RE = re.compile(r'run_dosbox\s+((?:\"[^\"]+\"\s*)+)')
 def find_steam_runtime() -> Path | None:
     """Find steam runtime."""
@@ -30,14 +32,36 @@ def build_runtime_library_paths(
             paths.append(str(candidate))
     return paths
 def parse_dosbox_conf_args(start_script: Path) -> list[str]:
-    """Parse dosbox conf args."""
+    """Return the ``-conf`` args to pass to the bundled DOSBox binary.
+
+    GOG's Linux DOSBox depots ship the actual ``.conf`` files as real
+    files next to ``start.sh`` — the ``run_dosbox`` shell call inside
+    ``start.sh`` just says which of them to use, and in what order.
+    Try the shell-parsed order first (it's authoritative when it
+    matches); if ``start.sh`` doesn't match the expected phrasing
+    (GOG has rephrased this script before), fall back to every
+    ``*.conf`` file found directly beside it, alphabetically, so a
+    title still gets *a* working config instead of none. Returns an
+    empty list (never raises) when neither approach finds anything —
+    callers should fall back to running ``start.sh`` directly.
+    """
     content = start_script.read_text(encoding="utf-8", errors="ignore")
     match = DOSBOX_CALL_RE.search(content)
-    if not match:
-        raise ValueError(
-            f"Could not find run_dosbox call in {start_script}",
+    if match:
+        return shlex.split(match.group(1))
+    globbed = sorted(start_script.parent.glob("*.conf"))
+    if globbed:
+        logger.info(
+            "[gog_linux_dosbox] run_dosbox call not found in %s, "
+            "using conf files found beside it: %s",
+            start_script, [str(p) for p in globbed],
         )
-    return shlex.split(match.group(1))
+        return [str(p) for p in globbed]
+    logger.warning(
+        "[gog_linux_dosbox] no run_dosbox call and no .conf files "
+        "found for %s", start_script,
+    )
+    return []
 def launch_via_steam_runtime(
     runtime_root: Path | None,
     start_script: Path,
@@ -58,7 +82,7 @@ def _parse_argv() -> tuple[Path, list[str]]:
     if len(sys.argv) < 2:
         raise SystemExit(
             "Usage: python -m "
-            "unifideck.launcher.proton.gog_linux_dosbox "
+            "unifideck.launcher.proton.handlers.gog_linux_dosbox "
             "/path/to/start.sh [args...]",
         )
     start_script = Path(sys.argv[1]).resolve()
@@ -130,6 +154,17 @@ def main() -> None:
             runtime_root, start_script, extra_args,
         )
     conf_args = parse_dosbox_conf_args(start_script)
+    if not conf_args:
+        # Neither the run_dosbox shell call nor a bare .conf glob found
+        # anything usable — running the bundled binary with no -conf
+        # args would launch the generic DOSBox engine with no game
+        # config (the exact symptom this module exists to prevent).
+        # Falling back to start.sh itself at least runs GOG's own
+        # script, which knows its own conf files regardless of our
+        # detection.
+        launch_via_steam_runtime(
+            runtime_root, start_script, extra_args,
+        )
     env = _build_env(bundled_lib_dir, runtime_root, runtime_arch_dir)
     command = [str(binary)]
     for conf in conf_args:

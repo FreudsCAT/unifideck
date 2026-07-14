@@ -259,12 +259,45 @@ def select_proton_version(
     return _default_latest_ge(tried)
 
 
+def select_managed_ge_proton() -> tuple[Path, str]:
+    """The plugin-managed latest GE-Proton (the tier-5 default in isolation).
+
+    Bypasses the saved / per-app / distro-default tiers to return the
+    known-good GE-Proton the plugin installs and validates. Used as the
+    recovery Proton when the normally-selected one hangs at runtime —
+    e.g. a broken auto-updated Proton-Experimental that wedged install
+    warmup (see ``prefix_warmup``). Falls back to Proton Experimental
+    only if GE is genuinely unavailable (offline + none installed), same
+    as the default tier.
+    """
+    return _default_latest_ge([])
+
+
 def _resolve_logged(source: str, tool: str, tried: list[str]) -> Path | None:
-    """Record the attempt, resolve the tool to a path, log on success."""
+    """Record the attempt, resolve + validate the tool, log on success.
+
+    Returns ``None`` (skip this tier, fall through to the next) when the
+    tool resolves to a *structurally incomplete* Proton — a truncated
+    or half-extracted install whose ``umu-run`` operations would hang.
+    This degrades a broken saved / per-app / distro-default Proton
+    gracefully into the managed-GE default instead of handing umu a
+    Proton that wedges prefix setup. (A build that is structurally
+    complete but hangs at *runtime* is caught later by the compat-step
+    timeout — see ``run_umu_with_retry(timeout=...)`` and the warmup
+    GE-retry.)
+    """
     tried.append(f"{source}:{tool}")
     path = resolve_proton_path(tool)
-    if path:
-        logger.info("[launcher.proton] selected via %s tool: %s", source, tool)
+    if not path:
+        return None
+    if not ge_installer.is_proton_install_complete(path):
+        logger.warning(
+            "[launcher.proton] %s tool %s resolved to an incomplete "
+            "install (%s) — skipping, will fall back",
+            source, tool, path.parent,
+        )
+        return None
+    logger.info("[launcher.proton] selected via %s tool: %s", source, tool)
     return path
 
 

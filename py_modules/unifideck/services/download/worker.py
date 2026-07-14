@@ -360,13 +360,26 @@ class _WorkerMixin:
 
         Only for the stores that own a per-game prefix — Ubisoft bootstraps its
         own prefix via UPC, and Microsoft is cloud-only, so both are skipped.
-        No-op when the hook isn't wired (e.g. launcher subset bootstrap).
-        Best-effort: a failure logs and the install still completes (the
-        launch-time path remains the fallback). Re-emitting DOWNLOAD_STARTED
-        forces the frontend to refetch the queue so the row picks up the new
-        ``download_phase`` (same mechanism Ubisoft's "manual" phase uses).
+        Also skipped for a GOG *Linux-native* depot (root-level ``start.sh`` —
+        the same signal ``GOGExeResolver``/the native-launch DOSBox dispatch
+        use): those games never touch Proton/Wine, so creating a prefix for
+        them is pure waste and, worse, can wedge the shared prefix-setup
+        machinery (wineserver locks, GE-Proton retry ladder) for a game that
+        will never use it. No-op when the hook isn't wired (e.g. launcher
+        subset bootstrap). Best-effort: a failure logs and the install still
+        completes (the launch-time path remains the fallback). Re-emitting
+        DOWNLOAD_STARTED forces the frontend to refetch the queue so the row
+        picks up the new ``download_phase`` (same mechanism Ubisoft's
+        "manual" phase uses).
         """
         if item.store in ("ubisoft", "microsoft"):
+            return
+        if item.store == "gog" and (Path(item.install_path) / "start.sh").is_file():
+            logger.info(
+                "[DownloadWorker] skipping prefix warmup for %s:%s — "
+                "Linux-native GOG depot (start.sh), no Proton prefix needed",
+                item.store, item.game_id,
+            )
             return
         hook: Any = getattr(self, "_prefix_warmup", None)
         if not callable(hook):

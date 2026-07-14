@@ -130,6 +130,56 @@ def is_valid_ge_install(tag: str) -> bool:
     return installed_ge_proton_path(tag) is not None
 
 
+def is_proton_install_complete(proton_script: Path) -> bool:
+    """True iff ``proton_script``'s install looks complete and runnable.
+
+    Guards against a partially-installed / corrupt Proton being handed
+    to umu, where every ``umu-run`` operation (createprefix, the
+    winetricks/regedit compat steps) hangs its wineserver forever — a
+    broken auto-updated Proton-Experimental build did exactly this and
+    wedged the serial install queue.
+
+    Checks the load-bearing pieces of a Proton tool directory:
+
+    * the ``proton`` launcher script is present **and executable**
+      (mirrors :func:`installed_ge_proton_path`'s "present AND
+      ``os.access(X_OK)``" guard — a survived-partial-extract copy is
+      left non-executable);
+    * a ``files/`` subdir (the Wine/runtime payload) exists and is
+      non-empty, with the Wine loader (``files/bin/wine``) present —
+      the payload a hung wineserver needs and the piece a truncated
+      extract most often lacks;
+    * a readable, non-empty ``version`` marker.
+
+    NB: a zero-byte ``dist.lock`` is *not* a corruption signal —
+    every official Steam Proton tool ships one as its normal per-tool
+    lock, so it is deliberately not checked here.
+
+    Best-effort and conservative: any unreadable/unexpected state is
+    treated as *incomplete* so the caller degrades to a known-good
+    Proton rather than risk a hang.
+    """
+    try:
+        if not (proton_script.is_file() and os.access(proton_script, os.X_OK)):
+            return False
+        root = proton_script.parent
+        files_dir = root / "files"
+        if not files_dir.is_dir() or not any(files_dir.iterdir()):
+            return False
+        if not (files_dir / "bin" / "wine").is_file():
+            return False
+        version = root / "version"
+        if not version.is_file() or version.stat().st_size == 0:
+            return False
+    except OSError as e:
+        logger.warning(
+            "[ge_installer] completeness check failed for %s: %s",
+            proton_script, e,
+        )
+        return False
+    return True
+
+
 def read_cached_latest_tag() -> str | None:
     """Return the tag the background installer last validated, if any."""
     if not _MARKER.is_file():

@@ -277,6 +277,7 @@ class GOGExeResolver:
                 continue
             candidates.sort(key=lambda item: item[1], reverse=True)
             best_exe, best_size = candidates[0]
+            GOGExeResolver._warn_if_ambiguous(candidates, best_exe, best_size)
             logger.info(
                 "[GOGExeResolver] fallback: largest exe (%.1f MB): %s",
                 best_size / (1024 * 1024),
@@ -284,6 +285,34 @@ class GOGExeResolver:
             )
             return (best_exe, str(Path(best_exe).parent))
         return None
+
+    @staticmethod
+    def _warn_if_ambiguous(
+        candidates: list[tuple[str, int]],
+        best_exe: str,
+        best_size: int,
+    ) -> None:
+        """Log a warning when the largest-exe guess isn't a clear winner.
+
+        Picking "the biggest .exe" is a guess, not a detection — it's
+        exactly how a GOG DOSBox install's ``dosbox.exe`` (a real,
+        often-large binary) can get launched instead of the actual
+        game. This doesn't change the guess (Unifideck has no UI to
+        punt an ambiguous choice to, unlike an in-emulator menu), but
+        makes a wrong one traceable in the logs instead of invisible:
+        any other candidate within 20% of the winner's size means the
+        pick was genuinely ambiguous.
+        """
+        close = [
+            exe for exe, size in candidates
+            if exe != best_exe and size >= best_size * 0.8
+        ]
+        if close:
+            logger.warning(
+                "[GOGExeResolver] largest-exe pick is ambiguous: chose "
+                "%s (%.1f MB) over %d other candidate(s) within 20%%: %s",
+                best_exe, best_size / (1024 * 1024), len(close), close,
+            )
 
     @staticmethod
     def _collect_exe_candidates_in(directory: str) -> list[tuple[str, int]]:

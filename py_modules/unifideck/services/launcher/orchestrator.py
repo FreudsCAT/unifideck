@@ -110,9 +110,17 @@ async def launch_native(
     ctx: LaunchContext,
     state: RuntimeState,
 ) -> Result:
-    """Native Linux game launch — simpler path."""
+    """Native Linux game launch — simpler path.
+
+    GOG's Linux DOSBox depots need special-casing (see
+    ``helpers.build_native_argv``) and every native title needs its
+    executable bit set and Steam Overlay/Input restored — both ported
+    from the previously-unreferenced ``flows/native.py``.
+    """
     try:
         from unifideck.core.types.events import Events
+
+        from .helpers import run_native_subprocess
         store = ctx.store
         game_id = ctx.game_id
 
@@ -130,26 +138,7 @@ async def launch_native(
 
         # Phase 2: Run Subprocess
         try:
-            # For native games, we just run the executable directly
-            import asyncio
-
-            cmd = [str(ctx.exe_path)]
-            # No launch_args on LaunchContext; if/when added,
-            # extend ``cmd`` here.
-            cmd.extend([])
-
-            logger.info("[Orchestrator] Spawning native launch: %s", cmd)
-
-            proc = await asyncio.create_subprocess_exec(
-                *cmd,
-                cwd=str(ctx.work_dir),
-            )
-            svc._active_subprocess = proc
-
-            rc = await proc.wait()
-            state.rc = rc
-            svc._active_subprocess = None
-
+            state.rc = await run_native_subprocess(svc, ctx, state)
         finally:
             await svc._bus.emit(Events.GAME_STOPPED, store=store, game_id=game_id)
 

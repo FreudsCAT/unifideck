@@ -348,6 +348,15 @@ async def _ensure_created(plan: ProtonLaunchPlan, prefix_root: Path) -> None:
     ensure_umu_runtime_ready()
     env = dict(plan.env)
     env["GAMEID"] = "umu-0"  # generic — no per-game protonfix during setup
+    # Use the ``run`` verb, NOT the inherited ``waitforexitandrun``. Proton's
+    # waitforexitandrun runs ``wineserver -w`` FIRST (proton script ~L2111),
+    # which blocks until any existing wineserver for this prefix shuts down.
+    # Proton's persistent ``steam.exe`` stub keeps that wineserver resident,
+    # so a second waitforexitandrun step (or a retry) deadlocks on the wait —
+    # the observed install-warmup hang. ``run`` skips ``wineserver -w`` (this
+    # is exactly why gog_setup.run_wine sets it). Setup steps don't need to
+    # wait for a prior session; they operate on the prefix directly.
+    env["PROTON_VERB"] = "run"
 
     if await _run_createprefix_with_retry(plan, env, prefix_root):
         await _restore_or_migrate_saves(plan, prefix_root)
@@ -434,6 +443,26 @@ def _kill_process_group(proc: asyncio.subprocess.Process) -> None:
         logger.warning("[prefix_init] failed to kill umu process group: %s", e)
 
 
+def _reap_prefix_wineserver(env: dict[str, str]) -> None:
+    """SIGKILL the detached wineserver bound to ``env``'s WINEPREFIX.
+
+    The killpg above misses a ``waitforexitandrun`` wineserver — it
+    detaches from the umu-run session and survives, holding the prefix's
+    ``server-<dev>-<ino>/lock`` and deadlocking the next same-prefix run.
+    Best-effort; no WINEPREFIX → nothing to reap.
+    """
+    prefix = env.get("WINEPREFIX")
+    if not prefix:
+        return
+    try:
+        from unifideck.launcher.proton.infrastructure.wineserver_reap import (
+            reap_prefix_wineserver,
+        )
+        reap_prefix_wineserver(Path(prefix))
+    except Exception:
+        logger.exception("[prefix_init] wineserver reap failed for %s", prefix)
+
+
 async def _run_umu(
     plan: ProtonLaunchPlan, env: dict[str, str], *umu_args: str,
 ) -> None:
@@ -464,5 +493,10 @@ async def _run_umu(
             umu_args, int(_UMU_STEP_TIMEOUT_SECONDS),
         )
         _kill_process_group(proc)
+        # killpg misses the detached wineserver: it survives holding this
+        # prefix's /tmp/.wine-<uid>/server-<dev>-<ino>/lock, and the NEXT
+        # step against the same prefix (compat, or a createprefix retry)
+        # then deadlocks on it. Reap it so the retry gets a clean server.
+        _reap_prefix_wineserver(env)
         with contextlib.suppress(Exception):
             await asyncio.wait_for(proc.wait(), timeout=5)

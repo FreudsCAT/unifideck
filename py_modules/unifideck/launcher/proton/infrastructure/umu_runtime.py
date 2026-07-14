@@ -5,6 +5,7 @@ import contextlib
 import logging
 import os
 import shutil
+import signal
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -28,6 +29,57 @@ _LAUNCHES_DIR = Path("~/.local/share/unifideck/launches").expanduser()
 # regardless of which runtime a given Proton build actually uses.
 UMU_RUNTIME_VARIANTS = ("steamrt2", "steamrt3", "steamrt4")
 _RECOVERABLE_CODES = {2, 74, 127}
+# Returned when a bounded umu step is force-killed for exceeding its
+# timeout. Never in ``_RECOVERABLE_CODES`` on purpose: a hung
+# Proton/Wine boot (e.g. a broken auto-updated Proton-Experimental
+# build spinning wineserver forever) will just hang again on retry, so
+# the caller should fail the step rather than loop.
+UMU_TIMEOUT_RC = 124
+
+
+def _kill_process_group(proc: asyncio.subprocess.Process) -> None:
+    """Best-effort SIGKILL of ``proc``'s whole process group.
+
+    ``start_new_session=True`` (see :func:`_run_umu_once`) makes the
+    spawned umu-run its own session/process-group leader, so killing
+    just ``proc.pid`` would leave every descendant running untouched —
+    pressure-vessel, wineserver, the simulated Wine boot. A broken
+    Proton build left exactly such trees spinning wineserver at ~14%
+    CPU indefinitely, wedging the serial install queue. Killing the
+    group reaps the whole tree.
+
+    Mirrors ``prefix_init._kill_process_group`` (the createprefix path
+    already does this); kept as a local copy to avoid an import-linter
+    layer dependency from ``infrastructure`` onto ``compat``.
+    """
+    try:
+        os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    except OSError as e:
+        logger.warning("[launcher.umu] failed to kill process group: %s", e)
+
+
+def _reap_prefix_wineserver(env: dict[str, str] | None) -> None:
+    """Also SIGKILL the wineserver bound to ``env``'s WINEPREFIX.
+
+    ``_kill_process_group`` misses it: a ``waitforexitandrun`` wineserver
+    detaches from the umu-run session and survives the killpg, keeping its
+    ``/tmp/.wine-<uid>/server-<dev>-<ino>/lock``. Left alive, it deadlocks
+    the NEXT run against the same prefix (retries stack stuck wineservers
+    on one lock — the observed install-warmup wedge). Reaping it here lets
+    the retry get a clean server. Best-effort; no WINEPREFIX → nothing to do.
+    """
+    prefix = (env or {}).get("WINEPREFIX")
+    if not prefix:
+        return
+    try:
+        from unifideck.launcher.proton.infrastructure.wineserver_reap import (
+            reap_prefix_wineserver,
+        )
+        reap_prefix_wineserver(Path(prefix))
+    except Exception:
+        logger.exception("[launcher.umu] wineserver reap failed for %s", prefix)
 
 
 def _open_game_log() -> Any:
@@ -89,9 +141,19 @@ async def run_umu_with_retry(
     cwd: Path | None = None,
     max_attempts: int = 2,
     on_start: Callable[[object], None] | None = None,
+    timeout: float | None = None,  # noqa: ASYNC109 — bounds a subprocess wait via wait_for + killpg, not an asyncio.timeout() wrapper
 ) -> int:
 
-    """Run UMU with retry."""
+    """Run UMU with retry.
+
+    ``timeout`` bounds each attempt's ``proc.wait()``. It defaults to
+    ``None`` (unbounded — a real game launch runs for hours), so the
+    bound is strictly opt-in per caller: only the short prefix-compat
+    steps (winetricks / vcruntime regedit) pass one. On timeout the
+    process group is force-killed and the attempt returns
+    :data:`UMU_TIMEOUT_RC`, which is deliberately *not* recoverable, so
+    a hung Proton fails the step instead of retrying into the same hang.
+    """
     last_rc = 1
     game_log = _open_game_log()
     out = game_log if game_log is not None else None
@@ -102,7 +164,7 @@ async def run_umu_with_retry(
                 attempt, max_attempts, argv[:3],
                 "game.log" if out is not None else "inherited",
             )
-            rc = await _run_umu_once(argv, env, cwd, out, on_start)
+            rc = await _run_umu_once(argv, env, cwd, out, on_start, timeout)
             last_rc = rc
             logger.info("[launcher.umu] attempt %d exit code: %d", attempt, rc)
             if rc == 0:
@@ -139,8 +201,17 @@ async def _run_umu_once(
     cwd: Path | None,
     out: Any,
     on_start: Callable[[object], None] | None,
+    timeout: float | None = None,  # noqa: ASYNC109 — bounds a subprocess wait via wait_for + killpg, not an asyncio.timeout() wrapper
 ) -> int:
-    """Spawn one umu process, fire ``on_start``, await its exit code."""
+    """Spawn one umu process, fire ``on_start``, await its exit code.
+
+    When ``timeout`` is set, a process that outlives it is force-killed
+    (whole process group) and :data:`UMU_TIMEOUT_RC` is returned; with
+    ``timeout is None`` the wait is unbounded (the launch default).
+    Cancellation (e.g. the user hitting Cancel on a "Setting up game…"
+    install) also reaps the process group before propagating, so no
+    orphaned wineserver is left spinning.
+    """
     if env is not None:
         # Belt-and-suspenders: LD_PRELOAD must never reach umu-run/pressure-
         # vessel here regardless of what built ``env`` — re-exporting the
@@ -160,4 +231,27 @@ async def _run_umu_once(
             on_start(proc)
         except Exception:
             logger.exception("[launcher.umu] on_start callback failed")
-    return await proc.wait()
+    try:
+        if timeout is None:
+            return await proc.wait()
+        try:
+            return await asyncio.wait_for(proc.wait(), timeout=timeout)
+        except TimeoutError:
+            logger.warning(
+                "[launcher.umu] %s exceeded %ds — killing process group",
+                argv[:3], int(timeout),
+            )
+            _kill_process_group(proc)
+            _reap_prefix_wineserver(env)
+            with contextlib.suppress(Exception):
+                await asyncio.wait_for(proc.wait(), timeout=5)
+            return UMU_TIMEOUT_RC
+    except asyncio.CancelledError:
+        # Reap the whole tree before unwinding, else the umu-run /
+        # pressure-vessel / wineserver descendants outlive the cancelled
+        # task and keep spinning (start_new_session=True detaches them).
+        _kill_process_group(proc)
+        _reap_prefix_wineserver(env)
+        with contextlib.suppress(Exception):
+            await asyncio.wait_for(proc.wait(), timeout=5)
+        raise

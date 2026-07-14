@@ -3,19 +3,18 @@
 ``bin/unifideck-launcher`` unconditionally strips ``LD_PRELOAD`` at process
 start (needed for the Proton/pressure-vessel path). The retired bash
 launcher's ``restore_steam_env`` restored the real value for native Linux
-games specifically ("critical for controller support"), but the 0.7.0
-rewrite's ``_restore_steam_env`` only restored the ``STEAM_OVERLAY``/
-``STEAM_INPUT`` feature flags and never the preload itself — so Steam's
-overlay never re-attached to a native game's process. Symptom reported in
-the field: game launches and is audible, but Gaming Mode's loading
-transition never dismisses (no in-process Steam hook to signal it) and
-Steam Input doesn't work. Native games run unsandboxed on the host, so
-(unlike Proton/pressure-vessel) there's no host/container library
-mismatch risk in restoring it.
+games specifically ("critical for controller support"). This logic lived in
+``launcher/flows/native.py``, which was never actually wired into the live
+dispatch chain (``LauncherService`` calls ``orchestrator.launch_native``
+instead) — so the restore never ran in practice. Ported into
+``services/launcher/helpers.py`` and reconnected into ``orchestrator.py``;
+this test now covers that live location. Native games run unsandboxed on
+the host, so (unlike Proton/pressure-vessel) there's no host/container
+library mismatch risk in restoring it.
 """
 from __future__ import annotations
 
-from unifideck.launcher.flows.native import _restore_steam_env
+from unifideck.services.launcher.helpers import restore_steam_env
 
 
 def _write_steam_env(tmp_path, monkeypatch, content: str) -> None:
@@ -34,7 +33,7 @@ def test_restore_steam_env_includes_ld_preload(tmp_path, monkeypatch):
         "SOME_OTHER_VAR=ignored\n",
     )
     env: dict[str, str] = {}
-    _restore_steam_env(env)
+    restore_steam_env(env)
 
     assert env["LD_PRELOAD"] == (
         "/home/deck/.local/share/Steam/ubuntu12_64/gameoverlayrenderer.so"
@@ -47,5 +46,5 @@ def test_restore_steam_env_includes_ld_preload(tmp_path, monkeypatch):
 def test_restore_steam_env_no_file_is_noop(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
     env: dict[str, str] = {}
-    _restore_steam_env(env)
+    restore_steam_env(env)
     assert env == {}
