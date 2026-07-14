@@ -490,7 +490,8 @@
           "items": { "$ref": "#/$defs/nonEmptyString" }
         },
         "list_updates_timeout_seconds": { "$ref": "#/$defs/positiveInt" },
-        "get_size_timeout_seconds": { "$ref": "#/$defs/positiveInt" }
+        "get_size_timeout_seconds": { "$ref": "#/$defs/positiveInt" },
+        "library_sync_timeout_seconds": { "$ref": "#/$defs/positiveInt" }
       }
     },
     "ubisoftStore": {

@@ -91,7 +91,8 @@
         "Succesfully registered"
       ],
       "list_updates_timeout_seconds": 60,
-      "get_size_timeout_seconds": 60
+      "get_size_timeout_seconds": 60,
+      "library_sync_timeout_seconds": 60
     },
     "ubisoft": {
       "data_dir": "~/.local/share/unifideck",

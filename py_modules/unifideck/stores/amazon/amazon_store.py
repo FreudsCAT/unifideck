@@ -245,10 +245,22 @@ class AmazonStore(StoreBase):
         return await self._auth.logout()
 
     async def get_library(self, *, force: bool = False) -> list[Game] | None:
-        """Get library."""
+        """Get library.
+
+        Refreshes nile's ``library.json`` from Amazon first so newly-claimed
+        games appear (UD-012). Runs on every sync (parity with Epic/GOG), not
+        just ``force`` — gated on auth to avoid a guaranteed-fail sync for
+        logged-out users. The refresh is best-effort: on failure we fall
+        through to the last-known file.
+        """
         if not self.cli_path:
             return []
         try:
+            if self._check_nile_authenticated():
+                await self._library.sync_library(
+                    self.cli_path,
+                    self._amazon_cfg["library_sync_timeout_seconds"],
+                )
             owned = await self._library.read_owned_games()
             installed = await self._library.read_installed_ids()
             return merge_install_status(owned, installed)
