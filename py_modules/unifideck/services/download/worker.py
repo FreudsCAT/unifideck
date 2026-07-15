@@ -23,6 +23,7 @@ from typing import TYPE_CHECKING, Any
 from unifideck.core.types import Game
 
 from .models import MAX_FINISHED_HISTORY, DownloadItem, classify_download_error
+from .worker_helpers import apply_dict_progress, track_task
 
 if TYPE_CHECKING:
     from unifideck.core.types import InstallResult
@@ -31,43 +32,6 @@ if TYPE_CHECKING:
     from unifideck.stores.shared.store_base import StoreBase
 
 logger = logging.getLogger(__name__)
-
-# Strong references to background install tasks so the GC can't
-# collect them mid-flight (see RUF006).
-_BACKGROUND_TASKS: set[asyncio.Task[Any]] = set()
-
-
-def _track(task: asyncio.Task[Any]) -> None:
-    """Register a fire-and-forget task so the GC doesn't collect it early."""
-    _BACKGROUND_TASKS.add(task)
-    task.add_done_callback(_BACKGROUND_TASKS.discard)
-
-
-# (progress-key, DownloadItem attribute, converter) for the structured
-# progress payloads emitted by GOG / Ubisoft. Driven by a table so
-# ``_apply_dict_progress`` stays flat (no per-field if-cascade).
-_PROGRESS_FIELDS: tuple[tuple[str, str, Any], ...] = (
-    ("downloaded_bytes", "downloaded_bytes", int),
-    ("total_bytes", "total_bytes", int),
-    ("eta_seconds", "eta_seconds", int),
-    ("phase", "download_phase", str),
-    ("phase_message", "phase_message", str),
-)
-
-
-def _apply_dict_progress(item: DownloadItem, progress: dict[str, Any]) -> None:
-    """Copy a structured progress payload (GOG/Ubisoft) onto *item*."""
-    pct = progress.get("percentage") or progress.get("progress_percent")
-    if isinstance(pct, (int, float)):
-        item.progress = float(pct)
-    if "speed_mbps" in progress:
-        item.speed_mbps = float(progress["speed_mbps"])
-    elif "speed_bps" in progress:
-        item.speed_mbps = float(progress["speed_bps"]) / (1024 * 1024)
-    for pkey, attr, conv in _PROGRESS_FIELDS:
-        if pkey in progress:
-            setattr(item, attr, conv(progress[pkey]))
-
 
 # Polling cadence — kept as module constants so a future test
 # can monkeypatch them to speed up integration runs without
@@ -166,7 +130,7 @@ class _WorkerMixin:
         running_tasks = getattr(self, "_running_tasks", None)
         for item in to_start:
             task = asyncio.create_task(self._run_install(item))
-            _track(task)
+            track_task(task)
             # Register the task so DownloadService.cancel can kill
             # a running install. The mixin host sets this up;
             # ``getattr`` keeps the worker mixin standalone-safe.
@@ -457,7 +421,7 @@ class _WorkerMixin:
             # the worker mixin stays standalone-safe.
             save_history = getattr(self, "_save_history", None)
             if callable(save_history):
-                _track(asyncio.create_task(save_history()))
+                track_task(asyncio.create_task(save_history()))
 
     async def _build_installed_game(
         self,
@@ -550,7 +514,7 @@ class _WorkerMixin:
             if item.progress > 0:
                 item.download_phase = "downloading"
         elif isinstance(progress, dict):
-            _apply_dict_progress(item, progress)
+            apply_dict_progress(item, progress)
         if self._bus:
             from unifideck.core.types.events import Events
             await self._bus.emit(

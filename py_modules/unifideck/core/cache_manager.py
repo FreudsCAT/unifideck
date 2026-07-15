@@ -37,6 +37,12 @@ logger = logging.getLogger(__name__)
 class CacheStore:
     """One named cache with TTL, disk persistence, and backup recovery."""
 
+    # Safety valve for deferred writes (``set(..., flush=False)``):
+    # after this many unflushed sets the store persists anyway, so a
+    # crash mid-phase loses a bounded number of entries. Caches hold
+    # derived, re-fetchable data — bounded loss is acceptable.
+    AUTO_FLUSH_EVERY = 200
+
     def __init__(self, name: str, path: Path, ttl_seconds: int = 0) -> None:
         """Initialise the store and load existing data from disk.
 
@@ -53,6 +59,8 @@ class CacheStore:
         self.ttl = ttl_seconds
         self._data: dict[str, Any] = {}
         self._ts: dict[str, float] = {}
+        self._dirty = False
+        self._writes_since_flush = 0
         self._load()
 
     def get(self, key: str) -> Any | None:
@@ -81,22 +89,38 @@ class CacheStore:
                 return None
         return self._data[key]
 
-    def set(self, key: str, value: Any) -> None:
-        """Insert/update ``key`` with ``value`` and persist immediately.
+    def set(self, key: str, value: Any, *, flush: bool = True) -> None:
+        """Insert/update ``key`` with ``value``.
 
-        Eager persist — each ``set`` triggers a full
-        rewrite. Fine for the typical cache size
-        (handful of keys, JSON-serialisable values);
-        callers needing batch writes should debounce on
-        their side.
+        Eager persist by default — each ``set`` triggers a full
+        file rewrite, fine for occasional writes. Hot loops (the
+        per-game sync enrichment writes thousands of keys into
+        growing files — O(n²) disk I/O) pass ``flush=False`` and
+        call :meth:`flush` at their phase boundary; the
+        ``AUTO_FLUSH_EVERY`` valve bounds data loss on crash.
 
         Args:
             key: cache key.
             value: any JSON-serialisable value.
+            flush: persist to disk immediately (default). When
+                ``False``, the write stays in memory until
+                :meth:`flush`, the auto-flush valve, or the next
+                eager operation persists it.
         """
         self._data[key] = value
         self._ts[key] = time.time()
-        self._save()
+        if flush:
+            self._save()
+            return
+        self._dirty = True
+        self._writes_since_flush += 1
+        if self._writes_since_flush >= self.AUTO_FLUSH_EVERY:
+            self._save()
+
+    def flush(self) -> None:
+        """Persist deferred writes, if any (no-op when clean)."""
+        if self._dirty:
+            self._save()
 
     def delete(self, key: str) -> None:
         """Drop ``key`` (and its timestamp) and persist.
@@ -206,6 +230,8 @@ class CacheStore:
         write failure leaves the prior file untouched
         (atomic semantics).
         """
+        self._dirty = False
+        self._writes_since_flush = 0
         self.path.parent.mkdir(parents=True, exist_ok=True)
         payload = {"data": self._data, "_ts": self._ts}
         if self.path.exists():
@@ -321,15 +347,32 @@ class CacheManager:
         """
         return self._get_store(cache).get(key)
 
-    def set(self, cache: str, key: str, value: Any) -> None:
+    def set(
+        self, cache: str, key: str, value: Any, *, flush: bool = True,
+    ) -> None:
         """Forward a ``set`` to the named cache.
 
         Args:
             cache: cache identifier.
             key: key within that cache.
             value: any JSON-serialisable value.
+            flush: persist immediately (default); ``False`` defers
+                to :meth:`flush` / the store's auto-flush valve.
         """
-        self._get_store(cache).set(key, value)
+        self._get_store(cache).set(key, value, flush=flush)
+
+    def flush(self, cache: str) -> None:
+        """Persist any deferred writes on the named cache.
+
+        Args:
+            cache: cache identifier.
+        """
+        self._get_store(cache).flush()
+
+    def flush_all(self) -> None:
+        """Persist deferred writes on every registered cache."""
+        for store in self._stores.values():
+            store.flush()
 
     def delete(self, cache: str, key: str) -> None:
         """Forward a ``delete`` to the named cache.

@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING, Any
 
 import aiohttp
 
+from unifideck.steam.http_retry import STEAM_STORE_GATE, get_json_with_backoff
 from unifideck.utils.config_helpers import get_cfg
 
 if TYPE_CHECKING:
@@ -27,7 +28,6 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 STEAM_APPREVIEWS_URL = "https://store.steampowered.com/appreviews/{appid}"
-_HTTP_OK = 200
 _DEFAULT_TIMEOUT = 15.0
 
 
@@ -71,16 +71,21 @@ async def _request_appreviews(
     params: dict[str, str],
     timeout_s: float,
 ) -> dict[str, Any] | None:
-    """GET the appreviews summary on ``sess``; None on transport error."""
-    try:
-        async with sess.get(
-            url, params=params, timeout=aiohttp.ClientTimeout(total=timeout_s),
-        ) as response:
-            if response.status != _HTTP_OK:
-                return None
-            payload = await response.json(content_type=None)
-    except (aiohttp.ClientError, TimeoutError) as exc:
-        logger.debug("[steam.appreviews] %d failed: %s", steam_app_id, exc)
+    """GET the appreviews summary on ``sess``; None on error.
+
+    Retries HTTP 429 via :func:`get_json_with_backoff` behind the
+    shared ``STEAM_STORE_GATE`` (previously this endpoint had no
+    rate-limit handling at all).
+    """
+    payload = await get_json_with_backoff(
+        sess,
+        url,
+        params=params,
+        timeout_s=timeout_s,
+        log_tag=f"[steam.appreviews] {steam_app_id}",
+        gate=STEAM_STORE_GATE,
+    )
+    if payload is None:
         return None
     return _parse_appreviews_summary(payload)
 

@@ -6,8 +6,9 @@ fix beyond the facet assembler (see ``test_library_facets.py``):
 * the backfill now stamps the resolved ``steam_appid`` onto the
   ``metadata[store:game_id]`` entry it writes (defensive — keeps any
   steam_appid-keyed reader correct), and
-* the appdetails fetcher's 429 helpers (``Retry-After`` parsing +
-  response-shape parsing) that back its rate-limit retry loop.
+* the 429 helpers (``Retry-After`` parsing, now shared via
+  ``steam/http_retry.py``) + the appdetails response-shape parsing
+  that back the rate-limit retry loop.
 """
 
 from __future__ import annotations
@@ -16,10 +17,10 @@ from types import SimpleNamespace
 from typing import Any
 
 from unifideck.services.metadata_backfill import _merge_into_metadata_cache
-from unifideck.steam.appdetails import (
-    _MAX_RETRY_AFTER_S,
-    _parse_appdetails,
-    _retry_after_seconds,
+from unifideck.steam.appdetails import _parse_appdetails
+from unifideck.steam.http_retry import (
+    MAX_RETRY_AFTER_S,
+    retry_after_seconds,
 )
 
 
@@ -32,8 +33,11 @@ class _Cache:
     def get(self, ns: str, key: str) -> Any:
         return self._d.get((ns, key))
 
-    def set(self, ns: str, key: str, val: Any) -> None:
+    def set(self, ns: str, key: str, val: Any, *, flush: bool = True) -> None:
         self._d[(ns, key)] = val
+
+    def flush(self, ns: str) -> None:
+        pass
 
 
 def _game(app_id: int, store: str, store_game_id: str) -> Any:
@@ -90,13 +94,13 @@ def test_backfill_preserves_existing_steam_appid() -> None:
 
 
 def test_retry_after_seconds_parsing() -> None:
-    assert _retry_after_seconds(SimpleNamespace(headers={"Retry-After": "5"})) == 5.0
-    assert _retry_after_seconds(SimpleNamespace(headers={})) is None
-    assert _retry_after_seconds(SimpleNamespace(headers={"Retry-After": "nope"})) is None
+    assert retry_after_seconds(SimpleNamespace(headers={"Retry-After": "5"})) == 5.0
+    assert retry_after_seconds(SimpleNamespace(headers={})) is None
+    assert retry_after_seconds(SimpleNamespace(headers={"Retry-After": "nope"})) is None
     # Clamped to the cap so a hostile header can't park us forever.
     assert (
-        _retry_after_seconds(SimpleNamespace(headers={"Retry-After": "99999"}))
-        == _MAX_RETRY_AFTER_S
+        retry_after_seconds(SimpleNamespace(headers={"Retry-After": "99999"}))
+        == MAX_RETRY_AFTER_S
     )
 
 

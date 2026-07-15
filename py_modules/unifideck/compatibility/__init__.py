@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-from .library import (
+from .legacy import (
     BackgroundCompatFetcher,
-    CompatLibrary,
-    CompatRating,
     fetch_deck_verified,
     fetch_protondb_rating,
     get_compat_for_title,
@@ -13,6 +11,10 @@ from .library import (
     prefetch_compat,
     save_compat_cache,
     search_steam_store,
+)
+from .library import (
+    CompatLibrary,
+    CompatRating,
 )
 from .proton_helpers import (
     CompatToolResult,

@@ -3,13 +3,13 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import random
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import aiohttp
 
+from unifideck.steam.http_retry import STEAM_STORE_GATE, get_json_with_backoff
 from unifideck.utils.config_helpers import get_cfg
 from unifideck.utils.title_match import (
     normalize_for_match,
@@ -147,21 +147,6 @@ def _format_price(price_block: Any) -> str:
     currency = price_block.get("currency", "")
     formatted = f"{final / 100:.2f}"
     return f"{formatted} {currency}".strip()
-_HTTP_TOO_MANY = 429
-_MAX_RETRIES = 3
-_RETRY_BASE_S = 1.0
-_MAX_RETRY_AFTER_S = 30.0
-
-
-def _retry_after_seconds(response: aiohttp.ClientResponse) -> float | None:
-    """Parse a numeric Retry-After header (seconds), clamped."""
-    raw = response.headers.get("Retry-After")
-    if not raw:
-        return None
-    try:
-        return min(float(raw), _MAX_RETRY_AFTER_S)
-    except (TypeError, ValueError):
-        return None
 
 
 async def _storesearch_items(
@@ -192,40 +177,20 @@ async def _request_storesearch(
 ) -> list[dict[str, Any]]:
     """GET Steam's ``storesearch`` on ``sess`` with HTTP 429 backoff.
 
-    Retries up to ``_MAX_RETRIES`` times, honoring a numeric ``Retry-After``
-    header plus jitter. Returns the raw item list, or ``[]`` on a non-OK
-    status or transport error.
+    Retries via :func:`get_json_with_backoff` behind the shared
+    ``STEAM_STORE_GATE``. Returns the raw item list, or ``[]`` on a
+    non-OK status or transport error.
     """
-    for attempt in range(_MAX_RETRIES + 1):
-        try:
-            async with sess.get(
-                STEAM_STORE_SEARCH_URL,
-                params=params,
-                timeout=aiohttp.ClientTimeout(total=timeout_s),
-            ) as response:
-                if response.status == _HTTP_TOO_MANY and attempt < _MAX_RETRIES:
-                    jitter = random.uniform(0, 0.5)  # noqa: S311
-                    delay = (
-                        _retry_after_seconds(response)
-                        or _RETRY_BASE_S * (2**attempt)
-                    ) + jitter
-                    logger.debug(
-                        "[steam.search_store] rate-limited (429), retry %d/%d in %.1fs",
-                        attempt + 1,
-                        _MAX_RETRIES,
-                        delay,
-                    )
-                    await asyncio.sleep(delay)
-                    continue
-                if response.status != _HTTP_OK:
-                    return []
-                data = await response.json(content_type=None)
-                items = data.get("items") if isinstance(data, dict) else None
-                return items if isinstance(items, list) else []
-        except (aiohttp.ClientError, TimeoutError) as exc:
-            logger.debug("[steam.search_store] %r failed: %s", term, exc)
-            return []
-    return []
+    data = await get_json_with_backoff(
+        sess,
+        STEAM_STORE_SEARCH_URL,
+        params=params,
+        timeout_s=timeout_s,
+        log_tag=f"[steam.search_store] {term!r}",
+        gate=STEAM_STORE_GATE,
+    )
+    items = data.get("items") if isinstance(data, dict) else None
+    return items if isinstance(items, list) else []
 
 
 def _pick_store_match(
