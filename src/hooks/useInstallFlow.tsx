@@ -20,6 +20,7 @@ import { useStorageConfig } from "./useStorageConfig";
 import { GOGLanguageSelectModal } from "../components/modals/GOGLanguageSelectModal";
 import { pickStorageForInstall } from "../components/modals/PickStorageModal";
 import type { Game, Result } from "../types/api";
+import type { StorageLocationsResponse } from "../types/downloads";
 
 /** Steam bridge shape — same minimal surface useGameActions
  *  consumes. */
@@ -56,6 +57,9 @@ export function useInstallFlow(bridge: SteamBridgeShape): UseInstallFlowResult {
   const getGogLangs = useRPC<[string], GogLanguagesResponse>(
     rpcRoutes.getGogGameLanguages,
   );
+  const getStorageLocations = useRPC<[], StorageLocationsResponse>(
+    rpcRoutes.getStorageLocations,
+  );
   const { locations, defaultLocation, setCustomPath } = useStorageConfig();
   const [working, setWorking] = useState(false);
 
@@ -63,12 +67,27 @@ export function useInstallFlow(bridge: SteamBridgeShape): UseInstallFlowResult {
     async (game: Game): Promise<Result | null> => {
       setWorking(true);
       try {
+        // `useStorageConfig` fetches once at row-mount time, which can be
+        // long before the user opens this picker (e.g. an SD card inserted
+        // after the library grid rendered). Re-fetch here so newly
+        // inserted/removed external drives are always reflected; fall back
+        // to the cached values on failure rather than blocking the install.
+        let currentLocations = locations;
+        let currentDefault = defaultLocation;
+        try {
+          const fresh = await getStorageLocations();
+          currentLocations = fresh.locations;
+          currentDefault = fresh.default;
+        } catch (e) {
+          console.log("[useInstallFlow] storage location refresh failed, using cached list", e);
+        }
+
         console.log("[useInstallFlow] opening storage picker for", game.title);
         const picked = await pickStorageForInstall(
           game.title,
           game.size_bytes,
-          locations,
-          defaultLocation,
+          currentLocations,
+          currentDefault,
           setCustomPath,
         );
         if (!picked) {
@@ -115,7 +134,7 @@ export function useInstallFlow(bridge: SteamBridgeShape): UseInstallFlowResult {
         setWorking(false);
       }
     },
-    [actions, getGogLangs, locations, defaultLocation, setCustomPath],
+    [actions, getGogLangs, getStorageLocations, locations, defaultLocation, setCustomPath],
   );
 
   return { isWorking: working || actions.isWorking, start };
