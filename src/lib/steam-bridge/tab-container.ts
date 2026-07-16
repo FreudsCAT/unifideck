@@ -128,13 +128,19 @@ export function getHiddenDefaultTabs(): string[] {
 
 export const HIDDEN_DEFAULT_TABS = DEFAULT_TABS_TO_HIDE;
 
+/** Steam's collections app filter (the HW-compat/tools dropdown).
+ *  Steam client builds reorder and reshape the internals this comes
+ *  from, so callers must treat it as possibly missing and always
+ *  feature-detect ``Matches`` before invoking it. */
+export interface SteamAppFilter {
+  Matches: (a: SteamAppOverview) => boolean;
+}
+
 interface SteamCollectionLike {
   AsDeletableCollection: () => null;
   AsDragDropCollection: () => null;
   AsEditableCollection: () => null;
-  GetAppCountWithToolsFilter: (appFilter: {
-    Matches: (a: SteamAppOverview) => boolean;
-  }) => number;
+  GetAppCountWithToolsFilter: (appFilter: SteamAppFilter | undefined) => number;
   bAllowsDragAndDrop: boolean;
   bIsDeletable: boolean;
   bIsDynamic: boolean;
@@ -195,8 +201,22 @@ export class UnifideckTabContainer {
       AsDeletableCollection: () => null,
       AsDragDropCollection: () => null,
       AsEditableCollection: () => null,
-      GetAppCountWithToolsFilter: (appFilter) =>
-        this.collection.visibleApps.filter((a) => appFilter.Matches(a)).length,
+      // A throw here propagates through Steam's tab renderer and
+      // error-boundaries the ENTIRE library, so this must never
+      // trust the filter's shape (Steam Beta 2026-07 moved it and
+      // handed us a collection object instead). Unfiltered count is
+      // the graceful fallback — visibleApps is already tab-filtered.
+      GetAppCountWithToolsFilter: (appFilter) => {
+        if (typeof appFilter?.Matches !== "function") {
+          return this.collection.visibleApps.length;
+        }
+        try {
+          return this.collection.visibleApps.filter((a) => appFilter.Matches(a))
+            .length;
+        } catch {
+          return this.collection.visibleApps.length;
+        }
+      },
       bAllowsDragAndDrop: false,
       bIsDeletable: false,
       bIsDynamic: false,
@@ -239,7 +259,7 @@ export class UnifideckTabContainer {
     TabAppGrid: React.ComponentType<Record<string, unknown>>,
     TabContext: React.Context<{ label: string }> | null,
     sortingProps: Record<string, unknown>,
-    collectionAppFilter: { Matches: (a: SteamAppOverview) => boolean },
+    collectionAppFilter: SteamAppFilter | undefined,
     templateFooter?: Record<string, unknown>,
   ): SteamTab | null {
     this.buildCollection();
@@ -263,12 +283,23 @@ export class UnifideckTabContainer {
       // as no-op entries that are skipped in the nav strip.
       footer: { ...(templateFooter ?? {}) },
       content,
-      renderTabAddon: () =>
-        React.createElement(
+      // Steam invokes this on every tab-strip render; any throw
+      // escapes into Steam's library error boundary, so the count
+      // is computed defensively no matter what shape Steam hands us.
+      renderTabAddon: () => {
+        let count: number;
+        try {
+          count =
+            this.collection.GetAppCountWithToolsFilter(collectionAppFilter);
+        } catch {
+          count = this.collection.visibleApps.length;
+        }
+        return React.createElement(
           "span",
           { className: gamepadTabbedPageClasses?.TabCount ?? "" },
-          this.collection.GetAppCountWithToolsFilter(collectionAppFilter),
-        ),
+          count,
+        );
+      },
     };
   }
 }

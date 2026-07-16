@@ -25,8 +25,8 @@ import {
   tabManager,
   getHiddenDefaultTabs,
   isTabMasterInstalled,
+  type SteamAppFilter,
   type SteamTab,
-  type UnifideckTabContainer,
 } from "./tab-container";
 import type { SteamBridge, RouterPatchHandle } from "./SteamBridge";
 
@@ -105,6 +105,33 @@ function logBailOnce(reason: string, extra?: unknown): void {
   console.warn(`[Unifideck Library] spliceTabs bailed: ${reason}`, extra ?? "");
 }
 
+function isAppFilter(v: unknown): v is SteamAppFilter {
+  return (
+    typeof v === "object" &&
+    v !== null &&
+    typeof (v as SteamAppFilter).Matches === "function"
+  );
+}
+
+/** Locate Steam's collections app filter in the tabs useMemo deps.
+ *  Matched by shape, never by position: Steam reorders this deps
+ *  array across client builds (the 2026-07 beta inserted a dep,
+ *  shifting the filter from index 6 to 7 and putting a collection —
+ *  no ``Matches`` — where we used to read the filter). The filter is
+ *  the only dep with a callable ``Matches``. */
+function resolveAppFilter(deps: unknown[]): SteamAppFilter | undefined {
+  const found = deps.find(isAppFilter);
+  if (!found && !loggedBailReasons.has("app-filter-missing")) {
+    loggedBailReasons.add("app-filter-missing");
+    console.warn(
+      "[Unifideck Library] collections app filter not found in useMemo deps;" +
+        " tab counts fall back to unfiltered",
+      deps.map((d) => typeof d),
+    );
+  }
+  return found;
+}
+
 function spliceTabs(result: unknown, deps: unknown[]): unknown {
   if (!Array.isArray(result)) {
     logBailOnce("result is not an array", result);
@@ -129,9 +156,7 @@ function spliceTabs(result: unknown, deps: unknown[]): unknown {
     unknown,
   ];
   const sortingProps = { eSortBy, setSortBy, showSortingContextMenu };
-  const collectionsAppFilterGamepad = deps[6] as Parameters<
-    UnifideckTabContainer["getActualTab"]
-  >[3];
+  const collectionsAppFilterGamepad = resolveAppFilter(deps);
 
   const template = shape.tabs.find((t) => t.id === "AllGames");
   if (!template) {
