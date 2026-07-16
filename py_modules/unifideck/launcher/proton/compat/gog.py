@@ -210,14 +210,26 @@ def _install_language(work_dir: Path) -> str:
     return ""
 
 
-async def _run_umu_exe(plan: ProtonLaunchPlan, exe_path: Path) -> int:
-    """Run a Windows exe through umu (shared by primary + fallback)."""
+async def _run_umu_exe(
+    plan: ProtonLaunchPlan, exe_path: Path, *, max_attempts: int = 2,
+) -> int:
+    """Run a Windows exe through umu (shared by primary + fallback).
+
+    ``max_attempts`` is the umu-level retry count for THIS exe. The
+    primary exe keeps the default (2); the launcher-stub fallback in
+    :func:`_run_gog_with_fallback` passes 1, because that fallback is
+    itself a higher-level retry (a *different* exe) — running a full
+    2-attempt umu retry on it too made one Play press fire the retry
+    toast (and, for corruption codes, wipe the shared runtime cache) up
+    to 4× (2 primary + 2 fallback). One attempt on the fallback caps it.
+    """
     cwd = exe_path.parent if exe_path.parent.is_dir() else None
     argv: list[str] = list(plan.state.wrappers)
     argv.extend([str(plan.python_bin), str(plan.umu_wrapper), str(exe_path)])
     argv.extend(plan.state.game_args)
     return await run_umu_with_retry(
         argv, env=plan.env, cwd=cwd, on_start=plan.on_process_start,
+        max_attempts=max_attempts,
     )
 
 
@@ -285,7 +297,7 @@ async def _run_gog_with_fallback(
                     "[compat.gog] launcher stub exited in %ds (rc=%d), "
                     "retrying game exe: %s", int(elapsed), rc, fallback,
                 )
-                rc = await _run_umu_exe(plan, Path(fallback))
+                rc = await _run_umu_exe(plan, Path(fallback), max_attempts=1)
         return rc
     finally:
         if comet is not None:

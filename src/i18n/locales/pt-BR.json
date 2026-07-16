@@ -273,6 +273,7 @@
     "unifideck": "Unifideck:",
     "launcher": {
       "networkError": "Erro de Rede",
+      "launchRetry": "Tentando iniciar novamente",
       "retryingUmu": "Tentando novamente o UMU em {{seconds}}s (tentativa {{attempt}}/{{max}})...",
       "protonUpgrade": "Upgrade do Proton",
       "resettingPrefix": "Redefinindo o prefixo para {{version}}...",

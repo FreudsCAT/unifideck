@@ -281,6 +281,7 @@
     "unifideck": "Unifideck:",
     "launcher": {
       "networkError": "Network Error",
+      "launchRetry": "Retrying Launch",
       "retryingUmu": "Retrying UMU in {{seconds}}s (attempt {{attempt}}/{{max}})...",
       "protonUpgrade": "Proton Upgrade",
       "resettingPrefix": "Resetting prefix for {{version}}...",

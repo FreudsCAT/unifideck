@@ -404,10 +404,11 @@ def test_umu_runtime_silent_when_steamrt4_present(tmp_path, monkeypatch):
 
 
 async def test_run_umu_with_retry_recovers_from_exit_127(tmp_path, monkeypatch):
-    """Regression: rc=127 (missing shared library / exec failure — the
-    exact symptom of a corrupted Steam Runtime cache) must trigger the
-    same wipe-and-retry recovery as the existing 2/74 codes, not just
-    give up on the first attempt.
+    """Regression (refined by UD-022): rc=127 is still *recoverable* — the
+    retry loop tries a second time rather than giving up on attempt 1 — but
+    it must NOT wipe the shared steamrt runtime cache. 127 is exec/command-
+    not-found, not a runtime-corruption signal; only 2/74 justify the
+    multi-hundred-MB shared-cache nuke. See ``_RUNTIME_CORRUPTION_CODES``.
     """
     from unifideck.launcher.proton.infrastructure import umu_runtime
 
@@ -427,8 +428,8 @@ async def test_run_umu_with_retry_recovers_from_exit_127(tmp_path, monkeypatch):
     rc = await umu_runtime.run_umu_with_retry([str(script)], max_attempts=2)
 
     assert rc == 0
-    assert counter.read_text().strip() == "2"
-    cleanup.assert_called_once()
+    assert counter.read_text().strip() == "2"  # retried once → recovered
+    cleanup.assert_not_called()  # 127 must NOT nuke the shared runtime cache
 
 
 def test_cleanup_umu_runtime_cache_wipes_steamrt4(tmp_path, monkeypatch):

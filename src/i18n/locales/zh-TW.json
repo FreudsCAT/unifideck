@@ -273,6 +273,7 @@
     "unifideck": "Unifideck:",
     "launcher": {
       "networkError": "網路錯誤",
+      "launchRetry": "正在重試啟動",
       "retryingUmu": "{{seconds}} 秒後重試 UMU (嘗試次數 {{attempt}}/{{max}})...",
       "protonUpgrade": "Proton 升級",
       "resettingPrefix": "正在為 {{version}} 重設環境...",

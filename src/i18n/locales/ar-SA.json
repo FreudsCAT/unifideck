@@ -273,6 +273,7 @@
     "unifideck": "Unifideck:",
     "launcher": {
       "networkError": "خطأ في الشبكة",
+      "launchRetry": "إعادة محاولة التشغيل",
       "retryingUmu": "إعادة محاولة تشغيل UMU خلال {{seconds}} ثوانٍ (محاولة {{attempt}}/{{max}})...",
       "protonUpgrade": "تحديث Proton",
       "resettingPrefix": "جاري إعادة تعيين بيئة التشغيل لـ {{version}}...",

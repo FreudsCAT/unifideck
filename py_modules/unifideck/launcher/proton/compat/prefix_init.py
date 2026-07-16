@@ -410,7 +410,7 @@ async def _run_createprefix_with_retry(
         if attempt < _CREATEPREFIX_ATTEMPTS:
             launcher_toast(
                 "toasts.launcher.retryingUmu",
-                i18n_title_key="toasts.launcher.networkError",
+                i18n_title_key="toasts.launcher.launchRetry",
                 i18n_params={
                     "seconds": wait,
                     "attempt": attempt + 1,

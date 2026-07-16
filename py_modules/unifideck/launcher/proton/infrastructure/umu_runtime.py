@@ -29,6 +29,15 @@ _LAUNCHES_DIR = Path("~/.local/share/unifideck/launches").expanduser()
 # regardless of which runtime a given Proton build actually uses.
 UMU_RUNTIME_VARIANTS = ("steamrt2", "steamrt3", "steamrt4")
 _RECOVERABLE_CODES = {2, 74, 127}
+# Recoverable codes whose likely cause is a corrupt/incomplete steamrt
+# runtime bootstrap — the only ones that justify wiping the *shared*
+# runtime cache (hundreds of MB, re-downloaded on the next launch of
+# ANY game) before a retry. 127 (command-not-found) is recoverable but
+# is NOT a runtime-corruption signal, so it retries WITHOUT the
+# expensive nuke. Wiping the shared cache on every recoverable failure
+# was both wasteful and — paired with the old "Network Error" title —
+# actively misleading about the real failure.
+_RUNTIME_CORRUPTION_CODES = {2, 74}
 # Returned when a bounded umu step is force-killed for exceeding its
 # timeout. Never in ``_RECOVERABLE_CODES`` on purpose: a hung
 # Proton/Wine boot (e.g. a broken auto-updated Proton-Experimental
@@ -170,13 +179,14 @@ async def run_umu_with_retry(
             if rc == 0:
                 return 0
             if rc in _RECOVERABLE_CODES and attempt < max_attempts:
+                wipe = rc in _RUNTIME_CORRUPTION_CODES
                 logger.warning(
-                    "[launcher.umu] recoverable rc=%d, wiping cache + retry",
-                    rc,
+                    "[launcher.umu] recoverable rc=%d, retry (wipe_cache=%s)",
+                    rc, wipe,
                 )
                 launcher_toast(
                     "toasts.launcher.retryingUmu",
-                    i18n_title_key="toasts.launcher.networkError",
+                    i18n_title_key="toasts.launcher.launchRetry",
                     i18n_params={
                         "seconds": _RETRY_BACKOFF_SECONDS,
                         "attempt": attempt + 1,
@@ -184,7 +194,8 @@ async def run_umu_with_retry(
                     },
                     severity="warning",
                 )
-                cleanup_umu_runtime_cache()
+                if wipe:
+                    cleanup_umu_runtime_cache()
                 await asyncio.sleep(_RETRY_BACKOFF_SECONDS)
                 continue
             return rc

@@ -273,6 +273,7 @@
     "unifideck": "Unifideck:",
     "launcher": {
       "networkError": "Ağ Hatası",
+      "launchRetry": "Başlatma yeniden deneniyor",
       "retryingUmu": "{{seconds}} saniye içinde UMU yeniden denenecek (deneme {{attempt}}/{{max}})...",
       "protonUpgrade": "Proton Güncellemesi",
       "resettingPrefix": "{{version}} için önek sıfırlanıyor...",

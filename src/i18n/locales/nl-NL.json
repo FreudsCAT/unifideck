@@ -273,6 +273,7 @@
     "unifideck": "Unifideck:",
     "launcher": {
       "networkError": "Netwerkfout",
+      "launchRetry": "Opnieuw starten",
       "retryingUmu": "UMU opnieuw proberen in {{seconds}}s (poging {{attempt}}/{{max}})...",
       "protonUpgrade": "Proton-upgrade",
       "resettingPrefix": "Prefix resetten voor {{version}}...",
