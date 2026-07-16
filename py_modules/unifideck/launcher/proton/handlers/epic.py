@@ -14,10 +14,29 @@ from unifideck.launcher.types.errors import GameFailedError, UmuRuntimeError
 logger = logging.getLogger(__name__)
 
 
+def _rockstar_play_exe_rel(plan: ProtonLaunchPlan) -> str | None:
+    """The Rockstar Play-launcher exe (relative) for RDR2/GTA5, else None.
+
+    Used as the default ``--override-exe`` for these titles so legendary
+    launches ``PlayRDR2.exe``/``PlayGTAV.exe`` directly instead of the
+    Epic-launcher stub. A user's explicit "Change executable" still wins
+    (checked first in ``_resolve_exe_override``).
+    """
+    from unifideck.launcher.proton.fixes.game_fixes import (
+        ROCKSTAR_PLAY_EXES,
+        is_rockstar_egs,
+    )
+    if not is_rockstar_egs(plan.state.umu_id):
+        return None
+    return ROCKSTAR_PLAY_EXES.get(plan.state.umu_id or "")
+
+
 def _resolve_exe_override(plan: ProtonLaunchPlan) -> Path | None:
     """Resolve exe override."""
     from unifideck.launcher.proton.fixes.game_fixes import get_exe_override
-    rel = get_exe_override(plan.context.game_id)
+    # User "Change executable" / curated MANUAL_FIXES wins; otherwise the
+    # Rockstar Play exe for RDR2/GTA5 (None for every other Epic game).
+    rel = get_exe_override(plan.context.game_id) or _rockstar_play_exe_rel(plan)
     if not rel:
         return None
     installed = Path(
@@ -63,6 +82,13 @@ async def epic_launch(plan: ProtonLaunchPlan) -> int:
     )
     cleanup_epic_artifacts(plan)
     await _run_epic_prerequisites(plan)
+    # Rockstar-on-Epic (RDR2/GTA5) only: fake EpicGamesLauncher.exe + the
+    # com.epicgames.launcher protocol handler. No-op for every other Epic
+    # title (gated on the umu id), so the standard flow is unchanged.
+    from unifideck.launcher.proton.compat.rockstar_egs import (
+        apply_rockstar_egs_setup,
+    )
+    apply_rockstar_egs_setup(plan)
     legendary_bin, env = await _prepare_epic_env(plan)
     argv = _build_legendary_argv(plan, legendary_bin)
     rc = await run_umu_with_retry(

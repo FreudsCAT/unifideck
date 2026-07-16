@@ -58,6 +58,49 @@ MANUAL_FIXES: dict[str, GameFix] = {
         source="manual",
     ),
 }
+# ── Rockstar-on-Epic games (RDR2 / GTA5) ──────────────────────────
+# These Epic titles boot the Rockstar Games Launcher, which then runs
+# the real game exe (``PlayRDR2.exe`` / ``PlayGTAV.exe``). Getting them
+# to launch under Proton/umu needs a bundle of Rockstar-specific
+# handling that would REGRESS ordinary Epic titles if applied globally:
+#   * STORE=egs (not "none") so umu's protonfixes apply the egs profile;
+#   * WINEDLLOVERRIDES=vulkan-1=n,b (the documented RDR2 launch fix);
+#   * KEEP the ``com.epicgames.launcher`` registry handler (epic_cleanup
+#     strips it for every other Epic game) + a fake EpicGamesLauncher.exe
+#     stub beside the game exe, so the game's ``start EpicGamesLauncher.exe
+#     PlayRDR2.exe`` handoff resolves without the real Epic launcher.
+# Every one of those is gated behind :func:`is_rockstar_egs` so a normal
+# Epic launch is byte-for-byte unchanged. Keyed by the umu-database
+# ``umu_id`` (resolved in ``core.proton_prepare`` from the Epic catalog
+# id) — the one identifier stable across accounts, unlike the per-account
+# 32-hex Epic app name. Online play never works (BattlEye has no Linux
+# support); this is story-mode only.
+ROCKSTAR_EGS_UMU_IDS: frozenset[str] = frozenset({
+    "umu-1174180",  # Red Dead Redemption 2
+    "umu-271590",   # Grand Theft Auto V
+})
+# The game's own Play-launcher exe, relative to the install dir, that the
+# Rockstar bootstrap ultimately runs. Used as the ``--override-exe`` target
+# so legendary launches it directly rather than the Epic-launcher stub.
+ROCKSTAR_PLAY_EXES: dict[str, str] = {
+    "umu-1174180": "PlayRDR2.exe",
+    "umu-271590": "PlayGTAV.exe",
+}
+# vulkan-1=n,b = native-then-builtin: lets the game's own vulkan-1.dll
+# load first. Heroic's documented RDR2/GTA5 fix for the launch failure.
+ROCKSTAR_WINEDLLOVERRIDES = "vulkan-1=n,b"
+
+
+def is_rockstar_egs(umu_id: str | None) -> bool:
+    """True for the Rockstar-on-Epic titles that need the special flow.
+
+    ``umu_id`` is the value ``core.proton_prepare`` resolved via the
+    umu-database lookup (e.g. ``umu-1174180``). ``None``/unknown → False,
+    so the ordinary Epic path is taken unchanged.
+    """
+    return bool(umu_id) and umu_id in ROCKSTAR_EGS_UMU_IDS
+
+
 _UMU_DATABASE_URL_FORMATS = [
     "https://raw.githubusercontent.com/Open-Wine-Components/"
     "umu-database/main/umu-egs-{game_id}.json",

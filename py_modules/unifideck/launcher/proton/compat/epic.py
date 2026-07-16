@@ -75,7 +75,14 @@ def build_legendary_env(
     authenticated legendary config (auth + EOS overlay registry).
     """
     env = dict(plan.env)
-    env["STORE"] = "none"
+    # STORE=none keeps umu from applying an egs profile to the legendary
+    # wrapper chain — correct for every Epic title EXCEPT Rockstar-on-Epic
+    # (RDR2/GTA5), which needs the egs profile umu-run picks up (set in
+    # core.proton_prepare). Preserve whatever proton_prepare chose for
+    # those; force "none" for all others.
+    from unifideck.launcher.proton.fixes.game_fixes import is_rockstar_egs
+    if not is_rockstar_egs(plan.state.umu_id):
+        env["STORE"] = "none"
     env.pop("LEGENDARY_WRAPPER_EXE", None)
     env["HEROIC_APP_RUNNER"] = "legendary"
     if config_path:

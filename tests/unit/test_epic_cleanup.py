@@ -19,7 +19,12 @@ from unifideck.launcher.proton.compat import epic_cleanup as ec
 
 
 def _plan(prefix_path: Path):
-    return types.SimpleNamespace(prefix_path=prefix_path)
+    # state.umu_id=None → not a Rockstar-EGS game, so full cleanup runs
+    # (the behavior these tests exercise).
+    return types.SimpleNamespace(
+        prefix_path=prefix_path,
+        state=types.SimpleNamespace(umu_id=None),
+    )
 
 
 def _poisoned_reg(path: Path) -> str:

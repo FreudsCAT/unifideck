@@ -24,7 +24,7 @@ from unifideck.launcher.proton.infrastructure.core import ProtonLaunchPlan
 def _plan() -> ProtonLaunchPlan:
     return ProtonLaunchPlan(
         context=types.SimpleNamespace(game_id="abc123", store="epic"),
-        state=types.SimpleNamespace(wrappers=[], game_args=[]),
+        state=types.SimpleNamespace(wrappers=[], game_args=[], umu_id=None),
         python_bin=Path("/usr/bin/python3"),
         umu_wrapper=Path("/plugin/bin/umu/umu/umu-run"),
         prefix_path=Path("/tmp/prefix"),  # noqa: S108

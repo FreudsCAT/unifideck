@@ -25,7 +25,7 @@ from unifideck.launcher.proton.infrastructure import core
 from unifideck.launcher.types.context import LaunchContext, RuntimeState
 
 
-def _prepare(tmp_path, monkeypatch, store):
+def _prepare(tmp_path, monkeypatch, store, umu_id=None):
     ctx = LaunchContext(
         store=store,
         game_id="game1",
@@ -36,7 +36,7 @@ def _prepare(tmp_path, monkeypatch, store):
     prefix = tmp_path / "prefix"
     prefix.mkdir()
     monkeypatch.setattr(core, "_resolve_prefix", lambda c: prefix)
-    monkeypatch.setattr(core, "_lookup_umu_id", lambda c, s, p: None)
+    monkeypatch.setattr(core, "_lookup_umu_id", lambda c, s, p: umu_id)
     monkeypatch.setattr(
         core, "_locate_umu_wrapper", lambda p, d: tmp_path / "umu-run",
     )
@@ -63,3 +63,36 @@ def test_gog_launch_keeps_real_store(tmp_path, monkeypatch):
 def test_ubisoft_launch_keeps_real_store(tmp_path, monkeypatch):
     plan = _prepare(tmp_path, monkeypatch, "ubisoft")
     assert plan.env["STORE"] == "ubisoft"
+
+
+# ── Rockstar-on-Epic (RDR2/GTA5) — the one Epic case wanting STORE=egs ──
+
+def test_ordinary_epic_game_unchanged(tmp_path, monkeypatch):
+    """A non-Rockstar Epic umu id must NOT trigger any Rockstar handling.
+
+    Regression guard: STORE stays "none" and no WINEDLLOVERRIDES is added.
+    """
+    plan = _prepare(tmp_path, monkeypatch, "epic", umu_id="umu-999999")
+    assert plan.env["STORE"] == "none"
+    assert "WINEDLLOVERRIDES" not in plan.env
+
+
+def test_rockstar_rdr2_gets_egs_and_dlloverride(tmp_path, monkeypatch):
+    plan = _prepare(tmp_path, monkeypatch, "epic", umu_id="umu-1174180")
+    assert plan.env["STORE"] == "egs"
+    assert plan.env["WINEDLLOVERRIDES"] == "vulkan-1=n,b"
+
+
+def test_rockstar_gta5_gets_egs_and_dlloverride(tmp_path, monkeypatch):
+    plan = _prepare(tmp_path, monkeypatch, "epic", umu_id="umu-271590")
+    assert plan.env["STORE"] == "egs"
+    assert plan.env["WINEDLLOVERRIDES"] == "vulkan-1=n,b"
+
+
+def test_rockstar_umu_id_on_non_epic_store_is_not_special(tmp_path, monkeypatch):
+    """The gate is store==epic AND rockstar umu id — a GOG game that
+    somehow resolved a Rockstar umu id must keep its own store profile.
+    """
+    plan = _prepare(tmp_path, monkeypatch, "gog", umu_id="umu-1174180")
+    assert plan.env["STORE"] == "gog"
+    assert "WINEDLLOVERRIDES" not in plan.env

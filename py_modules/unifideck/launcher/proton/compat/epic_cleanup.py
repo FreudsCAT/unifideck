@@ -131,7 +131,19 @@ def cleanup_epic_artifacts(plan: ProtonLaunchPlan) -> None:
     than the prefix root directly — resolve through the same helpers
     ``prefix_init.py`` uses, or this silently inspects paths that never
     exist and never actually cleans anything.
+
+    Rockstar-on-Epic (RDR2/GTA5) is the exception: those games DEPEND on
+    the ``EpicGamesLauncher.exe`` stub + the ``com.epicgames.launcher``
+    registration to boot the Rockstar launcher, so this hygiene is
+    skipped entirely for them (it would delete exactly what they need).
     """
+    from unifideck.launcher.proton.fixes.game_fixes import is_rockstar_egs
+    if is_rockstar_egs(plan.state.umu_id):
+        logger.info(
+            "[epic_cleanup] Rockstar-EGS (%s): skipping launcher-stub/"
+            "registry cleanup (the game needs them)", plan.state.umu_id,
+        )
+        return
     for prefix in _collect_prefix_candidates(plan):
         drive_c = resolve_drive_c(prefix)
         if drive_c is not None:
