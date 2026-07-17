@@ -52,7 +52,7 @@ def gog_harness(monkeypatch):
     calls: list[tuple[str, int]] = []
     state = {"codes": [], "clock": [0.0, 0.0], "fallback": None}
 
-    async def _spy_run_umu_exe(_plan, exe_path, *, max_attempts=2):
+    async def _spy_run_umu_exe(_plan, exe_path, _work_dir, *, max_attempts=2):
         calls.append((Path(exe_path).name, max_attempts))
         return state["codes"].pop(0)
 
