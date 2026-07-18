@@ -1,16 +1,28 @@
 """services/launcher/helpers.py — Technical primitives for launch flows.
 
-6 functions supporting the public orchestrators
-(``launch_windows`` / ``launch_native``). All take a
+Functions supporting the public orchestrators
+(``launch_windows`` / ``launch_native``). Most take a
 ``LauncherService`` as first arg (``svc``). Byte-identical
 behaviour to the pre-extraction versions — split out for volumetry.
+
+``build_native_argv``/``prepare_native_env``/``restore_steam_env``/
+``find_steam_runtime`` were ported in from ``launcher/flows/native.py``
+(2026-07) — that module's ``native_launch`` was never actually wired
+into the live dispatch chain (``LauncherService`` calls
+``orchestrator.launch_native`` instead), so its DOSBox-dispatch,
+chmod, Steam Runtime wrapping, and Steam-env restore had silently
+never run. Ported here rather than reconnecting the dead module, to
+avoid leaving two parallel native-launch implementations again.
 """
 from __future__ import annotations
 
+import contextlib
 import functools
 import logging
+import os
 import sys
 import time
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -19,6 +31,167 @@ if TYPE_CHECKING:
     from .service import LauncherService
 
 logger = logging.getLogger(__name__)
+
+_STEAM_RUNTIME_CANDIDATES = (
+    "~/.steam/steam/ubuntu12_32/steam-runtime/run.sh",
+    "~/.local/share/Steam/ubuntu12_32/steam-runtime/run.sh",
+)
+
+
+def find_steam_runtime() -> Path | None:
+    """Return the Steam Runtime's ``run.sh`` wrapper, or ``None``."""
+    for candidate in _STEAM_RUNTIME_CANDIDATES:
+        path = Path(candidate).expanduser()
+        if path.is_file():
+            return path
+    return None
+
+
+def restore_steam_env(env: dict[str, str]) -> None:
+    """Restore Steam Overlay/Input/LD_PRELOAD for a native Linux launch.
+
+    ``bin/unifideck-launcher`` unconditionally strips ``LD_PRELOAD`` at
+    process start (needed for the Proton/pressure-vessel path). Native
+    Linux games run directly on the host with no container involved,
+    so unlike Proton there's no host/container library mismatch to
+    worry about — and without Steam's overlay preload restored,
+    Steam/gamescope has no in-process hook into the game to know it's
+    running: Gaming Mode's loading transition never dismisses and
+    Steam Input never attaches (the retired bash launcher's equivalent
+    called this "critical for controller support").
+    """
+    steam_env = Path("~/.steam/steam.env").expanduser()
+    if not steam_env.is_file():
+        return
+    with contextlib.suppress(OSError):
+        for raw_line in steam_env.read_text(
+            encoding="utf-8", errors="replace",
+        ).splitlines():
+            line = raw_line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, _, value = line.partition("=")
+            if key in ("STEAM_OVERLAY", "STEAM_INPUT", "LD_PRELOAD"):
+                env[key] = value
+
+
+def prepare_native_env(ctx: LaunchContext) -> dict[str, str]:
+    """Build the subprocess env for a native Linux launch.
+
+    ``unifideck-launcher`` (the process this runs inside) makes the
+    ``unifideck`` package importable purely via an in-process
+    ``sys.path.insert`` — it never sets ``PYTHONPATH``. That's invisible
+    to a *child* interpreter: when a GOG DOSBox title's argv re-invokes
+    ``python3 -m unifideck.launcher.proton.handlers.gog_linux_dosbox``
+    (see ``build_native_argv``), the child got a bare env with no
+    ``unifideck`` on its path and died with ``ModuleNotFoundError``
+    within milliseconds — silently, since nothing captured its stderr.
+    Prepending ``ctx.plugin_dir / "py_modules"`` to ``PYTHONPATH`` here
+    mirrors ``unifideck-launcher``'s own bootstrap so the child resolves
+    the package the same way the parent did.
+    """
+    env = dict(os.environ)
+    env.update(ctx.env_overrides)
+    restore_steam_env(env)
+    py_modules = str(ctx.plugin_dir / "py_modules")
+    existing = env.get("PYTHONPATH")
+    env["PYTHONPATH"] = f"{py_modules}:{existing}" if existing else py_modules
+    return env
+
+
+def _is_gog_dosbox_wrapper(ctx: LaunchContext) -> bool:
+    """Whether ``ctx`` is a GOG Linux-depot DOSBox title (``start.sh``)."""
+    return ctx.store == "gog" and ctx.exe_path.name == "start.sh"
+
+
+def build_native_argv(
+    ctx: LaunchContext, state: RuntimeState, exe_path: Path,
+) -> list[str]:
+    """Build the argv to spawn for a native Linux launch.
+
+    GOG's Linux DOSBox depots ship a ``start.sh`` that shells out to a
+    bundled DOSBox binary with the wrong (generic) invocation if exec'd
+    directly — route those through the purpose-built conf-aware
+    ``gog_linux_dosbox`` module instead. Every other native title is
+    wrapped with the Steam Runtime when present (matches the retired
+    bash launcher's behaviour), else exec'd directly.
+    """
+    argv: list[str] = list(state.wrappers)
+    if _is_gog_dosbox_wrapper(ctx):
+        logger.info("[Helpers] using GOG DOSBox wrapper module for %s", exe_path)
+        # ``sys.executable`` — the interpreter already running this code
+        # (whatever ``unifideck-launcher``'s shebang resolved) — not a
+        # bare "python3" looked up on PATH, which can resolve to a
+        # different/absent interpreter depending on the scrubbed launch
+        # env. The module is stdlib-only, so no ABI-matching concern
+        # like umu's cryptography/cffi dependency (see
+        # ``find_python_3_10_plus``) applies here.
+        argv.extend([
+            sys.executable, "-m",
+            "unifideck.launcher.proton.handlers.gog_linux_dosbox",
+            str(exe_path),
+        ])
+    else:
+        runtime = find_steam_runtime()
+        if runtime is not None:
+            logger.info("[Helpers] using Steam Runtime: %s", runtime)
+            argv.extend([str(runtime), str(exe_path)])
+        else:
+            logger.info("[Helpers] no Steam Runtime, direct exec")
+            argv.append(str(exe_path))
+    argv.extend(state.game_args)
+    return argv
+
+
+async def run_native_subprocess(
+    svc: LauncherService, ctx: LaunchContext, state: RuntimeState,
+) -> int:
+    """Set up and run a native Linux game's subprocess, returning its exit code.
+
+    Chmods the executable bit (GOG's Linux depots don't always ship
+    one set), builds the DOSBox-aware/Steam-Runtime-wrapped argv, and
+    restores the Steam Overlay/Input env before spawning — see
+    ``build_native_argv``/``prepare_native_env``.
+    """
+    import asyncio
+
+    try:
+        await asyncio.to_thread(ctx.exe_path.chmod, 0o755)
+    except OSError as e:
+        logger.debug("[Helpers] chmod 755 failed on %s: %s", ctx.exe_path, e)
+
+    env = prepare_native_env(ctx)
+    cmd = build_native_argv(ctx, state, ctx.exe_path)
+    logger.info("[Helpers] Spawning native launch: %s", cmd)
+
+    # The DOSBox wrapper is itself a Python subprocess that can fail
+    # before ever exec'ing the real game (bad PYTHONPATH, missing
+    # module) — capture its stderr so that class of failure is logged
+    # instead of vanishing silently, as it did the first time this path
+    # actually ran (see ``prepare_native_env``'s PYTHONPATH fix). Every
+    # other native title inherits the parent's stdout/stderr directly,
+    # unchanged, since some expect a real terminal (console output,
+    # audio subsystem probes).
+    capture_stderr = _is_gog_dosbox_wrapper(ctx)
+    proc = await asyncio.create_subprocess_exec(
+        *cmd,
+        cwd=str(ctx.work_dir),
+        env=env,
+        stderr=asyncio.subprocess.PIPE if capture_stderr else None,
+    )
+    svc._active_subprocess = proc
+    try:
+        if capture_stderr:
+            _, stderr = await proc.communicate()
+            if proc.returncode != 0 and stderr:
+                logger.warning(
+                    "[Helpers] DOSBox wrapper exited %s: %s",
+                    proc.returncode, stderr.decode(errors="replace").strip(),
+                )
+            return proc.returncode or 0
+        return await proc.wait()
+    finally:
+        svc._active_subprocess = None
 
 
 @functools.lru_cache(maxsize=1)

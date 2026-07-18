@@ -166,6 +166,29 @@ class UbisoftIdMap:
         """In cache."""
         return space_id in self._cache
 
+    def find_cached_entry_by_install_id(
+        self,
+        install_id: int | str,
+    ) -> dict[str, Any] | None:
+        """Reverse-lookup a previously-cached entry by its ``install_id``.
+
+        Fallback for when an owned ``install_id`` can't be named by the
+        community game-ID DB (see ``_LibraryFetcher._build_backfill_configs``):
+        if Unifideck has already identified this exact game in a prior
+        session — most commonly via local-binary detection, which finds
+        installed games the community DB has never heard of — reuse that
+        cached identity (name, ``space_id``, executable) instead of
+        dropping the game from the library. Returns ``None`` when no
+        cached entry has a matching, named ``install_id``.
+        """
+        target = str(install_id)
+        for space_id, entry in self._cache.items():
+            if str(entry.get("install_id", "")) == target and entry.get("name"):
+                result = dict(entry)
+                result["space_id"] = space_id
+                return result
+        return None
+
     def resolve_prefix_path(self, space_id: str) -> str | None:
         """Recorded absolute Wine-prefix path for a game, if any.
 

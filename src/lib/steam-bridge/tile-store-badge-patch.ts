@@ -32,7 +32,13 @@
  * which reads the real overview, is unaffected. `StoreBadge` returns
  * `null` on any error so it can never break the grid.
  */
-import { createElement, cloneElement, type FC, type ReactElement } from "react";
+import {
+  createElement,
+  cloneElement,
+  Fragment,
+  type FC,
+  type ReactElement,
+} from "react";
 import { findInReactTree } from "./react-tree";
 import { StoreIcon } from "../../components/shared/StoreIcon";
 import { getStoreForApp } from "../library-filters";
@@ -54,6 +60,18 @@ interface ReactMemoObject {
   $$typeof: symbol;
   type: TileRenderFn;
   __unifideckOrigType?: TileRenderFn;
+}
+/**
+ * `wrappedTileType` with its self-identification brand + a durable
+ * back-reference to the memo it's installed on. The brand lets install
+ * detect an already-wrapped memo (across plugin reloads, where the module
+ * singletons reset but the webpack memo persists); the back-reference lets
+ * the wrapper recover the true original at render time without depending on
+ * the mutable module-level `originalType`.
+ */
+interface WrappedTileFn extends TileRenderFn {
+  __unifideckWrapper?: true;
+  __unifideckMemo?: ReactMemoObject;
 }
 /** `C.$o` — the deck-compat badge. Pure fn (no hooks), safe to call. */
 type DeckCompatBadgeFn = (props: {
@@ -248,8 +266,44 @@ const StoreBadge: FC<{ category: number; store: StoreId }> = ({
 
 const BADGE_KEY = "unifideck-store-badge";
 
+/**
+ * Resolve the true original tile render fn at render time. The library
+ * `React.memo` is a webpack singleton that survives plugin reload, but our
+ * module-level `originalType` resets to `null` on every fresh module
+ * instance — so a wrapper installed by a prior instance would read a null
+ * `originalType` and crash. Recover from the durable stash on the memo
+ * itself first (survives reload), then the render-time `this`, then the
+ * module vars. Never return the wrapper itself (would recurse). Returns
+ * `null` only if nothing usable is found, in which case the caller renders
+ * an empty Fragment rather than crashing the whole grid.
+ */
+function resolveOriginal(self: unknown): TileRenderFn | null {
+  const candidates: Array<TileRenderFn | undefined> = [
+    (wrappedTileType as WrappedTileFn).__unifideckMemo?.__unifideckOrigType,
+    (self as ReactMemoObject | null | undefined)?.__unifideckOrigType,
+    originalType ?? undefined,
+    memoObject?.__unifideckOrigType,
+  ];
+  for (const c of candidates) {
+    if (typeof c === "function" && c !== (wrappedTileType as TileRenderFn)) {
+      return c;
+    }
+  }
+  return null;
+}
+
 function wrappedTileType(this: unknown, ...args: unknown[]): ReactElement {
-  const orig = originalType!;
+  const orig = resolveOriginal(this);
+  if (!orig) {
+    // Transient reload artifact: the wrapper is still installed on the
+    // shared memo but the original can't be recovered. Render nothing for
+    // this one tile — an empty Fragment is a valid element that can't trip
+    // the mobx-observer render machinery — instead of throwing to Steam's
+    // error boundary and taking down the entire library grid. Self-heals
+    // on the next full render once install rebinds the original.
+    warnOnce("original type unavailable; rendering empty tile");
+    return createElement(Fragment);
+  }
   const props = args[0] as TileProps | undefined;
   const app = props?.app;
   // Fast bail for native tiles — only READ BIsModOrShortcut, never write.
@@ -334,12 +388,30 @@ export function startTileStoreBadgePatch(): () => void {
       return () => {};
     }
     memoObject = memo;
-    // Recover the true original if a prior patch is still installed.
-    originalType =
-      typeof memo.__unifideckOrigType === "function"
-        ? memo.__unifideckOrigType
-        : memo.type;
+    // Recover the true original. `memo` is a webpack singleton that
+    // survives plugin reload, so on re-inject a prior module instance's
+    // wrapper may already sit in `memo.type` with the durable stash on
+    // `__unifideckOrigType`. Prefer the stash; never treat our own wrapper
+    // as the original (would recurse). If `memo.type` is a stale wrapper
+    // with no stash to recover from, we can't safely unwrap it — leave it
+    // and bail rather than double-wrapping or stashing the wrapper.
+    const currentType = memo.type as WrappedTileFn;
+    if (typeof memo.__unifideckOrigType === "function") {
+      originalType = memo.__unifideckOrigType;
+    } else if (!currentType.__unifideckWrapper) {
+      originalType = memo.type;
+    } else {
+      warnOnce("stale wrapper without recoverable original; leaving as-is");
+      // Rebind this module's back-reference so the live (stale) wrapper's
+      // resolver can still find whatever original a later install stashes.
+      (wrappedTileType as WrappedTileFn).__unifideckMemo = memo;
+      started = false;
+      return () => {};
+    }
     memo.__unifideckOrigType = originalType;
+    const wrapper = wrappedTileType as WrappedTileFn;
+    wrapper.__unifideckWrapper = true;
+    wrapper.__unifideckMemo = memo;
     memo.type = wrappedTileType;
     console.log("[Unifideck] Tile store-badge patch active");
   } catch (e) {
@@ -352,15 +424,29 @@ export function startTileStoreBadgePatch(): () => void {
 
 export function stopTileStoreBadgePatch(): void {
   if (!started) return;
+  const memo = memoObject;
+  const orig = originalType;
+  // Reset the module singletons first — teardown must be idempotent and a
+  // second call must not re-enter this body.
+  memoObject = null;
+  originalType = null;
+  started = false;
+  if (!memo || !orig) return;
   try {
-    if (memoObject && originalType) {
-      memoObject.type = originalType;
-      delete memoObject.__unifideckOrigType;
+    // Only restore OUR wrapper (never clobber a foreign patch that may have
+    // been layered on since install).
+    if (memo.type === (wrappedTileType as TileRenderFn)) {
+      memo.type = orig;
+    }
+    // Delete the recovery stash ONLY once the live slot is confirmed
+    // unwrapped. If the restore above threw or silently didn't take (e.g.
+    // `.type` became non-writable on a newer Steam build), leave
+    // `__unifideckOrigType` in place so the still-live wrapper's resolver
+    // can recover the original next render and a later install can rebind.
+    if (memo.type !== (wrappedTileType as TileRenderFn)) {
+      delete memo.__unifideckOrigType;
     }
   } catch (e) {
     console.warn("[Unifideck TileBadge] unpatch failed:", e);
   }
-  memoObject = null;
-  originalType = null;
-  started = false;
 }

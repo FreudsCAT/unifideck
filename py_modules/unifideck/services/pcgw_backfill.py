@@ -60,6 +60,9 @@ async def _run(service: MetadataService, games: list[Game]) -> None:
         *(_fill_one(service, sem, g) for g in games),
         return_exceptions=True,
     )
+    # Persist the loop's deferred writes in one go.
+    with contextlib.suppress(Exception):
+        service._cache.flush(_PCGW_NS)
     logger.info("[PCGWBackfill] save-location backfill complete (%d games)", len(games))
 
 
@@ -81,10 +84,10 @@ async def _fill_one(
                 config=getattr(service, "_config", None),
             )
             if result and result.get("save_locations"):
-                cache.set(_PCGW_NS, key, result)
+                cache.set(_PCGW_NS, key, result, flush=False)
             else:
                 # Negative sentinel: don't re-query a game PCGW doesn't cover.
-                cache.set(_PCGW_NS, key, {"_negative": True})
+                cache.set(_PCGW_NS, key, {"_negative": True}, flush=False)
 
 
 def _already_covered(cache: Any, key: str) -> bool:

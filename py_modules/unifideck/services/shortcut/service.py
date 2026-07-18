@@ -24,7 +24,13 @@ from unifideck.event_bus.event_bus_devex import auto_wire
 from .events import EventsMixin
 from .games_map import GameMapEntry, generate_app_id
 from .games_map_mixin import UNIFIDECK_TAG, _GamesMapMixin
-from .persistence import read_games_map, read_vdf, write_games_map, write_vdf
+from .persistence import (
+    merge_foreign_shortcuts,
+    read_games_map,
+    read_vdf,
+    write_games_map,
+    write_vdf,
+)
 from .vdf_shortcuts import _VdfShortcutsMixin
 
 if TYPE_CHECKING:
@@ -110,8 +116,24 @@ class ShortcutService(
         self._games_map_loaded = True
 
     async def _save_all(self) -> None:
-        """Persist shortcuts.vdf + games.map atomically."""
+        """Persist shortcuts.vdf + games.map atomically.
+
+        Before writing shortcuts.vdf, re-read the on-disk file and
+        merge back any *foreign* shortcut a concurrent writer added
+        since our in-memory snapshot was loaded — NonSteamLaunchers'
+        scanner service, Steam's shutdown flush, or a manual add. Our
+        write is a full read-modify-write of a long-lived cached dict
+        (``_shortcuts_loaded`` never re-reads), so without this merge
+        it clobbers those entries (UD-043 data loss). Ownership is the
+        launcher-``Exe`` gate reconcile already uses: our own entries
+        stay memory-authoritative (our deletes are honoured), only
+        foreign entries missing from memory are restored.
+        """
         if self._shortcuts_loaded:
+            disk = await read_vdf(self._shortcuts_path)
+            merge_foreign_shortcuts(
+                self._shortcuts, disk, self._launcher_path,
+            )
             await write_vdf(self._shortcuts_path, self._shortcuts)
 
         if self._games_map_loaded:

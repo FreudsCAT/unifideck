@@ -16,12 +16,26 @@
  */
 import { useCallback, useState } from "react";
 import { showModal } from "@decky/ui";
+import { useTranslation } from "react-i18next";
 import { useAuth } from "../contexts/AuthContext";
 import { useStores } from "../contexts/StoreContext";
 import { useToast } from "./useToast";
 import { AuthDispatcher } from "../services/auth/AuthDispatcher";
 import { ChromiumInstallModal } from "../components/modals/ChromiumInstallModal";
 import type { AuthResult, StoreId } from "../types/api";
+
+/**
+ * Backend auth-failure codes that mean "the network was down /
+ * flaky", not a real credential problem. Surfaced with an
+ * actionable "connect to Wi-Fi" message instead of the raw code.
+ * `token_exchange_network_error` — code captured but the token
+ * exchange failed after retries; `network_unreachable` — the
+ * browser never reached the login page (offline fast-fail).
+ */
+const NETWORK_ERROR_CODES = new Set([
+  "token_exchange_network_error",
+  "network_unreachable",
+]);
 
 /**
  * Shape returned by {@link useStoreAuth}. Bundles the
@@ -51,6 +65,7 @@ export function useStoreAuth(store: StoreId): UseStoreAuthResult {
   const auth = useAuth();
   const { stores } = useStores();
   const toast = useToast();
+  const { t } = useTranslation();
   const [busy, setBusy] = useState(false);
   const info = stores.find((s) => s.name === store) ?? null;
   const status = auth.statuses[store];
@@ -79,6 +94,11 @@ export function useStoreAuth(store: StoreId): UseStoreAuthResult {
       if (result.success) {
         auth.notifyConnected(store);
         toast.success(`${store} connected`);
+      } else if (result.error && NETWORK_ERROR_CODES.has(result.error)) {
+        toast.error(
+          t("auth.errors.networkTitle"),
+          t("auth.errors.networkBody"),
+        );
       } else {
         toast.error(`${store} sign-in failed`, result.error);
       }
@@ -90,7 +110,7 @@ export function useStoreAuth(store: StoreId): UseStoreAuthResult {
     } finally {
       setBusy(false);
     }
-  }, [store, toast, auth]);
+  }, [store, toast, auth, t]);
 
   const disconnect = useCallback(async () => {
     setBusy(true);

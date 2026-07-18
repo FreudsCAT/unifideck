@@ -37,10 +37,12 @@ from .browser_content import (
 )
 from .browser_types import AuthCaptureResult
 from .browser_url_parsing import (
+    build_network_unreachable_result,
     build_redirect_capture,
     build_url_code_capture,
     extract_code_from_url,
     extract_oauth_params,
+    is_navigation_error_url,
     is_oauth_relevant_url,
     match_redirect,
 )
@@ -54,6 +56,11 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_POLL_INTERVAL = 0.5  # seconds between tab list checks
 DEFAULT_OAUTH_TIMEOUT = 300  # seconds
+# How long the browser may sit on navigation-error page(s) with no
+# OAuth-relevant target before we declare the network unreachable and
+# fail fast. Long enough to ride out a transient blip / partial
+# recovery, far shorter than the 300s timeout.
+_OFFLINE_GRACE_SECONDS = 20.0
 
 
 # Public re-exports — keep the module's import surface stable
@@ -84,12 +91,17 @@ def _init_polling_state() -> dict[str, Any]:
       attempt per URL.
     * ``last_heartbeat`` — monotonic timestamp of the last
       heartbeat emit; the heartbeat helper resets it every 30s.
+    * ``error_since`` — monotonic timestamp when the browser first
+      landed on a navigation-error page with no OAuth-relevant
+      target in sight; ``None`` while things look healthy. Drives
+      the offline fast-fail grace window.
     """
     return {
         "monitored_urls": set(),
         "logged_urls": set(),
         "content_extract_first_attempt": set(),
         "last_heartbeat": 0.0,
+        "error_since": None,
     }
 
 
@@ -116,6 +128,39 @@ def _make_timeout_result(
         error="timeout",
         elapsed_seconds=elapsed,
     )
+
+
+def _check_offline_fastfail(
+    all_targets: list[dict[str, Any]],
+    state: dict[str, Any],
+    start: float,
+) -> AuthCaptureResult | None:
+    """Fail fast when the browser is stuck offline.
+
+    Returns a ``network_unreachable`` result once navigation-error
+    pages have persisted for ``_OFFLINE_GRACE_SECONDS`` with no
+    OAuth-relevant target seen; ``None`` otherwise (keep polling).
+
+    The grace window matters: the network may recover mid-flow (the
+    tester's log showed partial recovery after a restart), so a
+    single error page must not abort the flow. Any OAuth-relevant
+    target resets the timer — real progress means the network works
+    for the login domain.
+    """
+    urls = [t.get("url", "") for t in all_targets if t.get("url")]
+    if any(is_oauth_relevant_url(u) for u in urls):
+        state["error_since"] = None
+        return None
+    if not any(is_navigation_error_url(u) for u in urls):
+        state["error_since"] = None
+        return None
+    now = time.monotonic()
+    if state["error_since"] is None:
+        state["error_since"] = now
+        return None
+    if now - state["error_since"] >= _OFFLINE_GRACE_SECONDS:
+        return build_network_unreachable_result(start)
+    return None
 
 
 class OAuthBrowserMonitor:
@@ -201,6 +246,10 @@ class OAuthBrowserMonitor:
             )
             if fallback is not None:
                 return fallback
+
+            offline = _check_offline_fastfail(all_targets, state, start)
+            if offline is not None:
+                return offline
 
             await asyncio.sleep(self._poll_interval)
 

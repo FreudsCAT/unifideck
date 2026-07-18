@@ -12,6 +12,10 @@
       "disconnected": "Não conectado",
       "checking": "Verificando…",
       "error": "Erro — verifique os logs"
+    },
+    "errors": {
+      "networkTitle": "No internet connection",
+      "networkBody": "Connect to Wi-Fi and try again."
     }
   },
   "storage": {
@@ -155,7 +159,6 @@
     "syncing": "Sincronizando...",
     "cancelSync": "Cancelar Sincronização",
     "retryStatusCheck": "Repetir Verificação de Status",
-    "refreshStore": "Atualizar biblioteca desta loja",
     "gamesSynced": "{{synced}} / {{total}} jogos sincronizados",
     "artworkDownloaded": "{{synced}} / {{total}} artes de capa baixadas",
     "metadataExtracted": "{{synced}} / {{total}} registros de metadados extraídos",
@@ -273,6 +276,7 @@
     "unifideck": "Unifideck:",
     "launcher": {
       "networkError": "Erro de Rede",
+      "launchRetry": "Tentando iniciar novamente",
       "retryingUmu": "Tentando novamente o UMU em {{seconds}}s (tentativa {{attempt}}/{{max}})...",
       "protonUpgrade": "Upgrade do Proton",
       "resettingPrefix": "Redefinindo o prefixo para {{version}}...",
@@ -900,6 +904,7 @@
     "currentTitle": "Atual",
     "downgradeButton": "Downgrade para v{{version}}",
     "installFailedTitle": "Instalação Falhou",
+    "installTimeoutMessage": "Sem resposta do Decky Loader — a instalação pode ter travado ou falhado. Tente novamente.",
     "installedLabel": "instalado",
     "installingButton": "Instalando...",
     "installingTitle": "Instalando Plugin",
@@ -908,6 +913,8 @@
     "noBackend": "O backend do Decky não está disponível.",
     "noReleaseNotes": "Nenhuma nota de versão disponível.",
     "reinstallButton": "Reinstalar v{{version}}",
+    "refreshFailedMessage": "Não foi possível verificar as informações da última versão. Verifique sua conexão e tente novamente.",
+    "releaseGoneMessage": "Esta versão não está mais disponível. Verifique as atualizações e selecione novamente.",
     "releaseNotesButton": "Notas de Versão",
     "stageDownload": "Baixando…",
     "stageFinish": "Finalizando…",

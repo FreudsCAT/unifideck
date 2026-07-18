@@ -199,3 +199,93 @@ async def test_install_launch_missing_upc_raises(
     monkeypatch.setattr(h, "_clone_template_into", lambda _dir: False)
     with pytest.raises(GameFailedError, match=r"upc\.exe"):
         await h.ubisoft_install_launch(_plan(tmp_path))
+
+
+# ── pfx/-nested layout (the real bug) ──────────────────────────────
+#
+# Regression: umu/Proton nest the real drive_c under ``pfx/`` on a modern
+# prefix (confirmed live: the actual .upc-auth auth prefix on a test
+# device only had drive_c under pfx/, never at the root). Every upc.exe
+# lookup in this file combined ``prefix_root / "drive_c"`` directly,
+# so it silently never found an upc.exe that was genuinely present —
+# ``ubisoft_auth_launch`` raised GameFailedError with no further trace,
+# which surfaced to the user as "Sign In does nothing." Same bug class
+# already fixed for system.reg/user.reg in prefix_init.py/epic_cleanup.py
+# (see resolve_drive_c/resolve_registry_prefix in prefix_layout.py); this
+# file's several upc.exe lookups had never been ported to it.
+
+_UPC_REL_NESTED = Path("pfx") / _UPC_REL
+
+
+async def test_auth_launch_finds_upc_under_pfx_nesting(
+    tmp_path, monkeypatch, _quiet_toast,
+):
+    captured: dict[str, object] = {}
+
+    async def fake_umu(argv, *, env=None, on_start=None, **kw):
+        captured["argv"] = argv
+        return 0
+
+    monkeypatch.setattr(h, "run_umu_with_retry", fake_umu)
+    upc = tmp_path / _UPC_REL_NESTED
+    upc.parent.mkdir(parents=True, exist_ok=True)
+    upc.write_text("stub")
+
+    rc = await h.ubisoft_auth_launch(_plan(tmp_path))
+
+    assert rc == 0
+    assert captured["argv"] == [
+        "/usr/bin/python3",
+        "/plugin/bin/umu/umu/umu-run",
+        str(upc),
+    ]
+
+
+def test_find_upc_in_prefers_modern_pfx_layout(tmp_path):
+    nested = tmp_path / _UPC_REL_NESTED
+    nested.parent.mkdir(parents=True, exist_ok=True)
+    nested.write_text("stub")
+
+    assert h._find_upc_in(tmp_path) == nested
+
+
+def test_find_upc_in_falls_back_to_legacy_layout(tmp_path):
+    flat = tmp_path / _UPC_REL
+    flat.parent.mkdir(parents=True, exist_ok=True)
+    flat.write_text("stub")
+
+    assert h._find_upc_in(tmp_path) == flat
+
+
+def test_find_upc_in_none_when_absent(tmp_path):
+    assert h._find_upc_in(tmp_path) is None
+
+
+def test_clone_template_into_finds_pfx_nested_template(tmp_path, monkeypatch):
+    template_dir = tmp_path / "template"
+    template_upc = template_dir / _UPC_REL_NESTED
+    template_upc.parent.mkdir(parents=True, exist_ok=True)
+    template_upc.write_text("stub")
+    monkeypatch.setattr(h, "_TEMPLATE_DIR", template_dir)
+
+    dest = tmp_path / "dest"
+    ok = h._clone_template_into(dest)
+
+    assert ok is True
+    assert h._find_upc_in(dest) is not None
+
+
+async def test_resolve_or_recover_finds_pfx_nested_recovered_prefix(
+    tmp_path, monkeypatch,
+):
+    recovered_dir = tmp_path / "recovered"
+    recovered_upc = recovered_dir / _UPC_REL_NESTED
+    recovered_upc.parent.mkdir(parents=True, exist_ok=True)
+    recovered_upc.write_text("stub")
+    monkeypatch.setattr(h, "_find_recovered_prefix", lambda _gid: recovered_dir)
+
+    plan = _plan(tmp_path / "empty")
+    result = await h._resolve_or_recover_upc_exe(plan)
+
+    assert result == recovered_upc
+    assert plan.env["WINEPREFIX"] == str(recovered_dir)

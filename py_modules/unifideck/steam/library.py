@@ -3,18 +3,22 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import random
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import aiohttp
 
+from unifideck.steam.http_retry import STEAM_STORE_GATE, get_json_with_backoff
 from unifideck.utils.config_helpers import get_cfg
 from unifideck.utils.title_match import (
     normalize_for_match,
     strip_edition_suffix,
     titles_match,
+)
+from unifideck.utils.vdf_compat import (
+    STEAM_ROOT_CANDIDATES,
+    resolve_live_steam_root,
 )
 
 if TYPE_CHECKING:
@@ -22,11 +26,10 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-STEAM_PATH_CANDIDATES = (
-    "~/.steam/steam",
-    "~/.local/share/Steam",
-    "~/.var/app/com.valvesoftware.Steam/.steam/steam",
-)
+# Single source of truth shared with the launcher + ``defaults/config.json``
+# (``paths.steam_candidates``) so the write paths and Proton resolution agree
+# on where Steam can live across SteamOS / Bazzite / CachyOS / Flatpak.
+STEAM_PATH_CANDIDATES = STEAM_ROOT_CANDIDATES
 STEAM_STORE_SEARCH_URL = "https://store.steampowered.com/api/storesearch"
 
 _HTTP_OK = 200
@@ -42,9 +45,18 @@ def _cfg(config: ConfigManager | None, key: str, default: Any) -> Any:
 def find_steam_path(config: ConfigManager | None = None) -> str | None:
     """Find steam path.
 
-    Honours an optional ``paths.steam_root`` config override; falls back
-    to the standard candidate locations. Returns the directory string
-    on success, or ``None`` when no Steam install is detectable.
+    Honours an optional ``paths.steam_root`` config override, then any
+    ``paths.steam_candidates`` list from config (advertised in
+    ``defaults/config.json`` but previously never read), then the built-in
+    cross-distro candidates. Returns the directory string on success, or
+    ``None`` when no Steam install is detectable.
+
+    A root counts only if it has a ``steamapps/`` dir. When several distinct
+    installs qualify (e.g. a stale native ``~/.steam/steam`` alongside a
+    running Flatpak Steam), ``resolve_live_steam_root`` picks the most
+    recently active one — writing shortcuts to a root Steam never reads was
+    the "synced but nothing shows in Steam" bug. The explicit
+    ``paths.steam_root`` override still wins outright.
     """
     if config is not None:
         override = _cfg(config, "paths.steam_root", None)
@@ -52,11 +64,14 @@ def find_steam_path(config: ConfigManager | None = None) -> str | None:
             full = str(Path(str(override)).expanduser())
             if (Path(full) / "steamapps").is_dir():
                 return full
-    for candidate in STEAM_PATH_CANDIDATES:
-        full_path = str(Path(candidate).expanduser())
-        if (Path(full_path) / "steamapps").is_dir():
-            return full_path
-    return None
+    candidates: list[str] = []
+    if config is not None:
+        configured = _cfg(config, "paths.steam_candidates", None)
+        if isinstance(configured, (list, tuple)):
+            candidates.extend(str(c) for c in configured)
+    candidates.extend(STEAM_PATH_CANDIDATES)
+    live = resolve_live_steam_root(candidates)
+    return str(live) if live is not None else None
 
 
 def _find_most_recent_user(steam_path: str) -> str | None:
@@ -132,21 +147,6 @@ def _format_price(price_block: Any) -> str:
     currency = price_block.get("currency", "")
     formatted = f"{final / 100:.2f}"
     return f"{formatted} {currency}".strip()
-_HTTP_TOO_MANY = 429
-_MAX_RETRIES = 3
-_RETRY_BASE_S = 1.0
-_MAX_RETRY_AFTER_S = 30.0
-
-
-def _retry_after_seconds(response: aiohttp.ClientResponse) -> float | None:
-    """Parse a numeric Retry-After header (seconds), clamped."""
-    raw = response.headers.get("Retry-After")
-    if not raw:
-        return None
-    try:
-        return min(float(raw), _MAX_RETRY_AFTER_S)
-    except (TypeError, ValueError):
-        return None
 
 
 async def _storesearch_items(
@@ -177,40 +177,20 @@ async def _request_storesearch(
 ) -> list[dict[str, Any]]:
     """GET Steam's ``storesearch`` on ``sess`` with HTTP 429 backoff.
 
-    Retries up to ``_MAX_RETRIES`` times, honoring a numeric ``Retry-After``
-    header plus jitter. Returns the raw item list, or ``[]`` on a non-OK
-    status or transport error.
+    Retries via :func:`get_json_with_backoff` behind the shared
+    ``STEAM_STORE_GATE``. Returns the raw item list, or ``[]`` on a
+    non-OK status or transport error.
     """
-    for attempt in range(_MAX_RETRIES + 1):
-        try:
-            async with sess.get(
-                STEAM_STORE_SEARCH_URL,
-                params=params,
-                timeout=aiohttp.ClientTimeout(total=timeout_s),
-            ) as response:
-                if response.status == _HTTP_TOO_MANY and attempt < _MAX_RETRIES:
-                    jitter = random.uniform(0, 0.5)  # noqa: S311
-                    delay = (
-                        _retry_after_seconds(response)
-                        or _RETRY_BASE_S * (2**attempt)
-                    ) + jitter
-                    logger.debug(
-                        "[steam.search_store] rate-limited (429), retry %d/%d in %.1fs",
-                        attempt + 1,
-                        _MAX_RETRIES,
-                        delay,
-                    )
-                    await asyncio.sleep(delay)
-                    continue
-                if response.status != _HTTP_OK:
-                    return []
-                data = await response.json(content_type=None)
-                items = data.get("items") if isinstance(data, dict) else None
-                return items if isinstance(items, list) else []
-        except (aiohttp.ClientError, TimeoutError) as exc:
-            logger.debug("[steam.search_store] %r failed: %s", term, exc)
-            return []
-    return []
+    data = await get_json_with_backoff(
+        sess,
+        STEAM_STORE_SEARCH_URL,
+        params=params,
+        timeout_s=timeout_s,
+        log_tag=f"[steam.search_store] {term!r}",
+        gate=STEAM_STORE_GATE,
+    )
+    items = data.get("items") if isinstance(data, dict) else None
+    return items if isinstance(items, list) else []
 
 
 def _pick_store_match(

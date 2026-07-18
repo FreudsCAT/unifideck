@@ -153,11 +153,9 @@ class GOGExeResolver:
         if not exe_rel:
             return None
         work_rel = primary.get("workingDir", "")
-        full_exe = str(
-            Path(root_dir) / exe_rel,
-        ).replace("\\", "/")
+        full_exe = resolve_case_insensitive(Path(root_dir), exe_rel)
         full_work = (
-            str(Path(root_dir) / work_rel).replace("\\", "/")
+            resolve_case_insensitive(Path(root_dir), work_rel)
             if work_rel
             else str(Path(full_exe).parent)
         )
@@ -277,6 +275,7 @@ class GOGExeResolver:
                 continue
             candidates.sort(key=lambda item: item[1], reverse=True)
             best_exe, best_size = candidates[0]
+            GOGExeResolver._warn_if_ambiguous(candidates, best_exe, best_size)
             logger.info(
                 "[GOGExeResolver] fallback: largest exe (%.1f MB): %s",
                 best_size / (1024 * 1024),
@@ -284,6 +283,34 @@ class GOGExeResolver:
             )
             return (best_exe, str(Path(best_exe).parent))
         return None
+
+    @staticmethod
+    def _warn_if_ambiguous(
+        candidates: list[tuple[str, int]],
+        best_exe: str,
+        best_size: int,
+    ) -> None:
+        """Log a warning when the largest-exe guess isn't a clear winner.
+
+        Picking "the biggest .exe" is a guess, not a detection — it's
+        exactly how a GOG DOSBox install's ``dosbox.exe`` (a real,
+        often-large binary) can get launched instead of the actual
+        game. This doesn't change the guess (Unifideck has no UI to
+        punt an ambiguous choice to, unlike an in-emulator menu), but
+        makes a wrong one traceable in the logs instead of invisible:
+        any other candidate within 20% of the winner's size means the
+        pick was genuinely ambiguous.
+        """
+        close = [
+            exe for exe, size in candidates
+            if exe != best_exe and size >= best_size * 0.8
+        ]
+        if close:
+            logger.warning(
+                "[GOGExeResolver] largest-exe pick is ambiguous: chose "
+                "%s (%.1f MB) over %d other candidate(s) within 20%%: %s",
+                best_exe, best_size / (1024 * 1024), len(close), close,
+            )
 
     @staticmethod
     def _collect_exe_candidates_in(directory: str) -> list[tuple[str, int]]:
@@ -315,6 +342,41 @@ class GOGExeResolver:
                 continue
             candidates.append((exe_path, size))
         return candidates
+
+
+def resolve_case_insensitive(root: Path, rel_path: str) -> str:
+    """Join ``root``/``rel_path`` (backslash- or forward-slash-separated),
+    correcting each segment's case against the real filesystem.
+
+    GOG's ``goggame-*.info`` manifests are authored on Windows, whose
+    filesystem is case-insensitive/case-preserving — a manifest can
+    legitimately say ``DOSBOX\\dosbox.exe`` while the actual extracted
+    file is ``DOSBOX/DOSBox.exe`` (confirmed against real GOG DOSBox
+    packages: "Betrayal at Krondor", "Caesar II" both ship this exact
+    mismatch). On Linux's case-sensitive filesystem a naive join then
+    never matches ``Path.is_file()``, silently discarding the whole
+    manifest-driven resolution — including the playTask's own
+    ``arguments`` (see ``compat/gog.py::_read_required_launch_args``,
+    which reuses this same function to match a playTask back to a
+    resolved exe path) — and falling through to the much less reliable
+    largest-exe heuristic. Walks one segment at a time so an
+    already-correct-case path costs nothing extra; only a missing
+    segment triggers a (single, cheap) case-insensitive directory scan.
+    """
+    current = root
+    for segment in Path(rel_path.replace("\\", "/")).parts:
+        candidate = current / segment
+        if candidate.exists():
+            current = candidate
+            continue
+        try:
+            entries = {entry.name.lower(): entry.name for entry in current.iterdir()}
+        except OSError:
+            current = candidate
+            continue
+        match = entries.get(segment.lower())
+        current = current / match if match else candidate
+    return str(current)
 
 
 def parse_size_string(size_str: str) -> int:

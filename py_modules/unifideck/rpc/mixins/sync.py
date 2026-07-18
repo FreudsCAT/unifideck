@@ -85,17 +85,6 @@ class SyncRPCMixin(CleanupRPCMixin):
         """
         return self.sync_service.get_status()
 
-    async def refresh_store(self, store_name: str) -> Any:
-        """Sync a single store — used by the per-store refresh button.
-
-        Calls ``sync_single_store`` on ``SyncService`` (no single-flight
-        lock — the caller is responsible for not racing a full sync).
-        Returns ``{"success": bool, "error": str | None}`` so the
-        frontend can show a brief toast for each refresh.
-        """
-        ok, err = await self.sync_service.sync_single_store(store_name)
-        return {"success": ok, "error": err}
-
     async def cancel_sync(self) -> Any:
         """Cancel an in-flight sync."""
         return await self.sync_service.cancel()

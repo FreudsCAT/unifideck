@@ -12,6 +12,10 @@
       "disconnected": "Not connected",
       "checking": "Checking…",
       "error": "Error — check logs"
+    },
+    "errors": {
+      "networkTitle": "No internet connection",
+      "networkBody": "Connect to Wi-Fi and try again."
     }
   },
   "storage": {
@@ -155,7 +159,6 @@
     "syncing": "Syncing...",
     "cancelSync": "Cancel Sync",
     "retryStatusCheck": "Retry Status Check",
-    "refreshStore": "Refresh this store's library",
     "gamesSynced": "{{synced}} / {{total}} games synced",
     "artworkDownloaded": "{{synced}} / {{total}} artwork covers downloaded",
     "metadataExtracted": "{{synced}} / {{total}} metadata records extracted",
@@ -281,6 +284,7 @@
     "unifideck": "Unifideck:",
     "launcher": {
       "networkError": "Network Error",
+      "launchRetry": "Retrying Launch",
       "retryingUmu": "Retrying UMU in {{seconds}}s (attempt {{attempt}}/{{max}})...",
       "protonUpgrade": "Proton Upgrade",
       "resettingPrefix": "Resetting prefix for {{version}}...",
@@ -923,6 +927,7 @@
     "currentTitle": "Current",
     "downgradeButton": "Downgrade to v{{version}}",
     "installFailedTitle": "Install Failed",
+    "installTimeoutMessage": "No response from Decky Loader — the install may have stalled or failed. Please try again.",
     "installedLabel": "installed",
     "installingButton": "Installing...",
     "installingTitle": "Installing Plugin",
@@ -931,6 +936,8 @@
     "noBackend": "Decky backend is unavailable.",
     "noReleaseNotes": "No release notes available.",
     "reinstallButton": "Reinstall v{{version}}",
+    "refreshFailedMessage": "Could not verify the latest release info. Check your connection and try again.",
+    "releaseGoneMessage": "This release is no longer available. Please Check for Updates and select again.",
     "releaseNotesButton": "Release Notes",
     "stageDownload": "Downloading…",
     "stageFinish": "Finishing…",

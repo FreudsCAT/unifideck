@@ -33,19 +33,32 @@ def sanitize_frozen_loader_env(env: dict[str, str]) -> None:
     ``ImportError: libcrypto.so.3: version 'OPENSSL_3.3.0' not found`` — umu
     then aborts, so ``createprefix`` / winetricks silently do nothing (the
     install-time prefix warmup produced empty prefixes for exactly this
-    reason). PyInstaller stashes the real pre-launch value in ``<VAR>_ORIG``;
-    restore it, else drop a ``_MEI`` bundle path.
+    reason). PyInstaller stashes the real pre-launch value in
+    ``LD_LIBRARY_PATH_ORIG``; restore it, else drop a ``_MEI`` bundle path.
 
     A NO-OP outside a frozen parent — e.g. the out-of-process launcher Steam
     spawns has a clean env (no ``_ORIG``, no ``_MEI`` path) — so it's safe to
     run on every launch path, not just the warmup.
+
+    ``LD_PRELOAD`` is handled differently: it is write-once-never. All
+    umu-run launches go through pressure-vessel (a container) which has its
+    own Steam overlay mechanism — re-exporting the host's
+    ``gameoverlayrenderer.so`` via ``LD_PRELOAD`` causes "cannot be
+    preloaded" errors and can crash/early-exit the game process
+    (``WARNING: Keyboard Interrupt``). The retired bash launcher unset
+    ``LD_PRELOAD`` once at startup and never restored it for any Proton/umu
+    launch; mirror that here — discard any ``LD_PRELOAD_ORIG`` instead of
+    restoring from it, and still drop a ``_MEI``-tainted ``LD_PRELOAD``.
     """
-    for var in ("LD_LIBRARY_PATH", "LD_PRELOAD"):
-        orig = env.pop(f"{var}_ORIG", None)
-        if orig is not None:
-            env[var] = orig
-        elif "/_MEI" in env.get(var, ""):
-            env.pop(var, None)
+    orig = env.pop("LD_LIBRARY_PATH_ORIG", None)
+    if orig is not None:
+        env["LD_LIBRARY_PATH"] = orig
+    elif "/_MEI" in env.get("LD_LIBRARY_PATH", ""):
+        env.pop("LD_LIBRARY_PATH", None)
+
+    env.pop("LD_PRELOAD_ORIG", None)
+    if "/_MEI" in env.get("LD_PRELOAD", ""):
+        env.pop("LD_PRELOAD", None)
 
 
 @dataclass(frozen=True)
@@ -137,35 +150,74 @@ def _locate_umu_wrapper(proton_path: Path, plugin_dir: Path) -> Path:
             "plugin_dir": str(plugin_dir),
         },
     )
-def proton_prepare(
- ctx: LaunchContext,
- state: RuntimeState,
- *,
- python_bin: Path,
- proton_path: Path,
- proton_tool_id: str,
- on_process_start: Callable[[object], None] | None = None,
-) -> ProtonLaunchPlan:
-    """Proton prepare."""
+def _epic_store_value(game_id: str, umu_id: str | None) -> str:
+    """The ``STORE`` env value for an Epic launch.
+
+    ``none`` for ordinary Epic titles (ProtonFixes' ``egs`` defaults add a
+    ``HKCR\\com.epicgames.launcher`` key that flips the EOS SDK to
+    launcher-IPC auth → instant exit/hang for EOS titles; the retired bash
+    launcher forced ``none`` for exactly this). Rockstar-on-Epic (RDR2/GTA5)
+    is the lone exception: it WANTS the ``egs`` profile — its protonfixes +
+    that same launcher handler are what boot the Rockstar launcher. Gated on
+    the Epic app name (game_id) so no ordinary Epic launch is affected.
+    """
+    from unifideck.launcher.proton.fixes.game_fixes import is_rockstar_egs
+    return "egs" if is_rockstar_egs(game_id, umu_id) else "none"
+
+
+def _apply_rockstar_dll_overrides(env: dict[str, str], umu_id: str | None) -> None:
+    """Add the RDR2/GTA5 WINEDLLOVERRIDES to ``env`` in place.
+
+    Native-then-builtin vulkan-1 is the documented Rockstar-on-Epic launch
+    fix (Heroic). Merges with any existing overrides rather than clobbering;
+    a user's explicit ``ctx.env_overrides`` still wins (applied afterwards).
+    """
+    from unifideck.launcher.proton.fixes.game_fixes import (
+        ROCKSTAR_WINEDLLOVERRIDES,
+    )
+    existing = env.get("WINEDLLOVERRIDES", "")
+    env["WINEDLLOVERRIDES"] = (
+        f"{existing};{ROCKSTAR_WINEDLLOVERRIDES}"
+        if existing else ROCKSTAR_WINEDLLOVERRIDES
+    )
+    logger.info(
+        "[launcher.proton.core] Rockstar-EGS (%s): STORE=egs, "
+        "WINEDLLOVERRIDES+=%s", umu_id, ROCKSTAR_WINEDLLOVERRIDES,
+    )
+
+
+def _build_umu_env(
+    ctx: LaunchContext,
+    *,
+    umu_store: str,
+    umu_id: str | None,
+    prefix_path: Path,
+    proton_path: Path,
+    proton_tool_id: str,
+) -> dict[str, str]:
+    """Build the umu-run environment for a Proton launch.
+
+    Extracted from :func:`proton_prepare` to keep that function under the
+    line cap; the ordering and every comment below are load-bearing (each
+    documents a specific field bug this env layout fixed).
+    """
     import os
-    umu_store = STORE_TO_UMU.get(ctx.store, "none")
-    prefix_path = _resolve_prefix(ctx)
-    umu_id = _lookup_umu_id(ctx, umu_store, ctx.plugin_dir)
-    umu_wrapper = _locate_umu_wrapper(proton_path, ctx.plugin_dir)
-    state.python_bin = python_bin
-    state.proton_path = proton_path
-    state.proton_tool_id = proton_tool_id
-    state.prefix_path = prefix_path
-    state.umu_store_code = umu_store
-    state.umu_id = umu_id
-    state.umu_wrapper = umu_wrapper
+
+    from unifideck.launcher.proton.fixes.game_fixes import is_rockstar_egs
     env = dict(os.environ)
+    had_ld_preload_orig = "LD_PRELOAD_ORIG" in env
     # Strip the Decky PluginLoader's PyInstaller LD_LIBRARY_PATH pollution so
     # umu-run (system python) doesn't load a stale libcrypto and abort — the
     # cause of empty install-time prefixes. No-op for the clean launcher env.
     sanitize_frozen_loader_env(env)
     env["GAMEID"] = umu_id or "umu-0"
-    env["STORE"] = umu_store
+    # See _epic_store_value for the Epic STORE reasoning. ``umu_store_code``
+    # on state keeps the real value for diagnostics regardless of this.
+    rockstar_egs = ctx.store == "epic" and is_rockstar_egs(ctx.game_id, umu_id)
+    if ctx.store == "epic":
+        env["STORE"] = _epic_store_value(ctx.game_id, umu_id)
+    else:
+        env["STORE"] = umu_store
     # PROTONPATH tells umu-run which Proton to use — the *directory*
     # holding the ``proton`` script (``proton_path`` is that script, so
     # use its parent). Without this umu falls back to downloading its
@@ -199,12 +251,44 @@ def proton_prepare(
     # one on atomic hosts.
     env.pop("STEAM_COMPAT_CLIENT_INSTALL_PATH", None)
     env["PROTON_VERB"] = "waitforexitandrun"
+    if rockstar_egs:
+        _apply_rockstar_dll_overrides(env, umu_id)
     env.update(ctx.env_overrides)
     logger.info(
-    "[launcher.proton.core] plan ready: store=%s umu_store=%s "
-    "umu_id=%s prefix=%s proton=%s",
-    ctx.store, umu_store, umu_id, prefix_path, proton_tool_id,
-   )
+        "[launcher.proton.core] plan ready: store=%s umu_store=%s "
+        "umu_id=%s prefix=%s proton=%s ld_preload=%r had_ld_preload_orig=%s",
+        ctx.store, umu_store, umu_id, prefix_path, proton_tool_id,
+        env.get("LD_PRELOAD"), had_ld_preload_orig,
+    )
+    return env
+
+
+def proton_prepare(
+ ctx: LaunchContext,
+ state: RuntimeState,
+ *,
+ python_bin: Path,
+ proton_path: Path,
+ proton_tool_id: str,
+ on_process_start: Callable[[object], None] | None = None,
+) -> ProtonLaunchPlan:
+    """Proton prepare."""
+    umu_store = STORE_TO_UMU.get(ctx.store, "none")
+    prefix_path = _resolve_prefix(ctx)
+    umu_id = _lookup_umu_id(ctx, umu_store, ctx.plugin_dir)
+    umu_wrapper = _locate_umu_wrapper(proton_path, ctx.plugin_dir)
+    state.python_bin = python_bin
+    state.proton_path = proton_path
+    state.proton_tool_id = proton_tool_id
+    state.prefix_path = prefix_path
+    state.umu_store_code = umu_store
+    state.umu_id = umu_id
+    state.umu_wrapper = umu_wrapper
+    env = _build_umu_env(
+        ctx, umu_store=umu_store, umu_id=umu_id,
+        prefix_path=prefix_path, proton_path=proton_path,
+        proton_tool_id=proton_tool_id,
+    )
     return ProtonLaunchPlan(
         context=ctx,
         state=state,

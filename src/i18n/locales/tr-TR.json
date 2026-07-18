@@ -12,6 +12,10 @@
       "disconnected": "Bağlı Değil",
       "checking": "Kontrol ediliyor…",
       "error": "Hata — günlükleri kontrol edin"
+    },
+    "errors": {
+      "networkTitle": "No internet connection",
+      "networkBody": "Connect to Wi-Fi and try again."
     }
   },
   "storage": {
@@ -155,7 +159,6 @@
     "syncing": "Senkronize ediliyor...",
     "cancelSync": "Senkronizasyonu İptal Et",
     "retryStatusCheck": "Durum Kontrolünü Yeniden Dene",
-    "refreshStore": "Bu mağazanın kütüphanesini yenile",
     "gamesSynced": "{{synced}} / {{total}} oyun senkronize edildi",
     "artworkDownloaded": "{{synced}} / {{total}} kapak görseli indirildi",
     "metadataExtracted": "{{synced}} / {{total}} meta veri kaydı ayıklandı",
@@ -273,6 +276,7 @@
     "unifideck": "Unifideck:",
     "launcher": {
       "networkError": "Ağ Hatası",
+      "launchRetry": "Başlatma yeniden deneniyor",
       "retryingUmu": "{{seconds}} saniye içinde UMU yeniden denenecek (deneme {{attempt}}/{{max}})...",
       "protonUpgrade": "Proton Güncellemesi",
       "resettingPrefix": "{{version}} için önek sıfırlanıyor...",
@@ -900,6 +904,7 @@
     "currentTitle": "Mevcut",
     "downgradeButton": "v{{version}} sürümüne düşür",
     "installFailedTitle": "Yükleme Başarısız",
+    "installTimeoutMessage": "Decky Loader'dan yanıt yok — yükleme takılmış veya başarısız olmuş olabilir. Lütfen tekrar deneyin.",
     "installedLabel": "yüklendi",
     "installingButton": "Yükleniyor...",
     "installingTitle": "Eklenti Yükleniyor",
@@ -908,6 +913,8 @@
     "noBackend": "Decky arka ucu kullanılamıyor.",
     "noReleaseNotes": "Sürüm notu bulunmuyor.",
     "reinstallButton": "v{{version}} sürümünü yeniden yükle",
+    "refreshFailedMessage": "En son sürüm bilgisi doğrulanamadı. Bağlantınızı kontrol edip tekrar deneyin.",
+    "releaseGoneMessage": "Bu sürüm artık kullanılamıyor. Lütfen güncellemeleri denetleyip yeniden seçin.",
     "releaseNotesButton": "Sürüm Notları",
     "stageDownload": "İndiriliyor…",
     "stageFinish": "Tamamlanıyor…",

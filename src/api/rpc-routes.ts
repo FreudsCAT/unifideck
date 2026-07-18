@@ -37,7 +37,6 @@ export const rpcRoutes = {
   getSyncProgress: "get_sync_progress",
   getAllUnifideckGames: "get_all_unifideck_games",
   getGameSizeBytes: "get_game_size_bytes",
-  refreshStore: "refresh_store",
   updateSteamOwnedTitles: "update_steam_owned_titles",
   // Orphaned-shortcut sweep — boot-time cleanup (CleanupRPCMixin)
   scanOrphanedShortcuts: "scan_orphaned_shortcuts",
@@ -107,6 +106,8 @@ export const rpcRoutes = {
   // Plugin self-update (UpdaterRPCMixin)
   checkPluginUpdate: "check_plugin_update",
   getAvailableVersions: "get_available_versions",
+  forceCheckPluginUpdate: "force_check_plugin_update",
+  forceGetAvailableVersions: "force_get_available_versions",
   getReleaseNotes: "get_release_notes",
   logUpdateEvent: "log_update_event",
 } as const;

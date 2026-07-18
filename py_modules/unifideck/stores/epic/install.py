@@ -27,12 +27,14 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import functools
 import json
 import logging
 import os
 import re
 import shutil
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -41,6 +43,7 @@ from unifideck.core.types import Events, InstallResult, Result
 from unifideck.event_bus.event_bus import EventBus
 from unifideck.stores.shared import dlc
 from unifideck.stores.shared.cli_install_helpers import (
+    TailRingBuffer,
     drain_install_output,
     parse_eta_seconds,
     parse_progress_line,
@@ -58,6 +61,32 @@ _PROGRESS_RE = re.compile(r"(\d+(?:\.\d+)?)\s*%")
 # partial dict (``percentage`` / ``speed_bps`` / ``eta_seconds`` / …)
 # and merges dict updates onto the queue item — see DownloadWorker.
 ProgressCallback = Callable[[float | dict[str, Any]], Awaitable[None]]
+
+
+@dataclass
+class _RunOutcome:
+    """Result of one ``legendary install`` subprocess run.
+
+    ``rc`` is the exit code (``-1`` on timeout); ``tail`` is the last few
+    non-progress output lines captured by the ring buffer — legendary's
+    real error text when ``rc != 0``, so the failure isn't reduced to a
+    bare ``legendary_exit_{rc}``.
+    """
+
+    rc: int
+    tail: str = ""
+
+
+def _format_exit_error(outcome: _RunOutcome) -> str:
+    """Turn a failed run into an error string.
+
+    Keeps the machine-parsable ``legendary_exit_{rc}`` prefix (matched by
+    downstream classification / callers) and appends legendary's actual
+    output tail when captured, so logs, the tracker, and the download
+    item's ``error_message`` name the real reason instead of a bare code.
+    """
+    base = f"legendary_exit_{outcome.rc}"
+    return f"{base}: {outcome.tail}" if outcome.tail else base
 
 
 def _legendary_config_dir() -> Path:
@@ -176,45 +205,76 @@ class EpicInstaller:
             game_id=game_id,
         )
         logger.info("[EpicInstall] running legendary install %s -> %s", game_id, base)
-        rc = await self._run_install(base, game_id, progress_cb)
-        logger.info("[EpicInstall] legendary exit_code=%d", rc)
-        if rc != 0:
+        outcome = await self._run_install_with_dlc_fallback(base, game_id, progress_cb)
+        logger.info("[EpicInstall] legendary exit_code=%d", outcome.rc)
+        if outcome.rc != 0:
+            error = _format_exit_error(outcome)
             await self._bus.emit(
                 Events.DOWNLOAD_FAILED,
                 store="epic",
                 game_id=game_id,
-                error=f"legendary_exit_{rc}",
+                error=error,
             )
             return InstallResult(
                 success=False,
-                error=f"legendary_exit_{rc}",
+                error=error,
                 store="epic",
                 game_id=game_id,
             )
         self._library.invalidate_installed_cache()
         return await self._finalize_install(game_id, base)
 
-    async def _run_install(self, base: str, game_id: str, progress_cb: ProgressCallback | None) -> int:
-        """Run install."""
-        cmd = self._build_install_cmd(base, game_id)
+    async def _run_install_with_dlc_fallback(
+        self, base: str, game_id: str, progress_cb: ProgressCallback | None,
+    ) -> _RunOutcome:
+        """Install with DLC, then retry the base game alone on failure.
+
+        legendary installs the base game first and *then* each DLC
+        (``--with-dlcs``); a single DLC with a broken/withheld manifest
+        aborts the whole command non-zero even though the base game is
+        already downloaded. So when the DLC-inclusive attempt fails on a
+        DLC-capable store, retry once with ``--skip-dlcs`` (an explicit
+        skip — with ``--yes`` legendary would otherwise still auto-install
+        DLC) to recover the playable base game. No ``DOWNLOAD_FAILED`` is
+        emitted for the first attempt; only ``install_game`` emits the
+        terminal failure if the retry also fails.
+        """
+        with_dlc = dlc.store_supports_dlc("epic")
+        outcome = await self._run_install(base, game_id, with_dlc, progress_cb)
+        if outcome.rc == 0 or not with_dlc:
+            return outcome
+        logger.warning(
+            "[EpicInstall] DLC install of %s failed (exit %d): %s — "
+            "retrying base game without DLC",
+            game_id, outcome.rc, outcome.tail or "(no output captured)",
+        )
+        return await self._run_install(base, game_id, False, progress_cb)
+
+    async def _run_install(
+        self, base: str, game_id: str, with_dlc: bool,
+        progress_cb: ProgressCallback | None = None,
+    ) -> _RunOutcome:
+        """Run one ``legendary install``, capturing its output tail."""
+        cmd = self._build_install_cmd(base, game_id, with_dlc)
         logger.info("[EpicInstall] executing: %s", " ".join(cmd))
         proc = await asyncio.create_subprocess_exec(
             *cmd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
         )
+        tail_buf = TailRingBuffer()
         drain_exc: BaseException | None = None
         try:
-            await self._drain_install_output(proc, game_id, progress_cb)
+            await self._drain_install_output(proc, game_id, progress_cb, tail_buf)
         except BaseException as e:
             drain_exc = e
         rc = await self._wait_with_timeout(proc)
         if drain_exc is not None:
             raise drain_exc
-        return rc
+        return _RunOutcome(rc=rc, tail=tail_buf.tail())
 
-    def _build_install_cmd(self, base: str, game_id: str) -> list[str]:
-        """Build install cmd."""
+    def _build_install_cmd(self, base: str, game_id: str, with_dlc: bool) -> list[str]:
+        """Build install cmd (``--with-dlcs`` or an explicit ``--skip-dlcs``)."""
         if self._cli_path is None:
             raise RuntimeError("legendary CLI path is not set; cannot build install cmd")
         cmd = [
@@ -225,16 +285,19 @@ class EpicInstaller:
             base,
             "--yes",
         ]
-        cmd.extend(dlc.get_dlc_flags("epic"))
+        cmd.extend(dlc.get_dlc_flags("epic", with_dlc))
         return cmd
 
-    async def _drain_install_output(self, proc: Any, game_id: str, progress_cb: ProgressCallback | None) -> None:
-        """Drain install output."""
+    async def _drain_install_output(
+        self, proc: Any, game_id: str,
+        progress_cb: ProgressCallback | None, tail_buf: TailRingBuffer,
+    ) -> None:
+        """Drain install output, feeding non-progress lines to ``tail_buf``."""
         await drain_install_output(
             proc,
             game_id,
             progress_cb,
-            self._handle_install_line,
+            functools.partial(self._handle_install_line, tail_buf=tail_buf),
         )
 
     async def _wait_with_timeout(self, proc: Any) -> int:
@@ -245,7 +308,10 @@ class EpicInstaller:
             "[epic_install]",
         )
 
-    async def _handle_install_line(self, line: str, game_id: str, progress_cb: ProgressCallback | None) -> None:
+    async def _handle_install_line(
+        self, line: str, game_id: str, progress_cb: ProgressCallback | None,
+        *, tail_buf: TailRingBuffer,
+    ) -> None:
         """Parse one line of legendary's install output.
 
         legendary's DLManager spreads a single progress tick across
@@ -260,6 +326,10 @@ class EpicInstaller:
         queue item (keeping the last value for fields a line omits).
         Earlier only the percentage was parsed, so the UI was stuck at
         ``0.0 MB/s · ETA --:--`` for the whole install.
+
+        Non-progress lines (where legendary prints its ``[cli] ERROR: …``)
+        are also fed to ``tail_buf`` so a failing install can surface the
+        real reason instead of a bare exit code.
         """
         # Transfer-rate line — forward speed only.
         speed_bps = parse_speed_bps(line)
@@ -267,6 +337,7 @@ class EpicInstaller:
             await self._safe_progress(progress_cb, {"speed_bps": speed_bps})
             return
         if "Progress:" not in line:
+            tail_buf.append(line)
             logger.debug("[legendary install] %s", line)
             return
         pct = parse_progress_line(line, _PROGRESS_RE)

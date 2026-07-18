@@ -588,6 +588,7 @@
   "toasts.launcher.installingRedist": "ffda9a8ac82a8643420195375fdba9b3",
   "toasts.launcher.installingRedistMessage": "b6bb99d2fa39d48188c578f00362a253",
   "toasts.launcher.installingRedistributables": "b2c60a52877b0f87567b0edb78b4df0f",
+  "toasts.launcher.launchRetry": "072e1dec6cb2b0911a7ae01d3fcfc975",
   "toasts.launcher.launcherError": "41d02c48638102eed81deb4b87f3701d",
   "toasts.launcher.launchingGame": "3777ea9d49e8d3e7c58c8c49fcf1efcb",
   "toasts.launcher.networkError": "3201603bcb7148a3f37775f184dbda44",

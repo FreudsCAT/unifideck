@@ -12,8 +12,8 @@ Mixin merging two slices that the handler groups split apart:
 
 Storage-location RPCs (``get_storage_locations``,
 ``set_default_storage_location``, ``set_custom_install_path``)
-live in a sibling ``StorageRPCMixin`` (OP-26j) so this file
-keeps the 200 LOC ceiling.
+live in a sibling ``StorageRPCMixin`` (OP-26j); this file only
+resolves a chosen storage id to a filesystem path.
 
 Two private helpers centralise the null checks:
 
@@ -27,7 +27,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 from pathlib import Path
 from typing import Any
 
@@ -39,6 +38,7 @@ from unifideck.core.types.identifiers import (
     validate_store_id,
 )
 from unifideck.rpc.errors import RpcError
+from unifideck.utils import mounts
 
 logger = logging.getLogger(__name__)
 
@@ -277,27 +277,22 @@ class DownloadRPCMixin:
 
 
 # ─── Storage type → path resolution ───────────────────────────
-
-
-# Filesystem types to skip when scanning for external mounts.
-# tmpfs (e.g. /dev/shm), devtmpfs, proc, sysfs and other
-# virtual filesystems should never be offered as install targets.
-_SKIP_FSTYPES: frozenset[str] = frozenset({
-    "proc", "sysfs", "devtmpfs", "devpts", "tmpfs", "cgroup",
-    "cgroup2", "pstore", "bpf", "debugfs", "tracefs", "hugetlbfs",
-    "ramfs", "overlay", "squashfs", "fuse.gvfsd-fuse",
-    "fuse.portal", "securityfs", "configfs", "efivarfs",
-    "autofs", "mqueue",
-})
+#
+# External-mount enumeration is delegated to ``utils/mounts.py``
+# (shared with ``rpc/mixins/storage.py`` and ``utils/paths.py``) —
+# see that module for why a FUSE-mounted external drive (NTFS via
+# ntfs-3g, some exFAT setups) needs a demoted subprocess to be
+# reachable from this backend's root process at all.
 
 
 def _resolve_storage_path(storage_type: str | None, config: Any) -> str | None:
     """Convert a storage type string to a filesystem path.
 
-    ``"internal"`` → ``~/Games``,
-    ``"sdcard"``    → first external mount + ``/Games``,
-    ``"custom"``    → ``download.custom_path`` from config,
-    ``None``        → ``None`` (store connector uses its default).
+    ``"internal"``      → ``~/Games``,
+    ``"sdcard"``         → legacy alias, first eligible external mount,
+    ``"ext:<name>"``     → that SPECIFIC external mount only,
+    ``"custom"``         → ``download.custom_path`` from config,
+    ``None``             → ``None`` (store connector uses its default).
     """
     if not storage_type:
         return None
@@ -306,53 +301,53 @@ def _resolve_storage_path(storage_type: str | None, config: Any) -> str | None:
         path = str(Path.home() / "Games")
         logger.debug("[download] resolved internal → %s", path)
         return path
-    if storage_type == "sdcard":
-        return _first_external_games_path()
     if storage_type == "custom":
         return _custom_path(config)
+    if storage_type == "sdcard" or storage_type.startswith("ext:"):
+        return _external_games_path(storage_type)
     logger.warning("[download] unknown storage type: %s", storage_type)
     return None
 
 
-def _stat_dev(p: Path) -> int:
-    """Return the ``st_dev`` of *p*, or -1 on error (never matches)."""
-    try:
-        return p.stat().st_dev
-    except OSError:
-        return -1
+def _external_games_path(storage_type: str) -> str | None:
+    """Resolve an external-mount storage id to its ``Games/`` dir.
 
-
-def _is_external_mount(mp: str, fstype: str, home_dev: int) -> bool:
-    """True if *mp* is a writable mount on a device other than ``$HOME``."""
-    if fstype in _SKIP_FSTYPES:
-        return False
-    dev = _stat_dev(Path(mp))
-    if dev == -1 or dev == home_dev:
-        return False
-    return os.access(mp, os.W_OK)
-
-
-def _first_external_games_path() -> str | None:
-    """The sdcard target: the first external mount's ``Games/`` dir."""
-    home_dev = _stat_dev(Path.home())
-    try:
-        lines = Path("/proc/mounts").read_text().splitlines()
-        for line in lines:
-            parts = line.split()
-            if len(parts) < 3:
-                continue
-            mp, fstype = parts[1], parts[2]
-            if not _is_external_mount(mp, fstype, home_dev):
-                continue
-            games_path = Path(mp) / "Games"
-            games_path.mkdir(parents=True, exist_ok=True)
+    ``storage_type == "sdcard"`` is the legacy alias (configs/callers
+    predating the unique-id fix) — resolved to the first eligible
+    external mount, preserving pre-fix behavior. Any other value is a
+    unique ``ext:<name>`` id from ``mounts.mount_id`` — resolved to
+    that SPECIFIC mount only; if it's no longer eligible (unplugged,
+    no longer writable) this returns ``None`` rather than silently
+    substituting a different device (the caller falls back to
+    internal storage — see ``install_game``).
+    """
+    home_dev = mounts.stat_dev(str(Path.home()))
+    # Dedupe first so the "first external" (legacy alias) and the unique-id
+    # assignment match the storage picker's device list exactly.
+    externals = mounts.dedupe_by_device(
+        mounts.scan_mounts(home_dev, require_writable=True),
+    )
+    if storage_type == "sdcard":
+        match = externals[0] if externals else None
+        if match is not None:
             logger.debug(
-                "[download] resolved sdcard → %s (%s)", games_path, fstype,
+                "[download] legacy 'sdcard' resolved to first external mount: %s",
+                match.mount_point,
             )
-            return str(games_path)
-    except OSError as e:
-        logger.warning("[download] sdcard resolution failed: %s", e)
-    return None
+    else:
+        match = next(
+            (m for loc_id, m in mounts.assign_unique_ids(externals)
+             if loc_id == storage_type),
+            None,
+        )
+    if match is None:
+        logger.warning("[download] no eligible external mount for storage=%s", storage_type)
+        return None
+    games_path = mounts.ensure_games_subdir(
+        match.mount_point, match.effective_uid, match.effective_gid,
+    )
+    logger.debug("[download] resolved %s → %s (%s)", storage_type, games_path, match.fstype)
+    return games_path
 
 
 def _custom_path(config: Any) -> str | None:

@@ -331,6 +331,18 @@ type StoreCountSink = (counts: StoreCounts) => void;
 let storeCountSink: StoreCountSink | null = null;
 let cacheLoadStarted = false;
 let cacheLoaded = false;
+// Bounded auto-retry for a failed initial load. A transient
+// ``get_all_unifideck_games`` failure used to latch ``cacheLoaded =
+// true`` with an empty cache, so every Unifideck shortcut failed
+// ``isUnifideckGame`` and all library tabs showed 0 until the next
+// full sync (UD-008 / UD-043 "synced but nothing shows"). We now only
+// mark the cache authoritative on success and retry a handful of times
+// with backoff, then give up (so the user's own shortcuts' native UI
+// isn't hidden forever if the backend is genuinely down).
+const _CACHE_RETRY_MAX = 5;
+const _CACHE_RETRY_BASE_MS = 1500;
+let cacheRetryCount = 0;
+let cacheRetryTimer: ReturnType<typeof setTimeout> | null = null;
 
 /** Whether the first ``loadUnifideckCache`` attempt has completed.
  *  Synchronous callers (e.g. the App-Details patch) stay optimistic
@@ -388,15 +400,39 @@ export async function loadUnifideckCache(): Promise<void> {
       });
       counts[g.store] += 1;
     }
+    // SUCCESS: populate + mark authoritative. An empty-but-valid
+    // response (0 games) legitimately marks the cache loaded — the
+    // library is genuinely empty. Only an RPC *failure* must not latch.
     updateUnifideckCache(inputs);
     storeCountSink?.(counts);
-  } catch (e) {
-    console.error("[Unifideck] loadUnifideckCache failed", e);
-  } finally {
-    // Mark the cache as "attempted" even on failure so synchronous
-    // callers stop treating every shortcut as a potential Unifideck game
-    // (which would keep the user's own shortcuts' native UI hidden).
     cacheLoaded = true;
+    cacheRetryCount = 0;
+    if (cacheRetryTimer !== null) {
+      clearTimeout(cacheRetryTimer);
+      cacheRetryTimer = null;
+    }
+  } catch (e) {
+    // FAILURE: do NOT latch ``cacheLoaded`` or wipe the existing cache
+    // (``updateUnifideckCache`` was never reached, so a prior good load
+    // survives). Latching true here with an empty cache made every
+    // library tab render 0 (UD-008/UD-043). Retry with backoff so a
+    // transient failure self-heals without waiting for a full sync.
+    console.error("[Unifideck] loadUnifideckCache failed", e);
+    if (cacheRetryCount < _CACHE_RETRY_MAX) {
+      cacheRetryCount += 1;
+      const delay = _CACHE_RETRY_BASE_MS * cacheRetryCount;
+      if (cacheRetryTimer !== null) clearTimeout(cacheRetryTimer);
+      cacheRetryTimer = setTimeout(() => {
+        cacheRetryTimer = null;
+        void loadUnifideckCache();
+      }, delay);
+    } else {
+      // Exhausted retries — accept the empty state so synchronous
+      // callers stop treating every shortcut as a potential Unifideck
+      // game (which would keep the user's own shortcuts' native UI
+      // hidden). The next ``unifideck-sync-completed`` still retries.
+      cacheLoaded = true;
+    }
   }
 }
 
@@ -413,6 +449,10 @@ export function startUnifideckCacheAutoload(): void {
   void loadCompatCacheFromBackend();
   void loadFacets();
   window.addEventListener("unifideck-sync-completed", () => {
+    // A fresh sync is a new chance for a previously-failed load —
+    // reset the retry budget so a transient earlier failure doesn't
+    // leave us out of retries.
+    cacheRetryCount = 0;
     void loadUnifideckCache();
     // A fresh sync rebuilt the metadata/compat caches — refresh the
     // derived compat + facet data so badges/sort/filters reflect it.

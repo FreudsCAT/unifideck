@@ -22,11 +22,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import random
 from typing import TYPE_CHECKING, Any
 
 import aiohttp
 
+from unifideck.steam.http_retry import STEAM_STORE_GATE, get_json_with_backoff
 from unifideck.utils.config_helpers import get_cfg
 
 if TYPE_CHECKING:
@@ -35,24 +35,8 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 STEAM_APPDETAILS_URL = "https://store.steampowered.com/api/appdetails"
-_HTTP_OK = 200
-_HTTP_TOO_MANY = 429
 _DEFAULT_TIMEOUT = 15.0
 _BATCH_DELAY_S = 0.25  # Polite delay between requests to avoid 429s.
-_MAX_RETRIES = 3  # extra attempts after a 429 before giving up
-_RETRY_BASE_S = 1.0  # exponential backoff base for 429 retries
-_MAX_RETRY_AFTER_S = 30.0  # cap a server-supplied Retry-After
-
-
-def _retry_after_seconds(response: aiohttp.ClientResponse) -> float | None:
-    """Parse a numeric ``Retry-After`` header (seconds), clamped."""
-    raw = response.headers.get("Retry-After")
-    if not raw:
-        return None
-    try:
-        return min(float(raw), _MAX_RETRY_AFTER_S)
-    except (TypeError, ValueError):
-        return None
 
 
 def _parse_appdetails(
@@ -77,46 +61,21 @@ async def _request_appdetails(
 ) -> dict[str, Any] | None:
     """GET the appdetails payload on ``sess`` with HTTP 429 backoff.
 
-    Retries up to ``_MAX_RETRIES`` times, honoring a numeric ``Retry-After``
-    header plus jitter (which de-syncs concurrent sync fetches). Returns the
-    parsed inner ``data`` dict, or ``None`` on a non-OK status or transport
-    error.
+    Retries via :func:`get_json_with_backoff` behind the shared
+    ``STEAM_STORE_GATE``. Returns the parsed inner ``data`` dict, or
+    ``None`` on a non-OK status or transport error.
     """
-    for attempt in range(_MAX_RETRIES + 1):
-        try:
-            async with sess.get(
-                STEAM_APPDETAILS_URL,
-                params=params,
-                timeout=aiohttp.ClientTimeout(total=timeout_s),
-            ) as response:
-                if response.status == _HTTP_TOO_MANY and attempt < _MAX_RETRIES:
-                    jitter = random.uniform(0, 0.5)  # noqa: S311
-                    delay = (
-                        _retry_after_seconds(response)
-                        or _RETRY_BASE_S * (2**attempt)
-                    ) + jitter
-                    logger.debug(
-                        "[steam.appdetails] %d rate-limited (429), "
-                        "retry %d/%d in %.1fs",
-                        steam_app_id,
-                        attempt + 1,
-                        _MAX_RETRIES,
-                        delay,
-                    )
-                    await asyncio.sleep(delay)
-                    continue
-                if response.status != _HTTP_OK:
-                    return None
-                payload = await response.json(content_type=None)
-                return _parse_appdetails(payload, steam_app_id)
-        except (aiohttp.ClientError, TimeoutError) as exc:
-            logger.debug(
-                "[steam.appdetails] %d failed: %s",
-                steam_app_id,
-                exc,
-            )
-            return None
-    return None
+    payload = await get_json_with_backoff(
+        sess,
+        STEAM_APPDETAILS_URL,
+        params=params,
+        timeout_s=timeout_s,
+        log_tag=f"[steam.appdetails] {steam_app_id}",
+        gate=STEAM_STORE_GATE,
+    )
+    if payload is None:
+        return None
+    return _parse_appdetails(payload, steam_app_id)
 
 
 async def fetch_appdetails(
@@ -132,8 +91,9 @@ async def fetch_appdetails(
     (delisted / region-locked games).
 
     On **HTTP 429** (rate limited — common during a bulk sync) it
-    retries with exponential backoff, honoring a numeric ``Retry-After``
-    header, up to ``_MAX_RETRIES`` times before returning ``None``.
+    retries with exponential backoff behind the shared
+    ``STEAM_STORE_GATE``, honoring a numeric ``Retry-After`` header,
+    before returning ``None``.
     """
     if steam_app_id <= 0:
         return None

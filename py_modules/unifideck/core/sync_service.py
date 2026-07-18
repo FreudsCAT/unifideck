@@ -36,6 +36,7 @@ from unifideck.event_bus import EventBus
 from unifideck.stores import StoreRegistry
 
 from .sync_cache_mixin import _SyncCacheMixin
+from .sync_finalize_mixin import _SyncFinalizeMixin
 from .sync_queries_mixin import _SyncQueriesMixin
 from .sync_results_mixin import _SyncResultsMixin
 from .sync_run_mixin import _SyncRunMixin
@@ -54,15 +55,17 @@ DEFAULT_COOLDOWN_MS = DEFAULT_COOLDOWN_SECONDS * 1000
 
 
 class SyncService(
-    _SyncCacheMixin, _SyncRunMixin, _SyncQueriesMixin, _SyncResultsMixin,
+    _SyncCacheMixin, _SyncRunMixin, _SyncFinalizeMixin,
+    _SyncQueriesMixin, _SyncResultsMixin,
 ):
     """Single-flight multi-store library sync orchestrator.
 
-    Composes the run loop (``_SyncRunMixin``), cache persistence
-    (``_SyncCacheMixin``), read-only queries (``_SyncQueriesMixin``),
-    and result aggregation (``_SyncResultsMixin``). The split is
-    purely about file size — externally this class still exposes the
-    same API surface it always did.
+    Composes the run loop (``_SyncRunMixin``), post-sync finalize
+    (``_SyncFinalizeMixin``), cache persistence (``_SyncCacheMixin``),
+    read-only queries (``_SyncQueriesMixin``), and result aggregation
+    (``_SyncResultsMixin``). The split is purely about file size —
+    externally this class still exposes the same API surface it
+    always did.
     """
 
     def __init__(
@@ -101,6 +104,12 @@ class SyncService(
         self._cooldown_ms = self._resolve_cooldown_ms()
         self._launcher_path = launcher_path
         self._lock = asyncio.Lock()
+        # ``time.monotonic()`` timestamp of the last ``self._lock``
+        # acquisition, ``None`` while free. Lets ``_enqueue`` report how
+        # long an in-flight sync has been running when a new request
+        # queues behind it — the single fact that distinguishes a merely
+        # slow sync from a permanently wedged lock (UD-013).
+        self._lock_acquired_at: float | None = None
         # Smaller lock guarding ``_pending_request`` reads/writes,
         # distinct from ``_lock`` (which gates whole runs) so an enqueue
         # from another task doesn't wait for the in-flight sync.
@@ -194,11 +203,15 @@ class SyncService(
             # tests / admin actions can drive the loop without
             # interference. Skip _enqueue; go straight to the lock.
             async with self._lock:
-                return await self._run_sync(
-                    fetch_artwork=fetch_artwork,
-                    resync_artwork=resync_artwork,
-                    is_force=is_force,
-                )
+                self._lock_acquired_at = time.monotonic()
+                try:
+                    return await self._run_sync(
+                        fetch_artwork=fetch_artwork,
+                        resync_artwork=resync_artwork,
+                        is_force=is_force,
+                    )
+                finally:
+                    self._lock_acquired_at = None
         return await self._enqueue(request)
 
     async def _enqueue(self, request: SyncRequest) -> SyncResult:
@@ -224,10 +237,15 @@ class SyncService(
                     else request
                 )
                 self._pending_request = merged
+            held_for = (
+                f"{time.monotonic() - self._lock_acquired_at:.1f}s"
+                if self._lock_acquired_at is not None
+                else "unknown"
+            )
             logger.info(
                 "[SyncService] sync request queued behind in-flight "
-                "(source=%s, kind=%s)",
-                request.source, request.kind,
+                "(source=%s, kind=%s, held=%s)",
+                request.source, request.kind, held_for,
             )
             return SyncResult(
                 success=True,
@@ -238,25 +256,29 @@ class SyncService(
                 source=request.source,
             )
         async with self._lock:
-            current = request
-            while True:
-                result = await self._run_sync(
-                    fetch_artwork=current.fetch_artwork,
-                    resync_artwork=current.resync_artwork,
-                    is_force=current.kind == "force",
-                )
-                result.source = current.source
-                # Drain anything queued during the run.
-                async with self._request_lock:
-                    next_req = self._pending_request
-                    self._pending_request = None
-                if next_req is None:
-                    return result
-                logger.info(
-                    "[SyncService] draining queued sync (source=%s, kind=%s)",
-                    next_req.source, next_req.kind,
-                )
-                current = next_req
+            self._lock_acquired_at = time.monotonic()
+            try:
+                current = request
+                while True:
+                    result = await self._run_sync(
+                        fetch_artwork=current.fetch_artwork,
+                        resync_artwork=current.resync_artwork,
+                        is_force=current.kind == "force",
+                    )
+                    result.source = current.source
+                    # Drain anything queued during the run.
+                    async with self._request_lock:
+                        next_req = self._pending_request
+                        self._pending_request = None
+                    if next_req is None:
+                        return result
+                    logger.info(
+                        "[SyncService] draining queued sync (source=%s, kind=%s)",
+                        next_req.source, next_req.kind,
+                    )
+                    current = next_req
+            finally:
+                self._lock_acquired_at = None
 
     def _resolve_cooldown_ms(self) -> int:
         """Read ``sync.cooldown_seconds`` from config, default 5s.
@@ -323,7 +345,7 @@ class SyncService(
             stores=[store_name],
             scope="single",
         )
-        await self._emit_progress(store_name, 0, 1)
+        await self._emit_progress(store_name, 0, 1, {})
         games, err = await self._sync_one_store(store)
         if self._all_games is None:
             self._all_games = {}  # type: ignore[unreachable]  # registry-miss fallback

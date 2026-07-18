@@ -110,6 +110,47 @@ def is_oauth_relevant_url(url: str) -> bool:
     return any(kw in lowered for kw in _OAUTH_URL_KEYWORDS)
 
 
+# CEF/Chromium navigation-error page markers. When the network is
+# down (DNS failure), the embedded browser lands on one of these
+# instead of the login page — e.g. Steam's CEF shows ``http://error/``.
+# Detecting them lets the capture loop fail fast with a network error
+# rather than polling uselessly until the 300s deadline.
+_NAV_ERROR_MARKERS: tuple[str, ...] = (
+    "http://error/", "chrome-error://", "chrome-error:",
+    "net::err", "data:text/html,chromewebdata",
+)
+
+
+def is_navigation_error_url(url: str) -> bool:
+    """True iff ``url`` is a CEF/Chromium navigation-error page.
+
+    Signals the browser failed to load the target (offline / DNS
+    failure) rather than a normal in-flight auth page.
+    """
+    lowered = url.lower()
+    return any(marker in lowered for marker in _NAV_ERROR_MARKERS)
+
+
+def build_network_unreachable_result(start: float) -> AuthCaptureResult:
+    """Construct a capture result for a persistent offline condition.
+
+    Emitted when the browser has been stuck on navigation-error
+    pages past the grace window with no OAuth-relevant target in
+    sight, so the flow can fail fast instead of timing out.
+    """
+    elapsed = time.monotonic() - start
+    logger.warning(
+        "[auth/browser] network unreachable after %.1fs — "
+        "browser stuck on navigation-error page(s)",
+        elapsed,
+    )
+    return AuthCaptureResult(
+        success=False,
+        error="network_unreachable",
+        elapsed_seconds=elapsed,
+    )
+
+
 def build_redirect_capture(url: str, start: float) -> AuthCaptureResult:
     """Construct a capture result for a strict redirect-URI match.
 

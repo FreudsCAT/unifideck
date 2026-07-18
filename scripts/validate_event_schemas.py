@@ -122,7 +122,7 @@ CANONICAL_SCHEMA: dict[str, set[str]] = {
     "SYNC_FAILED":                  {"error", "store"},
     "SYNC_PROGRESS":                {"current_game", "progress_percent", "status", "store", "synced_games", "total_games"},
     "SYNC_SKIPPED":                 {"reason", "store"},
-    "SYNC_STARTED":                 {"scope", "stores"},
+    "SYNC_STARTED":                 {"registered_phases", "scope", "stores"},
     "TOAST_NOTIFICATION":           {"actions", "duration_ms", "i18n_key", "params", "severity"},
     "UBISOFT_INSTALL_LAUNCH_REQUESTED": {"store_game_id"},
 }

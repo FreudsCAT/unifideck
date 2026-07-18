@@ -12,6 +12,10 @@
       "disconnected": "Niet verbonden",
       "checking": "Controleren…",
       "error": "Fout — controleer logs"
+    },
+    "errors": {
+      "networkTitle": "No internet connection",
+      "networkBody": "Connect to Wi-Fi and try again."
     }
   },
   "storage": {
@@ -155,7 +159,6 @@
     "syncing": "Synchroniseren...",
     "cancelSync": "Synchronisatie annuleren",
     "retryStatusCheck": "Statuscontrole opnieuw proberen",
-    "refreshStore": "Bibliotheek van deze winkel vernieuwen",
     "gamesSynced": "{{synced}} / {{total}} games gesynchroniseerd",
     "artworkDownloaded": "{{synced}} / {{total}} covers gedownload",
     "metadataExtracted": "{{synced}} / {{total}} metadatarecords uitgepakt",
@@ -273,6 +276,7 @@
     "unifideck": "Unifideck:",
     "launcher": {
       "networkError": "Netwerkfout",
+      "launchRetry": "Opnieuw starten",
       "retryingUmu": "UMU opnieuw proberen in {{seconds}}s (poging {{attempt}}/{{max}})...",
       "protonUpgrade": "Proton-upgrade",
       "resettingPrefix": "Prefix resetten voor {{version}}...",
@@ -900,6 +904,7 @@
     "currentTitle": "Huidige",
     "downgradeButton": "Downgraden naar v{{version}}",
     "installFailedTitle": "Installatie mislukt",
+    "installTimeoutMessage": "Geen reactie van Decky Loader — de installatie is mogelijk vastgelopen of mislukt. Probeer het opnieuw.",
     "installedLabel": "geïnstalleerd",
     "installingButton": "Installeren...",
     "installingTitle": "Plugin installeren",
@@ -908,6 +913,8 @@
     "noBackend": "Decky-backend is niet beschikbaar.",
     "noReleaseNotes": "Geen release-notes beschikbaar.",
     "reinstallButton": "Opnieuw installeren v{{version}}",
+    "refreshFailedMessage": "Kan de informatie over de nieuwste versie niet verifiëren. Controleer je verbinding en probeer het opnieuw.",
+    "releaseGoneMessage": "Deze release is niet meer beschikbaar. Controleer op updates en selecteer opnieuw.",
     "releaseNotesButton": "Release-notes",
     "stageDownload": "Downloaden…",
     "stageFinish": "Afronden…",

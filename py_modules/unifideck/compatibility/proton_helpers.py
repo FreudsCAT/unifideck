@@ -9,6 +9,15 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
+# Re-exported for backward-compat: the pure config.vdf KeyValues parsers now
+# live in the launcher-safe ``utils.vdf_compat`` (stdlib-only) so the
+# out-of-process launcher can share them without importing this aiohttp-heavy
+# package. Importing them here keeps ``proton_helpers.parse_*`` call sites working.
+from unifideck.utils.vdf_compat import (
+    parse_compat_tool,
+    parse_global_default_compat_tool,
+)
+
 if TYPE_CHECKING:
     from unifideck.config import ConfigManager
 logger = logging.getLogger(__name__)
@@ -53,71 +62,6 @@ def is_linux_runtime(tool_name: str) -> bool:
         for prefix in LINUX_RUNTIME_PREFIXES
     )
 
-def parse_compat_tool(content: str, appid: int) -> str:
-
-    """Parse compat tool."""
-    if not content:
-        return ""
-    appid_str = str(appid)
-    if f'"{appid_str}"' not in content:
-        return ""
-    marker = '"CompatToolMapping"'
-    marker_pos = content.find(marker)
-    if marker_pos < 0:
-        return ""
-    pattern = re.compile(
-        rf'"{appid_str}"\s*\{{([^}}]*)\}}', re.DOTALL,
-    )
-    m = pattern.search(content, marker_pos)
-    if not m:
-        return ""
-    name_match = re.search(r'"name"\s+"([^"]*)"', m.group(1))
-    return name_match.group(1) if name_match else ""
-def _extract_kv_block(content: str, start: int) -> str:
-    """Return the balanced ``{ … }`` block beginning at/after ``start``.
-
-    Unlike a ``[^}]*`` regex this respects the nested per-appid blocks
-    inside ``CompatToolMapping``, so callers can bound a search to just
-    that section instead of scanning the whole (large) ``config.vdf``.
-    Returns ``""`` when no balanced block is found.
-    """
-    open_brace = content.find("{", start)
-    if open_brace < 0:
-        return ""
-    depth = 0
-    for i in range(open_brace, len(content)):
-        ch = content[i]
-        if ch == "{":
-            depth += 1
-        elif ch == "}":
-            depth -= 1
-            if depth == 0:
-                return content[open_brace:i + 1]
-    return ""
-def parse_global_default_compat_tool(content: str) -> str:
-    """Parse the global-default compat tool (``CompatToolMapping["0"]``).
-
-    Steam writes ``"0"`` when the user enables Steam Play for all other
-    titles with a chosen tool; distros like Bazzite ship it pre-set (e.g.
-    ``Proton-CachyOS Latest``). The scan is bounded to the
-    ``CompatToolMapping`` block via ``_extract_kv_block`` so that, when no
-    global default is set, an unrelated ``"0" { … }`` elsewhere in
-    ``config.vdf`` cannot false-match. Returns ``""`` when unset.
-    """
-    if not content:
-        return ""
-    marker = '"CompatToolMapping"'
-    marker_pos = content.find(marker)
-    if marker_pos < 0:
-        return ""
-    block = _extract_kv_block(content, marker_pos)
-    if not block:
-        return ""
-    m = re.search(r'"0"\s*\{([^}]*)\}', block, re.DOTALL)
-    if not m:
-        return ""
-    name_match = re.search(r'"name"\s+"([^"]*)"', m.group(1))
-    return name_match.group(1) if name_match else ""
 def inject_compat_tool(
     content: str, appid: int, tool_name: str,
 ) -> str:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections import deque
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -12,6 +13,36 @@ if TYPE_CHECKING:
     ]
     ProgressCallback = Callable[[float | dict[str, Any]], Awaitable[None]]
 logger = logging.getLogger(__name__)
+
+
+class TailRingBuffer:
+    """Bounded FIFO of a CLI's most-recent non-progress output lines.
+
+    A store installer streams a download tool's stdout line-by-line and
+    forwards only the progress/speed lines to the UI; the *other* lines
+    (which is where the tool prints its actual error, e.g. legendary's
+    ``[cli] ERROR: …``) would otherwise be dropped. Feed those lines to
+    :meth:`append` and, on a non-zero exit, call :meth:`tail` to recover
+    the last few for the failure message. One instance per install (bind
+    it via ``functools.partial`` into the line handler) so concurrent or
+    sequential installs never share state.
+    """
+
+    def __init__(self, maxlen: int = 20) -> None:
+        """Keep at most ``maxlen`` lines (the newest win)."""
+        self._lines: deque[str] = deque(maxlen=maxlen)
+
+    def append(self, line: str) -> None:
+        """Record one output line (empty lines are ignored)."""
+        if line:
+            self._lines.append(line)
+
+    def tail(self, count: int = 5, sep: str = " | ") -> str:
+        """Return the last ``count`` recorded lines joined by ``sep``."""
+        if not self._lines:
+            return ""
+        recent = list(self._lines)[-count:]
+        return sep.join(recent)
 async def drain_install_output(
     proc: Any,
     game_id: str,

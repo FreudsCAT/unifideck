@@ -12,6 +12,10 @@
       "disconnected": "Nie połączono",
       "checking": "Sprawdzanie…",
       "error": "Błąd — sprawdź logi"
+    },
+    "errors": {
+      "networkTitle": "No internet connection",
+      "networkBody": "Connect to Wi-Fi and try again."
     }
   },
   "storage": {
@@ -155,7 +159,6 @@
     "syncing": "Synchronizacja...",
     "cancelSync": "Anuluj synchronizację",
     "retryStatusCheck": "Ponów sprawdzenie statusu",
-    "refreshStore": "Odśwież bibliotekę tego sklepu",
     "gamesSynced": "{{synced}} / {{total}} gier zsynchronizowanych",
     "artworkDownloaded": "{{synced}} / {{total}} okładek pobranych",
     "metadataExtracted": "{{synced}} / {{total}} rekordów metadanych wyodrębnionych",
@@ -273,6 +276,7 @@
     "unifideck": "Unifideck:",
     "launcher": {
       "networkError": "Błąd sieci",
+      "launchRetry": "Ponawianie uruchamiania",
       "retryingUmu": "Ponowna próba UMU za {{seconds}} s (próba {{attempt}}/{{max}})...",
       "protonUpgrade": "Aktualizacja Protona",
       "resettingPrefix": "Resetowanie prefiksu dla {{version}}...",
@@ -900,6 +904,7 @@
     "currentTitle": "Aktualna",
     "downgradeButton": "Downgrade do v{{version}}",
     "installFailedTitle": "Instalacja nie powiodła się",
+    "installTimeoutMessage": "Brak odpowiedzi od Decky Loader — instalacja mogła się zawiesić lub nie powieść. Spróbuj ponownie.",
     "installedLabel": "zainstalowano",
     "installingButton": "Instalowanie...",
     "installingTitle": "Instalowanie wtyczki",
@@ -908,6 +913,8 @@
     "noBackend": "Backend Decky jest niedostępny.",
     "noReleaseNotes": "Brak listy zmian.",
     "reinstallButton": "Zainstaluj ponownie v{{version}}",
+    "refreshFailedMessage": "Nie udało się zweryfikować informacji o najnowszej wersji. Sprawdź połączenie i spróbuj ponownie.",
+    "releaseGoneMessage": "Ta wersja nie jest już dostępna. Sprawdź aktualizacje i wybierz ją ponownie.",
     "releaseNotesButton": "Lista zmian",
     "stageDownload": "Pobieranie…",
     "stageFinish": "Kończenie…",

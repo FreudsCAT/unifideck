@@ -24,6 +24,8 @@ import asyncio
 import logging
 from typing import TYPE_CHECKING, Any
 
+import aiohttp
+
 from unifideck.compatibility import CompatLibrary
 from unifideck.core.types import Game
 from unifideck.core.types.events import Events
@@ -67,7 +69,11 @@ class CompatibilityService:
         self._bus = bus
         self._cache = cache
         self._config = config
-        self._lib = CompatLibrary(cache=cache, config=config)
+        # Deferred writes: the per-sync loop writes once per game;
+        # ``_run_enrichment``'s ``finally`` flushes both namespaces.
+        self._lib = CompatLibrary(
+            cache=cache, config=config, deferred_writes=True,
+        )
         self._enrichment_task: asyncio.Task[None] | None = None
         if sync_service is not None:
             sync_service.register_post_sync_phase("proton_meta")
@@ -125,42 +131,48 @@ class CompatibilityService:
             return
         sync_kwargs = kwargs.get("sync_kwargs") or {}
         games = sync_kwargs.get("games") or kwargs.get("games", [])
+        is_force = bool(sync_kwargs.get("is_force") or kwargs.get("is_force"))
         prior = self._enrichment_task
         if prior is not None and not prior.done():
             prior.cancel()
         self._enrichment_task = asyncio.create_task(
-            self._run_enrichment(games),
+            self._run_enrichment(games, is_force=is_force),
             name="compatibility-enrichment",
         )
 
-    async def _run_enrichment(self, games: list[Game]) -> None:
+    async def _run_enrichment(
+        self, games: list[Game], *, is_force: bool = False,
+    ) -> None:
         """Per-game ProtonDB + Deck-Verified lookup, concurrent under a semaphore.
 
-        Was sequential with a 50ms inter-game sleep — ~8 minutes
-        for a 1130-game library. The semaphore cap is sized for
-        the empirical ceiling of the slower of the two upstream
-        endpoints; both tolerate 16+ in flight comfortably.
+        Standard sync partitions out games whose rating is already
+        cached (mirrors ``MetadataService._partition_games``) — they
+        tick the progress counter instantly and cost zero HTTP.
+        ``is_force`` skips the partition and refreshes every entry.
         """
         total = len(games)
-        max_concurrent = self._max_concurrent()
         progress = self._bus.get_sync_progress() if hasattr(self._bus, "get_sync_progress") else None
         try:
             if not games:
                 return
             if progress is not None:
                 progress.start_compat(total)
-            logger.info(
-                "[CompatibilityService] compat fetch started "
-                "for %d games (concurrency=%d)",
-                total, max_concurrent,
+            skipped, pending = (
+                ([], list(games)) if is_force
+                else self._partition_games(games)
             )
-            sem = asyncio.Semaphore(max_concurrent)
-            tasks = [
-                asyncio.create_task(self._fetch_one(g, sem, progress))
-                for g in games
-            ]
-            await self._drain(tasks, progress, total)
+            logger.info(
+                "[CompatibilityService] compat fetch started for %d games "
+                "(%d skipped (cached), %d pending, force=%s)",
+                total, len(skipped), len(pending), is_force,
+            )
+            await self._tick_skipped(skipped, progress)
+            if pending:
+                await self._fetch_pending(
+                    pending, progress, total, refresh=is_force,
+                )
         finally:
+            self._flush_compat_caches()
             await self._bus.emit(
                 Events.POST_SYNC_PHASE_CHANGED,
                 phase="proton_meta", active=False, total=total, done=total,
@@ -170,8 +182,115 @@ class CompatibilityService:
                 total,
             )
 
+    @staticmethod
+    async def _tick_skipped(skipped: list[Game], progress: Any | None) -> None:
+        """Advance the progress counter instantly for cached games."""
+        if progress is None:
+            return
+        for g in skipped:
+            await progress.increment_compat(g.title)
+
+    async def _fetch_pending(
+        self,
+        pending: list[Game],
+        progress: Any | None,
+        total: int,
+        *,
+        refresh: bool,
+    ) -> None:
+        """Fan out the per-game lookups under one shared session.
+
+        One session per run (``ssl=False`` — the permissive-TLS
+        invariant): per-call sessions cost two TLS handshakes per
+        game on a cold sync.
+        """
+        sem = asyncio.Semaphore(self._max_concurrent())
+        connector = aiohttp.TCPConnector(ssl=False)
+        async with aiohttp.ClientSession(connector=connector) as sess:
+            tasks = [
+                asyncio.create_task(
+                    self._fetch_one(
+                        g, sem, progress, refresh=refresh, session=sess,
+                    ),
+                )
+                for g in pending
+            ]
+            await self._drain(tasks, progress, total)
+
+    def _flush_compat_caches(self) -> None:
+        """Persist the loop's deferred compat/appid-mapping writes."""
+        for namespace in ("compat", "steam_real_appid"):
+            try:
+                self._cache.flush(namespace)
+            except Exception:
+                logger.debug(
+                    "[CompatibilityService] cache flush %s failed", namespace,
+                )
+
+    def _partition_games(
+        self, games: list[Game],
+    ) -> tuple[list[Game], list[Game]]:
+        """Split games into ``(already-cached, pending-fetch)``.
+
+        Mirrors ``MetadataService._partition_games``. Before this
+        partition existed the compat phase visited every game every
+        sync: titles that never resolve on Steam re-ran
+        ``search_store`` forever, and entries with no published
+        test results re-hit the Deck-Verified endpoint forever.
+        """
+        skipped: list[Game] = []
+        pending: list[Game] = []
+        for g in games:
+            (skipped if self._has_cached_compat(g) else pending).append(g)
+        return skipped, pending
+
+    def _has_cached_compat(self, game: Game) -> bool:
+        """True when this sync could fetch nothing new for ``game``."""
+        mapping = self._lib.cached_steam_mapping(game.app_id)
+        if mapping is None:
+            # Never resolved — worth an attempt (backfills the
+            # mapping the metadata phase missed).
+            return False
+        if mapping <= 0:
+            # Negative-cached: no Steam counterpart exists. Only a
+            # force sync (via the metadata phase's re-resolution)
+            # retries these.
+            return True
+        entry = self._cached_compat_entry(mapping)
+        if entry is None:
+            return False
+        return not self._needs_self_heal(entry)
+
+    def _cached_compat_entry(self, steam_id: int) -> dict[str, Any] | None:
+        """Read the ``compat`` cache entry for a real Steam AppID."""
+        try:
+            value = self._cache.get("compat", str(steam_id))
+        except Exception:
+            return None
+        return value if isinstance(value, dict) else None
+
+    @staticmethod
+    def _needs_self_heal(entry: dict[str, Any]) -> bool:
+        """Pre-``deck_test_results`` cache entries get ONE upgrade fetch.
+
+        The ``dtr_checked`` stamp (written by ``CompatLibrary``)
+        marks the upgrade as attempted so games with genuinely no
+        published test results stop re-fetching every sync.
+        """
+        return (
+            entry.get("deck_status", "unknown") != "unknown"
+            and not entry.get("deck_test_results")
+            and not entry.get("dtr_checked")
+        )
+
     async def _fetch_one(
-        self, game: Game, sem: asyncio.Semaphore, progress: Any | None,
+        self,
+        game: Game,
+        sem: asyncio.Semaphore,
+        progress: Any | None,
+        *,
+        refresh: bool = False,
+        session: aiohttp.ClientSession | None = None,
     ) -> None:
         """Per-game lookup body — under the semaphore.
 
@@ -186,6 +305,7 @@ class CompatibilityService:
                 # MetadataService — skips a per-game storesearch.
                 await self._lib.get_for_title(
                     game.title, shortcut_app_id=game.app_id,
+                    refresh=refresh, session=session,
                 )
             except Exception as e:
                 logger.debug(

@@ -29,9 +29,25 @@ def test_restores_original_when_pyinstaller_saved_it():
     sanitize_frozen_loader_env(env)
     assert env["LD_LIBRARY_PATH"] == "/usr/lib/real"
     assert "LD_LIBRARY_PATH_ORIG" not in env
-    # An empty _ORIG is a real value (PyInstaller used to have nothing set) —
-    # restore it verbatim rather than dropping.
-    assert env["LD_PRELOAD"] == ""
+    # LD_PRELOAD is write-once-never: a _MEI-tainted value is dropped, but
+    # never restored from _ORIG — umu-run/pressure-vessel has its own Steam
+    # overlay mechanism, and re-exporting the host's gameoverlayrenderer.so
+    # crashes the game process ("WARNING: Keyboard Interrupt").
+    assert "LD_PRELOAD" not in env
+    assert "LD_PRELOAD_ORIG" not in env
+
+
+def test_never_restores_ld_preload_from_orig_on_clean_launcher_env():
+    # The Gaming-Mode-shaped case: no LD_PRELOAD set (already stripped by
+    # bin/unifideck-launcher at process start), but an inherited
+    # LD_PRELOAD_ORIG with a real overlay path survives. Must NOT be
+    # promoted back into LD_PRELOAD.
+    env = {
+        "PATH": "/usr/bin",
+        "LD_PRELOAD_ORIG": "/home/deck/.local/share/Steam/ubuntu12_32/gameoverlayrenderer.so",
+    }
+    sanitize_frozen_loader_env(env)
+    assert "LD_PRELOAD" not in env
     assert "LD_PRELOAD_ORIG" not in env
 
 

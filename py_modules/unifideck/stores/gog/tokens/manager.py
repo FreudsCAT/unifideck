@@ -33,7 +33,7 @@ from typing import TYPE_CHECKING, Any
 from unifideck.security import SecureTokenStore
 
 from .gogdl_credentials import _GogdlCreds
-from .oauth import _TokenOAuth
+from .oauth import ExchangeOutcome, _TokenOAuth
 from .storage import _TokenStorage
 from .user_info import GOGUserInfo
 
@@ -141,8 +141,8 @@ class GOGTokenManager:
         self._user_info = GOGUserInfo()
         await self._storage.clear_files()
 
-    async def exchange_code(self, auth_code: str) -> bool:
-        """Exchange code."""
+    async def exchange_code(self, auth_code: str) -> ExchangeOutcome:
+        """Exchange code (delegates; see :class:`ExchangeOutcome`)."""
         return await self._oauth.exchange_code(auth_code)
 
     async def refresh_if_stale(self) -> bool:

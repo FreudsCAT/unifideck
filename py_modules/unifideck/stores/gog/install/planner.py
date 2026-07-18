@@ -44,6 +44,7 @@ def _build_verify_result(
     has_info: bool,
     has_exe: bool,
     size_ratio: float,
+    platform: str,
 ) -> dict[str, Any]:
     """Build the dict returned by ``verify_installation``.
 
@@ -53,6 +54,18 @@ def _build_verify_result(
     them here also makes it obvious that the dict keys vary by
     outcome — a fact that was easy to miss when the branches
     were inlined.
+
+    Platform carve-out (UD-042): ``goggame-<id>.info`` is a
+    Windows/Galaxy-only artifact that is *never* present in GOG's
+    Linux-native builds. Treating its absence as an integrity
+    failure on ``platform == "linux"`` produced a false
+    "incomplete" on every Linux-native install, which needlessly
+    triggered a gogdl repair pass (that reliably wedged for ~1h
+    behind the finalize watchdog). So the missing-info branch is
+    skipped for Linux; the size-ratio and exe checks still guard
+    it. For Linux the returned "complete" dict carries
+    ``has_info=False`` honestly — downstream only branches on
+    ``complete``, so that is safe.
     """
     if expected > 0 and size_ratio < _MIN_SIZE_RATIO:
         return {
@@ -66,7 +79,7 @@ def _build_verify_result(
             "has_info": has_info,
             "has_exe": has_exe,
         }
-    if not has_info:
+    if platform != "linux" and not has_info:
         return {
             "complete": False,
             "issue": "Missing goggame.info file",
@@ -221,6 +234,7 @@ class GOGInstallPlanner:
                 has_info=has_info,
                 has_exe=has_exe,
                 size_ratio=size_ratio,
+                platform=platform,
             )
         except Exception as e:
             logger.exception("[GOGInstallPlanner] verify error")

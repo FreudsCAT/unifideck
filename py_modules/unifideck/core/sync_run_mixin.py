@@ -4,15 +4,16 @@ OP-08l-quater | core/sync_run_mixin.py
 
 Extracted from ``core/sync_service.py`` to keep that file under the
 550-LOC volumetry cap. Owns the per-run orchestration: setup,
-per-store fetch loop, cancellation handling, finalization (dedup +
-SYNC_COMPLETE), the post-sync watchdog, and the single-store path.
+per-store fetch loop, cancellation handling, and the single-store path.
 
-Construction, queueing (``sync_all`` / ``_enqueue``), the bus event
-handlers, and ``cancel`` stay in ``SyncService``; read-only queries
-live in ``_SyncQueriesMixin`` and result aggregation in
-``_SyncResultsMixin``. All consumed state + sibling-mixin methods are
-declared as ``TYPE_CHECKING`` annotations — the host provides them at
-runtime.
+Post-sync finalization (dedup + SYNC_COMPLETE, the phase set, and the
+watchdog) lives in ``_SyncFinalizeMixin`` (``sync_finalize_mixin.py``),
+also split out for the cap. Construction, queueing (``sync_all`` /
+``_enqueue``), the bus event handlers, and ``cancel`` stay in
+``SyncService``; read-only queries live in ``_SyncQueriesMixin`` and
+result aggregation in ``_SyncResultsMixin``. All consumed state +
+sibling-mixin methods are declared as ``TYPE_CHECKING`` annotations —
+the host provides them at runtime.
 """
 from __future__ import annotations
 
@@ -21,6 +22,7 @@ import logging
 import time
 from typing import TYPE_CHECKING, Any
 
+from .sync_availability import refresh_store_availability
 from .types import Events, Game, SyncResult
 
 if TYPE_CHECKING:
@@ -30,12 +32,6 @@ if TYPE_CHECKING:
     from unifideck.stores.shared.store_base import StoreBase
 
 logger = logging.getLogger(__name__)
-
-# Watchdog timeout for post-sync hooks. Real syncs of 1000+ games
-# spend 15-30 minutes in the metadata-enrichment phase, so this is
-# generous on purpose — it only catches pathological stuck states
-# (bus.emit raises, task is killed without reaching its finally).
-POST_SYNC_WATCHDOG_SECONDS = 1800
 
 # Per-store ``get_library`` ceiling. The sync runs stores sequentially,
 # so a single store that hangs (a wedged Wine/UPC catalog parse, a
@@ -78,6 +74,18 @@ class _SyncRunMixin:
             total: int,
         ) -> SyncResult: ...
         def _flatten(self, libraries: dict[str, list[Game]]) -> list[Game]: ...
+        # Post-sync finalize lives in ``_SyncFinalizeMixin``.
+        async def _finalize_sync(
+            self,
+            libraries: dict[str, list[Game]],
+            errors: dict[str, str],
+            total: int,
+            started: float,
+            *,
+            fetch_artwork: bool = ...,
+            resync_artwork: bool = ...,
+            is_force: bool = ...,
+        ) -> SyncResult: ...
 
     async def _run_sync(
         self,
@@ -105,7 +113,7 @@ class _SyncRunMixin:
             if self._cancel_event.is_set():
                 return await self._sync_cancelled_result(idx, total, libraries)
             self._current_store = store.store_name
-            await self._emit_progress(store.store_name, idx, total)
+            await self._emit_progress(store.store_name, idx, total, libraries)
             games, err = await self._fetch_one(store, is_force)
             libraries[store.store_name] = games
             if err is not None:
@@ -206,14 +214,35 @@ class _SyncRunMixin:
         else:
             self._cache_snapshot = None
         started = time.monotonic()
+        await refresh_store_availability(self._registry)
         available_stores = self._registry.available()
         store_names = [s.store_name for s in available_stores]
+        # Surface stores excluded from this sync. A dropped store never
+        # reaches its per-store "fetched N games" log, so without this a
+        # silently-skipped store (e.g. GOG after a transient availability
+        # probe blip) looks identical to "0 games" in an all-green log
+        # (UD-005).
+        dropped = [
+            s.store_name
+            for s in self._registry.all()
+            if s.store_name not in store_names
+        ]
+        if dropped:
+            logger.warning(
+                "[SyncService] stores excluded from sync "
+                "(not available): %s",
+                dropped,
+            )
         self._progress.start_fetching(len(available_stores))
         self._bus.set_sync_progress(self._progress)
         await self._bus.emit(
             Events.SYNC_STARTED,
             stores=store_names,
             scope="all",
+            # Authoritative post-sync phase set for the frontend to drain
+            # before prompting the Steam restart — hardcoding it there
+            # over-counted and the modal never fired (UD-006).
+            registered_phases=sorted(self._registered_phases),
         )
         # Durable activity event — ephemeral SYNC_STARTED above drives
         # UI; this one feeds the persistent log via ActivityLogService.
@@ -243,145 +272,6 @@ class _SyncRunMixin:
         except Exception:
             logger.exception("[SyncService] cache snapshot restore failed")
         self._cache_snapshot = None
-
-    async def _finalize_sync(
-        self,
-        libraries: dict[str, list[Game]],
-        errors: dict[str, str],
-        total: int,
-        started: float,
-        *,
-        fetch_artwork: bool = True,
-        resync_artwork: bool = False,
-        is_force: bool = False,
-    ) -> SyncResult:
-        """Compute duration, dedup, persist state, emit SYNC_COMPLETE.
-
-        Args:
-            fetch_artwork: when ``False``, mark the artwork phase as
-                already-done in ``_post_sync_pending`` so the progress
-                bar doesn't stall at 60%.
-            resync_artwork: forwarded to ArtworkService via the
-                SYNC_COMPLETE payload; treated as ``force``.
-            is_force: forwarded so ShortcutService UPDATEs (not just
-                KEEPs) existing shortcuts.
-
-        Side effects: updates ``self._all_games`` and
-        ``self._last_sync_time``.
-        """
-        duration_ms = int((time.monotonic() - started) * 1000)
-        self._populate_app_ids(libraries)
-        self._all_games = libraries
-        total_games = sum(len(g) for g in libraries.values())
-        self._progress.set_library_totals(total_games)
-        self._arm_artwork_phase(fetch_artwork, total_games)
-        self._last_sync_time = time.time()
-        self._save_library_cache()
-        self._arm_watchdog()
-        result = self._aggregate_results(libraries, errors, duration_ms, total)
-        await self._emit_complete(
-            result, libraries, errors, duration_ms, total_games,
-            fetch_artwork=fetch_artwork,
-            resync_artwork=resync_artwork,
-            is_force=is_force,
-        )
-        # Successful finalize — release the snapshot so the GC can
-        # reclaim it before the post-sync phases fill caches afresh.
-        self._cache_snapshot = None
-        return result
-
-    def _arm_artwork_phase(self, fetch_artwork: bool, total_games: int) -> None:
-        """Seed ``_post_sync_pending``; start the artwork phase if fetching.
-
-        ``resync_artwork`` / ``fetch_artwork`` themselves are forwarded
-        to ArtworkService via the SYNC_COMPLETE payload (it owns the
-        SGDB failure-cooldown cache). Signalling the phase here, before
-        the emit, lets the frontend's polling loop see the transition.
-        """
-        self._post_sync_pending = set(self._registered_phases)
-        if fetch_artwork:
-            self._progress.start_artwork(total_games)
-        else:
-            # Skip the artwork phase: drop it so mark_complete fires as
-            # soon as the other phases report done (else the bar stalls
-            # at 60% waiting for an artwork emit that never comes).
-            self._post_sync_pending.discard("artwork")
-
-    def _arm_watchdog(self) -> None:
-        """(Re)arm the post-sync completion watchdog, cancelling any prior.
-
-        The try/finally guards in MetadataService and ArtworkService
-        normally emit POST_SYNC_PHASE_CHANGED before this fires; the
-        watchdog only matters if both safeguards are bypassed.
-        """
-        if self._watchdog_task is not None and not self._watchdog_task.done():
-            self._watchdog_task.cancel()
-        self._watchdog_task = asyncio.create_task(
-            self._post_sync_watchdog(), name="post-sync-watchdog",
-        )
-
-    async def _emit_complete(
-        self,
-        result: SyncResult,
-        libraries: dict[str, list[Game]],
-        errors: dict[str, str],
-        duration_ms: int,
-        total_games: int,
-        *,
-        fetch_artwork: bool,
-        resync_artwork: bool,
-        is_force: bool,
-    ) -> None:
-        """Emit SYNC_COMPLETE (UI) + LIBRARY_SYNC_COMPLETED (activity log)."""
-        await self._bus.emit(
-            Events.SYNC_COMPLETE,
-            games=result.games,
-            stores_synced=list(libraries.keys()),
-            # Every registered store, not just the ones that returned
-            # games — lets ShortcutService.reconcile sweep stale
-            # shortcuts for a logged-out / empty store (phantom Ubisoft
-            # entries, the legacy microsoft:ms-auth row).
-            registered_stores=self._registry.store_ids(),
-            errors=errors,
-            duration_ms=duration_ms,
-            fetch_artwork=fetch_artwork,
-            resync_artwork=resync_artwork,
-            is_force=is_force,
-        )
-        await self._bus.emit(
-            Events.LIBRARY_SYNC_COMPLETED,
-            duration_ms=duration_ms,
-            game_count=total_games,
-            store_count=len(libraries),
-            errors=dict(errors),
-        )
-
-    async def _post_sync_watchdog(self) -> None:
-        """Force-complete the sync if ``_post_sync_pending`` is still
-        non-empty after ``POST_SYNC_WATCHDOG_SECONDS``.
-
-        Should never fire in practice — try/finally in the post-sync
-        services guarantees the phase-done events. Exists for the
-        pathological case where ``bus.emit`` itself raises or a task is
-        killed before reaching its finally block.
-        """
-        try:
-            await asyncio.sleep(POST_SYNC_WATCHDOG_SECONDS)
-        except asyncio.CancelledError:
-            return
-        if self._post_sync_pending:
-            logger.warning(
-                "[SyncService] post-sync watchdog tripped: phases %s "
-                "never reported done after %ds — forcing completion",
-                sorted(self._post_sync_pending),
-                POST_SYNC_WATCHDOG_SECONDS,
-            )
-            self._post_sync_pending.clear()
-            # Don't clobber a cancelled status — the user explicitly
-            # requested cancel and the bar should reflect that.
-            if self._progress.status != "cancelled":
-                self._progress.mark_complete()
-            self._bus.set_sync_progress(None)
 
     def _populate_app_ids(self, libraries: dict[str, list[Game]]) -> None:
         """Assign every ``Game`` a stable Steam-shortcut AppID.
@@ -512,10 +402,23 @@ class _SyncRunMixin:
             return [], str(e)
 
     async def _emit_progress(
-        self, store_name: str, idx: int, total: int,
+        self,
+        store_name: str,
+        idx: int,
+        total: int,
+        libraries: dict[str, list[Game]],
     ) -> None:
-        """Emit ``SYNC_PROGRESS`` — updates the phase tracker + fires event."""
-        total_games = sum(len(g) for g in self._all_games.values())
+        """Emit ``SYNC_PROGRESS`` — updates the phase tracker + fires event.
+
+        ``total_games`` is the count fetched so far *in this run*
+        (``libraries``, built up by the caller's per-store loop) — not
+        ``self._all_games``, which still holds the previous run's full
+        library until ``_finalize_sync`` overwrites it at the very end.
+        Reading ``_all_games`` here made an in-progress sync of a
+        handful of stores misreport the prior run's total game count
+        as already "synced".
+        """
+        total_games = sum(len(g) for g in libraries.values())
         self._progress.start_store_sync(store_name, idx, total)
         await self._bus.emit(
             Events.SYNC_PROGRESS,

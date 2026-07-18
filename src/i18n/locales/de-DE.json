@@ -12,6 +12,10 @@
       "disconnected": "Nicht verbunden",
       "checking": "Überprüfen…",
       "error": "Fehler — Protokolle prüfen"
+    },
+    "errors": {
+      "networkTitle": "No internet connection",
+      "networkBody": "Connect to Wi-Fi and try again."
     }
   },
   "storage": {
@@ -155,7 +159,6 @@
     "syncing": "Synchronisieren...",
     "cancelSync": "Synchronisierung abbrechen",
     "retryStatusCheck": "Statusprüfung wiederholen",
-    "refreshStore": "Bibliothek dieses Stores aktualisieren",
     "gamesSynced": "{{synced}} / {{total}} Spiele synchronisiert",
     "artworkDownloaded": "{{synced}} / {{total}} Coverbilder heruntergeladen",
     "metadataExtracted": "{{synced}} / {{total}} Metadatensätze extrahiert",
@@ -273,6 +276,7 @@
     "unifideck": "Unifideck:",
     "launcher": {
       "networkError": "Netzwerkfehler",
+      "launchRetry": "Start wird wiederholt",
       "retryingUmu": "UMU wird in {{seconds}}s erneut versucht (Versuch {{attempt}}/{{max}})...",
       "protonUpgrade": "Proton-Upgrade",
       "resettingPrefix": "Präfix für {{version}} wird zurückgesetzt...",
@@ -900,6 +904,7 @@
     "currentTitle": "Aktuell",
     "downgradeButton": "Downgrade auf v{{version}}",
     "installFailedTitle": "Installation fehlgeschlagen",
+    "installTimeoutMessage": "Keine Antwort von Decky Loader — die Installation ist möglicherweise hängen geblieben oder fehlgeschlagen. Bitte versuche es erneut.",
     "installedLabel": "installiert",
     "installingButton": "Wird installiert...",
     "installingTitle": "Plugin wird installiert",
@@ -908,6 +913,8 @@
     "noBackend": "Decky-Backend ist nicht verfügbar.",
     "noReleaseNotes": "Keine Release Notes verfügbar.",
     "reinstallButton": "Reinstall v{{version}}",
+    "refreshFailedMessage": "Die Informationen zur neuesten Version konnten nicht überprüft werden. Prüfe deine Verbindung und versuche es erneut.",
+    "releaseGoneMessage": "Diese Version ist nicht mehr verfügbar. Bitte suche nach Updates und wähle erneut aus.",
     "releaseNotesButton": "Release Notes",
     "stageDownload": "Herunterladen…",
     "stageFinish": "Fertigstellen…",

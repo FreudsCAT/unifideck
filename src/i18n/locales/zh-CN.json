@@ -12,6 +12,10 @@
       "disconnected": "未连接",
       "checking": "正在检查…",
       "error": "错误 — 请检查日志"
+    },
+    "errors": {
+      "networkTitle": "No internet connection",
+      "networkBody": "Connect to Wi-Fi and try again."
     }
   },
   "storage": {
@@ -155,7 +159,6 @@
     "syncing": "正在同步...",
     "cancelSync": "取消同步",
     "retryStatusCheck": "重试状态检查",
-    "refreshStore": "刷新此商店的游戏库",
     "gamesSynced": "已同步游戏 {{synced}} / {{total}}",
     "artworkDownloaded": "已下载封面 {{synced}} / {{total}}",
     "metadataExtracted": "已提取元数据 {{synced}} / {{total}}",
@@ -273,6 +276,7 @@
     "unifideck": "Unifideck:",
     "launcher": {
       "networkError": "网络错误",
+      "launchRetry": "正在重试启动",
       "retryingUmu": "{{seconds}} 秒后重试 UMU (尝试次数 {{attempt}}/{{max}})...",
       "protonUpgrade": "Proton 升级",
       "resettingPrefix": "正在为 {{version}} 重置环境...",
@@ -900,6 +904,7 @@
     "currentTitle": "当前版本",
     "downgradeButton": "降级至 v{{version}}",
     "installFailedTitle": "安装失败",
+    "installTimeoutMessage": "Decky Loader 无响应 — 安装可能已停滞或失败。请重试。",
     "installedLabel": "已安装",
     "installingButton": "正在安装...",
     "installingTitle": "安装插件中",
@@ -908,6 +913,8 @@
     "noBackend": "Decky 后端服务不可用。",
     "noReleaseNotes": "无可用发行说明。",
     "reinstallButton": "重新安装 v{{version}}",
+    "refreshFailedMessage": "无法验证最新版本信息。请检查网络连接后重试。",
+    "releaseGoneMessage": "此版本已不再可用。请检查更新后重新选择。",
     "releaseNotesButton": "发行说明",
     "stageDownload": "下载中…",
     "stageFinish": "正在完成…",

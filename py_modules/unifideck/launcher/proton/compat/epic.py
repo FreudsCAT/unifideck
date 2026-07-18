@@ -75,7 +75,14 @@ def build_legendary_env(
     authenticated legendary config (auth + EOS overlay registry).
     """
     env = dict(plan.env)
-    env["STORE"] = "none"
+    # STORE=none keeps umu from applying an egs profile to the legendary
+    # wrapper chain — correct for every Epic title EXCEPT Rockstar-on-Epic
+    # (RDR2/GTA5), which needs the egs profile umu-run picks up (set in
+    # core.proton_prepare). Preserve whatever proton_prepare chose for
+    # those; force "none" for all others.
+    from unifideck.launcher.proton.fixes.game_fixes import is_rockstar_egs
+    if not is_rockstar_egs(plan.context.game_id, plan.state.umu_id):
+        env["STORE"] = "none"
     env.pop("LEGENDARY_WRAPPER_EXE", None)
     env["HEROIC_APP_RUNNER"] = "legendary"
     if config_path:
@@ -90,7 +97,9 @@ def detect_offline() -> bool:
     ``WantsOfflineMode``, then a fast TCP probe (no ``ping``/``curl``
     dependency). Any error → assume online (return False).
     """
-    login_vdf = Path("~/.steam/steam/config/loginusers.vdf").expanduser()
+    from unifideck.utils.vdf_compat import find_steam_root
+    steam_root = find_steam_root() or Path("~/.steam/steam").expanduser()
+    login_vdf = steam_root / "config" / "loginusers.vdf"
     with contextlib.suppress(OSError):
         if login_vdf.is_file():
             text = login_vdf.read_text(encoding="utf-8", errors="replace")

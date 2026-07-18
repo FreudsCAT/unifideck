@@ -262,8 +262,14 @@ class AuthShortcutsRPCMixin:
 
         import vdf
 
+        from unifideck.steam.library import find_steam_path
         from unifideck.steam.steam_user import get_active_steam_user
-        steam_root = Path("~/.steam/steam").expanduser()
+        # Probe the cross-distro candidate roots (no config here — this is a
+        # staticmethod) instead of hardcoding ``~/.steam/steam``, so the
+        # Ubisoft install/Play appid lookup reads the SAME shortcuts.vdf the
+        # reconcile wrote on Bazzite/CachyOS/Flatpak layouts.
+        resolved = find_steam_path(None)
+        steam_root = Path(resolved) if resolved else Path("~/.steam/steam").expanduser()
         active_user = get_active_steam_user(steam_root) or "0"
         vdf_path = (
             steam_root / "userdata" / active_user / "config" / "shortcuts.vdf"
