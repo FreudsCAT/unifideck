@@ -23,10 +23,18 @@ from typing import Any
 
 import pytest
 
-from tests.unit._repo_root import find_repo_file
-
 
 def _load(relative: str) -> Any:
+    # Imported lazily (not at module top level) so it resolves during
+    # test *execution* rather than *collection*: ``tests/unit/`` has no
+    # ``__init__.py``, so the dotted ``tests.unit._repo_root`` import is
+    # only reliable once pytest has finished setting up sys.path. A
+    # collection-time top-level import raised ``ModuleNotFoundError: No
+    # module named 'tests'`` under CI's Python 3.12. Mirrors the lazy
+    # import already used by test_validate_event_schemas.py and
+    # _tooling/test_flake8_config.py.
+    from tests.unit._repo_root import find_repo_file
+
     path = find_repo_file(relative)
     if path is None:  # environment problem, but surface loudly (no skip)
         pytest.fail(
