@@ -19,10 +19,11 @@ from unifideck.launcher.proton.compat import epic_cleanup as ec
 
 
 def _plan(prefix_path: Path):
-    # state.umu_id=None → not a Rockstar-EGS game, so full cleanup runs
+    # game_id/umu_id → not a Rockstar-EGS game, so full cleanup runs
     # (the behavior these tests exercise).
     return types.SimpleNamespace(
         prefix_path=prefix_path,
+        context=types.SimpleNamespace(game_id="SomeGame"),
         state=types.SimpleNamespace(umu_id=None),
     )
 

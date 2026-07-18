@@ -55,7 +55,7 @@ def apply_rockstar_egs_setup(plan: ProtonLaunchPlan) -> None:
     not abort it.
     """
     from unifideck.launcher.proton.fixes.game_fixes import is_rockstar_egs
-    if not is_rockstar_egs(plan.state.umu_id):
+    if not is_rockstar_egs(plan.context.game_id, plan.state.umu_id):
         return
     logger.info(
         "[rockstar_egs] applying setup for %s (%s)",

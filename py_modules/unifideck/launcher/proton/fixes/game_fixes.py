@@ -70,11 +70,21 @@ MANUAL_FIXES: dict[str, GameFix] = {
 #     stub beside the game exe, so the game's ``start EpicGamesLauncher.exe
 #     PlayRDR2.exe`` handoff resolves without the real Epic launcher.
 # Every one of those is gated behind :func:`is_rockstar_egs` so a normal
-# Epic launch is byte-for-byte unchanged. Keyed by the umu-database
-# ``umu_id`` (resolved in ``core.proton_prepare`` from the Epic catalog
-# id) — the one identifier stable across accounts, unlike the per-account
-# 32-hex Epic app name. Online play never works (BattlEye has no Linux
-# support); this is story-mode only.
+# Epic launch is byte-for-byte unchanged. Online play never works
+# (BattlEye has no Linux support); this is story-mode only.
+#
+# PRIMARY key = the Epic **app name** (legendary's ``game_id``, e.g.
+# "Heather"): it's the one identifier ALWAYS present at launch. The
+# umu-database ``umu_id`` is NOT reliable here — it's resolved via the
+# optional ``bin/umu_lookup.py`` helper which is not bundled in the Decky
+# build, so ``core.proton_prepare`` reports ``umu_id=None`` for every game
+# (the reason the first cut of this flow never fired for RDR2 — the gate
+# was keyed on umu_id). The umu id is kept as a SECONDARY match only, for
+# the case where the lookup helper is present and returns one.
+ROCKSTAR_EGS_APP_NAMES: frozenset[str] = frozenset({
+    "Heather",                          # Red Dead Redemption 2 (Epic codename)
+    "9d2d0eb64d5c44529cece33fe2a46482",  # Grand Theft Auto V (Epic)
+})
 ROCKSTAR_EGS_UMU_IDS: frozenset[str] = frozenset({
     "umu-1174180",  # Red Dead Redemption 2
     "umu-271590",   # Grand Theft Auto V
@@ -82,8 +92,11 @@ ROCKSTAR_EGS_UMU_IDS: frozenset[str] = frozenset({
 # The game's own Play-launcher exe, relative to the install dir, that the
 # Rockstar bootstrap ultimately runs. Used as the ``--override-exe`` target
 # so legendary launches it directly rather than the Epic-launcher stub.
+# Keyed by BOTH the Epic app name and the umu id so either identity resolves.
 ROCKSTAR_PLAY_EXES: dict[str, str] = {
+    "Heather": "PlayRDR2.exe",
     "umu-1174180": "PlayRDR2.exe",
+    "9d2d0eb64d5c44529cece33fe2a46482": "PlayGTAV.exe",
     "umu-271590": "PlayGTAV.exe",
 }
 # vulkan-1=n,b = native-then-builtin: lets the game's own vulkan-1.dll
@@ -91,13 +104,17 @@ ROCKSTAR_PLAY_EXES: dict[str, str] = {
 ROCKSTAR_WINEDLLOVERRIDES = "vulkan-1=n,b"
 
 
-def is_rockstar_egs(umu_id: str | None) -> bool:
+def is_rockstar_egs(game_id: str | None, umu_id: str | None = None) -> bool:
     """True for the Rockstar-on-Epic titles that need the special flow.
 
-    ``umu_id`` is the value ``core.proton_prepare`` resolved via the
-    umu-database lookup (e.g. ``umu-1174180``). ``None``/unknown → False,
-    so the ordinary Epic path is taken unchanged.
+    ``game_id`` is legendary's Epic app name (e.g. "Heather") — the
+    reliable primary key. ``umu_id`` is an optional secondary match (the
+    umu-database id, only populated when ``bin/umu_lookup.py`` is present).
+    Either matching a known Rockstar title returns True; anything else
+    returns False so the ordinary Epic path is taken unchanged.
     """
+    if game_id and game_id in ROCKSTAR_EGS_APP_NAMES:
+        return True
     return bool(umu_id) and umu_id in ROCKSTAR_EGS_UMU_IDS
 
 

@@ -22,6 +22,7 @@ from .infrastructure.umu_runtime import (
     UMU_CACHE_DIR,
     cleanup_umu_runtime_cache,
     ensure_umu_runtime_ready,
+    repair_incomplete_umu_runtime,
     run_umu_with_retry,
 )
 
@@ -42,6 +43,10 @@ async def dispatch(plan: ProtonLaunchPlan) -> int:
     """
     from .compat import apply_prefix_compat
 
+    # Self-heal a half-downloaded umu runtime (payload present but the
+    # umu/_v2-entry-point link missing) before anything spawns umu-run this
+    # launch (UD-084). Store-agnostic, and a cheap no-op stat when healthy.
+    repair_incomplete_umu_runtime()
     await apply_prefix_compat(plan)
 
     store = plan.context.store
@@ -62,6 +67,7 @@ __all__ = [
     "find_python_3_10_plus",
     "generic_launch",
     "proton_prepare",
+    "repair_incomplete_umu_runtime",
     "resolve_proton_path",
     "run_umu_with_retry",
     "select_managed_ge_proton",

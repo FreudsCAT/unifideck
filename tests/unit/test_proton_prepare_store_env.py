@@ -25,10 +25,10 @@ from unifideck.launcher.proton.infrastructure import core
 from unifideck.launcher.types.context import LaunchContext, RuntimeState
 
 
-def _prepare(tmp_path, monkeypatch, store, umu_id=None):
+def _prepare(tmp_path, monkeypatch, store, umu_id=None, game_id="game1"):
     ctx = LaunchContext(
         store=store,
-        game_id="game1",
+        game_id=game_id,
         exe_path=Path("/dev/null"),
         work_dir=tmp_path,
         plugin_dir=tmp_path,
@@ -68,31 +68,49 @@ def test_ubisoft_launch_keeps_real_store(tmp_path, monkeypatch):
 # ── Rockstar-on-Epic (RDR2/GTA5) — the one Epic case wanting STORE=egs ──
 
 def test_ordinary_epic_game_unchanged(tmp_path, monkeypatch):
-    """A non-Rockstar Epic umu id must NOT trigger any Rockstar handling.
+    """A non-Rockstar Epic game must NOT trigger any Rockstar handling.
 
     Regression guard: STORE stays "none" and no WINEDLLOVERRIDES is added.
     """
-    plan = _prepare(tmp_path, monkeypatch, "epic", umu_id="umu-999999")
+    plan = _prepare(tmp_path, monkeypatch, "epic", game_id="Fortnite")
     assert plan.env["STORE"] == "none"
     assert "WINEDLLOVERRIDES" not in plan.env
 
 
-def test_rockstar_rdr2_gets_egs_and_dlloverride(tmp_path, monkeypatch):
-    plan = _prepare(tmp_path, monkeypatch, "epic", umu_id="umu-1174180")
-    assert plan.env["STORE"] == "egs"
-    assert plan.env["WINEDLLOVERRIDES"] == "vulkan-1=n,b"
-
-
-def test_rockstar_gta5_gets_egs_and_dlloverride(tmp_path, monkeypatch):
-    plan = _prepare(tmp_path, monkeypatch, "epic", umu_id="umu-271590")
-    assert plan.env["STORE"] == "egs"
-    assert plan.env["WINEDLLOVERRIDES"] == "vulkan-1=n,b"
-
-
-def test_rockstar_umu_id_on_non_epic_store_is_not_special(tmp_path, monkeypatch):
-    """The gate is store==epic AND rockstar umu id — a GOG game that
-    somehow resolved a Rockstar umu id must keep its own store profile.
+def test_rockstar_rdr2_gets_egs_with_umu_id_none(tmp_path, monkeypatch):
+    """The REAL Decky-build case: game_id='Heather', umu_id=None (no
+    umu_lookup.py). This is the exact runtime the tester hit — the gate
+    MUST fire on the Epic app name, not the (always-None) umu id.
     """
-    plan = _prepare(tmp_path, monkeypatch, "gog", umu_id="umu-1174180")
+    plan = _prepare(tmp_path, monkeypatch, "epic", umu_id=None, game_id="Heather")
+    assert plan.env["STORE"] == "egs"
+    assert plan.env["WINEDLLOVERRIDES"] == "vulkan-1=n,b"
+
+
+def test_rockstar_gta5_gets_egs_by_app_name(tmp_path, monkeypatch):
+    plan = _prepare(
+        tmp_path, monkeypatch, "epic", umu_id=None,
+        game_id="9d2d0eb64d5c44529cece33fe2a46482",
+    )
+    assert plan.env["STORE"] == "egs"
+    assert plan.env["WINEDLLOVERRIDES"] == "vulkan-1=n,b"
+
+
+def test_rockstar_umu_id_secondary_still_matches(tmp_path, monkeypatch):
+    """If umu_lookup.py IS present and returns a Rockstar umu id, the
+    secondary match still triggers the flow (belt-and-suspenders).
+    """
+    plan = _prepare(
+        tmp_path, monkeypatch, "epic", umu_id="umu-1174180", game_id="game1",
+    )
+    assert plan.env["STORE"] == "egs"
+    assert plan.env["WINEDLLOVERRIDES"] == "vulkan-1=n,b"
+
+
+def test_rockstar_app_name_on_non_epic_store_is_not_special(tmp_path, monkeypatch):
+    """The gate is store==epic AND rockstar identity — a GOG game named
+    'Heather' (hypothetically) must keep its own store profile.
+    """
+    plan = _prepare(tmp_path, monkeypatch, "gog", game_id="Heather")
     assert plan.env["STORE"] == "gog"
     assert "WINEDLLOVERRIDES" not in plan.env

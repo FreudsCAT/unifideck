@@ -26,9 +26,12 @@ def _rockstar_play_exe_rel(plan: ProtonLaunchPlan) -> str | None:
         ROCKSTAR_PLAY_EXES,
         is_rockstar_egs,
     )
-    if not is_rockstar_egs(plan.state.umu_id):
+    game_id = plan.context.game_id
+    umu_id = plan.state.umu_id
+    if not is_rockstar_egs(game_id, umu_id):
         return None
-    return ROCKSTAR_PLAY_EXES.get(plan.state.umu_id or "")
+    # ROCKSTAR_PLAY_EXES is keyed by BOTH the Epic app name and the umu id.
+    return ROCKSTAR_PLAY_EXES.get(game_id) or ROCKSTAR_PLAY_EXES.get(umu_id or "")
 
 
 def _resolve_exe_override(plan: ProtonLaunchPlan) -> Path | None:

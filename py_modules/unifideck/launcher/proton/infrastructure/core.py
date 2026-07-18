@@ -150,7 +150,7 @@ def _locate_umu_wrapper(proton_path: Path, plugin_dir: Path) -> Path:
             "plugin_dir": str(plugin_dir),
         },
     )
-def _epic_store_value(umu_id: str | None) -> str:
+def _epic_store_value(game_id: str, umu_id: str | None) -> str:
     """The ``STORE`` env value for an Epic launch.
 
     ``none`` for ordinary Epic titles (ProtonFixes' ``egs`` defaults add a
@@ -159,10 +159,10 @@ def _epic_store_value(umu_id: str | None) -> str:
     launcher forced ``none`` for exactly this). Rockstar-on-Epic (RDR2/GTA5)
     is the lone exception: it WANTS the ``egs`` profile — its protonfixes +
     that same launcher handler are what boot the Rockstar launcher. Gated on
-    the umu id so no ordinary Epic launch is affected.
+    the Epic app name (game_id) so no ordinary Epic launch is affected.
     """
     from unifideck.launcher.proton.fixes.game_fixes import is_rockstar_egs
-    return "egs" if is_rockstar_egs(umu_id) else "none"
+    return "egs" if is_rockstar_egs(game_id, umu_id) else "none"
 
 
 def _apply_rockstar_dll_overrides(env: dict[str, str], umu_id: str | None) -> None:
@@ -213,9 +213,9 @@ def _build_umu_env(
     env["GAMEID"] = umu_id or "umu-0"
     # See _epic_store_value for the Epic STORE reasoning. ``umu_store_code``
     # on state keeps the real value for diagnostics regardless of this.
-    rockstar_egs = ctx.store == "epic" and is_rockstar_egs(umu_id)
+    rockstar_egs = ctx.store == "epic" and is_rockstar_egs(ctx.game_id, umu_id)
     if ctx.store == "epic":
-        env["STORE"] = _epic_store_value(umu_id)
+        env["STORE"] = _epic_store_value(ctx.game_id, umu_id)
     else:
         env["STORE"] = umu_store
     # PROTONPATH tells umu-run which Proton to use — the *directory*

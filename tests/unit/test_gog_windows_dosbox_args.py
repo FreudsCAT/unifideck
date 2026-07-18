@@ -54,7 +54,14 @@ def _write_install(tmp_path: Path, info: dict) -> Path:
     (tmp_path / f"goggame-{info['gameId']}.info").write_text(json.dumps(info))
     dosbox_dir = tmp_path / "DOSBOX"
     dosbox_dir.mkdir()
-    (dosbox_dir / "dosbox.exe").write_bytes(b"")
+    # Real GOG DOSBox packages ("Betrayal at Krondor", "Caesar II" —
+    # confirmed on-device) ship the actual binary as ``DOSBox.exe``
+    # (mixed case) while the manifest's own ``path`` field says
+    # lowercase ``dosbox.exe`` — GOG's manifests are authored on
+    # Windows' case-insensitive filesystem. Deliberately mismatched
+    # here so these tests catch the case-sensitivity regression a
+    # same-case fixture would hide.
+    (dosbox_dir / "DOSBox.exe").write_bytes(b"")
     (dosbox_dir / "GOGDOSConfig.exe").write_bytes(b"")
     (tmp_path / "dosbox_caesar2.conf").write_text("")
     (tmp_path / "dosbox_caesar2_single.conf").write_text("")
@@ -63,7 +70,7 @@ def _write_install(tmp_path: Path, info: dict) -> Path:
 
 def test_reads_primary_playtask_arguments(tmp_path):
     install_root = _write_install(tmp_path, _CAESAR_II_INFO)
-    exe_path = install_root / "DOSBOX" / "dosbox.exe"
+    exe_path = install_root / "DOSBOX" / "DOSBox.exe"
 
     args = _read_required_launch_args(install_root, exe_path)
 
@@ -96,7 +103,7 @@ def test_returns_empty_list_for_exe_with_no_matching_playtask(tmp_path):
 def test_returns_empty_list_when_no_manifest_present(tmp_path):
     dosbox_dir = tmp_path / "DOSBOX"
     dosbox_dir.mkdir()
-    exe_path = dosbox_dir / "dosbox.exe"
+    exe_path = dosbox_dir / "DOSBox.exe"
     exe_path.write_bytes(b"")
 
     assert _read_required_launch_args(tmp_path, exe_path) == []
@@ -114,7 +121,7 @@ def test_returns_empty_list_on_unparsable_arguments(tmp_path):
         ],
     }
     install_root = _write_install(tmp_path, bad_info)
-    exe_path = install_root / "DOSBOX" / "dosbox.exe"
+    exe_path = install_root / "DOSBOX" / "DOSBox.exe"
 
     assert _read_required_launch_args(install_root, exe_path) == []
 
@@ -130,7 +137,7 @@ async def test_run_umu_exe_threads_required_args_before_user_game_args(
     manifest says this exe needs.
     """
     install_root = _write_install(tmp_path, _CAESAR_II_INFO)
-    exe_path = install_root / "DOSBOX" / "dosbox.exe"
+    exe_path = install_root / "DOSBOX" / "DOSBox.exe"
 
     captured: dict[str, list[str]] = {}
 

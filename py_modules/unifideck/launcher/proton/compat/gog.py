@@ -205,19 +205,31 @@ def _read_required_launch_args(work_dir: Path, exe_path: Path) -> list[str]:
     the generic DOSBOX .exe instead of the .bat"). Mirrors
     ``_read_amazon_fuel_args`` in ``handlers/generic.py`` — re-derived
     fresh from a file already on disk every launch, no persistence
-    through ``games.map``. Matched by resolved-path equality (mirrors
-    :func:`resolve_fallback_exe`'s own path-join/backslash-normalize),
-    so the fallback exe (a different playTask) gets its own arguments,
-    not the primary's. Returns ``[]`` on any failure or no match — the
-    exe still launches, just without extra args, same as Amazon's.
+    through ``games.map``. Matched by resolved-path equality using
+    ``GOGExeResolver._resolve_case_insensitive`` — GOG's manifests are
+    authored on Windows' case-insensitive filesystem and can say
+    ``DOSBOX\\dosbox.exe`` while the real extracted file is
+    ``DOSBOX/DOSBox.exe`` (confirmed against real "Betrayal at Krondor"
+    / "Caesar II" packages); a naive case-sensitive join here never
+    matches ``exe_path`` (already resolved through that same
+    case-correction upstream, in ``GOGExeResolver``) and silently drops
+    every required arg. So the fallback exe (a different playTask) gets
+    its own arguments, not the primary's. Returns ``[]`` on any failure
+    or no match — the exe still launches, just without extra args, same
+    as Amazon's.
     """
+    from unifideck.stores.gog.exe_resolver import resolve_case_insensitive
+
+    exe_resolved = exe_path.resolve()
     for info_file in work_dir.glob("goggame-*.info"):
         for task in _load_play_tasks(str(info_file)):
             task_path = task.get("path")
             if not task_path:
                 continue
-            candidate = (work_dir / str(task_path).replace("\\", "/")).resolve()
-            if candidate != exe_path.resolve():
+            candidate = Path(
+                resolve_case_insensitive(work_dir, str(task_path)),
+            ).resolve()
+            if candidate != exe_resolved:
                 continue
             args = task.get("arguments")
             if not args:

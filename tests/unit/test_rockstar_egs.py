@@ -18,27 +18,48 @@ from unifideck.launcher.proton.fixes import game_fixes
 
 # ── identity gate ──────────────────────────────────────────────────
 
+@pytest.mark.parametrize(
+    "game_id", ["Heather", "9d2d0eb64d5c44529cece33fe2a46482"],
+)
+def test_is_rockstar_egs_true_by_epic_app_name(game_id):
+    """The PRIMARY key is the Epic app name — this is what the real Decky
+    build has at launch. Regression: the first cut gated on umu_id, which
+    is always None on the build (umu_lookup.py isn't bundled), so the flow
+    never fired for RDR2. umu_id defaults to None here on purpose.
+    """
+    assert game_fixes.is_rockstar_egs(game_id) is True
+
+
 @pytest.mark.parametrize("umu_id", ["umu-1174180", "umu-271590"])
-def test_is_rockstar_egs_true_for_known_titles(umu_id):
-    assert game_fixes.is_rockstar_egs(umu_id) is True
+def test_is_rockstar_egs_true_by_umu_id_secondary(umu_id):
+    """umu id still matches as a secondary signal (if the lookup ran)."""
+    assert game_fixes.is_rockstar_egs(None, umu_id) is True
 
 
-@pytest.mark.parametrize("umu_id", [None, "", "umu-999999", "umu-0", "1174180"])
-def test_is_rockstar_egs_false_otherwise(umu_id):
-    assert game_fixes.is_rockstar_egs(umu_id) is False
+@pytest.mark.parametrize("game_id", [None, "", "SomeOtherGame", "Fortnite"])
+def test_is_rockstar_egs_false_for_ordinary_epic(game_id):
+    """A normal Epic app name (and no umu id) → ordinary path unchanged."""
+    assert game_fixes.is_rockstar_egs(game_id) is False
+    assert game_fixes.is_rockstar_egs(game_id, None) is False
 
 
 # ── epic_cleanup skip gating ───────────────────────────────────────
 
-def _cleanup_plan(tmp_path, umu_id):
+def _cleanup_plan(tmp_path, game_id, umu_id=None):
+    # umu_id defaults to None — the real Decky build never resolves one.
     return SimpleNamespace(
+        context=SimpleNamespace(game_id=game_id),
         prefix_path=tmp_path / "prefix",
         state=SimpleNamespace(umu_id=umu_id),
     )
 
 
 def test_cleanup_skipped_for_rockstar(tmp_path, monkeypatch):
-    """Rockstar games must NOT have the launcher stub / registry stripped."""
+    """Rockstar games must NOT have the launcher stub / registry stripped.
+
+    Uses the Epic app name with umu_id=None — the exact runtime shape the
+    tester reported (``store=epic umu_id=None``).
+    """
     stub_calls: list = []
     reg_calls: list = []
     monkeypatch.setattr(
@@ -48,7 +69,7 @@ def test_cleanup_skipped_for_rockstar(tmp_path, monkeypatch):
         epic_cleanup, "_clean_epic_registry", reg_calls.append,
     )
 
-    epic_cleanup.cleanup_epic_artifacts(_cleanup_plan(tmp_path, "umu-1174180"))
+    epic_cleanup.cleanup_epic_artifacts(_cleanup_plan(tmp_path, "Heather"))
 
     assert stub_calls == []
     assert reg_calls == []
@@ -72,7 +93,7 @@ def test_cleanup_runs_for_ordinary_epic(tmp_path, monkeypatch):
         epic_cleanup, "_clean_epic_registry", reg_calls.append,
     )
 
-    epic_cleanup.cleanup_epic_artifacts(_cleanup_plan(tmp_path, "umu-999999"))
+    epic_cleanup.cleanup_epic_artifacts(_cleanup_plan(tmp_path, "SomeGame"))
 
     assert stub_calls  # stub-removal ran
     assert reg_calls  # registry cleanup ran (user.reg + system.reg)
@@ -80,16 +101,18 @@ def test_cleanup_runs_for_ordinary_epic(tmp_path, monkeypatch):
 
 # ── rockstar_egs setup: fake launcher copy + protocol registration ─
 
-def _setup_plan(tmp_path, umu_id, *, install_dir, plugin_dir):
+def _setup_plan(tmp_path, game_id, *, install_dir, plugin_dir):
+    # umu_id=None mirrors the real Decky build (no umu_lookup.py).
     return SimpleNamespace(
         context=SimpleNamespace(
+            game_id=game_id,
             game_key="Red Dead Redemption 2",
             plugin_dir=plugin_dir,
             work_dir=install_dir,
             exe_path=install_dir / "game.exe",
         ),
         prefix_path=tmp_path / "prefix",
-        state=SimpleNamespace(umu_id=umu_id),
+        state=SimpleNamespace(umu_id=None),
     )
 
 
@@ -102,7 +125,7 @@ def test_setup_noop_for_ordinary_epic(tmp_path, monkeypatch):
     (plugin / "bin" / "EpicGamesLauncher.exe").write_bytes(b"MZ-fake")
 
     rockstar_egs.apply_rockstar_egs_setup(
-        _setup_plan(tmp_path, "umu-999999", install_dir=install, plugin_dir=plugin),
+        _setup_plan(tmp_path, "SomeGame", install_dir=install, plugin_dir=plugin),
     )
 
     assert not (install / "EpicGamesLauncher.exe").exists()
@@ -115,8 +138,9 @@ def test_setup_copies_fake_launcher_for_rockstar(tmp_path):
     (plugin / "bin").mkdir(parents=True)
     (plugin / "bin" / "EpicGamesLauncher.exe").write_bytes(b"MZ-fake")
 
+    # "Heather" (RDR2 Epic app name) with umu_id=None — the real build shape.
     rockstar_egs.apply_rockstar_egs_setup(
-        _setup_plan(tmp_path, "umu-1174180", install_dir=install, plugin_dir=plugin),
+        _setup_plan(tmp_path, "Heather", install_dir=install, plugin_dir=plugin),
     )
 
     dest = install / "EpicGamesLauncher.exe"
@@ -137,7 +161,7 @@ def test_setup_registers_protocol_when_user_reg_present(tmp_path):
     user_reg = prefix / "pfx" / "user.reg"
     user_reg.write_text("WINE REGISTRY Version 2\n", encoding="utf-8")
 
-    plan = _setup_plan(tmp_path, "umu-271590", install_dir=install, plugin_dir=plugin)
+    plan = _setup_plan(tmp_path, "Heather", install_dir=install, plugin_dir=plugin)
     rockstar_egs.apply_rockstar_egs_setup(plan)
 
     text = user_reg.read_text(encoding="utf-8")
@@ -160,6 +184,6 @@ def test_setup_survives_missing_bundled_launcher(tmp_path):
 
     # Must not raise.
     rockstar_egs.apply_rockstar_egs_setup(
-        _setup_plan(tmp_path, "umu-1174180", install_dir=install, plugin_dir=plugin),
+        _setup_plan(tmp_path, "Heather", install_dir=install, plugin_dir=plugin),
     )
     assert not (install / "EpicGamesLauncher.exe").exists()

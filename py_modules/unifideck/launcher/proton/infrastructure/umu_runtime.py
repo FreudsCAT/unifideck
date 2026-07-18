@@ -123,6 +123,48 @@ def cleanup_umu_runtime_cache() -> None:
             with contextlib.suppress(OSError):
                 target.unlink()
     logger.info("[launcher.umu] cache cleaned: %s", UMU_CACHE_DIR)
+def _runtime_entry_point_ok(variant_dir: Path) -> bool:
+    """Return whether ``variant_dir`` has a usable umu entry point.
+
+    Mirrors umu's OWN launch-time gate (``build_command`` does
+    ``entry_point.is_file()`` on ``<variant>/umu``): the ``umu`` symlink
+    must resolve to an existing ``_v2-entry-point``. ``Path.is_file()``
+    follows symlinks, so a *missing* ``umu`` file AND a *dangling* ``umu``
+    symlink both return ``False`` — exactly the two states that make umu
+    raise "Runtime Platform missing or download incomplete" *after* it has
+    already logged "<variant> is up to date".
+    """
+    return (variant_dir / "umu").is_file()
+def repair_incomplete_umu_runtime() -> None:
+    """Wipe any runtime variant that is present but has no umu entry point.
+
+    UD-084: a umu setup that died after extracting the runtime payload
+    (``<variant>_platform_*`` / ``pressure-vessel`` / ``VERSIONS.txt``) but
+    before its LAST step — creating the ``umu -> _v2-entry-point`` symlink
+    (umu's ``_install_umu`` does that in a ``finally``) — leaves a runtime
+    that umu's own ``_update_umu`` treats as "up to date" (it only checks
+    the platform dir / pressure-vessel / VERSIONS.txt, never the entry
+    point). The next launch then dies in ``build_command`` with
+    ``FileNotFoundError``, which umu exits with a code OUTSIDE our
+    ``_RECOVERABLE_CODES`` (0 when the bundled zipapp swallows it, 1 when a
+    field build re-raises) — so ``run_umu_with_retry`` never retries or
+    wipes, and the user stays wedged.
+
+    Deleting just the broken variant dir lets umu re-download it cleanly on
+    the next ``umu-run`` this same launch; healthy sibling variants are left
+    untouched (surgical). Cheap — one ``stat`` per existing variant — and a
+    no-op on a healthy runtime, so it is safe to call on every launch. Safe
+    without locking: launches run serially and this runs before any umu
+    process is spawned, so no concurrent umu holds ``umu.lock`` here.
+    """
+    for variant in UMU_RUNTIME_VARIANTS:
+        variant_dir = UMU_CACHE_DIR / variant
+        if variant_dir.is_dir() and not _runtime_entry_point_ok(variant_dir):
+            logger.warning(
+                "[launcher.umu] runtime '%s' present but entry point missing "
+                "— removing so umu re-downloads it", variant,
+            )
+            shutil.rmtree(variant_dir, ignore_errors=True)
 def ensure_umu_runtime_ready() -> None:
     """Ensure UMU runtime ready."""
     # The Steam Linux Runtime (steamrt2/3/4, depending on which one the
