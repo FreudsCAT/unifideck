@@ -12,6 +12,10 @@
       "disconnected": "연동 안 됨",
       "checking": "확인 중…",
       "error": "오류 — 로그 확인 필요"
+    },
+    "errors": {
+      "networkTitle": "No internet connection",
+      "networkBody": "Connect to Wi-Fi and try again."
     }
   },
   "storage": {

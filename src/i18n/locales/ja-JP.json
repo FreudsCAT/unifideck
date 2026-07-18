@@ -12,6 +12,10 @@
       "disconnected": "未連携",
       "checking": "確認中…",
       "error": "エラー — ログを確認してください"
+    },
+    "errors": {
+      "networkTitle": "No internet connection",
+      "networkBody": "Connect to Wi-Fi and try again."
     }
   },
   "storage": {

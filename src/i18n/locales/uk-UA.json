@@ -12,6 +12,10 @@
       "disconnected": "Не підключено",
       "checking": "Перевірка…",
       "error": "Помилка — перевірте логи"
+    },
+    "errors": {
+      "networkTitle": "No internet connection",
+      "networkBody": "Connect to Wi-Fi and try again."
     }
   },
   "storage": {

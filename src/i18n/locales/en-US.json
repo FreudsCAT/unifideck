@@ -12,6 +12,10 @@
       "disconnected": "Not connected",
       "checking": "Checking…",
       "error": "Error — check logs"
+    },
+    "errors": {
+      "networkTitle": "No internet connection",
+      "networkBody": "Connect to Wi-Fi and try again."
     }
   },
   "storage": {

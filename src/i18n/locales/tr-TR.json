@@ -12,6 +12,10 @@
       "disconnected": "Bağlı Değil",
       "checking": "Kontrol ediliyor…",
       "error": "Hata — günlükleri kontrol edin"
+    },
+    "errors": {
+      "networkTitle": "No internet connection",
+      "networkBody": "Connect to Wi-Fi and try again."
     }
   },
   "storage": {

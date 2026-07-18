@@ -12,6 +12,10 @@
       "disconnected": "غير متصل",
       "checking": "جاري التحقق…",
       "error": "خطأ — تحقق من السجلات"
+    },
+    "errors": {
+      "networkTitle": "No internet connection",
+      "networkBody": "Connect to Wi-Fi and try again."
     }
   },
   "storage": {

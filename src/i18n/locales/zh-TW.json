@@ -12,6 +12,10 @@
       "disconnected": "未連結",
       "checking": "正在檢查…",
       "error": "錯誤 — 請檢查記錄檔"
+    },
+    "errors": {
+      "networkTitle": "No internet connection",
+      "networkBody": "Connect to Wi-Fi and try again."
     }
   },
   "storage": {

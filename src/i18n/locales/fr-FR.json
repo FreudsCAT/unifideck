@@ -12,6 +12,10 @@
       "disconnected": "Non connecté",
       "checking": "Vérification…",
       "error": "Erreur — vérifier les journaux"
+    },
+    "errors": {
+      "networkTitle": "No internet connection",
+      "networkBody": "Connect to Wi-Fi and try again."
     }
   },
   "storage": {

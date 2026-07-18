@@ -12,6 +12,10 @@
       "disconnected": "Niet verbonden",
       "checking": "Controleren…",
       "error": "Fout — controleer logs"
+    },
+    "errors": {
+      "networkTitle": "No internet connection",
+      "networkBody": "Connect to Wi-Fi and try again."
     }
   },
   "storage": {
