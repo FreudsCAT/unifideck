@@ -265,7 +265,9 @@ class _IdMapSources:
         config = self._idmap._config
         paths = self._idmap._paths
         template_dir = config.template_dir_expanded
-        config_path = paths.find_configurations(template_dir)
+        config_path = await asyncio.to_thread(
+            paths.find_configurations, template_dir,
+        )
         if config_path and await self._refresh_from_path(
             config_path,
             build_id_map_from_configurations,
@@ -288,8 +290,8 @@ class _IdMapSources:
             entry = Path(prefix_str)
             if entry.name.startswith("."):
                 continue
-            config_path = paths.find_configurations(
-                str(entry),
+            config_path = await asyncio.to_thread(
+                paths.find_configurations, str(entry),
             )
             if not config_path:
                 continue

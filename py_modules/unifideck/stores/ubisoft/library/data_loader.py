@@ -58,7 +58,9 @@ class _DataLoader:
         parse_configurations: ParseConfigurationsFn,
     ) -> list[GameConfig] | None:
         """Load configurations."""
-        cfg_path = self._find_library_configurations_path()
+        cfg_path = await asyncio.to_thread(
+            self._find_library_configurations_path,
+        )
         if not cfg_path:
             logger.info(
                 "[UbisoftLibrary] no configurations binary found",
@@ -80,7 +82,9 @@ class _DataLoader:
         parse_ownership: ParseOwnershipFn,
     ) -> set[int] | None:
         """Load ownership set."""
-        ownership_path, user_id = self._discover_ownership_file()
+        ownership_path, user_id = await asyncio.to_thread(
+            self._discover_ownership_file,
+        )
         if not ownership_path:
             return None
         owned_ids = await asyncio.to_thread(
@@ -106,7 +110,9 @@ class _DataLoader:
         games the legacy install_id list lacks. Empty set when no ownership
         file is present.
         """
-        ownership_path, _user_id = self._discover_ownership_file()
+        ownership_path, _user_id = await asyncio.to_thread(
+            self._discover_ownership_file,
+        )
         if not ownership_path:
             return set()
         from unifideck.stores.ubisoft.parser import parse_ownership_uuids

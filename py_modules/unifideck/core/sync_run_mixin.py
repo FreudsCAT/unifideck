@@ -113,7 +113,7 @@ class _SyncRunMixin:
             if self._cancel_event.is_set():
                 return await self._sync_cancelled_result(idx, total, libraries)
             self._current_store = store.store_name
-            await self._emit_progress(store.store_name, idx, total)
+            await self._emit_progress(store.store_name, idx, total, libraries)
             games, err = await self._fetch_one(store, is_force)
             libraries[store.store_name] = games
             if err is not None:
@@ -402,10 +402,23 @@ class _SyncRunMixin:
             return [], str(e)
 
     async def _emit_progress(
-        self, store_name: str, idx: int, total: int,
+        self,
+        store_name: str,
+        idx: int,
+        total: int,
+        libraries: dict[str, list[Game]],
     ) -> None:
-        """Emit ``SYNC_PROGRESS`` — updates the phase tracker + fires event."""
-        total_games = sum(len(g) for g in self._all_games.values())
+        """Emit ``SYNC_PROGRESS`` — updates the phase tracker + fires event.
+
+        ``total_games`` is the count fetched so far *in this run*
+        (``libraries``, built up by the caller's per-store loop) — not
+        ``self._all_games``, which still holds the previous run's full
+        library until ``_finalize_sync`` overwrites it at the very end.
+        Reading ``_all_games`` here made an in-progress sync of a
+        handful of stores misreport the prior run's total game count
+        as already "synced".
+        """
+        total_games = sum(len(g) for g in libraries.values())
         self._progress.start_store_sync(store_name, idx, total)
         await self._bus.emit(
             Events.SYNC_PROGRESS,

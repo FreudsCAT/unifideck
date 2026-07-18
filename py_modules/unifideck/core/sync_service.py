@@ -345,7 +345,7 @@ class SyncService(
             stores=[store_name],
             scope="single",
         )
-        await self._emit_progress(store_name, 0, 1)
+        await self._emit_progress(store_name, 0, 1, {})
         games, err = await self._sync_one_store(store)
         if self._all_games is None:
             self._all_games = {}  # type: ignore[unreachable]  # registry-miss fallback
