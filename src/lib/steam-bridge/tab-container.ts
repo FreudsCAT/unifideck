@@ -176,6 +176,38 @@ export interface SteamTab {
   renderTabAddon?: () => ReactElement;
 }
 
+// Bounded re-render retry for the collectionStore-not-hydrated race.
+// When ``buildCollection`` runs before Steam's ``type-games``
+// collection exists, every tab renders 0 and stays there until an
+// unrelated re-render (UD-071). We ping the tab manager a few times
+// with backoff so the strip re-renders — and re-runs
+// ``buildCollection`` — once the store hydrates. Module-level (not
+// per-container) because one hydration fixes every tab, so a single
+// shared budget avoids N parallel timers.
+const _HYDRATION_RETRY_MAX = 8;
+const _HYDRATION_RETRY_BASE_MS = 400;
+let hydrationRetryCount = 0;
+let hydrationRetryTimer: ReturnType<typeof setTimeout> | null = null;
+
+function scheduleHydrationRetry(): void {
+  if (hydrationRetryTimer !== null) return; // one in flight already
+  if (hydrationRetryCount >= _HYDRATION_RETRY_MAX) return;
+  hydrationRetryCount += 1;
+  const delay = _HYDRATION_RETRY_BASE_MS * hydrationRetryCount;
+  hydrationRetryTimer = setTimeout(() => {
+    hydrationRetryTimer = null;
+    if (tabManager.isInitialized()) tabManager.rebuildTabs();
+  }, delay);
+}
+
+function resetHydrationRetry(): void {
+  hydrationRetryCount = 0;
+  if (hydrationRetryTimer !== null) {
+    clearTimeout(hydrationRetryTimer);
+    hydrationRetryTimer = null;
+  }
+}
+
 export class UnifideckTabContainer {
   id: string;
   title: string;
@@ -241,7 +273,17 @@ export class UnifideckTabContainer {
       const all =
         cs?.appTypeCollectionMap?.get("type-games") ??
         cs?.GetCollection("type-games");
-      if (!all) return;
+      if (!all) {
+        // Steam's collectionStore isn't hydrated yet. Leaving the
+        // collection empty here latches every tab to 0 until the
+        // next unrelated re-render (UD-071 "works, then 0"). Schedule
+        // a bounded re-render so tabs backfill once the store is ready.
+        scheduleHydrationRetry();
+        return;
+      }
+      // Store is hydrated — clear any pending hydration retry so a
+      // later genuinely-empty library doesn't inherit stale budget.
+      resetHydrationRetry();
       const filtered = (all.allApps ?? []).filter((app) =>
         runFilters(this.filters, app),
       );

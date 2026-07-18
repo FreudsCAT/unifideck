@@ -8,7 +8,7 @@
  * entire Steam library. The count path must never throw, whatever
  * shape Steam passes.
  */
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, afterEach } from "vitest";
 
 // The Decky runtime is peer-provided in the Steam webview and absent
 // under vitest — stub the imports that pull it in. (React resolves to
@@ -73,5 +73,39 @@ describe("renderTabAddon", () => {
     expect(tab).not.toBeNull();
     expect(tab?.renderTabAddon).toBeDefined();
     expect(() => tab?.renderTabAddon?.()).not.toThrow();
+  });
+});
+
+describe("buildCollection type-games hydration race (UD-071)", () => {
+  const win = window as unknown as { collectionStore?: unknown };
+
+  afterEach(() => {
+    delete win.collectionStore;
+    vi.useRealTimers();
+    vi.clearAllTimers();
+  });
+
+  it("schedules a retry (does not throw) when collectionStore is absent", () => {
+    vi.useFakeTimers();
+    delete win.collectionStore;
+    const c = makeContainer();
+    // No store yet: build leaves the collection empty and arms a retry.
+    expect(() => c.buildCollection()).not.toThrow();
+    expect(c.collection.allApps).toEqual([]);
+    // A retry timer is pending — advancing time must not throw even
+    // with the store still absent and the tab manager uninitialized.
+    expect(() => vi.advanceTimersByTime(5000)).not.toThrow();
+  });
+
+  it("populates the collection once type-games hydrates", () => {
+    win.collectionStore = {
+      appTypeCollectionMap: new Map([
+        ["type-games", { allApps: [{ appid: 42 } as SteamAppOverview] }],
+      ]),
+      GetCollection: () => null,
+    };
+    const c = makeContainer();
+    c.buildCollection();
+    expect(c.collection.allApps.map((a) => a.appid)).toEqual([42]);
   });
 });
