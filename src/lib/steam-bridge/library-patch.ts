@@ -251,6 +251,11 @@ export function applyLibraryPatch(bridge: SteamBridge): RouterPatchHandle {
             const origMemoComponent = ret2t.type.type as (
               ...args: unknown[]
             ) => unknown;
+            // Newer Steam builds can leave `.type.type` null/undefined on
+            // some render paths; wrapping it would make the replaced fn call
+            // `undefined(...args)` and crash the whole library tab. Bail to
+            // the untouched tree if there's no inner component to wrap.
+            if (typeof origMemoComponent !== "function") return ret2;
             wrapReactType(ret2 as never);
             innerPatch = replacePatch(
               ret2t.type as never,
