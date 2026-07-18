@@ -99,6 +99,8 @@ async def _run(service: MetadataService, games: list[Game]) -> None:
         *(_fill_one(service, sem, g) for g in games),
         return_exceptions=True,
     )
+    with contextlib.suppress(Exception):
+        service._cache.flush(_CACHE_NAMESPACE)
     logger.info(
         "[MetadataBackfill] metacritic backfill complete (%d games)",
         len(games),
@@ -209,7 +211,9 @@ def _merge_into_metadata_cache(
         steam_id = _read_real_steam_id(cache, game.app_id)
         if steam_id:
             merged["steam_appid"] = steam_id
-    cache.set(_CACHE_NAMESPACE, cache_key, merged)
+    # Deferred write — one per backfilled game; ``_run`` flushes once
+    # after the gather.
+    cache.set(_CACHE_NAMESPACE, cache_key, merged, flush=False)
 
 
 def _read_real_steam_id(

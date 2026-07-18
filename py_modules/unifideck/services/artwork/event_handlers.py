@@ -292,10 +292,12 @@ class _EventHandlersMixin:
         )
         # Bind sync_kwargs into the done callback so CompatibilityService
         # (which waits on phase="artwork" done) receives the original
-        # SYNC_COMPLETE payload.
-        fut.add_done_callback(
-            lambda f, sk=sync_kwargs: _on_artwork_batch_done(f, bus, sk),
-        )
+        # SYNC_COMPLETE payload. Flush the batch's deferred attempts-cache
+        # writes before announcing the phase done.
+        def _finish(f: Any, sk: dict[str, Any] = sync_kwargs) -> None:
+            self._flush_artwork_caches()
+            _on_artwork_batch_done(f, bus, sk)
+        fut.add_done_callback(_finish)
         _track(fut)
         # Stash on ``self`` so the SYNC_CANCELLED handler can cancel the
         # whole batch in one shot.

@@ -53,17 +53,72 @@ if [[ "$ENV_MODE" == "prod" ]]; then
     VERSION_TAG="v$PACKAGE_VERSION"
     ZIP_NAME="unifideck.prod.$VERSION_TAG.zip"
     PLUGIN_VERSION="$PACKAGE_VERSION"
+    # Empty on purpose (see _write_dev_build_json): a prod zip still
+    # ships a dev_build.json, just with a blank build_id, so installing
+    # it actively clears any dev_build.json left behind by a previous
+    # dev install — Decky's own plugin installer overlays the new zip's
+    # files onto the existing plugin directory rather than wiping it
+    # first, so a file the new zip doesn't contain is never removed.
+    GIT_BRANCH=""
+    GIT_SHA=""
+    DEV_BUILD_ID=""
     log_info "Building in PRODUCTION mode ($VERSION_TAG)"
 elif [[ "$ENV_MODE" == "dev" ]]; then
-    # Development builds auto-increment a local build number based on
-    # files currently in the `out/` directory to avoid overwriting testing builds.
     mkdir -p "$OUTPUT_DIR"
-    LATEST_DEV=$(ls -1 "$OUTPUT_DIR"/unifideck.dev.v*.zip 2>/dev/null | \
-        sed 's/.*unifideck\.dev\.v\([0-9]*\)\.zip/\1/' | sort -n | tail -1)
-    DEV_VER=$([ -z "$LATEST_DEV" ] && echo 1 || echo $((LATEST_DEV + 1)))
-    VERSION_TAG="v$DEV_VER"
-    ZIP_NAME="unifideck.dev.$VERSION_TAG.zip"
-    PLUGIN_VERSION="$PACKAGE_VERSION-dev$DEV_VER"
+
+    # ── Dev build identifier ──────────────────────────────────
+    # The "Dev" GitHub prerelease is a single rolling release whose one
+    # .zip asset gets deleted and re-uploaded on every local build — its
+    # tag/name is always literally "Dev", which the updater's version
+    # parser can't turn into a semver, so nothing in the GitHub API
+    # response can tell two dev builds apart. We bake a self-describing
+    # identifier (branch + short commit SHA) into the asset
+    # FILENAME itself, and stamp the same value into dev_build.json
+    # inside the zip (see _write_dev_build_json), so the pre-install
+    # dropdown (reads the filename) and the post-install "Current" line
+    # (reads dev_build.json) show the same build id.
+    #
+    # Branch name (not $PACKAGE_VERSION) leads the identifier: working
+    # branches are named after the target version (e.g. "0.7.1") while
+    # package.json/plugin.json intentionally stay frozen at the last
+    # official release until the real version-bump commit.
+    GIT_BRANCH=""
+    GIT_SHA=""
+    DEV_BUILD_ID=""
+    if command -v git >/dev/null 2>&1 \
+            && git -C "$SCRIPT_DIR" rev-parse --git-dir >/dev/null 2>&1; then
+        GIT_BRANCH=$(git -C "$SCRIPT_DIR" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
+        GIT_SHA=$(git -C "$SCRIPT_DIR" rev-parse --short HEAD 2>/dev/null || echo "")
+
+        BRANCH_LABEL="$GIT_BRANCH"
+        # Detached HEAD makes "HEAD" a useless leading component — fall
+        # back to package.json's version for that segment only.
+        if [ -z "$BRANCH_LABEL" ] || [ "$BRANCH_LABEL" = "HEAD" ]; then
+            BRANCH_LABEL="$PACKAGE_VERSION"
+        fi
+        # Branch names may contain '/' (e.g. "feature/x"), which would
+        # break the zip filename / GitHub asset name.
+        BRANCH_LABEL=$(echo "$BRANCH_LABEL" | tr '/' '-')
+
+        if [ -n "$GIT_SHA" ]; then
+            DEV_BUILD_ID="${BRANCH_LABEL}.g${GIT_SHA}"
+        fi
+    fi
+
+    if [ -z "$DEV_BUILD_ID" ]; then
+        # Fallback: no git available (e.g. a source tarball with no
+        # .git). A build must never fail just because we couldn't
+        # compute a cosmetic identifier — reuse the old local counter.
+        log_warn "git unavailable — falling back to local dev counter for build id"
+        LATEST_DEV=$(ls -1 "$OUTPUT_DIR"/unifideck.dev.v*.zip 2>/dev/null | \
+            sed 's/.*unifideck\.dev\.v\([0-9]*\)\.zip/\1/' | sort -n | tail -1)
+        DEV_VER=$([ -z "$LATEST_DEV" ] && echo 1 || echo $((LATEST_DEV + 1)))
+        DEV_BUILD_ID="v$DEV_VER"
+    fi
+
+    VERSION_TAG="$DEV_BUILD_ID"
+    ZIP_NAME="unifideck.dev.$DEV_BUILD_ID.zip"
+    PLUGIN_VERSION="$PACKAGE_VERSION-dev.$DEV_BUILD_ID"
     log_info "Building in DEVELOPMENT mode ($VERSION_TAG)"
 else
     log_error "Unknown mode: $ENV_MODE. Use 'dev' or 'prod'."
@@ -397,6 +452,51 @@ check_container_engine() {
 #     main.py, plugin.json, package.json, pnpm-lock.yaml,
 #     tsconfig.json, rollup.config.mjs, requirements.txt,
 #     LICENSE, README.md
+
+# ── Dev build-identity stamp ──────────────────────────────────
+# Writes dev_build.json to $1, read at runtime by
+# UpdaterService.get_current_build_id() so the Settings UI can show
+# which specific dev build is installed. Shipped in EVERY build, dev
+# and prod alike — DEV_BUILD_ID/GIT_BRANCH/GIT_SHA are simply empty
+# strings for a prod build, so get_current_build_id() correctly reads
+# no build id back. This is deliberate, not redundant: Decky's own
+# plugin installer overlays a newly-installed zip's files onto the
+# existing plugin directory instead of wiping it first, so a file
+# absent from the new zip is never removed — without a prod build
+# also shipping (and thereby overwriting) this file, a stale dev
+# install's dev_build.json would linger and the Settings UI would
+# claim a dev build is "installed" long after a prod version replaced
+# it.
+_write_dev_build_json() {
+    local target="$1"
+    cat > "$target" <<EOF
+{
+  "build_id": "$DEV_BUILD_ID",
+  "branch": "$GIT_BRANCH",
+  "commit": "$GIT_SHA",
+  "built_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+}
+EOF
+}
+
+# Stamps dev_build.json into an already-built plugin ZIP. This runs
+# AFTER packaging rather than being staged alongside main.py/plugin.json
+# beforehand: the Decky CLI's containerized `plugin build` step does its
+# own internal repackaging of the staging directory and silently drops
+# any file it doesn't recognize (confirmed — pnpm-lock.yaml, tsconfig.json,
+# rollup.config.mjs, and requirements.txt also don't survive into its
+# output, alongside a first attempt at staging dev_build.json the same
+# way). Appending the file directly to the finished ZIP sidesteps that
+# entirely, and works identically for both build paths.
+_inject_dev_build_json() {
+    local zip_path="$1"
+    local tmp; tmp=$(mktemp -d)
+    mkdir -p "$tmp/Unifideck"
+    _write_dev_build_json "$tmp/Unifideck/dev_build.json"
+    (cd "$tmp" && zip -q "$zip_path" "Unifideck/dev_build.json")
+    rm -rf "$tmp"
+}
+
 _stage_plugin_files() {
     local dest="$1"
     mkdir -p "$dest"
@@ -455,6 +555,12 @@ build_with_cli() {
     else
         log_warn "Expected CLI output not found: Unifideck.zip"
     fi
+
+    # Stamped for both dev and prod builds — see _write_dev_build_json.
+    if [ -f "$OUTPUT_FILE" ]; then
+        _inject_dev_build_json "$OUTPUT_FILE"
+    fi
+
     log_success "CLI build complete: $OUTPUT_FILE"
 }
 
@@ -672,6 +778,11 @@ build_local() {
     cd "$SCRIPT_DIR"
     rm -rf "$build_dir"
 
+    # Stamped for both dev and prod builds — see _write_dev_build_json.
+    if [ -f "$OUTPUT_FILE" ]; then
+        _inject_dev_build_json "$OUTPUT_FILE"
+    fi
+
     # Print final summary
     local size; size=$(ls -lh "$OUTPUT_FILE" | awk '{print $5}')
     echo ""
@@ -772,6 +883,19 @@ quick_install() {
             sudo cp -p "$SCRIPT_DIR/$f" "$install_dir/$f"
         fi
     done
+
+    # quick-install bypasses _stage_plugin_files entirely (rsync/cp
+    # straight from the repo), so stamp dev_build.json here too. Written
+    # for both modes — see _write_dev_build_json for why a prod
+    # quick-install must also overwrite (and thereby clear) this file.
+    local tmp_stamp; tmp_stamp=$(mktemp)
+    _write_dev_build_json "$tmp_stamp"
+    sudo cp "$tmp_stamp" "$install_dir/dev_build.json"
+    sudo chown deck:deck "$install_dir/dev_build.json" 2>/dev/null || true
+    rm -f "$tmp_stamp"
+    if [[ "$ENV_MODE" == "dev" ]]; then
+        log_success "Stamped dev_build.json ($DEV_BUILD_ID)"
+    fi
 
     # Make sure the install dir itself is writable by deck so the
     # plugin can mkdir state under it (e.g. data/cache fallback,

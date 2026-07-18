@@ -12,6 +12,10 @@
       "disconnected": "Non connecté",
       "checking": "Vérification…",
       "error": "Erreur — vérifier les journaux"
+    },
+    "errors": {
+      "networkTitle": "No internet connection",
+      "networkBody": "Connect to Wi-Fi and try again."
     }
   },
   "storage": {
@@ -155,7 +159,6 @@
     "syncing": "Synchronisation...",
     "cancelSync": "Annuler la synchronisation",
     "retryStatusCheck": "Réessayer la vérification du statut",
-    "refreshStore": "Actualiser la bibliothèque de cette boutique",
     "gamesSynced": "{{synced}} / {{total}} jeux synchronisés",
     "artworkDownloaded": "{{synced}} / {{total}} images de couverture téléchargées",
     "metadataExtracted": "{{synced}} / {{total}} fiches de métadonnées extraites",
@@ -273,6 +276,7 @@
     "unifideck": "Unifideck:",
     "launcher": {
       "networkError": "Erreur réseau",
+      "launchRetry": "Nouvelle tentative de lancement",
       "retryingUmu": "Nouvelle tentative UMU dans {{seconds}}s (tentative {{attempt}}/{{max}})...",
       "protonUpgrade": "Mise à niveau de Proton",
       "resettingPrefix": "Réinitialisation du préfixe pour {{version}}...",
@@ -900,6 +904,7 @@
     "currentTitle": "Actuelle",
     "downgradeButton": "Rétrograder vers la v{{version}}",
     "installFailedTitle": "Échec de l'installation",
+    "installTimeoutMessage": "Aucune réponse de Decky Loader — l'installation a peut-être bloqué ou échoué. Veuillez réessayer.",
     "installedLabel": "installée",
     "installingButton": "Installation...",
     "installingTitle": "Installation du plugin",
@@ -908,6 +913,8 @@
     "noBackend": "Le backend Decky est indisponible.",
     "noReleaseNotes": "Aucune note de version disponible.",
     "reinstallButton": "Réinstaller la v{{version}}",
+    "refreshFailedMessage": "Impossible de vérifier les informations de la dernière version. Vérifiez votre connexion et réessayez.",
+    "releaseGoneMessage": "Cette version n'est plus disponible. Veuillez rechercher des mises à jour et la sélectionner à nouveau.",
     "releaseNotesButton": "Notes de version",
     "stageDownload": "Téléchargement…",
     "stageFinish": "Finalisation…",

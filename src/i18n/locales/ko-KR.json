@@ -12,6 +12,10 @@
       "disconnected": "연동 안 됨",
       "checking": "확인 중…",
       "error": "오류 — 로그 확인 필요"
+    },
+    "errors": {
+      "networkTitle": "No internet connection",
+      "networkBody": "Connect to Wi-Fi and try again."
     }
   },
   "storage": {
@@ -155,7 +159,6 @@
     "syncing": "동기화 중...",
     "cancelSync": "동기화 취소",
     "retryStatusCheck": "상태 확인 재시도",
-    "refreshStore": "이 스토어 라이브러리 새로고침",
     "gamesSynced": "{{synced}} / {{total}}개의 게임 동기화됨",
     "artworkDownloaded": "{{synced}} / {{total}}개의 이미지 다운로드됨",
     "metadataExtracted": "{{synced}} / {{total}}개의 메타데이터 추출됨",
@@ -273,6 +276,7 @@
     "unifideck": "Unifideck:",
     "launcher": {
       "networkError": "네트워크 오류",
+      "launchRetry": "실행 재시도 중",
       "retryingUmu": "{{seconds}}초 후 UMU 재시도 (시도 횟수 {{attempt}}/{{max}})...",
       "protonUpgrade": "Proton 업그레이드",
       "resettingPrefix": "{{version}} 환경 재조정 중...",
@@ -900,6 +904,7 @@
     "currentTitle": "현재 버전",
     "downgradeButton": "v{{version}}(으)로 다운그레이드",
     "installFailedTitle": "설치 실패",
+    "installTimeoutMessage": "Decky Loader에서 응답이 없습니다. 설치가 멈췄거나 실패했을 수 있습니다. 다시 시도해 주세요.",
     "installedLabel": "설치됨",
     "installingButton": "설치 중...",
     "installingTitle": "플러그인 설치 중",
@@ -908,6 +913,8 @@
     "noBackend": "Decky 백엔드 연결 불가.",
     "noReleaseNotes": "릴리스 노트가 존재하지 않습니다.",
     "reinstallButton": "v{{version}} 재설치",
+    "refreshFailedMessage": "최신 버전 정보를 확인할 수 없습니다. 연결 상태를 확인하고 다시 시도해 주세요.",
+    "releaseGoneMessage": "이 릴리스는 더 이상 제공되지 않습니다. 업데이트를 확인한 후 다시 선택해 주세요.",
     "releaseNotesButton": "릴리스 노트",
     "stageDownload": "다운로드 중…",
     "stageFinish": "완료 중…",

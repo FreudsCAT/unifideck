@@ -27,23 +27,38 @@ from typing import Any
 # Cache spec: (name, ttl_seconds). 0 means unbounded.
 # Centralised so adding a cache = appending one tuple; no need
 # to edit the bootstrap orchestrator.
+#
+# Registration here wins: ``CacheManager.register`` is idempotent,
+# so later ``register`` calls with a different TTL (e.g.
+# ``CompatLibrary.register`` reading ``cache_ttl.compat`` from user
+# config) are no-ops — the ``defaults/config.json`` ``cache_ttl.*``
+# keys are effectively dead.
+#
+# TTL policy for the sync-enrichment caches (metadata /
+# steam_metadata / steam_reviews / unifidb_metadata): 30 days. A
+# standard sync only fetches missing/new games; a force sync
+# refreshes on demand. TTL expiry exists so entries (including
+# negative markers) still self-heal without user action — the old
+# 1-day/7-day TTLs made every sync past the window silently re-pull
+# the WHOLE library ("10-minute sync a day later" reports).
 _NAMED_CACHES: tuple[tuple[str, int], ...] = (
     ("steam_appid", 0),
     ("steam_real_appid", 0),
-    ("steam_metadata", 86400),
+    ("steam_metadata", 30 * 24 * 3600),
     # ``MetadataService`` caches the Steam ``appreviews`` summary
     # ({review_score, review_percentage, total_reviews}) per real
     # Steam AppID — feeds the native "Steam Review" library sort for
-    # spoofed shortcuts via ``get_overview_enrichment``. Reviews drift
-    # slowly, so a 7-day TTL avoids re-hitting the endpoint each sync.
-    ("steam_reviews", 7 * 24 * 3600),
+    # spoofed shortcuts via ``get_overview_enrichment``. Reviews
+    # drift slowly; monthly is fresh enough, force sync refreshes
+    # immediately.
+    ("steam_reviews", 30 * 24 * 3600),
     # First-seen timestamp per shortcut AppID, stamped by reconcile
     # when a shortcut is first created. Drives the native "Date Added
     # to Library" sort. Unbounded — must never expire or a game would
     # appear "newly added" again.
     ("shortcut_added", 0),
     ("rawg_metadata", 86400),
-    ("unifidb_metadata", 86400),
+    ("unifidb_metadata", 30 * 24 * 3600),
     ("metacritic", 604800),
     ("artwork_attempts", 0),
     ("game_sizes", 3600),
@@ -61,8 +76,7 @@ _NAMED_CACHES: tuple[tuple[str, int], ...] = (
     # ``ValueError: Cache 'metadata' not registered``, swallowed
     # by the service's try/except, so every ``enrich()`` call
     # silently re-fetched from all three upstream sources.
-    # 7 days mirrors the service's ``DEFAULT_CACHE_TTL``.
-    ("metadata", 7 * 24 * 3600),
+    ("metadata", 30 * 24 * 3600),
     # ``pcgw_backfill`` caches per-game save-location data fetched live
     # from PCGamingWiki when unifiDB has no entry (the hybrid fallback).
     # Save paths are very stable, so a long TTL avoids re-querying; the

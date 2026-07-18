@@ -43,10 +43,15 @@ export type DownloadPhase =
   | "preparing";
 
 /**
- * Where the game install lives. `internal` = eMMC, `sdcard`
- * = removable, `custom` = user-picked path on either disk.
+ * Where the game install lives. `internal` = eMMC, `custom` =
+ * user-picked path, `sdcard` = legacy removable-media alias kept
+ * for configs saved before external mounts got unique ids. Every
+ * currently-mounted external device gets its own `ext:<name>` id
+ * (see `mounts.mount_id` on the backend) so two simultaneously
+ * mounted drives (e.g. an SD card and a USB drive) are distinct,
+ * selectable locations rather than colliding on one shared id.
  */
-export type StorageLocation = "internal" | "sdcard" | "custom";
+export type StorageLocation = "internal" | "sdcard" | "custom" | (string & {});
 
 /**
  * One row of the download queue — kept loosely coupled to the

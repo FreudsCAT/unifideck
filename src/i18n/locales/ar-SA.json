@@ -12,6 +12,10 @@
       "disconnected": "غير متصل",
       "checking": "جاري التحقق…",
       "error": "خطأ — تحقق من السجلات"
+    },
+    "errors": {
+      "networkTitle": "No internet connection",
+      "networkBody": "Connect to Wi-Fi and try again."
     }
   },
   "storage": {
@@ -155,7 +159,6 @@
     "syncing": "جاري المزامنة...",
     "cancelSync": "إلغاء المزامنة",
     "retryStatusCheck": "إعادة محاولة التحقق من الحالة",
-    "refreshStore": "تحديث مكتبة هذا المتجر",
     "gamesSynced": "تمت مزامنة الألعاب {{synced}} / {{total}}",
     "artworkDownloaded": "تم تنزيل الأغلفة {{synced}} / {{total}}",
     "metadataExtracted": "تم استخراج البيانات الوصفية {{synced}} / {{total}}",
@@ -273,6 +276,7 @@
     "unifideck": "Unifideck:",
     "launcher": {
       "networkError": "خطأ في الشبكة",
+      "launchRetry": "إعادة محاولة التشغيل",
       "retryingUmu": "إعادة محاولة تشغيل UMU خلال {{seconds}} ثوانٍ (محاولة {{attempt}}/{{max}})...",
       "protonUpgrade": "تحديث Proton",
       "resettingPrefix": "جاري إعادة تعيين بيئة التشغيل لـ {{version}}...",
@@ -900,6 +904,7 @@
     "currentTitle": "الحالية",
     "downgradeButton": "تراجع إلى النسخة v{{version}}",
     "installFailedTitle": "فشل التثبيت",
+    "installTimeoutMessage": "لا استجابة من Decky Loader — قد يكون التثبيت قد توقف أو فشل. يُرجى المحاولة مرة أخرى.",
     "installedLabel": "مثبت",
     "installingButton": "جاري التثبيت...",
     "installingTitle": "تثبيت الملحق",
@@ -908,6 +913,8 @@
     "noBackend": "خدمة Decky الخلفية غير متوفرة.",
     "noReleaseNotes": "لا تتوفر ملاحظات الإصدار.",
     "reinstallButton": "إعادة تثبيت النسخة v{{version}}",
+    "refreshFailedMessage": "تعذّر التحقق من معلومات أحدث إصدار. تحقّق من اتصالك وحاول مرة أخرى.",
+    "releaseGoneMessage": "لم يعد هذا الإصدار متوفرًا. يُرجى التحقق من التحديثات والاختيار مرة أخرى.",
     "releaseNotesButton": "ملاحظات الإصدار",
     "stageDownload": "جاري التنزيل…",
     "stageFinish": "جاري الإنهاء…",

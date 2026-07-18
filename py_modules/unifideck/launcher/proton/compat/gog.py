@@ -16,6 +16,7 @@ import contextlib
 import json
 import logging
 import os
+import shlex
 import subprocess
 import time
 from pathlib import Path
@@ -192,6 +193,58 @@ def resolve_fallback_exe(install_path: str) -> str | None:
     return None
 
 
+def _read_required_launch_args(work_dir: Path, exe_path: Path) -> list[str]:
+    """Return the ``goggame-*.info`` playTask arguments required to launch ``exe_path``.
+
+    GOG's Windows DOSBox/ScummVM packages mark the *generic* wrapper exe
+    (``DOSBOX\\dosbox.exe``, ``SCUMMVM\\scummvm.exe``) as the primary
+    playTask, with the actual per-game ``-conf``/``-c`` flags living in
+    that task's own ``arguments`` string — e.g. ``-conf "..\\game.conf"
+    -conf "..\\game_single.conf" -noconsole -c "exit"``. Without them the
+    wrapper launches with no game config at all (GitHub #248: "loading
+    the generic DOSBOX .exe instead of the .bat"). Mirrors
+    ``_read_amazon_fuel_args`` in ``handlers/generic.py`` — re-derived
+    fresh from a file already on disk every launch, no persistence
+    through ``games.map``. Matched by resolved-path equality using
+    ``GOGExeResolver._resolve_case_insensitive`` — GOG's manifests are
+    authored on Windows' case-insensitive filesystem and can say
+    ``DOSBOX\\dosbox.exe`` while the real extracted file is
+    ``DOSBOX/DOSBox.exe`` (confirmed against real "Betrayal at Krondor"
+    / "Caesar II" packages); a naive case-sensitive join here never
+    matches ``exe_path`` (already resolved through that same
+    case-correction upstream, in ``GOGExeResolver``) and silently drops
+    every required arg. So the fallback exe (a different playTask) gets
+    its own arguments, not the primary's. Returns ``[]`` on any failure
+    or no match — the exe still launches, just without extra args, same
+    as Amazon's.
+    """
+    from unifideck.stores.gog.exe_resolver import resolve_case_insensitive
+
+    exe_resolved = exe_path.resolve()
+    for info_file in work_dir.glob("goggame-*.info"):
+        for task in _load_play_tasks(str(info_file)):
+            task_path = task.get("path")
+            if not task_path:
+                continue
+            candidate = Path(
+                resolve_case_insensitive(work_dir, str(task_path)),
+            ).resolve()
+            if candidate != exe_resolved:
+                continue
+            args = task.get("arguments")
+            if not args:
+                return []
+            try:
+                return shlex.split(str(args))
+            except ValueError:
+                logger.warning(
+                    "[compat.gog] unparsable playTask arguments for %s: %r",
+                    exe_path, args,
+                )
+                return []
+    return []
+
+
 def _install_language(work_dir: Path) -> str:
     """Read the user's install-time language from the ``.unifideck-id``
     marker, VERBATIM.
@@ -210,14 +263,35 @@ def _install_language(work_dir: Path) -> str:
     return ""
 
 
-async def _run_umu_exe(plan: ProtonLaunchPlan, exe_path: Path) -> int:
-    """Run a Windows exe through umu (shared by primary + fallback)."""
+async def _run_umu_exe(
+    plan: ProtonLaunchPlan, exe_path: Path, work_dir: Path, *, max_attempts: int = 2,
+) -> int:
+    """Run a Windows exe through umu (shared by primary + fallback).
+
+    ``max_attempts`` is the umu-level retry count for THIS exe. The
+    primary exe keeps the default (2); the launcher-stub fallback in
+    :func:`_run_gog_with_fallback` passes 1, because that fallback is
+    itself a higher-level retry (a *different* exe) — running a full
+    2-attempt umu retry on it too made one Play press fire the retry
+    toast (and, for corruption codes, wipe the shared runtime cache) up
+    to 4× (2 primary + 2 fallback). One attempt on the fallback caps it.
+
+    ``work_dir`` (the install root, where ``goggame-*.info`` lives — NOT
+    necessarily ``exe_path``'s own parent, e.g. a DOSBox wrapper under
+    ``DOSBOX\\dosbox.exe``) is searched for this exe's playTask
+    ``arguments`` (see :func:`_read_required_launch_args`); those are
+    prepended before the user's own launch options, mirroring
+    ``_read_amazon_fuel_args`` in ``handlers/generic.py``.
+    """
     cwd = exe_path.parent if exe_path.parent.is_dir() else None
+    required_args = _read_required_launch_args(work_dir, exe_path)
     argv: list[str] = list(plan.state.wrappers)
     argv.extend([str(plan.python_bin), str(plan.umu_wrapper), str(exe_path)])
+    argv.extend(required_args)
     argv.extend(plan.state.game_args)
     return await run_umu_with_retry(
         argv, env=plan.env, cwd=cwd, on_start=plan.on_process_start,
+        max_attempts=max_attempts,
     )
 
 
@@ -276,7 +350,7 @@ async def _run_gog_with_fallback(
     comet = start_comet(plan)
     try:
         start = time.monotonic()
-        rc = await _run_umu_exe(plan, plan.context.exe_path)
+        rc = await _run_umu_exe(plan, plan.context.exe_path, work_dir)
         elapsed = time.monotonic() - start
         if rc != 0 and elapsed < EARLY_EXIT_SECONDS:
             fallback = resolve_fallback_exe(str(work_dir))
@@ -285,7 +359,9 @@ async def _run_gog_with_fallback(
                     "[compat.gog] launcher stub exited in %ds (rc=%d), "
                     "retrying game exe: %s", int(elapsed), rc, fallback,
                 )
-                rc = await _run_umu_exe(plan, Path(fallback))
+                rc = await _run_umu_exe(
+                    plan, Path(fallback), work_dir, max_attempts=1,
+                )
         return rc
     finally:
         if comet is not None:

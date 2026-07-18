@@ -293,13 +293,13 @@
     },
     "ui": {
       "type": "object",
-      "description": "Frontend-facing preferences. `locale` drives the React i18next selection and is persisted to disk when the user changes it via the settings UI. Accepted values follow the en-US / fr-FR / de-DE BCP-47 shape; the validator checks the pattern but does not enforce the locale exists in src/i18n/locales/ — missing locales silently fall back to en-US at runtime.",
+      "description": "Frontend-facing preferences. `locale` drives the React i18next selection and is persisted to disk when the user changes it via the settings UI. Accepted values are the `auto` sentinel (auto-detect from the system, the shipped default) or a BCP-47 tag following the en-US / fr-FR / de-DE shape; the validator checks the pattern but does not enforce the locale exists in src/i18n/locales/ — missing locales silently fall back to en-US at runtime.",
       "additionalProperties": false,
       "properties": {
         "_comment": { "type": "string" },
         "locale": {
           "type": "string",
-          "pattern": "^[a-z]{2}(-[A-Z]{2})?$"
+          "pattern": "^(auto|[a-z]{2}(-[A-Z]{2})?)$"
         }
       }
     },
@@ -490,7 +490,8 @@
           "items": { "$ref": "#/$defs/nonEmptyString" }
         },
         "list_updates_timeout_seconds": { "$ref": "#/$defs/positiveInt" },
-        "get_size_timeout_seconds": { "$ref": "#/$defs/positiveInt" }
+        "get_size_timeout_seconds": { "$ref": "#/$defs/positiveInt" },
+        "library_sync_timeout_seconds": { "$ref": "#/$defs/positiveInt" }
       }
     },
     "ubisoftStore": {

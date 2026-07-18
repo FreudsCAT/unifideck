@@ -47,6 +47,10 @@ def apply_mask(data: BytesLike, mask: bytes | bytearray) -> bytes:
     if len(mask) != 4:
         raise ValueError("mask must contain 4 bytes")
 
+    # Python 3.15+ requires C-contiguous buffers for int.from_bytes().
+    if isinstance(data, memoryview) and not data.c_contiguous:
+        data = bytes(data)
+
     data_int = int.from_bytes(data, sys.byteorder)
     mask_repeated = mask * (len(data) // 4) + mask[: len(data) % 4]
     mask_int = int.from_bytes(mask_repeated, sys.byteorder)

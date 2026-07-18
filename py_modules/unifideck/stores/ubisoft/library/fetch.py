@@ -331,14 +331,13 @@ class _LibraryFetcher:
         db_entries: list[tuple[str, str]],
     ) -> list[GameConfig]:
         """Synthesize ``GameConfig`` rows for owned IDs absent from the local
-        ``configurations`` cache, named via the community DB (falling back to
-        any parsed config names). Owned IDs the DB can't name (modern games
-        not yet in the DB) are skipped — they stay unlisted until the DB
+        ``configurations`` cache: named via the community DB, a parsed
+        config name, or (last resort) Unifideck's own previously-cached
+        id_map entry — see :meth:`_resolve_backfill_identity`. Only IDs
+        unnamed by every source are skipped, staying unlisted until one
         covers them. Edition/DLC/test noise is removed downstream by
         :meth:`_GameBuilder.build_games_from_configs`.
         """
-        from unifideck.stores.ubisoft.parser import GameConfig
-
         id_to_name: dict[int, str] = {}
         for iid_str, name in db_entries:
             if not name:
@@ -351,20 +350,21 @@ class _LibraryFetcher:
         for cfg in configs:
             if cfg.name:
                 id_to_name.setdefault(cfg.install_id, cfg.name)
+
         backfilled: list[GameConfig] = []
         unresolved: list[int] = []
+        recovered_from_cache = 0
         for oid in owned_set:
             if oid in config_by_id:
                 continue
-            resolved = id_to_name.get(oid)
-            if not resolved:
+            synth, from_cache = self._resolve_backfill_identity(
+                oid, id_to_name,
+            )
+            if synth is None:
                 unresolved.append(oid)
                 continue
-            synth = GameConfig()
-            synth.install_id = oid
-            synth.launch_id = oid
-            synth.name = resolved
             backfilled.append(synth)
+            recovered_from_cache += from_cache
         if unresolved:
             logger.info(
                 "[UbisoftLibrary] %d owned install_id(s) unnamed by "
@@ -372,7 +372,57 @@ class _LibraryFetcher:
                 len(unresolved),
                 ", ".join(str(i) for i in sorted(unresolved)[:20]),
             )
+        if recovered_from_cache:
+            logger.info(
+                "[UbisoftLibrary] %d owned install_id(s) recovered from "
+                "Unifideck's own cache (community DB had no name)",
+                recovered_from_cache,
+            )
         return backfilled
+
+    def _resolve_backfill_identity(
+        self,
+        oid: int,
+        id_to_name: dict[int, str],
+    ) -> tuple[GameConfig | None, bool]:
+        """Resolve one owned, unconfigured install_id to a synthesized
+        ``GameConfig``, falling back to a cached id_map entry (see
+        :meth:`UbisoftIdMap.find_cached_entry_by_install_id`) when
+        neither the community DB nor a parsed config names it.
+
+        The cache fallback matters because the community DB is
+        crowd-sourced and best-effort — it can simply never have
+        catalogued an older/less common title (e.g. one superseded by
+        an HD remaster under a different install_id) that Unifideck
+        itself already correctly identified in an earlier session,
+        typically via local-binary detection. Reusing that cached
+        identity wholesale (not just its name) carries the correct
+        ``space_id`` through to install-status and prefix resolution
+        downstream (see ``_build_one_game``'s ``game_id``).
+
+        Returns ``(config_or_None, recovered_from_cache)``.
+        """
+        from unifideck.stores.ubisoft.parser import GameConfig
+
+        resolved = id_to_name.get(oid)
+        cached = (
+            None if resolved
+            else self._id_map.find_cached_entry_by_install_id(oid)
+        )
+        if not resolved and not cached:
+            return None, False
+
+        synth = GameConfig()
+        synth.install_id = oid
+        synth.launch_id = oid
+        if cached:
+            synth.name = cached.get("name") or ""
+            synth.space_id = cached.get("space_id") or ""
+            synth.executable = cached.get("executable") or ""
+            synth.game_identifier = cached.get("game_identifier") or ""
+            return synth, True
+        synth.name = resolved or ""
+        return synth, False
 
     @staticmethod
     def _import_ubisoft_parser() -> (

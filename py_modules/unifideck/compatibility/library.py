@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Iterable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from typing import TYPE_CHECKING, Any
+
+import aiohttp
 
 from unifideck.utils.config_helpers import get_cfg
 
@@ -36,10 +37,6 @@ DECK_VERIFIED_URL = (
 
 DEFAULT_USER_AGENT = "Unifideck/1.0 (compat-library)"
 CACHE_NAMESPACE = "compat"
-
-# HTTP status code constants — kept here so PLR2004 doesn't flag the magic numbers in the fetch helpers below.
-HTTP_OK = 200
-HTTP_NOT_FOUND = 404
 
 # Valve's Steam Deck verification report loc-tokens, mapped to the
 # human-readable strings the Steam client shows next to each
@@ -101,6 +98,27 @@ class CompatRating:
         "sources": list(self.sources),
         "error": self.error,
         }
+
+# Marker keys (``dtr_checked``) live alongside the rating fields in
+# the cached dict — filter to real dataclass fields so cached-entry
+# construction can't crash on them.
+_RATING_FIELDS = frozenset(f.name for f in fields(CompatRating))
+
+
+def _rating_from_cached(cached: dict[str, Any]) -> CompatRating:
+    """Build a ``CompatRating`` from a cached dict, ignoring marker keys."""
+    return CompatRating(
+        **{k: v for k, v in cached.items() if k in _RATING_FIELDS},
+    )
+
+
+def _stamped(result: CompatRating) -> dict[str, Any]:
+    """``to_dict`` plus the ``dtr_checked`` one-shot self-heal marker."""
+    payload = result.to_dict()
+    payload["dtr_checked"] = True
+    return payload
+
+
 def parse_protondb_response(payload: dict[str, Any]) -> str | None:
     """Parse protondb response."""
     if not isinstance(payload, dict):
@@ -157,10 +175,20 @@ class CompatLibrary:
         self,
         cache: CacheManager | None = None,
         config: ConfigManager | None = None,
+        *,
+        deferred_writes: bool = False,
     ) -> None:
-        """Initialize the instance."""
+        """Initialize the instance.
+
+        ``deferred_writes=True`` makes cache writes stay in memory
+        until the owner flushes (CompatibilityService's per-sync
+        loop writes once per game — eager persistence would rewrite
+        the whole namespace file each time). Ad-hoc/legacy
+        constructions keep the eager default.
+        """
         self._cache = cache
         self._config = config
+        self._deferred_writes = deferred_writes
         if cache is not None:
             ttl = int(get_cfg(config, "cache_ttl.compat", 604800))
             try:
@@ -169,40 +197,67 @@ class CompatLibrary:
                 # Already registered or cache backend misconfigured;
                 # lookups will still work, just without our preferred TTL.
                 logger.debug("[CompatLibrary] cache.register failed: %s", e)
-    async def get_for_appid(self, appid: int) -> CompatRating:
-        """Get for appid."""
-        cached = self._cache_get(str(appid))
+    async def get_for_appid(
+        self,
+        appid: int,
+        *,
+        refresh: bool = False,
+        session: aiohttp.ClientSession | None = None,
+    ) -> CompatRating:
+        """Look up ProtonDB + Deck-Verified for a real Steam AppID.
+
+        ``refresh=True`` (force sync) skips the cache read and
+        overwrites the entry with a fresh fetch — old data survives
+        only if the caller never reaches the write (task cancelled).
+        ``session`` lets the sync loop share one connection pool
+        across all games.
+        """
+        cached = None if refresh else self._cache_get(str(appid))
         if cached is not None:
-            result = CompatRating(**cached)
+            result = _rating_from_cached(cached)
             # Self-healing upgrade from entries cached before
             # ``deck_test_results`` was added to ``to_dict``: when
             # the entry has a known verification status but no
             # test-result entries, re-fetch only the deck-verified
             # side and merge the results. ProtonDB is left alone
             # (it was already populated correctly in the old
-            # format).
+            # format). The ``dtr_checked`` stamp makes this a
+            # one-shot upgrade — games with genuinely no published
+            # test results used to re-hit the endpoint every sync
+            # forever.
             if (
                 result.deck_status != "unknown"
                 and not result.deck_test_results
+                and not cached.get("dtr_checked")
             ):
-                status, test_results = await self._fetch_deck_verified(appid)
-                result.deck_status = status
-                result.deck_test_results = test_results
-                self._cache_set(str(appid), result.to_dict())
+                status, test_results = await self._fetch_deck_verified(
+                    appid, session,
+                )
+                if status != "unknown":
+                    # Only adopt a real answer — a transient fetch
+                    # failure must not downgrade the cached status.
+                    result.deck_status = status
+                    result.deck_test_results = test_results
+                self._cache_set(str(appid), _stamped(result))
             return result
         result = CompatRating(appid=appid)
-        result.protondb_tier = await self._fetch_protondb(appid)
+        result.protondb_tier = await self._fetch_protondb(appid, session)
         if result.protondb_tier is not None:
             result.sources.append("protondb")
-        status, test_results = await self._fetch_deck_verified(appid)
+        status, test_results = await self._fetch_deck_verified(appid, session)
         result.deck_status = status
         result.deck_test_results = test_results
         if status != "unknown":
             result.sources.append("deck_verified")
-        self._cache_set(str(appid), result.to_dict())
+        self._cache_set(str(appid), _stamped(result))
         return result
     async def get_for_title(
-        self, title: str, shortcut_app_id: int | None = None,
+        self,
+        title: str,
+        shortcut_app_id: int | None = None,
+        *,
+        refresh: bool = False,
+        session: aiohttp.ClientSession | None = None,
     ) -> CompatRating:
         """Resolve ``title`` to a Steam AppID, then look up ProtonDB + Deck-Verified.
 
@@ -218,21 +273,32 @@ class CompatLibrary:
 
         Falls back to ``search_store(title)`` on cache miss so the
         method still works for callers that don't have a shortcut
-        AppID (e.g. ad-hoc lookups outside the sync pipeline).
+        AppID (e.g. ad-hoc lookups outside the sync pipeline). A
+        failed search with a known shortcut is negative-cached
+        (``steam_real_appid = -1``, MetadataService's convention)
+        so the sync partition skips it instead of re-searching
+        every sync; a force sync retries it via the metadata
+        phase's re-resolution.
+
+        ``refresh=True`` bypasses the compat cache read (force
+        sync). The positive AppID mapping is still trusted — the
+        metadata phase re-resolves it before this phase runs.
         """
         steam_id: int | None = None
         if shortcut_app_id is not None:
             steam_id = self._lookup_cached_steam_id(shortcut_app_id)
         if steam_id is None:
             from unifideck.steam.library import search_store
-            steam = await search_store(title, config=self._config)
-            if steam is None or "app_id" not in steam:
-                return CompatRating(
-                    title=title, error="not_found_on_steam_store",
-                )
+            steam = await search_store(
+                title, config=self._config, session=session,
+            )
             try:
-                steam_id = int(steam["app_id"])
-            except (TypeError, ValueError):
+                steam_id = int(steam["app_id"]) if steam else 0
+            except (TypeError, ValueError, KeyError):
+                steam_id = 0
+            if steam_id <= 0:
+                if shortcut_app_id is not None:
+                    self._persist_steam_real_appid(shortcut_app_id, -1)
                 return CompatRating(
                     title=title, error="not_found_on_steam_store",
                 )
@@ -240,19 +306,22 @@ class CompatLibrary:
             # missed, so the facet join surfaces this game's badge.
             if shortcut_app_id is not None:
                 self._persist_steam_real_appid(shortcut_app_id, steam_id)
-        result = await self.get_for_appid(steam_id)
+        result = await self.get_for_appid(
+            steam_id, refresh=refresh, session=session,
+        )
         result.title = title
         return result
 
-    def _lookup_cached_steam_id(self, shortcut_app_id: int) -> int | None:
-        """Read the shortcut → real-Steam-AppID mapping written by MetadataService.
+    def cached_steam_mapping(self, shortcut_app_id: int) -> int | None:
+        """Raw shortcut → Steam-AppID mapping, including negative sentinels.
 
         Mirrors :meth:`ArtworkService._lookup_cached_steam_id`. Reads
         the ``steam_real_appid`` cache namespace's raw ``_data`` dict;
         the key is ``str(game.app_id)`` (signed 32-bit, matching how
         the sync layer stores AppIDs). Tries both signed and unsigned
         forms because Steam's frontend hands the unsigned form down
-        through some code paths.
+        through some code paths. ``None`` = never resolved; ``<= 0``
+        = negative-cached "no Steam counterpart".
         """
         cache = getattr(self, "_cache", None)
         if cache is None:
@@ -266,11 +335,16 @@ class CompatLibrary:
                 return None
             for key in self._appid_key_candidates(shortcut_app_id):
                 value = data.get(key)
-                if isinstance(value, int) and value > 0:
+                if isinstance(value, int):
                     return value
         except Exception:
             return None
         return None
+
+    def _lookup_cached_steam_id(self, shortcut_app_id: int) -> int | None:
+        """Positive-only view of :meth:`cached_steam_mapping`."""
+        value = self.cached_steam_mapping(shortcut_app_id)
+        return value if isinstance(value, int) and value > 0 else None
 
     @staticmethod
     def _appid_key_candidates(app_id: int) -> list[str]:
@@ -291,75 +365,89 @@ class CompatLibrary:
             if delay_ms > 0:
                 await asyncio.sleep(delay_ms / 1000)
         return out
-    async def _fetch_protondb(self, appid: int) -> str | None:
-        """Fetch protondb."""
-        import aiohttp
+    async def _fetch_protondb(
+        self,
+        appid: int,
+        session: aiohttp.ClientSession | None = None,
+    ) -> str | None:
+        """Fetch protondb.
+
+        Reuses ``session`` when provided (the sync loop passes one
+        shared session — creating a connector per game cost two TLS
+        handshakes per title on a cold sync). No rate-limit gate:
+        protondb.com is a different host from the Steam Store.
+        """
         url = PROTONDB_URL.format(appid=appid)
         timeout = int(_cfg(
         self._config, "compat.protondb_timeout_seconds", 30,
         ))
-        try:
-            # ssl=False — SteamOS's outdated cert store breaks SSL
-            # verification for several third-party hosts inside the
-            # Decky plugin process. See library.search_store for the
-            # same workaround.
-            connector = aiohttp.TCPConnector(ssl=False)
-            async with (
-                aiohttp.ClientSession(connector=connector) as session,
-                session.get(
-                    url,
-                    headers={"User-Agent": DEFAULT_USER_AGENT},
-                    timeout=aiohttp.ClientTimeout(total=timeout),
-                ) as resp,
-            ):
-                if resp.status == HTTP_NOT_FOUND:
-                    return None
-                if resp.status != HTTP_OK:
-                    return None
-                return parse_protondb_response(
-                    await resp.json(),
-                )
-        except Exception as e:
-            logger.debug(
-                "[compat] protondb(%d) failed: %s", appid, e,
-            )
+        payload = await self._get_json(
+            url, session, timeout, log_tag=f"[compat] protondb({appid})",
+            gate=None,
+        )
+        if not isinstance(payload, dict):
             return None
+        return parse_protondb_response(payload)
 
     async def _fetch_deck_verified(
-        self, appid: int,
+        self,
+        appid: int,
+        session: aiohttp.ClientSession | None = None,
     ) -> tuple[str, list[dict[str, Any]]]:
         """Fetch Steam Deck verification status + per-test reasoning.
 
         Returns ``(status, test_results)``; mirrors the shape of
         :func:`parse_deck_verified_response`. Failures degrade to
         ``("unknown", [])`` so callers never have to handle
-        exceptions.
+        exceptions. Runs behind the shared ``STEAM_STORE_GATE``
+        (same host as storesearch/appdetails).
         """
-        import aiohttp
+        from unifideck.steam.http_retry import STEAM_STORE_GATE
         url = DECK_VERIFIED_URL.format(appid=appid)
         timeout = int(_cfg(
         self._config, "compat.deck_verified_timeout_seconds", 10,
         ))
+        payload = await self._get_json(
+            url, session, timeout, log_tag=f"[compat] deck({appid})",
+            gate=STEAM_STORE_GATE,
+        )
+        if not isinstance(payload, dict):
+            return "unknown", []
+        return parse_deck_verified_response(payload)
+
+    async def _get_json(
+        self,
+        url: str,
+        session: aiohttp.ClientSession | None,
+        timeout_s: float,
+        *,
+        log_tag: str,
+        gate: Any,
+    ) -> Any | None:
+        """GET JSON on ``session`` (or a one-shot session) with 429 backoff.
+
+        ``ssl=False`` on the one-shot connector — SteamOS's outdated
+        cert store breaks SSL verification for several third-party
+        hosts inside the Decky plugin process. See
+        ``library.search_store`` for the same workaround.
+        """
+        from unifideck.steam.http_retry import get_json_with_backoff
+        headers = {"User-Agent": DEFAULT_USER_AGENT}
         try:
+            if session is not None:
+                return await get_json_with_backoff(
+                    session, url, timeout_s=timeout_s, log_tag=log_tag,
+                    headers=headers, gate=gate,
+                )
             connector = aiohttp.TCPConnector(ssl=False)
-            async with (
-                aiohttp.ClientSession(connector=connector) as session,
-                session.get(
-                    url,
-                    headers={"User-Agent": DEFAULT_USER_AGENT},
-                    timeout=aiohttp.ClientTimeout(total=timeout),
-                ) as resp,
-            ):
-                if resp.status != HTTP_OK:
-                    return "unknown", []
-                return parse_deck_verified_response(
-                    await resp.json(),
+            async with aiohttp.ClientSession(connector=connector) as one_shot:
+                return await get_json_with_backoff(
+                    one_shot, url, timeout_s=timeout_s, log_tag=log_tag,
+                    headers=headers, gate=gate,
                 )
         except Exception as e:
-            logger.debug(
-                "[compat] deck(%d) failed: %s", appid, e,
-            )
-            return "unknown", []
+            logger.debug("%s failed: %s", log_tag, e)
+            return None
     def _cache_get(self, key: str) -> dict[str, Any] | None:
         """Cache get."""
         if self._cache is None:
@@ -371,11 +459,14 @@ class CompatLibrary:
     def _cache_set(
         self, key: str, value: dict[str, Any],
     ) -> None:
-        """Cache set."""
+        """Cache set (deferred when ``deferred_writes`` — owner flushes)."""
         if self._cache is None:
             return
         try:
-            self._cache.set(CACHE_NAMESPACE, key, value)
+            if self._deferred_writes:
+                self._cache.set(CACHE_NAMESPACE, key, value, flush=False)
+            else:
+                self._cache.set(CACHE_NAMESPACE, key, value)
         except Exception as e:
             # Cache write failures are non-fatal: the rating was
             # computed successfully, we just won't re-use it.
@@ -395,97 +486,25 @@ class CompatLibrary:
         cached under 945360, but the shortcut had no mapping → no
         badge). Persist it here, keyed by the signed AppID to match how
         the sync layer writes it. Non-fatal on failure.
+
+        ``steam_id = -1`` is the negative sentinel (title has no Steam
+        counterpart) — same convention MetadataService writes, read by
+        the sync partition to skip the game next run.
         """
-        if self._cache is None or steam_id <= 0:
+        if self._cache is None or steam_id == 0:
             return
         try:
-            self._cache.set("steam_real_appid", str(shortcut_app_id), steam_id)
+            if self._deferred_writes:
+                self._cache.set(
+                    "steam_real_appid", str(shortcut_app_id), steam_id,
+                    flush=False,
+                )
+            else:
+                self._cache.set(
+                    "steam_real_appid", str(shortcut_app_id), steam_id,
+                )
         except Exception as e:
             logger.debug(
                 "[CompatLibrary] steam_real_appid backfill %r failed: %s",
                 shortcut_app_id, e,
             )
-def load_compat_cache() -> dict[str, Any]:
-    """Load compat cache (legacy passthrough — returns empty dict)."""
-    logger.debug("[compat] load_compat_cache called via legacy path")
-    return {}
-
-
-def save_compat_cache(cache: dict[str, Any]) -> bool:
-    """Save compat cache (legacy passthrough — always succeeds)."""
-    logger.debug("[compat] save_compat_cache called via legacy path")
-    return True
-
-
-async def search_steam_store(
-    session: Any | None = None,
-    title: str = "",
-    **kwargs: Any,
-) -> dict[str, Any] | None:
-    """Search Steam store for ``title`` (legacy passthrough)."""
-    from unifideck.steam.library import search_store
-    return await search_store(title)
-
-
-async def fetch_protondb_rating(
-    session: Any | None = None,
-    appid: int = 0,
-    **kwargs: Any,
-) -> str | None:
-    """Fetch the ProtonDB rating for ``appid`` (legacy passthrough)."""
-    lib = CompatLibrary()
-    return await lib._fetch_protondb(int(appid))
-
-
-async def fetch_deck_verified(
-    session: Any | None = None,
-    appid: int = 0,
-    **kwargs: Any,
-) -> str:
-    """Fetch the Steam Deck verification status for ``appid``.
-
-    Module-level facade — keeps the legacy single-string return
-    shape for older callers. New code should use
-    :meth:`CompatLibrary._fetch_deck_verified` directly to also
-    receive the per-test result entries.
-    """
-    lib = CompatLibrary()
-    status, _ = await lib._fetch_deck_verified(appid)
-    return status
-
-
-async def get_compat_for_title(
-    session: Any | None = None,
-    title: str = "",
-    **kwargs: Any,
-) -> tuple[str, dict[str, Any]]:
-    """Get compat rating for ``title`` (legacy passthrough)."""
-    lib = CompatLibrary()
-    rating = await lib.get_for_title(title)
-    status = "ok" if rating.error is None else rating.error
-    return (status, rating.to_dict())
-
-
-async def prefetch_compat(
-    titles: Iterable[str],
-    _batch_size: int = 10,
-    delay_ms: int = 50,
-) -> Any:
-    """Prefetch compat ratings for a list of ``titles`` (legacy)."""
-    lib = CompatLibrary()
-    return await lib.bulk_fetch(list(titles), delay_ms=delay_ms)
-
-
-class BackgroundCompatFetcher:
-
-    """Background compat fetcher."""
-    def __init__(self, *args: Any, **kwargs: Any) -> None:
-        """Initialize the instance."""
-        self._lib = CompatLibrary()
-    def start(self) -> None:
-        """Start the background fetcher (legacy no-op)."""
-    def stop(self) -> None:
-        """Stop the background fetcher (legacy no-op)."""
-    async def fetch(self, title: str) -> Any:
-        """Fetch compat rating for ``title``."""
-        return await self._lib.get_for_title(title)

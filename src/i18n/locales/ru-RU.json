@@ -12,6 +12,10 @@
       "disconnected": "Не подключено",
       "checking": "Проверка…",
       "error": "Ошибка — проверьте логи"
+    },
+    "errors": {
+      "networkTitle": "No internet connection",
+      "networkBody": "Connect to Wi-Fi and try again."
     }
   },
   "storage": {
@@ -155,7 +159,6 @@
     "syncing": "Синхронизация...",
     "cancelSync": "Отменить синхронизацию",
     "retryStatusCheck": "Повторить проверку статуса",
-    "refreshStore": "Обновить библиотеку этого магазина",
     "gamesSynced": "Синхронизировано игр: {{synced}} / {{total}}",
     "artworkDownloaded": "Скачано обложек: {{synced}} / {{total}}",
     "metadataExtracted": "Извлечено метаданных: {{synced}} / {{total}}",
@@ -273,6 +276,7 @@
     "unifideck": "Unifideck:",
     "launcher": {
       "networkError": "Ошибка сети",
+      "launchRetry": "Повторный запуск",
       "retryingUmu": "Повторная попытка запуска UMU через {{seconds}} сек. (попытка {{attempt}}/{{max}})...",
       "protonUpgrade": "Обновление Proton",
       "resettingPrefix": "Сброс префикса для {{version}}...",
@@ -900,6 +904,7 @@
     "currentTitle": "Текущая",
     "downgradeButton": "Откат к версии v{{version}}",
     "installFailedTitle": "Установка не удалась",
+    "installTimeoutMessage": "Нет ответа от Decky Loader — возможно, установка зависла или завершилась ошибкой. Пожалуйста, попробуйте снова.",
     "installedLabel": "установлено",
     "installingButton": "Установка...",
     "installingTitle": "Установка плагина",
@@ -908,6 +913,8 @@
     "noBackend": "Бэкенд Decky недоступен.",
     "noReleaseNotes": "Описание изменений отсутствует.",
     "reinstallButton": "Переустановить версию v{{version}}",
+    "refreshFailedMessage": "Не удалось проверить информацию о последней версии. Проверьте подключение и попробуйте снова.",
+    "releaseGoneMessage": "Этот выпуск больше недоступен. Проверьте обновления и выберите снова.",
     "releaseNotesButton": "Описание изменений",
     "stageDownload": "Загрузка…",
     "stageFinish": "Завершение…",

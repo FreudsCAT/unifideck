@@ -70,8 +70,11 @@ class _FakeCache:
     def get(self, cache: str, key: str):
         return self.store.get((cache, key))
 
-    def set(self, cache: str, key: str, value) -> None:
+    def set(self, cache: str, key: str, value, *, flush: bool = True) -> None:
         self.store[(cache, key)] = value
+
+    def flush(self, cache: str) -> None:
+        pass
 
     def clear(self, cache: str) -> None:
         for k in [k for k in self.store if k[0] == cache]:

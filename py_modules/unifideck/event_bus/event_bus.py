@@ -53,6 +53,19 @@ from unifideck.core.types import Events
 logger = logging.getLogger(__name__)
 Handler = Callable[..., Awaitable[Any]] | Callable[..., Any]
 
+# Ceiling for a single handler's execution inside ``emit``'s fan-out.
+# ``SYNC_STARTED``/``SYNC_COMPLETE`` are emitted while ``SyncService``
+# holds its single-flight ``_lock`` (see ``sync_run_mixin.py``/
+# ``sync_finalize_mixin.py``) — without a bound here, one wedged
+# subscriber (a stalled subprocess, an uncancellable socket call) hangs
+# ``emit`` forever, which wedges the lock forever, and every future sync
+# request queues behind it indefinitely (only a plugin/Steam restart,
+# which rebuilds ``SyncService`` with a fresh ``Lock()``, recovers).
+# 60s is generous for any legitimate handler (VDF reconcile, cache
+# writes) while still surfacing a genuinely stuck handler in a bounded
+# window instead of never (UD-013).
+HANDLER_TIMEOUT_SECONDS = 60.0
+
 
 class EventBus:
     """In-process async pub/sub with persistent + one-shot subscriptions."""
@@ -328,9 +341,11 @@ class EventBus:
         ok = sum(1 for r in results if not isinstance(r, Exception))
         for i, r in enumerate(results):
             if isinstance(r, Exception):
+                handler_name = getattr(handlers[i], "__qualname__", repr(handlers[i]))
                 logger.error(
-                    "[EventBus] handler #%d for %s failed: %s: %s",
+                    "[EventBus] handler #%d (%s) for %s failed: %s: %s",
                     i,
+                    handler_name,
                     key,
                     type(r).__name__,
                     r,
@@ -352,6 +367,14 @@ class EventBus:
         decorators) — the check via the function attribute
         ``__call__`` would miss those cases.
 
+        Bounded by ``HANDLER_TIMEOUT_SECONDS`` so one wedged handler
+        can't hang ``emit`` (and, transitively, any lock the emitting
+        caller holds — see the constant's docstring) forever. A
+        timeout is returned like any other per-handler failure: the
+        caller's ``asyncio.gather(..., return_exceptions=True)`` sees
+        a ``TimeoutError`` in this slot and logs it, but ``emit``
+        itself still returns on schedule.
+
         Args:
             handler: the callable to invoke.
             payload: kwargs to forward.
@@ -361,8 +384,13 @@ class EventBus:
             handlers, after thread completion for sync ones).
         """
         if inspect.iscoroutinefunction(handler):
-            return await handler(**payload)
-        return await asyncio.to_thread(handler, **payload)
+            return await asyncio.wait_for(
+                handler(**payload), timeout=HANDLER_TIMEOUT_SECONDS,
+            )
+        return await asyncio.wait_for(
+            asyncio.to_thread(handler, **payload),
+            timeout=HANDLER_TIMEOUT_SECONDS,
+        )
 
     @staticmethod
     def _key(event: Events | str) -> str:

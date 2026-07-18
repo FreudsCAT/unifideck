@@ -65,11 +65,21 @@ _TAG_VERSION_RE = re.compile(
 def _parse_version_from_tag(tag: str) -> str:
     """Extract a semver string from a GitHub tag name.
 
-    Returns the numeric portion (e.g. ``"0.6.1"``) or the raw tag
-    if no semver pattern is found (e.g. ``"Dev"``).
+    Returns the numeric portion, zero-padded to X.Y.Z (e.g. tag
+    ``"Release-0.7"`` becomes ``"0.7.0"``), so it compares equal to
+    ``package.json``'s always-three-component version string — some
+    older/two-component release tags (e.g. ``"Release-0.7"``) would
+    otherwise never match the installed version and the UI's
+    "(installed)" tag would never appear for them. Returns the raw tag
+    if no semver pattern is found at all (e.g. ``"Dev"``).
     """
     m = _TAG_VERSION_RE.search(tag)
-    return m.group(1) if m else tag
+    if not m:
+        return tag
+    parts = m.group(1).split(".")
+    while len(parts) < 3:
+        parts.append("0")
+    return ".".join(parts)
 
 
 def _version_tuple(version: str) -> tuple[int, ...]:
@@ -127,6 +137,23 @@ class UpdaterService:
             logger.warning("Could not read package.json for version")
             return "0.0.0"
 
+    def get_current_build_id(self) -> str | None:
+        """Read the dev-build identifier stamped at build time, if present.
+
+        Populated only for local ``./build-plugin.sh dev`` builds (see
+        ``dev_build.json``, written next to ``package.json`` by
+        ``_write_dev_build_json()`` in build-plugin.sh). Returns ``None``
+        for production installs, CI-built PR artifacts, and any install
+        that predates this feature — purely additive.
+        """
+        build_id_path = Path(self._package_json_path).parent / "dev_build.json"
+        try:
+            data = json.loads(build_id_path.read_text())
+            build_id = data.get("build_id")
+            return build_id if isinstance(build_id, str) and build_id else None
+        except Exception:
+            return None
+
     async def fetch_releases(self, *, force: bool = False) -> list[ReleaseInfo]:
         """Fetch and cache installable releases from GitHub.
 
@@ -153,7 +180,7 @@ class UpdaterService:
             # Return stale cache if available
             return self._cached_releases
 
-    async def check_for_update(self) -> dict[str, Any]:
+    async def check_for_update(self, *, force: bool = False) -> dict[str, Any]:
         """Check whether a newer version is available.
 
         Returns a dict with::
@@ -161,18 +188,33 @@ class UpdaterService:
             {
                 "available": bool,
                 "current": "0.6.1",
+                "current_build_id": "0.7.1.g3f9a1c2" | None,
                 "latest": {<ReleaseInfo fields>} | None,
             }
 
         The ``latest`` field is the newest *stable* release (non-
         prerelease). If no stable release is found, the newest
-        prerelease is used instead.
+        prerelease is used instead. ``current_build_id`` is only
+        populated for local dev builds (see ``get_current_build_id``);
+        it's ``None`` for production installs.
+
+        Args:
+            force: bypass ``CACHE_TTL_SECONDS`` and re-fetch from
+                GitHub. Used by the explicit "Check for Updates"
+                action so a mutable prerelease tag's rotated asset
+                is never missed by the 1-hour cache.
         """
         current = self.get_current_version()
-        releases = await self.fetch_releases()
+        current_build_id = self.get_current_build_id()
+        releases = await self.fetch_releases(force=force)
 
         if not releases:
-            return {"available": False, "current": current, "latest": None}
+            return {
+                "available": False,
+                "current": current,
+                "current_build_id": current_build_id,
+                "latest": None,
+            }
 
         # Prefer latest stable; fall back to latest prerelease
         stable = [r for r in releases if not r.prerelease]
@@ -185,6 +227,7 @@ class UpdaterService:
         return {
             "available": available,
             "current": current,
+            "current_build_id": current_build_id,
             "latest": latest.to_dict(),
         }
 

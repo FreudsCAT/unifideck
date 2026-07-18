@@ -13,6 +13,10 @@ import re
 from pathlib import Path
 
 from unifideck.launcher.proton.infrastructure.core import ProtonLaunchPlan
+from unifideck.launcher.proton.infrastructure.prefix_layout import (
+    resolve_drive_c,
+    resolve_registry_prefix,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -122,9 +126,29 @@ def cleanup_epic_artifacts(plan: ProtonLaunchPlan) -> None:
     ``com.epicgames.launcher`` registry blocks from ``user.reg`` /
     ``system.reg``. All failures are swallowed (logged at debug) — we
     never want preflight hygiene to block the launch itself.
+
+    umu/Proton nest the real Wine tree under ``<prefix>/pfx/`` rather
+    than the prefix root directly — resolve through the same helpers
+    ``prefix_init.py`` uses, or this silently inspects paths that never
+    exist and never actually cleans anything.
+
+    Rockstar-on-Epic (RDR2/GTA5) is the exception: those games DEPEND on
+    the ``EpicGamesLauncher.exe`` stub + the ``com.epicgames.launcher``
+    registration to boot the Rockstar launcher, so this hygiene is
+    skipped entirely for them (it would delete exactly what they need).
     """
+    from unifideck.launcher.proton.fixes.game_fixes import is_rockstar_egs
+    if is_rockstar_egs(plan.context.game_id, plan.state.umu_id):
+        logger.info(
+            "[epic_cleanup] Rockstar-EGS (%s): skipping launcher-stub/"
+            "registry cleanup (the game needs them)", plan.state.umu_id,
+        )
+        return
     for prefix in _collect_prefix_candidates(plan):
-        _remove_epic_launcher_stubs(prefix / "drive_c")
+        drive_c = resolve_drive_c(prefix)
+        if drive_c is not None:
+            _remove_epic_launcher_stubs(drive_c)
     for prefix in _collect_prefix_candidates(plan):
+        registry_root = resolve_registry_prefix(prefix)
         for reg_name in ("user.reg", "system.reg"):
-            _clean_epic_registry(prefix / reg_name)
+            _clean_epic_registry(registry_root / reg_name)

@@ -253,6 +253,15 @@ class ArtworkService(_EventHandlersMixin):
         attempted = self._cache.get(_ATTEMPTS_NAMESPACE, cache_key)
         return attempted is not None and set(attempted) == target
 
+    def _flush_artwork_caches(self) -> None:
+        """Persist the batch's deferred attempts-cache writes."""
+        try:
+            self._cache.flush(_ATTEMPTS_NAMESPACE)
+        except Exception:
+            logger.debug(
+                "[ArtworkService] cache flush %s failed", _ATTEMPTS_NAMESPACE,
+            )
+
     async def _run_fetch_phases(
         self,
         store: str,
@@ -291,8 +300,10 @@ class ArtworkService(_EventHandlersMixin):
             )
         # Record what's still missing so the next sync can skip this
         # game iff the gaps haven't changed (genuinely-absent art).
+        # Deferred write — one per game in the batch; the batch's
+        # done-callback flushes via ``_flush_artwork_caches``.
         still_missing = sorted(k for k in _ARTWORK_KINDS if not result.get(k))
-        self._cache.set(_ATTEMPTS_NAMESPACE, cache_key, still_missing)
+        self._cache.set(_ATTEMPTS_NAMESPACE, cache_key, still_missing, flush=False)
         if sources:
             self._log_sources(title, sources)
 

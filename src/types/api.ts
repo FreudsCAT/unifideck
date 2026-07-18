@@ -53,7 +53,16 @@ export interface Game {
   store_game_id: string;
   title: string;
   store: StoreId;
+  /** Adapter-normalised install flag (set by ``adaptGame`` on the
+   *  app-details path). NOTE: raw rows straight off
+   *  ``get_all_unifideck_games`` do NOT carry this — they carry
+   *  ``installed`` (the wire field, below). Read ``installed ?? is_installed``
+   *  when consuming un-adapted rows. */
   is_installed: boolean;
+  /** Raw wire field from ``asdict(Game)`` (backend ``Game.installed``).
+   *  Present on un-adapted RPC rows; ``adaptGame`` folds it into
+   *  ``is_installed``. */
+  installed?: boolean;
   cover_image?: string;
   install_path?: string;
   executable?: string;

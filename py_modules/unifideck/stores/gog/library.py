@@ -113,8 +113,21 @@ class GOGLibrary:
             )
             await self._tokens.clear()
             return False
+        if status == 0:
+            # Network/timeout blip — NOT a real 401/403 (HTTPError
+            # returns the actual code, so this is unreachable for a
+            # genuine auth failure). Don't drop GOG from the sync on a
+            # transient probe failure right after login: we still hold
+            # tokens (checked above), and fetch_library refreshes and
+            # fails visibly if the token is actually dead (UD-005).
+            logger.warning(
+                "[GOGLibrary] userdata probe unreachable "
+                "(timeout/network); assuming available — tokens present",
+            )
+            return True
         logger.warning(
-            "[GOGLibrary] userdata probe returned %s",
+            "[GOGLibrary] userdata probe returned unexpected status %s "
+            "— treating GOG as unavailable",
             status,
         )
         return False
@@ -152,8 +165,8 @@ class GOGLibrary:
             except urllib.request.HTTPError as e:
                 return e.code
             except Exception as e:
-                logger.debug(
-                    "[GOGLibrary] probe error: %s",
+                logger.warning(
+                    "[GOGLibrary] userdata probe error (returning 0): %s",
                     e,
                 )
                 return 0
@@ -162,6 +175,17 @@ class GOGLibrary:
 
     async def fetch_library(self) -> list[Game]:
         """Fetch library."""
+        # Refresh a stale token BEFORE the fetch loop (mirrors
+        # get_game_slug). Without this, an in-memory-but-expired
+        # token makes page 1 return 401 → _fetch_json returns None →
+        # the loop breaks → we hand back an empty library that reads
+        # as "0 games" with only a warning (UD-005).
+        if not await self._tokens.refresh_if_stale():
+            logger.warning(
+                "[GOGLibrary] fetch aborted — no valid token "
+                "(refresh failed/absent)",
+            )
+            return []
         if not self._tokens.access_token:
             logger.warning("[GOGLibrary] not authenticated")
             return []

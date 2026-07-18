@@ -189,6 +189,9 @@ def _build_prereq_env(
     env["WINEPREFIX"] = str(prefix_root)
     env["GAMEID"] = "umu-0"
     env["PROTON_VERB"] = "waitforexitandrun"
+    # Redundant with core.sanitize_frozen_loader_env/umu_runtime's own strip
+    # since both were hardened against LD_PRELOAD leaks — kept as defense-in-
+    # depth for this separate installer spawn point.
     env.pop("LD_PRELOAD", None)
     return env
 

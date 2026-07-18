@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import time
 from typing import TYPE_CHECKING, Any, cast
 
 import aiohttp
@@ -23,6 +22,11 @@ from unifideck.core.types import Game
 from unifideck.core.types.events import Events
 from unifideck.event_bus.event_bus_devex import auto_wire, subscribe
 from unifideck.services import metadata_backfill, metadata_sources, pcgw_backfill
+from unifideck.services.metadata_steam_mixin import (
+    STEAM_METADATA_NS,
+    STEAM_REAL_APPID_NS,
+    _SteamMetadataMixin,
+)
 
 if TYPE_CHECKING:
     from unifideck.config import ConfigManager
@@ -32,21 +36,15 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 CACHE_NAMESPACE = "metadata"
-# Two caches for the Steam Store patcher (SteamStorePatcher.ts).
-# ``STEAM_REAL_APPID_NS`` maps each Unifideck shortcut's synthetic
-# AppID to the real Steam Store AppID found by ``search_store``.
-# ``STEAM_METADATA_NS`` holds the rich ``appdetails`` payload per
-# real Steam AppID. The frontend reads both via dedicated RPCs.
-STEAM_REAL_APPID_NS = "steam_real_appid"
-STEAM_METADATA_NS = "steam_metadata"
-STEAM_REVIEWS_NS = "steam_reviews"
-SHORTCUT_ADDED_NS = "shortcut_added"
 DEFAULT_CACHE_TTL = 7 * 24 * 3600  # fallback if config missing
 
-# Per-game concurrency cap. Sized for Steam's ``appdetails`` rate
-# limit (the binding constraint); UnifiDB / Metacritic are
-# unconstrained on our side.
-ENRICHMENT_CONCURRENCY = 5
+# Per-game concurrency cap. Steam's ``appdetails`` rate limit is the
+# binding constraint (UnifiDB / Metacritic are unconstrained on our
+# side); the shared ``STEAM_STORE_GATE`` in ``steam/http_retry.py``
+# pauses every worker on a 429, so overshoot degrades into a brief
+# collective pause instead of a retry storm. Overridable via the
+# ``metadata.max_concurrent`` config key for field tuning.
+ENRICHMENT_CONCURRENCY = 10
 
 
 def _cancel_pending(tasks: list[asyncio.Task[None]]) -> None:
@@ -56,8 +54,13 @@ def _cancel_pending(tasks: list[asyncio.Task[None]]) -> None:
             t.cancel()
 
 
-class MetadataService:
-    """Enriches Game objects with cross-store metadata."""
+class MetadataService(_SteamMetadataMixin):
+    """Enriches Game objects with cross-store metadata.
+
+    The Steam-Store tail (AppID resolution, appdetails, reviews,
+    Date-Added stamp) lives in :class:`_SteamMetadataMixin`
+    (``metadata_steam_mixin.py``) — split out for the volumetry cap.
+    """
 
     def __init__(
         self,
@@ -161,8 +164,9 @@ class MetadataService:
         # serialises three previously-parallel pipelines that
         # were colliding on Steam's storesearch rate-limit.
         self._sync_kwargs = dict(kwargs)
+        is_force = bool(kwargs.get("is_force"))
         self._enrichment_task = asyncio.create_task(
-            self._run_enrichment(games),
+            self._run_enrichment(games, is_force=is_force),
             name="metadata-enrichment",
         )
 
@@ -199,11 +203,17 @@ class MetadataService:
 
         return True
 
-    async def _run_enrichment(self, games: list[Game]) -> None:
+    async def _run_enrichment(
+        self, games: list[Game], *, is_force: bool = False,
+    ) -> None:
         """Background enrichment loop. ``finally`` emits
         ``POST_SYNC_PHASE_CHANGED(active=False)`` so the sync's
         post-phase tracker advances on success, exception, or
         user-initiated sync cancellation.
+
+        ``is_force`` (force sync) skips the already-cached partition
+        and re-fetches every game — cache entries are bypassed on
+        read and overwritten on completion.
         """
         total = len(games)
         cancelled_by_replace = False
@@ -214,14 +224,19 @@ class MetadataService:
             if progress is not None:
                 progress.start_metadata(total)
             logger.info(
-                "[MetadataService] background enrichment started for %d games",
-                total,
+                "[MetadataService] background enrichment started "
+                "for %d games (force=%s)",
+                total, is_force,
             )
-            complete_games, pending_games = self._partition_games(games)
+            complete_games, pending_games = (
+                ([], list(games)) if is_force
+                else self._partition_games(games)
+            )
             await self._mark_complete_cached(complete_games, progress, total)
             if pending_games:
                 await self._enrich_pending(
                     pending_games, progress, total, len(complete_games),
+                    force=is_force,
                 )
         except asyncio.CancelledError:
             cancelled_by_replace = True
@@ -267,18 +282,20 @@ class MetadataService:
         progress: Any,
         total: int,
         complete_count: int,
+        *,
+        force: bool = False,
     ) -> None:
         """Run concurrent enrichment for the games that are missing data."""
         logger.info(
             "[MetadataService] Enqueueing %d games missing metadata for enrichment",
             len(pending_games),
         )
-        sem = asyncio.Semaphore(ENRICHMENT_CONCURRENCY)
+        sem = asyncio.Semaphore(self._max_concurrent())
         connector = aiohttp.TCPConnector(ssl=False)
         async with aiohttp.ClientSession(connector=connector) as session:
             tasks = [
                 asyncio.create_task(
-                    self._enrich_one_game(g, sem, session=session),
+                    self._enrich_one_game(g, sem, session=session, force=force),
                 )
                 for g in pending_games
             ]
@@ -291,6 +308,10 @@ class MetadataService:
     ) -> None:
         """``finally`` body: emit the phase-done event and spawn long-tail
         backfills (skipped when a newer sync cancelled this run)."""
+        # Persist the loop's deferred cache writes before announcing
+        # the phase done (cancelled runs flush too — partial data is
+        # still valid data).
+        self._flush_deferred_caches()
         if not cancelled_by_replace:
             # Forward SYNC_COMPLETE kwargs so the serialised
             # Artwork → Compat downstream chain reads them here.
@@ -315,6 +336,23 @@ class MetadataService:
         if not hasattr(self._bus, "get_sync_progress"):
             return None
         return self._bus.get_sync_progress()
+
+    def _max_concurrent(self) -> int:
+        """Read ``metadata.max_concurrent`` from config or fall back.
+
+        Mirrors ``CompatibilityService._max_concurrent`` — a config
+        knob so field devices hitting 429s can drop back below the
+        default without a plugin update.
+        """
+        if self._config is None:
+            return ENRICHMENT_CONCURRENCY
+        try:
+            value = self._config.get(
+                "metadata.max_concurrent", ENRICHMENT_CONCURRENCY,
+            )
+            return max(1, int(value))
+        except Exception:
+            return ENRICHMENT_CONCURRENCY
 
     async def _drain_enrichment(
         self,
@@ -352,12 +390,14 @@ class MetadataService:
         game: Game,
         sem: asyncio.Semaphore,
         session: aiohttp.ClientSession | None = None,
+        *,
+        force: bool = False,
     ) -> None:
         """Per-game enrichment under the semaphore: enrich → appdetails → progress."""
         async with sem:
             steam_id: int | None = None
             try:
-                enriched = await self.enrich(game, session=session)
+                enriched = await self.enrich(game, session=session, force=force)
                 raw = enriched.get("steam_appid")
                 if isinstance(raw, int) and raw > 0:
                     steam_id = raw
@@ -370,6 +410,7 @@ class MetadataService:
                 try:
                     await self.fetch_appdetails_for_game(
                         game, hint_steam_id=steam_id, session=session,
+                        force=force,
                     )
                 except Exception as e:
                     logger.debug(
@@ -382,20 +423,29 @@ class MetadataService:
                 await progress.increment_unifidb(game.title)
 
     async def enrich(
-        self, game: Game, session: aiohttp.ClientSession | None = None,
+        self,
+        game: Game,
+        session: aiohttp.ClientSession | None = None,
+        *,
+        force: bool = False,
     ) -> dict[str, Any]:
-        """Return enriched metadata for a single game."""
+        """Return enriched metadata for a single game.
+
+        ``force=True`` bypasses the cache read (negative markers
+        included) and overwrites the entry with the fresh merge.
+        """
         cache_key = f"{game.store}:{game.store_game_id}"
 
-        try:
-            cached = self._cache.get(CACHE_NAMESPACE, cache_key)
-            if isinstance(cached, dict):
-                if cached.get("_negative"):
-                    return {}
-                if cached:
-                    return cast("dict[str, Any]", cached)
-        except Exception as e:
-            logger.debug("[MetadataService] Cache read failed for %s: %s", cache_key, e)
+        if not force:
+            try:
+                cached = self._cache.get(CACHE_NAMESPACE, cache_key)
+                if isinstance(cached, dict):
+                    if cached.get("_negative"):
+                        return {}
+                    if cached:
+                        return cast("dict[str, Any]", cached)
+            except Exception as e:
+                logger.debug("[MetadataService] Cache read failed for %s: %s", cache_key, e)
 
         # Cache miss — fetch
         logger.debug("[MetadataService] Fetching metadata for %s", game.title)
@@ -418,118 +468,11 @@ class MetadataService:
 
         try:
             payload = merged if merged else {"_negative": True}
-            self._cache.set(CACHE_NAMESPACE, cache_key, payload)
+            # Deferred write — the enrichment loop calls this once per
+            # game; ``_finalize_enrichment`` flushes at the phase end.
+            self._cache.set(CACHE_NAMESPACE, cache_key, payload, flush=False)
         except Exception as e:
             logger.warning("[MetadataService] Failed to cache metadata for %s: %s", cache_key, e)
 
         return merged
 
-    async def fetch_appdetails_for_game(
-        self,
-        game: Game,
-        *,
-        hint_steam_id: int | None = None,
-        session: aiohttp.ClientSession | None = None,
-    ) -> dict[str, Any] | None:
-        """Resolve a game to a real Steam AppID, fetch its rich appdetails."""
-        from unifideck.steam.appdetails import fetch_appdetails
-        steam_id = await self._resolve_steam_id(game, hint_steam_id, session=session)
-        if steam_id is None:
-            self._cache_set_safely(
-                STEAM_REAL_APPID_NS, str(game.app_id), -1,
-            )
-            return None
-        self._cache_set_safely(
-            STEAM_REAL_APPID_NS, str(game.app_id), steam_id,
-        )
-        self._stamp_date_added(game.app_id)
-        try:
-            existing = self._cache.get(STEAM_METADATA_NS, str(steam_id))
-            if isinstance(existing, dict):
-                return cast("dict[str, Any]", existing)
-        except Exception:
-            logger.debug(
-                "[MetadataService] metadata cache read failed", exc_info=True,
-            )
-        data = await fetch_appdetails(steam_id, config=self._config, session=session)
-        if data is None:
-            return None
-        self._cache_set_safely(STEAM_METADATA_NS, str(steam_id), data)
-        await self._fetch_reviews(steam_id, session=session)
-        return data
-
-    async def _fetch_reviews(
-        self, steam_id: int, session: aiohttp.ClientSession | None = None,
-    ) -> None:
-        """Fetch + cache the Steam review summary for ``steam_id`` once."""
-        try:
-            if self._cache.get(STEAM_REVIEWS_NS, str(steam_id)) is not None:
-                return
-        except Exception:
-            logger.debug(
-                "[MetadataService] reviews cache read failed", exc_info=True,
-            )
-        from unifideck.steam.appreviews import fetch_appreviews
-        reviews = await fetch_appreviews(
-            steam_id, config=self._config, session=session,
-        )
-        if reviews is not None:
-            self._cache_set_safely(STEAM_REVIEWS_NS, str(steam_id), reviews)
-
-    def _stamp_date_added(self, app_id: int) -> None:
-        """Record a stable first-seen timestamp for the Date-Added sort."""
-        try:
-            if self._cache.get(SHORTCUT_ADDED_NS, str(app_id)) is not None:
-                return
-            self._cache_set_safely(
-                SHORTCUT_ADDED_NS, str(app_id), int(time.time()),
-            )
-        except Exception:
-            logger.debug(
-                "[MetadataService] date-added stamp failed", exc_info=True,
-            )
-
-    async def _resolve_steam_id(
-        self,
-        game: Game,
-        hint_steam_id: int | None,
-        session: aiohttp.ClientSession | None = None,
-    ) -> int | None:
-        """Return a valid Steam AppID for ``game`` — hint or cache or live search."""
-        if hint_steam_id is not None and hint_steam_id > 0:
-            return hint_steam_id
-        try:
-            cached_id = self._cache.get(STEAM_REAL_APPID_NS, str(game.app_id))
-            if isinstance(cached_id, int):
-                return cached_id if cached_id > 0 else None
-        except Exception:
-            logger.debug(
-                "[Metadata] cached appid read failed for %s", game.app_id,
-                exc_info=True,
-            )
-        from unifideck.steam import library
-        try:
-            best = await library.search_store(
-                game.title, config=self._config, session=session,
-            )
-        except Exception:
-            logger.debug(
-                "[Metadata] Steam search failed for %s", game.title,
-            )
-            return None
-        if not best:
-            return None
-        raw = best.get("app_id")
-        return raw if isinstance(raw, int) and raw > 0 else None
-
-    def _cache_set_safely(
-        self, namespace: str, key: str, value: Any,
-    ) -> None:
-        """``cache.set`` that logs (at DEBUG) on failure instead of raising."""
-        try:
-            self._cache.set(namespace, key, value)
-        except Exception:
-            logger.debug(
-                "[Metadata] cache set %s failed for %s",
-                namespace, key,
-            )

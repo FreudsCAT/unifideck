@@ -12,6 +12,10 @@
       "disconnected": "Не підключено",
       "checking": "Перевірка…",
       "error": "Помилка — перевірте логи"
+    },
+    "errors": {
+      "networkTitle": "No internet connection",
+      "networkBody": "Connect to Wi-Fi and try again."
     }
   },
   "storage": {
@@ -155,7 +159,6 @@
     "syncing": "Синхронізація...",
     "cancelSync": "Скасувати синхронізацію",
     "retryStatusCheck": "Повторити перевірку статусу",
-    "refreshStore": "Оновити бібліотеку цього магазину",
     "gamesSynced": "Синхронізовано ігор: {{synced}} / {{total}}",
     "artworkDownloaded": "Завантажено обкладинок: {{synced}} / {{total}}",
     "metadataExtracted": "Вилучено метаданих: {{synced}} / {{total}}",
@@ -273,6 +276,7 @@
     "unifideck": "Unifideck:",
     "launcher": {
       "networkError": "Помилка мережі",
+      "launchRetry": "Повторний запуск",
       "retryingUmu": "Повторна спроба запуску UMU через {{seconds}} сек. (спроба {{attempt}}/{{max}})...",
       "protonUpgrade": "Оновлення Proton",
       "resettingPrefix": "Скидання префіксу для {{version}}...",
@@ -900,6 +904,7 @@
     "currentTitle": "Поточна",
     "downgradeButton": "Відкат до версії v{{version}}",
     "installFailedTitle": "Встановлення не вдалося",
+    "installTimeoutMessage": "Немає відповіді від Decky Loader — можливо, встановлення зависло або не вдалося. Будь ласка, спробуйте ще раз.",
     "installedLabel": "встановлено",
     "installingButton": "Встановлення...",
     "installingTitle": "Встановлення плагіна",
@@ -908,6 +913,8 @@
     "noBackend": "Бекенд Decky недоступний.",
     "noReleaseNotes": "Опис змін відсутній.",
     "reinstallButton": "Перевстановити версію v{{version}}",
+    "refreshFailedMessage": "Не вдалося перевірити інформацію про останню версію. Перевірте з'єднання та спробуйте ще раз.",
+    "releaseGoneMessage": "Цей випуск більше недоступний. Перевірте оновлення та виберіть знову.",
     "releaseNotesButton": "Опис змін",
     "stageDownload": "Завантаження…",
     "stageFinish": "Завершення…",

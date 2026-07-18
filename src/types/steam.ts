@@ -186,6 +186,16 @@ declare global {
           nPlaytimeForever: number;
           rtLastTimePlayed: number;
         }>;
+        // "Verify integrity of game files" for an app/compat tool — the
+        // live client's repair-in-place call. Confirmed on-device: it
+        // re-downloads mismatched/missing files without a Steam restart
+        // (~8s on an intact tool). Not currently called anywhere — kept
+        // typed because it's a proven capability worth having on hand if
+        // a genuinely-corrupt-Proton repair flow is built later. See
+        // memory: install-hang-orphaned-wineserver-lock.md for why the
+        // install-warmup hang this was built for turned out to need a
+        // different fix (missing session env, not a corrupt Proton).
+        VerifyApp?(appId: number): unknown;
       };
       GameSessions?: {
         RegisterForAppLifetimeNotifications(

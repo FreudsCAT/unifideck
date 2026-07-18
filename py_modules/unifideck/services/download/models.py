@@ -177,8 +177,19 @@ def classify_download_error(exc: Exception) -> str:
         return "disk_full"
     if "timeout" in msg:
         return "timeout"
-    if "network" in msg or "connection" in msg:
+    if (
+        "network" in msg
+        or "connection" in msg
+        or "failed to establish" in msg
+        or "temporary failure in name resolution" in msg
+    ):
         return "network_error"
-    if "not found" in msg or "404" in msg:
+    if (
+        "not found" in msg
+        or "404" in msg
+        # legendary: game/asset missing for the account or platform.
+        or "no app asset found" in msg
+        or "in list of available games" in msg
+    ):
         return "not_found"
     return "unknown_error"

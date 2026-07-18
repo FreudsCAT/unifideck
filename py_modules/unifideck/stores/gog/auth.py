@@ -29,7 +29,7 @@ from unifideck.event_bus.event_bus import EventBus
 from unifideck.security import audit_auth_flow
 
 from .config import GOG_AUTH_URL_FILE, GOGConfig
-from .tokens import GOGTokenManager
+from .tokens import ExchangeOutcome, GOGTokenManager
 
 logger = logging.getLogger(__name__)
 _GOG_COOKIE_DOMAIN = "gog.com"
@@ -91,13 +91,31 @@ class GOGBrowserAuth:
         return url
 
     async def _exchange_code(self, code: str) -> AuthResult:
-        """Exchange code."""
-        ok = await self._tokens.exchange_code(code)
-        if ok:
+        """Exchange code.
+
+        Maps the token manager's three-state outcome to an
+        ``AuthResult`` error code. ``token_exchange_network_error``
+        (offline / flaky connection, retries exhausted) is
+        distinguished from ``token_exchange_failed`` (a definitive
+        auth failure: bad/consumed code, bad body, or save failure)
+        so the frontend can show an actionable "no internet" message
+        instead of a cryptic code.
+        """
+        outcome = await self._tokens.exchange_code(code)
+        if outcome is ExchangeOutcome.OK:
             logger.info(
                 "[GOGBrowserAuth] token exchange successful",
             )
             return AuthResult(success=True, store="gog")
+        if outcome is ExchangeOutcome.NETWORK_FAILED:
+            logger.warning(
+                "[GOGBrowserAuth] token exchange failed: network unreachable",
+            )
+            return AuthResult(
+                success=False,
+                error="token_exchange_network_error",
+                store="gog",
+            )
         return AuthResult(
             success=False,
             error="token_exchange_failed",

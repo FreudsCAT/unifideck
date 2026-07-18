@@ -21,8 +21,10 @@ produce the final ``GameRecord`` shape the UI consumes.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
+import os
 from pathlib import Path
 from typing import Any
 
@@ -73,6 +75,75 @@ class AmazonLibraryReader:
             len(games),
         )
         return games
+
+    async def sync_library(
+        self,
+        cli_path: str,
+        timeout: int,  # noqa: ASYNC109 — passed to asyncio.wait_for
+    ) -> bool:
+        """Refresh ``library.json`` from Amazon via ``nile library sync``.
+
+        The plugin otherwise only ever *reads* the on-disk
+        ``library.json``; nile only (re)writes it at login/register. So
+        games claimed after the last login never enter the file and never
+        appear (UD-012). Mirroring Epic/GOG, we re-fetch the owned list on
+        every sync. Never raises: on any failure we return ``False`` and the
+        caller falls through to the last-known (possibly stale) file, so the
+        user still gets their existing library.
+        """
+        env = self._sync_env()
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                cli_path,
+                "library",
+                "sync",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                env=env,
+            )
+            _, stderr = await asyncio.wait_for(
+                proc.communicate(),
+                timeout=timeout,
+            )
+        except (TimeoutError, OSError) as e:
+            logger.warning("[amazon_library] library sync failed: %s", e)
+            return False
+        if proc.returncode != 0:
+            logger.warning(
+                "[amazon_library] library sync rc=%s: %s",
+                proc.returncode,
+                stderr.decode(errors="ignore")[:200],
+            )
+            return False
+        logger.info("[amazon_library] library synced")
+        return True
+
+    def _sync_env(self) -> dict[str, str] | None:
+        """Env for ``nile library sync`` targeting ``self._config_dir``.
+
+        nile resolves its config dir from ``XDG_CONFIG_HOME/nile`` (else
+        ``$HOME/.config/nile``). When our config dir already equals the
+        ambient default we inherit the env unchanged (``None``); when it
+        differs we point ``XDG_CONFIG_HOME`` at its parent so nile reads
+        auth from and writes ``library.json`` to the same dir the reader
+        reads. nile can only be redirected to a ``nile``-basename dir.
+        """
+        target = Path(self._config_dir)
+        xdg = os.environ.get("XDG_CONFIG_HOME")
+        ambient = (
+            Path(xdg).expanduser() / "nile"
+            if xdg
+            else Path("~/.config/nile").expanduser()
+        )
+        if target == ambient:
+            return None
+        if target.name != "nile":
+            logger.debug(
+                "[amazon_library] non-nile config dir %s; inheriting env",
+                target,
+            )
+            return None
+        return {**os.environ, "XDG_CONFIG_HOME": str(target.parent)}
 
     async def read_installed_ids(self) -> dict[str, dict[str, Any]]:
         """Read installed ids."""
