@@ -103,8 +103,7 @@ const UnifiedLibraryViewInner: FC<UnifiedLibraryViewProps> = ({
       void refetch();
     };
     window.addEventListener("unifideck-sync-completed", onSync);
-    return () =>
-      window.removeEventListener("unifideck-sync-completed", onSync);
+    return () => window.removeEventListener("unifideck-sync-completed", onSync);
   }, [refetch]);
 
   const filteredGames = useMemo(() => {

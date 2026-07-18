@@ -77,12 +77,39 @@ class _ReconcilePhasesMixin:
         logged out of Epic.
         """
         from .launch_options import get_full_id, get_store_prefix
-        from .protected import is_protected
 
         if not isinstance(entry, dict):
             return False
         launch = entry.get("LaunchOptions", "") or ""
         full_id = get_full_id(launch) if isinstance(launch, str) else None
+        if not _ReconcilePhasesMixin._is_managed_sweepable(entry, full_id):
+            return False
+        # Ownership gate: never sweep a shortcut we didn't create. A
+        # foreign shortcut whose Exe was left intact (or a Unifideck one
+        # whose Exe a foreign scanner rewrote) is handed to
+        # ``orphan_scan``'s recover path instead of being deleted here.
+        exe_raw = entry.get("Exe") or entry.get("exe") or ""
+        exe = exe_raw.strip().strip('"') if isinstance(exe_raw, str) else ""
+        if not _is_launcher_exe(exe, launcher_path):
+            return False
+        if valid_stores is not None and full_id is not None:
+            store = get_store_prefix(launch)
+            if store and store not in valid_stores:
+                return False
+        return entry.get("appid") not in valid_app_ids
+
+    @staticmethod
+    def _is_managed_sweepable(entry: dict[str, Any], full_id: Any) -> bool:
+        """True if *entry* is a Unifideck-managed, non-protected shortcut.
+
+        The protected/auth early-exit + managed-by-options-or-tag check,
+        extracted from :meth:`_is_stale_managed_shortcut` to keep that
+        method under the cognitive-complexity cap. Returns ``False`` for
+        protected/auth shortcuts and for entries we never managed;
+        behaviour is identical to the inline chain it replaced.
+        """
+        from .protected import is_protected
+
         # Centralised protected-set check — replaces the previous
         # hardcoded ``ubisoft:upc-auth`` literal so new stores can
         # register their auth shortcuts in one place.
@@ -99,21 +126,7 @@ class _ReconcilePhasesMixin:
         is_managed_by_tag = any(
             t == UNIFIDECK_TAG for t in tags_dict.values()
         )
-        if not (is_managed_by_options or is_managed_by_tag):
-            return False
-        # Ownership gate: never sweep a shortcut we didn't create. A
-        # foreign shortcut whose Exe was left intact (or a Unifideck one
-        # whose Exe a foreign scanner rewrote) is handed to
-        # ``orphan_scan``'s recover path instead of being deleted here.
-        exe_raw = entry.get("Exe") or entry.get("exe") or ""
-        exe = exe_raw.strip().strip('"') if isinstance(exe_raw, str) else ""
-        if not _is_launcher_exe(exe, launcher_path):
-            return False
-        if valid_stores is not None and full_id is not None:
-            store = get_store_prefix(launch)
-            if store and store not in valid_stores:
-                return False
-        return entry.get("appid") not in valid_app_ids
+        return is_managed_by_options or is_managed_by_tag
 
     async def reconcile(
         self: Any, games: list[Game], *, force: bool = False,

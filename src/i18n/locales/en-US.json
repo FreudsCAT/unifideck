@@ -936,6 +936,7 @@
     "noBackend": "Decky backend is unavailable.",
     "noReleaseNotes": "No release notes available.",
     "reinstallButton": "Reinstall v{{version}}",
+    "refreshFailedMessage": "Could not verify the latest release info. Check your connection and try again.",
     "releaseGoneMessage": "This release is no longer available. Please Check for Updates and select again.",
     "releaseNotesButton": "Release Notes",
     "stageDownload": "Downloading…",

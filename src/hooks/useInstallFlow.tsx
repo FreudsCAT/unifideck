@@ -79,7 +79,10 @@ export function useInstallFlow(bridge: SteamBridgeShape): UseInstallFlowResult {
           currentLocations = fresh.locations;
           currentDefault = fresh.default;
         } catch (e) {
-          console.log("[useInstallFlow] storage location refresh failed, using cached list", e);
+          console.log(
+            "[useInstallFlow] storage location refresh failed, using cached list",
+            e,
+          );
         }
 
         console.log("[useInstallFlow] opening storage picker for", game.title);
@@ -134,7 +137,14 @@ export function useInstallFlow(bridge: SteamBridgeShape): UseInstallFlowResult {
         setWorking(false);
       }
     },
-    [actions, getGogLangs, getStorageLocations, locations, defaultLocation, setCustomPath],
+    [
+      actions,
+      getGogLangs,
+      getStorageLocations,
+      locations,
+      defaultLocation,
+      setCustomPath,
+    ],
   );
 
   return { isWorking: working || actions.isWorking, start };

@@ -81,6 +81,40 @@ def _shortcut_entries(data: dict[str, Any]) -> dict[str, Any]:
     return inner if isinstance(inner, dict) else {}
 
 
+def _merge_one_foreign(
+    entry: Any,
+    mem_inner: dict[str, Any],
+    known_appids: set[Any],
+    launcher_path: str,
+) -> bool:
+    """Merge a single disk *entry* back into *mem_inner* if it is a foreign
+    shortcut memory lost. Returns ``True`` if it was merged.
+
+    Extracted from :func:`merge_foreign_shortcuts` to keep that function
+    under the cognitive-complexity cap; behaviour is identical. Mutates
+    *mem_inner* / *known_appids* in place on a merge.
+    """
+    if not isinstance(entry, dict):
+        return False
+    exe_raw = entry.get("Exe") or entry.get("exe") or ""
+    exe = exe_raw.strip().strip('"') if isinstance(exe_raw, str) else ""
+    # Ours: memory is the source of truth (respect our own deletes).
+    if _is_launcher_exe(exe, launcher_path):
+        return False
+    appid = entry.get("appid")
+    # Foreign entry already represented in memory — leave memory's
+    # copy (our writes never mutate foreign entries anyway).
+    if appid is not None and appid in known_appids:
+        return False
+    new_key = str(len(mem_inner))
+    while new_key in mem_inner:
+        new_key = str(int(new_key) + 1)
+    mem_inner[new_key] = entry
+    if appid is not None:
+        known_appids.add(appid)
+    return True
+
+
 def merge_foreign_shortcuts(
     mem: dict[str, Any], disk: dict[str, Any], launcher_path: str,
 ) -> int:
@@ -124,25 +158,8 @@ def merge_foreign_shortcuts(
     }
     merged = 0
     for entry in disk_inner.values():
-        if not isinstance(entry, dict):
-            continue
-        exe_raw = entry.get("Exe") or entry.get("exe") or ""
-        exe = exe_raw.strip().strip('"') if isinstance(exe_raw, str) else ""
-        # Ours: memory is the source of truth (respect our own deletes).
-        if _is_launcher_exe(exe, launcher_path):
-            continue
-        appid = entry.get("appid")
-        # Foreign entry already represented in memory — leave memory's
-        # copy (our writes never mutate foreign entries anyway).
-        if appid is not None and appid in known_appids:
-            continue
-        new_key = str(len(mem_inner))
-        while new_key in mem_inner:
-            new_key = str(int(new_key) + 1)
-        mem_inner[new_key] = entry
-        if appid is not None:
-            known_appids.add(appid)
-        merged += 1
+        if _merge_one_foreign(entry, mem_inner, known_appids, launcher_path):
+            merged += 1
 
     if merged:
         logger.info(

@@ -259,20 +259,32 @@ def _manifest_tools(manifest: Path, base_dir: Path) -> Iterator[tuple[str, Path]
     if not isinstance(tools, dict):
         return
     for internal_name, spec in tools.items():
-        if not isinstance(spec, dict):
-            continue
-        install_path = str(spec.get("install_path", ".") or ".")
-        tool_dir = (
-            Path(install_path)
-            if Path(install_path).is_absolute()
-            else base_dir / install_path
-        )
-        proton = (tool_dir / "proton").expanduser()
-        if not proton.is_file():
-            continue
-        for name in (internal_name, str(spec.get("display_name", ""))):
-            if name:
-                yield name, proton
+        yield from _resolve_manifest_tool(internal_name, spec, base_dir)
+
+
+def _resolve_manifest_tool(
+    internal_name: str, spec: object, base_dir: Path,
+) -> Iterator[tuple[str, Path]]:
+    """Yield ``(name, proton_path)`` for one ``compat_tools`` entry.
+
+    Extracted from :func:`_manifest_tools` to keep that function under the
+    cognitive-complexity cap; behaviour is identical. Yields nothing when
+    *spec* is malformed or the ``proton`` script does not exist.
+    """
+    if not isinstance(spec, dict):
+        return
+    install_path = str(spec.get("install_path", ".") or ".")
+    tool_dir = (
+        Path(install_path)
+        if Path(install_path).is_absolute()
+        else base_dir / install_path
+    )
+    proton = (tool_dir / "proton").expanduser()
+    if not proton.is_file():
+        return
+    for name in (internal_name, str(spec.get("display_name", ""))):
+        if name:
+            yield name, proton
 
 
 def _entry_tools(entry: Path, root: Path) -> Iterator[tuple[str, Path]]:

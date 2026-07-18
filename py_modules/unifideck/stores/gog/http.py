@@ -88,58 +88,77 @@ async def fetch_json_get(
     if extra_headers:
         headers.update(extra_headers)
 
-    def _sync() -> Any | None:
-        """Sync."""
-        try:
-            ctx = build_ssl_context()
-            req = urllib.request.Request(url, headers=headers)
-            with urllib.request.urlopen(
-                req,
-                timeout=timeout,
-                context=ctx,
-            ) as response:
-                if response.status != 200:
-                    _logger.warning(
-                        "%s GET %s → HTTP %d",
-                        log_prefix,
-                        url,
-                        response.status,
-                    )
-                    return None
-                return json.loads(response.read().decode())
-        # HTTPError first — it subclasses URLError but carries a real
-        # HTTP status, so it is a definitive server response, never
-        # transient. Must precede the URLError clause below.
-        except urllib.error.HTTPError as e:
-            _logger.warning(
-                "%s GET %s → HTTP %d",
-                log_prefix,
-                url,
-                e.code,
-            )
-            return None
-        # Transport-level failure — the request never got an HTTP
-        # response back (gaierror is an OSError; URLError wraps it).
-        # This is the retryable case.
-        except (urllib.error.URLError, TimeoutError, OSError) as e:
-            _logger.warning(
-                "%s GET %s failed (network): %s",
-                log_prefix,
-                url,
-                e,
-            )
-            if raise_on_transient:
-                raise TransientNetworkError(str(e)) from e
-            return None
-        # 200 with a body that isn't valid JSON — definitive, not a
-        # network problem.
-        except (json.JSONDecodeError, ValueError) as e:
-            _logger.warning(
-                "%s GET %s failed (bad body): %s",
-                log_prefix,
-                url,
-                e,
-            )
-            return None
+    return await asyncio.to_thread(
+        _fetch_json_get_sync,
+        url,
+        headers,
+        timeout,
+        log_prefix,
+        raise_on_transient,
+    )
 
-    return await asyncio.to_thread(_sync)
+
+def _fetch_json_get_sync(
+    url: str,
+    headers: dict[str, str],
+    timeout: float,
+    log_prefix: str,
+    raise_on_transient: bool,
+) -> Any | None:
+    """Blocking body of :func:`fetch_json_get`, run in a worker thread.
+
+    Extracted to module level (rather than a closure) so
+    ``fetch_json_get`` stays under the function-length volumetry cap;
+    behaviour is identical.
+    """
+    try:
+        ctx = build_ssl_context()
+        req = urllib.request.Request(url, headers=headers)
+        with urllib.request.urlopen(
+            req,
+            timeout=timeout,
+            context=ctx,
+        ) as response:
+            if response.status != 200:
+                _logger.warning(
+                    "%s GET %s → HTTP %d",
+                    log_prefix,
+                    url,
+                    response.status,
+                )
+                return None
+            return json.loads(response.read().decode())
+    # HTTPError first — it subclasses URLError but carries a real
+    # HTTP status, so it is a definitive server response, never
+    # transient. Must precede the URLError clause below.
+    except urllib.error.HTTPError as e:
+        _logger.warning(
+            "%s GET %s → HTTP %d",
+            log_prefix,
+            url,
+            e.code,
+        )
+        return None
+    # Transport-level failure — the request never got an HTTP
+    # response back (gaierror is an OSError; URLError wraps it).
+    # This is the retryable case.
+    except (urllib.error.URLError, TimeoutError, OSError) as e:
+        _logger.warning(
+            "%s GET %s failed (network): %s",
+            log_prefix,
+            url,
+            e,
+        )
+        if raise_on_transient:
+            raise TransientNetworkError(str(e)) from e
+        return None
+    # 200 with a body that isn't valid JSON — definitive, not a
+    # network problem.
+    except (json.JSONDecodeError, ValueError) as e:
+        _logger.warning(
+            "%s GET %s failed (bad body): %s",
+            log_prefix,
+            url,
+            e,
+        )
+        return None

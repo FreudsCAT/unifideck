@@ -116,21 +116,17 @@ def _session_env_from_environ(data: bytes) -> dict[str, str]:
     return found
 
 
-def _user_session_env() -> dict[str, str]:
-    """Best-effort user-session env for install-time umu runs.
+def _session_env_from_steam_proc(uid: int) -> dict[str, str]:
+    """Scan ``/proc`` for the running Steam client (same *uid*) and return
+    the session env vars from its ``environ``, or ``{}`` if not found.
 
-    Borrows the four session vars from the running Steam client (same uid) —
-    exactly the environment the launcher inherits at launch time. Falls back
-    to the deterministic ``/run/user/<uid>`` locations when Steam isn't up.
-    Returns only the vars it could resolve; callers merge with ``setdefault``
-    so a launch-provided value is never clobbered.
+    Extracted from :func:`_user_session_env` to keep that function under
+    the cognitive-complexity cap; behaviour is identical.
     """
-    found: dict[str, str] = {}
-    uid = os.getuid()
     try:
         proc_entries = os.listdir("/proc")
     except OSError:
-        proc_entries = []
+        return {}
     for entry in proc_entries:
         if not entry.isdigit():
             continue
@@ -145,7 +141,21 @@ def _user_session_env() -> dict[str, str]:
             continue
         found = _session_env_from_environ(data)
         if found:
-            break
+            return found
+    return {}
+
+
+def _user_session_env() -> dict[str, str]:
+    """Best-effort user-session env for install-time umu runs.
+
+    Borrows the four session vars from the running Steam client (same uid) —
+    exactly the environment the launcher inherits at launch time. Falls back
+    to the deterministic ``/run/user/<uid>`` locations when Steam isn't up.
+    Returns only the vars it could resolve; callers merge with ``setdefault``
+    so a launch-provided value is never clobbered.
+    """
+    uid = os.getuid()
+    found = _session_env_from_steam_proc(uid)
     runtime = found.get("XDG_RUNTIME_DIR") or f"/run/user/{uid}"
     if os.path.isdir(runtime):
         found.setdefault("XDG_RUNTIME_DIR", runtime)
