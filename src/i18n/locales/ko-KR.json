@@ -159,7 +159,6 @@
     "syncing": "동기화 중...",
     "cancelSync": "동기화 취소",
     "retryStatusCheck": "상태 확인 재시도",
-    "refreshStore": "이 스토어 라이브러리 새로고침",
     "gamesSynced": "{{synced}} / {{total}}개의 게임 동기화됨",
     "artworkDownloaded": "{{synced}} / {{total}}개의 이미지 다운로드됨",
     "metadataExtracted": "{{synced}} / {{total}}개의 메타데이터 추출됨",

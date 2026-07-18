@@ -159,7 +159,6 @@
     "syncing": "جاري المزامنة...",
     "cancelSync": "إلغاء المزامنة",
     "retryStatusCheck": "إعادة محاولة التحقق من الحالة",
-    "refreshStore": "تحديث مكتبة هذا المتجر",
     "gamesSynced": "تمت مزامنة الألعاب {{synced}} / {{total}}",
     "artworkDownloaded": "تم تنزيل الأغلفة {{synced}} / {{total}}",
     "metadataExtracted": "تم استخراج البيانات الوصفية {{synced}} / {{total}}",

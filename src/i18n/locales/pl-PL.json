@@ -159,7 +159,6 @@
     "syncing": "Synchronizacja...",
     "cancelSync": "Anuluj synchronizację",
     "retryStatusCheck": "Ponów sprawdzenie statusu",
-    "refreshStore": "Odśwież bibliotekę tego sklepu",
     "gamesSynced": "{{synced}} / {{total}} gier zsynchronizowanych",
     "artworkDownloaded": "{{synced}} / {{total}} okładek pobranych",
     "metadataExtracted": "{{synced}} / {{total}} rekordów metadanych wyodrębnionych",

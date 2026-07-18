@@ -8,16 +8,13 @@
  * `useStoreAuth`) come from the current architecture so the data
  * plane is unchanged.
  */
-import { FC, useCallback, useState } from "react";
+import { FC } from "react";
 import { PanelSection, PanelSectionRow, Field } from "@decky/ui";
 import { useTranslation } from "react-i18next";
-import { call } from "@decky/api";
-import { FaSync } from "react-icons/fa";
 import { useStores } from "../../contexts/StoreContext";
 import { useStoreAuth } from "../../hooks/useStoreAuth";
 import { StoreIcon } from "../shared/StoreIcon";
 import { StoreAuthButton } from "./StoreAuthButton";
-import { rpcRoutes } from "../../api/rpc-routes";
 import type { StoreId } from "../../types/api";
 
 interface RowConfig {
@@ -46,19 +43,6 @@ const StoreRow: FC<{ storeId: StoreId; displayName: string }> = ({
   const config = ROW_CONFIG[storeId];
   const showNotInstalled =
     config?.notInstalledStatus && status === config.notInstalledStatus;
-  const [refreshing, setRefreshing] = useState(false);
-
-  const onRefresh = useCallback(async () => {
-    setRefreshing(true);
-    try {
-      await call<[string], unknown>(rpcRoutes.refreshStore, storeId);
-    } catch {
-      // RPC failure is silent — the store row isn't a progress
-      // display; the main sync bar and log carry the diagnostics.
-    } finally {
-      setRefreshing(false);
-    }
-  }, [storeId]);
 
   return (
     <div>
@@ -78,35 +62,6 @@ const StoreRow: FC<{ storeId: StoreId; displayName: string }> = ({
             color={isConnected ? "#4ade80" : "#fff"}
           />
           <span style={{ fontSize: 14 }}>{displayName}</span>
-          {isConnected && (
-            <span
-              role="button"
-              tabIndex={0}
-              onClick={(e) => {
-                e.stopPropagation();
-                void onRefresh();
-              }}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" || e.key === " ") {
-                  e.stopPropagation();
-                  void onRefresh();
-                }
-              }}
-              style={{
-                cursor: refreshing ? "default" : "pointer",
-                opacity: refreshing ? 0.4 : 0.6,
-                marginInlineStart: 4,
-              }}
-              title={t("librarySync.refreshStore", "Refresh this store")}
-            >
-              <FaSync
-                style={{
-                  fontSize: 11,
-                  animation: refreshing ? "spin 1s linear infinite" : "none",
-                }}
-              />
-            </span>
-          )}
         </div>
         <StoreAuthButton
           store={storeId}

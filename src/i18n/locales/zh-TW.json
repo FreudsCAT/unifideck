@@ -159,7 +159,6 @@
     "syncing": "正在同步...",
     "cancelSync": "取消同步",
     "retryStatusCheck": "重試狀態檢查",
-    "refreshStore": "重新整理此商店的遊戲庫",
     "gamesSynced": "已同步遊戲 {{synced}} / {{total}}",
     "artworkDownloaded": "已下載封面 {{synced}} / {{total}}",
     "metadataExtracted": "已提取元資料 {{synced}} / {{total}}",

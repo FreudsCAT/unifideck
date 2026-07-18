@@ -159,7 +159,6 @@
     "syncing": "Senkronize ediliyor...",
     "cancelSync": "Senkronizasyonu İptal Et",
     "retryStatusCheck": "Durum Kontrolünü Yeniden Dene",
-    "refreshStore": "Bu mağazanın kütüphanesini yenile",
     "gamesSynced": "{{synced}} / {{total}} oyun senkronize edildi",
     "artworkDownloaded": "{{synced}} / {{total}} kapak görseli indirildi",
     "metadataExtracted": "{{synced}} / {{total}} meta veri kaydı ayıklandı",

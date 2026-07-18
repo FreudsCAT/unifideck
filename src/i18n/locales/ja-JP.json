@@ -159,7 +159,6 @@
     "syncing": "同期中...",
     "cancelSync": "同期をキャンセル",
     "retryStatusCheck": "ステータス確認を再試行",
-    "refreshStore": "このストアのライブラリを更新",
     "gamesSynced": "{{synced}} / {{total}} 本のゲームを同期しました",
     "artworkDownloaded": "{{synced}} / {{total}} 枚のアートワークをダウンロードしました",
     "metadataExtracted": "{{synced}} / {{total}} 件のメタデータを抽出しました",

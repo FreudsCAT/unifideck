@@ -159,7 +159,6 @@
     "syncing": "Synchroniseren...",
     "cancelSync": "Synchronisatie annuleren",
     "retryStatusCheck": "Statuscontrole opnieuw proberen",
-    "refreshStore": "Bibliotheek van deze winkel vernieuwen",
     "gamesSynced": "{{synced}} / {{total}} games gesynchroniseerd",
     "artworkDownloaded": "{{synced}} / {{total}} covers gedownload",
     "metadataExtracted": "{{synced}} / {{total}} metadatarecords uitgepakt",

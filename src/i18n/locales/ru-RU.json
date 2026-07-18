@@ -159,7 +159,6 @@
     "syncing": "Синхронизация...",
     "cancelSync": "Отменить синхронизацию",
     "retryStatusCheck": "Повторить проверку статуса",
-    "refreshStore": "Обновить библиотеку этого магазина",
     "gamesSynced": "Синхронизировано игр: {{synced}} / {{total}}",
     "artworkDownloaded": "Скачано обложек: {{synced}} / {{total}}",
     "metadataExtracted": "Извлечено метаданных: {{synced}} / {{total}}",
