@@ -138,6 +138,12 @@ def save_shortcuts_vdf(path: str, data: dict[str, Any]) -> None:
     except OSError as e:
         _cleanup_tmp(tmp_path)
         raise VDFError(f"rename failed: {e}") from e
+    # Step 3b: keep the file executable so NonSteamLaunchers' scanner
+    # does not treat it as "uninitialised" and wipe it (see the primary
+    # writer, services/shortcut/persistence.write_vdf, for the full
+    # rationale). A chmod failure must not fail an otherwise-good write.
+    with contextlib.suppress(OSError):
+        Path(path).chmod(0o755)
     # Step 4: validate the write
     try:
         validation = load_shortcuts_vdf(path)
