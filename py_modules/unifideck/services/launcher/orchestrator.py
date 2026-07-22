@@ -43,19 +43,21 @@ async def launch_windows(
         store = ctx.store
         game_id = ctx.game_id
 
-        # Phase 1.5: Ensure the prefix is initialised BEFORE the cloud sync-down.
-        # The save dir resolves out of ``drive_c`` (e.g. GOG's
-        # ``<?DOCUMENTS?>\\<title>``), which only exists after ``createprefix``
-        # — so running sync-down first (the old order, where prefix creation
-        # happened later inside ``dispatch``) meant the FIRST launch resolved no
-        # save dir and pulled nothing (saves only appeared on a relaunch). This
-        # is idempotent: once ``system.reg`` exists it's a fast no-op, so it
-        # costs nothing when install-time warmup already created the prefix, and
-        # it self-heals games installed before that existed.
-        from unifideck.launcher.proton.compat.prefix_init import (
-            ensure_prefix_initialized,
-        )
-        await ensure_prefix_initialized(plan)
+        # Phase 1.5: Run the canonical prefix setup BEFORE the cloud sync-down.
+        # ``setup_prefix`` is the SAME self-healing process install-time warmup
+        # runs — createprefix + generic compat (winetricks + VC++ registry fix)
+        # with the managed-GE recovery ladder, and it PINS the Proton it
+        # succeeds with so a warmup that recovered to GE isn't undone here (the
+        # old split ran only createprefix here + compat later in ``dispatch``
+        # with no recovery, so launch re-picked the hanging global-default
+        # Proton, saw a "family change" against the GE-warmed prefix, and wiped
+        # + rebuilt it at Play time). Must precede sync-down: the save dir
+        # resolves out of ``drive_c`` (e.g. GOG's ``<?DOCUMENTS?>\\<title>``),
+        # which only exists after ``createprefix``. Idempotent — a no-op once
+        # the prefix is set up and the Proton matches the pin. ``session_env``
+        # is None: at launch Steam already provides the user session.
+        from unifideck.launcher.proton import setup_prefix
+        await setup_prefix(ctx, state)
 
         # Phase 2: Cloud Sync Down
         await svc._cloud_sync_phase(ctx, "down")

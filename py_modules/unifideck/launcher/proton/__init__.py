@@ -25,29 +25,29 @@ from .infrastructure.umu_runtime import (
     repair_incomplete_umu_runtime,
     run_umu_with_retry,
 )
+from .prefix_setup import setup_prefix
 
 
 async def dispatch(plan: ProtonLaunchPlan) -> int:
     """Dispatch.
 
-    Runs the store-agnostic per-prefix compatibility setup
-    (redistributables + VC++ registry fix) once, then routes to the
-    per-store handler which adds any store-specific compatibility
-    (Epic EOS overlay, GOG galaxy stub, Amazon fuel args).
+    Routes the prepared plan to the per-store handler, which adds any
+    store-specific compatibility (Epic EOS overlay, GOG galaxy stub, Amazon
+    fuel args) and runs the game through umu-run.
 
-    Prefix creation / Proton-change reset (``ensure_prefix_initialized``)
-    is NOT done here: the orchestrator runs it earlier (Phase 1.5), before
-    the cloud sync-down, so the save dir resolves out of ``drive_c`` on the
-    first launch. Calling it again here would double-run the proton-change
-    toast, so the single call lives in ``orchestrator.launch_windows``.
+    Prefix creation AND generic compat (createprefix + winetricks + VC++
+    registry fix, with the managed-GE recovery ladder + pin) are NOT done
+    here: the orchestrator runs the canonical :func:`setup_prefix` earlier
+    (Phase 1.5), before the cloud sync-down, so the save dir resolves out of
+    ``drive_c`` on the first launch and the exact same self-healing setup runs
+    at launch as at install-time warmup. Running compat here too would
+    double-run it (and its proton-change toast), so it lives in the single
+    ``setup_prefix`` call in ``orchestrator.launch_windows``.
     """
-    from .compat import apply_prefix_compat
-
     # Self-heal a half-downloaded umu runtime (payload present but the
     # umu/_v2-entry-point link missing) before anything spawns umu-run this
     # launch (UD-084). Store-agnostic, and a cheap no-op stat when healthy.
     repair_incomplete_umu_runtime()
-    await apply_prefix_compat(plan)
 
     store = plan.context.store
     if store == "ubisoft":
@@ -72,5 +72,6 @@ __all__ = [
     "run_umu_with_retry",
     "select_managed_ge_proton",
     "select_proton_version",
+    "setup_prefix",
     "ubisoft_launch",
 ]

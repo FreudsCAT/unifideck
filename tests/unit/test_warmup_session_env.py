@@ -1,12 +1,14 @@
-"""Tests for the install-time session-env graft (prefix_warmup).
+"""Tests for the install-time session-env graft.
 
 Root cause of the recurring fresh-install hang: the Decky backend is a
 headless service whose environment has NO user session vars (DISPLAY,
 WAYLAND_DISPLAY, XDG_RUNTIME_DIR, DBUS_SESSION_BUS_ADDRESS). winetricks/
 vcredist under ntsync-era Protons hangs or fails without them — while the
 SAME command with those four vars restored completes in ~55s (proven A/B
-on-device). Warmup now borrows them from the running Steam client and
-merges with ``setdefault`` so launch-provided values are never clobbered.
+on-device). Warmup borrows them from the running Steam client (the pure
+parser ``_session_env_from_environ`` lives in ``prefix_warmup``) and passes
+them into the canonical ``setup_prefix``/``_run_one`` (in ``prefix_setup``),
+which merges with ``setdefault`` so launch-provided values are never clobbered.
 """
 from __future__ import annotations
 
@@ -15,6 +17,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from unifideck.launcher.proton import prefix_setup as setup_mod
 from unifideck.services.download import prefix_warmup as warmup_mod
 
 
@@ -44,14 +47,12 @@ def test_parser_skips_empty_values_and_junk():
     assert env == {"WAYLAND_DISPLAY": "wayland-1"}
 
 
-# ── _run_setup grafts the session env into plan.env ─────────────
+# ── _run_one grafts the session env into plan.env ───────────────
 
 
 @pytest.fixture
 def setup_wiring(monkeypatch):
-    """Wire _run_setup's lazy imports to inert stubs; capture the plan."""
-    import contextlib
-
+    """Wire _run_one's lazy imports to inert stubs; capture the plan."""
     from unifideck.launcher import proton as proton_pkg
     from unifideck.launcher.proton import compat as compat_pkg
     from unifideck.launcher.proton.compat import prefix_init as prefix_init_mod
@@ -78,17 +79,16 @@ def setup_wiring(monkeypatch):
     return plans
 
 
-async def test_run_setup_grafts_missing_session_vars(setup_wiring, monkeypatch):
-    monkeypatch.setattr(
-        warmup_mod, "_user_session_env",
-        lambda: {
-            "DISPLAY": ":0",
-            "XDG_RUNTIME_DIR": "/run/user/1000",
-        },
-    )
+def _ctx():
+    return SimpleNamespace(game_key="gog:1")
 
-    await warmup_mod._run_setup(
-        object(), object(), "/usr/bin/python3", ("/p", "GE-Proton11-1"), "gog:1",
+
+async def test_run_one_grafts_missing_session_vars(setup_wiring):
+    # The caller (warmup) resolves the session env and passes it in; _run_one
+    # merges it into plan.env with setdefault.
+    await setup_mod._run_one(
+        _ctx(), SimpleNamespace(), "/usr/bin/python3", ("/p", "GE-Proton11-1"),
+        {"DISPLAY": ":0", "XDG_RUNTIME_DIR": "/run/user/1000"},
     )
 
     plan = setup_wiring[0]
@@ -98,13 +98,11 @@ async def test_run_setup_grafts_missing_session_vars(setup_wiring, monkeypatch):
     assert plan.env["DISPLAY"] == ":9"
 
 
-async def test_run_setup_survives_empty_session_env(setup_wiring, monkeypatch):
-    # No Steam running, no /run/user dir — graft resolves nothing, setup
-    # still proceeds (best-effort, matches pre-fix behavior).
-    monkeypatch.setattr(warmup_mod, "_user_session_env", dict)
-
-    await warmup_mod._run_setup(
-        object(), object(), "/usr/bin/python3", ("/p", "GE-Proton11-1"), "gog:1",
+async def test_run_one_survives_empty_session_env(setup_wiring):
+    # No Steam running, no /run/user dir — session_env is empty, setup still
+    # proceeds (best-effort, matches pre-fix behavior).
+    await setup_mod._run_one(
+        _ctx(), SimpleNamespace(), "/usr/bin/python3", ("/p", "GE-Proton11-1"), {},
     )
 
     assert setup_wiring[0].env["PROTONPATH"] == "/p"
