@@ -399,6 +399,7 @@
     "alreadyInQueue": "이미 대기열에 존재합니다",
     "download": {
       "diskSpace": "사용 가능한 디스크 공간 부족",
+      "insufficientSpace": "Not enough space: needs {{need}} GB, only {{free}} GB free.",
       "network": "네트워크 연결 오류 — 연결 상태를 확인하세요",
       "authExpired": "로그인 세션 만료 — 다시 로그인해 주세요",
       "toolMissing": "필수 다운로드 도구를 찾을 수 없습니다",

@@ -399,6 +399,7 @@
     "alreadyInQueue": "Zaten sırada",
     "download": {
       "diskSpace": "Yetersiz disk alanı",
+      "insufficientSpace": "Not enough space: needs {{need}} GB, only {{free}} GB free.",
       "network": "Ağ hatası — bağlantınızı kontrol edin",
       "authExpired": "Oturum süresi doldu — lütfen tekrar giriş yapın",
       "toolMissing": "Gerekli indirme aracı bulunamadı",

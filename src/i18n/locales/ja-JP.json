@@ -399,6 +399,7 @@
     "alreadyInQueue": "すでにキューに入っています",
     "download": {
       "diskSpace": "空き容量が不足しています",
+      "insufficientSpace": "Not enough space: needs {{need}} GB, only {{free}} GB free.",
       "network": "ネットワークエラー — 接続を確認してください",
       "authExpired": "セッションが切れました — もう一度ログインしてください",
       "toolMissing": "必要なダウンロードツールが見つかりません",

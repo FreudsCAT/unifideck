@@ -173,7 +173,8 @@ def classify_download_error(exc: Exception) -> str:
     msg = str(exc).lower()
     if "permission" in msg or "denied" in msg:
         return "permission_denied"
-    if "no space" in msg or "disk full" in msg:
+    if "no space" in msg or "disk full" in msg or "disk space" in msg:
+        # legendary phrases it "Not enough available disk space!"
         return "disk_full"
     if "timeout" in msg:
         return "timeout"

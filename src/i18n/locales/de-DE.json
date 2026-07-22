@@ -399,6 +399,7 @@
     "alreadyInQueue": "Bereits in Warteschlange",
     "download": {
       "diskSpace": "Nicht genügend freier Speicherplatz vorhanden",
+      "insufficientSpace": "Not enough space: needs {{need}} GB, only {{free}} GB free.",
       "network": "Netzwerkfehler — bitte überprüfe deine Verbindung",
       "authExpired": "Anmeldung abgelaufen — bitte melde dich erneut an",
       "toolMissing": "Erforderliches Download-Werkzeug nicht gefunden",

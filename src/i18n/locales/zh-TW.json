@@ -399,6 +399,7 @@
     "alreadyInQueue": "已在佇列中",
     "download": {
       "diskSpace": "可用磁碟空間不足",
+      "insufficientSpace": "Not enough space: needs {{need}} GB, only {{free}} GB free.",
       "network": "網路錯誤 — 請檢查您的連線",
       "authExpired": "登入已過期 — 請重新登入",
       "toolMissing": "未找到所需的下載工具",

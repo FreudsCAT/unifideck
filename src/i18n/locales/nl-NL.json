@@ -399,6 +399,7 @@
     "alreadyInQueue": "Al in de wachtrij",
     "download": {
       "diskSpace": "Onvoldoende schijfruimte beschikbaar",
+      "insufficientSpace": "Not enough space: needs {{need}} GB, only {{free}} GB free.",
       "network": "Netwerkfout — controleer je verbinding",
       "authExpired": "Aanmelding verlopen — meld je opnieuw aan",
       "toolMissing": "Vereist downloadprogramma niet gevonden",

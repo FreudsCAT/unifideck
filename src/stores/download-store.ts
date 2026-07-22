@@ -17,12 +17,14 @@
  * the thin `<DownloadProvider>` wrapper (which now only provides
  * mutation actions and the reactive snapshot).
  */
-import { call } from "@decky/api";
+import { call, toaster } from "@decky/api";
+import i18n from "i18next";
 import { rpcRoutes } from "../api/rpc-routes";
 import { unwrapRpcEnvelope } from "../api/useRPC";
 import { EventBusClient } from "../api/event-bus-client";
 import { invalidateGameInfo } from "../hooks/useGameInfo";
 import { bumpGameStateVersion } from "../lib/game-state-version";
+import { friendlyDownloadError } from "../lib/download-errors";
 import { launchUbisoftInstallViaShortcut } from "../utils/ubisoftShortcutLaunch";
 import type { DownloadItem, DownloadQueueInfo } from "../types/downloads";
 
@@ -35,6 +37,38 @@ function extractAppId(payload: unknown): number | null {
   if (!game || typeof game !== "object") return null;
   const id = (game as { app_id?: unknown }).app_id;
   return typeof id === "number" ? id : null;
+}
+
+/** Pull the failure reason + title out of a `download_failed` payload.
+ *  The event carries both `item.error_message` (the folded CLI tail)
+ *  and a top-level `error` — prefer the item's message, fall back to
+ *  the top-level one. */
+function extractFailure(payload: unknown): {
+  error?: string;
+  title?: string;
+} {
+  if (!payload || typeof payload !== "object") return {};
+  const item = (
+    payload as { item?: { error_message?: unknown; game_title?: unknown } }
+  ).item;
+  const itemError =
+    item && typeof item === "object"
+      ? (item as { error_message?: unknown }).error_message
+      : undefined;
+  const topError = (payload as { error?: unknown }).error;
+  const title =
+    item && typeof item === "object"
+      ? (item as { game_title?: unknown }).game_title
+      : undefined;
+  return {
+    error:
+      typeof itemError === "string" && itemError
+        ? itemError
+        : typeof topError === "string"
+        ? topError
+        : undefined,
+    title: typeof title === "string" ? title : undefined,
+  };
 }
 
 /** Build the `"<store>:<game_id>"` key from a terminal payload. */
@@ -140,10 +174,32 @@ class DownloadStoreImpl {
       void this._fetchQueue();
     };
 
+    // A failed install used to surface only as a bare red "Failed" badge —
+    // the backend already folds the real error into the payload, so toast it.
+    const onFailed = (payload: Record<string, unknown>) => {
+      onTerminal(payload);
+      const { error, title } = extractFailure(payload);
+      if (!error) return;
+      const body = friendlyDownloadError(error, i18n.t.bind(i18n));
+      try {
+        toaster.toast({
+          title: title
+            ? `${i18n.t("toasts.downloadFailed")}: ${title}`
+            : i18n.t("toasts.downloadFailed"),
+          body,
+          duration: 7500,
+        });
+      } catch {
+        console.error(
+          `[DownloadStore] install failed: ${title ?? ""} — ${body}`,
+        );
+      }
+    };
+
     this._unsubs.push(
       EventBusClient.subscribe("download_complete", onTerminal),
     );
-    this._unsubs.push(EventBusClient.subscribe("download_failed", onTerminal));
+    this._unsubs.push(EventBusClient.subscribe("download_failed", onFailed));
     this._unsubs.push(
       EventBusClient.subscribe("download_cancelled", onTerminal),
     );

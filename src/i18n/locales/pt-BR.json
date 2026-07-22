@@ -399,6 +399,7 @@
     "alreadyInQueue": "Já está na fila",
     "download": {
       "diskSpace": "Espaço em disco insuficiente disponível",
+      "insufficientSpace": "Not enough space: needs {{need}} GB, only {{free}} GB free.",
       "network": "Erro de rede — verifique sua conexão",
       "authExpired": "Sessão expirada — por favor, entre novamente",
       "toolMissing": "Ferramenta de download necessária não encontrada",

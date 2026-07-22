@@ -399,6 +399,7 @@
     "alreadyInQueue": "موجود بالفعل في قائمة الانتظار",
     "download": {
       "diskSpace": "مساحة القرص غير كافية",
+      "insufficientSpace": "Not enough space: needs {{need}} GB, only {{free}} GB free.",
       "network": "خطأ في الشبكة — يرجى التحقق من اتصالك بالإنترنت",
       "authExpired": "انتهت صلاحية الجلسة — يرجى تسجيل الدخول مرة أخرى",
       "toolMissing": "أداة التنزيل المطلوبة غير موجودة",

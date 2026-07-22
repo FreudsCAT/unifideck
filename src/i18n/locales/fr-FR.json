@@ -399,6 +399,7 @@
     "alreadyInQueue": "Déjà dans la file d'attente",
     "download": {
       "diskSpace": "Espace disque insuffisant",
+      "insufficientSpace": "Not enough space: needs {{need}} GB, only {{free}} GB free.",
       "network": "Erreur réseau — vérifiez votre connexion",
       "authExpired": "Session expirée — veuillez vous connecter à nouveau",
       "toolMissing": "Outil de téléchargement requis introuvable",

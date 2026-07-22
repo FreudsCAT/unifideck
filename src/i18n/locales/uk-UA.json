@@ -399,6 +399,7 @@
     "alreadyInQueue": "Вже у черзі",
     "download": {
       "diskSpace": "Недостатньо вільного місця на диску",
+      "insufficientSpace": "Not enough space: needs {{need}} GB, only {{free}} GB free.",
       "network": "Помилка мережі — перевірте підключення до Інтернету",
       "authExpired": "Сесія авторизації закінчилася — будь ласка, увійдіть знову",
       "toolMissing": "Необхідна утиліта завантаження не знайдена",

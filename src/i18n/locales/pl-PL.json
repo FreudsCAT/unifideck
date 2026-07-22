@@ -399,6 +399,7 @@
     "alreadyInQueue": "Już w kolejce",
     "download": {
       "diskSpace": "Brak wystarczającej ilości miejsca na dysku",
+      "insufficientSpace": "Not enough space: needs {{need}} GB, only {{free}} GB free.",
       "network": "Błąd sieci — sprawdź swoje połączenie",
       "authExpired": "Logowanie wygasło — zaloguj się ponownie",
       "toolMissing": "Nie znaleziono wymaganego narzędzia pobierania",
