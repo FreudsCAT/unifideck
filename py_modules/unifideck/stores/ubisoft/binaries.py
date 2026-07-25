@@ -29,6 +29,10 @@ import shutil
 import subprocess
 from pathlib import Path
 
+from unifideck.launcher.proton.infrastructure.umu_runtime import (
+    repair_incomplete_umu_runtime,
+)
+
 from .config import UbisoftConfig
 
 logger = logging.getLogger(__name__)
@@ -66,7 +70,18 @@ class UbisoftBinaryResolver:
         self._plugin_dir = plugin_dir
 
     def find_umu_run(self) -> str | None:
-        """Find UMU run."""
+        """Find UMU run.
+
+        Self-heals a half-downloaded umu runtime (payload present but the
+        umu/_v2-entry-point link missing, UD-084) before anything spawns
+        umu-run from this resolver. The out-of-process game launcher's
+        ``dispatch()`` already does this for real launches; every
+        backend-side (in-process) umu-run spawn for Ubisoft goes through
+        this resolver, so this is the single choke point for the auth-prefix
+        / template / per-game silent-install paths too. Store-agnostic and
+        a cheap no-op stat when the runtime is healthy.
+        """
+        repair_incomplete_umu_runtime()
         candidates: list[str] = []
         if self._plugin_dir:
             candidates.append(
