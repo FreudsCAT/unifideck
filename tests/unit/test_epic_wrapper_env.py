@@ -23,7 +23,9 @@ from unifideck.launcher.proton.infrastructure.core import ProtonLaunchPlan
 
 def _plan() -> ProtonLaunchPlan:
     return ProtonLaunchPlan(
-        context=types.SimpleNamespace(game_id="abc123", store="epic"),
+        context=types.SimpleNamespace(
+            game_id="abc123", store="epic", exe_path=Path("/install/abc123.exe"),
+        ),
         state=types.SimpleNamespace(wrappers=[], game_args=[], umu_id=None),
         python_bin=Path("/usr/bin/python3"),
         umu_wrapper=Path("/plugin/bin/umu/umu/umu-run"),

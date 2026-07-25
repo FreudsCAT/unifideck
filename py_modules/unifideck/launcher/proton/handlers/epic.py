@@ -28,10 +28,18 @@ def _rockstar_play_exe_rel(plan: ProtonLaunchPlan) -> str | None:
     )
     game_id = plan.context.game_id
     umu_id = plan.state.umu_id
-    if not is_rockstar_egs(game_id, umu_id):
+    exe_name = plan.context.exe_path.name
+    if not is_rockstar_egs(game_id, umu_id, exe_name):
         return None
     # ROCKSTAR_PLAY_EXES is keyed by BOTH the Epic app name and the umu id.
-    return ROCKSTAR_PLAY_EXES.get(game_id) or ROCKSTAR_PLAY_EXES.get(umu_id or "")
+    # Neither resolves when the title was recognised purely from its exe name
+    # (a Rockstar re-release under an app id the tables don't know yet) — in
+    # that case the exe we were handed IS the Play launcher, so use it.
+    return (
+        ROCKSTAR_PLAY_EXES.get(game_id)
+        or ROCKSTAR_PLAY_EXES.get(umu_id or "")
+        or exe_name
+    )
 
 
 def _resolve_exe_override(plan: ProtonLaunchPlan) -> Path | None:

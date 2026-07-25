@@ -83,7 +83,8 @@ MANUAL_FIXES: dict[str, GameFix] = {
 # the case where the lookup helper is present and returns one.
 ROCKSTAR_EGS_APP_NAMES: frozenset[str] = frozenset({
     "Heather",                          # Red Dead Redemption 2 (Epic codename)
-    "9d2d0eb64d5c44529cece33fe2a46482",  # Grand Theft Auto V (Epic)
+    "9d2d0eb64d5c44529cece33fe2a46482",  # Grand Theft Auto V (Epic, legacy)
+    "8769e24080ea413b8ebca3f1b8c50951",  # Grand Theft Auto V: Enhanced Edition (Epic)
 })
 ROCKSTAR_EGS_UMU_IDS: frozenset[str] = frozenset({
     "umu-1174180",  # Red Dead Redemption 2
@@ -97,22 +98,66 @@ ROCKSTAR_PLAY_EXES: dict[str, str] = {
     "Heather": "PlayRDR2.exe",
     "umu-1174180": "PlayRDR2.exe",
     "9d2d0eb64d5c44529cece33fe2a46482": "PlayGTAV.exe",
+    "8769e24080ea413b8ebca3f1b8c50951": "PlayGTAV.exe",
     "umu-271590": "PlayGTAV.exe",
 }
 # vulkan-1=n,b = native-then-builtin: lets the game's own vulkan-1.dll
 # load first. Heroic's documented RDR2/GTA5 fix for the launch failure.
 ROCKSTAR_WINEDLLOVERRIDES = "vulkan-1=n,b"
+# THIRD, most-durable match tier: the Rockstar Play-launcher exe name itself
+# (lowercased). Rockstar/Take-Two re-release these titles under a NEW Epic
+# app id every edition — legacy "Grand Theft Auto V"
+# (9d2d0eb64d5c44529cece33fe2a46482) and the 2026 "Enhanced Edition"
+# (8769e24080ea413b8ebca3f1b8c50951) are two different ids for what a user
+# experiences as "the same game" — and ROCKSTAR_EGS_APP_NAMES above silently
+# stops matching every time that happens.
+#
+# That is exactly what broke the Enhanced Edition (reported as: the Rockstar
+# Games Launcher doesn't detect the installed game). Confirmed from a user
+# log bundle that contains a clean A/B of both titles on one device:
+#   * RDR2 ("Heather", in the allowlist) — 10 launches, each logging the full
+#     flow: fake launcher installed, protocol registered, STORE=egs,
+#     WINEDLLOVERRIDES+=vulkan-1=n,b.
+#   * GTA V Enhanced (id absent from the allowlist) — 12 launches, NONE of
+#     the above; the game log shows protonfixes falling back to
+#     "No store specified, using UMU database" instead of the egs profile.
+# So this title received none of the Rockstar handling at all.
+#
+# NOTE: the reporter also described it working on the first boot and failing
+# after a restart. The per-boot mechanism for that is NOT established — the
+# obvious suspect, epic_cleanup stripping the registration on later launches,
+# is NOT supported by those logs (it never logged a removal for this game,
+# and it only logs when it actually removes something). Treat the
+# first-boot/restart asymmetry as unexplained; what IS proven is that the
+# whole flow was skipped for this title.
+#
+# The Play-launcher exe names are a Rockstar Games Launcher contract that is
+# edition-independent, so this is checked FIRST, ahead of the id allowlists.
+ROCKSTAR_PLAY_EXE_NAMES: frozenset[str] = frozenset({
+    "playrdr2.exe",
+    "playgtav.exe",
+})
 
 
-def is_rockstar_egs(game_id: str | None, umu_id: str | None = None) -> bool:
+def is_rockstar_egs(
+    game_id: str | None,
+    umu_id: str | None = None,
+    exe_name: str | None = None,
+) -> bool:
     """True for the Rockstar-on-Epic titles that need the special flow.
 
-    ``game_id`` is legendary's Epic app name (e.g. "Heather") — the
-    reliable primary key. ``umu_id`` is an optional secondary match (the
-    umu-database id, only populated when ``bin/umu_lookup.py`` is present).
-    Either matching a known Rockstar title returns True; anything else
-    returns False so the ordinary Epic path is taken unchanged.
+    Three tiers, most durable first: ``exe_name`` (the game's own exe
+    filename, e.g. "PlayGTAV.exe" — stable across every Epic-catalog
+    edition/re-release of the title, so prefer this everywhere the caller
+    has it); ``game_id``, legendary's Epic app name (e.g. "Heather") — the
+    reliable identifier ALWAYS present at launch, but a new one is minted
+    every time Rockstar reshuffles their Epic listings; ``umu_id`` — an
+    optional secondary match (the umu-database id, only populated when
+    ``bin/umu_lookup.py`` is present). Any one match returns True; matching
+    none returns False so the ordinary Epic path is taken unchanged.
     """
+    if exe_name and exe_name.lower() in ROCKSTAR_PLAY_EXE_NAMES:
+        return True
     if game_id and game_id in ROCKSTAR_EGS_APP_NAMES:
         return True
     return bool(umu_id) and umu_id in ROCKSTAR_EGS_UMU_IDS
