@@ -31,6 +31,7 @@ class SyncRPCMixin(CleanupRPCMixin):
     """
 
     sync_service: Any
+    config: Any
 
     async def sync_libraries(
         self, fetch_artwork: bool = True, **kw: Any,
@@ -124,6 +125,38 @@ class SyncRPCMixin(CleanupRPCMixin):
 
         safe = [t for t in (titles or []) if isinstance(t, str)]
         return {"count": save_frontend_owned_titles(safe)}
+
+    async def set_active_steam_user(self, account_id: str) -> Any:
+        """Persist the live logged-in Steam account id the frontend read.
+
+        The frontend runs *inside* the Steam client and reads the true active
+        user from ``window.App.m_CurrentUser`` — the only 100%-correct source.
+        The backend otherwise resolves the user from disk heuristics that can
+        misfire on multi-account decks (writing shortcuts.vdf to the wrong
+        ``userdata/<id>`` → "synced N games, Steam shows 0"). Persisting the id
+        (``steam.active_user``, read first by the resolver) fixes the NEXT boot;
+        re-binding the live services fixes the CURRENT session immediately.
+
+        Returns ``{"active_user": <id>}`` on success, or ``{"active_user": None}``
+        when the id is invalid (non-digit / empty) so the frontend can no-op.
+        """
+        aid = str(account_id or "").strip()
+        if not aid.isdigit() or aid == "0":
+            return {"active_user": None}
+
+        from unifideck.steam.current_user import CONFIG_ACTIVE_USER_KEY
+        self.config.set(CONFIG_ACTIVE_USER_KEY, aid)
+
+        # Re-bind the live session's per-user paths so the next sync writes to
+        # the correct account without waiting for a restart. Also sync the
+        # account watcher's view so it doesn't fight the correction.
+        coordinator = getattr(self.services, "user_paths_coordinator", None)
+        if coordinator is not None:
+            coordinator.rebind(aid)
+        account_svc = getattr(self.services, "account", None)
+        if account_svc is not None and hasattr(account_svc, "_current_user"):
+            account_svc._current_user = aid
+        return {"active_user": aid}
 
     async def get_game_info(self, app_id: int) -> Any:
         """Return the full record for a single Unifideck AppID.

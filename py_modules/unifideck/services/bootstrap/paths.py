@@ -66,11 +66,15 @@ def _resolve_steam_write_dir(config: ConfigManager) -> tuple[str, Path]:
     can't reproduce the alt-distro failures, so this is the field-diagnosis
     hook. Lazy imports avoid an import cycle and keep this backend-only.
     """
+    from unifideck.steam.current_user import resolve as resolve_active_user
     from unifideck.steam.library import find_steam_path
-    from unifideck.steam.steam_user import get_active_steam_user
     resolved_root = find_steam_path(config)
     steam_root = resolved_root or _DEFAULT_STEAM_ROOT
-    active_user = get_active_steam_user(Path(steam_root)) or _USER_ID_GUEST
+    # Config-first: a frontend-confirmed ``steam.active_user`` (the only
+    # 100%-correct source) is honored before any heuristic. Falls through the
+    # hardened resolver (loginusers → registry → localconfig-mtime) and only
+    # then to the guest dir, which the write path must refuse to write into.
+    active_user = resolve_active_user(Path(steam_root), config) or _USER_ID_GUEST
     logger.info(
         "[ServicePaths] steam_root=%s (%s) active_user=%s%s",
         steam_root,

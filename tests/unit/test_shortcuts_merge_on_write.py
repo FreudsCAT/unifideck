@@ -253,3 +253,41 @@ def test_icon_update_reads_fresh_and_keeps_foreign(tmp_path):
     # The foreign NSL shortcut (200) must survive the icon rewrite.
     assert 200 in appids, appids
     assert 100 in appids, appids
+
+
+# ── set_shortcuts_path (per-user re-bind) resets the cached snapshot ──
+
+def test_set_shortcuts_path_reloads_new_users_file(tmp_path):
+    """Re-binding to another user's file must NOT write the previous user's
+    cached entries into it — the setter resets ``_shortcuts_loaded`` so the
+    next access reads the correct file (the active-user misfire fix)."""
+    svc = _make_service(tmp_path)
+
+    # User A's file has one of our games; load it into the cache.
+    user_a = str(tmp_path / "userA_shortcuts.vdf")
+    _write_vdf_file(user_a, {"0": _ours(100, "epic:1")})
+    svc.set_shortcuts_path(user_a)
+    asyncio.run(svc._load_shortcuts())
+    assert svc._shortcuts_loaded is True
+
+    # Switch to user B's file (a DIFFERENT game). The setter must clear the
+    # cache so B's file is read fresh, not overwritten with A's snapshot.
+    user_b = str(tmp_path / "userB_shortcuts.vdf")
+    _write_vdf_file(user_b, {"0": _ours(200, "gog:9")})
+    svc.set_shortcuts_path(user_b)
+    assert svc._shortcuts_loaded is False
+    assert svc._shortcuts == {}
+
+    asyncio.run(svc._save_all())  # loads B fresh, merges (no-op), writes back
+    on_disk = asyncio.run(read_vdf(user_b))
+    appids = sorted(e["appid"] for e in on_disk["shortcuts"].values())
+    assert appids == [200], appids  # A's game 100 must NOT leak into B's file
+
+
+def test_set_shortcuts_path_noop_when_unchanged(tmp_path):
+    """Re-binding to the same path keeps the loaded cache intact."""
+    svc = _make_service(tmp_path)
+    _write_vdf_file(svc._shortcuts_path, {"0": _ours(100, "epic:1")})
+    asyncio.run(svc._load_shortcuts())
+    svc.set_shortcuts_path(svc._shortcuts_path)
+    assert svc._shortcuts_loaded is True

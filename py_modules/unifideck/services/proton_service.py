@@ -77,6 +77,15 @@ class ProtonService:
         # False and every subscription was silently dropped.
         auto_wire(self, self._bus)
 
+    def set_config_vdf_path(self, config_vdf_path: str) -> None:
+        """Re-point at a different user's ``localconfig.vdf`` at runtime.
+
+        Driven by :func:`unifideck.steam.current_user.rebind_user_paths` when
+        the active Steam user is (re)confirmed after boot, so per-game Proton
+        compat entries are written to the account the user is logged into.
+        """
+        self._config_vdf_path = config_vdf_path
+
     async def start(self) -> None:
         """Background-install the latest GE-Proton on plugin load.
 

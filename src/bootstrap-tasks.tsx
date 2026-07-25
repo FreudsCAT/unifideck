@@ -32,6 +32,7 @@ import {
 } from "./i18n/translations";
 import { AccountSwitchModal, SteamRestartModal } from "./components/modals";
 import { uploadSteamOwnedTitles } from "./lib/steam-bridge/owned-library";
+import { uploadActiveSteamUser } from "./lib/steam-bridge/active-user";
 import type { Unregisterable } from "./types/steam";
 /** Language pref — the `data` payload of `get_language_preference`
  *  after the `{success, error, data}` envelope is unwrapped.
@@ -290,6 +291,10 @@ export async function sweepOrphanedShortcuts(): Promise<void> {
  *  plugin entry can call it on unload. */
 export async function runBootstrapTasks(): Promise<Unregisterable | null> {
   purgeLeftoverAuthShortcuts();
+  // Push the live logged-in Steam user to the backend FIRST — it's the only
+  // 100%-correct source of the active account, and everything below (account-
+  // switch check, owned-titles, any sync) must target the right userdata dir.
+  await uploadActiveSteamUser();
   const [, , , , listener] = await Promise.all([
     applyLanguagePreference(),
     checkAccountSwitch(),

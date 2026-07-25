@@ -241,6 +241,14 @@ declare global {
     collectionStore?: {
       userCollections?: Map<string, SteamCollection>;
     };
+    // NOTE: `window.App` (with `m_CurrentUser.strSteamID` — the authoritative
+    // live logged-in SteamID64, the only 100%-correct source of the active
+    // user) is already declared globally elsewhere; `active-user.ts` reads it
+    // via that existing type. Only `loginStore` (a fallback) is added here.
+    loginStore?: {
+      m_strAccountName?: string;
+      m_strSteamID?: string;
+    };
   }
 }
 export {};

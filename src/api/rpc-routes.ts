@@ -38,6 +38,7 @@ export const rpcRoutes = {
   getAllUnifideckGames: "get_all_unifideck_games",
   getGameSizeBytes: "get_game_size_bytes",
   updateSteamOwnedTitles: "update_steam_owned_titles",
+  setActiveSteamUser: "set_active_steam_user",
   // Orphaned-shortcut sweep — boot-time cleanup (CleanupRPCMixin)
   scanOrphanedShortcuts: "scan_orphaned_shortcuts",
   // Downloads (DownloadRPCMixin)

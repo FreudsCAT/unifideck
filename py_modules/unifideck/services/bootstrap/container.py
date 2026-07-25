@@ -32,6 +32,7 @@ if TYPE_CHECKING:
     from unifideck.services.proton_service import ProtonService
     from unifideck.services.security import SecurityService
     from unifideck.services.shortcut import ShortcutService
+    from unifideck.services.user_paths_coordinator import UserPathsCoordinator
 
 
 @dataclass
@@ -69,3 +70,7 @@ class ServiceContainer:
     # the four OAuth stores (Epic / GOG / Amazon / Microsoft).
     # Constructed once per plugin and shared via the injector.
     edge_browser: EdgeBrowser | None = None
+    # Re-binds per-user paths (shortcuts.vdf / grid / localconfig) onto the
+    # shortcut/artwork/proton services when the active Steam user changes —
+    # driven by ACCOUNT_SWITCHED and the set_active_steam_user RPC.
+    user_paths_coordinator: UserPathsCoordinator | None = None

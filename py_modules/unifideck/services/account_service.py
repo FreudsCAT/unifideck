@@ -99,9 +99,13 @@ class AccountService:
                 logger.info("[AccountService] Account switched: %s -> %s", self._current_user, active_user)
                 self._current_user = active_user
 
+                # ``active_user_id`` is the documented payload key (events.py);
+                # ``new_user`` is kept for backward-compat with any existing
+                # consumer. The rebind coordinator accepts either.
                 await self._bus.emit(
                     Events.ACCOUNT_SWITCHED,
-                    new_user=active_user
+                    active_user_id=active_user,
+                    new_user=active_user,
                 )
                 return True
 
@@ -121,7 +125,16 @@ class AccountService:
                     return f.read()
 
             content = await asyncio.to_thread(read_file)
-            return self._extract_most_recent(content)
+            raw = self._extract_most_recent(content)
+            # ``_extract_most_recent`` yields the raw block key = the SteamID64.
+            # Everyone else (paths.py, AccountManager, the rebind coordinator)
+            # uses the 32-bit account id (``steam64 & 0xFFFFFFFF``), so normalise
+            # here — otherwise ACCOUNT_SWITCHED would carry a steam64 that the
+            # per-user path re-bind can't turn into a ``userdata/<id>`` folder.
+            if raw is None:
+                return None
+            from unifideck.steam.current_user import account_id_from_steam64
+            return account_id_from_steam64(raw) or raw
         except Exception as e:
             logger.debug("[AccountService] Failed to read loginusers: %s", e)
             return None

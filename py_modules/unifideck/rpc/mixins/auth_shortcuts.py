@@ -267,7 +267,10 @@ class AuthShortcutsRPCMixin:
         # Probe the cross-distro candidate roots (no config here — this is a
         # staticmethod) instead of hardcoding ``~/.steam/steam``, so the
         # Ubisoft install/Play appid lookup reads the SAME shortcuts.vdf the
-        # reconcile wrote on Bazzite/CachyOS/Flatpak layouts.
+        # reconcile wrote on Bazzite/CachyOS/Flatpak layouts. ``get_active_steam_user``
+        # is the shim over ``current_user.resolve``, which reads the persisted
+        # ``steam.active_user`` (frontend-confirmed) config-free from disk — so this
+        # resolves the SAME user reconcile targeted, even without a ConfigManager.
         resolved = find_steam_path(None)
         steam_root = Path(resolved) if resolved else Path("~/.steam/steam").expanduser()
         active_user = get_active_steam_user(steam_root) or "0"
